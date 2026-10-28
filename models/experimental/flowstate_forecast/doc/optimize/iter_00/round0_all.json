@@ -1289,9 +1289,8 @@
   "collapsed_abs_err_max": 0.7939653396606445,
   "collapsed_pcc_final": 0.7305940296798517,
   "collapsed_pcc_final_spread": -5.802831018998117e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1338,9 +1337,8 @@
   "collapsed_abs_err_max": 6.228386998176575,
   "collapsed_pcc_final": 0.999914821717797,
   "collapsed_pcc_final_spread": -6.907606095325828e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1387,9 +1385,8 @@
   "collapsed_abs_err_max": 0.4514129161834717,
   "collapsed_pcc_final": 0.7816061080979415,
   "collapsed_pcc_final_spread": -3.581667361544325e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1436,9 +1433,8 @@
   "collapsed_abs_err_max": 2.3342656567692757,
   "collapsed_pcc_final": 0.9999601105643755,
   "collapsed_pcc_final_spread": -6.041349715734163e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1485,9 +1481,8 @@
   "collapsed_abs_err_max": 2.2063889503479004,
   "collapsed_pcc_final": 0.9996169579877843,
   "collapsed_pcc_final_spread": -6.05993533269482e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1534,9 +1529,8 @@
   "collapsed_abs_err_max": 0.9896671772003174,
   "collapsed_pcc_final": 0.09620488207747951,
   "collapsed_pcc_final_spread": 3.8984737999040586e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1583,9 +1577,8 @@
   "collapsed_abs_err_max": 2.132978357374668,
   "collapsed_pcc_final": 0.999769103735707,
   "collapsed_pcc_final_spread": -5.021502665849063e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1632,9 +1625,8 @@
   "collapsed_abs_err_max": 0.3029182553291321,
   "collapsed_pcc_final": 0.5121331001210537,
   "collapsed_pcc_final_spread": -1.2494984897729544e-06,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1681,9 +1673,8 @@
   "collapsed_abs_err_max": 1.0977342128753662,
   "collapsed_pcc_final": 0.6924855013002749,
   "collapsed_pcc_final_spread": 1.0882907916269784e-05,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1739,9 +1730,8 @@
   "collapsed_abs_err_max": 0.7939653396606445,
   "collapsed_pcc_final": 0.7305940296798517,
   "collapsed_pcc_final_spread": -5.802831018998117e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1788,9 +1778,8 @@
   "collapsed_abs_err_max": 6.228386998176575,
   "collapsed_pcc_final": 0.999914821717797,
   "collapsed_pcc_final_spread": -6.907606095325828e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1837,9 +1826,8 @@
   "collapsed_abs_err_max": 0.4514129161834717,
   "collapsed_pcc_final": 0.7816061080979415,
   "collapsed_pcc_final_spread": -3.581667361544325e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1886,9 +1874,8 @@
   "collapsed_abs_err_max": 2.3342656567692757,
   "collapsed_pcc_final": 0.9999601105643755,
   "collapsed_pcc_final_spread": -6.041349715734163e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1935,9 +1922,8 @@
   "collapsed_abs_err_max": 2.2063889503479004,
   "collapsed_pcc_final": 0.9996169579877843,
   "collapsed_pcc_final_spread": -6.05993533269482e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -1984,9 +1970,8 @@
   "collapsed_abs_err_max": 0.9896671772003174,
   "collapsed_pcc_final": 0.09620488207747951,
   "collapsed_pcc_final_spread": 3.8984737999040586e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -2033,9 +2018,8 @@
   "collapsed_abs_err_max": 2.132978357374668,
   "collapsed_pcc_final": 0.999769103735707,
   "collapsed_pcc_final_spread": -5.021502665849063e-07,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -2082,9 +2066,8 @@
   "collapsed_abs_err_max": 0.3029182553291321,
   "collapsed_pcc_final": 0.5121331001210537,
   "collapsed_pcc_final_spread": -1.2494984897729544e-06,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  },
  {
   "test": "suite",
@@ -2131,8 +2114,7 @@
   "collapsed_abs_err_max": 1.0977342128753662,
   "collapsed_pcc_final": 0.6924855013002749,
   "collapsed_pcc_final_spread": 1.0882907916269784e-05,
-  "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
-  "git_dirty": "",
-  "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
+  "git_head": "c20d7cc52ad1e71ae3aeab9e534731949bef57c7",
+  "git_dirty": ""
  }
 ]

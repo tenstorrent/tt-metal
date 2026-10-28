@@ -1,0 +1,74 @@
+{
+ "paper/accuracy": {
+  "device_s": 0.37490928499028087,
+  "steady_s": 0.433545870706439,
+  "pcc_normalized": 0.9999955561604387,
+  "pcc_final": 0.9999999583773649
+ },
+ "paper/performance": {
+  "device_s": 0.3758285311050713,
+  "steady_s": 0.43208044208586216,
+  "pcc_normalized": 0.9999682214656058,
+  "pcc_final": 0.9999997193697555
+ },
+ "long_context/accuracy": {
+  "device_s": 0.7700807270593941,
+  "steady_s": 0.8792108749039471,
+  "pcc_normalized": 0.9999967984365673,
+  "pcc_final": 0.9999999704152197
+ },
+ "long_context/performance": {
+  "device_s": 0.7436808021739125,
+  "steady_s": 0.858366331551224,
+  "pcc_normalized": 0.9999557320740975,
+  "pcc_final": 0.9999995656487856
+ },
+ "long_horizon/accuracy": {
+  "device_s": 0.38620469300076365,
+  "steady_s": 0.4626629836857319,
+  "pcc_normalized": 0.9999891065105042,
+  "pcc_final": 0.9999999088785495
+ },
+ "long_horizon/performance": {
+  "device_s": 0.3881919328123331,
+  "steady_s": 0.46165745286270976,
+  "pcc_normalized": 0.9998382433700346,
+  "pcc_final": 0.9999985072377326
+ },
+ "scale_q/accuracy": {
+  "device_s": 0.2924849530681968,
+  "steady_s": 0.31083087297156453,
+  "pcc_normalized": 0.9999879253273314,
+  "pcc_final": 0.999999953433426
+ },
+ "scale_q/performance": {
+  "device_s": 0.2941019241698086,
+  "steady_s": 0.3211748139001429,
+  "pcc_normalized": 0.9999033969929995,
+  "pcc_final": 0.9999995177751221
+ },
+ "single/accuracy": {
+  "device_s": 0.09995726775377989,
+  "steady_s": 0.10649920301511884,
+  "pcc_normalized": 0.9999018575089614,
+  "pcc_final": 0.9998833675514777
+ },
+ "single/performance": {
+  "device_s": 0.10015767812728882,
+  "steady_s": 0.10633253399282694,
+  "pcc_normalized": 0.9997901365820975,
+  "pcc_final": 0.9997459406297065
+ },
+ "single_long/accuracy": {
+  "device_s": 0.7675447766669095,
+  "steady_s": 0.8818661742843688,
+  "pcc_normalized": 0.9999730634508989,
+  "pcc_final": 0.999964455558133
+ },
+ "single_long/performance": {
+  "device_s": 0.7436821861192584,
+  "steady_s": 0.856682269833982,
+  "pcc_normalized": 0.9997232410230291,
+  "pcc_final": 0.9996837834755459
+ }
+}
