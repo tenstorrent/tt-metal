@@ -259,12 +259,20 @@ def test_v41_moe_c1(mesh_device, device_params):
             again_rows = rows_of(again, r, u)
             ttnn.deallocate(again)
             all_idx = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["indices"])[0])[:n_rows, :6].tolist()
+            all_w = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["weights"])[0])[:n_rows, :6].double()
+            x_rows = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["x_full"])[0])[0, 0, :n_rows].double()
             per_row = {
                 "pcc": [round(_pcc(ref_row[t], out_row[t]), 5) for t in range(n_rows)],
                 "max_abs": [round(float((ref_row[t] - out_row[t]).abs().max()), 4) for t in range(n_rows)],
                 "again_max_abs": [round(float((again_rows[t] - out_row[t]).abs().max()), 4) for t in range(n_rows)],
                 "experts": all_idx,
+                "oracle_pcc_full": [],
+                "oracle_pcc_c1": [],
             }
+            for t in range(n_rows):  # the fp64 MoE of each row from the device's own weights
+                exact = _oracle_row(moe, c1, x_rows[t], all_idx[t], all_w[t], tp)
+                per_row["oracle_pcc_full"].append(round(_pcc(exact.float(), ref_row[t]), 5))
+                per_row["oracle_pcc_c1"].append(round(_pcc(exact.float(), out_row[t]), 5))
             logger.info(f"c1 moe rows {n_rows} per row {json.dumps(per_row)}")
             # the same call captured and replayed: the replay's rows must equal the eager call's (the verify
             # step's rounds replay it)
@@ -301,6 +309,8 @@ def test_v41_moe_c1(mesh_device, device_params):
                     "rel": round(d / max(float(exact.abs().max()), 1e-6), 6),
                     "pcc": round(_pcc(exact.float(), row), 6),
                 }
+            ttnn.deallocate(c1.debug["x_full"])
+        elif "x_full" in c1.debug:
             ttnn.deallocate(c1.debug["x_full"])
         ttnn.deallocate(c1.debug["weights"])
         c1.debug = None
