@@ -26,10 +26,73 @@
  * @file reduce_host.hpp
  * @brief Host-side planning and serialization for tiled reductions.
  *
- * One call to make_reduce_sequence_plan() produces one independent planning
- * unit: an ordered list of self-contained compute calls and one aggregate
- * auxiliary-tile recipe shared by those calls. Append the two parts to their
- * respective kernel compile-time-argument lists after any kernel-owned prefix:
+ * How to use the reduce helpers. Worked example: ttnn/examples/reduce_helpers/reduce_helpers.cpp.
+ *
+ * Ownership
+ *   Factory   Cores, tensors, the order in which the reader delivers input tiles, CB IDs, and the capacities of
+ *             the input, output and accumulator CBs. It also owns L1 fit checks.
+ *   Planner   make_reduce_plan() or make_reduce_sequence_plan(). Chooses the algorithm, partial-tile masking,
+ *             scaling and accumulation, and sizes the auxiliary CB.
+ *   Reader    Delivers input tiles in exactly the order the factory described to the planner.
+ *   Writer    Materializes the planned auxiliary recipe once, then writes outputs.
+ *   Compute   Issues compute_kernel_lib::reduce<Call>() for each planned call and makes no reduction decisions.
+ *
+ * Factory steps
+ *   1. Fix the block each reduce call consumes on one core and the order the reader delivers it in.
+ *   2. Describe it with ReduceBlockSpec, usually ReduceBlockSpec::tiled():
+ *      - logical_h/logical_w are the valid elements, even when they are not multiples of 32. The planner then
+ *        excludes the padding in the last tile from the result and divides AVG by the valid count. SFPU
+ *        reductions are the exception (see Constraints).
+ *      - input_cb_tiles is the input CB capacity you will allocate. Streaming (WaitAndPopPerTile) needs at least
+ *        two tiles for TileSum, BulkWaitBulkPop whole packets, and retained policies the whole block.
+ *      - output_group (H only) is the number of output columns reduced together in DEST, at most
+ *        max_reduce_output_group(). The reader must then deliver strips of that many columns, row-major within
+ *        each strip.
+ *      - tail describes one smaller shape that some cores reduce with the same compiled kernel.
+ *   3. Derive the hardware view from the compute kernel's own config:
+ *      make_reduce_hardware_config(arch, compute_hardware). Do not restate its fields by hand.
+ *   4. Plan. One reduction: make_reduce_plan(). Several inputs accumulated into one result, e.g. a mean over two
+ *      tensors without concatenating them: make_reduce_sequence_plan(), one ReduceCbConfig per call in the order
+ *      compute issues them. Leave the scalar absent for a mean; pass one only for an explicit scale.
+ *   5. Allocate CBs. The auxiliary CB comes from the plan (plan.auxiliary_cb, or sequence.auxiliary.cb) and every
+ *      plan needs one, including SFPU plans. Input, output and accumulator CBs are yours; reduce() pushes one
+ *      output tile at a time. A sequence's accumulator must hold one call's complete per-core output
+ *      (ReduceSequenceCbIds::accumulator_cb_tiles).
+ *   6. Serialize and append after each kernel's own compile-time arguments:
+ *      - Compute: ReduceCallArgs(plan, {input, auxiliary, output}) for a single plan, or
+ *        sequence.append_to() / get_compile_time_args() for a sequence.
+ *      - Writer: ReduceAuxiliaryArgs(plan, auxiliary) for a single plan, or
+ *        sequence.append_auxiliary_to() / get_auxiliary_compile_time_args() for a sequence.
+ *      - Tails: plan.append_runtime_args() or sequence.append_runtime_args() on every core, with use_tail
+ *        selecting the tail. The returned base is the device view's RTA_OFFSET.
+ *
+ * Kernel side
+ *   Compute  compute_kernel_hw_startup() once, then reduce<Call>() with Call = ReduceCallArgs<CTA_OFFSET> or, for a
+ *            sequence, ReduceCallAtT<first_call_offset, I> (reduce_plan_args.hpp). Other work may run between calls.
+ *   Writer   dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<ReduceAuxiliaryArgs<CTA_OFFSET>>() before compute
+ *            needs the tiles (reduce_helpers_dataflow.hpp).
+ *   Metal 2  Serialize dense logical CB IDs and bind them to dfb::<name> with BoundReduceCallArgs and
+ *            BoundReduceAuxiliaryArgs, as the example does.
+ *
+ * Rules
+ *   - Do not choose the algorithm, scale, mask or accumulation in the kernel, and do not infer them from the call
+ *     index, the call count or the auxiliary recipe. Each serialized call carries all of them.
+ *   - If the reader's order differs from the description, the results are wrong without any error. For example,
+ *     an H reduction of a 2x8-tile block with output_group = 4 expects r0c0-r0c3, r1c0-r1c3, r0c4-r0c7, r1c4-r1c7.
+ *     A plain row-major reader delivers r0c0-r0c7 first, so compute adds r0c4-r0c7 into columns 0-3.
+ *   - Override the algorithm only through make_reduce_sequence_plan()'s algorithm argument, and only when a fused
+ *     operation needs a specific accumulation order for accuracy. Never hand-roll a reduction loop instead.
+ *   - Several planning units in one kernel are appended to both suffixes in planner-invocation order; each
+ *     device view's next_compile_time_args_offset() locates the next unit.
+ *   - The Python binding ttnn.reduce_planner exposes the same API for ProgramDescriptor ops.
+ *
+ * Constraints (the planner rejects violations)
+ *   - INT32, accurate FLOAT32 and BFLOAT16 MIN run on the SFPU: W or H only, a tile-aligned reduction axis
+ *     (identity-pad it and describe the padded view), no Quasar. Accurate FLOAT32 needs fp32 DEST; lower its AVG
+ *     to SUM with an explicit 1/N scalar.
+ *   - Accumulated calls share math, dimension, fp32 mode and scalar, and produce the same number of outputs.
+ *
+ * Serialized layout
  *
  * @code{.cpp}
  * auto unit = make_reduce_sequence_plan(reductions, cb_ids, hardware);
@@ -40,11 +103,8 @@
  * // dataflow suffix: [one aggregate auxiliary descriptor]
  * @endcode
  *
- * Append multiple units to both lists in planner-invocation order. The device
- * kernels receive only these flat suffixes, not a ReduceSequencePlan object.
- * The compute kernel decides when to issue each call and may run arbitrary work
- * between them. In particular, multiple input descriptions may use the same CB
- * when the kernel refills or reuses it between calls.
+ * The device kernels receive only these flat suffixes, not a ReduceSequencePlan object. Multiple input
+ * descriptions may use the same CB when the kernel refills or reuses it between calls.
  */
 
 namespace ttnn::kernel_lib::host {
