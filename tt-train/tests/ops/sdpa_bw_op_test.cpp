@@ -860,6 +860,36 @@ TEST_F(SDPABackwardTest, DISABLED_TinyLlamaConfig) {
     run_sdpa_backward_test(config);
 }
 
+TEST_F(SDPABackwardTest, Arbitrary_GQA_HeadDim128) {
+    // Qwen3 training path: explicit (arbitrary) mask, no gate, head_dim 128, 8 query heads per K/V head.
+    // Same tolerance as NIGHTLY_NanoGPTConfig, the other D=128 row.
+    SDPABackwardTestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 256U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 16U,
+        .num_kv_heads = 2U,
+        .dropout_prob = 0.0F,
+        .test_name = "Arbitrary_GQA_HeadDim128 (B=1, S=256, D=128, qH=16, kvH=2)"};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, Arbitrary_GQA_Gated_HeadDim256) {
+    // Qwen3.8 full-attention layers: explicit (arbitrary) mask, output gate, head_dim 256, 6 query heads per K/V head.
+    SDPABackwardTestConfig config{
+        .batch_size = 1U,
+        .sequence_length = 256U,
+        .query_dim = 256U,
+        .key_value_dim = 256U,
+        .num_query_heads = 24U,
+        .num_kv_heads = 4U,
+        .dropout_prob = 0.0F,
+        .test_name = "Arbitrary_GQA_Gated_HeadDim256 (B=1, S=256, D=256, qH=24, kvH=4)",
+        .use_gate = true};
+    run_sdpa_backward_test(config);
+}
+
 // Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
 TEST_F(SDPABackwardTest, DISABLED_CausalMask_MHA) {
     // Test causal mask with Multi-Head Attention
@@ -1777,6 +1807,14 @@ INSTANTIATE_TEST_SUITE_P(
             .sequence_length = 512U},
         // Q kernel with its K/V loop but no u_scaler; KV kernel with grad_V alone.
         SDPABackwardSkipCase{.name = "FrozenK", .grad_k = false},
+        // OnlyQ and FrozenK reading a DRAM mask: the Q kernel's masked K/V loop without u_scaler or a gate.
+        SDPABackwardSkipCase{
+            .name = "OnlyQ_Arbitrary",
+            .grad_k = false,
+            .grad_v = false,
+            .mask_type = ttml::metal::AttentionMaskType::Arbitrary},
+        SDPABackwardSkipCase{
+            .name = "FrozenK_Arbitrary", .grad_k = false, .mask_type = ttml::metal::AttentionMaskType::Arbitrary},
         // Q kernel without its K/V loop, computing only u_scaler, so no mask CB or define even with a DRAM mask;
         // KV kernel with grad_K alone, which does read the mask.
         SDPABackwardSkipCase{
