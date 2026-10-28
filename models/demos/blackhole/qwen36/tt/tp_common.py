@@ -85,6 +85,20 @@ def verify_layout_cuts_enabled():
     return os.environ.get("QWEN36_VERIFY_LAYOUT_CUTS", "1") == "1"
 
 
+_PREFILL_RS_LINKS = None
+
+
+def prefill_rs_links():
+    """QWEN36_PREFILL_RS_LINKS (default unset = None = tt_all_reduce auto-detects, today's behaviour): when set to an
+    int N > 0, the prefill MLP-down and attention-wo tt_all_reduce reduce-scatters use N Ethernet links. Read once."""
+    global _PREFILL_RS_LINKS
+    if _PREFILL_RS_LINKS is None:
+        raw = os.environ.get("QWEN36_PREFILL_RS_LINKS", "").strip()
+        n = int(raw) if raw else 0
+        _PREFILL_RS_LINKS = n if n > 0 else 0
+    return _PREFILL_RS_LINKS or None
+
+
 def spec_hostfix_enabled():
     """Host-side spec-step fixes (QWEN36_SPEC_HOSTFIX, default 1; 0 = the old code paths): conflict check without
     tolist, one read of the drafter ids, vectorized row loops, drafter page tables skipped when unchanged.
@@ -290,6 +304,13 @@ def kv_cache_bf8_enabled():
     that grow with context: TP=8 B=1 decode 22.75 -> 21.55 ms/token at 64k and 24.19 -> 22.57 at 103k, unchanged
     at 128 tokens; accuracy_512 96.88 -> 97.27, accuracy_1536 95.96 -> 95.70 (QWEN_SDPA_BF8: 96.29 / 95.64)."""
     return os.environ.get("QWEN_SDPA_BF8", "0") == "1" or os.environ.get("QWEN36_KV_BF8", "1") == "1"
+
+
+def prefill_masked_big_enabled():
+    """QWEN36_PREFILL_MASKED_BIG (default "0" = off): the MTP spec fast prefill adds masked short traces of 4096 and
+    8192 rows (needs QWEN36_PREFILL_BIG_CHUNK=8192) and serves the remainder after the full 8192-row blocks by the
+    cheapest of {2048 chunk replays + masked tail, one masked 4096, one masked 8192} (see prefill_split.py)."""
+    return os.environ.get("QWEN36_PREFILL_MASKED_BIG", "0") == "1"
 
 
 def prefill_l1_rows_ok(rows):
@@ -810,6 +831,51 @@ def agmm_gather_buffer(tt_ccl, x, cluster_axis=1):
     return pair[idx]
 
 
+def prefill_agmm_tuned_enabled():
+    """QWEN36_PREFILL_AGMM_TUNED (default 0 = current AGMM grid/blocks; read at call time): 1 uses the swept per-shape
+    AGMM config (_AGMM_TUNED) for prefill row counts >= _AGMM_TUNED_MIN_ROWS (8192). Other shapes/rows keep the default.
+    """
+    return os.environ.get("QWEN36_PREFILL_AGMM_TUNED", "0") == "1"
+
+
+_AGMM_TUNED_MIN_ROWS = 8192
+# (swiglu, K, N), K and N rounded up to a multiple of 32 (tile-padded; GDN in-proj weight is 2060 wide -> 2080) -> (grid_x, grid_y, M_block, K_block, N_block)
+# subblock (1, 4); num_links 2. Source: work/research_1026/25_agmm_sweep_results.md (M=8192, 8x BH).
+_AGMM_TUNED = {
+    (True, 5120, 2 * 2176): (12, 9, 8, 4, 16),  # MLP gate|up swiglu
+    (False, 5120, 2080): (11, 9, 8, 4, 8),  # GDN qkvzab
+    (False, 5120, 2048): (11, 9, 8, 4, 16),  # attention qkv
+    # gdn_out keeps the default (K_block 8): the tuned K_block 4 split changed rounding (1 ulp) for only ~4.7% op gain (note 46).
+}
+_AGMM_TUNED_LOGGED = set()
+
+
+def agmm_tuned_config(rows, weight, swiglu):
+    """Return (cfg, num_links, workers_per_link) for the tuned AGMM config, or None to keep the default."""
+    if rows < _AGMM_TUNED_MIN_ROWS or not prefill_agmm_tuned_enabled():
+        return None
+    key = (bool(swiglu), -(-int(weight.shape[-2]) // 32) * 32, -(-int(weight.shape[-1]) // 32) * 32)
+    t = _AGMM_TUNED.get(key)
+    if t is None:
+        return None
+    gx, gy, mb, kb, nb = t
+    num_links = 2
+    if key not in _AGMM_TUNED_LOGGED:
+        _AGMM_TUNED_LOGGED.add(key)
+        logger.info(
+            f"AGMM tuned config rows={rows} swiglu={key[0]} K={key[1]} N={key[2]}: grid=({gx},{gy}) blocks=({mb},{kb},{nb})"
+        )
+    cfg = ttnn.MinimalMatmulConfig(
+        M_block_size=mb,
+        K_block_size=kb,
+        N_block_size=nb,
+        subblock_h=1,
+        subblock_w=4,
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+    )
+    return cfg, num_links, -(-gx // num_links)
+
+
 def all_gather_matmul_prefill(
     x,
     weight,
@@ -833,17 +899,21 @@ def all_gather_matmul_prefill(
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
     # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
     # = num_links*workers, and the 7-wide default (prime) forces 1 link -> widen to 8 (2 links, 4 workers).
-    num_links = 2
-    grid = (8, grid[1])
-    workers = grid[0] // num_links
-    cfg = ttnn.MinimalMatmulConfig(
-        M_block_size=4,
-        K_block_size=agmm_k_block_size(K_local),
-        N_block_size=8,
-        subblock_h=1,
-        subblock_w=4,
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
-    )
+    tuned = agmm_tuned_config(S, weight, swiglu=False)
+    if tuned is not None:
+        cfg, num_links, workers = tuned
+    else:
+        num_links = 2
+        grid = (8, grid[1])
+        workers = grid[0] // num_links
+        cfg = ttnn.MinimalMatmulConfig(
+            M_block_size=4,
+            K_block_size=agmm_k_block_size(K_local),
+            N_block_size=8,
+            subblock_h=1,
+            subblock_w=4,
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+        )
     out = ttnn.experimental.all_gather_minimal_matmul_async(
         input_tensor=x4,
         weight_tensor=weight,
@@ -878,17 +948,21 @@ def all_gather_swiglu_prefill(
     x: K-sharded [.,S,K/tp]; weight: tile-pair-interleaved [gate|up] [K, 2N/tp]. Emits silu(gate)*up of width N/tp."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
-    num_links = 2
-    grid = (8, grid[1])
-    workers = grid[0] // num_links
-    cfg = ttnn.MinimalMatmulConfig(
-        M_block_size=8,
-        K_block_size=agmm_k_block_size(K_local),
-        N_block_size=16,
-        subblock_h=1,
-        subblock_w=4,
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
-    )
+    tuned = agmm_tuned_config(S, weight, swiglu=True)
+    if tuned is not None:
+        cfg, num_links, workers = tuned
+    else:
+        num_links = 2
+        grid = (8, grid[1])
+        workers = grid[0] // num_links
+        cfg = ttnn.MinimalMatmulConfig(
+            M_block_size=8,
+            K_block_size=agmm_k_block_size(K_local),
+            N_block_size=16,
+            subblock_h=1,
+            subblock_w=4,
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+        )
     return ttnn.experimental.all_gather_minimal_matmul_async(
         input_tensor=x4,
         weight_tensor=weight,

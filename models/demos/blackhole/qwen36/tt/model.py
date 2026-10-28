@@ -27,6 +27,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import kv_cache_bf8_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
 from models.demos.blackhole.qwen36.tt.tp_common import (
     pack_u32_rows,
+    prefill_masked_big_enabled,
     rope_row_index,
     spec_hostfix_enabled,
     spec_hostset_enabled,
@@ -3607,6 +3608,15 @@ class Qwen36Model:
         big = self._chunk_sets.get("big") if self._chunk_set_active == "small" else None
         return int(big["_chunked_chunk_size"]) if big and big["_chunked_trace_id"] is not None else 0
 
+    def masked_big_buckets(self, page_table):
+        """Masked short-trace buckets beyond 2048 for the spec fast prefill (QWEN36_PREFILL_MASKED_BIG=1 with
+        QWEN36_PREFILL_BIG_CHUNK=8192 and the big set prepared): (4096, 8192) limited to what the page table holds, else
+        (). Pass them to prepare_prefill_traces_short(spec=True) with the default buckets."""
+        if not prefill_masked_big_enabled() or self._prefill_big_chunk != 8192 or "big" not in self._chunk_sets:
+            return ()
+        cap = page_table.shape[-1] * get_block_size(self._paged_kv_caches)
+        return tuple(b for b in self._MASKED_BIG_BUCKETS if cap >= b)
+
     def prepare_prefill_trace_chunked_big(self, device, page_table, warm_cb=None):
         """Allocate + compile the QWEN36_PREFILL_BIG_CHUNK chunk set (after the 2048 one, before any capture). One more
         eager big-chunk forward then compiles the tail-free last-row logits program on its real output and hands that
@@ -3862,6 +3872,7 @@ class Qwen36Model:
     # Prompts >= chunk_size (2048) keep the chunk trace + eager tail (out of scope).
 
     _SHORT_TRACE_DEFAULT_BUCKETS = (128, 256, 512, 1024, 2048)
+    _MASKED_BIG_BUCKETS = (4096, 8192)  # QWEN36_PREFILL_MASKED_BIG, spec short path only (see masked_big_buckets)
 
     @staticmethod
     def short_prefill_trace_enabled():
@@ -3906,17 +3917,28 @@ class Qwen36Model:
         """The GDN state tensors currently bound on every GDN layer (a short trace bakes their addresses)."""
         return tuple(l.attention.rec_state for l in self.layers if not l.is_full_attention)
 
-    def _short_trace_for(self, length, chunk_size=2048):
+    def _short_trace_for(self, length, chunk_size=2048, bucket=None):
         """The captured trace serving a `length`-token prompt, or None (flag off, length >= chunk_size, bucket not
         captured, or the GDN state bound now is not the one the trace was captured against, e.g. the decode buffers
-        vs the batched prefill scratch -> the caller falls back to the eager masked-bucket path)."""
+        vs the batched prefill scratch -> the caller falls back to the eager masked-bucket path).
+        ``bucket`` (QWEN36_PREFILL_MASKED_BIG only; 4096 or 8192): the masked big bucket the spec fast prefill chose for a
+        remainder of `length` <= bucket rows (3 <= length: the carried GDN conv history). None = the default lookup."""
         if not self._short_traces or not self.short_prefill_trace_enabled():
             return None
-        if not (1 <= length < chunk_size):
-            return None
-        tr = self._short_traces.get(self._mask_bucket_for(length))
-        if tr is None or (length != tr.bucket and not tr.masked):
-            return None
+        if bucket is not None:
+            if not prefill_masked_big_enabled() or bucket not in self._MASKED_BIG_BUCKETS:
+                return None
+            if not (3 <= length <= bucket):
+                return None
+            tr = self._short_traces.get(bucket)
+            if tr is None or not tr.masked or not tr.spec:
+                return None
+        else:
+            if not (1 <= length < chunk_size):
+                return None
+            tr = self._short_traces.get(self._mask_bucket_for(length))
+            if tr is None or (length != tr.bucket and not tr.masked):
+                return None
         refs = self._gdn_binding_refs()
         if len(refs) != len(tr.gdn_refs) or any(a is not b for a, b in zip(refs, tr.gdn_refs)):
             if not getattr(self, "_short_trace_binding_warned", False):
@@ -4278,6 +4300,7 @@ class Qwen36Model:
         carry_gdn=False,
         spec_inputs=None,
         vis_row_offset=0,
+        bucket=None,
     ):
         """Stage every per-request input of the bucket trace serving `actual_len` tokens, replay it, drain.
         Returns the _ShortPrefillTrace (outputs readable) or None when no trace serves this request (strict=False
@@ -4294,8 +4317,11 @@ class Qwen36Model:
         zeros (resumed segment; needs actual_len >= 3 so the conv history of the next step comes from this segment).
 
         vis_row_offset (default 0): image/video placeholder tokens before this segment (a segment with chunk_start > 0
-        of a multimodal prompt splices vision_tokens[vis_row_offset : ...]; see _vis_row_offset_for)."""
-        tr = self._short_trace_for(actual_len)
+        of a multimodal prompt splices vision_tokens[vis_row_offset : ...]; see _vis_row_offset_for).
+
+        bucket (default None): the masked big bucket (4096 / 8192, QWEN36_PREFILL_MASKED_BIG) serving `actual_len` rows.
+        """
+        tr = self._short_trace_for(actual_len, bucket=bucket)
         if tr is None:
             return None
         assert token_ids.shape[0] == 1 and token_ids.shape[1] >= actual_len, "short traced prefill is B=1"

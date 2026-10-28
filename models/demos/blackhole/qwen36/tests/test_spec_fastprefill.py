@@ -313,6 +313,9 @@ def test_big_chunk_parity(mesh_device, monkeypatch):
     pool = _prompt_pool(tokenizer, 32768)
     # 2 big + tail; 1 big exactly; 1 big + 1 small + tail; 2 big + 2 small exactly; four prompts < 8192.
     lens = (2 * big + 300, big, big + 2048 + 700, 2 * big + 2 * 2048, 1600, 300, 7, 513)
+    if os.environ.get("BIGPAR_LENS"):
+        lens = tuple(int(x) for x in os.environ["BIGPAR_LENS"].split(","))
+        assert len(lens) == 8, lens
     prompts = [pool[131 * i : 131 * i + n] for i, n in enumerate(lens)]
     assert all(len(p) == n for p, n in zip(prompts, lens))
 

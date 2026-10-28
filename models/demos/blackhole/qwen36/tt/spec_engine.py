@@ -54,6 +54,7 @@ from loguru import logger
 from ttnn.tools import trace_allocation_tracker
 
 import ttnn
+from models.demos.blackhole.qwen36.tt import prefill_split
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 from models.demos.blackhole.qwen36.tt.spec_bucket import apply_row_swap, pick_bucket, plan_row_swap
 from models.demos.blackhole.qwen36.tt.spec_chain import (
@@ -84,6 +85,7 @@ from models.demos.blackhole.qwen36.tt.spec_fused_sampled import (
 from models.demos.blackhole.qwen36.tt.tp_common import (
     engine_spec_buckets,
     pack_u32_rows,
+    prefill_masked_big_enabled,
     rope_row_index,
     spec_bucket_hold,
     spec_buckets_flag,
@@ -730,6 +732,8 @@ def spec_memory_costs(
     sel_buckets = _MASK_BUCKETS_DEFAULT if mask_buckets is None else mask_buckets
     _big = int(os.environ.get("QWEN36_PREFILL_BIG_CHUNK", "0") or 0)
     sel_buckets = tuple(sel_buckets) + ((_big,) if _big else ())
+    if _big == 8192 and prefill_masked_big_enabled():  # QWEN36_PREFILL_MASKED_BIG: the 4096 selector (8192 is _big)
+        sel_buckets = sel_buckets + (4096,)
     engine = (
         sum(_tile_bytes([1, 1, b, dim_frac], bf) for b in row_bks)  # _hp_bufs
         + sum(_tile_bytes([1, 1, 1, b], bf) for b in sel_buckets)  # _last_sel
@@ -1504,7 +1508,9 @@ class MTPSpecEngine:
             b: self._alloc_host_replicated(
                 torch.zeros(1, 1, 1, b, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
             )
-            for b in tuple(model._PREFILL_MASK_BUCKETS) + ((big,) if big else ())
+            for b in tuple(model._PREFILL_MASK_BUCKETS)
+            + ((4096,) if big == 8192 and prefill_masked_big_enabled() else ())
+            + ((big,) if big else ())
         }
         self._mtp_pt = self._alloc_host_replicated(pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self._mtp_pt_rows = [
@@ -1545,7 +1551,16 @@ class MTPSpecEngine:
                     prep_big(self.mesh, pt_prefill, warm_cb=lambda h: self._warm_big_chunk(h, pt[0:1]))
                 # vLLM's null block absorbs the base's padded K/V (the MTP padding rows go to the MTP scratch block).
                 model.prefill_trash_block = 0
-                model.prepare_prefill_traces_short(self.mesh, pt_prefill, spec=True)
+                # QWEN36_PREFILL_MASKED_BIG: the masked 4096 / 8192 spec short traces join the default buckets in this
+                # one prepare call (all persistent inputs allocated and every program warmed before any capture).
+                extra = getattr(model, "masked_big_buckets", None)  # absent on test fakes
+                extra = tuple(extra(pt_prefill)) if extra is not None else ()
+                model.prepare_prefill_traces_short(
+                    self.mesh,
+                    pt_prefill,
+                    buckets=(tuple(model.short_prefill_trace_buckets()) + extra) if extra else None,
+                    spec=True,
+                )
             finally:
                 if prev is not None:
                     model._unbind_gdn_prefill_scratch(prev)
@@ -2450,7 +2465,7 @@ class MTPSpecEngine:
         model = self.model
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
         assert self._last_hidden, "prefill before prepare"
-        prompt_list = [int(t) for t in torch.as_tensor(prompt_ids).reshape(-1)]
+        prompt_list = torch.as_tensor(prompt_ids).reshape(-1).tolist()
         Tp = len(prompt_list)
         if final:
             self._prompts[slot] = (prompt_list, torch.as_tensor(page_table_row).clone()) + (
@@ -2714,6 +2729,7 @@ class MTPSpecEngine:
         captured_row,
         decline_ok,
         vision_tokens=None,
+        _masked_big=True,
     ):
         """Traced prefill of the prompt segment [a, b) (a % 128 == 0) on the bound B=1 GDN scratch: full chunks by the
         chunk trace, the tail by the spec short trace (drafter warm-up fused) or the eager masked bucket. carry: continue
@@ -2721,12 +2737,69 @@ class MTPSpecEngine:
         drafter fuses from (the whole prompt for the final segment, prompt[:b+1] otherwise). Returns host float logits
         [vocab] (meaningful for the final segment only), or None when decline_ok and no trace serves a short segment.
         ``vision_tokens``: the multimodal prompt's packed vision rows; each replay / chunk splices the rows after the
-        image placeholders before its own start (model._vis_row_offset_for over the whole prompt)."""
+        image placeholders before its own start (model._vis_row_offset_for over the whole prompt).
+
+        QWEN36_PREFILL_MASKED_BIG (text only, n >= 2048): after the n // 8192 full big blocks the remainder runs as ONE
+        masked 4096 / 8192 spec short trace when _masked_big_plan finds it cheaper than 2048 replays + the masked tail.
+        ``_masked_big=False`` (internal) keeps the existing plan, used for the fallback after a declined replay."""
         model = self.model
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)
         chunk = model._chunked_chunk_size or 2048
         n = b - a
         num_full, tail = n // chunk, n % chunk
+        mb = None  # masked big bucket (4096 / 8192) serving the remainder after the full big blocks (flag only)
+        if num_full > 0 and _masked_big and vision_tokens is None and prefill_masked_big_enabled():
+            mb = self._masked_big_plan(n, a)
+        if mb is not None:
+            big = model.big_chunk_rows()
+            n_big = n // big
+            cs = a + n_big * big
+            r = b - cs
+            if n_big:
+                if a == 0 and not carry:
+                    model._build_request_rope(prompt, vision_tokens)
+                model._prefill_traced_chunked_tp(
+                    prompt,
+                    model._fit_spec_page_table(pt_row, self.nb_prefill),
+                    b,
+                    n_big * big // chunk,
+                    chunk,
+                    0,
+                    on_chunk=on_chunk,
+                    run_tail=False,
+                    start=a,
+                    reset_gdn=not carry,
+                    allow_big=True,
+                )
+            host = self._replay_spec_short(
+                slot,
+                mtp_list,
+                prompt[:, cs:] if n_big else prompt[:, a:],
+                pt_row,
+                r,
+                cs,
+                True if n_big else carry,
+                captured_row,
+                bucket=mb,
+            )
+            if host is not None:
+                return host
+            # trash-block collision (nothing was staged): the existing plan serves the rest of the segment
+            return self._fast_segment(
+                slot,
+                mtp_list,
+                prompt,
+                pt_row,
+                cs,
+                b,
+                final,
+                True if n_big else carry,
+                on_chunk,
+                captured_row,
+                decline_ok if not n_big else False,
+                vision_tokens=vision_tokens,
+                _masked_big=False,
+            )
         if num_full == 0:
             # `prompt[:, a:]` (not [:, a:b]): the replay slices the first n tokens, and at a == 0 builds the request RoPE
             # from what it gets, which must be the whole prompt when later segments follow.
@@ -2824,6 +2897,47 @@ class MTPSpecEngine:
             host = self._read_replicated_logits(logits)
         return host
 
+    _MASKED_BIG_LOG_FIRST = 20  # INFO-log the first N plan decisions
+    _MASKED_BIG_COUNT_EVERY = 64  # then the plan counters every N decisions
+
+    def _masked_big_plan(self, n, a):
+        """Split choice of QWEN36_PREFILL_MASKED_BIG for a segment [a, a + n), n >= 2048: after the n // 8192 full big
+        blocks the remainder r = n % 8192 runs by the cheapest plan of prefill_split.plan_remainder (cost model
+        A[M] + B[M] * depth, depth = absolute start of the remainder). Returns the masked bucket (4096 / 8192) to replay,
+        or None for the existing plan (2048 chunk replays + masked tail). Counts every decision in
+        self.masked_big_plans and logs the first 20 at INFO (then the counters every 64)."""
+        model = self.model
+        big = model.big_chunk_rows()
+        if big != 8192:
+            return None
+        n_big = n // big
+        r = n - n_big * big
+        if r <= 0:
+            return None
+        depth = a + n_big * big
+        avail = tuple(bk for bk in prefill_split.MASKED_BIG_BUCKETS if model._short_trace_for(r, bucket=bk) is not None)
+        if not avail:
+            return None
+        plan, costs = prefill_split.plan_remainder(r, depth, True, buckets=avail)
+        plans = self.__dict__.setdefault("masked_big_plans", {"old": 0, "m4096": 0, "m8192": 0})
+        plans[plan] = plans.get(plan, 0) + 1
+        total = sum(plans.values())
+        if total <= self._MASKED_BIG_LOG_FIRST:
+            logger.info(
+                f"[spec_engine] masked-big split #{total}: r={r} depth={depth} -> {plan} costs "
+                + " ".join(f"{k}={v:.3f}s" for k, v in costs.items())
+            )
+        elif total % self._MASKED_BIG_COUNT_EVERY == 0:
+            logger.info(f"[spec_engine] masked-big plans after {total} decisions{self._masked_big_note_text()}")
+        return None if plan == "old" else int(plan[1:])
+
+    def _masked_big_note_text(self):
+        """Tail of the periodic spec log line: counts of the remainder plans chosen (flag on, once a decision was made)."""
+        plans = self.__dict__.get("masked_big_plans")
+        if not plans:
+            return ""
+        return "; masked-big plans " + " ".join(f"{k}={v}" for k, v in sorted(plans.items()))
+
     def _vis_replay_kw(self, prompt, start, vision_tokens):
         """Vision kwargs (vision_tokens, vis_row_offset) for model._replay_short_trace / prefill_masked_bucket over the
         segment starting at absolute ``start`` of the whole ``prompt``: {} for text (the call is unchanged), else the
@@ -2844,13 +2958,15 @@ class MTPSpecEngine:
         captured_row,
         vision_tokens=None,
         vis_row_offset=0,
+        bucket=None,
     ):
         """One replay of the spec short trace over the prompt segment [chunk_start, chunk_start + L) = the prompt's last
         segment (slot Tp-1 is its last real row): base forward + MTP KV warm-up + feed row, then the feed row of slot
         Tp-1 is copied into _last_hidden[slot]. Returns host float logits [vocab] or None (no trace / trash collision).
         """
         model = self.model
-        tr = model._short_trace_for(L)
+        bkt_kw = {} if bucket is None else dict(bucket=bucket)  # only the masked-big replay passes it
+        tr = model._short_trace_for(L, **bkt_kw)
         if tr is None:
             return None
         inputs = mtp_prefill_inputs(
@@ -2858,7 +2974,15 @@ class MTPSpecEngine:
         )
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens, vis_row_offset=vis_row_offset)
         tr = model._replay_short_trace(
-            tokens, pt_row, L, strict=False, chunk_start=chunk_start, carry_gdn=carry, spec_inputs=inputs, **vis_kw
+            tokens,
+            pt_row,
+            L,
+            strict=False,
+            chunk_start=chunk_start,
+            carry_gdn=carry,
+            spec_inputs=inputs,
+            **bkt_kw,
+            **vis_kw,
         )
         if tr is None:
             # The trash block (vLLM's null block 0) is one of this request's real blocks: the traced prefill would park
@@ -3636,6 +3760,7 @@ class MTPSpecEngine:
                 + self._park_note_text()
                 + self._join_trace_note_text()
                 + self._bucket_note_text()
+                + self._masked_big_note_text()
             )
 
     def _join_trace_note_text(self):
