@@ -5,7 +5,7 @@
 """
 Smaller prefill chunks plus packed forwards vs today's big chunks, on one workload: real tokens per second.
 
-The question behind 4x4 / 2.5K chunks / N users per forward vs 8x4 / 5K / 1 user: a short request padded
+The question behind smaller chunks / N users per forward vs today's 8x4 / 5K / 1 user: a short request padded
 up to a big chunk wastes compute, a small chunk wastes less but runs the MoE on fewer tokens per call,
 and packing several users' chunks into one forward wins that back.
 
@@ -13,11 +13,9 @@ Workload: USERS users, each with history tokens of KV already prefilled (filled 
 same runtime), then one new request each (PRODUCTION_REQUEST_LENGTHS). The timed phase prefills every
 new request, traced, in the configuration's forwards (cK-fF: K-token chunks, F chunks per forward).
 
-  galaxy 8x4   c5120-f1 (today's production shape), c2048-f1 / f2 / f4 (smaller chunk on the same mesh; 2,560
-               would be 80 rows per TP rank, not whole tiles, which the indexer refuses)
-  galaxy 4x4   c2560-f1 / f2 / f4 (the proposed stage: 640 rows/chip, 16 experts/chip). Needs the
-               subtorus carve: TT_VISIBLE_DEVICES and TT_MESH_GRAPH_DESC_PATH as test_prefill_block_perf's
-               _SUBTORUS_XY4_ENV, set before pytest starts.
+  galaxy 8x4   c5120-f1 (today's production shape), c5120-f2 / f4 (packing alone, same padding),
+               c2048-f1 / f2 / f4 (smaller chunk on the same mesh; 2,560 would be 80 rows per TP rank, not
+               whole tiles, which the indexer refuses)
   LoudBox 2x4  everything at half scale (history, requests and chunks): c2560-f1, c1280-f1 / f2 / f4. A
                fixed-mesh comparison: TP and experts/chip stay as they are.
 
@@ -41,6 +39,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.common.prefill.prefill_chunk import PrefillChunk
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -58,9 +57,6 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime,
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
 from tests.ttnn.utils_for_testing import comp_pcc
-
-# TODO: import from models.demos.common.prefill.prefill_chunk once #62535 moves it there.
-from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk
 
 # Sweep knobs (GLM_WORKLOAD_*): the layer window, the history every user has already prefilled, and the new
 # requests (comma-separated lengths, one user each; a request may span several chunks).
@@ -85,8 +81,14 @@ def _workload(scale):
 
 
 _MESHES = {
-    "galaxy-8x4": ((8, 4), torus_xy_device_params, "mesh-8x4", 2, 1, [(5120, 1), (2048, 1), (2048, 2), (2048, 4)]),
-    "galaxy-4x4": ((4, 4), torus_xy_device_params, "mesh-4x4", 2, 1, [(2560, 1), (2560, 2), (2560, 4)]),
+    "galaxy-8x4": (
+        (8, 4),
+        torus_xy_device_params,
+        "mesh-8x4",
+        2,
+        1,
+        [(5120, 1), (5120, 2), (5120, 4), (2048, 1), (2048, 2), (2048, 4)],
+    ),
     "loudbox-fabric2d-2x4": (
         (2, 4),
         fabric2d_device_params,
@@ -308,7 +310,7 @@ def test_glm_chunk_batching_workload(
 # choices under the synthetic router would. A different chunk size should be no further off: attention sees
 # the same tokens. (On the LoudBox c2560-f1 is: 0.89 at layer 7, 0.69 at layer 9. Unexplained.)
 _KV_PCC = 0.98
-_KV_REFERENCE = {"galaxy-8x4": (2048, 1), "galaxy-4x4": (2560, 1), "loudbox-fabric2d-2x4": (1280, 1)}
+_KV_REFERENCE = {"galaxy-8x4": (2048, 1), "loudbox-fabric2d-2x4": (1280, 1)}
 
 
 @pytest.mark.parametrize(
