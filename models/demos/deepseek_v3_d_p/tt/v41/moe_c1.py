@@ -229,6 +229,18 @@ class C1FfnMatvec:
         assert gs[-2] == hidden and ds[-2] == inter and int(down0.shape[-1]) == hidden, (gs, ds, hidden, inter)
         self.KT, self.NGU_FULL, self.NT_GU = hidden // _TILE, gs[-1] // _TILE, inter // _TILE
         self.KD, self.ND_FULL, self.NT_D = inter // _TILE, ds[-1] // _TILE, hidden // _TILE
+        # timing probes (wrong outputs): ``noread`` skips the weight reads, ``nocompute`` the matmuls; ``cols<n>``
+        #  runs the TP-row split's quarter geometry on the whole-expert tensors: n gate/up
+        # column tiles on n cores and n down K tiles (the quarter's 18 of 72), the reads of a quarter expert
+        probe = os.environ.get("V41_DECODE_C1_FFN_PROBE", "")
+        self.cols = 0
+        if probe.startswith("cols"):  # ``cols18`` or ``cols18:noread``
+            cols, _, probe = probe[4:].partition(":")
+            self.cols = int(cols)
+        self.probe = {"": 0, "noread": 1, "nocompute": 2, "none": 3}[probe]
+        if self.cols:
+            assert 0 < self.cols <= self.NT_GU, (self.cols, self.NT_GU)
+            self.NT_GU = self.KD = self.BLK_D = self.cols
         assert self.KT % self.BLK_GU == 0 and self.KD % self.BLK_D == 0, (self.KT, self.KD)
         grid = device.compute_with_storage_grid_size()
         self.gx, self.gy = grid.x, grid.y
@@ -240,8 +252,6 @@ class C1FfnMatvec:
         self.rect = [c00.x, c00.y, c11.x, c11.y]
         fid = {"lofi": ttnn.MathFidelity.LoFi, "hifi2": ttnn.MathFidelity.HiFi2, "hifi4": ttnn.MathFidelity.HiFi4}
         self.fidelity = fidelity or os.environ.get("V41_DECODE_C1_FFN_FIDELITY", "lofi")
-        # timing probes (wrong outputs): ``noread`` skips the weight reads, ``nocompute`` the matmuls
-        self.probe = {"": 0, "noread": 1, "nocompute": 2, "none": 3}[os.environ.get("V41_DECODE_C1_FFN_PROBE", "")]
         self.X_SENDERS = self.gy  # one x stripe reader a grid row
         assert self.KT % self.X_SENDERS == 0, (self.KT, self.X_SENDERS)
         self.X_PER_SENDER = self.KT // self.X_SENDERS
