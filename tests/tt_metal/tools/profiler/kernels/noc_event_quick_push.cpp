@@ -34,6 +34,9 @@ void kernel_main() {
 #if ITER_ZONE
             DeviceZoneScopedN("TEST-ITER");
 #endif
+#if MCAST_EVERY > 0 && defined(PROFILE_KERNEL)
+            const uint32_t w_before = kernel_profiler::wIndex;
+#endif
             noc_async_read(src_noc_addr, l1_base + page_size, page_size);
             noc_async_read_barrier();
 #if PUSH_EVERY > 0 && defined(PROFILE_KERNEL)
@@ -47,7 +50,15 @@ void kernel_main() {
             }
 #endif
 #if MCAST_EVERY > 0
-            if (i % MCAST_EVERY == 0) {
+            // MCAST_EVERY == 1: right after a read whose event filled the ring and quick-pushed it (wIndex dropped),
+            // which is the model's pattern (a ring-full push, then ~75 cycles later the pre-emptive push of
+            // quick_push_if_linked before a linked multicast). MCAST_EVERY > 1: every n-th iteration instead.
+#if defined(PROFILE_KERNEL)
+            const bool ring_just_pushed = kernel_profiler::wIndex < w_before;
+#else
+            const bool ring_just_pushed = false;
+#endif
+            if (MCAST_EVERY == 1 ? ring_just_pushed : (i % MCAST_EVERY == 0)) {
                 // a linked chain of 4 writes, then the closing unlinked one (MCAST_WRITES = 5 NoC events)
                 for (uint32_t k = 0; k < 4; k++) {
                     noc_async_write_multicast(l1_base, mcast_noc_addr, page_size, mcast_num_dests, /*linked=*/true);
