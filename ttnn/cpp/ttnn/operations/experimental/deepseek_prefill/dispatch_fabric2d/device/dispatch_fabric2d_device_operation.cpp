@@ -81,7 +81,12 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: num_links must be between 1 and 4 (got {})",
         args.num_links);
     TT_FATAL(args.seq_len_per_chip > 0, "dispatch_fabric2d: seq_len_per_chip must be positive");
-    TT_FATAL(args.fwd_reduction >= 1, "dispatch_fabric2d: fwd_reduction must be >= 1 (got {})", args.fwd_reduction);
+    TT_FATAL(
+        args.fwd_vc_pages >= dspf2d::MIN_VC_PAGES,
+        "dispatch_fabric2d: fwd_vc_pages must be at least {} (got {}); the credit threshold is a quarter of a "
+        "channel and has to stay >= 1, and a channel shallower than a read batch spends all its time announcing",
+        dspf2d::MIN_VC_PAGES,
+        args.fwd_vc_pages);
     TT_FATAL(
         args.output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM &&
             args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -279,7 +284,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
-    uint32_t fwd_reduction,
+    uint32_t fwd_vc_pages,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set) {
@@ -296,7 +301,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .seq_len_per_chip = seq_len_per_chip,
             .axis = axis,
             .num_links = num_links,
-            .fwd_reduction = fwd_reduction,
+            .fwd_vc_pages = fwd_vc_pages,
             .has_padding_config = padding_config.has_value(),
             .topology = topology,
             .output_mem_config = memory_config,

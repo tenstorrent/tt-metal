@@ -107,51 +107,6 @@ std::vector<dspf2d::ChunkDescriptor> forwarding_descriptors(
     return descriptors;
 }
 
-uint32_t dense_pages_per_stream(
-    uint32_t ring_extent,
-    uint32_t num_links,
-    uint32_t seq_len_per_chip,
-    uint32_t num_experts_per_tok,
-    uint32_t experts_per_chip) {
-    const uint32_t m = ring_extent / 2;
-    const uint32_t per_pair = seq_len_per_chip * std::min(num_experts_per_tok, experts_per_chip);
-    const uint32_t sc = stream_count(num_links);
-    const auto div_up = [](uint32_t a, uint32_t b) { return (a + b - 1) / b; };
-
-    uint32_t pages = 0;
-    for (uint32_t dd = 1; dd < m; dd++) {
-        const uint32_t origins = m - dd;
-        pages += (origins - 1) * div_up(per_pair, num_links);
-        pages += div_up(per_pair, sc);
-    }
-    return pages + forward_descriptors_per_stream(ring_extent) * experts_per_chip;
-}
-
-uint32_t fwd_vc_pages(
-    uint32_t ring_extent,
-    uint32_t num_links,
-    uint32_t seq_len_per_chip,
-    uint32_t num_experts_per_tok,
-    uint32_t experts_per_chip,
-    uint32_t fwd_reduction) {
-    TT_FATAL(fwd_reduction > 0, "dispatch_fabric2d: fwd_reduction must be positive");
-    const uint32_t dense =
-        dense_pages_per_stream(ring_extent, num_links, seq_len_per_chip, num_experts_per_tok, experts_per_chip);
-    const uint32_t pages = (dense / fwd_reduction) / num_vcs(ring_extent);
-    return pages < dspf2d::MIN_VC_PAGES ? dspf2d::MIN_VC_PAGES : pages;
-}
-
-uint32_t fwd_pages_per_stream(
-    uint32_t ring_extent,
-    uint32_t num_links,
-    uint32_t seq_len_per_chip,
-    uint32_t num_experts_per_tok,
-    uint32_t experts_per_chip,
-    uint32_t fwd_reduction) {
-    return num_vcs(ring_extent) *
-           fwd_vc_pages(ring_extent, num_links, seq_len_per_chip, num_experts_per_tok, experts_per_chip, fwd_reduction);
-}
-
 // A channel IS a forward descriptor's movement class, so this is the descriptor enumeration itself rather
 // than a parallel list: descriptor d of a stream and channel d are the same (origin, destination) offsets,
 // which is what lets the reader map an arriving descriptor to its channel by index alone.

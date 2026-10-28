@@ -271,15 +271,9 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
         dspf2d::MAX_VCS);
     const auto sems = allocate_stream_semaphores(mesh, args.worker_core_range_set, vcs);
     // A page is a token plus its fwd_meta, so one fabric write carries both. Every channel is the same
-    // depth, so a stream's section is vcs channels of vc_pages.
-    const uint32_t vc_pages = fwd_vc_pages(
-        extent,
-        args.num_links,
-        args.seq_len_per_chip,
-        args.num_experts_per_tok,
-        args.experts_per_chip,
-        args.fwd_reduction);
-    const uint32_t fwd_pages = vcs * vc_pages;
+    // depth, so a stream's section is vcs channels of fwd_vc_pages.
+    const uint32_t vc_pages = args.fwd_vc_pages;
+    const uint32_t fwd_pages = fwd_pages_per_stream(extent, vc_pages);
     const OwnedBuffer fwd = allocate_buffer(
         mesh, fwd_pages * stream_count(args.num_links), token_bytes + dspf2d::FORWARDING_METADATA_SIZE, "forwarding");
     // Only for a TILE input: the untilized tokens, one row-major page each, so the stream cores address a

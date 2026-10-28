@@ -105,48 +105,12 @@ uint32_t vc_for_own(uint32_t distance, uint32_t ring_extent);
 // at page stream * fwd_pages_per_stream, divided into num_vcs channels of fwd_vc_pages each. Each page is
 // one token plus its fwd_meta. The upstream chip's sender writes it and this chip's reader reads it.
 //
-// What the region cost per stream when it was one flat queue that had to hold a whole launch, which is what
-// fwd_reduction divides. A chunk's length depends on expert_offsets, which is on device; reading it back
-// while building the program would break trace capture, so this is an upper bound that does not depend on
-// the data.
-//
-// One origin sends one destination at most seq_len_per_chip * min(num_experts_per_tok,
-// experts_per_chip) tokens, because a token picks distinct experts and the destination hosts
-// experts_per_chip of them. The destinations a fwd_section carries sit at distance 1..m-1. A destination
-// at distance dd is fed by m-dd origins: exactly one is a full m away and splits across every stream, and
-// the rest split across the num_links streams going that way. One spare page per chunk covers rounding
-// when a chunk is split.
-//
-// Note this bound charges every (origin, destination) pair a full run independently, which per-origin
-// conservation forbids -- the m-1 origins feeding a stream emit (m-1) runs between them, not the m(m-1)/2
-// the pairs suggest. It is kept as the baseline the reduction divides so a factor means the same thing it
-// does for combine_fabric2d.
-uint32_t dense_pages_per_stream(
-    uint32_t ring_extent,
-    uint32_t num_links,
-    uint32_t seq_len_per_chip,
-    uint32_t num_experts_per_tok,
-    uint32_t experts_per_chip);
-
-// Pages one channel holds. A FACTOR rather than a page count so it means the same thing for every model:
-// the dense size scales with num_experts_per_tok and the experts a chip hosts, so a fixed page count would
-// be a different reduction for each of them. Reducing it is free of correctness risk -- see the DRAIN note
-// above -- and costs only throughput, which is why it is an op parameter rather than a constant here.
-uint32_t fwd_vc_pages(
-    uint32_t ring_extent,
-    uint32_t num_links,
-    uint32_t seq_len_per_chip,
-    uint32_t num_experts_per_tok,
-    uint32_t experts_per_chip,
-    uint32_t fwd_reduction);
-
-// Pages a stream's whole section holds: every channel, each the same depth.
-uint32_t fwd_pages_per_stream(
-    uint32_t ring_extent,
-    uint32_t num_links,
-    uint32_t seq_len_per_chip,
-    uint32_t num_experts_per_tok,
-    uint32_t experts_per_chip,
-    uint32_t fwd_reduction);
+// Nothing here is derived from how much traffic a launch carries. It used to be: the region was one flat
+// queue that had to hold a whole launch, so it was sized from a data-independent upper bound on the chunks
+// crossing a chip. Credit return made that obsolete -- a producer now waits for a page rather than assuming
+// one -- and a channel is just a pipeline buffer, so its depth is given rather than computed.
+constexpr uint32_t fwd_pages_per_stream(uint32_t ring_extent, uint32_t fwd_vc_pages) {
+    return num_vcs(ring_extent) * fwd_vc_pages;
+}
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d
