@@ -42,21 +42,35 @@ Tensor _variance_impl(
     Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
     return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
 }
-Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
-    return _variance_impl(y, mean_y, y_minus_mean_y, output_mem_config);
+
+// ttnn::var and ttnn::std over H and W run as one program, but give each (N, C) plane to a single core. The
+// composite below spreads a plane over the grid in five programs. On Wormhole the one program is faster while
+// its busiest core reads at most 64 tiles; past that the composite usually is (2.6x for a single 1024x1024 plane).
+bool _hw_statistic_fits_one_program(const Tensor& y) {
+    const auto& shape = y.logical_shape();
+    // Host tensors and ranks below 2 take the composite, whose first op reports them. Quasar has no two-pass
+    // Std/Var kernel.
+    if (!ttnn::is_device_tensor(y) || shape.rank() < 2 || y.device()->arch() == tt::ARCH::QUASAR) {
+        return false;
+    }
+    const uint64_t plane_area = static_cast<uint64_t>(shape[-2]) * shape[-1];
+    const uint64_t planes = plane_area == 0 ? 0 : shape.volume() / plane_area;
+    const uint64_t tiles_per_plane = static_cast<uint64_t>(tt::div_up(shape[-2], tt::constants::TILE_HEIGHT)) *
+                                     tt::div_up(shape[-1], tt::constants::TILE_WIDTH);
+    const auto grid = y.device()->compute_with_storage_grid_size();
+    const uint64_t cores = static_cast<uint64_t>(grid.x) * grid.y;
+    constexpr uint64_t max_tiles_per_core = 64;
+    return tt::div_up(planes, cores) * tiles_per_plane <= max_tiles_per_core;
 }
 
-Tensor _std(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::sqrt(_variance_impl(y, mean_y, output_mem_config));
-}
-
-Tensor _std(
-    const Tensor& y,
-    const Tensor& mean_y,
-    Tensor& y_minus_mean_y,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::sqrt(_variance_impl(y, mean_y, y_minus_mean_y, output_mem_config));
+// mean((y - mean(y))^2) over H and W. Both means divide by the logical H * W and leave out the tile padding.
+// ttnn::bcast would round FP32 deviations to bfloat16 precision; ttnn::subtract keeps them.
+Tensor _mean_squared_deviation_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
+    ttsl::SmallVector<int> dims = {-2, -1};
+    Tensor mean_y = ttnn::mean(y, dims, true);
+    const std::array square = {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::SQUARE}};
+    Tensor squared_deviation = ttnn::subtract(y, mean_y, std::nullopt, output_mem_config, std::nullopt, square);
+    return ttnn::mean(squared_deviation, dims, true, output_mem_config);
 }
 
 std::vector<Tensor> split_tensor_for_glu(
@@ -134,17 +148,20 @@ Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_m
 }
 
 Tensor var_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    auto output_memory_config = output_mem_config.value_or(y.memory_config());
-    ttsl::SmallVector<int> dims = {2, 3};
-    Tensor mean_y = ttnn::mean(y, dims, true);
-    return detail::_variance_impl(y, mean_y, output_memory_config);
+    if (detail::_hw_statistic_fits_one_program(y)) {
+        return ttnn::var(y, ttsl::SmallVector<int>{-2, -1}, true, output_mem_config, std::nullopt, 1.0f, false);
+    }
+    return detail::_mean_squared_deviation_hw(y, output_mem_config);
 }
 
 // Function std
 // compute standard deviation of tensor y = sqrt( E((y-<y>)^2)/ y.volume() )
 //  Ref: torch.std
 Tensor std_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::sqrt(var_hw(y, output_mem_config));
+    if (detail::_hw_statistic_fits_one_program(y)) {
+        return ttnn::std(y, ttsl::SmallVector<int>{-2, -1}, true, output_mem_config, std::nullopt, 1.0f, false);
+    }
+    return ttnn::sqrt(detail::_mean_squared_deviation_hw(y, output_mem_config), false, output_mem_config);
 }
 
 // Function normalize
