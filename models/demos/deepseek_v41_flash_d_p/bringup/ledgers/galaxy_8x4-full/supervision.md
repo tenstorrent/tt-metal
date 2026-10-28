@@ -661,3 +661,9 @@ session's argv); a resume clears PAUSE (use --until to stop); watch + cron :07/:
   host work (both layers' hash, lookup, pack and upload) with dispatch; begin_chunk returns at once, take_engram_rows
   waits per layer. The overseer accepts its A/B on the clean-win rule without asking; anything else (gate fail,
   accuracy worse, wall not better) is reported.
+- 18:35 OWNER: after P.6 and the resident-engram profile -> 4-bit compressed KV. Queued FIX.8 HELD (CKV_FORMAT=bfp4_rows;
+  gate as FIX.7: W.1, M.1, L.s10240, L.last, L.s56320, L.smoke, K.1; paths model + ttnn/ttnn/bringup). Scope: only the
+  attention table goes bfp4 rows; served records stay bf16 holding the rounded values (contract + tt-d-gen unchanged);
+  bf16 path kept behind the switch. Release after: the overseer's single-card bfp4/bfp8 packer rounding test (~10 device
+  min) and the de-risk files (/scratch/dnijemcevic/ckv_derisk, report section 7 now cites the K3 artifact and PR #49811)
+  moved into the repo; the packer result goes to FIX.8 as a note.
