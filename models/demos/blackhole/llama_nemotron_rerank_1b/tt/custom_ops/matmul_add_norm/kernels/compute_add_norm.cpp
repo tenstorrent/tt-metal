@@ -118,6 +118,24 @@ ALWI void mul_dest_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
         icb, icb, idst, true)));
 }
 
+// add_unary_tile / rsqrt_tile over the column faces only (faces 0 and 2, VectorMode::C): the inverse
+// RMS lives in column 0, so the other half of the tile is wasted SFPU work.
+ALWI void add_scalar_col(uint32_t idst, uint32_t bits) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binop_with_scalar,
+        (APPROX, ADD_UNARY, 8, DST_ACCUM_MODE),
+        idst,
+        VectorMode::C,
+        bits));
+}
+
+ALWI void rsqrt_col(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_rsqrt, (APPROX, 8, DST_ACCUM_MODE, true), idst, VectorMode::C));
+}
+
 // From minimal_matmul compute.cpp.
 void matmul_blocks(
     const uint32_t M_block_tiles,
@@ -170,12 +188,16 @@ void pass1(uint32_t blk, uint32_t n_real) {
     for (uint32_t m = 0; m < M_block_tiles; ++m) {
         const uint32_t row = (blk * M_block_tiles + m) * res_w;
         cb_x2.reserve_back(N_block_tiles);
-        // res_cb and x2_cb are both bf16: one pack format for the row.
-        reconfig_data_format(acc_cb, res_cb);
-        pack_reconfig_data_format(res_cb);
-        for (uint32_t n = 0; n < N_block_tiles; n += P) {
-            const uint32_t t = m * N_block_tiles + n;
-            const uint32_t cnt = N_block_tiles - n < P ? N_block_tiles - n : P;
+        {
+#ifdef ZONES
+            DeviceZoneScopedN("P1A");
+#endif
+            // res_cb and x2_cb are both bf16: one pack format for the row.
+            reconfig_data_format(acc_cb, res_cb);
+            pack_reconfig_data_format(res_cb);
+            for (uint32_t n = 0; n < N_block_tiles; n += P) {
+                const uint32_t t = m * N_block_tiles + n;
+                const uint32_t cnt = N_block_tiles - n < P ? N_block_tiles - n : P;
 #ifdef INIT_PER_PAIR
             reconfig_data_format(acc_cb, res_cb);
 #endif
@@ -201,8 +223,12 @@ void pass1(uint32_t blk, uint32_t n_real) {
                 pack_tile<true>(P + j, x2_cb, n + j);
             }
             tile_regs_release();
-        }
+            }
         cb_x2.push_back(N_block_tiles);
+        }
+#ifdef ZONES
+        DeviceZoneScopedN("P1B");
+#endif
 
 #ifdef SKIP_SQ
         cb_x2.wait_front(N_block_tiles);
@@ -241,34 +267,42 @@ void pass2(uint32_t blk, uint32_t eps_bits) {
     // G tile-rows at a time: their inverse RMS in one DST session (CB 11 holds G tiles), then their y.
     for (uint32_t m0 = 0; m0 < M_block_tiles; m0 += G) {
         const uint32_t cnt = M_block_tiles - m0 < G ? M_block_tiles - m0 : G;
-        cb_inv.reserve_back(G);
-        pack_reconfig_data_format(inv_cb);
-        col_sum_init(gath_cb, one_cb, inv_cb);
-        tile_regs_acquire();
-        for (uint32_t j = 0; j < cnt; ++j) {
-            col_sum_tile(gath_cb, one_cb, m0 + j, j);
+        {
+#ifdef ZONES
+            DeviceZoneScopedN("P2A");
+#endif
+            cb_inv.reserve_back(G);
+            pack_reconfig_data_format(inv_cb);
+            col_sum_init(gath_cb, one_cb, inv_cb);
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < cnt; ++j) {
+                col_sum_tile(gath_cb, one_cb, m0 + j, j);
+            }
+            MATH((llk_math_reduce_uninit()));
+            transpose_dest_init<DST_ACCUM_MODE, true>();
+            for (uint32_t j = 0; j < cnt; ++j) {
+                transpose_dest<DST_ACCUM_MODE, true>(j);  // mean squares: row 0 -> column 0
+            }
+            binop_with_scalar_tile_init();
+            for (uint32_t j = 0; j < cnt; ++j) {
+                add_scalar_col(j, eps_bits);
+            }
+            rsqrt_tile_init();
+            for (uint32_t j = 0; j < cnt; ++j) {
+                rsqrt_col(j);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < cnt; ++j) {
+                pack_tile<true>(j, inv_cb, j);
+            }
+            tile_regs_release();
+            cb_inv.push_back(G);
+            cb_inv.wait_front(G);
         }
-        MATH((llk_math_reduce_uninit()));
-        transpose_dest_init<DST_ACCUM_MODE, true>();
-        for (uint32_t j = 0; j < cnt; ++j) {
-            transpose_dest<DST_ACCUM_MODE, true>(j);  // mean squares: row 0 -> column 0
-        }
-        binop_with_scalar_tile_init();
-        for (uint32_t j = 0; j < cnt; ++j) {
-            add_unary_tile(j, eps_bits);
-        }
-        rsqrt_tile_init();
-        for (uint32_t j = 0; j < cnt; ++j) {
-            rsqrt_tile(j);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t j = 0; j < cnt; ++j) {
-            pack_tile<true>(j, inv_cb, j);
-        }
-        tile_regs_release();
-        cb_inv.push_back(G);
-        cb_inv.wait_front(G);
+#ifdef ZONES
+        DeviceZoneScopedN("P2B");
+#endif
 
         reconfig_data_format(res_cb, inv_cb);
         mul_cols_init(res_cb, inv_cb);

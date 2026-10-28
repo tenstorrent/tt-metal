@@ -96,7 +96,17 @@ def main():
 
     def new():
         return matmul_add_norm(
-            tx, tw, res, consts, eps=EPS, block=block, fidelity=fid, defines=defines, fp32_acc=not args.bf16_acc
+            tx,
+            tw,
+            res,
+            consts,
+            eps=EPS,
+            block=block,
+            fidelity=fid,
+            defines=defines,
+            fp32_acc=not args.bf16_acc,
+            in0_depth=args.in0_depth,
+            in1_depth=args.in1_depth,
         )
 
     def old():
