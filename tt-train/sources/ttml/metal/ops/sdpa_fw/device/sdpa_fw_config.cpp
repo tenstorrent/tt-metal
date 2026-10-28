@@ -178,7 +178,7 @@ SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChun
         .output = rows * shape.vWt,
         .reduction_scaler = 1U,
         .matmul_reduce = 1U,
-        .partial = with_partials ? 4U * partial_tiles_per_row(shape) : 0U,  // streamed two rows per barrier
+        .partial = with_partials ? sdpa_fw_items::kPartialCbRows * partial_tiles_per_row(shape) : 0U,
         .alpha = with_partials ? rows : 0U};
 }
 
@@ -251,7 +251,7 @@ void append_unit_words(
 }
 
 uint32_t partial_tiles_per_row(const SDPAForwardShape& shape) {
-    return shape.vWt + 2U;  // running max, unreduced running sum, unnormalized output
+    return sdpa_fw_items::partial_row_tiles(shape.vWt);
 }
 
 uint32_t effective_max_pieces(const SDPAForwardProgramConfig& config) {

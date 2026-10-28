@@ -70,6 +70,20 @@ constexpr uint32_t unit_field_max(uint32_t bits) {
 
 constexpr uint32_t kMaxMergersPerCore = 4U;  // semaphores per core, one per merger
 
+// A sender's partial, per item row: [running max, unreduced running sum, vWt output tiles], all fp32, in
+// a DRAM scratch slot. The partial CBs hold kPartialCbRows rows; the reader and writer move
+// partial_rows_per_batch(rows) rows per NoC batch, which divides both so no batch straddles the CB end.
+constexpr uint32_t kPartialMaxTile = 0U;
+constexpr uint32_t kPartialSumTile = 1U;
+constexpr uint32_t kPartialFirstOutTile = 2U;
+constexpr uint32_t partial_row_tiles(uint32_t vWt) {
+    return kPartialFirstOutTile + vWt;
+}
+constexpr uint32_t kPartialCbRows = 4U;
+constexpr uint32_t partial_rows_per_batch(uint32_t rows) {
+    return (rows % 2U == 0U) ? 2U : 1U;
+}
+
 struct WorkUnitFields {
     uint32_t item;
     uint32_t role;

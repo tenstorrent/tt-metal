@@ -20,6 +20,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
+#include "tt-train/sources/ttml/metal/ops/sdpa_fw/device/sdpa_fw_item_math.hpp"
 #ifdef TRISC_MATH
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa_fw.h"
 #endif
@@ -359,16 +360,17 @@ void recip_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
     tile_regs_release();
 }
 
-// Split units. A sender packs its running state, per row [max, unreduced sum, output tiles], into
-// cb_partial_out (fp32) for the writer; a merger folds such a partial into its own running state, like
-// one more K/V step: m = max(m_own, m_p), alpha_x = exp(scale * (m_x - m)), sum = sum_own * alpha_own +
-// sum_p * alpha_p, O = O_own * alpha_own + O_p * alpha_p. The partials stream through the CBs one row
-// (Wt + 2 tiles) at a time. The partial's tiles and the sums are multiplied on the FPU (19-bit inputs,
-// once per partial); the merger's own fp32 output accumulator is scaled in DST so it is never truncated.
+// Split units. A sender packs its running state, per row [max, unreduced sum, output tiles] (the layout
+// in sdpa_fw_item_math.hpp), into cb_partial_out (fp32) for the writer; a merger folds such a partial into
+// its own running state, like one more K/V step: m = max(m_own, m_p), alpha_x = exp(scale * (m_x - m)),
+// sum = sum_own * alpha_own + sum_p * alpha_p, O = O_own * alpha_own + O_p * alpha_p. The partials stream
+// through the CBs one row (Wt + 2 tiles) at a time. The partial's tiles and the sums are multiplied on the
+// FPU (19-bit inputs, once per partial); the merger's own fp32 output accumulator is scaled in DST so it is
+// never truncated.
 #ifdef SPLIT_UNITS
 template <uint32_t rows>
 void send_partial(uint32_t Wt, uint32_t cb_mm_out, uint32_t cb_max, uint32_t cb_sum_exp, uint32_t cb_partial_out) {
-    const uint32_t tiles_per_row = Wt + 2U;
+    const uint32_t tiles_per_row = sdpa_fw_items::partial_row_tiles(Wt);
     cb_wait_front(cb_mm_out, rows * Wt);
     cb_wait_front(cb_max, rows);
     cb_wait_front(cb_sum_exp, rows);
@@ -431,9 +433,10 @@ void merge_partial(
     uint32_t cb_cur_sum_exp,
     uint32_t cb_alpha_own,
     uint32_t cb_alpha_p) {
-    const uint32_t tiles_per_row = Wt + 2U;
-    constexpr uint32_t kPartialSumTile = 1U;  // a partial row: max, sum, then the output tiles
-    constexpr uint32_t kPartialFirstOutTile = 2U;
+    const uint32_t tiles_per_row = sdpa_fw_items::partial_row_tiles(Wt);
+    using sdpa_fw_items::kPartialFirstOutTile;
+    using sdpa_fw_items::kPartialMaxTile;
+    using sdpa_fw_items::kPartialSumTile;
     cb_wait_front(cb_prev_mm_out, rows * Wt);
     cb_wait_front(cb_prev_max, rows);
     cb_wait_front(cb_prev_sum_exp, rows);
@@ -450,8 +453,8 @@ void merge_partial(
         copy_tile(cb_prev_max, r, 0);
         reconfig_data_format_srca(cb_partial_in);
         copy_init(cb_partial_in);
-        copy_tile(cb_partial_in, 0, 1);
-        copy_tile(cb_partial_in, 0, 2);
+        copy_tile(cb_partial_in, kPartialMaxTile, 1);
+        copy_tile(cb_partial_in, kPartialMaxTile, 2);
         binary_max_tile_init();
         binary_max_tile(0, 1, 1, VectorMode::C);
         sub_binary_tile_init();
