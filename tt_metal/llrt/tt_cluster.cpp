@@ -902,10 +902,17 @@ bool Cluster::supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) cons
     // TODO: Remove this once we have a proper fix for small DMA sizes.
     constexpr uint32_t min_dma_size_bytes = 32;
 
-    // DMA reads and writes are only supported on WH. If/when DMA reads and writes are supported on BH, this should be
-    // updated to support BH architectures as well. See https://github.com/tenstorrent/tt-metal/issues/22957
-    return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->get_cluster_desc()->is_chip_mmio_capable(chip_id) &&
-           sz_in_bytes >= min_dma_size_bytes;
+    return this->get_cluster_desc()->is_chip_mmio_capable(chip_id) && sz_in_bytes >= min_dma_size_bytes;
+}
+
+bool Cluster::supports_dma_writes(ChipId chip_id, uint32_t sz_in_bytes) const {
+    return (this->arch_ == tt::ARCH::WORMHOLE_B0 || this->arch_ == tt::ARCH::BLACKHOLE) &&
+           this->supports_dma_operations(chip_id, sz_in_bytes);
+}
+
+bool Cluster::supports_dma_reads(ChipId chip_id, uint32_t sz_in_bytes) const {
+    // DMA reads are broken on BH. See https://github.com/tenstorrent/tt-metal/issues/22957
+    return this->arch_ == tt::ARCH::WORMHOLE_B0 && this->supports_dma_operations(chip_id, sz_in_bytes);
 }
 
 void Cluster::write_core(
@@ -936,7 +943,7 @@ void Cluster::write_core(
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
+    if (this->supports_dma_writes(chip_id, sz_in_bytes)) {
         this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     } else {
         const tt::umd::IoOrdering resolved_ordering = ordering.value_or(
@@ -970,7 +977,7 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    if (this->supports_dma_operations(chip_id, size_in_bytes)) {
+    if (this->supports_dma_reads(chip_id, size_in_bytes)) {
         this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, core.chip, core_coord, addr);
     } else {
         this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
@@ -1695,7 +1702,8 @@ bool Cluster::is_external_cable(ChipId physical_chip_id, tt::tt_metal::CoreCoord
 }
 
 uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_bytes) const {
-    if (this->supports_dma_operations(chip_id, size_in_bytes)) {
+    // Every chip that supports DMA reads also supports DMA writes.
+    if (this->supports_dma_writes(chip_id, size_in_bytes)) {
         return this->hal_->get_dma_alignment();
     }
     return 1;
