@@ -8,7 +8,8 @@ Layout used throughout: reader (pipe sender) b reads DRAM bank b, and its R rece
 workers b*R .. b*R + R - 1 of the matmul grid, the order an mcast_in0 matmul over the pipes expects its
 K-blocks in. The matmul grid is as wide as fits a whole number of banks' receivers, so each bank's
 receivers are one row segment; the senders follow row-major in the rows below it, bank b's being the b-th
-(the (num_banks - 1 - b)-th with reversed senders).
+(the (num_banks - 1 - b)-th with reversed senders). The gather_in0 test places the senders inside its ring
+instead (_GatherLayout).
 
 See tt_metal/impl/buffers/prefetcher_matmul_design.md for the delivery contract.
 """
@@ -52,6 +53,7 @@ class _Layout:
         )
         self.matmul_grid = (banks_per_row * recv_per_reader, self.num_banks // banks_per_row)
         self.receiver_cores = _core_range(0, 0, self.matmul_grid[0] - 1, self.matmul_grid[1] - 1)
+        self.worker_cores = self.receiver_cores
         # The senders, then one core that is neither a sender nor a receiver.
         cores = [ttnn.CoreCoord(i % grid.x, self.matmul_grid[1] + i // grid.x) for i in range(self.num_banks + 1)]
         assert cores[-1].y < grid.y, f"{self.num_banks} senders do not fit below the {self.matmul_grid} matmul grid"
@@ -73,6 +75,39 @@ class _Layout:
     def entry_size(self, dtype, per_core_n):
         """Bytes each receiver is delivered per block: one in1 K-block of the matmul."""
         return self.in0_block_w * per_core_n * bytes_per_tile(dtype)
+
+
+class _GatherLayout(_Layout):
+    """A gather_in0 ring with the senders inside its bounding box, as a model places its prefetcher's
+    readers among the matmul's workers.
+
+    The senders fill the grid's middle column from the top, and the column right of it once that one is
+    full. The ring is every other row of the other columns, row-major, as far as it reaches; bank b's
+    receivers are ring positions b*R .. b*R + R - 1. The workers' sub-device is every core but the
+    senders, so it is not a rectangle, and the ring's bounding box crosses the senders' sub-device.
+    """
+
+    def __init__(self, device, recv_per_reader):
+        grid = device.compute_with_storage_grid_size()
+        self.num_banks = device.dram_grid_size().x
+        self.recv_per_reader = recv_per_reader
+        self.num_blocks = self.num_banks * recv_per_reader
+        sender_x = grid.x // 2
+        self._bank_senders = [ttnn.CoreCoord(sender_x + b // grid.y, b % grid.y) for b in range(self.num_banks)]
+        sender_xs = {core.x for core in self._bank_senders}
+        ring_cells = [ttnn.CoreCoord(x, y) for y in range(0, grid.y, 2) for x in range(grid.x) if x not in sender_xs]
+        self.ring = ring_cells[: self.num_blocks]
+        assert len(self.ring) == self.num_blocks, f"a {self.num_blocks}-core ring does not fit every other row"
+        self.receiver_cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in self.ring])
+        self.sender_cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in self._bank_senders])
+        self.worker_cores = _core_range(0, 0, grid.x - 1, grid.y - 1).subtract(self.sender_cores)
+        self.in0_block_w = 2
+        self.k_tiles = self.num_blocks * self.in0_block_w
+
+    def bank_receivers(self, b):
+        """Bank b's receivers: ring positions b*R .. b*R + R - 1."""
+        receivers = self.ring[b * self.recv_per_reader : (b + 1) * self.recv_per_reader]
+        return ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in receivers])
 
 
 def _make_pipes(device, layout, ring_size, mapping=None, receiver_domain=None):
@@ -138,7 +173,7 @@ def _prefetcher_sub_devices(device, layout):
     prefetcher_common.run_prefetcher_mm does.
     """
     sub_device_manager = device.create_sub_device_manager(
-        [ttnn.SubDevice([layout.sender_cores]), ttnn.SubDevice([layout.receiver_cores])], 0
+        [ttnn.SubDevice([layout.sender_cores]), ttnn.SubDevice([layout.worker_cores])], 0
     )
     device.load_sub_device_manager(sub_device_manager)
     worker_sub_device_id = ttnn.SubDeviceId(1)
@@ -236,13 +271,7 @@ def _check_matmuls(device, layout, num_layers, enable_performance_mode):
         pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     program_configs = [_matmul_program_config(layout, per_core_n) for _, per_core_n in _TWO_TENSORS]
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
+    compute_kernel_config = _compute_kernel_config(device)
 
     num_tensors = len(_TWO_TENSORS)
     cache_entries = []
@@ -283,6 +312,97 @@ def _check_matmuls(device, layout, num_layers, enable_performance_mode):
 
     assert cache_entries[0] > 0, "the program cache is disabled, so the cache-hit check below would prove nothing"
     assert cache_entries[1] == cache_entries[0], f"second run built new programs: cache entries {cache_entries}"
+
+
+def _compute_kernel_config(device):
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
+@skip_for_slow_dispatch("sub-device managers need fast dispatch")
+def test_worker_pipes_gather_in0_matmul_senders_inside_ring(device):
+    """dram_prefetcher over pipes feeding gather_in0 matmuls whose ring surrounds the senders.
+
+    The matmul's kernels also run on the idle cores around its ring, but never on the senders, which
+    belong to the prefetcher's sub-device and run the prefetcher meanwhile. The senders deliver each
+    worker its K-blocks in K order, so the matmul reads them with stream_in1=False from a ring that holds
+    the whole layer and a block and a half more, which starts the second layer mid-ring.
+    """
+    layout = _GatherLayout(device, recv_per_reader=2)
+    num_layers = 2
+    dtype, per_core_n = _TWO_TENSORS[0]
+    ring_size = round_up(
+        (2 * layout.num_blocks + 3) * layout.entry_size(dtype, per_core_n) // 2, ttnn.get_l1_alignment()
+    )
+    _space, pipes = _make_pipes(device, layout, ring_size)
+    pt_weights, tt_weights, tt_addrs = _make_weights(device, layout, [(dtype, per_core_n)], num_layers)
+
+    M = ttnn.TILE_SIZE
+    K = layout.k_tiles * ttnn.TILE_SIZE
+    N = layout.num_blocks * per_core_n * ttnn.TILE_SIZE
+
+    def ring_sharded(width):
+        return ttnn.create_sharded_memory_config(
+            shape=(M, width),
+            core_grid=layout.receiver_cores,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    pt_act = torch.randn(1, 1, M, K)
+    tt_act = ttnn.from_torch(
+        pt_act,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ring_sharded(K // layout.num_blocks),
+    )
+    grid = device.compute_with_storage_grid_size()
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=layout.in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=per_core_n,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=True,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=1,
+        untilize_out=False,
+        stream_in1=False,
+    )
+
+    with _prefetcher_sub_devices(device, layout) as worker_sub_device_id:
+        ttnn.dram_prefetcher(tt_weights[:1] + [tt_addrs], num_layers, prefetcher_pipes=pipes)
+        device.set_sub_device_stall_group([worker_sub_device_id])
+        outputs = [
+            ttnn.matmul(
+                tt_act,
+                tt_weights[layer],
+                program_config=program_config,
+                memory_config=ring_sharded(N // layout.num_blocks),
+                compute_kernel_config=_compute_kernel_config(device),
+                sub_device_id=worker_sub_device_id,
+                prefetcher_pipes=pipes,
+            )
+            for layer in range(num_layers)
+        ]
+        ttnn.synchronize_device(device)
+        device.reset_sub_device_stall_group()
+
+        for layer, tt_out in enumerate(outputs):
+            passing, output_str = comp_pcc(pt_act.float() @ pt_weights[layer].float(), ttnn.to_torch(tt_out), 0.999)
+            logger.info(f"[worker_pipes gather_in0 layer={layer}] {output_str}")
+            assert passing, f"layer {layer}: {output_str}"
 
 
 def _rejection_setup(device):

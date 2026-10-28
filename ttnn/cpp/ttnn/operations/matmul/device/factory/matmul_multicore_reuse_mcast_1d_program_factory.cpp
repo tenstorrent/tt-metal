@@ -4800,6 +4800,57 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     };
 }
 
+// Where the gather ring's worker kernels run: the ring's bounding box when the sub-device's worker grid
+// holds all of it, and otherwise the bounding box of the ring within each rectangle of that grid that
+// holds part of it. Dispatch configures a rectangle with one multicast, so a scattered ring placed on
+// its own cores costs a write per rectangle of the ring where a box costs one; the box's other cores run
+// the kernels idle, at the cost of their per-node runtime args. A box stays inside the sub-device, whose
+// neighbours may be running other programs. The grid's rectangles are its ranges merged, so how the
+// caller wrote the sub-device down does not change the boxes. Hop cores run their own kernels and a
+// worker-sender pipe's sender runs the producer, so neither joins a box. A ring that no one sub-device
+// holds stays on its own cores.
+static CoreRangeSet gather_in0_ring_placement(
+    const tt_metal::distributed::MeshDevice& device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreRangeSet& ring_cores,
+    const CoreRangeSet& hop_cores,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes) {
+    // Unnamed, the matmul runs on the sub-device holding its cores.
+    const std::vector<tt::tt_metal::SubDeviceId> candidates =
+        sub_device_id.has_value() ? std::vector{*sub_device_id} : device.get_sub_device_ids();
+    std::optional<CoreRangeSet> sub_device_cores;
+    for (const auto& id : candidates) {
+        CoreRangeSet cores = device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, id);
+        if (cores.contains(ring_cores)) {
+            sub_device_cores = std::move(cores);
+            break;
+        }
+    }
+    if (!sub_device_cores.has_value()) {
+        return ring_cores;
+    }
+
+    CoreRangeSet outside_box = hop_cores;
+    for (const auto& pipe : prefetcher_pipes) {
+        if (pipe->sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Worker) {
+            outside_box = outside_box.merge(pipe->sender_cores());
+        }
+    }
+    const CoreRange ring_box = ring_cores.bounding_box();
+    if (sub_device_cores->contains(ring_box)) {
+        return CoreRangeSet(ring_box).subtract(outside_box);
+    }
+    const CoreRangeSet sub_device_rectangles = sub_device_cores->merge_ranges();
+    std::vector<CoreRange> boxes;
+    for (const CoreRange& range : sub_device_rectangles.ranges()) {
+        const CoreRangeSet ring_in_range = ring_cores.intersection(CoreRangeSet(range));
+        if (!ring_in_range.empty()) {
+            boxes.push_back(ring_in_range.bounding_box());
+        }
+    }
+    return CoreRangeSet(boxes).subtract(outside_box);
+}
+
 // gather_in0 over PrefetcherPipes. The ring is the activation's shard grid in shard order (range by
 // range, which is row-major only within a range): worker i holds in0 shard i and computes output
 // column block i. Each step it forwards the in0 shard it holds to the previous worker (worker 0 to the
@@ -4815,6 +4866,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
 // this body to what it builds.
 static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifacts(
     const tt_metal::distributed::MeshDevice& device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool fp32_dest_acc_en,
     bool packer_l1_acc,
@@ -4849,6 +4901,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     const auto ring_size = static_cast<uint32_t>(ring.size());
     // Hop cores only pass in0 on, carrying the ring's link from its first core round to its last.
     const std::vector<CoreCoord> hops = corerange_to_cores(hop_cores, std::nullopt, row_major);
+    // The workers' kernels also run, idle, on the cores that fill out the ring's rectangles.
+    const CoreRangeSet ring_placement =
+        gather_in0_ring_placement(device, sub_device_id, ring_cores, hop_cores, prefetcher_pipes);
+    const CoreRangeSet idle_cores = ring_placement.subtract(ring_cores);
 
     // Each in0 shard is one K-block. When K does not fill the ring the last shards are short or empty;
     // the kernels take each one's unpadded width from k_tiles.
@@ -4974,7 +5030,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     //                      Semaphores
     ////////////////////////////////////////////////////////////////////////////
     Group<SemaphoreSpec> semaphores = {
-        SemaphoreSpec{.unique_id = RING_SIGNAL_SEM, .target_nodes = ring_cores.merge(hop_cores)},
+        SemaphoreSpec{.unique_id = RING_SIGNAL_SEM, .target_nodes = ring_placement.merge(hop_cores)},
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -5018,7 +5074,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
         .semaphore_bindings = {SemaphoreBinding{
             .semaphore_spec_name = RING_SIGNAL_SEM, .accessor_name = "in0_ring_signal"}},
         .compile_time_args = in0_forward_cta,
-        .runtime_arg_schema = {.runtime_arg_names = {"ring_idx", "next_core_noc_x", "next_core_noc_y"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"is_worker", "ring_idx", "next_core_noc_x", "next_core_noc_y"}},
         .hw_config = in0_forward_hw,
     });
 
@@ -5041,7 +5097,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
                 {"in1_in_ring_order", static_cast<uint32_t>(stream_in1)},
                 {"rest_of_ring_blocks", rest_of_ring_blocks},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"ring_idx"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"is_worker", "ring_idx"}},
         .hw_config =
             DataMovementHardwareConfig{
                 .config_1xx =
@@ -5052,7 +5108,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
             },
         // One accessor over every pipe, one of which is present on each worker.
         .advanced_options =
-            {.prefetcher_pipe_bindings = {{.pipe_parameter_names = in1_pipe_relay.names, .accessor_name = "in1"}}},
+            {.prefetcher_pipe_bindings =
+                 {{.pipe_parameter_names = in1_pipe_relay.names, .accessor_name = "in1", .extra_nodes = idle_cores}}},
     });
 
     // Metal 2.0 requires an unpack mode for every Float32 buffer a compute kernel consumes with 32-bit
@@ -5154,7 +5211,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
                         .endpoint_type = DFBEndpointType::CONSUMER},
                 },
             .compile_time_args = std::move(compute_cta),
-            .runtime_arg_schema = {.runtime_arg_names = {"ring_idx"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"is_worker", "ring_idx"}},
             .hw_config = compute_hw,
         });
     }
@@ -5187,7 +5244,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     }
 
     Group<WorkUnitSpec> work_units = {
-        WorkUnitSpec{.name = "ring", .kernels = {IN0_RING, IN1_READER, COMPUTE}, .target_nodes = ring_cores},
+        WorkUnitSpec{.name = "ring", .kernels = {IN0_RING, IN1_READER, COMPUTE}, .target_nodes = ring_placement},
     };
     if (!hops.empty()) {
         work_units.push_back(WorkUnitSpec{.name = "hops", .kernels = {IN0_HOP, HOP_SINK}, .target_nodes = hop_cores});
@@ -5212,11 +5269,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
         AddRuntimeArgsForNode(
             in0_ring_run_args.runtime_arg_values,
             ring[i],
-            {{"ring_idx", i},
+            {{"is_worker", 1},
+             {"ring_idx", i},
              {"next_core_noc_x", static_cast<uint32_t>(next_core_noc.x)},
              {"next_core_noc_y", static_cast<uint32_t>(next_core_noc.y)}});
-        AddRuntimeArgsForNode(in1_reader_run_args.runtime_arg_values, ring[i], {{"ring_idx", i}});
-        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, ring[i], {{"ring_idx", i}});
+        AddRuntimeArgsForNode(in1_reader_run_args.runtime_arg_values, ring[i], {{"is_worker", 1}, {"ring_idx", i}});
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, ring[i], {{"is_worker", 1}, {"ring_idx", i}});
+    }
+    for (const CoreCoord& core : corerange_to_cores(idle_cores, std::nullopt, row_major)) {
+        AddRuntimeArgsForNode(
+            in0_ring_run_args.runtime_arg_values,
+            core,
+            {{"is_worker", 0}, {"ring_idx", 0}, {"next_core_noc_x", 0}, {"next_core_noc_y", 0}});
+        AddRuntimeArgsForNode(in1_reader_run_args.runtime_arg_values, core, {{"is_worker", 0}, {"ring_idx", 0}});
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"is_worker", 0}, {"ring_idx", 0}});
     }
 
     ProgramRunArgs run_args;
@@ -6903,6 +6969,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
     if (gather_in0) {
         return reuse_mcast_1d_optimized_helpers::create_program_gather_in0_artifacts(
             device,
+            operation_attributes.sub_device_id,
             compute_kernel_config,
             fp32_dest_acc_en,
             packer_l1_acc,
