@@ -150,16 +150,19 @@ class FlowStateTT:
 
     # ------------------------------------------------------------------ host wrapper
 
-    def prepare(self, x, s, horizon):
-        """Host front end: x (B, T, 1) -> device tokens and the bookkeeping."""
+    def prepare(self, x, s, horizon, host_only=False):
+        """Host front end: x (B, T, 1) -> tokens (on device, or a host tile tensor for a traced upload), bookkeeping."""
         tok, mean, stdev, bk = dfl.front_end(x, s, horizon)
         B, L = tok.shape[:2]
         Bp = -(-B // TILE) * TILE
         t = torch.zeros(L, Bp, TILE)
         t[:, :B, :2] = tok.transpose(0, 1)
-        tok_dev = _put(self.device, t.view(1, 1, L * Bp, TILE), ttnn.float32)
         r0 = dfl.first_read_row(L, bk["min_context"])
-        return tok_dev, dict(bk, B=B, Bp=Bp, r0=r0, mean=mean, stdev=stdev)
+        meta = dict(bk, B=B, Bp=Bp, r0=r0, mean=mean, stdev=stdev)
+        host = ttnn.from_torch(t.view(1, 1, L * Bp, TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        if host_only:
+            return host, meta
+        return ttnn.to_device(host, self.device), meta
 
     def finish(self, dec, meta, horizon):
         """Device decoder output -> (quantile_outputs, prediction_outputs, combined_normalized, decoder_pre_denorm)."""
