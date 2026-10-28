@@ -103,8 +103,6 @@ case "${MODEL}" in
     if [ "${VARIANT#_mtp}" != "${VARIANT}" ]; then
       MTP=1
       MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
-      SC1_MAX_SEQ_LEN=81920
-      SC1_REQUEST_LEN=${GOLDEN_LEN}
       MTP_PCC_THRESHOLD=0.80
       MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-802cad1b-56320tok-L7-nozeropos0}"
       PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k; \
