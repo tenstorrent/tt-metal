@@ -40,6 +40,10 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvC
 _BLOCK_TIMING_ENABLED = os.environ.get("TT_PREFILL_BLOCK_TIMING", "0") == "1"
 _BLOCK_TIMINGS: dict[int, dict[str, list[float]]] = {}
 
+# Opt-in (TT_PREFILL_FUSED_MM_RS=1): MLA's q_a_proj / o_proj and the indexer's wk / weights_proj run their matmul and
+# TP reduce-scatter as one matmul_reduce_scatter_prefill op. Off by default.
+_FUSED_MM_RS_ENABLED = os.environ.get("TT_PREFILL_FUSED_MM_RS", "0") == "1"
+
 
 def reset_block_timings() -> None:
     """Drop all recorded per-layer MLA/FFN samples (e.g. to exclude a warmup iteration)."""
@@ -338,6 +342,7 @@ class TtPrefillBlock(LightweightModule):
             and config.num_attention_heads == 64
             and config.q_lora_rank == 2048
             and getattr(config, "indexer_types", None) is not None
+            and not _FUSED_MM_RS_ENABLED  # the fused op reads its input from DRAM
         )
         self.attn_norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
@@ -380,6 +385,7 @@ class TtPrefillBlock(LightweightModule):
             first_layer_idx=first_layer_idx,
             llama4_scale_cache=llama4_scale_cache,
             tp_shard_kv=tp_shard_kv,
+            fused_mm_rs=_FUSED_MM_RS_ENABLED,
         )
 
         if kv_only:

@@ -304,6 +304,7 @@ class ttMLA:
         llama4_scale_cache: Optional[dict] = None,
         sparse_mla_overlap_profile: Optional[str] = None,
         tp_shard_kv: Optional[bool] = None,
+        fused_mm_rs: bool = False,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -466,6 +467,8 @@ class ttMLA:
         self.active_seq_len_local = self.active_seq_len // self.sp_factor
 
         self.ccl_num_links = 2 if self._is_blackhole else 1  # Blackhole trains 2 fabric routing planes, others 1
+        # q_a_proj, o_proj and the indexer's wk / weights_proj run matmul + TP reduce-scatter as one op.
+        self._fused_mm_rs = fused_mm_rs and self.tp_factor > 1
 
         # The TP high-bandwidth all-gathers operate on the fixed prefill chunk, never on the full
         # growing KV-cache. Allocate their worst-case outputs once at construction and share them
@@ -690,6 +693,7 @@ class ttMLA:
                     layer_num=self.layer_num,
                     first_layer_idx=first_layer_idx,
                     output_tp_sequence_sharded=self._needs_head_to_seq_reshard,
+                    fused_mm_rs=self._fused_mm_rs,
                 )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
@@ -1152,6 +1156,17 @@ class ttMLA:
         """q_a projection + TP all-reduce + q_a_layernorm → the q_a latent (qr). Computed once per
         layer and shared: _q_stem consumes it for q_b_proj, and (when present) TtIndexer.forward reads
         it for the indexer queries — so the sparse path no longer recomputes the q_a stem."""
+        if self._fused_mm_rs:
+            qr = ttnn.experimental.matmul_reduce_scatter_prefill(
+                hidden_states,
+                self.q_a_proj_weight,
+                cluster_axis=self.tp_axis,
+                scatter_dim=-1,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+            )
+            qr = self._tp_all_reduce(qr, self._q_a_latent_gather_output, seq_len_local, ag_only=True)
+            return self._q_a_norm(qr, norm_memory_config)
         # NOTE: input is ideally L1 for chunked, but hidden states memory config is set outside the module
         qr = ttnn.linear(
             hidden_states,
@@ -1164,21 +1179,24 @@ class ttMLA:
             qr = self._tp_all_reduce(qr, self._q_a_latent_gather_output, seq_len_local)
         return self._q_a_norm(qr, norm_memory_config)
 
-    def _tp_all_reduce(self, x: ttnn.Tensor, gather_output: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+    def _tp_all_reduce(
+        self, x: ttnn.Tensor, gather_output: ttnn.Tensor, seq_len_local: int, ag_only: bool = False
+    ) -> ttnn.Tensor:
         assert (
             seq_len_local == self.active_seq_len_local
         ), f"TP gather was preallocated for {self.active_seq_len_local} local tokens, got {seq_len_local}"
-        x = ttnn.experimental.reduce_scatter_minimal_async(
-            x,
-            persistent_output_buffers=None,
-            dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.tp_ccl_topology,
-            cluster_axis=self.tp_axis,
-        )
+        if not ag_only:
+            x = ttnn.experimental.reduce_scatter_minimal_async(
+                x,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
         return ttnn.experimental.high_bw_all_gather(
             x,
             dim=3,
@@ -1635,6 +1653,15 @@ class ttMLA:
             g = self._output_gate(hidden_states, seq_len_local)
             v_out = ttnn.multiply(v_out, g, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(g)
+        if self._fused_mm_rs:
+            return ttnn.experimental.matmul_reduce_scatter_prefill(
+                v_out,
+                self.o_proj_weight,
+                cluster_axis=self.tp_axis,
+                scatter_dim=-1,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+            )
         v_out = ttnn.linear(
             v_out,
             self.o_proj_weight,
