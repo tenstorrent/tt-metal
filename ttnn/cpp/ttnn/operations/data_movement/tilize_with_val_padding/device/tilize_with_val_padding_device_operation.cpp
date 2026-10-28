@@ -69,6 +69,23 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
 
     size_t grid_area = available_grid.num_cores();
     auto [ncores, nblocks_per_core] = compute_ncores(grid_area, num_blocks);
+    // The default factory tilizes a whole row per block, which the Quasar unpacker cannot complete on
+    // RTL past QUASAR_MAX_TILIZE_BLOCK_TILES; the block-interleaved factory bounds the block width
+    // instead, whenever the grid admits such a split.
+    if (device->arch() == tt::ARCH::QUASAR &&
+        num_tiles_per_row > operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES) {
+        const uint32_t num_blocks_block = (input_tensor.padded_shape()[-1] * input_tensor.padded_shape()[-2]) /
+                                          (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        if (ttnn::try_compute_ncores_wh_sb(
+                grid_area,
+                num_blocks_block,
+                num_tiles_per_row,
+                num_tiles_per_col,
+                operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES)
+                .has_value()) {
+            return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
+        }
+    }
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block &&
         (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
