@@ -100,11 +100,6 @@ void expect_mesh_graph_host_topology_matches_runtime(const ControlPlane& control
 // these structural checks). Returns FABRIC_2D when no custom MGD path is set.
 tt::tt_fabric::FabricConfig fabric_config_for_active_mgd();
 
-// This process's OWN mesh's declared default fabric config, as a concrete config. On a heterogeneous MGD each rank
-// gets a different concrete config for its mesh -- used to test that a genuinely different per-rank fabric config is
-// permitted and still builds a consistent control plane on every rank.
-tt::tt_fabric::FabricConfig per_rank_owned_mesh_default_fabric_config();
-
 // Writes an inline descriptor to a PID-qualified temporary file and returns its path.
 std::string write_temp_descriptor(const std::string& name, const std::string& text_proto);
 

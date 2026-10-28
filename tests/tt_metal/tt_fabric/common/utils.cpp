@@ -1432,20 +1432,6 @@ tt::tt_fabric::FabricConfig fabric_config_for_active_mgd() {
     return FabricConfig::FABRIC_2D;
 }
 
-tt::tt_fabric::FabricConfig per_rank_owned_mesh_default_fabric_config() {
-    using tt::tt_fabric::FabricConfig;
-    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    if (!rtoptions.is_custom_fabric_mesh_graph_desc_path_specified()) {
-        return FabricConfig::FABRIC_2D;
-    }
-    tt::tt_fabric::MeshGraphDescriptor mgd(std::filesystem::path(rtoptions.get_custom_fabric_mesh_graph_desc_path()));
-    // This process's OWN mesh's declared default, returned as a concrete config. Unlike the process-wide
-    // fabric_config_for_active_mgd(), this gives a genuinely different concrete config per mesh/rank on a
-    // heterogeneous MGD -- which is only consistent across ranks because init_control_plane gathers the per-mesh
-    // configs before building the MeshGraph.
-    return mgd.default_fabric_config_from_dim_types(rtoptions.get_fabric_mesh_id());
-}
-
 std::string write_temp_descriptor(const std::string& name, const std::string& text_proto) {
     const auto path = std::filesystem::temp_directory_path() / (std::to_string(::getpid()) + "_" + name);
     std::ofstream(path) << text_proto;
