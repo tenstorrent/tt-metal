@@ -45,8 +45,8 @@ def swiglu_interleave(gate, up, tile=32):
     return torch.stack((gate.reshape(K, N // tile, tile), up.reshape(K, N // tile, tile)), 2).reshape(K, 2 * N)
 
 
-# R2-1 (sweep job TBD, paper): the fused SwiGLU's minimal_matmul blocks per precision; None = the op's auto config
-SWIGLU_BLOCKS = {"accuracy": None, "performance": None}
+# R2-1 (sweep job 1218, paper; accuracy: auto within 0.3 %): the fused SwiGLU's minimal_matmul blocks per precision; None = the op's auto config
+SWIGLU_BLOCKS = {"accuracy": None, "performance": (8, 8, 8, 1, 4)}
 
 
 def swiglu_config(device, precision):
