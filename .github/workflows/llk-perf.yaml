@@ -35,6 +35,7 @@ jobs:
         env:
           REPLAY_ROOT: ${{ runner.temp }}/replay
           CASE: ${{ matrix.case }}
+        shell: bash
         run: |
           if [[ $CASE == script\ * ]]; then bash .github/replay/${CASE#script }; else bash .github/replay/replay_case.sh $CASE; fi
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
