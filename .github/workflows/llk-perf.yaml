@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
 permissions:
   actions: read
+  checks: write
   contents: read
   packages: write
 jobs:
