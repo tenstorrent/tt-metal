@@ -125,3 +125,12 @@ Variance-table row (paper, full bench, isolation of R1-2/3 on top of R1-1; 1265 
 |---|---|---|---|---|
 | accuracy | 949.0 ms | 408.5 ms | -57.0 % | identical (median_err 0.03838, abs_err_max 0.0384, bias_row_p50 0.00091) |
 | performance | 904.3 ms | 367.3 ms | -59.4 % | identical (median_err 0.39463, abs_err_max 0.38025, bias_row_p50 0.00457) |
+
+## Checkers at the new HEAD (D7 condition f)
+- Suite 1266 (904a7b07c5d, clean): **173 passed** (166 + the 7 `test_qkv_heads_rope` cases of D7 e). `suite_job1266.json`.
+- check_gates 1286 (CPU) on bench 1256 + suite 1266, with the D7 ceilings: **0 failures** (`check_gates_1286.txt`).
+  long_horizon/accuracy `f2_inactive_max_err` / `f2_flat_max_err` 0.0557496 <= 0.06; horizon4/performance
+  `bias_row_p50` 0.0094002 <= 0.015. `test_check_gates.py::test_d7_ceilings` checks each ceiling fails just above itself.
+- score_broken 1267 (CPU): **0 broken outputs pass**, the golden fails 0 cases (`broken_job1267.txt`).
+  long_horizon/accuracy f2 `inactive_collapsed` (84 inactive rows) fails `f2_flat_max_err` and `f2_inactive_max_err`
+  under the 0.06 ceiling (and `f2_pcc_row_min`).
