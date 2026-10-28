@@ -3,10 +3,10 @@
 ## Run the e2e test
 ```bash
 source python_env/bin/activate
-export TT_METAL_HOME=$PWD ARCH_NAME=blackhole MESH_DEVICE=P150
+export TT_METAL_HOME=$PWD ARCH_NAME=blackhole
 export TT_CACHE_PATH=$HOME/tt_cache/strands_agent
 
-# QB2 (p300c) only: open one chip as a P150
+# QB2 (P300x2) only: open one of its 4 chips as a single P150
 export TT_VISIBLE_DEVICES=0
 export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
 export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
@@ -15,7 +15,7 @@ pytest -sv models/demos/strands_agent/tests/test_model.py
 ```
 
 ## Perf
-Eager prefill, batch 1, p50 of 5 runs after 2 warmups. One Blackhole chip (QB2 p300c, 1x1 mesh).
+Eager prefill, batch 1, p50 of 5 runs after 2 warmups. One Blackhole chip of a QB2 (P300x2), 1x1 mesh.
 
 | Prompt tokens | 128 | 256 | 512 | 1024 | 2048 | 4000 |
 |---|---|---|---|---|---|---|
