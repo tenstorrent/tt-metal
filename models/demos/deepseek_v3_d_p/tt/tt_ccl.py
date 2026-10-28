@@ -46,18 +46,18 @@ class SparseMlaOverlapResources:
     data_valid_semaphore: object
 
 
-# Tensix grid each profile requires. Every profile gives the KV gather the two worker rows right below the Ethernet
-# row (logical rows 0..1, the full width) and top-k the other eight rows. Blackhole has all its Ethernet cores in one
-# row and harvests only columns, so those two rows hold a core directly below every Ethernet core on every chip,
+# Tensix grid each profile requires. Every profile gives the KV gather the worker row right below the Ethernet row
+# (logical row 0, the full width) and top-k the other nine rows. Blackhole has all its Ethernet cores in one row and
+# harvests only columns, so that row holds a core directly below every Ethernet core on every chip,
 # whichever links the fabric routes through: the fabric CCL senders sit one NoC hop from their links. A column strip
 # (the previous 80/40 split) forced them across the chip (QuietBox, standalone: 1.7-2x slower KV gather).
 _SPARSE_MLA_OVERLAP_PROFILE_GRIDS = {
-    "loudbox_rows2": (12, 10),
-    "qb2_rows2": (11, 10),
+    "loudbox_rows1": (12, 10),
+    "qb2_rows1": (11, 10),
 }
 # A Galaxy has the LoudBox's 12x10 grid, so it takes the same profile.
-_SPARSE_MLA_OVERLAP_PROFILE_ALIASES = {"galaxy_rows2": "loudbox_rows2"}
-_SPARSE_MLA_OVERLAP_GATHER_ROWS = 2
+_SPARSE_MLA_OVERLAP_PROFILE_ALIASES = {"galaxy_rows1": "loudbox_rows1"}
+_SPARSE_MLA_OVERLAP_GATHER_ROWS = 1
 
 
 def get_tt_ccl(mesh_device: ttnn.MeshDevice) -> "TT_CCL":
@@ -264,7 +264,7 @@ class TT_CCL:
         return buffer
 
     def get_sparse_mla_overlap_resources(self, profile: str) -> SparseMlaOverlapResources:
-        """Create or return the sparse-MLA overlap profile: KV gather on the top two worker rows, top-k on the rest.
+        """Create or return the sparse-MLA overlap profile: KV gather on the top worker row, top-k on the rest.
 
         Resource creation happens outside the hot forward path. Semaphore allocation is followed by a
         mesh-wide synchronization so every participating device observes the zero initialization before
@@ -275,8 +275,8 @@ class TT_CCL:
         if profile == "auto":
             grid = self.mesh_device.compute_with_storage_grid_size()
             profile = {
-                (11, 10): "qb2_rows2",
-                (12, 10): "loudbox_rows2",
+                (11, 10): "qb2_rows1",
+                (12, 10): "loudbox_rows1",
             }.get((grid.x, grid.y))
             if profile is None:
                 raise ValueError(

@@ -12,27 +12,32 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import pytest
 import torch
 from filelock import FileLock
 
+from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .format_config import DataFormat, FormatConfig
-from .llk_params import format_dict
+from .llk_params import ReduceDimension, format_dict
 from .logger import logger
+from .target_config import TestTargetConfig
 from .tile_constants import (
     DEFAULT_TILE_C_DIM,
     DEFAULT_TILE_R_DIM,
+    MAX_FACE_R_DIM,
 )
 from .tile_shape import construct_tile_shape
 from .ulp import (
     FLUSH_SUBNORMAL_OUTPUTS,
-    MANTISSA_BITS_FOR_ULP,
     has_ulp_gate,
+    mantissa_bits,
+    max_meaningful_ulp,
+    selected_lanes,
     ulp_distance,
     ulp_dtype,
     ulp_elementwise_valid,
     ulp_stats,
     ulp_verdict_message,
-    warn_if_threshold_unmeaningful,
 )
 
 TEMP_DIR = Path(tempfile.gettempdir())
@@ -533,32 +538,17 @@ def _mxint_block_aware_compare(
 
 _RECORD_TEST_ORDER: bool = False
 
-#: Set by ``--ulp-report``. Measures and logs the step count for every comparison on a
-#: ULP-capable format, including the ops with no budget yet -- which is where the signal
-#: is most useful, since a drift shows up in the report long before anyone picks a number
-#: to gate it with. Never a verdict: it is computed after the verdict and never read back
-#: into one, so the flag cannot change whether a test passes -- which is also why it
-#: skips, with a warning, the shapes the tolerance arm broadcasts and ``ulp_distance``
-#: refuses, rather than raising after a verdict was reached.
-#:
-#: Trend p99, not max. An op with no declared ``near_zero_atol`` has no floor to excuse
-#: its near-zero lanes, and one lane whose golden is zero or subnormal carries a step
-#: count that says nothing about the kernel -- xlogy on Float16_b reports max 15073 ULP
-#: against a p99 of 1.
+# --ulp-report: log the step count of every comparison on a ULP-capable format, enrolled
+# or not. Computed after the verdict and never read back into it.
 _ULP_REPORT: bool = False
 
-#: Set by ``--ulp-measure=<path>``: append one JSON row per comparison that follows
-#: exactly one ``accuracy_contract`` lookup in the same test, on a variant that ran as
-#: asked (see :func:`_record_ulp_measurement`). The exhaustive sweep writes one for
-#: every cell it measures, gated or not -- it records a tolerance cell, and every cell
-#: under ``--ulp-emit``, itself rather than through ``passed_test`` -- and a non-finite
-#: lane count for a tolerance cell it cannot measure. Like ``_ULP_REPORT`` it is written
-#: after the verdict and never read back into one, with one exception: the sweep's
-#: records are *required* (the headroom report judges only the cells it reads), so a
-#: sweep record that is not written fails its cell (:class:`RecordDropped`).
+# --ulp-measure=<path>: append one Measurement per comparison that followed exactly one
+# accuracy_contract lookup in the same test (see _record_ulp_measurement). Written
+# after the verdict and never read back into it, but the sweep's records are required:
+# one not written fails its cell (RecordDropped).
 _ULP_MEASURE_PATH: Optional[str] = None
-
-#: Set once a recorder write has failed, so the warning is printed once per process.
+# Set by the first failed write: a path that stops taking writes mid-run (disk full, the
+# directory removed) is reported once, not once per comparison per worker.
 _ULP_MEASURE_WARNED: bool = False
 
 
@@ -577,31 +567,18 @@ def _promoted(in_fmt, out_fmt, dest, arch) -> bool:
 
 
 def prepare_ulp_measure_file() -> None:
-    """Create ``--ulp-measure``'s file empty, once per session, on the controller.
-
-    The parent is created so a later write cannot raise ``FileNotFoundError``, and the
-    file truncated so a second run does not fold its rows in with the first's. A path
-    that cannot be prepared -- an unwritable directory, a path that is a directory --
-    raises ``OSError``, which the plugin turns into a usage error before anything runs:
-    the sweep's records are required, and the workers, which set the path themselves,
-    would otherwise each fail every sweep cell on a path the controller gave up on.
-    """
-    if not _ULP_MEASURE_PATH:
-        return
-    path = Path(_ULP_MEASURE_PATH)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("", encoding="utf-8")
+    """Create ``--ulp-measure``'s file empty, once per session on the controller; an
+    ``OSError`` is the plugin's to turn into a usage error."""
+    if _ULP_MEASURE_PATH:
+        path = Path(_ULP_MEASURE_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
 
 
 def _consume_ulp_query() -> None:
-    """Drop ``accuracy_contract``'s pending query and ambiguity flag. Called once per
-    :func:`passed_test`, on every path, after the recorder had its chance to read them.
-
-    Looked up rather than imported: importing the registry loads and validates the whole
-    budget table, and every ``passed_test`` caller -- matmul, pack and Quasar suites run
-    on their own included -- would then fail on a bad row after its verdict. A registry
-    nobody imported published no query, so there is nothing to drop.
-    """
+    """Drop ``accuracy_contract``'s pending query once per :func:`passed_test`. Looked up
+    rather than imported: importing the registry loads the whole table, which every
+    comparison in the tree would then pay for."""
     budget = sys.modules.get(f"{__package__}.sfpu_accuracy_budget")
     if budget is not None:
         budget.LAST_QUERY, budget.PENDING_AMBIGUOUS = None, False
@@ -614,22 +591,15 @@ class RecordDropped(RuntimeError):
 def _record_ulp_measurement(
     distance, *, mask, nonfinite: int = 0, bins=None, readings=(), required=False
 ) -> None:
-    """Append the worst measurable lane of one comparison as a
-    :class:`~helpers.ulp_table.Measurement`, filed under ``accuracy_contract``'s last
-    query, which is consumed here. Nothing is written when the query is missing,
-    ambiguous, from another test, or names a ``dest_acc`` TestConfig did not run
-    (:func:`_promoted`): a lost datapoint is recoverable, a budget folded back under the
-    wrong variant is not.
-
-    *nonfinite* is how many lanes the hardware and the golden disagree about being
-    finite; *bins* the sweep's per-binade profile (``ulp_sweep.binade_maxima``);
-    *readings* its readings over each entry of the table's list. A failed write warns
-    once and is otherwise ignored -- unless *required*: the sweep's records are what the
-    headroom report judges its tolerance cells and past-ceiling entries on, and it can
-    judge only the cells it reads, so a sweep record that is not written raises
-    :class:`RecordDropped` instead.
+    """Append one comparison's worst measurable lane as a ``Measurement`` under
+    ``accuracy_contract``'s last query, which is consumed here. Nothing is written when
+    the query is missing, ambiguous, from another test, or names a ``dest_acc``
+    TestConfig did not run (:func:`_promoted`): a lost datapoint is recoverable, a budget
+    folded back under the wrong variant is not. *nonfinite* counts the lanes disagreeing
+    with the golden about being finite; *bins* and *readings* are the sweep's profile.
+    A failed write warns once -- unless *required*: the headroom report judges only the
+    cells it reads, so a sweep record that is not written raises :class:`RecordDropped`.
     """
-    global _ULP_MEASURE_WARNED
     if not _ULP_MEASURE_PATH:
         return
 
@@ -659,13 +629,18 @@ def _record_ulp_measurement(
         bins=tuple((int(b), *counts) for b, counts in sorted((bins or {}).items())),
         readings=tuple(readings),
     )
+    global _ULP_MEASURE_WARNED
     try:
         with open(_ULP_MEASURE_PATH, "a", encoding="utf-8") as handle:
             handle.write(measurement.to_json() + "\n")
     except OSError as exc:
         if not _ULP_MEASURE_WARNED:
             _ULP_MEASURE_WARNED = True
-            logger.warning("--ulp-measure: cannot write {}: {}", _ULP_MEASURE_PATH, exc)
+            logger.warning(
+                "--ulp-measure: cannot write {}: {} (not repeated)",
+                _ULP_MEASURE_PATH,
+                exc,
+            )
         dropped(f"cannot write {_ULP_MEASURE_PATH}: {exc}")
 
 
@@ -769,53 +744,26 @@ def passed_test(
 ):
     """Verdict for one result tensor against its golden.
 
-    With *max_ulp* set the gate becomes "every element is within *max_ulp* representable
-    steps of the reference", and both the tolerance check and PCC are skipped. That is
-    not a loosening: ``atol=0.05`` is ~6 bf16 steps at 1.0 and ~0.01 at 512, so a
-    tolerance loose enough to pass the tail is blind in the middle. The budget must stay
-    under the ``rtol`` half it replaces -- ``rtol * 2**mantissa_bits`` steps, ~6 for bf16
-    and ~51 for fp16 -- and the gate warns when it does not.
+    With *max_ulp* the gate is "every element within *max_ulp* representable steps of
+    the reference" and both the tolerance check and PCC are skipped; it warns when the
+    budget is looser than the ``rtol`` it replaces (``rtol * 2**mantissa_bits`` steps).
+    *mask* narrows the gate to the lanes it selects, *near_zero_atol* is the floor under
+    the budget where the reference crosses zero (:func:`helpers.ulp.ulp_elementwise_valid`)
+    and *flush_subnormals* overrides the metric's per-dtype default; all three are
+    refused without a budget. A ``Bfp8_b`` budget is counted in bfloat16 steps and
+    charges for block quantization (``helpers.ulp._ULP_PROXY_DTYPES``).
 
-    Within that ceiling, and with *near_zero_atol* no wider than ``atol``, the gate is
-    strictly stricter than the tolerance check: it passes nothing ``isclose`` would
-    reject. Against PCC it is stricter on every element but not a superset -- PCC can
-    reject a near-constant tile whose every lane is one step off, because a whole-tensor
-    correlation is unstable at low variance. Both are pinned in ``test_ulp_gate.py``.
-
-    * *mask* narrows the gate to the lanes it selects. The exhaustive sweep needs it:
-      the subnormals the unpack path flushes are not the op's accuracy.
-    * *near_zero_atol* is the floor under the budget where the reference crosses zero;
-      see :func:`helpers.ulp.ulp_elementwise_valid`.
-    * *flush_subnormals* overrides the metric's per-dtype default. It matters for an fp16
-      output and nowhere else: an fp16 golden keeps its subnormal band while a
-      ``dest_acc=No`` Dest flushes, so the two disagree by up to 1023 steps. This layer
-      cannot see ``dest_acc``, so the default is the answer that cannot hide error.
-
-    All three are read only by the ULP arm and are refused without *max_ulp* rather than
-    silently ignored, as is a negative *near_zero_atol*.
-
-    *max_ulp* is the enforced maximum, with nothing ORed in beside it -- so a ``Bfp8_b``
-    budget charges for block quantization the format is entitled to. See
-    ``_ULP_PROXY_DTYPES`` in :mod:`helpers.ulp`.
-
-    ``max_ulp=None`` gives the previous verdict bit for bit. Under ``--ulp-report`` it
-    also measures and logs the comparison's ULP at INFO, and under ``--ulp-measure`` files
-    it, without reading either back. That reading ranks subnormal outputs flushed
-    (``FLUSH_SUBNORMAL_OUTPUTS``), as every step-budget gate does, not under the
-    per-dtype default *flush_subnormals* describes, so a Float16 ``--ulp-report`` figure
-    is the flushed one.
-
-    Every call, on every path, spends the variant ``accuracy_contract`` last resolved
-    (its ``LAST_QUERY``/``PENDING_AMBIGUOUS``), so a later comparison cannot inherit it.
+    ``max_ulp=None`` gives the previous verdict bit for bit. Under ``--ulp-report`` and
+    ``--ulp-measure`` the comparison is measured after the verdict, with subnormal
+    outputs ranked flushed, and never read back. Every call spends the variant
+    ``accuracy_contract`` last resolved.
     """
 
     if tile_shape is None:
         tile_shape = construct_tile_shape((DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM))
 
     if max_ulp is None:
-        # Everything only the ULP arm reads: the tolerance arm is `torch.isclose`, which
-        # has no flush concept and no lane selection, so any of these without a budget
-        # did nothing at all -- a `mask` silently judging every lane most of all.
+        # The tolerance arm is `torch.isclose`: no flush, no floor, no lane selection.
         inert = sorted(
             name
             for name, value in {
@@ -826,62 +774,45 @@ def passed_test(
             if value is not None
         )
         if inert:
-            one = len(inert) == 1
             raise ValueError(
-                f"{' and '.join(inert)} {'is' if one else 'are'} read only by the ULP "
-                f"gate and {'does' if one else 'do'} nothing on "
-                f"{'its own' if one else 'their own'}. Pass max_ulp as well, or use "
-                "custom_atol for a flat tolerance over every lane."
+                f"{', '.join(inert)}: read only with max_ulp; pass a step budget as "
+                "well, or custom_atol for a flat tolerance over every lane"
             )
 
     if max_ulp is not None:
         if max_ulp < 0:
-            # A negative budget makes `distance <= max_ulp` false on every lane, so a
-            # bit-identical pair fails reading like a harness bug -- and -1 is exactly
-            # ulp.UNMEASURABLE. 0 stays legal: that is the bit-exact gate.
+            # -1 is ulp.UNMEASURABLE; 0 stays legal as the bit-exact gate.
             raise ValueError(
                 f"max_ulp must not be negative, got {max_ulp}; 0 is the bit-exact gate"
             )
         if near_zero_atol is not None and near_zero_atol < 0:
-            # The same inert-floor case reached by a different route: a negative floor
-            # makes `magnitude <= absolute_cut` false on every lane. It fails closed, but
-            # then nothing distinguishes an inert floor from a real regression. 0.0 stays
-            # legal as a deliberate "no floor", matching the None default.
             raise ValueError(
                 f"near_zero_atol must not be negative, got {near_zero_atol}; "
                 "0.0 is the no-floor value, and None is the default"
             )
-        # Raises for every format without a per-element ULP: the MX formats and the
-        # block floats below Bfp8_b keep their block-aware lattice compares, and applying
-        # a per-element count to their fp32 view would be a gate the caller does not have.
-        gate_dtype = ulp_dtype(output_data_format)
-        warn_if_threshold_unmeaningful(max_ulp, gate_dtype)
-        # The rtol half of isclose is itself a step budget at large magnitude -- about
-        # `rtol * 2**mantissa_bits` steps, ~6 for bf16 and ~51 for fp16 -- and past it a
-        # budget is looser than what it displaced, with no PCC behind it either.
+        gate_dtype = ulp_dtype(output_data_format)  # raises for a format with no ULP
+        if max_ulp > max_meaningful_ulp(gate_dtype):
+            logger.warning(
+                "max_ulp={} exceeds the largest meaningful ULP budget for {} ({} = "
+                "2**mantissa_bits, one binade); the op belongs on the tolerance metric",
+                max_ulp,
+                gate_dtype,
+                max_meaningful_ulp(gate_dtype),
+            )
         gate_tolerance = tolerances[output_data_format]
-        displaced = gate_tolerance.rtol * (1 << MANTISSA_BITS_FOR_ULP[gate_dtype])
+        displaced = gate_tolerance.rtol * (1 << mantissa_bits(gate_dtype))
         if max_ulp > displaced:
             logger.warning(
-                # One decimal: Bfp8_b's displaced figure is 25.6, and rounding printed
-                # the triggering budget of 26 as looser than "~26 steps".
                 "max_ulp={} is looser than the rtol={} tolerance it replaces (~{:.1f} "
-                "steps at large magnitude) and PCC no longer backs it up. Tighten the "
-                "budget, or keep the op on the tolerance metric.",
+                "steps at large magnitude) and PCC no longer backs it up",
                 max_ulp,
                 gate_tolerance.rtol,
                 displaced,
             )
         if near_zero_atol is not None and near_zero_atol > gate_tolerance.atol:
-            # near_zero_atol *is* the atol half of the isclose this arm replaces, so a
-            # floor above it is strictly looser than what it displaced. The absolute cut
-            # cannot close the gap: both intervals scale with the atol and are anchored
-            # at zero, so they always overlap.
             logger.warning(
                 "near_zero_atol={} is looser than the atol={} half of the tolerance it "
-                "replaces, so every lane in the near-zero band is judged more loosely "
-                "than before with no PCC behind it. Tighten the floor, or keep the op on "
-                "the tolerance metric.",
+                "replaces, with no PCC behind it",
                 near_zero_atol,
                 gate_tolerance.atol,
             )
@@ -893,9 +824,7 @@ def passed_test(
         }
         named = sorted(name for name, value in ignored.items() if value is not None)
         if L1_to_L1_iterations != 1:
-            # Its only effect here is `target_pcc = pow(0.99, n)`, which this arm returns
-            # before reaching. Checked separately because its default is 1, so the
-            # `is not None` comprehension above cannot see it.
+            # Its only effect is `target_pcc = pow(0.99, n)`, which this arm never reaches.
             named.append("L1_to_L1_iterations")
         if named:
             raise ValueError(
@@ -934,17 +863,10 @@ def passed_test(
         )
 
     if max_ulp is not None:
-        # Lanes the caller has already settled are not this gate's to judge -- a
-        # subnormal the unpack path flushed is worth ~16,000 steps of something that is
-        # not the op's accuracy. Validated by `_selection`, so a wrong shape or a
-        # non-boolean mask is an error rather than a silent reshape.
-        #
-        # Resolved *before* the verdict, so the near-zero band sizes its dynamic range
-        # over the judged lanes only; otherwise a large masked-out golden widens the
-        # relative cut and the floor rescues a lane that should have failed.
-        from .ulp import _selection
-
-        ulp_selected = _selection(mask, golden_tensor, "passed_test")
+        # The near-zero band sizes its dynamic range over the judged lanes only, so the
+        # selection is resolved before the verdict. No lattice arm is ORed in: max_ulp
+        # is the enforced maximum, Bfp8_b's block quantization included.
+        ulp_selected = selected_lanes(mask, golden_tensor)
         is_valid, ulp_distances, ulp_rescued = ulp_elementwise_valid(
             golden_tensor,
             res_tensor,
@@ -954,10 +876,6 @@ def passed_test(
             selected=ulp_selected,
         )
         is_valid = is_valid | ~ulp_selected
-        # No lattice arm here, unlike the Bfp8_b tolerance branch below: ORing the
-        # block-aware compare in would mean max_ulp was not the enforced maximum. So a
-        # Bfp8_b budget charges for block quantization too, and is usable only where that
-        # quantization is exact -- see _ULP_PROXY_DTYPES in helpers.ulp.
     elif output_data_format == DataFormat.Bfp8_b:
         # Bfp8_b shares one exponent across 16 elements, so when a block spans a wide
         # magnitude range the small elements quantize toward zero and a flat atol reads
@@ -1005,7 +923,7 @@ def passed_test(
         # count fallback; per-format lattice parameters live in
         # _MXFP_COMPARE_PARAMS.
         (
-            mantissa_bits,
+            element_bits,
             max_steps,
             element_max_normal,
             element_min_subnormal,
@@ -1013,7 +931,7 @@ def passed_test(
         is_valid = _mxfp_block_aware_compare(
             golden_tensor,
             res_tensor,
-            mantissa_bits=mantissa_bits,
+            mantissa_bits=element_bits,
             max_steps=max_steps,
             element_max_normal=element_max_normal,
             element_min_subnormal=element_min_subnormal,
@@ -1028,15 +946,8 @@ def passed_test(
     is_within_tolerance = torch.all(is_valid)
 
     if ulp_distances is not None:
-        # Ahead of the tile dump, so the worst lane leads the log. Logged on a pass too:
-        # at INFO under --ulp-report, otherwise at debug level, where collecting those
-        # datapoints needs --logging-level=DEBUG.
-        #
-        # Lazily: the message is several full-tensor reductions and on a normal run no
-        # sink accepts the pass line. The error path is not lazy; it is always wanted.
-        #
-        # Ranked without the lanes the floor accepted -- they hold the largest step
-        # counts by construction, so ranking every lane names one that passed.
+        # Ranked without the lanes the floor accepted (they hold the largest step counts
+        # by construction), ahead of the tile dump so the worst lane leads the log.
         ranked = ulp_selected & ~ulp_rescued
         _record_ulp_measurement(ulp_distances, mask=ranked)
 
@@ -1049,46 +960,32 @@ def passed_test(
                 mask=ranked,
                 max_ulp=max_ulp,
                 flush_subnormals=flush_subnormals,
-                # Only with a floor configured -- see within_ulp. Reported on the pass
-                # path too, which is what lets a DEBUG export tell a budget-carried pass
-                # from a floor-carried one: the rescued lanes are exactly the ones
-                # `ranked` keeps out of the summary.
-                rescued=(
-                    None if near_zero_atol is None else ulp_rescued & ulp_selected
-                ),
+                rescued=None if near_zero_atol is None else ulp_rescued & ulp_selected,
             )
 
         if is_within_tolerance and _ULP_REPORT:
-            # --ulp-report asked for it, so it is not a debug aside any more.
-            logger.info("ULP within budget — {}", _ulp_summary())
+            logger.info("ULP within budget - {}", _ulp_summary())
         elif is_within_tolerance:
-            logger.opt(lazy=True).debug("ULP within budget — {}", _ulp_summary)
+            logger.opt(lazy=True).debug("ULP within budget - {}", _ulp_summary)
         elif print_errors and not _RECORD_TEST_ORDER:
-            logger.error("ULP budget exceeded — {}", _ulp_summary())
+            logger.error("ULP budget exceeded - {}", _ulp_summary())
         elif _ULP_REPORT:
-            # Silenced for the error log, but --ulp-report asks for every comparison.
-            # Dropping the failures is how a reporting sweep ends up deriving a budget
-            # from the lanes that passed.
-            logger.info("ULP budget exceeded — {}", _ulp_summary())
+            logger.info("ULP budget exceeded - {}", _ulp_summary())
         else:
-            # A caller that asked for silence still gets the line, but not at a level that
-            # appends to the persistent test_errors.log that CI uploads.
-            logger.opt(lazy=True).debug("ULP budget exceeded — {}", _ulp_summary)
+            # Silence keeps the line out of the test_errors.log CI uploads, not out of DEBUG.
+            logger.opt(lazy=True).debug("ULP budget exceeded - {}", _ulp_summary)
 
     if (
         (_ULP_REPORT or _ULP_MEASURE_PATH)
         and ulp_distances is None
         and has_ulp_gate(output_data_format)
     ):
-        # No step budget, so nothing above measured one; these are the ops on the
-        # tolerance metric whose drift no number watches. Measured after the verdict,
-        # never read back into it, and one distance serves both consumers.
+        # No step budget measured it: an op on the tolerance metric. After the verdict,
+        # never read back into it.
         if golden_tensor.shape != res_tensor.shape:
-            # `torch.isclose` broadcast these; `ulp_distance` refuses a shape mismatch.
-            # Raising here would turn a pass into an error under flags that must not
-            # be able to change a verdict, so neither consumer gets a measurement.
+            # `torch.isclose` broadcast these; `ulp_distance` would refuse them.
             logger.warning(
-                "{} skipped — golden {} and result {} differ in shape; the verdict "
+                "{} skipped - golden {} and result {} differ in shape; the verdict "
                 "above compared them broadcast",
                 " and ".join(
                     name
@@ -1102,29 +999,24 @@ def passed_test(
                 tuple(res_tensor.shape),
             )
         else:
-            # Ranked under the step-budget gates' flush policy (`assert_against_contract`,
-            # the exhaustive sweep): one --ulp-measure file then holds one kind of fp16
-            # reading, and a tolerance cell's figure is the one its gate would see if
-            # enrolled. A no-op for bf16 and fp32, which flush by default.
-            flush = FLUSH_SUBNORMAL_OUTPUTS
-            distances = ulp_distance(golden_tensor, res_tensor, flush_subnormals=flush)
+            # Ranked flushed, as every step-budget gate ranks.
+            distances = ulp_distance(
+                golden_tensor, res_tensor, flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS
+            )
             _record_ulp_measurement(distances, mask=None)
             if _ULP_REPORT:
                 logger.info(
-                    "ULP report — {}",
+                    "ULP report - {}",
                     ulp_verdict_message(
                         golden_tensor,
                         res_tensor,
                         distances,
                         output_data_format,
-                        flush_subnormals=flush,
+                        flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS,
                     ),
                 )
 
-    # Whatever path the comparison took -- recorded above, a shape mismatch, an output
-    # with no per-element ULP -- the query it was resolved for is spent, so a later
-    # comparison in the same test cannot inherit it, nor the next lookup read as
-    # ambiguous.
+    # Spent on every path, so a later comparison in the same test cannot inherit it.
     _consume_ulp_query()
 
     if output_data_format.is_mx_format():
@@ -1309,3 +1201,22 @@ def create_directories(dirs: list[Path]):
     with lock:
         for dir in dirs:
             os.makedirs(dir, exist_ok=True)
+
+
+_TTSIM_PACR_ZERO_WRITE_REASON = (
+    "ttsim does not implement PACR ZeroWrite (UnimplementedFunctionality: tensix_pacr: "
+    "zero_write=1), which WH uses to zero face 1 of partial-face BFP Row/Scalar reduce "
+    "packs. Runs on silicon."
+)
+
+
+def skip_ttsim_partial_face_bfp_zero_write(tile_shape, output_format, reduce_dim):
+    if (
+        TestTargetConfig().run_simulator
+        and get_chip_architecture() == ChipArchitecture.WORMHOLE
+        and tile_shape.face_r_dim < MAX_FACE_R_DIM
+        and output_format
+        in {DataFormat.Bfp8, DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b}
+        and reduce_dim in {ReduceDimension.Row, ReduceDimension.Scalar}
+    ):
+        pytest.skip(_TTSIM_PACR_ZERO_WRITE_REASON)

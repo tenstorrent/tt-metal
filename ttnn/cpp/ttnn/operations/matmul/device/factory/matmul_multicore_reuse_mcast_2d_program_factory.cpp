@@ -6,6 +6,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -745,6 +746,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     }
 
     if (output_is_sharded) {
+        // The in1 writer pops batch * out_shard_tiles tiles in one wait_front/pop_front call, which takes a uint16_t.
+        TT_FATAL(
+            B * out_shard_tiles <= std::numeric_limits<uint16_t>::max(),
+            "matmul_multicore_reuse_mcast_2d: a sharded output of {} tiles per core exceeds the maximum of {} "
+            "supported by this program factory",
+            B * out_shard_tiles,
+            std::numeric_limits<uint16_t>::max());
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
@@ -1498,6 +1506,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                     {"in1_mcast_num_cores", num_blocks_y - 1},
                     {"KtNt", K * N},
                     {"batch", B},
+                    {"out_block_num_tiles", out_block_tiles},
                     {"bcast_B", (std::uint32_t)bcast_batch},
                     {"batchB", 0u},
                     {"sparsity_pagesize", 0u},
@@ -1625,6 +1634,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                         {"num_blocks_w_dim", out_num_blocks_x},
                         {"num_blocks_h_dim", out_num_blocks_y},
                         {"batch", B},
+                        {"out_block_num_tiles", out_block_tiles},
                         {"out_tensor_stride_w", 1u},
                         {"out_tensor_stride_h", N},
                         {"out_tensor_next_subblock_stride_w", out_subblock_w},

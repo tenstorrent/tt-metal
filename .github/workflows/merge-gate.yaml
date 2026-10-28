@@ -698,11 +698,85 @@ jobs:
       # Report-only for the first week. To block, set this to true and add both
       # llk-perf-merge-gate jobs to optional-jobs in Merge Gate Status.
       fail_on_regression: false
-      # The only LLK perf gate that posts to the regressions channel, and only a regression or a skip.
-      # A manual Merge Gate run on a dev branch does not post.
-      slack: ${{ github.event_name == 'merge_group' }}
+      # llk-perf-merge-gate-notify posts one message for both arches, so each arch does not post.
+      slack: false
       slack_on_pass: false
     secrets: inherit
+
+  # The only LLK perf gate that posts to the regressions channel, and only a regression or a skip.
+  # One message for both arches; a regression on one also shows the same points on the other.
+  # A manual Merge Gate run on a dev branch does not post.
+  llk-perf-merge-gate-notify:
+    name: LLK perf merge gate (Slack)
+    needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate]
+    if: >-
+      always() && !cancelled() && github.event_name == 'merge_group'
+      && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: tt_metal/tt-llk/perf
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      - name: Download the per-arch verdicts
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: llk-perf-gate-slack-*
+          path: parts
+      - name: Download the per-arch reports
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: llk-perf-gate-report-*
+          path: reports
+      - name: Build the Slack payload
+        id: slack
+        env:
+          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
+        run: |
+          ARGS=()
+          for part in parts/llk-perf-gate-slack-*/slack_part.json; do
+            [ -f "$part" ] && ARGS+=(--part "$part")
+          done
+          for points in reports/llk-perf-gate-report-*/perf_gate_report.points.csv; do
+            [ -f "$points" ] || continue
+            arch=$(basename "$(dirname "$points")")
+            ARGS+=(--points "${arch#llk-perf-gate-report-}=${points}")
+          done
+          python3 tt_metal/tt-llk/perf/gate_slack_combine.py "${ARGS[@]}" \
+            --expect blackhole,wormhole \
+            --gate-name "LLK perf merge gate" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --channel "${SLACK_CHANNEL_ID:-unset}" \
+            --out slack_payload.json && exit 0
+          echo "::error::The gate could not build its Slack notification."
+          echo "should_post=false" >> "$GITHUB_OUTPUT"
+      - name: Notify Slack
+        if: steps.slack.outputs.should_post == 'true'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
+        run: |
+          if [ -z "$SLACK_CHANNEL_ID" ]; then
+            echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
+            exit 0
+          fi
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "::error::LLK_SLACK_REPORTING_BOT_TOKEN is unset; the gate could not notify Slack."
+            exit 0
+          fi
+          RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-type: application/json; charset=utf-8" \
+            --data @slack_payload.json) || true
+          case "$RESPONSE" in
+            *'"ok":true'*) echo "Posted the gate verdict to Slack." ;;
+            *) echo "::error::Slack rejected the gate notification: ${RESPONSE}" ;;
+          esac
 
   # ===========================================================================
   # Team: ttsim

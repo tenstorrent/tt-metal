@@ -881,7 +881,7 @@ void TensorPrefetcherManager::build_and_launch_programs(
 
     programs_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
-        auto program = std::make_unique<Program>();
+        auto program = std::make_unique<Program>(CreateProgram(*mesh_device_));
         const auto& soc_desc =
             MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster().get_soc_desc(devices_[d]->id());
         TT_FATAL(
