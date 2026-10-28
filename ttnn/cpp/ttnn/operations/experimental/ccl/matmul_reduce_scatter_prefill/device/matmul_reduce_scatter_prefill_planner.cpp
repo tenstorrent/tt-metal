@@ -584,7 +584,7 @@ Plan solve_plan_uncached(const PlanInputs& in) {
 
 }  // namespace
 
-Plan solve_plan(const PlanInputs& in) {
+const Plan& solve_plan(const PlanInputs& in) {
     // every field of PlanInputs: the solve is a pure function of them
     const auto key = std::make_tuple(
         in.G,
