@@ -12,13 +12,21 @@
 
 #pragma once
 
-#include "compute_api/add.h" // eltwise_binary
+#include "compute_api/eltwise_binary.h"
+#include "compute_api/modifiers.h"
 
 namespace llk2
 {
 
 /// acc = a - b (b broadcast as Mods.bcast says).
-template <sub_modifiers Mods = sub_modifiers {}, const TensorSpec<tensor_rank>& A, class RA, const TensorSpec<tensor_rank>& B, class RB, const TensorSpec<tensor_rank>& D, class RD>
+template <
+    sub_modifiers Mods = sub_modifiers {},
+    const TensorSpec<tensor_rank>& A,
+    class RA,
+    const TensorSpec<tensor_rank>& B,
+    class RB,
+    const TensorSpec<tensor_rank>& D,
+    class RD>
 inline __attribute__((always_inline)) void sub(const Tensor<A, RA>& a, const Tensor<B, RB>& b, const Tensor<D, RD>& acc)
 {
     eltwise_binary<sub_op, Mods>(a, b, acc);

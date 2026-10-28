@@ -105,9 +105,9 @@ constexpr vec_params vec_params_from(const Plan& p)
     };
 }
 
-inline constexpr std::uint32_t vec_lanes = 32; ///< SFPU lanes: datums one SFPI iteration loads, computes and stores
+inline constexpr std::uint32_t vec_lanes               = 32; ///< SFPU lanes: datums one SFPI iteration loads, computes and stores
 inline constexpr std::uint32_t vec_iterations_per_face = max_face_rows * face_cols / vec_lanes; ///< 8 iterations of 4 rows x 8 columns: one face
-inline constexpr std::uint32_t vec_max_rwc_step        = 15; ///< the largest step SETRWC takes (a 4-bit field)
+inline constexpr std::uint32_t vec_max_rwc_step        = 15;                                    ///< the largest step SETRWC takes (a 4-bit field)
 
 /// The address modifier slot SFPI loads and stores name (sfpi_constants.h: SFPLOAD_ADDR_MODE_NOINC). It moves no
 /// counter: SFPI steps the Dest row counter itself.

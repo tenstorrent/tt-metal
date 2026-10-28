@@ -21,19 +21,13 @@
 #pragma once
 
 #include "compute_api/modifiers.h"
+#include "resolver/formats.h" // is_b_format
 #include "resolver/resolver.h"
 
 namespace llk2
 {
 
 inline constexpr std::uint32_t pack_tile_dim = default_tile_dim; ///< pack is ported for 32x32 tiles only
-
-/// True for the formats with an 8-bit exponent ("B" formats): FP32, TF32, BF16 and the BFP-B family.
-constexpr bool is_b_format(DataFormat f)
-{
-    return f == DataFormat::Float32 || f == DataFormat::Tf32 || f == DataFormat::Float16_b || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b ||
-           f == DataFormat::Bfp2_b;
-}
 
 /// The Dest formats of each Dest mode: 32-bit datums (FP32, INT32) or 16-bit ones.
 constexpr bool fits_dest_mode(DataFormat dest, bool dest_fp32)
@@ -142,6 +136,7 @@ constexpr bool l1_accumulates(DataFormat out)
     return out == DataFormat::Float32 || out == DataFormat::Float16_b || out == DataFormat::Float16;
 }
 
+/// accepts: see the file comment.
 constexpr bool pack_accepts(const TensorSpec<tensor_rank>& d, const TensorSpec<tensor_rank>& o, const pack_modifiers& m, const KernelSettings& s)
 {
     const bool storage = d.storage == Storage::Dest && o.storage == Storage::L1;
@@ -155,6 +150,7 @@ constexpr bool pack_accepts(const TensorSpec<tensor_rank>& d, const TensorSpec<t
     return storage && shapes && formats && modifiers;
 }
 
+/// options: the packer's input format (pack_in_format) and the L1 tensor, owned by the packer, as the result.
 constexpr OpConfig pack_options(const TensorSpec<tensor_rank>& d, const TensorSpec<tensor_rank>& o, const pack_modifiers&, const KernelSettings& s)
 {
     return {
@@ -166,16 +162,27 @@ constexpr OpConfig pack_options(const TensorSpec<tensor_rank>& d, const TensorSp
     };
 }
 
+/// work: the tile grid and the tile geometry; no K.
 constexpr Work pack_work(const TensorSpec<tensor_rank>& d, const TensorSpec<tensor_rank>&, const OpConfig&)
 {
-    return {d.shape.sizes[TileY], d.shape.sizes[TileX], 1, d.shape.sizes[DatumY], faces_per_tile(d.shape)};
+    return {d.shape.sizes[TileY], d.shape.sizes[TileX], no_k_steps, d.shape.sizes[DatumY], faces_per_tile(d.shape)};
 }
 
+/// plan: PackPlan from the tensors and modifiers; unpack, walk and math stay empty.
 constexpr Plan pack_plan(const TensorSpec<tensor_rank>& d, const TensorSpec<tensor_rank>& o, const pack_modifiers& m, const OpConfig& c, const Work& k)
 {
     const PackPlan pack {
-        d.format, o.format, k.face_r_dim, k.num_faces, tile_bytes(o), tile_count(d.shape), m.relu, m.l1_acc, m.untilize, c.in0.format,
-        d.format == DataFormat::Float32 || d.format == DataFormat::Int32,
+        d.format,
+        o.format,
+        k.face_r_dim,
+        k.num_faces,
+        tile_bytes(o),
+        tile_count(d.shape),
+        m.relu,
+        m.l1_acc,
+        m.untilize,
+        c.in0.format,
+        is_32bit_format(d.format),
     };
     return {Op::Pack, UnpackPlan {}, UnpackPlan {}, UnpackWalk {}, MathPlan {}, pack, k};
 }

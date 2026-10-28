@@ -26,6 +26,7 @@
 namespace llk2
 {
 
+/// acc = src, tile i to tile i, each tile transposed when Mods.transpose is set.
 template <copy_modifiers Mods = copy_modifiers {}, const TensorSpec<tensor_rank>& S, class RS, const TensorSpec<tensor_rank>& D, class RD>
 inline __attribute__((always_inline)) void copy(const Tensor<S, RS>& src, const Tensor<D, RD>& acc)
 {

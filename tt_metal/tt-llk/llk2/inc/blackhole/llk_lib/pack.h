@@ -22,9 +22,9 @@
 // with the X, Y, Z, W address counters of channel 0 and the strides in bytes of the input format. Y counts rows in
 // a face, Z faces, W tiles. The MOP runs one tile:
 //   for each of the 4 faces:          (outer loop)
-//     4 PACRs of 4 rows               (inner loop); next_rows moves Y on by 4
-//     the last one ends the face:     next_face clears Y and moves Z on (tile_end, on the last face, clears both
-//                                     and closes the tile: Last = 1 flushes the output to L1)
+//     4 PACRs of 4 rows               (inner loop); pack_next_rows moves Y on by 4
+//     the last one ends the face:     pack_next_face clears Y and moves Z on (pack_tile_end, on the last face,
+//                                     clears both and closes the tile: Last = 1 flushes the output to L1)
 // Before each tile, execute sets W to the tile's index and the L1 output address (L1_Dest_addr) to the tile's place.
 // The packer writes the output linearly from there (OutputAddressGenerator.md), so the L1 tensor must be dense.
 //
@@ -32,8 +32,9 @@
 // (RMWCIB, SETC16) after a STALLWAIT for the packer to go idle, so a pack still in flight keeps its config, and the
 // byte-masked RMWCIB never touches another thread's bits in a shared word (ALU_FORMAT_SPEC, STACC_RELU, THCON REG1).
 //
-// Not HAL yet: the format helpers masked_data_format, datum_size_in_bytes, IS_A_FORMAT and IS_BFP_A_FORMAT
-// (ckernel_defs.h), L1_ADDRESS (llk_memory_checks.h) and the GPR indices p_gpr::ZERO and p_gpr_pack::TMP0.
+// Not HAL yet: the format helpers masked_data_format (through reg_fmt, llk_lib/formats.h), datum_size_in_bytes,
+// IS_A_FORMAT and IS_BFP_A_FORMAT (ckernel_defs.h), L1_ADDRESS and is_valid_L1_address (llk_memory_checks.h) with
+// LLK_ASSERT, and the GPR indices p_gpr::ZERO and p_gpr_pack::TMP0 (ckernel_gpr_map.h).
 
 #pragma once
 
@@ -46,6 +47,7 @@
 #include "hal/pack.h"
 #include "hal/sync.h"
 #include "hal/tensix_counters.h"
+#include "llk_lib/formats.h"
 #include "llk_lib/thread.h"
 #include "llk_memory_checks.h"
 #include "resolver/plan.h"
@@ -65,18 +67,21 @@ using hal::sync::StallTarget;
 
 // ---- constants -----------------------------------------------------------------------------------------------------
 
-inline constexpr std::uint32_t rows_per_pacr      = 4;       ///< one PACR with all four Dest read interfaces reads 4 Dest rows
-inline constexpr std::uint8_t all_read_interfaces = 0;       ///< PACR interface mask 0: all four read interfaces
-inline constexpr std::uint32_t zero_relu          = 1;       ///< STACC_RELU ApplyRelu mode 1: negatives to 0 (Packers/ReLU.md)
-inline constexpr std::uint32_t no_relu            = 0;       ///< STACC_RELU ApplyRelu mode 0: values pass unchanged
-inline constexpr std::uint32_t all_datums_mask    = 0xffff;  ///< PCK_EDGE_OFFSET mask with every datum of a face row kept
-inline constexpr std::uint32_t no_downsampling    = 0;       ///< Downsample_mask 0 keeps every datum (Packers/Downsampling.md)
-inline constexpr std::uint32_t one_read_per_plane = 1;       ///< pack_reads_per_xy_plane outside reduce (_llk_pack_reduce_mask_clear_)
+inline constexpr std::uint32_t rows_per_pacr      = 4;        ///< one PACR with all four Dest read interfaces reads 4 Dest rows
+inline constexpr std::uint8_t all_read_interfaces = 0;        ///< PACR interface mask 0: all four read interfaces
+inline constexpr std::uint32_t zero_relu          = 1;        ///< STACC_RELU ApplyRelu mode 1: negatives to 0 (Packers/ReLU.md)
+inline constexpr std::uint32_t no_relu            = 0;        ///< STACC_RELU ApplyRelu mode 0: values pass unchanged
+inline constexpr std::uint32_t all_datums_mask    = 0xffff;   ///< PCK_EDGE_OFFSET mask with every datum of a face row kept
+inline constexpr std::uint32_t no_downsampling    = 0;        ///< Downsample_mask 0 keeps every datum (Packers/Downsampling.md)
+inline constexpr std::uint32_t one_read_per_plane = 1;        ///< pack_reads_per_xy_plane outside reduce (_llk_pack_reduce_mask_clear_)
 inline constexpr std::uint32_t packer0_addr_flag  = 1u << 31; ///< L1_Dest_addr bit 31 on packer 0: the other packers' addresses are offsets
                                                               ///< from it (OutputAddressGenerator.md); set as program_packer_destination does
+inline constexpr std::uint32_t fp32_exp_bias = 127;           ///< exponent bias of the 8-bit-exponent (B) formats
+inline constexpr std::uint32_t bfp_a_min_exp = 14;            ///< minus the smallest normal exponent of the 5-bit-exponent (A) formats: 1 - bias 15
 /// Exponent threshold for FP32 Dest to a BFP-A (5-bit exponent) L1 format: datums whose 8-bit exponent is below
-/// 127 - 14 (B bias minus A's smallest exponent) are not representable in A and become 0 (reconfigure_exp_threshold).
-inline constexpr std::uint32_t bfp_a_exp_threshold = 127 - 14;
+/// fp32_exp_bias - bfp_a_min_exp (113) are not representable in A and become 0 (reconfigure_exp_threshold,
+/// budabackend#1394).
+inline constexpr std::uint32_t bfp_a_exp_threshold = fp32_exp_bias - bfp_a_min_exp;
 
 // The packer address modifier slots the MOP uses (ADDR_MOD_0..2 of the original LLK).
 inline constexpr std::uint8_t pack_next_rows = 0; ///< Y on by rows_per_pacr
@@ -94,7 +99,7 @@ struct pack_params
     std::uint32_t face_r_dim; ///< rows per face
     std::uint32_t num_faces;  ///< faces per tile
     std::uint32_t tiles;      ///< tiles to pack
-    std::uint32_t tile_size;  ///< one tile in L1, in 16-byte words: the L1 address step from tile to tile
+    std::uint32_t tile_words; ///< one tile in L1, in L1 words: the L1 address step from tile to tile
     bool relu;                ///< negatives to 0 on the way out
     bool l1_acc;              ///< add into L1 instead of overwriting it
     bool untilize;            ///< write rows instead of tiles (not ported)
@@ -117,46 +122,50 @@ constexpr pack_params pack_params_from(const Plan& p)
     };
 }
 
-constexpr std::uint32_t pack_fmt(DataFormat f)
-{
-    return ckernel::masked_data_format(static_cast<std::uint32_t>(f));
-}
-
 /// The input format the packer is told: FP8 (E4M3) output goes through the gasket's FP16, so the packer takes FP16
 /// (set_packer_config).
 constexpr std::uint32_t packer_in_data_format(const pack_params& p)
 {
-    return p.out_format == DataFormat::Fp8_e4m3 ? pack_fmt(DataFormat::Float16) : pack_fmt(p.in_format);
+    return p.out_format == DataFormat::Fp8_e4m3 ? reg_fmt(DataFormat::Float16) : reg_fmt(p.in_format);
 }
 
 /// Bytes per datum of the packer's input format; the Dest strides count bytes of this size (InputAddressGenerator.md).
 constexpr std::uint32_t packer_datum_bytes(const pack_params& p)
 {
-    return ckernel::datum_size_in_bytes(pack_fmt(p.in_format));
+    return ckernel::datum_size_in_bytes(reg_fmt(p.in_format));
 }
 
 // ---- configure -----------------------------------------------------------------------------------------------------
 
+/// How one packer address counter (Y or Z of the Dest side) moves after a PACR.
+struct pack_counter_step
+{
+    std::uint32_t incr; ///< added to the counter
+    std::uint32_t clr;  ///< 1: the counter to 0
+};
+
 /// Programs packer address modifier Slot: Y (rows in a face) and Z (faces) of the Dest side. The L1 side never moves:
 /// the output address comes from L1_Dest_addr and the packer's write pointer.
-template <cfg::Sec Slot, std::uint32_t YIncr, std::uint32_t YClear, std::uint32_t ZIncr, std::uint32_t ZClear>
+template <cfg::Sec Slot, pack_counter_step Y, pack_counter_step Z>
 inline __attribute__((always_inline)) void set_pack_addr_mod()
 {
     using cfg::AddrMod;
     cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::set<AddrMod[cfg::Src][cfg::Y].Incr, Slot, YIncr>(),
-        cfg::set<AddrMod[cfg::Src][cfg::Y].CR, Slot, 0>(),
-        cfg::set<AddrMod[cfg::Src][cfg::Y].Clear, Slot, YClear>(),
+        cfg::set<AddrMod[cfg::Src][cfg::Y].Incr, Slot, Y.incr>(),
+        cfg::set<AddrMod[cfg::Src][cfg::Y].CR, Slot, 0>(), // no carriage return
+        cfg::set<AddrMod[cfg::Src][cfg::Y].Clear, Slot, Y.clr>(),
+        // The L1 (Dest-named) side's counters never move.
         cfg::set<AddrMod[cfg::Dest][cfg::Y].Incr, Slot, 0>(),
         cfg::set<AddrMod[cfg::Dest][cfg::Y].CR, Slot, 0>(),
         cfg::set<AddrMod[cfg::Dest][cfg::Y].Clear, Slot, 0>(),
-        cfg::set<AddrMod[cfg::Src][cfg::Z].Incr, Slot, ZIncr>(),
-        cfg::set<AddrMod[cfg::Src][cfg::Z].Clear, Slot, ZClear>(),
+        cfg::set<AddrMod[cfg::Src][cfg::Z].Incr, Slot, Z.incr>(),
+        cfg::set<AddrMod[cfg::Src][cfg::Z].Clear, Slot, Z.clr>(),
         cfg::set<AddrMod[cfg::Dest][cfg::Z].Incr, Slot, 0>(),
         cfg::set<AddrMod[cfg::Dest][cfg::Z].Clear, Slot, 0>());
 }
 
-/// One PACR of the tile: all four read interfaces, through address modifier AddrMod; Last closes the tile.
+/// One PACR of the tile, as an instruction word: all four read interfaces, then the counters move by address modifier
+/// slot addr_mod; boundary Last closes the tile.
 constexpr std::uint32_t pacr(std::uint8_t addr_mod, hal::pack::TileBoundary boundary)
 {
     return hal::pack::DataTransfer {.address_modifier = addr_mod, .interfaces = all_read_interfaces, .boundary = boundary}.get_operation();
@@ -166,14 +175,15 @@ constexpr std::uint32_t pacr(std::uint8_t addr_mod, hal::pack::TileBoundary boun
 template <pack_params P>
 inline __attribute__((always_inline)) void pack_configure()
 {
-    using namespace ckernel;
     using namespace hal::counters::adc;
     using cfg::Sec;
-    static_assert(P.num_faces == faces_per_full_tile && P.face_r_dim == max_face_rows, "32x32 tiles only, for now: the MOP and strides assume four 16-row faces");
+    using ckernel::p_gpr;
+    static_assert(
+        P.num_faces == faces_per_full_tile && P.face_r_dim == max_face_rows, "32x32 tiles only, for now: the MOP and strides assume four 16-row faces");
     static_assert(!P.untilize, "untilize is not ported yet");
 
     constexpr std::uint32_t in_format  = packer_in_data_format(P);
-    constexpr std::uint32_t out_format = pack_fmt(P.out_format);
+    constexpr std::uint32_t out_format = reg_fmt(P.out_format);
     constexpr bool fp8_e4m3            = P.out_format == DataFormat::Fp8_e4m3;
     constexpr bool in_32bit            = is_32bit_format(P.in_format);
 
@@ -183,7 +193,7 @@ inline __attribute__((always_inline)) void pack_configure()
 
     // Dest-side strides, in bytes of the input format: a face row, a face, a tile. X steps through the counter itself
     // (Xstride 0). The L1 side (register set 1) has no strides.
-    constexpr std::uint32_t y_stride = FACE_C_DIM * packer_datum_bytes(P);
+    constexpr std::uint32_t y_stride = face_cols * packer_datum_bytes(P);
     constexpr std::uint32_t z_stride = P.face_r_dim * y_stride;
     constexpr std::uint32_t w_stride = P.num_faces * z_stride;
     using cfg::PackerReg;
@@ -201,15 +211,15 @@ inline __attribute__((always_inline)) void pack_configure()
     cfg::write<cfg::Access::TensixCfgUnit>(
         cfg::set<cfg::AluFormatSpecReg::Dstacc_val, Sec::S0, 0>(),
         cfg::set<cfg::AluFormatSpecReg::Dstacc_override, Sec::S0, 0>(),
-        cfg::set<cfg::AluFormatSpecReg2::Dstacc, Sec::S0, fp8_e4m3 ? pack_fmt(DataFormat::Float16) : in_format>(),
+        cfg::set<cfg::AluFormatSpecReg2::Dstacc, Sec::S0, fp8_e4m3 ? reg_fmt(DataFormat::Float16) : in_format>(),
         cfg::set<cfg::StaccRelu::ApplyRelu, Sec::S0, P.relu ? zero_relu : no_relu>(),
-        cfg::set<cfg::StaccRelu::ReluThreshold, Sec::S0, 0>());
+        cfg::set<cfg::StaccRelu::ReluThreshold, Sec::S0, 0>()); // unused: only the threshold modes (2, 3) read it (ReLU.md)
 
     // How the packer reads Dest: 32-bit datums with a 32-bit Dest or a 32-bit input format; 8-bit integers;
     // unsigned for UINT8 output; mantissa rounded to 10 bits where the conversion needs it (set_packer_config).
-    constexpr bool read_32b    = in_32bit || P.dest_fp32;
-    constexpr bool read_int8   = !read_32b && (P.in_format == DataFormat::Int8 || P.in_format == DataFormat::UInt8);
-    constexpr bool round_10b   = (P.dest_fp32 && P.in_format == DataFormat::Float16) || (!IS_A_FORMAT(pack_fmt(P.in_format)) && fp8_e4m3);
+    constexpr bool read_32b  = in_32bit || P.dest_fp32;
+    constexpr bool read_int8 = !read_32b && (P.in_format == DataFormat::Int8 || P.in_format == DataFormat::UInt8);
+    constexpr bool round_10b = (P.dest_fp32 && P.in_format == DataFormat::Float16) || (!ckernel::IS_A_FORMAT(reg_fmt(P.in_format)) && fp8_e4m3);
     cfg::write<cfg::Access::TensixCfgUnit>(
         cfg::set<cfg::PckDestRdCtrl::Read_32b_data, Sec::S0, read_32b ? 1u : 0u>(),
         cfg::set<cfg::PckDestRdCtrl::Read_unsigned, Sec::S0, P.out_format == DataFormat::UInt8 ? 1u : 0u>(),
@@ -218,12 +228,14 @@ inline __attribute__((always_inline)) void pack_configure()
 
     // Packer 0's config (THCON SEC0 REG1), every field but L1_Dest_addr (set per tile) and Unp_LF8_4b_exp (the
     // unpacker's). The exponent section: one exponent block per face for block formats; none for FP8 and INT8.
-    using r1                              = cfg::ThconReg1Fields;
-    constexpr bool no_exponents           = out_format == pack_fmt(DataFormat::Lf8) || out_format == pack_fmt(DataFormat::Int8);
-    constexpr bool exp_threshold          = P.dest_fp32 && IS_BFP_A_FORMAT(out_format);
+    using r1                     = cfg::ThconReg1Fields;
+    constexpr bool no_exponents  = out_format == reg_fmt(DataFormat::Lf8) || out_format == reg_fmt(DataFormat::Int8);
+    constexpr bool exp_threshold = P.dest_fp32 && ckernel::IS_BFP_A_FORMAT(out_format);
     cfg::write<cfg::Access::TensixCfgUnit>(
         cfg::set<r1::Row_start_section_size, Sec::S0, 0>(), // no row-start section: no compression
         cfg::set<r1::Exp_section_size, Sec::S0, no_exponents ? 0u : P.num_faces>());
+    // The fields below without a comment are 0, as configure_pack (cpack_common.h) leaves them: it zeroes the whole
+    // config before setting the formats and section sizes.
     cfg::write<cfg::Access::TensixCfgUnit>(
         cfg::set<r1::Disable_zero_compress, Sec::S0, 1>(),   // plain tiles, no zero compression
         cfg::set<r1::Add_l1_dest_addr_offset, Sec::S0, 0>(), // the address is L1_Dest_addr alone
@@ -234,7 +246,7 @@ inline __attribute__((always_inline)) void pack_configure()
         cfg::set<r1::Dis_shared_exp_assembler, Sec::S0, 0>(),
         cfg::set<r1::Auto_set_last_pacr_intf_sel, Sec::S0, 0>(),
         cfg::set<r1::Enable_out_fifo, Sec::S0, 0>(),
-        cfg::set<r1::Sub_l1_tile_header_size, Sec::S0, 0>(), // output starts one 16-byte word after L1_Dest_addr (L1_ADDRESS)
+        cfg::set<r1::Sub_l1_tile_header_size, Sec::S0, 0>(),    // 0: nothing to subtract; L1_ADDRESS already points one word before the data
         cfg::set<r1::Source_interface_selection, Sec::S0, 0>(), // read Dest, not L1
         cfg::set<r1::pack_start_intf_pos, Sec::S0, 0>(),
         cfg::set<r1::All_pack_disable_zero_compress_ovrd, Sec::S0, 0>(),
@@ -243,13 +255,15 @@ inline __attribute__((always_inline)) void pack_configure()
         cfg::set<r1::L1_source_addr, Sec::S0, 0>());
     cfg::write<cfg::Access::TensixCfgUnit>(
         cfg::set<r1::Downsample_mask, Sec::S0, no_downsampling>(),
-        cfg::set<r1::Downsample_rate, Sec::S0, 0>(),
+        cfg::set<r1::Downsample_rate, Sec::S0, 0>(), // as configure_pack: config zeroed
         cfg::set<r1::Pack_L1_Acc, Sec::S0, P.l1_acc ? 1u : 0u>(),
         cfg::set<r1::Exp_threshold_en, Sec::S0, exp_threshold ? 1u : 0u>(),
         cfg::set<r1::Pac_LF8_4b_exp, Sec::S0, fp8_e4m3 ? 1u : 0u>(),
         cfg::set<r1::Exp_threshold, Sec::S0, exp_threshold ? bfp_a_exp_threshold : 0u>());
 
     // Edge masking off: one read per XY plane, every datum kept, every row on mask 0 (_llk_pack_reduce_mask_clear_).
+    // The other PACK_COUNTERS fields are 0, as configure_pack writes them (the whole word 0, then
+    // pack_reads_per_xy_plane = 1): no automatic last-PACR generation.
     cfg::write<cfg::Access::TensixCfgUnit>(
         cfg::set<cfg::PackCounters::pack_per_xy_plane, Sec::S0, 0>(),
         cfg::set<cfg::PackCounters::pack_reads_per_xy_plane, Sec::S0, one_read_per_plane>(),
@@ -265,27 +279,29 @@ inline __attribute__((always_inline)) void pack_configure()
         hal::gpr<p_gpr::ZERO>());
 
     // Address modifiers for the MOP below.
-    // Template arguments: slot, Y increment, Y clear, Z increment, Z clear.
-    set_pack_addr_mod<static_cast<Sec>(pack_next_rows), rows_per_pacr, 0, 0, 0>();
-    set_pack_addr_mod<static_cast<Sec>(pack_tile_end), 0, 1, 0, 1>();
-    set_pack_addr_mod<static_cast<Sec>(pack_next_face), 0, 1, 1, 0>();
+    constexpr pack_counter_step stay {0, 0};
+    constexpr pack_counter_step clear {0, 1};
+    constexpr pack_counter_step next_face {1, 0}; // Z counts faces
+    set_pack_addr_mod<static_cast<Sec>(pack_next_rows), pack_counter_step {rows_per_pacr, 0}, stay>();
+    set_pack_addr_mod<static_cast<Sec>(pack_tile_end), clear, clear>();
+    set_pack_addr_mod<static_cast<Sec>(pack_next_face), clear, next_face>();
 
     // Address counters to 0, except channel 1's X: the last datum of a row, so each read interface takes one
     // 16-datum row (InputNumDatums = channel 1 X - channel 0 X + 1).
-    hal::counters::set<AddrCounter {
-        .channel0 = {.x = 0, .y = 0, .z = 0, .w = 0}, .channel1 = {.x = FACE_C_DIM - 1, .y = 0, .z = 0, .w = 0}}.for_clients<Client::Packers>()>();
+    hal::counters::set<
+        AddrCounter {.channel0 = {.x = 0, .y = 0, .z = 0, .w = 0}, .channel1 = {.x = face_cols - 1, .y = 0, .z = 0, .w = 0}}.for_clients<Client::Packers>()>();
 
     // MOP template 1: one tile. Outer loop: the faces; inner loop: the PACRs of a face.
-    constexpr std::uint32_t next_rows = pacr(pack_next_rows, hal::pack::TileBoundary::NotLast);
-    constexpr std::uint32_t next_face = pacr(pack_next_face, hal::pack::TileBoundary::NotLast);
-    constexpr std::uint32_t tile_end  = pacr(pack_tile_end, hal::pack::TileBoundary::Last);
+    constexpr std::uint32_t next_rows_op = pacr(pack_next_rows, hal::pack::TileBoundary::NotLast);
+    constexpr std::uint32_t next_face_op = pacr(pack_next_face, hal::pack::TileBoundary::NotLast);
+    constexpr std::uint32_t tile_end_op  = pacr(pack_tile_end, hal::pack::TileBoundary::Last);
     hal::mop::program<hal::mop::MopConfig<hal::mop::MopTemplate::Template1> {
         .outer_loop = {.count = P.num_faces},
         .inner_loop = {
             .count                               = P.face_r_dim / rows_per_pacr,
-            .body_op                             = next_rows,
-            .last_op_on_final_outer_iteration    = tile_end,
-            .last_op_on_nonfinal_outer_iteration = next_face}}>();
+            .body_op                             = next_rows_op,
+            .last_op_on_final_outer_iteration    = tile_end_op,
+            .last_op_on_nonfinal_outer_iteration = next_face_op}}>();
 }
 
 // ---- execute -------------------------------------------------------------------------------------------------------
@@ -310,7 +326,7 @@ inline __attribute__((always_inline)) void pack_execute(std::uint32_t dest_row, 
     const std::uint32_t first_tile = L1_ADDRESS(l1_address); // 16-byte words, one before the data (the tile header slot)
     for (std::uint32_t tile = 0; tile < P.tiles; tile++)
     {
-        const std::uint32_t tile_address = first_tile + tile * P.tile_size;
+        const std::uint32_t tile_address = first_tile + tile * P.tile_words;
         LLK_ASSERT(is_valid_L1_address(tile_address), "pack address is outside L1");
         // W selects the Dest tile; the tile's first PACR samples the L1 address (in-order behind the last tile's
         // PACRs, as _llk_pack_ relies on). The STALLWAIT keeps the PACRs from starting before the address lands.

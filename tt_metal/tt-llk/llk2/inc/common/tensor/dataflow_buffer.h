@@ -4,7 +4,8 @@
 
 // Dataflow buffer (DM) API: Tensors from dataflow (circular) buffers. Arch-independent, single thread. Replaces
 // cb_wait_front, cb_pop_front, cb_reserve_back and cb_push_back (DataflowBuffer::wait_front, ... in tt-metal).
-// From tt-llk-lab lpremovic/llk-tensor, report 2, section 6.
+// From tt-llk-lab lpremovic/llk-tensor, report 2, section 6:
+// https://github.com/tenstorrent/tt-llk-lab/tree/lpremovic/llk-tensor/experiments/llk-tensor
 //
 //   inline constexpr DataflowBufferSpec in0_buf {.id = 0, .format = ..., .page_bytes = ..., .pages = ...};
 //   setup_dataflow_buffer<in0_buf>(base);        // every thread, once (tt-metal: the firmware does this)
@@ -66,7 +67,12 @@ inline constexpr std::uint32_t buffer_tile_bytes = tile_bytes(B.format, B.tile_r
 
 /// The spec of TilesY x TilesX of B's tiles, dense in L1.
 template <const DataflowBufferSpec& B, std::uint32_t TilesY, std::uint32_t TilesX>
-inline constexpr TensorSpec<tensor_rank> buffer_tensor_spec = make_spec<TilesY * B.tile_rows, TilesX * B.tile_cols, B.format, B.tile_rows, B.tile_cols>(Storage::L1);
+inline constexpr TensorSpec<tensor_rank> buffer_tensor_spec =
+    make_spec<TilesY * B.tile_rows, TilesX * B.tile_cols, B.format, B.tile_rows, B.tile_cols>(Storage::L1);
+
+/// B as llk-lib's parameters.
+template <const DataflowBufferSpec& B>
+inline constexpr llk_lib::dataflow_buffer_params buffer_params = llk_lib::dataflow_buffer_params_from(B);
 
 /// Pages of B that TilesY x TilesX tiles take. Checks the tensor fits the buffer without wrapping.
 template <const DataflowBufferSpec& B, std::uint32_t TilesY, std::uint32_t TilesX>
@@ -86,7 +92,7 @@ struct PopFront
 {
     void operator()() const
     {
-        llk_lib::dataflow_buffer_pop_front<Thread::Unpack, B, Pages>();
+        llk_lib::dataflow_buffer_pop_front<Thread::Unpack, buffer_params<B>, Pages>();
     }
 };
 
@@ -96,7 +102,7 @@ struct PushBack
 {
     void operator()() const
     {
-        llk_lib::dataflow_buffer_push_back<Thread::Pack, B, Pages>();
+        llk_lib::dataflow_buffer_push_back<Thread::Pack, buffer_params<B>, Pages>();
     }
 };
 
@@ -105,8 +111,9 @@ struct PushBack
 template <const DataflowBufferSpec& B>
 inline __attribute__((always_inline)) void setup_dataflow_buffer(std::uint32_t base_address)
 {
-    llk_lib::dataflow_buffer_setup<B>(base_address);
-    llk_lib::dataflow_buffer_set_counters<Thread::Pack, B>(0, 0); // harness only: empty; tt-metal's firmware zeroes them
+    llk_lib::dataflow_buffer_setup<buffer_params<B>>(base_address);
+    llk_lib::dataflow_buffer_set_counters<Thread::Pack, buffer_params<B>>(
+        0 /* acked */, 0 /* received */); // harness only: empty; tt-metal's firmware zeroes them
 }
 
 /// Harness only, every thread: B is set up at base_address and its first Pages pages, already in L1, count as pushed
@@ -114,8 +121,8 @@ inline __attribute__((always_inline)) void setup_dataflow_buffer(std::uint32_t b
 template <const DataflowBufferSpec& B>
 inline __attribute__((always_inline)) void preload_dataflow_buffer(std::uint32_t base_address, std::uint16_t pages)
 {
-    llk_lib::dataflow_buffer_setup<B>(base_address);
-    llk_lib::dataflow_buffer_set_counters<Thread::Unpack, B>(0, pages);
+    llk_lib::dataflow_buffer_setup<buffer_params<B>>(base_address);
+    llk_lib::dataflow_buffer_set_counters<Thread::Unpack, buffer_params<B>>(0 /* acked */, pages /* received */);
 }
 
 /// TilesY x TilesX of B's tiles at the read pointer, once the producer has pushed them. The unpacker's; release pops.
@@ -123,7 +130,7 @@ template <const DataflowBufferSpec& B, std::uint32_t TilesY = 1, std::uint32_t T
 inline __attribute__((always_inline)) auto wait_front()
 {
     constexpr std::uint32_t pages = buffer_pages<B, TilesY, TilesX>();
-    const std::uint32_t address   = llk_lib::dataflow_buffer_wait_front<Thread::Unpack, B, pages>();
+    const std::uint32_t address   = llk_lib::dataflow_buffer_wait_front<Thread::Unpack, buffer_params<B>, pages>();
     return Tensor<owned_by<buffer_tensor_spec<B, TilesY, TilesX>, Thread::Unpack, Exu::Unpacker>, PopFront<B, pages>>(address);
 }
 
@@ -132,7 +139,7 @@ template <const DataflowBufferSpec& B, std::uint32_t TilesY = 1, std::uint32_t T
 inline __attribute__((always_inline)) auto reserve_back()
 {
     constexpr std::uint32_t pages = buffer_pages<B, TilesY, TilesX>();
-    const std::uint32_t address   = llk_lib::dataflow_buffer_reserve_back<Thread::Pack, B, pages>();
+    const std::uint32_t address   = llk_lib::dataflow_buffer_reserve_back<Thread::Pack, buffer_params<B>, pages>();
     return Tensor<owned_by<buffer_tensor_spec<B, TilesY, TilesX>, Thread::Pack, Exu::Packer>, PushBack<B, pages>>(address);
 }
 
