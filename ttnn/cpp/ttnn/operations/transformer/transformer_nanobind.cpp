@@ -11,6 +11,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
 #include "attention_softmax/attention_softmax_nanobind.hpp"
 #include "concatenate_heads/concatenate_heads_nanobind.hpp"
@@ -36,7 +37,8 @@ void py_module(nb::module_& mod) {
                 uint32_t,
                 uint32_t,
                 std::optional<tt::tt_metal::MathFidelity>,
-                bool>(),
+                bool,
+                std::optional<std::vector<uint32_t>>>(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
             nb::arg("sub_core_grids") = nb::none(),
@@ -46,7 +48,8 @@ void py_module(nb::module_& mod) {
             nb::arg("max_cores_per_head_batch") = 16,
             nb::arg("k_splits") = 1,
             nb::arg("matmul_math_fidelity") = nb::none(),
-            nb::arg("segmented_accumulation") = false)
+            nb::arg("segmented_accumulation") = false,
+            nb::arg("floater_schedule") = nb::none())
         .def_rw("compute_with_storage_grid_size", &SDPAProgramConfig::compute_with_storage_grid_size)
         .def_rw("sub_core_grids", &SDPAProgramConfig::sub_core_grids)
         .def_rw("q_chunk_size", &SDPAProgramConfig::q_chunk_size)
@@ -56,11 +59,12 @@ void py_module(nb::module_& mod) {
         .def_rw("k_splits", &SDPAProgramConfig::k_splits)
         .def_rw("matmul_math_fidelity", &SDPAProgramConfig::matmul_math_fidelity)
         .def_rw("segmented_accumulation", &SDPAProgramConfig::segmented_accumulation)
+        .def_rw("floater_schedule", &SDPAProgramConfig::floater_schedule)
         .def("__repr__", [](const SDPAProgramConfig& config) {
             return fmt::format(
                 "SDPAProgramConfig(compute_with_storage_grid_size={}, sub_core_grids={}, q_chunk_size={}, "
                 "k_chunk_size={}, exp_approx_mode={}, max_cores_per_head_batch={}, k_splits={}, "
-                "matmul_math_fidelity={}, segmented_accumulation={})",
+                "matmul_math_fidelity={}, segmented_accumulation={}, floater_schedule={})",
                 config.compute_with_storage_grid_size,
                 config.sub_core_grids,
                 config.q_chunk_size,
@@ -69,7 +73,8 @@ void py_module(nb::module_& mod) {
                 config.max_cores_per_head_batch,
                 config.k_splits,
                 config.matmul_math_fidelity,
-                config.segmented_accumulation);
+                config.segmented_accumulation,
+                config.floater_schedule);
         });
 
     nb::class_<PagedCacheGeometryOverride>(mod, "PagedCacheGeometryOverride")

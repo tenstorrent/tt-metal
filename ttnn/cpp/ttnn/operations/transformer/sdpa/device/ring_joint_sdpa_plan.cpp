@@ -219,18 +219,20 @@ std::optional<ring_joint::FloaterSchedule> floater_eligibility(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, const KSplitShape& ksplit) {
     const auto& ag = args.all_gather_operation_attributes;
     const uint32_t NH = tensor_args.input_q.logical_shape()[1];
-    ring_joint::FloaterSchedule schedule{};
     if (!(tensor_args.has_k_expand() && ksplit.count > 1 && !args.has_sliding_window() &&
           !tensor_args.attention_sink.has_value() && ksplit.num_q_chunks == 2 && args.program_config.has_value() &&
-          args.program_config->q_chunk_size == ring_joint::kFloaterQChunkSize &&
-          args.program_config->k_chunk_size == ring_joint::kFloaterKChunkSize &&
-          ring_joint::floater_schedule(NH, ksplit.count, schedule) &&
-          (NH / 2) * ksplit.count == ring_joint::kFloaterHomeBlocks && ksplit.grid == CoreCoord(11, 10) &&
-          ag.ring_size == 8 && args.ccl_core_grid_offset == CoreCoord(ksplit.grid.x, 0) && ag.num_links == 2 &&
+          NH % 2 == 0 && (NH / 2) * ksplit.count == ring_joint::kFloaterHomeBlocks &&
+          ksplit.grid == CoreCoord(11, 10) && ag.ring_size == 8 &&
+          args.ccl_core_grid_offset == CoreCoord(ksplit.grid.x, 0) && ag.num_links == 2 &&
           ag.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR)) {
         return std::nullopt;
     }
-    if (!slice_readiness_enabled(args, tensor_args)) {
+    const auto& config = args.program_config.value();
+    const std::optional<ring_joint::FloaterSchedule> schedule =
+        config.floater_schedule.has_value()
+            ? ring_joint::floater_schedule_from_values(config.floater_schedule.value())
+            : ring_joint::tuned_floater_schedule({NH, ksplit.count, config.q_chunk_size, config.k_chunk_size});
+    if (!schedule.has_value() || !slice_readiness_enabled(args, tensor_args)) {
         return std::nullopt;
     }
     return schedule;

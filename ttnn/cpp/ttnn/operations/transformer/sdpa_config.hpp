@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <vector>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 
@@ -29,6 +30,10 @@ struct SDPAProgramConfig {
     // so no bf16 running sum spans the whole prefix. Refused with a K split, a sliding window, or several Q chunks
     // per core (raise q_chunk_size).
     bool segmented_accumulation = false;
+    // Ring joint expanded K only, for tuning: replaces the floater schedule the op takes from its tuned table
+    // (ring_joint::kTunedFloaterSchedules) as {iter0, iter1, frac0, frac1, donate_tail, merge0, ..., merge4}; empty
+    // runs without floaters. Unset uses the table, where a shape without an entry runs without floaters.
+    std::optional<std::vector<uint32_t>> floater_schedule;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

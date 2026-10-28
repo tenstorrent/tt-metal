@@ -10,8 +10,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -28,17 +30,12 @@ constexpr uint32_t kFloaterGroups = 5;
 constexpr uint32_t kFloaterCores = kFloaterGroupCores * kFloaterGroups;
 // Home blocks of the layout: 2x2 blocks of (2 heads x 2 Q chunks) per K-split band on a 10x10 sub-grid.
 constexpr uint32_t kFloaterHomeBlocks = 24;
-// The chunk sizes the schedules below were tuned at. A floater expands K for every piece it runs, which a smaller Q
-// chunk does not amortize: at q128 (2k chunks) the floaters cost K3 ~10 ms per 512k-prefix chunk instead of saving.
-constexpr uint32_t kFloaterQChunkSize = 320;
-constexpr uint32_t kFloaterKChunkSize = 256;
 // First-piece visits a floater group runs, at most (the home blocks go round-robin over the groups).
 constexpr uint32_t kFloaterFirstPieceVisits = (kFloaterHomeBlocks + kFloaterGroups - 1) / kFloaterGroups;
 
 // A shape's schedule: the ring iterations a home donates in, the fraction of its band donated in each, which end of
 // the band it donates, and the ring iteration after which a home merges its first piece, by that piece's position in
-// its floater's queue (a floater runs them back to back). Tuned on the Blackhole 8-chip ring (Kimi final chunk, 50k
-// cached + 5k new, q320 k256).
+// its floater's queue (a floater runs them back to back).
 struct FloaterSchedule {
     uint32_t iters[kDonatedPieces];
     uint32_t fracs[kDonatedPieces];
@@ -46,17 +43,61 @@ struct FloaterSchedule {
     uint32_t merge_after[kFloaterFirstPieceVisits];
 };
 
-// The schedule of a validated shape: heads per device x K-split bands (heads / 2 x bands = kFloaterHomeBlocks).
-inline bool floater_schedule(uint32_t heads, uint32_t bands, FloaterSchedule& schedule) {
-    if (heads == 24 && bands == 2) {  // Kimi K3: 0.35 of iteration 2, 0.9 of iteration 4, from the band's start
-        schedule = {{2, 4}, {1075, 2765}, false, {3, 3, 3, 3, 3}};
-        return true;
+// What a schedule is tuned for: heads per device, K-split bands, and the SDPA's Q and K chunk sizes. The layout fixes
+// the rest (the 11x10 grid, the 8-chip ring, 2 gather links).
+struct FloaterShape {
+    uint32_t heads, bands, q_chunk_size, k_chunk_size;
+    bool operator==(const FloaterShape&) const = default;
+};
+
+// Schedules measured on the Blackhole 8-chip ring. A shape that is not listed runs without floaters: a floater expands
+// K for every piece it runs, and where the Q chunk is too short to amortize that (Kimi 2k chunks, q128) the floaters
+// cost more than the idle cores give back.
+inline constexpr std::array<std::pair<FloaterShape, FloaterSchedule>, 2> kTunedFloaterSchedules = {{
+    // Kimi K3: 0.35 of iteration 2, 0.9 of iteration 4, from the band's start.
+    {{24, 2, 320, 256}, {{2, 4}, {1075, 2765}, false, {3, 3, 3, 3, 3}}},
+    // Kimi K2.7: 0.6 of iteration 1, 0.5 of iteration 3, from the band's end.
+    {{16, 3, 320, 256}, {{1, 3}, {1843, 1536}, true, {3, 4, 5, 6, 6}}},
+}};
+
+// The tuned schedule of `shape`, or nullopt.
+inline std::optional<FloaterSchedule> tuned_floater_schedule(const FloaterShape& shape) {
+    for (const auto& [tuned_shape, schedule] : kTunedFloaterSchedules) {
+        if (tuned_shape == shape) {
+            return schedule;
+        }
     }
-    if (heads == 16 && bands == 3) {  // Kimi K2.7: 0.6 of iteration 1, 0.5 of iteration 3, from the band's end
-        schedule = {{1, 3}, {1843, 1536}, true, {3, 4, 5, 6, 6}};
-        return true;
+    return std::nullopt;
+}
+
+// Values of a schedule in SDPAProgramConfig::floater_schedule's order: iters, fracs, donate_tail, merge_after.
+constexpr size_t kFloaterScheduleValues = 2 * kDonatedPieces + 1 + kFloaterFirstPieceVisits;
+
+// A schedule given as SDPAProgramConfig::floater_schedule: nullopt for an empty list (no floaters).
+// build_floater_layout validates the values against the layout.
+inline std::optional<FloaterSchedule> floater_schedule_from_values(const std::vector<uint32_t>& values) {
+    if (values.empty()) {
+        return std::nullopt;
     }
-    return false;
+    TT_FATAL(
+        values.size() == kFloaterScheduleValues,
+        "floater_schedule: expected {} values (iter0, iter1, frac0, frac1, donate_tail, merge0..merge{}) or none, got "
+        "{}",
+        kFloaterScheduleValues,
+        kFloaterFirstPieceVisits - 1,
+        values.size());
+    FloaterSchedule schedule{};
+    for (uint32_t piece = 0; piece < kDonatedPieces; ++piece) {
+        schedule.iters[piece] = values[piece];
+        schedule.fracs[piece] = values[kDonatedPieces + piece];
+    }
+    TT_FATAL(
+        values[2 * kDonatedPieces] <= 1, "floater_schedule: donate_tail is {}, not 0 or 1", values[2 * kDonatedPieces]);
+    schedule.donate_tail = values[2 * kDonatedPieces] == 1;
+    for (uint32_t v = 0; v < kFloaterFirstPieceVisits; ++v) {
+        schedule.merge_after[v] = values[2 * kDonatedPieces + 1 + v];
+    }
+    return schedule;
 }
 
 constexpr uint32_t kNoFloaterGroup = std::numeric_limits<uint32_t>::max();
@@ -147,11 +188,12 @@ inline FloaterLayout build_floater_layout(
             heads,
             bands);
     }
+    // Home blocks hold head pairs, so every head is covered only with an even count that fills them exactly.
     TT_FATAL(
-        (heads / 2) * bands == kFloaterHomeBlocks && gather_workers == 4 && grid_y == 10 && grid_x == 11,
-        "ring_joint floaters: the layout covers {} home blocks on an 11x10 grid beside 4 gather workers (got {} heads "
-        "x "
-        "{} bands, {}x{}, {} workers)",
+        heads % 2 == 0 && (heads / 2) * bands == kFloaterHomeBlocks && gather_workers == 4 && grid_y == 10 &&
+            grid_x == 11,
+        "ring_joint floaters: the layout covers {} home blocks of head pairs on an 11x10 grid beside 4 gather workers "
+        "(got {} heads x {} bands, {}x{}, {} workers)",
         kFloaterHomeBlocks,
         heads,
         bands,
