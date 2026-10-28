@@ -473,20 +473,20 @@ def to_float32_tt_tensor(input_tensor, device, layout=ttnn.TILE_LAYOUT, memory_c
     return to_tt_tensor(input_tensor, device, dtype=ttnn.float32, layout=layout, memory_config=memory_config)
 
 
-def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, **op_kwargs):
+def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, input_dtype=ttnn.bfloat16, **op_kwargs):
     """Run a tensor-tensor ttnn binary op and return ``(golden, result)``.
 
     Ops whose ``__name__`` ends in ``_`` (``ttnn.add_``, ``ttnn.multiply_``, …)
     are inplace: they write into lhs and the result is read back from that
     tensor rather than the return value.
 
-    Inputs are uploaded as ``ttnn.bfloat16``. ``op_kwargs`` (e.g.
-    ``fast_and_approximate_mode``) are forwarded only to the device op.
-    Torch-valid golden arguments (e.g. isclose ``rtol``/``atol``) go in
-    ``golden_kwargs`` and are also passed to the device op.
+    Inputs are uploaded as ``input_dtype`` (``ttnn.bfloat16`` by default).
+    ``op_kwargs`` (e.g. ``fast_and_approximate_mode``) are forwarded only to
+    the device op. Torch-valid golden arguments (e.g. isclose ``rtol``/``atol``)
+    go in ``golden_kwargs`` and are also passed to the device op.
     """
-    tt_a = to_tt_tensor(input_a, device)
-    tt_b = to_tt_tensor(input_b, device)
+    tt_a = to_tt_tensor(input_a, device, dtype=input_dtype)
+    tt_b = to_tt_tensor(input_b, device, dtype=input_dtype)
 
     golden_kwargs = golden_kwargs or {}
     golden_function = ttnn.get_golden_function(ttnn_op)

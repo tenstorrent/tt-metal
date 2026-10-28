@@ -38,15 +38,29 @@ def combine_overlap_payload_size(routed_emb_dim: int) -> int:
     return routed_emb_dim + CMB_FABRIC2D_ROUTING_INFO_BYTES
 
 
+def routed_expert_combine_overlap_enabled(model_cfg) -> bool:
+    """Whether the model opts into TtMoe's routed expert / combine_fabric2d overlap. Off unless the config names
+    ROUTED_EXPERT_COMBINE_OVERLAP = True (Kimi K2.7, GLM 5.3 and Mistral Small 4 today)."""
+    return getattr(model_cfg, "ROUTED_EXPERT_COMBINE_OVERLAP", False)
+
+
+def routed_expert_combine_overlap_arg(model_cfg):
+    """TtMoe's overlap_routed_expert_with_combine for ``model_cfg``: None (on wherever it fits) for a model that
+    opts in, False (the separate ops) for every other. Every TtMoe builder passes this, tests included, so a model
+    is measured the way it runs."""
+    return None if routed_expert_combine_overlap_enabled(model_cfg) else False
+
+
 def moe_fabric_payload_size(model_cfg) -> int:
     """The fabric payload to open a mesh with for a model whose MoE is TtMoe.
 
-    On Blackhole TtMoe overlaps the routed expert with combine_fabric2d, so the mesh needs room for half a bf16
-    token plus combine's routing tail. Everywhere else TtMoe runs the routed expert then combine as separate ops, and
-    the model's own FABRIC_PAYLOAD_SIZE stands. TtMoe reads the payload back to decide whether to overlap, so a
-    mesh opened any other way simply runs without it. Deferred to avoid probing hardware at import time.
+    On Blackhole a model that opts into the overlap (routed_expert_combine_overlap_enabled) overlaps the routed
+    expert with combine_fabric2d, so the mesh needs room for half a bf16 token plus combine's routing tail.
+    Everywhere else TtMoe runs the routed expert then combine as separate ops, and the model's own
+    FABRIC_PAYLOAD_SIZE stands. TtMoe reads the payload back to decide whether to overlap, so a mesh opened any
+    other way simply runs without it. Deferred to avoid probing hardware at import time.
     """
-    if is_blackhole():
+    if is_blackhole() and routed_expert_combine_overlap_enabled(model_cfg):
         return max(model_cfg.FABRIC_PAYLOAD_SIZE, combine_overlap_payload_size(model_cfg.EMB_SIZE))
     return model_cfg.FABRIC_PAYLOAD_SIZE
 

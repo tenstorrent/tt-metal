@@ -19,7 +19,7 @@ static constexpr uint32_t ACK_EQUALS_FANOUT = 0xFFFFFFFFu;
 // Internal lowering engine. Operation code and language bindings use Mcast.
 class McastImpl {
 public:
-    explicit McastImpl(const tt::tt_metal::IDevice& device, const McastConfig& cfg = {});
+    explicit McastImpl(const tt::tt_metal::distributed::MeshDevice& device, const McastConfig& cfg = {});
     void add_group(
         const tt::tt_metal::CoreRangeSet& receivers,
         std::vector<tt::tt_metal::CoreCoord> senders,
@@ -111,13 +111,13 @@ private:
             std::variant<PreparedMulticast, PreparedChain> transport = PreparedMulticast{};
         };
         void prepare_(
-            const tt::tt_metal::IDevice& device,
+            const tt::tt_metal::distributed::MeshDevice& device,
             const McastConfig& cfg,
             dataflow_kernel_lib::TransferMode transfer_mode,
             const tt::tt_metal::CoreRangeSet* handshake_cores) const;
         PreparedMulticast prepare_multicast_(
             const McastConfig& cfg, PreparedState& state, const tt::tt_metal::CoreRangeSet* handshake_cores) const;
-        PreparedChain prepare_chain_(const tt::tt_metal::IDevice& device, PreparedState& state) const;
+        PreparedChain prepare_chain_(const tt::tt_metal::distributed::MeshDevice& device, PreparedState& state) const;
         const PreparedState& prepared_state_() const;
         uint32_t sender_phase_(const tt::tt_metal::CoreCoord& core) const;
         uint32_t roles_for_core_(const tt::tt_metal::CoreCoord& core) const;
@@ -137,7 +137,7 @@ private:
     std::vector<uint32_t> compile_time_args_(
         const std::array<uint32_t, 3>& ids, const dataflow_kernel_lib::mcast_wire::ArgumentMetadata& metadata) const;
 
-    std::reference_wrapper<const tt::tt_metal::IDevice> device_;
+    std::reference_wrapper<const tt::tt_metal::distributed::MeshDevice> device_;
     mutable bool arguments_prepared_ = false;
     mutable bool topology_current_ = false;
     mutable tt::ARCH prepared_arch_{};

@@ -3,11 +3,29 @@
 
 
 import os
+import resource
 from pathlib import Path
 
 from loguru import logger
 
 import ttnn
+
+
+def raise_nproc_limit(tag: str = "prefill") -> None:
+    """Raise RLIMIT_NPROC's soft limit to the hard limit for this process and its children.
+
+    tt-metal JIT-compiles device kernels in parallel and each target spawns its own chain of short-lived
+    processes (g++, cc1plus/lto1, as, ld); at the per-user default on the galaxy hosts (counted across
+    every process the user owns) clone3 fails mid-build with "posix_spawn: Operation not permitted" /
+    "Resource temporarily unavailable". Call it first thing in any harness that builds a model.
+    """
+    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+    if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
+        try:
+            resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
+            logger.info(f"[{tag}] raised RLIMIT_NPROC soft {soft} -> {hard}")
+        except (ValueError, OSError) as e:
+            logger.warning(f"[{tag}] could not raise RLIMIT_NPROC (soft={soft}): {e}")
 
 
 def _create_fabric_router_config(max_payload_size):
@@ -144,14 +162,29 @@ def activation_global_spec(rows: int, hidden_size: int, planes: int = 1) -> ttnn
     )
 
 
+# Rows per chip of the MTP id block below the hidden on the D2D activation (see mtp_prefill/id_transport.py).
+MTP_ID_ROWS = TILE_HEIGHT
+
+
 def d2d_activation_rows(chunk_size: int, *, sp_factor: int, mtp_levels: int = 0) -> int:
     if not mtp_levels:
         return chunk_size
-    return chunk_size + sp_factor * mtp_union_rows(chunk_size, sp_factor, mtp_levels)
+    return chunk_size + sp_factor * MTP_ID_ROWS
 
 
 def d2d_activation_width(hidden_size: int, *, dflash: bool = False) -> int:
     return hidden_size * (2 if dflash else 1)
+
+
+def indexer_indices_global_spec(per_chip_shape, mesh_shape) -> ttnn.TensorSpec:
+    _, _, rows, k = per_chip_shape
+    sp, tp = mesh_shape
+    return ttnn.TensorSpec(
+        shape=ttnn.Shape([1, 1, sp * rows, tp * k]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
 
 
 def resolve_trace_dir(path) -> Path:
@@ -209,7 +242,7 @@ def _snap_counts_to_starts(counts, valid_starts, num_layers):
 
 
 def compute_layer_split(
-    num_layers: int, num_ranks: int, valid_starts=None, mtp_levels: int = 0
+    num_layers: int, num_ranks: int, valid_starts=None, tail_levels: int = 0
 ) -> list[tuple[int, int]]:
     override = os.environ.get("PREFILL_PP_LAYER_COUNTS")
     if override:
@@ -220,13 +253,14 @@ def compute_layer_split(
                 f"{num_layers} (got {len(counts)} counts summing to {sum(counts)})"
             )
     else:
-        base, rem = divmod(num_layers + mtp_levels, num_ranks)
-        counts = [base + (1 if r < rem else 0) for r in range(num_ranks)]
-        counts[-1] -= mtp_levels
+        base, rem = divmod(num_layers + tail_levels, num_ranks)
+        counts = [base + (1 if r >= num_ranks - rem else 0) for r in range(num_ranks)]
+        counts[-1] -= tail_levels
         if counts[-1] < 1:
             raise ValueError(
-                f"{mtp_levels} MTP levels leave the last of {num_ranks} ranks {counts[-1]} trunk layers "
-                f"out of {num_layers}: the tail would hold no trunk stage. Use fewer ranks, or set "
+                f"{tail_levels} tail levels (MTP heads or the DFlash drafter) leave the last of {num_ranks} "
+                f"ranks {counts[-1]} trunk layers out of {num_layers}: the tail would hold no trunk stage. "
+                f"Use fewer ranks, or set "
                 f"PREFILL_PP_LAYER_COUNTS (TRUNK counts, summing to {num_layers})."
             )
         if valid_starts is not None:

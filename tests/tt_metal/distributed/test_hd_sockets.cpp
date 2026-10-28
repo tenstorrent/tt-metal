@@ -34,7 +34,7 @@
 #include <cstring>
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
-#include <umd/device/io_window/io_window.hpp>
+#include <tt-umd/io_window/io_window.hpp>
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -189,6 +189,50 @@ void test_d2h_socket(
     EXPECT_EQ(src_vec, dst_vec);
 }
 
+// Adds the loopback kernel on `core` to `program`: it copies num_iterations * data_size bytes, a page at a time,
+// from `input_socket` to `output_socket`. Returns the kernel's L1 scratch page, which must outlive the kernel.
+std::shared_ptr<MeshBuffer> add_loopback_kernel(
+    Program& program,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const CoreCoord& core,
+    const H2DSocket& input_socket,
+    const D2HSocket& output_socket,
+    std::size_t page_size,
+    std::size_t data_size,
+    uint32_t num_iterations,
+    H2DMode h2d_mode) {
+    // DEVICE_PULL landing slot (CT arg 6): the H2D FIFO lives in pinned host memory, so the
+    // loopback kernel needs a page of local L1 to pull into before writing back to the D2H socket.
+    const ReplicatedBufferConfig scratch_buffer_config{.size = page_size};
+    auto scratch_shard_params =
+        ShardSpecBuffer(CoreRangeSet(core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    const DeviceLocalBufferConfig scratch_device_local_config{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(scratch_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto scratch_buffer = MeshBuffer::create(scratch_buffer_config, scratch_device_local_config, mesh_device.get());
+
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_loopback.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {
+                static_cast<uint32_t>(input_socket.get_config_buffer_address()),
+                static_cast<uint32_t>(output_socket.get_config_buffer_address()),
+                static_cast<uint32_t>(page_size),
+                static_cast<uint32_t>(data_size),
+                static_cast<uint32_t>(num_iterations),
+                h2d_mode == H2DMode::DEVICE_PULL,
+                static_cast<uint32_t>(scratch_buffer->address()),
+            }});
+    return scratch_buffer;
+}
+
 void test_hd_socket_loopback(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
@@ -205,36 +249,17 @@ void test_hd_socket_loopback(
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
-    // DEVICE_PULL landing slot (CT arg 6): the H2D FIFO lives in pinned host memory, so the
-    // loopback kernel needs a page of local L1 to pull into before writing back to the D2H socket.
-    const ReplicatedBufferConfig scratch_buffer_config{.size = page_size};
-    auto scratch_shard_params =
-        ShardSpecBuffer(CoreRangeSet(socket_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    const DeviceLocalBufferConfig scratch_device_local_config{
-        .page_size = page_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(scratch_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-    auto scratch_buffer = MeshBuffer::create(scratch_buffer_config, scratch_device_local_config, mesh_device.get());
-
     auto send_program = CreateProgram();
-    CreateKernel(
+    const std::shared_ptr<MeshBuffer> scratch_buffer = add_loopback_kernel(
         send_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_loopback.cpp",
+        mesh_device,
         socket_core.core_coord,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = {
-                static_cast<uint32_t>(input_socket.get_config_buffer_address()),
-                static_cast<uint32_t>(output_socket.get_config_buffer_address()),
-                static_cast<uint32_t>(page_size),
-                static_cast<uint32_t>(data_size),
-                static_cast<uint32_t>(num_iterations),
-                h2d_mode == H2DMode::DEVICE_PULL,
-                static_cast<uint32_t>(scratch_buffer->address()),
-            }});
+        input_socket,
+        output_socket,
+        page_size,
+        data_size,
+        num_iterations,
+        h2d_mode);
 
     const uint32_t num_txns = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
@@ -272,36 +297,17 @@ void test_hd_socket_multithreaded_loopback(
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
-    // DEVICE_PULL landing slot (CT arg 6): the H2D FIFO lives in pinned host memory, so the
-    // loopback kernel needs a page of local L1 to pull into before writing back to the D2H socket.
-    const ReplicatedBufferConfig scratch_buffer_config{.size = page_size};
-    auto scratch_shard_params =
-        ShardSpecBuffer(CoreRangeSet(socket_core.core_coord), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    const DeviceLocalBufferConfig scratch_device_local_config{
-        .page_size = page_size,
-        .buffer_type = BufferType::L1,
-        .sharding_args = BufferShardingArgs(scratch_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = false,
-    };
-    auto scratch_buffer = MeshBuffer::create(scratch_buffer_config, scratch_device_local_config, mesh_device.get());
-
     auto send_program = CreateProgram();
-    CreateKernel(
+    const std::shared_ptr<MeshBuffer> scratch_buffer = add_loopback_kernel(
         send_program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_loopback.cpp",
+        mesh_device,
         socket_core.core_coord,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = {
-                static_cast<uint32_t>(input_socket.get_config_buffer_address()),
-                static_cast<uint32_t>(output_socket.get_config_buffer_address()),
-                static_cast<uint32_t>(page_size),
-                static_cast<uint32_t>(data_size),
-                static_cast<uint32_t>(num_iterations),
-                h2d_mode == H2DMode::DEVICE_PULL,
-                static_cast<uint32_t>(scratch_buffer->address()),
-            }});
+        input_socket,
+        output_socket,
+        page_size,
+        data_size,
+        num_iterations,
+        h2d_mode);
 
     uint32_t num_txns = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size * num_iterations / sizeof(uint32_t));
@@ -395,6 +401,119 @@ void test_hd_socket_multithreaded_loopback(
     input_socket.barrier(10000);
     output_socket.barrier(10000);
     EXPECT_EQ(src_vec, dst_vec);
+}
+
+// Sends pages to a loopback socket on each of `socket_cores` through try_stage / publish_staged, publishing every
+// socket's pages from a pass together. Each page is passed by its own pointer, and consecutive pages are not adjacent
+// in memory. Checks that a staged page does not reach its receiver before it is published, that a call into an empty
+// FIFO stages as many pages as the FIFO holds, and that every socket's pages come back in order.
+void test_hd_socket_staged_loopback(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    std::size_t socket_fifo_size,
+    std::size_t page_size,
+    std::size_t data_size,
+    H2DMode h2d_mode,
+    uint32_t num_iterations,
+    const MeshCoordinate& device_coord,
+    const std::vector<CoreCoord>& socket_cores) {
+    // Not a power of two, so runs of staged pages straddle the FIFO's wrap at varying points.
+    constexpr uint32_t kPagesPerStage = 5;
+    TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
+    const uint32_t total_pages = data_size / page_size * num_iterations;
+    const uint32_t fifo_pages = socket_fifo_size / page_size;
+    const std::size_t page_words = page_size / sizeof(uint32_t);
+
+    struct Loopback {
+        std::unique_ptr<H2DSocket> input;
+        std::unique_ptr<D2HSocket> output;
+        std::shared_ptr<MeshBuffer> scratch_buffer;
+        // Page p is at pages[p]; `src` holds the pages last to first.
+        std::vector<uint32_t> src;
+        std::vector<const uint8_t*> pages;
+        std::vector<uint32_t> expected;
+        std::vector<uint32_t> dst;
+        uint32_t num_staged = 0;
+        uint32_t num_received = 0;
+    };
+    std::vector<Loopback> loopbacks(socket_cores.size());
+    auto program = CreateProgram();
+    for (std::size_t s = 0; s < socket_cores.size(); ++s) {
+        Loopback& loopback = loopbacks[s];
+        const MeshCoreCoord socket_core(device_coord, socket_cores[s]);
+        loopback.input =
+            std::make_unique<H2DSocket>(mesh_device, socket_core, BufferType::L1, socket_fifo_size, h2d_mode);
+        loopback.output = std::make_unique<D2HSocket>(mesh_device, socket_core, socket_fifo_size);
+        loopback.input->set_page_size(page_size);
+        loopback.output->set_page_size(page_size);
+        loopback.scratch_buffer = add_loopback_kernel(
+            program,
+            mesh_device,
+            socket_cores[s],
+            *loopback.input,
+            *loopback.output,
+            page_size,
+            data_size,
+            num_iterations,
+            h2d_mode);
+
+        loopback.src.resize(total_pages * page_words);
+        std::iota(loopback.src.begin(), loopback.src.end(), static_cast<uint32_t>(s * loopback.src.size()));
+        for (uint32_t p = 0; p < total_pages; ++p) {
+            const uint32_t* page = loopback.src.data() + (total_pages - 1 - p) * page_words;
+            loopback.pages.push_back(reinterpret_cast<const uint8_t*>(page));
+            loopback.expected.insert(loopback.expected.end(), page, page + page_words);
+        }
+        loopback.dst.resize(loopback.src.size());
+    }
+    auto mesh_workload = MeshWorkload();
+    mesh_workload.add_program(MeshCoordinateRange(device_coord), std::move(program));
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+
+    // The receiver would copy a page back as soon as it saw it counted; a staged page it can read is one that went
+    // out unpublished.
+    Loopback& first = loopbacks.front();
+    first.num_staged = experimental::detail::try_stage(
+        *first.input, ttsl::Span<const uint8_t* const>(first.pages.data(), kPagesPerStage));
+    EXPECT_EQ(first.num_staged, std::min(kPagesPerStage, fifo_pages));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    if (experimental::detail::try_read(*first.output, first.dst.data(), 1)) {
+        ADD_FAILURE() << "A staged page reached its receiver before publish_staged";
+        first.num_received = 1;
+    }
+    std::vector<H2DSocket*> staged_sockets{first.input.get()};
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!std::ranges::all_of(
+        loopbacks, [&](const Loopback& loopback) { return loopback.num_received == total_pages; })) {
+        experimental::detail::publish_staged(staged_sockets);
+        staged_sockets.clear();
+        ASSERT_TRUE(std::chrono::steady_clock::now() < deadline) << "Timed out waiting for staged pages to loop back";
+        for (Loopback& loopback : loopbacks) {
+            while (loopback.num_received < loopback.num_staged &&
+                   experimental::detail::try_read(
+                       *loopback.output, loopback.dst.data() + loopback.num_received * page_words, 1)) {
+                ++loopback.num_received;
+            }
+            const uint32_t num_pages = std::min(kPagesPerStage, total_pages - loopback.num_staged);
+            if (num_pages == 0) {
+                continue;
+            }
+            const uint32_t num_staged = experimental::detail::try_stage(
+                *loopback.input,
+                ttsl::Span<const uint8_t* const>(loopback.pages.data() + loopback.num_staged, num_pages));
+            EXPECT_LE(num_staged, num_pages);
+            if (num_staged > 0) {
+                loopback.num_staged += num_staged;
+                staged_sockets.push_back(loopback.input.get());
+            }
+        }
+    }
+
+    for (Loopback& loopback : loopbacks) {
+        loopback.input->barrier(10000);
+        loopback.output->barrier(10000);
+        EXPECT_EQ(loopback.dst, loopback.expected);
+    }
 }
 
 bool is_device_coord_mmio_mapped(
@@ -511,6 +630,26 @@ TEST_F(HDSocketFixture, H2DSocketLoopbackMultiThreadedStress) {
             // On most hosts, page size is 4K, so this should lead to 5 pages being allocated on the host.
             test_hd_socket_multithreaded_loopback(
                 mesh_device_, 16512, 1088, 156672, h2d_mode, 100, MeshCoreCoord(socket_coord, CoreCoord(0, 1)));
+        }
+    }
+}
+
+TEST_F(HDSocketFixture, H2DSocketStagedLoopback) {
+    // Skip if mapping to NOC isn't supported on this system
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
+    const std::vector<CoreCoord> socket_cores = {CoreCoord(0, 0), CoreCoord(1, 1)};
+    for (auto h2d_mode : {H2DMode::DEVICE_PULL, H2DMode::HOST_PUSH}) {
+        for (const auto& socket_coord : MeshCoordinateRange(mesh_device_->shape())) {
+            if (!is_device_coord_mmio_mapped(mesh_device_, socket_coord)) {
+                continue;
+            }
+            // 16-page FIFO: runs of staged pages split at the wrap.
+            test_hd_socket_staged_loopback(mesh_device_, 1024, 64, 32768, h2d_mode, 4, socket_coord, socket_cores);
+            // 3-page FIFO that the page size does not divide: a stage asks for more pages than fit.
+            test_hd_socket_staged_loopback(mesh_device_, 4096, 1088, 78336, h2d_mode, 4, socket_coord, socket_cores);
         }
     }
 }

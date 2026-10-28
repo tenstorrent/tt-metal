@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <array>
 #include <cstdint>
 #include <string>

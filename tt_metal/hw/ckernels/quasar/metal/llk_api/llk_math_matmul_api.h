@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_matmul.h"
 
@@ -59,17 +60,16 @@ inline void llk_math_matmul_init(
     // config set is active, not on the formats, so _configure_default_alu_data_format_state_ would
     // early-return and leave the ALU decoding 2x-packed src registers as Float16_b while the EN_X2
     // MOP below ran over them. When the formats deviate, program the ALU directly instead; this is
-    // still the DEFAULT config shape (implied math format off, no dest-format override), so the
+    // still the DEFAULT config shape (no dest-format override), so the
     // latched DataFormatConfigSet::DEFAULT stays truthful and transpose-dest's restore contract holds.
     if ((srcA_format != static_cast<DataFormat>(get_operand_dst_format(operandB_id))) ||
         (srcB_format != static_cast<DataFormat>(get_operand_dst_format(operandA_id)))) {
         const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
                                           _is_src_fmt_int32_dest_compatible_(srcB_format) && DST_ACCUM_MODE;
-        _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
+        _configure_alu_formats_<DST_ACCUM_MODE>(
             srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
     } else {
-        _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
-            srcA_format, srcB_format);
+        _configure_default_alu_data_format_state_<DST_ACCUM_MODE>(srcA_format, srcB_format);
     }
     const bool src_2x = is_2x_format(srcA_format) && is_2x_format(srcB_format);
     if (src_2x) {
@@ -102,9 +102,8 @@ inline void llk_math_matmul_init(
 inline void llk_math_matmul_uninit(const std::uint32_t operandA, const std::uint32_t operandB) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    const bool deviated =
-        (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) ||
-        (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4);
+    const bool deviated = (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) ||
+                          (static_cast<DataFormat>(get_operand_src_format(operandB_id)) == DataFormat::MxFp4);
     if (!deviated) {
         return;
     }
@@ -114,7 +113,7 @@ inline void llk_math_matmul_uninit(const std::uint32_t operandA, const std::uint
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operandB_id));
     const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
                                       _is_src_fmt_int32_dest_compatible_(srcB_format) && DST_ACCUM_MODE;
-    _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
+    _configure_alu_formats_<DST_ACCUM_MODE>(
         srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
 }
 
@@ -127,7 +126,12 @@ inline void llk_math_matmul_uninit(const std::uint32_t operandA, const std::uint
  * Input 0 = 1 tile -> SrcB reg, Input 1 = 1 tile -> SrcA reg,
  * Output = 1 tile -> Dst reg at specified dst_index
  */
-inline void llk_math_matmul_tile(const std::uint32_t dst_index) { _llk_math_matmul_tile_(dst_index); }
+inline void llk_math_matmul_tile(const std::uint32_t dst_index) {
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "llk_math_matmul_tile: dst_index exceeds dest capacity");
+    _llk_math_matmul_tile_(dst_index);
+}
 
 /**
  *
@@ -146,5 +150,8 @@ inline void llk_math_matmul_tile(const std::uint32_t dst_index) { _llk_math_matm
  *
  */
 inline void llk_math_matmul_block(const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
+    LLK_ASSERT(
+        (ct_dim * rt_dim <= get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "llk_math_matmul_block: ct_dim * rt_dim exceeds dest capacity");
     _llk_math_matmul_block_(ct_dim, rt_dim);
 }

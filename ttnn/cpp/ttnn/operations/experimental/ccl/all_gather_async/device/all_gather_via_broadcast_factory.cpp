@@ -88,7 +88,8 @@ tt::tt_metal::ProgramDescriptor build_descriptor_at(
         get_cores_close_to_erisc(operation_attributes.num_links * num_workers_per_link, true);
     auto sender_worker_cores = corerange_to_cores(sender_worker_core_range);
 
-    const uint32_t MAX_PACKET_SIZE_BYTES = std::bit_floor(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes());
+    const uint32_t MAX_PACKET_SIZE_BYTES =
+        std::bit_floor(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*input_tensor.device()));
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t output_page_size = output_tensor.buffer()->aligned_page_size();
     uint32_t cb_page_size = std::lcm(std::lcm(input_page_size, output_page_size), MAX_PACKET_SIZE_BYTES);

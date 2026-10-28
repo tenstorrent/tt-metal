@@ -85,6 +85,11 @@ class MeshConfig:
         tp_dim_size = self.mesh_shape[self.tp_axis]
         if config.tp > tp_dim_size:
             raise ValueError(f"{mode.value}: TP({config.tp}) > mesh_{self.tp_axis}_size({tp_dim_size})")
+        # EP shards the expert set over the ep axis (one local-expert mask per row of that axis),
+        # so it must span the whole axis.
+        ep_dim_size = self.mesh_shape[self.ep_axis]
+        if config.ep > 1 and config.ep != ep_dim_size:
+            raise ValueError(f"{mode.value}: EP({config.ep}) != mesh_{self.ep_axis}_size({ep_dim_size})")
 
     def get_config(self, mode: Mode) -> ModeConfig:
         return self.decode if mode == Mode.DECODE else self.prefill
@@ -134,7 +139,7 @@ class MeshConfig:
             memory_config=memory_config,
             topology=ccl_manager.topology,
             cluster_axis=axis,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(axis=axis),
         )
 
         gathered = ttnn.experimental.all_gather_async(
@@ -146,7 +151,7 @@ class MeshConfig:
             multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
             num_links=ccl_manager.num_links,
             memory_config=memory_config,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(axis=axis),
         )
 
         if padded:
@@ -167,7 +172,7 @@ class MeshConfig:
             multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
             num_links=ccl_manager.num_links,
             memory_config=memory_config,
-            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(axis=axis),
         )
 
     def __repr__(self):

@@ -13,7 +13,13 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*.cpp)
+# The kernels also include the layout header the host shares.
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+    device/hostdevcommon/*.hpp
+)
 
 target_sources(
     ttnn_op_experimental_kda_qkv_causal_conv1d_silu

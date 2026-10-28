@@ -23,7 +23,7 @@ namespace block_max8
  * while sfpi::dst_reg indexes physical addresses in two-row units.
  * @param band Four-row logical band, starting at zero.
  */
-inline std::uint32_t face_row_address(std::uint32_t band)
+constexpr std::uint32_t face_row_address(std::uint32_t band)
 {
     const std::uint32_t row = band * 4;
     return (row / FACE_R_DIM) * 2 * FACE_R_DIM + row % FACE_R_DIM;
@@ -223,21 +223,33 @@ __attribute__((noinline)) inline void compact_row_band(std::uint32_t src_address
 /**
  * @brief Mask scores outside the valid row-major prefix in the current DST tile.
  *
- * Each load/store touches one parity of four face rows. Each vector is loaded
- * before its own positions are overwritten, preserving unread inputs. Invalid
- * scores become negative infinity before any reduction. All addresses are
- * relative to the tile selected by the standard unary dispatcher.
+ * Each load/store touches one parity of four face rows. Bands below the one
+ * that holds valid_scores are fully valid and stay unchanged. That band is
+ * masked per lane, loading each vector before its own positions are
+ * overwritten. Later bands are fully invalid and are filled with negative
+ * infinity without a load. All addresses are relative to the tile selected by
+ * the standard unary dispatcher.
  * @param valid_scores Number of valid scores, from zero through TILE_R_DIM * TILE_C_DIM.
  */
 inline void _calculate_block_max8_mask_(std::uint32_t valid_scores)
 {
-    for (std::uint32_t band = 0; band < TILE_R_DIM / 4; ++band)
+    constexpr std::uint32_t BANDS = TILE_R_DIM / 4;
+    const std::uint32_t partial   = valid_scores / (4 * TILE_C_DIM);
+    if (partial < BANDS)
+    {
+        const std::uint32_t address                   = block_max8::face_row_address(partial);
+        sfpi::dst_reg[address / 2]                    = block_max8::load_masked<0, 0>(partial, valid_scores);
+        sfpi::dst_reg[(address + 2) / 2]              = block_max8::load_masked<0, 1>(partial, valid_scores);
+        sfpi::dst_reg[(address + FACE_R_DIM) / 2]     = block_max8::load_masked<1, 0>(partial, valid_scores);
+        sfpi::dst_reg[(address + FACE_R_DIM + 2) / 2] = block_max8::load_masked<1, 1>(partial, valid_scores);
+    }
+    for (std::uint32_t band = partial + 1; band < BANDS; ++band)
     {
         const std::uint32_t address                   = block_max8::face_row_address(band);
-        sfpi::dst_reg[address / 2]                    = block_max8::load_masked<0, 0>(band, valid_scores);
-        sfpi::dst_reg[(address + 2) / 2]              = block_max8::load_masked<0, 1>(band, valid_scores);
-        sfpi::dst_reg[(address + FACE_R_DIM) / 2]     = block_max8::load_masked<1, 0>(band, valid_scores);
-        sfpi::dst_reg[(address + FACE_R_DIM + 2) / 2] = block_max8::load_masked<1, 1>(band, valid_scores);
+        sfpi::dst_reg[address / 2]                    = -__builtin_inff();
+        sfpi::dst_reg[(address + 2) / 2]              = -__builtin_inff();
+        sfpi::dst_reg[(address + FACE_R_DIM) / 2]     = -__builtin_inff();
+        sfpi::dst_reg[(address + FACE_R_DIM + 2) / 2] = -__builtin_inff();
     }
 }
 
@@ -267,7 +279,7 @@ inline void _calculate_block_max8_(std::uint32_t valid_scores)
     }
     for (std::uint32_t band = 0; band < TILE_R_DIM / 4; ++band)
     {
-        const std::uint32_t address = block_max8::face_row_address(band);
+        const std::uint32_t address     = block_max8::face_row_address(band);
         const std::uint32_t dst_address = (band / 4) * 4;
         block_max8::compact_row_band<1>(address, dst_address + 2, band % 4);
         block_max8::compact_row_band<0>(address, dst_address, band % 4);

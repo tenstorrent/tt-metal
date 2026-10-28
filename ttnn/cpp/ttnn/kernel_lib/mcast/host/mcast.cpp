@@ -14,7 +14,7 @@ namespace ttnn::kernel_lib::host {
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
-using tt::tt_metal::IDevice;
+using tt::tt_metal::distributed::MeshDevice;
 
 namespace {
 std::vector<CoreCoord> ordered_cores(const CoreRangeSet& cores, McastCoreOrder order) {
@@ -29,7 +29,7 @@ std::vector<CoreCoord> ordered_cores(const CoreRangeSet& cores, McastCoreOrder o
 }  // namespace
 
 Mcast::Mcast(
-    const IDevice& device,
+    const MeshDevice& device,
     const McastConfig& config,
     const CoreRangeSet& receivers,
     uint32_t receiver_group_size,

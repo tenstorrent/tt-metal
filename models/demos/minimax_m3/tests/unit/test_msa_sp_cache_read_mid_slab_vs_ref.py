@@ -158,13 +158,13 @@ def test_msa_sp_cache_read_mid_slab(
             kv,
             shard(k[:, :, idx], True),
             shard(v[:, :, idx], True),
-            slot_idx=0,
+            slot_id=0,
             layer_idx=0,
             kv_actual=kv_actual,
             sp_axis=sp_axis,
         )
         write_index_k_chunk(
-            kv, shard(ik[:, :, idx], False), slot_idx=0, layer_idx=0, kv_actual=kv_actual, sp_axis=sp_axis
+            kv, shard(ik[:, :, idx], False), slot_id=0, layer_idx=0, kv_actual=kv_actual, sp_axis=sp_axis
         )
 
     # The previous turn: whole chunks from 0 (their tail past cached_len is overwritten by the resumed chunk).
@@ -176,7 +176,7 @@ def test_msa_sp_cache_read_mid_slab(
         shard(q[:, :, order - cached_len], True),
         shard(iq[:, :, order - cached_len], True),
         kv,
-        slot=0,
+        cache_row=0,
         mesh_config=mesh_config,
         ccl_manager=ccl,
         cached_len=cached_len,

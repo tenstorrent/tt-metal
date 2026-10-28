@@ -8,10 +8,13 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <future>
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <tt_stl/assert.hpp>
 #include "common/stable_hash.hpp"
@@ -358,7 +361,39 @@ void BuildEnvManager::build_firmware(ChipId device_id, bool ignore_precompiled) 
             build_env.build_env.get_firmware_binary_root());
         return;
     }
-    jit_build_once(build_env.build_key(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
+    // Dedup each firmware target on (build key, target) rather than the whole set on the build key: contexts
+    // that share a build key can have different firmware targets. Blackhole DRAM programmable cores are not
+    // part of the build key, and only a context that enables them (silicon on firmware >= 19.12, not a mock or
+    // the simulator) has a drisc target. Keying each target lets a later context build the targets an earlier
+    // one lacked, without rebuilding the ones that context already built.
+    const auto& states = build_env.firmware_build_states;
+    std::vector<uint64_t> target_keys;
+    target_keys.reserve(states.size());
+    for (const auto& state : states) {
+        StableHasher hasher;
+        hasher.update(build_env.build_key());
+        hasher.update(state.get_target_full_path());
+        target_keys.push_back(hasher.digest());
+    }
+    // A build step that waited for another thread's build of the same target would hold an executor worker
+    // that build may need, so targets in progress elsewhere are joined after the sync. uint8_t, not bool:
+    // the steps write their elements concurrently.
+    std::vector<uint8_t> in_progress_elsewhere(states.size(), 0);
+    std::vector<std::shared_future<void>> events;
+    for (size_t i = 0; i < states.size(); ++i) {
+        launch_build_step(
+            [&, i] {
+                in_progress_elsewhere[i] =
+                    !jit_build_once_no_wait(target_keys[i], [&states, i] { states[i].build(nullptr); });
+            },
+            events);
+    }
+    sync_build_steps(events);
+    for (size_t i = 0; i < states.size(); ++i) {
+        if (in_progress_elsewhere[i]) {
+            jit_build_once(target_keys[i], [&states, i] { states[i].build(nullptr); });
+        }
+    }
 }
 
 std::string BuildEnvManager::get_firmware_binary_path(

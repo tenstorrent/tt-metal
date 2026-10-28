@@ -23,7 +23,6 @@ struct StridedAllGatherMinimalMatmulAsyncParams {
 
     const CoreCoord all_gather_core_grid_offset;
     const bool read_local_slice_from_input;
-    const std::vector<tt::tt_metal::IDevice*> devices;
     const StridedAllGatherAsync ag_op;
     const MMSignalAggregatorMode mm_signal_aggregator_mode = MMSignalAggregatorMode::Auto;
 
