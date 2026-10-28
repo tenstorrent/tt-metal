@@ -11,11 +11,13 @@ RoPE: the q/k projection rows of each head are permuted at load from pair order 
 (i, i + 32), so the rotation is q * cos + (q @ R) * sin with R the rotate-half matrix (QK^T is unchanged).
 q @ R is not a matmul: its signed-permuted columns are extra projection columns, folded at load (R1-1, fold_stored).
 """
+
 from __future__ import annotations
 
 import torch
 
 from models.experimental.kairos_forecast.tt.common import (
+    bmm_config,
     D_PAD,
     NEG,
     S_PAD,
@@ -278,9 +280,22 @@ class TtKairos:
         """q [B, 8, Sq, 64], k / v [B, 8, Sk, 64] (rotated) -> (1, 1, B * Sq, 512). T5: no score scaling."""
         import ttnn
 
-        s = ttnn.matmul(q, ttnn.transpose(k, -2, -1), dtype=ttnn.float32, compute_kernel_config=self.p.hifi4())
+        Sk, fp32 = k.shape[-2], self.p.fp32_dest_acc_en
+        s = ttnn.matmul(
+            q,
+            k,
+            transpose_b=True,
+            dtype=ttnn.float32,
+            compute_kernel_config=self.p.hifi4(),
+            program_config=bmm_config(self.device, Sq, DK, Sk, fp32),
+        )  # R1-2b: full grid
         s = ttnn.softmax(ttnn.add(s, mask), dim=-1, numeric_stable=True, compute_kernel_config=self.p.hifi4())
-        o = ttnn.matmul(ttnn.typecast(s, ttnn.bfloat16), v, compute_kernel_config=self.p.mm())
+        o = ttnn.matmul(
+            ttnn.typecast(s, ttnn.bfloat16),
+            v,
+            compute_kernel_config=self.p.mm(),
+            program_config=bmm_config(self.device, Sq, Sk, DK, fp32),
+        )
         o = ttnn.transformer.concatenate_heads(o)  # [B, Sq, 512]
         return ttnn.reshape(o, (1, 1, B * Sq, D))
 
