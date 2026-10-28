@@ -2,23 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 / DataflowBuffer (DFB) FPU compute kernel for binary_ng's no-broadcast binary op,
-// Quasar-native.
+// Metal 2.0 / DataflowBuffer (DFB) FPU compute kernel for binary_ng, Quasar-native: the binary op on each output tile,
+// with each operand in its mode (A_MODE, B_MODE; kernels_qsr/common/operand_walk.hpp).
 //
-// Diverges from kernels_dfb/compute/eltwise_binary_no_bcast_dfb.cpp in two ways: thread c of C
-// processes its own share of num_tiles, and a borrowed shard's tiles past the largest multiple of C
-// come through the tail rings (TAIL_TILES). Which tiles a thread gets is the DFB's assignment.
+// Diverges from kernels_dfb/compute/eltwise_binary_no_bcast_dfb.cpp in three ways: thread c of C
+// processes its own share of num_tiles; a borrowed shard's tiles past the largest multiple of C
+// come through the tail rings (TAIL_TILES); and a ROW operand is expanded with unary_bcast<ROW>, one compute batch at a
+// time, into its staging ring, which the binary op reads. Which tiles a thread gets is the DFB's assignment.
 //
 // Otherwise mirrors the CircularBuffer kernels/compute/eltwise_binary_no_bcast.cpp, with the CB->DFB
 // swap. Uses the same define machinery the descriptor factory builds: BINARY_OP / BINARY_OP_TYPE
 // (the binary op), HAS_ACTIVATIONS / PREPROCESS / PROCESS_POST_ACTIVATIONS (lhs/rhs/post activation
-// chains), PACK_RELU (fused RELU fast path). Apart from the tail rings, the reader and the writer
+// chains), PACK_RELU (fused RELU fast path). Apart from the tail rings and the expansion, the reader and the writer
 // absorb every layout difference.
 //
 // DFB operand naming mirrors the CB CBIndex mapping:
 //   dfb::pre_lhs  (= CBIndex::c_0)   dfb::pre_rhs (= c_1)   dfb::out (= c_2)
 //   dfb::post_lhs (= c_3, used only when LHS has activations)   dfb::post_rhs (= c_4, RHS activations)
 // post_* default to pre_* when that operand has no activations (HAS_ACTIVATIONS(op) == 0).
+//   dfb::stage_lhs, dfb::stage_rhs: the expanded tiles of a ROW operand, one compute batch per compute thread.
 
 #include <cstdint>
 
@@ -28,6 +30,7 @@
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 #include "eltwise_utils_common.hpp"
+#include "ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/common/operand_walk.hpp"
 #if HAS_MAIN_RING
 // Its format reference names dfb::pre_lhs, which a program with no borrowed ring does not have.
 #include "eltwise_utils_dfb.hpp"
@@ -57,14 +60,27 @@ void kernel_main() {
 #else
     constexpr uint32_t dfb_post_rhs_id = dfb_pre_rhs_id;
 #endif
+    // The ring that the binary op reads for each operand: a ROW operand's staging ring, else its post ring.
+#if A_ROW
+    constexpr uint32_t dfb_stage_lhs_id = static_cast<uint32_t>(dfb::stage_lhs);
+    constexpr uint32_t dfb_bin_lhs_id = dfb_stage_lhs_id;
+#else
+    constexpr uint32_t dfb_bin_lhs_id = dfb_post_lhs_id;
+#endif
+#if B_ROW
+    constexpr uint32_t dfb_stage_rhs_id = static_cast<uint32_t>(dfb::stage_rhs);
+    constexpr uint32_t dfb_bin_rhs_id = dfb_stage_rhs_id;
+#else
+    constexpr uint32_t dfb_bin_rhs_id = dfb_post_rhs_id;
+#endif
 
-    compute_kernel_hw_startup(dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_bin_lhs_id, dfb_bin_rhs_id, dfb_out_id);
 #ifdef PACK_RELU
     pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
-    binary_tiles_init<true, BINARY_OP_TYPE>(dfb_post_lhs_id, dfb_post_rhs_id);
+    binary_tiles_init<true, BINARY_OP_TYPE>(dfb_bin_lhs_id, dfb_bin_rhs_id);
 #endif
 
     DataflowBuffer dfb_post_lhs(dfb_post_lhs_id);
@@ -77,23 +93,42 @@ void kernel_main() {
 #if HAS_ACTIVATIONS(RHS)
     DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
 #endif
+#if A_ROW
+    DataflowBuffer dfb_stage_lhs(dfb_stage_lhs_id);
+#endif
+#if B_ROW
+    DataflowBuffer dfb_stage_rhs(dfb_stage_rhs_id);
+#endif
 
     // Inline helper to process n tiles
     auto process_tiles = [&](uint32_t n) {
         PREPROCESS(LHS, dfb_pre_lhs, dfb_post_lhs, dfb_out_id, n);
         dfb_post_lhs.wait_front(n);
+#if A_ROW
+        // The activation chain, if any, ran on the row tiles. Their row 0 now fills each tile the binary op reads.
+        expand_dfb<BroadcastType::ROW>(dfb_post_lhs, dfb_stage_lhs, dfb_out_id, n);
+        dfb_post_lhs.pop_front(n);
+        dfb_stage_lhs.wait_front(n);
+#endif
 
         PREPROCESS(RHS, dfb_pre_rhs, dfb_post_rhs, dfb_out_id, n);
         dfb_post_rhs.wait_front(n);
+#if B_ROW
+        expand_dfb<BroadcastType::ROW>(dfb_post_rhs, dfb_stage_rhs, dfb_out_id, n);
+        dfb_post_rhs.pop_front(n);
+        dfb_stage_rhs.wait_front(n);
+#endif
 
         dfb_out.reserve_back(n);
 
-#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
-        binary_tiles_init<true, BINARY_OP_TYPE>(dfb_post_lhs_id, dfb_post_rhs_id);
+        // An expansion and an activation chain each reprogram the unpacker and the math, so the binary op's init
+        // runs again for each batch.
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST) or A_ROW or B_ROW
+        binary_tiles_init<true, BINARY_OP_TYPE>(dfb_bin_lhs_id, dfb_bin_rhs_id);
 #endif
         tile_regs_acquire();
         for (uint32_t i = 0; i < n; ++i) {
-            BINARY_OP(dfb_post_lhs_id, dfb_post_rhs_id, i, i, i);
+            BINARY_OP(dfb_bin_lhs_id, dfb_bin_rhs_id, i, i, i);
             PROCESS_POST_ACTIVATIONS(i);
         }
         tile_regs_commit();
@@ -105,8 +140,16 @@ void kernel_main() {
         tile_regs_release();
 
         dfb_out.push_back(n);
+#if A_ROW
+        dfb_stage_lhs.pop_front(n);
+#else
         dfb_post_lhs.pop_front(n);
+#endif
+#if B_ROW
+        dfb_stage_rhs.pop_front(n);
+#else
         dfb_post_rhs.pop_front(n);
+#endif
     };
 
     // Thread c of C consumes its own share. WHICH tiles is the DFB's business, so unlike the

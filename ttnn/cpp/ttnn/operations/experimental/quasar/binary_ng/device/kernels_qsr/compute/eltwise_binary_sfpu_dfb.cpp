@@ -2,14 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 / DataflowBuffer (DFB) SFPU compute kernel for binary_ng's no-broadcast binary op,
-// Quasar-native.
+// Metal 2.0 / DataflowBuffer (DFB) SFPU compute kernel for binary_ng, Quasar-native: the SFPU op on each output
+// tile, with each operand in its mode (A_MODE, B_MODE; kernels_qsr/common/operand_walk.hpp).
 //
 // Diverges from kernels_dfb/compute/eltwise_binary_sfpu_no_bcast_dfb.cpp as the native FPU kernel diverges
 // from its own: thread c of C processes its own share of num_tiles, and a borrowed shard's tiles past the
 // largest multiple of C come through the tail rings (TAIL_TILES). Which tiles a thread gets is the DFB's
 // assignment. Each tile takes two DST slots, the operands' copies, so a batch holds at most 4 tiles in a 16-bit DST
-// and 2 in a 32-bit DST. The native gate runs bf16 multiply and divide on it, and fp32 add, subtract, multiply and
+// and 2 in a 32-bit DST. A ROW operand goes from its row tile straight into its DST slot with unary_bcast<ROW>, in
+// place of the copy. The native gate runs bf16 multiply and divide on it, and fp32 add, subtract, multiply and
 // divide.
 
 #include <cstdint>
@@ -27,6 +28,10 @@
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 #include "eltwise_utils_common.hpp"
+#include "ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/common/operand_walk.hpp"
+#if A_ROW || B_ROW
+#include "api/compute/bcast.h"
+#endif
 #if HAS_MAIN_RING
 // Its format reference names dfb::pre_lhs, which a program with no borrowed ring does not have.
 #include "eltwise_utils_dfb.hpp"
@@ -56,15 +61,31 @@ FORCE_INLINE void process_sfpu_tiles(
 #endif
 
     tile_regs_acquire();
-    // Startup and preprocessing preserve the physical-LHS SrcA format.
+    // Startup and preprocessing preserve the physical-LHS SrcA format. An activation chain on a ROW operand ran on its
+    // row tiles, and the broadcast copies their row 0, so the bits are those of the activation after the broadcast.
+#if A_ROW
+    unary_bcast_init<BroadcastType::ROW>(dfb_post_lhs_id);
+    for (uint32_t i = 0; i < n; ++i) {
+        unary_bcast<BroadcastType::ROW>(dfb_post_lhs_id, i, i * 2);
+    }
+#else
     copy_init(dfb_post_lhs_id);
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_lhs_id, i, i * 2);
     }
+#endif
     reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
+#if B_ROW
+    unary_bcast_init<BroadcastType::ROW>(dfb_post_rhs_id);
+#else
     copy_init(dfb_post_rhs_id);
+#endif
     for (uint32_t i = 0; i < n; ++i) {
+#if B_ROW
+        unary_bcast<BroadcastType::ROW>(dfb_post_rhs_id, i, i * 2 + 1);
+#else
         copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
+#endif
 #if HAS_ACTIVATIONS(POST)
         // Each tile's post activation runs its own SFPU init, which can overwrite what the binary op set up (a
         // TANH init rewrites the constant that divide's reciprocal reads), so the binary init runs before every tile.

@@ -16,6 +16,10 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "../../kernels_dfb/compute/eltwise_format_reference_dfb.hpp"
+#include "ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/common/operand_walk.hpp"
+#if A_ROW || B_ROW
+#include "api/compute/bcast.h"
+#endif
 
 // Reads `per_core_block_size` tiles from dfb_pre, runs the per-operand activation chain on each tile
 // in DST, writes the results into dfb_post. dfb_out's id is used only to briefly retarget the packer
@@ -70,6 +74,43 @@ ALWI void preprocess_impl_dfb(
     pack_init(dfb_out_id);  // restore the packer destination ring to dfb_out (see above)
 #endif
 }
+
+#if A_ROW || B_ROW
+// Expands tiles 0 to n - 1 of dfb_src, which the caller has waited for, into n entries of dfb_dst with unary_bcast<bt>,
+// through DST. dfb_dst is a self-loop ring of this thread, and both are the kernel's own objects. The packer is
+// retargeted to dfb_dst and back to dfb_out_id, as preprocess_impl_dfb does. The caller pops dfb_src.
+template <BroadcastType bt, typename DFBSrc, typename DFBDst>
+ALWI void expand_dfb(DFBSrc& dfb_src, DFBDst& dfb_dst, uint32_t dfb_out_id, uint32_t n) {
+    const uint32_t dfb_src_id = dfb_src.get_id();
+    const uint32_t dfb_dst_id = dfb_dst.get_id();
+
+    dfb_dst.reserve_back(n);
+    pack_reconfig_data_format(/*old*/ dfb_out_id, /*new*/ dfb_dst_id);
+#ifdef ARCH_QUASAR
+    pack_init(dfb_dst_id);
+#endif
+    reconfig_data_format(dfb_src_id, dfb_src_id);
+    unary_bcast_init<bt>(dfb_src_id);
+
+    tile_regs_acquire();
+    for (uint32_t i = 0; i < n; ++i) {
+        unary_bcast<bt>(dfb_src_id, i, i);
+    }
+    tile_regs_commit();
+
+    tile_regs_wait();
+    for (uint32_t i = 0; i < n; ++i) {
+        pack_tile(i, dfb_dst_id);
+    }
+    tile_regs_release();
+    dfb_dst.push_back(n);
+
+    pack_reconfig_data_format(/*old*/ dfb_dst_id, /*new*/ dfb_out_id);
+#ifdef ARCH_QUASAR
+    pack_init(dfb_out_id);
+#endif
+}
+#endif
 
 // Dispatcher: identical macro structure to the CB original. PREPROCESS(op, dfb_pre, dfb_post, dfb_out,
 // n) compiles to either the activation pass or nothing, based on HAS_ACTIVATIONS(op). dfb_pre and
