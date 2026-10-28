@@ -47,16 +47,18 @@ git -C "$REPO" fetch -q --depth 1 origin "$BASE_SHA"
 git -C "$REPO" archive FETCH_HEAD tt_metal/tt-llk tt_metal/hw tt_metal/hostdevcommon \
   ttnn/cpp/ttnn/operations/experimental | tar -x -C "$BASE"
 
+# No stage2.json from here on means the gate keeps the stage-1 verdict.
 if [[ ! -x "$BASE/tt_metal/tt-llk/tests/run_llk_perf_placement.sh" ]]; then
   echo "::warning::The baseline commit ${BASE_SHA} predates stage 2; nothing to compare with."
+  exit 0
 elif ! cmp -s "$LLK/tests/sfpi-version" "$BASE/tt_metal/tt-llk/tests/sfpi-version"; then
   echo "::warning::The baseline commit ${BASE_SHA} pins another SFPI; nothing to compare with."
-else
-  ln -s "$LLK/tests/sfpi" "$BASE/tt_metal/tt-llk/tests/sfpi"
-  # Each side gets half of the time left.
-  measure head "$LLK" $(( ($(date +%s) + DEADLINE) / 2 ))
-  measure base "$BASE/tt_metal/tt-llk" "$DEADLINE"
+  exit 0
 fi
+ln -s "$LLK/tests/sfpi" "$BASE/tt_metal/tt-llk/tests/sfpi"
+# Each side gets half of the time left.
+measure head "$LLK" $(( ($(date +%s) + DEADLINE) / 2 ))
+measure base "$BASE/tt_metal/tt-llk" "$DEADLINE"
 
 mkdir -p "$BASE/tt_metal/tt-llk/perf_data/runs"
 python3 "$LLK/perf/placement_check.py" decide "${COMPARE[@]}" --candidates "$OUT/stage1.regressions.csv" \
