@@ -39,6 +39,13 @@ _UNSET = object()  # sentinel for "use config default" in WanPipelineConfig.defa
 
 _DEFAULT_CHECKPOINT = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 
+_BH_FULL_DRAM_BANKS = 8
+
+
+def is_dram_harvested(mesh_device: ttnn.MeshDevice) -> bool:
+    return ttnn.device.is_blackhole(mesh_device) and mesh_device.dram_grid_size().x < _BH_FULL_DRAM_BANKS
+
+
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
     (2, 4): {
         "sp_axis": 0,
@@ -92,6 +99,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         "is_fsdp": False,
         "vae_t_chunk_size": None,  # full-T
+        "vae_t_chunk_size_dram_harvested": 7,
     },
     (4, 32): {
         "sp_axis": 1,
@@ -156,6 +164,7 @@ class WanPipelineConfig:
         vae_dtype: ttnn.DataType = ttnn.bfloat16,
         vae_t_chunk_size: object = _UNSET,
         sdpa_t_fracture_w_only: bool | None = None,
+        dram_harvested: bool = False,
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
@@ -193,6 +202,8 @@ class WanPipelineConfig:
 
         if vae_t_chunk_size is _UNSET:
             vae_t_chunk_size = preset.get("vae_t_chunk_size", 1)
+            if dram_harvested:
+                vae_t_chunk_size = preset.get("vae_t_chunk_size_dram_harvested", vae_t_chunk_size)
 
         return cls(
             topology=topology if topology is not None else preset["topology"],
@@ -307,6 +318,7 @@ class WanPipeline(PipelineAPIMixin):
             overrides["checkpoint_name"] = checkpoint_name
         return WanPipelineConfig.default(
             mesh_shape=mesh_device.shape,
+            dram_harvested=is_dram_harvested(mesh_device),
             height=height,
             width=width,
             num_frames=num_frames,
