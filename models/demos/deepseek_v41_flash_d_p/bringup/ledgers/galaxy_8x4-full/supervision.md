@@ -598,3 +598,15 @@ session's argv); a resume clears PAUSE (use --until to stop); watch + cron :07/:
   RNE and truncation predictions and with the host packer (from_torch dtype=bfloat4_b = the de-risk codec). Hints:
   PR #49811 and the K3 write-up say the Blackhole packer truncates fp8; unknown for bfp4. Truncation -> SFPU rounding
   before the pack in the write kernel (else option B's error doubles: 0.21 vs 0.11).
+- PRECISION-INFO STATUS (owner asked, 14:55): FIXED: agents' rule 7 (caches + GEMM inputs at the reference's width;
+  bf16 where the reference is narrower is wrong even if a contract / spec / test says so); spec check
+  stale_precision_rules (F208, selftest); the stale line removed from both DS41 specs. STILL OPEN: (1) the frozen
+  serving_contract.md still says "One format: bf16, ROW_MAJOR. The owner's rule is a bf16 KV cache" - rewritten with
+  the cache work (remaining item 5); (2) glm53_flash_d_p(_lb) and xing40_a4b_d_p(_8x4) specs carry HiFi4 lines, now
+  flagged by the check - owner decision (remove / owner exception); (3) no automated check of the device's actual
+  formats yet (precision audit hook, rest of F208, remaining item 6); the model's settings.py texts and knowledge
+  files were not audited for old precision wording - the audit hook catches it in practice.
+  REMAINING bf16 WORK after FIX.7: 1 compressed KV -> bfp4 rows (de-risked, B; packer-rounding test first); 2 window
+  KV -> bfp8 tiles; 3 indexer keys -> bfp4 tiles (record geometry: owner); 4 index query -> bfp4/bfp8; 5 serving
+  contract + K.1 for the new formats (owner + server sign-off; bfp4 tooling); 6 precision audit hook. Then X.1
+  re-baseline, P.4/P.5, F209, pad-row masking, 2x2 seed-box re-verify (incl. MOE_IMPL=block on its FABRIC_2D).
