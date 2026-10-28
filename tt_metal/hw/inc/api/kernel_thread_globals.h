@@ -10,8 +10,9 @@
 #include "core_config.h"  // MaxDMProcessorsPerCoreType
 // The DM + compute barrier expands a tensix count into TRISCs, so it needs NUM_TRISC_CORES.
 // Only DM and TRISC builds take part in it (and only they can reach dev_mem_map.h), so eth
-// and host builds fall back to the no-op path below.
-#if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM)
+// and host builds fall back to the no-op path below. So do dispatch engines: they have no
+// tensix, so no tensix global semaphores.
+#if (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM)) && !defined(COMPILE_FOR_DISPATCH_ENGINE)
 #define TT_HAS_DM_COMPUTE_BARRIER 1
 #include "dev_mem_map.h"  // NUM_TRISC_CORES
 #endif
@@ -168,7 +169,8 @@ inline void thread_sync_init() {
         g_kernel_barrier[i].generation = 0;
     }
     // Hardware faults a post to an uninitialized semaphore, so these must be set before any barrier
-    // runs.
+    // runs. A dispatch engine has no tensix, so no tensix global semaphores to set.
+#if !defined(COMPILE_FOR_DISPATCH_ENGINE)
     tensix_global_sem_init(COMPUTE_BARRIER_ARRIVED_SEM_IDX, 0);
     tensix_global_sem_init(COMPUTE_BARRIER_GENERATION_SEM_IDX, 0);
     tensix_global_sem_init(DM_COMPUTE_BARRIER_ARRIVED_SEM_IDX, 0);
@@ -178,6 +180,7 @@ inline void thread_sync_init() {
     for (uint32_t i = 0; i < TENSIX_GLOBAL_SEM_USER_COUNT; i++) {
         tensix_global_sem_init(i, 0 /*value*/);
     }
+#endif
 #endif
 }
 #endif  // !COMPILE_FOR_TRISC
@@ -296,7 +299,7 @@ inline void sync_threads() {
  *
  * Independent of sync_threads(), so a kernel may use both. Intra-core only: it does not
  * synchronize with any other core or node, despite spanning both processor kinds. No-op on
- * WH/BH.
+ * WH/BH, and on a Quasar dispatch engine, which has no tensix.
  *
  * | Argument     | Description                                      | Type     | Required |
  * |--------------|--------------------------------------------------|----------|----------|
