@@ -44,6 +44,7 @@ def _configure(monkeypatch, *, supports_packed_forward):
     monkeypatch.setattr(runner, "MAX_SEQ_LEN", 16 * C)
     monkeypatch.setattr(runner, "MTP_LEVELS", 0)
     monkeypatch.setattr(runner, "ADAPTER", SimpleNamespace(supports_packed_forward=supports_packed_forward))
+    monkeypatch.setattr(runner, "PER_CHUNK_FORWARDS", F > 1 and not supports_packed_forward)
     monkeypatch.setattr(runner.ttnn, "deallocate", lambda t: None)
     monkeypatch.setattr(runner.ttnn, "synchronize_device", lambda d: None)
 
@@ -98,6 +99,31 @@ def test_first_rank_refuses_a_bad_forward(loop, expect_error):
         loop(_PackedRuntime(), [split], supports_packed_forward=True)
 
 
+@pytest.mark.parametrize(
+    "is_last_rank, returns, message",
+    [(False, None, "returned no activation"), (True, _Tensor(), "the last rank's prefill_chunk returned")],
+)
+def test_a_wrong_chunk_output_shuts_down_the_next_rank(loop, monkeypatch, expect_error, is_last_rank, returns, message):
+    shutdowns = []
+    monkeypatch.setattr(runner, "_lease_reclaim", lambda *a: None)
+    monkeypatch.setattr(runner, "_forward_shutdown", lambda d2d_out, *a: shutdowns.append(d2d_out))
+    monkeypatch.setattr(runner, "_chunk_rows", lambda inp, k, rows: _Tensor())
+    monkeypatch.setattr(runner, "_device_record", lambda words, dev: _Tensor())
+
+    class _Wrong(_PerChunkRuntime):
+        def prefill_chunk(self, inp, kv, **kwargs):
+            super().prefill_chunk(inp, kv, **kwargs)
+            return returns
+
+    runtime = _Wrong()
+    runtime.config.is_last_rank = is_last_rank
+    d2d_out = object()
+    with expect_error(AssertionError, message):
+        loop(runtime, FORWARDS[:1], supports_packed_forward=False, num_ranks=2, d2d_out=d2d_out)
+    assert shutdowns == [d2d_out]
+    assert len(runtime.calls) == 1
+
+
 def test_a_refused_forward_shuts_down_the_next_rank(loop, monkeypatch, expect_error):
     shutdowns = []
     monkeypatch.setattr(runner, "_lease_reclaim", lambda *a: None)
@@ -138,9 +164,18 @@ class _PerChunkRuntime(_PackedRuntime):
         self.calls.append((request_id, PrefillChunk(slot_id, actual_start, actual_end)))
 
 
+@pytest.mark.parametrize("per_chunk, rank, size", [(True, 0, 12), (True, 1, 12), (False, 0, 56), (False, 1, 60)])
+def test_layer_ack_record_size(monkeypatch, per_chunk, rank, size):
+    monkeypatch.setattr(runner, "PER_CHUNK_FORWARDS", per_chunk)
+    monkeypatch.setattr(runner, "CHUNK_METADATA_SIZE_BYTES", 56)
+    monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 60)
+    assert runner._layer_ack_record_bytes(rank) == size
+
+
 def test_per_chunk_forwards_run_each_chunk_once(loop, monkeypatch):
     monkeypatch.setattr(runner, "_chunk_rows", lambda inp, k, rows: _Tensor())
     monkeypatch.setattr(runner, "_device_record", lambda words, dev: _Tensor())
+    monkeypatch.setattr(runner, "_fill_record", lambda record, words: None)
     runtime = _PerChunkRuntime()
     loop(runtime, FORWARDS, supports_packed_forward=False)
     assert runtime.calls == list(zip(_request_ids(FORWARDS), (c for f in FORWARDS for c in f)))
@@ -175,35 +210,46 @@ class _EchoRuntime(_PackedRuntime):
     def __init__(self):
         super().__init__()
         self.config = SimpleNamespace(is_first_rank=False, is_last_rank=False, use_trace=False)
+        self.records = []
 
     def prefill_chunk(
         self, inp, kv, *, slot_id, actual_start, actual_end, request_id=0, d2h_service=None, metadata_msg=None
     ):
         self.calls.append((request_id, PrefillChunk(slot_id, actual_start, actual_end)))
+        self.records.append(metadata_msg.origin.flatten().tolist())
         return inp
 
 
-def test_downstream_rank_joins_chunks_and_forwards_the_metadata(monkeypatch):
+def test_downstream_rank_writes_chunks_into_one_buffer_and_forwards_the_metadata(monkeypatch):
     _configure(monkeypatch, supports_packed_forward=False)
     monkeypatch.setattr(runner, "_sp", SP)
     rows, hidden = C // SP, 64
-    joined, sent = [], []
+    zeros, writes, fills, sent = [], [], [], []
 
-    def concat(parts, dim, memory_config=None):
-        assert dim == 2
-        joined.append([p.origin if isinstance(p.origin, int) else ("zeros", p.shape[2]) for p in parts])
-        return _Act([1, 1, sum(p.shape[2] for p in parts), hidden])
+    def make_zeros(shape, **kw):
+        zeros.append(list(shape))
+        return _Act(shape)
+
+    def fill_cache(cache, act, batch_idx, update_idx):
+        assert batch_idx == 0
+        writes.append((cache, "zero" if act.origin is None else act.origin, update_idx))
+
+    def copy_host_to_device_tensor(src, dst):
+        fills.append(dst)
+        dst.origin = src.origin
 
     def outbound(service, activation, metadata):
-        sent.append((activation.shape, metadata.origin.flatten().tolist()))
+        sent.append((activation, metadata.origin.flatten().tolist()))
 
     monkeypatch.setattr(
         runner.ttnn, "slice", lambda t, s, e, memory_config=None: _Act([1, 1, e[2] - s[2], hidden], s[2])
     )
-    monkeypatch.setattr(runner.ttnn, "zeros", lambda shape, **kw: _Act(shape))
+    monkeypatch.setattr(runner.ttnn, "zeros", make_zeros)
+    monkeypatch.setattr(runner.ttnn, "fill_cache", fill_cache)
     monkeypatch.setattr(runner.ttnn, "from_torch", lambda t, **kw: _Act(t.shape, t))
+    monkeypatch.setattr(runner.ttnn, "copy_host_to_device_tensor", copy_host_to_device_tensor)
     monkeypatch.setattr(runner.ttnn, "create_mesh_mapper", lambda *a: None)
-    monkeypatch.setattr(runner.ttnn, "concat", concat)
+    monkeypatch.setattr(runner.ttnn, "ReplicateTensorToMesh", lambda dev: None)
     monkeypatch.setattr(runner.ttnn.experimental.deepseek_prefill, "outbound_socket_service_sync", outbound)
     words = [forward_metadata_words(pad_chunks(f, F), F) for f in FORWARDS] + [sentinel_words(SHUTDOWN_WORD, F)]
     it = iter(words)
@@ -214,6 +260,7 @@ def test_downstream_rank_joins_chunks_and_forwards_the_metadata(monkeypatch):
     )
 
     runtime = _EchoRuntime()
+    sockets = runner.SocketBuffers(metadata=None)
     runner.run_request_loop(
         runtime,
         None,
@@ -223,10 +270,17 @@ def test_downstream_rank_joins_chunks_and_forwards_the_metadata(monkeypatch):
         d2d_width=0,
         d2d_in=_D2D(),
         d2d_out=_D2D(),
-        sockets=runner.SocketBuffers(metadata=None),
+        sockets=sockets,
     )
 
-    assert runtime.calls == list(zip(_request_ids(FORWARDS), (c for f in FORWARDS for c in f)))
-    assert joined == [[0, rows, 2 * rows, ("zeros", rows)], [0, ("zeros", 3 * rows)], [0, rows, 2 * rows, 3 * rows]]
-    assert [s for s, _ in sent[:-1]] == [[1, 1, F * rows, hidden]] * len(FORWARDS)
+    chunks = [c for f in FORWARDS for c in f]
+    assert runtime.calls == list(zip(_request_ids(FORWARDS), chunks))
+    assert runtime.records == [[c.slot_id, c.actual_start, c.actual_end] for c in chunks]
+    assert len(sockets.per_chunk.records) == F and len(fills) == 4
+    out = sockets.per_chunk.out
+    assert zeros == [[1, 1, rows, hidden], [1, 1, F * rows, hidden]]
+    # Chunk k lands at rows k * rows; the 1-chunk forward re-zeroes the two rows forward 0 left behind.
+    own = [(out, k * rows, k * rows) for k in range(F)]
+    assert writes == own[:3] + own[:1] + [(out, "zero", rows), (out, "zero", 2 * rows)] + own
+    assert all(a is out for a, _ in sent[:-1])
     assert [w for _, w in sent] == words

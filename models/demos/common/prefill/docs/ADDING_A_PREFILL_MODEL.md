@@ -206,8 +206,9 @@ With `PREFILL_FORWARD_TOKENS_BUDGET` (default `chunk_size`, a multiple of it) on
 F = `forward_tokens_budget // chunk_size` chunks (`PrefillRunParams.forward_chunks`): `forward_tokens_budget`
 rows. F = 1 is the `prefill_chunk` path above, unchanged. At F > 1 the runner calls `prefill_chunk` once per
 non-empty chunk, each with its own slot, range, `request_id` and 12 B metadata tensor, and joins the outputs back
-into the forward's layout. A runtime that sets `supports_packed_forward = True` on the adapter gets the whole
-forward through `prefill_forward` instead:
+into the forward's layout; each call returns its chunk's activation on a non-last rank and None on the last. A
+runtime that sets `supports_packed_forward = True` on the adapter gets the whole forward through `prefill_forward`
+instead. At F > 1 the runner refuses a runtime whose `prefill_forward` does not match the flag:
 
 ```python
     def prefill_forward(self, input_tensor, kv_cache, chunks, request_id=0, d2h_service=None, *, metadata_msg=None):
