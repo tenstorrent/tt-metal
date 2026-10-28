@@ -77,8 +77,10 @@ FORCE_INLINE void trid_ring_gather(
     uint32_t lo,
     uint32_t hi,
     uint32_t k_row_bytes,
-    uint32_t page_offset) {
+    uint32_t page_offset,
+    uint32_t dst_stride = 0) {  // L1 row stride (0: k_row_bytes)
     constexpr uint32_t D = RingDepth;
+    const uint32_t stride = dst_stride ? dst_stride : k_row_bytes;
     const UnicastEndpoint local_l1;
     const uint32_t cnt = hi - lo;
     for (uint32_t i = 0; i < cnt; ++i) {
@@ -90,13 +92,51 @@ FORCE_INLINE void trid_ring_gather(
         experimental::set_read_trid(noc, trid);
         const uint32_t page = tt::block_cyclic::bringup::
             logical_to_physical_page<BlockCyclic, ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(idx_ptr[base + p]);
-        noc.async_read(kv, local_l1, k_row_bytes, {.page_id = page_offset + page}, {.addr = dst_l1 + p * k_row_bytes});
+        noc.async_read(kv, local_l1, k_row_bytes, {.page_id = page_offset + page}, {.addr = dst_l1 + p * stride});
     }
     const uint32_t to_drain = (cnt < D) ? cnt : D;
     for (uint32_t d = 0; d < to_drain; ++d) {
         experimental::async_read_barrier_with_trid(noc, ((cnt - to_drain + d) % D) + 1);
     }
     experimental::set_read_trid(noc, 0);  // restore untagged
+}
+
+// ROW_BFP4 (fork option): rows [lo, hi) of a chunk, two NoC reads a row (the data-movement RISC only issues reads):
+// the exponent copy congruent with exps + p * eb (mod 64) -> there, the nibbles -> data + p * k_dim / 2. block_l1 is
+// 64 B aligned (data then is too: k_chunk * eb is a multiple of 64).
+template <uint32_t K_DIM, uint32_t K_CHUNK, uint32_t RingDepth, typename Accessor>
+FORCE_INLINE void gather_bfp4_rows(
+    Noc& noc,
+    const Accessor& kv,
+    uint32_t block_l1,
+    volatile tt_l1_ptr uint32_t* idx_ptr,
+    uint32_t base,
+    uint32_t lo,
+    uint32_t hi,
+    uint32_t page_offset) {
+    constexpr uint32_t eb = row_bfp4_exp_bytes(K_DIM);
+    constexpr uint32_t db = K_DIM / 2;
+    static_assert(2 * eb == ROW_BFP4_ALIGN, "the two exponent copies cover both 32 B phases of a 64 B line");
+    constexpr uint32_t D = RingDepth;
+    const UnicastEndpoint local_l1;
+    const uint32_t data_l1 = block_l1 + K_CHUNK * eb;
+    const uint32_t cnt = hi - lo;
+    for (uint32_t i = 0; i < cnt; ++i) {
+        const uint32_t p = lo + i;
+        const uint32_t trid = (i % D) + 1;
+        if (i >= D) {
+            experimental::async_read_barrier_with_trid(noc, trid);
+        }
+        experimental::set_read_trid(noc, trid);
+        const uint32_t page = page_offset + idx_ptr[base + p];
+        noc.async_read(kv, local_l1, eb, {.page_id = page, .offset_bytes = (p & 1) * eb}, {.addr = block_l1 + p * eb});
+        noc.async_read(kv, local_l1, db, {.page_id = page, .offset_bytes = 2 * eb}, {.addr = data_l1 + p * db});
+    }
+    const uint32_t to_drain = (cnt < D) ? cnt : D;
+    for (uint32_t d = 0; d < to_drain; ++d) {
+        experimental::async_read_barrier_with_trid(noc, ((cnt - to_drain + d) % D) + 1);
+    }
+    experimental::set_read_trid(noc, 0);
 }
 
 }  // namespace sparse_sdpa

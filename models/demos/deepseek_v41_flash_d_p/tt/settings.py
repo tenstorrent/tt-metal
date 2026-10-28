@@ -578,6 +578,22 @@ TABLE = {
         "/ 32 threads 1265 / 424 / 484 ms; mmap hot 1 / 8 threads 10 / 19 ms; resident 1 / 8 threads 11-15 / 9-13 ms "
         "(torch intra-op 16 / 8 threads). Default 8: the cold gather (owner 2026-10-28); also the bfp8 pack's threads",
     ),
+    "CKV_FORMAT": Setting(
+        "bfp4_rows",
+        ("bf16", "bfp4_rows"),
+        "the compressed KV attention table (tt/compressor.AttnTable, read by sparse_sdpa; needs STATIC_TABLES=on). OWNER "
+        "DECISION 2026-10-28 (F208, FIX.8; developed on the 2x2; default bfp4_rows after the 2x2 ladder, owner: a win): "
+        "the reference stores the compressed KV in 4 bits (fp4 e2m1 + e4m3 per 16, ds41_ref.py:797-799). bfp4_rows = the "
+        "history as bfloat4_b row records, 320 B a row ([32 exponents | the same 32 | 256 nibble bytes]), written by the "
+        "packer (ttnn.bringup.ckv_bfp4: SFPU round to nearest even, byte-equal to the host packer; the packer alone "
+        "truncates bfp4 in effect) and read by the sparse_sdpa fork's kv_format ROW_BFP4 through the unpacker (no "
+        "data-movement RISC byte work), the window region a separate bf16 tensor (index list not compacted). The served "
+        "records stay bf16 rows holding the rounded values (contract and tt-d-gen unchanged; a host load re-encodes "
+        "them exactly). 2x2 rung last (55296, chunk 2048, 8 layers): device 61.56 -> 61.79 ms per chunk (+0.4 %), "
+        "sparse_sdpa 0.93-0.95 ms both; ladder err vs golden: compress_kv 0.004-0.039 -> 0.111-0.118 (limits "
+        "0.19-0.21), layers within limits (worst L20 0.032 / 0.051, L24 0.029 / 0.042); table 3.3x smaller. "
+        "bf16 = bf16 rows, stock sparse_sdpa",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8

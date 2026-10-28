@@ -325,7 +325,8 @@ void bind_sdpa(nb::module_& mod) {
     nb::enum_<ttnn::transformer::bringup::SparseKVFormat>(mod, "SparseKVFormat")
         .value("BF16", ttnn::transformer::bringup::SparseKVFormat::BF16)
         .value("FP8_E4M3", ttnn::transformer::bringup::SparseKVFormat::FP8_E4M3)
-        .value("SCALED_FP8", ttnn::transformer::bringup::SparseKVFormat::SCALED_FP8);
+        .value("SCALED_FP8", ttnn::transformer::bringup::SparseKVFormat::SCALED_FP8)
+        .value("ROW_BFP4", ttnn::transformer::bringup::SparseKVFormat::ROW_BFP4);
 
     const auto* const doc =
         R"doc(
@@ -440,6 +441,9 @@ void bind_sdpa(nb::module_& mod) {
                 probabilities, then rounds the probabilities to bf16 (nearest-even) in DEST before P@V, as DeepSeek's
                 sparse_attn kernel does; fp32_output may then be False (the output rounded to bf16, the kernel's
                 output dtype).
+            kv_window (ttnn.Tensor, optional): kv_format ROW_BFP4 only (bring-up fork option): [1, 1, Tw, K_DIM] bf16
+                ROW_MAJOR rows read by the first k_chunk of each index row; kv then holds bfloat4_b row records
+                [B, 1, T, 320] uint8 (K_DIM 512; ttnn.bringup.ckv_bfp4) read by the rest.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8), or
             Float32 with fp32_output.
@@ -462,7 +466,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("high_precision") = false,
         nb::arg("fp32_output") = false,
         nb::arg("fp32_scores") = false,
-        nb::arg("bf16_probs") = false);
+        nb::arg("bf16_probs") = false,
+        nb::arg("kv_window") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.bringup.">(
         mod,
