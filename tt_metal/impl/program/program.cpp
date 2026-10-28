@@ -938,15 +938,15 @@ const detail::BoundTensorFootprint* ProgramImpl::get_bound_tensor_footprint(cons
     return &*it->second.bound;
 }
 
-void ProgramImpl::register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name) {
+void ProgramImpl::register_dfb_borrowed_binding(DFBBorrowedBinding binding) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    metal2_registry_->dfb_borrowed_bindings.emplace_back(dfb_id, tensor_parameter_name);
+    metal2_registry_->dfb_borrowed_bindings.push_back(std::move(binding));
 }
 
-const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrowed_bindings() const {
-    static const std::vector<std::pair<uint32_t, std::string>> empty;
+const std::vector<ProgramImpl::DFBBorrowedBinding>& ProgramImpl::get_dfb_borrowed_bindings() const {
+    static const std::vector<DFBBorrowedBinding> empty;
     if (!metal2_registry_) {
         return empty;
     }

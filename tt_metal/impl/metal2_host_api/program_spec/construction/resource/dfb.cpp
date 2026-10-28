@@ -277,13 +277,13 @@ DataflowBufferHandles RegisterDataflowBuffers(
         dfb_name_to_slot[dfb_name] = program_impl.get_dataflow_buffer(dfb_id)->device_slot;
         dfb_name_to_is_relay[dfb_name] = created_config.is_relay;
 
-        // Borrowed-memory DFB: record the dfb_id ↔ TensorParamName binding so that
-        // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
-        // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
         if (dfb_spec.borrowed_from.has_value()) {
             const auto* tensor_name = std::get_if<TensorParamName>(&*dfb_spec.borrowed_from);
             TT_FATAL(tensor_name != nullptr, "DFB '{}' borrowing from RawAllocation is not implemented", dfb_name);
-            program_impl.register_dfb_borrowed_binding(dfb_id, tensor_name->get());
+            program_impl.register_dfb_borrowed_binding(
+                {.dfb_id = dfb_id,
+                 .source = *dfb_spec.borrowed_from,
+                 .offset = dfb_spec.advanced_options.borrowed_memory_offset});
         }
     }
     return DataflowBufferHandles{

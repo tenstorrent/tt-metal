@@ -24,6 +24,8 @@
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
 #include "tt-metalium/experimental/allocation/raw_allocation_properties.hpp"
+#include "tt-metalium/experimental/metal2_host_api/raw_allocation_parameter.hpp"
+#include "tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp"
 #include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
@@ -45,6 +47,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
@@ -651,10 +654,18 @@ public:
     void set_bound_tensor_footprint(const std::string& name, const BoundTensorFootprint& footprint);
     const BoundTensorFootprint* get_bound_tensor_footprint(const std::string& name) const;
 
-    // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
-    // bound to `tensor_parameter_name`.
-    void register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name);
-    const std::vector<std::pair<uint32_t, std::string>>& get_dfb_borrowed_bindings() const;
+    // Identifies the memory source and byte offset of a borrowed DFB.
+    struct DFBBorrowedBinding {
+        // invariant: The offset is zero when the source is a tensor parameter.
+        uint32_t dfb_id;
+        std::variant<experimental::TensorParamName, experimental::RawAllocationParamName> source;
+        uint32_t offset = 0;
+    };
+
+    // Register the memory source and byte offset of a borrowed DFB.
+    void register_dfb_borrowed_binding(DFBBorrowedBinding binding);
+    // Return the program's borrowed DFB bindings.
+    const std::vector<DFBBorrowedBinding>& get_dfb_borrowed_bindings() const;
 
     // Metal 2.0: Get kernel by name (TT_FATAL if not found)
     std::shared_ptr<Kernel> get_kernel_by_spec_name(const std::string& name) const {
@@ -782,8 +793,7 @@ private:
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
         std::unordered_map<std::string, RegisteredRawAllocationParameter> raw_allocation_parameters;
 
-        // Borrowed-memory DFB bindings: each entry is (dfb_id, tensor_parameter_name).
-        std::vector<std::pair<uint32_t, std::string>> dfb_borrowed_bindings;
+        std::vector<DFBBorrowedBinding> dfb_borrowed_bindings;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
 
