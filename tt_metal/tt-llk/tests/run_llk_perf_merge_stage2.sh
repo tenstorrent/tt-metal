@@ -25,6 +25,8 @@ python3 "$LLK/perf/regression_compare.py" "${COMPARE[@]}" \
   --run-types L1_TO_L1 --arch "$CHIP_ARCH" --report "$OUT/stage1.md" > /dev/null || true
 if [[ ! -s "$OUT/stage1.regressions.csv" ]]; then
   echo "No stage-1 regression in this leg."
+  # An empty result still tells the gate this leg's stage 2 ran.
+  echo "[]" > "$OUT/stage2.json"
   exit 0
 fi
 python3 "$LLK/perf/placement_check.py" nodes --candidates "$OUT/stage1.regressions.csv" \

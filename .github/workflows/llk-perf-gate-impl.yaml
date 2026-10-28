@@ -398,10 +398,24 @@ jobs:
       - name: Add stage 2 to the report
         id: stage2
         if: ${{ !cancelled() && hashFiles('stage2/**/stage2.json') != '' && hashFiles('perf_gate_report.md') != '' }}
+        env:
+          ARCH: ${{ inputs.arch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BLOCKS=false
           python3 ${{ env.LLK_PATH }}/perf/placement_check.py render \
-            --results 'stage2/**/stage2.json' --arch '${{ inputs.arch }}' --report stage2.md || BLOCKS=true
+            --results 'stage2/**/stage2.json' --arch "$ARCH" --report stage2.md || BLOCKS=true
+          # Every leg writes a stage-2 result, empty when it had nothing to re-measure. A leg without one
+          # (stage 2 failed, crashed or could not measure the base) leaves the stage-1 verdict.
+          LEGS=$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
+            --jq "[.jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\"))] | length") || LEGS=0
+          RESULTS=$(find stage2 -name stage2.json | wc -l)
+          if [ "$RESULTS" -lt "$LEGS" ] || [ "$LEGS" -eq 0 ]; then
+            BLOCKS=true
+            printf '\n> ⚠️ %s of %s %s leg(s) left a stage-2 result, so the gate keeps the stage-1 verdict.\n' \
+              "$RESULTS" "$LEGS" "$ARCH" >> stage2.md
+          fi
           echo "blocks=$BLOCKS" >> "$GITHUB_OUTPUT"
           printf '\n' >> perf_gate_report.md
           cat stage2.md >> perf_gate_report.md
@@ -595,6 +609,8 @@ jobs:
         env:
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
         run: |
+          # The merge gate's blocking job reads this.
+          trap 'echo $? > gate_verdict.txt' EXIT
           # Only the merge gate posts to Slack, so the run page is where the other gates show their verdict.
           if [ -f perf_gate_report.md ]; then
             cat perf_gate_report.md >> "$GITHUB_STEP_SUMMARY"
@@ -624,7 +640,7 @@ jobs:
             echo "❌ Performance regressions detected"
             cat perf_gate_report.md
             if [ "${{ steps.stage2.outputs.blocks }}" = "false" ]; then
-              echo "Stage 2 re-measured all of them and none is slower at every code position: the job does not fail."
+              echo "Stage 2 re-measured all of them in every leg and none is slower at every code position: the job does not fail."
               exit 0
             fi
             if [ "${{ inputs.fail_on_regression }}" = "true" ]; then
@@ -636,3 +652,11 @@ jobs:
 
           echo "✅ No regressions detected"
           cat perf_gate_report.md
+
+      - name: Upload the gate verdict
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: llk-perf-gate-verdict-${{ inputs.arch }}
+          path: gate_verdict.txt
+          if-no-files-found: ignore

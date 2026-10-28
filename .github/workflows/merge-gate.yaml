@@ -633,10 +633,11 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       changed: ${{ steps.classify.outputs.changed }}
-      # The gate's thresholds, for the compare jobs and for stage 2 in the Blackhole legs.
+      # The gate's thresholds, for the compare job and for stage 2 in the Blackhole legs.
+      # blocking: the arch's verdict can block a merge (llk-perf-merge-gate-blocking).
       thresholds: >-
-        {"blackhole": {"threshold": "0.02", "module_thresholds": ""},
-         "wormhole": {"threshold": "0.13", "module_thresholds": "perf_matmul=0.25,perf_math_matmul=0.25"}}
+        {"blackhole": {"threshold": "0.02", "module_thresholds": "", "blocking": true},
+         "wormhole": {"threshold": "0.13", "module_thresholds": "perf_matmul=0.25,perf_math_matmul=0.25", "blocking": false}}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -674,33 +675,6 @@ jobs:
         ${{ format('{{"blackhole": {0}}}', toJSON(fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds).blackhole)) }}
     secrets: inherit
 
-  # Blocks the merge when stage 2 finds a stage-1 regression slower at every code position, or cannot
-  # re-measure all of them. Placement effects stay in the report. An incomplete measurement also fails it.
-  llk-perf-merge-gate-blackhole:
-    name: LLK perf merge gate (blackhole)
-    needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate-measure]
-    if: always() && !cancelled() && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
-    uses: ./.github/workflows/llk-perf-gate-impl.yaml
-    with:
-      arch: blackhole
-      gate_name: LLK perf merge gate
-      baseline_pipeline: merge_baseline
-      baseline_match_ref: ${{ github.event.merge_group.base_sha || github.sha }}
-      # No wait, so the queue never waits for the warehouse: a missing baseline
-      # falls back to the newest older one in the base's history, marked stale.
-      baseline_wait_minutes: "0"
-      speed_of_light: "false"
-      run_types: L1_TO_L1
-      threshold: ${{ fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds).blackhole.threshold }}
-      module_thresholds: ${{ fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds).blackhole.module_thresholds }}
-      min_cycles: "30"
-      measure_result: ${{ needs.llk-perf-merge-gate-measure.result }}
-      fail_on_regression: true
-      # llk-perf-merge-gate-notify posts one message for both arches, so each arch does not post.
-      slack: false
-      slack_on_pass: false
-    secrets: inherit
-
   llk-perf-merge-gate:
     name: LLK perf merge gate (${{ matrix.arch }})
     needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate-measure]
@@ -708,7 +682,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [wormhole]
+        arch: [blackhole, wormhole]
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
@@ -724,19 +698,46 @@ jobs:
       module_thresholds: ${{ fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds)[matrix.arch].module_thresholds }}
       min_cycles: "30"
       measure_result: ${{ needs.llk-perf-merge-gate-measure.result }}
-      # Report-only until same-code Wormhole runs are repeatable (#62044).
-      fail_on_regression: false
+      # Wormhole is report-only until same-code Wormhole runs are repeatable (#62044).
+      fail_on_regression: ${{ fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds)[matrix.arch].blocking }}
       # llk-perf-merge-gate-notify posts one message for both arches, so each arch does not post.
       slack: false
       slack_on_pass: false
     secrets: inherit
+
+  # The verdict of the blocking arches only, so a report-only arch's fault cannot block a merge.
+  # Blackhole blocks when stage 2 finds a stage-1 regression slower at every code position, or cannot
+  # re-measure all of them; an incomplete measurement blocks too.
+  llk-perf-merge-gate-blocking:
+    name: LLK perf merge gate (blocking)
+    needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate]
+    if: always() && !cancelled() && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
+    runs-on: ubuntu-slim
+    steps:
+      - name: Download the verdicts
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: llk-perf-gate-verdict-*
+          path: verdicts
+      - name: Check the blocking arches
+        env:
+          THRESHOLDS: ${{ needs.llk-perf-merge-gate-changes.outputs.thresholds }}
+        run: |
+          FAIL=0
+          for ARCH in $(python3 -c 'import json, os; print(*[a for a, t in json.loads(os.environ["THRESHOLDS"]).items() if t["blocking"]])'); do
+            CODE=$(cat "verdicts/llk-perf-gate-verdict-${ARCH}/gate_verdict.txt" 2>/dev/null || echo missing)
+            echo "${ARCH}: ${CODE}"
+            [ "$CODE" = 0 ] || FAIL=1
+          done
+          exit "$FAIL"
 
   # The only LLK perf gate that posts to the regressions channel, and only a regression or a skip.
   # One message for both arches; a regression on one also shows the same points on the other.
   # A manual Merge Gate run on a dev branch does not post.
   llk-perf-merge-gate-notify:
     name: LLK perf merge gate (Slack)
-    needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate-blackhole, llk-perf-merge-gate]
+    needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate]
     if: >-
       always() && !cancelled() && github.event_name == 'merge_group'
       && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
@@ -862,16 +863,16 @@ jobs:
         contains(join(needs.*.result, ','), 'failure')
       }}
 
-    # The LLK perf merge gate is in needs, so the queue waits for its verdict. Only the
-    # Blackhole job is in optional-jobs; the Wormhole job is report-only.
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-measure, llk-perf-merge-gate-blackhole, llk-perf-merge-gate]
+    # The LLK perf merge gate is in needs, so the queue waits for its verdict. Only
+    # llk-perf-merge-gate-blocking is in optional-jobs; it checks the blocking arches.
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-measure, llk-perf-merge-gate, llk-perf-merge-gate-blocking]
     runs-on: ubuntu-slim
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-blackhole"
+          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-blocking"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
