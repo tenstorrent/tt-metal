@@ -343,7 +343,8 @@ fixes:
   - K.1
   status: held
   t: '2026-10-28T18:17:08'
-  text: 'OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses): the compressed KV (reference:
+  text: 'OWNER 2026-10-28: the 4-bit compressed KV is DEVELOPED ON THE 2x2 (packer test, forks, single-card tests, the 2x2 ladder) and pushed; this job INTEGRATES and gates it at full size on the Galaxy: pull the 2x2''s CKV_FORMAT work, make it run on the 8x4 (sizes / link counts / payloads derived from the mesh, never the 2x2''s literals), set CKV_FORMAT=bfp4_rows as the default once this gate passes, and report what the 2x2 could not measure (DRAM per chip of the replicated attention tables at the deploy context, sparse_sdpa kernel time bf16 vs bfp4 rows at chunk 5120, warm wall and device time per chunk). The original brief follows.
+    OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses): the compressed KV (reference:
     fp4 e2m1 + e4m3 scale per 16, RoPE before quantization; ds41_ref.py:797-799) is stored in 4 bits instead of bf16. Design
     and evidence: bringup/CKV_4BIT_DERISK.md (option B: row-packed bfloat4_b, 288 B a row, attention output 1-11 % above
     the reference''s own fp4; truncation would be 4-5x worse, so the write rounds to nearest even: on the SFPU before the
@@ -360,8 +361,7 @@ fixes:
     full-model run; work in small loops (single card, the 3-layer repro behind CKV_FORMAT) and run the ladder / K.1 only
     as the gate. Report: per-step accuracy vs the bf16 path, sparse_sdpa kernel time bf16 vs bfp4 rows, the warm wall and
     device time per chunk, DRAM per chip of the attention tables.'
-  hold: the overseer's single-card bfp4/bfp8 packer rounding test (L1 test 1) and the de-risk files in the repo (after P.6
-    and the resident-engram profile)
+  hold: the 2x2 session's CKV_FORMAT work pushed (packer test, forks, single-card tests, 2x2 ladder pass) and P.6 done
   paths:
   - models/demos/deepseek_v41_flash_d_p
   - ttnn/ttnn/bringup

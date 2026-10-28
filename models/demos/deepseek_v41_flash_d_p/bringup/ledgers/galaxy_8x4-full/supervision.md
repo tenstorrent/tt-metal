@@ -715,3 +715,11 @@ SDPA). Decode (tt-blaze llong/dsv41-reload-quad-engram4x1) has no prefill KV imp
 losslessly (index-key scale must be a power of two); the compressor's partial group is not handed over (64-aligned
 hand-over, contract :59-61, :123-124).
 Open for the owner: dlukic / node access; push; the in-RAM engram slowdown in the runner if Paris shows it again.
+- 19:05 OWNER: the 4-bit compressed KV is DEVELOPED ON THE 2x2 (packer rounding test bfp4 + bfp8, the write fork op, the
+  sparse_sdpa ROW_BFP4 fork, single-card tests 0-5, the model change behind CKV_FORMAT, the 2x2 ladder) and pushed; the
+  Galaxy's FIX.8 (still HELD) becomes the full-size integration gate (hold: the 2x2's push + P.6 done; its text says so).
+  FILE OWNERSHIP while both run: the 2x2 owns tt/compressor.py, tt/attention.py, tt/sparse_attention.py, the new forks in
+  ttnn/ttnn/bringup, the CKV_FORMAT block of tt/settings.py and bringup/ckv_derisk/; the Galaxy (P.6) owns tt/engram.py,
+  tt/engram_kv.py, begin_chunk / take_engram_rows in tt/model.py and the ENGRAM_ASYNC block of tt/settings.py (the
+  engram code moves back from the 2x2 to the Galaxy for P.6, owner). Anything else shared: coordinate through the owner;
+  ids: 2x2 DS41-150..169 / F220..F229 (as ENGRAM_HOST_PATH.md 4a), Galaxy DS41-130..149 / F207..F219. Pushed.
