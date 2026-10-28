@@ -27,8 +27,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 // Internal access
 #include "llrt/hal_types.hpp"
@@ -102,7 +103,7 @@ void PerformDeviceWork(
         throw std::runtime_error("Buffer read/write verification failed");
     }
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh_device);
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     // A no-op kernel only validates the create / JIT / dispatch pipeline,
     // so a single worker core is sufficient. (0, 0) is always a logical
@@ -239,7 +240,10 @@ struct ScopedProfilerSyncEnv {
 // Enqueues a single no-op kernel on one worker core of `target`, exercising the full
 // create-program / create-kernel / JIT-compile / enqueue-workload pipeline for that context.
 void RunNoOpProgram(distributed::MeshDevice& target, const std::string& label) {
-    auto program = CreateProgram();
+    auto program = CreateProgram(target);
+    // The program must be bound to the target's context, not the default (silicon) one. This matters
+    // when a silicon context and mock contexts coexist.
+    EXPECT_EQ(program.impl().get_context_id(), target.impl().get_context_id()) << label;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(target.shape());
     // Single worker core; see comment in PerformDeviceWork.
     auto core_range = CoreRange({0, 0}, {0, 0});
@@ -538,7 +542,8 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         std::vector<uint32_t> read_data;
         distributed::EnqueueReadMeshBuffer(cq, read_data, buffer, true);
 
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mock_device);
+        EXPECT_EQ(program.impl().get_context_id(), context_id);
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mock_device->shape());
         // Single worker core; see comment in PerformDeviceWork.
         auto core_range = CoreRange({0, 0}, {0, 0});
@@ -656,6 +661,64 @@ TEST(MetalContextIntegrationTest, MockMetal2ProgramCompileOnForeignMeshFails) {
         distributed::MeshDevice::open_mesh_device(env_b, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
 
     Program program = experimental::MakeProgramFromSpec(*mesh_a, MakeMinimalNoOpProgramSpec());
+    EXPECT_THROW(program.impl().compile(mesh_b.get()), std::runtime_error);
+}
+
+// CreateProgram(MeshDevice&) binds the program to the mesh device's context, never touching the default
+// (silicon) context, and the program can be enqueued on that mesh.
+TEST(MetalContextIntegrationTest, MockCreateProgramBindsToMeshDeviceContext) {
+    MetalEnv mock_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    auto mesh_device =
+        distributed::MeshDevice::open_mesh_device(mock_env, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    const auto context_id = mesh_device->impl().get_context_id();
+    ASSERT_NE(context_id, DEFAULT_CONTEXT_ID);
+
+    {
+        Program program = CreateProgram(*mesh_device);
+        EXPECT_EQ(program.impl().get_context_id(), context_id);
+        EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+
+        // Kernel creation resolves everything from the program's context; the kernel must inherit it.
+        const KernelHandle kernel =
+            CreateKernelFromString(program, "void kernel_main() {}", CoreRange({0, 0}, {0, 0}), DataMovementConfig{});
+        EXPECT_EQ(program.impl().get_kernel(kernel)->get_context_id(), context_id);
+
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+        EXPECT_NO_THROW(
+            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true));
+    }
+
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+}
+
+// Two mock envs can each create their own programs without either one binding to the other's context.
+TEST(MetalContextIntegrationTest, MockCreateProgramBindsPerEnv) {
+    MetalEnv env_a({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    MetalEnv env_b({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    auto mesh_a =
+        distributed::MeshDevice::open_mesh_device(env_a, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    auto mesh_b =
+        distributed::MeshDevice::open_mesh_device(env_b, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    ASSERT_NE(mesh_a->impl().get_context_id(), mesh_b->impl().get_context_id());
+
+    Program program_a = CreateProgram(*mesh_a);
+    Program program_b = CreateProgram(*mesh_b);
+    EXPECT_EQ(program_a.impl().get_context_id(), mesh_a->impl().get_context_id());
+    EXPECT_EQ(program_b.impl().get_context_id(), mesh_b->impl().get_context_id());
+}
+
+// A program bound to one env's mesh must not compile on a mesh from a different MetalEnv.
+TEST(MetalContextIntegrationTest, MockCreateProgramCompileOnForeignMeshFails) {
+    MetalEnv env_a({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    MetalEnv env_b({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    auto mesh_a =
+        distributed::MeshDevice::open_mesh_device(env_a, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    auto mesh_b =
+        distributed::MeshDevice::open_mesh_device(env_b, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+
+    Program program = CreateProgram(*mesh_a);
+    CreateKernelFromString(program, "void kernel_main() {}", CoreRange({0, 0}, {0, 0}), DataMovementConfig{});
     EXPECT_THROW(program.impl().compile(mesh_b.get()), std::runtime_error);
 }
 

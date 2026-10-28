@@ -324,6 +324,9 @@ class TTMSDeformableAttention:
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_queries, self.num_heads, self.num_levels * self.num_points)
         )
+        # TODO(#62506): drop once softmax zeroes tile padding itself. The reshape leaves stale L1 in the
+        # padding, and softmax's additive -inf pad mask turns NaN or +inf there into NaN rows.
+        attention_weights = ttnn.fill_implicit_tile_padding(attention_weights, 0.0)
         attention_weights = ttnn.softmax(attention_weights, dim=-1)
 
         if ENABLE_LOGGING:

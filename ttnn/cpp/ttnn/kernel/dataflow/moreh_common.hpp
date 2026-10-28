@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "tt-metalium/constants.hpp"
+#include "api/tile_constants.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -98,7 +98,11 @@ FORCE_INLINE void fill_cb_with_value(DFB cb, uint32_t value, int32_t num_of_elem
     switch ((uint)data_format & 0x1F) {
         case ((uint8_t)DataFormat::Float32):
         case ((uint8_t)DataFormat::Int32):
-        case ((uint8_t)DataFormat::UInt32): process_data<uint32_t>(cb, value, num_of_elems); break;
+#ifndef ARCH_QUASAR  // Quasar has no UInt32 data format
+        case ((uint8_t)DataFormat::UInt32):
+#endif
+            process_data<uint32_t>(cb, value, num_of_elems);
+            break;
         case ((uint8_t)DataFormat::Float16_b):
         default: process_data<uint16_t>(cb, value, num_of_elems); break;
     }

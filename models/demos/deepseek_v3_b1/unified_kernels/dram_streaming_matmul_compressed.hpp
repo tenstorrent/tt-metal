@@ -246,12 +246,11 @@ struct DRAMStreamingMatmulCompressed {
             // Identical on all cores — each consumes from its own cb_in1.
             // ================================================================
             constexpr uint32_t num_tiles_k = CTArgs::subblock_k * CTArgs::num_subblocks_k;
-            constexpr bool split_acc = true;
-            constexpr bool dense_packing = false;
+            constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
 
             reconfig_full_operand<SrcOrder::Reverse>(CTArgs::cb_in0, CTArgs::cb_in1);
             pack_reconfig_data_format<true>(CTArgs::cb_out);
-            compressed::custom_mm_compressed_block_init_short<true, 1, split_acc, dense_packing>(
+            compressed::custom_mm_compressed_block_init_short<true, 1, dest_layout>(
                 CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
 
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
@@ -288,10 +287,10 @@ struct DRAMStreamingMatmulCompressed {
                     const volatile uint32_t* fmt_ptr = fmt_base_ptr + fmt_tile_offset;
                     uint32_t fmt_addr = reinterpret_cast<uint32_t>(fmt_ptr);
                     if (sb_k < CTArgs::num_subblocks_k - 1) {
-                        compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, false>(
+                        compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, false, dest_layout>(
                             fmt_addr, addr_in0_subblock, 0, in0_face_r_dim, 0);
                     } else {
-                        compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, true>(
+                        compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, true, dest_layout>(
                             fmt_addr, addr_in0_subblock, 0, in0_face_r_dim, 0);
                     }
 
@@ -307,7 +306,7 @@ struct DRAMStreamingMatmulCompressed {
                 cb_push_back(CTArgs::cb_out, 1);
             }
 
-            custom_mm_block_uninit<dense_packing>();
+            custom_mm_block_uninit<dest_layout>(CTArgs::cb_out);
 
             if constexpr (PopIn0) {
                 cb_pop_front(CTArgs::cb_in0, num_tiles_k);

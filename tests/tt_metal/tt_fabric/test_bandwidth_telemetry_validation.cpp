@@ -19,8 +19,8 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
 #include <tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp>
-#include <umd/device/cluster.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <llrt/hal.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/context/metal_context.hpp"

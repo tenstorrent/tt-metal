@@ -12,8 +12,6 @@
 #include "api/scratchpad_binding_token.h"
 #include "experimental/kernel_args.h"
 
-enum class DataFormat : std::uint8_t;
-
 /**
  * @brief Kernel-side typed span over a Program-scope scratchpad.
  *
@@ -33,6 +31,7 @@ enum class DataFormat : std::uint8_t;
  * 1. Reading uninitialized data.
  * 2. Data races across threads in multi-threaded kernels.
  * 3. Data races across pipeline stages (Unpack/Math/Pack) in compute kernels.
+ * 4. Data races across kernels when ScratchpadSpec::advanced_options.allow_instance_multi_binding is enabled.
  *
  * Indexed access via operator[] is bounds-checked with ASSERT (see api/debug/assert.h for when it's activated).
  *

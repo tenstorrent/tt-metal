@@ -68,7 +68,8 @@ export (`fill_cache_for_user_` for recurrent, reshape/permute/`slice_write` for 
 import (`slice` back to a native carry) and the host decoders (`recurrent_segment_to_torch`,
 `convolution_segment_to_torch`, `assemble_*`). `KdaStateCache.commit` exports every committed layer
 inside the captured region, so the state a reader sees is the one after the last committed chunk, and
-it lands before any later MLA layer acks that chunk. `reset(slot)` zeroes the slot's regions too.
+it lands before any later MLA layer acks that chunk, and before the KDA layer's own ack.
+`reset(slot)` zeroes the slot's regions too.
 
 ## Reading it back
 

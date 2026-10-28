@@ -12,7 +12,7 @@
 #include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 #include "internal/risc_attribs.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 
 using namespace tt::constants;
 void kernel_main() {

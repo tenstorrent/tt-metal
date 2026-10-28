@@ -29,9 +29,9 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
@@ -108,6 +108,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: unharvested_logical_grid_size = CoreCoord(8, 10); break;
         case tt::ARCH::BLACKHOLE: unharvested_logical_grid_size = CoreCoord(14, 10); break;
+        case tt::ARCH::QUASAR: unharvested_logical_grid_size = CoreCoord(8, 4); break;
         default: TT_THROW("Unsupported arch {}", get_umd_arch_name());
     }
     auto logical_grid_size = mesh_device->logical_grid_size();

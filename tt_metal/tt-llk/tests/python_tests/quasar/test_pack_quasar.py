@@ -6,7 +6,7 @@ from typing import List
 import pytest
 import torch
 from helpers.constraints import is_valid_data_format_conversion
-from helpers.data_format_inference import infer_data_formats
+from helpers.data_format_inference import infer_data_formats, unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     DataCopyGolden,
@@ -147,8 +147,7 @@ def generate_qsr_pack_combinations(
                             continue
                         # Unpack-to-dest (required for 32-bit formats) does not support tiny tiles.
                         if (
-                            in_fmt.is_32_bit()
-                            and dest_acc == DestAccumulation.Yes
+                            unpacks_to_dest(in_fmt, dest_acc)
                             and tile_dims not in MX_SUPPORTED_TILE_SIZES
                         ):
                             continue
@@ -247,9 +246,7 @@ def test_pack_quasar(
     )
 
     # Same method as test_pack.py for original ReLu testing and threshold tolerance issue
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
     data_formats = infer_data_formats(
         input_format=formats.input_format,
         output_format=formats.output_format,

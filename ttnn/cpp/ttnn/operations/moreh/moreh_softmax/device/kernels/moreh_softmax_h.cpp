@@ -56,19 +56,15 @@ constexpr bool kSoftminMinShiftSupported =
 // UseMinShift so the branch that is not taken is never instantiated: kernel_main is not a
 // template, so a plain if constexpr there would still instantiate the MIN reduce and trip its
 // static_assert.
-template <bool UseMinShift>
+template <bool UseMinShift, typename DFBIn0, typename DFBMask, typename DFBTmp, typename DFBXmMax>
 ALWI void find_shift(
-    std::uint32_t Ht,
-    DataflowBuffer& dfb_in0_obj,
-    DataflowBuffer& dfb_mask_obj,
-    DataflowBuffer& dfb_tmp_obj,
-    DataflowBuffer& dfb_x_m_max_obj) {
+    std::uint32_t Ht, DFBIn0& dfb_in0_obj, DFBMask& dfb_mask_obj, DFBTmp& dfb_tmp_obj, DFBXmMax& dfb_x_m_max_obj) {
     constexpr PoolType kShiftPool = UseMinShift ? PoolType::MIN : PoolType::MAX;
     if constexpr (!UseMinShift) {
         // find max value
         if (Ht == 1) {
             mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
-                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/0, /*popm=*/0);
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/0, /*popm=*/0);
 
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
                 ckl::ReduceInputBlockShape::single());
@@ -83,7 +79,7 @@ ALWI void find_shift(
                 compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
 
             mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
-                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Ht - 1, 0, /*pop=*/0, /*popm=*/0);
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
                 compute_kernel_lib::ReduceInputBlockShape::single(),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
@@ -93,7 +89,7 @@ ALWI void find_shift(
         // find min value
         if (Ht == 1) {
             mask_posinf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
-                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/0, /*popm=*/0);
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/0, /*popm=*/0);
 
             ckl::reduce<
                 kShiftPool,
@@ -117,7 +113,7 @@ ALWI void find_shift(
                 copy_tile_to_dfb<dfb::in0, dfb::x_minus_max>(dfb_in0_obj, dfb_x_m_max_obj, i, /*pop=*/0);
             }
             mask_posinf_tile_to_dfb<dfb::in0, dfb::mask, dfb::x_minus_max>(
-                dfb_in0_obj, dfb_mask_obj, dfb_x_m_max_obj, Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
+                dfb_in0_obj, dfb_mask_obj, dfb_x_m_max_obj, Ht - 1, 0, /*pop=*/0, /*popm=*/0);
             ckl::reduce<
                 kShiftPool,
                 ReduceDim::REDUCE_COL,

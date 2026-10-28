@@ -7,6 +7,8 @@
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_device_operation.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
 
+#include <set>
+
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
 
 namespace {
@@ -40,6 +42,39 @@ void validate_overlap(const HybridRoutedExpertFfnParams& op, const HybridRoutedE
         op.fwd_arrived_addr == op.fwd_arrived->address() && op.final_arrived_addr == op.final_arrived->address() &&
             op.expert_go_addr == op.expert_go->address(),
         "hybrid routed expert overlapped with combine: the hashed semaphore addresses do not match the semaphores");
+    const uint32_t channels_needed = combine::channel_semaphore_count(
+        static_cast<uint32_t>(t.x.device()->shape()[static_cast<int32_t>(op.combine_axis)]));
+    TT_FATAL(
+        op.channel_semaphores.size() == channels_needed,
+        "hybrid routed expert overlapped with combine: {} channel semaphores passed, combine needs {} on this "
+        "mesh -- see hybrid_routed_expert_moe_channel_semaphore_count",
+        op.channel_semaphores.size(),
+        channels_needed);
+    TT_FATAL(
+        op.channel_semaphore_addrs.size() == op.channel_semaphores.size(),
+        "hybrid routed expert overlapped with combine: {} hashed channel addresses for {} semaphores",
+        op.channel_semaphore_addrs.size(),
+        op.channel_semaphores.size());
+    // Each counts something different, so a repeat is one counter serving two purposes: not an error anywhere,
+    // just wrong numbers. The trio above is already checked pairwise; this folds the channels in with it.
+    std::set<uint32_t> distinct{op.fwd_arrived_addr, op.final_arrived_addr, op.expert_go_addr};
+    for (uint32_t i = 0; i < channels_needed; i++) {
+        TT_FATAL(
+            op.channel_semaphores[i].device() == t.x.device(),
+            "hybrid routed expert overlapped with combine: channel semaphore {} belongs to another mesh device",
+            i);
+        TT_FATAL(
+            op.channel_semaphore_addrs[i] == op.channel_semaphores[i].address(),
+            "hybrid routed expert overlapped with combine: hashed address of channel semaphore {} does not match "
+            "the semaphore",
+            i);
+        TT_FATAL(
+            distinct.insert(op.channel_semaphore_addrs[i]).second,
+            "hybrid routed expert overlapped with combine: channel semaphore {} repeats an address (0x{:x}) "
+            "already in use",
+            i,
+            op.channel_semaphore_addrs[i]);
+    }
     TT_FATAL(
         t.l1_arena.has_value() == (op.hybrid_token_threshold > 0),
         "hybrid routed expert overlapped with combine needs an L1 arena exactly when the fused pass runs "

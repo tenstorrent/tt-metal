@@ -23,7 +23,8 @@
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
-#include "context/context_types.hpp"
+#include "impl/context/context_types.hpp"
+#include "impl/device/device_impl.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
@@ -93,8 +94,8 @@ private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
     class ScopedDevices {
     private:
-        std::vector<MaybeRemote<IDevice*>> devices_;
-        std::map<ChipId, IDevice*> opened_local_devices_;
+        std::vector<MaybeRemote<Device*>> devices_;
+        std::map<ChipId, Device*> opened_local_devices_;
         ContextId context_id_ = DEFAULT_CONTEXT_ID;
 
     public:
@@ -122,13 +123,9 @@ private:
         ScopedDevices(const ScopedDevices&) = delete;
         ScopedDevices& operator=(const ScopedDevices&) = delete;
 
-        // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
-        [[deprecated("This function is deprecated. Use opened_local_devices() instead.")]]
-        const std::vector<IDevice*>& local_root_devices() const;
+        const std::map<ChipId, Device*>& opened_local_devices() const;
 
-        const std::map<ChipId, IDevice*>& opened_local_devices() const;
-
-        const std::vector<MaybeRemote<IDevice*>>& root_devices() const;
+        const std::vector<MaybeRemote<Device*>>& root_devices() const;
     };
 
     // THREAD SAFETY: Enqueueing work on the device should be thread safe. Operations that modify state should be
@@ -163,10 +160,10 @@ private:
     // The view's local devices, which the view fixes when it is constructed. Held here because the
     // accessors that cross-check a property against every device would otherwise rebuild this list
     // on every call. Rewritten when a reshape swaps the view, under the api lock.
-    std::vector<IDevice*> local_devices_;
+    std::vector<Device*> local_devices_;
     // Filled on first use per range and cleared by reshape, both under the api lock, which the
     // dispatch path also holds while it reads an entry by reference.
-    mutable std::unordered_map<MeshCoordinateRange, std::vector<IDevice*>> local_devices_by_range_;
+    mutable std::unordered_map<MeshCoordinateRange, std::vector<Device*>> local_devices_by_range_;
     // The mesh-wide properties that are fixed once the devices are open. Each is otherwise answered
     // by a cross-device agreement check that walks the whole mesh, and the dispatch path asks for
     // several of them once per program on every enqueue. Established as a unit (see
@@ -210,11 +207,11 @@ private:
     // close_impl().
     std::unique_ptr<streaming_profiler::Receiver> streaming_profiler_;
 
-    // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.
+    // DRISC L1 arena for DRAM-sender PrefetcherPipe sender config pages.
     // Constructed eagerly in initialize_impl() when the HAL exposes programmable
     // DRAM cores; torn down in close_impl(). Held as a shared_ptr so
     // DriscL1Allocation handles can hold a weak_ptr back and become safe no-ops
-    // if the MeshDevice closes before their owning GCBs are destroyed (mirrors
+    // if the MeshDevice closes before their owning pipes are destroyed (mirrors
     // the MeshBuffer / weak_ptr<MeshDevice> pattern).
     std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
 
@@ -232,7 +229,7 @@ private:
     // lives until its last holder does.
     std::shared_ptr<experimental::HostRegion> host_region_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
-    IDevice* reference_device() const;
+    Device* reference_device() const;
     // Recursively quiesce all submeshes.
     void quiesce_internal();
 
@@ -396,8 +393,8 @@ public:
     void trigger_realtime_profiler_sync_check();
     RealtimeProfilerManager* get_realtime_profiler() const;
 
-    // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
-    // pages_sent allocations. Constructed eagerly in initialize_impl() when the
+    // DRISC L1 arena. Consumed by the DRAM-sender PrefetcherPipe factory for its
+    // sender config pages. Constructed eagerly in initialize_impl() when the
     // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
     ::tt::tt_metal::DriscL1Arena& drisc_l1_arena() const;
 
@@ -467,10 +464,10 @@ public:
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
 
     // Returns the devices in the mesh in row-major order.
-    std::vector<IDevice*> get_devices() const;
-    const std::vector<IDevice*>& get_local_devices(const MeshCoordinateRange& range) const;
-    IDevice* get_device(ChipId physical_device_id) const;
-    IDevice* get_device(const MeshCoordinate& coord) const;
+    std::vector<Device*> get_devices() const;
+    const std::vector<Device*>& get_local_devices(const MeshCoordinateRange& range) const;
+    Device* get_device(ChipId physical_device_id) const;
+    Device* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
     // The MPI ranks driving at least one device of this mesh, sorted; empty when this rank drives
@@ -491,7 +488,7 @@ public:
     // TODO: #17477 - Remove the methods that assume 2D mesh.
     size_t num_rows() const;
     size_t num_cols() const;
-    IDevice* get_device(size_t row_idx, size_t col_idx) const;
+    Device* get_device(size_t row_idx, size_t col_idx) const;
 
     // Returns true if the coordinate is local to this mesh device.
     // Throws if the coordinate is out of bounds of this mesh device.

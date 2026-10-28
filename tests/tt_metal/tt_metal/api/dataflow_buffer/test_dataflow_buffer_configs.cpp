@@ -297,6 +297,7 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
@@ -429,6 +430,7 @@ TEST_F(UnitMeshFixture, DfbSerializeBlockedInitEntries) {
         const CoreCoord logical_core(0, 0);
         experimental::dfb::CreateDataflowBuffer(program, logical_core, c.config);
         program.impl().finalize_dataflow_buffer_configs();
+        program.impl().prepare_ephemeral_allocation(this->device().get_devices()[0]);
         program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
         const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
@@ -475,6 +477,7 @@ TEST_F(UnitMeshFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
@@ -2383,6 +2386,7 @@ TEST_F(UnitMeshFixture, DFBConfigSerializationPreservesGappedDeviceSlots) {
     const uint32_t wide_id = experimental::dfb::CreateDataflowBuffer(program, CoreRangeSet(all_cores), config);
 
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     const auto& impl = program.impl();

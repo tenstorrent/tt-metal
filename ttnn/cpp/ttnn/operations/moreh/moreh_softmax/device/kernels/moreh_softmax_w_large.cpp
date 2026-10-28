@@ -51,21 +51,28 @@ constexpr bool kSoftminMinShiftSupported =
 // UseMinShift so the branch that is not taken is never instantiated: kernel_main is not a
 // template, so a plain if constexpr there would still instantiate the MIN reduce and trip its
 // static_assert.
-template <bool UseMinShift>
+template <
+    bool UseMinShift,
+    typename DFBIn0,
+    typename DFBMask,
+    typename DFBTmp,
+    typename DFBExps,
+    typename DFBAdd,
+    typename DFBMax>
 ALWI void find_shift(
     std::uint32_t Wt,
-    DataflowBuffer& dfb_in0_obj,
-    DataflowBuffer& dfb_mask_obj,
-    DataflowBuffer& dfb_tmp_obj,
-    DataflowBuffer& dfb_exps_obj,
-    DataflowBuffer& dfb_add_obj,
-    DataflowBuffer& dfb_max_obj) {
+    DFBIn0& dfb_in0_obj,
+    DFBMask& dfb_mask_obj,
+    DFBTmp& dfb_tmp_obj,
+    DFBExps& dfb_exps_obj,
+    DFBAdd& dfb_add_obj,
+    DFBMax& dfb_max_obj) {
     constexpr PoolType kShiftPool = UseMinShift ? PoolType::MIN : PoolType::MAX;
     if constexpr (!UseMinShift) {
         // find max
         if (Wt == 1) {
             mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
-                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::max>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
@@ -76,7 +83,7 @@ ALWI void find_shift(
 
             // Phase 2: mask the last tile and continue reducing into dfb::max via Accumulate.
             mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
-                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::max>(
                 compute_kernel_lib::ReduceInputBlockShape::row(1),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
@@ -86,7 +93,7 @@ ALWI void find_shift(
         // find min
         if (Wt == 1) {
             mask_posinf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
-                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
 
             compute_kernel_lib::reduce<
                 kShiftPool,
@@ -115,7 +122,7 @@ ALWI void find_shift(
             // tile into dfb::exps. A 0-masked pad (what the MAX path wants) wins the MIN on every
             // all-positive row, so the mask polarity has to flip with the pool type.
             mask_posinf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
-                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
             ckl::reduce<
                 kShiftPool,
                 ReduceDim::REDUCE_ROW,
