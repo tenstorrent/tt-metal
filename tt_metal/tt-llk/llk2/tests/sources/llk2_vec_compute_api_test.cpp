@@ -5,8 +5,7 @@
 // Compute API test: the SFPU activations (llk2::vec_*) on Tensors, one kernel body for all three threads. The
 // activation is a compile-time parameter (VEC_FUNCTION, the value of llk2::VecFunction; VEC_FAST), and so is the
 // thread that drives the SFPU (VEC_THREAD: llk2::Thread::Math or, as the target matmul kernel does, Thread::Pack).
-// Getting the input into Dest (unpack A + datacopy), the math-to-pack Dest sync and the pack still use today's LLKs
-// until llk2::copy and the pack + Dest sync API land.
+// Only Tensors, the Compute API (copy, vec_*, pack) and the Dest sync API: no LLK, init or per-thread code.
 
 #include <cstdint>
 
@@ -22,24 +21,19 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 #define LLK2_DEST_FP32 is_fp32_dest_acc_en
+#include "compute_api/copy.h"
+#include "compute_api/dest.h"
+#include "compute_api/pack.h"
 #include "compute_api/vec.h"
 
-#ifdef LLK_TRISC_UNPACK
-#include "llk_unpack_A.h"
-#include "llk_unpack_common.h"
-#endif
-#ifdef LLK_TRISC_MATH
-#include "llk_lib_math_wrappers.h"
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
-#endif
-#ifdef LLK_TRISC_PACK
-#include "llk_lib_pack_wrappers.h"
-#include "llk_pack_common.h"
-#endif
-
+constexpr DataFormat in_format   = static_cast<DataFormat>(UNPACK_A_IN);
+constexpr DataFormat out_format  = static_cast<DataFormat>(PACK_OUT);
 constexpr DataFormat dest_format = llk2::kernel_settings.dest_fp32 ? DataFormat::Float32 : DataFormat::Float16_b;
-constexpr std::uint32_t tiles    = (ROWS / llk2::default_tile_dim) * (COLS / llk2::default_tile_dim);
+
+inline constexpr auto& in_spec  = llk2::l1_spec<ROWS, COLS, in_format>;
+inline constexpr auto& out_spec = llk2::l1_spec<ROWS, COLS, out_format>;
+inline constexpr auto& acc_spec = llk2::dst_spec<ROWS, COLS, dest_format>; // the whole tensor in Dest
+inline constexpr auto thread    = static_cast<llk2::Thread>(VEC_THREAD);
 
 // The scalars each activation takes, as FP32 bit patterns. The goldens in test_llk2_vec.py use the same values.
 constexpr std::uint32_t relu_max_max        = 0x40a00000u; // 5.0 (RELU_MAX_THRESHOLD)
@@ -55,7 +49,7 @@ template <const auto& Acc>
 inline void apply(const llk2::Tensor<Acc>& acc)
 {
     using llk2::VecFunction;
-    constexpr llk2::vec_modifiers mods {.fast = VEC_FAST, .thread = static_cast<llk2::Thread>(VEC_THREAD)};
+    constexpr llk2::vec_modifiers mods {.fast = VEC_FAST, .thread = thread};
     constexpr VecFunction f = static_cast<VecFunction>(VEC_FUNCTION);
     if constexpr (f == VecFunction::Silu)
     {
@@ -105,57 +99,20 @@ inline void apply(const llk2::Tensor<Acc>& acc)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    [[maybe_unused]] const Operand& buffer_A   = params.buffer_A;
-    [[maybe_unused]] const Operand& buffer_Res = params.buffer_Res;
+    const auto x   = llk2::Tensor<in_spec>(params.buffer_A[0]);
+    const auto out = llk2::Tensor<out_spec>(params.buffer_Res[0]);
 
-    const auto acc = llk2::dst_tensor<ROWS, COLS, dest_format>(0); // the whole tensor in Dest from row 0
-
-    // Old style: L1 -> SrcA (or straight to Dest) for every tile.
-#ifdef LLK_TRISC_UNPACK
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0, 0, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES), formats.unpack_A_src, formats.unpack_A_dst);
-    for (std::uint32_t i = 0; i < tiles; i++)
+    const auto acc = llk2::dest_acquire<acc_spec>();
+    llk2::copy(x, acc); // acc = x
+    if constexpr (thread == llk2::Thread::Math)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            L1_ADDRESS(buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
+        apply(acc); // acc = f(acc), every tile, before math hands Dest over
     }
-#endif
-
-    // Old style: SrcA -> Dest for every tile, inside today's Dest sync.
-#ifdef LLK_TRISC_MATH
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_math_wait_for_dest_available_<dest_sync>();
-    for (std::uint32_t i = 0; i < tiles; i++)
+    llk2::dest_commit(acc);
+    if constexpr (thread == llk2::Thread::Pack)
     {
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            i, formats.math, formats.math);
+        apply(acc); // acc = f(acc), every tile, after math handed Dest to the packer
     }
-#endif
-
-    // Old style: the packer waits until math hands Dest over.
-#ifdef LLK_TRISC_PACK
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
-    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_packer_wait_for_math_done_();
-#endif
-
-    apply(acc); // acc = f(acc), every tile: on the math thread before the hand-over, or on the pack thread after it
-
-#ifdef LLK_TRISC_MATH
-    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
-#endif
-
-#ifdef LLK_TRISC_PACK
-    for (std::uint32_t i = 0; i < tiles; i++)
-    {
-        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(buffer_Res[i]));
-    }
-    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
-#endif
+    llk2::pack(acc, out);
+    llk2::dest_release(acc);
 }
