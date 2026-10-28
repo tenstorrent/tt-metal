@@ -3453,3 +3453,23 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   /scratch/dnijemcevic/diag/test_repro_tail.py -s`; op replay: `BRINGUP_TEST_MESH=8x4
   HOT_CAPTURE=/scratch/dnijemcevic/diag/dump_cap128/call0000_L00.pt scripts/run_safe_pytest.sh --run-all
   ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_hot_experts.py`.
+
+## K.1 contract, attempt 6 (OV-16, owner decision B)
+- test_adapter_acks failed only on dumped deep layers' window KV over every position (L20 0.981 < 0.9896, L21, L24):
+  the limit (server_rules.state_threshold, drift state_window_kv_L*) is measured on the ring = the last 128 positions
+  (DS41-125). Owner decision B: change the compared positions, not the limit.
+- caches.GoldenKV(window="last"): a dumped layer's window KV is compared on the last min(ring, hi - lo) positions of
+  each compared range [lo, hi) (ring = rows of the golden's window_kv state, 128), mode "last-window"; other layers keep
+  the ring-snapshot positions; compressed / index caches every row; coverage_failures still fails any layer never
+  compared. Default window="all" keeps test_cache_starts / parts unchanged.
+- Used by test_adapter_acks (every ack: [max(lo, hi - 128), hi) of every layer that has dumps) and test_runner_contract's
+  kv_checks (same check, same limit: its slot 1 final [0, 6572) would hit the same L20 gap).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate K.1 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+- Then test_runner_contract's other check failed: the pulled-back chunk (0, 5120, 10240) rewrote layer 0's window KV
+  [5120, 7616) with other bytes (704 rows, 1 bf16 ulp; contract: layer 0's KV depends on the token and position
+  only). The differing tiles were exactly those whose tp_sum row block (640 / 4 = 160 rows) changes between starts
+  2496 and 5120: the bf16 fabric reduce-scatter by row blocks adds the 4 TP partials in a block-dependent ring order
+  (DS41-128). New Setting TP_SUM_BLOCKS (default cols): tt/ccl.py:tp_sum splits by column blocks (dim 3) + column
+  gather, or the fixed-order gather_add where the width does not split (mHC [S/SP, 32] row). Same volume, same bf16
+  precision; rows keeps the old path. After it: test_runner_contract PASS (0 failures, tt-d-gen engine).

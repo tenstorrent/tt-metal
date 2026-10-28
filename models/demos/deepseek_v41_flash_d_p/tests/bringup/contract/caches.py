@@ -117,9 +117,16 @@ class GoldenKV:
                                          block input = the previous layer's "out" when that one is dumped
     Compressed KV / index keys: the layer's final state, every complete group ("full"). Every comparison goes through
     ``select`` / ``golden_failures``, which counts what was compared per (config, layer, mode): ``coverage_failures``
-    fails a served (config, layer) never compared, so no layer is skipped."""
+    fails a served (config, layer) never compared, so no layer is skipped.
 
-    def __init__(self):
+    ``window="last"`` (owner decision B, 2026-10-27, OV-16): a dumped layer's window KV is compared on the positions the
+    reference drift measures, whose limit R.state_threshold applies (drift state_window_kv_L*: the ring = the last
+    `window` positions): the last min(window, hi - lo) positions of the compared range [lo, hi), mode "last-window".
+    Accuracy over every position stays covered by the ladder's per-layer err. ``window="all"``: every position."""
+
+    def __init__(self, window: str = "all"):
+        assert window in ("all", "last"), window
+        self.window = window
         from models.demos.common.bringup.reference.golden import Golden
 
         s = R._spec()
@@ -178,12 +185,22 @@ class GoldenKV:
             )
         return self._ring[layer]
 
+    def ring_size(self) -> int:
+        """The reference's sliding window (rows of its window_kv ring state)."""
+        if not hasattr(self, "_ring_size"):
+            ring = self.g.state(0)["window_kv"]
+            self._ring_size = int(ring.reshape(-1, ring.shape[-1]).shape[0])
+        return self._ring_size
+
     def select(self, cfg: dict, layer: int, lo_tok: int, hi_tok: int) -> tuple[np.ndarray, np.ndarray, str]:
         """(local row indices into the rows of the complete groups of [lo_tok, hi_tok), golden rows there float32,
         mode "full" | "last-window")."""
         a, b = rows_of(cfg, lo_tok, hi_tok)
-        if cfg["kind"] != "window" or self.dumped(layer):
+        if cfg["kind"] != "window" or (self.dumped(layer) and self.window == "all"):
             return np.arange(b - a), self.rows(cfg, layer, lo_tok, hi_tok), "full"
+        if self.dumped(layer):  # window == "last": the ring the drift measures, the last positions of the range
+            first = max(lo_tok, hi_tok - self.ring_size())
+            return np.arange(first - lo_tok, hi_tok - lo_tok), self.rows(cfg, layer, first, hi_tok), "last-window"
         pos, ring = self._window_ring(layer)
         keep = (pos >= lo_tok) & (pos < hi_tok)
         return (pos[keep] - lo_tok).numpy(), ring[keep].float().numpy(), "last-window"
