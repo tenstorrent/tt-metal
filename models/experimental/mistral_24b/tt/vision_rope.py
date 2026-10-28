@@ -11,7 +11,7 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.common import precompute_mistral_vision_freqs
+from models.experimental.mistral_24b.tt.vision_utils import precompute_mistral_vision_freqs
 from ttnn import ReplicateTensorToMesh
 
 
