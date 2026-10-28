@@ -300,11 +300,6 @@ def _recv(sock) -> tuple[dict, bytes]:
     return header, _recv_exact(sock, bl) if bl else b""
 
 
-@pytest.mark.timeout(86400)
-@pytest.mark.parametrize(
-    "device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
-)
-@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 def _serve_wave(model, hdr: dict, ranks: dict, decs: dict, push_layers: list, mtp_layer, pool, accept_one, mesh_device):
     """tt-blaze G53F-0250: ``{"op": "prefill_wave", "members": [{"ids": [...], "slot": s}, ...]}`` -- up to ``rows``
     prompts of ONE length (S' = POOL * ((len - 1) // POOL) <= ``WAVE_MAX_TOKENS``) through ``prefill_wave_ids`` (prompt
@@ -391,6 +386,11 @@ def _serve_wave(model, hdr: dict, ranks: dict, decs: dict, push_layers: list, mt
     return rep
 
 
+@pytest.mark.timeout(86400)
+@pytest.mark.parametrize(
+    "device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 def test_prefill_seed_server(mesh_device):
     layers = list(range(45))
     cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
