@@ -6874,6 +6874,39 @@ def test_failed_report_write_still_ends_the_capture(tmp_path, expect_error):
     assert not ttnn.graph.is_python_io_recording_enabled()
 
 
+@pytest.mark.parametrize("detailed_buffer_tracing", [False, True], ids=["plain", "detailed_buffers"])
+def test_capture_survives_a_device_opened_and_closed_inside_it(tmp_path, detailed_buffer_tracing):
+    """The report fixture's capture wraps the whole test, so a test that opens and closes its own device does so inside
+    it. Opening a device puts its memory tracker above the capture on the processor stack, and closing it leaves the
+    capture holding a device it can no longer read: ending the capture, and with detailed buffer tracing freeing a
+    tensor after the close, must still work."""
+    if ttnn.graph.is_graph_capture_active():
+        pytest.skip("graph reporting is already on for this run, so this capture would nest inside the fixture's")
+    if detailed_buffer_tracing:
+        ttnn.graph.enable_detailed_buffer_tracing()
+    try:
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+        try:
+            tensor = ttnn.from_torch(
+                torch.rand((32, 32), dtype=torch.bfloat16),
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        finally:
+            ttnn.close_mesh_device(mesh_device)
+        del tensor
+        gc.collect()
+        ttnn.graph.end_graph_capture_to_file(tmp_path / "report.json")
+    finally:
+        if detailed_buffer_tracing:
+            ttnn.graph.disable_detailed_buffer_tracing()
+    assert not ttnn.graph.is_graph_capture_active()
+    report = json.loads((tmp_path / "report.json").read_text())
+    assert report["graph"][0]["node_type"] == "capture_start" and report["graph"][-1]["node_type"] == "capture_end"
+
+
 # mesh_device depends on silicon_arch_name, which conftest only parametrizes for tests that name it at collection.
 @pytest.mark.usefixtures("silicon_arch_name")
 def test_multihost_graph_report(request):

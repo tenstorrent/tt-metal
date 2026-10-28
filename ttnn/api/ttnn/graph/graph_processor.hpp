@@ -190,7 +190,10 @@ private:
     // Whether this capture has already warned about a program it could not place
     bool warned_unresolved_placement = false;
     // Device pointers for buffer pages (only valid during capture)
-    std::vector<tt::tt_metal::distributed::MeshDevice*> captured_mesh_devices;
+    // Weak: a device opened during the capture can be closed and destroyed before it ends.
+    std::vector<std::weak_ptr<tt::tt_metal::distributed::MeshDevice>> captured_mesh_devices;
+    // The captured mesh devices whose buffers can be read now: alive, open, and with chips on this host.
+    std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> readable_captured_mesh_devices() const;
     // Per-operation buffer snapshots (function_start counter -> buffers)
     std::unordered_map<node_id, std::vector<ttnn::reports::BufferInfo>> per_op_buffers_;
     // Buffer pages keyed by address, with versioning for re-allocations.

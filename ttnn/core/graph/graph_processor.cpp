@@ -179,6 +179,16 @@ std::string get_mesh_coordinate_mapping_content() {
     return buffer.str();
 }
 
+std::vector<tt::tt_metal::distributed::MeshDevice*> raw_pointers(
+    const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices) {
+    std::vector<tt::tt_metal::distributed::MeshDevice*> pointers;
+    pointers.reserve(devices.size());
+    for (const auto& device : devices) {
+        pointers.push_back(device.get());
+    }
+    return pointers;
+}
+
 }  // namespace
 
 namespace ttnn::graph {
@@ -259,8 +269,23 @@ void GraphProcessor::track_device(const tt::tt_metal::IDevice* device) {
     auto* mesh_device = const_cast<tt::tt_metal::distributed::MeshDevice*>(
         dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device));
     if (mesh_device != nullptr) {
-        captured_mesh_devices.push_back(mesh_device);
+        captured_mesh_devices.push_back(mesh_device->weak_from_this());
     }
+}
+
+std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> GraphProcessor::readable_captured_mesh_devices()
+    const {
+    // A device closed before the capture ends (as when the report fixture's capture wraps a test that opens and closes
+    // its own device) or one with no chips on this host has no allocator to read; reading it throws, in the middle of
+    // a deallocation if that is what is being tracked.
+    std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices;
+    for (const auto& weak_device : captured_mesh_devices) {
+        auto device = weak_device.lock();
+        if (device != nullptr && device->is_initialized() && !device->is_remote_only()) {
+            devices.push_back(std::move(device));
+        }
+    }
+    return devices;
 }
 
 void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
@@ -301,8 +326,10 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     // (e.g. fold at ps=448 then max_pool2d at ps=128).  Each allocation is
     // recorded with its graph counter so the importer can pick the right version.
     uint64_t addr = buffer->address();
-    if (capture_detailed_buffer_tracing_ && !captured_mesh_devices.empty()) {
-        auto all_pages = ttnn::reports::get_buffer_pages(captured_mesh_devices);
+    const auto readable_devices = capture_detailed_buffer_tracing_ ? readable_captured_mesh_devices()
+                                                                   : decltype(readable_captured_mesh_devices()){};
+    if (!readable_devices.empty()) {
+        auto all_pages = ttnn::reports::get_buffer_pages(raw_pointers(readable_devices));
         std::vector<ttnn::reports::BufferPageInfo> pages_for_addr;
         for (const auto& page : all_pages) {
             if (page.address == addr) {
@@ -875,8 +902,11 @@ node_id GraphProcessor::track_function_end_impl() {
     // Snapshot live buffer state after each top-level operation completes.
     // Only collected when detailed buffer tracing is enabled (report/visualization path)
     // to avoid the overhead of iterating all allocated buffers on every operation.
-    if (stacking_level == 1 && capture_detailed_buffer_tracing_ && !captured_mesh_devices.empty()) {
-        per_op_buffers_[function_start_id] = ttnn::reports::get_buffers(captured_mesh_devices);
+    if (stacking_level == 1 && capture_detailed_buffer_tracing_) {
+        const auto readable_devices = readable_captured_mesh_devices();
+        if (!readable_devices.empty()) {
+            per_op_buffers_[function_start_id] = ttnn::reports::get_buffers(raw_pointers(readable_devices));
+        }
     }
 
     return counter;
@@ -1219,8 +1249,10 @@ nlohmann::json GraphProcessor::get_report() const {
     }
 
     // Buffer pages (when detailed buffer report is enabled)
-    if (capture_detailed_buffer_tracing_ && !captured_mesh_devices.empty()) {
-        auto buffer_pages = ttnn::reports::get_buffer_pages(captured_mesh_devices);
+    const auto readable_devices = capture_detailed_buffer_tracing_ ? readable_captured_mesh_devices()
+                                                                   : decltype(readable_captured_mesh_devices()){};
+    if (!readable_devices.empty()) {
+        auto buffer_pages = ttnn::reports::get_buffer_pages(raw_pointers(readable_devices));
         nlohmann::json buffer_pages_json = nlohmann::json::array();
         for (const auto& page : buffer_pages) {
             buffer_pages_json.push_back(
@@ -1298,26 +1330,52 @@ void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::NORMAL) {
     tt::tt_metal::GraphTracker::instance().push_processor(std::make_shared<GraphProcessor>(mode));
 }
 
-nlohmann::json GraphProcessor::end_graph_capture() {
+namespace {
+
+// The innermost graph capture on this thread's processor stack. It need not be on top: opening a device pushes the
+// device's background memory tracker (ShmTrackingProcessor), which stays for the device's lifetime, so a device opened
+// after begin_graph_capture (as in a test run under the graph report fixture) sits above the capture.
+std::shared_ptr<GraphProcessor> innermost_graph_capture() {
+    const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
+    for (auto it = processors.rbegin(); it != processors.rend(); ++it) {
+        if (auto capture = std::dynamic_pointer_cast<GraphProcessor>(*it)) {
+            return capture;
+        }
+    }
+    TT_THROW("No active graph capture to end");
+}
+
+// Take `capture` off the processor stack, leaving the processors above it in place and in order.
+void remove_graph_capture(const std::shared_ptr<GraphProcessor>& capture) {
     auto& tracker = tt::tt_metal::GraphTracker::instance();
-    TT_FATAL(!tracker.get_processors().empty(), "No active graph capture to end");
+    std::vector<std::shared_ptr<tt::tt_metal::IGraphProcessor>> above;
+    while (tracker.get_processors().back() != capture) {
+        above.push_back(tracker.get_processors().back());
+        tracker.pop_processor();
+    }
+    tracker.pop_processor();
+    for (auto it = above.rbegin(); it != above.rend(); ++it) {
+        tracker.push_processor(*it);
+    }
+}
+
+}  // namespace
+
+nlohmann::json GraphProcessor::end_graph_capture() {
+    auto capture = innermost_graph_capture();
     // End the capture even if finalizing it throws; see end_graph_capture_to_file.
-    auto end_capture = ttnn::make_guard([&tracker]() { tracker.pop_processor(); });
-    return tracker.get_processors().back()->end_capture();
+    auto end_capture = ttnn::make_guard([capture]() { remove_graph_capture(capture); });
+    return capture->end_capture();
 }
 
 nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::path& report_path) {
-    auto& tracker = tt::tt_metal::GraphTracker::instance();
-    const auto& processors = tracker.get_processors();
-    TT_FATAL(!processors.empty(), "No active graph capture to end");
-
-    auto* processor = dynamic_cast<GraphProcessor*>(processors.back().get());
-    TT_FATAL(processor != nullptr, "The innermost graph tracking processor is not a graph capture, so none can end");
+    auto capture = innermost_graph_capture();
+    auto* processor = capture.get();
 
     // End the capture even if writing the report throws (unwritable path, full disk): a capture left active keeps
     // recording the caller's later operations, nests the next begin_graph_capture inside itself, and on a multi-rank
     // run leaves the other ranks waiting for this one.
-    auto end_capture = ttnn::make_guard([&tracker]() { tracker.pop_processor(); });
+    auto end_capture = ttnn::make_guard([capture]() { remove_graph_capture(capture); });
 
     // Finalize the graph, then build the report via the shared get_report() path
     auto graph_json = processor->end_capture();
