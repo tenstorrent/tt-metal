@@ -126,3 +126,25 @@ def test_plus_one_sharded_program_cache(device, w):
 
     assert_with_pcc(torch_a + 1, ttnn.to_torch(tensor_a), 0.9999)
     assert_with_pcc(torch_b + 1, ttnn.to_torch(tensor_b), 0.9999)
+
+
+@pytest.mark.parametrize("input_shape", [(32,), (4, 32), (2, 8, 32)])
+def test_plus_one_l1_interleaved(device, input_shape):
+    """L1-interleaved input is incremented in place, like DRAM input."""
+    torch_input_tensor = torch.randint(32000, input_shape)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.int32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    ttnn.plus_one(input_tensor)
+    assert torch.equal(ttnn.to_torch(input_tensor), torch_input_tensor + 1)
+
+
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+def test_plus_one_multi_core_sub_core_grids(device, memory_config):
+    """Interleaved input on a multi-core sub_core_grids is incremented exactly once."""
+    torch_input_tensor = torch.randint(32000, (4, 32))
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, device=device, memory_config=memory_config)
+    ttnn.plus_one(
+        input_tensor, sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    )
+    assert torch.equal(ttnn.to_torch(input_tensor), torch_input_tensor + 1)

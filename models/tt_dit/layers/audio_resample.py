@@ -30,7 +30,7 @@ from .audio_ops import (
     _zero_stuff_t,
     depthwise_tap_filter,
 )
-from .module import Module
+from .module import Module, release_device_cache
 
 
 def _make_hann_sinc_kernel_1d(*, ratio: int) -> tuple[torch.Tensor, int, int, int, int]:
@@ -101,6 +101,11 @@ class LowPassFilter1d(Module):
             t = state.pop("filter")
             assert tuple(t.shape) == (1, 1, self.kernel_size)
             self._taps_cpu = t.reshape(self.kernel_size).float().tolist()
+
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        # Eviction must take the lazily cached device constants with the weights (see `release_device_cache`).
+        release_device_cache(self._conv1d_cache)
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         """``x_BTC``: ``(B, T, C)`` ROW_MAJOR. Returns ``(B, T_out, C)``.
@@ -196,6 +201,11 @@ class UpSample1d(Module):
             t = state.pop("filter")
             assert tuple(t.shape) == (1, 1, self.kernel_size)
             self._taps_cpu = t.reshape(self.kernel_size).float().tolist()
+
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        # Eviction must take the lazily cached device constants with the weights (see `release_device_cache`).
+        release_device_cache(self._conv1d_cache)
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT

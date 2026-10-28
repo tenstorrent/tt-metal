@@ -4,13 +4,13 @@
 
 import pytest
 from loguru import logger
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
     skip_for_wormhole_b0,
     skip_for_blackhole,
 )
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
+from tt_py_test_utils_common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics

@@ -80,9 +80,8 @@ TEST_F(ProgramSpecTestQuasar, CPU_KernelSemaphoreBindingDuplicateAccessorFails) 
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("duplicate semaphore accessor_name 'same'")));
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_SemaphoreBoundToComputeKernelFailsOnQuasar) {
-    // Compute kernels cannot have semaphore bindings on any arch.
-    // (This may later change for Quasar.)
+TEST_F(ProgramSpecTestQuasar, CPU_SemaphoreBoundToComputeKernelSucceedsOnQuasar) {
+    // Quasar compute kernels may bind a semaphore (SemScope::COMPUTE_ATOMIC).
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem;
@@ -95,10 +94,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SemaphoreBoundToComputeKernelFailsOnQuasar) {
     spec.kernels[1].semaphore_bindings = {
         SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Semaphore bindings on compute kernels are supported only on Blackhole.")));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_SemaphoreBoundToComputeKernelFailsOnWormhole) {
@@ -117,8 +113,7 @@ TEST_F(ProgramSpecTestGen1, CPU_SemaphoreBoundToComputeKernelFailsOnWormhole) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Semaphore bindings on compute kernels are supported only on Blackhole.")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("supported only on Blackhole and Quasar")));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_SemaphoreBoundToDMKernelSucceedsOnGen1) {

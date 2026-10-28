@@ -16,6 +16,46 @@
 
 namespace ttnn::experimental::prim {
 
+namespace detail {
+
+// A row-major tensor has one-row pages when it is INTERLEAVED or HEIGHT_SHARDED (tt_metal page_config.cpp,
+// get_page_shape_rm), DRAM or L1. WIDTH_SHARDED, BLOCK_SHARDED and ND sharding give (1, shard width) pages: a row then
+// spans several pages and a writer's slice would have to be split at the shard boundaries, which neither writer does.
+void validate_combine_output_memory_config(
+    const tt::tt_metal::MemoryConfig& memory_config, uint32_t num_rows, uint32_t hidden_size, const char* what) {
+    using tt::tt_metal::TensorMemoryLayout;
+    const auto layout = memory_config.memory_layout();
+    TT_FATAL(
+        layout == TensorMemoryLayout::INTERLEAVED || layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        "the [k, T, H] output is written one token row per TensorAccessor page and a row is not split across column "
+        "pages, so the {} must be INTERLEAVED or HEIGHT_SHARDED row-major (WIDTH_SHARDED, BLOCK_SHARDED and ND "
+        "sharding need a column-page split that is not implemented); got {}",
+        what,
+        memory_config);
+    if (layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+        return;
+    }
+    const auto& shard_spec = memory_config.shard_spec();
+    TT_FATAL(shard_spec.has_value(), "the {} is HEIGHT_SHARDED without a shard spec: {}", what, memory_config);
+    TT_FATAL(
+        shard_spec->shape[1] == hidden_size,
+        "a height shard of the {} must hold whole token rows: shard width {} != hidden size {}",
+        what,
+        shard_spec->shape[1],
+        hidden_size);
+    const uint32_t shard_rows = shard_spec->shape[0];
+    const uint32_t num_shard_cores = shard_spec->grid.num_cores();
+    TT_FATAL(
+        shard_rows > 0 && num_shard_cores * shard_rows >= num_rows,
+        "the {} shard grid ({} cores x {} rows per shard) does not cover the k x T = {} token rows",
+        what,
+        num_shard_cores,
+        shard_rows,
+        num_rows);
+}
+
+}  // namespace detail
+
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.dense_input_tensor;
@@ -91,6 +131,19 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
         "page padding breaks the kernels' maps indexing",
         maps_row_bytes,
         tt::tt_metal::hal::get_l1_alignment());
+
+    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    const auto& output_shape = output_spec.logical_shape();
+    const uint32_t num_output_rows = output_shape[0] * output_shape[1];
+    detail::validate_combine_output_memory_config(
+        operation_attributes.output_memory_config, num_output_rows, output_shape[2], "output memory config");
+    if (tensor_args.optional_output_tensor.has_value()) {
+        detail::validate_combine_output_memory_config(
+            tensor_args.optional_output_tensor->memory_config(),
+            num_output_rows,
+            output_shape[2],
+            "optional output tensor memory config");
+    }
 }
 
 SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombineDeviceOperation::compute_output_specs(

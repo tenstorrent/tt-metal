@@ -28,7 +28,7 @@ RANKS_PER_HOST=4
   || { echo "STAGES=$STAGES needs exactly $((STAGES / RANKS_PER_HOST)) hosts (bindings are $RANKS_PER_HOST trays/host), got ${#HOST_ARR[@]}: $HOSTS"; exit 2; }
 for h in "${HOST_ARR[@]}"; do [ -n "$h" ] || { echo "empty host in HOSTS=$HOSTS"; exit 2; }; done
 HOSTLIST=$(printf "%s:$RANKS_PER_HOST," "${HOST_ARR[@]}"); HOSTLIST=${HOSTLIST%,}
-[ "$MATRIX_CHUNK" -ge 2048 ] && [ $((MATRIX_CHUNK % 32)) -eq 0 ] || { echo "CHUNK=$MATRIX_CHUNK must be a multiple of 32 and >= 2048"; exit 2; }
+[ "$MATRIX_CHUNK" -ge 1024 ] && [ $((MATRIX_CHUNK % 32)) -eq 0 ] || { echo "CHUNK=$MATRIX_CHUNK must be a multiple of 32 and >= 1024"; exit 2; }
 [ $((MAX_NEW % MATRIX_CHUNK)) -eq 0 ] || { echo "MAX_NEW=$MAX_NEW is not a multiple of CHUNK=$MATRIX_CHUNK"; exit 2; }
 if [ $((CACHED % MATRIX_CHUNK)) -ne 0 ]; then   # the default cached values are 5120 multiples; snap for other chunks
   C_ROUNDED=$(( CACHED / MATRIX_CHUNK * MATRIX_CHUNK )); echo "[row C=$CACHED] rounding cached $CACHED down to $C_ROUNDED (multiple of CHUNK=$MATRIX_CHUNK)"; CACHED=$C_ROUNDED

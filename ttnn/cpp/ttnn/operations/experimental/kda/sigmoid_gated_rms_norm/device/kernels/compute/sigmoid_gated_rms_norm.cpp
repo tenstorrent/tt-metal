@@ -14,7 +14,8 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
-void square(uint32_t n, DataflowBuffer& tmp) {
+template <typename DFB>
+void square(uint32_t n, DFB& tmp) {
     tmp.reserve_back(n);
     pack_reconfig_data_format(dfb::tmp);
     reconfig_data_format(dfb::x, dfb::x);
@@ -30,7 +31,8 @@ void square(uint32_t n, DataflowBuffer& tmp) {
     tmp.push_back(n);
 }
 
-void inverse_rms(DataflowBuffer& inv) {
+template <typename DFB>
+void inverse_rms(DFB& inv) {
     inv.reserve_back(1);
     pack_reconfig_data_format(dfb::inv);
     reconfig_data_format(dfb::stats, dfb::epsilon);
@@ -46,7 +48,8 @@ void inverse_rms(DataflowBuffer& inv) {
     inv.push_back(1);
 }
 
-void scale_by_inverse_rms(uint32_t Vt, DataflowBuffer& norm) {
+template <typename DFB>
+void scale_by_inverse_rms(uint32_t Vt, DFB& norm) {
     norm.reserve_back(Vt);
     pack_reconfig_data_format(dfb::norm);
     reconfig_data_format(dfb::x, dfb::inv);
@@ -62,7 +65,8 @@ void scale_by_inverse_rms(uint32_t Vt, DataflowBuffer& norm) {
     norm.push_back(Vt);
 }
 
-void apply_weight(uint32_t Vt, DataflowBuffer& tmp) {
+template <typename DFB>
+void apply_weight(uint32_t Vt, DFB& tmp) {
     tmp.reserve_back(Vt);
     pack_reconfig_data_format(dfb::tmp);
     reconfig_data_format(dfb::norm, dfb::weight);
@@ -78,7 +82,8 @@ void apply_weight(uint32_t Vt, DataflowBuffer& tmp) {
     tmp.push_back(Vt);
 }
 
-void activate_gate(uint32_t Vt, DataflowBuffer& norm) {
+template <typename DFB>
+void activate_gate(uint32_t Vt, DFB& norm) {
     norm.reserve_back(Vt);
     pack_reconfig_data_format(dfb::norm);
     reconfig_data_format_srca(dfb::gate);
@@ -96,7 +101,8 @@ void activate_gate(uint32_t Vt, DataflowBuffer& norm) {
     norm.push_back(Vt);
 }
 
-void multiply_output(uint32_t Vt, DataflowBuffer& out) {
+template <typename DFB>
+void multiply_output(uint32_t Vt, DFB& out) {
     out.reserve_back(Vt);
     pack_reconfig_data_format(dfb::out);
     reconfig_data_format(dfb::tmp, dfb::norm);

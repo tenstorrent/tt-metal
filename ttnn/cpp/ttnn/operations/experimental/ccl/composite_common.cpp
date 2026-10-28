@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/all_broadcast/all_broadcast.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -359,6 +360,13 @@ ttnn::Tensor composite_all_gather(
     const int32_t rank = static_cast<int32_t>(input_shape.rank());
     const int32_t gather_dim = static_cast<int32_t>(input_shape.get_normalized_index(dim));
 
+    // Label of the result: every device on `cluster_axis` ends up with every piece along `gather_dim`. Decided from
+    // the caller's tensor up front so a gather the helper refuses (a 1-D-mapped Shard gathered along an outer mesh
+    // axis interleaves the pieces) fails before any device work under strict mode; applied to the tensor returned
+    // at the bottom (nullopt, already reported, leaves the tail's union label in place).
+    const std::optional<tt::tt_metal::TensorTopology> output_topology =
+        ttnn::operations::ccl::common::all_gather_output_topology(input_tensor, cluster_axis, gather_dim);
+
     // If we need to convert to row-major, then if the input dtype is bfloat8_b we need to typecast before untilizing
     // and after re-tilizing.
     // rank-1 has no -2 axis, and ShapeBase[-2] returns a phantom 1 rather than throwing.
@@ -410,6 +418,11 @@ ttnn::Tensor composite_all_gather(
         all_gather_output_tensor = ttnn::to_memory_config(all_gather_output_tensor, output_memory_config);
     }
 
+    // The concat / typecast / to_memory_config tail takes the union label of its inputs, which is the all_broadcast
+    // label for an N-D input but not for a collapsed one; relabel what the caller receives.
+    if (output_topology.has_value()) {
+        all_gather_output_tensor.update_tensor_topology(*output_topology);
+    }
     return all_gather_output_tensor;
 }
 
@@ -492,6 +505,14 @@ ttnn::Tensor composite_all_to_all(
     for (auto& tensor : broadcasted_tensors) {
         tensor.deallocate();
     }
+
+    // TensorTopology: no relabel site in this composite, and none is needed. prim::all_broadcast over the whole mesh
+    // labels every copy Replicate on every axis (ccl_topology_utils); mesh_partition's hook labels each whole-mesh
+    // slice `{N}, [Shard{out_dim}]` through mesh_partition_output_topology (the shared scatter rule in its partition
+    // kind: a whole-mesh partition of a label that shards no other dim, spelled over the storage's row-major
+    // coordinates); the concat above takes the union of those identical labels and the layout / dtype /
+    // memory-config conversions below carry their input's label. The result reads `{N}, [Shard{out_dim}]`: out_dim
+    // scattered in device order, in_dim re-gathered -- the honest all_to_all label.
 
     // Convert back to tiled
     if (is_tiled_and_not_tile_aligned) {

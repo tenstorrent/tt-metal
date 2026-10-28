@@ -12,7 +12,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::upsample {
@@ -116,8 +115,10 @@ ttnn::Tensor upsample(
 
     // Validation is handled by the device operation's validate_on_program_cache_miss
 
-    ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4));
+    auto* device = input_tensor.device();
+    TT_FATAL(device != nullptr, "upsample expects an allocated device tensor as input");
+    ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(
+        ttnn::init_device_compute_kernel_config(device->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4));
 
     // For bilinear mode, call halo preprocessing step before the upsample operation
     if (mode == "bilinear") {

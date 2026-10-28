@@ -23,6 +23,10 @@ void kernel_main() {
     constexpr bool ht_need_bcast = (get_arg(args::ht_need_bcast) == 1);
 
     DataflowBuffer dfb_zero_obj(dfb::zero);  // zero tile
+    DataflowBuffer dfb_in_obj(dfb::in);
+    DataflowBuffer dfb_intermed_obj(dfb::intermed);
+    DataflowBuffer dfb_scalar_obj(dfb::scalar);
+    DataflowBuffer dfb_out_obj(dfb::out);
     constexpr uint32_t onetile = 1;
 
     compute_kernel_hw_startup(dfb::in, dfb::zero, dfb::out);
@@ -42,16 +46,16 @@ void kernel_main() {
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Add,
                     ckl::input(dfb::zero, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                    ckl::input(dfb::in, bcast_dim)>>{},
-            ckl::Optional<!has_bcast, ckl::CopyTile<ckl::input(dfb::in)>>{},
-            ckl::PackTile<ckl::output(dfb::intermed)>{});
+                    ckl::input(dfb::in, bcast_dim)>>{dfb_zero_obj, dfb_in_obj},
+            ckl::Optional<!has_bcast, ckl::CopyTile<ckl::input(dfb::in)>>{dfb_in_obj},
+            ckl::PackTile<ckl::output(dfb::intermed)>{dfb_intermed_obj});
 
         // output * (1 / number_of_elements)
         ckl::mul<
             ckl::input(dfb::intermed),
             // 1/num_dim bcast scalar
             ckl::input(dfb::scalar, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::output(dfb::out)>(ckl::IterationShape::tiles(onetile));
+            ckl::output(dfb::out)>(ckl::IterationShape::tiles(onetile), dfb_intermed_obj, dfb_scalar_obj, dfb_out_obj);
     }
     dfb_zero_obj.pop_front(onetile);
 }

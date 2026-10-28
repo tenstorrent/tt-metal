@@ -5,16 +5,9 @@
 # Wormhole LLK perf runner, shared by the 5 wh matrix groups in
 # tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
 #
-# pytest-split sharding: compile this shard's items (producer), then measure
-# them (consumer) -- one invocation each over the whole perf suite.
-#
-# There is no durations file, so pytest-split gives every test the same weight.
-# The default algorithm then cuts the suite into contiguous chunks by count, and
-# a chunk that holds the compile-heavy SFPU and untilize modules takes ~7x longer
-# than the rest. least_duration deals the tests out in turn, so every shard gets
-# a share of each module. Both passes must use the same split.
-#
 # Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_wormhole.sh <group> <n_groups>
+# Optional: LLK_PERF_PHASE=all|compile|run, LLK_PERF_COMPILE_WORKERS, LLK_PERF_DEBUG_SYMBOLS,
+# LLK_PERF_EXITFIRST, LLK_PERF_REPORT_TAG (JUnit name suffix). Defaults keep today's commands.
 set -euo pipefail
 
 GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
@@ -35,6 +28,34 @@ case "$SPEED_OF_LIGHT" in
     ;;
 esac
 
+PHASE="${LLK_PERF_PHASE:-all}"
+case "$PHASE" in
+  all|compile|run) ;;
+  *)
+    echo "LLK_PERF_PHASE must be 'all', 'compile' or 'run', got '$PHASE'" >&2
+    exit 2
+    ;;
+esac
+COMPILE_WORKERS="${LLK_PERF_COMPILE_WORKERS:-10}"
+
+case "${LLK_PERF_DEBUG_SYMBOLS:-true}" in
+  true) DEBUG_SYMBOL_ARGS=() ;;
+  false) DEBUG_SYMBOL_ARGS=(--no-debug-symbols) ;;
+  *)
+    echo "LLK_PERF_DEBUG_SYMBOLS must be 'true' or 'false', got '$LLK_PERF_DEBUG_SYMBOLS'" >&2
+    exit 2
+    ;;
+esac
+
+case "${LLK_PERF_EXITFIRST:-true}" in
+  true) EXITFIRST_ARGS=(-x) ;;
+  false) EXITFIRST_ARGS=() ;;
+  *)
+    echo "LLK_PERF_EXITFIRST must be 'true' or 'false', got '$LLK_PERF_EXITFIRST'" >&2
+    exit 2
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/python_tests"
 mkdir -p perf_data
@@ -42,10 +63,22 @@ mkdir -p perf_data
 PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
 PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 
-pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" --splitting-algorithm least_duration \
-  --junitxml="pytest-report-wormhole-${GROUP}-compile.xml" .
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" --splitting-algorithm least_duration \
-  --junitxml="pytest-report-wormhole-${GROUP}-run.xml" .
-junitparser merge pytest-report-wormhole-${GROUP}-compile.xml pytest-report-wormhole-${GROUP}-run.xml pytest-report-wormhole-${GROUP}.xml
+REPORT="pytest-report-wormhole-${GROUP}${LLK_PERF_REPORT_TAG:-}"
+COMPILE_XML="${REPORT}-compile.xml"
+RUN_XML="${REPORT}-run.xml"
+
+if [[ "$PHASE" != run ]]; then
+  pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-producer -n "$COMPILE_WORKERS" -m "perf and not accuracy" --timeout=60 \
+    --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
+    --junitxml="$COMPILE_XML" .
+fi
+[[ "$PHASE" == compile ]] && exit 0
+
+pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" "${DEBUG_SYMBOL_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 "${EXITFIRST_ARGS[@]}" -m "perf and not accuracy" --timeout=60 \
+  --perf-splits "$N_GROUPS" --perf-group "$GROUP" \
+  --junitxml="$RUN_XML" .
+if [[ -f "$COMPILE_XML" ]]; then
+  junitparser merge "$COMPILE_XML" "$RUN_XML" "${REPORT}.xml"
+else
+  cp "$RUN_XML" "${REPORT}.xml"
+fi

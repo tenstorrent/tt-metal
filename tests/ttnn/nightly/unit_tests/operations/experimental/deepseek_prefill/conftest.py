@@ -4,7 +4,7 @@
 
 import os
 
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 
 def pytest_configure(config):

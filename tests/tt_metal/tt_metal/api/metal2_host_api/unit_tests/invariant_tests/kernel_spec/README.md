@@ -79,7 +79,7 @@ struct KernelSpec {
     // Invariant:
     // - semaphore_spec_name must be unique across all semaphore_bindings.
     // - accessor_name must be unique across all semaphore_bindings.
-    // - Gen 2 & wormhole: Must be empty if is_compute_kernel().
+    // - Wormhole: Must be empty if is_compute_kernel().
     Group<SemaphoreBinding> semaphore_bindings;
 
     struct ScratchpadBinding {
@@ -103,7 +103,7 @@ struct KernelSpec {
     // - accessor_name must be unique across all tensor_bindings.
     Group<TensorBinding> tensor_bindings;
 
-    using CompileTimeArgs = Table<std::string, uint32_t>;
+    using CompileTimeArgs = Table<std::string, ArgValue>;
     // Table key represents the accessor name of the CTA.
     // Invariant:
     // - The key must be a valid C++ identifier.

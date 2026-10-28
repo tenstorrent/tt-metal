@@ -14,7 +14,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
@@ -165,6 +165,7 @@ void kernel_main() {
     uint32_t kv_pad_q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
     uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    const uint32_t static_mcast_q_count = get_arg_val<uint32_t>(argidx++);
 
     // Rotated Q split: first runtime arg past the scalars above. Captured here because argidx is
     // final at this point; the compile-time sizes are derived below, next to the other CT args.
@@ -219,6 +220,8 @@ void kernel_main() {
     // read it from there rather than tracking a per-kernel index into the block above.
     constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
     constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
+    // Set when the factory can schedule padded multicast slots on this program (see static_mcast_q_count there).
+    constexpr bool padded_q_slots_enabled = get_named_compile_time_arg_val("padded_q_slots") == 1;
     constexpr uint32_t rotated_iter_stride = kRotatedComputeIterWords;
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
@@ -375,8 +378,10 @@ void kernel_main() {
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
     auto arrival_preview = fused_op_indexer.seq;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::packed_kv_schedule(
-        GROUPED_KV_SOURCE_COUNT,
+    // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
+    // binary so it carries none of the packed-source path.
+    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
+    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<GROUPED_KV_SOURCE_COUNT>(
         ring_size,
         kv_local_padded_Nt,
         logical_nt,
@@ -389,7 +394,7 @@ void kernel_main() {
                 arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
         });
     const uint32_t source_group_size = packed_schedule.source_group_size;
-    const bool packed_sources = packed_schedule.packed();
+    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
@@ -407,6 +412,8 @@ void kernel_main() {
         // the ring-id sequencing below is interleaved with.
         uint32_t rotated_my_count = 0;
         RotatedQSlots rotated_slots;
+        // Padded multicast slots the reader runs after this core's own Q chunks.
+        uint32_t padded_q_slots = static_mcast_q_count - q_per_core;
         if constexpr (rotated_q_split_enabled) {
             // Grouped split-KV runs only with a full active mask, where ordinal == ring_iter.
             ASSERT(!packed_sources || active_ring_iter_mask == (ring_joint::all_sources_mask(ring_size)));
@@ -415,7 +422,11 @@ void kernel_main() {
                 ::rotated_iter_base(rotated_args_base, rotated_iter_stride, rotated_ordinal);
             rotated_slots = {global_q_start, q_per_core, get_arg_val<uint32_t>(rotated_iter_base)};
             rotated_my_count = rotated_slots.count(use_zigzag_balancing ? 2 : 1);
+            const uint32_t group_q_count =
+                q_per_core + get_arg_val<uint32_t>(rotated_iter_base + 1) * (use_zigzag_balancing ? 2 : 1);
+            padded_q_slots = group_q_count - rotated_my_count;
         }
+        ASSERT(padded_q_slots_enabled || padded_q_slots == 0);
         uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
         if (packed_sources) {
             for (uint32_t source = 0; source < source_group_size; ++source) {
@@ -445,7 +456,8 @@ void kernel_main() {
                            : (do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks);
         ring_joint::KSplitRange ksplit_k_range = ring_joint::kKSplitAll;
         if constexpr (ksplit_enabled) {
-            if (ksplit_active && !has_sliding_window) {
+            // Idle cores drain their row's padded multicast slots, so they skip the row's K chunks too.
+            if ((ksplit_active || q_per_core == 0) && !has_sliding_window) {
                 const uint32_t num_valid = ring_joint::ksplit_valid_local_k_chunks<
                     kv_pad_rotation_enabled,
                     chunked_enabled,
@@ -454,7 +466,9 @@ void kernel_main() {
                     q_local_padded_Nt,
                     Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, ksplit_causal_end_nt);
                 ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
-                ksplit_max_valid = num_valid > ksplit_max_valid ? num_valid : ksplit_max_valid;
+                if (ksplit_active) {
+                    ksplit_max_valid = num_valid > ksplit_max_valid ? num_valid : ksplit_max_valid;
+                }
             }
         }
         // A K-split slice can be empty on some iterations; accumulators start at the first non-empty one.
@@ -673,7 +687,8 @@ void kernel_main() {
                 ksplit_active ? ksplit_count : 1,
                 packed_sources ? packed_source_ids : nullptr,
                 packed_sources ? source_group_size : 0,
-                packed_schedule.rows(ring_iter));
+                packed_schedule.rows(ring_iter),
+                padded_q_slots);
             if constexpr (has_sliding_window && ksplit_enabled) {
                 // Sliding bands split the unit's work plan, which can be shorter than the band count near the
                 // sequence start: an empty band stages no state.
@@ -704,7 +719,9 @@ void kernel_main() {
                 }
             }
         } else {
-            assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
+            // kernel_main is not a template, so both branches of the if constexpr are instantiated; fold the
+            // branch condition in so the guard fires only on the path it protects.
+            assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled && !use_streaming_compute>();
             sdpa_ring<
                 cb_qk_im,
                 cb_identity_scale_in,
@@ -718,7 +735,8 @@ void kernel_main() {
                 needs_lightweight_mask,
                 chunked_enabled,
                 q_local_padded_Nt,
-                chunk_size_t>(
+                chunk_size_t,
+                padded_q_slots_enabled>(
                 qk_in0_block_w,
                 qk_subblock_w,
                 qk_subblock_h,
@@ -771,7 +789,8 @@ void kernel_main() {
                 skip_first_half_q,
                 is_last_ring_iter,
                 use_zigzag_balancing,
-                chunked_context);
+                chunked_context,
+                padded_q_slots);
         }
     }
 

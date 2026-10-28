@@ -5,12 +5,16 @@
 #include "common/device_fixture.hpp"
 #include "context/metal_context.hpp"
 
+#include <chrono>
+
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include <llrt/tt_cluster.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -395,4 +399,100 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestWorkloadAcrossMultipleWorkerNodes)
             EXPECT_EQ(compute_output, kExpectedComputeValues);
         }
     }
+}
+
+// Closing a MeshDevice must wait for workloads that were enqueued non-blocking. Otherwise the core reset
+// on the next open kills them mid-flight, and the Tensix state they leave behind can hang or corrupt the
+// next program on the same cores.
+TEST_F(QuasarMeshDeviceSingleCardFixture, TestMeshDeviceCloseDrainsNonBlockingWorkload) {
+    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
+    }
+
+    const experimental::NodeCoord node{0, 0};
+    // Result region on `node`: the DM slots in the first cache line, the compute slots in the second.
+    static_assert(kNumUserDMThreads * sizeof(uint32_t) <= kL1CacheLineBytes);
+    constexpr uint32_t kResultBytes = kL1CacheLineBytes + kNumComputeNEOs * kNumTRISCsPerNEO * sizeof(uint32_t);
+    constexpr uint32_t kResultWords = kResultBytes / sizeof(uint32_t);
+    // Reserve the region through the allocator. An interleaved L1 buffer takes the same address in every L1
+    // bank, so it is reserved on `node` too; the test addresses it there directly.
+    auto make_result_buffer = [&](distributed::MeshDevice& mesh_device) {
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = kResultBytes},
+            distributed::DeviceLocalBufferConfig{.page_size = kResultBytes, .buffer_type = BufferType::L1},
+            &mesh_device);
+    };
+    auto result_buf = make_result_buffer(this->device());
+    const uint32_t base_address = result_buf->address();
+    constexpr uint32_t kDoneValue = 0xd0e0d0e0;
+    // Long enough that close() would return well before the kernel finishes if it did not wait.
+    constexpr uint32_t kDelayCycles = 500'000;
+
+    std::vector<uint32_t> zeros(kResultWords, 0);
+    slow_dispatch::WriteToL1(this->device(), node, base_address, zeros);
+
+    const experimental::KernelSpecName DELAYED_KERNEL{"delayed_dm"};
+    experimental::ProgramSpec spec{
+        .name = "delayed_l1_write",
+        .kernels = {experimental::KernelSpec{
+            .unique_id = DELAYED_KERNEL,
+            .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/delayed_l1_write.cpp",
+            .num_threads = 1,
+            .runtime_arg_schema =
+                {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value", "delay_cycles"}},
+            .hw_config = experimental::DataMovementHardwareConfig{},
+        }},
+        .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {DELAYED_KERNEL}, .target_nodes = node}},
+    };
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DELAYED_KERNEL,
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", base_address}}),
+        .common_runtime_arg_values = {{"value", kDoneValue}, {"delay_cycles", kDelayCycles}},
+    });
+    experimental::SetProgramRunArgs(program, params);
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
+
+    auto& cluster = MetalContext::instance().get_cluster();
+    const ChipId device_id = this->device().get_device_ids()[0];
+    const CoreCoord virtual_core = this->device().worker_core_from_logical_core(CoreCoord(node.x, node.y));
+
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, false);
+    const auto close_start = std::chrono::steady_clock::now();
+    this->device().close();
+    const auto close_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - close_start).count();
+    std::vector<uint32_t> done = cluster.read_core(device_id, virtual_core, base_address, sizeof(uint32_t));
+    log_info(tt::LogTest, "MeshDevice::close() took {} ms", close_ms);
+    // Without the drain, close() returns while the program is still running. Fail here rather than reopen,
+    // which would reset the cores and kill it mid-flight.
+    ASSERT_EQ(done[0], kDoneValue) << "MeshDevice::close() returned while a non-blocking workload was still running";
+
+    // The reopened device must run a fresh program on the same node.
+    result_buf.reset();
+    id_to_device_.clear();
+    devices_.clear();
+    this->create_devices();
+
+    auto reopen_result_buf = make_result_buffer(this->device());
+    const uint32_t dm_base_address = reopen_result_buf->address();
+    const uint32_t compute_address = dm_base_address + kL1CacheLineBytes;
+    const uint32_t dm_base_value = 0x5eed0000;
+    slow_dispatch::WriteToL1(this->device(), node, dm_base_address, zeros);
+    distributed::MeshWorkload after_reopen =
+        create_workload(this->device(), node, dm_base_address, dm_base_value, compute_address, "reopen");
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), after_reopen, true);
+
+    std::vector<uint32_t> dm_output(kNumUserDMThreads, 0);
+    slow_dispatch::ReadFromL1(this->device(), node, dm_base_address, kNumUserDMThreads * sizeof(uint32_t), dm_output);
+    for (uint32_t i = 0; i < kNumUserDMThreads; i++) {
+        EXPECT_EQ(dm_output[i], dm_base_value + i);
+    }
+    std::vector<uint32_t> compute_output(kNumComputeNEOs * kNumTRISCsPerNEO, 0);
+    slow_dispatch::ReadFromL1(
+        this->device(), node, compute_address, kNumComputeNEOs * kNumTRISCsPerNEO * sizeof(uint32_t), compute_output);
+    EXPECT_EQ(compute_output, kExpectedComputeValues);
 }

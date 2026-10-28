@@ -16,10 +16,6 @@
       "test_job": "test-bh-multicard-image",
       "image_outputs": ["bh-qb-ge-image-tag"]
     },
-    "bh-p300": {
-      "test_job": "test-bh-p300-image",
-      "image_outputs": ["bh-p300-image-tag"]
-    },
     "bh-glx": {
       "test_job": "test-bh-glx-image",
       "image_outputs": ["bh-glx-image-tag"]

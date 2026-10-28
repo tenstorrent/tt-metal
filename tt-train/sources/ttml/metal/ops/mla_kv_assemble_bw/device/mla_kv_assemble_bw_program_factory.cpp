@@ -62,77 +62,6 @@ struct MLAKVAssembleBwKernels {
     tt::tt_metal::KernelHandle compute;
 };
 
-static void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const MLAKVAssembleBwKernels& kernels,
-    const tt::tt_metal::Buffer* dK_buffer,
-    const tt::tt_metal::Buffer* dV_buffer,
-    const tt::tt_metal::Buffer* dkv_up_buffer,
-    const tt::tt_metal::Buffer* dk_pe_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_blocks_per_core_group_1,
-    uint32_t num_blocks_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2,
-    uint32_t Ts,
-    uint32_t Th,
-    uint32_t Tn,
-    uint32_t Tr,
-    uint32_t Tv,
-    uint32_t k_HtWt,
-    uint32_t v_HtWt,
-    uint32_t n_heads) {
-    for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; ++i) {
-        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        uint32_t num_blocks_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_blocks_per_core = num_blocks_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_blocks_per_core = num_blocks_per_core_group_2;
-        } else {
-            TT_FATAL(false, "MLAKVAssembleBw: core not in any work group");
-        }
-
-        // Inputs are head-major: tile_id(b, h, sb, w) = b*H*HtWt + h*HtWt + sb*Wt + w.
-        const uint32_t b_start = num_blocks_written / Ts;
-        const uint32_t sb_start = num_blocks_written % Ts;
-        const uint32_t dK_block_base_start = b_start * n_heads * k_HtWt + sb_start * Th;
-        const uint32_t dV_block_base_start = b_start * n_heads * v_HtWt + sb_start * Tv;
-
-        // Outputs are flat across blocks: head 0 of (b, sb) at (b*Ts + sb) * (per_block_tiles).
-        const uint32_t flat_block_idx = num_blocks_written;
-        const uint32_t dkv_up_block_base_start = flat_block_idx * n_heads * (Tn + Tv);
-        const uint32_t dk_pe_block_base_start = flat_block_idx * Tr;
-
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {dK_buffer->address(),
-             dV_buffer->address(),
-             num_blocks_per_core,
-             sb_start,
-             dK_block_base_start,
-             dV_block_base_start});
-
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {dkv_up_buffer->address(),
-             dk_pe_buffer->address(),
-             num_blocks_per_core,
-             dkv_up_block_base_start,
-             dk_pe_block_base_start});
-
-        SetRuntimeArgs(program, kernels.compute, core, {num_blocks_per_core});
-
-        num_blocks_written += num_blocks_per_core;
-    }
-}
-
 MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& dK = tensor_args.dK;
@@ -223,27 +152,42 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
         program, all_cores, compute_compile_time_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     // ── Runtime args ──
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        dK_buffer,
-        dV_buffer,
-        dkv_up_buffer,
-        dk_pe_buffer,
+    for_each_core_with_work(
         num_cores,
         num_cores_y,
-        num_blocks_per_core_group_1,
-        num_blocks_per_core_group_2,
         core_group_1,
         core_group_2,
-        Ts,
-        Th,
-        Tn,
-        Tr,
-        Tv,
-        k_HtWt,
-        v_HtWt,
-        H);
+        num_blocks_per_core_group_1,
+        num_blocks_per_core_group_2,
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
+            const uint32_t b_start = start_block / Ts;
+            const uint32_t sb_start = start_block % Ts;
+            const uint32_t dK_block_base_start = b_start * H * k_HtWt + sb_start * Th;
+            const uint32_t dV_block_base_start = b_start * H * v_HtWt + sb_start * Tv;
+            const uint32_t dkv_up_block_base_start = start_block * H * (Tn + Tv);
+            const uint32_t dk_pe_block_base_start = start_block * Tr;
+            SetRuntimeArgs(
+                program,
+                kernels.reader,
+                core,
+                {dK_buffer->address(),
+                 dV_buffer->address(),
+                 num_blocks,
+                 sb_start,
+                 dK_block_base_start,
+                 dV_block_base_start});
+            SetRuntimeArgs(
+                program,
+                kernels.writer,
+                core,
+                {dkv_up_buffer->address(),
+                 dk_pe_buffer->address(),
+                 num_blocks,
+                 dkv_up_block_base_start,
+                 dk_pe_block_base_start});
+            SetRuntimeArgs(program, kernels.compute, core, {num_blocks});
+        });
 
     return cached_program_t{
         std::move(program),
@@ -270,8 +214,7 @@ void MLAKVAssembleBwProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, shared.reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, shared.writer_kernel_id);
 
-    for (uint32_t i = 0; i < shared.num_cores; ++i) {
-        const tt::tt_metal::CoreCoord core = {i / shared.num_cores_y, i % shared.num_cores_y};
+    for_each_core(shared.num_cores, shared.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
         {
             auto& ra = reader_runtime_args[core.x][core.y];
             ra[kReaderArgDKAddr] = dK_buffer->address();
@@ -282,7 +225,7 @@ void MLAKVAssembleBwProgramFactory::override_runtime_arguments(
             ra[kWriterArgDKVUpAddr] = dkv_up_buffer->address();
             ra[kWriterArgDKPeAddr] = dk_pe_buffer->address();
         }
-    }
+    });
 }
 
 }  // namespace ttml::metal::ops::mla_kv_assemble_bw::device

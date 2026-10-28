@@ -6,6 +6,7 @@ import struct
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ScalarBinopGolden, get_golden_generator
 from helpers.llk_params import (
@@ -171,8 +172,7 @@ _SCALAR_OPS = [
 
 
 def _skip_unsupported(formats, dest_acc, mathop, scalar):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     if (
         formats.input_format == DataFormat.Float16_b
         and dest_acc == DestAccumulation.Yes
@@ -221,7 +221,7 @@ def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
 #
 # Still out of scope, and both need a per-op tolerance first -- the default bf16 tolerance is
 # only meaningful while the result stays in range: |scalar| > 8, and +/-tiny / +/-large on the
-# tensor operand. That is the pattern sfpu_accuracy_budget.yaml uses for pow and xlogy.
+# tensor operand. That is the pattern sfpu_accuracy_budget_*.yaml uses for pow and xlogy.
 @pytest.mark.nightly
 @parametrize(
     formats=_SCALAR_FORMATS,

@@ -13,11 +13,14 @@ Run:
     pytest --disable-warnings models/experimental/modernbert/demo/demo.py
 """
 
+import time
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from models.demos.utils.common_demo_utils import report_generation_rate
 from models.experimental.modernbert.common import load_config, load_tokenizer, load_torch_mlm_model, load_torch_model
 from models.experimental.modernbert.reference.modernbert import ModernBertForMaskedLM, ModernBertModel
 from models.experimental.modernbert.tt.modernbert_head import TtnnModernBertLMHead
@@ -74,7 +77,12 @@ def test_modernbert_mlm_demo(device):
     head = TtnnModernBertLMHead(params, config)
 
     tt_ids = ttnn.from_torch(ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    inference_start = time.perf_counter()
     tt_logits = ttnn.to_torch(head(encoder(tt_ids))).float()
+    inference_elapsed_s = time.perf_counter() - inference_start
+
+    # Report-only perf for the CI dashboard (#58596). No-op outside CI.
+    report_generation_rate("modernbert-base", inference_elapsed_s, ids.shape[0])
 
     with torch.no_grad():
         hf_logits = hf(input_ids=ids, attention_mask=attention_mask).logits

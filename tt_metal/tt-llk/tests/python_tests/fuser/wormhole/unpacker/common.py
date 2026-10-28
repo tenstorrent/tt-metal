@@ -111,6 +111,20 @@ def dvalid_init(**kwargs) -> str:
     return ""
 
 
+def unpack_to_dest_sync_init(config: "GlobalConfig", operation: "L1Operation") -> str:
+    return ""
+
+
+def unpack_to_dest_wait_for_dest_available(config: "GlobalConfig") -> str:
+    return ""
+
+
+def unpack_to_dest_section_done(
+    config: "GlobalConfig", operation: "L1Operation"
+) -> str:
+    return ""
+
+
 def sync_with_packer(config: "GlobalConfig", operation: "L1Operation") -> str:
     if operation.needs_pack_sync:
         return (

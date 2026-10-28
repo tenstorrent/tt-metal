@@ -5,6 +5,7 @@
 #include "pytensor.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <unordered_set>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
@@ -23,10 +25,12 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/unordered_map.h>
 
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
@@ -56,6 +60,7 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -68,6 +73,10 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::tensor {
+using tt::tt_metal::experimental::per_core_allocation::NodeLocalSpan;
+using tt::tt_metal::experimental::per_core_allocation::PerNodeDeviceLocalMemorySpan;
+using tt::tt_metal::experimental::per_core_allocation::PerNodeMeshDeviceMemorySpan;
+
 namespace CMAKE_UNIQUE_NAMESPACE {
 namespace {
 
@@ -196,7 +205,13 @@ struct RowMajorHostBuffer {
 
 HostBuffer unpack_block_float_tiles_to_float(const HostBuffer& buffer, const TensorSpec& tensor_spec) {
     const auto tt_dtype = tensor_spec.data_type();
-    TT_FATAL(is_block_float(tt_dtype), "Expected block-float dtype, got {}", tt_dtype);
+    TT_FATAL(is_block_float(tt_dtype) || is_mx(tt_dtype), "Expected block-float or MX dtype, got {}", tt_dtype);
+
+    if (is_mx(tt_dtype)) {
+        // The per-format MX unpackers sit behind the host tensor APIs; to_dtype keeps the tile layout.
+        auto float_tensor = tt::tt_metal::to_dtype(HostTensor::from_buffer(buffer, tensor_spec), DataType::FLOAT32);
+        return host_buffer::get_host_buffer(float_tensor);
+    }
 
     const auto& tile = tensor_spec.tile();
     ttsl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
@@ -278,7 +293,15 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(buffer);
             case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(buffer);
             case DataType::BFLOAT8_B:
-            case DataType::BFLOAT4_B: {
+            case DataType::BFLOAT4_B:
+            case DataType::MXFP8_E4M3:
+            case DataType::MXFP8_E5M2:
+            case DataType::MXFP6_E2M3:
+            case DataType::MXFP6_E3M2:
+            case DataType::MXFP4:
+            case DataType::MXINT8:
+            case DataType::MXINT4:
+            case DataType::MXINT2: {
                 if (!padded_output) {
                     return convert_block_float_to_logical_row_major(buffer, tensor_spec);
                 }
@@ -329,6 +352,14 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
         case DataType::BFLOAT16: return dispatch_to_concrete.template operator()<bfloat16>(tt_tensor);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2:
         case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(tt_tensor);
         case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_tensor.dtype());
     }
@@ -394,7 +425,12 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
         // increments / decrements the reference count on the memory pin; the last decrement to the pin should be
         // triggered from the nanobind caller thread, which will correctly decrement the `nb::object` reference count
         // while holding GIL.
-        tt::tt_metal::MemoryPin pydata_pin(std::make_shared<nb::ndarray<nb::array_api>>(contiguous_py_tensor));
+        // May drop without the GIL; reacquire to decref.
+        tt::tt_metal::MemoryPin pydata_pin(std::shared_ptr<nb::ndarray<nb::array_api>>(
+            new nb::ndarray<nb::array_api>(contiguous_py_tensor), [](nb::ndarray<nb::array_api>* pinned) {
+                nb::gil_scoped_acquire gil;
+                delete pinned;
+            }));
         T* typed_py_ptr = const_cast<T*>(static_cast<const T*>(contiguous_py_tensor.data()));
         return HostBuffer(ttsl::Span<T>(typed_py_ptr, contiguous_py_tensor.size()), pydata_pin);
     };
@@ -462,6 +498,40 @@ void pytensor_module_types(nb::module_& mod) {
 }
 
 void pytensor_module(nb::module_& mod) {
+    nb::class_<NodeLocalSpan>(mod, "NodeLocalSpan", "A contiguous span of caller-owned SRAM on one core.")
+        .def(nb::init<DeviceAddr, uint64_t>(), nb::arg("address"), nb::arg("size"))
+        .def_rw("address", &NodeLocalSpan::address)
+        .def_rw("size", &NodeLocalSpan::size);
+    nb::class_<PerNodeDeviceLocalMemorySpan>(mod, "PerNodeDeviceLocalMemorySpan")
+        .def(nb::init<std::unordered_map<CoreCoord, NodeLocalSpan>>(), nb::arg("per_node_spans"))
+        .def_rw("per_node_spans", &PerNodeDeviceLocalMemorySpan::per_node_spans);
+    nb::class_<PerNodeMeshDeviceMemorySpan>(mod, "PerNodeMeshDeviceMemorySpan")
+        .def(
+            nb::init<std::unordered_map<distributed::MeshCoordinate, PerNodeDeviceLocalMemorySpan>>(),
+            nb::arg("per_device_spans"))
+        .def_rw("per_device_spans", &PerNodeMeshDeviceMemorySpan::per_device_spans);
+    mod.def(
+        "experimental_create_sram_tensor_view",
+        [](distributed::MeshDevice& mesh, const TensorSpec& spec, const PerNodeMeshDeviceMemorySpan& memory) {
+            auto buffer = tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(mesh, spec, memory);
+            std::vector<distributed::MeshCoordinate> coords;
+            coords.reserve(memory.per_device_spans.size());
+            for (const auto& [coord, local] : memory.per_device_spans) {
+                coords.push_back(coord);
+            }
+            std::sort(coords.begin(), coords.end());
+            TensorTopology topology(
+                distributed::MeshShape(coords.size()), {distributed::MeshMapperConfig::Replicate{}}, coords);
+            return Tensor(DeviceStorage(
+                mesh_tensor_from_buffer_with_topology(std::move(buffer), spec, std::move(topology)), coords));
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("tensor_spec"),
+        nb::arg("memory"),
+        nb::keep_alive<0, 1>(),
+        "Create a non-owning SRAM tensor view. Metal validates coverage, alignment, SRAM bounds and padded "
+        "tensor footprints within the supplied spans; the caller guarantees those spans are backed and retains "
+        "storage.");
     mod.def(
         "decorate_external_operation",
         [](const nb::callable& function, const std::optional<std::string>& function_name) -> nb::object {
@@ -709,17 +779,22 @@ void pytensor_module(nb::module_& mod) {
                 auto dst_dtype = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
                 const bool tile_layout_by_default =
-                    (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B);
+                    (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B || is_mx(dst_dtype));
                 auto layout_ = layout.value_or(tile_layout_by_default ? Layout::TILE : Layout::ROW_MAJOR);
 
+                const auto shape = CMAKE_UNIQUE_NAMESPACE::ndarray_shape_to_ttnn(dlpack_tensor);
+                const auto memory_config = mem_config.value_or(MemoryConfig());
+                // Tile, pack and place without the GIL.
+                nb::gil_scoped_release release;
                 new (t) Tensor(ttnn::convert_python_tensor_to_tt_tensor(
-                    CMAKE_UNIQUE_NAMESPACE::ndarray_shape_to_ttnn(dlpack_tensor),
+                    shape,
                     dst_dtype,
                     layout_,
                     tile,
-                    mem_config.value_or(MemoryConfig()),
+                    memory_config,
                     src_dtype,
                     [&](DataType dtype) -> HostBuffer {
+                        nb::gil_scoped_acquire gil;
                         return CMAKE_UNIQUE_NAMESPACE::convert_py_tensor_to_host_buffer(dlpack_tensor, dtype);
                     },
                     device,
@@ -901,7 +976,15 @@ void pytensor_module(nb::module_& mod) {
                         case DataType::FLOAT32: return self.to_vector<float>()[0];
                         case DataType::BFLOAT16: return static_cast<float>(self.to_vector<bfloat16>()[0]);
                         case DataType::BFLOAT8_B:
-                        case DataType::BFLOAT4_B: return self.to_vector<float>()[0];
+                        case DataType::BFLOAT4_B:
+                        case DataType::MXFP8_E4M3:
+                        case DataType::MXFP8_E5M2:
+                        case DataType::MXFP6_E2M3:
+                        case DataType::MXFP6_E3M2:
+                        case DataType::MXFP4:
+                        case DataType::MXINT8:
+                        case DataType::MXINT4:
+                        case DataType::MXINT2: return self.to_vector<float>()[0];
                         case DataType::INT32: return self.to_vector<int32_t>()[0];
                         case DataType::INT8: return self.to_vector<int8_t>()[0];
                         case DataType::UINT32: return self.to_vector<uint32_t>()[0];
@@ -1676,7 +1759,7 @@ void pytensor_module(nb::module_& mod) {
                     auto data_vec = [&self]() {
                         if constexpr (
                             std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> ||
-                            std::is_same_v<T, bfloat16>) {
+                            std::is_same_v<T, mx_tiles> || std::is_same_v<T, bfloat16>) {
                             return self.to_vector<float>();
                         } else if constexpr (std::is_same_v<T, float8_e4m3>) {
                             // to_vector<float>() doesn't yet handle FP8 source (see
@@ -1741,6 +1824,33 @@ void pytensor_module(nb::module_& mod) {
             [](const Tensor& self) { return self.tensor_id; },
             [](Tensor& self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
 
+    mod.def(
+        "experimental_allocate_single_device_tensor",
+        [](distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord, const TensorSpec& spec) {
+            // Reserve storage on the selected parent-mesh device without uploading any bytes.
+            TT_FATAL(spec.memory_config().buffer_type() == BufferType::L1, "Extent acquisition requires SRAM");
+            const auto sharding_args = spec.compute_buffer_sharding_args();
+            TT_FATAL(
+                experimental::per_core_allocation::is_per_core_allocation(sharding_args),
+                "Extent acquisition requires per-core allocation");
+            auto buffer = experimental::per_core_allocation::create_on_single_device(
+                tt::tt_metal::distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
+                tt::tt_metal::distributed::DeviceLocalBufferConfig{
+                    .page_size = spec.compute_page_size_bytes(),
+                    .buffer_type = spec.memory_config().buffer_type(),
+                    .sharding_args = sharding_args},
+                &mesh,
+                coord);
+            TensorTopology topology(
+                distributed::MeshShape(1, 1), {distributed::MeshMapperConfig::Replicate{}}, {coord});
+            return Tensor(DeviceStorage(
+                mesh_tensor_from_buffer_with_topology(std::move(*buffer), spec, std::move(topology)), {coord}));
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("coord"),
+        nb::arg("tensor_spec"),
+        nb::keep_alive<0, 1>(),
+        "Allocate per-core SRAM on one device without initializing or uploading any bytes.");
     mod.def(
         "experimental_to_single_device",
         [](const Tensor& host_tensor,

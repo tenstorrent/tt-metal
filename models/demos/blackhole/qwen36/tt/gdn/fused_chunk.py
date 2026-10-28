@@ -95,7 +95,7 @@ def chunk_gated_delta_rule_fused_adapter(
     device=None,
     cached_masks=None,  # unused (the fused op builds its own constants)
     valid_len=None,  # scalar: zero padded positions >= valid_len (masked-bucket prefill)
-    qkv_head_dims=None,  # (Nk, Dk, Nv, Dv) when q/k/v are flat
+    qkv_head_dims=None,  # (Nk, Dk, Nv, Dv) when q/k/v are flat; Dv != Dk passes num_key_heads=Nk to the op
     return_o_bh=False,  # True: return o as [B*Nv, T, V]; else [B, T, Nv, V]
     const_tiles=None,  # (eye, tril, ones, masks) device tensors built once by the caller (layer);
     # passed to the op so it stays stateless. Required under trace (the op's internal build does a
@@ -178,6 +178,11 @@ def chunk_gated_delta_rule_fused_adapter(
         if s0.dtype != ttnn.float32:
             s0 = ttnn.typecast(s0, ttnn.float32)
 
+    # Flat q/k with Dk != Dv (e.g. the sequence-parallel fold's augmented value, Dv' = Dk + Dv): the op cannot read the key
+    # head count off a flat width (it assumes K == V), so pass it. Only then is the kwarg sent: every Dk == Dv call stays
+    # identical to before (and keeps working on a library without ``num_key_heads``).
+    _extra_kwargs = {"num_key_heads": Nk} if (qkv_head_dims is not None and Dk != Dv) else {}
+
     # output_head_major=return_o_bh: skip token<->head permute when caller wants [BH,T,V].
     _eye, _tril, _ones, _masks = const_tiles if const_tiles is not None else (None, None, None, None)
     o, final_state = ttnn.transformer.chunk_gated_delta_rule(
@@ -197,6 +202,7 @@ def chunk_gated_delta_rule_fused_adapter(
         ones=_ones,
         masks=_masks,
         **({"wy_inverse": wy_inverse} if wy_inverse is not None else {}),
+        **_extra_kwargs,
     )
 
     if return_o_bh:
