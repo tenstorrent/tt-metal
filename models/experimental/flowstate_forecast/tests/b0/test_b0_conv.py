@@ -164,3 +164,51 @@ def test_dense_time(device):
     ms = median_ms(fn, lambda: ttnn.synchronize_device(device))
     print("dense time", ms)
     dump(f"{OUT}/dense_time_paper.json", {"M": M, "ms": ms, "timing": "synchronized wall, untraced"})
+
+
+# ---------------------------------------------------------------- route K (model-local generic_op, pre-approved)
+
+from models.experimental.flowstate_forecast.ops.lti_scan import op as route_k  # noqa: E402
+
+
+def run_k(device, Bu, lbar):
+    lt = route_k.lbar_tiles(device, lbar)
+    xr, xi = route_k.lti_scan(to_dev(device, Bu.real), to_dev(device, Bu.imag), lt)
+    return torch.complex(ttnn.to_torch(xr).float(), ttnn.to_torch(xi).float())
+
+
+@pytest.mark.parametrize("case", B0_CASES)
+def test_route_k_accuracy(device, case):
+    res = {}
+    for layer in LAYERS:
+        cs = case_inputs(case, layer)
+        res[layer] = metrics(run_k(device, cs.Bu, cs.lbar), cs.ref, cs.truth)
+        print("K", case, layer, res[layer], flush=True)
+    dump(f"{OUT}/K_acc_{case}.json", res)
+
+
+def test_route_k_control(device):
+    """Positive control (D0 item 4): the recurrence with a bf16-rounded Lbar (bf16 state precision) must fail."""
+    cs = case_inputs("b0_s1_L4096", 4)
+    lb = torch.complex(cs.lbar.real.bfloat16().float(), cs.lbar.imag.bfloat16().float())
+    m = metrics(run_k(device, cs.Bu, lb), cs.ref, cs.truth)
+    print("K control bf16 Lbar", m)
+    dump(f"{OUT}/K_control.json", m)
+    assert m["rel_l2"] > 1e-3
+
+
+@pytest.mark.parametrize("shape", [(64, 4096), (16, 16384)], ids=["paper", "long_context"])
+def test_route_k_time(device, shape):
+    B, L = shape
+    g = torch.Generator().manual_seed(0)
+    bu_re = to_dev(device, torch.randn(L, B, 512, generator=g))
+    bu_im = to_dev(device, torch.randn(L, B, 512, generator=g))
+    lt = route_k.lbar_tiles(device, torch.exp(torch.complex(-torch.rand(512) * 0.1, torch.rand(512))))
+
+    def fn():
+        for t in route_k.lti_scan(bu_re, bu_im, lt):
+            ttnn.deallocate(t)
+
+    ms = median_ms(fn, lambda: ttnn.synchronize_device(device))
+    print("K time", shape, ms)
+    dump(f"{OUT}/K_time_B{B}_L{L}.json", {"B": B, "L": L, "ms": ms, "timing": "synchronized wall, untraced (1 op)"})

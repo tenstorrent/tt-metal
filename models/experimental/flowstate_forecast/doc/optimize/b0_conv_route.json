@@ -1,9 +1,10 @@
 {
- "status": "partial: routes F and S measured, both > 1.5x dense at paper; route K (pre-approved, micro-benchmark first) next",
+ "status": "decided: route K",
  "git": "24c634cd64d",
  "jobs": {
   "F": 994,
-  "S_and_dense": 1015
+  "S_and_dense": 1015,
+  "K": "pcc run 2026-10-28 ~11:40 (ttq run, see STATUS)"
  },
  "timing_note": "synchronized wall clock, untraced, median of 5 after 2 warm-ups; F and S are bandwidth/op-count bound, not dispatch bound at these sizes",
  "ms_per_layer": {
@@ -19,7 +20,11 @@
    "paper": 528.0347052030265,
    "long_context": 593.6687779612839
   },
-  "dense_paper": 57.21237976104021
+  "dense_paper": 57.21237976104021,
+  "K": {
+   "paper": 5.271692294627428,
+   "long_context": 20.23034682497382
+  }
  },
  "raw": {
   "F_acc_b0_s0.25_L16384": {
@@ -179,6 +184,162 @@
    "N": 8192,
    "ms": 14581.408091820776,
    "timing": "synchronized wall, untraced"
+  },
+  "K_acc_b0_s0.25_L16384": {
+   "0": {
+    "rel_l2": 4.531876846228346e-05,
+    "rel_l2_vs_truth": 6.519992322228137e-06,
+    "ch_p99": 0.00017244982725941424,
+    "ch_max": 0.0003882851917916317,
+    "ref_own_ch_max": 0.00038832446888046815,
+    "nonfinite": 0
+   },
+   "3": {
+    "rel_l2": 4.375847030900092e-05,
+    "rel_l2_vs_truth": 1.1253636350424437e-06,
+    "ch_p99": 0.00019050303286709017,
+    "ch_max": 0.0002672540887376371,
+    "ref_own_ch_max": 0.00026714240141192166,
+    "nonfinite": 0
+   },
+   "4": {
+    "rel_l2": 3.976566953368689e-05,
+    "rel_l2_vs_truth": 1.3107691815646107e-06,
+    "ch_p99": 0.0001881972941877808,
+    "ch_max": 0.0002077788884807938,
+    "ref_own_ch_max": 0.00020713891105003982,
+    "nonfinite": 0
+   },
+   "5": {
+    "rel_l2": 3.418108275911398e-05,
+    "rel_l2_vs_truth": 1.1483754531270766e-06,
+    "ch_p99": 0.00018206173618081858,
+    "ch_max": 0.00023402210485429654,
+    "ref_own_ch_max": 0.0002334847671261227,
+    "nonfinite": 0
+   }
+  },
+  "K_acc_b0_s1_12_L16384": {
+   "0": {
+    "rel_l2": 2.9229332545654436e-05,
+    "rel_l2_vs_truth": 6.527952281265781e-06,
+    "ch_p99": 0.000214560658737566,
+    "ch_max": 0.00027690477740057,
+    "ref_own_ch_max": 0.0002794697520521145,
+    "nonfinite": 0
+   },
+   "3": {
+    "rel_l2": 6.449183803174592e-05,
+    "rel_l2_vs_truth": 1.2627214651058739e-06,
+    "ch_p99": 0.0002195676005604978,
+    "ch_max": 0.00031810447383147036,
+    "ref_own_ch_max": 0.0003200582041860394,
+    "nonfinite": 0
+   },
+   "4": {
+    "rel_l2": 7.569003613872357e-05,
+    "rel_l2_vs_truth": 1.3105024621827406e-06,
+    "ch_p99": 0.0002811951846510279,
+    "ch_max": 0.0003270938083807438,
+    "ref_own_ch_max": 0.00032630686660694436,
+    "nonfinite": 0
+   },
+   "5": {
+    "rel_l2": 6.921636733693619e-05,
+    "rel_l2_vs_truth": 1.2046713812073496e-06,
+    "ch_p99": 0.00027650136223045875,
+    "ch_max": 0.00038161128127004124,
+    "ref_own_ch_max": 0.0003816281856152996,
+    "nonfinite": 0
+   }
+  },
+  "K_acc_b0_s1_L4096": {
+   "0": {
+    "rel_l2": 8.224018565926404e-06,
+    "rel_l2_vs_truth": 9.195374708467756e-07,
+    "ch_p99": 6.012420405516153e-05,
+    "ch_max": 0.00019665087983062587,
+    "ref_own_ch_max": 0.00019666192389826656,
+    "nonfinite": 0
+   },
+   "3": {
+    "rel_l2": 1.7159244317787656e-05,
+    "rel_l2_vs_truth": 6.039642831537725e-07,
+    "ch_p99": 5.3410545824618886e-05,
+    "ch_max": 8.283598465575129e-05,
+    "ref_own_ch_max": 8.285292865352203e-05,
+    "nonfinite": 0
+   },
+   "4": {
+    "rel_l2": 2.9533426219422637e-05,
+    "rel_l2_vs_truth": 9.072837029637844e-07,
+    "ch_p99": 6.828709683064557e-05,
+    "ch_max": 0.00016562005770388955,
+    "ref_own_ch_max": 0.00016561920894262827,
+    "nonfinite": 0
+   },
+   "5": {
+    "rel_l2": 8.268401174783222e-06,
+    "rel_l2_vs_truth": 5.638056153682862e-07,
+    "ch_p99": 7.05889330941506e-05,
+    "ch_max": 0.00020944000547473238,
+    "ref_own_ch_max": 0.00020945251924671255,
+    "nonfinite": 0
+   }
+  },
+  "K_acc_b0_s6_L682": {
+   "0": {
+    "rel_l2": 3.7944436685474578e-06,
+    "rel_l2_vs_truth": 2.2571994896953242e-07,
+    "ch_p99": 6.835992685366237e-05,
+    "ch_max": 0.0001577266226896863,
+    "ref_own_ch_max": 0.00015774236223114582,
+    "nonfinite": 0
+   },
+   "3": {
+    "rel_l2": 4.003261141881953e-06,
+    "rel_l2_vs_truth": 3.145703025985619e-07,
+    "ch_p99": 4.0864950357924464e-05,
+    "ch_max": 0.00011809048869813716,
+    "ref_own_ch_max": 0.00011808985073718983,
+    "nonfinite": 0
+   },
+   "4": {
+    "rel_l2": 3.539628368919328e-06,
+    "rel_l2_vs_truth": 3.5206657925186883e-07,
+    "ch_p99": 6.701029896437533e-05,
+    "ch_max": 0.00014138995146993917,
+    "ref_own_ch_max": 0.00014138865201847493,
+    "nonfinite": 0
+   },
+   "5": {
+    "rel_l2": 3.9281533338668086e-06,
+    "rel_l2_vs_truth": 2.417964518705628e-07,
+    "ch_p99": 6.54938349483846e-05,
+    "ch_max": 0.00015508645765006148,
+    "ref_own_ch_max": 0.00015508515613273438,
+    "nonfinite": 0
+   }
+  },
+  "K_control": {
+   "rel_l2": 2.3496203639345805,
+   "rel_l2_vs_truth": 2.349651667922876,
+   "ch_p99": 17.97301068433376,
+   "ch_max": 165.65635341968112,
+   "ref_own_ch_max": 0.00016561920894262827,
+   "nonfinite": 0
+  },
+  "K_time_B16_L16384": {
+   "B": 16,
+   "L": 16384,
+   "ms": 20.23034682497382,
+   "timing": "synchronized wall, untraced (1 op)"
+  },
+  "K_time_B64_L4096": {
+   "B": 64,
+   "L": 4096,
+   "ms": 5.271692294627428,
+   "timing": "synchronized wall, untraced (1 op)"
   },
   "S32_acc_b0_s0.25_L16384": {
    "0": {
@@ -525,5 +686,46 @@
    "ms": 57.21237976104021,
    "timing": "synchronized wall, untraced"
   }
+ },
+ "accuracy": {
+  "F": {
+   "x_rel_l2_max": 2.1969819280418287e-07,
+   "ch_p99_max": 6.274910034040684e-07,
+   "ch_max_over_ref_own_max": 0.007541350046763633,
+   "nonfinite": 0,
+   "case_layers": 16
+  },
+  "S32": {
+   "x_rel_l2_max": 7.647090229976559e-05,
+   "ch_p99_max": 0.0002815772855420192,
+   "ch_max_over_ref_own_max": 1.0133812411209606,
+   "nonfinite": 0,
+   "case_layers": 16
+  },
+  "S64": {
+   "x_rel_l2_max": 7.609756448574173e-05,
+   "ch_p99_max": 0.00028420111844090507,
+   "ch_max_over_ref_own_max": 1.0086586786670853,
+   "nonfinite": 0,
+   "case_layers": 16
+  },
+  "K": {
+   "x_rel_l2_max": 7.569003613872357e-05,
+   "ch_p99_max": 0.0002811951846510279,
+   "ch_max_over_ref_own_max": 1.0030896050747287,
+   "nonfinite": 0,
+   "case_layers": 16
+  }
+ },
+ "controls": {
+  "F_circular_N_eq_L": 0.31461999301159704,
+  "S_bf16_state": 0.0017182270753007072,
+  "K_bf16_lbar": 2.3496203639345805
+ },
+ "decision": {
+  "route": "K",
+  "why": "all routes meet items 1, 2, 4, 5 (per-channel max is the reference's own complex64 error, item 4: <= 1.003x of it, limit 2x); K is fastest: 5.3 ms/layer at paper = 0.09x the 57 ms dense part (limit 1.5x); F 255x, S 9.2x the dense part",
+  "escalation": "none: a route meets the bound, cost < 1.5x dense, no bound loosened, no precision change (state, Bu, Lbar all fp32)",
+  "open": "item 3 (Re(C x) rel-L2 <= 2e-3, PCC >= 0.99999; block PCC >= 0.9999) is checked in the stage-B S5-block module test on K's output"
  }
 }
