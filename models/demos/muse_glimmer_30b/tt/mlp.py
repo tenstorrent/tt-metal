@@ -6,8 +6,9 @@
 
 import ttnn
 from models.demos.muse_glimmer_30b.tt.attention import MuseLinear, dram_sharded_enabled
-from models.demos.muse_glimmer_30b.tt.common import decode_memcfg, is_decode
-from models.demos.muse_glimmer_30b.tt.weight_packing import pack_down, pack_gate_up
+from models.demos.muse_glimmer_30b.tt.common import as_tt, decode_memcfg, is_decode, shard_mapper
+from models.demos.muse_glimmer_30b.tt.model_config import LOW_PRECISION
+from models.demos.muse_glimmer_30b.tt.weight_packing import pack_down, pack_gate_up, pack_gate_up_swiglu
 
 PREFILL_CHUNK = 2048
 
@@ -61,17 +62,48 @@ class MuseGlimmerMLP:
             readers=2,
             block=2,
         )
+        # Prefill from 512 rows fuses the SwiGLU into the gate/up minimal_matmul. The kernel needs gate/up tile
+        # pairs, so this is a second copy of the gate/up weight in that layout.
+        self.w_swiglu = None
+        if sharded:
+            self.w_swiglu = as_tt(
+                pack_gate_up_swiglu(
+                    state_dict["mlp.gate_proj.weight"], state_dict["mlp.up_proj.weight"], tp, pad_to=self.i_pad
+                ),
+                mesh_device,
+                dtype=dtype,
+                mesh_mapper=shard_mapper(mesh_device, -1),
+                cache_file_name=cache("w_swiglu", "v1"),
+            )
 
     def _forward_chunk(self, x):
         decode = is_decode(x)
+        if not decode and self.w_swiglu is not None and x.shape[-2] >= 512:
+            h = ttnn.experimental.minimal_matmul(
+                x,
+                self.w_swiglu,
+                fuse_swiglu=True,
+                config=self.w_gate_up._prefill_cfg(x.shape[-2]),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat8_b if LOW_PRECISION else None,
+                compute_kernel_config=self.w_gate_up.hifi_cfg,
+            )
+            return self._down(h, decode)
         silu = [ttnn.UnaryOpType.SILU]
-        gate, up = self.w_gate_up.split(x, 2, decode=decode)
+        gu = self.w_gate_up.decode(x) if decode else self.w_gate_up(x)
+        s = gu.shape
+        gate = ttnn.slice(gu, [0, 0, 0, 0], [s[0], s[1], s[2], self.i_pad])
+        up = ttnn.slice(gu, [0, 0, 0, self.i_pad], [s[0], s[1], s[2], 2 * self.i_pad])
+        ttnn.deallocate(gu)
         if decode:
             h = ttnn.mul(gate, up, input_tensor_a_activations=silu)
         else:
             h = ttnn.mul(gate, up, input_tensor_a_activations=silu, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
+        return self._down(h, decode)
+
+    def _down(self, h, decode):
         out = self.w_down.decode(h) if decode else self.w_down(h)
         ttnn.deallocate(h)
         if decode:

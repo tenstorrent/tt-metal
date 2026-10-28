@@ -25,6 +25,7 @@ from models.demos.muse_glimmer_30b.tt.weight_packing import (
     pack_column_parallel,
     pack_down,
     pack_gate_up,
+    pack_gate_up_swiglu,
     pack_lm_head,
     pack_o,
     pack_qkvg,
@@ -169,6 +170,23 @@ def test_pack_column_parallel_matches_gate_up(tp):
         assert torch.equal(pg[:, r * pad : (r + 1) * pad], gu[:, r * 2 * pad : r * 2 * pad + pad])
         assert torch.equal(pu[:, r * pad : (r + 1) * pad], gu[:, r * 2 * pad + pad : (r + 1) * 2 * pad])
     assert torch.equal(pack_column_parallel(gate_w, tp), pack_column_parallel(gate_w, tp, pad_to=il))
+
+
+@pytest.mark.parametrize("tp", [1, 4])
+def test_pack_gate_up_swiglu(tp):
+    """The fused kernel computes silu(even tile) * odd tile per rank block; that must equal silu(gate) * up."""
+    g = torch.Generator().manual_seed(6)
+    gate_w, up_w = torch.randn(1216, 64, generator=g), torch.randn(1216, 64, generator=g)
+    pad = -(-(1216 // tp) // 512) * 512
+    gu = pack_gate_up(gate_w, up_w, tp, pad_to=pad)
+    sw = pack_gate_up_swiglu(gate_w, up_w, tp, pad_to=pad)
+    assert sw.shape == gu.shape
+    x = torch.randn(3, 64, generator=g)
+    for r in range(tp):
+        h = x @ gu[:, r * 2 * pad : (r + 1) * 2 * pad]
+        ref = F.silu(h[:, :pad]) * h[:, pad:]
+        t = (x @ sw[:, r * 2 * pad : (r + 1) * 2 * pad]).reshape(3, -1, 2, 32)
+        assert torch.allclose((F.silu(t[:, :, 0]) * t[:, :, 1]).reshape(3, pad), ref, atol=1e-5)
 
 
 def test_lm_head_pack():
