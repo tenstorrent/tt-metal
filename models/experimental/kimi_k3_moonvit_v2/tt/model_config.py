@@ -7,7 +7,7 @@
 `MoonViTConfig` holds the architecture; its defaults are the Kimi-K3 `vision_config`, and
 `from_hf_config` reads the same fields from a checkpoint's `config.json`. `VisionParallel` is the
 mesh layout the TT modules receive, resolved from a sequence-parallel `ParallelFactor` and the
-`TT_CCL` that owns the ring resources (`ccl.py`). This module imports no ttnn at import time, so the CPU reference can use it.
+`TT_CCL` that owns the ring resources (`ccl.py`). This module imports no ttnn at import time, so host prep and the CPU tests can use it.
 """
 
 from __future__ import annotations
@@ -63,6 +63,18 @@ class MoonViTConfig:
         return self.in_channels * self.patch_size * self.patch_size
 
     @property
+    def padded_patch_dim(self) -> int:
+        """`patch_dim` (588) rounded up to a whole tile (608), the width the patch rows and the patch
+        embed weight have on device. The extra columns are explicit zeros on both sides, so the matmul
+        does not depend on the values ttnn leaves in tile padding.
+
+        This can potentially be removed in the future: today both tensors come from `ttnn.from_torch`,
+        which zero-fills tile padding, so 588 works as long as that holds and nothing on device
+        produces the patch rows. Drop it once that is guaranteed and tested.
+        """
+        return -(-self.patch_dim // 32) * 32
+
+    @property
     def merge_area(self) -> int:
         return self.merge_kernel_size[0] * self.merge_kernel_size[1]
 
@@ -76,7 +88,12 @@ class MoonViTConfig:
 
     @classmethod
     def from_hf_config(cls, config: dict | str | Path) -> MoonViTConfig:
-        """Read the `vision_config` block of a Kimi-K3 `config.json` (a dict, the file, or its folder)."""
+        """Read the `vision_config` block of a Kimi-K3 `config.json` (a dict, the file, or its folder).
+
+        A missing key takes upstream's effective default, which is `KimiK3VisionConfig`'s and also
+        this class's (the K3 values). Upstream's modeling code has other fallbacks (`bicubic`,
+        biases on), but they never apply: the vision config always sets those attributes.
+        """
         if not isinstance(config, dict):
             path = Path(config)
             if path.is_dir():
@@ -98,25 +115,29 @@ class MoonViTConfig:
         }
         if unsupported:
             raise ValueError(f"vision_config differs from MoonViT-V2 in {unsupported}")
-        if vc.get("mm_hidden_size", vc["vt_hidden_size"]) != vc["vt_hidden_size"]:
-            raise ValueError(f"mm_hidden_size {vc['mm_hidden_size']} != vt_hidden_size {vc['vt_hidden_size']}")
+        d = cls()
+        hidden_size = vc.get("vt_hidden_size", d.hidden_size)
+        if vc.get("mm_hidden_size") not in (None, hidden_size):
+            raise ValueError(f"mm_hidden_size {vc['mm_hidden_size']} != vt_hidden_size {hidden_size}")
+        if "qkv_hidden_size" in vc and vc["qkv_hidden_size"] is None:
+            raise ValueError("qkv_hidden_size null (attention width = vt_hidden_size) is not MoonViT-V2")
         return cls(
-            hidden_size=vc["vt_hidden_size"],
-            intermediate_size=vc["vt_intermediate_size"],
-            num_hidden_layers=vc["vt_num_hidden_layers"],
-            num_attention_heads=vc["vt_num_attention_heads"],
-            qkv_hidden_size=vc.get("qkv_hidden_size") or vc["vt_hidden_size"],
-            patch_size=vc["patch_size"],
-            init_pos_emb_height=vc["init_pos_emb_height"],
-            init_pos_emb_width=vc["init_pos_emb_width"],
-            init_pos_emb_time=vc["init_pos_emb_time"],
-            pos_emb_interpolation_mode=vc.get("pos_emb_interpolation_mode", "bilinear"),
-            attn_bias=vc.get("attn_bias", True),
-            linear_bias=vc.get("linear_bias", True),
-            patch_embed_proj_bias=vc.get("patch_embed_proj_bias", True),
-            merge_kernel_size=tuple(vc["merge_kernel_size"]),
-            text_hidden_size=vc["text_hidden_size"],
-            projector_norm_eps=vc["projector_ln_eps"],
+            hidden_size=hidden_size,
+            intermediate_size=vc.get("vt_intermediate_size", d.intermediate_size),
+            num_hidden_layers=vc.get("vt_num_hidden_layers", d.num_hidden_layers),
+            num_attention_heads=vc.get("vt_num_attention_heads", d.num_attention_heads),
+            qkv_hidden_size=vc.get("qkv_hidden_size", d.qkv_hidden_size),
+            patch_size=vc.get("patch_size", d.patch_size),
+            init_pos_emb_height=vc.get("init_pos_emb_height", d.init_pos_emb_height),
+            init_pos_emb_width=vc.get("init_pos_emb_width", d.init_pos_emb_width),
+            init_pos_emb_time=vc.get("init_pos_emb_time", d.init_pos_emb_time),
+            pos_emb_interpolation_mode=vc.get("pos_emb_interpolation_mode", d.pos_emb_interpolation_mode),
+            attn_bias=vc.get("attn_bias", d.attn_bias),
+            linear_bias=vc.get("linear_bias", d.linear_bias),
+            patch_embed_proj_bias=vc.get("patch_embed_proj_bias", d.patch_embed_proj_bias),
+            merge_kernel_size=tuple(vc.get("merge_kernel_size", d.merge_kernel_size)),
+            text_hidden_size=vc.get("text_hidden_size", d.text_hidden_size),
+            projector_norm_eps=vc.get("projector_ln_eps", d.projector_norm_eps),
         )
 
 

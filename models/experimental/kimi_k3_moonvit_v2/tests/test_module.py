@@ -4,18 +4,23 @@
 
 """CPU: the TT module tree loads the reference state dict by name, with the device upload stubbed.
 
-Catches renamed or missing parameters and wrong pre-load transforms without a device.
+Catches renamed or missing parameters and wrong pre-load transforms without a device. Also checks
+that per-image inputs are written into the same device tensors on every call (`DeviceInput`).
 """
 
 from __future__ import annotations
 
+import dataclasses
 from types import SimpleNamespace
 
 import pytest
 import torch
 
-from models.experimental.kimi_k3_moonvit_v2.tests.common import SHALLOW_REFERENCE
+import ttnn
+from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
+from models.experimental.kimi_k3_moonvit_v2.tests.common import SHALLOW_REFERENCE, random_patches
 from models.experimental.kimi_k3_moonvit_v2.tt import module, vision_model
+from models.experimental.kimi_k3_moonvit_v2.tt.device_input import DeviceInput
 from models.experimental.kimi_k3_moonvit_v2.tt.module import LoadingError, Module, Parameter, rename_substate
 
 
@@ -33,9 +38,30 @@ def host_parameters(monkeypatch):
     return SimpleNamespace(shape=(1, 1))
 
 
+@pytest.fixture
+def host_inputs(monkeypatch):
+    """`ttnn.from_torch` keeps the torch tensor and `copy_host_to_device_tensor` copies in place.
+    Returns the calls, "allocate" for a device upload and "copy" for an in-place write."""
+    calls = []
+
+    def from_torch(value, *, device=None, **kwargs):
+        if device is not None:
+            calls.append("allocate")
+        return value.clone()
+
+    def copy_host_to_device_tensor(host, device_tensor):
+        calls.append("copy")
+        device_tensor.copy_(host)
+
+    monkeypatch.setattr(ttnn, "from_torch", from_torch)
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", copy_host_to_device_tensor)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
+    return calls
+
+
 @SHALLOW_REFERENCE
-def test_vision_model_loads_reference(host_parameters, config, shallow_reference):
-    tt = vision_model.TT_MoonViT_Vision_Model(config, mesh_device=host_parameters)
+def test_vision_model_loads_reference(host_parameters, shallow_config, shallow_reference):
+    tt = vision_model.TT_MoonViT_Vision_Model(shallow_config, mesh_device=host_parameters)
     state = shallow_reference.state_dict()
     tt.load_torch_state_dict(state)
     assert tt.is_loaded()
@@ -44,10 +70,13 @@ def test_vision_model_loads_reference(host_parameters, config, shallow_reference
     block = tower.encoder.blocks[0]
     torch.testing.assert_close(block.attention.wqkv.weight.data, state["vision_tower.encoder.blocks.0.wqkv.weight"].T)
     torch.testing.assert_close(block.norm0.weight.data, state["vision_tower.encoder.blocks.0.norm0.weight"][None])
+    proj = tower.patch_embed.proj.weight.data
+    assert proj.shape == (shallow_config.padded_patch_dim, shallow_config.hidden_size)
     torch.testing.assert_close(
-        tower.patch_embed.proj.weight.data,
-        state["vision_tower.patch_embed.proj.weight"].reshape(config.hidden_size, -1).T,
+        proj[: shallow_config.patch_dim],
+        state["vision_tower.patch_embed.proj.weight"].reshape(shallow_config.hidden_size, -1).T,
     )
+    assert not proj[shallow_config.patch_dim :].any()
     assert torch.equal(tower.patch_embed.pos_emb_weight, state["vision_tower.patch_embed.pos_emb.weight"])
     torch.testing.assert_close(tt.mm_projector.fc0.weight.data, state["mm_projector.proj.0.weight"].T)
     torch.testing.assert_close(tt.mm_projector.fc1.weight.data, state["mm_projector.proj.2.weight"].T)
@@ -55,11 +84,11 @@ def test_vision_model_loads_reference(host_parameters, config, shallow_reference
 
 
 @SHALLOW_REFERENCE
-def test_rejects_missing_and_unexpected_keys(host_parameters, config, shallow_reference, expect_error):
+def test_rejects_missing_and_unexpected_keys(host_parameters, shallow_config, shallow_reference, expect_error):
     state = shallow_reference.state_dict()
     state.pop("vision_tower.encoder.final_layernorm.weight")
     state["vision_tower.encoder.extra.weight"] = torch.zeros(1)
-    tt = vision_model.TT_MoonViT_Vision_Model(config, mesh_device=host_parameters)
+    tt = vision_model.TT_MoonViT_Vision_Model(shallow_config, mesh_device=host_parameters)
     with expect_error(LoadingError, "final_layernorm"):
         tt.load_torch_state_dict(state)
 
@@ -87,3 +116,37 @@ def test_load_cached(tmp_path, monkeypatch):
     module.load_cached(cached, tmp_path, source)
     assert len(calls) == 1
     assert cached.is_loaded() and torch.equal(cached.weight.data, torch.tensor([1.0, 2.0]))
+
+
+def test_device_input_writes_in_place(host_inputs):
+    x = DeviceInput((1, 1, 4, 2), mesh_device=object(), sp_axis=None)
+    first = x.write(torch.zeros(4, 2))
+    second = x.write(torch.ones(4, 2))
+    assert second is first
+    assert torch.equal(second, torch.ones(1, 1, 4, 2))
+    assert host_inputs == ["allocate", "copy"]
+
+
+@SHALLOW_REFERENCE
+def test_prepare_inputs_reuses_device_tensors(host_parameters, host_inputs, shallow_config, shallow_reference):
+    """A second image of another size lands in the first image's device tensors."""
+    config = dataclasses.replace(shallow_config, max_patches=1024)
+    tt = vision_model.TT_MoonViT_Vision_Model(config, mesh_device=host_parameters)
+    tt.load_torch_state_dict(shallow_reference.state_dict())
+
+    first = tt.prepare_inputs(*random_patches(config, [(1, 8, 8)]))
+    pixels, grid_thws = random_patches(config, [(1, 6, 20)], seed=1)
+    second = tt.prepare_inputs(pixels, grid_thws)
+    assert all(second[key] is first[key] for key in ("patches", "pos_emb", "logical_n"))
+    assert all(b is a for a, b in zip(first["rope"], second["rope"]))
+
+    pos_emb_weight = shallow_reference.vision_tower.patch_embed.pos_emb.weight
+    expected = host_prep.prepare_host_inputs(config, pos_emb_weight, pixels, grid_thws)
+    for key, actual in (
+        ("patches", second["patches"]),
+        ("pos_emb", second["pos_emb"]),
+        ("cos", second["rope"].cos),
+        ("sin", second["rope"].sin),
+    ):
+        torch.testing.assert_close(actual[0, 0], expected[key], msg=key)
+    assert second["logical_n"].item() == 6 * 20

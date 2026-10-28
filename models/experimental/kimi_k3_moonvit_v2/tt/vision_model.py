@@ -9,10 +9,10 @@ merger). `TT_MoonViT_Vision_Model` adds the projector (`mm_projector`), so it ma
 language-model embeddings.
 
 One still image per call. Its patches are put in window order and padded to `config.max_patches`
-rows on the host (`reference.functional.prepare_host_inputs`), uploaded split along `sp_axis`, run
-through the tower, merger and projector, and gathered back with the padding dropped. The merged
-tokens come out in the reference's order. Weights are replicated and activations are DRAM
-interleaved.
+rows on the host (`host_prep.prepare_host_inputs`), written split along `sp_axis` into
+device inputs allocated once (`DeviceInput`, so a trace can replay them), run through the tower,
+merger and projector, and gathered back with the padding dropped. The merged tokens come out in the
+reference's order. Weights are replicated and activations are DRAM interleaved.
 
 Child names match the reference, so `load_torch_state_dict(reference.state_dict())` loads it, and
 `module.load_cached` caches it.
@@ -24,7 +24,9 @@ import torch
 
 import ttnn
 
+from .host_prep import prepare_host_inputs
 from .ccl import ParallelFactor, TT_CCL
+from .device_input import DeviceInput
 from .model_config import MoonViTConfig, VisionParallel, check_grid, compute_kernel_config, resolve_parallel
 from .module import Module, ModuleList
 from .patch_embed import TT_Patch_Embed
@@ -95,16 +97,28 @@ class TT_MoonViT_Vision_Model(Module):
             config, mesh_device=mesh_device, parallel=self.parallel, compute_kernel_config=ckc
         )
         self.mm_projector = TT_Projector(config, mesh_device=mesh_device, compute_kernel_config=ckc)
+        sp_axis = self.parallel.sp_axis
+        rows = config.max_patches
+        self.patches = DeviceInput((1, 1, rows, config.padded_patch_dim), mesh_device=mesh_device, sp_axis=sp_axis)
+        self.pos_emb = DeviceInput((1, 1, rows, config.hidden_size), mesh_device=mesh_device, sp_axis=sp_axis)
+        self.logical_n = DeviceInput(
+            (1, 1, 1, 1), mesh_device=mesh_device, sp_axis=None, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
 
     def prepare_inputs(self, pixel_values: torch.Tensor, grid_thws: torch.Tensor) -> dict:
-        """Host prep (`reference.functional.prepare_host_inputs`), then upload split along `sp_axis`.
+        """Host prep (`host_prep.prepare_host_inputs`), then write it, split along `sp_axis`,
+        into the same device tensors on every call.
 
-        Returns `patches` [1, 1, S/sp, patch_dim], `pos_emb` [1, 1, S/sp, hidden], `rope` and
-        `logical_n` (the unpadded length as a device tensor, `logical_length_tensor`), rows in window
-        order.
+        Returns `patches` [1, 1, S/sp, padded_patch_dim], `pos_emb` [1, 1, S/sp, hidden], `rope` and
+        `logical_n` (the unpadded length, [1, 1, 1, 1] uint32), rows in window order.
         """
-        check_grid(grid_thws, self.config)
-        raise NotImplementedError("TT_MoonViT_Vision_Model.prepare_inputs")
+        host = prepare_host_inputs(self.config, self.vision_tower.patch_embed.pos_emb_weight, pixel_values, grid_thws)
+        return {
+            "patches": self.patches.write(host["patches"]),
+            "pos_emb": self.pos_emb.write(host["pos_emb"]),
+            "rope": self.rope.write(host["cos"], host["sin"]),
+            "logical_n": self.logical_n.write(torch.tensor(host["logical_n"], dtype=torch.int64)),
+        }
 
     def gather_output(self, out: ttnn.Tensor, *, logical_n: int) -> torch.Tensor:
         """Concatenate the shards along `sp_axis` and drop the padding -> (logical_n, C)."""

@@ -5,9 +5,11 @@
 """Host-side input preparation for the TT encoder, written as plain functions.
 
 Each function reproduces one piece of `modeling_kimi_k3.py` in the form the device consumes, and
-`tests/test_functional.py` checks it against the reference module:
+`tests/test_host_prep.py` checks it against the reference module. Only torch is needed: nothing here
+imports the reference or `transformers`.
 
-  * `patches_to_rows`: the Conv2d patch embed as a matmul over flattened patches.
+  * `patches_to_rows`: the Conv2d patch embed as a matmul over flattened patches; `patch_rows` pads
+    them with zero columns to `config.padded_patch_dim`.
   * `pos_embeds`: the learned 64x64 table interpolated to the image grid.
   * `rope_cos_sin` + `rotate_pairs`: the complex-multiply 2D RoPE as `x * cos + rotate(x) * sin`,
     the form `ttnn.experimental.rotary_embedding_llama` computes with a pair-swapping `trans_mat`.
@@ -17,6 +19,7 @@ Each function reproduces one piece of `modeling_kimi_k3.py` in the form the devi
     each row alone, so the order changes nothing else as long as patches, position embeddings and RoPE
     tables share it.
   * `pad_rows`: padding to the fixed device sequence length.
+  * `rope_tables`: `rope_cos_sin` in window order and padded, as the device tables hold it.
 
 `prepare_host_inputs` combines them for one image.
 """
@@ -24,9 +27,9 @@ Each function reproduces one piece of `modeling_kimi_k3.py` in the form the devi
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 
-from ..tt.model_config import MoonViTConfig, check_grid
-from .modeling_kimi_k3 import Rope2DPosEmbRepeated, get_rope_shape
+from .model_config import MoonViTConfig, check_grid
 
 
 def patches_to_rows(pixel_values: torch.Tensor) -> torch.Tensor:
@@ -34,18 +37,33 @@ def patches_to_rows(pixel_values: torch.Tensor) -> torch.Tensor:
     return pixel_values.reshape(pixel_values.shape[0], -1)
 
 
+def patch_rows(config: MoonViTConfig, pixel_values: torch.Tensor) -> torch.Tensor:
+    """(L, C, p, p) -> (L, padded_patch_dim): `patches_to_rows` with zero columns up to a whole tile."""
+    rows = patches_to_rows(pixel_values)
+    return F.pad(rows, (0, config.padded_patch_dim - rows.shape[-1]))
+
+
 def pos_embeds(weight: torch.Tensor, h: int, w: int, interpolation_mode: str) -> torch.Tensor:
-    """(h*w, hidden): the position table at grid (h, w), as the reference adds it for one still image."""
+    """(h*w, hidden): the position table at grid (h, w), as the reference adds it for one still image
+    (`Learnable2DInterpPosEmbDivided_fixed`, `get_rope_shape`)."""
     if (h, w) == tuple(weight.shape[:-1]):
         return weight.flatten(end_dim=1)
-    return get_rope_shape(weight, interpolation_mode=interpolation_mode, shape=(h, w))
+    table = weight.permute(2, 0, 1).unsqueeze(0)  # (1, hidden, H, W)
+    return F.interpolate(table, size=(h, w), mode=interpolation_mode).squeeze(0).permute(1, 2, 0).flatten(end_dim=1)
 
 
 def rope_cos_sin(config: MoonViTConfig, h: int, w: int) -> tuple[torch.Tensor, torch.Tensor]:
-    """(h*w, head_dim) fp32 cos and sin, each value repeated for the two lanes of its pair."""
-    rope = Rope2DPosEmbRepeated(config.head_dim, config.max_side_patches, config.max_side_patches, config.rope_theta)
-    freqs_cis = rope.get_freqs_cis(torch.tensor([[1, h, w]]), device=torch.device("cpu"))  # (h*w, head_dim/2)
-    return freqs_cis.real.repeat_interleave(2, dim=-1), freqs_cis.imag.repeat_interleave(2, dim=-1)
+    """(h*w, head_dim) fp32 cos and sin, each value repeated for the two lanes of its pair.
+
+    `Rope2DPosEmbRepeated.get_freqs_cis` for one image: pair i of the head_dim/2 pairs rotates by
+    x * freq[i // 2] for even i and y * freq[i // 2] for odd i, with x the column and y the row.
+    """
+    dim = config.head_dim
+    freqs = 1.0 / (config.rope_theta ** (torch.arange(0, dim, 4)[: dim // 4].float() / dim))  # (head_dim/4,)
+    y, x = torch.meshgrid(torch.arange(h).float(), torch.arange(w).float(), indexing="ij")
+    angles = torch.stack((torch.outer(x.flatten(), freqs), torch.outer(y.flatten(), freqs)), dim=-1)
+    angles = angles.flatten(1)  # (h*w, head_dim/2)
+    return angles.cos().repeat_interleave(2, dim=-1), angles.sin().repeat_interleave(2, dim=-1)
 
 
 def rotate_pairs(x: torch.Tensor) -> torch.Tensor:
@@ -92,16 +110,24 @@ def pad_rows(x: torch.Tensor, rows: int) -> torch.Tensor:
     return torch.nn.functional.pad(x, (0, 0) * (x.ndim - 1) + (0, rows - x.shape[0]))
 
 
+def rope_tables(config: MoonViTConfig, h: int, w: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """(max_patches, head_dim) cos and sin for the device: `rope_cos_sin` in window order, zero-padded."""
+    return tuple(
+        pad_rows(to_window_order(t, h, w, config.merge_kernel_size), config.max_patches)
+        for t in rope_cos_sin(config, h, w)
+    )
+
+
 def prepare_host_inputs(
     config: MoonViTConfig, pos_emb_weight: torch.Tensor, pixel_values: torch.Tensor, grid_thws: torch.Tensor
 ) -> dict:
     """Everything the device needs for one image, in window order and padded to `config.max_patches` rows.
 
-    Returns `patches` (S, patch_dim), `pos_emb` (S, hidden), `cos` and `sin` (S, head_dim) and
+    Returns `patches` (S, padded_patch_dim), `pos_emb` (S, hidden), `cos` and `sin` (S, head_dim) and
     `logical_n`, the number of real rows.
     """
     h, w = check_grid(grid_thws, config)
-    cos, sin = rope_cos_sin(config, h, w)
+    cos, sin = rope_tables(config, h, w)
     pos_emb = pos_embeds(pos_emb_weight, h, w, config.pos_emb_interpolation_mode)
     rows = config.max_patches
 
@@ -109,9 +135,9 @@ def prepare_host_inputs(
         return pad_rows(to_window_order(x, h, w, config.merge_kernel_size), rows)
 
     return {
-        "patches": prepare(patches_to_rows(pixel_values)),
+        "patches": prepare(patch_rows(config, pixel_values)),
         "pos_emb": prepare(pos_emb),
-        "cos": prepare(cos),
-        "sin": prepare(sin),
+        "cos": cos,
+        "sin": sin,
         "logical_n": h * w,
     }

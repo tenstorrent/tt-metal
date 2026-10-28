@@ -17,7 +17,7 @@ from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig
 from models.common.utility_functions import comp_pcc
 from models.experimental.kimi_k3_moonvit_v2.tt.ccl import ParallelFactor, TT_CCL
 
-# Depth of the shallow model that the full-model tests run (`shallow_reference`, `config`).
+# Depth of the shallow model that the full-model tests run (`shallow_reference`, `shallow_config`).
 TEST_LAYERS = 2
 
 # Fixtures (conftest.py), each with random weights or the checkpoint at $KIMI_K3_HF_MODEL:

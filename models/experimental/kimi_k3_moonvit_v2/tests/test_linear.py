@@ -16,11 +16,14 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     P150_AND_RING,
     REFERENCE,
     REFERENCE_LAYERS,
+    random_patches,
     sp_gather,
     sp_shard,
 )
+from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.tt.linear import Linear
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import compute_kernel_config
+from models.experimental.kimi_k3_moonvit_v2.tt.patch_embed import TT_Patch_Embed
 
 # Per-layer linears, under `vision_tower.encoder.blocks.<layer>`; they see every patch.
 ENCODER_LINEARS = {"wqkv": "wqkv", "wo": "wo", "mlp_fc0": "mlp.fc0", "mlp_fc1": "mlp.fc1"}
@@ -66,3 +69,22 @@ def test_projector_linear(mesh_device, sp_axis, num_links, config, reference, gr
     _, h, w = grid[0]
     n, rows = h * w // config.merge_area, config.max_patches // config.merge_area
     check_linear(mesh_device, sp_axis, config, reference.get_submodule(path), n, rows)
+
+
+@P150_AND_RING
+@REFERENCE
+@DEVICE_GRIDS
+def test_patch_embed_linear(mesh_device, sp_axis, num_links, config, reference, grid):
+    """`patch_embed.proj`, loaded through `TT_Patch_Embed` (conv weight zero-padded to
+    `padded_patch_dim`), on zero-padded patch rows, against the reference Conv2d."""
+    config = device_config(config, sp_axis)
+    tt = TT_Patch_Embed(config, mesh_device=mesh_device, compute_kernel_config=compute_kernel_config(mesh_device))
+    tt.load_torch_state_dict(reference.vision_tower.patch_embed.state_dict())
+
+    pixels, _ = random_patches(config, grid)
+    pixels = pixels.to(torch.bfloat16)
+    with torch.no_grad():
+        golden = reference.vision_tower.patch_embed.proj(pixels).flatten(1)
+
+    out = tt.proj(sp_shard(host_prep.patch_rows(config, pixels), mesh_device, sp_axis, config.max_patches))
+    assert_pcc(golden, sp_gather(out, mesh_device, sp_axis, pixels.shape[0]))

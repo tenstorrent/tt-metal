@@ -22,9 +22,15 @@ from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig
 
 @pytest.fixture(scope="session")
 def config() -> MoonViTConfig:
+    """Every layer, from the checkpoint's `config.json` when $KIMI_K3_HF_MODEL is set."""
     path = checkpoint_path()
-    base = MoonViTConfig.from_hf_config(path) if path is not None else MoonViTConfig()
-    return base.with_layers(TEST_LAYERS)
+    return MoonViTConfig.from_hf_config(path) if path is not None else MoonViTConfig()
+
+
+@pytest.fixture(scope="session")
+def shallow_config(config) -> MoonViTConfig:
+    """The first TEST_LAYERS layers, matching `shallow_reference`."""
+    return config.with_layers(TEST_LAYERS)
 
 
 def build_reference(weights: str, num_layers: int | None) -> KimiK3VisionModel:
@@ -57,5 +63,5 @@ def reference(request) -> KimiK3VisionModel:
 
 @pytest.fixture(scope="session")
 def shallow_reference(request) -> KimiK3VisionModel:
-    """The first TEST_LAYERS layers, for the full-model tests that `config` describes."""
+    """The first TEST_LAYERS layers, for the full-model tests that `shallow_config` describes."""
     return build_reference(request.param, TEST_LAYERS)

@@ -16,21 +16,22 @@ replicated, activations DRAM interleaved, matmuls HiFi4 with fp32 accumulation.
 
 ## Structure
 
-The TT code depends only on `ttnn`. The reference needs `transformers`, as upstream does; tests
-also use `models.common.utility_functions`.
+The TT code depends only on `ttnn` and `torch`, and imports nothing from `reference/`. The reference
+needs `transformers`, as upstream does; tests also use `models.common.utility_functions`.
 
 | Path | Contents |
 |---|---|
 | `reference/modeling_kimi_k3.py` | Upstream `modeling_kimi_k3.py` without the language model (`KimiK3PreTrainedModel`, `KimiK3ForConditionalGeneration` and their imports) |
 | `reference/configuration_kimi_k3.py` | Upstream `configuration_kimi_k3.py`, unchanged |
 | `reference/kimi_k3_vision.py` | `KimiK3VisionModel`: the vision path of `KimiK3ForConditionalGeneration` (tower, then `mm_projector`), and `load_vision_config`, which selects upstream's `eager` attention |
-| `reference/functional.py` | Host prep for the device: patch rows, position embeddings, RoPE cos/sin, window order, padding |
 | `reference/checkpoint.py` | Reads `vision_tower.*` and `mm_projector.*` from a Kimi-K3 HF checkpoint |
 | `reference/config.json`, `LICENSE-Kimi-K3` | The K3 `vision_config` and the license of the vendored code |
+| `tt/host_prep.py` | Host prep for the device, torch only: patch rows, position embeddings, RoPE cos/sin, window order, padding |
 | `tt/model_config.py` | `MoonViTConfig`, the grid check, `VisionParallel`, the compute kernel config |
 | `tt/module.py` | `Module`, `ModuleList`, `Parameter`, state-dict loading, `save`/`load`, `load_cached` |
 | `tt/linear.py`, `tt/rms_norm.py` | The leaf layers |
 | `tt/ccl.py` | `ParallelFactor` and `TT_CCL` (links, topology, ring-attention semaphores and buffers) |
+| `tt/device_input.py` | `DeviceInput`: a per-image input allocated once and rewritten in place, so a trace can replay it |
 | `tt/patch_embed.py`, `rope.py`, `vision_attention.py`, `vision_mlp.py`, `vision_block.py` | One TT module per encoder part |
 | `tt/patch_merger.py`, `tt/projector.py` | `TT_Patch_Merger` (no weights) and `TT_Projector` |
 | `tt/vision_model.py` | `TT_MoonViT_Vision_Tower` (patch embed, encoder, merger) and `TT_MoonViT_Vision_Model` (tower, projector) |
@@ -71,7 +72,7 @@ Per-layer tests (attention, MLP, block, encoder linears and norms) take a `layer
 ```bash
 # CPU: reference, host prep, checkpoint loader, TT module names (device upload stubbed)
 pytest models/experimental/kimi_k3_moonvit_v2/tests/test_reference.py \
-       models/experimental/kimi_k3_moonvit_v2/tests/test_functional.py \
+       models/experimental/kimi_k3_moonvit_v2/tests/test_host_prep.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_load_checkpoint.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_module.py
 

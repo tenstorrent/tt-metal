@@ -6,7 +6,7 @@
 
 Each 2x2 window of patches becomes one token of the window's four patches concatenated, in
 (row, column) order. With one still image the temporal mean is a no-op. The rows arrive in window
-order (`reference.functional.to_window_order`), so a window is four consecutive rows and the merge
+order (`host_prep.to_window_order`), so a window is four consecutive rows and the merge
 is a reshape on each device: no collective, and the output is in the reference's token order.
 Each device's share of `max_patches` is a whole number of windows (`resolve_parallel` checks it).
 """

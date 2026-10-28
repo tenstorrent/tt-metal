@@ -20,7 +20,7 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     sp_shard,
 )
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import check_grid, compute_kernel_config
-from models.experimental.kimi_k3_moonvit_v2.reference import functional
+from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.tt.patch_embed import TT_Patch_Embed
 
 
@@ -38,9 +38,9 @@ def test_patch_embed(mesh_device, sp_axis, num_links, config, reference, grid):
     with torch.no_grad():
         golden = reference.vision_tower.patch_embed(pixels.to(torch.bfloat16), grid_thws)
 
-    pos_emb = functional.pos_embeds(tt.pos_emb_weight, h, w, config.pos_emb_interpolation_mode)
+    pos_emb = host_prep.pos_embeds(tt.pos_emb_weight, h, w, config.pos_emb_interpolation_mode)
     out = tt(
-        sp_shard(functional.patches_to_rows(pixels), mesh_device, sp_axis, config.max_patches),
+        sp_shard(host_prep.patch_rows(config, pixels), mesh_device, sp_axis, config.max_patches),
         sp_shard(pos_emb, mesh_device, sp_axis, config.max_patches),
     )
     assert_pcc(golden, sp_gather(out, mesh_device, sp_axis, h * w))
