@@ -1,7 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Raw-transfer address table for Gemma 4 durable ring caches."""
+"""Raw-transfer address table for Gemma 4 durable ring caches.
+
+The caches' declared layout (``cache_layout.py``, a ``CacheLayoutModel``) derives the same table with
+``to_chunk_map``. Until that replaces the walk (``GEMMA4_KV_TABLE_FROM_LAYOUT_MODEL=1``), the walked table is
+published and the derived one is checked against it; the model is written next to the table
+(``<path>.cache_layout.pb``) only when the two agree.
+"""
 
 from __future__ import annotations
 
@@ -14,10 +20,12 @@ from typing import NamedTuple
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.runners.cache_layout import publish_kv_chunk_table
 from models.demos.common.prefill.runners.migration import get_num_dram_banks
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM, SLIDING_HEAD_DIM
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import TILE_HEIGHT, GlobalRingKVCache
+from models.demos.gemma4_d_p.tt.runners.cache_layout import gemma4_cache_layout_model
 from models.demos.gemma4_d_p.tt.runners.kv_caches import Gemma4KvCaches
 
 _BFP8_TILE_BYTES = 1088
@@ -27,6 +35,8 @@ GLOBAL_CONFIGS = tuple(f"{idx:02d}_global_h{idx}" for idx in range(4))
 SLIDING_K_CONFIGS = tuple(f"{idx + 4:02d}_sliding_k_h{idx}" for idx in range(16))
 SLIDING_V_CONFIGS = tuple(f"{idx + 20:02d}_sliding_v_h{idx}" for idx in range(16))
 CONFIG_NAMES = GLOBAL_CONFIGS + SLIDING_K_CONFIGS + SLIDING_V_CONFIGS
+# Set to 1 to publish the table derived from the caches' CacheLayoutModel without walking the classic one.
+LAYOUT_MODEL_ENV = "GEMMA4_KV_TABLE_FROM_LAYOUT_MODEL"
 
 
 def worker_host_name(hostname: str | None = None) -> str:
@@ -215,8 +225,29 @@ def kv_chunk_table_cache_key(*, mesh_device, kv_caches: Gemma4KvCaches, chunk_si
 
 def build_and_serialize_kv_chunk_table(*, path: str, mesh_device, kv_caches: Gemma4KvCaches, chunk_size: int) -> str:
     inputs = dict(mesh_device=mesh_device, kv_caches=kv_caches, chunk_size=chunk_size)
-    hit = ttnn.experimental.disaggregation.get_or_build_kv_chunk_table(
-        _TABLE_CACHE_SEED, kv_chunk_table_cache_key(**inputs), lambda: build_kv_chunk_address_table(**inputs), path
+    mesh_config = _mesh_config(mesh_device, kv_caches)
+
+    def walk():
+        hit = ttnn.experimental.disaggregation.get_or_build_kv_chunk_table(
+            _TABLE_CACHE_SEED, kv_chunk_table_cache_key(**inputs), lambda: build_kv_chunk_address_table(**inputs), path
+        )
+        logger.info(f"[migration] KV chunk address table {'reused from cache' if hit else 'built'} -> {path}")
+        return ttnn.experimental.disaggregation.import_from_protobuf_file(path)
+
+    def layout_model():
+        return gemma4_cache_layout_model(
+            mesh_device=mesh_device,
+            mesh_config=mesh_config,
+            kv_caches=kv_caches,
+            chunk_size=chunk_size,
+            config_names=CONFIG_NAMES,
+        )
+
+    rows, cols = tuple(mesh_device.shape)
+    host_name = worker_host_name()
+    hosts = [
+        (mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c)), host_name) for r in range(rows) for c in range(cols)
+    ]
+    return publish_kv_chunk_table(
+        path=path, walk=walk, layout_model=layout_model, hosts=hosts, enable_env=LAYOUT_MODEL_ENV, model_name="Gemma 4"
     )
-    logger.info(f"[migration] KV chunk address table {'reused from cache' if hit else 'built'} -> {path}")
-    return path
