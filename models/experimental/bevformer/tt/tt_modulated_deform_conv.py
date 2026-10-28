@@ -6,7 +6,7 @@
 
 The ResNet101 backbone has 26 modulated deformable convs per inference (layer3 and
 layer4, `stage_with_dcn=(False, False, True, True)`). This module decomposes modulated
-deformable conv (Dai et al. 2018) into K*K (= 9 for K=3) sample positions per output
+deformable conv (DCNv2, Zhu et al. 2019) into K*K (= 9 for K=3) sample positions per output
 pixel, one `ttnn.grid_sample` over all of them and a matmul over K*K*C_in, so the
 whole op stays on device.
 
@@ -26,17 +26,18 @@ Math (per output (h_o, w_o), output channel c_out):
 `ttnn.grid_sample` expects:
   - input NHWC, shape (N, H_in, W_in, C)
   - grid (N, H_out, W_out, 2) in (x, y) order normalized to [-1, 1]
-  - mode="bilinear", align_corners=False. The base grid and the offset scales
-    use the align_corners=False normalization, gy = (2*sy + 1)/H - 1; switching
-    to align_corners=True needs (H - 1) in both formulas.
+  - mode="bilinear", align_corners=False. The base grid here and the offset
+    scale in ``model_preprocessing._dcn_parameters`` use the align_corners=False
+    normalization, gy = (2*sy + 1)/H - 1; switching to align_corners=True needs
+    (H - 1) in both formulas.
 
-The offsets reach this module in pixels but already in grid_sample's (x, y)
-channel order: `grid_offset_order` gives the reorder from DCNv2's (y, x), which
-the preprocessor folds into the offset conv. The forward scales them to [-1, 1] units
-with one multiply and adds the base grid.
+The offsets reach this module in grid_sample's (x, y) channel order and in its [-1, 1]
+units: ``model_preprocessing`` folds both the reorder from DCNv2's (y, x)
+(`grid_offset_order`) and the scale by ``2 / [W, H]`` into the offset conv. The forward
+adds the base grid.
 
-x is split along C_in into chunks of at most 256 channels (one chunk for the
-layer3 DCNs, C_in = 256; two for layer4, C_in = 512). Each chunk runs the
+x is split along C_in into chunks of at most GRID_SAMPLE_C_CAP channels (one chunk for
+the layer3 DCNs, C_in = 256; two for layer4, C_in = 512). Each chunk runs the
 grid_sample / mask / matmul pipeline and the partial C_out outputs are added,
 which equals a single matmul over the full K*K*C_in reduction axis.
 ttnn.grid_sample does not need the split, since it tiles wide channel dims
@@ -48,7 +49,7 @@ import torch
 import ttnn
 
 # Largest C_in chunk sampled at once; see the module docstring.
-_GRID_SAMPLE_C_CAP = 256
+GRID_SAMPLE_C_CAP = 256
 
 
 def grid_offset_order(kernel_positions):
@@ -60,74 +61,46 @@ def grid_offset_order(kernel_positions):
     return source
 
 
-class TtModulatedDeformConv2dDevice:
-    """Device-side modulated deformable conv 2D.
+class TTModulatedDeformConv2dDevice:
+    """Device-side modulated deformable conv 2D, groups and deform_groups 1.
 
-    Per-instance constants (base grids, weight slices, bias) are uploaded once, at
+    Per-instance constants (base grids, weight chunks, bias) are uploaded once, at
     construction.
     """
 
     def __init__(
         self,
-        weight,  # torch.Tensor (C_out, C_in, K, K)
-        bias,  # torch.Tensor (C_out,) or None
+        weight_chunks,
+        bias,
+        kernel_size,
         stride,
         padding,
         dilation,
-        groups,
-        deform_groups,
         device,
         input_shape,
         relu=False,
     ):
-        """``input_shape`` is the (batch, height, width) of the NHWC input every call will see.
-        It fixes the sampling base grid, which is built and uploaded here so a forward does
-        no host work. ``relu`` applies a ReLU to the output, inside its last add."""
-        assert groups == 1, f"device DCN supports groups=1 only, got {groups}"
-        assert deform_groups == 1, f"device DCN supports deform_groups=1 only, got {deform_groups}"
-
+        """``weight_chunks`` and ``bias`` are host tensors from ``model_preprocessing``: per
+        C_in chunk the ``(K*K*c_chunk, C_out)`` matmul weight, rows kk-major as grid_sample
+        emits its samples, and the ``(1, C_out)`` bias or None. ``kernel_size`` is the square
+        kernel's K. ``input_shape`` is the (batch, height, width) of the NHWC input every call
+        will see. It fixes the sampling base grid, which is built and uploaded here so a forward
+        does no host work. ``relu`` applies a ReLU to the output, inside the single chunk's matmul or
+        the last chunk's bias add."""
         self.device = device
         self.stride = stride
         self.padding = padding
         self.dilation = dilation
-        self.C_out, self.C_in, self.K, _ = weight.shape
-        assert weight.shape[2] == weight.shape[3], "kernel must be square"
+        self.K = kernel_size
+        rows, self.C_out = weight_chunks[0].shape
+        self.c_chunk = rows // (self.K * self.K)
+        self.n_c_chunks = len(weight_chunks)
+        self.C_in = self.c_chunk * self.n_c_chunks
 
-        # The DCN C_in values here (256, 512) are multiples of _GRID_SAMPLE_C_CAP,
-        # so one chunk size fits every instance; the assert flags a shape that
-        # would need ragged chunking.
-        self.c_chunk = min(self.C_in, _GRID_SAMPLE_C_CAP)
-        assert (
-            self.C_in % self.c_chunk == 0
-        ), f"C_in={self.C_in} is not a multiple of grid_sample chunk size {self.c_chunk}"
-        self.n_c_chunks = self.C_in // self.c_chunk
+        self.weight_cat_chunks = [ttnn.to_device(chunk, device) for chunk in weight_chunks]
+        self.bias = None if bias is None else ttnn.to_device(bias, device)
 
-        # Per-chunk concatenated weight (K*K*c_chunk, C_out): for chunk q, the
-        # rows of the matmul's reduction axis are the K*K weight slices
-        # restricted to the chunk's C_in range. Per chunk we run a full
-        # K*K*c_chunk -> C_out matmul, then sum the partials.
-        self.weight_cat_chunks = []
-        for q in range(self.n_c_chunks):
-            c_start = q * self.c_chunk
-            c_end = c_start + self.c_chunk
-            chunk_blocks = []
-            for kh in range(self.K):
-                for kw in range(self.K):
-                    chunk_blocks.append(weight[:, c_start:c_end, kh, kw].t().contiguous())  # (c_chunk, C_out)
-            wc_chunk = torch.cat(chunk_blocks, dim=0).contiguous()  # (K*K*c_chunk, C_out)
-            self.weight_cat_chunks.append(
-                ttnn.from_torch(wc_chunk, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            )
-
-        if bias is not None:
-            self.bias = ttnn.from_torch(
-                bias.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-            )
-        else:
-            self.bias = None
-
-        # HiFi4 + fp32 accumulator + no math approx. ttnn.grid_sample
-        # bilinear reads bf16 corner sticks and would normally accumulate
+        # ttnn.grid_sample bilinear reads bf16 corner sticks and would normally accumulate
         # in bf16; fp32_dest_acc_en lifts the bilinear pool reduction to
         # fp32. The matmul reuses this config so the K*K*C_in -> C_out
         # reduction also accumulates in fp32.
@@ -185,11 +158,10 @@ class TtModulatedDeformConv2dDevice:
         return grid.unsqueeze(0).expand(batch, H_out, W_out, 2 * self.K * self.K).contiguous()
 
     def __call__(self, x_nhwc, grid_offset_nhwc, mask_nhwc):
-        """Forward.
-
+        """
         Args:
-          x_nhwc: (B, H_in, W_in, C_in) NHWC on device, bfloat16 or bfloat8_b, preferably
-              already ROW_MAJOR, the layout it is sampled in.
+          x_nhwc: (B, H_in, W_in, C_in) NHWC bfloat16 on device, preferably already
+              ROW_MAJOR, the layout grid_sample reads.
           grid_offset_nhwc: (B, H_out, W_out, 2*K*K) bfloat16 NHWC TILE offsets in grid
               units (pixel offsets times ``2 / [W_in, H_in]``), in (x, y) order per kernel
               position, see `grid_offset_order`.
@@ -220,11 +192,8 @@ class TtModulatedDeformConv2dDevice:
         packed_grid = ttnn.add(self.base_grid, grid_offset)
         mask_b = ttnn.reshape(mask_nhwc, (B, H_out, W_out, K * K, 1))
 
-        # For each channel chunk: one grid_sample call over the K*K kernel
-        # positions, multiply by the mask (broadcast across c_chunk), matmul
-        # into C_out, accumulate. The matmul's fp32 accumulator covers the
-        # K*K*c_chunk reduction; only the C_out-wide bf16 partials are summed
-        # across channel chunks.
+        # The matmul's fp32 accumulator covers the K*K*c_chunk reduction; only the C_out-wide
+        # bf16 partials are summed across channel chunks.
         output_acc = None
         for q in range(self.n_c_chunks):
             c_start = q * self.c_chunk
@@ -240,9 +209,6 @@ class TtModulatedDeformConv2dDevice:
                 batch_output_channels=True,
                 compute_kernel_config=self.compute_kernel_config,
             )  # (B, H_out, W_out, K*K*c_chunk), kk-major
-            # Apply per-kk mask. Reshape sampled to expose the kk dim,
-            # broadcast-multiply by the (B, H_out, W_out, K*K, 1) mask, then
-            # reshape back to flatten kk into the channel axis.
             sampled = ttnn.reshape(sampled, (B, H_out, W_out, K * K, self.c_chunk))
             weighted = ttnn.multiply(sampled, mask_b)
             # Fold (B, H_out, W_out) into M so the matmul heuristic sees a large 2-D problem
