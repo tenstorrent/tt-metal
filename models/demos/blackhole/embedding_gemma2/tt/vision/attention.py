@@ -10,8 +10,9 @@
     out = concat_heads(o) @ Wo
 
 Optimized path (E5b, doc/optimized_vision/README.md):
-    projections   bf16 weights, HiFi2 + fp32 accumulation, `vision_linear` program configs
-                  (batch folded into M)
+    projections   `vision_linear` program configs (batch folded into M); weight dtype, fidelity,
+                  fp32 accumulation and output dtype from the precision policy (E6b,
+                  `vision.weights.attn_qkv` / `attn_o`; SDPA from `vision.sdpa`, norms `vision.norms`)
     RoPE          one fused `rotary_embedding_llama` per tensor (AxialRope)
     SDPA          HiFi2 + fp32 accumulation, per-shape chunk/grid table (`vision_sdpa_program_config`),
                   bfp4 key-padding mask, heads concatenated by the SDPA writer (no concat op)
@@ -35,6 +36,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.config import RMSNormConfig
+from models.demos.blackhole.embedding_gemma2.tt.precision import VisionPrecision, resolve_precision
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.vision.config import VisionAttentionConfig, vision_act_memory_config
 from models.demos.blackhole.embedding_gemma2.tt.vision.linear import vision_linear
@@ -50,8 +52,11 @@ _SDPA_TABLE = {
 }
 
 
-def vision_sdpa_program_config(seq_len: int, batch: int = 1, device_grid=None) -> ttnn.SDPAProgramConfig:
-    """head_dim 64 SDPA config for a patch bucket. Unlisted buckets: q128 / k256 when they divide S."""
+def vision_sdpa_program_config(
+    seq_len: int, batch: int = 1, device_grid=None, exp_approx: bool = False
+) -> ttnn.SDPAProgramConfig:
+    """head_dim 64 SDPA config for a patch bucket. Unlisted buckets: q128 / k256 when they divide S.
+    `exp_approx`: SDPA exp_approx_mode (precision policy `vision.sdpa.exp_approx`)."""
     gx, gy = (device_grid.x, device_grid.y) if device_grid is not None else (13, 10)
     q_chunk, k_chunk, grid = 128, 256, (gx, gy)
     for min_batch, cfg in _SDPA_TABLE.get(seq_len, ()):
@@ -69,7 +74,7 @@ def vision_sdpa_program_config(seq_len: int, batch: int = 1, device_grid=None) -
         compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
-        exp_approx_mode=False,
+        exp_approx_mode=exp_approx,
     )
 
 
@@ -110,7 +115,8 @@ class PaddingWindows:
 
 
 def sdpa_compute_kernel_config():
-    """HiFi2 + fp32 accumulation (per-op PCC 0.99994 vs fp32; HiFi4 is 5-7 % slower)."""
+    """E5b default: HiFi2 + fp32 accumulation (per-op PCC 0.99994 vs fp32; HiFi4 is 5-7 % slower).
+    The model takes its SDPA config from the precision policy (`vision.sdpa`)."""
     return ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
@@ -129,8 +135,12 @@ class VisionAttention(LightweightModule):
         k_norm: RMSNorm,
         v_norm: RMSNorm,
         rope: AxialRope,
+        *,
+        layer_idx: int = 0,
+        precision: VisionPrecision | None = None,
     ):
         super().__init__()
+        precision = precision or resolve_precision(None).vision
         self.config = config
         self.wqkv = wqkv
         self.wo = wo
@@ -138,7 +148,10 @@ class VisionAttention(LightweightModule):
         self.k_norm = k_norm
         self.v_norm = v_norm
         self.rope = rope
-        self.sdpa_compute_kernel_config = sdpa_compute_kernel_config()
+        self.qkv_policy = precision.matmul("attn_qkv", layer_idx)
+        self.o_policy = precision.matmul("attn_o", layer_idx)
+        self.sdpa_policy = precision.sdpa_for(layer_idx)
+        self.sdpa_compute_kernel_config = self.sdpa_policy.compute_kernel_config
 
     @classmethod
     def from_state_dict(
@@ -150,8 +163,12 @@ class VisionAttention(LightweightModule):
         *,
         cache_dir: Path | None = None,
         name: str = "vision.self_attn",
+        layer_idx: int = 0,
+        precision: VisionPrecision | None = None,
     ) -> "VisionAttention":
-        """`state_dict` holds the HF `encoder.layers.<i>.self_attn.` sub-state (`.linear.` folded)."""
+        """`state_dict` holds the HF `encoder.layers.<i>.self_attn.` sub-state (`.linear.` folded);
+        `precision` the vision policy (None: the default precision file), applied as layer `layer_idx`."""
+        precision = precision or resolve_precision(None).vision
         H, W = config.hidden_size, config.width
         ws = [state_dict[f"{p}_proj.weight"] for p in "qkvo"]
         expect = [(W, H), (W, H), (W, H), (H, W)]
@@ -159,18 +176,39 @@ class VisionAttention(LightweightModule):
             if tuple(w.shape) != shp:
                 raise ValueError(f"{name}.{p}_proj: expected {shp}, got {tuple(w.shape)}")
         wqkv = as_weight(
-            linear_weight(torch.cat(ws[:3], dim=0)), device, cache_dir=cache_dir, name=f"{name}.wqkv.weight"
+            linear_weight(torch.cat(ws[:3], dim=0)),
+            device,
+            cache_dir=cache_dir,
+            name=f"{name}.wqkv.weight",
+            dtype=precision.matmul("attn_qkv", layer_idx).ttnn_dtype,
         )
-        wo = as_weight(linear_weight(ws[3]), device, cache_dir=cache_dir, name=f"{name}.o_proj.weight")
+        wo = as_weight(
+            linear_weight(ws[3]),
+            device,
+            cache_dir=cache_dir,
+            name=f"{name}.o_proj.weight",
+            dtype=precision.matmul("attn_o", layer_idx).ttnn_dtype,
+        )
         hd = RMSNormConfig(dim=config.head_dim, eps=config.rms_norm_eps)
+        ckc_norm = precision.norms.compute_kernel_config
         q_norm = RMSNorm.from_state_dict(
-            substate(state_dict, "q_norm"), hd, device, cache_dir=cache_dir, name=f"{name}.q_norm"
+            substate(state_dict, "q_norm"),
+            hd,
+            device,
+            cache_dir=cache_dir,
+            name=f"{name}.q_norm",
+            compute_kernel_config=ckc_norm,
         )
         k_norm = RMSNorm.from_state_dict(
-            substate(state_dict, "k_norm"), hd, device, cache_dir=cache_dir, name=f"{name}.k_norm"
+            substate(state_dict, "k_norm"),
+            hd,
+            device,
+            cache_dir=cache_dir,
+            name=f"{name}.k_norm",
+            compute_kernel_config=ckc_norm,
         )
-        v_norm = RMSNorm(RMSNormConfig(dim=config.head_dim, eps=config.rms_norm_eps, with_scale=False), None)
-        return cls(config, wqkv, wo, q_norm, k_norm, v_norm, rope)
+        v_norm = RMSNorm(RMSNormConfig(dim=config.head_dim, eps=config.rms_norm_eps, with_scale=False), None, ckc_norm)
+        return cls(config, wqkv, wo, q_norm, k_norm, v_norm, rope, layer_idx=layer_idx, precision=precision)
 
     def forward(
         self, x: ttnn.Tensor, mask: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, memory_config=None
@@ -182,7 +220,12 @@ class VisionAttention(LightweightModule):
         windows = mask.cu if isinstance(mask, PaddingWindows) else None
         # the [B, H, S, 64] heads and the [B, 1, S, 768] SDPA output have the bytes of a [B, 1, S, 768] tensor
         mem = vision_act_memory_config(dev, B, S, cfg.width)
-        xqkv = vision_linear(x, self.wqkv, memory_config=vision_act_memory_config(dev, B, S, 3 * cfg.width, wide="qkv"))
+        xqkv = vision_linear(
+            x,
+            self.wqkv,
+            memory_config=vision_act_memory_config(dev, B, S, 3 * cfg.width, wide="qkv"),
+            policy=self.qkv_policy,
+        )
         if windows is not None:  # one [1, H, B*S, 64] sequence; cos/sin are [1, 1, B*S, 64]
             xqkv = ttnn.reshape(xqkv, (1, 1, B * S, 3 * cfg.width))
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -210,7 +253,9 @@ class VisionAttention(LightweightModule):
             attn_mask=None if windows is not None else mask,
             cu_window_seqlens=windows,
             scale=cfg.scaling,
-            program_config=vision_sdpa_program_config(S, B, dev.compute_with_storage_grid_size()),
+            program_config=vision_sdpa_program_config(
+                S, B, dev.compute_with_storage_grid_size(), exp_approx=self.sdpa_policy.exp_approx
+            ),
             compute_kernel_config=self.sdpa_compute_kernel_config,
             memory_config=mem,
             output_concat_heads=True,
@@ -221,6 +266,6 @@ class VisionAttention(LightweightModule):
         if windows is not None:
             o = ttnn.reshape(o, (B, 1, S, cfg.width))
 
-        out = vision_linear(o, self.wo, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG)
+        out = vision_linear(o, self.wo, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG, policy=self.o_policy)
         ttnn.deallocate(o)
         return out

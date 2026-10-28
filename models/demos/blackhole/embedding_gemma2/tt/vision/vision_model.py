@@ -32,6 +32,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.config import MASK_NEG
+from models.demos.blackhole.embedding_gemma2.tt.precision import PrecisionConfig, resolve_precision
 from models.demos.blackhole.embedding_gemma2.tt.vision.attention import PaddingWindows, use_windowed_attention
 from models.demos.blackhole.embedding_gemma2.tt.vision.config import VisionConfig
 from models.demos.blackhole.embedding_gemma2.tt.vision.embedder import VisionEmbedder
@@ -60,13 +61,15 @@ class VisionDeviceInputs:
 MASK_DTYPE = ttnn.bfloat4_b
 
 
-def key_padding_mask(keep: ttnn.Tensor) -> ttnn.Tensor:
-    """keep [B,1,1,S] (1 valid / 0 pad) -> additive [B,1,S,S] bfp4: 0 for valid keys, -1e9 for padding keys.
+def key_padding_mask(keep: ttnn.Tensor, dtype=None) -> ttnn.Tensor:
+    """keep [B,1,1,S] (1 valid / 0 pad) -> additive [B,1,S,S] `dtype` (MASK_DTYPE when None): 0 for
+    valid keys, -1e9 for padding keys. The model passes `vision.mask_dtype` of its precision policy.
 
     bfp4 (E5b, as the text masks in E5a): 0 stays exactly 0 and -1e9 stays fully masking; SDPA
     reads 3.6x fewer bytes. Built as zeros[B,1,S,1] + bias[B,1,1,S] (one broadcast add writing
     bfp4) instead of a bf16 repeat; the zero column is derived from `keep` on device.
     """
+    dtype = MASK_DTYPE if dtype is None else dtype
     dram = ttnn.DRAM_MEMORY_CONFIG
     shifted = ttnn.subtract(keep, 1.0, memory_config=dram)
     bias = ttnn.multiply(shifted, -MASK_NEG, memory_config=dram)
@@ -74,7 +77,7 @@ def key_padding_mask(keep: ttnn.Tensor) -> ttnn.Tensor:
     col = ttnn.transpose(keep, -2, -1, memory_config=dram)  # [B,1,S,1]
     zero_col = ttnn.multiply(col, 0.0, memory_config=dram)
     ttnn.deallocate(col)
-    mask = ttnn.add(zero_col, bias, dtype=MASK_DTYPE, memory_config=dram)
+    mask = ttnn.add(zero_col, bias, dtype=dtype, memory_config=dram)
     ttnn.deallocate(zero_col)
     ttnn.deallocate(bias)
     return mask
@@ -89,8 +92,10 @@ class VisionModel(LightweightModule):
         layers: list[VisionEncoderLayer],
         embedder: VisionEmbedder,
         rope: AxialRope,
+        precision: PrecisionConfig | None = None,
     ):
         super().__init__()
+        self.precision = precision or resolve_precision(None)
         self.config = config
         self.device = device
         self.patch_embedder = patch_embedder
@@ -98,6 +103,7 @@ class VisionModel(LightweightModule):
         self.pooler = VisionPooler(config)
         self.embedder = embedder
         self.rope = rope
+        self.mask_dtype = self.precision.vision.mask_ttnn_dtype
 
     @classmethod
     def from_state_dict(
@@ -108,27 +114,33 @@ class VisionModel(LightweightModule):
         *,
         cache_dir: Path | None = None,
         num_layers: int | None = None,
+        precision=None,
     ) -> "VisionModel":
         """`state_dict`: `vision_tower.*` and `embed_vision.*` keys (weights.load_vision_state_dict).
 
         num_layers < config.num_layers builds a truncated stack (debug / per-layer tests only).
+        precision: None (default) loads `doc/datatype_sweep/selected_precision_config.json` (or the
+        file named by EMBEDDING_GEMMA2_PRECISION); a path, dict or PrecisionConfig otherwise. The
+        `vision` section sets every weight dtype, matmul / SDPA / norm compute config and the mask dtype.
         """
+        precision = resolve_precision(precision)
+        vp = precision.vision
         n = config.num_layers if num_layers is None else num_layers
         tower = substate(state_dict, "vision_tower")
         rope = AxialRope.build(config.head_dim, device)
         patch = VisionPatchEmbedder.from_state_dict(
-            substate(tower, "patch_embedder"), config, device, cache_dir=cache_dir
+            substate(tower, "patch_embedder"), config, device, cache_dir=cache_dir, precision=vp
         )
         layers = [
             VisionEncoderLayer.from_state_dict(
-                substate(tower, f"encoder.layers.{i}"), config.layer(i), device, rope, cache_dir=cache_dir
+                substate(tower, f"encoder.layers.{i}"), config.layer(i), device, rope, cache_dir=cache_dir, precision=vp
             )
             for i in range(n)
         ]
         embedder = VisionEmbedder.from_state_dict(
-            substate(state_dict, "embed_vision"), config, device, cache_dir=cache_dir
+            substate(state_dict, "embed_vision"), config, device, cache_dir=cache_dir, precision=vp
         )
-        return cls(config, device, patch, layers, embedder, rope)
+        return cls(config, device, patch, layers, embedder, rope, precision)
 
     def forward_hidden(self, x: VisionDeviceInputs) -> ttnn.Tensor:
         """Patch embedding + 16 encoder layers. [B,1,S,768] bf16 (padding rows not meaningful)."""
@@ -137,7 +149,7 @@ class VisionModel(LightweightModule):
             mask = PaddingWindows(x.windows)
             cos, sin = (ttnn.reshape(t, (1, 1, B * S, D)) for t in (x.cos, x.sin))  # views
         else:
-            mask = key_padding_mask(x.keep)
+            mask = key_padding_mask(x.keep, self.mask_dtype)
             cos, sin = self.rope.expand(x.cos, x.sin, self.config.num_heads)  # once per forward
         h = self.patch_embedder(x.pixel_values, x.pos_x, x.pos_y)
         for layer in self.layers:

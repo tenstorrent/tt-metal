@@ -186,16 +186,27 @@ class EmbeddingGemma2(LightweightModule):
         precision=None,
     ) -> "EmbeddingGemma2":
         """Load the text tower and (optionally) the vision and audio towers. Open the device with a
-        trace region (the tests use 256 MiB for the full-model traces). `precision`: text-tower
-        precision policy (None: the selected config, see tt/precision.py)."""
+        trace region (the tests use 256 MiB for the full-model traces). `precision`: the precision
+        policy of all three towers (None: the selected config, see tt/precision.py)."""
         import json
 
+        from models.demos.blackhole.embedding_gemma2.tt.precision import resolve_precision
+
+        precision = resolve_precision(precision)
         snapshot = resolve_snapshot(model_id_or_path)
         text = TextEncoder.from_pretrained(
             device, str(snapshot), max_seq_len=max_seq_len, cache_dir=cache_dir, precision=precision
         )
-        venc = VisionEncoder.from_pretrained(device, str(snapshot), cache_dir=cache_dir) if vision else None
-        aenc = AudioEncoder.from_pretrained(device, str(snapshot), cache_dir=cache_dir) if audio else None
+        venc = (
+            VisionEncoder.from_pretrained(device, str(snapshot), cache_dir=cache_dir, precision=precision)
+            if vision
+            else None
+        )
+        aenc = (
+            AudioEncoder.from_pretrained(device, str(snapshot), cache_dir=cache_dir, precision=precision)
+            if audio
+            else None
+        )
         cfg = json.loads((snapshot / "config.json").read_text())
         token_ids = {"image": cfg["image_token_id"], "video": cfg["video_token_id"], "audio": cfg["audio_token_id"]}
         model = EmbeddingGemma2Model(

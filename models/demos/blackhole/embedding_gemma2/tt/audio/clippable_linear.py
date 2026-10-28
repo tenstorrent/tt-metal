@@ -26,17 +26,20 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.audio.config import ClipBounds, audio_act_memory_config
 from models.demos.blackhole.embedding_gemma2.tt.audio.linear import audio_linear, hardtanh
 from models.demos.blackhole.embedding_gemma2.tt.audio.weights import clip_bounds
-from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4
+from models.demos.blackhole.embedding_gemma2.tt.precision import MatmulPolicy
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight
+
+_E5_POLICY = MatmulPolicy("bf16", "HiFi4", True, "bf16")  # E3 / E5c: bf16 weights, HiFi4 + fp32 acc
 
 
 class ClippableLinear(LightweightModule):
-    def __init__(self, weight: ttnn.Tensor, bounds: ClipBounds, out_dtype=ttnn.bfloat16):
+    def __init__(self, weight: ttnn.Tensor, bounds: ClipBounds, out_dtype=None, policy: MatmulPolicy | None = None):
         super().__init__()
+        self.policy = policy or _E5_POLICY
         self.weight = weight
         self.bounds = bounds
-        self.out_dtype = out_dtype
-        self.compute_kernel_config = compute_kernel_config_hifi4()
+        self.out_dtype = self.policy.out_ttnn_dtype if out_dtype is None else out_dtype
+        self.compute_kernel_config = self.policy.compute_kernel_config
 
     @classmethod
     def from_state_dict(
@@ -48,14 +51,21 @@ class ClippableLinear(LightweightModule):
         *,
         cache_dir: Path | None = None,
         name: str,
-        out_dtype=ttnn.bfloat16,
+        out_dtype=None,
+        policy: MatmulPolicy | None = None,
     ) -> "ClippableLinear":
-        """`state_dict` holds one clippable linear's sub-state (`weight`, `input_min`, ...)."""
+        """`state_dict` holds one clippable linear's sub-state (`weight`, `input_min`, ...). `policy`:
+        weight dtype, fidelity, fp32 accumulation and output dtype (a precision-policy audio group;
+        None: bf16 weights, HiFi4 + fp32 acc, bf16 output). `out_dtype` overrides the policy's output
+        dtype (AudioModel `act_dtype`)."""
+        policy = policy or _E5_POLICY
         w = state_dict["weight"]
         if tuple(w.shape) != (out_features, in_features):
             raise ValueError(f"{name}: expected weight {(out_features, in_features)}, got {tuple(w.shape)}")
-        weight = as_weight(linear_weight(w), device, cache_dir=cache_dir, name=f"{name}.weight")
-        return cls(weight, clip_bounds(state_dict, name), out_dtype)
+        weight = as_weight(
+            linear_weight(w), device, cache_dir=cache_dir, name=f"{name}.weight", dtype=policy.ttnn_dtype
+        )
+        return cls(weight, clip_bounds(state_dict, name), out_dtype, policy)
 
     def input_clamp(self) -> ttnn.UnaryWithParam:
         """The input clamp as a unary op, for callers that fuse it into the producer of x."""

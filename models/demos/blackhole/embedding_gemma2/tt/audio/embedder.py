@@ -20,70 +20,109 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.audio.config import AudioConfig
 from models.demos.blackhole.embedding_gemma2.tt.audio.linear import audio_linear
-from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4
+from models.demos.blackhole.embedding_gemma2.tt.precision import AudioPrecision, resolve_precision
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight
 
 
 class AudioOutputProj(LightweightModule):
-    def __init__(self, weight: ttnn.Tensor, bias: ttnn.Tensor):
+    def __init__(self, weight: ttnn.Tensor, bias: ttnn.Tensor, precision: AudioPrecision | None = None):
         super().__init__()
+        precision = precision or resolve_precision(None).audio
         self.weight = weight
         self.bias = bias
-        self.compute_kernel_config = compute_kernel_config_hifi4()
+        self.policy = precision.matmul("output_proj")
+        self.compute_kernel_config = self.policy.compute_kernel_config
 
     @classmethod
     def from_state_dict(
-        cls, state_dict, config: AudioConfig, device, *, cache_dir: Path | None = None, name: str = "audio.output_proj"
+        cls,
+        state_dict,
+        config: AudioConfig,
+        device,
+        *,
+        cache_dir: Path | None = None,
+        name: str = "audio.output_proj",
+        precision: AudioPrecision | None = None,
     ) -> "AudioOutputProj":
-        """`state_dict` holds the HF `audio_tower.output_proj.` sub-state."""
+        """`state_dict` holds the HF `audio_tower.output_proj.` sub-state; `precision` the audio policy
+        (`audio.weights.output_proj`; None: the default precision file)."""
+        precision = precision or resolve_precision(None).audio
         w, b = state_dict["weight"], state_dict["bias"]
         if tuple(w.shape) != (config.output_proj_dims, config.hidden_size) or tuple(b.shape) != (
             config.output_proj_dims,
         ):
             raise ValueError(f"{name}: unexpected shapes {tuple(w.shape)}, {tuple(b.shape)}")
-        weight = as_weight(linear_weight(w), device, cache_dir=cache_dir, name=f"{name}.weight")
+        weight = as_weight(
+            linear_weight(w),
+            device,
+            cache_dir=cache_dir,
+            name=f"{name}.weight",
+            dtype=precision.matmul("output_proj").ttnn_dtype,
+        )
         bias = as_weight(
             b.float().reshape(1, 1, 1, -1), device, cache_dir=cache_dir, name=f"{name}.bias", dtype=ttnn.float32
         )
-        return cls(weight, bias)
+        return cls(weight, bias, precision)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         return audio_linear(
             x,
             self.weight,
             bias=self.bias,
-            dtype=ttnn.float32,
+            dtype=self.policy.out_ttnn_dtype,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
 
 class AudioEmbedder(LightweightModule):
-    def __init__(self, config: AudioConfig, norm: RMSNorm, w_proj: ttnn.Tensor):
+    def __init__(
+        self, config: AudioConfig, norm: RMSNorm, w_proj: ttnn.Tensor, precision: AudioPrecision | None = None
+    ):
         super().__init__()
+        precision = precision or resolve_precision(None).audio
         self.config = config
         self.norm = norm
         self.w_proj = w_proj
-        self.compute_kernel_config = compute_kernel_config_hifi4()
+        self.policy = precision.matmul("projector")
+        self.compute_kernel_config = self.policy.compute_kernel_config
 
     @classmethod
     def from_state_dict(
-        cls, state_dict, config: AudioConfig, device, *, cache_dir: Path | None = None, name: str = "embed_audio"
+        cls,
+        state_dict,
+        config: AudioConfig,
+        device,
+        *,
+        cache_dir: Path | None = None,
+        name: str = "embed_audio",
+        precision: AudioPrecision | None = None,
     ) -> "AudioEmbedder":
-        """`state_dict` holds the HF `embed_audio.` sub-state."""
+        """`state_dict` holds the HF `embed_audio.` sub-state; `precision` the audio policy
+        (`audio.weights.projector`, `audio.norms`; None: the default precision file)."""
+        precision = precision or resolve_precision(None).audio
         w = state_dict["embedding_projection.weight"]
         if tuple(w.shape) != (config.text_hidden_size, config.output_proj_dims):
             raise ValueError(f"{name}.embedding_projection: unexpected shape {tuple(w.shape)}")
-        w_proj = as_weight(linear_weight(w), device, cache_dir=cache_dir, name=f"{name}.embedding_projection.weight")
-        return cls(config, RMSNorm(config.norm(with_scale=False, dim=config.output_proj_dims), None), w_proj)
+        w_proj = as_weight(
+            linear_weight(w),
+            device,
+            cache_dir=cache_dir,
+            name=f"{name}.embedding_projection.weight",
+            dtype=precision.matmul("projector").ttnn_dtype,
+        )
+        norm = RMSNorm(
+            config.norm(with_scale=False, dim=config.output_proj_dims), None, precision.norms.compute_kernel_config
+        )
+        return cls(config, norm, w_proj, precision)
 
     def forward(self, hidden: ttnn.Tensor) -> ttnn.Tensor:
         n = self.norm(hidden)
         out = audio_linear(
             n,
             self.w_proj,
-            dtype=ttnn.bfloat16,
+            dtype=self.policy.out_ttnn_dtype,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

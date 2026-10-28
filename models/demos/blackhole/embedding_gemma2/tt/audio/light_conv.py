@@ -38,9 +38,9 @@ from models.demos.blackhole.embedding_gemma2.tt.audio.config import (
     audio_act_memory_config,
 )
 from models.demos.blackhole.embedding_gemma2.tt.audio.linear import audio_linear
+from models.demos.blackhole.embedding_gemma2.tt.audio.norm import AudioRMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.audio.program_configs import block_bmm_config
-from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4
-from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
+from models.demos.blackhole.embedding_gemma2.tt.precision import AudioPrecision, resolve_precision
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, substate
 
 
@@ -84,15 +84,17 @@ class AudioLightConv1d(LightweightModule):
     def __init__(
         self,
         config: AudioConfig,
-        pre_norm: RMSNorm,
+        pre_norm: AudioRMSNorm,
         linear_start: ClippableLinear,
         taps: list[ttnn.Tensor],
         selection: ttnn.Tensor,
-        conv_norm: RMSNorm,
+        conv_norm: AudioRMSNorm,
         linear_end: ClippableLinear,
         shifts: dict[int, list[ttnn.Tensor]],
+        precision: AudioPrecision | None = None,
     ):
         super().__init__()
+        precision = precision or resolve_precision(None).audio
         self.config = config
         self.pre_norm = pre_norm
         self.linear_start = linear_start
@@ -101,7 +103,8 @@ class AudioLightConv1d(LightweightModule):
         self.shifts = shifts
         self.conv_norm = conv_norm
         self.linear_end = linear_end
-        self.compute_kernel_config = compute_kernel_config_hifi4()
+        # 0/1 shift / selection matmuls: `audio.lconv_shift` (E5c: HiFi4 + fp32 acc, exact)
+        self.compute_kernel_config = precision.lconv_shift.kernel_config(True)
 
     @classmethod
     def from_state_dict(
@@ -112,25 +115,44 @@ class AudioLightConv1d(LightweightModule):
         *,
         cache_dir: Path | None = None,
         name: str = "audio.lconv1d",
-        act_dtype=ttnn.bfloat16,
+        act_dtype=None,
         shifts: dict[int, list[ttnn.Tensor]] | None = None,
+        layer_idx: int = 0,
+        precision: AudioPrecision | None = None,
     ) -> "AudioLightConv1d":
-        """`state_dict` holds the HF `layers.<i>.lconv1d.` sub-state (`.linear.` folded). `act_dtype`:
-        output dtype of linear_start / linear_end, see AudioModel. `shifts`: load_causal_shifts()
-        output to share between layers (loaded here when None)."""
+        """`state_dict` holds the HF `layers.<i>.lconv1d.` sub-state (`.linear.` folded). `precision`:
+        the audio policy (None: the default precision file) as layer `layer_idx` (`lconv_start`,
+        `lconv_end`, `lconv_shift`, norms). `act_dtype` (not None) overrides the output dtype of
+        linear_start / linear_end, see AudioModel. `shifts`: load_causal_shifts() output to share
+        between layers (loaded here when None)."""
+        precision = precision or resolve_precision(None).audio
         H, K = config.hidden_size, config.conv_kernel_size
         kw = dict(cache_dir=cache_dir)
-        pre = RMSNorm.from_state_dict(
-            substate(state_dict, "pre_layer_norm"), config.norm(), device, name=f"{name}.pre", **kw
+        pre = AudioRMSNorm.from_state_dict(
+            substate(state_dict, "pre_layer_norm"), config.norm(), device, precision.norms, name=f"{name}.pre", **kw
         )
-        cnorm = RMSNorm.from_state_dict(
-            substate(state_dict, "conv_norm"), config.norm(), device, name=f"{name}.conv_norm", **kw
+        cnorm = AudioRMSNorm.from_state_dict(
+            substate(state_dict, "conv_norm"), config.norm(), device, precision.norms, name=f"{name}.conv_norm", **kw
         )
         start = ClippableLinear.from_state_dict(
-            substate(state_dict, "linear_start"), H, 2 * H, device, name=f"{name}.start", out_dtype=act_dtype, **kw
+            substate(state_dict, "linear_start"),
+            H,
+            2 * H,
+            device,
+            name=f"{name}.start",
+            out_dtype=act_dtype,
+            policy=precision.matmul("lconv_start", layer_idx),
+            **kw,
         )
         end = ClippableLinear.from_state_dict(
-            substate(state_dict, "linear_end"), H, H, device, name=f"{name}.end", out_dtype=act_dtype, **kw
+            substate(state_dict, "linear_end"),
+            H,
+            H,
+            device,
+            name=f"{name}.end",
+            out_dtype=act_dtype,
+            policy=precision.matmul("lconv_end", layer_idx),
+            **kw,
         )
         w = state_dict["depthwise_conv1d.weight"]
         if tuple(w.shape) != (H, 1, K):
@@ -148,7 +170,7 @@ class AudioLightConv1d(LightweightModule):
         sel = as_weight(causal_selection(K), device, cache_dir=cache_dir, name=f"audio.causal_sel_k{K}")
         if shifts is None:
             shifts = load_causal_shifts(device, K, cache_dir)
-        return cls(config, pre, start, taps, sel, cnorm, end, shifts)
+        return cls(config, pre, start, taps, sel, cnorm, end, shifts, precision)
 
     def _causal_depthwise_full(self, h: ttnn.Tensor) -> ttnn.Tensor:
         """Batch 1: h_{t-s} = M_s h with the [S, S] shift matrices (2D multicast matmul, exact in bf16),

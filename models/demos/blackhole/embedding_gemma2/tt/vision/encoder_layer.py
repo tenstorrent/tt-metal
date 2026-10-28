@@ -26,6 +26,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.config import RMSNormConfig
+from models.demos.blackhole.embedding_gemma2.tt.precision import VisionPrecision, resolve_precision
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.vision.attention import VisionAttention
 from models.demos.blackhole.embedding_gemma2.tt.vision.config import VisionLayerConfig, vision_act_memory_config
@@ -58,13 +59,23 @@ class VisionEncoderLayer(LightweightModule):
         rope: AxialRope,
         *,
         cache_dir: Path | None = None,
+        precision: VisionPrecision | None = None,
     ) -> "VisionEncoderLayer":
-        """`state_dict` holds the HF `vision_tower.encoder.layers.<i>.` sub-state."""
-        prefix = f"vision.layers.{config.layer_idx}"
+        """`state_dict` holds the HF `vision_tower.encoder.layers.<i>.` sub-state; `precision` the
+        vision policy (None: the default precision file)."""
+        precision = precision or resolve_precision(None).vision
+        i = config.layer_idx
+        prefix = f"vision.layers.{i}"
         norm_cfg = RMSNormConfig(dim=config.hidden_size, eps=config.rms_norm_eps)
+        ckc_norm = precision.norms.compute_kernel_config
         norms = {
             n: RMSNorm.from_state_dict(
-                substate(state_dict, n), norm_cfg, device, cache_dir=cache_dir, name=f"{prefix}.{n}"
+                substate(state_dict, n),
+                norm_cfg,
+                device,
+                cache_dir=cache_dir,
+                name=f"{prefix}.{n}",
+                compute_kernel_config=ckc_norm,
             )
             for n in _NORMS
         }
@@ -75,9 +86,17 @@ class VisionEncoderLayer(LightweightModule):
             rope,
             cache_dir=cache_dir,
             name=f"{prefix}.self_attn",
+            layer_idx=i,
+            precision=precision,
         )
         mlp = VisionMLP.from_state_dict(
-            substate(state_dict, "mlp"), config.mlp, device, cache_dir=cache_dir, name=f"{prefix}.mlp"
+            substate(state_dict, "mlp"),
+            config.mlp,
+            device,
+            cache_dir=cache_dir,
+            name=f"{prefix}.mlp",
+            layer_idx=i,
+            precision=precision,
         )
         return cls(config, norms, attention, mlp)
 

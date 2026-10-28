@@ -61,8 +61,9 @@ BASELINE = {
         "residual_dtype": "bf16",
         "mask_dtype": "bfp4",
     },
-    "vision": {"status": "recorded, not consumed in E6a"},
-    "audio": {"status": "recorded, not consumed in E6a"},
+    # text candidates keep the E5 tower policies (precision.E5_VISION_POLICY / E5_AUDIO_POLICY)
+    "vision": None,
+    "audio": None,
     "kv_cache_dtype": "n/a: encoder, single chip (no KV cache)",
     "ccl_dtype": "n/a: encoder, single chip (no CCL)",
     "logits_dtype": "n/a: encoder, single chip (pooled fp32 embedding, no logits)",
@@ -115,11 +116,12 @@ def register_combo(cid: str, description: str, delta: dict) -> None:
 
 
 def candidate_dict(cid: str, delta: dict | None = None, description: str | None = None) -> dict:
-    from models.demos.blackhole.embedding_gemma2.tt.precision import deep_merge
+    from models.demos.blackhole.embedding_gemma2.tt.precision import E5_AUDIO_POLICY, E5_VISION_POLICY, deep_merge
 
     if delta is None:
         description, delta = CANDIDATES[cid]
-    d = deep_merge(BASELINE, delta)
+    base = dict(BASELINE, vision=E5_VISION_POLICY, audio=E5_AUDIO_POLICY)
+    d = deep_merge(base, delta)
     d["config_id"] = cid
     d["description"] = description or ""
     return d

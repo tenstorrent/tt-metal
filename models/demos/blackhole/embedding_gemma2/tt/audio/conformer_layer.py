@@ -32,7 +32,8 @@ from models.demos.blackhole.embedding_gemma2.tt.audio.attention import AudioAtte
 from models.demos.blackhole.embedding_gemma2.tt.audio.config import AudioConfig, audio_act_memory_config
 from models.demos.blackhole.embedding_gemma2.tt.audio.feed_forward import AudioFeedForward
 from models.demos.blackhole.embedding_gemma2.tt.audio.light_conv import AudioLightConv1d
-from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
+from models.demos.blackhole.embedding_gemma2.tt.audio.norm import AudioRMSNorm
+from models.demos.blackhole.embedding_gemma2.tt.precision import AudioPrecision, resolve_precision
 from models.demos.blackhole.embedding_gemma2.tt.weights import substate
 
 
@@ -41,12 +42,12 @@ class AudioConformerLayer(LightweightModule):
         self,
         layer_idx: int,
         ffn1: AudioFeedForward,
-        norm_pre_attn: RMSNorm,
+        norm_pre_attn: AudioRMSNorm,
         attn: AudioAttention,
-        norm_post_attn: RMSNorm,
+        norm_post_attn: AudioRMSNorm,
         lconv: AudioLightConv1d,
         ffn2: AudioFeedForward,
-        norm_out: RMSNorm,
+        norm_out: AudioRMSNorm,
     ):
         super().__init__()
         self.layer_idx = layer_idx
@@ -67,17 +68,23 @@ class AudioConformerLayer(LightweightModule):
         device,
         *,
         cache_dir: Path | None = None,
-        act_dtype=ttnn.bfloat16,
+        act_dtype=None,
         shifts: dict | None = None,
+        precision: AudioPrecision | None = None,
     ) -> "AudioConformerLayer":
         """`state_dict` holds the HF `audio_tower.layers.<i>.` sub-state (`.linear.` folded). `shifts`:
-        the lconv shift matrices shared by all layers (light_conv.load_causal_shifts)."""
+        the lconv shift matrices shared by all layers (light_conv.load_causal_shifts). `precision`:
+        the audio policy (None: the default precision file); `act_dtype` (not None) overrides the
+        output dtype of the activation-stream linears, see AudioModel."""
+        precision = precision or resolve_precision(None).audio
         name = f"audio.layers.{layer_idx}"
         kw = dict(cache_dir=cache_dir)
-        akw = dict(act_dtype=act_dtype, **kw)
+        akw = dict(act_dtype=act_dtype, layer_idx=layer_idx, precision=precision, **kw)
 
         def norm(key):
-            return RMSNorm.from_state_dict(substate(state_dict, key), config.norm(), device, name=f"{name}.{key}", **kw)
+            return AudioRMSNorm.from_state_dict(
+                substate(state_dict, key), config.norm(), device, precision.norms, name=f"{name}.{key}", **kw
+            )
 
         return cls(
             layer_idx,

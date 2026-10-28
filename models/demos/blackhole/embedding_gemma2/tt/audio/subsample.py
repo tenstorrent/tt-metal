@@ -12,7 +12,8 @@
 LayerNorms are over channels, weight only (`bias=False`), eps = rms_norm_eps. `flatten` follows HF
 `permute(0, 2, 3, 1).reshape(B, t, f*c)`: index f*32 + c, which is the NHWC conv output's natural order.
 
-Both convs run on device (`ttnn.conv2d`, fp32 mel in for conv0, bf16 weights, HiFi4 + fp32 accumulation).
+Both convs run on device (`ttnn.conv2d`, fp32 mel in for conv0; weight dtype and compute config from the
+precision policy `audio.weights.subsample_conv`, E5c: bf16 weights, HiFi4 + fp32 accumulation).
 `ttnn.conv2d` lays out its weights for one input geometry, so the device copies are prepared per
 (batch, frame bucket) by `prepare(batch, frames)` at setup (first conv2d call with host weights,
 `return_weights_and_bias=True`); the forward only uses prepared weights and raises for an
@@ -36,14 +37,14 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.audio.config import SUBSAMPLE, AudioConfig, audio_act_memory_config
-from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4, compute_kernel_config_norm
+from models.demos.blackhole.embedding_gemma2.tt.precision import AudioPrecision, resolve_precision
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight
 
 CONV0_L1_BYTES_PER_BANK = 256 * 1024
 
 
-def _conv_config():
-    return ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16, output_layout=ttnn.TILE_LAYOUT, config_tensors_in_dram=True)
+def _conv_config(weights_dtype=ttnn.bfloat16):
+    return ttnn.Conv2dConfig(weights_dtype=weights_dtype, output_layout=ttnn.TILE_LAYOUT, config_tensors_in_dram=True)
 
 
 class AudioSubsample(LightweightModule):
@@ -54,17 +55,22 @@ class AudioSubsample(LightweightModule):
         conv_w_host: tuple[ttnn.Tensor, ttnn.Tensor],
         norm_w: tuple[ttnn.Tensor, ttnn.Tensor],
         w_in: ttnn.Tensor,
-        act_dtype=ttnn.bfloat16,
+        act_dtype=None,
+        precision: AudioPrecision | None = None,
     ):
         super().__init__()
+        precision = precision or resolve_precision(None).audio
         self.config = config
         self.device = device
         self.conv_w_host = conv_w_host
         self.norm_w = norm_w
         self.w_in = w_in
-        self.act_dtype = act_dtype
-        self.compute_kernel_config = compute_kernel_config_hifi4()
-        self.norm_kernel_config = compute_kernel_config_norm()
+        self.conv_policy = precision.matmul("subsample_conv")
+        self.proj_policy = precision.matmul("subsample_proj")
+        self.act_dtype = self.proj_policy.out_ttnn_dtype if act_dtype is None else act_dtype
+        self.compute_kernel_config = self.conv_policy.compute_kernel_config
+        self.proj_kernel_config = self.proj_policy.compute_kernel_config
+        self.norm_kernel_config = precision.norms.compute_kernel_config
         self._conv_w: dict[tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]] = {}
 
     @classmethod
@@ -76,10 +82,15 @@ class AudioSubsample(LightweightModule):
         *,
         cache_dir: Path | None = None,
         name: str = "audio.subsample",
-        act_dtype=ttnn.bfloat16,
+        act_dtype=None,
+        precision: AudioPrecision | None = None,
     ) -> "AudioSubsample":
-        """`state_dict` holds the HF `subsample_conv_projection.` sub-state. `act_dtype`: output dtype
-        of input_proj (the conformer residual stream), see AudioModel."""
+        """`state_dict` holds the HF `subsample_conv_projection.` sub-state. `precision`: the audio
+        policy (None: the default precision file): conv weight dtype / compute config
+        (`subsample_conv`), input_proj (`subsample_proj`), LayerNorm compute config (`norms`).
+        `act_dtype` (not None) overrides input_proj's output dtype (the conformer residual stream),
+        see AudioModel."""
+        precision = precision or resolve_precision(None).audio
         c0, c1 = config.subsampling_channels
         shapes = {
             "layer0.conv.weight": (c0, 1, 3, 3),
@@ -108,8 +119,9 @@ class AudioSubsample(LightweightModule):
             device,
             cache_dir=cache_dir,
             name=f"{name}.input_proj",
+            dtype=precision.matmul("subsample_proj").ttnn_dtype,
         )
-        return cls(config, device, conv_w, norm_w, w_in, act_dtype)
+        return cls(config, device, conv_w, norm_w, w_in, act_dtype, precision)
 
     # ------------------------------------------------------------------ conv plumbing
     def _geometry(self, i: int, batch: int, frames: int) -> dict:
@@ -127,7 +139,7 @@ class AudioSubsample(LightweightModule):
             kernel_size=(3, 3),
             stride=(2, 2),
             padding=(1, 1),
-            conv_config=_conv_config(),
+            conv_config=_conv_config(self.conv_policy.ttnn_dtype),
             compute_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             return_weights_and_bias=prepare,
@@ -216,7 +228,7 @@ class AudioSubsample(LightweightModule):
             flat,
             self.w_in,
             dtype=self.act_dtype,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.proj_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 

@@ -58,7 +58,7 @@ from models.demos.blackhole.embedding_gemma2.tt.audio.config import (
 from models.demos.blackhole.embedding_gemma2.tt.audio.linear import audio_linear
 from models.demos.blackhole.embedding_gemma2.tt.audio.program_configs import block_bmm_config
 from models.demos.blackhole.embedding_gemma2.tt.audio.weights import clip_bounds
-from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4, compute_kernel_config_norm
+from models.demos.blackhole.embedding_gemma2.tt.precision import AudioPrecision, resolve_precision
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight, substate
 
 CTX = 2 * ATTN_BLOCK  # keys per query block: previous block + own block
@@ -152,8 +152,12 @@ class AudioAttention(LightweightModule):
         qscale: ttnn.Tensor,
         rel_keys_t: ttnn.Tensor,
         shift_index: ttnn.Tensor,
+        *,
+        layer_idx: int = 0,
+        precision: AudioPrecision | None = None,
     ):
         super().__init__()
+        precision = precision or resolve_precision(None).audio
         self.config = config
         self.wqkv = wqkv
         self.qkv_bounds = qkv_bounds
@@ -161,8 +165,10 @@ class AudioAttention(LightweightModule):
         self.qscale = qscale
         self.rel_keys_t = rel_keys_t
         self.shift_index = shift_index
-        self.compute_kernel_config = compute_kernel_config_norm()
-        self.proj_kernel_config = compute_kernel_config_hifi4()
+        # band-attention block matmuls + softmax sum: `audio.attention` (E5c: HiFi4 + fp32 acc)
+        self.compute_kernel_config = precision.attention.compute_kernel_config
+        self.qkv_policy = precision.matmul("attn_qkv", layer_idx)
+        self.proj_kernel_config = self.qkv_policy.compute_kernel_config
 
     @classmethod
     def from_state_dict(
@@ -173,14 +179,19 @@ class AudioAttention(LightweightModule):
         *,
         cache_dir: Path | None = None,
         name: str = "audio.self_attn",
-        act_dtype=ttnn.bfloat16,
+        act_dtype=None,
+        layer_idx: int = 0,
+        precision: AudioPrecision | None = None,
     ) -> "AudioAttention":
-        """`state_dict` holds the HF `layers.<i>.self_attn.` sub-state (`.linear.` folded). q/k/v are
-        always fp32; `act_dtype` is the output dtype of `post`, see AudioModel.
+        """`state_dict` holds the HF `layers.<i>.self_attn.` sub-state (`.linear.` folded). `precision`:
+        the audio policy (None: the default precision file), applied as layer `layer_idx`: the fused
+        QKV and `post` weights / compute configs / output dtypes (`attn_qkv`, `attn_o`; E5c: q/k/v
+        fp32), the block matmuls (`attention`). `act_dtype` (not None) overrides `post`'s output dtype.
 
         q / k / v run as one fused projection (weights concatenated to [1024, 3072]) after one input
         clamp. That needs identical q / k / v input bounds, which holds in all 12 layers of
         google/embeddinggemma-2 (E5c `bounds.py`); other bounds raise."""
+        precision = precision or resolve_precision(None).audio
         H = config.hidden_size
         kw = dict(cache_dir=cache_dir)
         f32 = ttnn.float32
@@ -192,9 +203,22 @@ class AudioAttention(LightweightModule):
         if len({(b.input_min, b.input_max) for b in bounds}) != 1:
             raise ValueError(f"{name}: q / k / v input clip bounds differ {bounds}; the fused QKV needs them equal")
         wqkv = torch.cat([subs[p]["weight"] for p in "qkv"], dim=0)  # [3H, H]
-        wqkv = as_weight(linear_weight(wqkv), device, cache_dir=cache_dir, name=f"{name}.wqkv")
+        wqkv = as_weight(
+            linear_weight(wqkv),
+            device,
+            cache_dir=cache_dir,
+            name=f"{name}.wqkv",
+            dtype=precision.matmul("attn_qkv", layer_idx).ttnn_dtype,
+        )
         post = ClippableLinear.from_state_dict(
-            substate(state_dict, "post"), H, H, device, name=f"{name}.post", out_dtype=act_dtype, **kw
+            substate(state_dict, "post"),
+            H,
+            H,
+            device,
+            name=f"{name}.post",
+            out_dtype=act_dtype,
+            policy=precision.matmul("attn_o", layer_idx),
+            **kw,
         )
         pds = state_dict["per_dim_scale"]
         if tuple(pds.shape) != (config.head_dim,):
@@ -217,7 +241,7 @@ class AudioAttention(LightweightModule):
             name=f"audio.rel_shift_index_h{config.max_past_horizon}",
             dtype=ttnn.uint16,
         )
-        return cls(config, wqkv, bounds, post, qscale, rel_t, shift_index)
+        return cls(config, wqkv, bounds, post, qscale, rel_t, shift_index, layer_idx=layer_idx, precision=precision)
 
     # ------------------------------------------------------------------ helpers
     def _qkv_heads(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
@@ -235,13 +259,15 @@ class AudioAttention(LightweightModule):
         )
         # the fp32 fused QKV output gets a wider L1 cap (72 KB per bank at 1 x 768), like the named
         # wide intermediates of the vision tower (E5b)
+        # (output dtype: `audio.weights.attn_qkv.out_dtype`, fp32 in E5c)
+        qkv_dtype = self.qkv_policy.out_ttnn_dtype
         qkv_shape = (x.shape[0], x.shape[2], 3 * cfg.hidden_size)
-        qkv_mc = audio_act_memory_config(dev, qkv_shape, ttnn.float32, bytes_per_bank=WIDE_L1_BYTES_PER_BANK)
+        qkv_mc = audio_act_memory_config(dev, qkv_shape, qkv_dtype, bytes_per_bank=WIDE_L1_BYTES_PER_BANK)
         qkv = audio_linear(
-            xc, self.wqkv, dtype=ttnn.float32, compute_kernel_config=self.proj_kernel_config, memory_config=qkv_mc
+            xc, self.wqkv, dtype=qkv_dtype, compute_kernel_config=self.proj_kernel_config, memory_config=qkv_mc
         )
         ttnn.deallocate(xc)
-        mc = audio_act_memory_config(dev, (x.shape[0], x.shape[2], cfg.hidden_size), ttnn.float32)  # one of q/k/v
+        mc = audio_act_memory_config(dev, (x.shape[0], x.shape[2], cfg.hidden_size), qkv_dtype)  # one of q/k/v
         q_r, k_r, v_r = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=cfg.num_heads, num_kv_heads=cfg.num_heads, transpose_k_heads=False, memory_config=mc
         )

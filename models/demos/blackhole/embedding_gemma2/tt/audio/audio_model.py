@@ -31,6 +31,7 @@ from models.demos.blackhole.embedding_gemma2.tt.audio.conformer_layer import Aud
 from models.demos.blackhole.embedding_gemma2.tt.audio.embedder import AudioEmbedder, AudioOutputProj
 from models.demos.blackhole.embedding_gemma2.tt.audio.light_conv import load_causal_shifts
 from models.demos.blackhole.embedding_gemma2.tt.audio.subsample import AudioSubsample
+from models.demos.blackhole.embedding_gemma2.tt.precision import PrecisionConfig, resolve_precision
 from models.demos.blackhole.embedding_gemma2.tt.weights import substate
 
 
@@ -54,8 +55,10 @@ class AudioModel(LightweightModule):
         layers: list[AudioConformerLayer],
         output_proj: AudioOutputProj,
         embedder: AudioEmbedder,
+        precision: PrecisionConfig | None = None,
     ):
         super().__init__()
+        self.precision = precision or resolve_precision(None)
         self.config = config
         self.device = device
         self.subsample = subsample
@@ -72,22 +75,33 @@ class AudioModel(LightweightModule):
         *,
         cache_dir: Path | None = None,
         num_layers: int | None = None,
-        act_dtype=ttnn.bfloat16,
+        act_dtype=None,
+        precision=None,
     ) -> "AudioModel":
         """`state_dict`: `audio_tower.*` and `embed_audio.*` keys (weights.load_audio_state_dict).
 
         num_layers < config.num_layers builds a truncated stack (debug / per-layer tests only).
-        act_dtype is the dtype of the conformer activations between ops (input_proj, the FFN /
-        lconv / attention-output linears, residual adds, norms). bf16 (default) or fp32; weights
-        are bf16 either way and attention q/k/v/logits are fp32 either way. The fp32 variant is
-        a measured precision lever (doc/functional_audio/README.md), not the default.
+        precision: None (default) loads `doc/datatype_sweep/selected_precision_config.json` (or the
+        file named by EMBEDDING_GEMMA2_PRECISION); a path, dict or PrecisionConfig otherwise. Its
+        `audio` section sets every weight dtype, compute config and projection output dtype.
+        act_dtype (None: from the policy) overrides the output dtype of the activation-stream
+        linears (precision.AUDIO_ACT_GROUPS: input_proj, the FFN / lconv / attention-output
+        linears), i.e. the dtype of the conformer activations between ops. bf16 or fp32; the fp32
+        variant is a measured precision lever (doc/functional_audio/README.md).
         """
+        precision = resolve_precision(precision)
+        ap = precision.audio
         n = config.num_layers if num_layers is None else num_layers
-        if act_dtype not in (ttnn.bfloat16, ttnn.float32):
-            raise ValueError(f"act_dtype must be bfloat16 or float32, got {act_dtype}")
+        if act_dtype not in (None, ttnn.bfloat16, ttnn.float32):
+            raise ValueError(f"act_dtype must be None, bfloat16 or float32, got {act_dtype}")
         tower = substate(state_dict, "audio_tower")
         sub = AudioSubsample.from_state_dict(
-            substate(tower, "subsample_conv_projection"), config, device, cache_dir=cache_dir, act_dtype=act_dtype
+            substate(tower, "subsample_conv_projection"),
+            config,
+            device,
+            cache_dir=cache_dir,
+            act_dtype=act_dtype,
+            precision=ap,
         )
         shifts = load_causal_shifts(device, config.conv_kernel_size, cache_dir)  # shared by the lconv layers
         layers = [
@@ -99,12 +113,17 @@ class AudioModel(LightweightModule):
                 cache_dir=cache_dir,
                 act_dtype=act_dtype,
                 shifts=shifts,
+                precision=ap,
             )
             for i in range(n)
         ]
-        out_proj = AudioOutputProj.from_state_dict(substate(tower, "output_proj"), config, device, cache_dir=cache_dir)
-        embed = AudioEmbedder.from_state_dict(substate(state_dict, "embed_audio"), config, device, cache_dir=cache_dir)
-        return cls(config, device, sub, layers, out_proj, embed)
+        out_proj = AudioOutputProj.from_state_dict(
+            substate(tower, "output_proj"), config, device, cache_dir=cache_dir, precision=ap
+        )
+        embed = AudioEmbedder.from_state_dict(
+            substate(state_dict, "embed_audio"), config, device, cache_dir=cache_dir, precision=ap
+        )
+        return cls(config, device, sub, layers, out_proj, embed, precision)
 
     def prepare(self, x: AudioDeviceInputs) -> None:
         """Setup for one (batch, bucket): lays out the conv weights (runs the subsampling stack once)."""

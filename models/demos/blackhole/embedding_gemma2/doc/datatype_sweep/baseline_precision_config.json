@@ -18,8 +18,40 @@
     "residual_dtype": "bf16",
     "mask_dtype": "bfp4"
   },
-  "vision": {"status": "recorded, not consumed in E6a; see selected_precision_config.json"},
-  "audio": {"status": "recorded, not consumed in E6a; see selected_precision_config.json"},
+  "vision": {
+    "note": "E5b vision policy (the E6b safe baseline)",
+    "weights": {
+      "attn_qkv": {"dtype": "bf16", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "attn_o": {"dtype": "bf16", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "mlp_gate_up": {"dtype": "bf16", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "mlp_down": {"dtype": "bf16", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "patch_embed": {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": true, "out_dtype": "bf16"},
+      "projector": {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": true, "out_dtype": "bf16"}
+    },
+    "layer_exceptions": [],
+    "sdpa": {"fidelity": "HiFi2", "fp32_acc": true, "exp_approx": false},
+    "norms": {"fidelity": "HiFi4", "fp32_acc": true},
+    "mask_dtype": "bfp4"
+  },
+  "audio": {
+    "note": "E5c audio policy (the E6b safe baseline)",
+    "weights": {
+      "subsample_conv": {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": true, "out_dtype": "bf16"},
+      "subsample_proj": {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": true, "out_dtype": "bf16"},
+      "attn_qkv": {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": true, "out_dtype": "fp32"},
+      "attn_o": {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": true, "out_dtype": "bf16"},
+      "ffn_up": {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": true, "out_dtype": "bf16"},
+      "ffn_down": {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": true, "out_dtype": "bf16"},
+      "lconv_start": {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": true, "out_dtype": "bf16"},
+      "lconv_end": {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": true, "out_dtype": "bf16"},
+      "output_proj": {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": true, "out_dtype": "fp32"},
+      "projector": {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": true, "out_dtype": "bf16"}
+    },
+    "layer_exceptions": [],
+    "attention": {"fidelity": "HiFi4", "fp32_acc": true},
+    "lconv_shift": {"fidelity": "HiFi4", "fp32_acc": true},
+    "norms": {"fidelity": "HiFi4", "fp32_acc": true, "sharded": false}
+  },
   "kv_cache_dtype": "n/a: encoder, single chip (no KV cache)",
   "ccl_dtype": "n/a: encoder, single chip (no CCL)",
   "logits_dtype": "n/a: encoder, single chip (pooled fp32 embedding, no logits)",

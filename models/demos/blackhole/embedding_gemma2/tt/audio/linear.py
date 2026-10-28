@@ -3,8 +3,9 @@
 
 """Audio projections with explicit 2D-multicast program configs (E5c).
 
-Same precision as the functional audio path: bf16 weights, HiFi4 with fp32 destination
-accumulation (the caller's compute kernel config). Only the work split changes: the default
+Precision is the caller's: weight dtype (the tensor `w`), compute kernel config and output dtype
+come from the audio precision policy (E6b; E5c: bf16 weights, HiFi4 with fp32 destination
+accumulation). Only the work split is decided here: the default
 config ran the 1024 -> 4096 / 4096 -> 1024 / q / k / v projections on 88-104 cores with
 in0_block_w 1; here a 2D multicast config over the full grid with in0_block_w up to 8.
 
@@ -23,7 +24,7 @@ from models.demos.blackhole.embedding_gemma2.tt.audio.config import audio_act_me
 # Static circular-buffer budget per core (Blackhole L1 is 1.5 MB; the allocator and other
 # program buffers need the rest), as in tt/linear.py.
 _CB_BUDGET_BYTES = 900 * 1024
-_TILE_BYTES = {ttnn.bfloat16: 2048, ttnn.float32: 4096}
+_TILE_BYTES = {ttnn.bfloat16: 2048, ttnn.float32: 4096, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}
 
 
 def _largest_divisor(n: int, limit: int) -> int:

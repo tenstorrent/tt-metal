@@ -13,8 +13,10 @@ faster on the narrow roles (E5b `mm_sweep.py`, bf16 weights, HiFi2 + fp32 acc, L
 At M = 10240 (4 images, 8 video frames) minimal_matmul wins every role (o 148 vs 222 us, down 334
 vs 840 us) and the 2D config often exceeds L1, so those shapes keep the text rule.
 
-Weights stay bf16 for the vision tower (doc/optimized_vision/README.md, "Precision"): bfp8 weights
-were 0.6-4 % faster but cut the worst soft-token cosine from 0.909 to 0.624.
+Precision (E6b): weight dtype, compute fidelity, fp32 accumulation and output dtype per weight group
+come from the vision section of the precision policy (`tt/precision.py`, doc/datatype_sweep/): the
+modules pass a `MatmulPolicy` as `policy=`. Without one the call uses the E5b policy (HiFi2, fp32
+accumulation `EG2_MM_FP32`, bf16 output).
 """
 
 from __future__ import annotations
@@ -46,22 +48,28 @@ def vision_linear(
     *,
     activation: str | None = None,
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    policy=None,
 ) -> ttnn.Tensor:
-    """x [B, 1, S, K] @ w [1, 1, K, N] -> [B, 1, S, N] bf16 TILE (optionally gelu_tanh fused)."""
+    """x [B, 1, S, K] @ w [1, 1, K, N] -> [B, 1, S, N] TILE (optionally gelu_tanh fused).
+
+    `policy` (a `precision.MatmulPolicy`): compute fidelity, fp32 accumulation and output dtype
+    (the weight dtype is the one `w` was built with). None: HiFi2, `FP32_ACC`, bf16 output."""
     shape = x.shape
     B, S, K = shape[0], shape[-2], shape[-1]
     N = w.shape[-1]
     M = B * shape[1] * S
+    if policy is None:
+        fp32_acc, ckc, dtype = FP32_ACC, _ckc(), ttnn.bfloat16
+    else:
+        fp32_acc, ckc, dtype = policy.fp32_acc, policy.compute_kernel_config, policy.out_ttnn_dtype
     if M > MCAST2D_MAX_M or K > MCAST2D_MAX_K:
-        return linear(x, w, activation=activation, memory_config=memory_config)
+        return linear(x, w, activation=activation, memory_config=memory_config, policy=policy, dtype=dtype)
     grid = x.device().compute_with_storage_grid_size()
-    pc = mcast2d_config(M, K, N, grid.x, grid.y, activation, FP32_ACC)
+    pc = mcast2d_config(M, K, N, grid.x, grid.y, activation, fp32_acc)
     if pc is None:
-        return linear(x, w, activation=activation, memory_config=memory_config)
+        return linear(x, w, activation=activation, memory_config=memory_config, policy=policy, dtype=dtype)
     x2 = ttnn.reshape(x, (1, 1, M, K)) if B * shape[1] != 1 else x
-    out = ttnn.linear(
-        x2, w, program_config=pc, compute_kernel_config=_ckc(), memory_config=memory_config, dtype=ttnn.bfloat16
-    )
+    out = ttnn.linear(x2, w, program_config=pc, compute_kernel_config=ckc, memory_config=memory_config, dtype=dtype)
     if x2 is not x:
         out = ttnn.reshape(out, (B, shape[1], S, N))
     return out

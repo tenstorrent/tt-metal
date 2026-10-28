@@ -25,7 +25,8 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.audio.clippable_linear import ClippableLinear
 from models.demos.blackhole.embedding_gemma2.tt.audio.config import AudioConfig, audio_act_memory_config
-from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
+from models.demos.blackhole.embedding_gemma2.tt.audio.norm import AudioRMSNorm
+from models.demos.blackhole.embedding_gemma2.tt.precision import AudioPrecision, resolve_precision
 from models.demos.blackhole.embedding_gemma2.tt.weights import substate
 
 
@@ -33,10 +34,10 @@ class AudioFeedForward(LightweightModule):
     def __init__(
         self,
         config: AudioConfig,
-        pre_norm: RMSNorm,
+        pre_norm: AudioRMSNorm,
         ffw1: ClippableLinear,
         ffw2: ClippableLinear,
-        post_norm: RMSNorm,
+        post_norm: AudioRMSNorm,
     ):
         super().__init__()
         self.config = config
@@ -54,23 +55,42 @@ class AudioFeedForward(LightweightModule):
         *,
         cache_dir: Path | None = None,
         name: str = "audio.feed_forward",
-        act_dtype=ttnn.bfloat16,
+        act_dtype=None,
+        layer_idx: int = 0,
+        precision: AudioPrecision | None = None,
     ) -> "AudioFeedForward":
-        """`state_dict` holds the HF `layers.<i>.feed_forward{1,2}.` sub-state. `act_dtype`: output
-        dtype of the two linears (and so of the residual stream), see AudioModel."""
+        """`state_dict` holds the HF `layers.<i>.feed_forward{1,2}.` sub-state. `precision`: the audio
+        policy (None: the default precision file) as layer `layer_idx` (`ffn_up` / `ffn_down`, norms).
+        `act_dtype` (not None) overrides the output dtype of the two linears (and so of the residual
+        stream), see AudioModel."""
+        precision = precision or resolve_precision(None).audio
         H, I = config.hidden_size, config.intermediate_size
         kw = dict(cache_dir=cache_dir)
-        pre = RMSNorm.from_state_dict(
-            substate(state_dict, "pre_layer_norm"), config.norm(), device, name=f"{name}.pre", **kw
+        pre = AudioRMSNorm.from_state_dict(
+            substate(state_dict, "pre_layer_norm"), config.norm(), device, precision.norms, name=f"{name}.pre", **kw
         )
-        post = RMSNorm.from_state_dict(
-            substate(state_dict, "post_layer_norm"), config.norm(), device, name=f"{name}.post", **kw
+        post = AudioRMSNorm.from_state_dict(
+            substate(state_dict, "post_layer_norm"), config.norm(), device, precision.norms, name=f"{name}.post", **kw
         )
         ffw1 = ClippableLinear.from_state_dict(
-            substate(state_dict, "ffw_layer_1"), H, I, device, name=f"{name}.ffw1", out_dtype=act_dtype, **kw
+            substate(state_dict, "ffw_layer_1"),
+            H,
+            I,
+            device,
+            name=f"{name}.ffw1",
+            out_dtype=act_dtype,
+            policy=precision.matmul("ffn_up", layer_idx),
+            **kw,
         )
         ffw2 = ClippableLinear.from_state_dict(
-            substate(state_dict, "ffw_layer_2"), I, H, device, name=f"{name}.ffw2", out_dtype=act_dtype, **kw
+            substate(state_dict, "ffw_layer_2"),
+            I,
+            H,
+            device,
+            name=f"{name}.ffw2",
+            out_dtype=act_dtype,
+            policy=precision.matmul("ffn_down", layer_idx),
+            **kw,
         )
         return cls(config, pre, ffw1, ffw2, post)
 

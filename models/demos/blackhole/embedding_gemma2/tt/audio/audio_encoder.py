@@ -79,8 +79,11 @@ class AudioEncoder(LightweightModule):
         *,
         cache_dir: Path | None = None,
         state_dict: dict[str, torch.Tensor] | None = None,
-        act_dtype=ttnn.bfloat16,
+        act_dtype=None,
+        precision=None,
     ) -> "AudioEncoder":
+        """`precision`: None loads the selected precision config (tt/precision.py, its `audio`
+        section); a path, dict or PrecisionConfig otherwise. `act_dtype`: see AudioModel."""
         snapshot = resolve_snapshot(model_id_or_path)
         acfg, text_hidden, mel_bins = load_audio_config_dicts(snapshot)
         config = AudioConfig.from_hf(acfg, text_hidden, mel_bins)
@@ -88,7 +91,9 @@ class AudioEncoder(LightweightModule):
             state_dict = load_audio_state_dict(snapshot)
         cache_dir = Path(cache_dir) if cache_dir is not None else default_weight_cache_dir() / snapshot.name
         cache_dir.mkdir(parents=True, exist_ok=True)
-        model = AudioModel.from_state_dict(state_dict, config, device, cache_dir=cache_dir, act_dtype=act_dtype)
+        model = AudioModel.from_state_dict(
+            state_dict, config, device, cache_dir=cache_dir, act_dtype=act_dtype, precision=precision
+        )
         return cls(model, device, snapshot)
 
     # ---------------------------------------------------------------- host side

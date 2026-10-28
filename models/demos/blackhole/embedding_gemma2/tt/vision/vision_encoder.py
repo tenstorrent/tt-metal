@@ -76,7 +76,10 @@ class VisionEncoder(LightweightModule):
         *,
         cache_dir: Path | None = None,
         state_dict: dict[str, torch.Tensor] | None = None,
+        precision=None,
     ) -> "VisionEncoder":
+        """`precision`: None loads the selected precision config (tt/precision.py, its `vision`
+        section); a path, dict or PrecisionConfig otherwise."""
         snapshot = resolve_snapshot(model_id_or_path)
         vcfg, text_hidden = load_vision_config_dicts(snapshot)
         config = VisionConfig.from_hf(vcfg, text_hidden)
@@ -84,7 +87,8 @@ class VisionEncoder(LightweightModule):
             state_dict = load_vision_state_dict(snapshot)
         cache_dir = Path(cache_dir) if cache_dir is not None else default_weight_cache_dir() / snapshot.name
         cache_dir.mkdir(parents=True, exist_ok=True)
-        return cls(VisionModel.from_state_dict(state_dict, config, device, cache_dir=cache_dir), device)
+        model = VisionModel.from_state_dict(state_dict, config, device, cache_dir=cache_dir, precision=precision)
+        return cls(model, device)
 
     # ---------------------------------------------------------------- host side
     def prepare_inputs(self, pixel_values: torch.Tensor, position_ids: torch.Tensor) -> VisionHostInputs:
