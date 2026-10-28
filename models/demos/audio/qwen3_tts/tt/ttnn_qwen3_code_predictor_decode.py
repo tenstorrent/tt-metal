@@ -11,12 +11,6 @@ per second of audio against the talker's 0.16 s, which made it the dominant bloc
 Same shape of fix as the talker's. Prefill the two-position prompt (the talker's hidden
 state and codebook 0) into a per-layer cache, then step one position at a time reading it.
 
-One structural difference: **each step reads a different output head.** Step k predicts
-codebook k+1 through `lm_head[k]`, so the traced graph covers the five transformer layers
-and the head is applied outside it. The head is one [1024, 2048] matmul against five layers
-of work, so leaving it out of the trace costs little and keeps a single graph serving all
-15 steps.
-
 The cache is tiny, 16 positions rounded up to the 64 that flash decode requires, but the
 step count is what matters here: this is a dispatch-bound block, which is exactly what a
 trace fixes.
@@ -42,6 +36,12 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import (
     decode_matmul_config,
     sharded_norm_plan,
 )
+
+PRECISION_LEVELS = ("main", "accurate", "max")
+
+
+def predictor_mlp_dtype(precision):
+    return ttnn.bfloat16 if precision == "max" else MLP_WEIGHT_DTYPE
 
 
 def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloat16, mlp_dtype=MLP_WEIGHT_DTYPE):
@@ -126,11 +126,24 @@ def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloa
 class TtCodePredictorCachedDecoder:
     """Prefill two positions, then 14 cached steps, one output head each."""
 
-    def __init__(self, device, parameters):
+    def __init__(self, device, parameters, precision="main"):
+        if precision not in PRECISION_LEVELS:
+            raise ValueError(f"precision must be one of {PRECISION_LEVELS}, got {precision!r}")
         self.device = device
         self.p = parameters
         self.config = parameters["config"]
-        self.compute_config = _compute_config(device)
+        self._fp32 = precision != "main"
+        if self._fp32:
+            self.compute_config = ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi3,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+        else:
+            self.compute_config = _compute_config(device)
+        self._norm_config = self.compute_config if self._fp32 else None
 
         self.heads = self.config["num_attention_heads"]
         self.kv_heads = self.config["num_key_value_heads"]
@@ -194,7 +207,8 @@ class TtCodePredictorCachedDecoder:
         self._position_inputs = {}
 
         self.trace_id = None
-        self._out = None
+        self._trace_ids = []
+        self._outs = []
 
     def _single_core_shard(self, column):
         return ttnn.MemoryConfig(
@@ -209,7 +223,7 @@ class TtCodePredictorCachedDecoder:
 
     def _norm(self, x, weights, key):
         if self._norm_plan is None or f"{key}_wide" not in weights or weights[f"{key}_wide"] is None:
-            return ttnn.rms_norm(x, weight=weights[key], epsilon=self.eps)
+            return self._rms(x, weights[key])
         memory_config, program_config = self._norm_plan
         sharded = ttnn.interleaved_to_sharded(x, memory_config)
         out = ttnn.rms_norm(
@@ -228,20 +242,40 @@ class TtCodePredictorCachedDecoder:
             x, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_config
         )
 
-    def _mlp(self, x, layer):
-        gate = ttnn.linear(
-            x, layer["gate_proj"], compute_kernel_config=self.compute_config, program_config=self._matmul["gate_proj"]
+    def _widen(self, x):
+        return ttnn.typecast(x, ttnn.float32) if self._fp32 else x
+
+    def _residual(self, x, update):
+        if self._fp32:
+            return ttnn.add(x, update, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return ttnn.add(x, update)
+
+    def _rms(self, x, weight):
+        return ttnn.rms_norm(x, weight=weight, epsilon=self.eps, compute_kernel_config=self._norm_config)
+
+    def _linear(self, x, weight, name=None, **kwargs):
+        return ttnn.linear(
+            x,
+            weight,
+            compute_kernel_config=self.compute_config,
+            program_config=self._matmul[name] if name else None,
+            memory_config=ttnn.L1_MEMORY_CONFIG if name else None,
+            **kwargs,
         )
+
+    def _qkv(self, x, layer, name=None):
+        return self._linear(x, layer["qkv"], name, dtype=ttnn.bfloat16 if self._fp32 else None)
+
+    def _o_proj(self, x, layer, name=None):
+        return self._linear(x, layer["o_proj"], name, dtype=ttnn.float32 if self._fp32 else None)
+
+    def _mlp(self, x, layer):
+        gate = self._linear(x, layer["gate_proj"], "gate_proj")
         if self._matmul["gate_proj"] is None or self._matmul["gate_proj"].fused_activation is None:
             gate = ttnn.silu(gate)
-        up = ttnn.linear(
-            x, layer["up_proj"], compute_kernel_config=self.compute_config, program_config=self._matmul["up_proj"]
-        )
-        return ttnn.linear(
-            ttnn.multiply(gate, up),
-            layer["down_proj"],
-            compute_kernel_config=self.compute_config,
-            program_config=self._matmul["down_proj"],
+        up = self._linear(x, layer["up_proj"], "up_proj")
+        return self._linear(
+            ttnn.multiply(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG), layer["down_proj"], "down_proj"
         )
 
     def _rotary(self, length, offset=0):
@@ -270,6 +304,26 @@ class TtCodePredictorCachedDecoder:
             )
         return self._position_inputs[position]
 
+    def _scaled_rope(self, position):
+        cos, sin = self._rotary(1, offset=int(position))
+        rows = lambda table: ttnn.from_torch(
+            (table * self.scale).reshape(1, 1, 1, -1).expand(1, 1, ROPE_ROWS, self.head_dim).contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+        )
+        return rows(cos), rows(sin)
+
+    def _position_tensors(self):
+        if not hasattr(self, "_at"):
+            self._at = [
+                tuple(ttnn.to_device(t, self.device) for t in self._host_position_inputs(p))
+                + (p,)
+                + (self._scaled_rope(p) if self._fp32 else ())
+                for p in range(self.groups)
+            ]
+        return self._at
+
     def set_position(self, position):
         pos, cos, sin = self._host_position_inputs(position)
         ttnn.copy_host_to_device_tensor(pos, self._pos)
@@ -286,10 +340,9 @@ class TtCodePredictorCachedDecoder:
         x = to_device(embeddings)
         cos_tt, sin_tt, mask_tt = to_device(cos), to_device(sin), to_device(causal_mask(length))
 
-        x = project(x, self.p, self.compute_config)
+        x = self._widen(project(x, self.p, self.compute_config))
         for index, layer in enumerate(self.p["layers"]):
-            normed = ttnn.rms_norm(x, weight=layer["input_layernorm"], epsilon=self.eps)
-            qkv = ttnn.linear(normed, layer["qkv"], compute_kernel_config=self.compute_config)
+            qkv = self._qkv(self._rms(x, layer["input_layernorm"]), layer)
 
             def split(start, heads, width):
                 piece = ttnn.slice(qkv, [0, 0, start], [1, length, start + width])
@@ -300,8 +353,8 @@ class TtCodePredictorCachedDecoder:
             key = split(q_width, self.kv_heads, kv_width)
             value = split(q_width + kv_width, self.kv_heads, kv_width)
 
-            query = self._rotate(ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps), cos_tt, sin_tt)
-            key = self._rotate(ttnn.rms_norm(key, weight=layer["k_norm"], epsilon=self.eps), cos_tt, sin_tt)
+            query = self._rotate(self._rms(query, layer["q_norm"]), cos_tt, sin_tt)
+            key = self._rotate(self._rms(key, layer["k_norm"]), cos_tt, sin_tt)
 
             ttnn.fill_cache(self.k_cache[index], key, 0)
             ttnn.fill_cache(self.v_cache[index], value, 0)
@@ -319,58 +372,112 @@ class TtCodePredictorCachedDecoder:
                 scores, ttnn.repeat_interleave(value, repeats, dim=1), compute_kernel_config=self.compute_config
             )
             attended = ttnn.reshape(ttnn.permute(attended, (0, 2, 1, 3)), (1, length, self.heads * self.head_dim))
-            x = ttnn.add(x, ttnn.linear(attended, layer["o_proj"], compute_kernel_config=self.compute_config))
-            normed = ttnn.rms_norm(x, weight=layer["post_attention_layernorm"], epsilon=self.eps)
-            x = ttnn.add(x, self._mlp(normed, layer))
+            x = self._residual(x, self._o_proj(attended, layer))
+            x = self._residual(x, self._mlp(self._rms(x, layer["post_attention_layernorm"]), layer))
 
-        hidden = ttnn.rms_norm(x, weight=self.p["norm"], epsilon=self.eps)
+        hidden = self._rms(x, self.p["norm"])
         return ttnn.slice(hidden, [0, length - 1, 0], [1, length, self.hidden])
 
-    def _step_ops(self, x):
-        """One position through the five layers. The output head stays outside the trace."""
-        x = project(x, self.p, self.compute_config)
+    def _attend(self, query, key, value, index, position):
+        if not hasattr(self, "_causal"):
+            self._causal = [
+                ttnn.from_torch(
+                    torch.where(torch.arange(self.max_seq) <= j, 0.0, -1e9).reshape(1, 1, 1, -1),
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                )
+                for j in range(self.groups)
+            ]
+        ttnn.experimental.paged_fused_update_cache(
+            self.k_cache[index],
+            ttnn.to_memory_config(key, self._k_shard),
+            self.v_cache[index],
+            ttnn.to_memory_config(value, self._v_shard),
+            update_idxs_tensor=self._position_tensors()[position][0],
+            page_table=None,
+        )
+        grid = ttnn.CoreGrid(y=1, x=self.kv_heads)
+        q = ttnn.reshape(query, (1, self.kv_heads, self.heads // self.kv_heads, self.head_dim))
+        scores = ttnn.matmul(
+            q,
+            self.k_cache[index],
+            transpose_b=True,
+            dtype=ttnn.float32,
+            compute_kernel_config=self.compute_config,
+            core_grid=grid,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        weights = ttnn.softmax(
+            ttnn.add(scores, self._causal[position]),
+            dim=-1,
+            compute_kernel_config=self.compute_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        out = ttnn.matmul(
+            weights,
+            self.v_cache[index],
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_config,
+            core_grid=grid,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        return ttnn.reshape(out, (1, 1, self.heads * self.head_dim))
+
+    def _step_ops(self, x, at=None):
+        pos, cos, sin = at[:3] if at is not None else (self._pos, self._cos, self._sin)
+        grouped = self._fp32 and at is not None
+        x = self._widen(project(x, self.p, self.compute_config))
         for index, layer in enumerate(self.p["layers"]):
-            normed = self._norm(x, layer, "input_layernorm")
-            qkv = ttnn.linear(
-                normed, layer["qkv"], compute_kernel_config=self.compute_config, program_config=self._matmul["qkv"]
-            )
+            qkv = self._qkv(self._norm(x, layer, "input_layernorm"), layer, "qkv")
             query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
                 ttnn.reshape(qkv, (1, 1, 1, qkv.shape[-1])), num_heads=self.heads, num_kv_heads=self.kv_heads
             )
             query = ttnn.sharded_to_interleaved(query)
             key = ttnn.sharded_to_interleaved(key)
-            query = self._rotate(ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps), self._cos, self._sin)
-            key = self._rotate(ttnn.rms_norm(key, weight=layer["k_norm"], epsilon=self.eps), self._cos, self._sin)
+            query = self._rotate(self._rms(query, layer["q_norm"]), *(at[4:6] if grouped else (cos, sin)))
+            key = self._rotate(self._rms(key, layer["k_norm"]), cos, sin)
 
-            ttnn.experimental.paged_fused_update_cache(
-                self.k_cache[index],
-                ttnn.to_memory_config(key, self._k_shard),
-                self.v_cache[index],
-                ttnn.to_memory_config(value, self._v_shard),
-                update_idxs_tensor=self._pos,
-                page_table=None,
-            )
-            attended = ttnn.transformer.scaled_dot_product_attention_decode(
-                query,
-                self.k_cache[index],
-                self.v_cache[index],
-                cur_pos_tensor=self._pos,
-                scale=self.scale,
-                compute_kernel_config=self.compute_config,
-            )
-            attended = ttnn.reshape(ttnn.experimental.nlp_concat_heads(attended), (1, 1, self.heads * self.head_dim))
-            x = ttnn.add(
-                x,
-                ttnn.linear(
-                    attended,
-                    layer["o_proj"],
+            if grouped:
+                attended = self._attend(query, key, value, index, at[3])
+            else:
+                ttnn.experimental.paged_fused_update_cache(
+                    self.k_cache[index],
+                    ttnn.to_memory_config(key, self._k_shard),
+                    self.v_cache[index],
+                    ttnn.to_memory_config(value, self._v_shard),
+                    update_idxs_tensor=pos,
+                    page_table=None,
+                )
+                attended = ttnn.transformer.scaled_dot_product_attention_decode(
+                    query,
+                    self.k_cache[index],
+                    self.v_cache[index],
+                    cur_pos_tensor=pos,
+                    scale=self.scale,
                     compute_kernel_config=self.compute_config,
-                    program_config=self._matmul["o_proj"],
-                ),
+                )
+                attended = ttnn.reshape(
+                    ttnn.experimental.nlp_concat_heads(attended), (1, 1, self.heads * self.head_dim)
+                )
+            x = self._residual(x, self._o_proj(attended, layer, "o_proj"))
+            x = self._residual(x, self._mlp(self._norm(x, layer, "post_attention_layernorm"), layer))
+        final = {"norm": self.p["norm"], "norm_wide": getattr(self, "_final_norm_wide", None)}
+        return self._norm(x, final, "norm")
+
+    def _lookup(self, table):
+        row = ttnn.embedding(self._index, table, layout=ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.to_layout(ttnn.reshape(row, (1, 1, self.p["input_width"])), ttnn.TILE_LAYOUT)
+
+    def _position(self, p):
+        if p == 0:
+            x = self._in
+        else:
+            x = self._lookup(
+                self.p["talker_codec_embedding_device"] if p == 1 else self.p["codec_embedding_device"][p - 2]
             )
-            normed = self._norm(x, layer, "post_attention_layernorm")
-            x = ttnn.add(x, self._mlp(normed, layer))
-        return self._norm(x, {"norm": self.p["norm"], "norm_wide": getattr(self, "_final_norm_wide", None)}, "norm")
+        out = self._step_ops(x, self._position_tensors()[p])
+        return self._head(out, p - 1) if p else out
 
     def warmup(self):
         """Compile the step eagerly, without capturing.
@@ -378,38 +485,34 @@ class TtCodePredictorCachedDecoder:
         Separate from `capture` so a caller driving two decoders can warm both before
         capturing either. The warmup allocates a buffer per op, and a buffer allocated
         while another trace exists is corrupt once that trace runs unless released first.
-        Warms at the last cache slot, which no real decode reaches, and leaves the cache
-        alone so this can follow `prefill`.
         """
         self.set_position(self.max_seq - 1)
         self._step_ops(self._in)
+        self._position_tensors()
+        for table in (self.p["talker_codec_embedding_device"], self.p["codec_embedding_device"][0]):
+            ttnn.deallocate(self._lookup(table))
+        ttnn.deallocate(self._head(self._step_ops(self._in, self._position_tensors()[0]), 0))
         ttnn.synchronize_device(self.device)
         self._warmed = True
 
     def capture(self):
-        """Capture the step so later ones replay a single graph.
-
-        Every trace must be captured before any of them executes. Capturing a second trace
-        after the first has run hangs the device: measured, and it took a board reset.
-        """
         if not getattr(self, "_warmed", False):
             self.warmup()  # a trace cannot compile new programs
-        self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
-        self._out = self._step_ops(self._in)
-        ttnn.end_trace_capture(self.device, self.trace_id, cq_id=0)
+        self._trace_ids, self._outs = [], []
+        for p in range(self.groups):
+            trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+            self._outs.append(self._position(p))
+            ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+            self._trace_ids.append(trace_id)
+        self.trace_id = self._trace_ids[0]
         ttnn.synchronize_device(self.device)
 
     def release(self):
-        """Drop the captured trace so eager work is safe again.
-
-        A prefill runs ops a trace never compiled and allocates as it goes, and buffers
-        allocated while a trace is live are corrupt once it runs. So a second utterance
-        has to release before it prefills, and capture again afterwards.
-        """
-        if self.trace_id is not None:
-            ttnn.release_trace(self.device, self.trace_id)
-            self.trace_id = None
-            self._warmed = False
+        for trace_id in self._trace_ids:
+            ttnn.release_trace(self.device, trace_id)
+        self._trace_ids, self._outs = [], []
+        self.trace_id = None
+        self._warmed = False
 
     def reset(self):
         """Clear the caches without allocating."""
@@ -418,14 +521,15 @@ class TtCodePredictorCachedDecoder:
 
     def _head(self, hidden, step):
         """Codebook logits for this step, from its own output head."""
-        return ttnn.linear(hidden, self.p["lm_head"][step], compute_kernel_config=self.compute_config)
+        return ttnn.linear(
+            hidden,
+            self.p["lm_head"][step],
+            compute_kernel_config=self.compute_config,
+            dtype=ttnn.float32 if self._fp32 else None,
+        )
 
     def _run(self, position):
-        """One traced position, over whatever `_in` now holds."""
         self.set_position(position)
-        if self.trace_id is not None:
-            ttnn.execute_trace(self.device, self.trace_id, cq_id=0, blocking=False)
-            return self._out
         return self._step_ops(self._in)
 
     def _fill_from_host(self, embedding):
@@ -434,14 +538,17 @@ class TtCodePredictorCachedDecoder:
             ttnn.from_torch(embedding.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._in
         )
 
+    def _write_index(self, code):
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(torch.tensor([[int(code)]], dtype=torch.int32), dtype=ttnn.uint32), self._index
+        )
+
     def _fill_from_table(self, table, code):
         """`_in` <- row `code` of a device codebook, without the row touching the host.
 
         One index write instead of 76 us of `from_torch`, for identical values.
         """
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(torch.tensor([[int(code)]], dtype=torch.int32), dtype=ttnn.uint32), self._index
-        )
+        self._write_index(code)
         row = ttnn.embedding(self._index, table, layout=ttnn.TILE_LAYOUT)
         ttnn.copy(ttnn.reshape(row, (1, 1, self.p["input_width"])), self._in)
         ttnn.deallocate(row)
@@ -451,32 +558,37 @@ class TtCodePredictorCachedDecoder:
 
         `talker_hidden` may be the device tensor the talker returned, which is what the pipeline
         passes. `pick` defaults to argmax, but greedy sends this model into a silence code it
-        never leaves. The two prompt positions go through the traced step like the rest: a
-        per-frame prefill allocated buffers, and buffers allocated under a live trace are corrupt
-        once it runs.
+        never leaves.
         """
         charge = watch.split if watch is not None else (lambda name: None)
+        pick = pick or (lambda row: int(row.argmax()))
         self.reset()
         if isinstance(talker_hidden, ttnn.Tensor):
             ttnn.copy(ttnn.reshape(talker_hidden, (1, 1, -1)), self._in)
         else:
             self._fill_from_host(talker_hidden.reshape(1, 1, -1))
-        self._run(0)
-        self._fill_from_table(self.p["talker_codec_embedding_device"], first_code)
-        hidden = self._run(1)
+        traced = bool(self._trace_ids)
 
-        pick = pick or (lambda row: int(row.argmax()))
+        def run(p, code=None):
+            if code is not None:
+                self._write_index(code)
+            if traced:
+                ttnn.execute_trace(self.device, self._trace_ids[p], cq_id=0, blocking=False)
+                return self._outs[p]
+            return self._position(p)
+
+        run(0)
+        logits = run(1, first_code)
         codes = []
         for step in range(self.groups - 1):
-            logits = self._head(hidden, step)
             row = ttnn.to_torch(logits).float().reshape(-1)
-            ttnn.deallocate(logits)  # released before the next trace execution
+            if not traced:
+                ttnn.deallocate(logits)
             charge("predictor")
             code = int(pick(row))
             charge("predictor_sample")
             codes.append(code)
             if step == self.groups - 2:
                 break
-            self._fill_from_table(self.p["codec_embedding_device"][step], code)
-            hidden = self._run(2 + step)
+            logits = run(2 + step, code)
         return codes
