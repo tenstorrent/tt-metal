@@ -278,18 +278,18 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     const std::vector<uint32_t> ct_args = {Ct, Kt, Vt};
 
     std::vector<uint32_t> reader_ct = ct_args;
-    TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.v.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.g.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.beta.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(in.q.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.k.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.v.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.g.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.beta.mesh_tensor()).append_to(reader_ct);
     // OPT-A: trailing compile args after all TensorAccessorArgs — 1 => read that tensor flat token-major.
     reader_ct.push_back(attrs.v_flat ? 1u : 0u);
     reader_ct.push_back(attrs.qk_flat ? 1u : 0u);
 
     std::vector<uint32_t> writer_ct = ct_args;
     for (auto& t : outputs) {
-        TensorAccessorArgs(*t.buffer()).append_to(writer_ct);
+        TensorAccessorArgs(t.mesh_tensor()).append_to(writer_ct);
     }
 
     KernelDescriptor reader;
@@ -493,14 +493,14 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     const std::vector<uint32_t> ct_args = {Ct, Kt, Vt, Vt_full};
 
     std::vector<uint32_t> reader_ct = ct_args;
-    TensorAccessorArgs(*in.v_beta.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.nkd.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.q_decay.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.intra.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.k_dec_t.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.dl.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.t_inv.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.initial_state.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(in.v_beta.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.nkd.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.q_decay.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.intra.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.k_dec_t.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.dl.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.t_inv.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.initial_state.mesh_tensor()).append_to(reader_ct);
     // Trailing compile-time args AFTER the accessor chain: the handshake semaphore ids. Appended
     // unconditionally — the plain (no-mcast) reader has no semaphores and ignores them — so the
     // trailing-arg offsets stay uniform across all three reader compile variants.
@@ -512,15 +512,15 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     std::vector<uint32_t> receiver_ct;
     if (do_mcast) {
         receiver_ct = ct_args;
-        TensorAccessorArgs(*in.v_beta.buffer()).append_to(receiver_ct);
-        TensorAccessorArgs(*in.initial_state.buffer()).append_to(receiver_ct);
+        TensorAccessorArgs(in.v_beta.mesh_tensor()).append_to(receiver_ct);
+        TensorAccessorArgs(in.initial_state.mesh_tensor()).append_to(receiver_ct);
         receiver_ct.push_back(sem_ready_id);
         receiver_ct.push_back(sem_valid_id);
     }
 
     std::vector<uint32_t> writer_ct = ct_args;
-    TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
-    TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
+    TensorAccessorArgs(outputs[0].mesh_tensor()).append_to(writer_ct);
+    TensorAccessorArgs(outputs[1].mesh_tensor()).append_to(writer_ct);
 
     // Plain reader (no mcast) or mcast sender — the full accessor set either way.
     KernelDescriptor reader;

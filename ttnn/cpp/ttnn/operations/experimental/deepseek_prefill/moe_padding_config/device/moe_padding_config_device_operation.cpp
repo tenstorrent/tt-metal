@@ -191,8 +191,8 @@ tt::tt_metal::ProgramDescriptor MoePaddingConfigDeviceOperation::ProgramFactory:
     // Compile args: [0]=cb_out, [1]=cb_meta, [2]=pad_side, [3..]=config accessor, then ONE metadata
     // accessor (both 1-element tensors share an identical layout, so one accessor serves both reads).
     KernelDescriptor::CompileTimeArgs writer_compile_args = {kOutCbIndex, kMetaCbIndex, args.pad_side};
-    TensorAccessorArgs(config.buffer()).append_to(writer_compile_args);
-    TensorAccessorArgs(tensor_args.actual_start.buffer()).append_to(writer_compile_args);
+    TensorAccessorArgs(config.mesh_tensor()).append_to(writer_compile_args);
+    TensorAccessorArgs(tensor_args.actual_start.mesh_tensor()).append_to(writer_compile_args);
 
     KernelDescriptor writer_kernel;
     writer_kernel.kernel_source = kWriterKernelPath;

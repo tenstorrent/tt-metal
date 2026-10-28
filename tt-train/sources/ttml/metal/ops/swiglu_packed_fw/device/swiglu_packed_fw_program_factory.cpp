@@ -63,17 +63,17 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
     create_circular_buffer(program, all_cores, kOutCbIndex, data_format, tile_size_bytes, twice_block);
     create_circular_buffer(program, all_cores, kSiluCbIndex, data_format, tile_size_bytes, twice_block);
 
-    auto* const packed_buf = packed.buffer();
-    auto* const output_buf = output.buffer();
+    const auto& packed_tensor = packed.mesh_tensor();
+    const auto& output_tensor = output.mesh_tensor();
 
     SwigluPackedFwKernels kernels;
 
     std::vector<uint32_t> reader_ct_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(packed_buf).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(packed_tensor).append_to(reader_ct_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_ct_args, {}, kReaderKernelPath);
 
     std::vector<uint32_t> writer_ct_args{block_size};
-    tt::tt_metal::TensorAccessorArgs(output_buf).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_ct_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_ct_args, {}, kWriterKernelPath);
 
     std::vector<uint32_t> compute_g1_args = {num_blocks_g1, block_size};
@@ -89,8 +89,8 @@ SwigluPackedFwProgramFactory::cached_program_t SwigluPackedFwProgramFactory::cre
     for_each_core_with_work(
         num_cores, num_cores_y, core_group_1, core_group_2, num_blocks_g1, num_blocks_g2, [&](const CoreWork& work) {
             const auto& [core, core_index, num_blocks, start_block, in_group_1] = work;
-            SetRuntimeArgs(program, kernels.reader, core, {packed_buf->address(), num_blocks, start_block});
-            SetRuntimeArgs(program, kernels.writer, core, {output_buf->address(), num_blocks, start_block});
+            SetRuntimeArgs(program, kernels.reader, core, {packed_tensor.address(), num_blocks, start_block});
+            SetRuntimeArgs(program, kernels.writer, core, {output_tensor.address(), num_blocks, start_block});
         });
 
     return cached_program_t{

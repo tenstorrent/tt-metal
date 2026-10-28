@@ -276,12 +276,12 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         valid_semaphore_id,
         static_cast<uint32_t>(blackhole),  // K/V chain
     };
-    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_q.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_q.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_k.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_v.mesh_tensor()).append_to(reader_compile_time_args);
 
     // Calculate which K chunks contain the mask boundaries
     // If a tensor does not require masking, set to MAX_UINT32. This avoids a
@@ -309,8 +309,8 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         mask_chunk_0,
         mask_chunk_1,
     };
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(joint_output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         cat_Skt,

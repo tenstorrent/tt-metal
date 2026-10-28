@@ -453,12 +453,12 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(sender_reader_compile_args);
     }
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(sender_reader_compile_args);
     }
 
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
@@ -516,7 +516,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(sender_writer_compile_args);
     }
 
     tt::tt_metal::KernelDescriptor writer_kernel_desc;

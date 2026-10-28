@@ -11,6 +11,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::moreh::moreh_layer_norm {
 
@@ -215,17 +216,15 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     KernelDescriptor::CompileTimeArgs reader_compile_time_args{block_size};
-    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_tensor()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(gamma)).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(beta)).append_to(reader_compile_time_args);
 
     KernelDescriptor::CompileTimeArgs writer_compile_time_args{
         static_cast<uint32_t>(mean_has_value), static_cast<uint32_t>(rstd_has_value), block_size};
-    tt::tt_metal::TensorAccessorArgs(output->buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(mean_as_tensor ? mean_as_tensor->buffer() : nullptr)
-        .append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(rstd_as_tensor ? rstd_as_tensor->buffer() : nullptr)
-        .append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output->mesh_tensor()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(mean_as_tensor)).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(rstd_as_tensor)).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines_map{};
     std::map<std::string, std::string> compute_defines_map{};

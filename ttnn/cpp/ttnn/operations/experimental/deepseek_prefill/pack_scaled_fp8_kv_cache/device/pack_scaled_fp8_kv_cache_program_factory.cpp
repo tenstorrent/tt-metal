@@ -19,10 +19,10 @@ PackScaledFp8KvCacheProgramFactory::cached_program_t PackScaledFp8KvCacheProgram
     using namespace tt;
     using namespace tt::tt_metal;
 
-    auto* latent_buffer = args.latent.buffer();
-    auto* scale_buffer = args.scales.buffer();
-    auto* rope_buffer = args.rope.buffer();
-    auto* output_buffer = output.buffer();
+    const auto& latent_tensor = args.latent.mesh_tensor();
+    const auto& scale_tensor = args.scales.mesh_tensor();
+    const auto& rope_tensor = args.rope.mesh_tensor();
+    const auto& output_tensor = output.mesh_tensor();
     const uint32_t rows = args.latent.logical_volume() / packed::LATENT_WIDTH;
 
     Program program;
@@ -40,10 +40,10 @@ PackScaledFp8KvCacheProgramFactory::cached_program_t PackScaledFp8KvCacheProgram
 
     std::vector<uint32_t> compile_args = {
         cb_scratch, packed::LATENT_WIDTH, packed::SCALE_WIDTH * sizeof(float), packed::ROPE_WIDTH * sizeof(uint16_t)};
-    TensorAccessorArgs(latent_buffer).append_to(compile_args);
-    TensorAccessorArgs(scale_buffer).append_to(compile_args);
-    TensorAccessorArgs(rope_buffer).append_to(compile_args);
-    TensorAccessorArgs(output_buffer).append_to(compile_args);
+    TensorAccessorArgs(latent_tensor).append_to(compile_args);
+    TensorAccessorArgs(scale_tensor).append_to(compile_args);
+    TensorAccessorArgs(rope_tensor).append_to(compile_args);
+    TensorAccessorArgs(output_tensor).append_to(compile_args);
 
     const auto kernel_id = CreateKernel(
         program,
@@ -60,10 +60,10 @@ PackScaledFp8KvCacheProgramFactory::cached_program_t PackScaledFp8KvCacheProgram
             program,
             kernel_id,
             core,
-            {latent_buffer->address(),
-             scale_buffer->address(),
-             rope_buffer->address(),
-             output_buffer->address(),
+            {latent_tensor.address(),
+             scale_tensor.address(),
+             rope_tensor.address(),
+             output_tensor.address(),
              start_row,
              core_rows});
         start_row += core_rows;

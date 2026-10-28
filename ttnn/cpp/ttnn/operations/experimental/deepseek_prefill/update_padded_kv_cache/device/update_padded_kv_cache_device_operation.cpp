@@ -762,15 +762,15 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         (has_rope || tiled_rope) ? tensor_args.rope->padded_shape()[-1] / TILE_WIDTH : 0u,
         static_cast<uint32_t>(has_scaled),
         tiled_rope ? kRopeCbIndex : 0u};
-    TensorAccessorArgs(input.buffer()).append_to(reader_compile_args);
+    TensorAccessorArgs(input.mesh_tensor()).append_to(reader_compile_args);
     if (tensor_args.rope.has_value()) {
-        TensorAccessorArgs(tensor_args.rope->buffer()).append_to(reader_compile_args);
+        TensorAccessorArgs(tensor_args.rope->mesh_tensor()).append_to(reader_compile_args);
     }
     if (has_scaled) {
-        TensorAccessorArgs(tensor_args.scales->buffer()).append_to(reader_compile_args);
+        TensorAccessorArgs(tensor_args.scales->mesh_tensor()).append_to(reader_compile_args);
     }
     if (has_metadata) {
-        TensorAccessorArgs(tensor_args.kv_actual_global->buffer()).append_to(reader_compile_args);
+        TensorAccessorArgs(tensor_args.kv_actual_global->mesh_tensor()).append_to(reader_compile_args);
     }
 
     KernelDescriptor reader_kernel;
@@ -799,10 +799,10 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         block_tiles,
         static_cast<uint32_t>(has_scaled),
         tiled_rope ? kUntilizedCbIndex : 0u};
-    TensorAccessorArgs(cache.buffer()).append_to(writer_compile_args);
+    TensorAccessorArgs(cache.mesh_tensor()).append_to(writer_compile_args);
     if (has_metadata) {
         // One accessor reused for both 1-element tensors (identical layout).
-        TensorAccessorArgs(tensor_args.slot_idx->buffer()).append_to(writer_compile_args);
+        TensorAccessorArgs(tensor_args.slot_idx->mesh_tensor()).append_to(writer_compile_args);
     }
 
     KernelDescriptor writer_kernel;

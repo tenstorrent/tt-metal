@@ -336,8 +336,8 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         (e_hops > 0) + (s_hops > 0),     // num_connections
         do_init_barrier,                 // do_init_barrier
     };
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(reader_compile_args);
 
     // Writer (covers backward directions W-line + N-rect)
     std::vector<uint32_t> writer_compile_args = {
@@ -352,7 +352,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         (w_hops > 0) + (n_hops > 0),     // num_connections
         do_init_barrier,                 // do_init_barrier
     };
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_args);
 
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/multicast_reader.cpp";

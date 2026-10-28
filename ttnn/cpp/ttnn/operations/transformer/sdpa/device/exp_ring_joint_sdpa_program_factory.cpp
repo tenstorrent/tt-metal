@@ -541,14 +541,14 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         args.ring_size,
         qk_out_subblock_h};
 
-    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(joint_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_q.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_k.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_v.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_q.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_k.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_v.mesh_tensor()).append_to(reader_compile_time_args);
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -631,7 +631,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // Trace-safe logical_n: presence flag, then the accessor args for the 1-element tensor. The accessor
     // block is emitted unconditionally (nullptr when absent) so the CT-arg layout after it never shifts.
     reader_compile_time_args.push_back(static_cast<uint32_t>(has_logical_n_tensor));
-    TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
+    TensorAccessorArgs(has_logical_n_tensor ? &tensor_args.logical_n_tensor->mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -661,10 +661,10 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // Trace-safe logical_n accessor block sits ahead of the output accessors so every downstream offset
     // (out / joint_out, and the MUX + AG block that chains off joint_out) keeps deriving normally.
     // Emitted unconditionally (nullptr when absent) to keep the layout stable across both modes.
-    TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
+    TensorAccessorArgs(has_logical_n_tensor ? &tensor_args.logical_n_tensor->mesh_buffer() : nullptr)
         .append_to(writer_compile_time_args);
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(joint_output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     // Streaming-only compute kernel: NH and the classic matmul block params (in0_block_w,
     // num_subblocks, num_blocks) are not consumed — only the subblock shapes are.
@@ -1529,8 +1529,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     writer_fabric_compile_time_args.push_back(ag_packet_size_in_pages);
     writer_fabric_compile_time_args.push_back(ag_page_size);
-    TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(writer_fabric_compile_time_args);
-    TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(writer_fabric_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_k.mesh_tensor()).append_to(writer_fabric_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_v.mesh_tensor()).append_to(writer_fabric_compile_time_args);
 
     auto writer_fabric_defines = defines;
     writer_fabric_defines["USE_MUX"] = "1";

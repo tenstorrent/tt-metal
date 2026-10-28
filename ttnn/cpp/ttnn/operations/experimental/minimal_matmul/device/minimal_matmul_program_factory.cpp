@@ -94,22 +94,22 @@ void append_accessors(
     const std::optional<const Tensor>& ag_input_tensor = std::nullopt,
     const std::optional<const Tensor>& ternary_a_tensor = std::nullopt,
     const std::optional<const Tensor>& ternary_b_tensor = std::nullopt) {
-    tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
+    tt::tt_metal::TensorAccessorArgs(main_tensor.mesh_tensor()).append_to(args);
     for (const auto& output_tensor : output_tensors) {
-        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(args);
     }
     if (bias_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(bias_tensor.value().mesh_tensor()).append_to(args);
     }
     // AG input must come before ternary to match kernel accessor order
     if (ag_input_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*ag_input_tensor.value().buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(ag_input_tensor.value().mesh_tensor()).append_to(args);
     }
     if (ternary_a_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*ternary_a_tensor.value().buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(ternary_a_tensor.value().mesh_tensor()).append_to(args);
     }
     if (ternary_b_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*ternary_b_tensor.value().buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(ternary_b_tensor.value().mesh_tensor()).append_to(args);
     }
 }
 

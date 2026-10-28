@@ -66,10 +66,15 @@ tt::tt_metal::ProgramDescriptor MoeHashGateDeviceOperation::ProgramFactory::crea
     auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_indices.dtype());
 
     auto* scores_buffer = scores.buffer();
+    const auto& scores_tensor = scores.mesh_tensor();
     auto* input_ids_buffer = input_ids.buffer();
+    const auto& input_ids_tensor = input_ids.mesh_tensor();
     auto* tid2eid_buffer = tid2eid.buffer();
+    const auto& tid2eid_tensor = tid2eid.mesh_tensor();
     auto* weights_buffer = output_weights.buffer();
+    const auto& weights_tensor = output_weights.mesh_tensor();
     auto* indices_buffer = output_indices.buffer();
+    const auto& indices_tensor = output_indices.mesh_tensor();
     TT_FATAL(scores_buffer != nullptr, "scores buffer must be allocated on device");
     TT_FATAL(input_ids_buffer != nullptr, "input_ids buffer must be allocated on device");
     TT_FATAL(tid2eid_buffer != nullptr, "tid2eid buffer must be allocated on device");
@@ -162,9 +167,9 @@ tt::tt_metal::ProgramDescriptor MoeHashGateDeviceOperation::ProgramFactory::crea
     };
 
     std::vector<uint32_t> reader_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(scores_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(input_ids_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(tid2eid_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(scores_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_ids_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(tid2eid_tensor).append_to(reader_compile_time_args);
 
     // --- Compute: apply_score_func -> normalize_scores -> scale ---
     KernelDescriptor::NamedCompileTimeArgs compute_named_compile_time_args = {
@@ -209,8 +214,8 @@ tt::tt_metal::ProgramDescriptor MoeHashGateDeviceOperation::ProgramFactory::crea
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(weights_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(indices_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weights_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(indices_tensor).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(padding_config_buffer).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_kernel_desc;

@@ -102,7 +102,9 @@ ProgramDescriptor ReshapeViewRMProgramFactory::create_descriptor(
     uint32_t read_start_page = 0;
     uint32_t write_start_page = 0;
     Buffer* src_buffer = input.buffer();
+    const auto& src_tensor = input.mesh_tensor();
     Buffer* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
     // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
@@ -169,8 +171,8 @@ ProgramDescriptor ReshapeViewRMProgramFactory::create_descriptor(
         num_dest_write_slots,
         dest_slot_size_bytes,
         dest_write_size_bytes};
-    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
-    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
+    TensorAccessorArgs(src_tensor).append_to(compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =

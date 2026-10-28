@@ -141,11 +141,11 @@ tt::tt_metal::ProgramDescriptor AttnResWeightedReduceNCProgramFactory::create_de
         num_sites,
         sites_per_group,
         num_groups};
-    TensorAccessorArgs(*tensor_args.input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*tensor_args.weight.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(tensor_args.input.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(tensor_args.weight.mesh_tensor()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {inner_tile_size, num_sites, sites_per_group, num_groups};
-    TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(tensor_return_value.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source = std::string(kKernelDir) + "reader_weighted_reduce_nc.cpp";

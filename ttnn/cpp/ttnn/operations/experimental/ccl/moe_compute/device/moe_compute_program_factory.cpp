@@ -1029,15 +1029,15 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
         {"local_output", local_output ? 1u : 0u}};
 
     std::vector<uint32_t> tilize_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(tilize_input_tensor.buffer()).append_to(tilize_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(tilize_indices_tensor.buffer()).append_to(tilize_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(tilize_input_scores_tensor.buffer()).append_to(tilize_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(tilize_mapping_tensor.buffer()).append_to(tilize_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(tilize_per_expert_total_tokens_output_tensor.buffer())
+    tt::tt_metal::TensorAccessorArgs(tilize_input_tensor.mesh_tensor()).append_to(tilize_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(tilize_indices_tensor.mesh_tensor()).append_to(tilize_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(tilize_input_scores_tensor.mesh_tensor()).append_to(tilize_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(tilize_mapping_tensor.mesh_tensor()).append_to(tilize_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(tilize_per_expert_total_tokens_output_tensor.mesh_tensor())
         .append_to(tilize_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(tilize_expert_activation_output_tensor.buffer())
+    tt::tt_metal::TensorAccessorArgs(tilize_expert_activation_output_tensor.mesh_tensor())
         .append_to(tilize_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(tilize_e_t_output_tensor.buffer()).append_to(tilize_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(tilize_e_t_output_tensor.mesh_tensor()).append_to(tilize_compile_time_args);
 
     // kTilizeReaderKernelIdx, then kTilizeWriterKernelIdx.
     TT_FATAL(desc.kernels.size() == kTilizeReaderKernelIdx, "tilize reader kernel index drifted");
@@ -1252,15 +1252,15 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
 
     std::vector<uint32_t> matmul_compile_time_args;
     for (const auto& tensor : matmul_tensors) {
-        tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(matmul_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(tensor->mesh_tensor()).append_to(matmul_compile_time_args);
     }
     if (local_output) {
         // LOCAL_OUTPUT: dm1 reads the e_t pages and writes the final output. Accessor args follow the
         // three matmul tensors; dm0 and compute stop after those. Addresses are Buffer* bindings below.
         TT_FATAL(
             tensor_return_value.size() == 6, "path=SingleCluster expects 6 output tensors, got {}", tensor_return_value.size());
-        tt::tt_metal::TensorAccessorArgs(*tilize_e_t_output_tensor.buffer()).append_to(matmul_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(*tensor_return_value[5].buffer()).append_to(matmul_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(tilize_e_t_output_tensor.mesh_tensor()).append_to(matmul_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(tensor_return_value[5].mesh_tensor()).append_to(matmul_compile_time_args);
     }
 
     // parameters for writing to output shards

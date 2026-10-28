@@ -216,23 +216,23 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
 
-    auto* input_buffer = input.buffer();
+    const auto& input_tensor = input.mesh_tensor();
     TT_FATAL(
-        input_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        input_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        enchantum::to_string(input_buffer->buffer_type()));
+        enchantum::to_string(input_tensor.memory_config().buffer_type()));
 
-    auto* target_buffer = target.buffer();
+    const auto& target_tensor = target.mesh_tensor();
     TT_FATAL(
-        target_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        target_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "Target buffer must be in DRAM. Target buffer of type {}",
-        enchantum::to_string(target_buffer->buffer_type()));
+        enchantum::to_string(target_tensor.memory_config().buffer_type()));
 
-    auto* output_buffer = output.buffer();
+    const auto& output_tensor = output.mesh_tensor();
     TT_FATAL(
-        output_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        output_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
-        enchantum::to_string(output_buffer->buffer_type()));
+        enchantum::to_string(output_tensor.memory_config().buffer_type()));
 
     // configure defines
     std::map<std::string, std::string> defines;
@@ -256,14 +256,14 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     {
         std::vector<uint32_t> reader_compile_time_args{
             block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size};
-        tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(target_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(target_tensor).append_to(reader_compile_time_args);
         kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
     }
 
     {
         std::vector<uint32_t> writer_compile_time_args{block_size, Wt, scaler_bits, mask_w};
-        tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_compile_time_args);
         kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
     }
 
@@ -305,11 +305,8 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
         [&](const CoreWork& work) {
             const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
             SetRuntimeArgs(
-                program,
-                kernels.reader,
-                core,
-                {input_buffer->address(), target_buffer->address(), num_rows, start_row});
-            SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows, start_row});
+                program, kernels.reader, core, {input_tensor.address(), target_tensor.address(), num_rows, start_row});
+            SetRuntimeArgs(program, kernels.writer, core, {output_tensor.address(), num_rows, start_row});
         });
 
     // -------------------------------------------------------------------------

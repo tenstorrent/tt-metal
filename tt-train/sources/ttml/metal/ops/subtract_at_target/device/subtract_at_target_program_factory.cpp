@@ -117,32 +117,32 @@ CreatedProgram create_program_for_device(
     create_circular_buffer(
         program, all_cores, kOutputCbIndex, tt::DataFormat::Float16_b, bfloat16_tile_bytes, kNumOutputTiles);
 
-    auto* input_buffer = input.buffer();
+    const auto& input_tensor = input.mesh_tensor();
     TT_FATAL(
-        input_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        input_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "subtract_at_target: input buffer must be DRAM, got {}",
-        enchantum::to_string(input_buffer->buffer_type()));
+        enchantum::to_string(input_tensor.memory_config().buffer_type()));
 
-    auto* target_buffer = target.buffer();
+    const auto& target_tensor = target.mesh_tensor();
     TT_FATAL(
-        target_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        target_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "subtract_at_target: target buffer must be DRAM, got {}",
-        enchantum::to_string(target_buffer->buffer_type()));
+        enchantum::to_string(target_tensor.memory_config().buffer_type()));
 
-    auto* output_buffer = output.buffer();
+    const auto& output_tensor = output.mesh_tensor();
     TT_FATAL(
-        output_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        output_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "subtract_at_target: output buffer must be DRAM, got {}",
-        enchantum::to_string(output_buffer->buffer_type()));
+        enchantum::to_string(output_tensor.memory_config().buffer_type()));
 
     std::vector<uint32_t> reader_ct_args{Wt, Ht, target_page_size, target_read_page_size};
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(target_buffer).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(target_tensor).append_to(reader_ct_args);
 
     auto reader_kernel = create_reader_kernel(program, all_cores, reader_ct_args, {}, kReaderKernelPath);
 
     std::vector<uint32_t> writer_ct_args{Wt};
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_ct_args);
 
     auto writer_kernel = create_writer_kernel(program, all_cores, writer_ct_args, {}, kWriterKernelPath);
 
@@ -161,14 +161,14 @@ CreatedProgram create_program_for_device(
                 program,
                 reader_kernel,
                 core,
-                {input_buffer->address(),
-                 target_buffer->address(),
+                {input_tensor.address(),
+                 target_tensor.address(),
                  num_rows,
                  start_row,
                  window.first_v,
                  window.last_v,
                  subtract_bits});
-            SetRuntimeArgs(program, writer_kernel, core, {output_buffer->address(), num_rows, start_row});
+            SetRuntimeArgs(program, writer_kernel, core, {output_tensor.address(), num_rows, start_row});
         });
 
     return CreatedProgram{

@@ -760,7 +760,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
     const Tensor& batch_index_tensor = cache_slot_from_metadata ? *tensor_args.input_batch_index_tensor : output_tensor;
     const Tensor& prefix_tensor = valid_prefix_from_metadata ? *tensor_args.gathered_prefix_tensor : output_tensor;
     auto append_accessor = [](std::vector<uint32_t>& compile_args, const Tensor& tensor) {
-        tt::tt_metal::TensorAccessorArgs(*tensor.buffer()).append_to(compile_args);
+        tt::tt_metal::TensorAccessorArgs(tensor.mesh_tensor()).append_to(compile_args);
     };
     // blocks_converted_semaphore (per program, one per local copy core): conversion blocks of a non-interleaved input's
     // own shard that copy core has written into the output.

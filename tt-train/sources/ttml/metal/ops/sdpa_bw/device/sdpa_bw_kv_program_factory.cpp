@@ -11,6 +11,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace {
 
@@ -349,16 +350,24 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // -------------------------------------------------------------------------
 
     auto* grad_output_buffer = grad_output.buffer();
+    const auto& grad_output_tensor = grad_output.mesh_tensor();
     auto* query_buffer = query.buffer();
+    const auto& query_tensor = query.mesh_tensor();
     auto* key_buffer = key.buffer();
+    const auto& key_tensor = key.mesh_tensor();
     auto* value_buffer = value.buffer();
+    const auto& value_tensor = value.mesh_tensor();
     auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
     auto* intermediates_buffer = intermediates.buffer();
+    const auto& intermediates_tensor = intermediates.mesh_tensor();
     auto* u_scaler_buffer = tensor_args.u_scaler.buffer();
+    const auto& u_scaler_tensor = tensor_args.u_scaler.mesh_tensor();
 
     auto& [grad_key, grad_value] = output;
     auto* grad_key_buffer = grad_key.buffer();
+    const auto& grad_key_tensor = grad_key.mesh_tensor();
     auto* grad_value_buffer = grad_value.buffer();
+    const auto& grad_value_tensor = grad_value.mesh_tensor();
 
     // Configure defines
     std::map<std::string, std::string> reader_defines;
@@ -402,13 +411,14 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         qNH,              // 4: number of query heads
         heads_per_group,  // 5: heads per group
     };
-    tt::tt_metal::TensorAccessorArgs(grad_output_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(value_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(u_scaler_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(grad_output_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(query_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(key_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(value_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(tensor_args.attn_mask))
+        .append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(intermediates_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(u_scaler_tensor).append_to(reader_compile_args);
 
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, reader_defines, kReaderKernelPath);
 
@@ -420,8 +430,8 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         qNH,             // 3: number of query heads
         heads_per_group  // 4: heads per group
     };
-    tt::tt_metal::TensorAccessorArgs(grad_key_buffer).append_to(writer_compile_args);
-    tt::tt_metal::TensorAccessorArgs(grad_value_buffer).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(grad_key_tensor).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(grad_value_tensor).append_to(writer_compile_args);
 
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, writer_defines, kWriterKernelPath);
 

@@ -174,8 +174,8 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     };
 
     std::vector<uint32_t> reader_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(scores.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(scores.mesh_tensor()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias.mesh_tensor()).append_to(reader_compile_time_args);
 
     // Compute kernel compile time arguments
     std::map<std::string, uint32_t> compute_named_compile_time_args = {
@@ -262,8 +262,8 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(output_weights.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_indices.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_weights.mesh_tensor()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_indices.mesh_tensor()).append_to(writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build kernels

@@ -686,12 +686,12 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     };
 
     // Append TensorAccessorArgs for all 6 tensors
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(offsets_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(indices_tensor.mesh_tensor()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(offsets_tensor.mesh_tensor()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.mesh_tensor()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.mesh_tensor()).append_to(compile_time_args);
 
     std::map<std::string, std::string> fabric_defines;
     if (operation_attributes.num_links > 0) {
@@ -832,21 +832,21 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
             block_ct_dim_dispatch,                                 // 27: must match the compute kernel
         };
 
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(worker_reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(worker_reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(offsets_tensor.buffer()).append_to(worker_reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(worker_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(worker_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(indices_tensor.mesh_tensor()).append_to(worker_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(offsets_tensor.mesh_tensor()).append_to(worker_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.mesh_tensor()).append_to(worker_reader_compile_args);
 
         if (has_padding_config) {
             // padding_config accessor + scratch CB id appended LAST so the existing index layout is unchanged.
-            tt::tt_metal::TensorAccessorArgs(tensor_args.padding_config.value().buffer())
+            tt::tt_metal::TensorAccessorArgs(tensor_args.padding_config.value().mesh_tensor())
                 .append_to(worker_reader_compile_args);
             worker_reader_compile_args.push_back(static_cast<uint32_t>(cb_padding_config_reader));
         }
         if (fp8_scaled_input) {
             // scales accessor + CB id + aligned page size appended after padding_config so the
             // kernel's chained TensorAccessorArgs offsets stay consistent (padding before scales).
-            tt::tt_metal::TensorAccessorArgs(tensor_args.scales_tensor.value().buffer())
+            tt::tt_metal::TensorAccessorArgs(tensor_args.scales_tensor.value().mesh_tensor())
                 .append_to(worker_reader_compile_args);
             worker_reader_compile_args.push_back(static_cast<uint32_t>(cb_scales));
             worker_reader_compile_args.push_back(aligned_scales_page_size);
@@ -871,10 +871,10 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
             static_cast<uint32_t>(tt::CBIndex::c_15),                    // 12: cb_route_info_scratch_id
             read_batch_size * operation_attributes.num_experts_per_tok,  // 13: meta_scratch_slots
         };
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(worker_writer_compile_args);
-        tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(worker_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(worker_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(metadata_tensor.mesh_tensor()).append_to(worker_writer_compile_args);
         if (has_padding_config) {
-            tt::tt_metal::TensorAccessorArgs(tensor_args.padding_config.value().buffer())
+            tt::tt_metal::TensorAccessorArgs(tensor_args.padding_config.value().mesh_tensor())
                 .append_to(worker_writer_compile_args);
             worker_writer_compile_args.push_back(static_cast<uint32_t>(cb_padding_config_writer));
         }

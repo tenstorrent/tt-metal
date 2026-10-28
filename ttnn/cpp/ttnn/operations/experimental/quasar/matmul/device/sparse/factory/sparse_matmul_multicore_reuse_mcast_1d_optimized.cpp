@@ -98,10 +98,10 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
 
-    auto* const in0_buffer = a.buffer();
-    auto* const in1_buffer = b.buffer();
-    auto* const sparsity_buffer = sparsity.buffer();
-    auto* const out_buffer = output_tensor.buffer();
+    const auto& in0_tensor = a.mesh_tensor();
+    const auto& in1_tensor = b.mesh_tensor();
+    const auto& sparsity_tensor = sparsity.mesh_tensor();
+    const auto& out_tensor = output_tensor.mesh_tensor();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
@@ -323,8 +323,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         // fuse op args
         (std::uint32_t)false,  // fuse_op
     };
-    tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(in0_sender_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*sparsity_buffer).append_to(in0_sender_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(sparsity_tensor).append_to(in0_sender_compile_time_args);
     // num_batch_compute (== nnz when supplied). The sender uses this to validate, on-device, that
     // count_nonzero(sparsity) matches the loop count baked into the receiver/compute kernels, failing
     // loudly instead of deadlocking. See https://github.com/tenstorrent/tt-metal/issues/45943.
@@ -380,9 +380,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     };
 
     // Append TensorAccessorArgs
-    tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*sparsity_buffer).append_to(in1_sender_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_sender_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(sparsity_tensor).append_to(in1_sender_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder for bias
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
@@ -661,7 +661,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         if (core == start_core) {
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
-                (std::uint32_t)in0_buffer->address(),
+                (std::uint32_t)in0_tensor.address(),
                 (std::uint32_t)Kt * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
@@ -672,7 +672,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 // padding args
                 (std::uint32_t)out_block_h,  // last_block_h
                 // sparsity args
-                (std::uint32_t)sparsity_buffer->address()  // sparsity_addr
+                (std::uint32_t)sparsity_tensor.address()  // sparsity_addr
             };
 
             tt_metal::SetRuntimeArgs(
@@ -694,7 +694,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
-                (std::uint32_t)in1_buffer->address(),
+                (std::uint32_t)in1_tensor.address(),
                 (std::uint32_t)per_core_N * output_idx_x,  // in1_tensor_start_tile_id
                 // in1 mcast args
                 (std::uint32_t)0,  // in1_mcast_dest_noc_start_x
@@ -703,11 +703,11 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 (std::uint32_t)0,  // in1_mcast_dest_noc_end_y
 
                 // sparsity args
-                (std::uint32_t)sparsity_buffer->address(),  // sparsity_addr
+                (std::uint32_t)sparsity_tensor.address(),  // sparsity_addr
 
                 // WRITER
                 // out tensor args
-                (std::uint32_t)out_buffer->address(),
+                (std::uint32_t)out_tensor.address(),
                 ((std::uint32_t)output_idx_x * per_core_N) +
                     (output_idx_y * per_core_M * Nt)  // out_tensor_start_tile_id
             };

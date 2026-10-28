@@ -183,10 +183,10 @@ ProgramDescriptor MorehSgdOperation::MorehSgdProgramFactory::create_descriptor(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     KernelDescriptor::CompileTimeArgs reader_ct_args;
-    TensorAccessorArgs(*param_in.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(*grad.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(param_in.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(grad.mesh_tensor()).append_to(reader_ct_args);
     if (momentum_buffer_in.has_value()) {
-        TensorAccessorArgs(*momentum_buffer_in->buffer()).append_to(reader_ct_args);
+        TensorAccessorArgs(momentum_buffer_in->mesh_tensor()).append_to(reader_ct_args);
     }
 
     KernelDescriptor reader_desc;
@@ -199,9 +199,9 @@ ProgramDescriptor MorehSgdOperation::MorehSgdProgramFactory::create_descriptor(
     reader_desc.runtime_args.reserve(num_cores);
 
     KernelDescriptor::CompileTimeArgs writer_ct_args;
-    TensorAccessorArgs(*param_out.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(param_out.mesh_tensor()).append_to(writer_ct_args);
     if (has_momentum_buffer_out) {
-        TensorAccessorArgs(*momentum_buffer_out->buffer()).append_to(writer_ct_args);
+        TensorAccessorArgs(momentum_buffer_out->mesh_tensor()).append_to(writer_ct_args);
     }
 
     KernelDescriptor writer_desc;

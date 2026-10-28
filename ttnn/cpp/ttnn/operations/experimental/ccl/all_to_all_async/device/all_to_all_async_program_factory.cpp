@@ -324,7 +324,7 @@ tt::tt_metal::ProgramDescriptor AllToAllAsyncProgram::create_descriptor(
         num_targets_forward,             // num_targets_forward_direction
         num_targets_backward             // num_targets_backward_direction
     };
-    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.buffer()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.mesh_tensor()).append_to(reader_compile_args);
     log_trace(tt::LogOp, "Reader Compile Args:");
     for ([[maybe_unused]] const auto& arg : reader_compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
@@ -354,9 +354,9 @@ tt::tt_metal::ProgramDescriptor AllToAllAsyncProgram::create_descriptor(
         contig_pages_advanced,           // contig_pages_advanced
         N_DRAM_BANKS                     // num_dram_banks
     };
-    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_intermediate_buffer.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_intermediate_buffer.mesh_tensor())
         .append_to(writer_compile_args);
-    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.buffer()).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.mesh_tensor()).append_to(writer_compile_args);
     for ([[maybe_unused]] const auto& arg : writer_compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
@@ -379,7 +379,7 @@ tt::tt_metal::ProgramDescriptor AllToAllAsyncProgram::create_descriptor(
         num_chunks_per_shard,
         op_config.get_page_size(),
         receiver_cb_index};
-    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.mesh_tensor())
         .append_to(receiver_writer_compile_args);
     tt::tt_metal::KernelDescriptor receiver_writer_kernel;
     receiver_writer_kernel.kernel_source =
@@ -401,8 +401,8 @@ tt::tt_metal::ProgramDescriptor AllToAllAsyncProgram::create_descriptor(
         receiver_cb_index,
         pages_per_packet,
         N_DRAM_BANKS};
-    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.buffer()).append_to(receiver_reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_intermediate_buffer.buffer())
+    tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.mesh_tensor()).append_to(receiver_reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_intermediate_buffer.mesh_tensor())
         .append_to(receiver_reader_compile_args);
     tt::tt_metal::KernelDescriptor receiver_reader_kernel;
     receiver_reader_kernel.kernel_source =

@@ -19,6 +19,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
@@ -645,10 +646,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
 
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1 = {};
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_2 = {};
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_2);
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_2);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_tensor()).append_to(reader_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(reader_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_tensor()).append_to(reader_mcast_sender_compile_time_args_group_2);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(reader_mcast_sender_compile_time_args_group_2);
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
@@ -688,20 +689,20 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
 
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {};
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_2 = {};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(writer_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(gamma))
         .append_to(writer_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(beta))
         .append_to(writer_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(input_mask))
         .append_to(writer_mcast_sender_compile_time_args_group_1);
 
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_mcast_sender_compile_time_args_group_2);
-    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(writer_mcast_sender_compile_time_args_group_2);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(gamma))
         .append_to(writer_mcast_sender_compile_time_args_group_2);
-    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(beta))
         .append_to(writer_mcast_sender_compile_time_args_group_2);
-    tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(input_mask))
         .append_to(writer_mcast_sender_compile_time_args_group_2);
 
     uint32_t reduce_factor_w_group_1 = num_rows_per_batch_per_core_group_1 * num_channels_per_group;

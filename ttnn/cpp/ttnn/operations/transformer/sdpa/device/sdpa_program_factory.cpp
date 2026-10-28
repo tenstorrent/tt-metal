@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 #include <cmath>
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -1598,14 +1599,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(0);  // arg 37: fwd_done_semaphore_id placeholder
     reader_compile_time_args.push_back(kv_retain);  // arg 38: K/V retention, Q heads per retention key (0 = off)
 
-    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(attn_mask.has_value() ? attn_mask->buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr).append_to(reader_compile_time_args);
-    TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
-        .append_to(reader_compile_time_args);
-    TensorAccessorArgs(flexible_chunked ? tensor_args.chunk_start_idx_tensor.value().buffer() : nullptr)
+    TensorAccessorArgs(input_tensor_q.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(ttnn::as_optional_mesh_tensor(attn_mask)).append_to(reader_compile_time_args);
+    TensorAccessorArgs(ttnn::as_optional_mesh_tensor(page_table)).append_to(reader_compile_time_args);
+    TensorAccessorArgs(ttnn::as_optional_mesh_tensor(attention_sink)).append_to(reader_compile_time_args);
+    TensorAccessorArgs(flexible_chunked ? &tensor_args.chunk_start_idx_tensor.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
     // Windowed K-range narrowing: the reader needs its own view of cu_window_seqlens and the per-device
     // Q-offset tensor to compute each Q chunk's [k_lo, k_hi) — same placeholder rule as the writer's pair.
@@ -1680,7 +1680,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
     // accessor offset chain stays intact. nullptr when not windowed (consistent placeholder).
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
     TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(writer_compile_time_args);
     // Then the per-device Q-offset accessor. Same chain, same placeholder rule: nullptr when the caller
     // passed the offset as a scalar (or is not windowed), in which case the writer never reads it.
@@ -1874,7 +1874,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         writer_compile_time_args.end(), writer_cb_compile_time_args.begin(), writer_cb_compile_time_args.end());
     compute_compile_time_args.insert(
         compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
-    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(compute_compile_time_args);
 
     // IDs match the order they were assigned above: sender=0, receiver=1, valid=2, fwd_done=3 (causal chains).
     if (kv_chain_semaphores) {

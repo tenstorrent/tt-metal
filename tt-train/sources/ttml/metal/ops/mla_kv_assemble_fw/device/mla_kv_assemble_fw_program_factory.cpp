@@ -119,18 +119,18 @@ MLAKVAssembleFwProgramFactory::cached_program_t MLAKVAssembleFwProgramFactory::c
         create_circular_buffer(program, all_cores, kKpeCbIndex, data_format, single_tile_size, kpe_cb_num_tiles);
 
     // ── Kernels ──
-    auto* kv_up_buffer = kv_up.buffer();
-    auto* k_pe_buffer = k_pe.buffer();
-    auto* k_buffer = k.buffer();
-    auto* v_buffer = v.buffer();
+    const auto& kv_up_tensor = kv_up.mesh_tensor();
+    const auto& k_pe_tensor = k_pe.mesh_tensor();
+    const auto& k_tensor = k.mesh_tensor();
+    const auto& v_tensor = v.mesh_tensor();
 
     std::vector<uint32_t> reader_compile_time_args = {Tn, Tv, Tr, H, block_size};
-    tt::tt_metal::TensorAccessorArgs(kv_up_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(k_pe_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(kv_up_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(k_pe_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, Tv, H, k_HtWt, v_HtWt, Ts, block_size};
-    tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(k_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(v_tensor).append_to(writer_compile_time_args);
 
     const std::map<std::string, std::string> defines;
 
@@ -160,12 +160,12 @@ MLAKVAssembleFwProgramFactory::cached_program_t MLAKVAssembleFwProgramFactory::c
                 program,
                 kernels.reader,
                 core,
-                {kv_up_buffer->address(), k_pe_buffer->address(), num_blocks, kv_up_tile_id_start, k_pe_tile_id_start});
+                {kv_up_tensor.address(), k_pe_tensor.address(), num_blocks, kv_up_tile_id_start, k_pe_tile_id_start});
             SetRuntimeArgs(
                 program,
                 kernels.writer,
                 core,
-                {k_buffer->address(), v_buffer->address(), num_blocks, sb_start, k_tile_id_start, v_tile_id_start});
+                {k_tensor.address(), v_tensor.address(), num_blocks, sb_start, k_tile_id_start, v_tile_id_start});
         });
 
     return cached_program_t{

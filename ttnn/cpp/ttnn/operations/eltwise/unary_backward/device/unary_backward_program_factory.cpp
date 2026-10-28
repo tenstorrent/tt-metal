@@ -234,8 +234,11 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     // ---- Circular buffers ----
 
     auto* grad_output_buffer = grad_output.buffer();
+    const auto& grad_output_tensor = grad_output.mesh_tensor();
     auto* input_buffer = input.buffer();
+    const auto& input_tensor = input.mesh_tensor();
     auto* grad_input_buffer = output.buffer();
+    const auto& grad_input_tensor = output.mesh_tensor();
 
     // `buffer` set means a globally allocated CB: the CB is the tensor's own shard in L1 rather
     // than a staging area, so the dataflow kernel copies nothing for it.
@@ -304,15 +307,15 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         // Unary's row-major block scheme, with page addressing generalized per tensor -- see
         // kernels/dataflow/row_major_pages.hpp.
         std::vector<uint32_t> reader_compile_time_args;
-        TensorAccessorArgs(*grad_output_buffer).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+        TensorAccessorArgs(grad_output_tensor).append_to(reader_compile_time_args);
+        TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/kernels/dataflow/"
             "reader_unary_backward_row_major.cpp";
         reader_desc.compile_time_args = reader_compile_time_args;
 
         std::vector<uint32_t> writer_compile_time_args;
-        TensorAccessorArgs(*grad_input_buffer).append_to(writer_compile_time_args);
+        TensorAccessorArgs(grad_input_tensor).append_to(writer_compile_time_args);
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/kernels/dataflow/"
             "writer_unary_backward_row_major.cpp";
@@ -327,8 +330,8 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
             reader_defines["IN0_SHARDED"] = "1";
             reader_defines["IN1_SHARDED"] = "1";
         } else {
-            TensorAccessorArgs(*grad_output_buffer).append_to(reader_compile_time_args);
-            TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+            TensorAccessorArgs(grad_output_tensor).append_to(reader_compile_time_args);
+            TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
         }
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp";
@@ -338,7 +341,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         // The writer declares its accessor unconditionally, so it is always appended; under
         // OUT_SHARDED the kernel just waits on the CB and never uses it.
         std::vector<uint32_t> writer_compile_time_args = {grad_input_cb_index};
-        TensorAccessorArgs(*grad_input_buffer).append_to(writer_compile_time_args);
+        TensorAccessorArgs(grad_input_tensor).append_to(writer_compile_time_args);
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
         writer_desc.compile_time_args = writer_compile_time_args;

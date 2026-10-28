@@ -231,7 +231,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
 
     auto* input_buffer = input_tensor.buffer();
     TT_FATAL(input_buffer != nullptr, "Input tensor must be allocated on device for rotate operation");
-    tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -320,7 +320,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
         std::vector<uint32_t> writer_compile_time_args = {output_cb_index, output_stick_size, out_ntiles_c};
         auto* output_buffer = output_tensor.buffer();
         TT_FATAL(output_buffer != nullptr, "Output tensor must be allocated on device for rotate operation");
-        tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
         KernelDescriptor wd;
         wd.kernel_source =

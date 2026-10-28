@@ -192,7 +192,7 @@ tt::tt_metal::ProgramDescriptor SendAsyncProgramFactory::create_descriptor(
         mesh_socket.get_config().socket_mem_config.socket_storage_type == tt::tt_metal::BufferType::DRAM;
     const uint32_t socket_config_addr = mesh_socket.get_config_buffer()->address();
 
-    const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(*input_buffer);
+    const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor());
     auto compile_time_args = input_accessor_args.get_compile_time_args();
     std::vector<uint32_t> reader_compile_args = {
         src0_cb_index,               // cb0_id

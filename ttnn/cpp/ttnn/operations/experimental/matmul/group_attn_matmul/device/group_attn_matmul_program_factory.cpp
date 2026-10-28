@@ -51,8 +51,11 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
     }
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
+    const auto& src0_tensor = a.mesh_tensor();
     tt::tt_metal::Buffer* src1_buffer = b.buffer();
+    const auto& src1_tensor = b.mesh_tensor();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // Load kernels on all device cores (cached program covers shape variation via
@@ -250,15 +253,15 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
         static_cast<uint32_t>(operation_attributes.row_major),
         operation_attributes.out_subblock_w,
     };
-    tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src1_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(output_cb_index),
         operation_attributes.out_subblock_w,
         intermediate_num_tiles,
     };
-    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src0_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     KernelDescriptor::Defines reader_defines;
     KernelDescriptor::Defines writer_defines;

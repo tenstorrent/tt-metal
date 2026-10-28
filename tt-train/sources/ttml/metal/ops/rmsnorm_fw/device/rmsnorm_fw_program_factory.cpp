@@ -197,29 +197,29 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
-    auto* input_buffer = input.buffer();
+    const auto& input_tensor = input.mesh_tensor();
     TT_FATAL(
-        input_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        input_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        enchantum::to_string(input_buffer->buffer_type()));
+        enchantum::to_string(input_tensor.memory_config().buffer_type()));
 
-    auto* gamma_buffer = gamma.buffer();
+    const auto& gamma_tensor = gamma.mesh_tensor();
     TT_FATAL(
-        gamma_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        gamma_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "Gamma buffer must be in DRAM. Gamma buffer of type {}",
-        enchantum::to_string(gamma_buffer->buffer_type()));
+        enchantum::to_string(gamma_tensor.memory_config().buffer_type()));
 
-    auto* output_buffer = output.front().buffer();
+    const auto& output_tensor = output.front().mesh_tensor();
     TT_FATAL(
-        output_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        output_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
-        enchantum::to_string(output_buffer->buffer_type()));
+        enchantum::to_string(output_tensor.memory_config().buffer_type()));
 
-    auto* rms_output_buffer = output.back().buffer();
+    const auto& rms_output_tensor = output.back().mesh_tensor();
     TT_FATAL(
-        rms_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        rms_output_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "RMS output buffer must be in DRAM. RMS output buffer of type {}",
-        enchantum::to_string(rms_output_buffer->buffer_type()));
+        enchantum::to_string(rms_output_tensor.memory_config().buffer_type()));
 
     // configure defines
     std::map<std::string, std::string> defines;
@@ -246,14 +246,14 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
 
     RMSNormForwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{packed_scaler, packed_eps, mask_w, Wt, block_size};
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma_tensor).append_to(reader_compile_time_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{Wt, block_size};
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_compile_time_args);
     if (args.return_intermediates) {
-        tt::tt_metal::TensorAccessorArgs(rms_output_buffer).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(rms_output_tensor).append_to(writer_compile_time_args);
     } else {
         tt::tt_metal::TensorAccessorArgs().append_to(writer_compile_time_args);
     }
@@ -299,13 +299,13 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
             const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
             // Reader kernel: (input_addr, gamma_addr, number_of_rows, offset_in_rows)
             SetRuntimeArgs(
-                program, kernels.reader, core, {input_buffer->address(), gamma_buffer->address(), num_rows, start_row});
+                program, kernels.reader, core, {input_tensor.address(), gamma_tensor.address(), num_rows, start_row});
             // Writer kernel: (dst_addr, dst_rms_addr, number_of_rows, offset_in_rows)
             SetRuntimeArgs(
                 program,
                 kernels.writer,
                 core,
-                {output_buffer->address(), rms_output_buffer->address(), num_rows, start_row});
+                {output_tensor.address(), rms_output_tensor.address(), num_rows, start_row});
         });
 
     // -------------------------------------------------------------------------

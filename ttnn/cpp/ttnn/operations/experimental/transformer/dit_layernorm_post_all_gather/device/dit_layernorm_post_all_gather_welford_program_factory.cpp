@@ -18,6 +18,7 @@
 
 #include <optional>
 #include <string>
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
@@ -75,10 +76,13 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
 
     Buffer* a_buffer = a.buffer();
+    const auto& a_tensor = a.mesh_tensor();
     Buffer* stats_buffer = stats.buffer();
+    const auto& stats_tensor = stats.mesh_tensor();
     Buffer* gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr;
     Buffer* beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr;
     Buffer* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
 
     uint32_t Wt_round_up_block_size = tt::round_up(Wt, block_size);
 
@@ -173,13 +177,13 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
     reader_compile_time_args.push_back((std::uint32_t)beta_batch_stride_tiles);
     reader_compile_time_args.push_back((std::uint32_t)Ht);
 
-    TensorAccessorArgs(a_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(stats_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(beta_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(a_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(stats_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(ttnn::as_optional_mesh_tensor(gamma)).append_to(reader_compile_time_args);
+    TensorAccessorArgs(ttnn::as_optional_mesh_tensor(beta)).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)Wt, (std::uint32_t)block_size};
-    TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> compute_defines;

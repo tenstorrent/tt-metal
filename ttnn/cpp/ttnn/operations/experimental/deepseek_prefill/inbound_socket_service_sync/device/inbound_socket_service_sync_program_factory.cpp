@@ -52,7 +52,9 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
     TT_FATAL(num_workers > 0, "inbound_socket_service_sync: worker_cores must contain at least one core");
 
     auto* backing_buffer = backing.buffer();
+    const auto& backing_tensor = backing.mesh_tensor();
     auto* tokens_buffer = tokens_out.buffer();
+    const auto& tokens_tensor = tokens_out.mesh_tensor();
     Buffer* overhang_buffer = has_overhang ? outputs[1].buffer() : nullptr;
     Buffer* metadata_buffer = has_metadata ? outputs[has_overhang ? 2 : 1].buffer() : nullptr;
 
@@ -80,8 +82,8 @@ ProgramDescriptor InboundSocketServiceSyncProgramFactory::create_descriptor(
         static_cast<uint32_t>(args.metadata_l1_addr),
         args.overhang_size_bytes,
     };
-    TensorAccessorArgs(*backing_buffer).append_to(ct_args);
-    TensorAccessorArgs(*tokens_buffer).append_to(ct_args);
+    TensorAccessorArgs(backing_tensor).append_to(ct_args);
+    TensorAccessorArgs(tokens_tensor).append_to(ct_args);
     TensorAccessorArgs(*(has_overhang ? overhang_buffer : tokens_buffer)).append_to(ct_args);
     if (has_metadata) {
         TensorAccessorArgs(*metadata_buffer).append_to(ct_args);

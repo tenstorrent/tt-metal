@@ -249,7 +249,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         Nc_tiles,
         N_tiles,
     };
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_kernel_desc.compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_kernel_desc.compile_time_args);
     writer_kernel_desc.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::NOC_0,

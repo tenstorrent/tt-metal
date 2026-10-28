@@ -377,8 +377,6 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
     uint32_t num_tiles_per_channel = input_padded_shape[3] / tt::constants::TILE_WIDTH;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-
     TT_FATAL(output.is_sharded(), "Output Tensor must be sharded.");
     auto output_shard_spec = output.shard_spec().value();
 
@@ -500,7 +498,7 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
         output_row_size_bytes};
 
     std::vector<uint32_t> reader_compile_time_args_vec = {max_num_tiles_per_row};
-    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_tensor()).append_to(reader_compile_time_args_vec);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"

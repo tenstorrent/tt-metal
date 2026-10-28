@@ -242,11 +242,11 @@ SoftmaxBackwardFactory::cached_program_t SoftmaxBackwardFactory::create(
 
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index, src1_cb_index, ones_cb_index, width_tiles, tiles_per_block, mask_w};
-    TensorAccessorArgs(softmax_output.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(upstream_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(softmax_output.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(upstream_grad.mesh_tensor()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index, width_tiles, tiles_per_block};
-    TensorAccessorArgs(tensor_return_value.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(tensor_return_value.mesh_tensor()).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {
         src0_cb_index,

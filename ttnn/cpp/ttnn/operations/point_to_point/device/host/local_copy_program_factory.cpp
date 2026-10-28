@@ -53,7 +53,7 @@ tt::tt_metal::ProgramDescriptor local_copy_program_factory(
 
     // Reader: input_tensor -> CB.
     std::vector<uint32_t> reader_ct_args;
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_ct_args);
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_unary_interleaved_start_id_gen.cpp";
@@ -64,7 +64,7 @@ tt::tt_metal::ProgramDescriptor local_copy_program_factory(
 
     // Writer: CB -> output_tensor.
     std::vector<uint32_t> writer_ct_args = {static_cast<uint32_t>(cb_id)};
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct_args);
     tt::tt_metal::KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/writer_unary_interleaved_start_id_gen.cpp";

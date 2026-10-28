@@ -190,9 +190,9 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
         metadata_page_size_bytes,
         operation_attributes.locally_reduced,
     };
-    TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(mapping_tensor.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(metadata_tensor.mesh_tensor()).append_to(reader_compile_time_args);
 
     const auto& axis = operation_attributes.axis;
 
@@ -220,7 +220,7 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
         (uint32_t)topology,
         operation_attributes.locally_reduced,
     };
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     // fabric routing info — enumerated for every device in the mesh in row-major order to
     // build the DEST_CHIP_ID / DEST_MESH_ID define arrays consumed by the writer kernel.

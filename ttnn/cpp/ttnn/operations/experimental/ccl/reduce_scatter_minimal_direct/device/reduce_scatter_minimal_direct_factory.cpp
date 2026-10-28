@@ -363,8 +363,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         direct_cb_reduce_id,
         (uint32_t)arrivals_in_cb,
         parity_stride_tiles};
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);  // tiled
-    tt::tt_metal::TensorAccessorArgs(staging.buffer()).append_to(reader_ct_args);       // chunk-paged
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_ct_args);  // tiled
+    tt::tt_metal::TensorAccessorArgs(staging.mesh_tensor()).append_to(reader_ct_args);       // chunk-paged
 
     std::vector<uint32_t> writer_ct_args = {
         single_tile_bytes,
@@ -378,8 +378,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         (uint32_t)arrivals_in_cb,
         parity_stride_tiles,
         (uint32_t)needs_init_sync};
-    tt::tt_metal::TensorAccessorArgs(staging.buffer()).append_to(writer_ct_args);        // chunk-paged
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);  // tiled
+    tt::tt_metal::TensorAccessorArgs(staging.mesh_tensor()).append_to(writer_ct_args);        // chunk-paged
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct_args);  // tiled
 
     std::vector<uint32_t> compute_ct_args = {
         tile_granularity, num_devices, direct_cb_reduce_id, direct_cb_out_id, parity_stride_tiles};

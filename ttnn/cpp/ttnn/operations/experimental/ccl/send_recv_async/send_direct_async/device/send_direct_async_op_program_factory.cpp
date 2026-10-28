@@ -182,7 +182,7 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
         }}},
     });
 
-    const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer());
+    const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor());
     auto compile_time_args = input_accessor_args.get_compile_time_args();
 
     std::vector<uint32_t> reader_compile_args = {

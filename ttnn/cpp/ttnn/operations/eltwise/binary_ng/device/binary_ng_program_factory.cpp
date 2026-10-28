@@ -967,8 +967,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const auto& all_device_cores = operation_attributes.worker_grid;
 
     Buffer* a_buffer = a.buffer();
+    const auto& a_tensor = a.mesh_tensor();
     Buffer* b_buffer = b.has_value() ? b->buffer() : nullptr;
     Buffer* c_buffer = c.buffer();
+    const auto& c_tensor = c.mesh_tensor();
 
     auto op_type = operation_attributes.binary_op_type;
 
@@ -1334,7 +1336,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // WRITER KERNEL DESCRIPTOR
     std::vector<uint32_t> writer_compile_time_args;
     std::vector<uint32_t> writer_common_runtime_args;
-    tt::tt_metal::TensorAccessorArgs(*c_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+    tt::tt_metal::TensorAccessorArgs(c_tensor, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_compile_time_args, writer_common_runtime_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
 
@@ -1503,7 +1505,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // READER KERNEL DESCRIPTOR
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> reader_common_runtime_args;
-    tt::tt_metal::TensorAccessorArgs(*a_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+    tt::tt_metal::TensorAccessorArgs(a_tensor, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_compile_time_args, reader_common_runtime_args);
     tt::tt_metal::TensorAccessorArgs(
         b_buffer != nullptr ? *b_buffer : *a_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)

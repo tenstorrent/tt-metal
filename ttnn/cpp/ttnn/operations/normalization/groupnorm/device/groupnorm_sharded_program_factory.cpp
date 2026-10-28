@@ -18,6 +18,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt_stl/fmt.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
@@ -636,16 +637,16 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     writer_mcast_sender_compile_time_args.push_back(num_cores_per_batch * num_cores_per_group);  // reduce_factor_c
 
     // Append TensorAccessorArgs for sharded writer kernel
-    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(gamma))
         .append_to(writer_mcast_sender_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(beta))
         .append_to(writer_mcast_sender_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(input_mask))
         .append_to(writer_mcast_sender_compile_time_args);
 
     // writer kernel
     if (negative_mask.has_value()) {
-        TensorAccessorArgs(*negative_mask.value().buffer()).append_to(writer_mcast_sender_compile_time_args);
+        TensorAccessorArgs(negative_mask.value().mesh_tensor()).append_to(writer_mcast_sender_compile_time_args);
     } else {
         TensorAccessorArgs().append_to(writer_mcast_sender_compile_time_args);  // placeholder
     }

@@ -693,18 +693,18 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     };
 
     // Input (MM output): always TensorAccessorArgs (handles interleaved AND L1-sharded) so the reader's
-    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(sender_reader_compile_args);
     if (intermediate_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.mesh_tensor()).append_to(sender_reader_compile_args);
     }
     // Addcmul tensor accessor CT args (a then b) — appended after intermediate.
     if (fuse_rs_addcmul) {
         sender_reader_compile_args.push_back(addcmul_a_cb_index);
         sender_reader_compile_args.push_back(addcmul_b_cb_index);
-        tt::tt_metal::TensorAccessorArgs(addcmul_input_tensor1->buffer()).append_to(sender_reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(addcmul_input_tensor2->buffer()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(addcmul_input_tensor1->mesh_tensor()).append_to(sender_reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(addcmul_input_tensor2->mesh_tensor()).append_to(sender_reader_compile_args);
     }
 
     std::string sender_reader_kernel_path =
@@ -768,12 +768,12 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     if (intermediate_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_writer_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(intermediate_tensor.mesh_tensor()).append_to(sender_writer_compile_args);
     }
     if (output_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(sender_writer_compile_args);
     }
 
     std::string sender_writer_kernel_path =

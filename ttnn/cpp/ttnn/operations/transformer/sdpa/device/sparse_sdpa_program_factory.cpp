@@ -219,10 +219,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // stay compile-time — their dims define the program. The accessor's runtime metadata is the same on
     // every core, so it rides on the kernel's common (not per-core) runtime args.
     std::vector<uint32_t> reader_crt;
-    tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(reader_ct, reader_crt);
-    tt::tt_metal::TensorAccessorArgs(t.kv.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+    tt::tt_metal::TensorAccessorArgs(t.q.mesh_tensor()).append_to(reader_ct, reader_crt);
+    tt::tt_metal::TensorAccessorArgs(t.kv.mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_ct, reader_crt);
-    tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
+    tt::tt_metal::TensorAccessorArgs(t.indices.mesh_tensor()).append_to(reader_ct, reader_crt);
     // The writer is the lighter dataflow kernel, so it builds the three persistent compute-input tiles.
     std::vector<uint32_t> writer_ct = {H, S, vDHt, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
     writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
@@ -234,10 +234,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         writer_ct.size() == ::sparse_sdpa::writer_ct_arg::END,
         "sparse_sdpa writer compile-time argument layout is out of sync");
     std::vector<uint32_t> writer_crt;
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
-    tt::tt_metal::TensorAccessorArgs(t.kv.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(writer_ct, writer_crt);
+    tt::tt_metal::TensorAccessorArgs(t.kv.mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_ct, writer_crt);
-    tt::tt_metal::TensorAccessorArgs(use_attention_sink ? t.attention_sink->buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(use_attention_sink ? &t.attention_sink->mesh_buffer() : nullptr)
         .append_to(writer_ct, writer_crt);
 
     std::vector<uint32_t> compute_ct = {H,

@@ -234,7 +234,9 @@ ProgramDescriptor build_program_descriptor_at(
     const auto& input_tensor_shape = tensor_args.input_tensor.padded_shape();
     const auto& output_tensor_shape = tensor_return_value.padded_shape();
     Buffer* input_buffer = tensor_args.input_tensor.buffer();
+    const auto& input_tensor = tensor_args.input_tensor.mesh_tensor();
     Buffer* output_buffer = tensor_return_value.buffer();
+    const auto& output_tensor = tensor_return_value.mesh_tensor();
 
     // Get OP Config, topology config
     // Use the buffer's aligned page size (architecture-specific: 32B on WH, 64B on BH).
@@ -508,7 +510,7 @@ ProgramDescriptor build_program_descriptor_at(
         sender_cb_index,   // cb_output_id
         is_padding_zeros,  // is_padding_zeros
         page_size};        // stick_size
-    TensorAccessorArgs(*input_buffer).append_to(h_reader_compile_args);
+    TensorAccessorArgs(input_tensor).append_to(h_reader_compile_args);
     h_reader_compile_args.push_back(is_2d ? 1 : 0);              // use_l1_intermediate
     h_reader_compile_args.push_back(is_2d ? recv_cb_index : 0);  // recv_cb_id
     KernelDescriptor h_reader_kernel;
@@ -532,7 +534,7 @@ ProgramDescriptor build_program_descriptor_at(
         sender_cb_index,   // cb_output_id
         is_padding_zeros,  // is_padding_zeros
         page_size};        // stick_size
-    TensorAccessorArgs(*output_buffer).append_to(h_writer_compile_args);
+    TensorAccessorArgs(output_tensor).append_to(h_writer_compile_args);
     h_writer_compile_args.push_back(is_2d ? 1 : 0);                   // use_l1_intermediate
     h_writer_compile_args.push_back(is_2d ? recv_cb_index : 0);       // recv_cb_id
     h_writer_compile_args.push_back(is_2d ? 1 : 0);                   // handle_incoming_writes
@@ -698,7 +700,7 @@ ProgramDescriptor build_program_descriptor_at(
 
             // Create consolidated local copy reader kernel (uniform compile args)
             std::vector<uint32_t> local_reader_compile_args = {sender_cb_index, page_size};
-            TensorAccessorArgs(*input_buffer).append_to(local_reader_compile_args);
+            TensorAccessorArgs(input_tensor).append_to(local_reader_compile_args);
             KernelDescriptor local_reader_kernel;
             local_reader_kernel.kernel_source =
                 "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/local_copy_reader.cpp";
@@ -718,7 +720,7 @@ ProgramDescriptor build_program_descriptor_at(
 
             // Create consolidated local copy writer kernel (uniform compile args)
             std::vector<uint32_t> local_writer_compile_args = {sender_cb_index, page_size};
-            TensorAccessorArgs(*output_buffer).append_to(local_writer_compile_args);
+            TensorAccessorArgs(output_tensor).append_to(local_writer_compile_args);
             KernelDescriptor local_writer_kernel;
             local_writer_kernel.kernel_source =
                 "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/local_copy_writer.cpp";
@@ -830,8 +832,8 @@ ProgramDescriptor build_program_descriptor_at(
             sender_cb_index,   // cb_output_id
             is_padding_zeros,  // is_padding_zeros
             page_size};        // stick_size
-        TensorAccessorArgs(*output_buffer).append_to(w_reader_compile_args);
-        TensorAccessorArgs(*input_buffer).append_to(w_reader_compile_args);
+        TensorAccessorArgs(output_tensor).append_to(w_reader_compile_args);
+        TensorAccessorArgs(input_tensor).append_to(w_reader_compile_args);
         KernelDescriptor w_reader_kernel;
         w_reader_kernel.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
@@ -855,7 +857,7 @@ ProgramDescriptor build_program_descriptor_at(
             sender_cb_index,   // cb_output_id
             is_padding_zeros,  // is_padding_zeros
             page_size};        // stick_size
-        TensorAccessorArgs(*output_buffer).append_to(w_writer_compile_args);
+        TensorAccessorArgs(output_tensor).append_to(w_writer_compile_args);
         w_writer_compile_args.push_back(0);            // use_l1_intermediate (direct-to-DRAM for W)
         w_writer_compile_args.push_back(0);            // recv_cb_id (unused)
         w_writer_compile_args.push_back(0);            // handle_incoming_writes (data goes direct to DRAM)

@@ -82,7 +82,7 @@ tt::tt_metal::ProgramDescriptor SendAsyncD2HDeviceOperation::create_descriptor(
         }}},
     });
 
-    const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(*input_buffer);
+    const auto input_accessor_args = tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor());
     auto input_accessor_compile_time_args = input_accessor_args.get_compile_time_args();
 
     // The socket config buffer address is a compile-time arg and part of the program hash

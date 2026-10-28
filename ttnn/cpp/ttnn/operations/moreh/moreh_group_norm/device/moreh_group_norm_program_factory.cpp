@@ -214,9 +214,9 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
 
     KernelDescriptor::CompileTimeArgs reader_ct_args{
         static_cast<uint32_t>(gamma_has_value), static_cast<uint32_t>(beta_has_value)};
-    TensorAccessorArgs(input.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(gamma_has_value ? gamma->buffer() : nullptr).append_to(reader_ct_args);
-    TensorAccessorArgs(beta_has_value ? beta->buffer() : nullptr).append_to(reader_ct_args);
+    TensorAccessorArgs(input.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(gamma_has_value ? &gamma->mesh_buffer() : nullptr).append_to(reader_ct_args);
+    TensorAccessorArgs(beta_has_value ? &beta->mesh_buffer() : nullptr).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = reader_kernel_file;
@@ -228,9 +228,9 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
 
     KernelDescriptor::CompileTimeArgs writer_ct_args{
         static_cast<uint32_t>(mean_has_value), static_cast<uint32_t>(rstd_has_value)};
-    TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
-    TensorAccessorArgs(mean_has_value ? mean.value().buffer() : nullptr).append_to(writer_ct_args);
-    TensorAccessorArgs(rstd_has_value ? rstd.value().buffer() : nullptr).append_to(writer_ct_args);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(writer_ct_args);
+    TensorAccessorArgs(mean_has_value ? &mean.value().mesh_buffer() : nullptr).append_to(writer_ct_args);
+    TensorAccessorArgs(rstd_has_value ? &rstd.value().mesh_buffer() : nullptr).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = WRITER_KERNEL_PATH;

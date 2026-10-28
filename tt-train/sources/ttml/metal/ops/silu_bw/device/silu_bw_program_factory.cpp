@@ -110,32 +110,32 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
-    auto* input_buffer = input.buffer();
+    const auto& input_tensor = input.mesh_tensor();
     TT_FATAL(
-        input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        enchantum::to_string(input_buffer->buffer_type()));
+        enchantum::to_string(input_tensor.memory_config().buffer_type()));
 
-    auto* dLdout_buffer = dLdout.buffer();
+    const auto& dLdout_tensor = dLdout.mesh_tensor();
     TT_FATAL(
-        dLdout_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        dLdout_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_dout buffer must be in DRAM. dL_dout buffer of type {}",
-        enchantum::to_string(dLdout_buffer->buffer_type()));
+        enchantum::to_string(dLdout_tensor.memory_config().buffer_type()));
 
-    auto* dL_da_buffer = output.buffer();
+    const auto& dL_da_tensor = output.mesh_tensor();
     TT_FATAL(
-        dL_da_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        dL_da_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_da buffer must be in DRAM. dL_da buffer of type {}",
-        enchantum::to_string(dL_da_buffer->buffer_type()));
+        enchantum::to_string(dL_da_tensor.memory_config().buffer_type()));
 
     SiLUBackwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dLdout_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dLdout_tensor).append_to(reader_compile_time_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, {}, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(dL_da_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dL_da_tensor).append_to(writer_compile_time_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, {}, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
@@ -177,12 +177,9 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
             const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
             // Reader kernel: (input_addr, dLdout_addr, num_rows, offset)
             SetRuntimeArgs(
-                program,
-                kernels.reader,
-                core,
-                {input_buffer->address(), dLdout_buffer->address(), num_rows, start_row});
+                program, kernels.reader, core, {input_tensor.address(), dLdout_tensor.address(), num_rows, start_row});
             // Writer kernel: (da_addr, num_rows, offset)
-            SetRuntimeArgs(program, kernels.writer, core, {dL_da_buffer->address(), num_rows, start_row});
+            SetRuntimeArgs(program, kernels.writer, core, {dL_da_tensor.address(), num_rows, start_row});
         });
 
     // -------------------------------------------------------------------------

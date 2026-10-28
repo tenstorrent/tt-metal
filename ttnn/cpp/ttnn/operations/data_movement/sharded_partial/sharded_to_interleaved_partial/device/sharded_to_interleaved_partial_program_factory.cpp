@@ -117,6 +117,7 @@ ProgramDescriptor ShardedToInterleavedPartialProgramFactory::create_descriptor(
     uint32_t num_input_units = num_units_per_shard;
     auto* src_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
     uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
@@ -161,7 +162,7 @@ ProgramDescriptor ShardedToInterleavedPartialProgramFactory::create_descriptor(
     writer_desc.core_ranges = used_cores;
     writer_desc.config = WriterConfigDescriptor{};
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
     if (is_tile) {
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"

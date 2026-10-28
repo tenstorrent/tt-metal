@@ -31,6 +31,7 @@ ProgramDescriptor ReshapeTileProgramFactory::create_descriptor(
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     Buffer* src0_buffer = input_tensor.buffer();
+    const auto& src0_tensor = input_tensor.mesh_tensor();
 
     auto output_shape = output_tensor.padded_shape();
 
@@ -39,6 +40,7 @@ ProgramDescriptor ReshapeTileProgramFactory::create_descriptor(
     uint32_t num_tiles = output_tensor.physical_volume() / tt::constants::TILE_HW;
 
     Buffer* dst_buffer = output_tensor.buffer();
+    const auto& dst_tensor = output_tensor.mesh_tensor();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     constexpr uint32_t src0_cb_index = 0;
@@ -61,10 +63,10 @@ ProgramDescriptor ReshapeTileProgramFactory::create_descriptor(
     uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
 
     std::vector<uint32_t> reader_compile_time_args = {alignment, input_tensor.element_size()};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src0_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(src0_cb_index)};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     // Wide-alignment scratch CB: only needed when DRAM/L1 alignment exceeds a face's
     // worth of bytes (the reader uses it as a temporary aligned landing pad).

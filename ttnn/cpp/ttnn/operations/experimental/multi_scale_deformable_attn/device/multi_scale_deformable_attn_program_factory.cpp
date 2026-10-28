@@ -158,9 +158,9 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         attn_stick_aligned,
         static_cast<uint32_t>(operation_attributes.align_corners),
     };
-    TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*grid.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*attn.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(value.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(grid.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(attn.mesh_tensor()).append_to(reader_ct);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -186,7 +186,7 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         output_stick_aligned,
         D,
     };
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(writer_ct);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =

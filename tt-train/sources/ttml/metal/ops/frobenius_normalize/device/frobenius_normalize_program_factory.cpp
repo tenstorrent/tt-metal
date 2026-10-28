@@ -108,17 +108,17 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
     // -------------------------------------------------------------------------
     // 4) Create kernels
     // -------------------------------------------------------------------------
-    auto* input_buffer = input.buffer();
-    auto* output_buffer = output[0].buffer();
+    const auto& input_tensor = input.mesh_tensor();
+    const auto& output_tensor = output[0].mesh_tensor();
 
     TT_FATAL(
-        input_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        input_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Got {}",
-        enchantum::to_string(input_buffer->buffer_type()));
+        enchantum::to_string(input_tensor.memory_config().buffer_type()));
     TT_FATAL(
-        output_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        output_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Got {}",
-        enchantum::to_string(output_buffer->buffer_type()));
+        enchantum::to_string(output_tensor.memory_config().buffer_type()));
 
     // Origin = core (0,0)
     tt::tt_metal::CoreCoord origin_core{0, 0};
@@ -139,13 +139,13 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
         static_cast<uint32_t>(mcast_end.y),
         mcast_num_dests,
         block_size};
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_ct_args);
 
     auto reader_origin = create_reader_kernel(program, origin_set, reader_ct_args, origin_defines, kReaderKernelPath);
     auto reader_kernel = create_reader_kernel(program, non_origin_cores, reader_ct_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_ct_args{block_size};
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_ct_args);
 
     auto writer_kernel = create_writer_kernel(program, all_cores, writer_ct_args, defines, kWriterKernelPath);
 
@@ -207,9 +207,9 @@ FrobeniusNormalizeProgramFactory::cached_program_t FrobeniusNormalizeProgramFact
                 program,
                 reader_handle,
                 logical_core,
-                {input_buffer->address(), tiles_this_core, tiles_written, reduction_sem_id, core_index, bcast_sem_id});
+                {input_tensor.address(), tiles_this_core, tiles_written, reduction_sem_id, core_index, bcast_sem_id});
             SetRuntimeArgs(
-                program, writer_kernel, logical_core, {output_buffer->address(), tiles_this_core, tiles_written});
+                program, writer_kernel, logical_core, {output_tensor.address(), tiles_this_core, tiles_written});
             auto compute_handle =
                 (logical_core == origin_core) ? compute_origin : (in_group_1 ? compute_g1 : compute_g2);
             SetRuntimeArgs(program, compute_handle, logical_core, {std::bit_cast<uint32_t>(args.epsilon)});

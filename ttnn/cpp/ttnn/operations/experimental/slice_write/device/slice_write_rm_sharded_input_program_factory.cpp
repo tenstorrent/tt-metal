@@ -265,8 +265,7 @@ ProgramDescriptor SliceWriteRMShardedInputProgramFactory::create_descriptor(
 
     uint32_t max_read_size = 4096;
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    const auto& dst_tensor = output.mesh_tensor();
 
     const uint32_t src0_cb_index = kSliceWriteRmShardedInputCbIndex;
 
@@ -306,7 +305,7 @@ ProgramDescriptor SliceWriteRMShardedInputProgramFactory::create_descriptor(
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, 0};
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args_vec);
 
     KernelDescriptor reader_kernel;
     reader_kernel.kernel_source =

@@ -72,10 +72,15 @@ ProgramDescriptor BinaryBackwardProgramFactory::create_descriptor(
     constexpr uint32_t double_buffered = 2;
 
     auto* grad_out_buf = grad_output.buffer();
+    const auto& grad_out_tensor = grad_output.mesh_tensor();
     auto* input_buf = input.buffer();
+    const auto& input_tensor = input.mesh_tensor();
     auto* other_buf = other.buffer();
+    const auto& other_tensor = other.mesh_tensor();
     auto* input_grad_buf = input_grad.buffer();
+    const auto& input_grad_tensor = input_grad.mesh_tensor();
     auto* other_grad_buf = other_grad.buffer();
+    const auto& other_grad_tensor = other_grad.mesh_tensor();
 
     ProgramDescriptor desc;
 
@@ -99,13 +104,13 @@ ProgramDescriptor BinaryBackwardProgramFactory::create_descriptor(
     // Reader compile-time args: 3 CB IDs + 3 TensorAccessorArgs (order matches
     // ternary_reader_nobcast_ttt.cpp's TensorAccessorArgs<3,0>() indices).
     std::vector<uint32_t> reader_compile_time_args = {cb_grad_out, cb_input, cb_other};
-    TensorAccessorArgs(*grad_out_buf).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*input_buf).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*other_buf).append_to(reader_compile_time_args);
+    TensorAccessorArgs(grad_out_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(other_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {cb_input_grad, cb_other_grad};
-    TensorAccessorArgs(*input_grad_buf).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*other_grad_buf).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_grad_tensor).append_to(writer_compile_time_args);
+    TensorAccessorArgs(other_grad_tensor).append_to(writer_compile_time_args);
 
     // UnpackToDestFp32 is only meaningful when DEST is actually accumulating in
     // float32 -- otherwise the request is a no-op that risks tripping asserts

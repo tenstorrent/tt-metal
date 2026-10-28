@@ -120,7 +120,9 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
     }
 
     Buffer* src_buffer = input.buffer();
+    const auto& src_tensor = input.mesh_tensor();
     Buffer* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
 
     KernelDescriptor::CompileTimeArgs reader_compile_time_args;
     KernelDescriptor::CompileTimeArgs writer_compile_time_args;
@@ -131,8 +133,8 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
         writer_compile_time_args = {static_cast<uint32_t>(output_cb_index), static_cast<uint32_t>(output_unit_size)};
     }
     std::map<std::string, std::string> kernel_defines;
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
     if (backwards) {
         kernel_defines["BACKWARDS"] = "1";
     }

@@ -10,6 +10,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace {
 
@@ -425,18 +426,21 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // -------------------------------------------------------------------------
 
     auto* query_buffer = query.buffer();
+    const auto& query_tensor = query.mesh_tensor();
     TT_FATAL(
         query_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Query buffer must be in DRAM. Query buffer of type {}",
         enchantum::to_string(query_buffer->buffer_type()));
 
     auto* key_buffer = key.buffer();
+    const auto& key_tensor = key.mesh_tensor();
     TT_FATAL(
         key_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Key buffer must be in DRAM. Key buffer of type {}",
         enchantum::to_string(key_buffer->buffer_type()));
 
     auto* value_buffer = value.buffer();
+    const auto& value_tensor = value.mesh_tensor();
     TT_FATAL(
         value_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Value buffer must be in DRAM. Value buffer of type {}",
@@ -459,6 +463,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     }
 
     auto* output_buffer = output.front().buffer();
+    const auto& output_tensor = output.front().mesh_tensor();
     TT_FATAL(
         output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
@@ -518,11 +523,12 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         heads_per_group,  // number of heads per group
         Sk_chunk_t,       // multi-tile K/V chunking factor
     };
-    tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(value_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(query_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(key_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(value_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(attn_mask)).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(args.has_gate ? &gate.value().mesh_buffer() : nullptr)
+        .append_to(reader_compile_args);
 
     kernels.reader = create_reader_kernel(
         program,
@@ -536,8 +542,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         St,   // num tile in seq len dim (S/TILE_H)
         qNH,  // number of heads in query
     };
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
-    tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(args.return_intermediates ? &output.back().mesh_buffer() : nullptr)
+        .append_to(writer_compile_args);
     kernels.writer = create_writer_kernel(
         program, all_cores, /* writer_compile_args */ writer_compile_args, defines, kWriterKernelPath);
 

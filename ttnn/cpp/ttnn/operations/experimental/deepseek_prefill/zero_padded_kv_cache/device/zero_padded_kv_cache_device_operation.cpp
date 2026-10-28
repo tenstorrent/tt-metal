@@ -372,7 +372,7 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
         writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer.core_ranges = all_cores;
         writer.compile_time_args = {kZeroCbIndex, row_page_size};
-        TensorAccessorArgs(cache.buffer()).append_to(writer.compile_time_args);
+        TensorAccessorArgs(cache.mesh_tensor()).append_to(writer.compile_time_args);
         writer.config = WriterConfigDescriptor{};
         writer.common_runtime_args = common_runtime_args;
         writer.emplace_runtime_args(CoreCoord{0, 0}, {cache.buffer()});
@@ -417,11 +417,11 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
         cache_tile_size,
         static_cast<uint32_t>(has_metadata),
         has_metadata ? kMetaCbIndex : 0u};
-    TensorAccessorArgs(cache.buffer()).append_to(reader.compile_time_args);
+    TensorAccessorArgs(cache.mesh_tensor()).append_to(reader.compile_time_args);
     if (has_metadata) {
         // One metadata accessor, reused for both 1-element tensors (identical layout); the kernel reads
         // each from its own DRAM address (common args 10/11).
-        TensorAccessorArgs(tensor_args.slot_idx->buffer()).append_to(reader.compile_time_args);
+        TensorAccessorArgs(tensor_args.slot_idx->mesh_tensor()).append_to(reader.compile_time_args);
     }
     reader.config = ReaderConfigDescriptor{};
     reader.common_runtime_args = common_runtime_args;
@@ -450,11 +450,11 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
         cache_tile_size,
         static_cast<uint32_t>(has_metadata),
         has_metadata ? kMetaCbIndexWriter : 0u};  // writer's OWN metadata CB (disjoint from the reader's)
-    TensorAccessorArgs(cache.buffer()).append_to(writer.compile_time_args);
+    TensorAccessorArgs(cache.mesh_tensor()).append_to(writer.compile_time_args);
     if (has_metadata) {
         // One metadata accessor, reused for both 1-element tensors (identical layout); the kernel reads
         // each from its own DRAM address (common args 10/11).
-        TensorAccessorArgs(tensor_args.slot_idx->buffer()).append_to(writer.compile_time_args);
+        TensorAccessorArgs(tensor_args.slot_idx->mesh_tensor()).append_to(writer.compile_time_args);
     }
     writer.config = WriterConfigDescriptor{};
     writer.common_runtime_args = common_runtime_args;

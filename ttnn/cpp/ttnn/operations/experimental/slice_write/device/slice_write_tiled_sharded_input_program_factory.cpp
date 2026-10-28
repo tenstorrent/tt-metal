@@ -269,6 +269,7 @@ ProgramDescriptor SliceWriteTiledShardedInputProgramFactory::create_descriptor(
         TILE_HEIGHT);
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     auto* input_buffer = input.buffer();
     TT_FATAL(input_buffer != nullptr, "Input buffer should be allocated on device");
@@ -296,7 +297,7 @@ ProgramDescriptor SliceWriteTiledShardedInputProgramFactory::create_descriptor(
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, 0};
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args_vec);
     KernelDescriptor::Defines writer_defines;
     if (num_tiles_channel_per_core * TILE_WIDTH * num_cores_channels > output_shape[-1]) {
         writer_defines.emplace_back("UNPAD_INPUT_WIDTH", "1");

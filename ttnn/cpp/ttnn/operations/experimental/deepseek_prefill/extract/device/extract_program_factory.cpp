@@ -47,8 +47,11 @@ tt::tt_metal::ProgramDescriptor ExtractProgramFactory::create_descriptor(
 
     auto* global_buffer = global_tensor.buffer();
     auto* start_buffer = start.buffer();
+    const auto& start_tensor = start.mesh_tensor();
     auto* counts_buffer = counts.buffer();
+    const auto& counts_tensor = counts.mesh_tensor();
     auto* global_expert_idx_table_buffer = global_expert_idx_table.buffer();
+    const auto& global_expert_idx_table_tensor = global_expert_idx_table.mesh_tensor();
     auto* output_buffer = output_tensor.buffer();
     TT_FATAL(global_buffer != nullptr, "global_tensor buffer must be allocated on device");
     TT_FATAL(start_buffer != nullptr, "start buffer must be allocated on device");
@@ -134,10 +137,10 @@ tt::tt_metal::ProgramDescriptor ExtractProgramFactory::create_descriptor(
         max_output_tiles,
         num_cores,
     };
-    tt::tt_metal::TensorAccessorArgs(global_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(global_expert_idx_table_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(global_tensor.mesh_tensor()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(start_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(counts_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(global_expert_idx_table_tensor).append_to(reader_compile_time_args);
 
     // Writer compile-time args: CB ids, scalars, then TensorAccessorArgs for
     // output/counts/global_expert_idx_table.
@@ -150,9 +153,9 @@ tt::tt_metal::ProgramDescriptor ExtractProgramFactory::create_descriptor(
         max_output_tiles,
         num_cores,
     };
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(global_expert_idx_table_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(counts_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(global_expert_idx_table_tensor).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =

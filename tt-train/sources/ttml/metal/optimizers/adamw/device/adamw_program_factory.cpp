@@ -13,6 +13,7 @@
 
 #include "adamw_device_operation_types.hpp"
 #include "metal/common/program_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace {
 
@@ -249,12 +250,12 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
 
-    auto* param_buffer = param.buffer();
-    auto* grad_buffer = grad.buffer();
-    auto* exp_avg_buffer = exp_avg.buffer();
-    auto* exp_avg_sq_buffer = exp_avg_sq.buffer();
+    const auto& param_tensor = param.mesh_tensor();
+    const auto& grad_tensor = grad.mesh_tensor();
+    const auto& exp_avg_tensor = exp_avg.mesh_tensor();
+    const auto& exp_avg_sq_tensor = exp_avg_sq.mesh_tensor();
     auto* max_exp_avg_sq_buffer = max_exp_avg_sq_opt.has_value() ? max_exp_avg_sq_opt.value().buffer() : nullptr;
-    auto* output_buffer = output.buffer();
+    const auto& output_tensor = output.mesh_tensor();
 
     std::map<std::string, std::string> defines;
     defines["AMSGRAD"] = operation_attributes.amsgrad ? "1" : "0";
@@ -263,18 +264,20 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     AdamWKernels kernels{};
 
     std::vector<uint32_t> reader_compile_time_args{block_size};
-    tt::tt_metal::TensorAccessorArgs(param_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(grad_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(exp_avg_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(exp_avg_sq_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(max_exp_avg_sq_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(param_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(grad_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(exp_avg_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(exp_avg_sq_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(max_exp_avg_sq_opt))
+        .append_to(reader_compile_time_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size};
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(exp_avg_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(exp_avg_sq_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(max_exp_avg_sq_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(exp_avg_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(exp_avg_sq_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(max_exp_avg_sq_opt))
+        .append_to(writer_compile_time_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
@@ -343,10 +346,10 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
                 program,
                 kernels.reader,
                 core,
-                {param_buffer->address(),
-                 grad_buffer->address(),
-                 exp_avg_buffer->address(),
-                 exp_avg_sq_buffer->address(),
+                {param_tensor.address(),
+                 grad_tensor.address(),
+                 exp_avg_tensor.address(),
+                 exp_avg_sq_tensor.address(),
                  max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U,
                  num_tiles,
                  start_tile});
@@ -356,9 +359,9 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
                 program,
                 kernels.writer,
                 core,
-                {output_buffer->address(),
-                 exp_avg_buffer->address(),
-                 exp_avg_sq_buffer->address(),
+                {output_tensor.address(),
+                 exp_avg_tensor.address(),
+                 exp_avg_sq_tensor.address(),
                  max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U,
                  num_tiles,
                  start_tile});

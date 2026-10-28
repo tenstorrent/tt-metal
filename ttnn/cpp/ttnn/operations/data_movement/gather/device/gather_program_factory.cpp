@@ -52,7 +52,9 @@ ProgramDescriptor GatherDeviceOperation::SingleRowSingleCore::create_descriptor(
     const uint32_t output_tensor_tile_size = tile_size(output_tensor_cb_data_format);
 
     auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
+    const auto& input_tensor = tensor_args.input_tensor.mesh_tensor();
     auto* input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
+    const auto& input_index_tensor = tensor_args.input_index_tensor.mesh_tensor();
     auto* output_tensor_buffer = output_tensor.buffer();
 
     const bool input_tensor_is_dram = input_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
@@ -139,7 +141,7 @@ ProgramDescriptor GatherDeviceOperation::SingleRowSingleCore::create_descriptor(
         total_number_of_cores,
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
-    TensorAccessorArgs(*input_index_tensor_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_index_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kReaderSingle;
@@ -159,8 +161,8 @@ ProgramDescriptor GatherDeviceOperation::SingleRowSingleCore::create_descriptor(
         total_number_of_cores,
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
-    TensorAccessorArgs(*input_tensor_buffer).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*output_tensor_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_tensor).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterSingle;
@@ -208,7 +210,9 @@ ProgramDescriptor GatherDeviceOperation::SingleRowMultiCore::create_descriptor(
     const uint32_t output_tensor_tile_size = tile_size(output_tensor_cb_data_format);
 
     auto* const input_tensor_buffer = tensor_args.input_tensor.buffer();
+    const auto& input_tensor = tensor_args.input_tensor.mesh_tensor();
     auto* const input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
+    const auto& input_index_tensor = tensor_args.input_index_tensor.mesh_tensor();
     auto* const output_tensor_buffer = output_tensor.buffer();
 
     const bool input_tensor_is_dram = input_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
@@ -296,7 +300,7 @@ ProgramDescriptor GatherDeviceOperation::SingleRowMultiCore::create_descriptor(
         total_number_of_cores,
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
-    TensorAccessorArgs(*input_index_tensor_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_index_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kReaderMulti;
@@ -316,8 +320,8 @@ ProgramDescriptor GatherDeviceOperation::SingleRowMultiCore::create_descriptor(
         total_number_of_cores,
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
-    TensorAccessorArgs(*input_tensor_buffer).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*output_tensor_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_tensor).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterMulti;
@@ -364,7 +368,9 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowSingleCore::create_descripto
         tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
 
     auto* input_tensor_buffer = tensor_args.input_tensor.buffer();
+    const auto& input_tensor = tensor_args.input_tensor.mesh_tensor();
     auto* input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
+    const auto& input_index_tensor = tensor_args.input_index_tensor.mesh_tensor();
     auto* output_tensor_buffer = output_tensor.buffer();
 
     const uint32_t input_elem_size = tensor_args.input_tensor.element_size();
@@ -444,7 +450,7 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowSingleCore::create_descripto
         input_elem_size,
         input_index_elem_size,
         output_elem_size};
-    TensorAccessorArgs(*input_index_tensor_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_index_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kReaderRmSingle;
@@ -462,8 +468,8 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowSingleCore::create_descripto
         total_number_of_cores,
         input_elem_size,
         output_elem_size};
-    TensorAccessorArgs(*input_tensor_buffer).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*output_tensor_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_tensor).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterRmSingle;
@@ -521,7 +527,9 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
         tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
 
     auto* const input_tensor_buffer = tensor_args.input_tensor.buffer();
+    const auto& input_tensor = tensor_args.input_tensor.mesh_tensor();
     auto* const input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
+    const auto& input_index_tensor = tensor_args.input_index_tensor.mesh_tensor();
     auto* const output_tensor_buffer = output_tensor.buffer();
 
     const uint32_t input_elem_size = tensor_args.input_tensor.element_size();
@@ -603,7 +611,7 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
         input_elem_size,
         input_index_elem_size,
         output_elem_size};
-    TensorAccessorArgs(*input_index_tensor_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_index_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kReaderRmMulti;
@@ -614,8 +622,8 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
 
     std::vector<uint32_t> writer_compile_time_args = {
         input_tensor_cb_index, output_tensor_cb_index, H, W_input, W_index, input_elem_size, output_elem_size};
-    TensorAccessorArgs(*input_tensor_buffer).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*output_tensor_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(input_tensor).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterRmMulti;

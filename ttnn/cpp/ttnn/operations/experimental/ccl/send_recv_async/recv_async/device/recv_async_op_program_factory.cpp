@@ -172,7 +172,7 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
         }}},
     });
 
-    const auto output_accessor_args = tt::tt_metal::TensorAccessorArgs(*output_buffer);
+    const auto output_accessor_args = tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor());
     auto output_accessor_compile_time_args = output_accessor_args.get_compile_time_args();
 
     constexpr uint8_t scratch_buffer_cb_index = tt::CBIndex::c_1;

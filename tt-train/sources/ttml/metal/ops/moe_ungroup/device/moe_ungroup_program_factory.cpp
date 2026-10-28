@@ -183,11 +183,11 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
     // -------------------------------------------------------------------------
     // Buffer pointers
     // -------------------------------------------------------------------------
-    auto* expert_out_buf = args.expert_out.buffer();
-    auto* ungrouped_buf = output.buffer();
-    auto* plan_buf = args.plan.buffer();
-    auto* offsets_buf = args.offsets.buffer();
-    auto* grouped_scores_buf = args.grouped_scores.buffer();
+    const auto& expert_out_tensor = args.expert_out.mesh_tensor();
+    const auto& ungrouped_tensor = output.mesh_tensor();
+    const auto& plan_tensor = args.plan.mesh_tensor();
+    const auto& offsets_tensor = args.offsets.mesh_tensor();
+    const auto& grouped_scores_tensor = args.grouped_scores.mesh_tensor();
 
     // -------------------------------------------------------------------------
     // Mcast rectangle (covers full worker grid).
@@ -224,8 +224,8 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         kCbCtrl,                    // 16
         Wt,                         // 17
     };
-    tt::tt_metal::TensorAccessorArgs(expert_out_buf).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(expert_out_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(offsets_tensor).append_to(reader_ct_args);
 
     auto reader_kernel_g1 = create_reader_kernel(program, worker_group_1, reader_ct_args, {}, kReaderKernelPath);
     tt::tt_metal::KernelHandle reader_kernel_g2{};
@@ -249,10 +249,10 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         brisc_release_sem_id,  // 9
         kL1_ALIGN,             // 10
     };
-    tt::tt_metal::TensorAccessorArgs(ungrouped_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(plan_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(grouped_scores_buf).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(ungrouped_tensor).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(plan_tensor).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(offsets_tensor).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(grouped_scores_tensor).append_to(writer_ct_args);
 
     auto writer_kernel_g1 = create_writer_kernel(program, worker_group_1, writer_ct_args, {}, kWriterKernelPath);
     tt::tt_metal::KernelHandle writer_kernel_g2{};
@@ -290,16 +290,16 @@ MoeUngroupProgramFactory::cached_program_t MoeUngroupProgramFactory::create(
         bool is_g1 = worker_group_1.contains(core);
 
         std::vector<uint32_t> reader_rt = {
-            expert_out_buf->address(),  // 0
-            offsets_buf->address(),     // 1
-            worker_idx,                 // 2 my_core_idx
+            expert_out_tensor.address(),  // 0
+            offsets_tensor.address(),     // 1
+            worker_idx,                   // 2 my_core_idx
         };
         std::vector<uint32_t> writer_rt = {
-            ungrouped_buf->address(),       // 0
-            plan_buf->address(),            // 1
-            offsets_buf->address(),         // 2
-            grouped_scores_buf->address(),  // 3
-            worker_idx,                     // 4 my_core_idx
+            ungrouped_tensor.address(),       // 0
+            plan_tensor.address(),            // 1
+            offsets_tensor.address(),         // 2
+            grouped_scores_tensor.address(),  // 3
+            worker_idx,                       // 4 my_core_idx
         };
 
         SetRuntimeArgs(program, is_g1 ? reader_kernel_g1 : reader_kernel_g2, core, reader_rt);

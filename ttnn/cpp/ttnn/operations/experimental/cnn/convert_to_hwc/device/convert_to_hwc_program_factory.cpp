@@ -477,8 +477,8 @@ tt::tt_metal::ProgramDescriptor ConvertToHWCProgramFactory::create_descriptor(
 
     // Input TensorAccessorArgs at CTA 14 of both writers (after the 14 args from make_writer_compile_args); the
     // reader uses them for its BankView DRAM reads. Real args for L1 inputs too, so the layout never changes.
-    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(writer_compile_time_args0);
-    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(writer_compile_time_args1);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_tensor()).append_to(writer_compile_time_args0);
+    tt::tt_metal::TensorAccessorArgs(a.mesh_tensor()).append_to(writer_compile_time_args1);
 
     auto compute_compile_time_args =
         make_compute_compile_args(tiling.total_tiles_per_block, config.gather_l1_output_shard_height, num_blocks);

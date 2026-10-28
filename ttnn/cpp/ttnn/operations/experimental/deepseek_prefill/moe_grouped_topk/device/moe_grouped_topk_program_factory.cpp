@@ -57,9 +57,13 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
 
     auto grid = device->compute_with_storage_grid_size();
     auto* scores_buffer = scores.buffer();
+    const auto& scores_tensor = scores.mesh_tensor();
     auto* bias_buffer = bias.buffer();
+    const auto& bias_tensor = bias.mesh_tensor();
     auto* weights_buffer = output_weights.buffer();
+    const auto& weights_tensor = output_weights.mesh_tensor();
     auto* indices_buffer = output_indices.buffer();
+    const auto& indices_tensor = output_indices.mesh_tensor();
     TT_FATAL(scores_buffer != nullptr, "scores buffer must be allocated on device");
     TT_FATAL(bias_buffer != nullptr, "bias buffer must be allocated on device");
     TT_FATAL(weights_buffer != nullptr, "output weights buffer must be allocated on device");
@@ -214,8 +218,8 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     };
 
     std::vector<uint32_t> reader_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(scores_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(scores_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor::NamedCompileTimeArgs compute_named_compile_time_args = {
         {"cb_in_scores", cb_in_scores},
@@ -329,8 +333,8 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(weights_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(indices_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weights_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(indices_tensor).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(padding_config_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(biased_buffer).append_to(writer_compile_time_args);
 

@@ -309,9 +309,9 @@ tt::tt_metal::Program build_program(
     }
 
     // Kernels.
-    auto* logits_buffer = logits.buffer();
+    const auto& logits_tensor = logits.mesh_tensor();
     auto* mask_buffer = has_mask ? tensor_args.logits_mask->buffer() : nullptr;
-    auto* output_buffer = output.buffer();
+    const auto& output_tensor = output.mesh_tensor();
 
     // Greedy vs noisy is decided by uses_gumbel_noise, NOT `temperature > 0`: a positive
     // temperature whose reciprocal overflows float32 must build the greedy kernel. The program
@@ -324,15 +324,16 @@ tt::tt_metal::Program build_program(
     // appended past the accessor chain, matching each kernel's read order. Nothing derived from
     // the token dimension may be a compile-time arg -- the normalized program hash depends on it.
     std::vector<uint32_t> reader_ct_args{layout.block_size, layout.Wt};
-    tt::tt_metal::TensorAccessorArgs(logits_buffer).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(logits_tensor).append_to(reader_ct_args);
     if (has_mask) {
-        tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(has_mask ? &tensor_args.logits_mask->mesh_buffer() : nullptr)
+            .append_to(reader_ct_args);
     } else {
         tt::tt_metal::TensorAccessorArgs().append_to(reader_ct_args);
     }
     // The null appends keep the accessor chain's length mode-independent.
     if (layout.position_aware) {
-        tt::tt_metal::TensorAccessorArgs(tensor_args.positions->buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(tensor_args.positions->mesh_tensor()).append_to(reader_ct_args);
     } else {
         tt::tt_metal::TensorAccessorArgs().append_to(reader_ct_args);
     }
@@ -353,9 +354,9 @@ tt::tt_metal::Program build_program(
         layout.position_aware ? 1U : layout.Ht,
         reduction_sem_id,
         max_foreign_shards};
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_ct_args);
     if (layout.position_aware) {
-        tt::tt_metal::TensorAccessorArgs(tensor_args.positions->buffer()).append_to(writer_ct_args);
+        tt::tt_metal::TensorAccessorArgs(tensor_args.positions->mesh_tensor()).append_to(writer_ct_args);
     } else {
         tt::tt_metal::TensorAccessorArgs().append_to(writer_ct_args);
     }
@@ -404,7 +405,7 @@ tt::tt_metal::Program build_program(
             program,
             shared_vars.reader_kernel_id,
             core,
-            {logits_buffer->address(),
+            {logits_tensor.address(),
              has_mask ? mask_buffer->address() : 0U,
              num_tiles,
              start_tile,
@@ -417,7 +418,7 @@ tt::tt_metal::Program build_program(
             program,
             shared_vars.writer_kernel_id,
             core,
-            {output_buffer->address(),
+            {output_tensor.address(),
              num_tiles,
              start_tile,
              positions_address,

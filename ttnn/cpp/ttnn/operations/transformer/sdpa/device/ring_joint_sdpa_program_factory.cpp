@@ -37,6 +37,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <hostdevcommon/common_values.hpp>
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
 using ttnn::Tensor;
@@ -1688,26 +1689,25 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(has_logical_l_tensor),
     };
 
-    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_q.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_k.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_v.mesh_tensor()).append_to(reader_compile_time_args);
     if (L != 0) {
-        TensorAccessorArgs(joint_tensor_q->buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(joint_tensor_k->buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(joint_tensor_v->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(joint_tensor_q->mesh_tensor()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(joint_tensor_k->mesh_tensor()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(joint_tensor_v->mesh_tensor()).append_to(reader_compile_time_args);
     }
     // Sharded-joint path: the gathered joint K/V accessors follow the local joint accessors, matching
     // get_post_tensor_args_offset<has_joint_inputs, has_gathered_joint_k, ...>() in the reader kernel.
     // They must precede the attention-sink and metadata accessors below, which the kernel places at
     // post_joint_tensor_args_offset / post_tensor_args_offset respectively.
     if (joint_is_sharded) {
-        TensorAccessorArgs(gathered_joint_tensor_k->buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(gathered_joint_tensor_v->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(gathered_joint_tensor_k->mesh_tensor()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(gathered_joint_tensor_v->mesh_tensor()).append_to(reader_compile_time_args);
     }
-    TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
-        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(ttnn::as_optional_mesh_tensor(attention_sink)).append_to(reader_compile_time_args);
     // Metadata accessors follow the tensor accessors (metadata path only) and precede the chain semaphore
     // compile args; the reader kernel gates their offsets on slot_from_metadata / kv_pad_from_metadata.
     // sem_args_offset below is computed after this append, so the chain/CB compile-arg indices stay correct.
@@ -1716,11 +1716,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // from one buffer and reads the wrong bank for the other (kv read silently returned 0, breaking the
     // rotation derivation). The writer already appends kv_actual_isl's own accessor for the same reason.
     if (slot_from_metadata) {
-        TensorAccessorArgs(tensor_args.slot_id->buffer()).append_to(reader_compile_time_args);
+        TensorAccessorArgs(tensor_args.slot_id->mesh_tensor()).append_to(reader_compile_time_args);
         if (kv_pad_from_metadata) {
-            TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(reader_compile_time_args);
+            TensorAccessorArgs(tensor_args.kv_actual_isl->mesh_tensor()).append_to(reader_compile_time_args);
             if (tensor_args.has_kv_valid_end()) {
-                TensorAccessorArgs(tensor_args.kv_valid_end->buffer()).append_to(reader_compile_time_args);
+                TensorAccessorArgs(tensor_args.kv_valid_end->mesh_tensor()).append_to(reader_compile_time_args);
             }
         }
     }
@@ -1728,9 +1728,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // depend on which was supplied. Separate accessors: the two single-page tensors can land in different
     // DRAM banks, the same trap documented for slot_id/kv_actual_isl.
     if (has_logical_n_tensor || has_logical_l_tensor) {
-        TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
+        TensorAccessorArgs(has_logical_n_tensor ? &tensor_args.logical_n_tensor->mesh_buffer() : nullptr)
             .append_to(reader_compile_time_args);
-        TensorAccessorArgs(has_logical_l_tensor ? tensor_args.logical_l_tensor->buffer() : nullptr)
+        TensorAccessorArgs(has_logical_l_tensor ? &tensor_args.logical_l_tensor->mesh_buffer() : nullptr)
             .append_to(reader_compile_time_args);
     }
 
@@ -1865,19 +1865,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(has_logical_l_tensor),
     };
 
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(joint_output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(stats_output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
     if (kv_pad_from_metadata) {
-        TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(writer_compile_time_args);
+        TensorAccessorArgs(tensor_args.kv_actual_isl->mesh_tensor()).append_to(writer_compile_time_args);
         if (tensor_args.has_kv_valid_end()) {
-            TensorAccessorArgs(tensor_args.kv_valid_end->buffer()).append_to(writer_compile_time_args);
+            TensorAccessorArgs(tensor_args.kv_valid_end->mesh_tensor()).append_to(writer_compile_time_args);
         }
     }
     if (has_logical_n_tensor || has_logical_l_tensor) {
-        TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
+        TensorAccessorArgs(has_logical_n_tensor ? &tensor_args.logical_n_tensor->mesh_buffer() : nullptr)
             .append_to(writer_compile_time_args);
-        TensorAccessorArgs(has_logical_l_tensor ? tensor_args.logical_l_tensor->buffer() : nullptr)
+        TensorAccessorArgs(has_logical_l_tensor ? &tensor_args.logical_l_tensor->mesh_buffer() : nullptr)
             .append_to(writer_compile_time_args);
     }
 

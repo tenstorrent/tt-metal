@@ -81,6 +81,7 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
     auto* src_buffer = input.buffer();
+    const auto& src_tensor = input.mesh_tensor();
     auto* dst_buffer = output.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
@@ -192,14 +193,14 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
     reader_desc.config = ReaderConfigDescriptor{};
     if (input.layout() == Layout::TILE) {
         std::vector<uint32_t> reader_compile_time_args = {input_cb_index, all_cores.num_cores()};
-        tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
             "reader_unary_sharded_blocks_interleaved_start_id.cpp";
         reader_desc.compile_time_args = std::move(reader_compile_time_args);
     } else {
         std::vector<uint32_t> reader_compile_time_args = {input_cb_index, scratch_cb_index, num_trids};
-        tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
             "reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp";

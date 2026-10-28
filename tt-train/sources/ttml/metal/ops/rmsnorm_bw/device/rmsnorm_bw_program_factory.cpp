@@ -219,41 +219,41 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
-    auto* input_buffer = input.buffer();
+    const auto& input_tensor = input.mesh_tensor();
     TT_FATAL(
-        input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        enchantum::to_string(input_buffer->buffer_type()));
+        enchantum::to_string(input_tensor.memory_config().buffer_type()));
 
-    auto* gamma_buffer = gamma.buffer();
+    const auto& gamma_tensor = gamma.mesh_tensor();
     TT_FATAL(
-        gamma_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        gamma_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
         "Gamma buffer must be in DRAM. Gamma buffer of type {}",
-        enchantum::to_string(gamma_buffer->buffer_type()));
+        enchantum::to_string(gamma_tensor.memory_config().buffer_type()));
 
-    auto* rms_buffer = rms.buffer();
+    const auto& rms_tensor = rms.mesh_tensor();
     TT_FATAL(
-        rms_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        rms_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
         "RMS buffer must be in DRAM. RMS buffer of type {}",
-        enchantum::to_string(rms_buffer->buffer_type()));
+        enchantum::to_string(rms_tensor.memory_config().buffer_type()));
 
-    auto* dLdout_buffer = dLdout.buffer();
+    const auto& dLdout_tensor = dLdout.mesh_tensor();
     TT_FATAL(
-        dLdout_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        dLdout_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_dout buffer must be in DRAM. dL_dout buffer of type {}",
-        enchantum::to_string(dLdout_buffer->buffer_type()));
+        enchantum::to_string(dLdout_tensor.memory_config().buffer_type()));
 
-    auto* dL_da_buffer = output[0].buffer();
+    const auto& dL_da_tensor = output[0].mesh_tensor();
     TT_FATAL(
-        dL_da_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        dL_da_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_da buffer must be in DRAM. dL_da buffer of type {}",
-        enchantum::to_string(dL_da_buffer->buffer_type()));
+        enchantum::to_string(dL_da_tensor.memory_config().buffer_type()));
 
-    auto* dL_dgamma_components_buffer = output[1].buffer();
+    const auto& dL_dgamma_components_tensor = output[1].mesh_tensor();
     TT_FATAL(
-        dL_dgamma_components_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
+        dL_dgamma_components_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_dgamma buffer must be in DRAM. dL_dgamma buffer of type {}",
-        enchantum::to_string(dL_dgamma_components_buffer->buffer_type()));
+        enchantum::to_string(dL_dgamma_components_tensor.memory_config().buffer_type()));
 
     std::map<std::string, std::string> defines;
     if (mask_w != 0) {
@@ -265,15 +265,15 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
 
     RMSNormBackwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{packed_scaler, block_size, mask_w, Wt};
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(rms_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dLdout_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(rms_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dLdout_tensor).append_to(reader_compile_time_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(dL_da_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dL_dgamma_components_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dL_da_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dL_dgamma_components_tensor).append_to(writer_compile_time_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
@@ -320,10 +320,10 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
                 program,
                 kernels.reader,
                 core,
-                {input_buffer->address(),
-                 gamma_buffer->address(),
-                 rms_buffer->address(),
-                 dLdout_buffer->address(),
+                {input_tensor.address(),
+                 gamma_tensor.address(),
+                 rms_tensor.address(),
+                 dLdout_tensor.address(),
                  num_rows,
                  start_row});
             // Writer kernel: (da_addr, dgamma_addr, num_rows, offset)
@@ -331,7 +331,7 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
                 program,
                 kernels.writer,
                 core,
-                {dL_da_buffer->address(), dL_dgamma_components_buffer->address(), num_rows, start_row});
+                {dL_da_tensor.address(), dL_dgamma_components_tensor.address(), num_rows, start_row});
         });
 
     // -------------------------------------------------------------------------

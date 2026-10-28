@@ -53,6 +53,7 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
     TT_FATAL(num_workers > 0, "outbound_socket_service_sync: worker_cores must contain at least one core");
 
     auto* input_buffer = input.buffer();
+    const auto& input_tensor = input.mesh_tensor();
     auto* backing_buffer = backing_out.buffer();
     Buffer* metadata_buffer = has_metadata ? tensor_args.metadata->buffer() : nullptr;
 
@@ -81,9 +82,9 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
         args.metadata_slot_stride,
         args.metadata_data_offset,
     };
-    TensorAccessorArgs(input_buffer).append_to(ct_args);
+    TensorAccessorArgs(input_tensor).append_to(ct_args);
     if (has_metadata) {
-        TensorAccessorArgs(metadata_buffer).append_to(ct_args);
+        TensorAccessorArgs(has_metadata ? &tensor_args.metadata->mesh_buffer() : nullptr).append_to(ct_args);
     }
 
     KernelDescriptor writer;

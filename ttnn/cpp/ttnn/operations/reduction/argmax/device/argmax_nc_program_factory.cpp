@@ -135,14 +135,16 @@ ProgramDescriptor ArgMaxNCDeviceOperation::create_descriptor(
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/argmax_nc_compute.cpp";
 
     Buffer* input_buffer = input.buffer();
+    const auto& input_tensor = input.mesh_tensor();
     Buffer* output_buffer = output.buffer();
+    const auto& output_tensor = output.mesh_tensor();
     TT_FATAL(input_buffer != nullptr, "argmax_nc input tensor has no device buffer");
     TT_FATAL(output_buffer != nullptr, "argmax_nc output tensor has no device buffer");
 
     std::vector<uint32_t> reader_compile_args;
-    TensorAccessorArgs(input_buffer).append_to(reader_compile_args);
+    TensorAccessorArgs(input_tensor).append_to(reader_compile_args);
     std::vector<uint32_t> writer_compile_args;
-    TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
+    TensorAccessorArgs(output_tensor).append_to(writer_compile_args);
 
     KernelDescriptor reader_kernel;
     reader_kernel.kernel_source = reader_kernel_file;

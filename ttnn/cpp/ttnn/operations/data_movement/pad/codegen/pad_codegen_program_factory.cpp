@@ -129,7 +129,9 @@ ProgramDescriptor build_pad_tiled(
     Tensor& output,
     tt::DataFormat format) {
     Buffer* src_buffer = input.buffer();
+    const auto& src_tensor = input.mesh_tensor();
     Buffer* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
 
     const auto tile = input.tensor_spec().tile();
     const uint32_t tile_h = tile.get_height();
@@ -153,7 +155,7 @@ ProgramDescriptor build_pad_tiled(
     desc.cbs.push_back(make_cb(split.all_cores, kCbPad, format, tile_bytes, 1));
 
     std::vector<uint32_t> reader_ct_args;
-    TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(src_tensor).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = std::string(kSharedKernelDir) + "/reader_tile_interleaved_unified.cpp";
@@ -169,7 +171,7 @@ ProgramDescriptor build_pad_tiled(
     reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_ct_args = {kCbOut, tile_bytes, batches.write_batch};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = std::string(kSharedKernelDir) + "/writer_interleaved.cpp";

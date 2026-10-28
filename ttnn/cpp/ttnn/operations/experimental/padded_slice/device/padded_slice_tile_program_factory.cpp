@@ -394,6 +394,7 @@ ProgramDescriptor PaddedSliceTileProgramFactory::create_descriptor(
     uint32_t num_tiles_per_channel = input_padded_shape[3] / tt::constants::TILE_WIDTH;
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
+    const auto& src0_tensor = a.mesh_tensor();
     TT_FATAL(src0_buffer != nullptr, "Input buffer should be allocated on device");
 
     TT_FATAL(output.is_sharded(), "Output Tensor must be sharded.");
@@ -515,7 +516,7 @@ ProgramDescriptor PaddedSliceTileProgramFactory::create_descriptor(
         output_row_size_bytes};
 
     std::vector<uint32_t> reader_compile_time_args_vec = {max_num_tiles_per_row};
-    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
+    tt::tt_metal::TensorAccessorArgs(src0_tensor).append_to(reader_compile_time_args_vec);
     KernelDescriptor reader_kernel;
     reader_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"

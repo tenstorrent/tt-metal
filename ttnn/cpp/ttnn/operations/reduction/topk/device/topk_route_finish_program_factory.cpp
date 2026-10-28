@@ -218,8 +218,8 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
         values_cb_index,
         indices_cb_index,
         split.index_is_u32 ? 1u : 0u};
-    tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(*indices.buffer()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_tensor()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(indices.mesh_tensor()).append_to(reader_compile_args);
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_topk_route_finish_gather.cpp",
@@ -236,10 +236,10 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
         value_half_bytes,
         idx_half_bytes,
         split.index_is_u32 ? 1u : 0u};
-    tt::tt_metal::TensorAccessorArgs(*values_out.buffer()).append_to(writer_compile_args);
-    tt::tt_metal::TensorAccessorArgs(*indices_out.buffer()).append_to(writer_compile_args);
-    tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(writer_compile_args);
-    tt::tt_metal::TensorAccessorArgs(*indices.buffer()).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(values_out.mesh_tensor()).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(indices_out.mesh_tensor()).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_tensor()).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(indices.mesh_tensor()).append_to(writer_compile_args);
     auto writer_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_topk_route_finish_tiles.cpp",

@@ -179,41 +179,41 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
         float32_tile_size,
         packed_partials_tiles_per_row);
 
-    auto* input_buffer = input.buffer();
+    const auto& input_tensor = input.mesh_tensor();
     TT_FATAL(
-        input_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        input_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        enchantum::to_string(input_buffer->buffer_type()));
+        enchantum::to_string(input_tensor.memory_config().buffer_type()));
 
-    auto* dL_dout_buffer = dL_dout.buffer();
+    const auto& dL_dout_tensor = dL_dout.mesh_tensor();
     TT_FATAL(
-        dL_dout_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        dL_dout_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "dL_dout buffer must be in DRAM. dL_dout buffer of type {}",
-        enchantum::to_string(dL_dout_buffer->buffer_type()));
+        enchantum::to_string(dL_dout_tensor.memory_config().buffer_type()));
 
     const auto& weight = tensor_args.weight;
-    auto* weight_buffer = weight.buffer();
+    const auto& weight_tensor = weight.mesh_tensor();
     TT_FATAL(
-        weight_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        weight_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "Weight buffer must be in DRAM. Weight buffer of type {}",
-        enchantum::to_string(weight_buffer->buffer_type()));
+        enchantum::to_string(weight_tensor.memory_config().buffer_type()));
 
-    auto* dL_dx_output_buffer = output[0].buffer();
+    const auto& dL_dx_output_tensor = output[0].mesh_tensor();
     TT_FATAL(
-        dL_dx_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        dL_dx_output_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "dL_dx output buffer must be in DRAM. Output buffer of type {}",
-        enchantum::to_string(dL_dx_output_buffer->buffer_type()));
-    auto* packed_partials_output_buffer = output[1].buffer();
+        enchantum::to_string(dL_dx_output_tensor.memory_config().buffer_type()));
+    const auto& packed_partials_output_tensor = output[1].mesh_tensor();
     TT_FATAL(
-        packed_partials_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        packed_partials_output_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "Packed partials output buffer must be in DRAM. Output buffer of type {}",
-        enchantum::to_string(packed_partials_output_buffer->buffer_type()));
+        enchantum::to_string(packed_partials_output_tensor.memory_config().buffer_type()));
 
     PolyNormBackwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dL_dout_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(weight_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dL_dout_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weight_tensor).append_to(reader_compile_time_args);
     std::map<std::string, std::string> defines;
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
@@ -221,8 +221,8 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> dL_dx_writer_compile_time_args{block_size, Wt, packed_partials_tiles_per_row};
-    tt::tt_metal::TensorAccessorArgs(dL_dx_output_buffer).append_to(dL_dx_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(packed_partials_output_buffer).append_to(dL_dx_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dL_dx_output_tensor).append_to(dL_dx_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(packed_partials_output_tensor).append_to(dL_dx_writer_compile_time_args);
     kernels.dL_dx_writer =
         create_writer_kernel(program, all_cores, dL_dx_writer_compile_time_args, defines, kDLdxWriterKernelPath);
 
@@ -267,9 +267,9 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
                 program,
                 kernels.reader,
                 core,
-                {input_buffer->address(),
-                 dL_dout_buffer->address(),
-                 weight_buffer->address(),
+                {input_tensor.address(),
+                 dL_dout_tensor.address(),
+                 weight_tensor.address(),
                  num_rows,
                  start_row,
                  scaler_fp32_bits,
@@ -278,7 +278,7 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
                 program,
                 kernels.dL_dx_writer,
                 core,
-                {dL_dx_output_buffer->address(), packed_partials_output_buffer->address(), num_rows, start_row});
+                {dL_dx_output_tensor.address(), packed_partials_output_tensor.address(), num_rows, start_row});
             SetRuntimeArgs(
                 program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {Wt, eps_fp32_bits});
         });

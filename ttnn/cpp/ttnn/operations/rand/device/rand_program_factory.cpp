@@ -165,7 +165,7 @@ ProgramDescriptor RandDeviceOperation::RandProgramFactory::create_descriptor(
     KernelDescriptor::CompileTimeArgs writer_ct_args;
     writer_ct_args.reserve(8);
     writer_ct_args.push_back(output_cb_id);
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = WRITER_KERNEL_PATH;

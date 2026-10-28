@@ -206,14 +206,11 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
-    tt::tt_metal::Buffer* src0_buffer = input.buffer();
-
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     uint32_t input_row_size_bytes = input_padded_shape[-1] * input.element_size();
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    const auto& dst_tensor = output.mesh_tensor();
 
     uint32_t max_read_size = 4096;
 
@@ -274,8 +271,8 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
         (std::uint32_t)dst0_cb_index,
         begins_bytes,
         output.element_size()};
-    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_tensor()).append_to(reader_compile_time_args_vec);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args_vec);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

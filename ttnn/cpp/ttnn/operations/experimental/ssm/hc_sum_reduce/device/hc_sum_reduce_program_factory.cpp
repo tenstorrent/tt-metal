@@ -20,7 +20,9 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
 
     auto* input_buffer = tensor_args.input.buffer();
+    const auto& input_tensor = tensor_args.input.mesh_tensor();
     tt::tt_metal::Buffer* out_buffer = output.buffer();
+    const auto& out_tensor = output.mesh_tensor();
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const auto& ashape = tensor_args.input.padded_shape();
@@ -52,13 +54,13 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
     const uint32_t output_cb_id = tt::CBIndex::c_16;
 
     std::vector<uint32_t> reader_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         intermed_cb_id1,
         intermed_cb_id2,
         output_cb_id,
     };
-    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_compile_time_args = {
         input_cb_id,
         scalar_cb_id,

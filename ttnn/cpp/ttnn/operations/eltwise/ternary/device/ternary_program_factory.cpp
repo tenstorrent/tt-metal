@@ -1276,10 +1276,10 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
         reader_compile_time_args = {
             (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_true_tensor_cb};
 
-        tt::tt_metal::TensorAccessorArgs(*predicate_tensor.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+        tt::tt_metal::TensorAccessorArgs(predicate_tensor.mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
         tt::tt_metal::TensorAccessorArgs(
-            *value_true_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+            value_true_tensor.value().mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
         reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
 
@@ -1287,23 +1287,23 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
         // TST: c_0 = predicate, c_1 = value_false tensor
         reader_compile_time_args = {
             (std::uint32_t)predicate_tensor_cb, (std::uint32_t)value_false_tensor_cb};
-        tt::tt_metal::TensorAccessorArgs(*predicate_tensor.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+        tt::tt_metal::TensorAccessorArgs(predicate_tensor.mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
         tt::tt_metal::TensorAccessorArgs(
-            *value_false_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+            value_false_tensor.value().mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
         reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
     } else if (variant == TernaryVariant::TTT) {
         reader_compile_time_args.push_back((std::uint32_t)predicate_tensor_cb);
         reader_compile_time_args.push_back((std::uint32_t)value_true_tensor_cb);
         reader_compile_time_args.push_back((std::uint32_t)value_false_tensor_cb);
-        tt::tt_metal::TensorAccessorArgs(*predicate_tensor.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+        tt::tt_metal::TensorAccessorArgs(predicate_tensor.mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
         tt::tt_metal::TensorAccessorArgs(
-            *value_true_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+            value_true_tensor.value().mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
         tt::tt_metal::TensorAccessorArgs(
-            *value_false_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+            value_false_tensor.value().mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
         reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
     }
@@ -1330,7 +1330,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     // ---- Writer Kernel ----
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tensor_cb};
     std::vector<uint32_t> writer_common_runtime_args;
-    tt::tt_metal::TensorAccessorArgs(*output.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_compile_time_args, writer_common_runtime_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
     std::map<std::string, std::string> writer_defines;

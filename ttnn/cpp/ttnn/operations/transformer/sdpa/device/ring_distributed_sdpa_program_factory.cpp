@@ -19,6 +19,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -302,12 +303,11 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,                                            // arg 38: K/V retention, off on ring
     };
 
-    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_q.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_k.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.mesh_tensor()).append_to(reader_compile_time_args);
     TensorAccessorArgs().append_to(reader_compile_time_args);  // mask tensor (not used in ring)
-    TensorAccessorArgs(page_table.has_value() ? page_table->buffer() : nullptr)
-        .append_to(reader_compile_time_args);                  // page table
+    TensorAccessorArgs(ttnn::as_optional_mesh_tensor(page_table)).append_to(reader_compile_time_args);  // page table
     TensorAccessorArgs().append_to(reader_compile_time_args);  // attention sink (not used in ring)
     TensorAccessorArgs().append_to(reader_compile_time_args);  // chunk_start_idx_tensor (ring has no flexible chunked)
     TensorAccessorArgs().append_to(reader_compile_time_args);  // cu_window_seqlens (ring is never windowed)
@@ -349,7 +349,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     };
     // out accessor, then the cu_window and Q-offset accessors chained right after it (mirrors the regular
     // factory so the writer's accessor offset chain stays intact). Ring is never windowed → placeholders.
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
     TensorAccessorArgs().append_to(writer_compile_time_args);
     TensorAccessorArgs().append_to(writer_compile_time_args);
 
@@ -481,7 +481,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         writer_compile_time_args.end(), writer_cb_compile_time_args.begin(), writer_cb_compile_time_args.end());
     compute_compile_time_args.insert(
         compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
-    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(compute_compile_time_args);
 
     // ---- Kernels ----
 

@@ -34,6 +34,7 @@
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::prim {
 
@@ -1049,8 +1050,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             split_reader_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
     }
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
-    tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(b.mesh_tensor()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(bias)).append_to(writer_compile_time_args);
 
     const bool check_skip_compute = input_cores != output_cores;
 

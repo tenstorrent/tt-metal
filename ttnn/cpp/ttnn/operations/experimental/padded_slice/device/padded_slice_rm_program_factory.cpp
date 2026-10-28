@@ -271,8 +271,7 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
 
     ProgramDescriptor desc;
 
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-    TT_FATAL(src0_buffer != nullptr, "Input buffer should be allocated on device");
+    const auto& src0_tensor = a.mesh_tensor();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
@@ -306,7 +305,7 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
     uint32_t temp_pad_cb_index = 1;
     uint32_t non_aligned_temp_cb_index = 2;
 
-    auto src_buffer_alignment = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = src0_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     auto dst_buffer_alignment = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM
@@ -358,7 +357,7 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
 
     std::vector<uint32_t> reader_compile_time_args_vec = {
         (uint32_t)is_non_aligned, non_aligned_temp_cb_index, num_trids};
-    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
+    tt::tt_metal::TensorAccessorArgs(src0_tensor).append_to(reader_compile_time_args_vec);
 
     KernelDescriptor reader_kernel;
     reader_kernel.kernel_source =

@@ -91,6 +91,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
 
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt_metal::Buffer* in0_buffer = input_tensor.buffer();
+    const auto& in0_tensor = input_tensor.mesh_tensor();
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
 
     tt_metal::Buffer* in1_buffer = nullptr;
@@ -131,10 +132,13 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
     ttnn::Tensor& v = std::get<2>(output);
 
     tt_metal::Buffer* q_buffer = q.buffer();
+    const auto& q_tensor = q.mesh_tensor();
     TT_ASSERT(q_buffer != nullptr, "Output q buffer should be allocated on device!");
     tt_metal::Buffer* k_buffer = k.buffer();
+    const auto& k_tensor = k.mesh_tensor();
     TT_ASSERT(k_buffer != nullptr, "Output k buffer should be allocated on device!");
     tt_metal::Buffer* v_buffer = v.buffer();
+    const auto& v_tensor = v.mesh_tensor();
     TT_ASSERT(v_buffer != nullptr, "Output v buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
@@ -147,7 +151,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
         (std::uint32_t)q_num_tiles,
         (std::uint32_t)kv_num_tiles,
     };
-    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(read_from_input_tensor_kv ? in1_buffer : nullptr)
         .append_to(reader_compile_time_args);
 
@@ -157,10 +161,10 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Interleaved::create_descri
         (std::uint32_t)q_out_HtWt,
         (std::uint32_t)num_q_heads,  // q_out_c
     };
-    tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(q_tensor).append_to(writer_compile_time_args);
     writer_compile_time_args.push_back((std::uint32_t)num_kv_heads);  // kv_out_c placed after q accessor
-    tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(k_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(v_tensor).append_to(writer_compile_time_args);
 
     KernelDescriptor::Defines reader_defines;
     KernelDescriptor::Defines writer_defines;

@@ -37,7 +37,9 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     const uint32_t num_pages = input.buffer()->num_pages();
 
     Buffer* src_buffer = input.buffer();
+    const auto& src_tensor = input.mesh_tensor();
     Buffer* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
 
     // Set CB page size correctly based on layout
     // - For TILE layout: page = one 32x32 tile
@@ -75,9 +77,9 @@ tt::tt_metal::ProgramDescriptor TypecastProgramFactory::create_descriptor(
     });
 
     std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -258,12 +260,14 @@ tt::tt_metal::ProgramDescriptor TypecastSubgridProgramFactory::create_descriptor
     });
 
     auto* src_buffer = input.buffer();
+    const auto& src_tensor = input.mesh_tensor();
     auto* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
 
     std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelDescriptor reader_desc;
     reader_desc.kernel_source =

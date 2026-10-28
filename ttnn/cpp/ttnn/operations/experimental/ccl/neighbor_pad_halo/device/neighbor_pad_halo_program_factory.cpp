@@ -113,7 +113,7 @@ NpHaloScatterSetup setup_interior_scatter(
         return setup;
     }
 
-    Buffer* padded_buf = tensor_args.padded_output.value().buffer();
+    const auto& padded_tensor = tensor_args.padded_output.value().mesh_tensor();
     const uint32_t Hd_i = geom.input_halo_dim_size;      // interior H (input is unpadded in repack mode)
     const uint32_t Wd_i = geom.num_sticks_per_halo_dim;  // interior W
     const uint32_t Hp_i = Hd_i + 2 * op.np_padding_h;
@@ -154,7 +154,7 @@ NpHaloScatterSetup setup_interior_scatter(
         /*border_only=*/0u};
     TensorAccessorArgs(*geom.input_buffer).append_to(sc_ct);
     TensorAccessorArgs(*geom.halo_buffer).append_to(sc_ct);
-    TensorAccessorArgs(*padded_buf).append_to(sc_ct);
+    TensorAccessorArgs(padded_tensor).append_to(sc_ct);
     auto sc_cfg = WriterDataMovementConfig{};
     sc_cfg.compile_args = sc_ct;
     setup.kernel_id = CreateKernel(
@@ -178,7 +178,7 @@ NpHaloScatterSetup setup_interior_scatter(
                 c,
                 {geom.input_buffer->address(),
                  geom.halo_buffer->address(),
-                 padded_buf->address(),
+                 padded_tensor.address(),
                  start,
                  count,
                  /*exchange_done=*/0u,
@@ -739,7 +739,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     // Tensor info
     const auto& input_tensor_shape = tensor_args.input_tensor.padded_shape();
     Buffer* input_buffer = tensor_args.input_tensor.buffer();
+    const auto& input_tensor = tensor_args.input_tensor.mesh_tensor();
     Buffer* halo_buffer = tensor_args.halo_buffer.buffer();
+    const auto& halo_tensor = tensor_args.halo_buffer.mesh_tensor();
 
     // H-dim is index 2 in BTHWC layout (B=0, T=1, H=2, W=3, C=4)
     constexpr uint32_t np_dim = 2;
@@ -1049,7 +1051,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             sender_cb_index,   // cb_output_id
             is_padding_zeros,  // is_padding_zeros
             page_size};        // stick_size
-        TensorAccessorArgs(*input_buffer).append_to(h_reader_kernel_config.compile_args);
+        TensorAccessorArgs(input_tensor).append_to(h_reader_kernel_config.compile_args);
         h_reader_kernel_config.compile_args.push_back(h_use_l1);        // use_l1_intermediate (0 when H-coalescing)
         h_reader_kernel_config.compile_args.push_back(recv_cb_index);   // recv_cb_id
         h_reader_kernel_config.compile_args.push_back(hsend_cb_index);  // send_cb_id (batched H send)
@@ -1073,7 +1075,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             sender_cb_index,   // cb_output_id
             is_padding_zeros,  // is_padding_zeros
             page_size};        // stick_size
-        TensorAccessorArgs(*halo_buffer).append_to(h_writer_kernel_config.compile_args);
+        TensorAccessorArgs(halo_tensor).append_to(h_writer_kernel_config.compile_args);
         h_writer_kernel_config.compile_args.push_back(h_use_l1);         // use_l1_intermediate (0 when H-coalescing)
         h_writer_kernel_config.compile_args.push_back(recv_cb_index);    // recv_cb_id
         h_writer_kernel_config.compile_args.push_back(h_use_l1);         // handle_incoming_writes (0 when H-coalescing)
@@ -1271,7 +1273,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
 
         // H reader on worker cores (same CT layout as the standard H reader).
         std::vector<uint32_t> hr_ct = {sender_cb_index, is_padding_zeros, page_size};
-        TensorAccessorArgs(*input_buffer).append_to(hr_ct);
+        TensorAccessorArgs(input_tensor).append_to(hr_ct);
         hr_ct.push_back(h_use_l1);
         hr_ct.push_back(recv_cb_index);
         hr_ct.push_back(hsend_cb_index);
@@ -1291,7 +1293,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
 
         // H-mux writer on worker cores. CT: is_padding_zeros, c_in0 (is_first local pad), hsend, stick.
         std::vector<uint32_t> hw_ct = {is_padding_zeros, sender_cb_index, hsend_cb_index, page_size};
-        TensorAccessorArgs(*halo_buffer).append_to(hw_ct);
+        TensorAccessorArgs(halo_tensor).append_to(hw_ct);
         hw_ct.push_back(h_coalesce_n);
         ttnn::ccl::fabric_mux_connection_ct_args(
             num_h_workers, FabricMuxChannelType::FULL_SIZE_CHANNEL, hmux_cfg, hw_ct);

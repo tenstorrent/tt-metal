@@ -49,7 +49,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
 
     KernelDescriptor::CompileTimeArgs reader_compile_time_args = {num_input_tensors};
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {num_input_tensors, input_unit_size};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =

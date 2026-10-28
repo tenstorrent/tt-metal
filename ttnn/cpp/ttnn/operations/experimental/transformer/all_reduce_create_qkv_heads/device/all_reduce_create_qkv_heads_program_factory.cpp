@@ -524,7 +524,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         batch_offset_cb_index_reader,
         out_cb_index,
     };
-    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.mesh_tensor()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         reduction_cb_index,
@@ -542,7 +542,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
         batch_offset_cb_index_reader,
         out_cb_index,
     };
-    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor reduction_reader_kernel_desc;
     reduction_reader_kernel_desc.kernel_source =

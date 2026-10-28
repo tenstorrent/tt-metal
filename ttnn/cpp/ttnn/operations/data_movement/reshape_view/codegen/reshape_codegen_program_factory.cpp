@@ -65,7 +65,9 @@ ProgramDescriptor build_tile_rows(
     ProgramDescriptor desc;
     const auto fmt = datatype_to_dataformat_converter(input.dtype());
     Buffer* in_buf = input.buffer();
+    const auto& in_tensor = input.mesh_tensor();
     Buffer* out_buf = output.buffer();
+    const auto& out_tensor = output.mesh_tensor();
     const auto [num_cores, all_cores, group1, group2, batches1, batches2] =
         split_work_to_cores(grid, layout.num_batches, false);
 
@@ -79,7 +81,7 @@ ProgramDescriptor build_tile_rows(
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
     TensorAccessorArgs(*plan_buf).append_to(reader.compile_time_args);
-    TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    TensorAccessorArgs(in_tensor).append_to(reader.compile_time_args);
     reader.named_compile_time_args = {
         {"plan_page_bytes", layout.page_bytes()},
         {"tile_bytes", tile_bytes},
@@ -94,7 +96,7 @@ ProgramDescriptor build_tile_rows(
     writer.kernel_source = op_kernel("writer_reshape_tile_rows.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
-    TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
+    TensorAccessorArgs(out_tensor).append_to(writer.compile_time_args);
     writer.named_compile_time_args = {
         {"tile_bytes", tile_bytes},
         {"face_row_bytes", tt::constants::FACE_WIDTH * static_cast<uint32_t>(input.element_size())},
@@ -142,7 +144,9 @@ ProgramDescriptor build_tile_mapped(
     ProgramDescriptor desc;
     const auto fmt = datatype_to_dataformat_converter(input.dtype());
     Buffer* in_buf = input.buffer();
+    const auto& in_tensor = input.mesh_tensor();
     Buffer* out_buf = output.buffer();
+    const auto& out_tensor = output.mesh_tensor();
     const auto [num_cores, all_cores, group1, group2, rows1, rows2] = split_work_to_cores(grid, layout.num_rows, false);
 
     desc.cbs.push_back(make_cb(kCbMap, tt::DataFormat::UInt32, layout.page_bytes(), 1, all_cores));
@@ -154,7 +158,7 @@ ProgramDescriptor build_tile_mapped(
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = all_cores;
     TensorAccessorArgs(*map_buf).append_to(reader.compile_time_args);
-    TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    TensorAccessorArgs(in_tensor).append_to(reader.compile_time_args);
     reader.named_compile_time_args = {
         {"map_page_bytes", layout.page_bytes()},
         {"tile_bytes", tile_bytes},
@@ -170,7 +174,7 @@ ProgramDescriptor build_tile_mapped(
     writer.kernel_source = op_kernel("writer_reshape_tile_mapped.cpp");
     writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = all_cores;
-    TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
+    TensorAccessorArgs(out_tensor).append_to(writer.compile_time_args);
     writer.named_compile_time_args = {
         {"tile_bytes", tile_bytes},
         {"max_entries", layout.entries_per_page},

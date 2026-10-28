@@ -48,8 +48,11 @@ tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
     uint32_t max_tiles_ncrisc = (h_ncrisc + tile_h - 1) / tile_h + 1;
 
     auto* src_buffer = input.buffer();
+    const auto& src_tensor = input.mesh_tensor();
     auto* dst_buffer = tensor_return_value.buffer();
+    const auto& dst_tensor = tensor_return_value.mesh_tensor();
     auto* mask_buffer = expert_mask.buffer();
+    const auto& mask_tensor = expert_mask.mesh_tensor();
     TT_FATAL(src_buffer != nullptr, "input buffer must be allocated on device");
     TT_FATAL(dst_buffer != nullptr, "output buffer must be allocated on device");
     TT_FATAL(mask_buffer != nullptr, "expert_mask buffer must be allocated on device");
@@ -115,9 +118,9 @@ tt::tt_metal::ProgramDescriptor MaskedBincountProgramFactory::create_descriptor(
 
     // --- TensorAccessor args (shared by both kernels) ---
     std::vector<uint32_t> accessor_args;
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(accessor_args);
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(accessor_args);
-    tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(accessor_args);
+    tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(accessor_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(accessor_args);
+    tt::tt_metal::TensorAccessorArgs(mask_tensor).append_to(accessor_args);
 
     // --- BRISC compile-time args ---
     std::vector<uint32_t> ct_args_brisc = {

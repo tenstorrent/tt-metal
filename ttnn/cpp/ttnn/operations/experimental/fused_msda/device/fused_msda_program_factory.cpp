@@ -584,11 +584,11 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         gather_mailbox_cb,
         gather_mailbox_nbytes,
     };
-    TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*attn.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*loc.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(value.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(attn.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(loc.mesh_tensor()).append_to(reader_ct);
     if (attrs.from_offsets) {
-        TensorAccessorArgs(*tensor_args.reference_points->buffer()).append_to(reader_ct);
+        TensorAccessorArgs(tensor_args.reference_points->mesh_tensor()).append_to(reader_ct);
     }
 
     KernelDescriptor reader_desc;
@@ -667,8 +667,8 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         value_stick_aligned,
         static_cast<uint32_t>(value.buffer()->page_size()),
     };
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
-    TensorAccessorArgs(*value.buffer()).append_to(writer_ct);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(writer_ct);
+    TensorAccessorArgs(value.mesh_tensor()).append_to(writer_ct);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = std::string(kKernelDir) + "dataflow/writer_msda.cpp";

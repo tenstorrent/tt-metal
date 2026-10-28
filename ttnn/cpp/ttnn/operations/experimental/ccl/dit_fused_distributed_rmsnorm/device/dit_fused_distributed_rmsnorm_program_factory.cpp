@@ -1099,35 +1099,35 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         static_cast<uint32_t>(per_batch_bias),
         rows_per_batch_tiles,
     };
-    TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
+    TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_args);
     if (has_weight) {
-        TensorAccessorArgs(weight.value().buffer()).append_to(reader_compile_args);
+        TensorAccessorArgs(weight.value().mesh_tensor()).append_to(reader_compile_args);
     } else {
-        TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
+        TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_args);  // dummy
     }
     if (has_bias) {
-        TensorAccessorArgs(bias.value().buffer()).append_to(reader_compile_args);
+        TensorAccessorArgs(bias.value().mesh_tensor()).append_to(reader_compile_args);
     } else {
-        TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
+        TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_args);  // dummy
     }
     if (fuse_rope) {
-        TensorAccessorArgs(rope_cos.value().buffer()).append_to(reader_compile_args);
-        TensorAccessorArgs(rope_sin.value().buffer()).append_to(reader_compile_args);
+        TensorAccessorArgs(rope_cos.value().mesh_tensor()).append_to(reader_compile_args);
+        TensorAccessorArgs(rope_sin.value().mesh_tensor()).append_to(reader_compile_args);
     } else {
-        TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-        TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
+        TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_args);
+        TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_args);
     }
     // Recip LUT accessor (last). Dummy=input when the LUT is unused.
     if (use_recip_lut) {
-        TensorAccessorArgs(reciprocals.value().buffer()).append_to(reader_compile_args);
+        TensorAccessorArgs(reciprocals.value().mesh_tensor()).append_to(reader_compile_args);
     } else {
-        TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
+        TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_args);  // dummy
     }
     std::map<std::string, std::string> reader_defines;
     if (use_tile_row_map) {
         reader_defines["AFFINE_TILE_ROW_MAP"] = "1";
         reader_compile_args.push_back(tile_row_map_cb_id);
-        TensorAccessorArgs(tile_row_map->buffer()).append_to(reader_compile_args);
+        TensorAccessorArgs(tile_row_map->mesh_tensor()).append_to(reader_compile_args);
     }
 
     KernelHandle reader_kernel_id = CreateKernel(
@@ -1162,7 +1162,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             head_dim_tiles,
             num_tile_rows,
         };
-        TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
+        TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_args);
         // Scalar/eps/trans_mat population args (the writer always populates these
         // CBs so the reader starts the input read ASAP). Appended after the output
         // accessor; the kernel reads them at output_args.next_compile_time_args_offset().
@@ -1174,9 +1174,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         writer_compile_args.push_back(std::bit_cast<uint32_t>(args.epsilon));
         writer_compile_args.push_back(static_cast<uint32_t>(fuse_rope));
         if (fuse_rope) {
-            TensorAccessorArgs(trans_mat.value().buffer()).append_to(writer_compile_args);
+            TensorAccessorArgs(trans_mat.value().mesh_tensor()).append_to(writer_compile_args);
         } else {
-            TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
+            TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(writer_compile_args);  // dummy
         }
 
         writer_kernel_id = CreateKernel(
@@ -1207,8 +1207,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             arrival_sem_id,
             go_sem_id,
         };
-        TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
-        TensorAccessorArgs(stats_dram_buffer).append_to(writer_compile_args);
+        TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_args);
+        TensorAccessorArgs(use_mux ? &stats_dram_tensor->mesh_buffer() : nullptr).append_to(writer_compile_args);
         writer_compile_args.push_back(reduce_scalar_sum_cb_id);
         writer_compile_args.push_back(reduce_scalar_avg_cb_id);
         writer_compile_args.push_back(epsilon_cb_id);
@@ -1217,9 +1217,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         writer_compile_args.push_back(std::bit_cast<uint32_t>(args.epsilon));
         writer_compile_args.push_back(static_cast<uint32_t>(fuse_rope));
         if (fuse_rope) {
-            TensorAccessorArgs(trans_mat.value().buffer()).append_to(writer_compile_args);
+            TensorAccessorArgs(trans_mat.value().mesh_tensor()).append_to(writer_compile_args);
         } else {
-            TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
+            TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(writer_compile_args);  // dummy
         }
         writer_kernel_id = CreateKernel(
             program,
@@ -1253,7 +1253,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             arrival_sem_id,
             go_sem_id,
         };
-        TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
+        TensorAccessorArgs(use_mux ? &stats_dram_tensor->mesh_buffer() : nullptr).append_to(fwd_ct);
         // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
         TT_FATAL(
             !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||

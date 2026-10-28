@@ -22,6 +22,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -819,16 +820,16 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         capacity_t,
         spec_multi_pos_tiles,
     };
-    tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(attn_mask ? attn_mask->buffer() : nullptr).append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(cur_pos_tensor ? cur_pos_tensor->buffer() : nullptr)
+    tt_metal::TensorAccessorArgs(input_tensor_q.mesh_tensor()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(input_tensor_k.mesh_tensor()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(input_tensor_v.mesh_tensor()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(attn_mask)).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(cur_pos_tensor))
         .append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(page_table_tensor ? page_table_tensor->buffer() : nullptr)
+    tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(page_table_tensor))
         .append_to(reader_compile_time_args_common);
     if (use_attention_sink) {
-        tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
+        tt_metal::TensorAccessorArgs(attention_sink->mesh_tensor()).append_to(reader_compile_time_args_common);
     } else {
         tt_metal::TensorAccessorArgs(static_cast<const Buffer*>(nullptr)).append_to(reader_compile_time_args_common);
     }
@@ -858,7 +859,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         original_block_size,
         spec_multi_pos_tiles,
     };
-    tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args_common);
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,

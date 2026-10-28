@@ -200,25 +200,25 @@ static inline void append_accessors(
     const std::optional<const ttnn::Tensor>& ternary_b_tensor = std::nullopt,
     bool is_injector_core = false,
     const std::optional<const ttnn::Tensor>& fsdp_local_weight_tensor = std::nullopt) {
-    tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
+    tt::tt_metal::TensorAccessorArgs(main_tensor.mesh_tensor()).append_to(args);
     for (const auto& output_tensor : output_tensors) {
-        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(args);
     }
     if (bias_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(bias_tensor.value().mesh_tensor()).append_to(args);
     }
     if (is_injector_core) {
-        tt::tt_metal::TensorAccessorArgs(*ag_input_tensor.buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(ag_input_tensor.mesh_tensor()).append_to(args);
     }
     if (fsdp_local_weight_tensor.has_value()) {
         // FSDP-sharded local weight (for in1 kernel reading its own K-slice from DRAM)
-        tt::tt_metal::TensorAccessorArgs(*fsdp_local_weight_tensor.value().buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(fsdp_local_weight_tensor.value().mesh_tensor()).append_to(args);
     }
     if (ternary_a_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*ternary_a_tensor.value().buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(ternary_a_tensor.value().mesh_tensor()).append_to(args);
     }
     if (ternary_b_tensor.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(*ternary_b_tensor.value().buffer()).append_to(args);
+        tt::tt_metal::TensorAccessorArgs(ternary_b_tensor.value().mesh_tensor()).append_to(args);
     }
 }
 

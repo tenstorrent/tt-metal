@@ -159,11 +159,11 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
     };
 
     // Add tensor accessor args for input tensor (17 compile time args offset)
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(writer_compile_time_args);
     if (!is_sharded) {
-        tt::tt_metal::TensorAccessorArgs(*grid_tensor.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(grid_tensor.mesh_tensor()).append_to(writer_compile_time_args);
     } else {
-        tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(writer_compile_time_args);
     }
 
     KernelDescriptor writer_desc;

@@ -557,17 +557,16 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // per weight role covers every expert (identical shape/layout), and the
     // kernels build a per-expert accessor from that descriptor + the per-expert
     // base address (passed as a runtime-arg).
-    auto* x_buffer = t.x.buffer();
-    auto* gate_buffer = t.gate_projs[0].buffer();
-    auto* up_buffer = t.up_projs[0].buffer();
-    auto* down_buffer = t.down_projs[0].buffer();
+    const auto& x_tensor = t.x.mesh_tensor();
+    const auto& gate_tensor = t.gate_projs[0].mesh_tensor();
+    const auto& up_tensor = t.up_projs[0].mesh_tensor();
+    const auto& down_tensor = t.down_projs[0].mesh_tensor();
     auto* counts_buffer = t.counts.buffer();
+    const auto& counts_tensor = t.counts.mesh_tensor();
     auto* idx_buffer = t.global_expert_idx_table.buffer();
+    const auto& idx_tensor = t.global_expert_idx_table.mesh_tensor();
     auto* out_buffer = tensor_return_value.buffer();
-    TT_FATAL(x_buffer != nullptr, "x buffer must be allocated on device");
-    TT_FATAL(gate_buffer != nullptr, "gate weight buffer must be allocated on device");
-    TT_FATAL(up_buffer != nullptr, "up weight buffer must be allocated on device");
-    TT_FATAL(down_buffer != nullptr, "down weight buffer must be allocated on device");
+    const auto& out_tensor = tensor_return_value.mesh_tensor();
     TT_FATAL(counts_buffer != nullptr, "counts buffer must be allocated on device");
     TT_FATAL(idx_buffer != nullptr, "global_expert_idx_table buffer must be allocated on device");
     TT_FATAL(out_buffer != nullptr, "output buffer must be allocated on device");
@@ -577,6 +576,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // output buffer at start[global_id]/TILE tile-rows (fusing ttnn::insert),
     // and the reader always reads x from the same region.
     auto* start_buffer = t.expert_region_offsets->buffer();
+    const auto& start_tensor = t.expert_region_offsets->mesh_tensor();
     TT_FATAL(start_buffer != nullptr, "expert_region_offsets buffer must be allocated on device");
     // dst_M_tiles bounds destination writes: the shared output buffer's
     // tile-row count.
@@ -929,16 +929,16 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         gu_shard_w,  // 34
         d_shard_w,   // 35
     };
-    tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(idx_buffer).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(x_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(gate_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(up_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(down_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(counts_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(idx_tensor).append_to(reader_ct_args);
     // `start` (= expert_region_offsets) accessor — appended last, matching the
     // reader's accessor stream. Always read: x is the shared dispatched buffer
     // and each expert's rows begin at start[global_id].
-    tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(start_tensor).append_to(reader_ct_args);
 
     // FUSE_BIAS: after the `start` accessor, append the 3 bias CB ids then the 3
     // bias tensor accessors (gate, up, down). The reader reads them at the
@@ -951,9 +951,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         reader_ct_args.push_back(CB_DOWN_BIAS);
         // Representative expert-0 bias buffers describe the layout; per-expert
         // bias base addresses are passed as runtime-arg arrays below.
-        tt::tt_metal::TensorAccessorArgs(t.gate_biases[0].buffer()).append_to(reader_ct_args);
-        tt::tt_metal::TensorAccessorArgs(t.up_biases[0].buffer()).append_to(reader_ct_args);
-        tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.gate_biases[0].mesh_tensor()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.up_biases[0].mesh_tensor()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.down_biases[0].mesh_tensor()).append_to(reader_ct_args);
         reader_defines.emplace_back("FUSE_BIAS", "1");
     }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
@@ -1023,12 +1023,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start, then up (UP_SPLIT).
-    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(start_tensor).append_to(writer_ct_args);
     // up accessor follows start; used only when the writer handles `up`.
-    tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(up_tensor).append_to(writer_ct_args);
     // DOWN_SPLIT: down accessor follows up in the writer's compile-arg stream.
-    tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(down_tensor).append_to(writer_ct_args);
 
     tt::tt_metal::KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =

@@ -19,6 +19,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 #include <hostdevcommon/common_values.hpp>
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -916,12 +917,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         operation_attributes.logical_h_mask,
         operation_attributes.logical_w_mask,
         cb_pad_offset_id};
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_time_args);
     // Halo buffer accessor follows the input accessor (nullptr when not in halo mode, like bias).
-    tt::tt_metal::TensorAccessorArgs(halo_mode ? tensor_args.halo_buffer.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(halo_mode ? &tensor_args.halo_buffer.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
     // Per-device offset accessor follows the halo accessor (nullptr when not masking).
-    tt::tt_metal::TensorAccessorArgs(mask_mode ? tensor_args.pad_offset_tensor.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(mask_mode ? &tensor_args.pad_offset_tensor.value().mesh_buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
@@ -1055,11 +1056,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         operation_attributes.output_pad_w,
         cb_weight_lo_tiled_id,
         (uint32_t)operand_split};
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
-        .append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(operand_split ? tensor_args.weight_lo_tensor.value().buffer() : nullptr)
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weight_tensor.mesh_tensor()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(bias_tensor)).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(operand_split ? &tensor_args.weight_lo_tensor.value().mesh_buffer() : nullptr)
         .append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;

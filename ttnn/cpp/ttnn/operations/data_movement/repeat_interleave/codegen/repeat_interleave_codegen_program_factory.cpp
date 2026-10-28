@@ -81,7 +81,9 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
     const Tensor& input = tensor_args.input;
     Tensor& output = tensor_return_value;
     Buffer* in_buffer = input.buffer();
+    const auto& in_tensor = input.mesh_tensor();
     Buffer* out_buffer = output.buffer();
+    const auto& out_tensor = output.mesh_tensor();
 
     auto grid = input.device()->compute_with_storage_grid_size();
     const auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
@@ -112,7 +114,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
         KernelDescriptor reader_desc;
         reader_desc.kernel_source = kTileReaderSrc;
         reader_desc.core_ranges = all_cores;
-        TensorAccessorArgs(*in_buffer).append_to(reader_desc.compile_time_args);
+        TensorAccessorArgs(in_tensor).append_to(reader_desc.compile_time_args);
         // reader_tile_interleaved_unified.cpp reads "src_page_pitch" unconditionally for every
         // seq_id (not just the ones that override it); 0 keeps the accessor's own page size.
         reader_desc.named_compile_time_args = {
@@ -124,7 +126,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
         writer_desc.kernel_source = kWriterSrc;
         writer_desc.core_ranges = all_cores;
         writer_desc.compile_time_args = {cb_id, out_page_size, kRiWriteBatch};
-        TensorAccessorArgs(*out_buffer).append_to(writer_desc.compile_time_args);
+        TensorAccessorArgs(out_tensor).append_to(writer_desc.compile_time_args);
         writer_desc.config = WriterConfigDescriptor{};
 
         for (const auto& work : layout) {
@@ -175,7 +177,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
     reader_desc.kernel_source = kRmReaderSrc;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = {operation_attributes.stick_size, in_page_size, slot_stride};
-    TensorAccessorArgs(*in_buffer).append_to(reader_desc.compile_time_args);
+    TensorAccessorArgs(in_tensor).append_to(reader_desc.compile_time_args);
     reader_desc.compile_time_args.push_back(cb_id);
     reader_desc.compile_time_args.push_back(operation_attributes.num_repeats);
     reader_desc.compile_time_args.push_back(operation_attributes.lower_pages);
@@ -191,7 +193,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
     // three. Requesting the stick keeps each output page's alignment padding untouched, which is what
     // the host expects to trim on read-back.
     writer_desc.compile_time_args = {cb_id, operation_attributes.stick_size, batch};
-    TensorAccessorArgs(*out_buffer).append_to(writer_desc.compile_time_args);
+    TensorAccessorArgs(out_tensor).append_to(writer_desc.compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
     for (const auto& work : layout) {

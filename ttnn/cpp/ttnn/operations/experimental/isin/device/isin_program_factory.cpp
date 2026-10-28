@@ -87,9 +87,9 @@ ProgramDescriptor IsInProgramFactory::create_descriptor(
         static_cast<uint32_t>(invert),
         elements_tensor.element_size(),
         output_datum_size};
-    tt::tt_metal::TensorAccessorArgs(*elements_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*test_elements_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(elements_tensor.mesh_tensor()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(test_elements_tensor.mesh_tensor()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(compile_time_args);
 
     // The final tensor to be dealt with by the isin device operation is flattened to 1D and the number of subchunks
     // (each of elements, test_elements and output) that they have to be split into depends on the L1 available size per

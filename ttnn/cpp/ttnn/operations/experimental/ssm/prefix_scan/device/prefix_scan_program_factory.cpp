@@ -28,6 +28,7 @@ tt::tt_metal::ProgramDescriptor PrefixScanProgramFactory::create_descriptor(
     Buffer* bx_buffer = bx.buffer();
     Buffer* h_buffer = h_prev.buffer();
     Buffer* output_buffer = output.buffer();
+    const auto& output_tensor = output.mesh_tensor();
     TT_FATAL(a_buffer != nullptr, "Input a buffer should be allocated on device");
     TT_FATAL(bx_buffer != nullptr, "Input bx buffer should be allocated on device");
     TT_FATAL(h_buffer != nullptr, "Input h_prev buffer should be allocated on device");
@@ -89,7 +90,7 @@ tt::tt_metal::ProgramDescriptor PrefixScanProgramFactory::create_descriptor(
     std::vector<uint32_t> reader_compile_time_args = {
         cb_a_in_id, cb_bx_in_id, cb_h_in_id, input_tile_size, intermediary_row_size};
     std::vector<uint32_t> writer_compile_time_args = {cb_out_id, cb_h_acc_id};
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_compile_time_args = {
         cb_a_in_id,
         cb_bx_in_id,

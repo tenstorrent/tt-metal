@@ -114,10 +114,10 @@ tt::tt_metal::ProgramDescriptor build_program(
         in.actual_end.has_value(),
         tail_groups,
         head_tiles};
-    tt::tt_metal::TensorAccessorArgs(in.rank_final.buffer()).append_to(reader_args);
-    tt::tt_metal::TensorAccessorArgs(in.prefix_final.buffer()).append_to(reader_args);
-    tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(reader_args);
-    tt::tt_metal::TensorAccessorArgs(end_tensor.buffer()).append_to(reader_args);
+    tt::tt_metal::TensorAccessorArgs(in.rank_final.mesh_tensor()).append_to(reader_args);
+    tt::tt_metal::TensorAccessorArgs(in.prefix_final.mesh_tensor()).append_to(reader_args);
+    tt::tt_metal::TensorAccessorArgs(in.actual_start.mesh_tensor()).append_to(reader_args);
+    tt::tt_metal::TensorAccessorArgs(end_tensor.mesh_tensor()).append_to(reader_args);
     std::vector<uint32_t> writer_args = {
         tiles_cb,
         mode_cb,
@@ -128,7 +128,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         forward ? targets_forward : 0u,
         uint32_t(backward.has_value()),
         backward ? targets_backward : 0u};
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(writer_args);
 
     tt::tt_metal::KernelDescriptor reader;
     reader.kernel_source = std::string(kernel_dir) + "reader_select_final_carry.cpp";

@@ -212,16 +212,16 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
     // -------------------------------------------------------------------------
     // Buffer pointers
     // -------------------------------------------------------------------------
-    auto* metadata_buf = args.metadata.buffer();
-    auto* scores_buf = args.scores.buffer();
-    auto* plan_buf = plan.buffer();
-    auto* grouped_scores_buf = grouped_scores.buffer();
-    auto* k_slot_buf = k_slot.buffer();
-    auto* counts_buf = counts.buffer();
-    auto* offsets_buf = offsets.buffer();
-    auto* leids_buf = args.local_expert_ids.buffer();
-    auto* dispatched_buf = args.dispatched.buffer();
-    auto* grouped_buf = grouped.buffer();
+    const auto& metadata_tensor = args.metadata.mesh_tensor();
+    const auto& scores_tensor = args.scores.mesh_tensor();
+    const auto& plan_tensor = plan.mesh_tensor();
+    const auto& grouped_scores_tensor = grouped_scores.mesh_tensor();
+    const auto& k_slot_tensor = k_slot.mesh_tensor();
+    const auto& counts_tensor = counts.mesh_tensor();
+    const auto& offsets_tensor = offsets.mesh_tensor();
+    const auto& leids_tensor = args.local_expert_ids.mesh_tensor();
+    const auto& dispatched_tensor = args.dispatched.mesh_tensor();
+    const auto& grouped_tensor = grouped.mesh_tensor();
 
     // -------------------------------------------------------------------------
     // NOC coords used as CT args by the combined kernel
@@ -271,15 +271,15 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         mcast_ey,                        // 22
         mcast_num_dests_including_self,  // 23
         kCbCtrl};                        // 24
-    tt::tt_metal::TensorAccessorArgs(plan_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(dispatched_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(metadata_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(counts_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(leids_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(scores_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(grouped_scores_buf).append_to(combined_ct_args);
-    tt::tt_metal::TensorAccessorArgs(k_slot_buf).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(plan_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(dispatched_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(counts_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(offsets_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(leids_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(scores_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(grouped_scores_tensor).append_to(combined_ct_args);
+    tt::tt_metal::TensorAccessorArgs(k_slot_tensor).append_to(combined_ct_args);
 
     auto combined_kernel_g1 = create_reader_kernel(program, worker_group_1, combined_ct_args, {}, kCombinedKernelPath);
     tt::tt_metal::KernelHandle combined_kernel_g2{};
@@ -298,8 +298,8 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         last_chunk_tiles,
         num_total_cores,     // 5 — stride (= num_workers)
         plan_ready_sem_id};  // 6
-    tt::tt_metal::TensorAccessorArgs(grouped_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(offsets_buf).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(grouped_tensor).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(offsets_tensor).append_to(writer_ct_args);
 
     auto writer_kernel_g1 = create_writer_kernel(program, worker_group_1, writer_ct_args, {}, kWorkerWriterPath);
     tt::tt_metal::KernelHandle writer_kernel_g2{};
@@ -369,27 +369,27 @@ MoeGroupProgramFactory::cached_program_t MoeGroupProgramFactory::create(
         // lead NOC, mcast rect, shared_tables_offset, worker_stride) moved
         // to CT args in combined_ct_args above.
         std::vector<uint32_t> reader_rt = {
-            plan_buf->address(),            // 0
-            dispatched_buf->address(),      // 1
-            worker_idx,                     // 2 my_worker_start (interleaved tile_row)
-            tiles_this_core,                // 3 my_worker_count
-            metadata_buf->address(),        // 4
-            counts_buf->address(),          // 5
-            offsets_buf->address(),         // 6
-            leids_buf->address(),           // 7
-            worker_idx,                     // 8 my_core_idx
-            my_slice_start,                 // 9
-            my_slice_end,                   // 10
-            scores_buf->address(),          // 11
-            grouped_scores_buf->address(),  // 12
-            k_slot_buf->address(),          // 13
+            plan_tensor.address(),            // 0
+            dispatched_tensor.address(),      // 1
+            worker_idx,                       // 2 my_worker_start (interleaved tile_row)
+            tiles_this_core,                  // 3 my_worker_count
+            metadata_tensor.address(),        // 4
+            counts_tensor.address(),          // 5
+            offsets_tensor.address(),         // 6
+            leids_tensor.address(),           // 7
+            worker_idx,                       // 8 my_core_idx
+            my_slice_start,                   // 9
+            my_slice_end,                     // 10
+            scores_tensor.address(),          // 11
+            grouped_scores_tensor.address(),  // 12
+            k_slot_tensor.address(),          // 13
         };
 
         std::vector<uint32_t> writer_rt = {
-            grouped_buf->address(),  // 0
-            worker_idx,              // 1 my_start
-            tiles_this_core,         // 2 my_count
-            offsets_buf->address(),  // 3
+            grouped_tensor.address(),  // 0
+            worker_idx,                // 1 my_start
+            tiles_this_core,           // 2 my_count
+            offsets_tensor.address(),  // 3
         };
 
         bool is_g1 = worker_group_1.contains(core);

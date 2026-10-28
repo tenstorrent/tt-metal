@@ -26,7 +26,9 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
 
     tt_metal::Buffer* index_tensor_buffer = tensor_args.index_tensor.buffer();
     tt_metal::Buffer* grad_tensor_buffer = tensor_args.grad_tensor.buffer();
+    const auto& grad_tensor = tensor_args.grad_tensor.mesh_tensor();
     tt_metal::Buffer* out_buffer = tensor_return_value.buffer();
+    const auto& out_tensor = tensor_return_value.mesh_tensor();
 
     auto* device = tensor_args.grad_tensor.device();
 
@@ -161,9 +163,9 @@ ProgramDescriptor EmbeddingBackwardDeviceOperation::create_descriptor(
         (uint32_t)index_page_size,
         (uint32_t)(tensor_args.index_tensor.dtype() == DataType::BFLOAT16),
         (uint32_t)(tensor_return_value.dtype() == DataType::BFLOAT16)};
-    TensorAccessorArgs(*grad_tensor_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*index_tensor_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*out_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(grad_tensor).append_to(reader_compile_time_args);
+    TensorAccessorArgs(tensor_args.index_tensor.mesh_tensor()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(out_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =

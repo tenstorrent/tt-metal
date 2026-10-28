@@ -170,7 +170,7 @@ TopkRoutePrepProgramFactory::cached_program_t TopkRoutePrepProgramFactory::creat
     // Reader: reused BY PATH, with the same compile args the untilize parallelize-column factory
     // passes (TensorAccessorArgs only; CB c_0 and its page size come from the CB interface).
     std::vector<uint32_t> reader_compile_args;
-    tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(input.mesh_tensor()).append_to(reader_compile_args);
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
@@ -192,7 +192,7 @@ TopkRoutePrepProgramFactory::cached_program_t TopkRoutePrepProgramFactory::creat
                                     .defines = compute_defines});
 
     std::vector<uint32_t> writer_compile_args = {split.bw_full, split.bw_last, output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(writer_compile_args);
     auto writer_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_topk_route_prep_stick_layout.cpp",

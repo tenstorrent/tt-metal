@@ -1629,18 +1629,23 @@ void append_to_descriptor(
     // kernels build a per-expert accessor from that descriptor + the per-expert
     // base address (passed as a runtime-arg).
     auto* x_buffer = t.x.buffer();
-    auto* gate_buffer = t.gate_projs[0].buffer();
-    auto* up_buffer = t.up_projs[0].buffer();
-    auto* down_buffer = t.down_projs[0].buffer();
+    const auto& x_tensor = t.x.mesh_tensor();
     auto* counts_buffer = t.counts.buffer();
+    const auto& counts_tensor = t.counts.mesh_tensor();
+    const auto& gate_tensor = t.gate_projs[0].mesh_tensor();
+    const auto& up_tensor = t.up_projs[0].mesh_tensor();
+    const auto& down_tensor = t.down_projs[0].mesh_tensor();
     auto* idx_buffer = t.global_expert_idx_table.buffer();
+    const auto& idx_tensor = t.global_expert_idx_table.mesh_tensor();
     auto* out_buffer = tensor_return_value.buffer();
+    const auto& out_tensor = tensor_return_value.mesh_tensor();
 
     // expert_region_offsets is a mandatory input (validated in the device op):
     // the writer always writes an expert's output straight into the shared
     // output buffer at start[global_id]/TILE tile-rows (fusing ttnn::insert),
     // and the reader always reads x from the same region.
     auto* start_buffer = t.expert_region_offsets->buffer();
+    const auto& start_tensor = t.expert_region_offsets->mesh_tensor();
     // dst_M_tiles bounds destination writes: the shared output buffer's
     // tile-row count.
     const uint32_t dst_M_tiles = tensor_return_value.padded_shape()[-2] / TILE;
@@ -2045,16 +2050,16 @@ void append_to_descriptor(
         gu_shard_w,  // 34
         d_shard_w,   // 35
     };
-    tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(idx_buffer).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(x_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(gate_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(up_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(down_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(counts_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(idx_tensor).append_to(reader_ct_args);
     // `start` (= expert_region_offsets) accessor — appended last, matching the
     // reader's accessor stream. Always read: x is the shared dispatched buffer
     // and each expert's rows begin at start[global_id].
-    tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(start_tensor).append_to(reader_ct_args);
 
     // FUSE_BIAS: after the `start` accessor, append the 3 bias CB ids then the 3
     // bias tensor accessors (gate, up, down). The reader reads them at the
@@ -2072,9 +2077,9 @@ void append_to_descriptor(
         reader_ct_args.push_back(CB_DOWN_BIAS);
         // Representative expert-0 bias buffers describe the layout; per-expert
         // bias base addresses are passed as runtime-arg arrays below.
-        tt::tt_metal::TensorAccessorArgs(t.gate_biases[0].buffer()).append_to(reader_ct_args);
-        tt::tt_metal::TensorAccessorArgs(t.up_biases[0].buffer()).append_to(reader_ct_args);
-        tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.gate_biases[0].mesh_tensor()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.up_biases[0].mesh_tensor()).append_to(reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(t.down_biases[0].mesh_tensor()).append_to(reader_ct_args);
         reader_defines["FUSE_BIAS"] = "1";
     }
     tt::tt_metal::KernelDescriptor reader_descriptor{
@@ -2145,12 +2150,12 @@ void append_to_descriptor(
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start, then up (UP_SPLIT).
-    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(start_tensor).append_to(writer_ct_args);
     // up accessor follows start; used only when the writer handles `up`.
-    tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(up_tensor).append_to(writer_ct_args);
     // DOWN_SPLIT: down accessor follows up in the writer's compile-arg stream.
-    tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(down_tensor).append_to(writer_ct_args);
 
     tt::tt_metal::KernelDescriptor writer_descriptor{
         .kernel_source =

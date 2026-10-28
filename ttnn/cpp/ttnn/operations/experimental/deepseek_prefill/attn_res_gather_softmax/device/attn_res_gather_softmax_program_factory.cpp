@@ -327,10 +327,10 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // the same length either way and the kernel's compile-time offsets do not move. The
     // kernel never reads through it there.
     std::vector<uint32_t> reader_ct_args = {Wt, static_cast<uint32_t>(fuse_add)};
-    TensorAccessorArgs(*running_sum.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(*partial.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(*q.buffer()).append_to(reader_ct_args);
-    TensorAccessorArgs(*pending.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(running_sum.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(partial.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(q.mesh_tensor()).append_to(reader_ct_args);
+    TensorAccessorArgs(pending.mesh_tensor()).append_to(reader_ct_args);
 
     const auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -340,11 +340,11 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
 
     std::vector<uint32_t> writer_ct_args = {
         Wt, ring_size, Ht, ready_sem_id, done_sem_id, static_cast<uint32_t>(fuse_add)};
-    TensorAccessorArgs(*stats.buffer()).append_to(writer_ct_args);
-    TensorAccessorArgs(*shift.buffer()).append_to(writer_ct_args);
-    TensorAccessorArgs(*mass.buffer()).append_to(writer_ct_args);
-    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
-    TensorAccessorArgs(*total.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(stats.mesh_tensor()).append_to(writer_ct_args);
+    TensorAccessorArgs(shift.mesh_tensor()).append_to(writer_ct_args);
+    TensorAccessorArgs(mass.mesh_tensor()).append_to(writer_ct_args);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(writer_ct_args);
+    TensorAccessorArgs(total.mesh_tensor()).append_to(writer_ct_args);
 
     const auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -372,7 +372,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
 
     std::vector<uint32_t> gather_ct_args = {
         ring_size, Ht, static_cast<uint32_t>(num_stat_cores), ready_sem_id, done_sem_id, stage_tiles};
-    TensorAccessorArgs(*stats.buffer()).append_to(gather_ct_args);
+    TensorAccessorArgs(stats.mesh_tensor()).append_to(gather_ct_args);
 
     auto gather_kernel_id = tt::tt_metal::CreateKernel(
         program,

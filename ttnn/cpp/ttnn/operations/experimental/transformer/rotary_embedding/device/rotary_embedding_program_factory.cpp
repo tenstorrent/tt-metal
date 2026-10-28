@@ -300,9 +300,13 @@ ProgramDescriptor create_single_tile_descriptor(
     }
 
     auto* src_buffer = input.buffer();
+    const auto& src_tensor = input.mesh_tensor();
     auto* cos_buffer = cos.buffer();
+    const auto& cos_tensor = cos.mesh_tensor();
     auto* sin_buffer = sin.buffer();
+    const auto& sin_tensor = sin.mesh_tensor();
     auto* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
 
     std::vector<uint32_t> reader_compile_time_args;
     if (in_sharded) {
@@ -314,8 +318,8 @@ ProgramDescriptor create_single_tile_descriptor(
             (std::uint32_t)Ht,
             (std::uint32_t)HtWt,
         };
-        tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(cos_tensor).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(sin_tensor).append_to(reader_compile_time_args);
     } else {
         reader_compile_time_args = {
             (std::uint32_t)input_cb_index,
@@ -325,12 +329,12 @@ ProgramDescriptor create_single_tile_descriptor(
             (std::uint32_t)Ht,
             (std::uint32_t)HtWt,
         };
-        tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(cos_tensor).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(sin_tensor).append_to(reader_compile_time_args);
     }
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
     if (token_idx.has_value()) {
         writer_compile_time_args.insert(
             writer_compile_time_args.end(),
@@ -692,9 +696,13 @@ ProgramDescriptor create_multi_tile_descriptor(
     const uint16_t bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
 
     auto* src_buffer = input.buffer();
+    const auto& src_tensor = input.mesh_tensor();
     auto* cos_buffer = cos.buffer();
+    const auto& cos_tensor = cos.mesh_tensor();
     auto* sin_buffer = sin.buffer();
+    const auto& sin_tensor = sin.mesh_tensor();
     auto* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
 
     std::vector<uint32_t> reader_compile_time_args;
     if (in_sharded) {
@@ -710,8 +718,8 @@ ProgramDescriptor create_multi_tile_descriptor(
             (std::uint32_t)HtWt,
             (std::uint32_t)half_Wt * input_single_tile_size,
         };
-        tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(cos_tensor).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(sin_tensor).append_to(reader_compile_time_args);
     } else {
         reader_compile_time_args = {
             (std::uint32_t)input_cb_index,
@@ -725,12 +733,12 @@ ProgramDescriptor create_multi_tile_descriptor(
             (std::uint32_t)HtWt,
             (std::uint32_t)half_Wt,
         };
-        tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(cos_tensor).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(sin_tensor).append_to(reader_compile_time_args);
     }
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     if (token_idx.has_value()) {
         writer_compile_time_args.insert(

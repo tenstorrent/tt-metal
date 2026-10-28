@@ -145,7 +145,7 @@ ProgramDescriptor BernoulliDeviceOperation::BernoulliProgramFactory::create_desc
 
     // Reader kernel
     std::vector<uint32_t> reader_compile_time_args{in_cb_id};
-    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.mesh_tensor()).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kernels_dir_path + "reader_bernoulli.cpp";
@@ -156,7 +156,7 @@ ProgramDescriptor BernoulliDeviceOperation::BernoulliProgramFactory::create_desc
 
     // Writer kernel
     std::vector<uint32_t> writer_compile_time_args{in_cb_id, intermed_cb_id, intermed1_cb_id};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor::Defines writer_defines;
     switch (input.dtype()) {

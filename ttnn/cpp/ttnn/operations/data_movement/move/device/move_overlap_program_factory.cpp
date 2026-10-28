@@ -92,7 +92,9 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
         output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, tt::tt_metal::hal::get_l1_alignment());
 
     Buffer* src_buffer = input.buffer();
+    const auto& src_tensor = input.mesh_tensor();
     Buffer* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
 
     ProgramDescriptor desc;
 
@@ -123,8 +125,8 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
     if (!tilized) {
         compile_time_args.push_back(page_size);
     }
-    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
-    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
+    TensorAccessorArgs(src_tensor).append_to(compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(compile_time_args);
 
     const std::string kernel_path =
         tilized

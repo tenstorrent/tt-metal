@@ -629,11 +629,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     compile_time_args.push_back((uint32_t)max_dispatch_buffer_token_size);
 
     // Append TensorAccessorArgs for all 5 tensors (starting at index 39)
-    tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dispatched_metadata.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(expert_token_counts.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(expert_region_offsets.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dispatched_buffer.mesh_tensor()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dispatched_metadata.mesh_tensor()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(expert_token_counts.mesh_tensor()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(expert_region_offsets.mesh_tensor()).append_to(compile_time_args);
 
     // Both reader and writer get fabric defines so the reader can compute routes
     std::map<std::string, std::string> fabric_defines;
@@ -886,8 +886,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 // wait the entire CB, not just the counter slice.
                 per_core_args.push_back(detail::get_num_pages(expert_token_counts) + 1);  // cb_counter_total_pages
                 // 18+: TensorAccessorArgs for dispatched_buffer + dispatched_metadata
-                tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(per_core_args);
-                tt::tt_metal::TensorAccessorArgs(dispatched_metadata.buffer()).append_to(per_core_args);
+                tt::tt_metal::TensorAccessorArgs(dispatched_buffer.mesh_tensor()).append_to(per_core_args);
+                tt::tt_metal::TensorAccessorArgs(dispatched_metadata.mesh_tensor()).append_to(per_core_args);
 
                 CoreRangeSet single_untilizer_core({CoreRange(untilizer_row_cores[global_untilizer_idx])});
                 tt::tt_metal::KernelDescriptor reader_untilize_kd;
@@ -966,7 +966,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             init_zeros ? num_cores : 0u,
             init_zeros ? static_cast<uint32_t>(tt::CBIndex::c_6) : 0u,
         };
-        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_untilize_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_untilize_compile_time_args);
 
         // Compile-time args for the untilized-data send loop, which now runs for BOTH layouts
         // (writer_untilize forwards cb_untilize_id rows to the sender regardless of layout).

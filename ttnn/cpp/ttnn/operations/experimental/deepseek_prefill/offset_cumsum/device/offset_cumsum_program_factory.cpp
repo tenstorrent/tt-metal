@@ -72,10 +72,15 @@ tt::tt_metal::ProgramDescriptor OffsetCumsumProgramFactory::create_descriptor(
         H);
 
     auto* src_buffer = input.buffer();
+    const auto& src_tensor = input.mesh_tensor();
     auto* dst_offsets_buffer = tensor_return_value.at(0).buffer();
+    const auto& dst_offsets_tensor = tensor_return_value.at(0).mesh_tensor();
     auto* dst_totals_buffer = tensor_return_value.at(1).buffer();
+    const auto& dst_totals_tensor = tensor_return_value.at(1).mesh_tensor();
     auto* dst_expert_region_buffer = tensor_return_value.at(2).buffer();
+    const auto& dst_expert_region_tensor = tensor_return_value.at(2).mesh_tensor();
     auto* dst_all_offsets_buffer = tensor_return_value.at(3).buffer();
+    const auto& dst_all_offsets_tensor = tensor_return_value.at(3).mesh_tensor();
     uint32_t input_page_size = src_buffer->aligned_page_size();
     uint32_t offsets_page_size = dst_offsets_buffer->aligned_page_size();
     uint32_t totals_page_size = dst_totals_buffer->aligned_page_size();
@@ -136,11 +141,11 @@ tt::tt_metal::ProgramDescriptor OffsetCumsumProgramFactory::create_descriptor(
         H,
         experts_per_chip,
     };
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_offsets_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_totals_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_expert_region_buffer).append_to(compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dst_all_offsets_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_offsets_tensor).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_totals_tensor).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_expert_region_tensor).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_all_offsets_tensor).append_to(compile_time_args);
 
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =

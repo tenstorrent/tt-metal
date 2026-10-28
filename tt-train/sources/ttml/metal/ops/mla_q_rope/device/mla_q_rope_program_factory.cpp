@@ -149,22 +149,22 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     [[maybe_unused]] auto cb_rope_out =
         create_circular_buffer(program, all_cores, kRopeOutCbIndex, data_format, single_tile_size, rope_cb_num_tiles);
 
-    auto* q_in_buffer = q_in.buffer();
-    auto* cos_buffer = tensor_args.cos_cache.buffer();
-    auto* sin_buffer = tensor_args.sin_cache.buffer();
-    auto* trans_buffer = tensor_args.trans_mat.buffer();
-    auto* q_out_buffer = q_out.buffer();
+    const auto& q_in_tensor = q_in.mesh_tensor();
+    const auto& cos_tensor = tensor_args.cos_cache.mesh_tensor();
+    const auto& sin_tensor = tensor_args.sin_cache.mesh_tensor();
+    const auto& trans_tensor = tensor_args.trans_mat.mesh_tensor();
+    const auto& q_out_tensor = q_out.mesh_tensor();
 
     std::vector<uint32_t> reader_compile_time_args = {
         Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles, packed_input_u32};
-    tt::tt_metal::TensorAccessorArgs(q_in_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(trans_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(q_in_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(cos_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(sin_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(trans_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         Tn, Tr, H, Ts, tiles_per_head, nope_chunk_tiles, packed_input_u32};
-    tt::tt_metal::TensorAccessorArgs(q_out_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(q_out_tensor).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {
         (std::uint32_t)kQPeCbIndex,
@@ -208,15 +208,15 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
                 program,
                 kernels.reader,
                 core,
-                {q_in_buffer->address(),
-                 cos_buffer->address(),
-                 sin_buffer->address(),
-                 trans_buffer->address(),
+                {q_in_tensor.address(),
+                 cos_tensor.address(),
+                 sin_tensor.address(),
+                 trans_tensor.address(),
                  num_blocks,
                  sb_start,
                  q_in_tile_base});
             SetRuntimeArgs(
-                program, kernels.writer, core, {q_out_buffer->address(), num_blocks, sb_start, q_out_tile_base});
+                program, kernels.writer, core, {q_out_tensor.address(), num_blocks, sb_start, q_out_tile_base});
             SetRuntimeArgs(program, kernels.compute, core, {num_blocks});
         });
 

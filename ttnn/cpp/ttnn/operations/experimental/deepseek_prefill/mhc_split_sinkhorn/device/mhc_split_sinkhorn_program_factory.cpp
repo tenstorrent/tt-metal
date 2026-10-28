@@ -61,10 +61,14 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
     const uint32_t tile_size = tt::tile_size(df);
 
     auto* mixes_buffer = tensor_args.mixes.buffer();
+    const auto& mixes_tensor = tensor_args.mixes.mesh_tensor();
     auto* consts_buffer = tensor_args.consts.buffer();
     auto* pre_buffer = tensor_return_value.at(0).buffer();
+    const auto& pre_tensor = tensor_return_value.at(0).mesh_tensor();
     auto* post_buffer = tensor_return_value.at(1).buffer();
+    const auto& post_tensor = tensor_return_value.at(1).mesh_tensor();
     auto* comb_buffer = tensor_return_value.at(2).buffer();
+    const auto& comb_tensor = tensor_return_value.at(2).mesh_tensor();
 
     const std::string kdir =
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/mhc_split_sinkhorn/device/kernels/";
@@ -97,7 +101,7 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
         add_cb(desc, cores, CB_POST_W, 2, tile_size, df);
 
         std::vector<uint32_t> reader_ct = {CB_MIXES, CB_CONSTS};
-        TensorAccessorArgs(consts_buffer).append_to(reader_ct);
+        TensorAccessorArgs(tensor_args.consts.mesh_tensor()).append_to(reader_ct);
         KernelDescriptor reader;
         reader.kernel_source = kdir + "dataflow/reader_mhc_split_sinkhorn_sharded.cpp";
         reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -153,8 +157,8 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
     add_cb(desc, all_cores, CB_POST_W, 2, tile_size, df);
 
     std::vector<uint32_t> reader_ct = {CB_MIXES, CB_CONSTS};
-    TensorAccessorArgs(mixes_buffer).append_to(reader_ct);
-    TensorAccessorArgs(consts_buffer).append_to(reader_ct);
+    TensorAccessorArgs(mixes_tensor).append_to(reader_ct);
+    TensorAccessorArgs(tensor_args.consts.mesh_tensor()).append_to(reader_ct);
     KernelDescriptor reader;
     reader.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/mhc_split_sinkhorn/device/kernels/dataflow/"
@@ -165,9 +169,9 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
     reader.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_ct = {CB_PRE, CB_POST, CB_COMB};
-    TensorAccessorArgs(pre_buffer).append_to(writer_ct);
-    TensorAccessorArgs(post_buffer).append_to(writer_ct);
-    TensorAccessorArgs(comb_buffer).append_to(writer_ct);
+    TensorAccessorArgs(pre_tensor).append_to(writer_ct);
+    TensorAccessorArgs(post_tensor).append_to(writer_ct);
+    TensorAccessorArgs(comb_tensor).append_to(writer_ct);
     KernelDescriptor writer;
     writer.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/mhc_split_sinkhorn/device/kernels/dataflow/"

@@ -161,7 +161,9 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     const Tensor& input = tensor_args.input;
     Tensor& output = tensor_return_value;
     Buffer* src_buffer = input.buffer();
+    const auto& src_tensor = input.mesh_tensor();
     Buffer* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
     TT_FATAL(src_buffer != nullptr, "RepeatCodegen input must be allocated on device!");
     TT_FATAL(dst_buffer != nullptr, "RepeatCodegen output must be allocated on device!");
     const RepeatPageMap page_map =
@@ -196,8 +198,8 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         });
 
         std::vector<uint32_t> reader_ct_args = {0, tile_bytes, page_map.lower_pages, page_map.rep_dim_pages};
-        TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
-        TensorAccessorArgs(*dst_buffer).append_to(reader_ct_args);
+        TensorAccessorArgs(src_tensor).append_to(reader_ct_args);
+        TensorAccessorArgs(dst_tensor).append_to(reader_ct_args);
 
         KernelDescriptor reader_desc;
         reader_desc.kernel_source = kOuterTileDirect;
@@ -237,7 +239,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         });
 
         std::vector<uint32_t> reader_ct_args;
-        TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
+        TensorAccessorArgs(src_tensor).append_to(reader_ct_args);
 
         KernelDescriptor reader_desc;
         reader_desc.kernel_source = kReaderSequenced;
@@ -254,7 +256,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         reader_desc.config = ReaderConfigDescriptor{};
 
         std::vector<uint32_t> writer_ct_args = {0, page_size, kRepeatBatch};
-        TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+        TensorAccessorArgs(dst_tensor).append_to(writer_ct_args);
 
         KernelDescriptor writer_desc;
         writer_desc.kernel_source = kWriterInterleaved;
@@ -310,7 +312,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     if (is_last_dim_rm) {
         reader_ct_args = {
             page_map.stick_size, in_aligned, slot_size, /*cb_id=*/0, operation_attributes.num_repeats, cb_batch};
-        TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
+        TensorAccessorArgs(src_tensor).append_to(reader_ct_args);
         reader_desc.kernel_source = kReaderLastDimRm;
     } else {
         reader_ct_args = {
@@ -321,14 +323,14 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
             page_map.lower_pages,
             page_map.rep_dim_pages,
             cb_batch};
-        TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
+        TensorAccessorArgs(src_tensor).append_to(reader_ct_args);
         reader_desc.kernel_source = kReaderHigherDimRm;
     }
     reader_desc.compile_time_args = std::move(reader_ct_args);
 
     // The writer takes its L1 stride from the CB, so only the output's aligned page is passed.
     std::vector<uint32_t> writer_ct_args = {0, out_aligned, cb_batch};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterInterleaved;

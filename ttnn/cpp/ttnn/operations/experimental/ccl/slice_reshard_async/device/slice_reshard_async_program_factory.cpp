@@ -78,8 +78,6 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
     // Tensor Info
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
-    tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
-    tt::tt_metal::Buffer* output_buffer = output_tensor.buffer();
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
@@ -165,7 +163,7 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
                 direction,
                 page_size,
             };
-            TensorAccessorArgs(*input_buffer).append_to(reader_kernel_config.compile_args);
+            TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_kernel_config.compile_args);
             auto worker_reader_kernel_id = tt::tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/device/kernels/"
@@ -196,7 +194,7 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
                 sender_cb_index,  // cb_forward_id
                 direction,
             };
-            TensorAccessorArgs(*output_buffer).append_to(writer_kernel_config.compile_args);
+            TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_kernel_config.compile_args);
             auto worker_writer_kernel_id = tt::tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/device/kernels/"

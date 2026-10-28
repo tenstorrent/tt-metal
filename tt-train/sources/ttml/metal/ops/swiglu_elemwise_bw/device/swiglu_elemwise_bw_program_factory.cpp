@@ -83,23 +83,23 @@ SwigluElemwiseBwProgramFactory::cached_program_t SwigluElemwiseBwProgramFactory:
     create_circular_buffer(program, all_cores, kScratchCbIndex, data_format, tile_size_bytes, twice_block);
     create_circular_buffer(program, all_cores, kSiluGradCbIndex, data_format, tile_size_bytes, twice_block);
 
-    auto* const linear1_buf = linear1.buffer();
-    auto* const gate_buf = gate.buffer();
-    auto* const dL_dprod_buf = dL_dprod.buffer();
-    auto* const dL_dlinear1_buf = output.dL_dlinear1.buffer();
-    auto* const dL_dgate_buf = output.dL_dgate.buffer();
+    const auto& linear1_tensor = linear1.mesh_tensor();
+    const auto& gate_tensor = gate.mesh_tensor();
+    const auto& dL_dprod_tensor = dL_dprod.mesh_tensor();
+    const auto& dL_dlinear1_tensor = output.dL_dlinear1.mesh_tensor();
+    const auto& dL_dgate_tensor = output.dL_dgate.mesh_tensor();
 
     SwigluElemwiseBwKernels kernels;
 
     std::vector<uint32_t> reader_ct_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(linear1_buf).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(gate_buf).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(dL_dprod_buf).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(linear1_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(gate_tensor).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(dL_dprod_tensor).append_to(reader_ct_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_ct_args, {}, kReaderKernelPath);
 
     std::vector<uint32_t> writer_ct_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(dL_dlinear1_buf).append_to(writer_ct_args);
-    tt::tt_metal::TensorAccessorArgs(dL_dgate_buf).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(dL_dlinear1_tensor).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(dL_dgate_tensor).append_to(writer_ct_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_ct_args, {}, kWriterKernelPath);
 
     std::vector<uint32_t> compute_g1_args = {num_rows_g1, block_size, Wt};
@@ -119,12 +119,12 @@ SwigluElemwiseBwProgramFactory::cached_program_t SwigluElemwiseBwProgramFactory:
                 program,
                 kernels.reader,
                 core,
-                {linear1_buf->address(), gate_buf->address(), dL_dprod_buf->address(), num_rows, start_row});
+                {linear1_tensor.address(), gate_tensor.address(), dL_dprod_tensor.address(), num_rows, start_row});
             SetRuntimeArgs(
                 program,
                 kernels.writer,
                 core,
-                {dL_dlinear1_buf->address(), dL_dgate_buf->address(), num_rows, start_row});
+                {dL_dlinear1_tensor.address(), dL_dgate_tensor.address(), num_rows, start_row});
         });
 
     return cached_program_t{

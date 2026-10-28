@@ -19,7 +19,9 @@ ProgramDescriptor ExampleDeviceOperation::SingleCore::create_descriptor(
     auto& output_tensor = tensor_return_value;
 
     auto* src_buffer = input_tensor.buffer();
+    const auto& src_tensor = input_tensor.mesh_tensor();
     auto* dst_buffer = output_tensor.buffer();
+    const auto& dst_tensor = output_tensor.mesh_tensor();
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tile_size(cb_data_format);
@@ -64,7 +66,7 @@ ProgramDescriptor ExampleDeviceOperation::SingleCore::create_descriptor(
 
     // Reader kernel
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -76,7 +78,7 @@ ProgramDescriptor ExampleDeviceOperation::SingleCore::create_descriptor(
 
     // Writer kernel
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =

@@ -13,6 +13,7 @@
 #include "metal/common/program_utils.hpp"
 #include "sgd_device_operation_types.hpp"
 #include "tt-metalium/bfloat16.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace {
 
@@ -216,10 +217,10 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
 
-    auto* param_buffer = param.buffer();
-    auto* grad_buffer = grad.buffer();
+    const auto& param_tensor = param.mesh_tensor();
+    const auto& grad_tensor = grad.mesh_tensor();
     auto* momentum_buffer = momentum_wrapped.has_value() ? momentum_wrapped.value().buffer() : nullptr;
-    auto* output_buffer = output.buffer();
+    const auto& output_tensor = output.mesh_tensor();
 
     std::map<std::string, std::string> defines;
     defines["USE_MOMENTUM"] = momentum_buffer != nullptr ? "1" : "0";
@@ -227,15 +228,17 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
 
     SGDKernels kernels{};
     std::vector<uint32_t> reader_compile_time_args{block_size};
-    tt::tt_metal::TensorAccessorArgs(param_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(grad_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(momentum_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(param_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(grad_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(momentum_wrapped))
+        .append_to(reader_compile_time_args);
 
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size};
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(momentum_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(momentum_wrapped))
+        .append_to(writer_compile_time_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
@@ -283,8 +286,8 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
                 program,
                 kernels.reader,
                 core,
-                {param_buffer->address(),
-                 grad_buffer->address(),
+                {param_tensor.address(),
+                 grad_tensor.address(),
                  momentum_buffer != nullptr ? momentum_buffer->address() : 0U,
                  packed_lr,
                  packed_momentum,
@@ -301,7 +304,7 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
                 program,
                 kernels.writer,
                 core,
-                {output_buffer->address(),
+                {output_tensor.address(),
                  momentum_buffer != nullptr ? momentum_buffer->address() : 0U,
                  num_tiles,
                  start_tile});

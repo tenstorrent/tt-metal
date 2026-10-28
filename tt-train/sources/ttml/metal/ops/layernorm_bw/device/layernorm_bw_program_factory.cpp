@@ -280,14 +280,14 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
-    auto* gamma_buffer = gamma.buffer();
-    auto* input_buffer = input.buffer();
-    auto* mean_buffer = mean.buffer();
-    auto* rstd_buffer = rstd.buffer();
-    auto* dLdout_buffer = dLdout.buffer();
-    auto* dx_buffer = output[0].buffer();
-    auto* dgamma_components_buffer = output[1].buffer();
-    auto* dbeta_components_buffer = output[2].buffer();
+    const auto& gamma_tensor = gamma.mesh_tensor();
+    const auto& input_tensor = input.mesh_tensor();
+    const auto& mean_tensor = mean.mesh_tensor();
+    const auto& rstd_tensor = rstd.mesh_tensor();
+    const auto& dLdout_tensor = dLdout.mesh_tensor();
+    const auto& dx_tensor = output[0].mesh_tensor();
+    const auto& dgamma_components_tensor = output[1].mesh_tensor();
+    const auto& dbeta_components_tensor = output[2].mesh_tensor();
 
     std::map<std::string, std::string> defines;
     if (mask_w != 0) {
@@ -299,17 +299,17 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
 
     LayerNormBackwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{packed_scaler, block_size, mask_w, Wt};
-    tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(mean_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(rstd_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dLdout_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(mean_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(rstd_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dLdout_tensor).append_to(reader_compile_time_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(dx_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dgamma_components_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dbeta_components_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dx_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dgamma_components_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dbeta_components_tensor).append_to(writer_compile_time_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
@@ -357,11 +357,11 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
                 program,
                 kernels.reader,
                 core,
-                {gamma_buffer->address(),
-                 input_buffer->address(),
-                 mean_buffer->address(),
-                 rstd_buffer->address(),
-                 dLdout_buffer->address(),
+                {gamma_tensor.address(),
+                 input_tensor.address(),
+                 mean_tensor.address(),
+                 rstd_tensor.address(),
+                 dLdout_tensor.address(),
                  start_row,
                  num_rows});
             // Writer kernel runtime args
@@ -369,9 +369,9 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
                 program,
                 kernels.writer,
                 core,
-                {dx_buffer->address(),
-                 dgamma_components_buffer->address(),
-                 dbeta_components_buffer->address(),
+                {dx_tensor.address(),
+                 dgamma_components_tensor.address(),
+                 dbeta_components_tensor.address(),
                  start_row,
                  num_rows});
         });

@@ -308,13 +308,13 @@ void ring_attention_neighbor_halo_exchange_helper(
         reader_kernel.compile_time_args.push_back(page_size);
     }
     for (const auto& input : input_tensors) {
-        tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_kernel.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(input.mesh_tensor()).append_to(reader_kernel.compile_time_args);
     }
     // Metadata accessors follow the input accessors.
     reader_kernel.compile_time_args.push_back(halo.derives_start_on_device() ? 1u : 0u);
     if (halo.derives_start_on_device()) {
-        tt::tt_metal::TensorAccessorArgs(halo.slot_id->buffer()).append_to(reader_kernel.compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->buffer()).append_to(reader_kernel.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(halo.slot_id->mesh_tensor()).append_to(reader_kernel.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->mesh_tensor()).append_to(reader_kernel.compile_time_args);
     }
 
     KernelDescriptor writer_kernel{};
@@ -340,11 +340,11 @@ void ring_attention_neighbor_halo_exchange_helper(
         writer_kernel.compile_time_args.push_back(page_size);
     }
     for (const auto& output : output_tensors) {
-        tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_kernel.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output.mesh_tensor()).append_to(writer_kernel.compile_time_args);
     }
     writer_kernel.compile_time_args.push_back(halo.derives_start_on_device() ? 1u : 0u);
     if (halo.derives_start_on_device()) {
-        tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->buffer()).append_to(writer_kernel.compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(halo.kv_actual_isl->mesh_tensor()).append_to(writer_kernel.compile_time_args);
     }
 
     auto halo_signaler = fused_op_signaler;
@@ -959,19 +959,19 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         // TensorAccessorArgs tuples expect one page-size entry per tensor before the accessor blocks.
         args.insert(args.end(), num_inputs, op_config.get_page_size());
         for (const auto& tensor : input_tensor) {
-            tt::tt_metal::TensorAccessorArgs(tensor.buffer()).append_to(args);
+            tt::tt_metal::TensorAccessorArgs(tensor.mesh_tensor()).append_to(args);
         }
         for (const auto& tensor : output_tensor) {
-            tt::tt_metal::TensorAccessorArgs(tensor.buffer()).append_to(args);
+            tt::tt_metal::TensorAccessorArgs(tensor.mesh_tensor()).append_to(args);
         }
         if (has_metadata) {
             // The slot accessor block must exist whenever the metadata block does -- one reader binary
             // serves both -- but the slot itself is optional (kv_deduped gathers a BATCH-1 slab). Fall
             // back to an input buffer's accessor so the compile-time layout is fixed; the reader only
             // consults it under has_slot_metadata.
-            tt::tt_metal::TensorAccessorArgs(has_slot_metadata ? slot_id->buffer() : input_tensor[0].buffer())
+            tt::tt_metal::TensorAccessorArgs(has_slot_metadata ? slot_id->mesh_tensor() : input_tensor[0].mesh_tensor())
                 .append_to(args);
-            tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer()).append_to(args);
+            tt::tt_metal::TensorAccessorArgs(kv_actual_isl->mesh_tensor()).append_to(args);
         }
         return args;
     };
@@ -1013,10 +1013,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         // TensorAccessorArgs tuples expect one page-size entry per tensor before the accessor blocks.
         args.insert(args.end(), num_inputs, op_config.get_page_size());
         for (const auto& tensor : output_tensor) {
-            tt::tt_metal::TensorAccessorArgs(tensor.buffer()).append_to(args);
+            tt::tt_metal::TensorAccessorArgs(tensor.mesh_tensor()).append_to(args);
         }
         if (has_metadata) {
-            tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer()).append_to(args);
+            tt::tt_metal::TensorAccessorArgs(kv_actual_isl->mesh_tensor()).append_to(args);
         }
         return args;
     };

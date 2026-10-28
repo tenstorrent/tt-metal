@@ -126,18 +126,18 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
         create_circular_buffer(program, all_cores, kDKpeOutCbIndex, data_format, single_tile_size, kpe_cb_num_tiles);
 
     // ── Kernels ──
-    auto* dK_buffer = dK.buffer();
-    auto* dV_buffer = dV.buffer();
-    auto* dkv_up_buffer = dkv_up.buffer();
-    auto* dk_pe_buffer = dk_pe.buffer();
+    const auto& dK_tensor = dK.mesh_tensor();
+    const auto& dV_tensor = dV.mesh_tensor();
+    const auto& dkv_up_tensor = dkv_up.mesh_tensor();
+    const auto& dk_pe_tensor = dk_pe.mesh_tensor();
 
     std::vector<uint32_t> reader_compile_time_args = {Th, Tn, Tr, Tv, H, k_HtWt, v_HtWt, Ts, block_size};
-    tt::tt_metal::TensorAccessorArgs(dK_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dV_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dK_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dV_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {Tn, Tr, Tv, H, block_size};
-    tt::tt_metal::TensorAccessorArgs(dkv_up_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dk_pe_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dkv_up_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dk_pe_tensor).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {Tr, H};
 
@@ -171,8 +171,8 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
                 program,
                 kernels.reader,
                 core,
-                {dK_buffer->address(),
-                 dV_buffer->address(),
+                {dK_tensor.address(),
+                 dV_tensor.address(),
                  num_blocks,
                  sb_start,
                  dK_block_base_start,
@@ -181,8 +181,8 @@ MLAKVAssembleBwProgramFactory::cached_program_t MLAKVAssembleBwProgramFactory::c
                 program,
                 kernels.writer,
                 core,
-                {dkv_up_buffer->address(),
-                 dk_pe_buffer->address(),
+                {dkv_up_tensor.address(),
+                 dk_pe_tensor.address(),
                  num_blocks,
                  dkv_up_block_base_start,
                  dk_pe_block_base_start});

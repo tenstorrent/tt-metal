@@ -66,7 +66,7 @@ tt::tt_metal::ProgramDescriptor RecvAsyncH2DDeviceOperation::create_descriptor(
 
     const auto receiver_core_range_set = CoreRangeSet({CoreRange(receiver_core_coord, receiver_core_coord)});
 
-    const auto output_accessor_args = tt::tt_metal::TensorAccessorArgs(*output_buffer);
+    const auto output_accessor_args = tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_tensor());
     auto output_accessor_compile_time_args = output_accessor_args.get_compile_time_args();
 
     // The socket config buffer address is a compile-time arg and part of the program hash

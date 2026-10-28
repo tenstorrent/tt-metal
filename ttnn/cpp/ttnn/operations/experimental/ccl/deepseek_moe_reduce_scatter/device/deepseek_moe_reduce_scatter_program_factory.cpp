@@ -258,10 +258,10 @@ ProgramDescriptor build_program_descriptor(
             intermediate_slice_tensors.at(slice).buffer() != nullptr,
             "deepseek_moe_reduce_scatter intermediate slice {} must have a buffer",
             slice);
-        TensorAccessorArgs(intermediate_slice_tensors.at(slice).buffer()).append_to(writer_ct_args);
+        TensorAccessorArgs(intermediate_slice_tensors.at(slice).mesh_tensor()).append_to(writer_ct_args);
     }
     TT_FATAL(output_tensor.buffer() != nullptr, "deepseek_moe_reduce_scatter output tensor must have a buffer");
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct_args);
 
     std::vector<uint32_t> reduce_ct_args = {
         ring_index,

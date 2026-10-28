@@ -102,33 +102,33 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
         program, all_cores, kWeightedCoeffCbIndex, data_format, bfloat16_tile_size, /*num_tiles=*/3U);
     [[maybe_unused]] auto cb_output =
         create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_tile_size, block_size);
-    auto* input_buffer = input.buffer();
-    auto* weight_buffer = weight.buffer();
-    auto* bias_buffer = bias.buffer();
+    const auto& input_tensor = input.mesh_tensor();
+    const auto& weight_tensor = weight.mesh_tensor();
+    const auto& bias_tensor = bias.mesh_tensor();
     TT_FATAL(
-        input_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        input_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        enchantum::to_string(input_buffer->buffer_type()));
+        enchantum::to_string(input_tensor.memory_config().buffer_type()));
     TT_FATAL(
-        weight_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        weight_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "weight buffer must be in DRAM. weight buffer of type {}",
-        enchantum::to_string(weight_buffer->buffer_type()));
+        enchantum::to_string(weight_tensor.memory_config().buffer_type()));
     TT_FATAL(
-        bias_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        bias_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "bias buffer must be in DRAM. bias buffer of type {}",
-        enchantum::to_string(bias_buffer->buffer_type()));
+        enchantum::to_string(bias_tensor.memory_config().buffer_type()));
 
-    auto* output_buffer = output.buffer();
+    const auto& output_tensor = output.mesh_tensor();
     TT_FATAL(
-        output_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        output_tensor.memory_config().buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
-        enchantum::to_string(output_buffer->buffer_type()));
+        enchantum::to_string(output_tensor.memory_config().buffer_type()));
 
     PolyNorm3ForwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(weight_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weight_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias_tensor).append_to(reader_compile_time_args);
     std::map<std::string, std::string> defines;
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
@@ -136,7 +136,7 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_compile_time_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     std::vector<uint32_t> compute_group_1_args = {num_rows_per_core_group_1, block_size, Wt};
@@ -164,13 +164,13 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
                 program,
                 kernels.reader,
                 core,
-                {input_buffer->address(),
-                 weight_buffer->address(),
-                 bias_buffer->address(),
+                {input_tensor.address(),
+                 weight_tensor.address(),
+                 bias_tensor.address(),
                  num_rows,
                  start_row,
                  scaler_fp32_bits});
-            SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows, start_row});
+            SetRuntimeArgs(program, kernels.writer, core, {output_tensor.address(), num_rows, start_row});
             SetRuntimeArgs(
                 program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {eps_fp32_bits});
         });

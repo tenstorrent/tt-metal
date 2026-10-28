@@ -211,7 +211,7 @@ ProgramDescriptor ConcatTiledUnalignedProgramFactory::create_descriptor(
     {
         KernelDescriptor::CompileTimeArgs ct_args = {cb_in, num_tensors};
         for (const auto& t : input_tensors) {
-            TensorAccessorArgs(*t.buffer()).append_to(ct_args);
+            TensorAccessorArgs(t.mesh_tensor()).append_to(ct_args);
         }
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
@@ -228,7 +228,7 @@ ProgramDescriptor ConcatTiledUnalignedProgramFactory::create_descriptor(
     {
         KernelDescriptor::CompileTimeArgs ct_args = {
             cb_rm, cb_asm, cb_out, num_tensors, g.out_wt, g.total_in_wt, tile_row_bytes, out_row_bytes, tail_bytes};
-        TensorAccessorArgs(*output.buffer()).append_to(ct_args);
+        TensorAccessorArgs(output.mesh_tensor()).append_to(ct_args);
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
             "writer_concat_tiled_unaligned.cpp";

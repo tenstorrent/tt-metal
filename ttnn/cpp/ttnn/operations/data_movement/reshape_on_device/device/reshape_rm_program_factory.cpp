@@ -33,7 +33,9 @@ ProgramDescriptor ReshapeRMProgramFactory::create_descriptor(
 
     auto output_shape = output_tensor.padded_shape();
     Buffer* src0_buffer = input_tensor.buffer();
+    const auto& src0_tensor = input_tensor.mesh_tensor();
     Buffer* dst_buffer = output_tensor.buffer();
+    const auto& dst_tensor = output_tensor.mesh_tensor();
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 
@@ -86,11 +88,11 @@ ProgramDescriptor ReshapeRMProgramFactory::create_descriptor(
 
     // Reader compile-time args
     std::vector<uint32_t> reader_ct_args = {old_stick_size};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(src0_tensor).append_to(reader_ct_args);
 
     // Writer compile-time args
     std::vector<uint32_t> writer_ct_args = {src0_cb_index, new_stick_size};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_ct_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =

@@ -11,6 +11,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace {
 
@@ -405,18 +406,26 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // -------------------------------------------------------------------------
 
     auto* grad_output_buffer = grad_output.buffer();
+    const auto& grad_output_tensor = grad_output.mesh_tensor();
     auto* attn_output_buffer = attn_output.buffer();
+    const auto& attn_output_tensor = attn_output.mesh_tensor();
     auto* query_buffer = query.buffer();
+    const auto& query_tensor = query.mesh_tensor();
     auto* key_buffer = key.buffer();
+    const auto& key_tensor = key.mesh_tensor();
     auto* value_buffer = value.buffer();
+    const auto& value_tensor = value.mesh_tensor();
     auto* attn_mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
     auto* intermediates_buffer = intermediates.buffer();
+    const auto& intermediates_tensor = intermediates.mesh_tensor();
 
     auto* gate_buffer = args.has_gate ? gate.value().buffer() : nullptr;
 
     auto& [grad_query_output, u_scaler_output, grad_gate_output, gated_grad_output_output] = output;
     auto* grad_query_buffer = grad_query_output.buffer();
+    const auto& grad_query_tensor = grad_query_output.mesh_tensor();
     auto* u_scaler_buffer = u_scaler_output.buffer();
+    const auto& u_scaler_tensor = u_scaler_output.mesh_tensor();
     auto* grad_gate_buffer = args.has_gate ? grad_gate_output.value().buffer() : nullptr;
     auto* gated_grad_output_buffer = args.has_gate ? gated_grad_output_output.value().buffer() : nullptr;
 
@@ -468,14 +477,16 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         q_heads,          // 3: number of query heads
         heads_per_group,  // 4: heads per group
     };
-    tt::tt_metal::TensorAccessorArgs(grad_output_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(attn_output_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(value_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(attn_mask_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(reader_compile_args);
-    tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(grad_output_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(attn_output_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(query_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(key_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(value_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(tensor_args.attn_mask))
+        .append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(intermediates_tensor).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(args.has_gate ? &gate.value().mesh_buffer() : nullptr)
+        .append_to(reader_compile_args);
 
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, reader_defines, kReaderKernelPath);
 
@@ -485,10 +496,12 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         St,   // 1: sequence length in tiles
         vWt,  // 2: V/dO width in tiles (grad_gate / gated dO rows)
     };
-    tt::tt_metal::TensorAccessorArgs(grad_query_buffer).append_to(writer_compile_args);
-    tt::tt_metal::TensorAccessorArgs(u_scaler_buffer).append_to(writer_compile_args);
-    tt::tt_metal::TensorAccessorArgs(grad_gate_buffer).append_to(writer_compile_args);
-    tt::tt_metal::TensorAccessorArgs(gated_grad_output_buffer).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(grad_query_tensor).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(u_scaler_tensor).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(args.has_gate ? &grad_gate_output.value().mesh_buffer() : nullptr)
+        .append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(args.has_gate ? &gated_grad_output_output.value().mesh_buffer() : nullptr)
+        .append_to(writer_compile_args);
 
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, writer_defines, kWriterKernelPath);
 

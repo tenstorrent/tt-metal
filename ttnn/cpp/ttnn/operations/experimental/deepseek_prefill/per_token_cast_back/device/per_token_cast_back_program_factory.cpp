@@ -122,9 +122,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const DataFormat fp32_df = DataFormat::Float32;
     const DataFormat output_df = datatype_to_dataformat_converter(operation_attributes.output_dtype);
 
-    auto* src_e4m3_buffer = input_e4m3.buffer();
-    auto* src_scale_buffer = input_scale.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto& src_e4m3_tensor = input_e4m3.mesh_tensor();
+    const auto& src_scale_tensor = input_scale.mesh_tensor();
+    const auto& dst_tensor = output.mesh_tensor();
     auto* region_buffer = token_count_aware ? expert_region_offsets->buffer() : nullptr;
     auto* counts_buffer = token_count_aware ? expert_token_counts->buffer() : nullptr;
     auto* table_buffer = token_count_aware ? global_expert_idx_table->buffer() : nullptr;
@@ -285,12 +285,14 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
              num_routed_experts,
              M});
     }
-    TensorAccessorArgs(src_e4m3_buffer).append_to(reader_ct_args);
-    TensorAccessorArgs(src_scale_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(src_e4m3_tensor).append_to(reader_ct_args);
+    TensorAccessorArgs(src_scale_tensor).append_to(reader_ct_args);
     if (token_count_aware) {
-        TensorAccessorArgs(region_buffer).append_to(reader_ct_args);
-        TensorAccessorArgs(counts_buffer).append_to(reader_ct_args);
-        TensorAccessorArgs(table_buffer).append_to(reader_ct_args);
+        TensorAccessorArgs(token_count_aware ? &expert_region_offsets->mesh_buffer() : nullptr)
+            .append_to(reader_ct_args);
+        TensorAccessorArgs(token_count_aware ? &expert_token_counts->mesh_buffer() : nullptr).append_to(reader_ct_args);
+        TensorAccessorArgs(token_count_aware ? &global_expert_idx_table->mesh_buffer() : nullptr)
+            .append_to(reader_ct_args);
     }
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -317,11 +319,13 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
              num_routed_experts,
              M});
     }
-    TensorAccessorArgs(dst_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_ct_args);
     if (token_count_aware) {
-        TensorAccessorArgs(region_buffer).append_to(writer_ct_args);
-        TensorAccessorArgs(counts_buffer).append_to(writer_ct_args);
-        TensorAccessorArgs(table_buffer).append_to(writer_ct_args);
+        TensorAccessorArgs(token_count_aware ? &expert_region_offsets->mesh_buffer() : nullptr)
+            .append_to(writer_ct_args);
+        TensorAccessorArgs(token_count_aware ? &expert_token_counts->mesh_buffer() : nullptr).append_to(writer_ct_args);
+        TensorAccessorArgs(token_count_aware ? &global_expert_idx_table->mesh_buffer() : nullptr)
+            .append_to(writer_ct_args);
     }
     KernelHandle writer_kernel_id = CreateKernel(
         program,
@@ -378,8 +382,8 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
                 program,
                 reader_kernel_id,
                 core,
-                {src_e4m3_buffer->address(),
-                 src_scale_buffer->address(),
+                {src_e4m3_tensor.address(),
+                 src_scale_tensor.address(),
                  region_buffer->address(),
                  counts_buffer->address(),
                  table_buffer->address(),
@@ -389,7 +393,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
                 program,
                 writer_kernel_id,
                 core,
-                {dst_buffer->address(),
+                {dst_tensor.address(),
                  region_buffer->address(),
                  counts_buffer->address(),
                  table_buffer->address(),
@@ -419,9 +423,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
                 program,
                 reader_kernel_id,
                 core,
-                {src_e4m3_buffer->address(), src_scale_buffer->address(), num_blocks, row_offset, rows_for_core, H});
+                {src_e4m3_tensor.address(), src_scale_tensor.address(), num_blocks, row_offset, rows_for_core, H});
             SetRuntimeArgs(
-                program, writer_kernel_id, core, {dst_buffer->address(), num_blocks, row_offset, rows_for_core, H});
+                program, writer_kernel_id, core, {dst_tensor.address(), num_blocks, row_offset, rows_for_core, H});
             SetRuntimeArgs(program, compute_kernel_id, core, {num_blocks});
             row_offset += rows_for_core;
         }

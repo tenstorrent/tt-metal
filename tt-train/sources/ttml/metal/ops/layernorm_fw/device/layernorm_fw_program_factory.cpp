@@ -263,10 +263,10 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
-    auto* input_buffer = input.buffer();
-    auto* gamma_buffer = gamma.buffer();
-    auto* beta_buffer = beta.buffer();
-    auto* output_buffer = output[0].value().buffer();
+    const auto& input_tensor = input.mesh_tensor();
+    const auto& gamma_tensor = gamma.mesh_tensor();
+    const auto& beta_tensor = beta.mesh_tensor();
+    const auto& output_tensor = output[0].value().mesh_tensor();
     tt::tt_metal::Buffer* mean_buffer = nullptr;
     tt::tt_metal::Buffer* rstd_buffer = nullptr;
     if (return_mean_rstd) {
@@ -287,16 +287,16 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
 
     LayerNormForwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{packed_scaler, packed_eps, block_size, mask_w, Wt};
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(beta_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(beta_tensor).append_to(reader_compile_time_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_compile_time_args);
     if (return_mean_rstd) {
-        tt::tt_metal::TensorAccessorArgs(mean_buffer).append_to(writer_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(rstd_buffer).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output[1].value().mesh_tensor()).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output[2].value().mesh_tensor()).append_to(writer_compile_time_args);
     } else {
         // Add dummy TensorAccessorArgs for mean and rstd (they won't be used)
         auto dummy_buffer = tt::tt_metal::distributed::MeshBuffer::create(
@@ -354,13 +354,13 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
                 program,
                 kernels.reader,
                 core,
-                {input_buffer->address(), gamma_buffer->address(), beta_buffer->address(), start_row, num_rows});
+                {input_tensor.address(), gamma_tensor.address(), beta_tensor.address(), start_row, num_rows});
             // Writer kernel runtime args
             SetRuntimeArgs(
                 program,
                 kernels.writer,
                 core,
-                {output_buffer->address(),
+                {output_tensor.address(),
                  mean_buffer ? mean_buffer->address() : 0,
                  rstd_buffer ? rstd_buffer->address() : 0,
                  start_row,

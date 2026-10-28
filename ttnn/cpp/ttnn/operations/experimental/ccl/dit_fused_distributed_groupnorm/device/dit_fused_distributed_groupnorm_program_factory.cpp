@@ -518,7 +518,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         sender_reader_named_ct.emplace("stats_gathered_cb_id", stats_gathered_cb_id);
     }
     std::vector<uint32_t> sender_reader_ct;
-    TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_ct);
+    TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(sender_reader_ct);
     TensorAccessorArgs(use_mux ? stats_dram_buffer : input_tensor.buffer()).append_to(sender_reader_ct);
 
     KernelHandle sender_reader_kernel_id = CreateKernel(
@@ -531,7 +531,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     KernelHandle receiver_reader_kernel_id = 0;
     if (has_receivers) {
         std::vector<uint32_t> receiver_reader_ct;
-        TensorAccessorArgs(input_tensor.buffer()).append_to(receiver_reader_ct);
+        TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(receiver_reader_ct);
         receiver_reader_kernel_id = CreateKernel(
             program,
             gn_kernel_base + "dataflow/welford_reader_mcast_receiver_unary_gn.cpp",
@@ -569,10 +569,10 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         {"TILE_WIDTH", tile_w},
     };
     std::vector<uint32_t> writer_ct;
-    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct);
-    TensorAccessorArgs(has_gamma ? gamma->buffer() : nullptr).append_to(writer_ct);
-    TensorAccessorArgs(has_beta ? beta->buffer() : nullptr).append_to(writer_ct);
-    TensorAccessorArgs(input_mask->buffer()).append_to(writer_ct);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_ct);
+    TensorAccessorArgs(has_gamma ? &gamma->mesh_buffer() : nullptr).append_to(writer_ct);
+    TensorAccessorArgs(has_beta ? &beta->mesh_buffer() : nullptr).append_to(writer_ct);
+    TensorAccessorArgs(input_mask->mesh_tensor()).append_to(writer_ct);
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
@@ -601,7 +601,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
             arrival_sem_id,
             go_sem_id,
         };
-        TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
+        TensorAccessorArgs(use_mux ? &stats_dram_tensor->mesh_buffer() : nullptr).append_to(fwd_ct);
         // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
         TT_FATAL(
             !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||

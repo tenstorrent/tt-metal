@@ -196,8 +196,11 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     });
 
     auto* combine_buffer = combine_output.buffer();
+    const auto& combine_tensor = combine_output.mesh_tensor();
     auto* weight_buffer = weights.buffer();
+    const auto& weight_tensor = weights.mesh_tensor();
     auto* output_buffer = tensor_return_value.buffer();
+    const auto& output_tensor = tensor_return_value.mesh_tensor();
     auto* indices_buffer = use_dispatch_table_skip ? indices_opt->buffer() : nullptr;
     auto* dispatch_table_buffer = use_dispatch_table_skip ? dispatch_table_opt->buffer() : nullptr;
 
@@ -208,7 +211,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         emb_dim_cb_tiles,
         emb_dim_bytes,
     };
-    tt::tt_metal::TensorAccessorArgs(combine_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(combine_tensor).append_to(reader_compile_time_args);
 
     // Compute compile-time args. The skip-mode toggle is appended last so the
     // DeepSeek-only arg (dispatch_table page count) retains a stable position
@@ -235,8 +238,8 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         indices_page_size_val,
         indices_aligned_page_size,
     };
-    tt::tt_metal::TensorAccessorArgs(weight_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(weight_tensor).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(use_dispatch_table_skip ? dispatch_table_buffer : weight_buffer)
         .append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(use_dispatch_table_skip ? indices_buffer : weight_buffer)

@@ -360,7 +360,7 @@ tt::tt_metal::ProgramDescriptor build_reshape_tiled_program(
     std::vector<uint32_t> reader_compile_time_args = {
         mapping_page_size_bytes, input_tile_size_bytes, mapping_cb_idx, input_cb_idx};
     TensorAccessorArgs(*mapping_buffer).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input_tensor.mesh_tensor()).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -378,7 +378,7 @@ tt::tt_metal::ProgramDescriptor build_reshape_tiled_program(
         mapping_cb_idx,
         input_cb_idx,
         output_cb_idx};
-    TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensor.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =

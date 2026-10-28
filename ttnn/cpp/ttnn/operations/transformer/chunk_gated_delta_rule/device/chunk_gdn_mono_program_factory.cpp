@@ -143,19 +143,19 @@ tt::tt_metal::ProgramDescriptor ChunkGdnMonoProgramFactory::create_descriptor(
 
     // Reader compile args: {Ct,Kt,Vt} + TensorAccessorArgs for each input (in order).
     std::vector<uint32_t> reader_ct = ct_args;
-    TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.v.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.g.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.beta.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.eye_c.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.tril_c.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.ones_c.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.initial_state.buffer()).append_to(reader_ct);
+    TensorAccessorArgs(in.q.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.k.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.v.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.g.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.beta.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.eye_c.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.tril_c.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.ones_c.mesh_tensor()).append_to(reader_ct);
+    TensorAccessorArgs(in.initial_state.mesh_tensor()).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = ct_args;
-    TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
-    TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
+    TensorAccessorArgs(outputs[0].mesh_tensor()).append_to(writer_ct);
+    TensorAccessorArgs(outputs[1].mesh_tensor()).append_to(writer_ct);
 
     KernelDescriptor reader;
     reader.kernel_source = kdir + "dataflow/reader_chunk_gated_delta_rule.cpp";

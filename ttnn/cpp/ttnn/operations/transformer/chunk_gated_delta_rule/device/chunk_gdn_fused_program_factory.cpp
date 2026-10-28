@@ -282,11 +282,11 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const std::vector<uint32_t> ct_prep = {Ct, Kt, Vt};
 
     std::vector<uint32_t> prep_reader_ct = ct_prep;
-    TensorAccessorArgs(*in.q.buffer()).append_to(prep_reader_ct);
-    TensorAccessorArgs(*in.k.buffer()).append_to(prep_reader_ct);
-    TensorAccessorArgs(*in.v.buffer()).append_to(prep_reader_ct);
-    TensorAccessorArgs(*in.g.buffer()).append_to(prep_reader_ct);
-    TensorAccessorArgs(*in.beta.buffer()).append_to(prep_reader_ct);
+    TensorAccessorArgs(in.q.mesh_tensor()).append_to(prep_reader_ct);
+    TensorAccessorArgs(in.k.mesh_tensor()).append_to(prep_reader_ct);
+    TensorAccessorArgs(in.v.mesh_tensor()).append_to(prep_reader_ct);
+    TensorAccessorArgs(in.g.mesh_tensor()).append_to(prep_reader_ct);
+    TensorAccessorArgs(in.beta.mesh_tensor()).append_to(prep_reader_ct);
     // OPT-A: trailing compile args after all TensorAccessorArgs — 1 => read that tensor flat token-major.
     prep_reader_ct.push_back(attrs.v_flat ? 1u : 0u);
     prep_reader_ct.push_back(attrs.qk_flat ? 1u : 0u);
@@ -319,7 +319,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // index 4), then the semaphore ids and the credit-word location as trailing args, and the protocol tag
     // LAST (the kernel static_asserts on it).
     std::vector<uint32_t> receiver_ct = ct_scan;
-    TensorAccessorArgs(*in.initial_state.buffer()).append_to(receiver_ct);
+    TensorAccessorArgs(in.initial_state.mesh_tensor()).append_to(receiver_ct);
     receiver_ct.push_back(sem_ready_id);
     receiver_ct.push_back(sem_valid_id);
     receiver_ct.push_back(sem_init_id);
@@ -329,8 +329,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     receiver_ct.push_back(gdn_handoff::kHandoffTag);
 
     std::vector<uint32_t> scan_writer_ct = ct_scan;
-    TensorAccessorArgs(*outputs[0].buffer()).append_to(scan_writer_ct);
-    TensorAccessorArgs(*outputs[1].buffer()).append_to(scan_writer_ct);
+    TensorAccessorArgs(outputs[0].mesh_tensor()).append_to(scan_writer_ct);
+    TensorAccessorArgs(outputs[1].mesh_tensor()).append_to(scan_writer_ct);
 
     // ---- Kernels. Push order FIXED (part of the program-cache identity):
     // prep_reader, prep_compute, fused_writer, fused_receiver_reader, scan_compute, scan_writer.

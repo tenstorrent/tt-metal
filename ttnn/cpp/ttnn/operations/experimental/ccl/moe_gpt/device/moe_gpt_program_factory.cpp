@@ -227,7 +227,7 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
 
     std::vector<uint32_t> compile_args;
     for (const auto& tensor : tensors) {
-        tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(compile_args);
+        tt::tt_metal::TensorAccessorArgs(tensor->mesh_tensor()).append_to(compile_args);
     }
 
     std::vector<std::pair<std::string, uint32_t>> named_compile_time_args = {
@@ -756,16 +756,17 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
 
         // --- Tilize tensor accessors ---
         std::vector<uint32_t> tilize_compile_time_args;
-        tt::tt_metal::TensorAccessorArgs(sparse_buffer.buffer()).append_to(tilize_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(expert_indices.buffer()).append_to(tilize_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(expert_scores.buffer()).append_to(tilize_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(expert_mapping.buffer()).append_to(tilize_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(sparse_buffer.mesh_tensor()).append_to(tilize_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(expert_indices.mesh_tensor()).append_to(tilize_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(expert_scores.mesh_tensor()).append_to(tilize_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(expert_mapping.mesh_tensor()).append_to(tilize_compile_time_args);
         // Metadata output tensor accessors (outputs 0, 1, 2 written by drain tilize core)
-        tt::tt_metal::TensorAccessorArgs(tensor_return_value[0].buffer())
+        tt::tt_metal::TensorAccessorArgs(tensor_return_value[0].mesh_tensor())
             .append_to(tilize_compile_time_args);  // per_expert_total_tokens
-        tt::tt_metal::TensorAccessorArgs(tensor_return_value[1].buffer())
+        tt::tt_metal::TensorAccessorArgs(tensor_return_value[1].mesh_tensor())
             .append_to(tilize_compile_time_args);  // expert_activation
-        tt::tt_metal::TensorAccessorArgs(tensor_return_value[2].buffer()).append_to(tilize_compile_time_args);  // e_t
+        tt::tt_metal::TensorAccessorArgs(tensor_return_value[2].mesh_tensor())
+            .append_to(tilize_compile_time_args);  // e_t
 
         // --- Named compile-time args ---
         std::vector<std::pair<std::string, uint32_t>> tilize_named_compile_time_args = {

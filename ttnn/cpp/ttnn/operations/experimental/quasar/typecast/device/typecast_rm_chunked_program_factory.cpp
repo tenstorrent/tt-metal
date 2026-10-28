@@ -83,7 +83,9 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
     const auto* device = input.device();
 
     Buffer* src_buffer = input.buffer();
+    const auto& src_tensor = input.mesh_tensor();
     Buffer* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
 
     // Get row information
     const auto& padded_shape = input.padded_shape();
@@ -152,7 +154,7 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
         input_full_chunk_size_bytes,     // 3: full_chunk_size_bytes (DRAM read size)
         input_partial_chunk_size_bytes,  // 4: partial_chunk_size_bytes (DRAM read size)
     };
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         output_cb_index,                  // 0: cb_id_out
@@ -161,7 +163,7 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
         output_full_chunk_size_bytes,     // 3: full_chunk_size_bytes (DRAM write size)
         output_partial_chunk_size_bytes,  // 4: partial_chunk_size_bytes (DRAM write size)
     };
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelDescriptor reader_desc;
     reader_desc.kernel_source =

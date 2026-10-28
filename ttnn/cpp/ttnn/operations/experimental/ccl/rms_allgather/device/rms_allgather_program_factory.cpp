@@ -33,6 +33,7 @@
 #include <variant>
 #include <vector>
 #include <bit>
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
@@ -687,7 +688,7 @@ ProgramDescriptor build_rms_allgather_program_descriptor(
     writer_compile_time_args.push_back(signaling_cb);
     writer_compile_time_args.push_back(num_blocks);
     writer_compile_time_args.push_back(num_mcast_dests);
-    tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(ttnn::as_optional_mesh_tensor(gamma)).append_to(writer_compile_time_args);
 
     tt::tt_metal::NOC reader_noc = NOC::NOC_1;
     tt::tt_metal::NOC writer_noc = NOC::NOC_1;
