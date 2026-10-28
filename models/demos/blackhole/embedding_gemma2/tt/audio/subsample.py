@@ -172,12 +172,14 @@ class AudioSubsample(LightweightModule):
             compute_kernel_config=self.norm_kernel_config,
         )
         ttnn.deallocate(out)
+        if i == 0:
+            # relu as the SFPU pre-activation of the layer-1 input mask multiply
+            relu = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+            m = ttnn.multiply(ln, x.mask1, input_tensor_a_activations=[relu], memory_config=dram)
+            ttnn.deallocate(ln)
+            return m
         r = ttnn.relu(ln, memory_config=dram)
         ttnn.deallocate(ln)
-        if i == 0:
-            m = ttnn.multiply(r, x.mask1, memory_config=dram)
-            ttnn.deallocate(r)
-            return m
         return r
 
     # ------------------------------------------------------------------ forward
