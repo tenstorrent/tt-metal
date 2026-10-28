@@ -27,6 +27,11 @@ void kernel_main() {
     constexpr auto ring_size = get_arg(args::ring_size);
     constexpr auto k_tiles = get_arg(args::k_tiles);  // the activation's unpadded K
 
+    // A core that only fills out the ring's rectangle: it holds no shard and takes no part.
+    if (get_arg(args::is_worker) == 0) {
+        return;
+    }
+
     // This core holds activation shard ring_idx.
     const uint32_t ring_idx = get_arg(args::ring_idx);
 

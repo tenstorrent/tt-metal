@@ -24,6 +24,11 @@ void kernel_main() {
     constexpr bool in1_in_ring_order = get_arg(args::in1_in_ring_order);
     // In K order: the K-blocks of the pipe's ring past the layer.
     constexpr auto rest_of_ring_blocks = get_arg(args::rest_of_ring_blocks);
+
+    // A core that only fills out the ring's rectangle: no pipe reaches it, so it must not construct one.
+    if (get_arg(args::is_worker) == 0) {
+        return;
+    }
     // This worker's position in the gather ring.
     const uint32_t ring_idx = get_arg(args::ring_idx);
 
