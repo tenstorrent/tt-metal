@@ -62,8 +62,8 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<ui
 }
 
 // input_cores lists the cores of the input tensor's shard grid in shard order, so input_cores[k] is the
-// logical coordinate of the core holding input shard k. Every NOC coordinate written into an argument
-// list is converted from an input_cores entry. num_padded_sticks is how many rows the input holds.
+// logical coordinate of the core holding input shard k. Every bank id written into an argument list is
+// looked up from an input_cores entry. num_padded_sticks is how many rows the input holds.
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_slice_runtime_args_rm_sharded(
     const Tensor& input_tensor,
     Tensor& output_tensor,
@@ -74,6 +74,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t shard_height_padded,
     uint32_t num_padded_sticks) {
     tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
+    const auto input_buffer_type = input_tensor.buffer()->buffer_type();
 
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
@@ -180,13 +181,13 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         // reader rt args
         std::vector<uint32_t> reader_kernel_args;
-        reader_kernel_args.reserve(1 + 3 * shard_stick_map.size() + 2 * num_sticks_per_core_unpadded);
+        reader_kernel_args.reserve(1 + 2 * shard_stick_map.size() + 2 * num_sticks_per_core_unpadded);
         reader_kernel_args.push_back(shard_stick_map.size());  // num_cores
 
         for (const auto& shard_stick_pair : shard_stick_map) {
-            auto core_physical = device->worker_core_from_logical_core(input_cores[shard_stick_pair.first]);
-            reader_kernel_args.push_back(core_physical.x);  // noc x
-            reader_kernel_args.push_back(core_physical.y);  // noc y
+            const uint32_t bank_id = device->allocator()->get_bank_ids_from_logical_core(
+                input_buffer_type, input_cores[shard_stick_pair.first])[0];
+            reader_kernel_args.push_back(bank_id);
         }
 
         // coalesce the sticks into chunks
@@ -270,7 +271,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
 
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
-    // The reader reaches both shards through LocalTensorAccessor, which needs a tensor in SRAM.
+    // The reader addresses the input shards by SRAM bank and reaches its output shard through
+    // LocalTensorAccessor, so both tensors must be in SRAM.
     TT_FATAL(
         input.buffer()->is_l1() && output.buffer()->is_l1(),
         "SliceRmShardedProgramFactory: input and output must both be in SRAM (BufferType::L1 or L1_SMALL), but "
