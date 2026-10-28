@@ -109,6 +109,7 @@ _SQLITE_TABLES_WITH_RANK = (
     "buffer_chunks",
     "local_tensor_comparison_records",
     "global_tensor_comparison_records",
+    "rank_metadata",
 )
 
 
@@ -489,6 +490,42 @@ class TestImportReportMultiFileOperationIds:
         stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
         cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
         assert cursor.fetchall() == [(1, 0), (stride + 1, 0), (1, 1)]
+
+
+class TestImportReportRankMetadata:
+    """Every rank's capture metadata lands in rank_metadata; report_metadata holds the lowest rank's."""
+
+    @staticmethod
+    def _import_two_ranks(tmp_path):
+        """Rank 1's file sorts last, so a last-file-wins report_metadata would show rank 1."""
+        report_dir = tmp_path / "reports_in"
+        report_dir.mkdir()
+        graph = TestImportReportMultiFileOperationIds._minimal_single_op_graph()
+        for filename, rank, timestamp in (("a.json", 0, 1000), ("b.json", 1, 2000)):
+            report = _make_report(graph, metadata={"rank": rank, "world_size": 2, "capture_timestamp_ns": timestamp})
+            with open(report_dir / filename, "w") as f:
+                json.dump(report, f)
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        return sqlite3.connect(db_path)
+
+    def test_rank_metadata_holds_every_rank(self, tmp_path):
+        conn = self._import_two_ranks(tmp_path)
+        try:
+            rows = conn.execute(
+                "SELECT rank, value FROM rank_metadata WHERE key = 'capture_timestamp_ns' ORDER BY rank"
+            ).fetchall()
+            assert rows == [(0, "1000"), (1, "2000")]
+        finally:
+            conn.close()
+
+    def test_report_metadata_holds_the_lowest_rank(self, tmp_path):
+        conn = self._import_two_ranks(tmp_path)
+        try:
+            metadata = dict(conn.execute("SELECT key, value FROM report_metadata").fetchall())
+            assert (metadata["rank"], metadata["capture_timestamp_ns"]) == ("0", "1000")
+            assert metadata["schema_version"] == graph_report.DATABASE_SCHEMA_VERSION
+        finally:
+            conn.close()
 
 
 @pytest.fixture
