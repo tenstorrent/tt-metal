@@ -253,9 +253,11 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",), reduce_dty
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
         axis_names: Tuple of mesh axis names to reduce over.
-        reduce_dtype: The dtype the gradients are summed in. ``None`` or ``ttnn.DataType.BFLOAT16`` sums in each
-            gradient's own dtype, as before. ``ttnn.DataType.FLOAT32`` sums in fp32 and casts the mean back to the
-            gradient's dtype (``ttml.core.distributed.synchronize_tensor``), which keeps the low bits a bf16 sum loses.
+        reduce_dtype: The dtype the gradients are summed in. ``ttnn.DataType.BFLOAT16`` sums in each gradient's own
+            dtype, as before. ``ttnn.DataType.FLOAT32`` sums in fp32 and casts the mean back to the gradient's dtype
+            (``ttml.core.distributed.synchronize_tensor``), which keeps the low bits a bf16 sum loses. ``None`` takes
+            the training config's ``precision.reduce_dtype``, which ``create_optimizer`` stores
+            (``AutoContext.get_gradient_reduce_dtype``); with no default set, it sums as before.
     """
     if reduce_dtype not in (None, ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32):
         raise ValueError(f"reduce_dtype must be None, BFLOAT16 or FLOAT32, got {reduce_dtype}")
@@ -266,6 +268,8 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",), reduce_dty
     axes = tuple(m.axis_index(name) for name in axis_names if m.has_axis(name))
     if not axes:
         return
+    if reduce_dtype is None:
+        reduce_dtype = ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype()
 
     for _, param in parameters.items():
         if not param.is_grad_initialized():

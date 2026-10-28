@@ -28,8 +28,10 @@ ttnn::Tensor synchronize_tensor(
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis);
 
 // Averages every parameter's gradient along the mesh axes the parallelism context reduces (context parallel, then
-// data parallel), skipping for each parameter any axis it is sharded on (see is_sharded_on_axis). A no-op when no
-// parallelism context is initialized.
+// data parallel), skipping for each parameter any axis it is sharded on (see is_sharded_on_axis), summing in
+// `reduce_dtype` as synchronize_tensor does. Unset takes the training config's precision.reduce_dtype
+// (autograd::AutoContext::get_gradient_reduce_dtype); a value passed here wins over it. A no-op when no parallelism
+// context is initialized.
 void synchronize_gradients(
     const serialization::NamedParameters& parameters, std::optional<ttnn::DataType> reduce_dtype = std::nullopt);
 // The same along `cluster_axes`: a parameter sharded on one of them is not averaged along it.

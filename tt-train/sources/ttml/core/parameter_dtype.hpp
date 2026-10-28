@@ -26,11 +26,18 @@ namespace ttml::core {
 //   they put bf16 tensors back.
 void store_trainable_parameters_as(const serialization::NamedParameters& parameters, ttnn::DataType dtype);
 
-// Applies training_config.precision to the parameters: stores them in precision.master_dtype ("bfloat16" or
-// "float32") with store_trainable_parameters_as(), whose contract applies. The block must be a map of known keys, and
-// any other key or name is a TT_FATAL. Unset, or set to null, leaves the parameters in the dtype the model builds them
-// in. Returns the dtype it applied, if any.
+// Applies training_config.precision. precision.master_dtype ("bfloat16" or "float32") stores the parameters in that
+// dtype with store_trainable_parameters_as(), whose contract applies; unset, or set to null, leaves them in the dtype
+// the model builds them in. precision.reduce_dtype (same names) becomes the dtype the gradient syncs sum in when a call
+// passes none (autograd::AutoContext::set_gradient_reduce_dtype); unset or null leaves that default as it is. The block
+// must be a map of known keys, and any other key or name is a TT_FATAL; both are read before anything changes. Returns
+// the master dtype it applied, if any.
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters);
+
+// The dtype training_config.precision.reduce_dtype names ("bfloat16" or "float32"; any other name, or an unknown key in
+// the block, is a TT_FATAL), or nullopt when it is unset or null. FSDP takes it as an argument of fully_shard(), which
+// runs before the optimizer is created, so train.py reads it with this function too.
+std::optional<ttnn::DataType> reduce_dtype_from_config(const YAML::Node& training_config);
 
 }  // namespace ttml::core
