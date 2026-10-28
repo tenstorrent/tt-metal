@@ -56,6 +56,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.attention import TOPK_ALIGN, TtV41Atten
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import fabric_num_links
 from models.demos.deepseek_v3_d_p.tt.v41.decode import DECODE_ROUTING, DECODE_TAIL, MOE_ROWS, ROWS, SHARED_IN_FFN
 from models.demos.deepseek_v3_d_p.tt.v41.decode import SHARED_IN_FFN_DTYPE
+from models.demos.deepseek_v3_d_p.tt.v41 import dspark_blocks
 from models.demos.deepseek_v3_d_p.tt.v41.dspark import TtV41DSpark
 from models.demos.deepseek_v3_d_p.tt.v41.dspark_weights import (
     DSPARK_BLOCK_SIZE,
@@ -132,9 +133,14 @@ class TtDSparkStage:
         cache_dir: Path,
         routed_expert_weights_dtype,
         ring_slots: int = RING,
+        users: int = 1,
     ):
+        """``users``: rings per chip (one a slot of the rank: user ``u``'s at rows
+        ``u ring_slots ..``); the block tile follows the rings (``block_base``)."""
         self.mesh_device, self.config, self.stage = mesh_device, config, stage
-        self.ring_slots, self.kv_rows = ring_slots, ring_slots + ROWS
+        self.ring_slots, self.users = ring_slots, users
+        self.block_base = users * ring_slots
+        self.kv_rows = self.block_base + ROWS
         self.layer = dspark_layer_id(stage, config)
         self.sp, self.tp = tuple(mesh_device.shape)
         self.attn = TtV41Attention(mesh_device, config, self.layer, weights["attn"])
@@ -206,7 +212,7 @@ class TtDSparkStage:
         kv = attn._rope(kv, cos, sin)
         rows = ttnn.to_layout(fp8_qdq(kv), ttnn.ROW_MAJOR_LAYOUT)
         ttnn.experimental.slice_write(
-            rows, self.kv, [0, 0, self.ring_slots, 0], [1, 1, self.kv_rows, rows.shape[3]], [1, 1, 1, 1]
+            rows, self.kv, [0, 0, self.block_base, 0], [1, 1, self.kv_rows, rows.shape[3]], [1, 1, 1, 1]
         )
         ttnn.deallocate(rows)
         q = attn.ccl.tp_all_gather(q, dim=3)  # all heads, in head order
@@ -243,6 +249,7 @@ class TtDSparkDrafter:
         trace: bool = False,
         warmup: int = 2,
         ring_slots: int = RING,
+        users: int = 1,
     ):
         """``ckpt``: the ``V41Checkpoint`` the ``mtp.*`` tensors are read from; ``embedding``: the backbone's device
         embedding (tied); ``head_weight``: the tied ``head.weight`` (the head is built here with the last stage's
@@ -250,17 +257,24 @@ class TtDSparkDrafter:
         stage's norm (no second copy of the 330 MB a chip); ``cache_root``: ``TT_V41_WEIGHT_CACHE`` (the drafter's
         directory is ``dspark_cache_dir`` under it); ``stages``: how many stages to build (tests; default all).
         ``trace``: ``run`` captures the draft call after ``warmup`` eager calls and replays it. ``ring_slots``: the
-        stages' ring slots (128: the reference's ``p % 128``; more: position-based, the module docstring)."""
+        stages' ring slots (128: the reference's ``p % 128``; more: position-based, the module docstring).
+        ``users``: rings a chip, one per slot of the rank (the standalone call then proposes
+        for up to ``users`` slots at once, ``run_blocks``; ``tt/v41/dspark_blocks.py`` has the row layout)."""
         self.mesh_device, self.config = mesh_device, config
         self.sp, self.tp = tuple(mesh_device.shape)
         assert ring_slots >= RING and ring_slots % 32 == 0, ring_slots
-        self.ring_slots = ring_slots
+        assert 1 <= users <= ROWS // DSPARK_BLOCK_SIZE, users
+        self.ring_slots, self.users = ring_slots, users
+        self.block_base = users * ring_slots
         self._consts: dict = {}  # the fused call's constants by key
         self.embedding = embedding
         self.trace, self.warmup = trace, warmup
         self.buffers: dict = {}
-        self.capture = None
-        self.eager_count = 0
+        self.captures: dict[int, tuple] = {}  # the standalone call's capture per block count
+        self.eager_counts: dict[int, int] = {}
+        self.blocks = 1  # the staged standalone call's block count
+        self.out = None  # the last call's output tensor (``read_ranks``)
+        self._eager_out = None
         self.last: dict = {}
         self.cache_dir = dspark_cache_dir(
             cache_root,
@@ -282,7 +296,9 @@ class TtDSparkDrafter:
             self.build_s[f"load{k}"] = round(time.time() - t0, 1)
             t0 = time.time()
             self.stages.append(
-                TtDSparkStage(mesh_device, config, k, weights, self.cache_dir, routed_expert_weights_dtype, ring_slots)
+                TtDSparkStage(
+                    mesh_device, config, k, weights, self.cache_dir, routed_expert_weights_dtype, ring_slots, users
+                )
             )
             complete_layer(self.cache_dir, layer)
             if k == config.NUM_DSPARK_LAYERS - 1:
@@ -305,6 +321,10 @@ class TtDSparkDrafter:
         pre = torch.zeros(1, 1, ROWS, config.HC_MULT)
         pre[..., 0] = 1.0
         self.pre_mix = self._replicated(pre, ttnn.float32)
+        if self.markov is not None:  # the standalone call's Markov masks for every block count, before any capture
+            for blocks in range(1, users + 1):
+                for i in range(DSPARK_BLOCK_SIZE):
+                    self._block_mask(i, blocks)
 
     def _markov_device_tables(self, markov: dict) -> None:
         """The Markov tables on device (``V41_DSPARK_MARKOV=device``): ``embed`` ``[vocab, 256]`` bf16 row-major
@@ -431,14 +451,29 @@ class TtDSparkDrafter:
         """The draft call's host tensors at ``position`` = the reference's ``start_pos`` ``p``: the tap is position
         ``p``'s (its ``main_kv`` goes to ring slot ``p % 128``), ``token`` is the target's output at ``p`` (``x[p + 1]``,
         the block's first row at position ``p + 1``), the other rows noise at ``p + 2 ..``."""
-        p, cfg = position, self.config
-        ids = torch.full((1, 1, ROWS), DSPARK_NOISE_TOKEN_ID, dtype=torch.int32)
-        ids[0, 0, 0] = token
-        inputs = {"token": self._replicated(ids, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device=False)}
         # no tap: the first call after a prefill (whose seeding wrote the slot; no ring write), or (``write``) a
         # device tap copied over the host one by ``stage``
         if write is None:
             write = main_hidden is not None
+        entry = {"user": 0, "token": token, "position": position, "taps": [(tap_row, position)] if write else []}
+        return self.host_inputs_blocks([[entry]] * self.sp, main_hidden)
+
+    def host_inputs_blocks(self, entries_by_rank: list[list[dict]], main_hidden: torch.Tensor | None = None) -> dict:
+        """The draft call's host tensors for up to ``users`` blocks a rank (``tt/v41/dspark_blocks.py``: an entry
+        is a slot's ``user``, ``token``, ``position`` ``p`` and the ``taps`` to write, ``(tap row, position)``),
+        one list per rank (``sp`` of them; a rank's slice sharded to its chips): row ``5 a`` of the tile is block
+        ``a``'s first token at ``p + 1``, rows ``5 a + i`` carry its slot's tap writes. ``main_hidden``: a host tap
+        on every row (the single-block tests; the served and harness calls select the verify step's tap tile
+        through ``sel``, ``stage(tap32=)``). Sets ``blocks`` (the count every rank must share)."""
+        cfg, sp = self.config, self.sp
+        assert len(entries_by_rank) == sp, (len(entries_by_rank), sp)
+        blocks = {len(entries) for entries in entries_by_rank}
+        assert len(blocks) == 1, f"one block count on every rank: {blocks}"
+        (self.blocks,) = blocks
+        assert 1 <= self.blocks <= self.users, (self.blocks, self.users)
+        t = dspark_blocks.mesh_inputs(entries_by_rank, self.ring_slots, self.users)
+        rm = ttnn.ROW_MAJOR_LAYOUT
+        inputs = {"token": self._per_rank(t["ids"].view(sp, 1, ROWS), ttnn.uint32, rm)}
         if main_hidden is None:
             main_hidden = torch.zeros(len(cfg.DSPARK_TARGET_LAYER_IDS) * cfg.EMB_SIZE)
         inputs["tap"] = ttnn.from_torch(
@@ -448,32 +483,30 @@ class TtDSparkDrafter:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, tuple(self.mesh_device.shape), dims=(None, 3)),
         )
         # the row selector of a device tap tile (``stage(..., tap32=)``: the target step's taps of every tile row):
-        # ``sel @ tap32`` puts row ``tap_row`` on every row (one nonzero term a row: exact); without a device tile
-        # the host tap is used (use_tap32 0)
-        sel = torch.zeros(1, 1, ROWS, ROWS)
-        sel[0, 0, :, tap_row] = 1.0
-        inputs["sel"] = self._replicated(sel, ttnn.bfloat16, device=False)
+        # ``sel @ tap32`` puts the selected tap row on each writing row (one nonzero term a row: exact); without
+        # a device tile the host tap is used (use_tap32 0)
+        inputs["sel"] = self._per_rank(t["sel"].view(sp, 1, ROWS, ROWS), ttnn.bfloat16, ttnn.TILE_LAYOUT)
         inputs["use_tap32"] = self._replicated(torch.full((1, 1, 1, 1), 0.0), ttnn.bfloat16, device=False)
-        main = cos_sin(cfg, False, torch.full((ROWS,), p, dtype=torch.int64))
-        inputs["rope_main"] = tuple(self._replicated(t, ttnn.float32, device=False) for t in main)
-        block = cos_sin(cfg, False, torch.arange(p + 1, p + 1 + ROWS))
-        inputs["rope_block"] = tuple(self._replicated(t, ttnn.bfloat16, device=False) for t in block)
-        ring_idx = torch.full((1, 1, 1, ROWS), SENTINEL, dtype=torch.int64)
-        if write:
-            ring_idx[..., 0] = p % self.ring_slots
-        inputs["ring_idx"] = self._replicated(
-            ring_idx.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device=False
+        main = cos_sin(cfg, False, t["main_pos"].flatten())
+        inputs["rope_main"] = tuple(
+            self._per_rank(r.view(sp, 1, ROWS, -1), ttnn.float32, ttnn.TILE_LAYOUT) for r in main
         )
-        valid = min(RING, p + 1)  # the reference's get_dspark_topk_idxs: the written ring slots, then the block
-        rows = [SENTINEL] * INDEX_WIDTH
-        if self.ring_slots == RING:
-            rows[:valid] = range(valid)
-        else:  # position-based slots: the positions p - valid + 1 .. p
-            rows[:valid] = [q % self.ring_slots for q in range(p - valid + 1, p + 1)]
-        rows[valid : valid + DSPARK_BLOCK_SIZE] = range(self.ring_slots, self.ring_slots + DSPARK_BLOCK_SIZE)
-        index = torch.tensor(rows, dtype=torch.int64).view(1, 1, 1, -1).expand(1, 1, ROWS, -1).contiguous()
-        inputs["index_rows"] = self._replicated(index.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device=False)
+        block = cos_sin(cfg, False, t["block_pos"].flatten())
+        inputs["rope_block"] = tuple(
+            self._per_rank(r.view(sp, 1, ROWS, -1), ttnn.bfloat16, ttnn.TILE_LAYOUT) for r in block
+        )
+        inputs["ring_idx"] = self._per_rank(t["ring_idx"].view(sp, 1, 1, ROWS), ttnn.uint32, rm)
+        inputs["index_rows"] = self._per_rank(t["index"].view(sp, 1, ROWS, INDEX_WIDTH), ttnn.uint32, rm)
         return inputs
+
+    def _per_rank(self, host: torch.Tensor, dtype, layout):
+        """``host`` ``[sp, ...]`` -> each mesh row its slice, replicated over its TP chips (a host tensor)."""
+        return ttnn.from_torch(
+            host.contiguous(),
+            dtype=dtype,
+            layout=layout,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, None)),
+        )
 
     def tap_rows_from_streams(self, streams: list, row: int):
         """The device tap of tile row ``row`` from the target's block input streams of the tap layers (``streams``:
@@ -514,22 +547,33 @@ class TtDSparkDrafter:
             ttnn.copy(tap32, self.buffers["tap32"])
 
     def _graph(self):
-        """The draft call's graph on the buffers -> the device tensor read after it: the five drafts
-        (``DSPARK_MARKOV=device``) or the five logits rows (host loop)."""
+        """The draft call's graph on the buffers -> the device tensor read after it: the blocks' drafts
+        (``DSPARK_MARKOV=device``) or the five logits rows (host loop, one block)."""
         if DSPARK_MARKOV == "device":
-            ids, logits, _ = self.draft_ids(self.buffers)
+            ids, logits, _ = self.draft_ids(self.buffers, blocks=self.blocks)
             ttnn.deallocate(logits)
             return ids
+        assert self.blocks == 1, "the host Markov loop takes one block"
         logits, _ = self.draft(self.buffers)
         return self.head.scored_rows(logits, 0, DSPARK_BLOCK_SIZE)
 
-    def _read(self, out, token: int) -> list[int]:
-        """The graph's output tensor -> the five drafts (the host loop on the logits rows in host mode)."""
+    def _read(self, out, tokens: list[int]) -> list[list[int]]:
+        """The graph's output tensor -> every block's five drafts (the host loop on the logits rows in host
+        mode); ``tokens``: the blocks' first tokens (the host loop's ``out[0]``). The rank-0 chip's row: the
+        harness's lockstep slots; the served round reads every rank (``read_ranks``)."""
         if DSPARK_MARKOV == "device":
-            return [int(v) for v in ttnn.to_torch(ttnn.get_device_tensors(out)[0]).flatten()[:DSPARK_BLOCK_SIZE]]
+            return dspark_blocks.read_drafts(ttnn.to_torch(ttnn.get_device_tensors(out)[0]), self.blocks)
         rows = self.head._tile_to_host(out, 0)
-        ids, _ = self.markov_loop(token, rows)
-        return ids[1:].tolist()
+        ids, _ = self.markov_loop(tokens[0], rows)
+        return [ids[1:].tolist()]
+
+    def read_ranks(self, out) -> list[list[list[int]]]:
+        """Every rank's blocks' drafts from the call's output (``run_blocks``'s ``out``): rank ``r`` -> block ``a``
+        -> its five drafts (the TP chips of a rank hold the same row; the first is read)."""
+        assert DSPARK_MARKOV == "device"
+        chips = ttnn.get_device_tensors(out)
+        assert len(chips) == self.sp * self.tp, len(chips)
+        return [dspark_blocks.read_drafts(ttnn.to_torch(chips[r * self.tp]), self.blocks) for r in range(self.sp)]
 
     def _capture(self):
         controller = SubDeviceTraceController(self.mesh_device)
@@ -546,57 +590,95 @@ class TtDSparkDrafter:
         return controller, out
 
     def run(self, token: int) -> list[int]:
-        """One draft call on the staged buffers -> the five drafts (``token`` the block's first token, for the
-        host loop): eager, or (``trace``) captured after ``warmup`` eager calls and replayed. ``last`` keeps the
-        mode and times (``device_s``: the call to a synchronize; ``read_s``: the readback and any host loop)."""
+        """One draft call on the staged buffers (one block) -> the five drafts (``token`` the block's first
+        token, for the host loop): eager, or (``trace``) captured after ``warmup`` eager calls and replayed.
+        ``last`` keeps the mode and times (``device_s``: the call to a synchronize; ``read_s``: the readback and
+        any host loop)."""
+        return self.run_blocks([token])[0]
+
+    def run_blocks(self, tokens: list[int], read: bool = True) -> list[list[int]]:
+        """One draft call on the staged buffers (``host_inputs_blocks``: ``blocks`` blocks a rank) -> rank 0's
+        blocks' drafts, five each (``tokens``: the blocks' first tokens, for the host loop). The capture is per
+        block count. ``read=False``: no readback; ``out`` is the call's output tensor (``read_ranks``)."""
+        assert len(tokens) == self.blocks, (len(tokens), self.blocks)
+        blocks = self.blocks
+        if self._eager_out is not None:  # the previous eager call's output, read by now
+            ttnn.deallocate(self._eager_out)
+            self._eager_out = None
         t0 = time.time()
         if not self.trace:
             mode = "eager"
-        elif self.capture is not None:
+        elif blocks in self.captures:
             mode = "replay"
-        elif self.eager_count >= self.warmup:
+        elif self.eager_counts.get(blocks, 0) >= self.warmup:
             mode = "capture"
         else:
             mode = "eager"
         if mode == "eager":
-            self.eager_count += 1
+            self.eager_counts[blocks] = self.eager_counts.get(blocks, 0) + 1
             out = self._graph()
             ttnn.synchronize_device(self.mesh_device)
             t1 = time.time()
-            drafts = self._read(out, token)
-            ttnn.deallocate(out)
+            drafts = self._read(out, tokens) if read else None
+            self.out = self._eager_out = out
         else:
             if mode == "capture":
-                self.capture = self._capture()
-            controller, out = self.capture
+                self.captures[blocks] = self._capture()
+            controller, out = self.captures[blocks]
             ttnn.synchronize_device(self.mesh_device)
             t0 = time.time()
             controller.replay(blocking=False)
             ttnn.synchronize_device(self.mesh_device)
             t1 = time.time()
-            drafts = self._read(out, token)
-        self.last = {"mode": mode, "device_s": round(t1 - t0, 4), "read_s": round(time.time() - t1, 4)}
+            drafts = self._read(out, tokens) if read else None
+            self.out = out
+        self.last = {
+            "mode": mode,
+            "blocks": blocks,
+            "device_s": round(t1 - t0, 4),
+            "read_s": round(time.time() - t1, 4),
+        }
         return drafts
 
-    def release(self) -> None:
-        if self.capture is not None:
-            self.capture[0].release()
-            self.capture = None
+    @property
+    def capture(self):
+        """The one-block call's capture (the tests' and the harness's ``capture is not None``)."""
+        return self.captures.get(1)
 
-    def load_rings_from_device(self, rings: list, start: int | None = None) -> None:
-        """Rows [0, 128) of every stage's KV buffer from device rings ``[1, 1, 128, head_dim]`` bf16 row-major
-        (a prefill state's ``dspark_rings``: slot ``q % 128`` holds position ``q`` of the last 128 before
-        ``start``); with position-based rings (``ring_slots > 128``) each row goes to slot ``q % ring_slots``
-        (``start`` required)."""
-        if self.ring_slots == RING:
+    def release(self) -> None:
+        for controller, _ in self.captures.values():
+            controller.release()
+        self.captures = {}
+
+    def load_rings_from_device(
+        self, rings: list, start: int | None = None, user: int = 0, rank: int | None = None
+    ) -> None:
+        """User ``user``'s ring rows (``[u ring_slots, u ring_slots + 128)`` of every stage's KV buffer) from
+        device rings ``[1, 1, 128, head_dim]`` bf16 row-major (a prefill state's ``dspark_rings``: slot
+        ``q % 128`` holds position ``q`` of the last 128 before ``start``); with position-based rings
+        (``ring_slots > 128``) each row goes to the user's slot ``q % ring_slots`` (``start`` required). On every
+        rank (the rings are replicated), or (``rank``) on that mesh row alone: the served join of one slot, whose
+        user index the other rows' slots share."""
+        assert 0 <= user < self.users, (user, self.users)
+        base = user * self.ring_slots
+        if self.ring_slots == RING and rank is None:
             for stage, ring in zip(self.stages, rings):
-                ttnn.experimental.slice_write(ring, stage.kv, [0, 0, 0, 0], [1, 1, RING, ring.shape[3]], [1, 1, 1, 1])
+                ttnn.experimental.slice_write(
+                    ring, stage.kv, [0, 0, base, 0], [1, 1, base + RING, ring.shape[3]], [1, 1, 1, 1]
+                )
             return
         assert start is not None and start >= RING, start
-        idx = torch.zeros(1, 1, 1, RING, dtype=torch.int32)
-        for q in range(start - RING, start):
-            idx[0, 0, 0, q % RING] = q % self.ring_slots
-        idx = self._replicated(idx, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        idx = torch.full((self.sp, 1, 1, RING), SENTINEL, dtype=torch.int64)
+        for r in range(self.sp) if rank is None else [rank]:
+            for q in range(start - RING, start):
+                idx[r, 0, 0, q % RING] = base + q % self.ring_slots
+        idx = ttnn.from_torch(
+            idx.to(torch.int32),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, None)),
+        )
         for stage, ring in zip(self.stages, rings):
             scatter_rows(ring, stage.kv, idx, rows=RING)
         ttnn.deallocate(idx)
@@ -621,7 +703,7 @@ class TtDSparkDrafter:
             picked = ttnn.matmul(inputs["sel"], inputs["tap32"], compute_kernel_config=s.compute_kernel_config)
             use = inputs["use_tap32"]
             tap = ttnn.add(ttnn.multiply(picked, use), ttnn.multiply(tap, ttnn.rsub(use, 1.0)))
-        return self._write_main_kv(tap, inputs["rope_main"], inputs["ring_idx"], 1)
+        return self._write_main_kv(tap, inputs["rope_main"], inputs["ring_idx"], ROWS)
 
     def _write_main_kv(self, tap, rope_main: tuple, ring_idx, rows: int):
         """``tap`` [1, 1, ROWS, n_taps * hidden/tp] bf16 (every row its own), ``rope_main`` the fp32 pair of every
@@ -664,12 +746,13 @@ class TtDSparkDrafter:
             parts.append(self._noise_run(rest))
         return ttnn.reshape(ttnn.concat(parts, dim=3), (1, 1, ROWS))
 
-    def block_index_rows(self, wslots, rows: tuple):
+    def block_index_rows(self, wslots, rows: tuple, ring_base: int = 0):
         """``wslots`` [1, 1, ROWS, 128] fp32 tiled (the verify step's window slots per tile row: the slots of
         positions ``p + j - 127 .. p + j`` of verify row ``j`` at tile row ``rows[j]``) -> the fused call's index
         rows [1, 1, ROWS, INDEX_WIDTH] uint32 row-major: row ``5 a + i`` lists verify row ``a``'s window (the ring
-        slots of positions ``<= p + a``), then its block's five rows ``ring_slots + 5 a ..``, then the sentinel; the
-        rows past the blocks block 0's window alone."""
+        slots of positions ``<= p + a``, offset by ``ring_base``: the user's ring with rings per slot), then its
+        block's five rows ``block_base + 5 a ..``, then the sentinel; the rows past the blocks block 0's window
+        alone."""
         blocks = len(rows)
         key = ("index", tuple(rows))
         if key not in self._consts:
@@ -680,13 +763,15 @@ class TtDSparkDrafter:
                 sel[0, 0, r, rows[min(a, blocks - 1)]] = 1.0
                 if a < blocks:
                     cols[0, 0, r, :DSPARK_BLOCK_SIZE] = torch.arange(
-                        self.ring_slots + DSPARK_BLOCK_SIZE * a, self.ring_slots + DSPARK_BLOCK_SIZE * (a + 1)
+                        self.block_base + DSPARK_BLOCK_SIZE * a, self.block_base + DSPARK_BLOCK_SIZE * (a + 1)
                     )
             self._consts[key] = (self._replicated(sel, ttnn.float32), self._replicated(cols, ttnn.int32))
         if wslots is None:
             return None  # ``prepare_fused``
         sel, cols = self._consts[key]
         w = ttnn.matmul(sel, wslots, compute_kernel_config=self.markov_compute)  # one 1.0 a row: exact (< 2^8)
+        if ring_base:
+            w = ttnn.add(w, float(ring_base))
         rows_t = ttnn.concat([ttnn.typecast(w, ttnn.int32), cols], dim=3)
         return ttnn.to_layout(ttnn.typecast(rows_t, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
 
@@ -703,12 +788,13 @@ class TtDSparkDrafter:
                 self._noise_run(ROWS - DSPARK_BLOCK_SIZE * blocks)
             self.block_index_rows(None, tuple(rows))
 
-    def fused_draft(self, taps, ids, inputs: dict, rows: tuple):
+    def fused_draft(self, taps, ids, inputs: dict, rows: tuple, user: int = 0):
         """The draft call inside the verify step's graph (``TtV41VerifyDecoder._forward``), after the sampler:
         ``taps`` [1, 1, ROWS, n_taps * hidden/tp] bf16 (tile row ``rows[j]`` the tap of verify row ``j`` at position
-        ``p + j``), ``ids`` the rows' argmaxes, ``inputs`` the step's unpacked inputs (``dring``: the ring slot of
-        every verify row, the sentinel elsewhere; ``dmain``: the fp32 RoPE pair of every row's position;
-        ``dblock``: the bf16 pair of the block rows' positions, row ``5 a + i`` at ``p + a + 1 + i``; ``wslots``)
+        ``p + j``), ``ids`` the rows' argmaxes, ``inputs`` the step's unpacked inputs (``dring``: the ring row of
+        every verify row (the user's ring with rings per slot), the sentinel elsewhere; ``dmain``: the fp32 RoPE
+        pair of every row's position; ``dblock``: the bf16 pair of the block rows' positions, row ``5 a + i`` at
+        ``p + a + 1 + i``; ``wslots``), ``user`` the live slot's user index (its ring with rings per slot)
         -> the drafts of every accept outcome ``a < len(rows)`` [1, 1, 1, ROWS] uint32 row-major (row ``5 a + i``
         the ``i + 1``-th draft after accepting ``a``). Every verify row's tap reaches the rings (a rejected row's
         write sits past the frontier and is rewritten when its position is really processed)."""
@@ -718,7 +804,7 @@ class TtDSparkDrafter:
         assert blocks * DSPARK_BLOCK_SIZE <= ROWS, blocks
         self._write_main_kv(taps, inputs["dmain"], inputs["dring"], ROWS)
         tokens = self.block_tokens(ids, rows)
-        index_rows = self.block_index_rows(inputs["wslots"], rows)
+        index_rows = self.block_index_rows(inputs["wslots"], rows, user * self.ring_slots if self.users > 1 else 0)
         final = self.forward_block({"token": tokens, "rope_block": inputs["dblock"], "index_rows": index_rows})
         logits, _ = self.head(final, 0)
         drafts = self._markov_device(logits, tokens, blocks)
@@ -745,18 +831,18 @@ class TtDSparkDrafter:
         return ttnn.typecast(self.stages[-1].residual.final_collapse(x, pre), ttnn.bfloat16)
 
     def draft(self, inputs: dict, on_stage=None):
-        """One draft call on device inputs: the ring write, the block, the head -> (logits tile [1, 1, ROWS,
-        vocab/tp] fp32 per chip (row j the block's row j), main_x)."""
+        """One draft call on device inputs: the ring writes (every row with a ring index), the block, the head ->
+        (logits tile [1, 1, ROWS, vocab/tp] fp32 per chip (row j the block's row j), main_x)."""
         main_x = self.write_main_kv(inputs)
         final = self.forward_block(inputs, on_stage)
         logits, _ = self.head(final, 0)
         return logits, main_x
 
-    def draft_ids(self, inputs: dict, on_stage=None):
-        """``draft`` followed by the device Markov loop -> (the five drafts [1, 1, 1, block] uint32 on device, the
-        logits tile before the biases, main_x)."""
+    def draft_ids(self, inputs: dict, on_stage=None, blocks: int = 1):
+        """``draft`` followed by the device Markov loop on ``blocks`` blocks -> (the drafts [1, 1, 1, ROWS] uint32
+        on device, row ``5 a + i`` block ``a``'s draft ``i + 1``; the logits tile before the biases; main_x)."""
         logits, main_x = self.draft(inputs, on_stage)
-        return self._markov_device(logits, inputs["token"]), logits, main_x
+        return self._markov_device(logits, inputs["token"], blocks), logits, main_x
 
     def logits_rows(self, logits, rows: int = DSPARK_BLOCK_SIZE) -> torch.Tensor:
         """The block's first ``rows`` rows of the logits tile on the host, ``[rows, vocab]`` fp32 (``scored_rows``:
@@ -776,7 +862,7 @@ class TtDSparkDrafter:
         return out, logits
 
     def reset_rings(self) -> None:
-        n = self.ring_slots
+        n = self.block_base
         for stage in self.stages:
             ttnn.experimental.slice_write(
                 self._replicated(torch.zeros(1, 1, n, self.config.HEAD_DIM), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
@@ -793,6 +879,7 @@ class TtDSparkDrafter:
             ttnn.experimental.slice_write(t, stage.kv, [0, 0, 0, 0], [1, 1, RING, ring.shape[-1]], [1, 1, 1, 1])
             ttnn.deallocate(t)
 
-    def ring_rows(self, stage: int) -> torch.Tensor:
-        """The stage's ring on the host (chip 0), ``[ring_slots, head_dim]``."""
-        return ttnn.to_torch(ttnn.get_device_tensors(self.stages[stage].kv)[0])[0, 0, : self.ring_slots]
+    def ring_rows(self, stage: int, user: int = 0) -> torch.Tensor:
+        """The stage's ring of ``user`` on the host (chip 0), ``[ring_slots, head_dim]``."""
+        base = user * self.ring_slots
+        return ttnn.to_torch(ttnn.get_device_tensors(self.stages[stage].kv)[0])[0, 0, base : base + self.ring_slots]

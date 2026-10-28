@@ -27,14 +27,18 @@ replay and one readback a round; the first round's drafts come from one standalo
 exact against sequential served sampling); the committed text then differs from the plain text by
 construction (``matches_plain`` is recorded, not asserted) and the record carries the acceptance under sampling.
 ``V41_VR_LIVE=n`` (default 1; first c32 measurement): ``n`` live slots in lockstep, all
-joined from the one prefill (the same prompt, so one standalone draft call's drafts serve every slot and every slot
-accepts the same count), ``n / sp`` a mesh row at user indices ``0 .. n / sp - 1`` of the rank's ``V41_VR_USERS``
-slots; the MoE tile's real rows are ``V41_VR_USERS x (1 + Kmax)`` a rank (``TtV41VerifyDecoder(real_rows=)``,: decoupled from the pool's slots, so the production 32-slot pool at ``V41_VR_SEQ`` serves 32
-live slots; the earlier geometry realised the rows through ``V41_VR_USERS=12 V41_VR_SEQ=348160``, a 96-slot pool at a third
-of the capacity, with the live slots at user indices ``0, 1 + Kmax, ..``) and a slot's ``1 + K`` rows are
-``u (1 + Kmax) .. u (1 + Kmax) + K``; the drafter is not in the step's graph (``V41_VR_FUSED=0`` is forced: the
-fused call takes one live slot a rank). The round's wall and device time are the step's over all the slots; the
-tokens a round are one slot's. ``V41_VR_REAL_ROWS`` overrides the real rows (0: the slots are the real rows).
+joined from the one prefill (the same prompt, so every slot drafts and accepts the same tokens), ``n / sp`` a
+mesh row at user indices ``0 .. n / sp - 1`` of the rank's ``V41_VR_USERS`` slots (``n < sp``: ``n`` slots of
+rank 0 alone, the c2 .. c4 regime); the MoE tile's real rows are
+``V41_VR_USERS x (1 + Kmax)`` a rank (``TtV41VerifyDecoder(real_rows=)``: decoupled from
+the pool's slots, so the production 32-slot pool at ``V41_VR_SEQ`` serves 32 live slots; the earlier geometry realised the
+rows through ``V41_VR_USERS=12 V41_VR_SEQ=348160``, a 96-slot pool at a third of the capacity, with the live
+slots at user indices ``0, 1 + Kmax, ..``) and a slot's ``1 + K`` rows are ``u (1 + Kmax) .. u (1 + Kmax) + K``;
+the drafter is not in the step's graph (``V41_VR_FUSED=0`` is forced: the fused call takes one live slot a rank)
+but has a ring per slot (``TtDSparkDrafter(users=)``) and one standalone call after the
+step proposes for every live slot of a rank at once from its own ring (``run_blocks``; the taps of the accepted
+rows written first). The round's wall and device time are the step's over all the slots; the tokens a round are
+one slot's. ``V41_VR_REAL_ROWS`` overrides the real rows (0: the slots are the real rows).
 """
 
 import json
@@ -105,11 +109,16 @@ def test_v41_verify_rows(mesh_device, device_params):
     if live > 1 and real_rows is None:  # geometry: the slots are the real rows
         assert live % sp == 0 and (live // sp) * (1 + max(ks)) <= users, (live, sp, ks, users)
         slots = [r * users + u * (1 + max(ks)) for r in range(sp) for u in range(live // sp)]
+    elif live > 1 and live < sp:  # the c2 .. c4 regime: the live slots on rank 0 
+        assert live <= users and real_rows <= 32, (live, users, real_rows)
+        slots = list(range(live))
     elif live > 1:
         assert live % sp == 0 and live // sp <= users and real_rows <= 32, (live, sp, users, real_rows)
         slots = [r * users + u for r in range(sp) for u in range(live // sp)]
     else:
         slots = [0]
+    rank0 = [slot for slot in slots if slot // users == 0]  # the live slots of rank 0 (every rank's are alike)
+    draft_users = [slot % users for slot in rank0]  # the standalone call's blocks, in user order
     max_seq = -(-(prompt_len + n_tokens + max(ks) + 2) // chunk) * chunk  # the prefill state's capacity
     assert cap % chunk == 0 and cap >= max_seq, (cap, chunk, max_seq)
     tokenizer = AutoTokenizer.from_pretrained(orc.HF_SNAPSHOT)
@@ -190,7 +199,8 @@ def test_v41_verify_rows(mesh_device, device_params):
         shared_head=model.head,
         trace=True,
         warmup=warmup,
-        ring_slots=decoder.ring_slots if fused else 128,
+        ring_slots=decoder.ring_slots if fused or live > 1 else 128,
+        users=users if live > 1 else 1,
     )
     if fused:
         decoder.attach_drafter(drafter)
@@ -198,9 +208,7 @@ def test_v41_verify_rows(mesh_device, device_params):
         # the merged index selection's index pages for the live rows' layouts (attach_drafter builds the one-slot ones)
         decoder.prepare_merge(
             [
-                tuple(
-                    row for slot in slots[: live // sp] for row in decoder.block_rows(slot % users, k, one_slot=False)
-                )
+                tuple(row for slot in rank0 for row in decoder.block_rows(slot % users, k, one_slot=False))
                 for k in [0] + ks
             ]
         )
@@ -233,7 +241,14 @@ def test_v41_verify_rows(mesh_device, device_params):
     def rejoin():
         for slot in slots:
             decoder.join(slot, prompt, state)
-        drafter.load_rings_from_device(state.dspark_rings, start=prompt_len)
+        for u in draft_users:  # every rank's ring of user u (the rings are replicated: the lockstep slots)
+            drafter.load_rings_from_device(state.dspark_rings, start=prompt_len, user=u)
+
+    def draft_entries(tok, frontier, taps):
+        """The standalone call's entries, one block a live user of a rank (the same on every rank: lockstep);
+        ``taps``: the ``(tap row, position)`` pairs of the rows just committed (slot 0's rows: alike on every
+        slot), written to each slot's own ring before its block."""
+        return [[{"user": u, "token": tok, "position": frontier - 1, "taps": taps} for u in draft_users]] * sp
 
     def step(block):
         """The step over every live slot with the same block -> slot 0's argmaxes (every slot's must be the same:
@@ -281,6 +296,7 @@ def test_v41_verify_rows(mesh_device, device_params):
         tok, frontier = first, prompt_len  # the next token to process and its position
         tap = None  # the frontier - 1 tap: the prefill's seeding wrote its slot
         tap_row = None
+        taps = []  # (tap row, position) of the rows the last round committed: the standalone call writes them
         if fused:
             # the first drafts: one standalone draft call (no ring write: the prefill seeded the slot)
             t0 = time.time()
@@ -293,8 +309,8 @@ def test_v41_verify_rows(mesh_device, device_params):
             if fused:
                 t1 = t2 = t3 = t0
             else:
-                inputs = drafter.host_inputs(tok, None, frontier - 1, write=tap is not None, tap_row=tap_row or 0)
                 if taps_mode == "streams":
+                    inputs = drafter.host_inputs(tok, None, frontier - 1, write=tap is not None, tap_row=tap_row or 0)
                     tap_dev = (
                         drafter.tap_rows_from_streams([streams[l] for l in stream_layers], tap_row)
                         if tap is not None
@@ -304,9 +320,15 @@ def test_v41_verify_rows(mesh_device, device_params):
                     if tap_dev is not None:
                         ttnn.deallocate(tap_dev)
                 else:
+                    # the accepted rows' taps (all of them: the reference's ring) then the
+                    # block of every live user of the rank, one call
+                    inputs = drafter.host_inputs_blocks(draft_entries(tok, frontier, taps))
                     drafter.stage(inputs, tap32=decoder.taps if tap is not None else None)
                 t1 = time.time()
-                drafts = drafter.run(tok)[:k]
+                by_block = drafter.run_blocks([tok] * len(draft_users))
+                drafts = by_block[0][:k]
+                if not sampling and any(b[:k] != drafts for b in by_block):
+                    logger.warning(f"K={k} the blocks' drafts differ: {by_block}")
                 t2 = time.time()
                 t3 = time.time()
             block = [tok] + drafts
@@ -318,6 +340,7 @@ def test_v41_verify_rows(mesh_device, device_params):
             committed += emitted
             tok = emitted[-1]
             tap, tap_row = True, decoder.rows[0][a]
+            taps = [(decoder.rows[0][i], frontier + i) for i in range(a + 1)]
             frontier += a + 1
             if fused:
                 drafts = decoder.drafts[0][a][:k]  # the drafts of the accepted outcome, out of the same replay
@@ -332,6 +355,7 @@ def test_v41_verify_rows(mesh_device, device_params):
                 "draft_inputs_s": round(t1 - t0, 4),
                 "draft_s": round(t2 - t1, 4),
                 "draft_mode": decoder.last.get("mode") if fused else drafter.last.get("mode"),
+                "draft_blocks": None if fused else drafter.last.get("blocks"),
                 "draft_device_s": None if fused else drafter.last.get("device_s"),
                 "draft_read_s": None if fused else drafter.last.get("read_s"),
                 "verify_s": round(t4 - t3, 4),

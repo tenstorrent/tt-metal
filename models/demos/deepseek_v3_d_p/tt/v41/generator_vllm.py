@@ -42,6 +42,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.dspark_drafter import TtDSparkDrafter
 from models.demos.deepseek_v3_d_p.tt.v41.dspark_weights import seeding_weights
 from models.demos.deepseek_v3_d_p.tt.v41.engram import V41EngramTable
 from models.demos.deepseek_v3_d_p.tt.v41.engram_checkpoint import build_engram_modules, unswap
+from models.demos.deepseek_v3_d_p.tt.v41.pool import RING
 from models.demos.deepseek_v3_d_p.tt.v41.spec_verify import TtV41VerifyDecoder
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import (
     TtV41Transformer,
@@ -65,6 +66,14 @@ WARMUP_PROMPT = 255  # tokens of the warm-up prompt (a full window; odd, so the 
 SPEC = "TT_V41_SPEC"
 SPEC_GREEDY_ALL = "TT_V41_SPEC_GREEDY_ALL"
 SPEC_SAMPLED = "TT_V41_SPEC_SAMPLED"
+# TT_V41_SPEC_RINGS=slot (the served c32 round): the drafter keeps a ring per slot, so every
+# request speculates: a step of one live slot is the fused c1 round above; a step of several runs every slot of the
+# pool as a block of 1 + K rows (the requests' drafts padded to K, a pad row rejected by construction; the slots
+# without a request as dummies at their last position, whose writes sit past their frontier: one capture whatever
+# the live set) and then one standalone draft call for the four slots of every rank at once (the accepted rows'
+# taps written first). "one" (default): one ring set, the last joined request speculates, the others run plain.
+SPEC_RINGS = "TT_V41_SPEC_RINGS"
+SPEC_PAD = 0  # the pad draft and the dummy slots' token: any id; a pad row's token is never committed
 WARMUP_DECODE_STEPS = 8  # at most; done once the step is captured and replayed once
 PREFILL_SLOTS = "TT_V41_PREFILL_SLOTS"  # prefill states (default 2): requests prefill through them into the pool
 # Traced prefill: ``TT_V41_TRACE_PREFILL_LENGTHS`` lists prompt lengths (tokens, comma-separated) whose prefill is
@@ -200,6 +209,9 @@ class DeepseekV41ForCausalLM:
         self.spec_k = int(os.environ.get(SPEC, "0"))
         self.spec_greedy_all = os.environ.get(SPEC_GREEDY_ALL, "0") == "1"
         self.spec_sampled = os.environ.get(SPEC_SAMPLED, "1") == "1"
+        self.spec_rings_per_slot = os.environ.get(SPEC_RINGS, "one") == "slot"
+        self.sp = tuple(mesh_device.shape)[0]
+        self.users_per_rank = max_batch_size // self.sp
         self.drafter: TtDSparkDrafter | None = None
         self.ring_owner: int | None = None
         self.next_drafts: dict[int, list[int]] = {}
@@ -274,10 +286,23 @@ class DeepseekV41ForCausalLM:
         assert (
             max_batch_size % sp == 0
         ), f"max_num_seqs {max_batch_size}: the pool holds the same slots per mesh row ({sp})"
-        decoder_cls = TtV41VerifyDecoder if spec_k else TtV41BatchDecoder
-        decoder = decoder_cls(
-            model, root, users_per_rank=max_batch_size // sp, trace=True, sample_on_device=cls.SAMPLE_ON_DEVICE
-        )
+        users = max_batch_size // sp
+        rings_per_slot = os.environ.get(SPEC_RINGS, "one") == "slot"
+        if spec_k:
+            # rings per slot: every slot of a rank holds a block of 1 + K rows in the multi-slot step (the MoE's
+            # real rows decoupled from the slots)
+            decoder = TtV41VerifyDecoder(
+                model,
+                root,
+                users_per_rank=users,
+                trace=True,
+                sample_on_device=cls.SAMPLE_ON_DEVICE,
+                real_rows=users * (1 + spec_k) if rings_per_slot else None,
+            )
+        else:
+            decoder = TtV41BatchDecoder(
+                model, root, users_per_rank=users, trace=True, sample_on_device=cls.SAMPLE_ON_DEVICE
+            )
         drafter = None
         if spec_k:
             from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import WEIGHT_CACHE, routed_expert_dtype
@@ -295,8 +320,18 @@ class DeepseekV41ForCausalLM:
                 shared_head=model.head,
                 trace=True,
                 ring_slots=decoder.ring_slots,
+                users=users if rings_per_slot else 1,
             )
             decoder.attach_drafter(drafter, users=list(range(max_batch_size // sp)), max_k=spec_k)
+            if rings_per_slot:
+                # the multi-slot step's merged index selection over every slot's rows, and the standalone call's
+                # input buffers, before any capture (a persistent tensor allocated after a
+                # capture may sit in its freed intermediates)
+                decoder.prepare_merge(
+                    [tuple(row for u in range(users) for row in decoder.block_rows(u, spec_k, one_slot=False))]
+                )
+                dummy = [{"user": u, "token": SPEC_PAD, "position": RING - 1, "taps": []} for u in range(users)]
+                drafter.stage(drafter.host_inputs_blocks([dummy] * sp))
             decoder.draft_plain = True
             logger.info(
                 f"DeepSeek-V4.1-Flash: DSpark drafter built in {time.time() - t1:.1f} s, "
@@ -474,9 +509,14 @@ class DeepseekV41ForCausalLM:
         t0 = time.time()
         self.decoder.join(slot, prompt[: state.start], state)
         if self.drafter is not None:
-            # the drafter's rings take this request's seeding (one set of rings: the last joined request speculates)
+            # the drafter's rings take this request's seeding: the slot's own ring on its rank (rings per slot), or
+            # the one set of rings (the last joined request speculates)
             assert state.dspark_rings is not None, "the prefill did not seed the drafter's rings"
-            self.drafter.load_rings_from_device(state.dspark_rings, start=state.start)
+            if self.spec_rings_per_slot:
+                r, u = divmod(slot, self.users_per_rank)
+                self.drafter.load_rings_from_device(state.dspark_rings, start=state.start, user=u, rank=r)
+            else:
+                self.drafter.load_rings_from_device(state.dspark_rings, start=state.start)
             self.ring_owner = slot
             self.next_drafts.pop(slot, None)
             self.buffered.pop(slot, None)
@@ -596,7 +636,7 @@ class DeepseekV41ForCausalLM:
             ), f"row {i}: vLLM position {p}, slot {slot} at {self.decoder.position(slot)}"
             temperature = float(params.temperature[i])
             greedy = temperature <= 0 or self.spec_greedy_all
-            proposes = slot == self.ring_owner and (greedy or self.spec_sampled)
+            proposes = (self.spec_rings_per_slot or slot == self.ring_owner) and (greedy or self.spec_sampled)
             if ragged:
                 given = [int(t) for t in tokens[i, 1:].tolist() if t >= 0]
                 drafts = given if proposes else []
@@ -610,6 +650,8 @@ class DeepseekV41ForCausalLM:
             sampling[slot] = (int(params.top_k[i]), float(params.top_p[i]), 0.0 if greedy else temperature)
         if not blocks:
             return out
+        if self.spec_rings_per_slot and len(blocks) > 1:
+            return self._spec_step_slots(blocks, rows, sampling, out, ragged, t0)
         # a step whose live slots all run plain (sampled, or not the rings' owner) is the plain variant (``v:``,
         # captured at warm-up), not a round proposing drafts nobody verifies
         self.decoder.draft_plain = speculating
@@ -639,6 +681,86 @@ class DeepseekV41ForCausalLM:
             f"DeepSeek-V4.1-Flash: spec step of {len(blocks)} slots ({[len(b) for b in blocks.values()]} rows) in "
             f"{time.time() - t0:.3f} s {last}; accepted {accepted} stats {self.spec_stats}"
         )
+        return out
+
+    def _uniform_blocks(self, blocks: dict) -> tuple[dict, dict]:
+        """``TT_V41_SPEC_RINGS=slot``'s multi-slot step: every slot of the pool as a block of ``1 + K`` rows (the
+        requests' drafts padded, the slots without a request as dummies at their position; a slot whose block would
+        not fit its pool is left out, at the cost of a capture) -> (the blocks, the real draft count per slot)."""
+        K, decoder = self.spec_k, self.decoder
+        real = {slot: len(block) - 1 for slot, block in blocks.items()}
+        uniform = {}
+        for slot in range(self.max_batch_size):
+            if slot in blocks:
+                block = list(blocks[slot])
+            elif slot in decoder.slots and decoder.position(slot) + 1 + K <= decoder.pool.max_seq_len:
+                block = [SPEC_PAD]
+            else:
+                logger.warning(f"DeepSeek-V4.1-Flash: slot {slot} cannot pad the multi-slot step")
+                continue
+            uniform[slot] = block + [SPEC_PAD] * (1 + K - len(block))
+        return uniform, real
+
+    def _spec_step_slots(self, blocks: dict, rows: dict, sampling: dict, out, ragged: bool, t0: float):
+        """The multi-slot round with rings per slot (``TT_V41_SPEC_RINGS=slot``): the uniform
+        step over every slot, the accept capped at each request's real drafts, then one standalone draft call for
+        the live slots of every rank (their accepted rows' taps written to their rings first), whose drafts are the
+        slots' next."""
+        K, decoder, drafter, users = self.spec_k, self.decoder, self.drafter, self.users_per_rank
+        uniform, real = self._uniform_blocks(blocks)
+        full = dict(sampling)
+        for slot in uniform:
+            full.setdefault(slot, (1, 0.0, 0.0))
+        decoder.draft_plain = False
+        result = decoder.decode(uniform, full)
+        entries: list[list[dict]] = [[] for _ in range(self.sp)]
+        where: dict[int, tuple[int, int]] = {}  # slot -> (rank, block index)
+        for slot, i in rows.items():
+            m = real[slot]
+            block, argmax = uniform[slot][: 1 + m], result[slot][: 1 + m]
+            a, emitted = decoder.accept(block, argmax)
+            p = decoder.position(slot)
+            decoder.commit(slot, a)
+            r, u = divmod(slot, users)
+            taps = [(decoder.rows[slot][j], p + j) for j in range(a + 1)]
+            where[slot] = (r, len(entries[r]))
+            entries[r].append({"user": u, "token": emitted[-1], "position": p + a, "taps": taps})
+            if ragged:
+                out[i, : len(emitted)] = torch.tensor(emitted, dtype=torch.int32)
+                self.spec_stats["emitted_steps"] = self.spec_stats.get("emitted_steps", 0) + len(emitted)
+            else:
+                out[i] = self.handed[slot] = emitted[0]
+                self.buffered[slot] = list(emitted[1:])
+            if m:
+                self.spec_stats["rounds"] += 1
+                self.spec_stats["accepted"] += a
+                self.spec_stats["emitted"] += len(emitted)
+        # one block count on every rank: the ranks short of blocks get dummies (no tap write, their drafts unread)
+        n = max(len(e) for e in entries)
+        for r in range(self.sp):
+            while len(entries[r]) < n:
+                taken = {e["user"] for e in entries[r]}
+                u = next(u for u in range(users) if u not in taken)
+                entries[r].append({"user": u, "token": SPEC_PAD, "position": RING - 1, "taps": []})
+        t1 = time.time()
+        drafter.stage(drafter.host_inputs_blocks(entries), tap32=decoder.taps)
+        drafter.run_blocks([e["token"] for e in entries[0]], read=False)
+        by_rank = drafter.read_ranks(drafter.out)
+        for slot, i in rows.items():
+            r, b = where[slot]
+            self.next_drafts[slot] = by_rank[r][b][:K]
+            if ragged:
+                self.last_drafts[i] = list(self.next_drafts[slot])
+        t2 = time.time()
+        last = decoder.last
+        accepted = [int((out[i] >= 0).sum()) - 1 if ragged else len(self.buffered[s]) for s, i in rows.items()]
+        # the same line as the one-slot round's; the draft call's
+        # own line after it
+        logger.debug(
+            f"DeepSeek-V4.1-Flash: spec step of {len(blocks)} slots ({[1 + K] * len(uniform)} rows) in "
+            f"{t2 - t0:.3f} s {last}; accepted {accepted} stats {self.spec_stats}"
+        )
+        logger.debug(f"DeepSeek-V4.1-Flash: draft call of {n} blocks a rank in {t2 - t1:.3f} s {drafter.last}")
         return out
 
     def take_drafts(self) -> dict[int, list[int]]:
@@ -769,7 +891,8 @@ class DeepseekV41ForCausalLM:
             self.decoder.join(slot, prompt, self.prefill_states[slot % len(self.prefill_states)])
         if self.drafter is not None:  # the drafter's rings: slot 0's (its warm-up rounds, ``_warmup_spec``)
             state = self.prefill_states[0]
-            self.drafter.load_rings_from_device(state.dspark_rings, start=state.start)
+            for u in range(self.drafter.users):  # every ring with rings per slot (every slot joined the prompt)
+                self.drafter.load_rings_from_device(state.dspark_rings, start=state.start, user=u)
             self.ring_owner = 0
         logger.info(f"DeepSeek-V4.1-Flash warm-up: {self.max_batch_size} slots joined in {time.time() - t0:.1f} s")
         _l1_probe(self.mesh_device, "after warm-up joins")
@@ -890,6 +1013,54 @@ class DeepseekV41ForCausalLM:
             assert replayed, f"plain variant not captured and replayed: {plain}"
             decoder.draft_plain = True
         self.ring_owner = None  # the next joined request's
+        if self.spec_rings_per_slot:
+            self._warmup_spec_slots(prompt)
+
+    def _warmup_spec_slots(self, prompt: torch.Tensor) -> None:
+        """``TT_V41_SPEC_RINGS=slot``: the multi-slot round's two captures, the uniform step of every slot
+        (``1 + K`` rows each, one variant) and the standalone draft call of ``users`` blocks a rank, each run
+        eagerly, captured and replayed once."""
+        decoder, drafter, K, users = self.decoder, self.drafter, self.spec_k, self.users_per_rank
+        token = int(prompt[-1])
+        blocks = {slot: [token] + [SPEC_PAD] * K for slot in range(self.max_batch_size)}
+        sampling = {slot: (1, 0.0, 0.0) for slot in blocks}
+        decoder.draft_plain = False
+        replayed = False
+        for step in range(WARMUP_DECODE_STEPS):
+            t0 = time.time()
+            out = decoder.decode(blocks, sampling)
+            for slot in blocks:
+                decoder.commit(slot, 0)
+                blocks[slot][0] = out[slot][0]
+            variant, mode = decoder.last.get("variant"), decoder.last.get("mode")
+            logger.info(
+                f"DeepSeek-V4.1-Flash warm-up: multi-slot step {step} {variant} ({mode}) in {time.time() - t0:.2f} s "
+                f"{decoder.last}"
+            )
+            if mode == "replay":
+                replayed = True
+                break
+        assert replayed, "the multi-slot step was not captured and replayed"
+        p = decoder.position(0)
+        entries = [
+            [
+                {"user": u, "token": token, "position": p - 1, "taps": [(decoder.rows[u][0], p - 1)]}
+                for u in range(users)
+            ]
+        ] * self.sp
+        for step in range(WARMUP_DECODE_STEPS):
+            t0 = time.time()
+            drafter.stage(drafter.host_inputs_blocks(entries), tap32=decoder.taps)
+            drafter.run_blocks([token] * users, read=False)
+            drafts = drafter.read_ranks(drafter.out)
+            logger.info(
+                f"DeepSeek-V4.1-Flash warm-up: draft call {step} ({drafter.last}) in {time.time() - t0:.2f} s; "
+                f"rank 0 {drafts[0]}"
+            )
+            if drafter.last.get("mode") == "replay":
+                break
+        assert users in drafter.captures, "the multi-slot draft call was not captured"
+        decoder.draft_plain = True
 
     def _warmup_prompt(self, n: int = WARMUP_PROMPT) -> torch.Tensor:
         """The first ``n`` tokens of the text the tests use (``oracle.text_tokens``, with this tokenizer), the text

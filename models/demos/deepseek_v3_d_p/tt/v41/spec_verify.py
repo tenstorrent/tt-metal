@@ -126,6 +126,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         """Run ``drafter`` (a ``TtDSparkDrafter`` at this pool's ``ring_slots``) inside the steps with drafts; its
         constants for the live user indices ``users`` (default: every one) and ``K <= max_k`` are allocated now."""
         assert drafter.ring_slots == self.ring_slots, (drafter.ring_slots, self.ring_slots)
+        assert drafter.users in (1, self.users), (drafter.users, self.users)
         assert self.model.dspark is not None, "the fused draft call needs the model's seeder (dspark_weights)"
         self.drafter = drafter
         layouts = []
@@ -202,8 +203,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             return None
         ranks = [slot // self.users for slot in tokens]
         if len(set(ranks)) != len(ranks):
-            assert all(len(block) == 1 for block in tokens.values()), "verify rows need one live slot a rank"
-            return None
+            return None  # several slots a rank: the standalone draft call after the step 
         layouts = {(slot % self.users, len(block)) for slot, block in tokens.items()}
         if len(layouts) != 1:
             assert all(len(block) == 1 for block in tokens.values()), f"one (user, rows) layout a step: {layouts}"
@@ -214,6 +214,23 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
     def join(self, slot: int, tokens: torch.Tensor, state) -> None:
         super().join(slot, tokens, state)
         self.pending_carry.pop(slot, None)
+        u, s = slot % self.users, self.slot_stride
+        if s > 1 and any(c is not None for c in state.compressor_carry.values()):
+            # the join placed the odd prompt's carry at the slot's user row ``u`` (``pool.join_ops``), which a
+            # one-slot step's first row reads; a multi-slot step's first row is tile row ``u s``: the carry
+            # copied there too (a later step's commit re-places it at its own first row)
+            idx = torch.full((1, 1, 1, ROWS), SENTINEL32, dtype=torch.int32)
+            idx[0, 0, 0, u] = u * s
+            idx = self._replicated(idx, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+            for k0, s0 in self.pool.carry.values():
+                for dst in (k0, s0):
+                    src_rows = ttnn.to_layout(dst, ttnn.ROW_MAJOR_LAYOUT)
+                    dst_rows = ttnn.to_layout(dst, ttnn.ROW_MAJOR_LAYOUT)
+                    scatter_rows(src_rows, dst_rows, idx, rows=ROWS)
+                    ttnn.copy(ttnn.to_layout(dst_rows, ttnn.TILE_LAYOUT), dst)
+                    ttnn.deallocate(src_rows)
+                    ttnn.deallocate(dst_rows)
+            ttnn.deallocate(idx)
 
     # --- host inputs ---------------------------------------------------------------------------------------------
     def _host_inputs(self, tokens: dict[int, list[int]], sampling: dict | None = None) -> dict:
@@ -252,8 +269,11 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             self.live += [(row, u) for row in rows if (row, u) not in self.live]  # one selection per tile row
             committed = self.pending_carry.pop(slot, None)
             if committed is not None:
+                # scratch row ``committed`` -> the carry row ``_compress`` reads for this block's first row: its
+                # own tile row (``k0 * first`` is row-aligned), which is the slot's user row ``u`` in the c1
+                # geometry and ``u s`` with decoupled real rows
                 for src in carry_rows:
-                    carry_rows[src][r, committed] = u  # scratch row ``committed`` -> the slot's carry row u
+                    carry_rows[src][r, committed] = rows[0]
         if entries:
             e = torch.tensor(entries, dtype=torch.int64)  # [rows, 6]: rank, row, j, token, position, user
             er, erow, ej = e[:, 0], e[:, 1], e[:, 2]
@@ -331,7 +351,9 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             # verify row's ring slot and fp32 RoPE pair (the ring write), the block rows' bf16 pair (block a's
             # row i at p + a + 1 + i; the rows past the blocks at p + 1 + row)
             user, blocks = self.draft_layout or (0, 1)
-            ints["dring"] = torch.where(active, slot_of, torch.full_like(slot_of, SENTINEL32)).to(torch.int32)
+            # the ring row of every verify row's tap: the user's ring with rings per slot (``TtDSparkDrafter(users=)``)
+            ring_row = slot_of + (user_of * self.drafter.ring_slots if self.drafter.users > 1 else 0)
+            ints["dring"] = torch.where(active, ring_row, torch.full_like(slot_of, SENTINEL32)).to(torch.int32)
             cos, sin = cos_sin(cfg, False, positions.flatten())
             wide["dcos"], wide["dsin"] = cos.view(sp * ROWS, -1), sin.view(sp * ROWS, -1)
             base = positions[:, user].view(sp, 1)  # the live slot's frontier p per rank
@@ -519,7 +541,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         logits, _ = model.head(final, 0)
         ids = self.sampler.sample(logits, self.inputs)  # [1, 1, 1, ROWS]: the rows' argmaxes
         if self.draft_layout is not None:
-            drafts = self.drafter.fused_draft(self.taps, ids, self.inputs, self.draft_rows)
+            drafts = self.drafter.fused_draft(self.taps, ids, self.inputs, self.draft_rows, self.draft_layout[0])
             ids = ttnn.concat([ids, drafts], dim=3)  # [1, 1, 1, 64]
         return self.sampler.gather(ids)
 
