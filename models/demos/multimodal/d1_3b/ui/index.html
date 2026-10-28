@@ -1,0 +1,175 @@
+<!-- SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc. -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>d1-3B</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --line:#2a2f3a; --fg:#e7e9ee; --mut:#9aa3b2; --acc:#6ea8fe; --good:#49c17a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif; }
+  header { padding:16px 22px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:12px; }
+  header h1 { font-size:17px; margin:0; font-weight:650; }
+  header .sub { color:var(--mut); font-size:13px; }
+  .wrap { max-width:980px; margin:0 auto; padding:22px; display:grid; grid-template-columns:1fr 1fr; gap:22px; }
+  @media (max-width:820px){ .wrap{ grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; }
+  .step { font-size:12px; text-transform:uppercase; letter-spacing:.07em; color:var(--mut); margin:0 0 10px; }
+  .step b { color:var(--fg); }
+  label { display:block; font-size:12px; color:var(--mut); margin:14px 0 5px; }
+  textarea, input[type=text], select { width:100%; background:#10131a; color:var(--fg); border:1px solid var(--line);
+    border-radius:8px; padding:9px 11px; font:inherit; }
+  textarea { min-height:78px; resize:vertical; }
+  button { background:#232833; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px 13px;
+    font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--acc); }
+  button.primary { background:var(--acc); color:#071022; border:none; font-weight:650; padding:11px 20px; width:100%; margin-top:16px; }
+  button.ghost { padding:5px 10px; font-size:13px; color:var(--mut); background:none; border:none; }
+  button.ghost:hover { color:var(--acc); }
+  .seg { display:flex; gap:6px; }
+  .seg button { flex:1; }
+  .seg button.on { background:var(--acc); color:#071022; border-color:var(--acc); font-weight:600; }
+  .opt { display:flex; gap:8px; margin-top:7px; align-items:center; }
+  .opt input { flex:1; } .opt .lv { color:var(--mut); font-size:12px; min-width:70px; }
+  .img-drop { border:1.5px dashed var(--line); border-radius:10px; padding:16px; text-align:center; color:var(--mut); cursor:pointer; }
+  .img-drop.has img { max-height:150px; border-radius:8px; }
+  .img-row { display:flex; justify-content:space-between; align-items:center; margin-top:6px; }
+  .answer { text-align:center; padding:6px 0 14px; }
+  .answer .big { font-size:30px; font-weight:700; color:var(--good); }
+  .answer .cap { color:var(--mut); font-size:13px; margin-top:2px; }
+  .bar { position:relative; height:26px; background:#10131a; border-radius:7px; margin:7px 0; overflow:hidden; }
+  .bar > span { position:absolute; inset:0 auto 0 0; background:linear-gradient(90deg,#2d4f66,#6ea8fe); }
+  .bar.win > span { background:linear-gradient(90deg,#2f6b4a,#49c17a); }
+  .bar > em { position:absolute; inset:0; display:flex; justify-content:space-between; align-items:center; padding:0 10px; font-style:normal; font-size:13px; }
+  .meta { color:var(--mut); font-size:12px; margin-top:12px; text-align:center; }
+  .empty { color:var(--mut); font-size:13px; }
+  .err { color:#ff8080; font-size:13px; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>d1-3B</h1>
+  <span class="sub">decision model on a single Wormhole N150 · one state, one question, scored in a single pass</span>
+</header>
+
+<div class="wrap">
+  <div class="card">
+    <p class="step"><b>1.</b> Give it something to look at</p>
+    <label>Text</label>
+    <textarea id="state" placeholder="Paste any text here…">Paris is the capital of France.</textarea>
+
+    <label>…or an image (used instead of the text)</label>
+    <div id="drop" class="img-drop">Click or drop an image</div>
+    <input id="file" type="file" accept="image/*" style="display:none" />
+    <div class="img-row"><span></span><button class="ghost" id="clearimg" style="display:none">remove image</button></div>
+
+    <p class="step" style="margin-top:20px"><b>2.</b> Ask one question</p>
+    <div class="seg" id="types">
+      <button data-t="noul" class="on">Yes / No</button>
+      <button data-t="choice">Pick one</button>
+      <button data-t="score">Give a score</button>
+    </div>
+    <label id="qlabel">Your yes/no question</label>
+    <input id="q" type="text" placeholder="e.g. Is this statement true?" value="Is this statement true?" />
+    <div id="opts"></div>
+
+    <button class="primary" id="run">Run on the N150</button>
+  </div>
+
+  <div class="card">
+    <p class="step"><b>3.</b> Answer</p>
+    <div id="out"><div class="empty">The answer and a confidence bar for every possible option will show up here.</div></div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const el = (t,a={},k=[]) => { const n=document.createElement(t); for(const x in a)n[x]=a[x]; for(const c of k)n.append(c); return n; };
+let imageData = null, type = "noul";
+
+// ---------- image ----------
+const drop=$("#drop"), file=$("#file");
+drop.onclick=()=>file.click();
+file.onchange=()=>file.files[0]&&readImage(file.files[0]);
+drop.ondragover=e=>{e.preventDefault();drop.style.borderColor="var(--acc)";};
+drop.ondragleave=()=>drop.style.borderColor="";
+drop.ondrop=e=>{e.preventDefault();drop.style.borderColor="";e.dataTransfer.files[0]&&readImage(e.dataTransfer.files[0]);};
+function readImage(f){const r=new FileReader();r.onload=()=>{imageData=r.result;drop.classList.add("has");drop.innerHTML="";drop.append(el("img",{src:imageData}));$("#clearimg").style.display="";};r.readAsDataURL(f);}
+$("#clearimg").onclick=()=>{imageData=null;file.value="";drop.classList.remove("has");drop.textContent="Click or drop an image";$("#clearimg").style.display="none";};
+
+// ---------- question type ----------
+const opts=$("#opts"), qlabel=$("#qlabel");
+function optRow(ph, lv){
+  const inp=el("input",{type:"text",placeholder:ph});
+  const rm=el("button",{className:"ghost",textContent:"×"});
+  const row=el("div",{className:"opt"}, lv!=null?[el("span",{className:"lv",textContent:lv}),inp,rm]:[inp,rm]);
+  rm.onclick=()=>{ if(opts.querySelectorAll(".opt").length>2) row.remove(); };
+  return row;
+}
+function rebuild(){
+  opts.innerHTML="";
+  if(type==="noul"){ qlabel.textContent="Your yes/no question"; $("#q").placeholder="e.g. Is this statement true?"; return; }
+  if(type==="choice"){
+    qlabel.textContent="Your question"; $("#q").placeholder="e.g. What is the main colour?";
+    opts.append(el("label",{textContent:"Options to pick from"}));
+    opts.append(optRow("option 1")); opts.append(optRow("option 2"));
+    opts.append(el("button",{className:"ghost",textContent:"+ option",onclick:()=>opts.insertBefore(optRow("option"),add.nextSibling)}));
+    var add=opts.lastChild;
+  } else {
+    qlabel.textContent="What are you scoring?"; $("#q").placeholder="e.g. How positive is the tone?";
+    opts.append(el("label",{textContent:"Scale, lowest to highest"}));
+    ["lowest","middle","highest"].forEach((d,i)=>opts.append(optRow("describe this level","level "+i)));
+    opts.append(el("button",{className:"ghost",textContent:"+ level",onclick:()=>{ const n=opts.querySelectorAll(".opt").length; opts.insertBefore(optRow("describe this level","level "+n),lvlAdd.nextSibling); }}));
+    var lvlAdd=opts.lastChild;
+  }
+}
+$("#types").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+  type=b.dataset.t; $("#types").querySelectorAll("button").forEach(x=>x.classList.toggle("on",x===b)); rebuild();
+});
+rebuild();
+
+// ---------- run ----------
+const pct=x=>(100*x).toFixed(1)+"%";
+function buildQuestion(){
+  const q={ type, instructions:$("#q").value.trim() };
+  const vals=[...opts.querySelectorAll(".opt input")].map(i=>i.value.trim()).filter(Boolean);
+  if(type==="choice"){ q.criteria={}; vals.forEach(v=>q.criteria[v]=v); }
+  else if(type==="score"){ q.criteria=vals; }
+  return q;
+}
+function renderAnswer(a){
+  const out=$("#out"); out.innerHTML="";
+  let entries, winner, big, cap="";
+  if(a.type==="noul"){ entries=[["yes",a.noul],["no",1-a.noul]]; winner=a.noul>=0.5?"yes":"no"; big=winner.toUpperCase(); }
+  else if(a.type==="choice"){ entries=Object.entries(a.probabilities); winner=a.choice; big=a.choice; }
+  else { entries=Object.entries(a.probabilities); winner=null; big=a.score.toFixed(2); cap="expected score"+(a.legend?" · "+(a.legend[Math.round(a.score)]||""):""); }
+  out.append(el("div",{className:"answer"},[ el("div",{className:"big",textContent:big}), cap?el("div",{className:"cap",textContent:cap}):"" ].filter(Boolean)));
+  const top=Math.max(...entries.map(([,v])=>v),0.0001);
+  for(const [k,v] of entries){
+    const isWin = a.type==="score" ? false : (k===winner || (a.type==="noul"&&k===winner));
+    const label = (a.type==="score"&&a.legend&&a.legend[k])? `${k} — ${a.legend[k]}` : k;
+    const bar=el("div",{className:"bar"+(isWin?" win":"")});
+    bar.append(el("span",{style:`width:${Math.max(2,100*v/top)}%`}));
+    bar.append(el("em",{},[el("span",{textContent:label}),el("span",{textContent:pct(v)})]));
+    out.append(bar);
+  }
+  return out;
+}
+$("#run").onclick=async()=>{
+  const out=$("#out"); out.innerHTML=""; out.append(el("div",{className:"empty",textContent:"running on the N150…"}));
+  const body={ questions:{ q:buildQuestion() } };
+  if(imageData) body.image=imageData; else body.state=$("#state").value;
+  try{
+    const res=await fetch("/ask",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+    const data=await res.json();
+    if(data.error){ out.innerHTML=""; out.append(el("div",{className:"err",textContent:data.error})); return; }
+    renderAnswer(data.answers.q);
+    const u=data.usage||{};
+    out.append(el("div",{className:"meta",textContent:`${data.latency_ms} ms · ${u.input_tokens||0} input tokens`+(u.image_tokens?` · ${u.image_tokens} image tokens`:"")+` · 0 generated`}));
+  }catch(e){ out.innerHTML=""; out.append(el("div",{className:"err",textContent:String(e)})); }
+};
+</script>
+</body>
+</html>
