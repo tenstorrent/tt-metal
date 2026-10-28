@@ -8,6 +8,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "device/embedding_device_operation.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include <ttnn/operations/copy/typecast/typecast.hpp>
 
@@ -75,6 +76,12 @@ ttnn::Tensor embedding(
     embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
     if (embeddings.layout() == ttnn::TILE_LAYOUT && embeddings.dtype() != dtype.value_or(weight.dtype())) {
         embeddings = ttnn::typecast(embeddings, dtype.value_or(weight.dtype()));
+    }
+    if (optional_output_tensor.has_value() &&
+        optional_output_tensor->storage_type() == StorageType::DEVICE &&
+        embeddings.storage_type() == StorageType::DEVICE &&
+        embeddings.buffer() != optional_output_tensor->buffer()) {
+        return ttnn::copy(embeddings, *optional_output_tensor);
     }
     return embeddings;
 }
