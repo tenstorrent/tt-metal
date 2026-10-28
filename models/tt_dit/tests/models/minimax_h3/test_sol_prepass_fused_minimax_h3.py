@@ -142,21 +142,25 @@ def _check_fused(
     if mode == "chunk":
         assert torch.all(dev_mask[..., S * geo.nkc :] == 0), "mask padding words must be zero"
 
-    bias = (
-        _to_host(mesh_device, sp_axis, tp_axis, out["bias"])[:, :H]
-        .float()
-        .view(S, H, geo.nqc_pad, 32, geo.n_blocks_pad)
-    )
-    real = bias[:, :, : geo.nqc]
-    assert torch.equal(real[:, :, :, 0], real[:, :, :, 17]), "bias tile rows must be identical"
-    b0 = real[:, :, :, 0]
-    kept_dev = b0 < NEG / 2
-    kept_ref = ref_bias[:, :, : geo.nqc] < NEG / 2
-    marker_agree = (kept_dev == kept_ref).float().mean().item()
-    live = ~kept_ref & ~kept_dev
-    bias_err = (b0[live] - ref_bias[:, :, : geo.nqc][live].bfloat16().float()).abs().max().item() if live.any() else 0.0
-    logger.info(f"bias: kept-marker agreement {marker_agree:.5f}, max abs err on approximated blocks {bias_err:.3f}")
-    assert marker_agree > 0.985
+    if out["bias"] is None:  # TT_SOL_EMIT_BIAS=0: the pre-pass emits no bias tiles, mask-only check
+        logger.info("bias not emitted (TT_SOL_EMIT_BIAS=0): mask-only check")
+        marker_agree, bias_err = 1.0, 0.0
+    else:
+        bias = (
+            _to_host(mesh_device, sp_axis, tp_axis, out["bias"])[:, :H]
+            .float()
+            .view(S, H, geo.nqc_pad, 32, geo.n_blocks_pad)
+        )
+        real = bias[:, :, : geo.nqc]
+        assert torch.equal(real[:, :, :, 0], real[:, :, :, 17]), "bias tile rows must be identical"
+        b0 = real[:, :, :, 0]
+        kept_dev = b0 < NEG / 2
+        kept_ref = ref_bias[:, :, : geo.nqc] < NEG / 2
+        marker_agree = (kept_dev == kept_ref).float().mean().item()
+        live = ~kept_ref & ~kept_dev
+        bias_err = (b0[live] - ref_bias[:, :, : geo.nqc][live].bfloat16().float()).abs().max().item() if live.any() else 0.0
+        logger.info(f"bias: kept-marker agreement {marker_agree:.5f}, max abs err on approximated blocks {bias_err:.3f}")
+        assert marker_agree > 0.985
 
     result = {"agree_all": agree_all, "agree_real": agree_real, "marker_agree": marker_agree, "bias_err": bias_err}
     if compare_ttnn:
