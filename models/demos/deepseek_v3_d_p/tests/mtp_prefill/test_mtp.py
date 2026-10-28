@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3.mtp import (
     glm_mtp_predictor_reference,
 )
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
+from models.demos.deepseek_v3_d_p.tests._reuse import acquire_module
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
@@ -630,28 +631,34 @@ def test_mtp_multiturn_pcc(
     device_weights, weight_cache_path = _mtp_device_weights(
         variant, mesh_device, layer_idx, use_pretrained, mtp_state_dict, layer_state_dict
     )
-    predictor = TtMTPPredictor(
+    # The turn schedule is the only axis the predictor does not depend on, so its cases share one build.
+    predictor = acquire_module(
         mesh_device,
-        config,
-        GLM53Config,
-        device_weights,
-        mtp_cfg,
-        seq_len=CHUNK,
-        num_levels=num_levels,
-        layer_idx=layer_idx,
-        tp_axis=TP_AXIS,
-        num_links=num_links,
-        topology=topology,
-        sp_axis=SP_AXIS,
-        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
-        # Every padding row is identical, so all of them can route to one chip's experts.
-        dispatch_buffer_capacity_factor=8,
-        weight_cache_path=weight_cache_path,
-        cache_name_prefix=MTP_CACHE_PREFIX,
-        is_chunked=True,
-        max_seq_len=CACHE_LEN,
-        slot_num=1,
-        layer_num=num_levels,
+        ("TtMTPPredictor multiturn", variant.name, use_pretrained, num_levels, num_links, CHUNK, CACHE_LEN, layer_idx),
+        lambda: TtMTPPredictor(
+            mesh_device,
+            config,
+            GLM53Config,
+            device_weights,
+            mtp_cfg,
+            seq_len=CHUNK,
+            num_levels=num_levels,
+            layer_idx=layer_idx,
+            tp_axis=TP_AXIS,
+            num_links=num_links,
+            topology=topology,
+            sp_axis=SP_AXIS,
+            gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+            # Every padding row is identical, so all of them can route to one chip's experts.
+            dispatch_buffer_capacity_factor=8,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=MTP_CACHE_PREFIX,
+            is_chunked=True,
+            max_seq_len=CACHE_LEN,
+            slot_num=1,
+            layer_num=num_levels,
+        ),
+        release=lambda p: p.module.layer.release_sub_device_managers(),
     )
     kvpe_cache, rope_tensors, index_kv_cache = _mtp_device_caches(
         config, mesh_device, CACHE_LEN, num_levels, chunk_size=CHUNK

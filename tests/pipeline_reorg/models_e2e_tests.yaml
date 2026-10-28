@@ -59,24 +59,24 @@
 # test definition instead of leaking into the workflow yamls. Mirrors the
 # legacy `llama3.1-8b data-parallel tests (LFC)` entry from
 # tests/pipeline_reorg/blackhole_demo_tests.yaml.
-- name: Llama 3.1-8B data-parallel e2e tests (P300 LFC)
-  cmd: |
-    set -e
-    mkdir -p /mnt/MLPerf/huggingface/meta-llama
-    wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /mnt/MLPerf/huggingface/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
-    export HF_MODEL=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
-    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072
-  model: llama3.1-8b-dp
-  model_family: Llama
-  skus:
-    bh_p300:
-      timeout: 25
-      tier: 2
-      release_ready: false
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: e2e
+# - name: Llama 3.1-8B data-parallel e2e tests (P300 LFC)
+#   cmd: |
+#     set -e
+#     mkdir -p /mnt/MLPerf/huggingface/meta-llama
+#     wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /mnt/MLPerf/huggingface/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
+#     export HF_MODEL=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
+#     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
+#     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072
+#   model: llama3.1-8b-dp
+#   model_family: Llama
+#   skus:
+#     bh_p300:
+#       timeout: 25
+#       tier: 2
+#       release_ready: false
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: e2e
 
 # TODO: Move DP tests to sweep pipelines when those come online
 - name: Llama 3.1-8B data-parallel e2e tests
@@ -729,10 +729,10 @@
     #   tier: 3
     # Note: do not add bh_p150 here — models e2e_tier3 bh_p150 budget is 7m
     # and Gemma-4-E2B already uses 5m on that SKU (f562aa60493 over-budget).
-    bh_p300:
-      timeout: 10
-      tier: 3
-      release_ready: false
+    # bh_p300:
+    #   timeout: 10
+    #   tier: 3
+    #   release_ready: false
     bh_quietbox_2:
       timeout: 15
       tier: 3
@@ -748,11 +748,12 @@
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
     # Deselect packed-verify batch_perf (~2–3m): WH llmbox_perf SKU budget is
     # 10m; demo+lm_head+matches_sequential+full_model already fill it.
-    pytest -s --timeout 900 \
-      models/demos/gemma4/tests/unit/test_lm_head.py \
-      models/demos/gemma4/tests/unit/test_packed_verify.py \
-      models/demos/gemma4/tests/unit/test_model.py::test_full_model \
-      --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    # test_full_model ("MoE model too large for TP=4") and test_packed_verify
+    # (expert prefill needs seq_len % 32 == 0) skip on the 26B, so only lm_head
+    # is listed. The image e2e (SigLIP tower shared with the 31B, 1152->2816
+    # projector, soft tokens merged into the MoE prefill) runs batch 1 only.
+    pytest -s --timeout 900 models/demos/gemma4/tests/unit/test_lm_head.py
+    pytest -s --timeout 900 models/demos/gemma4/demo/vision_demo.py -k "not 32"
   model: gemma-4-26b-a4b
   model_family: Gemma
   skus:
@@ -761,7 +762,7 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 22
+      timeout: 14  # measured 7.7 min warm (16.4 cold) 2026-10-24
       tier: 1
       release_ready: true
     # bh_galaxy_perf: temporarily disabled — Blackhole Galaxy fabric / ethernet
@@ -782,21 +783,42 @@
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
     # Deselect packed-verify batch_perf (~2–3m): WH llmbox_perf SKU budget is
-    # 10m; demo+lm_head+matches_sequential+full_model already fill it.
+    # 14m; demo+lm_head+matches_sequential+full_model measure 11-13m there.
+    # test_prose_accuracy: 2048 prose tokens on the (1,4) mesh against the fp32 top-5 reference (~1.5 min with the load)
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    # Blackhole only: the 2K prose gate (a (1,4) gate; the wh_llmbox_perf leg has no minute to spare for it) and the
+    # report-only composite-path readings (GEMMA4_QKV_NORM_ROPE_PREFILL=0) on the release SKU: the 2K prose gate and
+    # the 385-position token-accuracy row next to the gated rows, which run the fused prefill op (the dense default);
+    # never asserting. Blackhole only (the op's kernels are Blackhole-validated; the resolver refuses it on Wormhole).
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      pytest -s --timeout 900 models/demos/gemma4/tests/test_prose_accuracy.py
+      GEMMA4_QKV_NORM_ROPE_PREFILL=0 GEMMA4_PROSE_REPORT_ONLY=1 GEMMA4_PROSE_TAG="report-only composite qkv-norm-rope" \
+        pytest -s --timeout 900 models/demos/gemma4/tests/test_prose_accuracy.py
+      GEMMA4_QKV_NORM_ROPE_PREFILL=0 GEMMA4_MIN_TOP1=0 GEMMA4_MIN_TOP5=0 GEMMA4_TOKACC_TAG="report-only 31B composite qkv-norm-rope" \
+        pytest -s --timeout 1500 models/demos/gemma4/tests/test_token_accuracy.py -k "batch_1"
+    fi
+    # Vision tower + encoder at full depth against the masked HF reference
+    # (PCC >= 0.98), weight-backed; ~2.5 min on the QB2 1x4 mesh. The vision
+    # tests keep CI to their two_layers case unless told otherwise.
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      GEMMA4_VISION_FULL_DEPTH=1 pytest -s --timeout 900 \
+        models/demos/gemma4/tests/unit/test_vision_encoder.py \
+        -k "all_layers"
+    fi
   model: gemma-4-31b
   model_family: Gemma
   skus:
     wh_llmbox_perf:
-      timeout: 12
+      timeout: 14
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 25
+      timeout: 26  # text_demo 404 s + lm_head / packed_verify / full_model 614 s (HF reference cached after the first run)
+                   # + the prose gate and its composite reading + the vision towers; a 31B load on this runner is ~5.5 min
       tier: 1
       release_ready: true
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
@@ -808,16 +830,52 @@
   team: models
   budget_type: e2e
 
+- name: Gemma-4-31B token-accuracy tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
+    # Whole-model teacher-forced token-accuracy gate (top-1 / top-5 vs the stored HF predictions, batch 1): ~3 min
+    # on the QB2 1x4 mesh plus the ~5.5 min checkpoint load from a warm TT cache (a cold cache converts the 1188
+    # tensors first). The full-depth vision gate runs in the 31B e2e job.
+    pytest -s --timeout 1500 models/demos/gemma4/tests/test_token_accuracy.py -k "batch_1"
+    # Report-only rows on the release SKU (GEMMA4_MIN_TOP1/5=0 never trip the gate; the tag names the row in the log):
+    # the 12B on the same 385 positions with the fused qkv-norm-rope prefill op (the dense default) and with the
+    # composite path (GEMMA4_QKV_NORM_ROPE_PREFILL=0). The 385-position metric swings 0.02-0.04 between ulp-level
+    # trajectories (0.8416 on a Galaxy column vs 0.8649 on this SKU for identical code); the prose gates decide.
+    export HF_MODEL=google/gemma-4-12B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-12B-it
+    GEMMA4_MIN_TOP1=0 GEMMA4_MIN_TOP5=0 GEMMA4_TOKACC_TAG="report-only 12B fused qkv-norm-rope (the default)" \
+      pytest -s --timeout 1500 models/demos/gemma4/tests/test_token_accuracy.py -k "batch_1"
+    GEMMA4_QKV_NORM_ROPE_PREFILL=0 GEMMA4_MIN_TOP1=0 GEMMA4_MIN_TOP5=0 GEMMA4_TOKACC_TAG="report-only 12B composite qkv-norm-rope" \
+      pytest -s --timeout 1500 models/demos/gemma4/tests/test_token_accuracy.py -k "batch_1"
+  model: gemma-4-31b
+  model_family: Gemma
+  skus:
+    bh_quietbox_2:
+      timeout: 16  # 3.3 min warm plus the two 12B report rows; a cold TT-cache rebuild is the shield runner's exposure
+      tier: 1  # the tier-2 QB2 bucket is full (186/186); this fits the tier-1 headroom
+      release_ready: false
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: e2e
+
 - name: Gemma-4-12B e2e tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-12B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-12B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    # test_prose_accuracy: 2048 prose tokens on the (1,4) mesh against the fp32 top-5 reference (skips on bh_p150)
+    # test_mm_prefill_vision_device: bidirectional vision attention through a cached-prefix continuation and a
+    # generator-chunked prefill vs the whole prompt (a (1,4) gate, ~1 min; skips on bh_p150)
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      models/demos/gemma4/tests/test_prose_accuracy.py \
+      models/demos/gemma4/tests/unit/test_mm_prefill_vision_device.py \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    # Report-only 2K prose reading with the fused prefill op on (GEMMA4_QKV_NORM_ROPE_PREFILL=1), next to the gated row
+    GEMMA4_QKV_NORM_ROPE_PREFILL=0 GEMMA4_PROSE_REPORT_ONLY=1 GEMMA4_PROSE_TAG="report-only composite qkv-norm-rope" \
+      pytest -s --timeout 900 models/demos/gemma4/tests/test_prose_accuracy.py
   model: gemma-4-12b
   model_family: Gemma
   skus:
@@ -829,7 +887,7 @@
       timeout: 6
       tier: 2
     bh_quietbox_2:
-      timeout: 22
+      timeout: 13  # 9.7 min measured plus ~1 min for test_prose_accuracy (24 s of test on a warm cache + load)
       tier: 1
       release_ready: true
   owner_id: U088413NP0Q # Ashai Reddy

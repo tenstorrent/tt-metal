@@ -4,23 +4,19 @@
 
 """Combined DRAM-core prefetch + consuming 1D matmul.
 
-``ttnn.experimental.queue_tensor_prefetcher_request`` (fills a DRAM-sender
-delivery target over NOC, off the command queue) and the ``ttnn.linear``
-that drains it are always issued as a pair, against the *same* target and the
+``ttnn.experimental.queue_tensor_prefetcher_request`` (fills DRAM-sender
+PrefetcherPipes over NOC, off the command queue) and the ``ttnn.linear``
+that drains them are always issued as a pair, against the *same* pipes and the
 *same* 1D program config. As two separate calls the caller has to (a)
-hand both the same delivery target, (b) hand both the same ``program_config``, and
+hand both the same pipes, (b) hand both the same ``program_config``, and
 (c) pass a prefetch ``block_count`` that matches what the matmul expects -- three
 couplings nothing enforces.
 
 ``prefetch_and_linear`` issues the pair from one call site so they cannot drift:
-it derives ``block_count``, queues the request, then runs the consuming
-``ttnn.linear`` with the same target and program config. Gather-in0 uses one block
-per ring receiver. Mcast-in0 uses ``K_tiles / in0_block_w`` natural-order blocks
-per receiver.
-
-The delivery target is either a ``GlobalCircularBuffer`` or the list of ``PrefetcherPipe``
-objects from one ``create_prefetcher_pipes_for_tensor_prefetcher`` call; for pipes the block count
-comes from the program config rather than the ring.
+it derives ``block_count`` from the program config, queues the request, then runs
+the consuming ``ttnn.linear`` with the same pipes and program config. Gather-in0
+uses one block per ring receiver. Mcast-in0 uses ``K_tiles / in0_block_w``
+natural-order blocks per receiver.
 
 This is a host-side composition, not a device-level fusion: the prefetch still
 runs on the DRAM-core (DRISC) path off the command queue while the matmul is
@@ -37,17 +33,16 @@ def prefetch_and_linear(
     input_tensor_a,
     weight,
     *,
-    global_cb=None,
-    prefetcher_pipes=None,
+    prefetcher_pipes,
     program_config,
     **linear_kwargs,
 ):
-    """Queue a DRAM-core prefetch of ``weight`` into ``global_cb`` or
-    ``prefetcher_pipes``, then run the 1D matmul (``ttnn.linear``) that consumes it.
+    """Queue a DRAM-core prefetch of ``weight`` into ``prefetcher_pipes``, then run the
+    1D matmul (``ttnn.linear``) that consumes it.
 
     Gather-in0 preserves its existing batched/streaming behavior selected by
     ``program_config.stream_in1``. Mcast-in0 always uses natural FIFO order with
-    ``stream_in1=False`` and can consume from a shallow GCB without a rotation table,
+    ``stream_in1=False`` and can consume from a shallow ring without a rotation table,
     on either DRAM weight layout.
 
     Args:
@@ -55,12 +50,10 @@ def prefetch_and_linear(
         weight: DRAM-sharded weight (in1) to prefetch and multiply by, in either the legacy
             WIDTH_SHARDED K-row-major or the receiver-contiguous layout. Streaming gather
             (``stream_in1``) requires the receiver-contiguous layout.
-        global_cb: DRAM-sender GlobalCircularBuffer shared by the prefetch and
-            the matmul. Supply exactly one of ``global_cb`` / ``prefetcher_pipes``.
         prefetcher_pipes: The DRAM-sender PrefetcherPipes (every pipe of one
             ``create_prefetcher_pipes_for_tensor_prefetcher`` call) shared by the prefetch and
-            the matmul, as an alternative to ``global_cb``. Receiver-contiguous weight only;
-            mcast-in0 or gather-in0.
+            the matmul. A K-row-major weight needs one pipe per bank
+            (``support_multi_receiver_shards=True``); mcast-in0 or gather-in0.
         program_config: 1D matmul program config driving the matmul.
         **linear_kwargs: Forwarded to ``ttnn.linear`` (e.g. ``memory_config``,
             ``compute_kernel_config``, ``dtype``, ``bias``). A ``queue_id``/``cq_id``
@@ -73,20 +66,15 @@ def prefetch_and_linear(
     Returns:
         The ``ttnn.linear`` output tensor.
     """
-    if (global_cb is None) == (prefetcher_pipes is None):
-        raise ValueError("prefetch_and_linear needs exactly one delivery target: global_cb or prefetcher_pipes")
-    # Passed through by name only when set: the bindings take a GCB or a (default-empty) pipe list,
-    # neither of which accepts None for the other transport.
-    target_kwargs = {"global_cb": global_cb} if global_cb is not None else {"prefetcher_pipes": prefetcher_pipes}
-
+    # Rejected before the prefetch is queued: ttnn.linear would reject a global_cb beside the pipes,
+    # but only after the request went out, and with no matmul to consume it, stopping the prefetcher
+    # waits forever for its acks.
+    if linear_kwargs.get("global_cb") is not None:
+        raise ValueError("prefetch_and_linear delivers through prefetcher_pipes only; it does not take a global_cb")
     device = input_tensor_a.device()
-    if prefetcher_pipes is not None or program_config.mcast_in0 or program_config.stream_in1:
-        block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(
-            program_config, weight, **target_kwargs
-        )
-    else:
-        # Gather consumes one K-block per ring position.
-        block_count = global_cb.receiver_cores().num_cores()
+    block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(
+        program_config, weight, prefetcher_pipes=prefetcher_pipes
+    )
 
     # Streaming gather needs identity ring rotation (``rotation[r] = r``). That table is
     # layout-agnostic -- identical for ROUND_ROBIN_1D and CONTIGUOUS_1D receiver-contiguous
@@ -110,7 +98,7 @@ def prefetch_and_linear(
     ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [request],
-        **target_kwargs,
+        prefetcher_pipes=prefetcher_pipes,
         # Capture against the queue the matmul below dispatches on, so both halves land in the
         # one trace. Left False, a capture region would take the matmul but send the prefetch
         # immediately -- a replay would never refill the ring and the matmul would hang.
@@ -121,6 +109,6 @@ def prefetch_and_linear(
         input_tensor_a,
         weight,
         program_config=program_config,
-        **target_kwargs,
+        prefetcher_pipes=prefetcher_pipes,
         **linear_kwargs,
     )
