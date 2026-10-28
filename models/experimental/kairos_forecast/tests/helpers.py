@@ -29,6 +29,13 @@ LOWER_IS_BETTER = {"route_mismatch_rows", "bias_max_abs_diff", "abs_err_max"}
 # Report-only for free-running rollout steps >= 2 and e2e_stream (D0 amendment 1).
 REPORT_ONLY_ROUTING_KEYS = {"route_mismatch_rows", "bias_max_abs_diff", "min_top3_margin"}
 
+# Device module tests (tests/pcc/test_modules.py, v1.24: asserted in both precisions). Proposed at the G1 re-raise
+# from the measured minimum over the test goldens; provisional until the decision.
+MODULE_FLOORS = {
+    m: {"accuracy": 0.999, "performance": 0.99}
+    for m in ("embed", "rope_qk", "enc_block", "enc_chain", "enc_out", "cross_attn", "dec_self")
+}
+
 DRIFT = {}  # set from the fixed round-0 record at G1
 
 # Padded lengths and SDPA chunks the code can reach (PLAN v1.20). Each needs an F1/F9 test and a v1.13
