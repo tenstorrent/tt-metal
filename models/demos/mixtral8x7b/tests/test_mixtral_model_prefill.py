@@ -14,7 +14,7 @@ from models.ttt_compat.tt.common import PagedAttentionConfig, create_tt_model
 from models.ttt_compat.tt.generator import Generator
 from models.ttt_compat.tt.model_config import DecodersPrecision
 
-# pytest models/ttt_compat/tests/mixtral/test_mixtral_model_prefill.py
+# pytest models/demos/mixtral8x7b/tests/test_mixtral_model_prefill.py
 
 
 @torch.no_grad()
@@ -167,7 +167,7 @@ def test_model_inference(
 
     # Load prompt
     current_file_path = os.path.abspath(__file__)
-    current_file_dir = os.path.dirname(os.path.dirname(current_file_path))
+    current_file_dir = os.path.dirname(current_file_path)
     prompt_file = os.path.join(current_file_dir, "tale-of-two-cities.txt.bz2")
     with bz2.open(prompt_file, "rt", encoding="utf-8") as f:
         prompt = f.read()

@@ -4,19 +4,23 @@
 import pytest
 import torch
 from loguru import logger
-from transformers.models.mixtral.modeling_mixtral import MixtralDecoderLayer, MixtralRotaryEmbedding
+from transformers.models.mixtral.modeling_mixtral import (
+    MixtralDecoderLayer,
+    MixtralRotaryEmbedding,
+    create_causal_mask,
+    create_sliding_window_causal_mask,
+)
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.ttt_compat.tt.ccl import TT_CCL
-from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.common import Mode, get_prefill_rot_mat, get_rot_transformation_mat
 from models.ttt_compat.tt.decoder import TransformerBlock as TtTransformerBlock
 from models.ttt_compat.tt.model_config import ModelArgs
-from models.ttt_compat.tt.rope import RotarySetup
 
 from .utils import fuse_mixtral_experts, load_hf_mixtral_config
 
-# pytest models/ttt_compat/tests/mixtral/test_mixtral_decoder.py
+# pytest models/demos/mixtral8x7b/tests/test_mixtral_decoder_prefill.py
 
 
 def convert2ref(state_dict):
@@ -57,25 +61,24 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
     h: hidden size
     """
 
-    pcc = 0.98
+    pcc = 0.99
     dtype = ttnn.bfloat8_b
-
-    if batch == 32:
-        generation_start_pos = 15000
-        max_seq_len = 16384
-    elif batch in [4, 8, 16]:
-        generation_start_pos = 30000
-        max_seq_len = 32768
-    else:
-        raise ValueError(f"Batch size {batch} not supported")
+    mode = Mode.PREFILL
+    batch = 1
+    max_seq_len = 1024
 
     hf_config = load_hf_mixtral_config()
     model_args = ModelArgs(mesh_device, max_seq_len=max_seq_len, max_batch_size=batch)
-    model_args.use_qk_fused = False
-    model_args.n_layers = layer_idx + 1
+    model_args.n_layers = 1
+
+    mesh_device.disable_and_clear_program_cache()
+
     state_dict = model_args.load_state_dict()
-    partial_state_dict = {k[9:]: v for k, v in state_dict.items() if (k.startswith(f"layers.{layer_idx}."))}
-    reference_model = MixtralDecoderLayer(hf_config, layer_idx)
+    first_layer_prefix = model_args.get_state_dict_prefix("TransformerBlock", layer_idx)
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
+    reference_model = MixtralDecoderLayer(hf_config, layer_idx=layer_idx)
     # transformers 5.x: experts are fused into mlp.experts.{gate_up_proj,down_proj}
     reference_model.load_state_dict(
         fuse_mixtral_experts(
@@ -85,64 +88,58 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
     reference_rotary_emb = MixtralRotaryEmbedding(config=hf_config)
 
     # Initialize TT model
-    rope_setup = RotarySetup(
-        mesh_device,
-        model_args.max_batch_size,
+    rot_mats = get_prefill_rot_mat(
         model_args.head_dim,
-        model_args.max_seq_len,
+        mesh_device,
+        max_seq_len,
         model_args.rope_theta,
-        model_args.rope_scaling,
+        model_args.rope_scaling.factor if model_args.rope_scaling else None,
+        model_args.max_context_len,
     )
+    transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
+    transformation_mats_prefill = ttnn.as_tensor(
+        transformation_mat_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    transformation_mats = {"prefill": transformation_mats_prefill}
+
     tt_ccl = TT_CCL(mesh_device)
     tt_model = TtTransformerBlock(
         mesh_device=mesh_device,
         state_dict=state_dict,
-        args=model_args,
+        weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=layer_idx,
         dtype=dtype,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        transformation_mats=rope_setup.get_both_trans_mats(),
+        transformation_mats=transformation_mats,
+        args=model_args,
         tt_ccl=tt_ccl,
     )
 
     generation_length = 10
     all_tests_pass = True
-
-    seqlen = 1
+    generation_start_pos = 0
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
-
-        pt_decode_input_bsh = (torch.rand(batch, seqlen, model_args.dim) * 2) - 1
-
-        start_pos = generation_start_pos + i
-        start_pos_ids = torch.tensor([start_pos for _ in range(batch)])
-        current_pos_tensor = ttnn.from_torch(
-            start_pos_ids,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, None),
-                mesh_shape=model_args.cluster_shape,
-            ),
-        )
-
+        pt_decode_input_bsh = (torch.rand(batch, max_seq_len, model_args.dim) * 2) - 1
         tt_decode_input = pt_decode_input_bsh.clone()
-
-        decode_input = model_args.prepare_residual_tensor_decode(
+        decode_input = model_args.prepare_residual_tensor_prefill(
             tt_decode_input,
-            model_args.get_residual_mem_config(Mode.DECODE, None),
         )
-
-        rot_mats = rope_setup.get_rot_mats(start_pos_ids)
 
         # Run TT model
+        start_pos = generation_start_pos + i
+        start_pos_ids = [start_pos for _ in range(batch)]
         tt_out_b1sh = tt_model(
             decode_input,
-            current_pos_tensor,
-            rot_mats_global=rot_mats,
-            mode=Mode.DECODE,
+            None,
+            rot_mats,
+            user_id=0,
+            mode=mode,
         )
         tt_out = (
             ttnn.to_torch(
@@ -150,12 +147,24 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
             )[0]
             .squeeze(0)
-            .view(batch, 1, -1)
+            .view(batch, max_seq_len, -1)
         )
 
         # Reference model
-        positions = torch.LongTensor([start_pos])
-        position_ids = positions.unsqueeze(0)
+        positions = torch.LongTensor(range(max_seq_len))
+        # Causal mask generated as in HF Mixtral model: https://github.com/huggingface/transformers/blob/a7f29523361b2cc12e51c1f5133d95f122f6f45c/src/transformers/models/mixtral/modeling_mixtral.py#L473
+        mask_function = create_causal_mask if hf_config.sliding_window is None else create_sliding_window_causal_mask
+        # transformers 5.x create_causal_mask: input_embeds -> inputs_embeds, and cache_position
+        # was dropped in favour of position_ids.
+        causal_mask = mask_function(
+            config=hf_config,
+            inputs_embeds=pt_decode_input_bsh,
+            attention_mask=None,
+            past_key_values=None,
+            position_ids=positions.unsqueeze(0),
+        )
+
+        position_ids = positions.unsqueeze(0).expand(batch, -1)
         position_embeddings = reference_rotary_emb(pt_decode_input_bsh, position_ids)
 
         # transformers 5.x MixtralDecoderLayer.forward returns a single tensor (older versions
@@ -163,11 +172,14 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
         # so assign directly and take element 0 only when a tuple/list is returned.
         ref_output_bsh = reference_model(
             hidden_states=pt_decode_input_bsh,
+            attention_mask=causal_mask,
             position_ids=position_ids,
             position_embeddings=position_embeddings,
         )
         if isinstance(ref_output_bsh, (tuple, list)):
             ref_output_bsh = ref_output_bsh[0]
+
+        # Reference model
         passing, pcc_message = comp_pcc(ref_output_bsh, tt_out, pcc)
 
         logger.info(comp_allclose(ref_output_bsh, tt_out))
