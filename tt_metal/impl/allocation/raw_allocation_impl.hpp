@@ -67,6 +67,9 @@ struct RawAllocationImpl {
     // Release allocation
     ~RawAllocationImpl() = default;
 
+    // Return whether the allocation kind, per-bank size, and node set exactly match the given properties.
+    bool matches_properties(const RawAllocationProperties& properties) const;
+
     static RawAllocationImpl allocate_on_sram(
         distributed::MeshDevice& device, LockstepAllocationProperties properties) {
         TT_FATAL(properties.per_bank_size > 0, "allocate_on_sram requires a non-zero per-bank size");

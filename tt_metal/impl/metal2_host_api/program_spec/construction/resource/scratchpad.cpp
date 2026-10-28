@@ -71,10 +71,11 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
         handle.llk_metadata = LLKMetadataFromScratchpad(*scratchpad_spec);
+        handle.borrowed_from = scratchpad_spec->advanced_options.borrowed_from;
         if (scratchpad_spec->advanced_options.allow_instance_multi_binding) {
             handle.shared_allocation_identifier = scratchpad_spec->unique_id;
         }
-        // handle.allocated_address stays 0 until allocate_scratchpads runs.
+        // The address stays 0 until local allocation or RawAllocation argument binding.
         out.handles.push_back(std::move(handle));
         crta_word_index += 1;  // one address word per scratchpad binding
     }

@@ -23,6 +23,7 @@
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
+#include "tt-metalium/experimental/allocation/raw_allocation_properties.hpp"
 #include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
@@ -617,6 +618,24 @@ public:
     void register_tensor_parameter(
         const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations);
 
+    // Describes the required properties and device of a RawAllocation argument.
+    struct RegisteredRawAllocationParameter {
+        experimental::RawAllocationProperties properties;
+        // invariant: The device outlives the program.
+        std::reference_wrapper<const distributed::MeshDevice> device;
+    };
+
+    // Declare the required properties and device for a named allocation argument.
+    // precondition: device outlives the program.
+    // side-effect: Add the declaration to the program's runtime argument schema.
+    void register_raw_allocation_parameter(
+        const std::string& name,
+        const experimental::RawAllocationProperties& properties,
+        const distributed::MeshDevice& device);
+
+    // Return the program's RawAllocation parameter declarations.
+    const std::unordered_map<std::string, RegisteredRawAllocationParameter>& get_raw_allocation_parameters() const;
+
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const std::string& name) const;
     uint32_t get_dfb_handle(const std::string& name) const;
@@ -761,6 +780,7 @@ private:
             std::optional<BoundTensorFootprint> bound;
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
+        std::unordered_map<std::string, RegisteredRawAllocationParameter> raw_allocation_parameters;
 
         // Borrowed-memory DFB bindings: each entry is (dfb_id, tensor_parameter_name).
         std::vector<std::pair<uint32_t, std::string>> dfb_borrowed_bindings;

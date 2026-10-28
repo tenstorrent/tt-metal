@@ -71,6 +71,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/merge_program_run_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/named_runtime_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/prefetcher_pipe_args.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/raw_allocation_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/runtime_varargs.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/tensor_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/update_program_run_args.cpp

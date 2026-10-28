@@ -8,9 +8,11 @@
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/experimental/allocation/raw_allocation.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
@@ -18,6 +20,7 @@
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/fmt.hpp>
+#include "impl/allocation/raw_allocation_impl.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/metal2_host_api/tensor_binding_crtas.hpp"
@@ -201,6 +204,57 @@ void ValidateTensorArgs(
                 tensor_parameters_with_params.contains(declared),
                 "TensorParameter '{}' is declared in the Program but has no TensorArgument entry.",
                 declared);
+        }
+    }
+}
+
+void ValidateRawAllocationArgs(
+    const Program& program,
+    const Table<RawAllocationParamName, AdvancedProgramRunArgs::RawAllocationArgument>& args,
+    bool require_all) {
+    const auto& declarations = program.impl().get_raw_allocation_parameters();
+    for (const auto& [name, argument] : args) {
+        const auto it = declarations.find(name.get());
+        TT_FATAL(
+            it != declarations.end(), "RawAllocationArgument references unknown RawAllocationParameter '{}'.", name);
+        const auto& allocation = argument.get().impl();
+        TT_FATAL(
+            allocation.backing.device() == &it->second.device.get(),
+            "RawAllocationArgument for '{}' belongs to a different MeshDevice.",
+            name);
+        TT_FATAL(
+            allocation.matches_properties(it->second.properties),
+            "RawAllocationArgument for '{}' properties do not match the RawAllocationParameter declaration.",
+            name);
+    }
+    if (require_all) {
+        for (const auto& [name, declaration] : declarations) {
+            TT_FATAL(
+                args.contains(RawAllocationParamName{name}),
+                "RawAllocationParameter '{}' is declared in the Program but has no RawAllocationArgument entry.",
+                name);
+        }
+    }
+}
+
+void BindRawAllocationArgs(
+    detail::ProgramImpl& program,
+    const Table<RawAllocationParamName, AdvancedProgramRunArgs::RawAllocationArgument>& args) {
+    if (args.empty()) {
+        return;
+    }
+    for (const auto& name : program.get_registered_kernel_names()) {
+        auto kernel = program.get_kernel_by_spec_name(name);
+        for (auto& binding : kernel->scratchpad_binding_handles()) {
+            if (!binding.borrowed_from) {
+                continue;
+            }
+            const auto& source = *binding.borrowed_from;
+            if (const auto argument = args.get(source.allocation)) {
+                const auto base =
+                    std::visit([](const auto& layout) { return layout.addr; }, argument->get().impl().layout);
+                SetScratchpadBindingAddress(*kernel, binding, base + source.offset);
+            }
         }
     }
 }
@@ -512,6 +566,8 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     // Validate tensor runtime parameters (delegated to shared helper).
     ValidateTensorArgs(program, params.tensor_args);
 
+    ValidateRawAllocationArgs(program, params.advanced_options.raw_allocation_args, /*require_all=*/true);
+
     // Validate PrefetcherPipe arguments (delegated to shared helper; full path requires all).
     ValidatePrefetcherPipeArgs(program, params.advanced_options.prefetcher_pipe_args, /*require_all=*/true);
 }
@@ -691,6 +747,8 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     }
 
     detail::ProgramImpl& program_impl = program.impl();
+
+    BindRawAllocationArgs(program_impl, params.advanced_options.raw_allocation_args);
 
     // Build a tensor_parameter_name -> MeshTensor lookup from the user's TensorArgument entries.
     // Used below to fill each kernel's TensorBinding CRTA section: at minimum, the binding's
@@ -1287,6 +1345,8 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
     // ones are validated against their declared spec.
     ValidateTensorArgs(program, params.tensor_args, /*require_all=*/false);
 
+    ValidateRawAllocationArgs(program, params.advanced_options.raw_allocation_args, /*require_all=*/false);
+
     // PrefetcherPipe args: any may be omitted (the binding is sticky); a supplied one must name a
     // declared parameter and match its geometry.
     ValidatePrefetcherPipeArgs(program, params.advanced_options.prefetcher_pipe_args, /*require_all=*/false);
@@ -1310,6 +1370,8 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
     if (!skip_validation) {
         ValidateUpdateProgramRunArgs(program, params);
     }
+
+    BindRawAllocationArgs(program_impl, params.advanced_options.raw_allocation_args);
 
     // Patch the supplied args in place. Omitted named args and tensor params are left untouched,
     // retaining the value installed by the most recent SetProgramRunArgs. A supplied positional
@@ -1469,6 +1531,16 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
 
 ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation) {
     for (const ProgramRunArgs& other : rest) {
+        for (const auto& [name, argument] : other.advanced_options.raw_allocation_args) {
+            if (!skip_validation) {
+                TT_FATAL(
+                    !base.advanced_options.raw_allocation_args.contains(name),
+                    "MergeProgramRunArgs: RawAllocationParameter '{}' is specified in more than one ProgramRunArgs.",
+                    name);
+            }
+            base.advanced_options.raw_allocation_args.insert({name, argument});
+        }
+
         // Tensor args: union by TensorParameter name (disjoint).
         for (const auto& [name, arg] : other.tensor_args) {
             if (!skip_validation) {

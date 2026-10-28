@@ -647,7 +647,9 @@ KernelHandle detail::ProgramImpl::add_kernel(
         }
     }
 
-    if (!kernel->scratchpad_binding_handles().empty()) {
+    if (std::ranges::any_of(kernel->scratchpad_binding_handles(), [](const auto& binding) {
+            return !binding.borrowed_from.has_value();
+        })) {
         register_ephemeral_allocation(this->dfb_allocation_metadata_, kernel->core_range_set());
     }
 
@@ -852,6 +854,24 @@ void ProgramImpl::register_tensor_parameter(
     auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(
         name, Metal2NameRegistry::RegisteredTensorParameter{spec, relaxations});
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
+}
+
+void ProgramImpl::register_raw_allocation_parameter(
+    const std::string& name,
+    const experimental::RawAllocationProperties& properties,
+    const distributed::MeshDevice& device) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    const auto [it, inserted] = metal2_registry_->raw_allocation_parameters.try_emplace(
+        name, RegisteredRawAllocationParameter{properties, std::cref(device)});
+    TT_FATAL(inserted, "Duplicate raw allocation parameter name: {}", name);
+}
+
+const std::unordered_map<std::string, ProgramImpl::RegisteredRawAllocationParameter>&
+ProgramImpl::get_raw_allocation_parameters() const {
+    static const std::unordered_map<std::string, RegisteredRawAllocationParameter> empty;
+    return metal2_registry_ ? metal2_registry_->raw_allocation_parameters : empty;
 }
 
 const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& name) const {
@@ -2231,7 +2251,7 @@ void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
     for (const auto& kernels_of_core_type : this->kernels_) {
         for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
             for (const auto& handle : kernel->scratchpad_binding_handles()) {
-                if (handle.shared_allocation_identifier) {
+                if (handle.shared_allocation_identifier && !handle.borrowed_from) {
                     auto& cores = shared_cores[*handle.shared_allocation_identifier];
                     cores = cores.merge(kernel->core_range_set());
                 }
@@ -2277,6 +2297,9 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
             }
             const CoreRangeSet& kernel_cores = kernel->core_range_set();
             for (auto& handle : scratchpad_handles) {
+                if (handle.borrowed_from) {
+                    continue;
+                }
                 // Multi-binded scratchpad, let's collect it and deal with it later
                 if (auto id = handle.shared_allocation_identifier) {
                     multi_binded_scratchpads[*id].emplace_back(handle, *kernel);

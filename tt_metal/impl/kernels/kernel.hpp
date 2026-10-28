@@ -167,21 +167,21 @@ struct TensorBindingHandle {
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
 // A scratchpad is an uninitialized, node-local L1 region, private to a kernel by default.
-//  - The base address is allocated at Program-compile time, and is passed to the kernel as an
-//    implicit CRTA.
+//  - The base address is allocated at Program-compile time or supplied through a RawAllocation
+//    argument, and is passed to the kernel as an implicit CRTA.
 //  - Since the address is persistent across enqueues, we store it on the Kernel object rather
 //    than rely on the statefulness of the CRTA buffer. (The invariant of SetProgramRunArgs is that
 //    the CRTA and RTA buffers are completely overwritten when it's called.)
 //  - It is possible for DFB size overrides to be applied between enqueues. If this happens, the
 //    allocated scratchpad addresses will update between enqueues as well.
-//  - The allocated address is 0 until allocate_scratchpads runs.
+//  - The address is 0 until local memory is allocated or a RawAllocation argument is bound.
 //  - Unlike ScratchpadBindingHandle, TensorBindingHandle does NOT store the address, as for bound
 //    tensors the base address is strictly a user enqueue-time argument.
 struct ScratchpadBindingHandle {
     std::string accessor_name;       // user-facing identifier (kernel symbol in `scratch::`)
     uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
     uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
-    uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
+    uint32_t allocated_address = 0;  // L1 base address; 0 until allocated or bound
     std::optional<LLKMetadata> llk_metadata;  // LLK related metadata (dataformat/ tile format)
     // Present only if the binding handle could share it's allocation with another scratchpad.
     // Configured in advanced options: ScratchpadAdvancedOptions::allow_instance_multi_binding.
@@ -194,6 +194,7 @@ struct ScratchpadBindingHandle {
     // The ScratchpadSpecName serves as an identifier & does not carry specific meaning.
     using AllocationIdentifier = experimental::ScratchpadSpecName;
     std::optional<experimental::ScratchpadSpecName> shared_allocation_identifier;
+    std::optional<experimental::ScratchpadAdvancedOptions::RawAllocationBorrowing> borrowed_from;
 };
 
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).
