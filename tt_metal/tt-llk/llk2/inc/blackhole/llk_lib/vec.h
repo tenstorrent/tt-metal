@@ -28,17 +28,21 @@
 //
 // Which thread drives the SFPU. Either the math or the pack thread can issue SFPU instructions; each has its own
 // Dest offset register, row counters and address modifiers, so configure and execute are the same on both. They
-// differ in the hand-over around the call, which belongs to the Dest sync API, not to the op:
-//   math   the FPU wrote Dest on the same thread: execute stalls the SFPU until the FPU is idle. The math thread then
-//          hands Dest to the packer as usual (today: _llk_math_dest_section_done_, which also waits for the SFPU).
-//   pack   the math thread has handed Dest over already (today: _llk_packer_wait_for_math_done_ before the call). The
-//          FPU is idle, so the same stall passes at once. After the last tile, vec stalls the packer until the SFPU is
-//          idle, so the pack that follows reads the results (today's apply_activation_from_pack does the same).
-//          get_dest_buffer_base() is the pack thread's copy, which follows the packer's Dest half.
+// differ in the hand-over around the call, which belongs to the Dest sync API (compute_api/dest.h), not to the op:
+//   math   call between dest_acquire and dest_commit. The FPU wrote Dest on the same thread: execute stalls the SFPU
+//          until the FPU is idle. Math's dest_commit waits for the SFPU before it hands the section to the packer.
+//   pack   call between dest_commit and pack. The pack thread's dest_commit is a SEMWAIT on MATH_PACK that blocks
+//          only Tdma and Sync instructions, not SFPU or Config ones, so on its own it would not hold the SFPU back.
+//          What holds it back is the ISA's rule that a STALLWAIT does not execute while an earlier wait is still
+//          latched, and later instructions queue behind it (tt-isa-documentation, WormholeB0/.../STALLWAIT.md):
+//          the first instruction vec issues is configure's STALLWAIT, so nothing of vec reaches the SFPU or the
+//          Config unit before math has posted MATH_PACK. That is what _llk_packer_wait_for_math_done_ gave the old
+//          *_tile_pack calls. After the last tile, vec stalls the packer until the SFPU is idle, so the pack that
+//          follows reads the results (as today's apply_activation_from_pack does).
+// Either way the Dest offset is the tensor's address (the absolute Dest row) plus the tile's rows: no section base.
 //
 // Not HAL yet:
 //   - SFPCONFIG (the SFPU lane config): ckernel::sfpu::_init_sfpu_config_reg(), flagged below.
-//   - get_dest_buffer_base(): the base of the Dest half the calling thread works on now (as matmul.h).
 //   - The SFPI init functions also issue one SETRWC each (math::reset_counters); they are called as they are.
 
 #pragma once
@@ -49,6 +53,7 @@
 #include "hal/cfg.h"
 #include "hal/sync.h"
 #include "hal/tensix_counters.h"
+#include "llk_lib/math_common.h" // counter_step, set_addr_mod
 #include "llk_lib/thread.h"
 #include "resolver/plan.h"
 #include "resolver/vec_function.h"
@@ -100,19 +105,19 @@ constexpr vec_params vec_params_from(const Plan& p)
     };
 }
 
-inline constexpr int sfpu_iterations_per_face       = 8;  ///< one SFPI iteration covers 4 rows x 8 columns; 8 cover a 16 x 16 face
-inline constexpr std::uint32_t max_rwc_step         = 15; ///< the largest step SETRWC takes (a 4-bit field)
-inline constexpr std::uint32_t faces_per_32x32_tile = 4;  ///< 2 x 2 faces of 16 x 16
+inline constexpr int vec_iterations_per_face      = 8;  ///< one SFPI iteration covers 4 rows x 8 columns; 8 cover a 16 x 16 face
+inline constexpr std::uint32_t vec_max_rwc_step   = 15; ///< the largest step SETRWC takes (a 4-bit field)
+inline constexpr std::uint32_t vec_faces_per_tile = 4;  ///< 2 x 2 faces of 16 x 16
 
 /// Dest rows one tile takes.
-constexpr std::uint32_t dest_rows_per_tile(const vec_params& p)
+constexpr std::uint32_t vec_dest_rows_per_tile(const vec_params& p)
 {
     return p.num_faces * p.face_r_dim;
 }
 
 /// The address modifier slot SFPI loads and stores name (sfpi_constants.h: SFPLOAD_ADDR_MODE_NOINC). It moves no
 /// counter: SFPI steps the Dest row counter itself.
-inline constexpr cfg::Sec sfpi_addr_mod = cfg::Sec::S7;
+inline constexpr cfg::Sec vec_sfpi_addr_mod = cfg::Sec::S7;
 
 /// Runs the SFPI init of function P.function: its programmable constants and lookup tables. SFPI, not HAL.
 template <vec_params P>
@@ -180,7 +185,7 @@ inline __attribute__((always_inline)) void vec_function_face([[maybe_unused]] Sc
     using namespace ckernel::sfpu;
     constexpr bool fast = P.fast;
     constexpr bool fp32 = P.dest_fp32;
-    constexpr int n     = sfpu_iterations_per_face;
+    constexpr int n     = vec_iterations_per_face;
     if constexpr (P.function == VecFunction::Silu)
     {
         calculate_silu<fp32, n>();
@@ -237,10 +242,11 @@ inline __attribute__((always_inline)) void vec_configure()
 {
     using namespace hal::counters::rwc;
     static_assert(
-        P.num_faces == faces_per_32x32_tile && P.face_r_dim == max_face_rows, "32x32 tiles only, for now: the face loop below assumes four 16-row faces");
+        P.num_faces == vec_faces_per_tile && P.face_r_dim == max_face_rows, "32x32 tiles only, for now: the face loop below assumes four 16-row faces");
     static_assert(P.function != VecFunction::None, "name an SFPU function");
 
-    // The SFPU's Dest mode is ALU config, shared with the FPU: wait for both to drain before writing it.
+    // The SFPU's Dest mode is ALU config, shared with the FPU: wait for both to drain before writing it. This STALLWAIT
+    // is the first instruction vec issues; on the pack thread it also waits out dest_commit's SEMWAIT (see above).
     hal::sync::wait::stall<StallTarget::Config, StallCondition::MathIdle | StallCondition::SfpuIdle>();
     cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::SFPU_Fp32_enabled, cfg::Sec::S0, P.dest_fp32 ? 1u : 0u>();
 
@@ -249,22 +255,9 @@ inline __attribute__((always_inline)) void vec_configure()
     ckernel::sfpu::_init_sfpu_config_reg();
 #endif
 
-    // The SFPI address modifier: no counter moves (fields this does not name are 0).
-    using cfg::AddrMod;
-    cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::set<AddrMod[cfg::SrcA].Incr, sfpi_addr_mod, 0>(),
-        cfg::set<AddrMod[cfg::SrcA].Clear, sfpi_addr_mod, 0>(),
-        cfg::set<AddrMod[cfg::SrcA].CR, sfpi_addr_mod, 0>(),
-        cfg::set<AddrMod[cfg::SrcB].Incr, sfpi_addr_mod, 0>(),
-        cfg::set<AddrMod[cfg::SrcB].Clear, sfpi_addr_mod, 0>(),
-        cfg::set<AddrMod[cfg::SrcB].CR, sfpi_addr_mod, 0>());
-    cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::set<AddrMod[cfg::Dest].Incr, sfpi_addr_mod, 0>(),
-        cfg::set<AddrMod[cfg::Dest].Clear, sfpi_addr_mod, 0>(),
-        cfg::set<AddrMod[cfg::Dest].CR, sfpi_addr_mod, 0>(),
-        cfg::set<AddrMod[cfg::Fidelity].Incr, sfpi_addr_mod, 0>(),
-        cfg::set<AddrMod[cfg::Fidelity].Clear, sfpi_addr_mod, 0>());
-    cfg::write<cfg::Access::TensixCfgUnit, AddrMod[cfg::Bias].Incr, sfpi_addr_mod, 0>();
+    // The SFPI address modifier: no counter moves.
+    constexpr counter_step stay {0, 0, 0}; // counter unchanged
+    set_addr_mod<vec_sfpi_addr_mod, stay, stay, stay>();
 
     // Every row counter and the fidelity phase to 0.
     set<MathCounter {.src_a = Set(0), .src_b = Set(0), .dest = Set(0), .clear_fidelity = true}>();
@@ -272,7 +265,7 @@ inline __attribute__((always_inline)) void vec_configure()
     vec_function_init<P>();
 }
 
-/// The function on every tile of the tensor that starts at dest_row (relative to the current Dest section), in place.
+/// The function on every tile of the tensor that starts at dest_row (the absolute Dest row), in place.
 template <vec_params P, class... Scalars>
 inline __attribute__((always_inline)) void vec_execute(std::uint32_t dest_row, Scalars... scalars)
 {
@@ -280,13 +273,12 @@ inline __attribute__((always_inline)) void vec_execute(std::uint32_t dest_row, S
     // The Dest row counter moves one face per face. SETRWC steps at most 15 rows, so a 16-row face is two half steps,
     // each through the CR: SFPI's own row steps inside the face do not count.
     constexpr std::uint32_t half_face = P.face_r_dim / 2;
-    static_assert(half_face <= max_rwc_step, "a half face must fit one SETRWC step");
+    static_assert(half_face <= vec_max_rwc_step, "a half face must fit one SETRWC step");
     constexpr MathCounter next_half_face {.dest = AdvanceAndReset(half_face)};
 
     for (std::uint32_t tile = 0; tile < P.tiles; tile++)
     {
-        cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(
-            dest_row + tile * dest_rows_per_tile(P) + ckernel::get_dest_buffer_base());
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(dest_row + tile * vec_dest_rows_per_tile(P));
         // The SFPU waits until the FPU has finished writing Dest.
         hal::sync::wait::stall<StallTarget::Sfpu, StallCondition::MathIdle>();
 #pragma GCC unroll 0
