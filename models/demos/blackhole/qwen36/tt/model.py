@@ -18,6 +18,7 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.blackhole.qwen36.tt import tp_common as _tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.prefix_cache import alloc_zeros_like
@@ -383,6 +384,18 @@ class Qwen36Model:
             **(dict(mesh_mapper=lm_mapper) if lm_mapper is not None else {}),
         )
 
+        # QWEN36_LMHEAD_DSHARD (default 0): decode-shaped head calls (<= 32 rows) read a DRAM-width-sharded copy of
+        # the vocab-sharded weight (+1 head copy of DRAM per device); everything else keeps lm_head_weight.
+        self._lm_head_dshard = None
+        _dshard_mode = _tpc.lm_head_dshard_mode()
+        if _dshard_mode is not None:
+            if self._lmhead_vocab_sharded:
+                self._lm_head_dshard = _tpc.LMHeadDShard(
+                    self.lm_head_weight, mesh_device, _dshard_mode, _tpc.lm_head_dshard_readers()
+                )
+            else:
+                logger.warning("QWEN36_LMHEAD_DSHARD ignored: the LM head is not vocab-sharded")
+
         self.vocab_size = args.vocab_size
         # True: return pre-gather vocab-sharded logits for per-shard argmax + host combine.
         self._ondev_argmax = False
@@ -742,6 +755,15 @@ class Qwen36Model:
         """Generator mode-change hook; no-op (no prefetcher)."""
         return None
 
+    def _lm_head_linear(self, x, **kw):
+        """The LM-head matmul ``ttnn.linear(x, lm_head_weight, **kw)`` (kw: dtype / compute_kernel_config). With
+        QWEN36_LMHEAD_DSHARD on, a decode-shaped x (<= 32 rows) reads the DRAM-sharded weight copy instead and
+        returns the same DRAM-interleaved [.., rows, vocab/TP] logits."""
+        d = getattr(self, "_lm_head_dshard", None)  # absent on __new__-built test doubles
+        if d is not None and d.applies(x):
+            return d.linear(x, **kw)
+        return ttnn.linear(x, self.lm_head_weight, **kw)
+
     def _lm_head(self, x, out_dtype=None, gather=True):
         """LM-head matmul. Vocab-sharded mesh: partial logits + all-gather to full replicated.
         Single device: plain matmul. ``gather=False`` returns the per-device vocab shard [.., vocab/TP]
@@ -769,7 +791,7 @@ class Qwen36Model:
             # the fp32 -> bf16 cast on this [1,1,B,vocab/tp] tensor actually returns garbage (the
             # drafter's argmax came back with an out-of-range id). Gather at the head's own dtype.
             ccl_kw = dict(dtype=out_dtype)
-        logits = ttnn.linear(x, self.lm_head_weight, **kw)
+        logits = self._lm_head_linear(x, **kw)
         if self._lmhead_vocab_sharded and gather:
             from models.tt_transformers.tt.ccl import tt_all_gather
 
@@ -1526,7 +1548,7 @@ class Qwen36Model:
         x = self._final_norm_decode(x)
         if self._ondev_argmax:
             # Pre-gather vocab-sharded logits; caller argmaxes shards, skips all-gather + readback.
-            logits = ttnn.linear(x, self.lm_head_weight, **_lm_head_kwargs())
+            logits = self._lm_head_linear(x, **_lm_head_kwargs())
         else:
             logits = self._lm_head(x)
         ttnn.deallocate(x)
@@ -1567,7 +1589,7 @@ class Qwen36Model:
         x = self._final_norm_decode(x)
         if sharded_lm_head or self._ondev_argmax:
             # Pre-gather vocab-sharded logits (on-device sampling / greedy argmax).
-            logits = ttnn.linear(x, self.lm_head_weight, **_lm_head_kwargs())
+            logits = self._lm_head_linear(x, **_lm_head_kwargs())
         else:
             logits = self._lm_head(x)
         ttnn.deallocate(x)
