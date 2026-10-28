@@ -5,14 +5,19 @@
 forward between the PERF_TEXT / PERF_TEXT_END signposts).
 
     python -m models.demos.embedding_gemma2.tests.perf.prefill_op_table <ops_perf_results.csv> \
-        --bucket 2048 --out-md table.md --out-json table.json [--clock-mhz 1350]
+        --bucket 2048 --out-md table.md --out-json table.json [--clock-mhz 1350] [--grid-cores 120]
 
 Rows: one per op class, aggregated over layers (same op code, op variant, input / output shapes, dtypes,
 fidelity and memory). Roofline per row (model, not measured):
 
-    compute_us = FLOPs / (GRID_CORES * flops_per_cycle(fidelity) * clock)     matmul and SDPA only
-    memory_us  = DRAM bytes / DRAM_GBPS + L1 bytes / (GRID_CORES * L1_BYTES_PER_CYCLE * clock)
+    compute_us = FLOPs / (grid_cores * flops_per_cycle(fidelity) * clock)     matmul and SDPA only
+    memory_us  = DRAM bytes / DRAM_GBPS + L1 bytes / (grid_cores * L1_BYTES_PER_CYCLE * clock)
     floor_us   = max(compute_us, memory_us); gap = device_us / floor_us; bound = the larger term
+
+grid_cores is the compute grid the profile was captured on (130 on the P150a's 13 x 10, 120 on the
+12 x 10 Galaxy grid, EMBEDDING_GEMMA2_GRID): --grid-cores if given, else the profiler's own record, the
+CSV column AVAILABLE WORKER CORE COUNT of the forward's ops (must be one value), else compute_grid in a
+device_info.json (perf.py) next to the CSV. No record and no --grid-cores is an error.
 
 flops_per_cycle per Tensix core: 4096 LoFi, 2048 HiFi2, 1365 HiFi3, 1024 HiFi4 (one 8x16 x 16x16 matrix-
 engine op per cycle, divided by the fidelity phases; tech_reports/GEMM_FLOPS/GEMM_FLOPS.md). Bytes are the
@@ -31,7 +36,6 @@ import re
 from collections import OrderedDict
 from pathlib import Path
 
-GRID_CORES = 130  # P150a compute grid 13 x 10
 DRAM_GBPS = 512.0  # P150a: 8 GDDR6 channels x 32 bit at 16 GT/s (tt-smi DDR_SPEED 16000)
 L1_BYTES_PER_CYCLE = 64.0  # per core, one NoC read port; model value for L1-resident operands
 FLOPS_PER_CYCLE = {"LoFi": 4096.0, "HiFi2": 2048.0, "HiFi3": 4096.0 / 3, "HiFi4": 1024.0}
@@ -90,7 +94,21 @@ def _nbytes(shape, dtype) -> float:
     return n * DTYPE_BYTES.get(dtype, 2.0)
 
 
-def roofline(r, clock_hz: float) -> dict:
+def grid_cores_of(csv_path: Path, rows) -> int:
+    """Compute cores of the grid the profile ran on: the profiler's per-op record, else device_info.json."""
+    seen = {r.get("AVAILABLE WORKER CORE COUNT") or "" for r in rows} - {""}
+    if len(seen) > 1:
+        raise ValueError(f"{csv_path}: ops ran on different grids (AVAILABLE WORKER CORE COUNT {sorted(seen)})")
+    if seen:
+        return int(seen.pop())
+    info = Path(csv_path).parent / "device_info.json"
+    if info.exists():
+        gx, gy = json.loads(info.read_text())["compute_grid"]
+        return gx * gy
+    raise ValueError(f"{csv_path}: no grid record (AVAILABLE WORKER CORE COUNT, device_info.json); pass --grid-cores")
+
+
+def roofline(r, clock_hz: float, grid_cores: int) -> dict:
     code = r["OP CODE"]
     t = _tensors(r)
     if "Embeddings" in code or "Slice" in code:
@@ -106,7 +124,7 @@ def roofline(r, clock_hz: float) -> dict:
         moved = t
     dram = sum(_nbytes(s, d) for _, s, d, m in moved if "DRAM" in m)
     l1 = sum(_nbytes(s, d) for _, s, d, m in moved if "L1" in m)
-    mem_us = (dram / (DRAM_GBPS * 1e9) + l1 / (GRID_CORES * L1_BYTES_PER_CYCLE * clock_hz)) * 1e6
+    mem_us = (dram / (DRAM_GBPS * 1e9) + l1 / (grid_cores * L1_BYTES_PER_CYCLE * clock_hz)) * 1e6
     flops, mnk = 0.0, ""
     fid = _fidelity(r)
     shapes = {p: s for p, s, _, _ in t}
@@ -123,7 +141,7 @@ def roofline(r, clock_hz: float) -> dict:
         need = min(keys, 2 * SLIDING_RADIUS + 1) if D == 256 else keys
         flops = 4.0 * B * H * S * need * D
         mnk = f"H{H} S{S} keys{need} D{D}"
-    comp_us = flops / (GRID_CORES * FLOPS_PER_CYCLE.get(fid, 1024.0) * clock_hz) * 1e6 if flops else 0.0
+    comp_us = flops / (grid_cores * FLOPS_PER_CYCLE.get(fid, 1024.0) * clock_hz) * 1e6 if flops else 0.0
     floor = max(comp_us, mem_us)
     bound = "compute" if comp_us >= mem_us and comp_us > 0 else ("DRAM" if dram >= l1 else "L1/NoC")
     return {
@@ -146,9 +164,10 @@ def load_forward(csv_path: Path, start="PERF_TEXT", end="PERF_TEXT_END"):
     return [r for r in rows[i0 + 1 : i1] if r["OP TYPE"] != "signpost"]
 
 
-def table(csv_path: Path, bucket: int, clock_mhz: float = 1350.0) -> dict:
+def table(csv_path: Path, bucket: int, clock_mhz: float = 1350.0, grid_cores: int | None = None) -> dict:
     clock = clock_mhz * 1e6
     rows = load_forward(csv_path)
+    grid_cores = grid_cores or grid_cores_of(csv_path, rows)
     groups: OrderedDict = OrderedDict()
     kernel_ns = gap_ns = floor_us = 0.0
     first_gap_us = float(rows[0]["OP TO OP LATENCY [ns]"] or 0) / 1e3 if rows else 0.0
@@ -160,7 +179,7 @@ def table(csv_path: Path, bucket: int, clock_mhz: float = 1350.0) -> dict:
         gaps.append(gap)
         kernel_ns += dev
         gap_ns += gap
-        rf = roofline(r, clock)
+        rf = roofline(r, clock, grid_cores)
         floor_us += rf["floor_us"]
         t = _tensors(r)
         sig = (
@@ -213,6 +232,7 @@ def table(csv_path: Path, bucket: int, clock_mhz: float = 1350.0) -> dict:
         "bucket": bucket,
         "csv": str(csv_path),
         "clock_mhz": clock_mhz,
+        "grid_cores": grid_cores,
         "ops": len(rows),
         "device_kernel_us": kernel_ns,
         "op_to_op_gap_us_eager": gap_ns,
@@ -227,7 +247,7 @@ def to_markdown(t: dict, top: int | None = None) -> str:
     lines = [
         f"### b1_s{t['bucket']}: {t['ops']} ops, device kernel sum {t['device_kernel_us'] / 1e3:.3f} ms, "
         f"eager op-to-op gaps {t['op_to_op_gap_us_eager'] / 1e3:.3f} ms, roofline floor {t['floor_us'] / 1e3:.3f} ms "
-        f"(clock {t['clock_mhz']:.0f} MHz)",
+        f"(clock {t['clock_mhz']:.0f} MHz, {t['grid_cores']} cores)",
         "",
         "| op | variant | count | device us | share | cores | M x K x N / SDPA | dtypes (in.../out) | fidelity | memory (in.../out) | compute us | memory us | floor us | device / floor | bound |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
@@ -247,10 +267,11 @@ def main():
     ap.add_argument("csv", type=Path)
     ap.add_argument("--bucket", type=int, required=True)
     ap.add_argument("--clock-mhz", type=float, default=1350.0)
+    ap.add_argument("--grid-cores", type=int, help="compute cores of the profiled grid (default: from the CSV)")
     ap.add_argument("--out-md", type=Path)
     ap.add_argument("--out-json", type=Path)
     a = ap.parse_args()
-    t = table(a.csv, a.bucket, a.clock_mhz)
+    t = table(a.csv, a.bucket, a.clock_mhz, a.grid_cores)
     md = to_markdown(t)
     if a.out_md:
         a.out_md.write_text(md)

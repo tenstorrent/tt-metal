@@ -191,16 +191,26 @@ gate / up projection outputs in bfp8, every other activation and the residual st
 SDPA with fp32 accumulation and per-shape chunks; HiFi4 norms; bfp4 additive masks (with an SDPA
 block map at buckets >= 4096); intermediates and the residual stream in L1 up to 4096 tokens.
 Accuracy margin over the gate cases plus 90 extra short / padded / mid-length inputs: last-hidden
-PCC >= 0.99106 (gate 0.99), embedding cosine >= 0.99382 (gate 0.99). The E5a policy is one
-override away: `EMBEDDING_GEMMA2_PRECISION=<doc/datatype_sweep/baseline_precision_config.json>`.
+PCC >= 0.99106 (gate 0.99), embedding cosine >= 0.99382 (gate 0.99). The E5a policy is
+`EMBEDDING_GEMMA2_PRECISION=<doc/datatype_sweep/baseline_precision_config.json>`; it works on the
+P150's 13 x 10 grid but not yet on the 12 x 10 Galaxy grid: at 12 x 10 it crashes in multi-bucket
+device sessions of 8192 tokens and below (`TT_THROW`: static circular buffers clash with L1
+buffers, first at the 1 x 4096 full-attention SDPA). That is an open item for E9 stage 5 (memory
+placement): `doc/prefill/target_contract.json` `accuracy.open_items.baseline_precision_12x10`,
+`doc/datatype_sweep/README.md` "Open item for E9 stage 5".
 The largest bucket is now 65536 (was 32768); 65536 has no HF reference (validated by padding
 equivalence vs 32768 only), so the HF-validated maximum stays 32768.
 
-**E9.1-r re-selection (2026-10-28): the text default is now `p2_sdpa_fast`** (E5a policy with SDPA
-fp32 accumulation off and `exp_approx` on; QKV and gate / up outputs back to bf16). `p3_qkv_gu`
-fails the E9 b1_s256 contract input (last-hidden PCC 0.98872), and the re-selection ran on the
-12 x 10 grid. The table and the policy paragraph above describe `p3_qkv_gu`. Selection, numbers
-and the E8 numbers it supersedes: `doc/datatype_sweep/README.md` ("E9.1-r re-selection") and
+**E9.1-r re-selection (2026-10-28): the text default is now `sdpa_nofp32acc`** (E5a policy with
+SDPA fp32 accumulation off, exact exp; QKV and gate / up outputs back to bf16). `p3_qkv_gu` fails
+the E9 b1_s256 contract input (last-hidden PCC 0.98872), and the re-selection ran on the 12 x 10
+grid. E9.1-r first picked `p2_sdpa_fast` (the same policy plus SDPA `exp_approx`); the two tie
+within noise on time, and amendment E9.1-r2a switched to `sdpa_nofp32acc` for its wider
+worst-case probe margin (last-hidden PCC 0.99240 vs 0.99094). Cost vs `p3_qkv_gu` **[M]**: text
+1 x 512 forward at 13 x 10, 7.078 / 7.091 ms vs 6.861 ms (+3.3 %, new / control / new in one
+session); 12 x 10 ranking aggregate (1x512 + 8x512 burst) 41.845 vs 38.234 ms (+9.4 %). The table
+and the policy paragraph above describe `p3_qkv_gu`. Selection, numbers and the E8 numbers it
+supersedes: `doc/datatype_sweep/README.md` ("E9.1-r re-selection", "Amendment E9.1-r2a") and
 `doc/benchmark/REPORT.md` (addendum). The serving wrapper (`demo/generator_vllm.py`) reads the
 same file, so served embeddings change with it.
 
