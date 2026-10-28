@@ -154,6 +154,28 @@ def test_the_ab_report_runs_off_and_on_then_waits_for_the_owner(mk):
     assert o.run() == HUMAN and len(mk.calls) == n and mk.agents() == ["P.1.perf.1.md bringup-engineer"]
 
 
+def test_a_side_whose_process_crashed_runs_once_more(mk):
+    """F207: the old side's profile died of a bus error while loading weights (DeepSeek-V4.1 P.2); the report ran it
+    once more instead of recording the off side as failed."""
+    o = mk([pick()], CHANGE)
+    real, crashed = o.run_cmd, []
+
+    def run_cmd(cmd, env, log):
+        if "test_profile.py" in cmd and env.get("TOY_FIDELITY") == "hifi4" and not crashed:
+            crashed.append(cmd)
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text("Fatal Python error: Bus error\n")
+            return -7
+        return real(cmd, env, log)
+
+    o.run_cmd = run_cmd
+    assert o.run() == HUMAN, mk.lines
+    rec = o.led.state()["P.1"]["ab"]
+    assert crashed and rec["profile"]["old"]["device_ms_total"] == 100.0, rec["profile"]
+    assert any("F207" in line for line in mk.lines)
+    assert list((o.run_dir / "ab" / "P.1" / "old" / "profile").glob("profile.crashed.log"))
+
+
 def test_without_an_ab_switch_the_change_is_measured_on_only(mk):
     o = mk([pick(ab=None)], CHANGE)
     assert o.run() == HUMAN
