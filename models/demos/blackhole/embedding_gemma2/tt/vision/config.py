@@ -32,8 +32,10 @@ PATCH_BUCKETS = (1280, 2560)
 # E5b: vision activations live in L1 (interleaved over every bank) when one tensor needs at most
 # this many bytes per bank and the forward has at most this many patches (batch x bucket); the E5a
 # text rule. One image (2560 patches): the [*, 768]-wide activations, heads and the residual stream
-# go to L1 (-2.5 ms per forward); the 3072-wide MLP intermediates and every batch > 1 tensor stay in
-# DRAM. 128 KB / 10240 patches (batch 4 in L1) failed: op circular buffers clash with L1 buffers.
+# go to L1 (-2.5 ms per forward); the 3072-wide MLP intermediates stay in DRAM unless named below.
+# Whole-batch tensors of a batch > 1 forward stay in DRAM; only the per-image MLP (VisionMLP) puts
+# one image's slice and MLP tensors in L1. 128 KB / 10240 patches (batch 4 in L1) failed: op
+# circular buffers clash with L1 buffers.
 VISION_L1_BYTES_PER_BANK = 64 * 1024
 VISION_L1_MAX_TOKENS = 4096
 # Wide intermediates named by the caller ("mlp": the up / gate projection outputs, "qkv": the fused

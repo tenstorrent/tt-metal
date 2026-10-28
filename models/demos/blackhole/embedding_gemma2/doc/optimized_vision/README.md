@@ -193,41 +193,39 @@ for E6.
 
 **Accuracy cost of the kept path.** The E5b path loses a small, systematic amount of soft-token
 accuracy against E2; it is not at the level of HF's own bf16 run. Per image or frame, vs the HF fp32
-reference (E2 = row L0, E5b = the gate run, HF bf16 = HF run in bf16 against the same reference)
-**[M]** `results_L0_none.jsonl`, `results_gates.jsonl` (`vision_soft_token_*`, `hf_bf16_*`):
+reference (E2 = row L0, E5b = the final E5b code with the per-image MLP review fix, HF bf16 = HF
+run in bf16 against the same reference) **[M]** `results_L0_none.jsonl`, `results_review_fix.jsonl`
+(`vision_soft_token_*`, `hf_bf16_*`; `e5c/scripts/softtok_stats.py`):
 
 | image | soft-token PCC E2 / E5b / HF bf16 | worst-token cosine E2 / E5b / HF bf16 |
 |---|---|---|
 | portrait | 0.99908 / 0.99804 / 0.99843 | 0.9429 / 0.8638 / 0.8662 |
-| video frame 5 | 0.99895 / 0.99733 / 0.99876 | 0.9862 / 0.9085 / 0.9816 |
-| video frame 3 (lowest PCC) | 0.99774 / 0.99716 / 0.99841 | 0.9523 / 0.9225 / 0.9654 |
-| mean of the 15 images / frames | 0.99896 / 0.99859 / 0.99895 | — |
+| video frame 7 (largest loss) | 0.99904 / 0.99769 / 0.99927 | 0.9853 / 0.9505 / 0.9952 |
+| video frame 3 (lowest PCC) | 0.99774 / 0.99653 / 0.99841 | 0.9523 / 0.8656 / 0.9654 |
+| video frame 5 | 0.99895 / 0.99830 / 0.99876 | 0.9862 / 0.9648 / 0.9816 |
+| mean of the 15 images / frames | 0.99896 / 0.99856 / 0.99895 | — |
 
-- Mean soft-token PCC drops by 3.7e-4 against E2, and by up to 1.6e-3 on one image (video frame
-  5). E5b is below HF bf16 on 11 of the 15 images.
-- Worst-token cosine falls from 0.943 to 0.864 on the portrait and from 0.986 to 0.909 on video
-  frame 5, where HF bf16 holds 0.982. (HF bf16's own worst token is 0.815, on video frame 4,
-  where E5b scores 0.964.)
-- The ablation rows attribute the loss mostly to two changes. The gelu-as-multiply row (L8 -> L9)
-  moves frame 5 from PCC 0.99827 to 0.99733 (cosine 0.970 to 0.909) and the portrait cosine from
-  0.887 to 0.862. The bf16-weight projection / MLP config rows (L3 -> L6, HiFi2 configs) move the
-  portrait cosine from 0.962 to 0.909. The SDPA HiFi2 table (L0 -> L1) also moves frame 5 from PCC
-  0.99895 to 0.99791.
-- Every gate still passes: the minimum soft-token PCC is 0.99716 against a bar of 0.99.
+- Mean soft-token PCC drops by 4.0e-4 against E2, and by up to 1.34e-3 on one image (video frame
+  7). E5b is below HF bf16 on 12 of the 15 images.
+- Worst-token cosine falls from 0.943 to 0.864 on the portrait (HF bf16 0.866) and from 0.952 to
+  0.866 on video frame 3, where HF bf16 holds 0.965. (HF bf16's own worst token is 0.815, on
+  video frame 4, where E5b scores 0.955.)
+- The ablation rows (run on the reviewed code `47824a6e41`, before the per-image MLP fix) attribute
+  the loss mostly to two changes. The gelu-as-multiply row (L8 -> L9) moves frame 5 from PCC
+  0.99827 to 0.99733 (cosine 0.970 to 0.909) and the portrait cosine from 0.887 to 0.862. The
+  bf16-weight projection / MLP config rows (L3 -> L6, HiFi2 configs) move the portrait cosine from
+  0.962 to 0.909. The SDPA HiFi2 table (L0 -> L1) also moves frame 5 from PCC 0.99895 to 0.99791.
+- Every gate still passes: the minimum soft-token PCC is 0.99653 (video frame 3) against a bar of
+  0.99.
 - The worst-token cosine is a noisy tail metric: it moves by +-0.03 between rows whose op outputs
   are identical to 1e-6 (L2 -> L3).
 - To revisit in the E6 datatype sweep: HiFi4 for the projections and MLP, and the gelu placement.
 
-The table above is the reviewed code (`47824a6e41`). The review fix (per-image MLP) changes only the
-batched cases (b2, video8), because their MLP matmuls now use the one-image configs; single images
-are bit-identical. With the fix **[M]** `results_review_fix.jsonl`:
-- The mean soft-token PCC is 0.99856 (was 0.99859); the loss against E2 is 4.0e-4 mean and 1.3e-3
-  at most (video frame 7).
-- Video frame 5 recovers to PCC 0.99830, cosine 0.965. Video frame 3 drops to PCC 0.99653 (the new
-  minimum), cosine 0.866 (HF bf16: 0.99841 / 0.965).
-- The portrait is unchanged (0.99804 / 0.8638, still the worst token). 12 of 15 images are below
-  HF bf16.
-- The gates pass: min soft-token PCC 0.99653 against a bar of 0.99.
+The per-image MLP review fix changes only the batched cases (b2, video8), because their MLP matmuls
+now use the one-image configs; single images are bit-identical. Against the reviewed code
+(`47824a6e41`, `results_gates.jsonl`) the mean soft-token PCC moves from 0.99859 to 0.99856, video
+frame 5 recovers (PCC 0.99733 -> 0.99830, cosine 0.909 -> 0.965) and video frame 3 drops (PCC
+0.99716 -> 0.99653, cosine 0.923 -> 0.866). The portrait is unchanged.
 
 ## L1 placement
 

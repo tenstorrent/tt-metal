@@ -175,11 +175,12 @@ pytest models/demos/blackhole/embedding_gemma2/tests/pcc/vision/test_vision_perf
 Measured on real images and an 8-frame video (E5b path): per-layer PCC >= 0.99993 and soft-token
 PCC 0.9965-0.9997 per image vs the HF fp32 reference (bar 0.99; 0.9972-0.9997 before the
 per-image MLP review fix, which reshuffles the batched cases). The E5b optimizations cost a small,
-systematic amount of accuracy against E2. The mean soft-token PCC drops by 3.7e-4 over 15 images
-and frames, and by up to 1.6e-3 on video frame 5. The worst-token cosine drops on the portrait image
-(0.943 to 0.864) and on video frame 5 (0.986 to 0.909; HF bf16 scores 0.982 there). E5b also scores
-below HF's own bf16 run on 11 of the 15 images (portrait 0.99804 vs 0.99843, frame 5 0.99733 vs
-0.99876). The E5b ablation attributes most of the loss to the gelu-multiply change and the
+systematic amount of accuracy against E2. On the final E5b code the mean soft-token PCC drops by
+4.0e-4 over 15 images and frames, and by up to 1.34e-3 on video frame 7. The worst-token cosine
+drops on the portrait image (0.943 to 0.864; HF bf16 0.866) and on video frame 3 (0.952 to 0.866;
+HF bf16 0.965). E5b also scores below HF's own bf16 run on 12 of the 15 images (portrait 0.99804
+vs 0.99843, frame 3 0.99653 vs 0.99841, frame 7 0.99769 vs 0.99927). The E5b ablation (run before
+the per-image MLP fix) attributes most of the loss to the gelu-multiply change and the
 bf16-weight projection / MLP config change. Both are to be revisited in the E6 datatype sweep. See
 `doc/optimized_vision/README.md` ("Precision").
 

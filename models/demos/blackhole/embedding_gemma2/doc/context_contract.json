@@ -73,7 +73,7 @@
       "speedup_vs_e2_published": {"1x2560": 2.12, "4x2560": 2.54, "8x1280": 2.26},
       "speedup_before_review_fix": "vs E2 same day 2.39 / 2.66 / 2.41x, vs E2 published 2.12 / 2.42 / 2.11x (1x2560 / 4x2560 / 8x1280)",
       "e2_baseline_drift": "unexplained: the E2 code re-measures slower than published (extra time in the default-config HiFi4 bf16 matmuls); libraries predate E2 and the E5a text control (1x512, 7.315 ms) reproduces",
-      "accuracy_vs_e2": "small systematic soft-token loss: mean PCC -3.7e-4 over 15 images / frames (max -1.6e-3, video frame 5); worst-token cosine portrait 0.943 -> 0.864, video frame 5 0.986 -> 0.909 (HF bf16 0.982); below HF bf16 PCC on 11 of 15; gates pass (min 0.99716, bar 0.99); revisit in E6",
+      "accuracy_vs_e2": "small systematic soft-token loss (final E5b code, results_review_fix.jsonl): mean PCC -4.0e-4 over 15 images / frames (max -1.34e-3, video frame 7); worst-token cosine portrait 0.943 -> 0.864 (HF bf16 0.866), video frame 3 0.952 -> 0.866 (HF bf16 0.965); below HF bf16 PCC on 12 of 15; gates pass (min 0.99653, video frame 3, bar 0.99); revisit in E6",
       "windowed_attention_test": "tests/pcc/vision/test_vision_windowed_attention.py: windowed == masked on valid rows (8 frames, valid 81..1278, bit-identical), padding-row invariance, padding_windows structure and ValueError",
       "evidence": "doc/optimized_vision/README.md; tt-ops/runs/embeddinggemma-2/e5b/bench.jsonl (labels baseline_E2, c3_wide_l1, r_c4_mlp_split)"
     }

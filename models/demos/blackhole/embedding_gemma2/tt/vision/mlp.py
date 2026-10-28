@@ -10,8 +10,9 @@ Same math as the text `MLP`; E5b gives the vision tower its own module so its po
                  matmul's packer: -0.3 ms at 1 x 2560, -6.9 ms at 4 x 2560 and 8 x 1280 per forward
                  (E5b A/B; the packer gelu cost 52 us per gate matmul at M = 2560, Tracy)
     per image    batches above VISION_L1_WIDE_MAX_TOKENS["mlp"] patches run one image / frame at a
-                 time (slice -> the one-image path with up / gate in L1 -> concat): -5.9 ms at
-                 4 x 2560, -6.9 ms at 8 x 1280 per forward (E5b review fix, `exp_b4.py mlp_split`)
+                 time (slice -> the one-image path with up / gate in L1 -> concat): -5.6 ms at
+                 4 x 2560 (121.63 -> 116.02 ms), -6.5 ms at 8 x 1280 (94.67 -> 88.14 ms) per forward
+                 (E5b review fix, bench_vision burst medians, doc/optimized_vision/README.md)
 
 Contract
     input   x [B, 1, S, 768] bf16 TILE (DRAM or L1 interleaved)
@@ -74,8 +75,9 @@ class VisionMLP(LightweightModule):
         """Batch too large for the L1 up / gate outputs: one image at a time on the one-image path.
 
         At 4 x 2560 the M = 10240 projections run minimal_matmul with DRAM outputs; per image they
-        get the M = 2560 2D configs and L1 up / gate outputs (121.63 -> 115.69 ms per forward; 8 x 1280:
-        94.67 -> 87.81 ms). Each image's input slice and MLP output are [1, 1, S, 768] in L1.
+        get the M = 2560 2D configs and L1 up / gate outputs (121.63 -> 116.02 ms per forward; 8 x 1280:
+        94.67 -> 88.14 ms; bench_vision burst medians). Each image's input slice and MLP output are
+        [1, 1, S, 768] in L1.
         """
         B, S, D = x.shape[0], x.shape[2], x.shape[3]
         one = vision_act_memory_config(x.device(), 1, S, D)
