@@ -72,6 +72,7 @@ on:
           6U fabric quick , 6U multi-process ,
           BH fabric 1D unit tests , BH fabric 2D fixture unit tests ,
           BH fabric mux v2 unit tests , BH fabric UDM mode unit tests ,
+          BH fabric channel trimming tests ,
           BH ttnn UDM unit tests , BH fabric system health tests ,
           BH fabric stability nightly tests , BH ccl nightly tests ,
           BH fabric infra unit tests

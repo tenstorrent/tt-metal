@@ -5,8 +5,8 @@
 //
 // A program may hold only one kernel per processor per core, so the two halves cannot be placed
 // as separate kernels on the same grid -- both bodies are compiled into one binary per RISC-V
-// instead. Pass A runs every expert at or below the model's measured token threshold on the fused
-// implementation, pass B runs the rest on the unified one.
+// instead. The first pass runs every expert above the model's measured token threshold on the
+// unified implementation, the second runs the rest on the fused one.
 //
 // The passes are strictly ordered, never interleaved, because they share L1: the two halves'
 // circular buffers are overlaid on one arena and their semaphores are drawn from one 16-id

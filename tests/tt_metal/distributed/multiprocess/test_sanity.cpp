@@ -241,7 +241,7 @@ TEST_F(BigMeshDualRankTest2x4, SubmeshCreationSingleSubmesh) {
     EXPECT_EQ(submesh->shape(), MeshShape(2, 2));
 
     // Make sure the inactive rank returns a DummyMeshCommandQueue
-    if (submesh->get_view().get_devices().empty()) {
+    if (submesh->get_device_ids().empty()) {
         auto& cq = submesh->mesh_command_queue();
         EXPECT_TRUE(dynamic_cast<DummyMeshCommandQueue*>(&cq) != nullptr);
     }

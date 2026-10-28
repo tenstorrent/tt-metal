@@ -89,4 +89,8 @@ void kernel_main() {
         advance_tensor_index(output_id_per_dim, output_page_shape, num_dims);
         output_page_offset++;
     }
+    // cb_pad_val is this kernel's own scratch (it is both producer and consumer); pop the page it pushed
+    // so the buffer is left balanced.
+    cb_pad_val.wait_front(1);
+    cb_pad_val.pop_front(1);
 }

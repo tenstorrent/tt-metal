@@ -7,24 +7,33 @@
 namespace tt::tt_metal {
 
 bool JitBuildCache::build_once(size_t hash, const std::function<void()>& build_fn) {
+    while (true) {
+        switch (build_once_no_wait(hash, build_fn)) {
+            case BuildOnceStatus::BuiltByCaller: return true;
+            case BuildOnceStatus::AlreadyBuilt: return false;
+            case BuildOnceStatus::InProgress: {
+                // Another thread is building this hash. Wait until it finishes or fails, then re-check.
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, [&] {
+                    auto it = entries_.find(hash);
+                    return it == entries_.end() || it->second == State::Built;
+                });
+                break;
+            }
+        }
+    }
+}
+
+JitBuildCache::BuildOnceStatus JitBuildCache::build_once_no_wait(size_t hash, const std::function<void()>& build_fn) {
     std::unique_lock<std::mutex> lock(mutex_);
 
-    while (true) {
-        auto it = entries_.find(hash);
-        if (it != entries_.end()) {
-            if (it->second == State::Built) {
-                return false;
-            }
-            // Another thread is building this hash. Wait and re-check.
-            cv_.wait(lock);
-            continue;
-        }
-
-        // Hash not present -- we are the builder.
-        entries_.emplace(hash, State::Building);
-        break;
+    auto it = entries_.find(hash);
+    if (it != entries_.end()) {
+        return it->second == State::Built ? BuildOnceStatus::AlreadyBuilt : BuildOnceStatus::InProgress;
     }
 
+    // Hash not present -- we are the builder.
+    entries_.emplace(hash, State::Building);
     lock.unlock();
 
     try {
@@ -42,7 +51,7 @@ bool JitBuildCache::build_once(size_t hash, const std::function<void()>& build_f
         entries_[hash] = State::Built;
     }
     cv_.notify_all();
-    return true;
+    return BuildOnceStatus::BuiltByCaller;
 }
 
 void JitBuildCache::clear() {

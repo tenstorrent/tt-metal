@@ -12,7 +12,6 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>  // q.device()->get_view().shape() for block-cyclic sp derivation
 
 #include "kernels/indexer_score_work_split.hpp"  // banded grid mapping (banded_core_count)
@@ -488,7 +487,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
 
     // Blackhole-only: the compute kernel relies on BH fast-untilize + custom BH LLK paths. Enforce in C++
     // so a Wormhole caller fails cleanly instead of hanging at launch.
-    const tt::ARCH arch = tt::tt_metal::hal::get_arch();
+    const tt::ARCH arch = q.device()->arch();
     TT_FATAL(arch == tt::ARCH::BLACKHOLE, "indexer_score is only supported on Blackhole, got {}", arch);
 
     // The custom blocked bcast-col LLK + half-sync 8-head subblock are validated only for bf16 DEST in

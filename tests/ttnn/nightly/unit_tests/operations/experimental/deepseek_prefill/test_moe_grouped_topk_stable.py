@@ -19,7 +19,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_gate_output,
     assert_index_domain,

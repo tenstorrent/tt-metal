@@ -136,6 +136,7 @@ Tensor softmax(
     bool is_causal_mask = false,
     DeviceComputeKernelConfig compute_kernel_config = {},
     bool is_scale_causal_mask_hw_dims_softmax = false,
-    bool numeric_stable = true);
+    bool numeric_stable = true,
+    bool has_explicit_compute_kernel_config = false);
 
 }  // namespace ttnn::prim

@@ -18,7 +18,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 _t = ttnn._ttnn.operations.transformer  # the prims are not registered as ttnn.transformer operations
 
@@ -63,19 +63,19 @@ def _const_tiles(device, chunk_size=CHUNK):
     return (_up(eye), _up(tril), _up(ones), _up(masks))
 
 
-def _make_inputs(bh, nc, seed, scale):
+def _make_inputs(bh, nc, seed, scale, chunk=CHUNK):
     """Head-major prim inputs in the op's numeric regime: q/k L2-normalized over the last dim
     (unnormalized keys NaN the recurrence on every path), q pre-scaled on host (the prim applies
     NO scale when qk_norm=False — mirroring the public op, which folds scale into q before prep),
     beta in (0,1), g <= 0."""
     torch.manual_seed(seed)
-    q = F.normalize(torch.randn(bh, nc, CHUNK, KDIM), dim=-1)
-    k = F.normalize(torch.randn(bh, nc, CHUNK, KDIM), dim=-1)
+    q = F.normalize(torch.randn(bh, nc, chunk, KDIM), dim=-1)
+    k = F.normalize(torch.randn(bh, nc, chunk, KDIM), dim=-1)
     q = (q * scale).to(torch.bfloat16)
     k = k.to(torch.bfloat16)
-    v = (0.5 * torch.randn(bh, nc, CHUNK, VDIM)).to(torch.bfloat16)
-    beta = torch.sigmoid(torch.randn(bh, nc, CHUNK))
-    g = -F.softplus(torch.randn(bh, nc, CHUNK)) * 0.5
+    v = (0.5 * torch.randn(bh, nc, chunk, VDIM)).to(torch.bfloat16)
+    beta = torch.sigmoid(torch.randn(bh, nc, chunk))
+    g = -F.softplus(torch.randn(bh, nc, chunk)) * 0.5
     s0 = 0.05 * torch.randn(bh, KDIM, VDIM)
     return q, k, v, g, beta, s0
 
@@ -136,26 +136,34 @@ def _dev(device, t, dtype):
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
+def _gate(x):
+    """A per-(head, chunk) gate [BH, NC, C] as the prim reads it: token-major [1, T, BH] (batch 1, BH heads)."""
+    bh = x.shape[0]
+    return x.reshape(bh, -1).transpose(0, 1).unsqueeze(0).contiguous()
+
+
 # ---------------------------------------------------------------------------
 # (1) prep prim vs torch, each of the seven outputs
 # ---------------------------------------------------------------------------
 
 
 # (16, 8) = 128 (head, chunk) work-items: exercises the multi-core fan-out of distribute_prep
-# (fills a full 8x8+ grid); (4, 4) is the small-shape smoke.
-@pytest.mark.parametrize("bh, nc", [(4, 4), (16, 8)])
-def test_prep_outputs_vs_torch(device, bh, nc):
+# (fills a full 8x8+ grid); (4, 4) is the small-shape smoke. The chunk-64 case (Ct = 2, two tile rows per
+# chunk) is the only place the per-tile-row outputs are held to the math rather than to another device path:
+# the second tile row's decay factor (k_dec_t's upper half of C) and the dl tile.
+@pytest.mark.parametrize("bh, nc, chunk", [(4, 4, CHUNK), (16, 8, CHUNK), (4, 2, 64)], ids=["4-4", "16-8", "chunk64"])
+def test_prep_outputs_vs_torch(device, bh, nc, chunk):
     scale = KDIM**-0.5
-    q, k, v, g, beta, _ = _make_inputs(bh, nc, seed=20260820, scale=scale)
+    q, k, v, g, beta, _ = _make_inputs(bh, nc, seed=20260820, scale=scale, chunk=chunk)
 
     outs = _t.chunk_gdn_prep(
         _dev(device, q, ttnn.bfloat16),
         _dev(device, k, ttnn.bfloat16),
         _dev(device, v, ttnn.bfloat16),
-        _dev(device, g.unsqueeze(-1), ttnn.float32),
-        _dev(device, beta.unsqueeze(-1), ttnn.float32),
-        *_const_tiles(device),
-        chunk_size=CHUNK,
+        _dev(device, _gate(g), ttnn.float32),
+        _dev(device, _gate(beta), ttnn.float32),
+        *_const_tiles(device, chunk),
+        chunk_size=chunk,
     )
     refs = _prep_reference(q.float(), k.float(), v.float(), g, beta)
 
@@ -189,6 +197,25 @@ def test_prep_outputs_vs_torch(device, bh, nc):
         max_abs = (got - ref).abs().max().item()
         assert max_abs <= bound, f"{name}: max-abs {max_abs} > {bound}"
         ttnn.deallocate(out)
+
+
+def test_prep_rejects_gates_of_different_length(device, expect_error):
+    """g and beta of the same chunk count but different T are refused: the prep readers address both gates
+    with g's T, so a shorter beta would be read past its end. (The public op checks the gates' shape itself;
+    this is the private prim's own guard.)"""
+    q, k, v, g, beta, _ = _make_inputs(4, 1, seed=20261019, scale=KDIM**-0.5)
+    g_t = _dev(device, _gate(g), ttnn.float32)
+    short_beta = _dev(device, _gate(beta)[:, :1], ttnn.float32)
+    with expect_error(RuntimeError, "the gates must have the same T"):
+        _t.chunk_gdn_prep(
+            _dev(device, q, ttnn.bfloat16),
+            _dev(device, k, ttnn.bfloat16),
+            _dev(device, v, ttnn.bfloat16),
+            g_t,
+            short_beta,
+            *_const_tiles(device),
+            chunk_size=CHUNK,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -285,20 +312,17 @@ def test_composition_bit_exact(device):
     fs_op = ttnn.to_torch(fs_op_d)  # [B, H, K, V] fp32
 
     # Replicate the op's preprocessing in torch (chunk_gated_delta_rule.cpp head_split_tile /
-    # headvec_split_tile / to_chunks_tile): [B,T,H,D] -> [B,H,T,D] -> [BH,NC,C,D]; values are
-    # moved, never re-rounded, so from_torch of these feeds prep bit-identical inputs.
+    # to_chunks_tile): [B,T,H,D] -> [B,H,T,D] -> [BH,NC,C,D]; values are moved, never re-rounded, so
+    # from_torch of these feeds prep bit-identical inputs. The gates go in as they are ([B, T, H]).
     def head_major(x):
         return x.permute(0, 2, 1, 3).reshape(BH, NC, CHUNK, x.shape[-1]).contiguous()
-
-    def headvec_major(x):
-        return x.permute(0, 2, 1).reshape(BH, NC, CHUNK, 1).contiguous()
 
     prep = _t.chunk_gdn_prep(
         _dev(device, head_major(q), ttnn.bfloat16),
         _dev(device, head_major(k), ttnn.bfloat16),
         _dev(device, head_major(v), ttnn.bfloat16),
-        _dev(device, headvec_major(g), ttnn.float32),
-        _dev(device, headvec_major(beta), ttnn.float32),
+        _dev(device, g, ttnn.float32),
+        _dev(device, beta, ttnn.float32),
         *const_tiles,
         chunk_size=CHUNK,
     )
@@ -387,8 +411,8 @@ def test_prep_tinv_methods(device, regime):
         _dev(device, q, ttnn.bfloat16),
         _dev(device, k, ttnn.bfloat16),
         _dev(device, v, ttnn.bfloat16),
-        _dev(device, g.unsqueeze(-1), ttnn.float32),
-        _dev(device, beta.unsqueeze(-1), ttnn.float32),
+        _dev(device, _gate(g), ttnn.float32),
+        _dev(device, _gate(beta), ttnn.float32),
     )
     const_tiles = _const_tiles(device)
 

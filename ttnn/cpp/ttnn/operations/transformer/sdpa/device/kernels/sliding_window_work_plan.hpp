@@ -232,7 +232,8 @@ constexpr SlidingQWorkPlan<MaxSourceRanges> build_sliding_q_work_plan(
     uint32_t k_chunk_tile_rows,
     uint32_t logical_k_tile_rows,
     uint32_t circular_kv_slab_count = 0,
-    const ChunkedQMapping* rotated_q = nullptr) {
+    const ChunkedQMapping* rotated_q = nullptr,
+    bool local_first = true) {
     SlidingQWorkPlan<MaxSourceRanges> plan;
     if (q_chunk_tile_rows == 0 || q_local_tile_rows == 0 || ring_size == 0 || sliding_window_tokens == 0 ||
         tile_height == 0 || k_chunk_tile_rows == 0 || q_local_tile_rows % k_chunk_tile_rows != 0 ||
@@ -318,6 +319,18 @@ constexpr SlidingQWorkPlan<MaxSourceRanges> build_sliding_q_work_plan(
                 compact_k,
                 slab_begin / k_chunk_tile_rows + first_k - local_base / k_chunk_tile_rows};
             plan.total_k_chunk_count += last_k - first_k;
+        }
+    }
+    // Local ranges first: they need no halo, so the reader can start on them while the halo is in flight. A K split
+    // keeps the oldest-first order instead, so the reducer's (last) band holds the diagonal chunk.
+    uint32_t local_count = 0;
+    for (uint32_t i = 0; local_first && i < plan.source_range_count; ++i) {
+        if (plan.source_ranges[i].source_ring_id == q_device_index) {
+            const SlidingKVSourceRange local = plan.source_ranges[i];
+            for (uint32_t j = i; j > local_count; --j) {
+                plan.source_ranges[j] = plan.source_ranges[j - 1];
+            }
+            plan.source_ranges[local_count++] = local;
         }
     }
     if (rotated_q && plan.total_k_chunk_count == 0) {

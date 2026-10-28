@@ -5,6 +5,7 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
+#include <vector>
 
 #include "optimizer_base.hpp"
 #include "serialization/serializable.hpp"
@@ -29,7 +30,10 @@ public:
         return "MorehAdamW";
     }
 
-    MorehAdamW(serialization::NamedParameters parameters, const AdamWCompositeConfig& config);
+    MorehAdamW(
+        serialization::NamedParameters parameters,
+        const AdamWCompositeConfig& config,
+        std::vector<ParamGroup> param_groups = {});
 
     void zero_grad() override;
 
@@ -41,12 +45,8 @@ public:
     [[nodiscard]] size_t get_steps() const override;
     void set_steps(size_t steps) override;
 
-    [[nodiscard]] float get_lr() const override;
-    void set_lr(float lr) override;
-
 private:
     size_t m_steps{0};
-    AdamWCompositeConfig m_config;
     serialization::NamedParameters m_first_moment;
     serialization::NamedParameters m_second_moment;
 };
@@ -57,7 +57,10 @@ public:
         return "AdamWComposite";
     }
 
-    AdamWComposite(serialization::NamedParameters parameters, const AdamWCompositeConfig& config);
+    AdamWComposite(
+        serialization::NamedParameters parameters,
+        const AdamWCompositeConfig& config,
+        std::vector<ParamGroup> param_groups = {});
 
     void zero_grad() override;
 
@@ -69,13 +72,10 @@ public:
     [[nodiscard]] size_t get_steps() const override;
     void set_steps(size_t steps) override;
 
-    [[nodiscard]] float get_lr() const override;
-
-    void set_lr(float lr) override;
-
 private:
     size_t m_steps{0};
-    AdamWCompositeConfig m_config;
+    bool m_amsgrad{false};
+    bool m_kahan_summation{false};
     serialization::NamedParameters m_first_moment;
     serialization::NamedParameters m_second_moment;
     serialization::NamedParameters m_max_exp_avg_sq;

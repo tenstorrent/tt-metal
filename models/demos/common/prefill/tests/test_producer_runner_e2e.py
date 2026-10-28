@@ -14,6 +14,7 @@ import contextlib
 import copy
 import glob
 import json
+import math
 import os
 import signal
 import subprocess
@@ -24,8 +25,10 @@ import time
 import pytest
 
 from models.common.utility_functions import is_blackhole, skip_for_slow_dispatch
+from models.demos.common.prefill.runners.kv_bank_alignment import bank_aligned_seq_len_quantum
 
 CHUNK_SIZE = 5120
+SEQ_QUANTUM = math.lcm(CHUNK_SIZE, bank_aligned_seq_len_quantum(stripes=32, num_dram_banks=8))
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", "2"))
 # GLM-5.3 golden trace carrying BOTH the 78 kv_cache layers and the 21 dsa/indexer_k_layer_* dirs, at
 # 56320 rows (= 11 x CHUNK_SIZE). Pinned here (same path as the adapter's prefill_trace_default) because a
@@ -116,14 +119,14 @@ SCENARIOS = {
     # 1) Full-depth single user: 11 x 5120 = 56320 = the full Kimi golden trace. Deepest correctness gate.
     "single_user_full_depth": {
         "users": 1,
-        "max_seq_len": 56320,
+        "max_seq_len": 2 * SEQ_QUANTUM,
         "producer": {"PREFILL_PRODUCER_CHUNKS": "11", "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
     },
     # 2) Round-robin across 4 users, 4 chunks each (u0c0, u1c0, u2c0, u3c0, u0c1, ...). Deterministic
-    #    interleave correctness; breadth over depth so it fits the KV budget (4 x 20480).
+    #    interleave correctness; breadth over depth so it fits the KV budget (4 x 40960).
     "round_robin_4users": {
         "users": 4,
-        "max_seq_len": 20480,
+        "max_seq_len": SEQ_QUANTUM,
         "producer": {
             "PREFILL_PRODUCER_INTERLEAVE": "round_robin",
             "PREFILL_PRODUCER_CHUNKS": "4",
@@ -133,10 +136,10 @@ SCENARIOS = {
         },
     },
     # 3) Random interleave across 8 users, 1-2 chunks each, with gaps/bursts + slot recycling (seeded =>
-    #    reproducible). Chaotic multi-user correctness at the highest slot count (KV budget 8 x 10240).
+    #    reproducible). Chaotic multi-user correctness at the highest slot count (KV budget 8 x 40960).
     "random_8users": {
         "users": 8,
-        "max_seq_len": 10240,
+        "max_seq_len": SEQ_QUANTUM,
         "producer": {
             "PREFILL_PRODUCER_CHUNKS": "1,2",
             "PREFILL_PRODUCER_MAX_REQUESTS": "12",
@@ -145,11 +148,11 @@ SCENARIOS = {
         },
     },
     # 4) GLM-5.3 (sparse / DSA) full-depth single user over ALL 78 layers. This is the gate for the
-    #    MERGED two-config KV chunk address table: config 0 = the bf16 ROW_MAJOR MLA KVPE cache (all 78
+    #    MERGED two-config KV chunk address table: config 0 = the scaled-FP8 MLA KVPE cache (all 78
     #    layers), config 1 = the bfp8 lightning-indexer KEY cache (only the 21 `full` layers, compacted).
-    #    The runner builds that single merged table under PREFILL_MOCK_MIGRATION and the producer reads
-    #    BOTH configs back through it over UMD, so a wrong address in either config shows up as a PCC
-    #    failure. 11 x 5120 = 56320 is exactly the trace depth.
+    #    The runner builds that single merged table and the producer reads BOTH configs back through it
+    #    over UMD, so a wrong address in either config shows up as a PCC failure. 11 x 5120 = 56320 is
+    #    exactly the trace depth.
     #
     #    ALL layers is mandatory here, not a preference: the index cache is sized from the model's whole
     #    indexer_types map (21 full layers), so a truncated run leaves the upper index ranks unwritten —
@@ -157,7 +160,7 @@ SCENARIOS = {
     "glm53_full_depth_kv_table": {
         "users": 1,
         "layers": 78,
-        "max_seq_len": 56320,
+        "max_seq_len": 2 * SEQ_QUANTUM,
         "env": {
             "PREFILL_MODEL": "glm_5_3",
             "PREFILL_TRACE_DIR": GLM53_TRACE,
@@ -175,7 +178,7 @@ SCENARIOS = {
     "glm53_mtp4": {
         "users": 1,
         "layers": 78,
-        "max_seq_len": 56320,
+        "max_seq_len": 2 * SEQ_QUANTUM,
         "env": {
             "PREFILL_MODEL": "glm_5_3",
             "PREFILL_TRACE_DIR": GLM53_TRACE,
@@ -220,7 +223,7 @@ if _PROMPT_FILE:
         # Cache width must exceed the deepest single push (Q.seq == CHUNK_SIZE): the chunked-attention
         # SDPA gate requires Q.seq < cache-width, so a 1-chunk prompt still needs a 2-chunk cache. For
         # N>=2 the accumulated fill N*CHUNK_SIZE already exceeds one chunk, so N*CHUNK_SIZE suffices.
-        "max_seq_len": max(2, _PROMPT_CHUNKS) * CHUNK_SIZE,
+        "max_seq_len": SEQ_QUANTUM * math.ceil(max(2, _PROMPT_CHUNKS) * CHUNK_SIZE / SEQ_QUANTUM),
         "producer": {"PREFILL_PRODUCER_CHUNKS": str(_PROMPT_CHUNKS), "PREFILL_PRODUCER_MAX_REQUESTS": "1"},
         "prompt_file": _PROMPT_FILE,
         "isl": _PROMPT_CHUNKS * CHUNK_SIZE,
@@ -229,7 +232,7 @@ if _PROMPT_FILE:
 
 def _transport_env(num_users: int, max_seq_len: int, num_layers: int = NUM_LAYERS, **extra) -> dict:
     """Inherit the CI/dev env (weights cache, HF, golden trace) and add the shared orchestration knobs
-    for this scenario's runner+producer. `extra` layers on the runner (MOCK_MIGRATION) or producer
+    for this scenario's runner+producer. `extra` layers on the runner (layer-ack transport) or producer
     (schedule + CHECK_PCC) knobs.
 
     In the CI (mpirun) launch path the launcher's MPI/PMIx session variables are stripped from the
@@ -257,8 +260,8 @@ def _transport_env(num_users: int, max_seq_len: int, num_layers: int = NUM_LAYER
 def _scenario_env(sc: dict, **extra) -> dict:
     """Child environment for one scenario's runner or producer: the shared transport knobs, the
     scenario's own layer count, its model-specific `env` (model, trace dir, ...), then the role-specific
-    `extra` (MOCK_MIGRATION for the runner; the schedule + CHECK_PCC for the producer). Both roles must
-    agree on model/layers/seq_len or the producer would validate against a differently-shaped cache."""
+    `extra` (the layer-ack transport for the runner; the schedule + CHECK_PCC for the producer). Both
+    roles must agree on model/layers/seq_len or the producer would validate against a differently-shaped cache."""
     return _transport_env(
         sc["users"],
         sc["max_seq_len"],
@@ -433,7 +436,7 @@ def _running_runner(tag: str, sc: dict, **extra):
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
     env = _scenario_env(
         sc,
-        PREFILL_MOCK_MIGRATION="1",
+        PREFILL_ENABLE_MIGRATION="0",
         # The scenario's own setting wins; otherwise the caller's environment, so a model whose runtime
         # reports layer completion through the host callback only can run a shared scenario.
         PREFILL_LAYER_ACK_D2H=sc.get("env", {}).get(

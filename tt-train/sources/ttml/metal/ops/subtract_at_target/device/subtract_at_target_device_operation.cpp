@@ -4,9 +4,9 @@
 
 #include "subtract_at_target_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
 #include <limits>
 
+#include "metal/common/tensor_validation.hpp"
 #include "subtract_at_target_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -14,37 +14,12 @@ namespace ttml::metal::ops::subtract_at_target::device {
 
 void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor,
-                           const std::string& name,
-                           tt::tt_metal::Layout required_layout,
-                           tt::tt_metal::DataType required_dtype) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "SubtractAtTarget: '{}' must be on DEVICE, got '{}'",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-        TT_FATAL(tensor.buffer() != nullptr, "SubtractAtTarget: '{}' buffer is null.", name);
-        TT_FATAL(
-            tensor.layout() == required_layout,
-            "SubtractAtTarget: '{}' must have layout '{}', got '{}'",
-            name,
-            enchantum::to_string(required_layout),
-            enchantum::to_string(tensor.layout()));
-        TT_FATAL(
-            tensor.dtype() == required_dtype,
-            "SubtractAtTarget: '{}' must have dtype '{}', got '{}'",
-            name,
-            enchantum::to_string(required_dtype),
-            enchantum::to_string(tensor.dtype()));
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "SubtractAtTarget: '{}' must use INTERLEAVED memory layout, got '{}'",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
-
-    check_tensor(tensor_args.input, "input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
-    check_tensor(tensor_args.target, "target", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
+    check_device_tensor(tensor_args.input, "SubtractAtTarget", "input");
+    check_device_tensor(
+        tensor_args.target,
+        "SubtractAtTarget",
+        "target",
+        {.dtypes = {tt::tt_metal::DataType::UINT32}, .layout = tt::tt_metal::Layout::ROW_MAJOR});
 
     TT_FATAL(
         tensor_args.input.logical_shape().rank() == 4U,
@@ -88,11 +63,7 @@ void SubtractAtTargetDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (tensor_args.preallocated_output.has_value()) {
-        check_tensor(
-            tensor_args.preallocated_output.value(),
-            "preallocated_output",
-            tt::tt_metal::Layout::TILE,
-            tt::tt_metal::DataType::BFLOAT16);
+        check_device_tensor(tensor_args.preallocated_output.value(), "SubtractAtTarget", "preallocated_output");
     }
 }
 

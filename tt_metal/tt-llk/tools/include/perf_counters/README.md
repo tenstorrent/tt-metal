@@ -10,7 +10,7 @@ Header-only description of the hardware performance counters, namespace `llk::pe
 
 Two consumers use these headers and nothing else describes the counters:
 
-- the metal profiler (`tt_metal/tools/profiler/perf_counters.hpp`), which adds its record format,
+- the metal profiler (`tt_metal/hw/inc/internal/profiler/perf_counters.hpp`), which adds its record format,
   group bit contract and emission into the profiler buffer;
 - the LLK perf harness (`tt_metal/tt-llk/tests/helpers/include/counters.h`), which adds its L1 ABI,
   zones and barriers.

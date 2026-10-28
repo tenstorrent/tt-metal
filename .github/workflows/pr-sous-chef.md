@@ -60,10 +60,13 @@ on:
   # re-reads the PR right before writing and posts nothing if `copilot-flow` is gone.
   # Maintainers reset a handed-off PR by removing `copilot-flow-handoff`; only nudges
   # posted after that removal count toward the next cap. The agent job stays read-only.
+  # `actions: read` lets the prefilter list the PR's `dynamic` Actions runs (Copilot coding
+  # agent / Copilot code review) to tell whether Copilot is working on it right now.
   permissions:
     pull-requests: write
     issues: read
     checks: read
+    actions: read
   steps:
     - name: Resolve the identity Sous Chef nudges are posted as
       id: identity

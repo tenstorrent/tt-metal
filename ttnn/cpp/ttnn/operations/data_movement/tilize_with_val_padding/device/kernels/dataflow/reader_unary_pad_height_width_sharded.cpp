@@ -33,20 +33,15 @@ void kernel_main() {
 
     dfb_in1.reserve_back(num_padded_tiles_per_batch);
 
-    uint32_t read_addr = src_shard.get_bank_base_address();
+    // Byte offset into src_shard; src_shard and pad are read as loop-back NoC sources (this core's own L1).
+    uint32_t read_offset = 0;
     uint32_t write_addr = dfb_in1.get_write_ptr();
-    uint32_t pad_addr = pad.get_base_address();
 
     {
         CoreLocalMem<uint32_t> dst(write_addr);
-        noc.async_read(
-            UnicastEndpoint{},
-            dst,
-            input_block_size,
-            {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = read_addr},
-            {.offset_bytes = 0});
+        noc.async_read(src_shard, dst, input_block_size, {.offset_bytes = read_offset}, {.offset_bytes = 0});
     }
-    read_addr += input_block_size;
+    read_offset += input_block_size;
     write_addr += input_block_size;
     {
         // The pad row is CPU-filled here and then used as a NOC read source below. On Quasar the DM
@@ -59,12 +54,7 @@ void kernel_main() {
     }
     for (uint32_t i = 0; i < num_padded_rows; ++i) {
         CoreLocalMem<uint32_t> dst(write_addr);
-        noc.async_read(
-            UnicastEndpoint{},
-            dst,
-            input_width_bytes,
-            {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = pad_addr},
-            {.offset_bytes = 0});
+        noc.async_read(pad, dst, input_width_bytes, {.offset_bytes = 0}, {.offset_bytes = 0});
         write_addr += input_width_bytes;
     }
     noc.async_read_barrier();
@@ -75,27 +65,13 @@ void kernel_main() {
         write_addr = dfb_in1.get_write_ptr();
         {
             CoreLocalMem<uint32_t> dst(write_addr);
-            noc.async_read(
-                UnicastEndpoint{},
-                dst,
-                input_block_size,
-                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-                 .addr = read_addr},
-                {.offset_bytes = 0});
+            noc.async_read(src_shard, dst, input_block_size, {.offset_bytes = read_offset}, {.offset_bytes = 0});
         }
-        read_addr += input_block_size;
+        read_offset += input_block_size;
         write_addr += input_block_size;
         for (uint32_t i = 0; i < num_padded_rows; ++i) {
             CoreLocalMem<uint32_t> dst(write_addr);
-            noc.async_read(
-                UnicastEndpoint{},
-                dst,
-                input_width_bytes,
-                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-                 .addr = pad_addr},
-                {.offset_bytes = 0});
+            noc.async_read(pad, dst, input_width_bytes, {.offset_bytes = 0}, {.offset_bytes = 0});
             write_addr += input_width_bytes;
         }
         noc.async_read_barrier();

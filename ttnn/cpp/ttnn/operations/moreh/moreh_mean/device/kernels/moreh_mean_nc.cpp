@@ -21,6 +21,9 @@ void kernel_main() {
 
     DataflowBuffer dfb_in1_obj(dfb::in1);
     DataflowBuffer dfb_scalar_obj(dfb::scalar);
+    DataflowBuffer dfb_input_obj(dfb::input);
+    DataflowBuffer dfb_intermed0_obj(dfb::intermed0);
+    DataflowBuffer dfb_out_obj(dfb::out);
     constexpr uint32_t onetile = 1;
 
     compute_kernel_hw_startup(dfb::input, dfb::in1, dfb::out);
@@ -33,12 +36,13 @@ void kernel_main() {
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
             if (enable_reload) {
                 ckl::add<ckl::input(dfb::input), ckl::input(dfb::intermed0), ckl::output(dfb::intermed0)>(
-                    ckl::IterationShape::tiles(onetile));
+                    ckl::IterationShape::tiles(onetile), dfb_input_obj, dfb_intermed0_obj, dfb_intermed0_obj);
             } else {
                 ckl::add<
                     ckl::input(dfb::input),
                     ckl::input(dfb::in1, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                    ckl::output(dfb::intermed0)>(ckl::IterationShape::tiles(onetile));
+                    ckl::output(dfb::intermed0)>(
+                    ckl::IterationShape::tiles(onetile), dfb_input_obj, dfb_in1_obj, dfb_intermed0_obj);
             }
 
             enable_reload = true;
@@ -48,6 +52,6 @@ void kernel_main() {
         ckl::mul<
             ckl::input(dfb::intermed0),
             ckl::input(dfb::scalar, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-            ckl::output(dfb::out)>(ckl::IterationShape::tiles(onetile));
+            ckl::output(dfb::out)>(ckl::IterationShape::tiles(onetile), dfb_intermed0_obj, dfb_scalar_obj, dfb_out_obj);
     }
 }

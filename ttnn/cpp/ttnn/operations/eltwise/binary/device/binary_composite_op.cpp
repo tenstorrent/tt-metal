@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/device/pow_int_device_operation.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
@@ -19,6 +20,7 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/core/to_layout/to_layout_op.hpp"
@@ -1043,6 +1045,12 @@ Tensor lcm(
         rhs_activations);
 }
 
+namespace {
+bool is_integer_pow_base(DataType dtype) {
+    return dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16;
+}
+}  // namespace
+
 // power - floating point exponent
 Tensor pow(
     const Tensor& input_a,
@@ -1054,6 +1062,11 @@ Tensor pow(
         std::int32_t exp = exponent;
         return pow(input_a, exp, output_mem_config, output_tensor);
     }
+    TT_FATAL(
+        !is_integer_pow_base(input_a.dtype()),
+        "pow: {} input requires an integral exponent, got {}",
+        input_a.dtype(),
+        exponent);
     return ttnn::power(input_a, exponent, output_mem_config, output_tensor);
 }
 
@@ -1063,6 +1076,20 @@ Tensor pow(
     std::int32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
+    if (exponent == 0 || exponent == 1) {
+        const MemoryConfig memory_config = output_mem_config.value_or(
+            output_tensor.has_value() ? output_tensor->memory_config() : input.memory_config());
+        if (exponent == 0) {
+            return ttnn::full_like(input, 1, input.dtype(), input.layout(), std::nullopt, memory_config, output_tensor);
+        }
+        return ttnn::assign(input, memory_config, input.dtype(), output_tensor);
+    }
+    if (is_integer_pow_base(input.dtype())) {
+        TT_FATAL(exponent >= 0, "pow: integers to negative integer powers are not allowed, got {}", exponent);
+        const MemoryConfig memory_config = output_mem_config.value_or(
+            output_tensor.has_value() ? output_tensor->memory_config() : input.memory_config());
+        return ttnn::prim::pow_int(input, static_cast<std::uint32_t>(exponent), memory_config, output_tensor);
+    }
     // For exponents 0, 1, 2, 3: use iterative approach
     if (exponent == 0 || exponent == 1 || exponent == 2 || exponent == 3) {
         std::uint32_t exp = exponent;
@@ -1081,6 +1108,13 @@ Tensor pow(
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
+    // The binary POWER kernel computes in floating point, so it is not an exact integer power.
+    // Keep the shared "not supported for binary operation" wording that dtype validation uses.
+    TT_FATAL(
+        !is_integer_pow_base(input.dtype()),
+        "Input tensor A dtype {} is not supported for binary operation POWER: tensor exponents are not supported for "
+        "integer inputs, use a scalar integer exponent",
+        input.dtype());
     return ttnn::detail::invoke_binary_ng(
         input,
         exponent,
@@ -1255,6 +1289,10 @@ constexpr uint64_t SITU_GLU_L1_PEAK_INTERMEDIATES = 3;
 constexpr uint64_t SITU_GLU_L1_BUDGET_NUM = 3;
 constexpr uint64_t SITU_GLU_L1_BUDGET_DEN = 4;
 
+// The betas ckernel::sfpu::SituGluConfigKimi compiles into situ_glu_tile.
+constexpr float SITU_GLU_NATIVE_BETA_GATE = 4.0f;
+constexpr float SITU_GLU_NATIVE_BETA_UP = 25.0f;
+
 static bool situ_glu_intermediates_fit_l1(const Tensor& gate) {
     const auto& allocator = gate.device()->allocator();
     const uint64_t l1_total = static_cast<uint64_t>(allocator->get_bank_size(tt::tt_metal::BufferType::L1)) *
@@ -1311,6 +1349,63 @@ Tensor situ_glu(
         !(cores.has_value() && effective_out.is_l1() && !effective_out.is_sharded()),
         "situ_glu: a core restriction cannot be combined with an interleaved-L1 output, which would "
         "take L1 on the cores restricted away. Use DRAM or a sharded L1 memory config.");
+
+    // Native path: one binary_ng SFPU launch (situ_glu_tile), reading gate and up once and writing the
+    // result once, with no intermediates. The LLK compiles Kimi K3's betas in, so any other betas --
+    // and the architectures without the LLK -- keep the composite below and its numerics. It goes
+    // through the same entry point as the public binary ops, so layout normalization, output
+    // placement and dtype handling are theirs rather than a second copy here.
+    const auto arch = gate.device()->arch();
+    if ((arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) && beta1 == SITU_GLU_NATIVE_BETA_GATE &&
+        beta2 == SITU_GLU_NATIVE_BETA_UP && gate.dtype() == up.dtype()) {
+        const bool gate_rm = gate.layout() == Layout::ROW_MAJOR;
+        const bool up_rm = up.layout() == Layout::ROW_MAJOR;
+        // The shared entry point tilizes (and re-untilizes) a pair it cannot run row-major, but on the
+        // full grid: it does not carry a core restriction into those conversions. Under a restriction,
+        // do them here on the restricted cores so the shared path finds nothing left to convert. Same
+        // rule as the shared path: both row-major and interleaved runs row-major, anything else tiles.
+        const bool convert_here =
+            cores.has_value() && (gate_rm || up_rm) && !(gate_rm && up_rm && !gate.is_sharded() && !up.is_sharded());
+        if (!convert_here) {
+            return ttnn::detail::invoke_binary_ng(
+                gate,
+                up,
+                binary::BinaryOpType::SITU_GLU,
+                std::nullopt,
+                output_mem_config,
+                std::nullopt,
+                {},
+                {},
+                {},
+                std::nullopt,
+                cores);
+        }
+        // A tilized copy is a new buffer: keep it off interleaved L1, which would take L1 on the cores
+        // restricted away (see the output check above).
+        const auto tilize = [&](const Tensor& t) {
+            if (t.layout() == Layout::TILE) {
+                return t;
+            }
+            const auto& mc = t.memory_config();
+            const std::optional<MemoryConfig> tile_mc =
+                mc.is_l1() && !mc.is_sharded() ? std::optional<MemoryConfig>(ttnn::DRAM_MEMORY_CONFIG) : std::nullopt;
+            return ttnn::to_layout(t, Layout::TILE, std::nullopt, tile_mc, cores);
+        };
+        Tensor result = ttnn::detail::invoke_binary_ng(
+            tilize(gate),
+            tilize(up),
+            binary::BinaryOpType::SITU_GLU,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt,
+            cores);
+        return gate_rm && up_rm ? ttnn::to_layout(result, Layout::ROW_MAJOR, std::nullopt, std::nullopt, cores)
+                                : result;
+    }
 
     // Sharded inputs keep the ops' own placement: interleaved-L1 intermediates against a sharded
     // input would add an unshard/reshard round-trip, which is the opposite of the point here.

@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/packed_summary.hpp"
 
 #include <cstdint>
 
-#include "tt-metalium/constants.hpp"
+#include "api/tile_constants.h"
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
@@ -16,28 +18,15 @@
 FORCE_INLINE uint32_t worker_x(uint32_t worker) { return get_common_vararg(2 * worker); }
 FORCE_INLINE uint32_t worker_y(uint32_t worker) { return get_common_vararg(2 * worker + 1); }
 
-template <typename Accessor>
-FORCE_INLINE void issue_tensor_block_read(
-    Noc& noc, const Accessor& accessor, DataflowBuffer& buffer, uint32_t page, uint32_t tiles) {
-    for (uint32_t tile = 0; tile < tiles; tile++) {
-        noc.async_read(
-            accessor,
-            buffer,
-            buffer.get_entry_size(),
-            {.page_id = page + tile},
-            {.offset_bytes = tile * buffer.get_entry_size()});
-    }
-}
-
-template <typename ReadySem>
+template <typename ReadySem, typename SendA, typename SendB, typename RemoteA, typename RemoteB>
 FORCE_INLINE void send_affine_pair(
     Noc& noc,
     ReadySem& ready,
     uint32_t target,
-    DataflowBuffer& send_a,
-    DataflowBuffer& send_b,
-    DataflowBuffer& remote_a,
-    DataflowBuffer& remote_b,
+    SendA& send_a,
+    SendB& send_b,
+    RemoteA& remote_a,
+    RemoteB& remote_b,
     uint32_t a_tiles,
     uint32_t b_tiles) {
     const uint32_t target_x = worker_x(target);
@@ -60,9 +49,9 @@ FORCE_INLINE void send_affine_pair(
 
 // Empty ranks contribute the affine identity (I, 0) to the distributed prefix.
 // The unused remote buffer provides one FLOAT32 scratch tile; compute has exited.
-template <uint32_t Kt, uint32_t Vt, typename AAccessor, typename BAccessor>
+template <uint32_t Kt, uint32_t Vt, typename AAccessor, typename BAccessor, typename DFB>
 FORCE_INLINE void write_identity_transform(
-    Noc& noc, DataflowBuffer& scratch, uint32_t head, const AAccessor& output_a, const BAccessor& output_b) {
+    Noc& noc, DFB& scratch, uint32_t head, const AAccessor& output_a, const BAccessor& output_b) {
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
     constexpr uint32_t face_rows = tt::constants::FACE_HEIGHT;
@@ -134,8 +123,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
 
-    const auto a_accessor = TensorAccessor(tensor::a);
-    const auto b_accessor = TensorAccessor(tensor::b);
+    const auto summaries_accessor = TensorAccessor(tensor::summaries);
     const auto output_a_accessor = TensorAccessor(tensor::output_a);
     const auto output_b_accessor = TensorAccessor(tensor::output_b);
     DataflowBuffer initial_a(dfb::initial_a);
@@ -182,8 +170,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
 
     initial_a.reserve_back(a_tiles);
     initial_b.reserve_back(b_tiles);
-    issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * a_tiles, a_tiles);
-    issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * b_tiles, b_tiles);
+    kda::read_summary_transform<Kt, Vt>(noc, summaries_accessor, initial_a, initial_b, worker_index);
     noc.async_read_barrier();
     initial_a.push_back(a_tiles);
     initial_b.push_back(b_tiles);

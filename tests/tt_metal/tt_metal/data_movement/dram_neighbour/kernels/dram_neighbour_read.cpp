@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
-#include "hw/inc/api/debug/dprint.h"
+#include "api/debug/dprint.h"
 #include "barrier_sync.hpp"
 
 void kernel_main() {

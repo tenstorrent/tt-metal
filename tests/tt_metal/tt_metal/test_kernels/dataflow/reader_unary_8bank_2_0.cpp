@@ -11,8 +11,8 @@
 #include "experimental/kernel_args.h"
 
 #if GENERATE_BCAST_SCALER
-void generate_bcast_scaler() {
-    DataflowBuffer dfb1(dfb::out_scaler);
+template <typename DFB>
+void generate_bcast_scaler(DFB& dfb1) {
     std::uint32_t scaler = get_arg(args::scaler);
     union {
         float f;
@@ -49,7 +49,10 @@ void kernel_main() {
 
 #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
-    generate_bcast_scaler();
+    // The scaler DFB lives for the whole kernel: on Quasar its destructor waits until the compute kernel
+    // pops the scaler, which it does after the last data tile, so it can't go out of scope before the reads.
+    DataflowBuffer dfb_scaler(dfb::out_scaler);
+    generate_bcast_scaler(dfb_scaler);
     constexpr std::uint32_t blk = BLOCK_SIZE;
 #else
     constexpr std::uint32_t blk = 1;  // 1 for correctness for unfused kernels

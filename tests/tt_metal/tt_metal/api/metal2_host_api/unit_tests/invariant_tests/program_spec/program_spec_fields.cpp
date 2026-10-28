@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Per-field invariants of ProgramSpec (program_spec.hpp): unique ids within each group, non-empty
-// kernels and work_units, disjoint work_units, no cross-node DFBs yet.
+// kernels and work_units, disjoint work_units.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -190,35 +190,6 @@ TEST_F(ProgramSpecTestQuasar, CPU_MultipleWorkUnitsOnDifferentNodesSucceeds) {
         MakeMinimalWorkUnit("work_unit0", node0, {"kernel"}), MakeMinimalWorkUnit("work_unit1", node1, {"kernel"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
-}
-
-// Cross-node DFBs are part of the API surface but not yet supported by the runtime.
-TEST_F(ProgramSpecTestQuasar, CPU_CrossNodeDFBNotYetSupportedAtRuntime) {
-    NodeCoord producer_node{0, 0};
-    NodeCoord consumer_node{1, 0};
-
-    ProgramSpec spec;
-    spec.name = "test_program";
-
-    auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer = MakeMinimalGen2DMKernel("consumer");
-
-    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {producer, consumer};
-    spec.cross_node_dataflow_buffers = {CrossNodeDataflowBufferSpec{
-        .dfb_spec = MakeMinimalDFB("dfb"),
-        .producer_consumer_map = {{producer_node, consumer_node}},
-    }};
-    spec.work_units = std::vector<WorkUnitSpec>{
-        MakeMinimalWorkUnit("producer_work_unit", producer_node, {"producer"}),
-        MakeMinimalWorkUnit("consumer_work_unit", consumer_node, {"consumer"}),
-    };
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not yet supported")));
 }
 
 }  // namespace

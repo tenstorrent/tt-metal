@@ -119,7 +119,7 @@ class MiniMaxH3TokenRefinerBlock(Module):
         # row-parallel and reduce-scatters back to TP-fractured.
         if not self.use_fused_agmm and self.tp_factor > 1:
             normed = self.ccl_manager.all_gather(normed, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
-        ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2])
+        ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2]) if self.use_fused_agmm else None
         ff_out = self.ff(
             normed,
             compute_kernel_config=self.mm_compute_kernel_config,

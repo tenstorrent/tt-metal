@@ -11,7 +11,7 @@ would reintroduce (chunk 0 stays correct while later chunks scatter).
 
 import pytest
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 
 from models.tt_dit.tests.models.wan2_2.test_all_gather_minimal_matmul_async import (
     create_fabric_router_config,

@@ -22,6 +22,11 @@ void kernel_main() {
 
     DataflowBuffer dfb_one_obj(dfb::one);
     DataflowBuffer dfb_mask_w_obj(dfb::mask_w);
+    DataflowBuffer dfb_x_obj(dfb::x);
+    DataflowBuffer dfb_val_obj(dfb::val);
+    DataflowBuffer dfb_cal_obj(dfb::cal);
+    DataflowBuffer dfb_reduce_obj(dfb::reduce);
+    DataflowBuffer dfb_y_obj(dfb::y);
 
     constexpr uint32_t onetile = 1;
 
@@ -48,29 +53,32 @@ void kernel_main() {
             // f(x)
             ckl::eltwise_chain(
                 ckl::IterationShape::tiles(onetile),
-                ckl::CopyTile<ckl::input(dfb::x)>{},
+                ckl::CopyTile<ckl::input(dfb::x)>{dfb_x_obj},
                 ckl::runtime_if(
                     mask_this,
-                    ckl::CopyTile<ckl::input(dfb::mask_w, ckl::WaitPolicy::None, ckl::PopPolicy::None), ckl::Dst::D1>{},
+                    ckl::CopyTile<ckl::input(dfb::mask_w, ckl::WaitPolicy::None, ckl::PopPolicy::None), ckl::Dst::D1>{
+                        dfb_mask_w_obj},
                     MaskOp{}),
                 ckl::Optional<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},
                 ckl::Optional<!is_zero, ckl::Abs<ckl::Dst::D0>>{},
                 ckl::Optional<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
-                ckl::PackTile<ckl::output(dfb::val)>{});
+                ckl::PackTile<ckl::output(dfb::val)>{dfb_val_obj});
 
             // calculate f(x) over dimension
             if (col_idx == 0) {
-                ckl::copy<ckl::input(dfb::val), ckl::output(dfb::cal)>(ckl::IterationShape::tiles(onetile));
+                ckl::copy<ckl::input(dfb::val), ckl::output(dfb::cal)>(
+                    ckl::IterationShape::tiles(onetile), dfb_val_obj, dfb_cal_obj);
             } else {
                 if constexpr (is_zero) {
                     ckl::add<ckl::input(dfb::val), ckl::input(dfb::cal), ckl::output(dfb::cal)>(
-                        ckl::IterationShape::tiles(onetile));
+                        ckl::IterationShape::tiles(onetile), dfb_val_obj, dfb_cal_obj, dfb_cal_obj);
                 } else {
                     ckl::binary_sfpu<
                         ckl::BinaryMax<>,
                         ckl::input(dfb::val),
                         ckl::input(dfb::cal),
-                        ckl::output(dfb::cal)>(ckl::IterationShape::tiles(onetile));
+                        ckl::output(dfb::cal)>(
+                        ckl::IterationShape::tiles(onetile), dfb_val_obj, dfb_cal_obj, dfb_cal_obj);
                 }
             }
         }
@@ -80,9 +88,9 @@ void kernel_main() {
 
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
-            ckl::CopyTile<ckl::input(dfb::reduce)>{},
+            ckl::CopyTile<ckl::input(dfb::reduce)>{dfb_reduce_obj},
             ckl::Optional<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
-            ckl::PackTile<ckl::output(dfb::y)>{});
+            ckl::PackTile<ckl::output(dfb::y)>{dfb_y_obj});
     }
 
     dfb_one_obj.pop_front(onetile);

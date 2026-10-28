@@ -47,11 +47,32 @@ const COOLDOWN_MS = 60 * 60 * 1000;
 // queues can hold a job QUEUED much longer; 90 min keeps nudges from firing during a
 // merely slow (not stuck) pipeline.
 const PENDING_CHECK_MAX_AGE_MS = 90 * 60 * 1000;
-// NEW vs upstream: age past which an unmatched `copilot_work_started` (no later `finished`
-// or `finished_failure`) is treated as stale rather than "still running" (see Filter 2).
-// Same 90 min reasoning as PENDING_CHECK_MAX_AGE_MS above it: sessions run up to 59 min per
-// the COOLDOWN_MS comment, so 90 min is well past a genuine one but still bounded.
-const SESSION_STALE_MS = 90 * 60 * 1000;
+// Filter 2 ("is Copilot working on this PR right now?") uses upstream's mechanic
+// (github/gh-aw scripts/pr-sous-chef.mjs `activeAgent`): an Actions run in one of these
+// statuses whose workflow path starts with `dynamic/` and that references the PR. Both
+// Copilot session types run as such `dynamic` runs on the PR's head branch, and their
+// status tracks the real session (checked live on PR #60257, 2026-10-12):
+//   dynamic/copilot-swe-agent/copilot             "Running Copilot cloud agent"
+//   dynamic/agents/copilot-pull-request-reviewer  "Running Copilot Code Review"
+// The `copilot_work_*` timeline events used before cannot answer the question: the code
+// reviewer emits a `copilot_work_started` that never gets a finished event, which blocked
+// every flow PR for the old 90 min staleness backstop.
+const ACTIVE_RUN_STATUSES = new Set(['queued', 'in_progress', 'pending', 'requested', 'waiting']);
+const DYNAMIC_RUN_PATH_PREFIX = 'dynamic/';
+// NEW vs upstream: an "active" dynamic run older than this is ignored (and logged) rather
+// than holding the PR. GitHub does NOT bound a queued dynamic run: this repo has a
+// `dynamic/github-code-scanning/codeql` run still `queued` since 2026-05-20 (checked
+// 2026-10-12). Copilot sessions here run up to 59 min (observed max 41 min, reviewer max
+// 5 min), so 3 h is far past any genuine one while still keeping a stuck run from
+// silently parking a PR forever.
+const ACTIVE_RUN_MAX_AGE_MS = 3 * 60 * 60 * 1000;
+// `copilot_work_*` timeline events posted via this GitHub App are Copilot CODE REVIEW's,
+// not a coding-agent session's. They are ignored by the session-OUTCOME reads below
+// (Filter 4's silent-session check): the reviewer's `copilot_work_started` is never
+// matched by a finished event, and a lone reviewer `copilot_work_finished_failure` (seen
+// on #57754) must not look like a failed coding session. Denylist, not allowlist: an
+// event with no app field still counts.
+const COPILOT_REVIEWER_APP_SLUG = 'copilot-pull-request-reviewer';
 // Upstream default: a PR with zero changed files 24h after creation is "stalled".
 const ZERO_DIFF_AGE_MS = 24 * 60 * 60 * 1000;
 // NEW vs upstream: after this many actionable nudges on one PR, stop mentioning Copilot
@@ -121,6 +142,12 @@ const isResolvableReviewerBot = (node) => node?.__typename === 'Bot'
 // mergeable CONFLICTING (both checked live on real conflicting tt-metal PRs, 2026-09-28).
 // Either is accepted; UNKNOWN (GitHub still computing) counts as not conflicting this tick.
 const isConflicting = (pr) => pr?.mergeStateStatus === 'DIRTY' || pr?.mergeable === 'CONFLICTING';
+// Upstream `activeAgent`'s run clause, minus its name pattern (only `dynamic/` paths count;
+// see Filter 2 for why the gh-aw skills reviewers need no name match here).
+const isActiveAgentRunFor = (run, pr) => ACTIVE_RUN_STATUSES.has(run?.status)
+  && typeof run?.path === 'string' && run.path.startsWith(DYNAMIC_RUN_PATH_PREFIX)
+  && ((run.pull_requests || []).some(p => p?.number === pr?.number) || (!!run.head_branch && run.head_branch === pr?.headRefName));
+const isCopilotReviewerEvent = (ev) => (ev?.performed_via_github_app?.slug || '').toLowerCase() === COPILOT_REVIEWER_APP_SLUG;
 // Identity predicates. `sousChefLogin` is the login the add-comment safe output posts under
 // (resolved by the workflow's `identity` step: GH_AW_AGENT_TOKEN's user when provisioned,
 // github-actions[bot] otherwise). Only comments from that login that also carry the
@@ -154,6 +181,7 @@ async function run({ github, context, core }) {
   const { isNudge, isHandoff } = identity;
   const counters = {
     fetched: 0, filtered_flow_label_missing: 0, filtered_checks_pending: 0, filtered_copilot_session_active: 0,
+    filtered_agent_runs_unreadable: 0,
     filtered_handed_off: 0, handed_off_now: 0, handoff_skipped_stale_state: 0, filtered_last_comment_from_sous_chef: 0,
     filtered_cooldown: 0, filtered_copilot_unassigned: 0, filtered_nothing_actionable: 0,
     filtered_error: 0, eligible: 0, resolvable_threads_deferred: 0,
@@ -227,8 +255,50 @@ async function run({ github, context, core }) {
       });
       if (checksPending) { counters.filtered_checks_pending++; reasons[number] = 'checks still running'; continue; }
 
-      // Filter 2 (new vs upstream) — Copilot is working on it right now. Exact signal: the
-      // latest copilot_work_* timeline event is copilot_work_started.
+      // Filter 2 — Copilot (coding agent OR code reviewer) is working on it right now.
+      // Upstream's signal (scripts/pr-sous-chef.mjs `activeAgent`): an active Actions run
+      // with a `dynamic/` workflow path that references this PR. Queried PER PR, scoped to
+      // its head branch and `event=dynamic` (upstream scans every active run repo-wide,
+      // which on a repo this busy is many pages per status). One unpaginated page: a
+      // Copilot branch carries a handful of dynamic runs (max 8 on the 40 most recent
+      // Copilot PRs) and the list is newest first, so an active run is on it.
+      //
+      // Not matched by name, unlike upstream's agentPattern: the other agents that review
+      // these PRs (the gh-aw Tenstorrent / Matt Pocock Skills Reviewers) are
+      // `pull_request` workflows whose jobs are CheckRuns in statusCheckRollup, so Filter 1
+      // already holds the PR while they run; the Copilot reviewer's check is NOT in the
+      // GraphQL rollup, which is why only the dynamic runs need this extra read.
+      //
+      // FAIL CLOSED: if the runs cannot be read, skip the PR this tick. There is no fallback
+      // to timeline events (they are what made this filter wrong).
+      if (!pr.headRefName) throw new Error('PR has no headRefName; cannot look up Copilot runs');
+      let agentRuns;
+      try {
+        const res = await github.rest.actions.listWorkflowRunsForRepo({ owner, repo, branch: pr.headRefName, event: 'dynamic', per_page: 100 });
+        agentRuns = res?.data?.workflow_runs;
+        if (!Array.isArray(agentRuns)) throw new Error('response has no workflow_runs array');
+      } catch (error) {
+        counters.filtered_agent_runs_unreadable++;
+        reasons[number] = `could not read Copilot's Actions runs (${error.message}); skipped this tick`;
+        core.warning(`#${number}: could not list dynamic runs for ${pr.headRefName}: ${error.message}; skipping (fail closed)`);
+        continue;
+      }
+      const activeRuns = agentRuns.filter(r => isActiveAgentRunFor(r, pr));
+      const liveRuns = activeRuns.filter(r => {
+        const startedAt = new Date(r.run_started_at || r.created_at || 0).getTime();
+        if (now - startedAt < ACTIVE_RUN_MAX_AGE_MS) return true;
+        counters.agent_run_stale_ignored = (counters.agent_run_stale_ignored || 0) + 1;
+        core.warning(`#${number}: ignoring ${r.status} run ${r.id} (${r.path}), started ${r.run_started_at || r.created_at}: older than ${ACTIVE_RUN_MAX_AGE_MS / 3600000} h`);
+        return false;
+      });
+      if (liveRuns.length) {
+        counters.filtered_copilot_session_active++;
+        reasons[number] = `Copilot is working on it (${liveRuns.map(r => `${r.name || r.path}: ${r.status}`).join('; ')})`;
+        continue;
+      }
+
+      // Timeline: the nudge-count baseline below, and Copilot coding-session OUTCOMES for
+      // Filter 4. Never liveness (Filter 2 above).
       const timeline = await github.paginate(github.rest.issues.listEventsForTimeline, { owner, repo, issue_number: number, per_page: 100 });
       let session = 'none';
       let sessionAt = null;
@@ -242,7 +312,8 @@ async function run({ github, context, core }) {
       let nudgeBaseline = 0;
       for (const ev of timeline) {
         if (typeof ev.event !== 'string') continue;
-        if (ev.event.startsWith('copilot_work_')) {
+        // Code-review events are not coding sessions (see COPILOT_REVIEWER_APP_SLUG).
+        if (ev.event.startsWith('copilot_work_') && !isCopilotReviewerEvent(ev)) {
           session = ev.event; sessionAt = ev.created_at || null;
           if (ev.event === 'copilot_work_started') lastStartedAt = ev.created_at || null;
         }
@@ -250,21 +321,10 @@ async function run({ github, context, core }) {
           nudgeBaseline = Math.max(nudgeBaseline, new Date(ev.created_at || 0).getTime());
         }
       }
-      // A `copilot_work_started` with no later `copilot_work_finished*` normally means the
-      // session is genuinely running (comment above: up to 59 min). But the finished event is
-      // occasionally never emitted at all (observed on PR #58341: started 05:23, no commit or
-      // finished event for 2h+) and this filter has no other way to notice — unlike Filter 1's
-      // checks-pending, which self-heals once a check actually completes. Without an age cutoff
-      // a dropped finished event blocks the PR forever. SESSION_STALE_MS is deliberately looser
-      // than PENDING_CHECK_MAX_AGE_MS: a real session can legitimately run close to 59 min, and
-      // being slow to unstick a merely-slow one is much cheaper than nudging Copilot mid-session.
-      if (session === 'copilot_work_started') {
-        const startedAt = sessionAt ? new Date(sessionAt).getTime() : null;
-        const stale = startedAt !== null && now - startedAt >= SESSION_STALE_MS;
-        if (!stale) { counters.filtered_copilot_session_active++; reasons[number] = 'Copilot session in progress'; continue; }
-        counters.session_stale_override = (counters.session_stale_override || 0) + 1;
-        core.info(`#${number}: copilot_work_started at ${sessionAt} has no finished event after ${SESSION_STALE_MS / 60000} min; treating the session as stale, not blocking`);
-      }
+      // A latest `copilot_work_started` here is NOT a running session (Filter 2 found no
+      // active run): its finished event was dropped (PR #58341), or REST listed a
+      // same-second finished/started pair in the wrong order (#49020). It simply is not a
+      // finished/failed outcome, so Filter 4's silent-session check does not fire on it.
 
       // ALL issue comments (REST, paginated, newest first). They are the persistence for
       // the nudge cap, the cooldown and the hand-off marker, so a recency window is not
@@ -344,9 +404,9 @@ async function run({ github, context, core }) {
       // Second tt-metal refinement (PR #58341, 2026-09-29): a session that STARTS and FINISHES
       // (or fails) entirely after the nudge, with no push and no reply either, means Copilot
       // tried and silently produced nothing -- e.g. the "GitHub engine reported fetch failed"
-      // write-back error observed there. `session`/`sessionAt` can only be a finished/failed
-      // event here (a `copilot_work_started` with no later finished event already `continue`d
-      // at Filter 2, unless stale). The old code treated this identically to "still working,
+      // write-back error observed there. `session`/`sessionAt` is the latest coding-agent
+      // (non-reviewer) `copilot_work_*` event; only a finished/failed one counts below, and
+      // no Copilot run is active (Filter 2). The old code treated this identically to "still working,
       // wait" and blocked forever: Filter 4 never lets a second nudge through, so a silently
       // failed nudge could never progress toward a working retry OR the nudge cap. A silent
       // session is evidence the last nudge already failed, not a reason to keep waiting on it.
@@ -629,7 +689,8 @@ module.exports = {
   run,
   // exported for prefilter.test.js
   FLOW_LABEL, HANDOFF_LABEL, HANDOFF_MARKER, WORKFLOW_ID, MAX_NUDGES_PER_PR, MAX_ELIGIBLE,
-  MAX_THREADS_PER_PR, RESOLVE_THREADS_MAX, REPLY_VETO, COOLDOWN_MS, SESSION_STALE_MS, PRE_ACTIVATION_LOGIN,
-  matchesWorkflowId, isCopilotCodingAgent, isResolvableReviewerBot, isConflicting,
+  MAX_THREADS_PER_PR, RESOLVE_THREADS_MAX, REPLY_VETO, COOLDOWN_MS, ACTIVE_RUN_MAX_AGE_MS, PRE_ACTIVATION_LOGIN,
+  COPILOT_REVIEWER_APP_SLUG, matchesWorkflowId, isCopilotCodingAgent, isResolvableReviewerBot, isConflicting,
+  isActiveAgentRunFor, isCopilotReviewerEvent,
   makeIdentity, verifyFix, buildHandoffComment
 };

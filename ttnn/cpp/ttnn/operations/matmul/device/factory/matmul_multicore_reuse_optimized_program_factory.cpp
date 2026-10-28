@@ -119,7 +119,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     uint32_t batch_scale_factor = per_core_M > M ? per_core_M / M : 1;
     uint32_t per_core_M_per_batch = per_core_M > M ? M : per_core_M;
     uint32_t num_blocks = (K / in0_block_w);
-    bool packer_l1_acc_en = packer_l1_acc && (num_blocks > 2);
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
@@ -278,6 +280,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     const DFBSpecName BIAS_DFB{"bias"};
     const DFBSpecName OUT_DFB{"out"};
     const DFBSpecName INTERMED0_DFB{"intermed0"};
+    const DFBSpecName INTERMED0_RELOAD_ALIAS_DFB{"intermed0_reload_alias"};
     const DFBSpecName IN0_TRANSPOSED_DFB{"in0_transposed"};
 
     const TensorParamName IN0{"in0"};
@@ -331,23 +334,61 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         .data_format_metadata = interm0_data_format,
         .tile_format_metadata = output_tile,
     };
+
+    // When accumulating in fp32 with the K reduction split across blocks, the partials buffer holds
+    // Float32 and is reloaded into DEST between blocks. Unless the reload's view is marked UnpackToDest,
+    // that reload goes through SrcA and is rounded to TF32 on every block boundary (same fix as the
+    // mcast_1d/2d factories). The fused bias add reads the partials buffer as an FPU operand (SrcA), so
+    // with bias the reload instead goes through intermed0_reload_alias, a second view of the same SRAM
+    // carrying UnpackToDest, selected in the compute kernel by MM_PARTIALS_RELOAD_ALIAS.
+    const bool reload_partials_to_dest = fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32;
+    const bool bias_reload_alias = reload_partials_to_dest && bias.has_value();
+    DataflowBufferSpec intermed0_reload_alias_dfb_spec{
+        .unique_id = INTERMED0_RELOAD_ALIAS_DFB,
+        .entry_size = interm0_single_tile_size,
+        .num_entries = out_DFB_tiles,
+        .data_format_metadata = interm0_data_format,
+        .tile_format_metadata = output_tile,
+    };
     if (output_is_sharded) {
         out_dfb_spec.borrowed_from = OUTPUT;
         if (share_out_interm_buffer) {
             intermed0_dfb_spec.borrowed_from = OUTPUT;
+            intermed0_reload_alias_dfb_spec.borrowed_from = OUTPUT;
         }
     }
-    if (share_out_interm_buffer) {
-        out_dfb_spec.advanced_options.alias_with = {INTERMED0_DFB};
-        intermed0_dfb_spec.advanced_options.alias_with = {OUT_DFB};
+    {
+        Group<DFBSpecName> out_aliases;
+        Group<DFBSpecName> intermed0_aliases;
+        Group<DFBSpecName> alias_aliases;
+        if (share_out_interm_buffer) {
+            out_aliases.push_back(INTERMED0_DFB);
+            intermed0_aliases.push_back(OUT_DFB);
+            if (bias_reload_alias) {
+                out_aliases.push_back(INTERMED0_RELOAD_ALIAS_DFB);
+                intermed0_aliases.push_back(INTERMED0_RELOAD_ALIAS_DFB);
+                alias_aliases.push_back(OUT_DFB);
+                alias_aliases.push_back(INTERMED0_DFB);
+            }
+        } else if (bias_reload_alias) {
+            intermed0_aliases.push_back(INTERMED0_RELOAD_ALIAS_DFB);
+            alias_aliases.push_back(INTERMED0_DFB);
+        }
+        out_dfb_spec.advanced_options.alias_with = std::move(out_aliases);
+        intermed0_dfb_spec.advanced_options.alias_with = std::move(intermed0_aliases);
+        intermed0_reload_alias_dfb_spec.advanced_options.alias_with = std::move(alias_aliases);
     }
 
     Group<DataflowBufferSpec> dataflow_buffers;
-    dataflow_buffers.reserve(4 + (bias.has_value() ? 1 : 0) + (in0_transpose_tile ? 1 : 0));
+    dataflow_buffers.reserve(
+        4 + (bias.has_value() ? 1 : 0) + (in0_transpose_tile ? 1 : 0) + (bias_reload_alias ? 1 : 0));
     dataflow_buffers.push_back(std::move(in0_dfb_spec));
     dataflow_buffers.push_back(std::move(in1_dfb_spec));
     dataflow_buffers.push_back(std::move(out_dfb_spec));
     dataflow_buffers.push_back(std::move(intermed0_dfb_spec));
+    if (bias_reload_alias) {
+        dataflow_buffers.push_back(std::move(intermed0_reload_alias_dfb_spec));
+    }
     if (bias.has_value()) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BIAS_DFB,
@@ -394,6 +435,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS"] = "1";
+    }
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
@@ -414,6 +458,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
+
+    // A core's consecutive output blocks walk the M blocks of a batch, then move to the next batch
+    // (per_core_N == N, so a batch has no N blocks to walk).
+    const uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
+    const uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
+    const uint32_t out_m_block_stride = per_core_M_per_batch * N;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build KernelSpecs
@@ -453,10 +503,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"num_blocks", num_blocks},
                 {"bcast_B", static_cast<uint32_t>(bcast_batch)},
                 {"MtKt", M * K},
+                {"m_blocks_per_batch", m_blocks_per_batch},
+                {"in0_m_block_stride", in0_m_block_stride},
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"in0_tensor_start_tile_id", "batch"},
+                .runtime_arg_names = {"in0_tensor_start_tile_id", "batch", "start_m_block"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -513,10 +565,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"out_num_subblocks_w", out_num_subblocks_w},
                 {"out_num_subblocks_h", out_num_subblocks_h},
                 {"MtNt", M * N},
+                {"m_blocks_per_batch", m_blocks_per_batch},
+                {"out_m_block_stride", out_m_block_stride},
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id"},
+                .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id", "start_m_block"},
             },
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -538,15 +592,19 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t blocks_per_core_group) {
         auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config.value());
 
-        // Legacy set no unpack_to_dest_mode at all, i.e. UnpackToDestMode::Default for every
-        // buffer, which is UnpackMode::UnpackToSrc here. Stated explicitly because Metal 2.0
-        // requires the choice for a Float32 buffer a compute kernel consumes under
-        // enable_32_bit_dest, which the intermediate hits whenever fp32_dest_acc_en is set.
+        // Inputs are read via SrcA/SrcB. The Float32 partials are reloaded into DEST with UnpackToDest
+        // (on the reload alias when bias also reads the partials buffer via SrcA), see above. Stated
+        // explicitly because Metal 2.0 requires the choice for a Float32 buffer a compute kernel
+        // consumes under enable_32_bit_dest.
         compute_hw.unpack_modes = {
             {IN0_DFB, UnpackMode::UnpackToSrc},
             {IN1_DFB, UnpackMode::UnpackToSrc},
-            {INTERMED0_DFB, UnpackMode::UnpackToSrc},
+            {INTERMED0_DFB,
+             (reload_partials_to_dest && !bias_reload_alias) ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc},
         };
+        if (bias_reload_alias) {
+            compute_hw.unpack_modes.insert({INTERMED0_RELOAD_ALIAS_DFB, UnpackMode::UnpackToDest});
+        }
         if (bias.has_value()) {
             compute_hw.unpack_modes.insert({BIAS_DFB, UnpackMode::UnpackToSrc});
         }
@@ -640,6 +698,20 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             // Full-tile bias block, indexed by (M-tile-row, N-tile) rather than broadcast per row.
             compute.compile_time_args.insert({"row_broadcast_bias", 0u});
         }
+        if (bias_reload_alias) {
+            // The reload view of the partials buffer: compute drives its read cursor and nothing else
+            // touches it, so it holds both endpoints.
+            compute.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = INTERMED0_RELOAD_ALIAS_DFB,
+                .accessor_name = "intermed0_reload_alias",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+            compute.dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = INTERMED0_RELOAD_ALIAS_DFB,
+                .accessor_name = "intermed0_reload_alias",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
         return compute;
     };
 
@@ -652,12 +724,10 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     }
     const auto cores = corerange_to_cores(all_cores, num_cores, row_major);
 
-    uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
     uint32_t n_blocks_per_batch = N / per_core_N;
     uint32_t blocks_per_batch = m_blocks_per_batch * n_blocks_per_batch;
     uint32_t in0_batch_stride = M * K;
     uint32_t in1_batch_stride = K * N;
-    uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
     uint32_t in1_n_block_stride = per_core_N * (transpose_b ? K : 1);
 
     KernelRunArgs reader_run_args{.kernel = READER};
@@ -680,7 +750,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
-            {{"in0_tensor_start_tile_id", in0_start_tile_id}, {"batch", num_output_blocks_per_core}});
+            {{"in0_tensor_start_tile_id", in0_start_tile_id},
+             {"batch", num_output_blocks_per_core},
+             {"start_m_block", start_m_block}});
 
         uint32_t out_start_tile_id =
             (start_batch * M * N) + (start_m_block * per_core_M_per_batch * N) + (start_n_block * per_core_N);
@@ -689,7 +761,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             core,
             {{"in1_tensor_start_tile_id", in1_start_tile_id},
              {"batch", num_output_blocks_per_core},
-             {"out_tensor_start_tile_id", out_start_tile_id}});
+             {"out_tensor_start_tile_id", out_start_tile_id},
+             {"start_m_block", start_m_block}});
         if (bias.has_value()) {
             // Broadcast over batch, single block per element (start_m_block == start_n_block == 0
             // under the bias FATAL): the whole [M, N] bias starts at tile 0.

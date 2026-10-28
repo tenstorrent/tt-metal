@@ -20,7 +20,7 @@
 #include "metadata_scalar_read.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
+#include "../ring_joint_ksplit.hpp"  // relative, so its chunked_prefill_utils.hpp is the same file this kernel includes
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -556,10 +556,18 @@ void kernel_main() {
     constexpr uint32_t meta_args_offset =
         kv_pad_from_metadata ? stats_args.next_compile_time_args_offset() : kFirstAccessorArgOffset;
     constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();
+#ifdef KV_VALID_END
+    constexpr bool has_kv_valid_end = kv_pad_from_metadata;
+#else
+    constexpr bool has_kv_valid_end = false;
+#endif
+    constexpr uint32_t kv_valid_end_args_offset =
+        has_kv_valid_end ? meta_args.next_compile_time_args_offset() : meta_args_offset;
+    constexpr auto kv_valid_end_args = TensorAccessorArgs<kv_valid_end_args_offset>();
     // logical_n / logical_l accessors follow the metadata accessor, appended as a pair so the offsets do
     // not depend on which one was supplied.
-    constexpr uint32_t post_meta_args_offset =
-        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : stats_args.next_compile_time_args_offset();
+    constexpr uint32_t post_meta_args_offset = kv_pad_from_metadata ? kv_valid_end_args.next_compile_time_args_offset()
+                                                                    : stats_args.next_compile_time_args_offset();
     constexpr uint32_t logical_n_args_offset =
         has_logical_length_tensor ? post_meta_args_offset : kFirstAccessorArgOffset;
     constexpr auto logical_n_args = TensorAccessorArgs<logical_n_args_offset>();
@@ -608,7 +616,7 @@ void kernel_main() {
     // the physical (x, y) of its reducer (a sender) or of its senders in band order (the reducer).
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool ksplit_enabled = ksplit_count > 1;
-    static_assert(!ksplit_enabled || (!rotated_q_split_enabled && !has_sliding_window && use_streaming_compute));
+    static_assert(!ksplit_enabled || (!rotated_q_split_enabled && use_streaming_compute));
     static_assert(ksplit_count <= ring_joint::kKSplitMaxCount);
     const bool ksplit_active = ksplit_enabled && global_q_end - global_q_start == 1;
     // Segmented accumulation (see the compute kernel): the output is normalized after the ring loop.
@@ -645,6 +653,10 @@ void kernel_main() {
     // Common runtime args: kv_actual_isl slot first when present, then the logical-length pair.
     constexpr uint32_t logical_length_common_arg_base =
         kv_pad_from_metadata ? ring_joint::kWriterMetadataCommonArgCount : 0;
+    // kv_valid_end is validated incompatible with the logical_n / logical_l tensors, so its arg directly
+    // follows the kv_actual_isl slot.
+    static_assert(!has_kv_valid_end || !has_logical_length_tensor);
+    [[maybe_unused]] constexpr uint32_t kv_valid_end_common_arg = logical_length_common_arg_base;
     [[maybe_unused]] uint32_t global_n_partial_col_live = global_n_partial_col;
     [[maybe_unused]] uint32_t joint_l_partial_col_live = joint_l_partial_col;
 
@@ -710,6 +722,15 @@ void kernel_main() {
         }
         logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
             kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+        if constexpr (has_kv_valid_end) {
+            const uint32_t kv_valid_end = trace_metadata::read_metadata_scalar_u32(
+                noc,
+                kv_valid_end_args,
+                get_common_arg_val<uint32_t>(kv_valid_end_common_arg),
+                cb_meta_scratch.get_write_ptr());
+            logical_nt =
+                trace_metadata::logical_tile_rows_clamped_to_valid_end(logical_nt, kv_actual_isl, kv_valid_end);
+        }
         // Joint trio stays defaulted: KV-pad rotation is validated incompatible with a sharded joint.
         const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>({
             .transport_rank = fused_op_receiver.seq.ring_index,
@@ -820,8 +841,10 @@ void kernel_main() {
     // Track non-skipped iters so the first active iter starts with fresh accumulators (matches compute).
     bool seen_active_iter = false;
     auto arrival_preview = fused_op_receiver.seq;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::packed_kv_schedule(
-        GROUPED_KV_SOURCE_COUNT,
+    // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
+    // binary so it carries none of the packed-source path.
+    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
+    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<GROUPED_KV_SOURCE_COUNT>(
         ring_size,
         kv_local_padded_Nt,
         logical_nt,
@@ -834,7 +857,7 @@ void kernel_main() {
                 arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
         });
     const uint32_t source_group_size = packed_schedule.source_group_size;
-    const bool packed_sources = packed_schedule.packed();
+    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
@@ -894,6 +917,10 @@ void kernel_main() {
                     cb_sig.pop_front(1);
                 }
 
+                // K-split bands hand their state to the reducer, which writes after the merge.
+                if (ksplit_active) {
+                    continue;
+                }
                 const auto& gen = [&]() -> const auto& {
                     if constexpr (has_joint_q) {
                         if (qi.is_joint_q) {

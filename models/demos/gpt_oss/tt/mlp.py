@@ -4,6 +4,7 @@
 """
 MoE MLP: Router + Experts with minimal abstraction
 """
+
 import ttnn
 from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
@@ -16,6 +17,7 @@ from .experts_throughput import (
     ThroughputExperts,
     create_fused_moe_gpt_config,
 )
+from .fused_decode.config import DENSE_MOE_TOKENS, dense_moe_decode_supported, fused_decode_supported
 from .topk import TopKRouter
 
 
@@ -38,20 +40,29 @@ class MLP:
         router_state_dict = substate(state_dict, "router")
         experts_state_dict = substate(state_dict, "experts")
 
+        # Throughput experts rely on all_to_all_dispatch/combine across a mesh axis,
+        # which has no meaning on a single device and would require fabric.
+        if use_throughput_experts and mesh_device.get_num_devices() == 1:
+            use_throughput_experts = False
+
+        # One decode token per device under TP (no expert parallelism): decode routes and computes only the token's
+        # top-k experts (router.decode_indexed + Experts streamed decode).
+        self.indexed_decode = fused_decode_supported(
+            mesh_device, mesh_config, hf_config, use_throughput_experts, tokens_per_device
+        )
+
         # Initialize components with mesh_config
         self.router = TopKRouter(
             mesh_device,
             hf_config,
             router_state_dict,
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "router"),
+            indexed_decode=self.indexed_decode,
+            ccl_manager=ccl_manager,
         )
 
-        # Throughput experts rely on all_to_all_dispatch/combine across a mesh axis,
-        # which has no meaning on a single device and would require fabric.
-        if use_throughput_experts and mesh_device.get_num_devices() == 1:
-            use_throughput_experts = False
-
         self.use_throughput_experts = use_throughput_experts
+        self.dense_decode = False
         if self.use_throughput_experts:
             # Create TT config
             throughput_expert_config = ThroughputExpertConfig(
@@ -143,6 +154,11 @@ class MLP:
 
             # Use GPT-OSS specific program config
             program_config = GPTOSSProgramConfig()
+            # One 32-token tile per device (batch 32 on Blackhole 1x4): decode routes into dense [tokens, experts]
+            # weights and computes every expert (router.dense_decode + Experts decode_forward_dense).
+            self.dense_decode = dense_moe_decode_supported(
+                mesh_device, mesh_config, hf_config, use_throughput_experts, tokens_per_device
+            )
 
             # Create experts with new modular implementation
             self.experts = Experts(
@@ -154,6 +170,8 @@ class MLP:
                 program_config=program_config,
                 weight_dtype=ttnn.bfloat4_b,
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                indexed_decode=self.indexed_decode,
+                dense_decode_tokens=DENSE_MOE_TOKENS if self.dense_decode else None,
             )
 
     def __call__(self, hidden_states, is_decode):
@@ -163,6 +181,21 @@ class MLP:
         Returns:
             Expert output tensor [batch, seq_len, hidden_size]
         """
+        if is_decode and self.indexed_decode:
+            # Fused decode (fused_decode/stream.py): the router (top-k + softmax fused) and the experts read the flat
+            # norm output of the layer boundary; the routed ids / weights live in shared buffers. Returns this
+            # device's flat MoE partial sum (the next boundary all-reduces it).
+            # hidden_states may be the pending post-attention boundary, which then runs inside the router op
+            # (fused_decode/boundary.py consumer_parts); the experts read its normed output.
+            expert_indices, expert_weights = self.router.decode_indexed(hidden_states)
+            x = hidden_states if isinstance(hidden_states, ttnn.Tensor) else hidden_states.x
+            return self.experts(
+                x, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=True
+            )
+        if is_decode and self.dense_decode:
+            # Batched decode (dense MoE): dense [tokens, experts] routing weights straight from the router.
+            expert_weights = self.router.dense_decode(hidden_states)
+            return self.experts(hidden_states, topk_expert_weights=expert_weights, is_decode=True)
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
         expert_output = self.experts(
             hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=is_decode

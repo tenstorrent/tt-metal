@@ -33,11 +33,56 @@ constexpr std::uint32_t dest_reuse_dummy_unpack()
 } // namespace llk_unpack_a_detail
 
 /**
+ * @brief Whether @ref _llk_unpack_A_ programs the operand's L1 address into unpacker A (SEC0).
+ *
+ * Otherwise the address goes to unpacker B (SEC1): a broadcast or acc_to_dest operand's address goes
+ * to unpacker B unless DEST is reused as SrcB or the operand is unpacked to DEST. For example,
+ * acc_to_dest with DEST_TO_SRCA unpacks the operand to SrcB and moves DEST to SrcA.
+ * This only selects the address register; the MOP decides which sources are actually unpacked.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @return true if the operand's L1 base address goes to unpacker A (SEC0), false if it goes to unpacker B (SEC1).
+ */
+template <BroadcastType BType, bool acc_to_dest, EltwiseBinaryReuseDestType binary_reuse_dest, bool unpack_to_dest>
+constexpr bool _llk_unpack_A_address_on_unpacker_A_()
+{
+    return ((BType == BroadcastType::NONE) && (!acc_to_dest)) || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB || unpack_to_dest;
+}
+
+/**
+ * @brief Whether the unpack A configuration asserts check unpacker B (SEC1) rather than unpacker A (SEC0).
+ *
+ * Unpacker B is checked only when it both holds the operand's address (see
+ * @ref _llk_unpack_A_address_on_unpacker_A_) and unpacks it from L1: broadcasts, and acc_to_dest with
+ * DEST_TO_SRCA. acc_to_dest without DEST reuse also routes the address to unpacker B, but the
+ * transpose-of-faces MOP that transpose_init configures with it unpacks only SrcA (SrcB is zeroed),
+ * and its paired per-tile unpack uses acc_to_dest = false, so unpacker A is checked there.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @return true if the asserts should check unpacker B (SEC1), false for unpacker A (SEC0).
+ */
+template <BroadcastType BType, bool acc_to_dest, EltwiseBinaryReuseDestType binary_reuse_dest, bool unpack_to_dest>
+constexpr bool _llk_unpack_A_asserts_check_unpacker_B_()
+{
+    return !_llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>() &&
+           ((BType != BroadcastType::NONE) || (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA));
+}
+
+/**
  * @brief Program the unpacker MOP for a single-operand (A) unpack.
  *
  * Selects the UNPACR instruction sequence based on broadcast type, dest-reuse mode and
  * whether data is unpacked straight to the dest register, covering transpose-of-faces and
  * 32-bit-to-dest paths.
+ *
+ * @note On the plain path, a face shorter than 16 rows zeroes both SrcA banks here, because datacopy moves all
+ * 16 rows.
  *
  * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
  * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
@@ -222,6 +267,11 @@ inline void _llk_unpack_A_mop_config_(
             {
                 const std::uint32_t outerloop     = num_faces;
                 constexpr std::uint32_t innerloop = 1;
+                if (tensor_shape.face_r_dim < FACE_R_DIM)
+                {
+                    // Datacopy moves all 16 rows of a face.
+                    _llk_unpack_clear_src_banks_<SrcA>();
+                }
                 ckernel_template tmp(outerloop, innerloop, unpack_srcb_set_dvalid);
                 tmp.set_start_op(unpack_srca);
                 tmp.program();
@@ -245,6 +295,9 @@ inline void _llk_unpack_A_mop_config_(
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
+ * @note On the plain path, a face shorter than 16 rows waits for math and zeroes both SrcA banks
+ *       (see @ref _llk_unpack_A_mop_config_). Re-run this init after any op that writes SrcA, for example a
+ *       MOVD2A or MOVB2A.
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
  * @ref _llk_unpack_A_ is the matching execute call.
@@ -339,6 +392,8 @@ inline void _llk_unpack_A_uninit_()
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function, and
  *       @ref _llk_unpack_A_uninit_ after it as the matching teardown (currently a no-op).
+ * @note With unpack_to_dest, a 32-bit input and BType != NONE, this also hands the math thread one SrcB bank
+ *       per tile; only @ref _llk_math_eltwise_unary_datacopy_ with the same BType releases it.
  * @ref _llk_math_eltwise_unary_datacopy_ on the math thread consumes the tile unpacked here.
  */
 template <
@@ -360,7 +415,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     wait_for_next_context(2);
 
     // Set upk0/1 L1 read addr
-    if constexpr (((BType == BroadcastType::NONE) && (!acc_to_dest)) || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB || unpack_to_dest)
+    if constexpr (_llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>())
     {
         const std::uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
         cfg[upk0_reg]                = address;
@@ -388,6 +443,16 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 
     // Run MOP
     ckernel::ckernel_template::run();
+
+    if constexpr (unpack_to_dest && (BType != BroadcastType::NONE))
+    {
+        if (is_32bit_input(unpack_src_format, unpack_dst_format))
+        {
+            // The math side broadcasts the tile in DEST through SrcB (MOVD2B/MOVB2D), so hand it a SrcB bank.
+            // SETDVALID from the math thread is unsupported on Blackhole.
+            TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+        }
+    }
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);

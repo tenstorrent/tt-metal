@@ -21,7 +21,7 @@ The skill passes you:
 - `test_file` (e.g. `test_sfpu_square_quasar.py`)
 - `arch` (`quasar`, `blackhole`, `wormhole`)
 - `command` (`count` | `compile` | `simulate` | `run`)
-- options (any combination of `--k`, `--test-id`, `--maxfail`, `--no-split`, `--port`, `--timeout`)
+- options (any combination of `--k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`)
 
 ## Mandatory Pre-Flight (do this every run)
 
@@ -49,7 +49,7 @@ bash .claude/scripts/run_test.sh <command> \
     --arch <arch> \
     --test <test_file> \
     [--maxfail N] [--k EXPR] [--test-id ID] \
-    [--no-split] [--port PORT] [--timeout SECS]
+    [--no-split] [--timeout SECS]
 ```
 
 Use `timeout: 1800000` (30 min) on the Bash tool call — synchronous, never `run_in_background`.
@@ -88,7 +88,7 @@ For deeper context, look for these blocks (each appears at most once):
 | 0    | PASS         | Report PASS                                                           |
 | 1    | FAIL         | Surface failing variants from `= FAILURES =` section                  |
 | 2    | COMPILE_FAIL | Surface compile error from compile phase output                       |
-| 3    | ENV_ERROR    | Likely venv missing, simulator port stuck, or `flock` timeout. Report root cause; do **not** retry blindly |
+| 3    | ENV_ERROR    | Likely venv missing or `flock` timeout. Report root cause; do **not** retry blindly |
 | 4    | BAD_ARGS     | Bug in the skill/agent invocation — surface and stop                  |
 | 5    | HANG         | Surface the `RUN_LLK_TESTS_HANG` block (includes `tt-triage` for BH/WH). Do **not** retry — report HANG with the failing variant; the script has already cleaned up. |
 

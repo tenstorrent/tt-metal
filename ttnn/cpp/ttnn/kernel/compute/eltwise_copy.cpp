@@ -17,6 +17,8 @@ void kernel_main() {
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     constexpr auto dfb_in_id = tt::CBIndex::c_0;
     constexpr auto dfb_out_id = tt::CBIndex::c_16;
+    DataflowBuffer dfb_in(dfb_in_id);
+    DataflowBuffer dfb_out(dfb_out_id);
 
     compute_kernel_hw_startup(dfb_in_id, dfb_out_id);
 
@@ -24,5 +26,5 @@ void kernel_main() {
         ckl::input(dfb_in_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
         ckl::output(
             dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
-        ckl::IterationShape::tiles(per_core_tile_cnt));
+        ckl::IterationShape::tiles(per_core_tile_cnt), dfb_in, dfb_out);
 }

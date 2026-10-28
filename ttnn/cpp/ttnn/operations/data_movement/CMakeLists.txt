@@ -18,6 +18,7 @@ file(
     bcast/device/kernels/*.cpp
     clone/device/kernels/*.cpp
     concat/device/kernels/*.cpp
+    concat/device/kernels/*.hpp
     common/kernels/*.hpp
     common/kernels/codegen/*.cpp
     common/kernels/codegen/*.h
@@ -44,6 +45,8 @@ file(
     repeat/codegen/kernels/*.cpp
     roll/device/kernels/*.cpp
     reshape_view/device/device/*.cpp
+    reshape_view/codegen/kernels/*.cpp
+    reshape_view/codegen/kernels/*.h
     scatter/device/kernels/*.cpp
     scatter/device/kernels/*.hpp
     sharded/device/kernels/*.cpp

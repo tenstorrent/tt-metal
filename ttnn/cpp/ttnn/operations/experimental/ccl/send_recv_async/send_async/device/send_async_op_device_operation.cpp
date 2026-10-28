@@ -19,6 +19,15 @@ void SendAsyncDeviceOperation::validate_on_program_cache_miss(
     std::vector<Tensor> input_tensors = {input_tensor};
     send_recv_utils::validate<tt::tt_metal::distributed::SocketEndpoint::SENDER>(
         input_tensors, mesh_socket, "send_async");
+
+    // The program factory builds per mesh coordinate and emits an empty descriptor (no program) for
+    // devices that hold no sender core. Catch a socket that misses the tensor's coordinates entirely
+    // here, otherwise it would dispatch an empty workload instead of reporting the mismatch.
+    ttnn::MeshCoordinateRangeSet tensor_coords;
+    for (const auto& coord : input_tensor.device_storage().get_coords()) {
+        tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
+    }
+    send_recv_utils::get_workload_coords<tt::tt_metal::distributed::SocketEndpoint::SENDER>(tensor_coords, mesh_socket);
 }
 
 SendAsyncDeviceOperation::spec_return_value_t SendAsyncDeviceOperation::compute_output_specs(
@@ -37,6 +46,9 @@ ttsl::hash::hash_t SendAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "SendAsyncDeviceOperation::compute_program_hash is called");
     const ttnn::Tensor& input_tensor = tensor_args;
+    // The MeshSocket hashes its config, endpoint type and fabric node map, not its config buffer
+    // address; SendAsyncProgramFactory::override_runtime_arguments re-applies that address (and the
+    // input tensor address) on every cache hit.
     return tt::tt_metal::operation::hash_operation<SendAsyncDeviceOperation>(args.mesh_socket, input_tensor);
 }
 

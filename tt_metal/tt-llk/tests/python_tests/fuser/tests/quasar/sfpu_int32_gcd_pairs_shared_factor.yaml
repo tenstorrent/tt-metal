@@ -1,0 +1,31 @@
+# Int32 gcd on specific operand pairs: large shared factors.
+# The operand samples only these values, so every pair of them, (a, b) and (b, a) included, lands in
+# about 1024 / 64 = 16 lanes of the A/B tiles. One stage per file: the fuser misroutes outputs of
+# later stages for this layout.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 64]
+    format: Int32
+    stimuli:
+      include:
+        - -1073741824.0
+        - 6291456.0
+        - 805306368.0
+        - 1073741824.0
+        - 2146861073.0
+        - 2146926607.0
+        - 2147483644.0
+        - 2147483646.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Int32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 64]}
+      - {type: "BinarySfpu", operation: SfpuGcd, approximation_mode: false, sign_magnitude: true, iterations: 32, block_size: [32, 32], indexes: {src0: 0, src1: 1, dest: 2}}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 2, out: 0}}

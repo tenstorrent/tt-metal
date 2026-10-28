@@ -4,7 +4,7 @@
 - Hardware reference (counter inventory, registers, limitations, derived metric catalogue): [tt_metal/tt-llk/docs/performance_counters/hardware_reference.md](../../tt_metal/tt-llk/docs/performance_counters/hardware_reference.md)
 - User guide: [docs/source/ttnn/ttnn/profiling_ttnn_operations.rst](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst)
 - Counter names, per-arch select tables, register map (shared with the tt-llk harness): [tt_metal/tt-llk/tools/include/perf_counters/](../../tt_metal/tt-llk/tools/include/perf_counters/)
-- Profiler firmware side (record format, group bits, readout): [tt_metal/tools/profiler/perf_counters.hpp](../../tt_metal/tools/profiler/perf_counters.hpp)
+- Profiler firmware side (record format, group bits, readout): [tt_metal/hw/inc/internal/profiler/perf_counters.hpp](../../tt_metal/hw/inc/internal/profiler/perf_counters.hpp)
 - Header parsers and metric formulas (shared with the tt-llk harness): [tt_metal/tt-llk/tools/python/tt_llk_perf/](../../tt_metal/tt-llk/tools/python/tt_llk_perf/)
 - Tracy adapter: [tools/tracy/perf_counter_analysis.py](../../tools/tracy/perf_counter_analysis.py)
 - CSV writer: [tools/tracy/process_ops_logs.py](../../tools/tracy/process_ops_logs.py)
@@ -33,7 +33,7 @@ On Quasar the DM0 core does both halves: it calls `start_perf_counter()` before 
 
 ### Where the definitions live
 
-Everything that describes the hardware is in tt-llk, under `tt_metal/tt-llk/tools/include/perf_counters/` (namespace `llk::perf`): `types.h` (the `PerfCounterType` enum, whose ordinal is the wire format, and the `Bank` enum), `blackhole.h`, `wormhole.h` and `quasar.h` (per-bank `{name, select}` tables), `inventory.h` (arch selection and `table_for`), `registers.h` (debug register addresses and bit constants; on Quasar the per-bank offsets, the two address windows and the l1_client CSR pair) and `hw.h` (the register primitives). The Python package `tt_metal/tt-llk/tools/python/tt_llk_perf/` parses names and tables from those headers (`headers.py`) and holds the metric engine (`metrics.py`). `tt_metal/tools/profiler/perf_counters.hpp` adds only the profiler policy: the record format, the `TT_METAL_PROFILE_PERF_COUNTERS` group bits and the emission into the profiler buffer. Adding a counter means appending to the enum and adding a table entry; no host code changes.
+Everything that describes the hardware is in tt-llk, under `tt_metal/tt-llk/tools/include/perf_counters/` (namespace `llk::perf`): `types.h` (the `PerfCounterType` enum, whose ordinal is the wire format, and the `Bank` enum), `blackhole.h`, `wormhole.h` and `quasar.h` (per-bank `{name, select}` tables), `inventory.h` (arch selection and `table_for`), `registers.h` (debug register addresses and bit constants; on Quasar the per-bank offsets, the two address windows and the l1_client CSR pair) and `hw.h` (the register primitives). The Python package `tt_metal/tt-llk/tools/python/tt_llk_perf/` parses names and tables from those headers (`headers.py`) and holds the metric engine (`metrics.py`). `tt_metal/hw/inc/internal/profiler/perf_counters.hpp` adds only the profiler policy: the record format, the `TT_METAL_PROFILE_PERF_COUNTERS` group bits and the emission into the profiler buffer. Adding a counter means appending to the enum and adding a table entry; no host code changes.
 
 ### How to Run
 
