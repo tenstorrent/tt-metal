@@ -154,6 +154,9 @@ SCENARIOS = [
     # round-timeline runs (tt/round_timeline.py): no early stop so that every user decodes 1600 (gsm) or 1000 (needle) tokens (>= 100 rounds after the warm-up)
     _s(GSM, 4, 1048576, 1600, "gsm8k_b4_m1M_rt", instruct=True, stop_at_eos=False, chunk=512),
     _s(GSM, 8, 524288, 1600, "gsm8k_b8_m512k_rt", instruct=True, stop_at_eos=False, chunk=512),
+    # device-profiler runs (4-layer model, DSV41_ROUND_TL_PROF=1): few tokens so that the profiler log stays small
+    _s(GSM, 4, 1048576, 112, "gsm8k_b4_m1M_prof", instruct=True, chunk=512),
+    _s(GSM, 8, 524288, 112, "gsm8k_b8_m512k_prof", instruct=True, chunk=512),
     _s("/mnt/tt-data/ssinghal/dsv4-logs/b8_a/prompts/needle_64000_8.json", 4, 1048576, 1000, "needle64k_b4_rt", instruct=True, chunk=512),
     _s("/mnt/tt-data/ssinghal/dsv4-logs/b8_a/prompts/needle_128000_8.json", 4, 1048576, 1000, "needle128k_b4_rt", instruct=True, chunk=512),
     _s("/mnt/tt-data/ssinghal/dsv4-logs/b8_a/prompts/needle_64000_8.json", 8, 524288, 1000, "needle64k_b8_m512k_rt", instruct=True, chunk=512),
