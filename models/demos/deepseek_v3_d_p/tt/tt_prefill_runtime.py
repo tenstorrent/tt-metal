@@ -13,6 +13,8 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.common.prefill.chunk_layout import pack_forward_tokens
+from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
 from models.demos.common.prefill.runners.layer_completion_ring_writer import NullLayerCompletionSink
 from models.demos.common.prefill.runners.runner_utils import (
     MTP_ID_ROWS,
@@ -40,14 +42,7 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, allocate_dflash_kv_cache
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
-
-# TODO: import from models.demos.common.prefill.prefill_chunk once #62535 moves it there.
-from models.demos.minimax_m3.tt.prefill_chunk import (
-    PrefillChunk,
-    pack_forward_tokens,
-    packed_real_rows,
-    validate_chunks,
-)
+from models.demos.minimax_m3.tt.packed_rows import packed_real_rows
 
 
 @dataclass
