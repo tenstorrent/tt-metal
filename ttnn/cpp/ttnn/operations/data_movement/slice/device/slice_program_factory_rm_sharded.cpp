@@ -333,7 +333,8 @@ void SliceDeviceOperation::override_runtime_arguments(
     // Height-sharded RM reader args depend only on shapes/slice_start/shard specs, all cache-keyed, so
     // on a hit the only thing that changes is the two CB addresses. Patch those in O(1) instead of
     // rebuilding all per-core args (which scaled host cost with the core grid). CBs: src0, then c_16.
-    if (std::holds_alternative<SliceRmShardedProgramFactory>(factory)) {
+    if (std::holds_alternative<SliceRmShardedProgramFactory>(factory) ||
+        std::holds_alternative<SliceTileHsLocalProgramFactory>(factory)) {
         tt::tt_metal::ProgramDescriptor cb_addr_only;
         cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_args.input.buffer()});
         cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = tensor_return_value.buffer()});

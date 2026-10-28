@@ -291,6 +291,10 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
         }
         return SliceRmProgramFactory{};
     }
+    // Layout::TILE, height-sharded in and out on one grid, last-dim cut at tile granularity: core-local copies.
+    if (SliceTileHsLocalProgramFactory::applies(args, input)) {
+        return SliceTileHsLocalProgramFactory{};
+    }
     // Layout::TILE — TensorAccessor at tile granularity handles all sharded buffer types natively.
     return SliceTileProgramFactory{};
 }

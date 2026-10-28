@@ -9,6 +9,7 @@
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_stride.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_hs_local.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
@@ -40,6 +41,7 @@ struct SliceDeviceOperation {
         SliceRmShardedProgramFactory,
         SliceRmStrideProgramFactory,
         SliceTileProgramFactory,
+        SliceTileHsLocalProgramFactory,
         SliceTileTensorArgsProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

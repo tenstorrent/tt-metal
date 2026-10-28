@@ -1869,3 +1869,44 @@ def test_slice_rm_wide_row_chunking(device, last_dim):
     ttnn_output = ttnn.slice(ttnn_input, begins, ends, step, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     assert torch.equal(torch_output, ttnn.to_torch(ttnn_output))
+
+
+# ---------------------------------------------------------------------------
+# TILE, height-sharded in and out on the same grid, last-dim slice: the core-local path
+# ---------------------------------------------------------------------------
+
+
+def _hs_mem_cfg(cores, rows, cols):
+    full, rem = divmod(cores, 8)
+    rs = set()
+    if full:
+        rs.add(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, full - 1)))
+    if rem:
+        rs.add(ttnn.CoreRange(ttnn.CoreCoord(0, full), ttnn.CoreCoord(rem - 1, full)))
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(ttnn.CoreRangeSet(rs), (rows, cols), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize(
+    "rows, cols, cores, shard_rows, w0, w1",
+    [
+        (46080, 96, 63, 736, 32, 96),   # BEV block C: 160x288x96 -> channels 32..96 (ragged last shard)
+        (11520, 128, 60, 192, 64, 128),
+        (2880, 256, 45, 64, 64, 256),
+        (1024, 160, 8, 128, 0, 96),     # leading channels
+        (512, 192, 4, 128, 64, 128),    # a single tile column in the middle
+    ],
+)
+def test_slice_tile_height_sharded_local(device, dtype, rows, cols, cores, shard_rows, w0, w1):
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, rows, cols).bfloat16()
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=_hs_mem_cfg(cores, shard_rows, cols))
+    ref = ttnn.to_torch(t)[:, :, :, w0:w1]
+    out = ttnn.slice(t, [0, 0, 0, w0], [1, 1, rows, w1], [1, 1, 1, 1], memory_config=_hs_mem_cfg(cores, shard_rows, w1 - w0))
+    assert out.shape == (1, 1, rows, w1 - w0)
+    assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert torch.equal(ttnn.to_torch(out), ref)

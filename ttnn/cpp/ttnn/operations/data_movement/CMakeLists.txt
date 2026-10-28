@@ -253,6 +253,7 @@ target_sources(
             slice/device/slice_program_factory_rm_sharded.hpp
             slice/device/slice_program_factory_rm_stride.hpp
             slice/device/slice_program_factory_tile.hpp
+            slice/device/slice_program_factory_tile_hs_local.hpp
             slice/device/slice_program_factory_tile_tensor_args.hpp
             # sort/
             sort/sort.hpp
