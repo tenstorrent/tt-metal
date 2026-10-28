@@ -491,6 +491,46 @@ class TestImportReportMultiFileOperationIds:
         assert cursor.fetchall() == [(1, 0), (stride + 1, 0), (1, 1)]
 
 
+class TestStackTraceSourceResolution:
+    """Stack-trace source paths are resolved once per file named, not once per operation: resolving one rebuilds a
+    realpath allowlist over sys.path, which dominated the import of a real capture."""
+
+    @staticmethod
+    def _traces(paths):
+        return [(i, f'  File "{path}", line {i}, in forward\n    x = op(x)\n', 0) for i, path in enumerate(paths)]
+
+    def test_each_file_is_resolved_and_read_once(self, monkeypatch, tmp_path):
+        source = tmp_path / "model.py"
+        source.write_text("x = op(x)\n")
+        resolved, read = [], []
+        normalize = graph_report.normalize_existing_source_file_path
+        read_source_file = graph_report.read_source_file
+        monkeypatch.setattr(
+            graph_report, "normalize_existing_source_file_path", lambda p: resolved.append(p) or normalize(p)
+        )
+        monkeypatch.setattr(graph_report, "read_source_file", lambda p: read.append(p) or read_source_file(p))
+        monkeypatch.chdir(tmp_path)
+
+        files, rows = graph_report._prepare_stack_traces_with_source_refs(self._traces([source] * 50))
+
+        assert resolved == [str(source)]
+        assert len(read) == 1
+        assert [path for _, _, path, _ in rows] == [str(source.resolve())] * 50
+        assert files == [(str(source.resolve()), "x = op(x)\n")]
+
+    def test_unreadable_file_is_tried_once(self, monkeypatch, tmp_path):
+        source = tmp_path / "model.py"
+        source.write_text("x = op(x)\n")
+        read = []
+        monkeypatch.setattr(graph_report, "read_source_file", lambda p: read.append(p))
+        monkeypatch.chdir(tmp_path)
+
+        files, rows = graph_report._prepare_stack_traces_with_source_refs(self._traces([source] * 50))
+
+        assert len(read) == 1
+        assert files == [] and all(path is None for _, _, path, _ in rows)
+
+
 @pytest.fixture
 def single_relu_python_io():
     """python_io sidecar for single_relu_mock_graph with a minimal stack trace.

@@ -50,8 +50,9 @@ if __package__:
         CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
         CREATE_SOURCE_FILES_TABLE_SQL,
         CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
+        extract_stack_trace_file,
         get_source_file_id,
-        normalize_source_path_from_stack_trace,
+        normalize_existing_source_file_path,
         read_source_file,
     )
 else:
@@ -59,8 +60,9 @@ else:
         CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
         CREATE_SOURCE_FILES_TABLE_SQL,
         CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
+        extract_stack_trace_file,
         get_source_file_id,
-        normalize_source_path_from_stack_trace,
+        normalize_existing_source_file_path,
         read_source_file,
     )
 
@@ -629,17 +631,25 @@ def _prepare_stack_traces_with_source_refs(
 ) -> tuple[list[tuple[str, str]], list[tuple[int, str, str | None, int]]]:
     """Return deduped (path, contents) rows and per-row (op_id, trace, path_or_none, rank)."""
     source_files_by_path: dict[str, str] = {}
+    unreadable_paths: set[str] = set()
     stack_rows: list[tuple[int, str, str | None, int]] = []
+    # Resolving a path checks it against an allowlist of resolved roots that is rebuilt on every call, at a realpath
+    # per sys.path entry and its parents. Traces name the same few files over and over, so resolve each file once.
+    normalized_path_by_file: dict[str | None, str | None] = {}
 
     for operation_id, stack_trace, rank in stack_traces_batch:
-        normalized_path = normalize_source_path_from_stack_trace(stack_trace)
-        if normalized_path is None:
+        stack_trace_file = extract_stack_trace_file(stack_trace)
+        if stack_trace_file not in normalized_path_by_file:
+            normalized_path_by_file[stack_trace_file] = normalize_existing_source_file_path(stack_trace_file)
+        normalized_path = normalized_path_by_file[stack_trace_file]
+        if normalized_path is None or normalized_path in unreadable_paths:
             stack_rows.append((operation_id, stack_trace, None, rank))
             continue
 
         if normalized_path not in source_files_by_path:
             file_contents = read_source_file(normalized_path)
             if file_contents is None:
+                unreadable_paths.add(normalized_path)
                 stack_rows.append((operation_id, stack_trace, None, rank))
                 continue
             source_files_by_path[normalized_path] = file_contents
