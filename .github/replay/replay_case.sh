@@ -8,7 +8,8 @@
 # Trees are the branches perf-trial/replay/<sha12> (commit + stack + harness).
 set -uo pipefail
 export PATH="${REPLAY_ROOT:-/tmp/replay}/venv/bin:$HOME/.local/bin:$PATH"
-ARCH=$1 CASE=$2 BASE=$3 HEAD=$4 MODULES=${5:-} CAP=900
+ARCH=$1 CASE=$2 BASE=$3 HEAD=$4 MODULES=${5:-} RUN_TYPES=${6:-L1_TO_L1} CAP=900
+[[ $MODULES == - ]] && MODULES=""
 W=${REPLAY_ROOT:-/tmp/replay}
 REPO=$W/repo
 OUT=$W/out/$CASE
@@ -40,7 +41,7 @@ tree() {  # tree <sha12> -> path of a sparse worktree with sfpi installed
 measure_suite() {  # measure_suite <llk dir> <tag>
   local L=$1
   rm -rf "$L/perf_data/runs/$2"
-  export SPEED_OF_LIGHT=false LLK_PERF_RUN_TYPES=L1_TO_L1 TT_LLK_DISABLE_ASSERTS=1 LLK_PERF_EXITFIRST=false \
+  export SPEED_OF_LIGHT=false LLK_PERF_RUN_TYPES=$RUN_TYPES TT_LLK_DISABLE_ASSERTS=1 LLK_PERF_EXITFIRST=false \
     PERF_RUN_TAG=$2 RUNNER_TEMP=$W/tmp/$CASE-$2
   if [[ -z $MODULES ]]; then
     (cd "$L" && ./tests/run_llk_perf_${ARCH}.sh 1 1 > "$OUT/$2.pytest.log" 2>&1)
@@ -81,7 +82,7 @@ if [[ -s $OUT/stage1.regressions.csv ]]; then
   for side in base head; do
     L=$LB; [[ $side == head ]] && L=$LH
     rm -rf "$L"/perf_data/runs/p{0,4,20,36,52}
-    (cd "$L" && LLK_PERF_NODE_LIST="$OUT/nodes.txt" RUNNER_TEMP=$W/tmp/$CASE-s2-$side \
+    (cd "$L" && LLK_PERF_RUN_TYPES=$RUN_TYPES LLK_PERF_NODE_LIST="$OUT/nodes.txt" RUNNER_TEMP=$W/tmp/$CASE-s2-$side \
        ./tests/run_llk_perf_placement.sh > "$OUT/s2-$side.pytest.log" 2>&1)
     mkdir -p "$OUT/s2-$side"
     cp -r "$L"/perf_data/runs/p{0,4,20,36,52} "$OUT/s2-$side/" 2>/dev/null
