@@ -451,7 +451,7 @@ class NemotronReranker:
             fidelity=ttnn.MathFidelity.LoFi if kind in self.lofi_kinds else self.cfg.mm_fidelity,
             y_dtype=y_dtype or self.cfg.norm_out_dtype,
             memory_config=self._mem(rows, self.cfg.dim),
-            y_fidelity=MM_ADD_NORM_Y_FIDELITY,
+            y_fidelity="HiFi2" if kind in self.cfg.y_hifi2_kinds.split(",") else MM_ADD_NORM_Y_FIDELITY,
             skip_gamma=self.cfg.fold_norm_gamma,
         )
 

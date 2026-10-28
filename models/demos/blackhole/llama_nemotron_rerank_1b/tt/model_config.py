@@ -62,8 +62,8 @@ QKV_ROPE_FIDELITY = "HiFi2"
 # rows, so no padding column is computed. 16384 rows (perf_tools/probe_mm_add_norm.py, gamma folded):
 # WO 681 us, FF2 1216 us, against 1131 / 1547 us for the matmul plus fused_add_rmsnorm.
 MM_ADD_NORM_CONFIGS = {"wo": (4, 8, 7, 4, 1), "ff2": (8, 8, 7, 4, 1)}
-# Fidelity of matmul_add_norm's y multiplies (h * inv, * gamma). HiFi2 saves ~20 us per op but drops
-# MIRACL batch 32 Pearson 0.99965 -> 0.99947 (below the 0.9995 gate).
+# Fidelity of matmul_add_norm's y multiplies (h * inv, * gamma). HiFi2 for both fused ops dropped MIRACL
+# batch 32 Pearson to 0.99947 before gamma folding; with it folded it passes (RerankConfig.y_hifi2_kinds).
 MM_ADD_NORM_Y_FIDELITY = "HiFi4"
 
 
@@ -154,6 +154,10 @@ class RerankConfig:
     sdpa_segmented_accumulation: bool = False
     # SDPA softmax exp in the SFPU's approximate mode.
     sdpa_exp_approx: bool = False
+    # Per fused kind ("wo", "ff2"), comma separated: the y multiplies at HiFi2 instead of MM_ADD_NORM_Y_FIDELITY.
+    # Both (with gamma folded): 32x512 150.67 -> 150.38 M cycles; MIRACL Pearson batch 32 0.99960
+    # (nDCG@10 0.6834), batch 8 0.99967 (0.6745).
+    y_hifi2_kinds: str = "ff2,wo"
     # SDPA q / k chunk sizes; 0 = the sdpa_chunks table.
     sdpa_q_chunk: int = 0
     sdpa_k_chunk: int = 0
