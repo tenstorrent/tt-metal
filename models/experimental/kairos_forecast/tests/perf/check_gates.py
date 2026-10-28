@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -257,6 +258,16 @@ def check(
                     where = "no baseline record" if b is None else f"{vec} missing or of another length"
                     print(f"FAIL drift {key[0]}/{key[1]} {metric}: {where}")
                     failures.append(f"{key} {metric} drift: {where}")
+                    continue
+                # R1-0b: a NaN/inf row, or a candidate None where the baseline has a value, fails (max() skips NaN)
+                bad = [
+                    i
+                    for i, (x, y) in enumerate(zip(r[vec], b[vec]))
+                    if (x is None and y is not None) or (x is not None and not math.isfinite(x))
+                ]
+                if bad:
+                    print(f"FAIL drift {key[0]}/{key[1]} {metric}: non-finite or missing rows {bad[:8]}")
+                    failures.append(f"{key} {metric} drift: non-finite or missing rows {bad[:8]}")
                     continue
                 d = [(abs(x - y), i) for i, (x, y) in enumerate(zip(r[vec], b[vec])) if x is not None and y is not None]
                 v, row = max(d) if d else (0.0, -1)

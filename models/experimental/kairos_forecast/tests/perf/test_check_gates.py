@@ -189,6 +189,18 @@ def test_row_drift():  # D4 item 1: one row moved by the v1.25 probe fails, in h
     assert check([_rec(bias_rows_final=rows)], [base], ROW_GATES)
 
 
+def test_row_drift_non_finite_or_missing_fails():  # D5 R1-0b: max() skipped a NaN past row 0
+    rows = [0.01 * i - 0.08 for i in range(16)]
+    base = _rec(bias_rows=rows, bias_rows_final=rows)
+    for vec, metric in (("bias_rows", "bias_row_drift_max"), ("bias_rows_final", "bias_row_drift_max_final")):
+        for row in (0, 5, 15):
+            for bad in (float("nan"), float("inf"), -float("inf"), None):
+                moved = list(rows)
+                moved[row] = bad
+                fails = check([_rec(**{**base, vec: moved})], [base], ROW_GATES)
+                assert any(metric in f and "non-finite or missing" in f for f in fails), (metric, row, bad)
+
+
 def test_row_drift_against_row_base():  # broken_outputs: the move is taken against the golden itself
     gold = _rec(bias_rows=[0.0] * 8, bias_rows_final=[0.0] * 8)
     dev = _rec(bias_rows=[0.3] + [0.0] * 7, bias_rows_final=[0.0] * 8)  # a fixed record with an outlier row
