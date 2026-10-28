@@ -344,19 +344,39 @@ def test_op_packer_rounding(device, op):
     _check(name, fn(device, x), x, out_dtype, rule)
 
 
-ROUND = "ttnn/ttnn/bringup/ckv_bfp4_ttnn/kernels/ckv_bfp4_compute.cpp"
+def _op_rows(device, x: torch.Tensor) -> torch.Tensor:
+    """ttnn.bringup.ckv_bfp4 (SFPU round onto the bfp4 grid, then the packer writes the row records) on x [R, 32]
+    read as rows of 512 -> the records' codes [R, 32] and shared exponents [R, 2], as _quantize gives them."""
+    v = x.reshape(-1)
+    n = -(-v.numel() // (32 * 512)) * 32 * 512
+    v = torch.cat([v, torch.zeros(n - v.numel())]).view(-1, 512)
+    ckv = ttnn.from_torch(v.view(1, 1, -1, 512), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    rows = ttnn.from_torch(torch.zeros(1, 1, v.shape[0], 320, dtype=torch.uint8), dtype=ttnn.uint8, device=device)
+    ttnn.bringup.ckv_bfp4(ckv, rows, 0)
+    b = ttnn.to_torch(rows).view(torch.uint8).reshape(-1, 320).long()
+    assert torch.equal(b[:, :32], b[:, 32:64]), "the two exponent copies differ"
+    nb = b[:, 64:]
+    codes = torch.stack([nb & 15, nb >> 4], -1).reshape(-1)[: x.numel()].view(-1, 32)
+    return codes, b[:, :32].reshape(-1)[: x.numel() // 16].view(-1, 2)
+
+
+def _assert_rne(got, x):
+    codes, shared = _quantize(x, 3, "rne_host")
+    nz = codes != 0  # an all-zero group's exponent is don't-care
+    bad = (got[0] != codes).sum().item() + ((got[1] != shared) & nz.view(-1, 2, 16).any(-1)).sum().item()
+    return bad
 
 
 @pytest.mark.parametrize("seed", [0, 1])
 def test_sfpu_round_then_pack_is_the_host_packer(device, seed):
-    """The ckv_bfp4 compute kernel (SFPU round onto the bfp4 grid, then the pack) writes the host packer's bytes."""
+    """The ckv_bfp4 op (SFPU round onto the bfp4 grid, then the packer writes the rows) gives the host packer's
+    codes and exponents."""
     x = crafted(3, False, seed)
     small = x.abs().view(-1, 2, 16).amax(-1) < 2.0**-124  # the kernel's documented limit: those groups go to 0
     x = torch.where(small.repeat_interleave(16, 1), torch.zeros_like(x), x)
-    got = _copy_pack(device, x, ttnn.bfloat16, ttnn.bfloat4_b, False, precise=False, compute=ROUND)
-    exp = expected(x, ttnn.bfloat4_b, "rne_host")
-    print(f"sfpu round: {(got != exp).sum().item()} bytes differ of {got.numel()}")
-    assert torch.equal(got, exp)
+    bad = _assert_rne(_op_rows(device, x), x)
+    print(f"sfpu round: {bad} codes / exponents differ of {x.numel()}")
+    assert bad == 0
 
 
 GOLDEN_KV = "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/kv_cache"
@@ -376,10 +396,8 @@ def test_sfpu_round_on_golden_rows(device, layer):
     with safe_open(path, "pt") as h:
         x = h.get_tensor([k for k in h.keys() if "compress_kv" in k][0]).float().reshape(-1, 512)[:2048]
     xb = x.bfloat16().float().reshape(-1, 32)  # 16-value groups stay whole
-    got = _copy_pack(device, xb, ttnn.bfloat16, ttnn.bfloat4_b, False, precise=False, compute=ROUND)
+    bad = _assert_rne(_op_rows(device, xb), xb)
     plain = _copy_pack(device, xb, ttnn.bfloat16, ttnn.bfloat4_b, False, precise=False)
     exp = expected(xb, ttnn.bfloat4_b, "rne_host")
-    print(
-        f"layer {layer}: sfpu round {(got != exp).sum().item()} bytes differ; plain pack {(plain != exp).sum().item()}"
-    )
-    assert torch.equal(got, exp)
+    print(f"layer {layer}: sfpu round {bad} codes / exponents differ; plain pack {(plain != exp).sum().item()} bytes")
+    assert bad == 0
