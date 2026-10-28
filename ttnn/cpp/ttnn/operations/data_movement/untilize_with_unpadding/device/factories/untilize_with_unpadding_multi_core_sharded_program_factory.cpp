@@ -297,6 +297,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
             .runtime_arg_names = {
                 "start_padded_row",
                 "num_rows",
+                "num_valid_rows",
+                "num_output_rows",
                 "matrix_h_padded",
                 "matrix_h_logical",
                 "block_row_size",
@@ -442,6 +444,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         const uint32_t matrix_h_padded = a.padded_shape()[-2];
         const uint32_t matrix_h_logical = output.logical_shape()[-2];
         const uint32_t shard_height = shard_spec.shape[0];
+        const uint32_t total_padded_rows = a.physical_volume() / a.padded_shape()[-1];
         const uint32_t buffer_row_size = shard_spec.shape[1] * output.element_size();  // row stride (padded width)
         const uint32_t row_size_unpadded =
             output.logical_shape()[-1] * output.element_size();  // bytes written per row (logical width)
@@ -449,11 +452,19 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         for (uint32_t i = 0; i < all_core_coords.size(); ++i) {
             const CoreCoord& core = all_core_coords[i];
             const uint32_t start_padded_row = i * shard_height;
+            const uint32_t rows_on_core =
+                start_padded_row < total_padded_rows
+                    ? std::min(shard_height, total_padded_rows - start_padded_row)
+                    : 0;
             AddRuntimeArgsForNode(
                 writer_run_args.runtime_arg_values,
                 core,
                 {{"start_padded_row", start_padded_row},
+                 // Compute produces a whole shard on each grid core, so the writer must drain all
+                 // num_rows. These two bounds decide which produced rows belong to the tensors.
                  {"num_rows", shard_height},
+                 {"num_valid_rows", rows_on_core},
+                 {"num_output_rows", num_output_rows},
                  {"matrix_h_padded", matrix_h_padded},
                  {"matrix_h_logical", matrix_h_logical},
                  {"block_row_size", buffer_row_size},
@@ -461,8 +472,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                  {"ntiles_per_row", ntiles_per_block}});
         }
     } else {
+        const CoreCoord grid_start = all_cores.bounding_box().start_coord;
         for (uint32_t i = 0; i < all_core_coords.size(); ++i) {
             CoreCoord core = all_core_coords[i];
+            CoreCoord local_core = {core.x - grid_start.x, core.y - grid_start.y};
 
             // writer runtime args
             uint32_t block_start_row_offset;
@@ -483,25 +496,25 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                 }
             } else {
                 if (row_major) {
-                    block_start_row_offset = core.x * block_row_size;
-                    block_start_row_id_offset = core.y * num_rows_block;
-                    if (core.x == end_core.x) {
+                    block_start_row_offset = local_core.x * block_row_size;
+                    block_start_row_id_offset = local_core.y * num_rows_block;
+                    if (local_core.x == end_core.x) {
                         row_size_unpadded = last_block_row_size_unpadded;
                     }
-                    if (core.y == end_core.y) {
+                    if (local_core.y == end_core.y) {
                         num_rows_unpadded = num_output_rows_unpadded;
                     }
                 } else {
-                    block_start_row_offset = core.y * block_row_size;
-                    block_start_row_id_offset = core.x * num_rows_block;
-                    if (core.y == end_core.y) {
+                    block_start_row_offset = local_core.y * block_row_size;
+                    block_start_row_id_offset = local_core.x * num_rows_block;
+                    if (local_core.y == end_core.y) {
                         row_size_unpadded = last_block_row_size_unpadded;
                     }
-                    if (core.x == end_core.x) {
+                    if (local_core.x == end_core.x) {
                         num_rows_unpadded = num_output_rows_unpadded;
                     }
                 }
-                if (core.x > end_core.x || core.y > end_core.y) {
+                if (local_core.x > end_core.x || local_core.y > end_core.y) {
                     row_size_unpadded = 0;
                     num_rows_unpadded = 0;
                 }
