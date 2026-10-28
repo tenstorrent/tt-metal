@@ -154,7 +154,9 @@ def crafted(m: int, fp32: bool, seed: int = 0) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------------------------- device packs
-def _copy_pack(device, x: torch.Tensor, in_dtype, out_dtype, fp32_dest: bool, precise: bool) -> torch.Tensor:
+def _copy_pack(
+    device, x: torch.Tensor, in_dtype, out_dtype, fp32_dest: bool, precise: bool, compute=COPY
+) -> torch.Tensor:
     """A copy kernel's pack of x's tiles to out_dtype, written out as raw tile bytes [T, tile bytes]."""
     t = x.shape[0] // 32
     xin = ttnn.from_torch(x, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -198,7 +200,13 @@ def _copy_pack(device, x: torch.Tensor, in_dtype, out_dtype, fp32_dest: bool, pr
             runtime_args=wr_rt,
             config=ttnn.WriterConfigDescriptor(),
         ),
-        ttnn.KernelDescriptor(kernel_source=COPY, core_ranges=core, compile_time_args=[t], runtime_args=[], config=cfg),
+        ttnn.KernelDescriptor(
+            kernel_source=compute,
+            core_ranges=core,
+            compile_time_args=[t] if compute == COPY else [t, 0, 16],
+            runtime_args=[],
+            config=cfg,
+        ),
     ]
     ttnn.generic_op([xin, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
     return ttnn.to_torch(out).view(torch.uint8)
@@ -328,3 +336,44 @@ def test_op_packer_rounding(device, op):
     name, in_dtype, out_dtype, fn, rule = op
     x = crafted(MBITS[out_dtype], in_dtype == ttnn.float32)
     _check(name, fn(device, x), x, out_dtype, rule)
+
+
+ROUND = "ttnn/ttnn/bringup/ckv_bfp4/kernels/ckv_bfp4_compute.cpp"
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_sfpu_round_then_pack_is_the_host_packer(device, seed):
+    """The ckv_bfp4 compute kernel (SFPU round onto the bfp4 grid, then the pack) writes the host packer's bytes."""
+    x = crafted(3, False, seed)
+    small = x.abs().view(-1, 2, 16).amax(-1) < 2.0**-124  # the kernel's documented limit: those groups go to 0
+    x = torch.where(small.repeat_interleave(16, 1), torch.zeros_like(x), x)
+    got = _copy_pack(device, x, ttnn.bfloat16, ttnn.bfloat4_b, False, precise=False, compute=ROUND)
+    exp = expected(x, ttnn.bfloat4_b, "rne_host")
+    print(f"sfpu round: {(got != exp).sum().item()} bytes differ of {got.numel()}")
+    assert torch.equal(got, exp)
+
+
+GOLDEN_KV = "/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/kv_cache"
+
+
+@pytest.mark.parametrize("layer", [2, 20])
+def test_sfpu_round_on_golden_rows(device, layer):
+    """Real compressed-KV rows (the device's bf16 ckv): SFPU round + pack == host packer, and the default pack alone
+    is far off (row error vs native: host RNE / the plain pack / truncation)."""
+    import os
+
+    from safetensors import safe_open
+
+    path = f"{GOLDEN_KV}/layer_{layer}.safetensors"
+    if not os.path.exists(path):
+        pytest.skip(f"no golden at {path}")
+    with safe_open(path, "pt") as h:
+        x = h.get_tensor([k for k in h.keys() if "compress_kv" in k][0]).float().reshape(-1, 512)[:2048]
+    xb = x.bfloat16().float().reshape(-1, 32)  # 16-value groups stay whole
+    got = _copy_pack(device, xb, ttnn.bfloat16, ttnn.bfloat4_b, False, precise=False, compute=ROUND)
+    plain = _copy_pack(device, xb, ttnn.bfloat16, ttnn.bfloat4_b, False, precise=False)
+    exp = expected(xb, ttnn.bfloat4_b, "rne_host")
+    print(
+        f"layer {layer}: sfpu round {(got != exp).sum().item()} bytes differ; plain pack {(plain != exp).sum().item()}"
+    )
+    assert torch.equal(got, exp)
