@@ -1,247 +1,290 @@
-# YOLO26 Object Detection Model
+# YOLO26 on Tenstorrent Blackhole (TTNN)
 
-YOLO26 is Ultralytics' latest object detection model, optimized for edge and low-power devices. This implementation runs on Tenstorrent hardware using TTNN.
+TTNN implementation of Ultralytics [YOLO26](https://docs.ultralytics.com/models/yolo26/) object detection
+(`yolo26n`, `yolo26s`) at 640×640, using the NMS-free end-to-end (one2one) head. Runs traced with two command queues
+(trace + 2CQ) at batch 1, 2 or 4 per chip, on one Blackhole chip or data parallel across the 4 chips of a QuietBox 2.
 
-## Features
+![20 camera streams at 30 FPS on one Blackhole chip](images/multistream_1chip_20streams.jpg)
 
-- **End-to-End NMS-Free**: Native predictions without Non-Maximum Suppression post-processing
-- **SiLU Activation**: Modern activation function with native TTNN support
-- **Multi-Scale Detection**: P3, P4, P5 feature pyramid for objects of all sizes
-- **Optimized for Tenstorrent**: BatchNorm folding, optimal sharding strategies
+*20 shopping-centre camera streams × 30 FPS on one Blackhole chip (yolo26s, batch 4): live person counts per camera.*
+
+- **Accuracy**: PCC vs Ultralytics (fp32, CPU) per image: yolo26s cls 0.9979–0.9980, box ≥ 0.9990; yolo26n cls ≥ 0.9982.
+  Detections match Ultralytics 1:1 on the bundled test images (IoU ≥ 0.995).
+- **Throughput**, end-to-end (upload, trace, read-back), yolo26s: 660 FPS on one chip, ~2,377 FPS on 4 chips;
+  yolo26n: 1,094 FPS on one chip, ~2,566 FPS on 4 chips.
+- **Demo**: 20 video streams × 30 FPS on one chip; 80 streams × 30 FPS on 4 chips.
+
+This branch keeps every activation in L1, which allows up to batch 4 per chip. Batch > 4 (DRAM staging) and a
+lower-latency version of the multi-stream demo are on the branch `sdawle/tvardhineni/yolov26_dram_batch`.
+
+Contents: [Setup](#setup) · [PCC tests](#pcc-tests) · [Performance tests](#performance-tests) ·
+[Performance](#performance) · [Demos](#demos) · [Viewing the live demo remotely](#viewing-the-live-demo-remotely) ·
+[Demo results and video](#demo-results-and-video) · [Known issues](#known-issues) · [Files](#files)
 
 ## Setup
 
-First, install dependencies and download weights:
+Tested on a Tenstorrent QuietBox 2 (4 × Blackhole p300c chips).
 
 ```bash
-cd models/experimental/yolo26
-./setup.sh
+cd tt-metal
+source python_env/bin/activate
+export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
+pip install ultralytics          # if not installed (or run models/experimental/yolo26/setup.sh)
 ```
 
-This will:
-1. Install ultralytics package if not present
-2. Download YOLO26 weights (starting with yolo26n - nano variant)
+Weights (`yolo26n.pt`, `yolo26s.pt`) are downloaded by Ultralytics on first use into the working directory.
 
-## Model Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         YOLO26                                   │
-├─────────────────────────────────────────────────────────────────┤
-│  Backbone (CSP-style)                                            │
-│  ├── Stem: Conv 3x3 stride=2                                     │
-│  ├── Stage 1: Conv + C2f                                         │
-│  ├── Stage 2: Conv + C2f → P3 (stride 8)                        │
-│  ├── Stage 3: Conv + C2f → P4 (stride 16)                       │
-│  └── Stage 4: Conv + C2f + SPPF → P5 (stride 32)                │
-├─────────────────────────────────────────────────────────────────┤
-│  Neck (PAN - Path Aggregation Network)                           │
-│  ├── Top-Down: P5 → upsample → concat P4 → C2f                  │
-│  │             P4 → upsample → concat P3 → C2f → N3             │
-│  └── Bottom-Up: N3 → downsample → concat → C2f → N4             │
-│                 N4 → downsample → concat → C2f → N5             │
-├─────────────────────────────────────────────────────────────────┤
-│  Head (Detection)                                                │
-│  ├── P3 Head: Conv 1x1 → [B, H/8, W/8, 84]                      │
-│  ├── P4 Head: Conv 1x1 → [B, H/16, W/16, 84]                    │
-│  └── P5 Head: Conv 1x1 → [B, H/32, W/32, 84]                    │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Model Variants
-
-| Variant | Parameters | Input Size | Description |
-|---------|-----------|------------|-------------|
-| yolo26n | ~2.5M | 640×640 | Nano - fastest, for initial bringup |
-| yolo26s | ~9M | 640×640 | Small - balanced |
-| yolo26m | ~20M | 640×640 | Medium - accuracy focused |
-| yolo26l | ~43M | 640×640 | Large - high accuracy |
-| yolo26x | ~68M | 640×640 | Extra - maximum accuracy |
-
-## Usage
-
-### Running Demo
+**One chip.** The QB2 exposes 4 chips; to run on one, select it and give the single-chip mesh descriptor (without the
+descriptor `TT_VISIBLE_DEVICES` alone fails with `TT_FATAL ... Custom fabric mesh graph descriptor path must ...`):
 
 ```bash
-# Basic inference
-python models/experimental/yolo26/demo/demo.py --input <image_path>
-
-# With options
-python models/experimental/yolo26/demo/demo.py \
-    --input test.jpg \
-    --output result.jpg \
-    --variant yolo26n \
-    --input-size 640 \
-    --conf-threshold 0.25
+export TT_VISIBLE_DEVICES=0
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
 ```
 
-### Running PCC Tests
+**All 4 chips** (data-parallel tests and the 4-chip demo): leave both unset.
 
 ```bash
-# Full model PCC test
-pytest models/experimental/yolo26/tests/pcc/test_pcc.py -v
-
-# With specific input size
-pytest models/experimental/yolo26/tests/pcc/test_pcc.py -v --input-size 320
-
-# Backbone-only PCC test
-pytest models/experimental/yolo26/tests/pcc/test_pcc.py::test_yolo26_backbone_pcc -v
+unset TT_VISIBLE_DEVICES TT_MESH_GRAPH_DESC_PATH
 ```
 
-### Running Performance Tests
+Reset the chips if a previous run was killed or hung (see [Known issues](#known-issues)):
 
 ```bash
-# Device performance (kernel time)
-pytest models/experimental/yolo26/tests/perf/test_yolo26_device_perf.py -v
-
-# End-to-end performance
-pytest models/experimental/yolo26/tests/perf/test_yolo26_device_perf.py::test_yolo26_e2e_perf -v
+tt-smi -r          # on the QB2: ~/.tenstorrent-venv/bin/tt-smi -r
 ```
 
-## Directory Structure
+## PCC tests
+
+One chip (environment above):
+
+```bash
+pytest models/experimental/yolo26/tests/pcc -q
+```
+
+Expected: `17 passed` (about 10 s once kernels are compiled; the first run compiles them). The suite compares TTNN
+against the Ultralytics PyTorch model:
+
+| File | Covers |
+|---|---|
+| `test_tt_yolo26.py` | Full model, yolo26n and yolo26s, float input and the raw uint8 input path used by the runner and demos |
+| `test_pcc.py` | Full model end to end (all scales, boxes and class scores) |
+| `test_full_model.py`, `test_detailed_e2e.py` | Full model, per-output detail |
+| `test_end_to_end.py`, `test_full_neck.py`, `test_c2psa.py` | Backbone + neck, the neck, the C2PSA attention block |
+| `test_backbone_only.py`, `test_backbone_continuous.py`, `test_layer_by_layer.py` | Backbone and individual layers |
+
+## Performance tests
+
+End-to-end trace + 2CQ: each iteration uploads the input (CQ1), runs the trace (CQ0) and reads the outputs back
+(CQ1), with the next upload overlapping the current trace. 10 warm-up and 50 measured iterations;
+FPS = images per iteration / mean iteration time.
+
+One chip; variant `yolo26n` / `yolo26s`, batch `1`, `2` or `4`:
+
+```bash
+pytest models/experimental/yolo26/tests/perf/test_yolo26_trace_2cq.py::test_yolo26_trace_2cq_perf \
+    -k "yolo26s-640-4" -s
+```
+
+All 4 chips (data parallel, batch per chip; unset the single-chip variables first):
+
+```bash
+pytest models/experimental/yolo26/tests/perf/test_yolo26_trace_2cq.py::test_yolo26_trace_2cq_perf_dp \
+    -k "yolo26s-640-4" -s
+```
+
+Each run logs, for example:
+
+```
+Batch size: 4 per device x 1 devices
+Average inference time: 6.06 ms
+Throughput: 660.1 FPS
+```
+
+Omit `-k` to run every variant and batch. `test_yolo26_device_perf.py`, `test_e2e_performant.py` and `test_perf.py`
+predate the current model outputs and are not maintained.
+
+## Performance
+
+640×640, end-to-end trace + 2CQ (FPS):
+
+| Configuration | yolo26s | yolo26n |
+|---|---|---|
+| As first brought up (batch 1, 1 chip) | 85.0 | 85.9 |
+| 1 chip, batch 1 | 418.4 | 527.0 |
+| 1 chip, batch 2 | 604.2 | 795.2 |
+| 1 chip, batch 4 | 659.7 – 660.1 | 1,092.6 – 1,094.4 |
+| 4 chips, batch 1 per chip | 1,582.5 | 1,772.6 |
+| 4 chips, batch 2 per chip | 1,795.4 – 1,812.8 | 1,866.2 – 1,870.2 |
+| 4 chips, batch 4 per chip | 2,347.4 – 2,403.6 | 2,560.7 – 2,570.5 |
+
+Model only (traced forward, input already on the chip), yolo26s on one chip: batch 1 2.31 ms (433 FPS), batch 2
+3.18 ms (629 FPS), batch 3 4.66 ms (644 FPS), batch 4 5.86 ms (683 FPS); yolo26n batch 4 3.43 ms (1,166 FPS).
+
+Ranges are separate runs. How each number was measured, and every optimization step from 85 FPS, are in
+[`post_mortem.md`](post_mortem.md) (entries YOLO26-0015 to 0025).
+
+## Demos
+
+### Single images
+
+Runs one or more images through the model as one batch, draws the detections, and with `--compare` also runs the
+Ultralytics reference and saves side-by-side images:
+
+```bash
+ASSETS=$(python -c "from ultralytics.utils import ASSETS; print(ASSETS)")
+python models/experimental/yolo26/demo/demo.py -i $ASSETS/bus.jpg $ASSETS/zidane.jpg \
+    -o output.jpg --variant yolo26s --compare
+```
+
+Writes `output_bus.jpg`, `output_zidane.jpg` (and `*_vs_reference.jpg` with `--compare`) and prints the detections
+and how many reference detections were matched (bus: 5/5, zidane: 3/3).
+
+| Option | Default | |
+|---|---|---|
+| `-i`, `--input` | (required) | one or more images; several run as one batch (up to 4) |
+| `-o`, `--output` | `output.jpg` | output path (per-image suffix with several inputs) |
+| `--variant` | `yolo26n` | `yolo26n` or `yolo26s` |
+| `--conf-threshold` | `0.25` | detection confidence threshold |
+| `--compare` | off | also run Ultralytics and save side-by-side images |
+
+### Multi-stream people counting, one chip (`multistream_demo.py`)
+
+20 video streams paced at 30 FPS each (600 images/s), run through yolo26s at batch 4: every 1/30 s tick the newest
+frame of each stream is letterboxed and the 20 frames go through the chip as 5 batches of 4. People (COCO class 0)
+are counted per camera and shown on a 5 × 4 mosaic with a side panel (per-camera count, total, throughput, latency),
+served live as MJPEG and optionally recorded.
+
+**Videos.** The demo was built with 20 clips of the CAVIAR shopping-centre set (384×288, 25 FPS MPEG-2; CC BY-SA,
+EC-funded CAVIAR project IST 2001 37540). Any directory of `.mpg` / `.mp4` files works; with fewer clips than streams,
+clips are reused from a different start frame. To fetch the same 20 clips:
+
+```bash
+mkdir -p ~/yolo26_store_videos && cd ~/yolo26_store_videos
+for c in EnterExitCrossingPaths1cor EnterExitCrossingPaths1front EnterExitCrossingPaths2cor OneShopOneWait1cor \
+         OneShopOneWait2front ShopAssistant1cor ShopAssistant1front ShopAssistant2cor ThreePastShop1cor \
+         ThreePastShop1front ThreePastShop2cor ThreePastShop2front TwoEnterShop1cor TwoEnterShop1front \
+         TwoEnterShop2cor TwoEnterShop3front TwoLeaveShop1cor TwoLeaveShop2front WalkByShop1cor WalkByShop1front; do
+    [ -f $c.mpg ] && continue
+    until curl -fsS -C - -o $c.mpg.part https://homepages.inf.ed.ac.uk/rbf/CAVIARDATA2/$c/$c.mpg; do sleep 2; done
+    mv $c.mpg.part $c.mpg
+done
+```
+
+The server is slow (tens of KB/s per connection), hence the resume-and-retry loop.
+
+**Run** (one chip, environment above, from the `tt-metal` directory):
+
+```bash
+python models/experimental/yolo26/demo/multistream_demo.py --videos ~/yolo26_store_videos
+```
+
+| Option | Default | |
+|---|---|---|
+| `--videos` | (required) | directory of `.mpg` / `.mp4` clips |
+| `--variant` | `yolo26s` | model variant |
+| `--streams` | `20` | number of streams (a multiple of `--batch-size`) |
+| `--fps` | `30` | target frame rate per stream |
+| `--batch-size` | `4` | images per pass (1, 2 or 4) |
+| `--duration` | `60` | seconds to run |
+| `--port` | `8090` | live MJPEG view port (`0` = off) |
+| `--record` | off | record the mosaic to this `.mp4` (H.264, real time) |
+| `--snapshot` | off | save the last mosaic to this `.jpg` |
+| `--conf` | `0.35` | person confidence threshold |
+| `--prep-workers` | `2` | processes that letterbox frames |
+
+At the end it logs throughput and latency, for example:
+
+```
+20 streams on 1 chip(s), target 30 FPS each: processed 12000 images in 20.0 s = 599.8 images/s = 30.0 FPS per stream;
+... capture-to-results median per pass (chip 1 cameras): CAM 01-04 14.4 ms; ... CAM 17-20 38.7 ms;
+on screen (median ms, frames shown): (42.6, 600)
+```
+
+*Capture-to-results* is the time from a frame's capture to its people counts, per group of 4 cameras; *on screen*
+is the time to the published mosaic.
+
+### Multi-stream people counting, 4 chips (`multichip_demo.py`)
+
+The same pipeline on all 4 chips of the QB2: each chip serves 20 streams (the same 20 clips, each chip starting at a
+different frame), 80 streams × 30 FPS = 2,400 images/s, shown as 80 small tiles with a per-chip panel.
+
+```bash
+unset TT_VISIBLE_DEVICES TT_MESH_GRAPH_DESC_PATH
+python models/experimental/yolo26/demo/multichip_demo.py --videos ~/yolo26_store_videos
+```
+
+Same options as above, plus `--chips` (default 4) and `--streams-per-chip` (default 20).
+
+## Viewing the live demo remotely
+
+The demos serve the live view at `http://<host>:8090/`. From your own machine, forward the port over SSH (add
+`-J <user>@<jump-host>` if you reach the QB2 through a jump host):
+
+```bash
+ssh -L 8090:localhost:8090 <user>@<qb2-host>
+```
+
+then open <http://localhost:8090/> while the demo runs. In VS Code Remote-SSH, forwarding port 8090 in the *Ports*
+panel does the same. Recordings (`--record`) can be copied off with `scp` and played in any player.
+
+## Demo results and video
+
+yolo26s, batch 4 per chip, 60 s runs with the live view on and recording (MEASURED):
+
+| | 1 chip, 20 streams | 4 chips, 80 streams |
+|---|---|---|
+| Throughput | 599.9 images/s = 30.0 FPS per stream | 2,399.1 images/s = 30.0 FPS per stream |
+| Capture → results, cameras 1–4 | 17.3 ms | 32.7 ms |
+| Capture → results, cameras 5–8 | 19.7 ms | 34.3 ms |
+| Capture → results, cameras 9–12 | 28.8 ms | 49.4 ms |
+| Capture → results, cameras 13–16 | 32.3 ms | 51.3 ms |
+| Capture → results, cameras 17–20 | 39.6 ms | 55.4 ms |
+| Capture → on screen (median) | 43.4 ms | 61.0 ms |
+| Capacity (asking for more than 30 FPS per stream) | 661 images/s (33 FPS per stream) | 2,598 images/s (32.5 FPS per stream) |
+
+(4 chips: cameras of chip 1; the 4 chips run in lockstep.) All 20 cameras of a chip are captured at the start of each
+tick and go through the chip as 5 batches of 4, one after another, so later groups wait for the earlier ones. The
+screenshot at the top of this page is from the 1-chip recording.
+
+Recordings (2340×1152, H.264, 60 s, ~110 MB each; too large for the repository) on the QB2 used for this work:
+
+- 1 chip, 20 streams: `/home/ttuser/sdawle/yolo26_demo_outputs/multistream/yolo26s_20streams_1chip_v4.mp4`
+- 4 chips, 80 streams: `/home/ttuser/sdawle/yolo26_demo_outputs/multistream/yolo26s_80streams_4chips_v2.mp4`
+
+Limits: counts are per frame (no tracking); the clips are 25 FPS sources played at 30 FPS; video decoding of live
+cameras is not included (clips are decoded into memory at start).
+
+## Known issues
+
+- **Intermittent hang in trace capture.** Rarely a run stops in `capture_trace_2cq` (seen on 1 and 4 chips, root
+  cause unknown). Kill it, `tt-smi -r`, and rerun.
+- **Batch > 4 per chip** runs out of L1 on this branch (batch 5 fails at `model.2.cv2`); see the DRAM branch.
+- **Live-view port taken.** In Tracy-enabled builds every process that imports ttnn opens a Tracy listener on the
+  first free port from 8086 up; the demo's processes use 8086–8089 with the default 2 prep workers. With more workers,
+  or if 8090 is busy, pass another `--port`.
+
+## Files
 
 ```
 models/experimental/yolo26/
-├── __init__.py
-├── common.py                 # Common utilities (BN folding, sharding)
-├── README.md                 # This file
-├── setup.sh                  # Setup script for weights
-├── demo/
-│   └── demo.py              # Inference demo with visualization
-├── reference/               # Reference PyTorch implementation (optional)
+├── README.md
+├── post_mortem.md                 # every defect, fix and measurement, with method (YOLO26-0001 ...)
+├── common.py                      # BN folding, L1_SMALL size
+├── setup.sh                       # installs ultralytics, downloads weights
+├── images/                        # README image
+├── tt/
+│   ├── ttnn_yolo26.py             # TTNN model: backbone, neck (C2PSA attention), NMS-free head
+│   └── model_preprocessing.py     # weight loading from Ultralytics
 ├── runner/
-│   ├── __init__.py
-│   ├── performant_runner.py     # Trace+2CQ runner (TODO)
-│   └── performant_runner_infra.py
-├── tests/
-│   ├── __init__.py
-│   ├── conftest.py          # Pytest configuration
-│   ├── pcc/
-│   │   ├── __init__.py
-│   │   └── test_pcc.py      # PCC comparison tests
-│   └── perf/
-│       ├── __init__.py
-│       └── test_yolo26_device_perf.py  # Performance tests
-└── tt/
-    ├── __init__.py
-    ├── model_preprocessing.py  # Weight loading utilities
-    └── ttnn_yolo26.py          # Main TTNN model implementation
+│   ├── performant_runner.py       # trace + 2CQ runner (uint8 input, persistent L1 input)
+│   └── yolo26_test_infra.py       # model construction, inputs, data-parallel sharding
+├── demo/
+│   ├── demo.py                    # single-image / batch demo, optional Ultralytics comparison
+│   ├── multistream_demo.py        # 20 streams × 30 FPS on one chip, live MJPEG view, recording
+│   ├── multichip_demo.py          # 80 streams × 30 FPS on 4 chips
+│   └── simple_demo.py             # minimal TTNN vs PyTorch comparison
+└── tests/
+    ├── pcc/                       # PCC tests (17)
+    └── perf/test_yolo26_trace_2cq.py   # end-to-end trace + 2CQ performance, 1 chip and data parallel
 ```
-
-## Key Optimizations
-
-### 1. BatchNorm Folding
-
-BatchNorm parameters are folded into Conv weights at load time:
-```python
-# From common.py
-folded_weight = conv_weight * (bn_weight / sqrt(bn_var + eps))
-folded_bias = bn_bias - (bn_weight * bn_mean / sqrt(bn_var + eps))
-```
-
-### 2. Optimal Sharding Strategy
-
-Sharding is selected based on tensor dimensions:
-- **HEIGHT_SHARDED**: When N×H×W >> C (spatial dominant)
-- **BLOCK_SHARDED**: When N×H×W ≈ C (balanced)
-- **WIDTH_SHARDED**: When C >> N×H×W (channel dominant)
-
-### 3. Memory Management
-
-- `bfloat8_b` for weights (reduced memory, faster compute)
-- Aggressive tensor deallocation
-- Double buffering for activations and weights
-
-### 4. Activation Function
-
-YOLO26 uses SiLU (Swish) activation, natively supported:
-```python
-output = ttnn.silu(conv_output)
-```
-
-## Output Format
-
-The model outputs 3 tensors (one per scale):
-- P3: `[batch, input_size/8, input_size/8, num_classes + 4]`
-- P4: `[batch, input_size/16, input_size/16, num_classes + 4]`
-- P5: `[batch, input_size/32, input_size/32, num_classes + 4]`
-
-Where `num_classes + 4` = 84 for COCO (80 classes + 4 bbox coordinates).
-
-## Supported Input Sizes
-
-- 320×320 - Fast inference
-- 416×416
-- 512×512
-- **640×640** - Default, recommended
-- 1024×1024 - Higher accuracy for small objects
-
-## Current Status
-
-**Work in Progress** - Initial implementation complete, needs testing on device.
-
-### Completed
-- [x] Project structure and scaffolding
-- [x] Weight download from Ultralytics (yolo26n)
-- [x] BatchNorm folding utilities
-- [x] Backbone implementation (Conv, C2f, SPPF blocks)
-- [x] Basic Neck and Head structure
-- [x] PCC test framework
-- [x] Demo script
-
-### In Progress
-- [ ] Verify backbone PCC against PyTorch reference
-- [ ] Fix C2f channel calculations for exact match
-- [ ] Implement attention mechanism in neck (model.10)
-
-### TODO
-- [ ] Add Trace+2CQ performant runner for higher throughput
-- [ ] Add web demo (FastAPI + Streamlit)
-- [ ] Support yolo26s, yolo26m variants
-- [ ] Add segmentation head support (yolo26-seg)
-- [ ] Optimize sharding for specific hardware (N150, P150)
-
-## YOLO26n Actual Architecture (from weights)
-
-```
-Backbone:
-  model.0:  Conv 3→16 (k3, stride 2)
-  model.1:  Conv 16→32 (k3, stride 2)
-  model.2:  C2f 32→64 (1 bottleneck)
-  model.3:  Conv 64→64 (k3, stride 2)
-  model.4:  C2f 64→128 (2 bottlenecks) → P3 (128ch)
-  model.5:  Conv 128→128 (k3, stride 2)
-  model.6:  C2f 128→128 (2 bottlenecks) → P4 (128ch)
-  model.7:  Conv 128→256 (k3, stride 2)
-  model.8:  C2f 256→256 (1 bottleneck)
-  model.9:  SPPF 256→256 → P5 (256ch)
-
-Neck (with attention):
-  model.10: C2f+Attn 256→256
-  model.13: C2f 384→128 (upsample path)
-  model.16: C2f 256→64 → N3 (64ch)
-  model.17: Conv 64→64 (downsample)
-  model.19: C2f 192→128 → N4 (128ch)
-  model.20: Conv 128→128 (downsample)
-  model.22: C2f 384→256 → N5 (256ch)
-
-Head (model.23):
-  cv2: bbox predictions (4 outputs per scale)
-  cv3: class predictions (80 outputs per scale)
-  one2one_cv2/cv3: end-to-end predictions
-```
-
-## References
-
-- [Ultralytics YOLO26 Documentation](https://docs.ultralytics.com/models/yolo26/)
-- [YOLOv4 TTNN Tech Report](../../tech_reports/YoloV4-TTNN/yolov4.md)
-- [YUNet Implementation](../yunet/) - Similar face detection model
-
-## Performance Targets
-
-| Hardware | Input Size | Target FPS |
-|----------|-----------|------------|
-| N150 Wormhole | 640×640 | >30 FPS |
-| P150 Blackhole | 640×640 | >60 FPS |
-
-Performance measurements will be updated after optimization.
