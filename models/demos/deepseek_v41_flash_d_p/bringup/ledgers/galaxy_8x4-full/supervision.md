@@ -551,3 +551,26 @@ check (F196 / F197); host times stay hidden until verified warm.
   KV cache" line replaced by "realistic = whatever the reference uses" (every weight, cache and GEMM input); intakes
   re-approved. F208 framework (rule 7 + spec check + selftest; suite 641 pass / 1 known failure). Next: the fix plan
   for the KV caches and GEMM activation inputs (owner discussion). P.4, P.5 held until then.
+
+## 2026-10-28 14:35 HAND-OFF (context 84 %): node bh-glx-110-c10u02 (slurm 158554), branch dnijemcevic/model_bringup
+Pushed: origin dnijemcevic/model_bringup = 673f9d93ddd (engram hand-off docs). LOCAL, NOT PUSHED (owner: no push without
+agreement): F207 63a55fcfc67, P.1 01cd1c615ee, P.2 7078290a9f3, P.3 reject record 954a7829f3b, F208 + specs 2fff5b8b667.
+Where the run is: FIX.7 (GEMM inputs -> bfp8, setting GEMM_INPUTS, owner F208) running in tmux ds41-8x4 via
+/scratch/dnijemcevic/run_ds41_fix7.sh (--until FIX.7): W.1, M.1, L.s10240 PASS in its check; then L.last, L.s56320,
+L.smoke, K.1. P.4 / P.5 HELD (pause/abort OV-17) until the precision work and a re-baseline; X.3 after P.5.
+Perf so far (block MoE fused head+tail on FABRIC_2D_TORUS_XY, the default since FIX.6): warm wall 673 -> 544 ms per
+chunk (P.1 prepared reduce-scatter -79, P.2 prepared fused tail -50); P.3 rejected. Owner delegation: clean wins
+(gate PASS, accuracy unchanged/within limits and no worse, wall better, device not worse, diff clean) the overseer
+accepts; anything else to the owner.
+Precision plan (owner; F208): phase 0 precision audit hook + reference quantizer checks; 1 GEMM inputs bfp8 (FIX.7);
+compressed KV FIRST (owner: hardest, biggest risk): de-risk agent running CPU-only L0 (CKV_4BIT_DERISK.md: option A
+reference e2m1 + e4m3 scale per 16 vs B row-packed bfp4; RoPE is inside the quantized row; index_topk 512 rows /
+candidate blocks of 8 -> row-major with in-row scales, gather+decode); device L1 (one card) / L2 (1-layer repro) only
+after FIX.7 frees the mesh, L3 (ladder + K.1) once as the fix job's gate. Then window KV -> bfp8 tiles, index keys
+-> bfp4 tiles (record geometry: owner), contract + K.1, re-baseline X.1, resume P.4/P.5.
+Open owner decisions: window KV bfp8 tiles; index keys bfp4 + 16-row records (32-row vs half-tile); bfp4 tooling
+(tt-d-gen vs ours); GLM / xing40 spec rules flagged by F208 (remove / owner exception); pad-row masking as a perf
+item; engram: "never hold the tables in host RAM" spec rule vs the RAM path; F209 (reject must revert fork changes,
+keep notes) to implement. Engram work: on the 2x2 session (ENGRAM_HOST_PATH.md, 4b order).
+Overseer notes: use `pgrep -f "^python -u -m models.demos.common.bringup.orchestrator"` (the plain pattern matches this
+session's argv); a resume clears PAUSE (use --until to stop); watch + cron :07/:37 + Stop hook armed.
