@@ -1,8 +1,7 @@
 # Compressed KV in 4 bits: de-risk (L0, CPU)
 
-Location: `models/demos/deepseek_v41_flash_d_p/bringup/ckv_derisk/` (copied from the node-local /scratch on 2026-10-28;
-`PYTHONPATH=<repo>:. python -m pytest -q test_codec.py` there, CPU only, 8 pass). FIX.8 moves `codec.py` to
-`tt/ckv_codec.py`, `test_codec.py` to `tests/test_ckv_codec.py`, and `study.py` / `bopt.py` to `tools/`.
+Location: `models/demos/deepseek_v41_flash_d_p/bringup/ckv_derisk/`. The codec is `tt/ckv_codec.py` (tests
+`tests/test_ckv_codec.py`, CPU, 8 pass); the studies are `tools/ckv_study.py` / `tools/ckv_bopt.py` (moved 2026-10-28).
 DESIGN CHANGE (owner 2026-10-28, supersedes sections 3 and 5 where they differ): only the attention table goes 4-bit;
 the served records stay bf16 rows holding the bfp4-rounded values (contract and tt-d-gen unchanged; load_served repacks
 exactly). The window goes to the reference's width later on the same two-tensor fork (fp8 per 32: section 7).
@@ -216,3 +215,23 @@ L2 (later): `/scratch/dnijemcevic/diag/test_repro_tail.py` with REPRO_LAYERS=3, 
   (512 e4m3 + 64 bf16 RoPE + 4 fp32 scales) is PR #49812. Neither source covers bfp4 / fp4 / e2m1, bfp8, or the
   bfp4 packer: L1 test 1 (section 5) is still the only evidence for the bfp4 rounding rule, and it should cover bfp8
   too (FIX.7's GEMM inputs are packed to bfp8 on the device).
+
+## 8. L1 test 1 result: the device packer does not round bfp4 to nearest (2x2 QB, 2026-10-28)
+`tests/test_bfp_packer_rounding.py` (one card, ~1 min): crafted tiles packed by the device (a copy kernel from 16- and
+32-bit DEST, ttnn.typecast, a matmul with a bfp output), the packed tiles read back as raw bytes and compared byte for
+byte with CPU rules; each case below matches its rule exactly.
+- **The packer rounds to bfloat8_b (7 bits), half away from zero.** With `bfp8_pack_precise` (what ttnn.typecast to
+  bfloat8_b sets) it rounds once at the group's shared exponent. Without it (the default: a matmul's bfp output, a
+  typecast to bfloat4_b) the packer's source format is bfloat8_b and each value is first rounded to 7 significant bits
+  at its own exponent (a value may carry into the next exponent and bump the group's), then as above.
+- **bfloat4_b = that bfloat8_b with the low 4 bits dropped: truncation in effect.** Row error on the golden compressed
+  KV (layers 2 / 8 / 14 / 20, rel L2 vs native): host RNE 0.112-0.120, device 0.199-0.214, truncation 0.208-0.224.
+  So option B needs a write that rounds to nearest itself (section 3's condition).
+- **bfloat8_b (FIX.7's GEMM inputs) rounds, it does not truncate.** Golden rows: RNE 0.0075-0.0080; typecast (precise)
+  the same; the default path (matmul output dtype bfp8) 0.0090-0.0096; truncation 0.0121-0.0131. It differs from the
+  host packer only at exact ties (and the double rounding of the default path).
+- **tt-metal bug found:** `ComputeKernel::config_hash()` (tt_metal/impl/kernels/kernel.cpp, Wormhole / Blackhole)
+  leaves `bfp8_pack_precise` out of the kernel's cache key (the Quasar version has it): two kernels that differ only in
+  it share one compiled binary (12 copy configurations gave 6 cache entries, all with the non-precise pack format).
+  Stock ops are not hit as far as seen (typecast always sets it for bfp8 outputs, never for bfp4); a fork that toggles
+  it would be. Fix proposed (append the flag to the hash only when set, so existing hashes do not change); not made.
