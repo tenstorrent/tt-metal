@@ -1007,10 +1007,13 @@ class TILIZE(TemplateParameter):
 class PACK_BLOCK(TemplateParameter):
     """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
 
-    pack_block: bool = False
+    pack_block: bool | int = False  # 2: the block calls llk_pack_block makes, not the opt-in fast forms
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool pack_block_en = {str(self.pack_block).lower()};"
+        return (
+            f"constexpr bool pack_block_en = {str(bool(self.pack_block)).lower()};\n"
+            f"constexpr bool pack_block_default = {str(self.pack_block == 2).lower()};"
+        )
 
 
 class MATMUL_PACK_BLOCK(TemplateParameter):

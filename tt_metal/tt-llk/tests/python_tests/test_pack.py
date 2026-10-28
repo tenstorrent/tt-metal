@@ -103,7 +103,7 @@ def test_pack(
     perf_report=None,
     run_types=None,
     loop_factor: int = 1,
-    pack_block: bool = False,
+    pack_block: bool | int = False,
     block_tiles: int | None = None,
 ):
     if (formats.input_format == DataFormat.Int32) ^ (

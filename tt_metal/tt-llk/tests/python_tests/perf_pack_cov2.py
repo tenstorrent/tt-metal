@@ -60,7 +60,7 @@ def test_perf_pack_cov2(perf_report, formats, dest_acc, input_dimensions, relu_t
 
 
 # The block packs of the sweep above run at dest index 0. A block call from a tile index is made by kernels (welford groupnorm and welford reduce pack two
-# tiles from dest index 1): test_perf_pack_cov2_block_idx below times blocks of two and four tiles from dest index 1, 2 and 3 with the real block call (pack_block True) and with the per-tile pack of the same tiles (pack_block False, the loop a kernel without the block call runs).
+# tiles from dest index 1): test_perf_pack_cov2_block_idx below times blocks of two and four tiles from dest index 1, 2 and 3 with the block calls llk_pack_block makes (pack_block 2) and with the per-tile pack of the same tiles (pack_block False, the loop a kernel without the block call runs).
 COV2_BLOCK_SWEEP = {**COV2_SWEEP, "dest_index": [0]}
 
 
@@ -93,7 +93,7 @@ COV2_BLOCK_IDX_SWEEP = {
         i for i in (1, 2, 3) if i in get_valid_dest_indices(dest_sync, dest_acc, formats, input_dimensions)
     ],
     "block_tiles": [2, 4],
-    "pack_block": [False, True],
+    "pack_block": [False, 2],
 }
 
 
@@ -103,6 +103,8 @@ COV2_BLOCK_IDX_SWEEP = {
 def test_perf_pack_cov2_block_idx(
     perf_report, formats, dest_acc, input_dimensions, relu_type, dest_sync, dest_index, block_tiles, pack_block, run_types, loop_factor, is_perf
 ):
+    if pack_block == 2 and formats.output_format.is_block_float() and block_tiles == 2 and dest_index % 4 == 3:
+        pytest.skip("llk_pack_block packs two block-float tiles that straddle a four tile boundary of DEST one by one: the per-tile rows are those cells")
     run_pack(
         formats,
         dest_acc,

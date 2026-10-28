@@ -257,7 +257,9 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
             get_local_cb_interface(output_id).fifo_page_size * ntiles;
         _llk_pack_block_dense_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
             start_tile_index, pack_tile_addr, ntiles, get_output_face_r_dim(output_id), get_output_num_faces(output_id));
-    } else if (ntiles > 1 && llk_pack_block_is_closable(output_id)) {
+    // two block-float tiles that straddle a four tile boundary of DEST (tiles 3 and 4) read 6 cycles slower closed than per tile
+    } else if (ntiles > 1 && llk_pack_block_is_closable(output_id) &&
+               !(IS_BFP_FORMAT(pack_dst_format[output_id]) && ntiles == 2 && (start_tile_index & 3) == 3)) {
         const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
         std::uint32_t pack_tile_addr =
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
