@@ -153,35 +153,23 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         const uint32_t global_row_idx = start_row + i;
 
-        // The row's dY, Y, Q and G (dY, Y and G are V-dim wide, Q is Q/K-dim wide) share one read barrier.
+        // Read attn_output and grad_output rows (V-dim width)
         const uint32_t vo_start_idx = global_row_idx * vWt;
-        read_tiles_by_row</* UseBarrier */ false>(
-            cb_grad_output, grad_output_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
         if constexpr (read_attn_output) {
-            read_tiles_by_row</* UseBarrier */ false>(
-                cb_attn_output, attn_output_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
+            read_tiles_by_row(cb_attn_output, attn_output_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
         }
+        read_tiles_by_row(cb_grad_output, grad_output_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
+
         if constexpr (compute_grad_query) {
+            // Read query row (Q/K-dim width)
             const uint32_t q_start_idx = global_row_idx * qWt;
-            read_tiles_by_row</* UseBarrier */ false>(
-                cb_query, query_addr_generator, q_start_idx, qWt, tile_bytes, qWt);
+            read_tiles_by_row(cb_query, query_addr_generator, q_start_idx, qWt, tile_bytes, qWt);
         }
+
 #ifdef HAS_GATE
         if constexpr (read_gate) {
-            read_tiles_by_row</* UseBarrier */ false>(cb_gate, gate_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
-        }
-#endif
-        noc_async_read_barrier();
-        cb_push_back(cb_grad_output, vWt);
-        if constexpr (read_attn_output) {
-            cb_push_back(cb_attn_output, vWt);
-        }
-        if constexpr (compute_grad_query) {
-            cb_push_back(cb_query, qWt);
-        }
-#ifdef HAS_GATE
-        if constexpr (read_gate) {
-            cb_push_back(cb_gate, vWt);
+            // Read gate row (V-dim width)
+            read_tiles_by_row(cb_gate, gate_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
         }
 #endif
 

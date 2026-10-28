@@ -209,6 +209,7 @@ if(TARGET benchmark::benchmark)
         benchmark/frobenius_normalize_benchmark.cpp
         benchmark/polynorm_fusion_benchmark.cpp
         benchmark/rmsnorm_benchmark.cpp
+        benchmark/grad_skipping_benchmark.cpp
         benchmark/gram_matmul_benchmark.cpp
         benchmark/mla_q_rope_benchmark.cpp
         benchmark/mla_kv_assemble_benchmark.cpp
