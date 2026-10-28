@@ -33,6 +33,8 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_PARTIAL_OUTPUT_L1_BYT
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, reduce_scatter_tp_partials, ttKDA
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
+from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
@@ -346,6 +348,8 @@ def test_synthetic_kimi_k3_perf(
     sequence_parallel_axis = 1 - tensor_parallel_axis
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
     report_only = layout in _REPORT_ONLY_LAYOUTS
+    if layout == "SP8xTP4":
+        require_high_power(f"kimi_k3 KDA {layout} perf")
     device_reference_ms = None if report_only else _device_perf_reference_ms(layout)
     reference_ms = None if report_only or device_reference_ms is not None else _perf_reference_ms(layout)
     sequence, num_heads, actual_start = {
@@ -402,6 +406,7 @@ def test_synthetic_kimi_k3_perf(
         "device_perf_margin_pct": _DEVICE_PERF_MARGIN * 100.0,
     }
     print("KDA_SYNTHETIC_PERF=" + json.dumps(result, sort_keys=True))
+    emit_perf_metrics(f"kimi_k3_kda_layer_{layout}", f"Kimi-K3 KDA layer perf ({layout})", result)
     if report_only:
         return
     if _ACTUAL_START_OVERRIDE is not None:

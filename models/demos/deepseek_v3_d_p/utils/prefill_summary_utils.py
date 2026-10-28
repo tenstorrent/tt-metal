@@ -12,6 +12,7 @@ $GITHUB_STEP_SUMMARY.
 """
 
 import getpass
+import json
 import os
 from pathlib import Path
 
@@ -68,4 +69,21 @@ def emit_summary(kind: str, run_name: str, title: str, lines: list[str]) -> Path
     path = summary_dir(kind) / f"{run_name}.md"
     path.write_text(f"### {title}\n\n```text\n{body}\n```\n")
     logger.info(f"{kind} summary -> {path}")
+    return path
+
+
+def emit_perf_metrics(run_name: str, title: str, record: dict) -> Path | None:
+    """On rank 0 only: persist a single-test perf record as PREFILL_SUMMARIES/perf_json/<run_name>.json
+    (uploaded as the prefill-perf-metrics artifact) and as a key/value table under PREFILL_SUMMARIES/perf
+    (published to the job summary). The record is tagged kind="test_perf" so scaling_summary.py, which
+    reads the same artifact for disaggregated-prefill model/config records, skips it. Returns the JSON path,
+    or None on non-primary ranks (nothing written)."""
+    if not is_primary_rank():
+        return None
+    record = {"name": run_name, "kind": "test_perf", **record}
+    path = summary_dir("perf_json") / f"{run_name}.json"
+    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    logger.info(f"perf metrics -> {path}")
+    rows = [[k, str(v)] for k, v in sorted(record.items()) if not isinstance(v, (list, dict))]
+    emit_summary("perf", run_name, title, render_table(["metric", "value"], rows))
     return path
