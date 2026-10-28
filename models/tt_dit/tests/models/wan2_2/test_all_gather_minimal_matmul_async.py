@@ -112,6 +112,7 @@ def run_test_linear_impl(
     gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     num_buffers_per_channel=48,
     share_addcmul_inputs=False,
+    output_dtype=None,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -291,6 +292,7 @@ def run_test_linear_impl(
                 tt_weight,
                 bias_tensor=tt_bias,
                 fused_activation=activation_fn,
+                dtype=output_dtype,
                 compute_kernel_config=compute_config,
                 config=matmul_config,
                 persistent_output_buffer=persistent_output_buffers[i],
@@ -310,6 +312,8 @@ def run_test_linear_impl(
                 fuse_swiglu=fuse_swiglu,
             )
 
+        if output_dtype is not None:
+            assert all(output.dtype == output_dtype for output in tt_output)
         return tt_output
 
     if enable_trace:
@@ -447,6 +451,7 @@ def run_test_linear(
     gate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     num_buffers_per_channel=48,
     share_addcmul_inputs=False,
+    output_dtype=None,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -562,6 +567,7 @@ def run_test_linear(
         gate_memory_config=gate_memory_config,
         num_buffers_per_channel=num_buffers_per_channel,
         share_addcmul_inputs=share_addcmul_inputs,
+        output_dtype=output_dtype,
     )
 
 
@@ -843,10 +849,10 @@ def require_cache_identity_executed():
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_linear_cache_identity(mesh_device, require_cache_identity_executed):
+@pytest.mark.parametrize("cache_attribute", ["fused_activation", "output_dtype", "compute_kernel_config"])
+def test_linear_cache_identity(mesh_device, require_cache_identity_executed, cache_attribute):
     global _cache_identity_executions
     _cache_identity_executions += 1
-    # Keep both activation variants in one process so they can expose program-cache aliasing.
     submesh = _create_cluster_submesh(mesh_device, cluster_axis=1)
     common = dict(
         M=32,
@@ -868,14 +874,41 @@ def test_linear_cache_identity(mesh_device, require_cache_identity_executed):
         cluster_axis=1,
         chunks=1,
     )
-    plain = run_test_linear(submesh, activation=None, **common)
-    gelu_tanh = run_test_linear(submesh, activation="gelu_tanh", **common)
-    for activation_results in (plain, gelu_tanh):
-        for iteration_results in activation_results:
+    baseline = dict(activation=None, output_dtype=ttnn.bfloat16, math_fidelity=ttnn.MathFidelity.HiFi2)
+    changed = dict(baseline)
+    if cache_attribute == "fused_activation":
+        changed["activation"] = "gelu_tanh"
+    elif cache_attribute == "output_dtype":
+        changed["output_dtype"] = ttnn.float32
+    else:
+        changed["math_fidelity"] = ttnn.MathFidelity.HiFi4
+
+    def run_and_check(parameters):
+        # Reuse identical data and tensor specs; only the selected op attribute changes.
+        torch.manual_seed(0)
+        results = run_test_linear(submesh, **parameters, **common)
+        for iteration_results in results:
             for chunk_results in iteration_results:
                 for device_result in chunk_results:
                     assert device_result["pcc"] > 0.999_500
                     assert device_result["relative_rmse"] < 0.02
+        return submesh.num_program_cache_entries()
+
+    # Cache state must survive all calls in this test. A numerically correct uncached run
+    # would not cover aliasing; a changed compute configuration can also return plausible
+    # numbers on a stale program, so require a distinct entry as well as correct output.
+    submesh.disable_and_clear_program_cache()
+    submesh.enable_program_cache()
+    try:
+        baseline_entries = run_and_check(baseline)
+        assert baseline_entries > 0
+        assert run_and_check(baseline) == baseline_entries
+        changed_entries = run_and_check(changed)
+        assert changed_entries == baseline_entries + 1, f"{cache_attribute} must create its own program"
+        assert run_and_check(changed) == changed_entries
+        assert run_and_check(baseline) == changed_entries
+    finally:
+        submesh.disable_and_clear_program_cache()
 
 
 def run_test_linear_fsdp(
