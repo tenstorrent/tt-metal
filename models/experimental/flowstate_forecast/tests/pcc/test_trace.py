@@ -4,11 +4,13 @@
 """Fresh-input trace test (skill §1 C, PLAN §9 v1.21): two shapes' buffers are allocated, then both traces are
 captured; new values go through each trace and are compared with the eager forward on the same values.
 Positive control (v1.13): replaying without uploading the new values (stale input) must fail the same check.
-The job log must not contain ttnn's "potentially unsafe ... active trace" allocation warning (checked by the job
-wrapper, see doc/optimize/iter_00/trace_fresh_inputs.txt)."""
+Both precisions. The test captures its own stdout / stderr at the file-descriptor level and fails on ttnn's
+"potentially unsafe ... active trace" allocation warning (D3 item 9); test_active_trace_warning_seen is that
+check's positive control: an allocation under a live trace must produce the warning the check looks for."""
 
 import pytest
 import torch
+import ttnn
 
 from models.experimental.flowstate_forecast.reference import weights
 from models.experimental.flowstate_forecast.tests.golden.test_dataflow import GOLDENS
@@ -17,11 +19,21 @@ from models.experimental.flowstate_forecast.tt.model import FlowStateTT
 from models.experimental.flowstate_forecast.tt.trace import TracedForward
 
 CASES = ("model16", "monthly")  # s = 1, 16 series; s = 2, 3 series, NaN-free
+WARNING = "active trace"
+
+
+def no_active_trace_warning(capfd):
+    out, err = capfd.readouterr()
+    print(out, end="")  # keep the test's output in the job log
+    print(err, end="")
+    hits = [line for line in (out + err).splitlines() if WARNING in line]
+    assert not hits, hits
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 64 * 1024**2}], indirect=True)
-def test_trace_fresh_inputs(device):
-    tt = FlowStateTT(weights.load(), device, "accuracy")
+@pytest.mark.parametrize("precision", ["accuracy", "performance"])
+def test_trace_fresh_inputs(device, precision, capfd):
+    tt = FlowStateTT(weights.load(), device, precision)
     gold = {c: torch.load(GOLDENS / f"{c}.pt", weights_only=True) for c in CASES}
     gen = torch.Generator().manual_seed(7)
     inputs, eager = {}, {}
@@ -59,3 +71,20 @@ def test_trace_fresh_inputs(device):
         print(f"trace {c} control (stale input): max abs {err:.3e}")
         assert err > 1e-3, (c, err)
         traced[c].release()
+    no_active_trace_warning(capfd)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 64 * 1024**2}], indirect=True)
+def test_active_trace_warning_seen(device, capfd):
+    """Positive control of the warning check: allocate a buffer while a trace is live."""
+    tt = FlowStateTT(weights.load(), device, "accuracy")
+    g = torch.load(GOLDENS / "monthly.pt", weights_only=True)
+    traced = TracedForward(tt)
+    _, meta = tt.prepare(g["inputs"].clone(), g["s"], g["horizon"], host_only=True)
+    traced.add(meta, g["s"])
+    traced.capture()
+    extra = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, 32, 32]), ttnn.float32, ttnn.TILE_LAYOUT, device)
+    ttnn.deallocate(extra)
+    traced.release()
+    with pytest.raises(AssertionError):
+        no_active_trace_warning(capfd)

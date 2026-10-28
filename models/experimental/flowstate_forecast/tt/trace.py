@@ -7,11 +7,17 @@ PLAN v1.21: every shape's persistent buffers (per-scale constants, input buffer)
 add all shapes with ``add`` first, then ``capture``. A buffer allocated while a trace is live can alias its freed
 intermediates, so nothing is allocated between capture and the last replay (the host-side tokens are copied into
 the existing buffer).
+
+Until stage E solves holding several shape traces at once (D3 item 9), at most one trace is live in the process:
+``capture`` asserts that no other trace is live and that it captures exactly one shape; ``release`` frees it.
 """
 
 import ttnn
 
 from models.experimental.flowstate_forecast.tt.model import TILE
+
+
+_LIVE = [0]  # live traces in this process
 
 
 class TracedForward:
@@ -36,6 +42,7 @@ class TracedForward:
 
     def capture(self):
         pending = [(k, v) for k, v in self.shapes.items() if v["trace"] is None]
+        assert _LIVE[0] == 0 and len(pending) == 1, f"one live trace at most (D3 item 9): {_LIVE[0]} live, {len(pending)} new"
         for (s, L, Bp, r0, P), v in pending:  # every compile run before the first capture (its outputs freed)
             out, _ = self.tt.forward_device(v["inp"], s, L, Bp, r0, P)
             ttnn.deallocate(out)
@@ -46,6 +53,7 @@ class TracedForward:
                 v["out"], _ = self.tt.forward_device(v["inp"], s, L, Bp, r0, P)
                 ttnn.end_trace_capture(self.device, tid, cq_id=0)
                 v["trace"] = tid
+                _LIVE[0] += 1
 
     def upload(self, tok_dev_host, k):
         ttnn.copy_host_to_device_tensor(tok_dev_host, self.shapes[k]["inp"])
@@ -58,4 +66,5 @@ class TracedForward:
         for v in self.shapes.values():
             if v["trace"] is not None:
                 ttnn.release_trace(self.device, v["trace"])
+                _LIVE[0] -= 1
         self.shapes.clear()
