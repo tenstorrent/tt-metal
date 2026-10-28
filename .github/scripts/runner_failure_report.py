@@ -518,7 +518,9 @@ def normalize_timestamp(value: Any) -> str:
 def normalize_conclusion(row: dict[str, Any]) -> str:
     explicit_conclusion = clean_string(row_value(row, "CONCLUSION", "JOB_CONCLUSION", "conclusion")).lower()
     if explicit_conclusion:
-        return explicit_conclusion
+        return {"failed": "failure", "canceled": "cancelled", "timed out": "timed_out"}.get(
+            explicit_conclusion, explicit_conclusion
+        )
 
     status = clean_string(row_value(row, "JOB_STATUS", "status", "job_status")).lower()
     if status in {"cancelled", "canceled", "skipped", "timed_out", "timed out"}:
