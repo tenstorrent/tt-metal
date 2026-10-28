@@ -2255,33 +2255,6 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
     const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
 
-    // Set address to a given scratchpad binding handle and it's kernel
-    auto set_address_on_scratchpad = [](DeviceAddr addr, ScratchpadBindingHandle& handle, Kernel& kernel) {
-        TT_FATAL(
-            addr != 0,
-            "Internal error: scratchpad '{}' on kernel '{}' "
-            "has a 0 allocated address (allocation failed or was skipped).",
-            handle.accessor_name,
-            kernel.name());
-
-        handle.allocated_address = static_cast<uint32_t>(addr);
-
-        // Patch the allocated address into the kernel's CRTA buffer if it exists.
-        // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
-        // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
-        // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
-        // handle.allocated_address into the scratchpad section when it builds the buffer.
-        // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
-        //
-        // Usage of the CRTA buffer:
-        //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
-        //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
-        if (!kernel.common_runtime_args().empty()) {
-            RuntimeArgsData& crta = kernel.common_runtime_args_data();
-            crta[handle.addr_crta_word] = handle.allocated_address;
-        }
-    };
-
     // Backticks needed to set a binding handle's address
     struct ScratchpadBindingRef {
         ScratchpadBindingHandle& handle;
@@ -2312,7 +2285,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
                 DeviceAddr addr =
                     allocate_scratchpad(this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
-                set_address_on_scratchpad(addr, handle, *kernel);
+                SetScratchpadBindingAddress(*kernel, handle, addr);
             }
         }
     }
@@ -2328,7 +2301,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
         DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, cores, size_bytes, alignment);
         for (auto& handle : refs) {
-            set_address_on_scratchpad(addr, handle.handle, handle.kernel);
+            SetScratchpadBindingAddress(handle.kernel, handle.handle, addr);
         }
     }
 

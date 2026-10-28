@@ -525,6 +525,11 @@ private:
     void register_kernel_with_watcher();
 };
 
+// Set the address used by a scratchpad binding.
+// precondition: binding belongs to kernel, and address is a nonzero L1 address.
+// side-effect: Update the kernel's common runtime argument slot if storage exists.
+void SetScratchpadBindingAddress(Kernel& kernel, ScratchpadBindingHandle& binding, DeviceAddr address);
+
 class DataMovementKernel : public Kernel {
 public:
     DataMovementKernel(
