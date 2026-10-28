@@ -1,5 +1,5 @@
 {
- "_comment": "PROPOSED at G1 from round-0 (iter_00, fea54780f2a); set only by decision. Floors per <case>/<precision> or */<precision>; drift against iter_00/bench.json + suite.json (the fixed round-0 records). Applicability (v1.14): spread_ratio_p50 needs >= 8 active rows, spread_ratio_p01/p99 >= 100 (check_gates.MIN_ACTIVE). Cases with < 8 active rows (no p50) carry spread_ratio_min/max [0.9, 1.1] in performance too, so a uniform 0.88x / 1.12x band fails there.",
+ "_comment": "G1 floors (D3: adopted with items 2-4 and 11). Floors per <case>/<precision> or */<precision>; drift against iter_00/fixed_record.json (the D3 item-12 bench + suite records). Applicability (v1.14): spread_ratio_p50 needs >= 8 active rows, spread_ratio_p01/p99 >= 100 (check_gates.MIN_ACTIVE); inactive_max_err applies only with inactive rows. bias_row_p50 / bias_row_max / pcc_step are outer bounds set from the item-12 measurement; the row gates are bias_row_drift_max (0.03 abs, both presets) and spread_ratio_row_drift_max (0.15). spread_ratio_p50 drift is centred on 1 (v1.26). performance inactive_max_err 0.045 (D3 item 11): round-0 max 0.0327 (long_context), the collapsed value 0.0575; nan_mix's inactive row is near-flat (collapsed error 0.0032, under its own device error), so its inactive collapse is caught by pcc_row_min.",
  "floors": {
   "*/accuracy": {
    "pcc_normalized": 0.999,
@@ -18,7 +18,10 @@
    "spread_ratio_min": 0.9,
    "spread_ratio_max": 1.1,
    "inactive_max_err": 0.05,
-   "pcc_final_spread": 0.9995
+   "pcc_final_spread": 0.9995,
+   "bias_row_p50": 0.02,
+   "bias_row_max": 0.05,
+   "pcc_step": 0.998
   },
   "*/performance": {
    "pcc_normalized": 0.995,
@@ -36,8 +39,11 @@
    "spread_ratio_p99": 1.1,
    "spread_ratio_min": 0.8,
    "spread_ratio_max": 1.25,
-   "inactive_max_err": 0.1,
-   "pcc_final_spread": 0.998
+   "inactive_max_err": 0.045,
+   "pcc_final_spread": 0.998,
+   "bias_row_p50": 0.05,
+   "bias_row_max": 0.15,
+   "pcc_step": 0.99
   },
   "single/performance": {
    "spread_ratio_min": 0.9,
@@ -95,10 +101,16 @@
   },
   "spread_ratio_p50": {
    "abs": 0.01,
-   "two_sided": true
+   "toward": 1.0
   },
   "abs_err_max": {
    "rel": 0.5
+  },
+  "bias_row_drift_max": {
+   "abs": 0.03
+  },
+  "spread_ratio_row_drift_max": {
+   "abs": 0.15
   }
  },
  "drift_by": {

@@ -17,6 +17,14 @@ sort). Data space: ``quantile_outputs`` ``(B, 9, H', 1)`` and ``prediction_outpu
     abs_err_max        worst absolute error over every element: a gross single-element check (v1.16)
     pcc_final, pcc_final_spread   data-space quantiles, and minus their quantile mean
     pcc_mean           the weighted-mean point forecast
+    bias_row_p50 / bias_row_max   the row |mean error| (normalized), median and max over every row; no n_active
+                       gate (v1.24): a level shift. bias_row_argmax names the row.
+    bias_rows          each active row's signed mean error (None on inactive rows): check_gates gates
+                       bias_row_drift_max = max_i |e_i - e0_i| against the fixed record (v1.26, D3 item 3)
+    spread_ratio_rows  each active row's spread ratio (None on inactive rows): spread_ratio_row_drift_max
+    pcc_step           PCC of the step differences along the horizon, per quantile: a one-step lag (v1.24)
+    row_info           per row metric, the row index, that row's golden std and band RMS (v1.25); for
+                       abs_err_max also the quantile, the step and the golden band half-width there
 ``collapsed(head)`` replaces every quantile by the quantile mean: the failure these metrics must catch.
 """
 
@@ -72,6 +80,17 @@ def _q(t, p):
     return float(torch.quantile(t, p)) if t.numel() else float("nan")
 
 
+def step_diff(h):
+    h = h.double()
+    return h[..., 1:] - h[..., :-1]
+
+
+def _row(g_h, i, extra=None):
+    g = g_h[i].double()
+    out = {"row": int(i), "row_std": float(g.std()), "band_rms": float(spread(g_h[i : i + 1]).double().pow(2).mean().sqrt())}
+    return {**out, **(extra or {})}
+
+
 def gate_metrics(h, g_h, q, g_q, mean=None, g_mean=None) -> dict:
     h, g_h, q, g_q = head(h), head(g_h), head(q), head(g_q)
     rows = row_pccs(g_h, h)
@@ -80,6 +99,23 @@ def gate_metrics(h, g_h, q, g_q, mean=None, g_mean=None) -> dict:
     act = active_rows(g_h)
     ratio = spread_ratios(g_h[act], h[act])
     err = (h.double() - g_h.double()).abs().reshape(g_h.shape[0], -1).amax(1)
+    diff = h.double() - g_h.double()
+    signed = diff.reshape(g_h.shape[0], -1).mean(1)
+    bias = signed.abs()
+    ratio_all = spread_ratios(g_h, h)
+    aidx = act.nonzero().flatten()
+    flat_e = diff.abs().reshape(-1)
+    r_e, q_e, t_e = (int(v) for v in torch.unravel_index(flat_e.argmax(), diff.shape))
+    band_hw = float((g_h[r_e, :, t_e].max() - g_h[r_e, :, t_e].min()) / 2)
+    info = {
+        "bias_row_max": _row(g_h, int(bias.argmax())),
+        "abs_err_max": _row(g_h, r_e, {"quantile": q_e, "step": t_e, "band_half_width": band_hw}),
+    }
+    if aidx.numel():
+        rr = rows[aidx]
+        info["pcc_row_min_active"] = _row(g_h, int(aidx[rr.argmin()]))
+        info["spread_ratio_min"] = _row(g_h, int(aidx[ratio.argmin()]))
+        info["spread_ratio_max"] = _row(g_h, int(aidx[ratio.argmax()]))
     m = {
         "pcc_normalized": pearson(g_h, h),
         "pcc_spread": pearson(spread(g_h), spread(h)),
@@ -99,6 +135,13 @@ def gate_metrics(h, g_h, q, g_q, mean=None, g_mean=None) -> dict:
         "flat_max_err": float(err[flat].max()) if bool(flat.any()) else 0.0,
         "inactive_max_err": float(err[~act].max()) if bool((~act).any()) else 0.0,
         "abs_err_max": float(err.max()),
+        "bias_row_p50": float(bias.median()),
+        "bias_row_max": float(bias.max()),
+        "bias_row_argmax": int(bias.argmax()),
+        "bias_rows": [round(float(b), 7) if a else None for b, a in zip(signed, act)],
+        "spread_ratio_rows": [round(float(r), 7) if a else None for r, a in zip(ratio_all, act)],
+        "pcc_step": pearson(step_diff(g_h), step_diff(h)),
+        "row_info": info,
         "pcc_final": pearson(g_q, q),
         "pcc_final_spread": pearson(spread(g_q), spread(q)),
     }
@@ -108,4 +151,9 @@ def gate_metrics(h, g_h, q, g_q, mean=None, g_mean=None) -> dict:
 
 
 def fmt(m: dict) -> str:
-    return "  ".join(f"{k} {v}" if isinstance(v, int) else f"{k} {v:.6f}" for k, v in m.items())
+    def one(k, v):
+        if isinstance(v, (list, dict)):
+            return f"{k} [{len(v)}]"
+        return f"{k} {v}" if isinstance(v, int) else f"{k} {v:.6f}"
+
+    return "  ".join(one(k, v) for k, v in m.items())
