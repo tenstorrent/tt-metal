@@ -59,6 +59,31 @@ std::vector<CoreUnits> split_items_contiguous(uint32_t total_items, uint32_t num
     return per_core;
 }
 
+// Causal: Q chunk i of a stack attends ~(i+1) K/V steps, so pairing chunk i with chunk
+// (q_num_chunks - 1 - i) gives every pair the same work. The pairs are handed out contiguously like
+// items above and each core's items are sorted, which folds them into few runs (a fully covered stack is
+// one run). The fallback when the longest-first lists do not fit the runtime args.
+std::vector<CoreUnits> split_items_paired(uint32_t num_stacks, uint32_t q_num_chunks, uint32_t num_cores) {
+    const uint32_t pairs_per_stack = q_num_chunks / 2U;
+    const auto pair_runs = split_items_contiguous(num_stacks * pairs_per_stack, num_cores);
+    std::vector<CoreUnits> per_core(num_cores);
+    std::vector<uint32_t> items;
+    for (uint32_t core = 0; core < num_cores; ++core) {
+        const WorkUnit& pairs = pair_runs[core].front();
+        items.clear();
+        for (uint32_t p = pairs.item; p < pairs.item + pairs.num_items; ++p) {
+            const uint32_t stack_base = (p / pairs_per_stack) * q_num_chunks;
+            items.push_back(stack_base + p % pairs_per_stack);
+            items.push_back(stack_base + (q_num_chunks - 1U - p % pairs_per_stack));
+        }
+        std::sort(items.begin(), items.end());
+        for (const uint32_t item : items) {
+            append_item(per_core[core], item);
+        }
+    }
+    return per_core;
+}
+
 // Chunk knob in elements -> tiles. 0 = unset; otherwise it must be a tile multiple that divides S.
 uint32_t chunk_size_to_tiles(uint32_t chunk_size, uint32_t St, const char* name) {
     if (chunk_size == 0U) {
@@ -459,6 +484,16 @@ SDPAForwardSchedule make_schedule(
             SDPAForwardSchedule schedule = schedule_pieces(shape, chunks, num_cores, pieces);
             if (!schedule.per_core.empty()) {
                 return schedule;
+            }
+        }
+        // Longest-first scatters a stack's items over the cores, so its lists outgrow the runtime args at
+        // about 112 items per core. Heavy/light pairs balance nearly as well and fold into a few runs.
+        const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
+        const uint32_t num_stacks = shape.batch * shape.q_heads / chunks.heads_per_item;
+        if (q_num_chunks % 2U == 0U && num_stacks * (q_num_chunks / 2U) >= num_cores) {
+            SDPAForwardSchedule paired{.per_core = split_items_paired(num_stacks, q_num_chunks, num_cores)};
+            if (fits_runtime_args(paired.per_core)) {
+                return paired;
             }
         }
     }

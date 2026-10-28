@@ -123,7 +123,7 @@ struct SDPAForwardSchedule {
 // max_pieces step ranges (senders + one merger), then all pieces go longest first to the least loaded
 // core; every core runs its senders first, then its whole items, then its mergers, so a merger never
 // waits for a piece behind another merger. Everything else: contiguous blocks. When the lists would not
-// fit the runtime args, tries one piece per item, then contiguous blocks.
+// fit the runtime args, tries one piece per item, then heavy/light chunk pairs, then contiguous blocks.
 SDPAForwardSchedule make_schedule(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t max_pieces);
 

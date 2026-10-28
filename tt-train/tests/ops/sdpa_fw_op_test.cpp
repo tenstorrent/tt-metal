@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -2137,16 +2138,30 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
     EXPECT_EQ(few_items.per_core.size(), num_work_items(two_heads, sq4sk8));
 
     // Longest-first scatters equal-cost items across the cores, so with far more items than the runtime
-    // args can list per core the schedule falls back to contiguous blocks.
+    // args can list per core the schedule falls back to heavy/light chunk pairs: every core gets the same
+    // number of K/V steps within one pair, folded into a few runs.
     const SDPAForwardShape many_items = causal_shape(2U, 32U, 32U, 256U, 2U);
     const SDPAForwardChunks sq1sk8{.Sq_chunk_t = 1U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
-    const SDPAForwardSchedule contiguous = make_schedule(many_items, sq1sk8, kCores, kDefaultMaxPieces);
+    const SDPAForwardSchedule paired = make_schedule(many_items, sq1sk8, kCores, kDefaultMaxPieces);
     const uint32_t total = num_work_items(many_items, sq1sk8);
-    ASSERT_EQ(contiguous.per_core.size(), kCores);
-    ASSERT_EQ(contiguous.per_core[0].size(), 1U);
-    EXPECT_EQ(contiguous.per_core[0][0].item, 0U);
-    EXPECT_EQ(contiguous.per_core[0][0].num_items, total / kCores + 1U);  // the remainder goes to the first cores
-    check_schedule(many_items, sq1sk8, contiguous, kDefaultMaxPieces);
+    ASSERT_EQ(paired.per_core.size(), kCores);
+    EXPECT_EQ(paired.num_slots, 0U);
+    uint64_t min_steps = std::numeric_limits<uint64_t>::max();
+    uint64_t max_steps = 0;
+    for (const auto& units : paired.per_core) {
+        EXPECT_LE(units.size(), 4U) << "pairs of one stack fold into runs";
+        uint64_t steps = 0;
+        for (const WorkUnit& unit : units) {
+            for (uint32_t item = unit.item; item < unit.item + unit.num_items; ++item) {
+                steps += num_kv_steps(many_items, sq1sk8, item);
+            }
+        }
+        min_steps = std::min(min_steps, steps);
+        max_steps = std::max(max_steps, steps);
+    }
+    // 16384 items on 120 cores: 136 or 137 items each, one pair's worth of steps apart at most.
+    EXPECT_LE(max_steps - min_steps, static_cast<uint64_t>(num_kv_steps(many_items, sq1sk8, total - 1U) + 1U));
+    check_schedule(many_items, sq1sk8, paired, kDefaultMaxPieces);
 }
 
 // The production pick (four-row chunks, eight K/V tiles) only lands on device when the items keep the
