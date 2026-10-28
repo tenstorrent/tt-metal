@@ -32,19 +32,22 @@ SLOT_TRACES = os.environ.get("MUSE_VLLM_SLOT_TRACES", "1") == "1"
 CONTRACT_V1 = os.environ.get("MUSE_VLLM_V1", "1") == "1"
 
 
-def prefill_buckets(max_len: int) -> list[int]:
-    """Prefill lengths compiled at warmup: 128, powers of two to 32K, then 32K steps (chunked SDPA above 32K)."""
-    buckets, n = [128], 256
-    while n <= min(max_len, 32768):
-        buckets.append(n)
-        n *= 2
-    n = 65536
-    while n <= max_len:
-        buckets.append(n)
-        n += 32768
-    if buckets[-1] < max_len:
-        buckets.append(max_len)
-    return buckets
+def prefill_buckets(max_len: int, step_div: int | None = None) -> list[int]:
+    """Prefill lengths compiled at warmup.
+
+    Above 256 the step is the largest power of two <= bucket / step_div (min 256, the prefill SDPA chunk), so a prompt
+    just past a bucket pads by at most 1/step_div: 33 shapes and 25 % at the default 4 (up to 128K), about 57 shapes
+    and 12.5 % at 8. step_div=1 gives power-of-two buckets.
+    """
+    step_div = step_div or int(os.environ.get("MUSE_VLLM_PREFILL_STEP_DIV", 4))
+    buckets, n = [128, 256], 256
+    while n < max_len:
+        step = 256
+        while step * 2 <= n // step_div:
+            step *= 2
+        n += step
+        buckets.append(min(n, max_len))
+    return [b for b in buckets if b <= max_len] or [max_len]
 
 
 def _checkpoint_dir(hf_config) -> str:
