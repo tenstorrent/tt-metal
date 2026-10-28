@@ -44,6 +44,7 @@ TILE_BYTES = 2048
 # Defaults of the pooled all-gather configuration (see SolPrepassFused.__init__): overridden per instance / by env.
 DEFAULT_GATHER_KWARGS: dict = {"num_workers_per_link": 1, "barrier": False}
 DEFAULT_GATHER_PERSISTENT = False
+DEFAULT_PERSISTENT_INTERNAL = True  # q_bar / kc_local / vc_local allocated once and reused across calls
 L1_CB_BUDGET = 1_200_000  # circular-buffer bytes per core the route program may use (Blackhole L1 = 1.5 MB)
 SCRATCH_PAGES = 8
 
@@ -229,6 +230,11 @@ class SolPrepassFused:
         if os.environ.get("SOL_AG_KW"):
             self.gather_kwargs.update(json.loads(os.environ["SOL_AG_KW"]))
         self.gather_persistent = bool(gather_persistent or DEFAULT_GATHER_PERSISTENT)
+        # persistent_internal (SOL_PERSISTENT_INTERNAL, default 1): the pool outputs that never leave this object
+        # (q_bar, the local pooled K / V) are allocated once per prepare() and reused: on the in-order command queue the
+        # next call's pool program runs only after the previous call's gathers and route have consumed them. Saves three
+        # mesh allocations and three deallocations (~0.25 ms of host time) per call. pool() always allocates fresh.
+        self.persistent_internal = os.environ.get("SOL_PERSISTENT_INTERNAL", "1" if DEFAULT_PERSISTENT_INTERNAL else "0") == "1"
         self._held_route: tuple | None = None  # (mask, bias, union) of the last routed call, while mask_reuse > 1
         self._reuse_left = 0  # calls the held route may still serve
         self.last_mask_reused = False  # whether the last call reused the held mask (diagnostics)
@@ -307,8 +313,14 @@ class SolPrepassFused:
                 ),
                 "pool_prog": None,
                 "route_prog": None,
+                "pool_outs": None,
             }
             SolPrepassFused._shared[shared_key] = st
+        old = getattr(self, "_state", None)
+        if old is not None and old is not st and old.get("pool_outs"):  # the state is shared per geometry key
+            for t in {id(t): t for t in old["pool_outs"]}.values():
+                ttnn.deallocate(t)
+            old["pool_outs"] = None
         self._state = st
         self.geo = geo
         self._key = key
@@ -401,11 +413,12 @@ class SolPrepassFused:
         compute = self._kernel("sol_pool_compute.cpp", cores, ct, [], [], self._compute_config(full_sync=False))
         return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
 
-    def _run_pool(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> list[ttnn.Tensor]:
+    def _run_pool(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, persistent: bool | None = None) -> list[ttnn.Tensor]:
         st = self._state
         _, H, _, D = q.shape
+        persistent = self.persistent_internal if persistent is None else bool(persistent)
         t0 = time.perf_counter()
-        outs = [
+        outs = st["pool_outs"] if (persistent and st["pool_outs"] is not None) else [
             ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, H, self.geo.nb_pad, D]),
                 ttnn.bfloat16,
@@ -415,6 +428,8 @@ class SolPrepassFused:
             )
             for _ in range(3)
         ]
+        if persistent:
+            st["pool_outs"] = outs
         t1 = time.perf_counter()
         if st["pool_prog"] is None:
             st["pool_prog"] = self._pool_program(q, st["geo"], outs)
@@ -657,7 +672,7 @@ class SolPrepassFused:
 
     def pool(self, q, k, v) -> dict:
         """Block means only (q_bar, kc_local, vc_local), for unit tests."""
-        qb, kcl, vcl = self._run_pool(q, k, v)
+        qb, kcl, vcl = self._run_pool(q, k, v, persistent=False)
         return {"q_bar": qb, "kc_local": kcl, "vc_local": vcl}
 
     def __call__(
@@ -682,8 +697,9 @@ class SolPrepassFused:
         q_bar, kc_local, vc_local = self._run_pool(q, k, v)
         kc = self._gather(kc_local)
         vc = self._gather(vc_local)
-        ttnn.deallocate(kc_local)
-        ttnn.deallocate(vc_local)
+        if not self.persistent_internal:
+            ttnn.deallocate(kc_local)
+            ttnn.deallocate(vc_local)
         reuse = self.mask_reuse > 1 and self._held_route is not None and self._reuse_left > 0
         if reuse:
             mask, bias, union = self._held_route
@@ -711,7 +727,8 @@ class SolPrepassFused:
                 cols = torch.cat([torch.arange(s * geo.nb_pad, s * geo.nb_pad + geo.nb) for s in range(geo.shards)])
             self.last_density = float(sub[..., cols].mean())
             self.last_block_density = None if self.mode == "chunk" else self.last_density
-        ttnn.deallocate(q_bar)
+        if not self.persistent_internal:
+            ttnn.deallocate(q_bar)
         out = {"block_mask": mask, "pooled_k": kc, "pooled_v": vc, "bias": bias, "row_max": row_max}
         if union is not None:
             out["chunk_union"] = union
