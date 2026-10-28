@@ -85,6 +85,42 @@ process (a mapped page cannot be dropped).
 6. `hash_ms` of 45-75 ms in fresh-process runs is first-call cost (in the model: 1.5 ms for both layers); ignore it in
    cold rows.
 
+### 3d. Update 2026-10-28 10:30: real disk traffic, and the table resident in RAM
+
+Disk counters per gather (`/proc/self/io` read_bytes, major faults; bench fields `gather_disk_mb`,
+`gather_major_faults`), layer 1, cold, 5120 tokens:
+
+| mode | gather ms | read from disk | major faults |
+|---|---|---|---|
+| default read-ahead, 1 / 8 threads | 4480 / 4493 | **23 GB** | 104k |
+| `MADV_RANDOM`, 1 / 8 threads | 612 / 384 | **527 MB** (= 135k x 4 KB) | 135k |
+
+- Confirms 3c.2: 23 GB read to use ~32 MB (~700x). With `MADV_RANDOM` exactly one 4 KB page a fault.
+- The "1 thread" rows are not single-threaded: torch spreads the fancy-indexing gather over its intra-op pool
+  (here 32 cores), so the cold reads already ran in parallel. That is why the Python threads only add ~1.6x.
+
+**Table resident in RAM** (one layer, 94.4 GiB copied once into anonymous memory with `MADV_HUGEPAGE`,
+`engram_bench.load_resident`; 93 s at 1 GiB/s here, at nice 19 beside a device gate; the NVMe reads ~6.9 GB/s, so
+~30 s for both tables on an idle host), gather per layer per 5120-token chunk, rows byte-equal:
+
+| torch intra-op threads | Python threads | gather ms (median of 5) |
+|---|---|---|
+| 1 | 1 | 92.1 |
+| 1 | 8 | 25.4 |
+| 8 | 1 | 13.8 |
+| 8 | 8 | **10.0** |
+| 32 | 1 | 174.1 (oversubscribed: set thread counts explicitly) |
+
+RAM: both engram layers need **~189 GiB** (fp8 rows 2 x 91.6 + scales 2 x 2.9). The format is already the
+checkpoint's 1-byte fp8 + e8m0 scale per 32; smaller (fp4) would change the numbers (owner rule: shipped precision
+only); dequantized bf16 would be ~378 GiB. The Galaxy host has 566 GB (446 GB available with the model running): it
+fits. **Check the 2x2 host's RAM before choosing this there.** The tables would live in the tt-d-gen runner process,
+next to its KV transfer buffers.
+
+Consequence for the plan: where the RAM exists, a resident table (load once at model load, multi-threaded gather,
+huge pages) replaces stages 1/1b; the remaining engram host cost is then dequant + assembly + upload (~80 ms a
+chunk), which stages 2-4 address.
+
 ## 4. Plan (owner-agreed staging; each stage = its own setting in `tt/settings.py`, its own commit, its own A/B)
 
 Invariant for every stage: **the device rows stay bit-identical to today's** (check by byte comparison, not a

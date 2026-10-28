@@ -2430,8 +2430,8 @@
     "t": "2026-10-28T07:53:02"
    }
   ],
-  "started": "2026-10-28T07:43:45",
-  "status": "TODO"
+  "started": "2026-10-28T09:48:50",
+  "status": "RUNNING"
  },
  "_run": {
   "branch": "dnijemcevic/model_bringup",
