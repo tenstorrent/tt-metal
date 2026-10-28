@@ -24,12 +24,10 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     TemplateParameter,
 )
-from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+from llk2_common import DEST_HALF_TILES, TILE_DATUMS, TILE_DIM, blocks_in_pop_order, tilize_operands
 from llk2_paths import cpp_source, include_dirs
 
-TILE_DIM = 32
-TILE_DATUMS = TILE_DIM * TILE_DIM
 
 
 @dataclass
@@ -72,31 +70,11 @@ def _combinations():
                 and dest_acc == DestAccumulation.No
             ):
                 continue
-            max_tiles = 4 if dest_acc == DestAccumulation.Yes else 8
             for blocking in _BLOCKINGS:
                 rt, ct = blocking[0], blocking[1]
-                if rt * ct <= max_tiles:
+                if rt * ct <= DEST_HALF_TILES[dest_acc]:
                     combos.append((fmt, dest_acc, blocking))
     return combos
-
-
-def _blocks_in_pop_order(
-    tiles: torch.Tensor,
-    tiles_y: int,
-    tiles_x: int,
-    rows: int,
-    cols: int,
-    row_blocks,
-    col_blocks,
-):
-    """The [tiles_y, tiles_x] tile grid cut into [rows, cols] blocks, taken in the given block order."""
-    grid = tiles.view(tiles_y, tiles_x, TILE_DATUMS)
-    return torch.cat(
-        [
-            grid[r * rows : (r + 1) * rows, c * cols : (c + 1) * cols].flatten()
-            for r, c in zip(row_blocks, col_blocks)
-        ]
-    )
 
 
 @parametrize(
@@ -133,30 +111,12 @@ def test_llk2_dfb(math_fidelity, format_dest_acc_and_blocking):
         input_B_format=formats.input_format,
     )
 
-    if formats.input_format != DataFormat.Bfp8_b:  # as test_llk2_matmul.py
-        tilized_A = tilize_block(
-            src_A, dimensions=dims_A, stimuli_format=formats.input_format
-        ).flatten()
-        tilized_B = tilize_block(
-            src_B, dimensions=dims_B, stimuli_format=formats.input_format
-        ).flatten()
-    else:
-        tilized_A, tilized_B = src_A.flatten(), src_B.flatten()
+    tilized_A, tilized_B = tilize_operands(src_A, dims_A, src_B, dims_B, formats.input_format)
 
     # The reader kernels' job: block (o, k) of in0, and block k of in1 again for every o.
     order = [(o, k) for o in range(out_blocks) for k in range(k_blocks)]
-    in0 = _blocks_in_pop_order(
-        tilized_A,
-        out_blocks * rt,
-        kt,
-        rt,
-        kb,
-        [o for o, _ in order],
-        [k for _, k in order],
-    )
-    in1 = _blocks_in_pop_order(
-        tilized_B, kt, ct, kb, ct, [k for _, k in order], [0] * len(order)
-    )
+    in0 = blocks_in_pop_order(tilized_A, out_blocks * rt, kt, rt, kb, order)
+    in1 = blocks_in_pop_order(tilized_B, kt, ct, kb, ct, [(k, 0) for _, k in order])
 
     configuration = TestConfig(
         cpp_source("llk2_dfb_compute_api_test.cpp"),

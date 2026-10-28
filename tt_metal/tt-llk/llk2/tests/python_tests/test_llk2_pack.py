@@ -31,8 +31,8 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     TemplateParameter,
 )
-from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+from llk2_common import DEST_HALF_TILES, tilize_operands, unwrap_case
 from llk2_paths import cpp_source, include_dirs
 
 ACCUMULATING_PASSES = 3  # > 2: the Dest sections wrap around
@@ -69,14 +69,14 @@ def _combinations():
                     # L1 adds Float32, Float16_b and Float16 only (Packers/Accumulation.md).
                     if l1_acc and fmt.output_format == DataFormat.Bfp8_b:
                         continue
-                    for dims in generate_matmul_dimension_combinations(4, kt_dims=[1, 2]):
+                    for dims in generate_matmul_dimension_combinations(DEST_HALF_TILES[DestAccumulation.Yes], kt_dims=[1, 2]):
                         combos.append((fmt, dest_acc, relu, l1_acc, dims))
     return combos
 
 
 @parametrize(case=_combinations())
 def test_llk2_pack(case):
-    (formats, dest_acc, relu, l1_acc, (dims_A, dims_B)),  = case  # parametrize wraps one-axis tuples
+    formats, dest_acc, relu, l1_acc, (dims_A, dims_B) = unwrap_case(case)
     torch_format = format_dict[formats.output_format]
     math_fidelity = MathFidelity.LoFi
     passes = ACCUMULATING_PASSES if l1_acc else 1
@@ -118,11 +118,7 @@ def test_llk2_pack(case):
     if passes > 1:
         golden = PackGolden.accumulate_l1([golden] * passes, formats.output_format)
 
-    if formats.input_format != DataFormat.Bfp8_b:
-        tilized_A = tilize_block(src_A, dimensions=dims_A, stimuli_format=formats.input_format)
-        tilized_B = tilize_block(src_B, dimensions=dims_B, stimuli_format=formats.input_format)
-    else:
-        tilized_A, tilized_B = src_A, src_B
+    tilized_A, tilized_B = tilize_operands(src_A, dims_A, src_B, dims_B, formats.input_format)
 
     configuration = TestConfig(
         cpp_source("llk2_pack_compute_api_test.cpp"),
@@ -134,9 +130,9 @@ def test_llk2_pack(case):
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
-            tilized_A.flatten(),
+            tilized_A,
             formats.input_format,
-            tilized_B.flatten(),
+            tilized_B,
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,

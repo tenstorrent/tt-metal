@@ -16,7 +16,7 @@
 #include "llk_memory_checks.h"
 #include "params.h"
 
-// Globals
+// ckernel_globals.h declares these extern; unp_cfg_context is the unpack context unpack.h flips.
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -26,14 +26,14 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "compute_api/dest.h"
 #include "compute_api/pack.h"
 
-constexpr DataFormat src_format  = static_cast<DataFormat>(UNPACK_A_IN);
-constexpr DataFormat out_format  = static_cast<DataFormat>(PACK_OUT);
-constexpr DataFormat dest_format = llk2::kernel_settings.dest_fp32 ? DataFormat::Float32 : DataFormat::Float16_b; // every format here is a B format
+constexpr DataFormat src_format = static_cast<DataFormat>(UNPACK_A_IN);
+constexpr DataFormat out_format = static_cast<DataFormat>(PACK_OUT);
 constexpr llk2::copy_modifiers mods {.transpose = TRANSPOSE};
 
 inline constexpr auto& src_spec = llk2::l1_spec<TILES_Y * llk2::default_tile_dim, TILES_X * llk2::default_tile_dim, src_format>;
 inline constexpr auto& out_spec = llk2::l1_spec<TILES_Y * llk2::default_tile_dim, TILES_X * llk2::default_tile_dim, out_format>;
-inline constexpr auto& acc_spec = llk2::dst_spec<TILES_Y * llk2::default_tile_dim, TILES_X * llk2::default_tile_dim, dest_format>;
+inline constexpr auto& acc_spec =
+    llk2::dst_spec<TILES_Y * llk2::default_tile_dim, TILES_X * llk2::default_tile_dim, llk2::kernel_dest_format>; // every format here is a B format
 
 // The Resolver must make the choice the harness made for the same test: the register format, and whether the
 // tiles go straight to Dest.

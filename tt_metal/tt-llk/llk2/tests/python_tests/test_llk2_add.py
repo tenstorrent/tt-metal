@@ -35,11 +35,9 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+from llk2_common import DEST_HALF_TILES, TILE_DIM
 from llk2_paths import cpp_source, include_dirs
 
-TILE_DIM = 32
-# Output tiles that fit one half of Dest (the test uses half sync): 8 with a 16-bit Dest, 4 with a 32-bit one.
-DEST_HALF_TILES = {DestAccumulation.No: 8, DestAccumulation.Yes: 4}
 TILE_GRIDS = [(1, 1), (1, 3), (2, 2), (2, 4), (4, 1)]  # (rt, ct)
 
 
