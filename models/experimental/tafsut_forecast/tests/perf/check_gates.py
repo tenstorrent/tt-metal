@@ -24,8 +24,10 @@ is taken once per session (``SESSION_STAMP``) with ``started_at``; a record star
 The porcelain covers the floor files too (D4 item 4).
 
 Row-indexed drift (D4 items 1-2): ``bias_row_drift_max`` and ``spread_ratio_row_drift_max`` (and their ``f2_`` forms)
-are derived from the per-row vectors of the candidate and its fixed record and gated by their floors; a record
-without the vectors, or with a different active set, fails them as missing. A drift with ``toward_one`` is
+are derived from the per-row vectors of the candidate and its fixed record and gated by their floors: each row's
+distance from the interval between the reference and its fixed-record value (v1.27). A record without the vectors,
+with a different active set, or with a NaN/inf in them fails; a candidate None where the fixed record has a value
+fails (only the v1.14 population rule, None in both records, is n/a). A drift with ``toward_one`` is
 ``|candidate - 1| <= |baseline - 1| + abs`` (D4 item 5: re-centred, so a fixed record off 1 does not fail itself).
 
 Key families (v1.24, D3 item 1): a metric ``f2_<m>`` is forward 2 (teacher-forced) of ``<m>``, same direction. A
@@ -38,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -135,19 +138,42 @@ def _by_key(records: list[dict]) -> dict:
     return {(r["name"], r["precision"]): r for r in records}
 
 
+# v1.27: a row passes when it lies within the bound of the interval between the reference and the fixed record
+ROW_REF = {"bias_row_drift_max": 0.0, "spread_ratio_row_drift_max": 1.0}
+
+
+def _outside(x, x0, ref) -> float:
+    """Distance of ``x`` from [min(ref, x0), max(ref, x0)]; inf for NaN, inf or a missing value (v1.27: fail closed)."""
+    if x is None or x0 is None or not math.isfinite(x) or not math.isfinite(x0):
+        return math.inf
+    return max(min(ref, x0) - x, x - max(ref, x0), 0.0)
+
+
 def row_drift(r: dict, b: dict | None) -> dict:
-    """The row-indexed drift metrics of ``r`` against its fixed record ``b``, with the worst row index of each."""
+    """The row-indexed drift metrics of ``r`` against its fixed record ``b``, with the worst row index of each.
+
+    v1.27: the drift of row i is its distance from the interval between the reference (bias 0, spread ratio 1) and
+    the fixed record's value, so a row that moves toward the reference passes; rows that moved toward it by more than
+    the row's own bound are listed in ``<metric>_improved``. A NaN or inf in either vector, or a candidate vector that
+    is missing or None (or on another active set) where the fixed record has one, is inf: it fails the floor."""
     out = {}
-    for fam in {_family(k) for k in r}:
+    for fam in {_family(k) for k in r} | {_family(k) for k in (b or {})}:
         idx, idx0 = r.get(fam + "row_active_idx"), (b or {}).get(fam + "row_active_idx")
         for metric, vec in ROW_DRIFT.items():
             v, v0 = r.get(fam + vec), (b or {}).get(fam + vec)
-            if v is None or v0 is None or idx != idx0 or len(v) != len(v0):
+            if v0 is None:
+                continue  # no fixed-record vector: the floor reports the metric as missing
+            if v is None or idx != idx0 or len(v) != len(v0):
+                out[fam + metric], out[fam + metric + "_row"] = math.inf, None
                 continue
-            d = [abs(x - y) for x, y in zip(v, v0)]
+            ref = ROW_REF[metric]
+            d = [_outside(x, y, ref) for x, y in zip(v, v0)]
             i = max(range(len(d)), key=d.__getitem__) if d else None
-            out[fam + metric] = max(d, default=0.0)
+            out[fam + metric] = d[i] if d else 0.0
             out[fam + metric + "_row"] = idx[i] if i is not None else None
+            out[fam + metric + "_improved"] = [
+                idx[j] for j, (x, y) in enumerate(zip(v, v0)) if d[j] == 0.0 and abs(x - ref) < abs(y - ref) - 1e-12
+            ]
     return out
 
 
@@ -214,8 +240,13 @@ def check(
                     print(f"FAIL family {key[0]}/{key[1]} {fam}*: no {what}")
                     failures.append(f"{key} {fam}* family: no {what}")
         for metric, floor in floors.items():
-            if metric in r and r[metric] is None:  # v1.14: skipped for too few active rows
-                print(f"n/a  floor {key[0]}/{key[1]} {metric}: not applicable (n_active={r.get('active_rows')})")
+            if metric in r and r[metric] is None:
+                b0 = base_by.get(key)
+                if b0 is None or b0.get(metric) is None:  # v1.14: too few active rows, in the fixed record too
+                    print(f"n/a  floor {key[0]}/{key[1]} {metric}: not applicable (n_active={r.get('active_rows')})")
+                    continue
+                print(f"FAIL floor {key[0]}/{key[1]} {metric}: None, the fixed record has {b0[metric]}")  # v1.27
+                failures.append(f"{key} {metric}: None against the fixed record's value")
                 continue
             v = r.get(metric)
             if v is None:
@@ -225,8 +256,10 @@ def check(
             rel = "in" if isinstance(floor, list) else "<=" if _base(metric) in LOWER_IS_BETTER else ">="
             at = f" (row {r[metric + '_row']})" if metric + "_row" in r else ""
             print(f"{'ok  ' if ok else 'FAIL'} floor {key[0]}/{key[1]} {metric} {v:.6g} {rel} {floor}{at}")
+            if r.get(metric + "_improved"):
+                print(f"improved {key[0]}/{key[1]} {metric}: rows {r[metric + '_improved']} moved toward the reference")
             if not ok:
-                failures.append(f"{key} {metric} {v} vs floor {floor}")
+                failures.append(f"{key} {metric} {v} vs floor {floor}" + (at and f" row {r[metric + '_row']}"))
         for metric, tol in drift.items():
             if "ref" in tol:
                 path = (gates_dir or DEFAULT_GATES.parent) / tol["ref"]

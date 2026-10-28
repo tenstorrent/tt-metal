@@ -21,6 +21,11 @@ precision with the broken forward's family replaced, so the other forward passes
 least one floor or drift check (against the fixed round-0 records) per case, forward and precision, **beyond the
 checks the golden itself fails** when scored the same way (``golden``, scored first; D4 item 5). Exit status 1 otherwise.
 
+v1.27: the golden is scored with its own row vectors (bias 0, spread ratio 1 on every row) and must pass every
+drift; ``level_shift_rows`` and ``shift10pct`` (+/-0.05) and the one-row ``band1.3x`` / ``band0.7x`` probes come in both signs, and the
+sign that moves a probed row away from the reference must fail (the other is reported). The golden's own failures
+are subtracted by (metric, row).
+
 Row vectors (D4 items 1-2): the per-row signed bias and spread ratio of a broken record are the fixed record's device
 rows with the broken output's own row change composed onto them, ``e0_i + e_i`` and ``r0_i x r_i``. This is exact for
 the shift and band-scaling probes (the bias is linear in the output; a band scaled about its quantile mean scales its
@@ -69,9 +74,9 @@ def lag1(head):
     return h.reshape(head.shape)
 
 
-def shift_rows(head, rows):
+def shift_rows(head, rows, sign=1.0):
     h = head.clone()
-    h[rows] += LEVEL_SHIFT
+    h[rows] += sign * LEVEL_SHIFT
     return h
 
 
@@ -103,16 +108,23 @@ def broken(g_head):
             shift_rows(g_head, idx[: math.ceil(0.1 * len(idx))]),
             f"{math.ceil(0.1 * len(idx))} of {len(idx)} active rows",
         ),
+        "shift10pct-": (
+            shift_rows(g_head, idx[: math.ceil(0.1 * len(idx))], -1.0),
+            f"{math.ceil(0.1 * len(idx))} of {len(idx)} active rows",
+        ),
         "lag1": (lag1(g_head), "all rows"),
     }
     gen = torch.Generator().manual_seed(0)
     n = min(n_shift_rows(g_head.shape[0]), len(idx))
     for p in range(PLACEMENTS):
         rows = idx[torch.randperm(len(idx), generator=gen)[:n]]
-        out[f"level_shift_rows#{p}"] = (shift_rows(g_head, rows), f"{n} of {len(idx)} active rows {rows.tolist()[:4]}")
+        what = f"{n} of {len(idx)} active rows {rows.tolist()[:4]}"
+        out[f"level_shift_rows#{p}"] = (shift_rows(g_head, rows), what)
+        out[f"level_shift_rows-#{p}"] = (shift_rows(g_head, rows, -1.0), what)  # v1.27: both signs
     for p in range(PLACEMENTS):
         row = idx[torch.randint(len(idx), (1,), generator=gen)]
         out[f"band1.3x_row#{p}"] = (scale_band(g_head, row, 1.3), f"active row {int(row)}")
+        out[f"band0.7x_row#{p}"] = (scale_band(g_head, row, 0.7), f"active row {int(row)}")
     if not bool((~act).any()):  # no inactive rows: the "broken" output is the golden itself
         del out["inactive_collapsed"]
     return out
@@ -128,9 +140,20 @@ def case_inputs(name, k=0):
 
 
 def check_id(failure: str) -> str:
-    """``<metric>`` or ``<metric> drift`` of a check_gates failure line (its values stripped)."""
+    """``<metric>[ drift][ row <i>]`` of a check_gates failure line, its values stripped (v1.27: by metric and row)."""
     rest = failure.split(") ", 1)[-1].split(" ")
-    return rest[0] + (" drift" if len(rest) > 1 and rest[1] == "drift" else "")
+    row = f" row {rest[rest.index('row') + 1]}" if "row" in rest[1:-1] else ""
+    return rest[0] + (" drift" if len(rest) > 1 and rest[1] == "drift" else "") + row
+
+
+def away(name: str, e0: list, r0: list, e: list, r: list) -> bool:
+    """v1.27: whether a one-row probe moves a probed row away from the reference on the device rows (required to
+    fail); the toward sign is reported but may pass. Every other broken output is required to fail."""
+    if name.startswith(("level_shift_rows", "shift10pct")):
+        return any(abs(d) > 1e-9 and (x == 0 or (x > 0) == (d > 0)) for x, d in zip(e0, e))
+    if name.startswith("band"):
+        return any(abs(q - 1) > 1e-9 and (q > 1) == (x >= 1) for x, q in zip(r0, r))
+    return True
 
 
 def score(gates, base, quiet=True):
@@ -166,7 +189,15 @@ def score(gates, base, quiet=True):
                 for precision in ("accuracy", "performance"):
                     b = base_by.get((shape, precision), {})
                     mp = dict(m)
-                    if fam + "bias_row_vec" in b:  # the probe composed onto the fixed record's device rows
+                    required = True
+                    if fam + "bias_row_vec" in b and name != "golden":  # composed onto the fixed record's device rows
+                        required = away(
+                            name,
+                            b[fam + "bias_row_vec"],
+                            b[fam + "spread_ratio_row_vec"],
+                            m["bias_row_vec"],
+                            m["spread_ratio_row_vec"],
+                        )
                         mp["bias_row_vec"] = [x + y for x, y in zip(b[fam + "bias_row_vec"], m["bias_row_vec"])]
                         mp["spread_ratio_row_vec"] = [
                             x * y for x, y in zip(b[fam + "spread_ratio_row_vec"], m["spread_ratio_row_vec"])
@@ -188,6 +219,7 @@ def score(gates, base, quiet=True):
                             "rows": what,
                             "precision": precision,
                             "fails": beyond,
+                            "required": required,
                             "golden_also_fails": len(fails) - len(beyond),
                             "metrics": {kk: v for kk, v in m.items() if not isinstance(v, list)},
                         }
@@ -221,8 +253,9 @@ def main():
         )
         print(
             f"{r['shape']:15s} f{r['forward']} {r['precision']:11s} {r['broken']:19s} ({r['rows']}): fails {len(r['fails'])} {short}{extra}"
+            + ("" if r["required"] else " (toward the reference: may pass)")
         )
-        if not r["fails"]:
+        if not r["fails"] and r["required"]:
             bad.append(f"{r['shape']}/f{r['forward']}/{r['precision']}/{r['broken']}")
     if args.out:
         args.out.write_text(json.dumps({"stamp": st, "results": results}, indent=1) + "\n")

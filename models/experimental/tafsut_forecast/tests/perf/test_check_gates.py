@@ -126,17 +126,17 @@ def test_row_drift_gated():
     row whose own bias is already large (no relative term); missing vectors or a different active set fail."""
     r = dict(REC, **ROWS)
     assert not check([r], [r], GATES_ROW)
-    assert CG.row_drift(r, r) == {
+    assert {k: v for k, v in CG.row_drift(r, r).items() if not k.endswith("_improved")} == {
         "bias_row_drift_max": 0.0,
         "bias_row_drift_max_row": 0,
         "spread_ratio_row_drift_max": 0.0,
         "spread_ratio_row_drift_max_row": 0,
     }
-    shifted = dict(r, bias_row_vec=[0.0, -0.006, 0.01])  # +0.05 on row 3 (e0 -0.056)
+    shifted = dict(r, bias_row_vec=[0.0, -0.106, 0.01])  # -0.05 on row 3 (e0 -0.056): away from the reference
     assert any("bias_row_drift_max" in f for f in check([shifted], [r], GATES_ROW))
     assert CG.row_drift(shifted, r)["bias_row_drift_max_row"] == 3
     assert not check([dict(r, bias_row_vec=[0.02, -0.07, 0.0])], [r], GATES_ROW)  # under 0.03 on every row
-    band = dict(r, spread_ratio_row_vec=[1.0, 1.43, 0.9])  # 1.3x on row 3
+    band = dict(r, spread_ratio_row_vec=[1.0, 1.43, 0.9])  # 1.3x on row 3 (r0 1.1): away from 1
     assert any("spread_ratio_row_drift_max" in f for f in check([band], [r], GATES_ROW))
     assert check([REC], [r], GATES_ROW)  # no vectors: missing
     assert check([dict(r, row_active_idx=[0, 3, 8])], [r], GATES_ROW)  # another active set: missing
@@ -145,6 +145,43 @@ def test_row_drift_gated():
     r2 = dict(REC, **f2)
     g2["drift"] = {"f2_pcc_normalized": {"abs": 1}}
     assert any("f2_bias_row_drift_max" in f for f in check([dict(r2, f2_bias_row_vec=[0.05, -0.056, 0.01])], [r2], g2))
+
+
+def test_row_drift_toward_reference():
+    """v1.27: a row passes inside [min(0, e0) - 0.03, max(0, e0) + 0.03] (spread: around 1 with 0.15), so the golden
+    itself (bias 0, ratio 1 on every row) passes, and moving past the reference by more than the bound fails."""
+    r = dict(REC, **ROWS)
+    golden = dict(r, bias_row_vec=[0.0, 0.0, 0.0], spread_ratio_row_vec=[1.0, 1.0, 1.0])
+    assert not check([golden], [r], GATES_ROW)
+    d = CG.row_drift(golden, r)
+    assert d["bias_row_drift_max"] == 0.0 and d["bias_row_drift_max_improved"] == [3, 7]
+    assert d["spread_ratio_row_drift_max_improved"] == [3, 7]
+    assert not check([dict(r, bias_row_vec=[0.0, -0.006, 0.01])], [r], GATES_ROW)  # +0.05 toward 0 on row 3
+    assert not check([dict(r, bias_row_vec=[0.0, 0.025, 0.01])], [r], GATES_ROW)  # past 0 by 0.025 < 0.03
+    assert check([dict(r, bias_row_vec=[0.0, 0.035, 0.01])], [r], GATES_ROW)  # past 0 by 0.035
+    assert not check([dict(r, spread_ratio_row_vec=[1.0, 0.9, 0.9])], [r], GATES_ROW)  # 1.1 -> 0.9: inside 0.15
+    assert check([dict(r, spread_ratio_row_vec=[1.0, 1.1, 0.74])], [r], GATES_ROW)  # 0.9 -> 0.74: away by 0.16
+
+
+def test_row_drift_fails_closed():
+    """v1.27: a NaN or inf in any row, or a None / missing candidate vector against a fixed-record vector, fails."""
+    r = dict(REC, **ROWS)
+    for bad in (float("nan"), float("inf"), -float("inf"), None):
+        for vec in ("bias_row_vec", "spread_ratio_row_vec"):
+            v = list(r[vec])
+            v[2] = bad  # after the first row: max() would have dropped a NaN here
+            assert check([dict(r, **{vec: v})], [r], GATES_ROW), (vec, bad)
+    assert check([dict(r, bias_row_vec=None)], [r], GATES_ROW)
+    assert CG.row_drift(dict(r, bias_row_vec=None), r)["bias_row_drift_max"] == float("inf")
+    no_vec = {k: v for k, v in r.items() if k != "spread_ratio_row_vec"}
+    assert CG.row_drift(no_vec, r)["spread_ratio_row_drift_max"] == float("inf")
+
+
+def test_none_against_value_fails():
+    """v1.27: a candidate None skips its floor only when the fixed record is None too (v1.14 population rule)."""
+    g = {"floors": {"*/accuracy": {"spread_ratio_p50": [0.98, 1.02]}}, "drift": {}}
+    assert not check([dict(REC, spread_ratio_p50=None)], [dict(REC, spread_ratio_p50=None)], g)
+    assert check([dict(REC, spread_ratio_p50=None)], [REC], g)
 
 
 def test_spread_ratio_p50_toward_one():
@@ -238,11 +275,12 @@ def test_g1_proposal_fails_broken():
     assert {r["broken"] for r in results} >= {"level_shift", "lag1", "sign_flip", "collapsed", "shift10pct"}
     assert {(r["shape"], r["forward"]) for r in results} >= {("long_horizon", 2), ("horizon4", 2)}
     assert {r["broken"] for r in results} >= {"level_shift_rows#0", "band1.3x_row#0"}  # D4 items 1-2
+    assert {r["broken"] for r in results} >= {"level_shift_rows-#0", "band0.7x_row#0"}  # v1.27: both signs
     golden = [r for r in results if r["broken"] == "golden"]
     assert golden and not [r for r in golden if r["fails"] or r["golden_also_fails"]]  # D4 item 5: no vacuous catch
     passed = [
         f"{r['shape']}/f{r['forward']}/{r['precision']}/{r['broken']}"
         for r in results
-        if not r["fails"] and r["broken"] != "golden"
+        if not r["fails"] and r["required"] and r["broken"] != "golden"
     ]
     assert set(passed) <= PENDING_RULING, passed
