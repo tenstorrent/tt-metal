@@ -37,7 +37,8 @@ def _partial(mesh_device, parts):
     """parts [tp, B, dim] -> device i holds parts[i] as [1,1,B,dim] (DRAM, bf16), like a row-parallel output."""
     tp, B, dim = parts.shape
     return ttnn.from_torch(
-        parts.reshape(1, 1, B, tp * dim),
+        # [tp, B, dim] -> [B, tp, dim] first so column block i (device i under ShardTensorToMesh dim=3) is parts[i].
+        parts.permute(1, 0, 2).reshape(1, 1, B, tp * dim),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
@@ -59,7 +60,7 @@ def _residual(mesh_device, res, dar):
 
 
 @torch.no_grad()
-@parametrize_mesh_tp()
+@parametrize_mesh_tp(trace_region_size=268435456)  # the test captures a trace
 @pytest.mark.parametrize("B", [1, 8, 32], ids=["B1", "B8", "B32"])
 def test_decode_ar_fuse_residual(mesh_device, B, reset_seeds, ensure_gc):
     os.environ.setdefault("HF_MODEL", model_path())

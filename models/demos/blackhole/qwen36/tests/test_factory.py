@@ -320,14 +320,15 @@ def _resolve_mesh_shape(max_tp=8):
     return (1, min(len(ttnn.get_device_ids()), max_tp))
 
 
-def parametrize_mesh_tp(max_tp=8):
+def parametrize_mesh_tp(max_tp=8, trace_region_size=None):
     """Parametrize a TP test over the env-selected mesh shape + FABRIC_1D.
 
     Mirrors the idiom the qwen TP tests used inline: ``MESH_DEVICE=P150`` -> (1,1),
     ``P150x4`` -> (1,4), ``P150x8`` -> (1,8); otherwise (1, min(num_devices, max_tp)).
     The mesh shape
     gets an explicit ``RxC`` id so node names (and ``pcc_thresholds.json`` mesh
-    keys) are readable.
+    keys) are readable. ``trace_region_size`` (optional) is added to ``device_params`` for
+    tests that capture a trace; when None the conftest fallback applies (unchanged behaviour).
     """
     shape = _resolve_mesh_shape(max_tp)
     # Local import to keep this test helper's module load light (see module docstring).
@@ -344,6 +345,7 @@ def parametrize_mesh_tp(max_tp=8):
                     if os.environ.get("QWEN36_FABRIC_RING") == "1"
                     else ttnn.FabricConfig.FABRIC_1D,
                     "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE,
+                    **({"trace_region_size": trace_region_size} if trace_region_size is not None else {}),
                 }
             ],
             indirect=True,

@@ -69,9 +69,11 @@ void kernel_main() {
             }
         }
         if constexpr (fuse_residual) {
-            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_residual);
+            // DEST_TO_SRCB: sum (DST) -> SrcB, residual (CB) -> SrcA, i.e. residual + sum, the same
+            // operand order as the unfused ttnn.add(residual, all_reduce_out).
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_residual);
             for (uint32_t i = 0; i < num_tiles_to_pack; ++i) {
-                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                     cb_residual, p * max_dst_tiles + i, i);
             }
         }
