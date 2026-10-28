@@ -493,10 +493,18 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize2_EvenC) {
     CompareKernelVsComposite({1U, 1U, 1U, 126U});  // C = 126 (even)
 }
 
-// Frozen gamma (e.g. under LoRA): the backward skips dL/dgamma, on the resident and the streaming path.
+// Frozen gamma (e.g. under LoRA): the backward skips dL/dgamma, on the resident and the streaming path. add_grad drops
+// the gradient of a frozen gamma by itself, so the program cache is what shows the skip: after a trained run of the
+// same shape, the frozen run compiles exactly one program, the backward without dL/dgamma.
 TEST_F(RMSNormOpTest, RMSNorm_Compare_FrozenGamma) {
-    CompareKernelVsComposite({1U, 1U, 32U, 1024U}, /* train_gamma */ false);
-    CompareKernelVsComposite({1U, 1U, 1U, 16384U}, /* train_gamma */ false);
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->clear_program_cache();
+    for (const auto& shape : {std::vector<uint32_t>{1U, 1U, 32U, 1024U}, std::vector<uint32_t>{1U, 1U, 1U, 16384U}}) {
+        CompareKernelVsComposite(shape, /* train_gamma */ true);
+        const auto num_programs = device->num_program_cache_entries();
+        CompareKernelVsComposite(shape, /* train_gamma */ false);
+        EXPECT_EQ(device->num_program_cache_entries(), num_programs + 1U) << "C = " << shape[3];
+    }
 }
 
 // Test training-like shapes with NanoLlama dimensions
@@ -535,8 +543,9 @@ namespace {
 
 constexpr float kEps = 1e-6F;
 // Max error over max |expected|, per index of dim 0. bf16 rounding alone is up to 2^-8 of the peak, so 1e-2 is ~2.5x
-// that; dx also carries the bf16 1/rms error (up to 2^-7).
+// that. dx also carries the bf16 1/rms error (up to 2^-7), so its budget is 2^-8 + 2^-7 ~ 1.2e-2.
 constexpr double kTol = 1e-2;
+constexpr double kDxTol = 1.5e-2;
 
 struct Shape {
     uint32_t batch;
@@ -678,7 +687,8 @@ Reference reference(const Inputs& in, const xt::xarray<float>& dy, const Shape& 
 // Bounds the error per index of dim 0: one head for the head-major rms and dx, one batch for the head-merged out and
 // dgate, the whole tensor for dgamma.
 template <typename Got>
-void expect_close(const Got& got, const xt::xarray<double>& expected, const std::string& label) {
+void expect_close(
+    const Got& got, const xt::xarray<double>& expected, const std::string& label, const double tol = kTol) {
     ASSERT_EQ(got.shape(), expected.shape()) << label;
     const size_t num_slices = expected.shape()[0];
     const size_t slice_size = expected.size() / num_slices;
@@ -693,8 +703,32 @@ void expect_close(const Got& got, const xt::xarray<double>& expected, const std:
                 max_err = err;
             }
         }
-        EXPECT_LE(max_err, kTol * peak) << label << " [" << slice << "]: max error " << max_err << " vs peak " << peak;
+        EXPECT_LE(max_err, tol * peak) << label << " [" << slice << "]: max error " << max_err << " vs peak " << peak;
     }
+}
+
+// In the negative tail of the gate dgate is ~1e-7 of the peak, far below what expect_close resolves, so dgate is also
+// bounded per element relative to itself, by kDxTol: like dx, each element carries the bf16 1/rms error on top of its
+// own bf16 rounding. The floor skips zeros and values below the bf16 normal range.
+template <typename Got>
+void expect_dgate_close(const Got& got, const xt::xarray<double>& expected, const std::string& label) {
+    constexpr double kFloor = 1e-30;
+    expect_close(got, expected, label);
+    double max_rel = 0.0;
+    size_t worst = 0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+        const double magnitude = std::abs(expected.data()[i]);
+        if (magnitude < kFloor) {
+            continue;
+        }
+        const double rel = std::abs(static_cast<double>(got.data()[i]) - expected.data()[i]) / magnitude;
+        if (!(rel <= max_rel)) {
+            max_rel = rel;
+            worst = i;
+        }
+    }
+    EXPECT_LE(max_rel, kDxTol) << label << ": max relative error " << max_rel << " at " << worst << ", expected "
+                               << expected.data()[worst] << ", got " << got.data()[worst];
 }
 
 struct RMSNormCase {
@@ -769,14 +803,14 @@ TEST_P(RMSNormOpParamTest, MatchesReference) {
         const std::string suffix = compute_dgamma ? "" : " without dgamma";
         const auto bw = ttml::metal::rmsnorm_bw(x, gamma, fw[1].value(), dy, compute_dgamma, gate);
         ASSERT_EQ(bw.size(), 3U);
-        expect_close(ttml::core::to_xtensor(bw[0].value()), ref.dx, "dx" + suffix);
+        expect_close(ttml::core::to_xtensor(bw[0].value()), ref.dx, "dx" + suffix, kDxTol);
         ASSERT_EQ(bw[1].has_value(), compute_dgamma);
         if (compute_dgamma) {
             expect_close(ttml::core::to_xtensor(bw[1].value()), ref.dgamma, "dgamma");
         }
         ASSERT_EQ(bw[2].has_value(), c.gated);
         if (c.gated) {
-            expect_close(ttml::core::to_xtensor(bw[2].value()), ref.dgate, "dgate" + suffix);
+            expect_dgate_close(ttml::core::to_xtensor(bw[2].value()), ref.dgate, "dgate" + suffix);
         }
     }
 }
@@ -795,58 +829,74 @@ TEST_F(RMSNormOpTest, GatedForwardWithoutIntermediates) {
     expect_close(ttml::core::to_xtensor(fw[0].value()), ref.out, "out");
 }
 
-// Preallocated launches that hit cached programs must still read and write the new buffers.
+// Preallocated launches that hit cached programs must still read and write the new buffers, with and without
+// dL_dgamma_components.
 TEST_F(RMSNormOpTest, GatedPreallocatedOutputsOnCachedProgram) {
     const Shape s{1, 64, 3, 128};
     constexpr auto dtype = ttnn::DataType::FLOAT32;
     auto* device = &ttml::autograd::ctx().get_device();
+    device->clear_program_cache();
 
-    // Caches the programs with launches on other inputs into fresh outputs. Everything stays alive, so no buffer below
-    // can reuse their addresses.
-    const auto first = make_inputs(s, 29U, dtype, /* gated */ true);
-    const auto first_x = to_device(first.x, dtype);
-    const auto first_gate = to_device(first.gate);
-    const auto first_gamma = to_device(first.gamma);
-    const auto first_dy = to_device(first.dy);
-    const auto first_fw =
-        ttml::metal::rmsnorm_fw(first_x, first_gamma, /* return_intermediates */ true, kEps, first_gate);
-    const auto first_bw = ttml::metal::rmsnorm_bw(
-        first_x, first_gamma, first_fw[1].value(), first_dy, /* compute_dgamma */ true, first_gate);
+    for (const bool compute_dgamma : {true, false}) {
+        const std::string suffix = compute_dgamma ? "" : " without dgamma";
+        // Caches the programs with launches on other inputs into fresh outputs. Everything stays alive, so no buffer
+        // below can reuse their addresses.
+        const auto num_programs_before = device->num_program_cache_entries();
+        const auto first = make_inputs(s, 29U, dtype, /* gated */ true);
+        const auto first_x = to_device(first.x, dtype);
+        const auto first_gate = to_device(first.gate);
+        const auto first_gamma = to_device(first.gamma);
+        const auto first_dy = to_device(first.dy);
+        const auto first_fw =
+            ttml::metal::rmsnorm_fw(first_x, first_gamma, /* return_intermediates */ true, kEps, first_gate);
+        const auto first_bw =
+            ttml::metal::rmsnorm_bw(first_x, first_gamma, first_fw[1].value(), first_dy, compute_dgamma, first_gate);
+        const auto num_programs = device->num_program_cache_entries();
+        // Else the program cache is off and the unchanged count below proves nothing.
+        ASSERT_GT(num_programs, num_programs_before) << "program cache not populated" << suffix;
 
-    const auto in = make_inputs(s, 31U, dtype, /* gated */ true);
-    const auto ref = reference(in, in.dy, s);
-    const auto x = to_device(in.x, dtype);
-    const auto gate = to_device(in.gate);
-    const auto gamma = to_device(in.gamma);
-    const auto dy = to_device(in.dy);
-    const auto out = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
-    const auto rms = ttml::core::zeros(ttnn::Shape(s.rms()), device);
-    const auto da = ttml::core::zeros(ttnn::Shape(s.head_major()), device);
-    const auto dgamma_components = ttml::core::zeros(ttnn::Shape(s.head_major()), device);
-    const auto dgate = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
+        const auto in = make_inputs(s, 31U, dtype, /* gated */ true);
+        const auto ref = reference(in, in.dy, s);
+        const auto x = to_device(in.x, dtype);
+        const auto gate = to_device(in.gate);
+        const auto gamma = to_device(in.gamma);
+        const auto dy = to_device(in.dy);
+        const auto out = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
+        const auto rms = ttml::core::zeros(ttnn::Shape(s.rms()), device);
+        const auto da = ttml::core::zeros(ttnn::Shape(s.head_major()), device);
+        const auto dgamma_components =
+            compute_dgamma ? std::make_optional(ttml::core::zeros(ttnn::Shape(s.head_major()), device)) : std::nullopt;
+        const auto dgate = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
 
-    const auto num_programs = device->num_program_cache_entries();
-    const auto fw = ttnn::prim::ttml_rmsnorm_fw(x, gamma, gate, /* return_intermediates */ true, kEps, rms, out);
-    const auto bw =
-        ttnn::prim::ttml_rmsnorm_bw(x, gamma, rms, dy, gate, /* compute_dgamma */ true, da, dgamma_components, dgate);
-    EXPECT_EQ(device->num_program_cache_entries(), num_programs);
+        const auto fw = ttnn::prim::ttml_rmsnorm_fw(x, gamma, gate, /* return_intermediates */ true, kEps, rms, out);
+        const auto bw =
+            ttnn::prim::ttml_rmsnorm_bw(x, gamma, rms, dy, gate, compute_dgamma, da, dgamma_components, dgate);
+        EXPECT_EQ(device->num_program_cache_entries(), num_programs) << suffix;
 
-    EXPECT_EQ(fw[0].buffer()->address(), out.buffer()->address());
-    EXPECT_EQ(fw[1].buffer()->address(), rms.buffer()->address());
-    EXPECT_EQ(bw[0]->buffer()->address(), da.buffer()->address());
-    EXPECT_EQ(bw[1]->buffer()->address(), dgamma_components.buffer()->address());
-    EXPECT_EQ(bw[2]->buffer()->address(), dgate.buffer()->address());
-    expect_close(ttml::core::to_xtensor(out), ref.out, "preallocated out");
-    expect_close(ttml::core::to_xtensor(rms), ref.rms, "preallocated rms");
-    expect_close(ttml::core::to_xtensor(da), ref.dx, "preallocated dx");
-    expect_close(ttml::core::to_xtensor(dgate), ref.dgate, "preallocated dgate");
-    const xt::xarray<double> components = xt::cast<double>(ttml::core::to_xtensor(dgamma_components));
-    const xt::xarray<double> dgamma = xt::sum(components, {0, 1, 2}, xt::keep_dims);
-    expect_close(dgamma, ref.dgamma, "preallocated dgamma");
+        EXPECT_EQ(fw[0].buffer()->address(), out.buffer()->address());
+        EXPECT_EQ(fw[1].buffer()->address(), rms.buffer()->address());
+        EXPECT_EQ(bw[0]->buffer()->address(), da.buffer()->address());
+        EXPECT_EQ(bw[2]->buffer()->address(), dgate.buffer()->address());
+        expect_close(ttml::core::to_xtensor(out), ref.out, "preallocated out" + suffix);
+        expect_close(ttml::core::to_xtensor(rms), ref.rms, "preallocated rms" + suffix);
+        expect_close(ttml::core::to_xtensor(da), ref.dx, "preallocated dx" + suffix, kDxTol);
+        expect_close(ttml::core::to_xtensor(dgate), ref.dgate, "preallocated dgate" + suffix);
+        ASSERT_EQ(bw[1].has_value(), compute_dgamma);
+        if (compute_dgamma) {
+            EXPECT_EQ(bw[1]->buffer()->address(), dgamma_components->buffer()->address());
+            const xt::xarray<double> components = xt::cast<double>(ttml::core::to_xtensor(*dgamma_components));
+            const xt::xarray<double> dgamma = xt::sum(components, {0, 1, 2}, xt::keep_dims);
+            expect_close(dgamma, ref.dgamma, "preallocated dgamma");
+        }
+    }
 }
 
+// add_grad drops the gradient of a frozen gamma by itself, so the program cache is what shows that the frozen iteration
+// ran the backward without dL/dgamma: it compiles exactly the one program the trained iteration did not.
 TEST_F(RMSNormOpTest, GatedAutogradSkipsFrozenGamma) {
     using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    device->clear_program_cache();
     for (const bool train_gamma : {true, false}) {
         const Shape s{1, 64, 3, 128};
         const auto in = make_inputs(s, 37U, ttnn::DataType::FLOAT32, /* gated */ true);
@@ -854,16 +904,20 @@ TEST_F(RMSNormOpTest, GatedAutogradSkipsFrozenGamma) {
         auto gate = autograd::create_tensor(to_device(*in.gate), /* requires_grad */ true);
         auto gamma = autograd::create_tensor(to_device(in.gamma), /* requires_grad */ train_gamma);
 
+        const auto num_programs = device->num_program_cache_entries();
         auto out = ops::gated_rmsnorm(x, gate, gamma, kEps);
         out->backward();
+        if (!train_gamma) {
+            EXPECT_EQ(device->num_program_cache_entries(), num_programs + 1U);
+        }
 
         const xt::xarray<float> ones = xt::ones<float>(s.head_merged());  // backward() seeds dL/dout with ones
         const auto ref = reference(in, ones, s);
         expect_close(core::to_xtensor(out->get_value()), ref.out, "autograd out");
         ASSERT_TRUE(x->is_grad_initialized());
         ASSERT_TRUE(gate->is_grad_initialized());
-        expect_close(core::to_xtensor(x->get_grad()), ref.dx, "autograd dx");
-        expect_close(core::to_xtensor(gate->get_grad()), ref.dgate, "autograd dgate");
+        expect_close(core::to_xtensor(x->get_grad()), ref.dx, "autograd dx", kDxTol);
+        expect_dgate_close(core::to_xtensor(gate->get_grad()), ref.dgate, "autograd dgate");
         ASSERT_EQ(gamma->is_grad_initialized(), train_gamma);
         if (train_gamma) {
             expect_close(core::to_xtensor(gamma->get_grad()), ref.dgamma, "autograd dgamma");

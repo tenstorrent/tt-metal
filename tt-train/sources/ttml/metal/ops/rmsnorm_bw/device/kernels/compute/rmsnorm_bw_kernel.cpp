@@ -66,11 +66,20 @@ constexpr bool gated = false;
 #endif
 static_assert(
     !gated || everything_fits_in_l1,
-    "Gated mode needs the row resident in L1: cb_du holds the whole row before compute_scale reads it.");
+    "Gated mode needs the row resident in L1: cb_du holds the whole row for the stages after the gate stage.");
 
 // Gradient with respect to the RMSNorm output, read by every stage below. In gated mode cb_dL_out holds the gradient
 // of the gated output rmsnorm(a) * silu(gate), so the stages read du = dL_dout * silu(gate) from cb_du instead.
 constexpr uint32_t cb_rmsnorm_dL_dout_idx = gated ? cb_du_idx : cb_dL_out_idx;
+
+// Gated with frozen gamma: cb_du holds gained_du = (gamma / rms_a) * du instead of du, so compute_dL_da does not form
+// gamma / rms_a again. Trained gamma keeps du, which dL_dgamma_components needs.
+constexpr bool fold_gain = gated && !compute_dgamma;
+
+// DEST registers that hold the gate stage's outputs at commit.
+constexpr uint32_t gate_stage_dL_dgate_register = 0U;
+constexpr uint32_t gate_stage_scale_register = 1U;
+constexpr uint32_t gate_stage_du_register = 3U;
 
 // ============================================================================
 // The following functions are register-only helpers. They perform intermediate
@@ -157,7 +166,13 @@ inline void compute_dL_da(
     mul_binary_tile(rhs_register, tile_register, rhs_register);
 
     // Compute final result: dL_da = gained_dL_dout - rhs
-    compute_gained_dL_dout<cb_scaler_idx>(input_tile_idx, dL_da_register, tile_register);
+    if constexpr (fold_gain) {
+        reconfig_data_format_srca(cb_scaler_idx, cb_du_idx);
+        copy_init(cb_du_idx);
+        copy_tile(cb_du_idx, input_tile_idx, dL_da_register);
+    } else {
+        compute_gained_dL_dout<cb_scaler_idx>(input_tile_idx, dL_da_register, tile_register);
+    }
     sub_binary_tile_init();
     sub_binary_tile(dL_da_register, rhs_register, dL_da_register);
 }
@@ -204,17 +219,78 @@ inline void compute_recip_rms_a_bcasted() {
     pack_and_push(reg_rms_a, cb_recip_rms_a_bcasted_idx);
 }
 
+inline void compute_gate_stage_tile(const uint32_t col, const uint32_t block_idx) {
+    // With q = (gamma / rms_a) * dL_dout: du = dL_dout * silu(gate), dL_dgate = q * silu'(gate) * a, and the scale
+    // component a * (gamma / rms_a) * du. With fold_gain, du_register gets gained_du = q * silu(gate) instead.
+    constexpr uint32_t one = 0x3F800000U;                       // (float)1.0 -> uint32_t
+    const uint32_t q_register = gate_stage_dL_dgate_register;   // gamma / rms_a, q, q * s, q * silu', dL_dgate
+    const uint32_t scale_register = gate_stage_scale_register;  // gate, silu(gate), a, the scale component
+    const uint32_t sigmoid_register = 2U;                       // s, gate, 1 + gate - silu(gate), gamma / rms_a, mask
+    const uint32_t du_register = gate_stage_du_register;        // dL_dout, then du or gained_du
+    // The CB of the tile's last unpack, which the next tile starts on.
+    constexpr uint32_t cb_last_srca = fold_gain ? cb_input_idx : cb_recip_rms_a_bcasted_idx;
+
+    // SrcA is on the previous tile's last CB, or on cb_rms_a (bf16) at the start of a row.
+    compute_scaled_gain<cb_last_srca>(col + block_idx, q_register);
+    reconfig_data_format_srca(cb_recip_rms_a_bcasted_idx, cb_dL_out_idx);
+    copy_init(cb_dL_out_idx);
+    copy_tile(cb_dL_out_idx, block_idx, du_register);
+    mul_binary_tile_init();
+    mul_binary_tile(q_register, du_register, q_register);
+
+    reconfig_data_format_srca(cb_dL_out_idx, cb_gate_idx);
+    copy_init(cb_gate_idx);
+    copy_tile(cb_gate_idx, block_idx, scale_register);
+    copy_tile(cb_gate_idx, block_idx, sigmoid_register);
+    sigmoid_tile_init();
+    sigmoid_tile(sigmoid_register);
+
+    mul_binary_tile_init();
+    mul_binary_tile(scale_register, sigmoid_register, scale_register);
+    mul_binary_tile(fold_gain ? q_register : du_register, scale_register, du_register);
+    mul_binary_tile(q_register, sigmoid_register, q_register);
+
+    copy_init(cb_gate_idx);
+    copy_tile(cb_gate_idx, block_idx, sigmoid_register);
+    sub_binary_tile_init();
+    sub_binary_tile(sigmoid_register, scale_register, sigmoid_register);
+    binop_with_scalar_tile_init();
+    add_unary_tile(sigmoid_register, one);
+    mul_binary_tile_init();
+    mul_binary_tile(q_register, sigmoid_register, q_register);
+
+    reconfig_data_format_srca(cb_gate_idx, cb_input_idx);
+    copy_init(cb_input_idx);
+    copy_tile(cb_input_idx, col + block_idx, scale_register);
+    mul_binary_tile_init();
+    mul_binary_tile(q_register, scale_register, q_register);
+    mul_binary_tile(scale_register, du_register, scale_register);
+    if constexpr (!fold_gain) {
+        compute_scaled_gain<cb_input_idx>(col + block_idx, sigmoid_register);
+        mul_binary_tile_init();
+        mul_binary_tile(scale_register, sigmoid_register, scale_register);
+    }
+
+    if constexpr (do_mask_w) {
+        if (col + block_idx + 1 == Wt) {
+            // Limitation: mask_tile only works when the mask register is immediately next to the data register.
+            reconfig_data_format_srca(cb_last_srca, cb_mask_w_idx);
+            copy_init(cb_mask_w_idx);
+            copy_tile(cb_mask_w_idx, /* tile_idx */ 0, sigmoid_register);
+            mask_tile_init();
+            mask_tile(scale_register, sigmoid_register);
+        }
+    }
+}
+
 inline void compute_du_and_dL_dgate(const uint32_t row) {
-    // For every tile of the row, computes in DEST from one s = sigmoid(gate):
+    // For every tile of the row, computes in DEST from one s = sigmoid(gate), with q = (gamma / rms_a) * dL_dout:
     //   du       = dL_dout * silu(gate), with silu(gate) = gate * s, into cb_du;
-    //   dL_dgate = dL_dout * u * silu'(gate), with silu'(gate) = s * (1 + gate - silu(gate)), into cb_dL_dgate;
-    // where u = (gamma / rms_a) * a is the RMSNorm output before the gate. cb_du keeps the whole row: compute_scale
-    // holds its accumulator in DEST across the row, so du must be complete before it starts.
-    constexpr uint32_t one = 0x3F800000U;  // (float)1.0 -> uint32_t
-    const uint32_t u_register = 0U;        // u, then dL_dout * u, then dL_dout * u * s, then dL_dgate
-    const uint32_t silu_register = 1U;     // gate, then silu(gate)
-    const uint32_t sigmoid_register = 2U;  // s, then gate, then 1 + gate - silu(gate)
-    const uint32_t du_register = 3U;       // a, then dL_dout, then du
+    //   dL_dgate = q * silu'(gate) * a, with silu'(gate) = s * (1 + gate - silu(gate)), into cb_dL_dgate;
+    //   the scale components a * (gamma / rms_a) * du, summed into one cb_scale tile by packer L1 accumulation.
+    // silu'(gate) is evaluated entirely in fp32 DEST; swiglu_gate_bw_block's CB round trips lose precision. With
+    // fold_gain, cb_du gets gained_du = q * silu(gate) instead of du. cb_du keeps the whole row for the later stages.
+    cb_reserve_back(cb_scale_idx, onetile);
     for (uint32_t col = 0; col < Wt; col += block_size) {
         // The input and gamma are read again after this loop, so their waits are cumulative; dL_dout and the gate are
         // not, so their blocks are popped here.
@@ -228,47 +304,18 @@ inline void compute_du_and_dL_dgate(const uint32_t row) {
         cb_reserve_back(cb_dL_dgate_idx, block_size);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             tile_regs_acquire();
-            // SrcA is on the previous tile's gate, or on cb_rms_a at the start of a row; both are bf16.
-            compute_scaled_gain<cb_gate_idx>(col + block_idx, u_register);
-            reconfig_data_format_srca(cb_recip_rms_a_bcasted_idx, cb_input_idx);
-            copy_init(cb_input_idx);
-            copy_tile(cb_input_idx, col + block_idx, du_register);
-            mul_binary_tile_init();
-            mul_binary_tile(u_register, du_register, u_register);
-
-            reconfig_data_format_srca(cb_input_idx, cb_gate_idx);
-            copy_init(cb_gate_idx);
-            copy_tile(cb_gate_idx, block_idx, silu_register);
-            copy_tile(cb_gate_idx, block_idx, sigmoid_register);
-            reconfig_data_format_srca(cb_gate_idx, cb_dL_out_idx);
-            copy_init(cb_dL_out_idx);
-            copy_tile(cb_dL_out_idx, block_idx, du_register);
-            sigmoid_tile_init();
-            sigmoid_tile(sigmoid_register);
-
-            mul_binary_tile_init();
-            mul_binary_tile(u_register, du_register, u_register);
-            mul_binary_tile(silu_register, sigmoid_register, silu_register);
-            mul_binary_tile(du_register, silu_register, du_register);
-            mul_binary_tile(u_register, sigmoid_register, u_register);
-
-            // 1 + gate - silu(gate) keeps its precision in both tails, unlike forms that recover s from 1 - s.
-            reconfig_data_format_srca(cb_dL_out_idx, cb_gate_idx);
-            copy_init(cb_gate_idx);
-            copy_tile(cb_gate_idx, block_idx, sigmoid_register);
-            sub_binary_tile_init();
-            sub_binary_tile(sigmoid_register, silu_register, sigmoid_register);
-            binop_with_scalar_tile_init();
-            add_unary_tile(sigmoid_register, one);
-            mul_binary_tile_init();
-            mul_binary_tile(u_register, sigmoid_register, u_register);
+            compute_gate_stage_tile(col, block_idx);
             tile_regs_commit();
 
             tile_regs_wait();
             pack_reconfig_data_format(cb_du_idx);
-            pack_tile(du_register, cb_du_idx);
+            pack_tile(gate_stage_du_register, cb_du_idx);
             pack_reconfig_data_format(cb_dL_dgate_idx);
-            pack_tile(u_register, cb_dL_dgate_idx);
+            pack_tile(gate_stage_dL_dgate_register, cb_dL_dgate_idx);
+            pack_reconfig_data_format(cb_scale_idx);
+            pack_reconfig_l1_acc(col + block_idx == 0 ? 0U : 1U);
+            pack_tile</* out_of_order_output = */ true>(gate_stage_scale_register, cb_scale_idx, 0U);
+            pack_reconfig_l1_acc(0U);
             tile_regs_release();
         }
         cb_push_back(cb_du_idx, block_size);
@@ -276,6 +323,31 @@ inline void compute_du_and_dL_dgate(const uint32_t row) {
         cb_pop_front(cb_dL_out_idx, block_size);
         cb_pop_front(cb_gate_idx, block_size);
     }
+    cb_push_back(cb_scale_idx, onetile);
+}
+
+inline void reduce_scale() {
+    // Reduces the accumulated scale tile in cb_scale along the inner dimension (C) and pushes it back reduced.
+    cb_wait_front(cb_scale_idx, onetile);
+    const uint32_t reduced_scale_register = 0U;
+    tile_regs_acquire();
+
+    // NOTE: Currently, there is a bug in reduce_tile that causes precision issues. To avoid this, we use a
+    // workaround of matmul with appropriate scale. Once the bug is fixed, we can switch back to reduce_tile.
+    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
+    reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
+    matmul_init(cb_scale_idx, cb_mat_mul_reduce, 0);
+    matmul_tiles(
+        cb_scale_idx,
+        cb_mat_mul_reduce,
+        /* tile_idx */ 0,
+        /* tile_idx */ 0,
+        reduced_scale_register);
+    tile_regs_commit();
+
+    // Pop the non-reduced scale tile from the CB.
+    cb_pop_front(cb_scale_idx, onetile);
+    pack_and_push(reduced_scale_register, cb_scale_idx);
 }
 
 #ifdef EVERYTHING_FITS_IN_L1
@@ -332,29 +404,7 @@ inline void compute_scale(const uint32_t row) {
     tile_regs_commit();
 
     pack_and_push(scale_register, cb_scale_idx);
-
-    cb_wait_front(cb_scale_idx, onetile);
-    const uint32_t reduced_scale_register = 0U;
-    tile_regs_acquire();
-
-    // Reduce scale along the inner dimension (C).
-
-    // NOTE: Currently, there is a bug in reduce_tile that causes precision issues. To avoid this, we use a
-    // workaround of matmul with appropriate scale. Once the bug is fixed, we can switch back to reduce_tile.
-    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
-    reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
-    matmul_init(cb_scale_idx, cb_mat_mul_reduce, 0);
-    matmul_tiles(
-        cb_scale_idx,
-        cb_mat_mul_reduce,
-        /* tile_idx */ 0,
-        /* tile_idx */ 0,
-        reduced_scale_register);
-    tile_regs_commit();
-
-    // Pop the non-reduced scale tile from the CB.
-    cb_pop_front(cb_scale_idx, onetile);
-    pack_and_push(reduced_scale_register, cb_scale_idx);
+    reduce_scale();
 }
 #else
 inline void compute_scale(const uint32_t row) {
@@ -414,29 +464,7 @@ inline void compute_scale(const uint32_t row) {
     tile_regs_commit();
 
     pack_and_push(scale_register, cb_scale_idx);
-
-    cb_wait_front(cb_scale_idx, onetile);
-    const uint32_t reduced_scale_register = 0U;
-    tile_regs_acquire();
-
-    // Reduce scale along the inner dimension (C).
-
-    // NOTE: Currently, there is a bug in reduce_tile that causes precision issues. To avoid this, we use a
-    // workaround of matmul with appropriate scale. Once the bug is fixed, we can switch back to reduce_tile.
-    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
-    reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
-    matmul_init(cb_scale_idx, cb_mat_mul_reduce, 0);
-    matmul_tiles(
-        cb_scale_idx,
-        cb_mat_mul_reduce,
-        /* tile_idx */ 0,
-        /* tile_idx */ 0,
-        reduced_scale_register);
-    tile_regs_commit();
-
-    // Pop the non-reduced scale tile from the CB.
-    cb_pop_front(cb_scale_idx, onetile);
-    pack_and_push(reduced_scale_register, cb_scale_idx);
+    reduce_scale();
 }
 #endif  // EVERYTHING_FITS_IN_L1
 
@@ -457,10 +485,14 @@ void kernel_main() {
         compute_recip_rms_a_bcasted();
         cb_wait_front(cb_recip_rms_a_bcasted_idx, onetile);
         if constexpr (gated) {
+            // The gate stage accumulates the scale components; its input and gamma waits already cover the row.
             compute_du_and_dL_dgate(row);
+            reduce_scale();
+            cb_wait_front(cb_du_idx, Wt);
+        } else {
+            // To compute scale we must iterate over all inner dimension.
+            compute_scale(row);
         }
-        // To compute scale we must iterate over all inner dimension.
-        compute_scale(row);
         // Wait for the reduced cb_scale to be ready.
         cb_wait_front(cb_scale_idx, onetile);
 

@@ -37,6 +37,7 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
         check_head_merged(input_tensor, tensor_args.gate.value(), op, "Gate");
     }
     if (preallocated_rms_tensor.has_value()) {
+        TT_FATAL(args.return_intermediates, "{}: Preallocated RMS given but return_intermediates is false", op);
         check_device_tensor(preallocated_rms_tensor.value(), op, "Preallocated RMS", in_dram);
         check_shape(preallocated_rms_tensor.value(), op, "Preallocated RMS", get_rms_shape(input_tensor));
     }

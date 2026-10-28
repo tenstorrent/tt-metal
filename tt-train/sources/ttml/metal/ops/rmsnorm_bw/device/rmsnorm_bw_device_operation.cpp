@@ -41,7 +41,7 @@ void RMSNormBackwardDeviceOperation::validate_on_program_cache_miss(
         check_device_tensor(tensor_args.gate.value(), op, "Gate", in_dram);
         check_head_merged(input_tensor, tensor_args.gate.value(), op, "Gate");
     }
-    const auto& output_shape = rmsnorm::get_output_shape(input_tensor, tensor_args.gate);
+    const ttnn::Shape output_shape = rmsnorm::get_output_shape(input_tensor, tensor_args.gate);
     check_shape(dL_dout_tensor, op, "dL_dout", output_shape);
     if (preallocated_da_tensor.has_value()) {
         check_device_tensor(preallocated_da_tensor.value(), op, "Preallocated dL_da", in_dram);

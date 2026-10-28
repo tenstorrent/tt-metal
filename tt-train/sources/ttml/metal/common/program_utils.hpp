@@ -6,7 +6,6 @@
 
 #include <bit>
 #include <cstdint>
-#include <string_view>
 #include <tt-metalium/allocator.hpp>
 #include <type_traits>
 

@@ -22,14 +22,15 @@ inline ttnn::Shape get_rms_shape(const ttnn::Tensor& input) {
 }
 
 // The forward output, dL_dout and dL_dgate take the gate's head-merged shape in gated mode and the input's otherwise.
-inline const ttnn::Shape& get_output_shape(const ttnn::Tensor& input, const std::optional<ttnn::Tensor>& gate) {
+inline ttnn::Shape get_output_shape(const ttnn::Tensor& input, const std::optional<ttnn::Tensor>& gate) {
     return gate.has_value() ? gate->logical_shape() : input.logical_shape();
 }
 
-// A rank-4 input and a gamma of [1, 1, 1, V] for the input's V.
+// A rank-4 input and a gamma of [1, 1, 1, V] for the input's V, both with only tile padding.
 inline void check_input_and_gamma_shapes(const ttnn::Tensor& input, const ttnn::Tensor& gamma, std::string_view op) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 4U, "{}: Input must be rank 4, got shape {}", op, input_shape);
+    check_tile_padding(input, op, "Input");
     check_shape(gamma, op, "Gamma", ttnn::Shape({1U, 1U, 1U, input_shape[-1]}));
 }
 

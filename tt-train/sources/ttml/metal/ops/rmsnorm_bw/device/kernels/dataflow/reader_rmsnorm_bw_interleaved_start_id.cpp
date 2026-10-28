@@ -42,6 +42,10 @@ constexpr bool gated = true;
 constexpr bool gated = false;
 #endif
 
+#if defined(GATED) && !defined(EVERYTHING_FITS_IN_L1)
+#error "Gated mode needs EVERYTHING_FITS_IN_L1, like the compute kernel: streaming would read the gate twice."
+#endif
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
     uint32_t input_address = get_arg_val<uint32_t>(runtime_args_counter++);

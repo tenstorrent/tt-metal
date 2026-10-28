@@ -289,7 +289,8 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     }
 
     RMSNormBackwardKernels kernels;
-    // An absent gate or output appends zero accessor args, so the kernels' offsets do not depend on the mode.
+    // An absent gate or output still appends a null accessor (two zero-valued args), so the offsets do not depend on
+    // the mode.
     std::vector<uint32_t> reader_compile_time_args{packed_scaler, block_size, mask_w, Wt, layout_Ht, layout_num_heads};
     tt::tt_metal::TensorAccessorArgs(buffers.input).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(buffers.gamma).append_to(reader_compile_time_args);

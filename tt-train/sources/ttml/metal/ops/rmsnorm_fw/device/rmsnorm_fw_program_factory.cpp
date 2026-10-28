@@ -270,7 +270,8 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     RMSNormForwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{
         packed_scaler, packed_eps, mask_w, Wt, block_size, layout_Ht, layout_num_heads};
-    // An absent gate or rms appends zero accessor args, so the kernels' offsets do not depend on the mode.
+    // An absent gate or rms still appends a null accessor (two zero-valued args), so the offsets do not depend on the
+    // mode.
     tt::tt_metal::TensorAccessorArgs(buffers.input).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(buffers.gamma).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(buffers.gate).append_to(reader_compile_time_args);

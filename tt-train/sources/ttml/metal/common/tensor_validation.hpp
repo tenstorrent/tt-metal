@@ -70,15 +70,32 @@ inline void check_device_tensor(
     }
 }
 
-// Checks that `tensor` has the logical shape `expected`.
+// Checks that `tensor` is padded only up to whole tiles. Kernels that take tile counts from the padded shape and masks
+// from the logical one misplace tiles under custom padding, even when the logical shapes match.
+inline void check_tile_padding(const ttnn::Tensor& tensor, std::string_view op, std::string_view name) {
+    auto expected_padded = tensor.logical_shape();
+    expected_padded[-2] = tt::round_up(expected_padded[-2], tt::constants::TILE_HEIGHT);
+    expected_padded[-1] = tt::round_up(expected_padded[-1], tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        tensor.padded_shape() == expected_padded,
+        "{}: {} padded shape {} must be its logical shape {} rounded up to whole tiles",
+        op,
+        name,
+        tensor.padded_shape(),
+        tensor.logical_shape());
+}
+
+// Checks that `tensor` has the logical shape `expected` and only tile padding, so its tile grid follows from it.
 inline void check_shape(
     const ttnn::Tensor& tensor, std::string_view op, std::string_view name, const ttnn::Shape& expected) {
     TT_FATAL(
         tensor.logical_shape() == expected, "{}: {} shape {} must be {}", op, name, tensor.logical_shape(), expected);
+    check_tile_padding(tensor, op, name);
 }
 
 // Checks that `head_merged` [B, 1, T, H*V] holds the tokens of `head_major` [B*H, 1, T, V] for a whole number of
-// heads H, with the heads side by side in the last dim. Heads must start on tile boundaries unless H == 1.
+// heads H, with the heads side by side in the last dim. Heads must start on tile boundaries unless H == 1, and
+// `head_merged` must have only tile padding.
 inline void check_head_merged(
     const ttnn::Tensor& head_major, const ttnn::Tensor& head_merged, std::string_view op, std::string_view name) {
     const auto& major_shape = head_major.logical_shape();
@@ -115,6 +132,7 @@ inline void check_head_merged(
         name,
         merged_shape,
         major_shape);
+    check_tile_padding(head_merged, op, name);
 }
 
 // Checks that `tensor` lives on the same device as `reference`. Kernels are handed raw buffer addresses,
