@@ -513,3 +513,4 @@ check (F196 / F197); host times stay hidden until verified warm.
   prepared_program.generic_op 21 ms (120 calls), str.replace 13 ms (1170 calls: kernel source templated per call),
   combine_plan.build_mc 12 ms (3 builds/chunk), begin_chunk +10 ms. Flat itself: ~443 ms/chunk ttnn dispatch
   (3575 calls, ~124 us each: host dispatch-bound, device 308 ms), engram host rows ~100 ms/chunk on the critical path.
+- 07:19 OWNER: A. Fast-forwarded origin dnijemcevic/model_bringup d762b21db30..74c043c800e (= model_bringup_galaxy tip; galaxy pushed 2dc76a55232..74c043c800e). Both branches identical; next owner rebase: git rebase --rebase-merges or rerere trained on c9ba76f8618, else the 16-file fork conflicts recur.
