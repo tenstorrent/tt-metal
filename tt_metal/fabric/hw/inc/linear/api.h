@@ -1802,4 +1802,5 @@ FORCE_INLINE void fabric_sparse_multicast_noc_scatter_write(
 
 }  // namespace tt::tt_fabric::linear::experimental
 
+// API IMPL files for new architectures will be included here as they are added
 #include "tt_metal/fabric/hw/inc/linear/tt-1xx/api_impl.h"
