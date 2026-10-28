@@ -29,6 +29,8 @@
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
+using ttml::test_utils::adamw::error_metrics;
+
 struct AdamWFullPrecisionCase {
     std::array<std::size_t, 4> shape;  // (B, H, S, C)
     float lr{1e-3f};
@@ -124,6 +126,11 @@ public:
         }
     }
 
+    // Bias-correct the next step with these beta powers, as the kernel takes them, instead of beta^t.
+    void set_beta_powers(float beta1_pow, float beta2_pow) {
+        m_beta_powers = {beta1_pow, beta2_pow};
+    }
+
     // Perform one optimization step
     // grads should be bf16 precision (truncated)
     xt::xarray<float> step(const xt::xarray<float>& grads) {
@@ -134,11 +141,13 @@ public:
         // v_t = beta2 * v_{t-1} + (1 - beta2) * grad^2
         m_second_moment = m_beta2 * m_second_moment + (1.0f - m_beta2) * (grads * grads);
 
-        float bias_correction1 = 1.0f - std::pow(m_beta1, static_cast<float>(m_steps));
+        float bias_correction1 =
+            1.0f - (m_beta_powers ? m_beta_powers->first : std::pow(m_beta1, static_cast<float>(m_steps)));
         // m_hat = m_t / (1 - beta1^t)
         xt::xarray<float> first_moment_hat = m_first_moment / bias_correction1;
 
-        float bias_correction2 = 1.0f - std::pow(m_beta2, static_cast<float>(m_steps));
+        float bias_correction2 =
+            1.0f - (m_beta_powers ? m_beta_powers->second : std::pow(m_beta2, static_cast<float>(m_steps)));
 
         // For AMSGrad: use max of past squared gradients
         xt::xarray<float> denom;
@@ -177,6 +186,7 @@ private:
     float m_weight_decay;
     bool m_amsgrad;
     size_t m_steps;
+    std::optional<std::pair<float, float>> m_beta_powers;
     xt::xarray<float> m_master_weights;
     xt::xarray<float> m_first_moment;
     xt::xarray<float> m_second_moment;
@@ -458,17 +468,6 @@ static void run_effective_betas_step_and_compare(bool use_beta_setters) {
     auto master_weights_tensor = device_master_weights.at("theta")->get_value(autograd::PreferredPrecision::FULL);
     auto actual = core::to_xtensor(master_weights_tensor);
 
-    auto error_metrics = [](const xt::xarray<float>& reference, const xt::xarray<float>& candidate) {
-        float sum_error = 0.0f;
-        float max_error = 0.0f;
-        for (size_t i = 0; i < reference.size(); ++i) {
-            float error = std::abs(reference.flat(i) - candidate.flat(i));
-            sum_error += error;
-            max_error = std::max(max_error, error);
-        }
-        return std::pair<float, float>(sum_error / static_cast<float>(reference.size()), max_error);
-    };
-
     const float mean_error_tolerance = 1e-7f;
     const float max_error_tolerance = 1e-6f;
     auto [mean_error, max_error] = error_metrics(w_cpu, actual);
@@ -515,10 +514,10 @@ using ttml::test_utils::two_core_group_rows_shape;
 using namespace ttml::test_utils::adamw;
 
 // Without weight decay the kernel skips the decay multiply; launch B changes every scalar of launch A.
-constexpr AdamWStepScalars kScalarsA{1e-3F, 0.9F, 0.999F, 10U, 1e-8F, 0.0F};
-constexpr AdamWStepScalars kScalarsB{1e-2F, 0.5F, 0.9F, 3U, 1e-3F, 0.1F};
+const AdamWStepScalars kScalarsA = step_scalars(1e-3F, 0.9F, 0.999F, 10U, 1e-8F, 0.0F);
+const AdamWStepScalars kScalarsB = step_scalars(1e-2F, 0.5F, 0.9F, 3U, 1e-3F, 0.1F);
 // AMSGrad keeps weight decay at 0, as kAMSGradCases does (#46121).
-constexpr AdamWStepScalars kAmsgradScalarsB{1e-2F, 0.5F, 0.9F, 3U, 1e-3F, 0.0F};
+const AdamWStepScalars kAmsgradScalarsB = step_scalars(1e-2F, 0.5F, 0.9F, 3U, 1e-3F, 0.0F);
 
 // The parameter's mean and max error tolerances; the moments take the max one.
 struct Tolerances {
@@ -560,16 +559,18 @@ AdamWValues adamw_reference(const AdamWLaunchTensors& tensors, const AdamWStepSc
     const bool amsgrad = tensors.max_exp_avg_sq.has_value();
     CPUAdamWFullPrecision cpu_opt(
         scalars.lr, scalars.beta1, scalars.beta2, scalars.epsilon, scalars.weight_decay, amsgrad);
+    // The step count only feeds the bias corrections, which take the launch's beta powers instead.
     if (amsgrad) {
         cpu_opt.set_state(
             tensors.param.before,
             tensors.exp_avg.before,
             tensors.exp_avg_sq.before,
-            scalars.steps,
+            0U,
             tensors.max_exp_avg_sq->before);
     } else {
-        cpu_opt.set_state(tensors.param.before, tensors.exp_avg.before, tensors.exp_avg_sq.before, scalars.steps);
+        cpu_opt.set_state(tensors.param.before, tensors.exp_avg.before, tensors.exp_avg_sq.before, 0U);
     }
+    cpu_opt.set_beta_powers(scalars.beta1_pow, scalars.beta2_pow);
     xt::xarray<float> param = cpu_opt.step(tensors.grad.before);
     AdamWValues values{
         std::move(param), tensors.grad.before, cpu_opt.first_moment(), cpu_opt.second_moment(), std::nullopt};
@@ -579,31 +580,17 @@ AdamWValues adamw_reference(const AdamWLaunchTensors& tensors, const AdamWStepSc
     return values;
 }
 
-std::pair<float, float> mean_and_max_error(const xt::xarray<float>& reference, const xt::xarray<float>& actual) {
-    float sum_error = 0.0f;
-    float max_error = 0.0f;
-    for (size_t i = 0; i < reference.size(); ++i) {
-        const float error = std::abs(reference.flat(i) - actual.flat(i));
-        if (!std::isfinite(error)) {
-            return {error, error};  // std::max would skip a NaN
-        }
-        sum_error += error;
-        max_error = std::max(max_error, error);
-    }
-    return {sum_error / static_cast<float>(reference.size()), max_error};
-}
-
 // The moments are computed outright rather than as a small update of a larger value, so they carry the kernel's
 // rounding at full scale and take only the max tolerance; a stale address or a stale beta moves them far more.
 void expect_close_to_reference(
     const AdamWValues& expected, const AdamWValues& actual, const Tolerances& tolerances, const std::string& label) {
     ASSERT_EQ(expected.param.shape(), actual.param.shape()) << label;
-    const auto [param_mean_error, param_max_error] = mean_and_max_error(expected.param, actual.param);
+    const auto [param_mean_error, param_max_error] = error_metrics(expected.param, actual.param);
     EXPECT_LT(param_mean_error, tolerances.mean_error) << label << ": param";
     EXPECT_LT(param_max_error, tolerances.max_error) << label << ": param";
     auto expect_close = [&](const xt::xarray<float>& reference, const xt::xarray<float>& result, const char* name) {
         ASSERT_EQ(reference.shape(), result.shape()) << label << ": " << name;
-        EXPECT_LT(mean_and_max_error(reference, result).second, tolerances.max_error) << label << ": " << name;
+        EXPECT_LT(error_metrics(reference, result).max_error, tolerances.max_error) << label << ": " << name;
     };
     expect_close(expected.exp_avg, actual.exp_avg, "exp_avg");
     expect_close(expected.exp_avg_sq, actual.exp_avg_sq, "exp_avg_sq");
@@ -619,7 +606,7 @@ void expect_each_stale_scalar_detectable(
     const AdamWLaunchTensors& tensors, const AdamWStepScalars& scalars, const AdamWStepScalars& cached) {
     const auto expected = adamw_reference(tensors, scalars);
     for (const auto& [name, stale] : stale_scalar_variants(scalars, cached)) {
-        const float mean_error = mean_and_max_error(expected.param, adamw_reference(tensors, stale).param).first;
+        const float mean_error = error_metrics(expected.param, adamw_reference(tensors, stale).param).mean_error;
         EXPECT_GT(mean_error, kFp32Tolerances.mean_error) << "a stale " << name << " is too close to tell apart";
     }
 }

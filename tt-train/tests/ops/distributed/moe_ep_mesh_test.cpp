@@ -13,21 +13,19 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <array>
+#include <cstddef>
 #include <cstdint>
-#include <numeric>
-#include <random>
 #include <string>
 #include <tuple>
 #include <vector>
 
+#include "../moe_test_utils.hpp"
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "test_utils/mesh_utils.hpp"
 #include "test_utils/program_cache.hpp"
-#include "test_utils/random_data.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 
 namespace {
@@ -71,26 +69,23 @@ EpInputs make_inputs(uint32_t S, const std::vector<uint16_t>& leids, uint32_t se
     const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(device);
     const auto shard = ttnn::distributed::shard_tensor_to_mesh_mapper(device, 0);
 
-    const auto dispatched =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{kD, kB, S, kH}, -1.F, 1.F, seed);
-    const auto scores =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{kD, kB, S, kK}, 0.F, 0.5F, seed + 1U);
-    xt::xarray<uint16_t> metadata = xt::zeros<uint16_t>({kD, kB, S, kK});
-    std::mt19937 gen(seed + 2U);
-    std::array<uint16_t, kE> experts{};
-    for (std::size_t t = 0; t < metadata.size() / kK; ++t) {
-        std::iota(experts.begin(), experts.end(), uint16_t{0});
-        std::shuffle(experts.begin(), experts.end(), gen);
-        for (uint32_t k = 0; k < kK; ++k) {
-            metadata.flat(t * kK + k) = experts[k];
-        }
-    }
+    const auto host = ttml::test_utils::moe::make_moe_host_inputs({
+        .D = kD,
+        .B = kB,
+        .S = S,
+        .H = kH,
+        .E = kE,
+        .K = kK,
+        .seed = seed,
+    });
+    const xt::xarray<uint16_t> metadata = xt::cast<uint16_t>(host.metadata);
     const xt::xarray<uint16_t> leids_xt = xt::adapt(leids, std::vector<std::size_t>{leids.size()});
 
     EpInputs in{
-        from_xtensor<float, ttnn::DataType::BFLOAT16>(dispatched, &device, ttnn::Layout::ROW_MAJOR, replicate.get()),
+        from_xtensor<float, ttnn::DataType::BFLOAT16>(
+            host.dispatched, &device, ttnn::Layout::ROW_MAJOR, replicate.get()),
         from_xtensor<uint16_t, ttnn::DataType::UINT16>(metadata, &device, ttnn::Layout::ROW_MAJOR, replicate.get()),
-        from_xtensor<float, ttnn::DataType::BFLOAT16>(scores, &device, ttnn::Layout::ROW_MAJOR, replicate.get()),
+        from_xtensor<float, ttnn::DataType::BFLOAT16>(host.scores, &device, ttnn::Layout::ROW_MAJOR, replicate.get()),
         from_xtensor<uint16_t, ttnn::DataType::UINT16>(leids_xt, &device, ttnn::Layout::ROW_MAJOR, shard.get()),
         {},
         metadata,
@@ -107,8 +102,9 @@ ttnn::Tensor ungroup(const ttml::metal::MoeGroupResult& group, uint32_t S) {
     return ttml::metal::moe_ungroup(grouped, plan, offsets, grouped_scores, kELocal, kD, kB, S);
 }
 
-// One device's outputs of moe_group (all but `grouped`, which reaches the check through moe_ungroup) and moe_ungroup.
+// One device's outputs of moe_group and moe_ungroup.
 struct DeviceOutputs {
+    xt::xarray<float> grouped;          // [1, 1, T_cap, H]
     std::vector<uint32_t> counts;       // [E_local]
     std::vector<uint32_t> offsets;      // [E_local + 1]
     std::vector<uint32_t> plan;         // [T_cap]
@@ -128,6 +124,7 @@ std::vector<std::vector<T>> per_device(const ttnn::Tensor& tensor) {
 
 std::vector<DeviceOutputs> read_outputs(const ttml::metal::MoeGroupResult& group, const ttnn::Tensor& ungrouped) {
     const auto& [grouped, grouped_scores, k_slot, counts, offsets, plan] = group;
+    auto grouped_values = ttml::core::to_xtensor<float>(grouped, ttml::core::IdentityComposer{});
     const auto counts_values = per_device<uint32_t>(counts);
     const auto offsets_values = per_device<uint32_t>(offsets);
     const auto plan_values = per_device<uint32_t>(plan);
@@ -138,7 +135,8 @@ std::vector<DeviceOutputs> read_outputs(const ttml::metal::MoeGroupResult& group
     outputs.reserve(ungrouped_values.size());
     for (std::size_t d = 0; d < ungrouped_values.size(); ++d) {
         outputs.push_back(
-            {counts_values.at(d),
+            {std::move(grouped_values.at(d)),
+             counts_values.at(d),
              offsets_values.at(d),
              plan_values.at(d),
              k_slot_values.at(d),
@@ -150,9 +148,9 @@ std::vector<DeviceOutputs> read_outputs(const ttml::metal::MoeGroupResult& group
 
 // Checks one device's outputs against the tokens routed to its expert ids. moe_group lists the tokens that picked the
 // device's expert e in plan[offsets[e], offsets[e + 1]), padded with sentinel entries, each with the slot of its
-// routing that picked the expert (k_slot) and its score there (grouped_scores); every plan entry past the last expert
-// is a sentinel. moe_ungroup then gives every token the sum of its scores for the device's experts times its hidden
-// row, and zero when the token picked none of them.
+// routing that picked the expert (k_slot), its score there (grouped_scores) and its hidden row (the row of grouped);
+// every plan entry past the last expert is a sentinel. moe_ungroup then gives every token the sum of its scores for the
+// device's experts times its hidden row, and zero when the token picked none of them.
 void expect_matches_reference(const DeviceOutputs& out, const EpInputs& in, uint32_t device_index) {
     const std::size_t tokens = in.metadata_values.size() / kK;
     const auto leids_begin = in.leids_values.begin() + device_index * kELocal;
@@ -161,6 +159,7 @@ void expect_matches_reference(const DeviceOutputs& out, const EpInputs& in, uint
     ASSERT_EQ(out.offsets.size(), kELocal + 1U);
     ASSERT_EQ(out.k_slot.size(), out.plan.size());
     ASSERT_EQ(out.grouped_scores.size(), out.plan.size());
+    ASSERT_EQ(out.grouped.size(), out.plan.size() * kH);
     EXPECT_EQ(out.offsets[0], 0U);
 
     for (uint32_t e = 0; e < kELocal; ++e) {
@@ -177,6 +176,7 @@ void expect_matches_reference(const DeviceOutputs& out, const EpInputs& in, uint
 
         std::vector<uint32_t> listed;
         uint32_t wrong_entries = 0U;
+        uint32_t wrong_rows = 0U;
         for (uint32_t i = out.offsets[e]; i < out.offsets[e + 1U]; ++i) {
             const uint32_t t = out.plan[i];
             if (t == kPlanSentinel) {
@@ -186,9 +186,14 @@ void expect_matches_reference(const DeviceOutputs& out, const EpInputs& in, uint
             const bool consistent = t < tokens && out.k_slot[i] < kK && in.metadata_values.flat(slot) == leids[e] &&
                                     out.grouped_scores[i] == in.scores_values.flat(slot);
             wrong_entries += consistent ? 0U : 1U;
+            const float* row = out.grouped.data() + static_cast<std::size_t>(i) * kH;
+            const bool hidden_row =
+                t < tokens && std::equal(row, row + kH, in.dispatched_values.data() + static_cast<std::size_t>(t) * kH);
+            wrong_rows += hidden_row ? 0U : 1U;
             listed.push_back(t);
         }
         EXPECT_EQ(wrong_entries, 0U) << "plan entries of expert " << e << " with a wrong k_slot or grouped_scores";
+        EXPECT_EQ(wrong_rows, 0U) << "rows of grouped for expert " << e << " that are not their token's hidden row";
         std::sort(listed.begin(), listed.end());
         EXPECT_EQ(listed, routed) << "the tokens plan lists for expert " << e;
     }
@@ -211,8 +216,10 @@ void expect_matches_reference(const DeviceOutputs& out, const EpInputs& in, uint
     EXPECT_TRUE(xt::allclose(out.ungrouped, expected, kRtol, kAtol)) << "ungrouped";
 }
 
-// Bit for bit: a later launch must not write into an earlier launch's buffers.
+// Bit for bit: a later launch must not write into an earlier launch's buffers. The pad rows of grouped are never
+// written, so any bits they hold must stay too.
 void expect_unchanged(const DeviceOutputs& actual, const DeviceOutputs& expected) {
+    EXPECT_EQ(ttml::test_utils::count_bit_mismatches(expected.grouped, actual.grouped), 0U) << "grouped";
     EXPECT_EQ(actual.counts, expected.counts) << "counts";
     EXPECT_EQ(actual.offsets, expected.offsets) << "offsets";
     EXPECT_EQ(actual.plan, expected.plan) << "plan";

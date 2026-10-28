@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -21,29 +22,50 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "xtensor/containers/xarray.hpp"
 
-// Launch tensors and checks shared by the AdamW and AdamWFullPrecision program-cache tests.
+// Launch tensors and checks shared by the AdamW and AdamWFullPrecision tests.
 
 namespace ttml::test_utils::adamw {
 
-// The arguments of ttml::metal::adamw that are left out of the program hash. The beta powers are the ones the CPU
-// references use for the step after `steps` completed ones.
+// The mean and max absolute differences of `actual` from `reference`; both non-finite if any difference is.
+struct ErrorMetrics {
+    float mean_error;
+    float max_error;
+};
+
+inline ErrorMetrics error_metrics(const xt::xarray<float>& reference, const xt::xarray<float>& actual) {
+    float sum_error = 0.0F;
+    float max_error = 0.0F;
+    for (std::size_t i = 0; i < reference.size(); ++i) {
+        const float error = std::abs(reference.flat(i) - actual.flat(i));
+        if (!std::isfinite(error)) {
+            return {error, error};  // std::max would skip a NaN
+        }
+        sum_error += error;
+        max_error = std::max(max_error, error);
+    }
+    return {sum_error / static_cast<float>(reference.size()), max_error};
+}
+
+// The arguments of ttml::metal::adamw that are left out of the program hash. The optimizers keep the beta powers apart
+// from the betas, so each is a value of its own that a cache hit could keep.
 struct AdamWStepScalars {
     float lr;
     float beta1;
     float beta2;
-    size_t steps;
+    float beta1_pow;
+    float beta2_pow;
     float epsilon;
     float weight_decay;
 
     bool operator==(const AdamWStepScalars&) const = default;
-
-    [[nodiscard]] float beta1_pow() const {
-        return std::pow(beta1, static_cast<float>(steps + 1U));
-    }
-    [[nodiscard]] float beta2_pow() const {
-        return std::pow(beta2, static_cast<float>(steps + 1U));
-    }
 };
+
+// The scalars of the step after `steps` completed ones, with beta^(steps + 1) as the beta powers.
+inline AdamWStepScalars step_scalars(
+    float lr, float beta1, float beta2, size_t steps, float epsilon, float weight_decay) {
+    const auto t = static_cast<float>(steps + 1U);
+    return {lr, beta1, beta2, std::pow(beta1, t), std::pow(beta2, t), epsilon, weight_decay};
+}
 
 // `scalars` with one of them set to its value in `cached`, named, for each scalar the two differ in: what a hit that
 // kept that one value of the cached program would compute with.
@@ -54,11 +76,12 @@ inline std::vector<std::pair<const char*, AdamWStepScalars>> stale_scalar_varian
         take_cached(stale);
         return stale;
     };
-    const std::array<std::pair<const char*, AdamWStepScalars>, 6> variants = {{
+    const std::array<std::pair<const char*, AdamWStepScalars>, 7> variants = {{
         {"lr", with([&](auto& s) { s.lr = cached.lr; })},
         {"beta1", with([&](auto& s) { s.beta1 = cached.beta1; })},
         {"beta2", with([&](auto& s) { s.beta2 = cached.beta2; })},
-        {"beta powers", with([&](auto& s) { s.steps = cached.steps; })},
+        {"beta1_pow", with([&](auto& s) { s.beta1_pow = cached.beta1_pow; })},
+        {"beta2_pow", with([&](auto& s) { s.beta2_pow = cached.beta2_pow; })},
         {"epsilon", with([&](auto& s) { s.epsilon = cached.epsilon; })},
         {"weight_decay", with([&](auto& s) { s.weight_decay = cached.weight_decay; })},
     }};
@@ -109,8 +132,8 @@ inline ttnn::Tensor launch_adamw(
         scalars.lr,
         scalars.beta1,
         scalars.beta2,
-        scalars.beta1_pow(),
-        scalars.beta2_pow(),
+        scalars.beta1_pow,
+        scalars.beta2_pow,
         scalars.epsilon,
         scalars.weight_decay,
         stochastic_rounding,

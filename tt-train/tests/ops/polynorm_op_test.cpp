@@ -13,12 +13,12 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <tt-metalium/bfloat16.hpp>
 #include <tuple>
 #include <vector>
 
@@ -496,7 +496,7 @@ enum class Output { Allocated, Preallocated };
 xt::xarray<float> make_bf16_uniform(const std::vector<uint32_t>& shape, float min, float max, uint32_t seed) {
     auto values = ttml::test_utils::make_uniform_xarray<float>(shape, min, max, seed);
     for (auto& v : values) {
-        v = std::bit_cast<float>(std::bit_cast<uint32_t>(v) & 0xFFFF0000U);
+        v = static_cast<float>(bfloat16::truncate(v));
     }
     return values;
 }
@@ -666,8 +666,11 @@ BackwardLaunch run_backward(
         launch.preallocated_dL_dx = test_utils::filled_on_device(shape, kUnwrittenSentinel);
     }
     if (preallocate_packed_partials) {
-        launch.preallocated_packed_partials = core::from_xtensor<float, ttnn::DataType::FLOAT32>(
-            filled({shape[0], shape[1], shape[2], kPackedPartialsWidth}, kUnwrittenSentinel), device);
+        launch.preallocated_packed_partials = core::full(
+            ttnn::Shape({shape[0], shape[1], shape[2], kPackedPartialsWidth}),
+            kUnwrittenSentinel,
+            device,
+            ttnn::DataType::FLOAT32);
     }
 
     const auto entries_before = device->num_program_cache_entries();

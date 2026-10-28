@@ -28,6 +28,8 @@
 #include "test_utils/random_data.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
+using ttml::test_utils::adamw::error_metrics;
+
 struct AdamWCase {
     std::array<std::size_t, 4> shape;  // (B, H, S, C)
     float lr{1e-3f};
@@ -104,6 +106,11 @@ public:
         }
     }
 
+    // Bias-correct the next step with these beta powers, as the kernel takes them, instead of beta^t.
+    void set_beta_powers(float beta1_pow, float beta2_pow) {
+        m_beta_powers = {beta1_pow, beta2_pow};
+    }
+
     void step(xt::xarray<float>& params, const xt::xarray<float>& grads) {
         if (m_steps == 0 && m_first_moment.size() == 0) {
             m_first_moment = xt::zeros_like(params);
@@ -120,11 +127,13 @@ public:
         // v_t = beta2 * v_{t-1} + (1 - beta2) * grad^2
         m_second_moment = m_beta2 * m_second_moment + (1.0f - m_beta2) * (grads * grads);
 
-        float bias_correction1 = 1.0f - std::pow(m_beta1, static_cast<float>(m_steps));
+        float bias_correction1 =
+            1.0f - (m_beta_powers ? m_beta_powers->first : std::pow(m_beta1, static_cast<float>(m_steps)));
         // m_hat = m_t / (1 - beta1^t)
         xt::xarray<float> first_moment_hat = m_first_moment / bias_correction1;
 
-        float bias_correction2 = 1.0f - std::pow(m_beta2, static_cast<float>(m_steps));
+        float bias_correction2 =
+            1.0f - (m_beta_powers ? m_beta_powers->second : std::pow(m_beta2, static_cast<float>(m_steps)));
         // v_hat = v_t / (1 - beta2^t)
         xt::xarray<float> second_moment_hat = m_second_moment / bias_correction2;
 
@@ -159,32 +168,11 @@ private:
     float m_weight_decay;
     bool m_amsgrad;
     size_t m_steps;
+    std::optional<std::pair<float, float>> m_beta_powers;
     xt::xarray<float> m_first_moment;
     xt::xarray<float> m_second_moment;
     xt::xarray<float> m_max_second_moment;
 };
-
-struct ErrorMetrics {
-    float mean_error;
-    float max_error;
-    std::string name;
-};
-
-static ErrorMetrics compute_error_metrics(
-    const xt::xarray<float>& reference, const xt::xarray<float>& actual, const std::string& name) {
-    float sum_error = 0.0f;
-    float max_error = 0.0f;
-    size_t count = reference.size();
-
-    for (size_t i = 0; i < count; ++i) {
-        float error = std::abs(reference(i) - actual(i));
-        sum_error += error;
-        max_error = std::max(max_error, error);
-    }
-
-    float mean_error = sum_error / static_cast<float>(count);
-    return {mean_error, max_error, name};
-}
 
 static void run_step_and_compare(const AdamWCase& pc) {
     using namespace ttml;
@@ -261,7 +249,7 @@ static void run_step_and_compare(const AdamWCase& pc) {
     auto result_fused = theta_fused->get_value();
     auto result_fused_cpu = core::to_xtensor(result_fused);
 
-    auto fused_metrics = compute_error_metrics(w_cpu, result_fused_cpu, "AdamW");
+    auto fused_metrics = error_metrics(w_cpu, result_fused_cpu);
 
     const float mean_error_tolerance = 1e-3f;
     const float max_error_tolerance = 1e-2f;
@@ -452,18 +440,18 @@ TEST_F(AdamWWeightDecaySkip1DTest, SkipsDecayOn1DParamsOnly) {
     const float max_error_tolerance = 1e-2f;
 
     // 1-D param must match the NO-weight-decay reference.
-    auto gain_metrics = compute_error_metrics(w1_no_wd, gain_result, "gain_1d");
+    auto gain_metrics = error_metrics(w1_no_wd, gain_result);
     EXPECT_LE(gain_metrics.mean_error, mean_error_tolerance) << "1-D param should not be weight-decayed";
     EXPECT_LE(gain_metrics.max_error, max_error_tolerance) << "1-D param should not be weight-decayed";
 
     // 2-D param must match the weight-decayed reference.
-    auto weight_metrics = compute_error_metrics(w2_with_wd, weight_result, "weight_2d");
+    auto weight_metrics = error_metrics(w2_with_wd, weight_result);
     EXPECT_LE(weight_metrics.mean_error, mean_error_tolerance) << "2-D param should be weight-decayed";
     EXPECT_LE(weight_metrics.max_error, max_error_tolerance) << "2-D param should be weight-decayed";
 
     // Guard against a vacuous pass: the undecayed 1-D result must be clearly distinct from the
     // would-be-decayed reference, i.e. the weight decay is actually large enough to observe.
-    auto skip_vs_decay = compute_error_metrics(w1_with_wd, gain_result, "gain_skip_vs_decay");
+    auto skip_vs_decay = error_metrics(w1_with_wd, gain_result);
     EXPECT_GT(skip_vs_decay.mean_error, mean_error_tolerance)
         << "weight decay too small to distinguish skipping from applying it; test is not meaningful";
 }
@@ -567,7 +555,7 @@ static void run_effective_betas_step_and_compare(bool use_beta_setters) {
     opt.step();
 
     auto result = core::to_xtensor(theta->get_value());
-    auto metrics = compute_error_metrics(w_cpu, result, "effective_betas");
+    auto metrics = error_metrics(w_cpu, result);
 
     const float mean_error_tolerance = 1e-3f;
     const float max_error_tolerance = 1e-2f;
@@ -585,7 +573,7 @@ static void run_effective_betas_step_and_compare(bool use_beta_setters) {
         1.0f - std::pow(constructor_beta2, static_cast<float>(initial_steps)) * effective_beta2;
     xt::xarray<float> w_stale =
         w0 - lr * (m1 / stale_bias_correction1) / (xt::sqrt(v1 / stale_bias_correction2) + epsilon);
-    auto stale_metrics = compute_error_metrics(w_cpu, w_stale, "stale_bias_correction");
+    auto stale_metrics = error_metrics(w_cpu, w_stale);
     EXPECT_GT(stale_metrics.mean_error, mean_error_tolerance)
         << "constructor and effective betas too close to distinguish; test is not meaningful";
 }
@@ -837,8 +825,8 @@ TEST_F(StochasticRoundingTest, NIGHTLY_ErrorComparisonOverMultipleSteps) {
     auto result_stoch = core::to_xtensor(theta_stoch->get_value());
     auto result_det = core::to_xtensor(theta_det->get_value());
 
-    auto stoch_metrics = compute_error_metrics(w_cpu, result_stoch, "Stochastic");
-    auto det_metrics = compute_error_metrics(w_cpu, result_det, "Deterministic");
+    auto stoch_metrics = error_metrics(w_cpu, result_stoch);
+    auto det_metrics = error_metrics(w_cpu, result_det);
 
     EXPECT_LT(stoch_metrics.mean_error, det_metrics.mean_error);
     EXPECT_LT(stoch_metrics.max_error, det_metrics.max_error);
@@ -881,11 +869,12 @@ using ttml::test_utils::same_bits;
 using namespace ttml::test_utils::adamw;
 
 // Without weight decay the kernel skips the decay multiply. Launch B changes every scalar of launch A, each by enough
-// that a hit keeping launch A's value of it alone misses the bf16 tolerance; hence the large lr, epsilon and decay.
-constexpr AdamWStepScalars kScalarsA{1e-3F, 0.9F, 0.999F, 10U, 1e-8F, 0.0F};
-constexpr AdamWStepScalars kScalarsB{5e-2F, 0.5F, 0.9F, 3U, 0.3F, 0.2F};
+// that a hit keeping launch A's value of it alone misses the bf16 tolerance; hence the large lr, epsilon and decay, and
+// a beta2 far enough from launch A's to show through AMSGrad's max with max_exp_avg_sq.
+const AdamWStepScalars kScalarsA = step_scalars(1e-3F, 0.9F, 0.999F, 10U, 1e-8F, 0.0F);
+const AdamWStepScalars kScalarsB = step_scalars(0.1F, 0.5F, 0.5F, 3U, 0.1F, 0.2F);
 // AMSGrad keeps weight decay at 0, as kAMSGradCases does (#46121).
-constexpr AdamWStepScalars kAmsgradScalarsB{5e-2F, 0.5F, 0.9F, 3U, 0.3F, 0.0F};
+const AdamWStepScalars kAmsgradScalarsB = step_scalars(0.1F, 0.5F, 0.5F, 3U, 0.1F, 0.0F);
 
 // run_step_and_compare's tolerances.
 constexpr float kMeanErrorTolerance = 1e-3f;
@@ -917,12 +906,13 @@ AdamWLaunchTensors make_adamw_launch_tensors(const std::vector<uint32_t>& shape,
 AdamWValues adamw_reference(const AdamWLaunchTensors& tensors, const AdamWStepScalars& scalars) {
     const bool amsgrad = tensors.max_exp_avg_sq.has_value();
     CPUAdamW cpu_opt(scalars.lr, scalars.beta1, scalars.beta2, scalars.epsilon, scalars.weight_decay, amsgrad);
+    // The step count only feeds the bias corrections, which take the launch's beta powers instead.
     if (amsgrad) {
-        cpu_opt.set_state(
-            tensors.exp_avg.before, tensors.exp_avg_sq.before, scalars.steps, tensors.max_exp_avg_sq->before);
+        cpu_opt.set_state(tensors.exp_avg.before, tensors.exp_avg_sq.before, 0U, tensors.max_exp_avg_sq->before);
     } else {
-        cpu_opt.set_state(tensors.exp_avg.before, tensors.exp_avg_sq.before, scalars.steps);
+        cpu_opt.set_state(tensors.exp_avg.before, tensors.exp_avg_sq.before, 0U);
     }
+    cpu_opt.set_beta_powers(scalars.beta1_pow, scalars.beta2_pow);
     xt::xarray<float> param = tensors.param.before;
     cpu_opt.step(param, tensors.grad.before);
     AdamWValues values{
@@ -971,7 +961,7 @@ void expect_every_core_differs(const xt::xarray<float>& a, const xt::xarray<floa
 void expect_close_to_reference(const AdamWValues& expected, const AdamWValues& actual, const std::string& label) {
     auto expect_close = [&](const xt::xarray<float>& reference, const xt::xarray<float>& result, const char* name) {
         ASSERT_EQ(reference.shape(), result.shape()) << label << ": " << name;
-        const auto metrics = compute_error_metrics(reference, result, name);
+        const auto metrics = error_metrics(reference, result);
         EXPECT_LE(metrics.mean_error, kMeanErrorTolerance) << label << ": " << name;
         EXPECT_LE(metrics.max_error, kMaxErrorTolerance) << label << ": " << name;
     };
@@ -991,7 +981,7 @@ void expect_each_stale_scalar_detectable(
     const AdamWLaunchTensors& tensors, const AdamWStepScalars& scalars, const AdamWStepScalars& cached) {
     const auto expected = adamw_reference(tensors, scalars);
     for (const auto& [name, stale] : stale_scalar_variants(scalars, cached)) {
-        const auto metrics = compute_error_metrics(expected.param, adamw_reference(tensors, stale).param, name);
+        const auto metrics = error_metrics(expected.param, adamw_reference(tensors, stale).param);
         EXPECT_GT(metrics.mean_error, kMeanErrorTolerance) << "a stale " << name << " is too close to tell apart";
     }
 }
