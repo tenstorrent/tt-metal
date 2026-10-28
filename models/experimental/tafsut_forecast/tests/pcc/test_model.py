@@ -33,7 +33,7 @@ def test_model(device, case, prec):
     print(
         f"[pcc] {case}-{prec}: "
         + " ".join(
-            f"{k}={v:.5f}" if isinstance(v, float) else f"{k}={v}" for k, v in met.items() if not isinstance(v, list)
+            f"{k}={v:.5f}" if isinstance(v, float) else f"{k}={v}" for k, v in met.items() if not isinstance(v, (list, dict))
         )
     )
     rec = {"test": "suite", "name": case, "precision": prec, "rows": int(g["x"].shape[0]), **met}

@@ -49,6 +49,9 @@ All head metrics use the head output at the read-out tokens in normalized space,
     pcc_final       PCC of the single-pass [targets, 9, H] forecast after inverse scaling and band calibration
     pcc_final_spread  PCC of that forecast minus its mean over the quantile axis (data space)
     median_err      worst |median error| / scale over target rows
+    <key>_at        for every ``*_max_err``, ``abs_err_max`` and ``median_err``: where the maximum sits (D7 condition
+                    a): row, read-out token, step in the token's patch, horizon step, quantile, golden and device
+                    value, and the golden row std
 
 ``collapsed(head)`` replaces every quantile by the mean over quantiles: the failure mode these metrics must
 catch (t0-gamma's ``pcc_normalized`` scored 0.99965 on it).
@@ -113,6 +116,31 @@ def spread_ratios(exp: torch.Tensor, got: torch.Tensor) -> torch.Tensor:
     return g / e.clamp_min(1e-300)
 
 
+def argmax_at(head, g_head, rows: torch.Tensor | None = None) -> dict | None:
+    """Where the largest |head - g_head| sits, over ``rows`` (a bool mask; all rows when None)."""
+    idx = torch.arange(g_head.shape[0]) if rows is None else rows.nonzero().flatten()
+    if len(idx) == 0:
+        return None
+    err = (head[idx].double() - g_head[idx].double()).abs().reshape(len(idx), -1)
+    flat = int(err.argmax())
+    r, i = int(idx[flat // err.shape[1]]), flat % err.shape[1]
+    tok, j = divmod(i, Q * P)
+    qi, step = divmod(j, P)
+    return {
+        "row": r, "token": tok, "step": step, "horizon_step": tok * P + step, "quantile": qi,
+        "golden": round(float(g_head[r, tok, j]), 6), "got": round(float(head[r, tok, j]), 6),
+        "row_std": round(float(g_head[r].double().std()), 6),
+    }
+
+
+def med_argmax_at(q, g_q, scale_targets) -> dict:
+    """Where ``median_err`` sits: target row and horizon step."""
+    e = (q[:, Q // 2] - g_q[:, Q // 2]).abs() / scale_targets.reshape(-1, 1)
+    r, h = divmod(int(e.argmax()), e.shape[1])
+    return {"row": r, "horizon_step": h, "golden": round(float(g_q[r, Q // 2, h]), 6),
+            "got": round(float(q[r, Q // 2, h]), 6), "scale": round(float(scale_targets.reshape(-1)[r]), 6)}
+
+
 def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
     rows = row_pccs(g_head, head)
     std = g_head.double().reshape(g_head.shape[0], -1).std(1)
@@ -155,6 +183,10 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
         "row_active_idx": act.nonzero().flatten().tolist(),
         "bias_row_vec": [round(float(v), 7) for v in sbias[act]],
         "spread_ratio_row_vec": [round(float(v), 7) for v in ratio],
+        "flat_max_err_at": argmax_at(head, g_head, flat),
+        "inactive_max_err_at": argmax_at(head, g_head, ~act),
+        "abs_err_max_at": argmax_at(head, g_head),
+        "median_err_at": med_argmax_at(q, g_q, scale_targets),
     }
 
 
@@ -168,8 +200,8 @@ def fmt(m: dict) -> str:
     def one(k, v):
         if v is None:
             return f"{k} n/a"
-        if isinstance(v, list):
-            return ""
+        if v is None or isinstance(v, (list, dict)):
+            return "" if v is not None else f"{k} n/a"
         if isinstance(v, int):
             return f"{k} {v}"
         return f"{k} {v:.3e}" if k in ("median_err", "flat_max_err") else f"{k} {v:.6f}"

@@ -157,7 +157,7 @@ def test_forward_perf(device, shape, precision):
         rec["speedup_vs_cpu"] = rec["cpu_s"] / rec["steady_s"] if rec["cpu_s"] else None
         met, col = gate_case(g, heads, q, 0)
         rec.update(met)
-        rec.update({f"collapsed_{k}": v for k, v in col.items() if not isinstance(v, list)})
+        rec.update({f"collapsed_{k}": v for k, v in col.items() if not isinstance(v, (list, dict))})
         msg = f"\n  metrics:   {M.fmt(met)}\n  collapsed: {M.fmt(col)}"
         if len(xs) > 1:  # forward 2, teacher-forced (CONTRACT §3, D0 amendment 5)
             met2, col2 = gate_case(g, heads, q, 1)
