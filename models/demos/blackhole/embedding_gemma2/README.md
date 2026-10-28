@@ -111,7 +111,7 @@ earlier stages, limitations); identity of the run: `doc/benchmark/identity.json`
 `doc/benchmark/run/`. One P150a, selected precision config, traced, run `20261028-063930` on
 commit `1bcb04d2f0` **[M]**:
 
-| workload | shape | forward p50 ms | request (h2d_d2h) p50 ms | public API p50 ms |
+| workload | shape | forward p50 ms | request (h2d_d2h) p50 ms, excl. host prep | public API p50 ms |
 |---|---|---|---|---|
 | text | 1 x 512 tokens | 6.869 (146 emb/s) | 6.951 | |
 | text | 32 x 128 tokens | 22.227 (1,440 emb/s) | 22.756 | |
@@ -122,7 +122,9 @@ commit `1bcb04d2f0` **[M]**:
 | full model, audio 10 s + text | 260 tokens + 1 clip | 14.170 | 14.353 | 46.994 |
 
 `forward` = trace replay + one sync per iteration (inputs resident); `h2d_d2h` = input upload +
-replay + output readback; public API = `EmbeddingGemma2.encode([item], traced=True)` including the
+replay + output readback, excluding host input preparation (timed separately as `host_prep`: 3.8 ms
+for 1 x 2560 vision, 6.7 ms for 1 x 768 audio, under 0.5 ms for text up to 8192; serial
+throughput with host prep in `doc/benchmark/REPORT.md`); public API = `EmbeddingGemma2.encode([item], traced=True)` including the
 HF processor. 2cq is not supported (one command queue). Vision sustains 5.4 % slower than burst
 after 30 s back to back; text and audio do not throttle.
 
@@ -130,7 +132,7 @@ How to run `tests/perf/perf.py` (from the tt-metal root, environment as in Setup
 quick; every extra is an opt-in env switch (`"1"` = on). They combine, and `-k` picks single cases.
 Costs with a warm weight / kernel cache: the plain run and the all-on run are measured whole
 (16 s and 318 s wall); the per-option deltas are estimated from the per-class log timestamps of the
-full-sweep run:
+full-sweep run, rounded, and sum to the measured 318 s:
 
 | option | adds | about |
 |---|---|---|
@@ -139,7 +141,7 @@ full-sweep run:
 | `EMBEDDING_GEMMA2_PERF_MODES=1` | `h2d_d2h`, `api` (full model) and `2cq` (records "not supported") besides `forward` | +0.3 min |
 | `EMBEDDING_GEMMA2_PERF_LONG=1` | text 1 x 32768 in its own device session | +0.8 min |
 | `EMBEDDING_GEMMA2_PERF_PROBE=1` | text batch-capacity probe at 128 tokens (32 ... 8192, stops at the first OOM) | +0.8 min |
-| `EMBEDDING_GEMMA2_PERF_SUSTAINED=1` | 30 s sustained vs burst per tower at its headline shape | +2.5 min |
+| `EMBEDDING_GEMMA2_PERF_SUSTAINED=1` | 30 s sustained vs burst per tower at its headline shape | +2.3 min |
 | `EMBEDDING_GEMMA2_PERF_HF_CHECK=1` | HF fp32 comparison of the timed output (one shape per tower, every selected full case) | +0.3 min |
 | `EMBEDDING_GEMMA2_PERF_ALL=1` | all of the above: the full sweep of `doc/benchmark/REPORT.md` | 5.3 min |
 

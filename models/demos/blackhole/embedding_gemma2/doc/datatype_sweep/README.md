@@ -388,13 +388,17 @@ concatenation; E5c base 0.7726 at s30 token 267 / 0.7705). For s10 token 126 and
 low cosine is a property of the model (Audio worst-token sensitivity, below); s30 token 559 under
 the selected config was not put through that check **[I: same pattern, not measured]**.
 
-The vision worst-token drop is TT-attributable to the SDPA `exp_approx` lever, not to model
-ill-conditioning **[M]**: on the landscape case the selected `v_exp_bfp8w4` gives 0.708 (token 191)
-against 0.928 for the E5b base and 0.941 for HF bf16 vs HF fp32 (`hf_bf16_soft_token_cos_min`,
-`e6/results_gates_r1.jsonl`); `sdpa_exp_approx` alone gives 0.7265 (video8 frame 2 token 21,
-`e6b/sweep_vision.jsonl`). The impact on the probe is small: the median per-input worst token goes
-from 0.981 (base) to 0.971 (selected) over the 18 probe inputs, and the probe embedding cosine min is
-0.99854 against 0.99869 for the base (`e6b/probe_vision.jsonl`). Worst-token cosine is not gated; the
+The vision worst-token drop on the landscape case is TT-attributable to the combination of SDPA
+`exp_approx` with bfp8 weights on the four layer matmuls (`v_exp_bfp8w4`), not to `exp_approx`
+alone and not to model ill-conditioning **[M]**: landscape worst token is 0.7080 (token 191) for
+`v_exp_bfp8w4`, 0.9273 for `sdpa_exp_approx` alone and 0.9278 for the E5b base
+(`e6b/sweep_vision.jsonl`, `token_cos_per_case`), against 0.941 for HF bf16 vs HF fp32
+(`hf_bf16_soft_token_cos_min`, `e6/results_gates_r1.jsonl`). The single-group bfp8 weight rows do
+not drop landscape either (0.9279 to 0.9816). `exp_approx` alone has its own minimum, 0.7265, on a
+different case only (video8 frame 2 token 21); its landscape value equals the base. On the probe
+(`e6b/probe_vision.jsonl`, 18 inputs) the median per-input worst token is 0.9815 for both the base
+and `sdpa_exp_approx`, and falls to 0.9706 only with `v_exp_bfp8w4`; the probe embedding cosine min
+is 0.99854 for `v_exp_bfp8w4` against 0.99869 for the base. Worst-token cosine is not gated; the
 pre-stated selection policy selects `v_exp_bfp8w4`. The base's own minimum, 0.864 (portrait token
 45), equals HF bf16's 0.866 on the same case: that one is model-intrinsic.
 
@@ -574,10 +578,12 @@ Sustained rises over burst for the selected vision policy at 1 x 2560 (+5.1 %) a
 - The worst-token cosine is lower than the E5 baselines (vision 0.708 vs 0.864, audio 0.697 vs
   0.773) and is not a gate. The audio tokens checked (s10 token 126, s30 token 267) are
   ill-conditioned in the model (below); s30 token 559 is inferred to follow the same pattern, not
-  measured. The vision drop is TT-attributable to SDPA `exp_approx` (landscape 0.708 selected vs
-  0.928 base and 0.941 HF bf16; `exp_approx` alone 0.7265), not model ill-conditioning; probe impact
-  is small (median per-input worst token 0.981 -> 0.971 over 18 inputs, embedding cosine 0.99854 vs
-  0.99869 base). The base's 0.864 (portrait token 45) equals HF bf16's own 0.866 (model-intrinsic).
+  measured. The landscape drop is TT-attributable to `exp_approx` combined with bfp8 layer weights
+  (`v_exp_bfp8w4` 0.708 vs 0.928 base and 0.941 HF bf16), not to `exp_approx` alone (landscape
+  0.9273 = base 0.9278; its 0.7265 minimum is on video8 frame 2 only), and not model
+  ill-conditioning. Probe impact is small: median per-input worst token 0.9815 for base and
+  `sdpa_exp_approx`, 0.9706 with `v_exp_bfp8w4` (18 inputs); embedding cosine 0.99854 vs 0.99869
+  base. The base's 0.864 (portrait token 45) equals HF bf16's own 0.866 (model-intrinsic).
 - `doc/context_contract.json` unchanged: no capacity change (bfp8 weights only shrink DRAM use).
 - `sweep_results.json` holds summary rows for the tower configs (worst metrics, perf medians, probe
   summary; policy and construction evidence for the selected configs and the bases) to stay under

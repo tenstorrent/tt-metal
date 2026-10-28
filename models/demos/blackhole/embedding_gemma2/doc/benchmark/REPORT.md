@@ -9,16 +9,20 @@ This report covers traced latency and throughput for every tower and for the ful
 
 ## Headline (batch 1)
 
-| workload | shape | forward p50 ms | request (h2d_d2h) p50 ms | public API p50 ms | throughput (forward) |
-|---|---|---|---|---|---|
-| text query / short doc | 1 x 128 tokens | 4.852 | 4.930 | | 206 emb/s, 26.4k tok/s |
-| text document | 1 x 512 tokens | 6.869 | 6.951 | | 146 emb/s, 74.5k tok/s |
-| text long document | 1 x 8192 tokens | 93.041 | 93.178 | | 10.7 emb/s, 88.0k tok/s |
-| image (soft tokens) | 1 x 2560 patches | 17.395 | 18.151 | | 57.5 images/s |
-| audio 30 s (soft tokens) | 1 x 768 tokens | 11.961 | 12.775 | | 83.6 clips/s |
-| full model, text only | 472 tokens (bucket 512) | 6.869 | 6.951 | 7.992 | 145.6 emb/s |
-| full model, image + text | 267 tokens + 1 image | 24.229 | 24.698 | 33.730 | 41.3 emb/s |
-| full model, audio 10 s + text | 260 tokens + 1 clip | 14.170 | 14.353 | 46.994 | 70.6 emb/s |
+| workload | shape | forward p50 ms | request (h2d_d2h) p50 ms, excl. host prep | request + host prep, mean ms | public API p50 ms | throughput (forward) | serial throughput (request + host prep) |
+|---|---|---|---|---|---|---|---|
+| text query / short doc | 1 x 128 tokens | 4.852 | 4.930 | 4.992 | | 206 emb/s, 26.4k tok/s | 200 emb/s |
+| text document | 1 x 512 tokens | 6.869 | 6.951 | 7.041 | | 146 emb/s, 74.5k tok/s | 142 emb/s |
+| text long document | 1 x 8192 tokens | 93.041 | 93.178 | 93.656 | | 10.7 emb/s, 88.0k tok/s | 10.7 emb/s |
+| image (soft tokens) | 1 x 2560 patches | 17.395 | 18.151 | 21.937 | | 57.5 images/s | 45.6 images/s |
+| audio 30 s (soft tokens) | 1 x 768 tokens | 11.961 | 12.775 | 19.435 | | 83.6 clips/s | 51.5 clips/s |
+| full model, text only | 472 tokens (bucket 512) | 6.869 | 6.951 | 7.062 | 7.992 | 145.6 emb/s | 141.6 emb/s |
+| full model, image + text | 267 tokens + 1 image | 24.229 | 24.698 | 28.877 | 33.730 | 41.3 emb/s | 34.6 emb/s |
+| full model, audio 10 s + text | 260 tokens + 1 clip | 14.170 | 14.353 | 16.815 | 46.994 | 70.6 emb/s | 59.5 emb/s |
+
+The request (h2d_d2h) column excludes host input preparation (`host_prep`, timed separately; tables
+below). "Request + host prep" is the `h2d_d2h` mean plus the `host_prep` mean of the same record;
+serial throughput is batch / that sum, for one command queue and no overlap between requests.
 
 ## Text tower
 
@@ -58,7 +62,7 @@ Tokenization is not timed for the towers. The full-model `api` rows include it.
 **Batch capacity at 128 tokens.** The probe runs one eager forward per batch, ascending, in one device session with no traces live.
 - Batches 32, 64, 128, 256, 512, 1024, 2048 and 4096 fit.
 - **Batch 8192 fails with a DRAM OOM:** "Not enough space to allocate 570425344 B DRAM buffer across 8 banks ... free: 57827968 B".
-- OOM boundary: the largest fit is 4096 x 128 (524,288 tokens); the first failure is 8192 x 128.
+- OOM boundary: the largest tested fit is 4096 x 128 (524,288 tokens) on a power-of-two ladder; the first failure is 8192 x 128, so the boundary is in [4096, 8192).
 - Only 32 x 128 was timed.
 
 ## Vision tower
@@ -74,7 +78,7 @@ The vision tower runs through `VisionEncoder`, using processor outputs of the in
 | 8 x 1280 | 8 video frames | forward | 69.202 | 69.211 | 69.260 | 69.315 | 69.071 | 115.6 | 69.157 |
 | 8 x 1280 | | h2d_d2h | 71.494 | 71.536 | 71.681 | 71.754 | 71.185 | 111.9 | |
 
-Host input preparation covers pixel padding, positions, RoPE tables, masks and the pooling matrix. Mean ms: 3.753 (1 x 2560), 15.043 (4 x 2560), 11.605 (8 x 1280). At 1 x 2560 it is 20 % of the request, and it is not overlapped with device work.
+Host input preparation covers pixel padding, positions, RoPE tables, masks and the pooling matrix. Mean ms: 3.753 (1 x 2560), 15.043 (4 x 2560), 11.605 (8 x 1280). At 1 x 2560 it is 17 % of the serial total (3.753 of 3.753 + 18.184 = 21.937 ms), and it is not overlapped with device work.
 
 ## Audio tower
 
@@ -112,12 +116,12 @@ The full model runs through `EmbeddingGemma2`, one item per forward, with inputs
 
 Host prep covers the batch tensors and the merge index, timed outside h2d_d2h. Mean ms: 0.112 (text), 4.178 (image), 2.462 (audio).
 
-The `api` rows add the HF processor **[I: by difference of the measured rows]**:
-- Text: about 1 ms.
-- Image: about 9 ms (33.7 - 24.7).
-- 10 s clip: about 33 ms (47.2 - 14.4), from log-mel extraction on the host.
+The `api` rows add the HF processor **[I: by difference of the measured means, api - h2d_d2h - host_prep]**:
+- Text: about 1.0 ms (8.020 - 6.950 - 0.112 = 0.96).
+- Image: about 4.8 ms (33.713 - 24.699 - 4.178 = 4.84).
+- 10 s clip: about 30.4 ms (47.213 - 14.353 - 2.462 = 30.40), from log-mel extraction on the host.
 
-The audio item therefore spends 70 % of its public-API latency on the host.
+The audio item therefore spends 70 % of its public-API latency off the device (47.213 - 14.171 forward = 33.0 ms of 47.2 ms; the processor alone is 64 %).
 
 The full-model device time equals the sum of its towers plus the text pass **[I]**:
 - Image + text: 24.23 ms = vision 1 x 2560 (17.39) + text at 512 (6.87); the sum is 24.26.
@@ -136,9 +140,14 @@ The full-model device time equals the sum of its towers plus the text pass **[I]
 
 Vision slows within 2 s of back-to-back replays: 17.36 ms becomes 17.96 ms at 2.0 s. It keeps drifting to 18.28 ms at 25-30 s; the series is in `run/perf.jsonl`. Text and audio show no drift.
 
-The cause is **[I]** the P150a power and current management lowering AICLK under the vision load. The bfp8 weights and exp_approx SDPA keep the matmul engines busier than the E5b vision code did, and E5b did not throttle. AICLK was not read during the run, because tt-smi cannot share the card with the benchmark.
+What is measured: the drift is specific to the selected vision policy at its larger single-image shapes. In the E6b post-selection bench (same card, same session for both policies; `doc/datatype_sweep/README.md`, `e6b/post_bench_g1.jsonl`) **[M]**:
+- the E5 baseline vision policy is flat at 1 x 2560 (burst 26.115 ms, sustained 26.161 ms);
+- the selected policy drifts at 1 x 2560 (17.355 -> 18.242 ms) and 4 x 2560 (88.565 -> 89.620 ms);
+- the selected policy is flat at 8 x 1280 (69.204 / 69.218 ms).
 
-The 1 x 32768 text case shows the same effect: per-iteration samples range from 647 to 657 ms, and the pipelined mean is 659 ms after 13 s of back-to-back forwards.
+The cause is **[I]** the P150a power and current management lowering AICLK under the selected vision load; it is not confirmed. AICLK and power were not read during the run. Whether tt-smi can read telemetry while the benchmark holds the card is untested **[I]**.
+
+The 1 x 32768 text case drifts too **[I: same pattern, not confirmed by telemetry]**: the `forward` samples rise +1.5 % (647.7 -> 657.4 ms) over the first ~10 iterations and then stay flat (mean of the last 10: 656.7 ms). The `h2d_d2h` mode ran after `forward`, so its samples (mean 663.3 ms) all sit on the drifted plateau. The +9.3 ms gap between the `h2d_d2h` and `forward` means is therefore likely that drift (mode order), not upload **[I]**: the ramp inside the forward mean accounts for 2.8 ms of it; the other 6.6 ms (against the forward plateau) is either further drift or transfer, and this run does not separate the two. At 1 x 32768 the uploads are 128 KB of uint32 ids and a 2 MB keep mask (bf16, tile layout pads it to 32 rows); the readback is one 768-wide embedding.
 
 ## Protocol
 
@@ -147,7 +156,7 @@ The 1 x 32768 text case shows the same effect: per-iteration samples range from 
 A plain `pytest tests/perf/perf.py` is quick: headline shapes in `forward` mode only. Every extra is an opt-in env switch, where `"1"` means on.
 - Switches combine, and `-k` picks single cases.
 - Selection happens at collection time, so `--collect-only` shows exactly what will run.
-- Costs assume a warm weight and kernel cache. The plain run and the all-on run were timed as whole runs. The per-option deltas are **[I]**, estimated from the per-class log timestamps of the full-sweep run.
+- Costs assume a warm weight and kernel cache. The plain run and the all-on run were timed as whole runs. The per-option deltas are **[I]**, estimated from the per-class log timestamps of the full-sweep run and rounded to 0.1 min; they sum to the measured 318 s (5.3 min). The sustained delta is 3 towers x (30 s sustained + 5 burst windows after 3 s idle each), about 2.3 min.
 
 | option | adds | about |
 |---|---|---|
@@ -156,7 +165,7 @@ A plain `pytest tests/perf/perf.py` is quick: headline shapes in `forward` mode 
 | `EMBEDDING_GEMMA2_PERF_MODES=1` | `h2d_d2h`, `api` (full model) and `2cq` (records "not supported") besides `forward` | +0.3 min |
 | `EMBEDDING_GEMMA2_PERF_LONG=1` | text 1 x 32768 in its own device session | +0.8 min |
 | `EMBEDDING_GEMMA2_PERF_PROBE=1` | text batch-capacity probe at 128 tokens (32 ... 8192, stops at the first OOM) | +0.8 min |
-| `EMBEDDING_GEMMA2_PERF_SUSTAINED=1` | 30 s sustained vs burst per tower at its headline shape | +2.5 min |
+| `EMBEDDING_GEMMA2_PERF_SUSTAINED=1` | 30 s sustained vs burst per tower at its headline shape | +2.3 min |
 | `EMBEDDING_GEMMA2_PERF_HF_CHECK=1` | HF fp32 comparison of the timed output (one shape per tower, every selected full case) | +0.3 min |
 | `EMBEDDING_GEMMA2_PERF_ALL=1` | all of the above: the full sweep of this report | 5.3 min (measured 318 s) |
 
@@ -183,7 +192,7 @@ The selection logic was checked without rerunning the full sweep (`tt-ops/runs/e
 - **Throughput:**
   - tokens/s = batch x bucket / mean. For text, every position is a real token; for the full model, logical tokens are counted.
   - embeddings/s and items/s = batch / mean.
-  - Requests do not overlap (one command queue), so request throughput is 1 / h2d_d2h latency.
+  - Requests do not overlap (one command queue). Serial request throughput is batch / (h2d_d2h mean + host_prep mean), because host prep is timed outside `h2d_d2h` and also runs serially. From `run/perf.jsonl`: vision 1 x 2560 45.6 items/s, audio 1 x 768 51.5 clips/s, audio 4 x 256 163 clips/s, text 1 x 512 142 emb/s (headline table, last column).
 - **Checks inside the timed path:**
   - Every case asserts a finite output; full-model cases also assert unit norm.
   - With HF_CHECK (on in the full sweep), the output of the timed replay is compared against HF fp32. All bars are 0.99.
@@ -231,11 +240,11 @@ The E8 numbers reproduce the E6 selected-config numbers within 0.1 % **[M]**. Th
 - **Batch boundary (text, seq 128):** 4096 fits; 8192 is a DRAM OOM. This was measured eagerly, with no traces live, in its own session. With traces of other shapes resident, the boundary can be lower **[I]**. Only 32 x 128 was timed; batches 64 to 4096 were not.
 - **Throttling:** vision sustains 5.4 % slower than burst after 30 s; text and audio do not throttle. Burst numbers are the "short request" figure. For a saturated server, use the sustained vision number.
 - **p99:** with N = 20 it is near the maximum sample, not a tail estimate.
-- **Host work is serial:** vision host prep (3.8-15 ms) and audio feature extraction (about 33 ms for 10 s, from the `api` row) run on the host before upload and do not overlap with device work.
+- **Host work is serial:** vision host prep (3.8-15 ms) and audio feature extraction (about 30.4 ms for 10 s, from the `api` row minus h2d_d2h and host prep) run on the host before upload and do not overlap with device work.
 - **Text 1 x 32768:** this bucket has an HF check from E5a (`doc/context_contract.json`). This run only checks that its output is finite. 65536 was not benchmarked; it has no HF reference (see the contract notes).
 - **Video:** not part of the full-model sweep. The 8 x 1280 vision trace is the video tower number.
 - **Accuracy:** no MTEB or lm-eval, by decision. The HF checks above are cosine and PCC guards only.
-- **Option costs:** the per-option costs in the selection table are estimates from log timestamps. Only the plain run and the all-on run were timed as whole runs.
+- **Option costs:** the per-option costs in the selection table are rounded estimates from log timestamps that sum to the measured 318 s. Only the plain run and the all-on run were timed as whole runs.
 
 ## Next (not done here: this stage measures, it does not tune)
 
@@ -246,9 +255,12 @@ The E8 numbers reproduce the E6 selected-config numbers within 0.1 % **[M]**. Th
 
 ## Reproduce
 
+From the tt-metal root, with a built checkout:
+1. Activate the tt-metal Python environment (`source python_env/bin/activate`), with `TT_METAL_HOME` and `PYTHONPATH` at the checkout root.
+2. Select the card: `export TT_VISIBLE_DEVICES=<card index>`.
+3. Run offline against a local snapshot of `google/embeddinggemma-2` at revision `914f7f89`: `export HF_HUB_OFFLINE=1 HF_MODEL=<path to that snapshot>`.
+
 ```bash
-source /local/ttuser/gtobar/tt-ops/runs/embeddinggemma-2/e1/env.sh   # PYTHONPATH overlay, TT_VISIBLE_DEVICES=0
-export HF_HUB_OFFLINE=1 HF_MODEL=/local/ttuser/.cache/huggingface/hub/models--google--embeddinggemma-2/snapshots/914f7f89142e33e77833254d9c9b90c3cef7303b
 pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -s                              # quick (headline, forward)
 EMBEDDING_GEMMA2_PERF_ALL=1 pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -s  # full sweep (this report)
 ```
@@ -259,4 +271,4 @@ Raw data:
 - `run/run_info.json`: commit, precision hash, versions.
 - `run/device_info.json`.
 
-Identity of the run: `identity.json`. Commands, timestamps and reruns: `RUN_NOTES.md`.
+Identity of the run: `identity.json`. Commands, timestamps, reruns and the host paths used for this run: `RUN_NOTES.md`.
