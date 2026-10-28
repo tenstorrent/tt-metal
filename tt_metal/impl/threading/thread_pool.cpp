@@ -323,7 +323,9 @@ public:
 private:
     void worker_loop();
 
-    bool has_work() const { return !tasks_.empty() || pool_published_job_.load(std::memory_order_seq_cst) != seen_; }
+    bool has_work() const {
+        return !tasks_.empty() || pool_published_job_.load(std::memory_order_seq_cst) != last_seen_job_;
+    }
 
     // Spins briefly, then parks until a producer publishes work or the executor shuts down.
     void wait_for_work() {
@@ -346,7 +348,7 @@ private:
     alignas(64) const uint32_t index_;
     const std::atomic<uint64_t>& pool_published_job_;
     const std::unique_ptr<ParallelJob>* const pool_jobs_;
-    uint64_t seen_ = 0;  // The published word this worker last acted on; worker thread only.
+    uint64_t last_seen_job_ = 0;
     std::exception_ptr stored_exception_;
 };
 
@@ -564,8 +566,9 @@ inline void NumaAwareExecutor::worker_loop() {
             completion_.done();
             continue;
         }
-        if (const uint64_t published = pool_published_job_.load(std::memory_order_acquire); published != seen_) {
-            seen_ = published;
+        if (const uint64_t published = pool_published_job_.load(std::memory_order_acquire);
+            published != last_seen_job_) {
+            last_seen_job_ = published;
             auto* job = pool_jobs_[ParallelJob::slot_of(published)].get();
             if (job->hold(ParallelJob::generation_of(published))) {
                 job->participate(this);
