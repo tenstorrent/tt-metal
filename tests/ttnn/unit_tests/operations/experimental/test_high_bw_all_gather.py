@@ -290,24 +290,35 @@ def _to_torch_with_device_padding(tensor):
     return torch.nn.functional.pad(host_tensor, padding)
 
 
-def _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype, batch_index=None):
+def _assert_exact_all_gather(
+    device_input, persistent_output, mesh_device, dtype, batch_index=None, full_mesh_outer_axis=0
+):
     """The collective performs no arithmetic, so compare the gathered device values exactly.
 
     `batch_index` selects one cache slot of a multi-slot input: the gather reads only that slot, so the
-    reference has to be sliced to it before the ranks are concatenated.
+    reference has to be sliced to it before the ranks are concatenated. `full_mesh_outer_axis=1` expects
+    the ranks in column-major order (c * rows + r) instead of the row-major order the shards come in.
     """
 
     def _slot(tensor):
         return tensor if batch_index is None else tensor[batch_index : batch_index + 1]
 
+    def _rank_order(shards):
+        if full_mesh_outer_axis == 0:
+            return shards
+        rows, cols = tuple(mesh_device.shape)
+        return [shards[r * cols + c] for c in range(cols) for r in range(rows)]
+
     if dtype == ttnn.fp8_e4m3:
-        expected = torch.cat([_slot(payload) for payload in _fp8_payloads(device_input, mesh_device)], dim=2)
+        expected = torch.cat(
+            [_slot(payload) for payload in _rank_order(_fp8_payloads(device_input, mesh_device))], dim=2
+        )
         actual_outputs = _fp8_payloads(persistent_output, mesh_device)
     else:
         # Compare the device representation so quantized types and padding inserted
         # independently into each local tile shard are both represented exactly.
         expected = torch.cat(
-            [_slot(_to_torch_with_device_padding(tensor)) for tensor in ttnn.get_device_tensors(device_input)],
+            [_slot(_to_torch_with_device_padding(t)) for t in _rank_order(ttnn.get_device_tensors(device_input))],
             dim=2,
         )
         actual_outputs = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(persistent_output)]
@@ -433,6 +444,7 @@ def _run_high_bw_all_gather_accuracy(
     metadata_batch_index=None,
     *,
     external_semaphores=False,
+    full_mesh_outer_axis=0,
 ):
     """Exact-output check for one configuration.
 
@@ -525,6 +537,7 @@ def _run_high_bw_all_gather_accuracy(
                 cluster_axis=cluster_axis,
                 num_links=num_links,
                 **external_kwargs,
+                **({"full_mesh_outer_axis": full_mesh_outer_axis} if full_mesh_outer_axis else {}),
             )
 
         # This call carries no per-chunk scalars, so the traced arm proves the op CAPTURES and REPLAYS at
@@ -538,7 +551,14 @@ def _run_high_bw_all_gather_accuracy(
     # main's split: a partial collective replicates rather than concatenating, so it needs the
     # replicated-output compare. Keep the metadata slot index on the full-mesh branch.
     if collective_size == mesh_device.get_num_devices():
-        _assert_exact_all_gather(device_input, persistent_output, mesh_device, dtype, batch_index=metadata_batch_index)
+        _assert_exact_all_gather(
+            device_input,
+            persistent_output,
+            mesh_device,
+            dtype,
+            batch_index=metadata_batch_index,
+            full_mesh_outer_axis=full_mesh_outer_axis,
+        )
     else:
         _assert_exact_replicated_output(host_input, persistent_output, mesh_device, dtype, layout)
 
@@ -1280,6 +1300,38 @@ def test_high_bw_all_gather_full_mesh_open_path_accuracy(mesh_device, submesh_sh
         cluster_axis=None,
         rows_per_device=4,
         num_links=1,
+    )
+
+
+@run_for_blackhole("full-mesh column-major coverage requires Blackhole")
+@pytest.mark.skipif(
+    os.getenv("MESH_DEVICE") != "TG",
+    reason="full-mesh column-major coverage requires MESH_DEVICE=TG",
+)
+@pytest.mark.parametrize("device_params", _FULL_MESH_DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("submesh_shape", [(2, 4), (4, 2), (4, 4)], ids=["2x4", "4x2", "4x4"])
+@pytest.mark.parametrize("full_mesh_outer_axis", [0, 1], ids=["row-major", "column-major"])
+@pytest.mark.parametrize("ag_traced", [False, True], ids=["eager", "traced"])
+def test_high_bw_all_gather_full_mesh_outer_axis_accuracy(mesh_device, submesh_shape, full_mesh_outer_axis, ag_traced):
+    """cluster_axis=None with each mesh axis outermost in the gathered order.
+
+    A TP-deduplicated cache with SP on mesh axis 1 (a 4x4 tray-half stage) holds its shards SP-major,
+    which is column-major on the mesh, so the gather must be able to emit that order. Every rank's shard
+    differs, so a wrong order is a data mismatch even on the square mesh.
+    """
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    _run_high_bw_all_gather_accuracy(
+        submesh,
+        ttnn.bfloat16,
+        width=576,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        expected_page_size=1152,
+        cluster_axis=None,
+        rows_per_device=64,
+        num_links=1,
+        ag_traced=ag_traced,
+        full_mesh_outer_axis=full_mesh_outer_axis,
     )
 
 
