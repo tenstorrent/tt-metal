@@ -103,8 +103,7 @@ def mixed_main_form(fidelity, kb, fp32_dest, in_format, in_format_b, out_format,
         return False
     block = (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
     return (
-        (in_format_b == DataFormat.Float32 and in_format in block)
-        or (in_format == DataFormat.Float32 and in_format_b in block)
+        (in_format == DataFormat.Float32 and in_format_b in block)
         or (not fp32_dest and kb == 1 and not full_sync and in_format == DataFormat.Bfp8_b and in_format_b == DataFormat.Float16_b and out_format == DataFormat.Float32)
     )
 

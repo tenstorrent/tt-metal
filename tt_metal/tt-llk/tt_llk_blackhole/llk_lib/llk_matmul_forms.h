@@ -186,8 +186,9 @@ inline constexpr matmul_main_form_cell matmul_main_form_cells[] = {
 };
 
 // Mixed operand pairs whose keyed forms read slower than main's on the tt-llk mixed sweep (perf_matmul_mix, ABBA against main):
-// Float32 against a block float operand (Bfp8_b or Bfp4_b, either order) at HiFi2, any block, k, DEST, sync and output (up to 9 percent on K 32 rows),
-// and Bfp8_b in in1 against Float16_b in in0 at HiFi2, half sync, 16-bit DEST, one k step (a single tile, 0.2 cycles).
+// Float32 in in1 (the streamed SrcA) against a block float operand (Bfp8_b or Bfp4_b) in in0 at HiFi2, any block, k, DEST, sync and output
+// (the keyed forms read up to 9 percent slower on K 32 rows there), and Bfp8_b in in1 against Float16_b in
+// in0 at HiFi2, half sync, 16-bit DEST, one k step (a single tile, 0.2 cycles). Float32 in in0 keeps the keyed forms, up to 5 percent faster.
 constexpr bool matmul_block_float_format(const DataFormat f)
 {
     return f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b;
@@ -197,7 +198,7 @@ template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_de
 constexpr bool matmul_mixed_main_form()
 {
     return math_fidelity == MathFidelity::HiFi2 &&
-           ((in0 == DataFormat::Float32 && matmul_block_float_format(in1)) || (in1 == DataFormat::Float32 && matmul_block_float_format(in0)) ||
+           ((in1 == DataFormat::Float32 && matmul_block_float_format(in0)) ||
             (!fp32_dest && kt_per_section == 1 && sync == 0 && in1 == DataFormat::Bfp8_b && in0 == DataFormat::Float16_b && out_format == DataFormat::Float32));
 }
 
