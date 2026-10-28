@@ -1204,6 +1204,19 @@ void Cluster::l1_barrier(ChipId chip_id) const {
     this->driver_->l1_membar(chip_id);
 }
 
+void Cluster::l1_barrier(ChipId chip_id, const std::set<tt::tt_metal::CoreCoord>& virtual_cores) const {
+    // UMD treats an empty set as every core on the chip.
+    if (virtual_cores.empty()) {
+        return;
+    }
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
+    std::unordered_set<tt::umd::CoreCoord> cores;
+    for (const auto& core : virtual_cores) {
+        cores.insert(soc_desc.get_coord_at(core, CoordSystem::TRANSLATED));
+    }
+    this->driver_->l1_membar(chip_id, cores);
+}
+
 uint32_t Cluster::get_num_host_channels(ChipId device_id) const {
     bool mmio_capable = this->get_cluster_desc()->is_chip_mmio_capable(device_id);
     return mmio_capable ? this->driver_->get_num_host_channels(device_id) : 0;
