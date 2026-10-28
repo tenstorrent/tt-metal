@@ -977,19 +977,15 @@ inline void calculate_typecast_fp32_to_uint8() {
     }
 }
 
+// The uint8 wrap of any 32-bit input is its low byte: (x + 256) & 0xFF == x & 0xFF (adding 256
+// never touches bits 7:0, mod-2^32 wrap included) and (x & 0xFFFF) & 0xFF == x & 0xFF, so neither a
+// bias nor a UInt16 pre-mask is needed; `u16` is kept for the dispatchers but selects nothing.
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool u16 = false>
 inline void calculate_typecast_uint_to_uint8() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d) {
-        if constexpr (u16) {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-            TTI_SFPAND(0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
-        } else {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-        }
-        TTI_SFPIADD(256, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
+        sfpi::vInt x = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>(ADDR_MOD_7);
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>(ADDR_MOD_6) = x & sfpi::vConstIntPrgm0;
     }
 }
 
@@ -1091,7 +1087,6 @@ inline void init_typecast_uint_to_uint8() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 0xFF;
-    sfpi::vConstIntPrgm1 = UINT16_LOW_MASK;
 }
 
 template <bool APPROXIMATION_MODE>
