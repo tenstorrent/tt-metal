@@ -20,4 +20,8 @@ struct FusedRecurrentGdnProgramConfig {
     std::optional<uint32_t> units_per_core;
 };
 
+// Tokens per call the op accepts: single-token decode and speculative verify with up to 31 draft tokens. Later
+// stages size their per-token scratch (index pages, circular buffers) from this constant.
+inline constexpr uint32_t kFusedRecurrentGdnMaxTokensPerCall = 32;
+
 }  // namespace ttnn::transformer

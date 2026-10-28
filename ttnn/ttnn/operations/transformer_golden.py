@@ -1800,11 +1800,13 @@ def fused_recurrent_gated_delta_rule_golden(
     initial_state=None,
     output_final_state=False,
     output_per_token_state=False,
+    use_qk_l2norm_in_kernel=False,
     use_qk_l2norm=False,
     **_,
 ):
     """Golden of ttnn.transformer.fused_recurrent_gated_delta_rule: the op's argument order (q, k, v, g, beta) over the
-    FLA-ordered recurrence (q, k, v, beta, g). Returns (o, state); state is None unless a state output is requested."""
+    FLA-ordered recurrence (q, k, v, beta, g). Returns (o, state); state is None unless a state output is requested.
+    `use_qk_l2norm_in_kernel` is the op's (FLA's) name of the norm option; `use_qk_l2norm` is the former name."""
     return recurrent_gated_delta_rule(
         q,
         k,
@@ -1814,7 +1816,7 @@ def fused_recurrent_gated_delta_rule_golden(
         scale=scale,
         initial_state=initial_state,
         output_final_state=output_final_state or output_per_token_state,
-        use_qk_l2norm=use_qk_l2norm,
+        use_qk_l2norm=use_qk_l2norm_in_kernel or use_qk_l2norm,
         output_per_token_state=output_per_token_state,
     )
 
