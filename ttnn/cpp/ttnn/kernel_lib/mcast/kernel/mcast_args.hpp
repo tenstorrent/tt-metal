@@ -161,6 +161,9 @@ struct McastArgsImpl<true, METADATA, Runtime, DATA_READY, CONSUMER_READY, SIGNAL
     uint32_t sender_y() const {
         return Runtime::read(mcast_wire::sender_coords_offset(rotating_span) + mcast_wire::SENDER_Y);
     }
+    // The sender coordinate pairs ([SENDER_X, SENDER_Y] per sender), resolved once: hold it across a loop that
+    // signals the sender, instead of calling sender_x()/sender_y() on every iteration.
+    auto sender_coordinates() const { return Runtime::coordinates(mcast_wire::sender_coords_offset(rotating_span)); }
 
 private:
     // A declaration-only fallback capacity keeps this unused decoder well-formed for chain-only layouts.
@@ -182,6 +185,7 @@ struct McastArgsImpl<false, METADATA, Runtime, DATA_READY, CONSUMER_READY, SIGNA
     bool can_send() const { return false; }
     bool can_receive() const { return false; }
     bool should_send(uint32_t) const { return false; }
+    const uint32_t* sender_coordinates() const { return nullptr; }
 
     void sender(const Noc&) const {
         static_assert(dependent_false<METADATA>, "No multicast on this core; a sender pipe cannot be built");

@@ -35,7 +35,10 @@ void kernel_main() {
     mismatches += p.can_receive() != t.can_receive();
     mismatches += p.sender_x() != t.sender_x();
     mismatches += p.sender_y() != t.sender_y();
+    const auto p_from = p.sender_coordinates();
+    const auto t_from = t.sender_coordinates();
     for (uint32_t w = 0; w < 2 * p.num_senders; ++w) {
+        mismatches += p_from[w] != t_from[w];
         mismatches += PositionalRuntime::coordinates(mcast_wire::sender_coords_offset(p.rotating_span))[w] !=
                       TableRuntime::coordinates(mcast_wire::sender_coords_offset(t.rotating_span))[w];
     }

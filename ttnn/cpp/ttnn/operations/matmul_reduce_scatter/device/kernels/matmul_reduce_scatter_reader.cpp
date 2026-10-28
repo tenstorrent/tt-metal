@@ -45,12 +45,14 @@
 using namespace dataflow_kernel_lib;
 namespace mrs = matmul_reduce_scatter;
 
-// split-phase halves of ReceiverPipe::receive (Flag signal, pre-handshake, fixed sender); no-ops for an absent family
-template <typename MC>
-FORCE_INLINE void rx_ack(const MC& mc, const Noc& noc) {
+// split-phase halves of ReceiverPipe::receive (Flag signal, pre-handshake, fixed sender); no-ops for an absent family.
+// `sender` is the family's sender coordinates, resolved once at kernel start (mc.sender_coordinates()).
+template <typename MC, typename Coords>
+FORCE_INLINE void rx_ack(const MC&, const Coords& sender, const Noc& noc) {
     if constexpr (MC::active) {
         static_assert(MC::pre_handshake && MC::signal == DataReadySignal::Flag && !MC::rotating);
-        Semaphore(detail::mcast_semaphore_id(MC::consumer_ready)).up(noc, mc.sender_x(), mc.sender_y(), 1);
+        Semaphore(detail::mcast_semaphore_id(MC::consumer_ready))
+            .up(noc, sender[mcast_wire::SENDER_X], sender[mcast_wire::SENDER_Y], 1);
     }
 }
 template <typename MC, typename Poll>
@@ -236,6 +238,11 @@ void kernel_main() {
     auto w_rx = mc_b.optional_receiver(noc);
     auto w2_tx = mc_b2.optional_sender(noc);
     auto w2_rx = mc_b2.optional_receiver(noc);
+    // where each family's sender sits: resolved once, read by every rx_ack in the step loop
+    const auto a_from = mc_a.sender_coordinates();
+    const auto a2_from = mc_a2.sender_coordinates();
+    const auto w_from = mc_b.sender_coordinates();
+    const auto w2_from = mc_b2.sender_coordinates();
     const bool a_sends[2] = {a_tx.has_value(), a2_tx.has_value()};
     const bool w_sends[2] = {w_tx.has_value(), w2_tx.has_value()};
     const bool a_sender = a_sends[0] || a_sends[1];
@@ -450,11 +457,11 @@ void kernel_main() {
                 // my A slot is reserved (free): ack the A senders now, before my own reads land, so no A multicast
                 // waits for a W reader's DRAM barrier
                 if (a_rx) {
-                    rx_ack(mc_a, noc);
+                    rx_ack(mc_a, a_from, noc);
                 }
                 if constexpr (mc_a2.active) {
                     if (a2_rx) {
-                        rx_ack(mc_a2, noc);
+                        rx_ack(mc_a2, a2_from, noc);
                     }
                 }
             }
@@ -502,7 +509,7 @@ void kernel_main() {
                     w_tx->template send<SourceL1Guard::CallerManaged>(
                         w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]);
                 } else {
-                    rx_ack(mc_b, noc);  // fused order: W is acked only once my A landed (A-then-W phases)
+                    rx_ack(mc_b, w_from, noc);  // fused order: W is acked only once my A landed (A-then-W phases)
                     rx_wait(mc_b, try_land);
                 }
                 if constexpr (mc_b2.active) {
@@ -510,7 +517,7 @@ void kernel_main() {
                         w2_tx->template send<SourceL1Guard::CallerManaged>(
                             w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]);
                     } else {
-                        rx_ack(mc_b2, noc);
+                        rx_ack(mc_b2, w2_from, noc);
                         rx_wait(mc_b2, try_land);
                     }
                 }
