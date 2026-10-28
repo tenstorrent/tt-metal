@@ -51,16 +51,17 @@ def random_stacked(mesh_shape, shape, seed, scale=1.0):
     return (torch.randn((*mesh_shape, *shape), dtype=torch.float32) * scale).to(torch.bfloat16)
 
 
-def to_mesh(stacked, mesh_device, dtype):
+def to_mesh(stacked, mesh_device, dtype, on_device=True):
+    """on_device=False: the same multi-device tensor on the host (for copy_host_to_device_tensor)."""
     rows, cols = stacked.shape[0], stacked.shape[1]
     full = torch.cat([torch.cat(list(stacked[r]), dim=1) for r in range(rows)], dim=0)
+    placement = dict(device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) if on_device else {}
     return ttnn.from_torch(
         full,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(rows, cols)),
+        **placement,
     )
 
 
@@ -257,3 +258,129 @@ def test_refusals(mesh_device, expect_error, overrides, message):
     kwargs.update(overrides)
     with expect_error(RuntimeError, message):
         ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, **kwargs)
+
+
+# Traced calls. Each test compiles eagerly, captures one trace and replays it; every output is checked against the
+# host reference after the replays.
+TRACE_REGION_BYTES = 1 << 20
+TRACE_KWARGS = dict(
+    cluster_axis=1,
+    scatter_dim=-1,
+    topology=ttnn.Topology.Ring,
+    num_links=2,
+    compute_kernel_config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2),
+)
+# (a_shape, w_shape, weight_dtype): an unchunked plan and a chunked one, which need different staging sizes
+TRACE_SHAPES = {
+    "kimi_k27_o_proj": ((1, 1, 640, 2048), (2048, 7168), ttnn.bfloat8_b),
+    "chunked_n": ((1, 1, 2048, 1024), (1024, 16384), ttnn.bfloat16),
+}
+
+
+def traced_device_params():
+    return {**ring_device_params(), "trace_region_size": TRACE_REGION_BYTES}
+
+
+def host_operands(mesh_shape, name, seed):
+    a_shape, w_shape, weight_dtype = TRACE_SHAPES[name]
+    a = random_stacked(mesh_shape, a_shape, seed=seed)
+    w = quantize_like_device(random_stacked(mesh_shape, w_shape, seed=seed + 1, scale=w_shape[0] ** -0.5), weight_dtype)
+    return a, w, reference(a, w, TRACE_KWARGS["cluster_axis"], TRACE_KWARGS["scatter_dim"])
+
+
+def capture(mesh_device, calls):
+    """Capture calls (no-argument callables) into one trace; returns (trace_id, outputs)."""
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    outs = [call() for call in calls]
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    return trace_id, outs
+
+
+def replay(mesh_device, trace_id, times=3):
+    for _ in range(times):
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [traced_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "order", [("kimi_k27_o_proj", "chunked_n"), ("chunked_n", "kimi_k27_o_proj")], ids=["small_first", "large_first"]
+)
+def test_trace_two_shapes(mesh_device, order):
+    """Two programs of the op with different plans and staging sizes in one trace, either order."""
+    mesh_shape = tuple(mesh_device.shape)
+    cases = []
+    for i, name in enumerate(order):
+        a, w, expected = host_operands(mesh_shape, name, seed=10 * i)
+        ta = to_mesh(a, mesh_device, ttnn.bfloat16)
+        tw = to_mesh(w, mesh_device, TRACE_SHAPES[name][2])
+        cases.append((ta, tw, expected, TRACE_SHAPES[name][2]))
+    for ta, tw, _, _ in cases:  # compile both
+        ttnn.deallocate(ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, **TRACE_KWARGS))
+    trace_id, outs = capture(
+        mesh_device,
+        [
+            lambda ta=ta, tw=tw: ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, **TRACE_KWARGS)
+            for ta, tw, _, _ in cases
+        ],
+    )
+    try:
+        replay(mesh_device, trace_id)
+        for out, (_, _, expected, weight_dtype) in zip(outs, cases):
+            check(out, expected, mesh_device, weight_dtype)
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [traced_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+def test_trace_after_warmup(mesh_device):
+    """A trace captured after eager calls of the same shape: the captured call is a program-cache hit."""
+    mesh_shape = tuple(mesh_device.shape)
+    a, w, expected = host_operands(mesh_shape, "kimi_k27_o_proj", seed=0)
+    weight_dtype = TRACE_SHAPES["kimi_k27_o_proj"][2]
+    ta = to_mesh(a, mesh_device, ttnn.bfloat16)
+    tw = to_mesh(w, mesh_device, weight_dtype)
+    for _ in range(3):
+        out = ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, **TRACE_KWARGS)
+    ttnn.synchronize_device(mesh_device)
+    check(out, expected, mesh_device, weight_dtype)
+    ttnn.deallocate(out)
+    entries = mesh_device.num_program_cache_entries()
+    trace_id, (traced,) = capture(
+        mesh_device, [lambda: ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, **TRACE_KWARGS)]
+    )
+    try:
+        assert mesh_device.num_program_cache_entries() == entries, "the captured call built a new program"
+        replay(mesh_device, trace_id)
+        check(traced, expected, mesh_device, weight_dtype)
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [traced_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+def test_trace_new_inputs(mesh_device):
+    """New A and W copied into the captured input tensors before each replay, as a model feeds a trace."""
+    mesh_shape = tuple(mesh_device.shape)
+    weight_dtype = TRACE_SHAPES["kimi_k27_o_proj"][2]
+    a, w, _ = host_operands(mesh_shape, "kimi_k27_o_proj", seed=0)
+    ta = to_mesh(a, mesh_device, ttnn.bfloat16)
+    tw = to_mesh(w, mesh_device, weight_dtype)
+    ttnn.deallocate(ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, **TRACE_KWARGS))
+    trace_id, (traced,) = capture(
+        mesh_device, [lambda: ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, **TRACE_KWARGS)]
+    )
+    try:
+        for seed in (20, 30, 40):
+            a, w, expected = host_operands(mesh_shape, "kimi_k27_o_proj", seed=seed)
+            ttnn.copy_host_to_device_tensor(to_mesh(a, mesh_device, ttnn.bfloat16, on_device=False), ta)
+            ttnn.copy_host_to_device_tensor(to_mesh(w, mesh_device, weight_dtype, on_device=False), tw)
+            replay(mesh_device, trace_id, times=1)
+            check(traced, expected, mesh_device, weight_dtype)
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
