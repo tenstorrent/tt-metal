@@ -29,6 +29,4 @@ constexpr size_t MAX_CONTEXT_COUNT = 32;
 // passed in
 ContextId extract_context_id(const IDevice* device);
 
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device);
-
 }  // namespace tt::tt_metal

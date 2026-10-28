@@ -256,16 +256,19 @@ def create_tt_model(
             max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
         )
 
-    model = TtTransformer(
-        args=tt_model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        paged_attention_config=paged_attention_config,
-        mode="prefill",
-        enable_prefetcher_performance_mode=True,
-    )
+    # A placeholder state_dict holds no weight data, so as_tensor must raise on an unloadable cache
+    # file rather than rebuild it from the placeholder.
+    with ttnn.as_tensor_cache_repair(not getattr(state_dict, "is_placeholder", False)):
+        model = TtTransformer(
+            args=tt_model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=tt_model_args.weight_cache_path(dtype),
+            paged_attention_config=paged_attention_config,
+            mode="prefill",
+            enable_prefetcher_performance_mode=True,
+        )
 
     if use_paged_kv_cache:
         tt_kv_cache = [l.attention.layer_past for l in model.layers]

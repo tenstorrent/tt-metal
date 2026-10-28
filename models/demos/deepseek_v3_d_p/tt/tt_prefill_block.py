@@ -30,9 +30,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
-
-# TODO: import from models.demos.common.prefill.prefill_chunk once #62535 moves it there.
-from models.demos.minimax_m3.tt.prefill_chunk import packed_real_rows
+from models.demos.minimax_m3.tt.packed_rows import packed_real_rows
 
 # Optional per-layer MLA-vs-FFN host timing (rough ratio only). Gated by TT_PREFILL_BLOCK_TIMING=1.
 # Host wall-clock with a device sync bracketing each region, so the syncs serialize the pipeline and
@@ -699,7 +697,9 @@ class TtPrefillBlock(LightweightModule):
         )
 
         if kv_only:
-            kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device, self.mla.sp_axis) if return_kv_cache else None
+            kv_cache = (
+                ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device, self.mla.sp_axis) if return_kv_cache else None
+            )
             if return_indexer_indices:
                 return None, kv_cache, None
             return None, kv_cache

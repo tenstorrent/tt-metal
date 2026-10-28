@@ -7,15 +7,18 @@
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <memory>
@@ -198,6 +201,9 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
       {"SFPU_OP_CHAIN_0", "copy_tile(in0_id, 0, 1); tiled_prod_tile_init(); tiled_prod_tile(0);"}}},
     {"alt_complex_rotate90", {{"SFPU_OP_CHAIN_0", "alt_complex_rotate90_tile_init(); alt_complex_rotate90_tile(0);"}}},
     {"abs", {{"SFPU_OP_CHAIN_0", "abs_tile_init(); abs_tile(0);"}}},
+    {"signbit", {{"SFPU_OP_CHAIN_0", "signbit_tile_init(); signbit_tile(0);"}}},
+    {"unary_max", {{"SFPU_OP_CHAIN_0", "unary_max_tile_init(); unary_max_tile(0, 0x3F000000u);"}}},  // max(x, 0.5)
+    {"unary_min", {{"SFPU_OP_CHAIN_0", "unary_min_tile_init(); unary_min_tile(0, 0x3F000000u);"}}},  // min(x, 0.5)
     {"fill", {{"SFPU_OP_FILL_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "fill_tile_init(); fill_tile(0, 5.0f);"}}},
     // Trigonometry family (api/compute/eltwise_unary/trigonometry.h).
     {"sin", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "sin_tile_init(); sin_tile(0);"}}},
@@ -254,7 +260,8 @@ bool is_exact_unary_sfpu_op(const std::string& op_name) {
     return op_name == "ceil" || op_name == "floor" || op_name == "trunc" || op_name == "frac" || op_name == "round" ||
            op_name == "isinf" || op_name == "isposinf" || op_name == "isneginf" || op_name == "isnan" ||
            op_name == "isfinite" || op_name == "logical_not" || op_name == "heaviside" || op_name == "identity" ||
-           op_name == "abs" || op_name == "fill" || op_name == "tiled_prod_next_tile" || op_name.starts_with("unary_");
+           op_name == "abs" || op_name == "fill" || op_name == "tiled_prod_next_tile" || op_name == "signbit" ||
+           op_name.starts_with("unary_");
 }
 
 // Binary SFPU ops driven by `run_sfpu_binary_two_input_buffer`.
@@ -270,6 +277,9 @@ bool is_exact_unary_sfpu_op(const std::string& op_name) {
 //                       acquire/release section. By convention LHS lives at
 //                       DST[0] and RHS at DST[1]; the result is written back
 //                       to DST[0] so the packer reads from there.
+//   * SFPU_PACK_DST_INDEX — optional; the DST index the packer reads instead of 0,
+//                       for ops that write their result elsewhere (reshuffle_rows
+//                       accumulates into DST[1]).
 //
 // To add a new binary SFPU op: add an entry here, add a matching arm in
 // sfpu_binary_function() or get_binary_int_operation_result() for golden compute,
@@ -447,6 +457,20 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_LOGADDEXP_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "logaddexp2_binary_tile_init();"},
       {"SFPU_OP_CHAIN_0", "logaddexp2_binary_tile(0, 1, 0);"}}},
+    // DST[1] += DST[0]'s rows, each scattered to the row its mask byte names; the chain, which carries
+    // the mask's L1 address, is set in run_sfpu_binary_two_input_buffer.
+    {"reshuffle_rows",
+     {{"SFPU_OP_RESHUFFLE_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "reshuffle_rows_tile_init();"},
+      {"SFPU_PACK_DST_INDEX", "1"}}},
+    {"gcd",
+     {{"SFPU_OP_BINARY_GCD_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "gcd_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "gcd_tile(0, 1, 0);"}}},
+    {"lcm",
+     {{"SFPU_OP_BINARY_LCM_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "lcm_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "lcm_tile(0, 1, 0);"}}},
 };
 
 // ---- Tile-layout ops (goldens mirror the tt-llk SFPU tests' UnarySFPUGolden) --------------------
@@ -456,6 +480,36 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
 inline size_t tile_order_index(size_t row, size_t col) {
     const size_t face = (row / 16) * 2 + (col / 16);
     return face * 256 + (row % 16) * 16 + (col % 16);
+}
+
+// reshuffle_rows: byte r of the mask is the row that input row r is added to; 0xFF skips the row, and so does
+// any other target past row 31 (row 10 here). Rows 1 and 2 share a target, so it accumulates both.
+std::array<uint8_t, 32> reshuffle_rows_mask() {
+    std::array<uint8_t, 32> mask{};
+    for (size_t r = 0; r < mask.size(); ++r) {
+        mask[r] = r % 5 == 4 ? 0xFF : static_cast<uint8_t>((r * 13 + 5) % 32);
+    }
+    mask[2] = mask[1];
+    mask[10] = 40;
+    return mask;
+}
+
+std::vector<bfloat16> reshuffle_rows_golden(const std::vector<bfloat16>& in, const std::vector<bfloat16>& acc) {
+    const auto mask = reshuffle_rows_mask();
+    std::vector<bfloat16> out = acc;
+    for (size_t base = 0; base < in.size(); base += 1024) {
+        for (size_t r = 0; r < 32; ++r) {
+            if (mask[r] >= 32) {
+                continue;
+            }
+            for (size_t c = 0; c < 32; ++c) {
+                const size_t dst = base + tile_order_index(mask[r], c);
+                out[dst] =
+                    bfloat16(static_cast<float>(out[dst]) + static_cast<float>(in[base + tile_order_index(r, c)]));
+            }
+        }
+    }
+    return out;
 }
 
 // Ops that move values across the tile, so their golden works on whole tiles.
@@ -540,6 +594,12 @@ std::vector<int32_t> int_tile_layout_golden(const std::string& op_name, const st
 //
 // Int8 L1 (non-negative, so sign-magnitude == two's complement) copied into a 32-bit Dest, Int32 out.
 // Scalars match the tt-llk SFPU tests.
+// The int32 max/min scalar, shared by the device chains and the golden. Inputs stay non-negative: Int8
+// promotes to sign-magnitude in Dest, while unary_max/min_int32_tile expect two's complement (native Int32).
+constexpr int32_t unary_max_min_int32_scalar = 64;
+const std::string unary_max_min_int32_scalar_arg =
+    std::to_string(static_cast<uint32_t>(unary_max_min_int32_scalar)) + "u";
+
 const map<std::string, std::map<std::string, std::string>> sfpu_int32_unary_op_to_op_name = {
     {"bitwise_and",
      {{"SFPU_OP_BITWISE_INCLUDE", "1"},
@@ -571,7 +631,22 @@ const map<std::string, std::map<std::string, std::string>> sfpu_int32_unary_op_t
     {"fill_int32",
      {{"SFPU_OP_FILL_INCLUDE", "1"},
       {"SFPU_OP_CHAIN_0", "fill_tile_init(); fill_tile_int<DataFormat::Int32>(0, 5u);"}}},
+    {"signbit_int32",
+     {{"SFPU_OP_COMPUTE_KERNEL_API_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0", "signbit_tile_int32_init(); signbit_tile_int32(0);"}}},
+    {"unary_max_int32",
+     {{"SFPU_OP_COMPUTE_KERNEL_API_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0",
+       "unary_max_int32_tile_init(); unary_max_int32_tile(0, " + unary_max_min_int32_scalar_arg + ");"}}},
+    {"unary_min_int32",
+     {{"SFPU_OP_COMPUTE_KERNEL_API_INCLUDE", "1"},
+      {"SFPU_OP_CHAIN_0",
+       "unary_min_int32_tile_init(); unary_min_int32_tile(0, " + unary_max_min_int32_scalar_arg + ");"}}},
 };
+
+// Int32 unary ops that also see negative inputs: the sign bit sits at bit 31 in both
+// sign-magnitude and two's complement, so the result does not depend on Dest's integer encoding.
+bool is_signed_int32_unary_op(const std::string& op_name) { return op_name == "signbit_int32"; }
 
 int32_t int32_unary_result(const std::string& op_name, int32_t x) {
     if (op_name == "bitwise_and") {
@@ -601,6 +676,15 @@ int32_t int32_unary_result(const std::string& op_name, int32_t x) {
     if (op_name == "fill_int32") {
         return 5;
     }
+    if (op_name == "signbit_int32") {
+        return x < 0 ? 1 : 0;
+    }
+    if (op_name == "unary_max_int32") {
+        return std::max(x, unary_max_min_int32_scalar);
+    }
+    if (op_name == "unary_min_int32") {
+        return std::min(x, unary_max_min_int32_scalar);
+    }
     TT_THROW("Unsupported int unary op_name in test");
 }
 
@@ -613,7 +697,8 @@ bool is_non_negative_int8_binary_op(const std::string& op_name) {
     return op_name == "add_top_row_int32" || op_name == "div_int32_floor" || op_name == "div_int32_trunc" ||
            op_name == "div_int32" || op_name == "fmod_int32" || op_name == "remainder_int32" ||
            op_name == "bitwise_and_binary" || op_name == "bitwise_or_binary" || op_name == "bitwise_xor_binary" ||
-           op_name == "rsub_int" || op_name == "sfpu_add_int" || op_name == "int_mask" || is_binary_shift_op(op_name);
+           op_name == "rsub_int" || op_name == "sfpu_add_int" || op_name == "int_mask" || op_name == "gcd" ||
+           op_name == "lcm" || is_binary_shift_op(op_name);
 }
 
 // Rows 0-3 of faces 0 and 1 in tile order: what sfpu_add_top_row writes (see ckernel_sfpu_add_top_row.h).
@@ -923,6 +1008,15 @@ float sfpu_function(const std::string& op_name, float input) {
     if (op_name == "atanh") {
         return static_cast<float>(std::atanh(d));
     }
+    if (op_name == "signbit") {
+        return std::signbit(input) ? 1.0f : 0.0f;
+    }
+    if (op_name == "unary_max") {
+        return std::max(input, 0.5f);
+    }
+    if (op_name == "unary_min") {
+        return std::min(input, 0.5f);
+    }
     if (op_name == "unary_ne") {
         return input != 0.5f ? 1.0f : 0.0f;
     }
@@ -1142,6 +1236,12 @@ int32_t get_binary_int_operation_result(const std::string& op_name, int lhs, int
     if (op_name == "int_mask") {
         return rhs == 0 ? 0 : lhs;
     }
+    if (op_name == "gcd") {
+        return std::gcd(lhs, rhs);
+    }
+    if (op_name == "lcm") {
+        return std::lcm(lhs, rhs);
+    }
     if (is_binary_shift_op(op_name)) {
         // Non-negative operands: the arithmetic and logical right shifts agree.
         if (rhs < 0 || rhs >= 32) {
@@ -1190,6 +1290,10 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
     if (op_name.starts_with("unary_")) {
         // The comparisons are against 0.5: include it and its neighbours.
         return pick({-1.0f, 0.0f, 0.25f, 0.5f, 0.75f, 1.0f, 2.0f});
+    }
+    if (op_name == "signbit") {
+        // No -0.0: whether it reaches Dest with its sign is an unpack property, not signbit's.
+        return pick({-3.0f, -1.0f, -0.25f, 0.0f, 0.25f, 1.0f, 3.0f});
     }
     if (op_name == "logical_not" || op_name == "heaviside") {
         return pick({-2.0f, -0.5f, 0.0f, 0.0f, 0.5f, 1.0f, 3.0f});
@@ -1335,6 +1439,11 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
         }
         return pack_vector<uint32_t, bfloat16>(values);
     };
+    if (op_name == "reshuffle_rows") {
+        // Whole numbers, so the scattered sums are exact in bf16 and the golden is bit-exact.
+        const auto round = [](float f) { return std::round(f); };
+        return {map_lhs(uniform(-8.0f, 8.0f, seed), round), map_lhs(uniform(-8.0f, 8.0f, seed + 1), round)};
+    }
     if (op_name == "power_binary") {
         return {uniform(0.5f, 4.0f, seed), uniform(-2.0f, 2.0f, seed + 1)};
     }
@@ -1476,7 +1585,8 @@ bool is_close_packed_sfpu_output(
         return is_close_packed_sfpu_output_f32(vec_a, vec_b, op_name);
     }
     if (is_int8_binary_sfpu_op(op_name) || op_name == "binary_max" || op_name == "binary_min" ||
-        op_name == "copy_dest" || op_name == "mask" || op_name == "mask_posinf" || op_name == "isclose") {
+        op_name == "reshuffle_rows" || op_name == "copy_dest" || op_name == "mask" || op_name == "mask_posinf" ||
+        op_name == "isclose") {
         return vec_a == vec_b;
     }
     if (is_exact_unary_sfpu_op(op_name)) {
@@ -2111,12 +2221,21 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     return ok;
 }
 
-/// Int32 unary SFPU ops: Int8 L1 (non-negative) -> 32-bit Dest -> Int32 L1, compared exactly.
+/// Int32 unary SFPU ops: Int8 L1 -> 32-bit Dest -> Int32 L1, compared exactly. Inputs are non-negative,
+/// except for the signed ops (is_signed_int32_unary_op), which get every other nonzero value negated.
 bool run_sfpu_int32_unary(distributed::MeshDevice& mesh_device, const SfpuConfig& test_config) {
     const size_t numel = test_config.num_tiles * 1024;
     const int seed = sfpu_test_seed;
-    const auto packed_input =
-        sfpu_util::generate_non_negative_int8_binary_inputs(numel, test_config.sfpu_op, seed).first;
+    auto packed_input = sfpu_util::generate_non_negative_int8_binary_inputs(numel, test_config.sfpu_op, seed).first;
+    if (sfpu_util::is_signed_int32_unary_op(test_config.sfpu_op)) {
+        // Flip the sign of every other value; zeros stay +0 (0x80, a sign-magnitude -0, is not a value).
+        for (size_t i = 0; i < numel; i += 2) {
+            const uint32_t shift = 8 * (i % 4);
+            if (((packed_input[i / 4] >> shift) & 0x7Fu) != 0) {
+                packed_input[i / 4] |= 0x80u << shift;
+            }
+        }
+    }
 
     std::vector<int32_t> values(numel);
     for (size_t i = 0; i < numel; ++i) {
@@ -2141,6 +2260,189 @@ bool run_sfpu_int32_unary(distributed::MeshDevice& mesh_device, const SfpuConfig
     sfpu_defines["SFPU_UNARY_OP"] = "1";
     const auto dest_buffer_data = run_sfpu_pipeline(mesh_device, test_config, sfpu_defines, packed_input);
     return dest_buffer_data == packed_golden;
+}
+
+// ---- rand / dropout ------------------------------------------------------------------------------
+//
+// No element-wise golden, so these check the properties the tt-llk rand / dropout tests check: range
+// and uniformity (rand), 0 or x * scale with a dropped fraction near p (dropout), and that a seed
+// repeats its output exactly while another seed changes it.
+namespace sfpu_random {
+
+constexpr uint32_t seed = 0x12345678u;
+constexpr uint32_t other_seed = 0x9E3779B9u;
+
+// rand: from = -4, scale = 8, so every draw lies in [-4, 4].
+constexpr float rand_from = -4.0f;
+constexpr float rand_scale = 8.0f;
+// dropout: p = 0.5 (passed as p * INT_MAX) and scale = 1 / (1 - p) = 2, exact in bf16.
+constexpr uint32_t dropout_half_probability = 0x3FFFFFFFu;
+constexpr float dropout_scale = 2.0f;
+
+std::map<std::string, std::string> defines(const std::string& op_name, uint32_t prng_seed) {
+    std::map<std::string, std::string> d{{"SFPU_UNARY_OP", "1"}};
+    if (op_name == "rand") {
+        d["SFPU_OP_RAND_INCLUDE"] = "1";
+        d["SFPU_OP_INIT_0"] = fmt::format("rand_tile_init({:#x}u);", prng_seed);
+        d["SFPU_OP_CHAIN_0"] = fmt::format(
+            "rand_tile(0, {:#x}u, {:#x}u);", std::bit_cast<uint32_t>(rand_from), std::bit_cast<uint32_t>(rand_scale));
+        return d;
+    }
+    const uint32_t probability = op_name == "dropout" ? dropout_half_probability : 0u;
+    TT_FATAL(op_name == "dropout" || op_name == "dropout_p0", "Unsupported random op_name {}", op_name);
+    d["SFPU_OP_DROPOUT_INCLUDE"] = "1";
+    d["SFPU_OP_INIT_0"] = fmt::format("dropout_kernel_init({:#x}u);", prng_seed);
+    d["SFPU_OP_CHAIN_0"] =
+        fmt::format("dropout_tile(0, {:#x}u, {:#x}u);", probability, std::bit_cast<uint32_t>(dropout_scale));
+    return d;
+}
+
+bool check_rand(const std::vector<bfloat16>& out) {
+    const size_t n = out.size();
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    for (const auto& v : out) {
+        const float f = static_cast<float>(v);
+        if (!std::isfinite(f) || f < rand_from || f > rand_from + rand_scale) {
+            log_error(tt::LogTest, "rand: {} lies outside [{}, {}]", f, rand_from, rand_from + rand_scale);
+            return false;
+        }
+        sum += f;
+        sum_sq += static_cast<double>(f) * f;
+    }
+    // Uniform: mean within 6 sigma / sqrt(n) of the midpoint (plus one bf16 ulp at 4 for the truncating
+    // store), and the standard deviation within 15% of scale / sqrt(12).
+    const double sigma = rand_scale / std::sqrt(12.0);
+    const double mean = sum / n;
+    const double std_dev = std::sqrt(std::max(0.0, sum_sq / n - mean * mean));
+    const double mean_tol = 6.0 * sigma / std::sqrt(static_cast<double>(n)) + 1.0 / 32;
+    const std::set<float> distinct(out.begin(), out.end());
+    if (std::fabs(mean - (rand_from + rand_scale / 2)) > mean_tol || std::fabs(std_dev - sigma) > 0.15 * sigma ||
+        distinct.size() < 64) {
+        log_error(
+            tt::LogTest, "rand: mean {} std {} with {} distinct values is not uniform", mean, std_dev, distinct.size());
+        return false;
+    }
+    return true;
+}
+
+bool check_dropout(const std::string& op_name, const std::vector<bfloat16>& in, const std::vector<bfloat16>& out) {
+    size_t dropped = 0;
+    for (size_t i = 0; i < out.size(); ++i) {
+        const float got = static_cast<float>(out[i]);
+        const float kept = static_cast<float>(in[i]) * dropout_scale;
+        if (got == 0.0f) {
+            ++dropped;
+        } else if (got != kept) {
+            log_error(tt::LogTest, "{}: element {} is {}, neither 0 nor {}", op_name, i, got, kept);
+            return false;
+        }
+    }
+    const double dropped_fraction = static_cast<double>(dropped) / out.size();
+    // p = 0 keeps every element; p = 0.5 drops 0.5 +- 0.05 (over 4.5 sigma at 2048 elements).
+    const bool ok = op_name == "dropout_p0" ? dropped == 0 : std::fabs(dropped_fraction - 0.5) <= 0.05;
+    if (!ok) {
+        log_error(tt::LogTest, "{}: dropped fraction {}", op_name, dropped_fraction);
+    }
+    return ok;
+}
+
+}  // namespace sfpu_random
+
+/// rand / dropout: bf16 L1 through a 16- or 32-bit Dest. Runs seed A, seed B, then seed A again.
+bool run_sfpu_random(distributed::MeshDevice& mesh_device, const SfpuConfig& test_config) {
+    const size_t numel = test_config.num_tiles * 1024;
+    // dropout scales its input, so keep it away from 0 (a kept 0 would read as dropped).
+    const auto packed_input =
+        generate_packed_uniform_random_vector<uint32_t, bfloat16>(0.5f, 2.0f, numel, sfpu_test_seed);
+    const auto input = unpack_vector<bfloat16, uint32_t>(packed_input);
+
+    const auto run = [&](uint32_t prng_seed) {
+        return unpack_vector<bfloat16, uint32_t>(run_sfpu_pipeline(
+            mesh_device, test_config, sfpu_random::defines(test_config.sfpu_op, prng_seed), packed_input));
+    };
+    const auto first = run(sfpu_random::seed);
+    const auto other = run(sfpu_random::other_seed);
+    const auto again = run(sfpu_random::seed);
+
+    for (const auto* out : {&first, &other}) {
+        const bool ok = test_config.sfpu_op == "rand" ? sfpu_random::check_rand(*out)
+                                                      : sfpu_random::check_dropout(test_config.sfpu_op, input, *out);
+        if (!ok) {
+            return false;
+        }
+    }
+    if (first != again) {
+        log_error(tt::LogTest, "{}: the same seed gave a different output", test_config.sfpu_op);
+        return false;
+    }
+    if (test_config.sfpu_op == "dropout_p0") {
+        return first == other;  // nothing is drawn at p = 0
+    }
+    // rand: at least 90% of the draws change with the seed (as in the tt-llk test); dropout: the mask changes.
+    size_t different = 0;
+    for (size_t i = 0; i < first.size(); ++i) {
+        different += first[i] != other[i];
+    }
+    const size_t min_different = test_config.sfpu_op == "rand" ? first.size() * 9 / 10 : 1;
+    if (different < min_different) {
+        log_error(
+            tt::LogTest,
+            "{}: another seed changed only {} of {} elements",
+            test_config.sfpu_op,
+            different,
+            first.size());
+        return false;
+    }
+    return true;
+}
+
+// ---- ema -----------------------------------------------------------------------------------------
+//
+// ema_tile(i) writes alpha * previous + beta * x down each column of tile i into tile i + 1. The carry
+// continues into the next tile until ema_clear_previous_output, so a multi-tile run checks it too.
+namespace sfpu_ema {
+
+constexpr float alpha = 0.75f;
+constexpr float beta = 0.25f;
+
+}  // namespace sfpu_ema
+
+bool run_sfpu_ema(distributed::MeshDevice& mesh_device, const SfpuConfig& test_config) {
+    const size_t numel = test_config.num_tiles * 1024;
+    const auto packed_input =
+        generate_packed_uniform_random_vector<uint32_t, bfloat16>(-4.0f, 4.0f, numel, sfpu_test_seed);
+    const auto input = unpack_vector<bfloat16, uint32_t>(packed_input);
+
+    // Float32 carry, as the kernel keeps it in an LREG; only the stored output is rounded.
+    std::vector<bfloat16> golden(numel);
+    std::array<float, 32> previous{};
+    for (size_t base = 0; base < numel; base += 1024) {
+        for (size_t row = 0; row < 32; ++row) {
+            for (size_t col = 0; col < 32; ++col) {
+                const size_t i = base + sfpu_util::tile_order_index(row, col);
+                previous[col] = sfpu_ema::alpha * previous[col] + sfpu_ema::beta * static_cast<float>(input[i]);
+                golden[i] = bfloat16(previous[col]);
+            }
+        }
+    }
+
+    const std::map<std::string, std::string> defines{
+        {"SFPU_UNARY_OP", "1"},
+        {"SFPU_OP_EMA_INCLUDE", "1"},
+        {"SFPU_OP_INIT_0",
+         fmt::format(
+             "ema_init({:#x}u, {:#x}u); ema_clear_previous_output();",
+             std::bit_cast<uint32_t>(sfpu_ema::alpha),
+             std::bit_cast<uint32_t>(sfpu_ema::beta))},
+        {"SFPU_OP_CHAIN_0", "ema_tile(0);"},
+        {"SFPU_PACK_DST_INDEX", "1"}};
+    const auto out = run_sfpu_pipeline(mesh_device, test_config, defines, packed_input);
+    // One bf16 ulp of the output (2^-7 relative), plus the 16-bit Dest's rounding of the input.
+    return is_close_packed_vectors<bfloat16, uint32_t>(
+        out, pack_vector<uint32_t, bfloat16>(golden), [](const bfloat16& a, const bfloat16& b) {
+            return is_close(a, b, 0.02f /*rtol*/, 0.02f /*atol*/);
+        });
 }
 
 namespace {
@@ -2248,9 +2550,14 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
         auto lhs = unpack_vector<bfloat16, uint32_t>(packed_lhs);
         auto rhs = unpack_vector<bfloat16, uint32_t>(packed_rhs);
         std::vector<bfloat16> golden(lhs.size());
-        std::transform(lhs.begin(), lhs.end(), rhs.begin(), golden.begin(), [&](const bfloat16& a, const bfloat16& b) {
-            return sfpu_util::sfpu_binary_function(test_config.sfpu_op, a, b);
-        });
+        if (test_config.sfpu_op == "reshuffle_rows") {
+            golden = sfpu_util::reshuffle_rows_golden(lhs, rhs);
+        } else {
+            std::transform(
+                lhs.begin(), lhs.end(), rhs.begin(), golden.begin(), [&](const bfloat16& a, const bfloat16& b) {
+                    return sfpu_util::sfpu_binary_function(test_config.sfpu_op, a, b);
+                });
+        }
         if (test_config.sfpu_op == "add_top_row") {
             // Only the top rows are written; the rest of DST[0] keeps the LHS tile.
             for (size_t i = 0; i < golden.size(); ++i) {
@@ -2264,6 +2571,27 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
 
     std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_binary_op_to_op_name.at(test_config.sfpu_op);
     sfpu_defines["SFPU_BINARY_OP"] = "1";
+    std::shared_ptr<distributed::MeshBuffer> reshuffle_mask_buffer;
+    if (test_config.sfpu_op == "reshuffle_rows") {
+        // Mirrors RESHUFFLE_MASK_HEADER_BYTES in ckernel_sfpu_reshuffle_rows.h, which the host cannot include.
+        constexpr uint32_t reshuffle_mask_header_bytes = 16;
+        // The kernel reads its row mask from L1, at an address it takes as an argument: reserve L1 for it,
+        // write the mask to this core's bank, and pass that address less the header the kernel skips.
+        const auto mask = sfpu_util::reshuffle_rows_mask();
+        std::vector<uint32_t> packed_mask(mask.size() / sizeof(uint32_t));
+        std::memcpy(packed_mask.data(), mask.data(), mask.size());
+        reshuffle_mask_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = mask.size()},
+            {.page_size = mask.size(), .buffer_type = tt::tt_metal::BufferType::L1},
+            &mesh_device);
+        const CoreCoord core = test_config.cores.ranges().begin()->start_coord;
+        const uint32_t bank_id = mesh_device.allocator()->get_bank_ids_from_logical_core(BufferType::L1, core).at(0);
+        const uint32_t mask_addr =
+            reshuffle_mask_buffer->address() + mesh_device.allocator()->get_bank_offset(BufferType::L1, bank_id);
+        slow_dispatch::WriteToL1(mesh_device, core, mask_addr, packed_mask);
+        sfpu_defines["SFPU_OP_CHAIN_0"] =
+            fmt::format("reshuffle_rows_tile(0, {:#x}u);", mask_addr - reshuffle_mask_header_bytes);
+    }
 
     const auto node = extract_single_core_node(test_config, "Metal 2.0 binary SFPU path");
     const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
@@ -3030,6 +3358,10 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "tiled_prod"),
         std::make_tuple(1, "tiled_prod_next_tile"),
         std::make_tuple(1, "alt_complex_rotate90"),
+        std::make_tuple(1, "signbit"),
+        std::make_tuple(4, "signbit"),
+        std::make_tuple(1, "unary_max"),
+        std::make_tuple(1, "unary_min"),
         std::make_tuple(1, "abs"),
         std::make_tuple(1, "fill"),
         std::make_tuple(1, "sin"),
@@ -3161,7 +3493,10 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "expm1"),
         std::make_tuple(1, "log_with_base"),
         std::make_tuple(1, "tiled_prod"),
-        std::make_tuple(1, "alt_complex_rotate90")),
+        std::make_tuple(1, "alt_complex_rotate90"),
+        std::make_tuple(1, "signbit"),
+        std::make_tuple(1, "unary_max"),
+        std::make_tuple(1, "unary_min")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
@@ -3293,6 +3628,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "tiled_prod"),
         std::make_tuple(1, "tiled_prod_next_tile"),
         std::make_tuple(1, "alt_complex_rotate90"),
+        std::make_tuple(1, "signbit"),
+        std::make_tuple(1, "unary_max"),
+        std::make_tuple(1, "unary_min"),
         std::make_tuple(1, "abs"),
         std::make_tuple(1, "fill"),
         std::make_tuple(1, "sin"),
@@ -3423,7 +3761,10 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "expm1"),
         std::make_tuple(1, "log_with_base"),
         std::make_tuple(1, "tiled_prod"),
-        std::make_tuple(1, "alt_complex_rotate90")),
+        std::make_tuple(1, "alt_complex_rotate90"),
+        std::make_tuple(1, "signbit"),
+        std::make_tuple(1, "unary_max"),
+        std::make_tuple(1, "unary_min")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
@@ -3474,7 +3815,8 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture, TensixSfpuBinar
     }
 }
 
-// TODO: BinarySFPU ops here can only do 1 tile due to the hardcoding in the macros to indicies (0,1,2)
+// TODO: the binary chains hard-code DST indices (0, 1, 2), so each acquire holds a single tile pair;
+// multi-tile cases loop one pair per acquire rather than packing several tiles into one DEST section.
 INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuBinaryCompute,
     SingleCoreSingleMeshDeviceSfpuBinaryParameterizedFixture,
@@ -3518,7 +3860,11 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "right_shift_binary"),
         std::make_tuple(1, "logical_right_shift_binary"),
         std::make_tuple(1, "logaddexp_binary"),
-        std::make_tuple(1, "logaddexp2_binary")),
+        std::make_tuple(1, "logaddexp2_binary"),
+        std::make_tuple(1, "gcd"),
+        std::make_tuple(1, "lcm"),
+        std::make_tuple(1, "reshuffle_rows"),
+        std::make_tuple(2, "reshuffle_rows")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
@@ -3609,9 +3955,84 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "sum_int_col"),
         std::make_tuple(1, "sum_int_row"),
         std::make_tuple(1, "abs_int32"),
-        std::make_tuple(1, "fill_int32")),
+        std::make_tuple(1, "fill_int32"),
+        std::make_tuple(1, "signbit_int32"),
+        std::make_tuple(1, "unary_max_int32"),
+        std::make_tuple(1, "unary_min_int32")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
+    });
+
+// rand / dropout: (num_tiles, op, 32-bit Dest). Checked by property and seed determinism, see
+// run_sfpu_random.
+class SingleCoreSingleMeshDeviceSfpuRandomParameterizedFixture
+    : public LLKMeshDeviceFixture,
+      public testing::WithParamInterface<std::tuple<size_t, std::string, bool>> {};
+
+TEST_P(SingleCoreSingleMeshDeviceSfpuRandomParameterizedFixture, TensixSfpuCompute) {
+    const auto& [num_tiles, sfpu_op, en_32bit_dest] = GetParam();
+    if (sfpu_op == "rand" && !en_32bit_dest && (arch_ == tt::ARCH::WORMHOLE_B0 || arch_ == tt::ARCH::BLACKHOLE)) {
+        GTEST_SKIP() << "The WH/BH rand kernel stores FP32, so it needs a 32-bit Dest (as the rand op sets)";
+    }
+    CoreRange core_range({0, 0}, {0, 0});
+    unit_tests::compute::sfpu::SfpuConfig test_config = {
+        .num_tiles = num_tiles,
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .cores = CoreRangeSet({core_range}),
+        .sfpu_op = sfpu_op,
+        .approx_mode = false,
+        .en_32bit_dest = en_32bit_dest};
+    log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={} en_32bit_dest={}", sfpu_op, num_tiles, en_32bit_dest);
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_random(*device, test_config));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SingleCoreSfpuCompute,
+    SingleCoreSingleMeshDeviceSfpuRandomParameterizedFixture,
+    ::testing::Values(
+        std::make_tuple(2, "rand", false),
+        std::make_tuple(2, "rand", true),
+        std::make_tuple(2, "dropout", false),
+        std::make_tuple(2, "dropout", true),
+        std::make_tuple(2, "dropout_p0", false)),
+    [](const testing::TestParamInfo<std::tuple<size_t, std::string, bool>>& info) {
+        return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles" +
+               (std::get<2>(info.param) ? "_dest32" : "");
+    });
+
+// ema: (num_tiles, 32-bit Dest).
+class SingleCoreSingleMeshDeviceSfpuEmaParameterizedFixture
+    : public LLKMeshDeviceFixture,
+      public testing::WithParamInterface<std::tuple<size_t, bool>> {};
+
+TEST_P(SingleCoreSingleMeshDeviceSfpuEmaParameterizedFixture, TensixSfpuCompute) {
+    const auto& [num_tiles, en_32bit_dest] = GetParam();
+    CoreRange core_range({0, 0}, {0, 0});
+    unit_tests::compute::sfpu::SfpuConfig test_config = {
+        .num_tiles = num_tiles,
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .cores = CoreRangeSet({core_range}),
+        .sfpu_op = "ema",
+        .approx_mode = false,
+        .en_32bit_dest = en_32bit_dest};
+    log_info(tt::LogTest, "Testing SFPU_OP=ema num_tiles={} en_32bit_dest={}", num_tiles, en_32bit_dest);
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_ema(*device, test_config));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SingleCoreSfpuCompute,
+    SingleCoreSingleMeshDeviceSfpuEmaParameterizedFixture,
+    ::testing::Values(std::make_tuple(1, false), std::make_tuple(3, false), std::make_tuple(3, true)),
+    [](const testing::TestParamInfo<std::tuple<size_t, bool>>& info) {
+        return "ema_" + std::to_string(std::get<0>(info.param)) + "tiles" + (std::get<1>(info.param) ? "_dest32" : "");
     });
 
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {

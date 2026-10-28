@@ -1396,26 +1396,40 @@ void validate_prefetcher_pipes_gather_in0_geometry(
     // slab has to be ring_size shard widths deep, padded past the weight's K when the shards are. (A
     // worker-sender pipe's producer is the caller's, and lays out its entries itself.) Checked ahead of
     // the shared weight checks, whose K-blocking rule a padded ring with an unpadded slab would trip
-    // first; a weight that is not a 2D receiver-contiguous one is left to them.
+    // first; a weight that is neither legacy nor 2D receiver-contiguous is left to them. A legacy
+    // K-row-major weight's slab is its bank shard, which holds exactly the weight's K and so cannot be
+    // padded: its K has to fill the ring.
     const auto pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
     const tt::tt_metal::experimental::PrefetcherPipe& first_pipe = pipes.front();
-    const auto& weight_nd_shard_spec = input_tensor_b.nd_shard_spec();
-    const bool tensor_prefetcher_2d_slab =
-        first_pipe.sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram &&
-        weight_nd_shard_spec.has_value() && weight_nd_shard_spec->shard_shape.rank() == 2;
-    if (tensor_prefetcher_2d_slab) {
-        const uint32_t slab_K_tiles = weight_nd_shard_spec->shard_shape[0] / in1_tile.get_height();
+    if (first_pipe.sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram) {
         const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();
-        TT_FATAL(
-            slab_K_tiles == ring_size * in0_shard_width_tiles,
-            "gather_in0 prefetcher_pipes reads in1 K-blocks one in0 shard ({} tiles) deep, but the Tensor prefetcher "
-            "cuts each receiver's {}-tile slab of the weight into {} K-blocks of a different depth. Give the weight's "
-            "NdShardSpec a K of {} tiles (ring_size * shard width), padded past the weight's K of {} tiles if need be.",
-            in0_shard_width_tiles,
-            slab_K_tiles,
-            ring_size,
-            ring_size * in0_shard_width_tiles,
-            weight_K_tiles);
+        const auto& weight_nd_shard_spec = input_tensor_b.nd_shard_spec();
+        if (input_tensor_b.buffer()->has_shard_spec()) {
+            TT_FATAL(
+                weight_K_tiles == ring_size * in0_shard_width_tiles,
+                "gather_in0 prefetcher_pipes reads in1 K-blocks one in0 shard ({} tiles) deep, so the Tensor "
+                "prefetcher has to cut {} K-blocks of that depth, {} tiles in all, but a legacy WIDTH_SHARDED weight's "
+                "bank shard holds exactly its K of {} tiles and cannot be padded to fill the ring. Use a "
+                "receiver-contiguous (NdShardSpec) weight with a K of {} tiles.",
+                in0_shard_width_tiles,
+                ring_size,
+                ring_size * in0_shard_width_tiles,
+                weight_K_tiles,
+                ring_size * in0_shard_width_tiles);
+        } else if (weight_nd_shard_spec.has_value() && weight_nd_shard_spec->shard_shape.rank() == 2) {
+            const uint32_t slab_K_tiles = weight_nd_shard_spec->shard_shape[0] / in1_tile.get_height();
+            TT_FATAL(
+                slab_K_tiles == ring_size * in0_shard_width_tiles,
+                "gather_in0 prefetcher_pipes reads in1 K-blocks one in0 shard ({} tiles) deep, but the Tensor "
+                "prefetcher cuts each receiver's {}-tile slab of the weight into {} K-blocks of a different depth. "
+                "Give the weight's NdShardSpec a K of {} tiles (ring_size * shard width), padded past the weight's K "
+                "of {} tiles if need be.",
+                in0_shard_width_tiles,
+                slab_K_tiles,
+                ring_size,
+                ring_size * in0_shard_width_tiles,
+                weight_K_tiles);
+        }
     }
 
     const uint32_t in1_block_size_bytes =
@@ -1601,8 +1615,8 @@ void validate_matmul_multicore_config(
         attributes.output_mem_config.memory_layout());
 }
 
-// DRAMSharded config: in0 width-sharded in L1, in1 width-sharded in DRAM; height must
-// be a single tile (M == 1) and K/shard dims divide in0_block_w.
+// DRAMSharded config: in0 width-sharded in L1, in1 width-sharded in DRAM. Each activation
+// shard spans all M tile rows; the multicast path also requires compatible K/shard block widths.
 void validate_matmul_dram_sharded_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1641,14 +1655,19 @@ void validate_matmul_dram_sharded_config(
         "{}: Input A shard orientation must be ROW_MAJOR, got: {}",
         config_name,
         input_tensor_a.shard_spec().value().orientation);
-    const auto M = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
+    // Width shards hold the flattened batch and M dimensions, as in the factory and
+    // output specification. Every row uses the same weight matrix.
+    TT_FATAL(
+        get_batch_size(input_tensor_b.padded_shape()) == 1,
+        "{}: input B must contain one weight matrix; use the batched DRAM-sharded config for per-batch weights",
+        config_name);
+    const auto M = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/true);
     const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
     uint32_t per_core_M = program_config.per_core_M;
     auto shard_shape = input_tensor_a.shard_spec().value().shape;
 
-    // No padding
+    // Each width shard spans all padded row tiles.
     TT_FATAL(M == per_core_M, "{}: M ({}) must equal per_core_M ({})", config_name, M, per_core_M);
-    TT_FATAL(M == 1, "{}: currently only support in0 tensor height of tile height", config_name);
     TT_FATAL(
         per_core_M == (shard_shape[0] / in0_tile.get_height()),
         "{}: per_core_M ({}) must equal shard_shape[0] / in0_tile.get_height() ({})",
@@ -2482,6 +2501,14 @@ void validate_matmul_mcast1d_config(
             config_name,
             input_tensor_b.memory_config().memory_layout());
     }
+    // With a sharded output, the in0 and in1 multicast programs (mcast_in0 true or false) use the core's output shard
+    // as the output buffer, which holds the output of one batch. gather_in0 uses different kernels, which this check
+    // does not cover.
+    if (!program_config.gather_in0) {
+        const uint32_t B = program_config.fuse_batch ? 1u : get_batch_size(a_shape_padded);
+        operations::matmul::utilities::validate_block_sharded_output_batch(
+            attributes.output_mem_config.is_sharded(), B, program_config.per_core_M, program_config.per_core_N);
+    }
 }
 
 // Shared Mcast2D/Mcast1D preamble — the fuse_batch gate. Fused batch requires B batch==1,
@@ -3217,7 +3244,9 @@ MatmulParams create_matmul_attributes(
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     // When inputs are FLOAT32 (which drives fp32_dest_acc_en=True by default), use HiFi3 on Wormhole B0.
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    math_fidelity = are_inputs_32F ? (is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4) : math_fidelity;
+    math_fidelity = are_inputs_32F
+                        ? (is_wormhole ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4)
+                        : math_fidelity;
 
     bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(
         input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b, parameters.program_config));

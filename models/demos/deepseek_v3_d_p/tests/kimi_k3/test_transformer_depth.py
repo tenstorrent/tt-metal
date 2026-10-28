@@ -95,6 +95,10 @@ DEEP_TRACE_FROM = 12
 # exists for full-depth bf8_b drift), so hold the tighter one and let a real regression show.
 KV_CACHE_PCC = 0.96
 
+# The 8x4 placement's axes, for the tests that import this module's setup (test_chunked_prefill,
+# test_dspark_taps). The depth ladder itself runs every PLACEMENTS entry.
+SP_AXIS, TP_AXIS = 0, 1
+
 PLACEMENTS = [
     pytest.param(
         (8, 4),
@@ -123,6 +127,8 @@ PLACEMENTS = [
         id="4x4-sp1",
     ),
 ]
+# PLACEMENTS' 8x4 entry as (mesh_device, device_params), for the tests that import this module's setup.
+PLACEMENTS_8X4 = [pytest.param(*p.values[:2], marks=p.marks, id=p.id) for p in PLACEMENTS if p.values[2] == SP_AXIS]
 
 
 def _model_state_dict(checkpoint: Path, num_layers: int, root: str, cache: Path | None = None) -> dict:
@@ -141,7 +147,7 @@ def _model_state_dict(checkpoint: Path, num_layers: int, root: str, cache: Path 
     return {"embed_weight": model["embed_weight"].float(), "norm_weight": model["norm_weight"], "layers": layers}
 
 
-def _compose(mesh_device, tensor, sp_axis, tp_axis):
+def _compose(mesh_device, tensor, sp_axis=SP_AXIS, tp_axis=TP_AXIS):
     dims = [0, 0]
     dims[sp_axis], dims[tp_axis] = 2, 3
     return ttnn.to_torch(

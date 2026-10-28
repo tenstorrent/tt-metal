@@ -24,7 +24,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_mode
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, resolve_checkpoint, resolve_trace
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
     DEEP_LAYER_PCC,
-    PLACEMENTS,
+    PLACEMENTS_8X4,
     SEQ_LEN,
     SHALLOW_LAYER_PCC,
     SP_AXIS,
@@ -47,7 +47,7 @@ GOLDEN_TAPS_ENV = "PREFILL_DFLASH_GOLDEN_TAPS_DIR"
 
 
 @pytest.mark.timeout(4800)
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS_8X4, indirect=True)
 @pytest.mark.parametrize("num_layers", [9, 25], ids=["L9", "L25"])
 def test_dspark_taps_match_golden(mesh_device, device_params, num_layers):
     checkpoint = resolve_checkpoint()

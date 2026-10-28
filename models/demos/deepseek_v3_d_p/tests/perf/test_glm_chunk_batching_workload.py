@@ -41,6 +41,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.common.prefill.prefill_chunk import PrefillChunk
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -59,9 +60,6 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime,
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
 from tests.ttnn.utils_for_testing import comp_pcc
-
-# TODO: import from models.demos.common.prefill.prefill_chunk once #62535 moves it there.
-from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk
 
 # Sweep knobs (GLM_WORKLOAD_*): the layer window, the history every user has already prefilled, and the new
 # requests (comma-separated lengths, one user each; a request may span several chunks).
