@@ -4,8 +4,8 @@
 
 #include "rmsnorm_bw.hpp"
 
-#include "core/compute_kernel_config.hpp"
 #include "device/rmsnorm_bw_device_operation.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::metal {
 
@@ -23,15 +23,7 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw(
 
     // dL_dgamma requires sum over batches so we cannot perform this sum in the kernel. Instead we return the
     // dL_dgamma_components and reduce it here.
-    return {
-        result[0],
-        ttnn::sum(
-            result[1],
-            /* dim_arg */ ttsl::SmallVector<int>{0, 1, 2},
-            /* keep_dim */ true,
-            /* output_mem_config */ std::nullopt,
-            /*compute_kernel_config */ core::ComputeKernelConfig::precise())  // [B,1,S,C] -> [1,1,1,C]
-    };
+    return {result[0], ttnn_fixed::sum_over_leading_dims(result[1])};  // [B,1,S,C] -> [1,1,1,C]
 }
 
 }  // namespace ttml::metal

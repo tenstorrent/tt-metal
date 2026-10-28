@@ -13,7 +13,6 @@
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
-#include "core/compute_kernel_config.hpp"
 #include "metal/operations.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -214,12 +213,7 @@ autograd::TensorPtr rmsnorm_composite(
             none,
             none,
             none);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast); checked by add_grad
-        auto dL_dg = ttnn::sum(
-            dL_dg_components,
-            /* dim_arg */ ttsl::SmallVector<int>{0, 1, 2},
-            /* keep_dim */ true,
-            /* output_mem_config */ std::nullopt,
-            /*compute_kernel_config */ core::ComputeKernelConfig::precise());  // [B,1,S,C] -> [1,1,1,C]
+        auto dL_dg = ttnn_fixed::sum_over_leading_dims(dL_dg_components);  // [B,1,S,C] -> [1,1,1,C]
 
         gamma->add_grad(dL_dg);
     };
