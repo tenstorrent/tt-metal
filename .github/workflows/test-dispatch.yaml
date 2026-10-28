@@ -53,6 +53,16 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      hf-host-path:
+        required: false
+        type: string
+        default: ""
+        description: "Optional: host directory with the HF hub and tt_cache trees, mounted read-only at /mnt/hf"
+      use-artifacts-from-run:
+        required: false
+        type: string
+        default: ""
+        description: "Optional: a run whose tt-metal build to reuse instead of building"
 
 run-name: ${{ inputs.description }}
 jobs:
@@ -76,10 +86,11 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run }}
   test-dispatch:
     needs: [check-harbor, build-artifact]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
-    timeout-minutes: 120
+    timeout-minutes: 360
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     container:
       image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
@@ -94,6 +105,7 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
         - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
+        - ${{ inputs.hf-host-path != '' && format('{0}:/mnt/hf:ro', inputs.hf-host-path) || '/donotmount-hf:/donotmount-hf:ro' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -141,5 +153,13 @@ jobs:
           uv pip install pytest-repeat
           ${{ inputs.command }}
         shell: bash
+      - name: Upload archloop profile
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: archloop-profile
+          path: /work/generated/archloop/out
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
