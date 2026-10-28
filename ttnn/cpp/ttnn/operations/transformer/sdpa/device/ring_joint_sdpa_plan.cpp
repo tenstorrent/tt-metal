@@ -223,8 +223,9 @@ double floater_compute_to_transfer(
         return static_cast<double>(tt::tt_metal::tile_size(tensor.dtype())) /
                static_cast<double>(tt::constants::TILE_HW);
     };
-    // Q's logical shape: the factory schedules Q chunks from it, so padded rows do no work.
     const auto& q_shape = tensor_args.input_q.logical_shape();
+    // The rows the scheduled Q chunks compute: num_q_chunks whole chunks, so a ragged last chunk counts in full.
+    const uint32_t q_rows = ksplit.num_q_chunks * args.get_q_chunk_size();
     // k_expand_weight: [1, heads, no-PE width, latent width].
     const auto& wuk_shape = tensor_args.k_expand_weight->logical_shape();
     const uint32_t v_dim = tensor_args.v_head_dim(args.latent_v_head_dim);
@@ -237,7 +238,7 @@ double floater_compute_to_transfer(
         args.program_config->matmul_math_fidelity.value_or(ttnn::get_math_fidelity(args.compute_kernel_config));
     return ring_joint::floater_compute_to_transfer({
         .heads = static_cast<uint32_t>(q_shape[1]),
-        .q_rows = static_cast<uint32_t>(q_shape[2]),
+        .q_rows = q_rows,
         .qk_dim = static_cast<uint32_t>(q_shape[3]),
         .v_dim = v_dim,
         .expand_in = static_cast<uint32_t>(wuk_shape[3]),

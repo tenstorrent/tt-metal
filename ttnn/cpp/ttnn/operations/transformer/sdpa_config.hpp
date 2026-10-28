@@ -30,9 +30,9 @@ struct SDPAProgramConfig {
     // so no bf16 running sum spans the whole prefix. Refused with a K split, a sliding window, or several Q chunks
     // per core (raise q_chunk_size).
     bool segmented_accumulation = false;
-    // Ring joint expanded K only, for tuning: replaces the floater schedule the op takes from its tuned table
-    // (ring_joint::kTunedFloaterSchedules) as {iter0, iter1, frac0, frac1, donate_tail, merge0, ..., merge4}; empty
-    // runs without floaters. Unset uses the table, where a shape without an entry runs without floaters.
+    // Ring joint expanded K only, for tuning: the floater schedule, replacing the op's own choice (the layout's
+    // schedule in ring_joint::kFloaterLayoutSchedules where floaters pay off), as {iter0, iter1, frac0, frac1,
+    // donate_tail, merge0, ..., merge4}; empty runs without floaters. A call that cannot run floaters refuses one.
     std::optional<std::vector<uint32_t>> floater_schedule;
 };
 

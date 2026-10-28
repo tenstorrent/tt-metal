@@ -12,9 +12,9 @@ each prefix. The MLA layers, caches and inputs are built once; a candidate costs
 
 Every measurement is appended to generated/floater_tune/<variant>_c<chunk>.jsonl (one JSON object per line) before
 the next starts, and a rerun skips what is there, so a crash or a hung schedule costs one candidate: a candidate that
-started and never finished is not tried again. Only the op refusing a schedule marks it invalid; any other error stops
-the run, and that candidate is retried by the next one. The result is printed as a kFloaterLayoutSchedules entry, or as "no floaters" when the best
-schedule does not beat none by MIN_GAIN.
+started and never finished (a crash, or a device timeout) is not tried again. Only the op refusing a schedule marks
+it invalid; any other error stops the run, and the next one retries that candidate. The result is printed as a
+kFloaterLayoutSchedules entry, or as "no floaters" when the best schedule does not beat none by MIN_GAIN.
 
     scripts/run_safe_pytest.sh models/demos/deepseek_v3_d_p/tests/perf/test_tune_ring_joint_floaters.py \\
         -m floater_tune -k "k3 and c5k" -s
@@ -88,6 +88,25 @@ def _neighbours(schedule, frac_step):
     return [s for s in moves if valid(s)]
 
 
+# The op's refusals of a schedule (ring_joint_floater_layout.hpp, ring_joint_sdpa_plan.cpp): what makes a candidate
+# invalid. Any other error, including others raised from the floater code, stops the run.
+SCHEDULE_REFUSALS = (
+    "floater_schedule: ",
+    "floater_schedule is set, but this call cannot run floaters",
+    "ring_joint floaters: invalid schedule",
+    "ring_joint floaters: no merge iteration",
+    "ring_joint floaters: group",
+)
+
+
+def _schedule_refusal(error):
+    """The op's message refusing the schedule, if `error` is one; else None."""
+    for line in str(error).splitlines():
+        if any(refusal in line for refusal in SCHEDULE_REFUSALS):
+            return line.strip()[:300]
+    return None
+
+
 def _sdpa_ns(mesh_device, forward):
     """Device time of the fused gather + SDPA program in one forward, on its slowest chip. Records of an earlier
     dispatch can arrive late; runtime ids grow, so the newest such program is this forward's."""
@@ -118,10 +137,19 @@ class _Log:
         if self.path.exists():
             text = self.path.read_text()
             if text and not text.endswith("\n"):
-                # A record cut short by a crash mid-append: drop it, so the next record starts on its own line.
-                text = text[: text.rfind("\n") + 1]
-                self.path.write_text(text)
-                logger.warning(f"floater tune: dropped a record cut short at the end of {self.path}")
+                # A crash mid-append: end the file on a line break so the next record starts on its own line, keeping
+                # the tail if it is a whole record and cutting it off (in place) if not.
+                tail_start = text.rfind("\n") + 1
+                try:
+                    json.loads(text[tail_start:])
+                    with self.path.open("a") as f:
+                        f.write("\n")
+                    text += "\n"
+                except json.JSONDecodeError:
+                    with self.path.open("r+") as f:
+                        f.truncate(len(text[:tail_start].encode()))
+                    text = text[:tail_start]
+                    logger.warning(f"floater tune: dropped a record cut short at the end of {self.path}")
             for n, line in enumerate(text.splitlines()):
                 try:
                     entry = json.loads(line)
@@ -202,6 +230,7 @@ def test_tune_ring_joint_floaters(request, mesh_device, device_params, variant, 
                 entry = log.results[text]
                 return entry["ns"] if entry["status"] == "ok" else None
             log.write({"schedule": text, "status": "started"})
+            outcome = None
             try:
                 ns = []
                 for forward, mla in forwards:
@@ -209,22 +238,28 @@ def test_tune_ring_joint_floaters(request, mesh_device, device_params, variant, 
                     try:
                         tt_out = forward()  # compiles: the op checks the schedule here
                     except RuntimeError as error:
-                        if "floater" not in str(error):  # not the op refusing the schedule
+                        reason = _schedule_refusal(error)
+                        if reason is None:
                             raise
-                        reason = str(error).splitlines()[0][:300]
-                        log.write({"schedule": text, "status": "invalid", "reason": reason})
-                        logger.info(f"floater tune: {text} invalid: {reason}")
-                        return None
+                        outcome = {"schedule": text, "status": "invalid", "reason": reason}
+                        break
                     ttnn.deallocate(tt_out)
                     ns.append(sorted(_sdpa_ns(mesh_device, forward) for _ in range(SAMPLES))[SAMPLES // 2])
-            except BaseException:
-                # Stopped by something other than the schedule (the profiler, the device, an interrupt): retry it.
-                log.write({"schedule": text, "status": "aborted"})
+                else:
+                    outcome = {"schedule": text, "status": "ok", "ns": ns}
+                log.write(outcome)
+            except BaseException as error:
+                # Stopped before an outcome was recorded by something other than the schedule (the profiler, an
+                # interrupt): retry it. A device timeout is a hang; its "started" stays, so it is not tried again.
+                if outcome is None and "TIMEOUT" not in str(error):
+                    log.write({"schedule": text, "status": "aborted"})
                 raise
             finally:
                 # Each candidate is its own program; drop them so the cache does not grow with the search.
                 mesh_device.clear_program_cache()
-            log.write({"schedule": text, "status": "ok", "ns": ns})
+            if outcome["status"] == "invalid":
+                logger.info(f"floater tune: {text} invalid: {outcome['reason']}")
+                return None
             logger.info(f"floater tune: {text}: " + ", ".join(f"{n / 1e6:.3f} ms" for n in ns))
             return ns
 

@@ -9079,8 +9079,10 @@ def test_ring_joint_attention_chunked_unrolled_v_perf_check(model_name, ring_siz
 # expansion (every K row once per head, latent 512 -> 128), 1.335x the attention-only FLOPs at this shape; it is not
 # comparable to the absorbed rows above.
 if MESH_CONFIG.is_galaxy:
-    # sp=8 tp=4, the Galaxy's floater schedules (ring_joint_floater_layout.hpp): measured on the Blackhole Galaxy, two
-    # runs within 0.3% (K3 61.06 / 60.88%, K2.7 55.89 / 55.62%).
+    # sp=8 tp=4, the Galaxy's floater schedules (ttnn/cpp/ttnn/operations/transformer/sdpa/device/
+    # ring_joint_floater_layout.hpp): measured on a high-power Blackhole Galaxy, two runs within 0.3 percentage points
+    # (K3 61.06 / 60.88%, K2.7 55.89 / 55.62%). +/-1.5% as on the LoudBox rows: two samples, one host, not yet compared
+    # with the CI host.
     EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, ring_size, expected_util, margin)
         ("kimi_k3_expanded_k", 8, 60.97, 0.015),
@@ -9115,6 +9117,10 @@ def expanded_k_expansion_utilization(model, chunk_size, perf_chunk, duration_ns,
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+@pytest.mark.skipif(
+    MESH_CONFIG.is_galaxy and not is_high_power(),
+    reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
+)
 def test_ring_joint_attention_chunked_expanded_k_perf_check(model_name, ring_size_expected, expected_util, margin):
     """Math util of the final chunk of Kimi K3 / K2.7 production MLA chunked prefill (expanded K in head pairs and
     K-split bands, indexed latent K cache, batch-1 per-head bfp8 V) on an SP ring of ring_size_expected."""
