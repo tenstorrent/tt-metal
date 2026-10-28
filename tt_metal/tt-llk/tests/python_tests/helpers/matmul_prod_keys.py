@@ -38,10 +38,10 @@ _MAIN_PART, _, _FORCED_PART = _HEADER.partition("matmul_forced_form_cells[] = {"
 _MAIN_CELLS = _cells(_MAIN_PART)
 # matmul_forced_form_cells: cells that take the form 'R', 'h' or 'r' whatever the table says
 _FORCED_CELLS = [
-    (fid, int(sync), int(mink), int(maxk, 0), acc == "true", DataFormat[i], DataFormat[o], DataFormat[p], int(minw), int(maxw, 0), int(minh), wide == "true", form, several == "true", int(sections or 0), int(maxh, 0) if maxh else 0xFFFF)
-    for fid, sync, mink, maxk, acc, i, o, p, minw, maxw, minh, wide, form, several, sections, maxh in re.findall(
+    (fid, int(sync), int(mink), int(maxk, 0), acc == "true", DataFormat[i], DataFormat[o], DataFormat[p], int(minw), int(maxw, 0), int(minh), wide == "true", form, several == "true", int(sections or 0), int(maxh, 0) if maxh else 0xFFFF, in0_only == "true")
+    for fid, sync, mink, maxk, acc, i, o, p, minw, maxw, minh, wide, form, several, sections, maxh, in0_only in re.findall(
         r"\{MathFidelity::(\w+), (\d), (\d+), (0x[0-9A-Fa-f]+|\d+), (true|false), DataFormat::(\w+), DataFormat::(\w+), DataFormat::(\w+), "
-        r"(\d+), (0x[0-9A-Fa-f]+|\d+), (\d+), (true|false), '(\w)'(?:, (true|false))?(?:, (\d))?(?:, (0x[0-9A-Fa-f]+|\d+))?\},",
+        r"(\d+), (0x[0-9A-Fa-f]+|\d+), (\d+), (true|false), '(\w)'(?:, (true|false))?(?:, (\d))?(?:, (0x[0-9A-Fa-f]+|\d+))?(?:, (true|false))?\},",
         _FORCED_PART.split("};")[0],
     )
 ]
@@ -97,20 +97,35 @@ def _cell_hit(cells, fidelity, kb, fp32_dest, in_format, out_format, pack_format
     return False
 
 
-def main_form_cell(fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks=False, row_tiles=0, full_sync=False, min_side=99) -> bool:
-    """matmul_main_form_cell_selected of llk_matmul_forms.h for equal in0 and in1 formats."""
+def mixed_main_form(fidelity, kb, fp32_dest, in_format, in_format_b, out_format, full_sync) -> bool:
+    """matmul_mixed_main_form of llk_matmul_forms.h; in_format is in1 (SrcA), in_format_b is in0 (SrcB)."""
+    if in_format_b is None or fidelity != MathFidelity.HiFi2:
+        return False
+    block = (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+    return (
+        (in_format_b == DataFormat.Float32 and in_format in block)
+        or (in_format == DataFormat.Float32 and in_format_b in block)
+        or (not fp32_dest and kb == 1 and not full_sync and in_format == DataFormat.Bfp8_b and in_format_b == DataFormat.Float16_b and out_format == DataFormat.Float32)
+    )
+
+
+def main_form_cell(fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks=False, row_tiles=0, full_sync=False, min_side=99, in_format_b=None) -> bool:
+    """matmul_main_form_cell_selected of llk_matmul_forms.h; the table cells for equal in0 and in1 formats, in_format_b (in0) given for a mixed pair."""
+    if mixed_main_form(fidelity, kb, fp32_dest, in_format, in_format_b, out_format, full_sync):
+        return True
     return _cell_hit(_MAIN_CELLS, fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks, row_tiles, full_sync, min_side)
 
 
-def forced_form(fidelity, kb, fp32_dest, in_format, out_format, pack_format, full_sync, rt, ct, several_blocks=False, sections=1) -> str:
+def forced_form(fidelity, kb, fp32_dest, in_format, out_format, pack_format, full_sync, rt, ct, several_blocks=False, sections=1, in_format_b=None) -> str:
     """matmul_forced_form of llk_matmul_forms.h: 'R', 'h', 'r' or '' (the table's form), for a block of rt x ct tiles."""
-    for fid, sync, mink, maxk, acc, i, o, p, minw, maxw, minh, wide, form, several, sec, maxh in _FORCED_CELLS:
+    for fid, sync, mink, maxk, acc, i, o, p, minw, maxw, minh, wide, form, several, sec, maxh, in0_only in _FORCED_CELLS:
         if (
             fid == fidelity.name
             and sync == (1 if full_sync else 0)
             and mink <= kb <= maxk
             and acc == fp32_dest
-            and in_format == i
+            and (i in (in_format, in_format_b) if in_format_b is not None else in_format == i)
+            and (not in0_only or (in_format if in_format_b is None else in_format_b) == i)
             and out_format == o
             and pack_format == p
             and minw <= ct <= maxw
