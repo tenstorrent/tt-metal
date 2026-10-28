@@ -422,8 +422,9 @@ def _assert_signed_zero_partition_valid():
             "reclassified -- an entry here means the kernel regressed."
         ),
         MathOperation.Heaviside: (
-            "heaviside(-0.0) returns the scalar now. Same sfpi::abs(v) guard and the same "
-            "SFPSETCC reasoning as Sign."
+            "heaviside(-0.0) returns the scalar now. Its zero arm ignores the sign bit, as Sign's "
+            "does (SFPLZ NOSGN on Wormhole, sfpi::abs(v) on Blackhole), for the same SFPSETCC "
+            "reasoning."
         ),
         MathOperation.Signbit: (
             "Signbit's divergences were a stimulus limitation, not a kernel defect. An entry "

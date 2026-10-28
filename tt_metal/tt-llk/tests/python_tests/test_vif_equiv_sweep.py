@@ -168,9 +168,11 @@ assert set(_NONFINITE_EXPECTED) == set(_FLOAT_OPS)
 # tt-isa-documentation specifies only "provided that VC is neither negative zero
 # nor any kind of NaN", so the sign-bit read on -0.0 was outside the primitive's
 # contract rather than a hardware fault. Both kernels now take the zero arm on
-# -0.0 by testing sfpi::abs(v), which clears the sign bit and so brings -0.0
-# inside that contract (NaN stays outside it: SFPABS leaves -NaN sign-set), so
-# those two rows agree with torch and every row below is now the IEEE answer.
+# -0.0 by testing the magnitude bits alone: sign through sfpi::abs(v), which
+# clears the sign bit and so brings -0.0 inside that contract (NaN stays outside
+# it: SFPABS leaves -NaN sign-set), heaviside through SFPLZ NOSGN, which ignores
+# the sign bit. So those two rows agree with torch and every row below is now the
+# IEEE answer.
 # The table stays because ulp_sweep still cannot reach -0.0, and it still pins
 # these bit-exactly so a later rewrite of these kernels cannot move them
 # unnoticed.
