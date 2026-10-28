@@ -358,6 +358,30 @@ def test_a_waived_step_covers_the_block_out_of_its_swap_test(gspec, noise, monke
     assert not run_swap_test(s, "blk", SWAPPED)
 
 
+def test_a_waived_step_covers_the_golden_check_of_the_steps_it_feeds(gspec, noise, monkeypatch):
+    """F221: DeepSeek-V4.1 swap_swa_engram_02..18: the owner waived the bfp8 engram rows (rel 3.5e-3 vs exact), and
+    the next swapped step, engram_kv, failed only its vs-golden check (0.00350 > 0.00335) on the rows' gap while it
+    matched the CPU on the same inputs. A waiver of an earlier swapped step now covers a later step's vs-golden check
+    (recorded <tag>_vs_golden_err_waived); its vs-CPU checks still gate, and a later step's waiver covers nothing
+    before it."""
+    s = gspec()
+    noise(0.0)
+    monkeypatch.setitem(fixture_model.NOISE, "steps", {"attn_norm": 0.03})  # only the first swapped step is off
+    s.data.setdefault("tests", {})["waivers"] = {"attn_residual": "a step after attention (owner)"}
+    assert not run_swap_test(s, "blk", SWAPPED, checks="steps")
+    m = got()
+    assert m["swap_attention_vs_golden_err"] > m["swap_attention_vs_golden_err_limit"]
+    assert "swap_attention_vs_golden_err_waived" not in m
+    s.data["tests"]["waivers"] = {"attn_norm": "device format gap; judged end to end (owner)"}
+    M.reset("T")
+    assert run_swap_test(s, "blk", SWAPPED, checks="steps")
+    m = got()
+    assert m["swap_attn_norm_waived"] == 1 and m["swap_attention_vs_golden_err_waived"] == 1
+    monkeypatch.setitem(fixture_model.NOISE, "steps", {"attn_norm": 0.03, "attention": 0.5})  # attention itself off
+    M.reset("T")
+    assert not run_swap_test(s, "blk", SWAPPED, checks="steps")
+
+
 def test_a_topk_step_is_compared_as_a_set_not_by_position():
     """F160: DeepSeek-V4.1 swap indexer: the reference returns ascending ids, the device's top-k returns them by score;
     a positional match gave 0.0015 for the same set. Index steps compare per-row overlap."""

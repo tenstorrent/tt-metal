@@ -325,6 +325,7 @@ def _calib(s, kind) -> float:
 
 
 _STEP_CTX: dict = {}  # step -> (floor, chain) of the running swap test (F79: frozen tests wrap _check_step)
+_UPSTREAM_WAIVED: dict = {}  # step -> the first owner-waived swapped step before it in the block (F221)
 
 
 def CC_limits(s) -> dict:
@@ -432,6 +433,10 @@ def _check_step(s, block_type: str, layer: int, st, got, cpu, golden, bridged: b
             metrics.record(f"{tag}_vs_golden_err_limit", gl_lim)
             good = e <= gl_lim
             print(f"{'ok  ' if good else 'FAIL'} {tag}_vs_golden_err: rel={e:.6f} (<= {gl_lim:.6f}, {how})")
+            up = _UPSTREAM_WAIVED.get(st.name)
+            if not good and up:  # F221: an earlier waived step's gap reaches this step's input; vs the CPU still gates
+                print(f"  {tag}_vs_golden_err: its inputs carry the waived step {up}")
+                good = NF.waive(s, block_type, up, False, got, f"{tag}_vs_golden_err", golden)
             ok = good and ok
     if not cpu.is_floating_point():
         sc = (model or {}).get("scores") if isinstance(model, dict) else None
@@ -739,6 +744,14 @@ def run_swap_test(
     ok = out_ok and ok
     if checks == "steps":
         _STEP_CTX.clear()
+        _UPSTREAM_WAIVED.clear()
+        from models.demos.common.bringup.testing import noise_floor as NF
+
+        order = sorted(swapped, key=names.index)
+        for i, name in enumerate(order):
+            up = [n for n in order[:i] if NF.waiver(s, block_type, n)]
+            if up:
+                _UPSTREAM_WAIVED[name] = up[0]
         for name in swapped:
             out_name = _step(ref, layer, name).output
             _STEP_CTX[name] = (models.get(name), [r.get(out_name) for r in chain] if chain else None)

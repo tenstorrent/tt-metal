@@ -2296,3 +2296,16 @@ rungs: the stamp's environment key kept only `BRINGUP_` / `TT_` variables, so th
 bfp8 run and the A/B compared a run with itself. `stamps.env_key` now also keeps every prefix a model declares in its
 `tt/settings.py` (`Settings("DS41_", ...)`, found by `stamps.settings_prefixes()`). With no such variable set the key
 is unchanged, so no kept result is invalidated. Selftest: `test_a_model_switch_in_the_environment_changes_the_stamp`.
+
+## F221: a waived step covers the golden check of the later steps it feeds (DeepSeek-V4.1 2x2 engram bfp8 default, 2026-10-28)
+
+The owner waived the engram_rows step when its rows became bfp8 (rel 3.5e-3 vs the exact rows, limit 0). Swap tests
+S.swa_engram.02 / .03 / .18 then failed on one check only: swap_engram_kv_vs_golden_err 0.00350 > 0.00335, the rows'
+gap carried into the next step, while engram_kv matched the CPU on the same inputs (0.0029 <= 0.0034). F158 passed a
+waiver on to the block out, not to a later step's vs-golden check. `testing/component.run_swap_test` now records, per
+swapped step, the first waived swapped step before it in the block (`_UPSTREAM_WAIVED`); `_check_step` waives that
+step's vs-golden failure under it (`NF.waive`: structural bound kept, `<tag>_vs_golden_err_waived` recorded). Its
+vs-CPU checks still gate; a later step's waiver covers nothing before it. Selftest
+`test_swap_checks.py::test_a_waived_step_covers_the_golden_check_of_the_steps_it_feeds` (fixture: per-step noise,
+`fixture_model.NOISE["steps"]`); full selftests 650 pass (1 failure from before: xing40 fixed threshold). Device:
+S.swa_engram.18 and S.enc_source_engram.20 pass with ENGRAM_ROWS=bfp8.

@@ -287,14 +287,15 @@ def tokenizer(spec):
 
 
 # ---- fake device hooks: the reference plus small deterministic noise, for testing the device-side test helpers
-NOISE = {"value": 1e-3}
+NOISE = {"value": 1e-3}  # optional "steps": {step: value} overrides it per step (F221)
 
 
-def _noisy(t: torch.Tensor, seed: int) -> torch.Tensor:
-    if not t.is_floating_point() or NOISE["value"] == 0:
+def _noisy(t: torch.Tensor, seed: int, step: str | None = None) -> torch.Tensor:
+    v = NOISE.get("steps", {}).get(step, NOISE["value"])
+    if not t.is_floating_point() or v == 0:
         return t
     g = torch.Generator().manual_seed(seed)
-    return t + NOISE["value"] * t.abs().mean() * torch.randn(t.shape, generator=g)
+    return t + v * t.abs().mean() * torch.randn(t.shape, generator=g)
 
 
 def device_component(mesh, spec, layer, name):
@@ -307,7 +308,9 @@ def device_component(mesh, spec, layer, name):
             ref.load_state(state, layer, ctx.extra["state_prefix"], ctx.extra["prefix_len"])
         for j, t in ctx.extra.get("source_state", {}).items():  # F65: the source layers' state after this chunk
             ref.load_state(state, j, t, ctx.extra["source_len"])
-        return _noisy(cpu(Ctx(layer, ctx.start, ctx.length, state, {"tokens": ctx.extra.get("tokens")}), *x), layer)
+        return _noisy(
+            cpu(Ctx(layer, ctx.start, ctx.length, state, {"tokens": ctx.extra.get("tokens")}), *x), layer, name
+        )
 
     return fn
 
