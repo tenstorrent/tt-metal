@@ -586,7 +586,20 @@ class TtWindowAttention:
         dealloc(qa)
         return q_rm
 
-    def _sdpa(self, q_rm, table, index):
+    def _sdpa(self, q_rm, table, index, window=None):
+        if window is not None:  # CKV_FORMAT=bfp4_rows: bfloat4_b row records + the bf16 window (sdpa fork ROW_BFP4)
+            return ttnn.bringup.sparse_sdpa(
+                q_rm,
+                table,
+                index,
+                self.d,
+                kv_format=ttnn.bringup.SparseKVFormat.ROW_BFP4,
+                scale=1.0,
+                k_chunk_size=SDPA_K_CHUNK,
+                compute_kernel_config=self.ckc,
+                attention_sink=self.sink,
+                kv_window=window,
+            )
         return ttnn.transformer.sparse_sdpa(
             q_rm,
             table,

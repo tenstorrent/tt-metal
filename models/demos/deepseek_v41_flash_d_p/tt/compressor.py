@@ -150,6 +150,14 @@ def static_tables() -> bool:
     return settings.get("STATIC_TABLES") == "on"
 
 
+def ckv_bfp4() -> bool:
+    """CKV_FORMAT=bfp4_rows (FIX.8): the attention table's history as 288 B bfloat4_b row records (``AttnTable``)."""
+    return settings.get("CKV_FORMAT") == "bfp4_rows"
+
+
+BFP4_ROW_BYTES = 288  # 512 values: 32 shared exponents + 256 bytes of nibbles (tt/ckv_codec.py format B)
+
+
 class AttnTable:
     """STATIC_TABLES=on (P.21, fusion report item 3): the sparse-attention table of one KV source and slot, allocated
     once with the source's served compressed cache and kept:
@@ -163,28 +171,66 @@ class AttnTable:
     cache by ``TtServedRows``: its device ``write`` appends the chunk's rows (the replicated natural-order rows it was
     given) with one slice_write, its host ``load_host`` writes the loaded rows the same way. A top-k id j is then the
     table row j as it is, and the window index lists are load-time lists offset by ``base`` (``index``). The shape
-    never changes between chunks."""
+    never changes between chunks.
+
+    CKV_FORMAT=bfp4_rows (FIX.8): ``buf`` is the history alone, [1, 1, hist, 288] uint8 ROW_MAJOR bfloat4_b row records
+    written by ttnn.bringup.ckv_bfp4 (``append_tiles``: the compressor's gathered bf16 tiles, rounded to nearest even;
+    it returns the rounded bf16 rows for the served cache), and ``win`` the window region [1, 1, 128 + S, 512] bf16
+    (base 0): sparse_sdpa's ROW_BFP4 reads the two, the index list [window ids | top-k ids] as built, not compacted."""
 
     def __init__(self, mesh, tables, hist: int, width: int):
         g = tables.geo
         self.mesh, self.width = mesh, width
-        self.hist = self.base = hist
-        self.rows = hist + WINDOW + g.chunk
+        self.hist = hist
+        self.bfp4 = ckv_bfp4()
+        self.win = None
+        if self.bfp4:
+            self.base, self.rows = 0, WINDOW + g.chunk
+            self.buf = ttnn.zeros(
+                [1, 1, hist, BFP4_ROW_BYTES],
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=DRAM,
+            )
+            self.win = ttnn.zeros(
+                [1, 1, self.rows, width],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=DRAM,
+            )
+        else:
+            self.base, self.rows = hist, hist + WINDOW + g.chunk
+            self.buf = ttnn.zeros(
+                [1, 1, self.rows, width],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=DRAM,
+            )
         assert self.rows < (1 << 31), self.rows
-        self.buf = ttnn.zeros(
-            [1, 1, self.rows, width], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=DRAM
-        )
         self.index = tables.index_lists(self.base)  # {start class: window ids + base}, chip (r, c) its query rows
 
     def _put(self, rows_rm: ttnn.Tensor, row0: int) -> None:
+        """bf16 rows at row0 of the window region (bfp4_rows) or of the whole table (bf16)."""
+        dst = self.win if self.bfp4 else self.buf
         n = rows_rm.shape[-2]
         assert rows_rm.shape[-1] == self.width and 0 <= row0 and row0 + n <= self.rows, (rows_rm.shape, row0, self.rows)
-        ttnn.experimental.slice_write(rows_rm, self.buf, [0, 0, row0, 0], [1, 1, row0 + n, self.width], [1, 1, 1, 1])
+        ttnn.experimental.slice_write(rows_rm, dst, [0, 0, row0, 0], [1, 1, row0 + n, self.width], [1, 1, 1, 1])
 
     def append(self, rows_rm: ttnn.Tensor, g0: int) -> None:
         """History: compressed rows [g0, g0 + n) = rows_rm [1, 1, n, 512] bf16 ROW_MAJOR, replicated (device)."""
+        assert not self.bfp4, "CKV_FORMAT=bfp4_rows: the history is written by append_tiles"
         assert g0 + rows_rm.shape[-2] <= self.hist, (g0, rows_rm.shape, self.hist)
         self._put(rows_rm, g0)
+
+    def append_tiles(self, rows_tile: ttnn.Tensor, g0: int, rounded: bool = True):
+        """CKV_FORMAT=bfp4_rows: history rows [g0, g0 + n) from rows_tile [1, 1, n, 512] bf16 TILE (n % 32 == 0,
+        replicated; not consumed) as row records; ``rounded``: also return their bf16 values (TILE, the caller frees).
+        """
+        assert self.bfp4 and g0 + rows_tile.shape[-2] <= self.hist, (self.bfp4, g0, rows_tile.shape, self.hist)
+        return ttnn.bringup.ckv_bfp4(rows_tile, self.buf, g0, rounded=rounded, memory_config=DRAM)
 
     def put_window(self, carry: ttnn.Tensor, kv_rm: ttnn.Tensor) -> None:
         """The window region = [carry 128 | chunk S] (device; both bf16 ROW_MAJOR, replicated, not consumed)."""
@@ -196,8 +242,20 @@ class AttnTable:
         self._put(kv_rm, self.base + WINDOW)
 
     def load_host(self, rows: torch.Tensor, g0: int) -> None:
-        """Host boundary: compressed rows [n, 512] of groups [g0, g0 + n) (a loaded prefix)."""
-        if not rows.shape[0]:
+        """Host boundary: compressed rows [n, 512] of groups [g0, g0 + n) (a loaded prefix). CKV_FORMAT=bfp4_rows:
+        encoded on the device like a chunk's rows (the served rows hold bfp4-rounded values: the same records), n
+        padded to whole tiles with zero rows (groups past the prefix, written again by their own chunk)."""
+        n = rows.shape[0]
+        if not n:
+            return
+        if self.bfp4:
+            pad = -(-n // 32) * 32
+            assert g0 + pad <= self.hist, (g0, n, self.hist)
+            x = torch.zeros(pad, self.width)
+            x[:n] = rows.float().reshape(n, self.width)
+            t = _upload(self.mesh, x.reshape(1, 1, pad, self.width).to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+            self.append_tiles(t, g0, rounded=False)
+            dealloc(t)
             return
         t = _upload(
             self.mesh, rows.reshape(1, 1, -1, self.width).to(torch.bfloat16), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT
@@ -206,7 +264,7 @@ class AttnTable:
         dealloc(t)
 
     def free(self) -> None:
-        for t in [self.buf, *self.index.values()]:
+        for t in [self.buf, *([self.win] if self.win is not None else []), *self.index.values()]:
             if t.is_allocated():
                 dealloc(t)
         self.index = {}
@@ -256,6 +314,7 @@ class TtServedRows:
         self.version = 0  # bumped by every write (INDEXER_GLUE=on: tt/sparse_attention.ChunkMemo keys on it)
         # STATIC_TABLES=on (P.21): a KV source's compressed KV keeps the sparse-attention table of its readers in step
         self.table = AttnTable(mesh, tables, self.max_seq // ratio, width) if attn_table and static_tables() else None
+        assert not (attn_table and ckv_bfp4() and self.table is None), "CKV_FORMAT=bfp4_rows needs STATIC_TABLES=on"
         if ratio > 1:  # metadata-path values (load time): starts / valid ends in compressed rows, slot ids
             self._pos = tables.scalars(32 // ratio, max_seq // 32 + 1)
             self._slot = tables.scalars(1, slab.slots)
@@ -278,9 +337,10 @@ class TtServedRows:
         for t in (slot, kv, valid):
             self._slot.release(t) if t is slot else self._pos.release(t)
 
-    def write(self, rows_rm: ttnn.Tensor, start: int, end: int) -> None:
+    def write(self, rows_rm: ttnn.Tensor, start: int, end: int, table: bool = True) -> None:
         """rows_rm [1, 1, S / r, width] bf16 ROW_MAJOR, the chunk's compressed rows in natural order, replicated, rows
-        of incomplete groups zero: token positions [start, end) into the cache (the last record whole)."""
+        of incomplete groups zero: token positions [start, end) into the cache (the last record whole). ``table``
+        False: the attention table was written already (CKV_FORMAT=bfp4_rows: AttnTable.append_tiles)."""
         g = self.geo
         assert start % 32 == 0 and start < end <= start + g.chunk and end <= self.max_seq, (start, end, self.max_seq)
         k = (start % g.chunk) // 32
@@ -295,7 +355,7 @@ class TtServedRows:
         self.tables.release_srv(idx)
         slab = ttnn.reshape(rows, [1, 1, g.w // self.ratio, self.width])
         self._put(slab, start, end)
-        if self.table is not None:  # STATIC_TABLES=on (P.21): the same rows into the attention table, natural order
+        if self.table is not None and table:  # STATIC_TABLES=on (P.21): the same rows into the table, natural order
             self.table.append(rows_rm, start // self.ratio)
         view = slab.buffer_address() == rows.buffer_address()  # a reshape may return a view (K-1, DS41-52)
         dealloc(rows)
@@ -519,6 +579,15 @@ class TtCompressor:
     def _gathered(self, t: ttnn.Tensor, valid: int) -> ttnn.Tensor:
         """[1, 1, n, w] bf16 TILE row-split -> [1, 1, SP n, w] bf16 ROW_MAJOR on every chip (natural order), rows at
         or past ``valid`` zero."""
+        g = self._gathered_tile(t, valid)
+        rm = ttnn.to_layout(g, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        if g is not t and rm is not g:
+            dealloc(g)
+        return rm
+
+    def _gathered_tile(self, t: ttnn.Tensor, valid: int) -> ttnn.Tensor:
+        """``_gathered`` before its ROW_MAJOR: [1, 1, SP n, w] bf16 TILE (t itself on one SP row with every row valid;
+        the caller frees it when it is not t)."""
         g = t
         if self.mesh.shape[SP_AXIS] > 1:
             g = ccl.all_gather(t, 2, SP_AXIS)
@@ -540,18 +609,28 @@ class TtCompressor:
             if g is not t:
                 dealloc(g)
             g = masked
-        rm = ttnn.to_layout(g, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
-        if g is not t and rm is not g:
-            dealloc(g)
-        return rm
+        return g
 
     def write(self, ckv: ttnn.Tensor, k: ttnn.Tensor, start: int, end: int, caches: TtCompressCaches) -> None:
         """The chunk's groups complete by actual_end ((j + 1) r <= end) into the served caches; the other rows of the
         chunk (an incomplete last group, pad) written as zeros. Does not consume its inputs."""
         valid = end // self.ratio - start // self.ratio  # complete groups of the chunk
         for t, cache in ((ckv, caches.ckv), (k, caches.index_k)):
-            rm = self._gathered(t, valid)
-            cache.write(rm, start, end)
+            table = cache.table
+            if table is not None and table.bfp4:
+                # CKV_FORMAT=bfp4_rows: the table's records from the gathered tiles; the served cache gets their bf16
+                # values (the rounded rows), so serving and a later host load see what attention reads
+                g = self._gathered_tile(t, valid)
+                rounded = table.append_tiles(g, start // self.ratio)
+                if g is not t:
+                    dealloc(g)
+                rm = ttnn.to_layout(rounded, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+                if rm is not rounded:
+                    dealloc(rounded)
+                cache.write(rm, start, end, table=False)
+            else:
+                rm = self._gathered(t, valid)
+                cache.write(rm, start, end)
             dealloc(rm)
 
 
