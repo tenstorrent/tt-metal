@@ -394,6 +394,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     // Clear counter(s) on host to reflect update device state
     for (auto sub_device_id : sub_device_ids) {
         expected_num_workers_completed_[*sub_device_id] = 0;
+        ++worker_counter_epochs_[*sub_device_id];
         cross_node_program_completion_counts_[*sub_device_id].clear();
     }
 
@@ -466,6 +467,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Need to stall and reset counters if host wraps
     if (updated_worker_counts.wrapped) [[unlikely]] {
         get_config_buffer_mgr(*sub_device_id).mark_completely_full(0);
+        ++worker_counter_epochs_[*sub_device_id];
         cross_node_program_completion_counts_[*sub_device_id].clear();
         for (auto* device : mesh_device_->impl().get_devices()) {
             program_dispatch::reset_expected_num_workers_completed_on_device(
@@ -1033,6 +1035,93 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     }
 }
 
+std::optional<uint32_t> FDMeshCommandQueue::fence_wait_count(const experimental::QueueFence& fence) const {
+    // A transfer fence waits for no workers. Nor does a fence whose counter restarted behind its programs: everything
+    // enqueued since already follows them.
+    if (!fence.sub_device_id.has_value() || fence.epoch != worker_counter_epochs_[**fence.sub_device_id]) {
+        return std::nullopt;
+    }
+    // The dispatcher compares stream counters within a window, so a count far behind reads as "in the future"
+    // (see reserve_space_in_kernel_config_buffer). Wait instead for a later count that is still in the window: it is
+    // at least as strong, and it does not wait for the newest programs.
+    constexpr uint32_t safe_window = 1u << 15;
+    const uint32_t expected = expected_num_workers_completed_[**fence.sub_device_id];
+    if (expected - fence.count > safe_window) {
+        return expected - safe_window / 2;
+    }
+    return fence.count;
+}
+
+experimental::QueueFence FDMeshCommandQueue::fence(SubDeviceId sub_device_id) {
+    auto lock = lock_api_function_();
+    TT_FATAL(!trace_id_.has_value(), "Queue fences are not supported during trace capture.");
+    TT_FATAL(
+        *sub_device_id < mesh_device_->num_sub_devices(),
+        "Sub-device {} does not exist: the active sub-device manager has {}",
+        *sub_device_id,
+        mesh_device_->num_sub_devices());
+    return experimental::QueueFence{
+        .cq_id = id_,
+        .sub_device_id = sub_device_id,
+        .epoch = worker_counter_epochs_[*sub_device_id],
+        .count = expected_num_workers_completed_[*sub_device_id]};
+}
+
+void FDMeshCommandQueue::enqueue_wait_for_fence(const experimental::QueueFence& fence) {
+    auto lock = lock_api_function_();
+    TT_FATAL(fence.cq_id == id_, "A fence of command queue {} waited for on its own queue {}", fence.cq_id, id_);
+    TT_FATAL(!trace_id_.has_value(), "Queue fences are not supported during trace capture.");
+    // The queue carries out its transfers in order, before anything enqueued after them.
+    const auto count = this->fence_wait_count(fence);
+    if (!count.has_value() || this->get_target_device_type() == tt::TargetDevice::Mock ||
+        this->get_target_device_type() == tt::TargetDevice::Emule) {
+        return;
+    }
+    in_use_ = true;
+    for_each_local(mesh_device_, MeshCoordinateRange(mesh_device_->shape()), [&](const auto& coord) {
+        event_dispatch::issue_wait_for_workers_commands(
+            id_, mesh_device_->impl().get_device(coord)->sysmem_manager(), *fence.sub_device_id, *count);
+    });
+}
+
+MeshEvent FDMeshCommandQueue::enqueue_record_event_for_fence(const experimental::QueueFence& fence) {
+    auto lock = lock_api_function_();
+    TT_FATAL(fence.cq_id == id_, "A fence of command queue {} recorded on queue {}", fence.cq_id, id_);
+    TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
+    const MeshCoordinateRange all_devices(mesh_device_->shape());
+    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+        this->get_target_device_type() == tt::TargetDevice::Emule) {
+        return MeshEvent(0, *this, all_devices);
+    }
+    in_use_ = true;
+    // Wait for the fence's count, not the current one, so that programs enqueued after the fence do not delay the
+    // event. If the counter restarted since, the fence's programs finished before the restart, which this record
+    // follows, so it waits for no workers at all. The event does not hand sub-device ownership over: later programs on
+    // the sub-device may still run.
+    const auto count = this->fence_wait_count(fence);
+    DispatchArray<uint32_t> counts{};
+    std::vector<SubDeviceId> sub_device_ids;
+    if (count.has_value()) {
+        counts[**fence.sub_device_id] = *count;
+        sub_device_ids.push_back(*fence.sub_device_id);
+    }
+    auto event = MeshEvent(this->reference_sysmem_manager().get_next_event(id_), *this, all_devices);
+    for_each_local(mesh_device_, all_devices, [&](const auto& coord) {
+        auto* device = mesh_device_->impl().get_device(coord);
+        event_dispatch::issue_record_event_commands(
+            mesh_device_,
+            device->id(),
+            event.impl().id(),
+            id_,
+            mesh_device_->num_hw_cqs(),
+            device->sysmem_manager(),
+            sub_device_ids,
+            counts,
+            /*notify_host=*/false);
+    });
+    return event;
+}
+
 void FDMeshCommandQueue::read_completion_queue() {
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
@@ -1257,6 +1346,9 @@ void FDMeshCommandQueue::reset_worker_state(
         expected_num_workers_completed_,
         mesh_device_->num_sub_devices(),
         mesh_device_->allocator_impl()->get_config().l1_unreserved_base);
+    for (auto& epoch : worker_counter_epochs_) {
+        ++epoch;
+    }
     if (reset_launch_msg_state) {
         std::for_each(
             this->cq_shared_state_->worker_launch_message_buffer_state.begin(),
@@ -1526,6 +1618,9 @@ void FDMeshCommandQueue::submit_replay_buffer(
         cq_shared_state_->worker_launch_message_buffer_state,
         config_buffer_mgr_,
         expected_num_workers_completed_);
+    for (const auto& [sub_device_id, descriptor] : worker_descriptors) {
+        ++worker_counter_epochs_[*sub_device_id];
+    }
 }
 
 void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) {
@@ -1859,6 +1954,9 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
             expected_num_workers_completed_,
             mesh_device_->num_sub_devices(),
             mesh_device_->allocator_impl()->get_config().l1_unreserved_base);
+        for (auto& epoch : worker_counter_epochs_) {
+            ++epoch;
+        }
         if (reset_launch_msg_state) {
             std::for_each(
                 this->cq_shared_state_->worker_launch_message_buffer_state.begin(),
@@ -1889,3 +1987,33 @@ void FDMeshCommandQueue::finish_and_reset_in_use() {
 }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental {
+
+namespace {
+distributed::FDMeshCommandQueue& fast_dispatch_queue(distributed::MeshCommandQueue& cq) {
+    auto* queue = dynamic_cast<distributed::FDMeshCommandQueue*>(&cq);
+    TT_FATAL(queue != nullptr, "Queue fences need fast dispatch");
+    return *queue;
+}
+}  // namespace
+
+QueueFence GetQueueFence(distributed::MeshCommandQueue& cq, SubDeviceId sub_device_id) {
+    return fast_dispatch_queue(cq).fence(sub_device_id);
+}
+
+QueueFence GetQueueTransferFence(distributed::MeshCommandQueue& cq) {
+    fast_dispatch_queue(cq);
+    return QueueFence{.cq_id = cq.id()};
+}
+
+void EnqueueWaitForQueueFence(distributed::MeshCommandQueue& cq, const QueueFence& fence) {
+    if (fence.cq_id == cq.id()) {
+        fast_dispatch_queue(cq).enqueue_wait_for_fence(fence);
+        return;
+    }
+    auto& producer = fast_dispatch_queue(cq.device()->mesh_command_queue(fence.cq_id));
+    cq.enqueue_wait_for_event(producer.enqueue_record_event_for_fence(fence));
+}
+
+}  // namespace tt::tt_metal::experimental

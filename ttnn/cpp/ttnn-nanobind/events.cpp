@@ -8,11 +8,14 @@
 #include <sstream>
 #include <vector>
 
+#include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
+
+#include <tt-metalium/experimental/queue_fence.hpp>
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/events.hpp"
@@ -30,6 +33,17 @@ void py_module_types(nb::module_& mod) {
             str << self;
             return str.str();
     });
+    nb::class_<experimental::QueueFence>(mod, "QueueFence")
+        .def_ro("cq_id", &experimental::QueueFence::cq_id)
+        .def_ro("count", &experimental::QueueFence::count)
+        .def("__repr__", [](const experimental::QueueFence& self) {
+            return fmt::format(
+                "QueueFence(cq_id={}, sub_device_id={}, epoch={}, count={})",
+                self.cq_id,
+                self.sub_device_id.has_value() ? std::to_string(**self.sub_device_id) : "transfers",
+                self.epoch,
+                self.count);
+        });
 }
 
 void py_module(nb::module_& mod) {
@@ -70,6 +84,26 @@ void py_module(nb::module_& mod) {
                 cq_id (int): The Command Queue on which the barrier is being issued.
                 mesh_event (MeshEvent): The Command Queue will stall until this event is completed.
             )doc");
+
+    // Experimental: precise fences (tt-metalium/experimental/queue_fence.hpp).
+    mod.def(
+        "queue_fence",
+        [](MeshDevice* mesh_device, std::optional<QueueId> cq_id, SubDeviceId sub_device_id) {
+            return experimental::GetQueueFence(mesh_device->mesh_command_queue(raw_optional(cq_id)), sub_device_id);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("cq_id") = nb::none(),
+        nb::arg("sub_device_id") = SubDeviceId{0},
+        "Experimental: the fence after everything the queue has enqueued so far on the sub-device. Enqueues nothing.");
+    mod.def(
+        "wait_for_queue_fence",
+        [](MeshDevice* mesh_device, std::optional<QueueId> cq_id, const experimental::QueueFence& fence) {
+            experimental::EnqueueWaitForQueueFence(mesh_device->mesh_command_queue(raw_optional(cq_id)), fence);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("cq_id") = nb::none(),
+        nb::arg("fence"),
+        "Experimental: the queue runs nothing enqueued after this call until the fence completes.");
 
     mod.def(
         "event_synchronize",

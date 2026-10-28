@@ -80,9 +80,9 @@ void issue_record_event_commands(
     for (uint32_t i = 0; i + 1 < num_worker_counters; ++i) {
         calculator.add_dispatch_wait();
     }
-    if (num_worker_counters > 0) {
-        calculator.add_dispatch_wait_with_prefetch_stall();
-    }
+    // With no workers to wait for (a fence on a queue's transfers), a barrier alone orders the event after the queue's
+    // earlier writes.
+    calculator.add_dispatch_wait_with_prefetch_stall();
 
     calculator.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
         num_dispatch_cores, DispatchSettings::EVENT_PADDED_SIZE, packed_write_max_unicast_sub_cmds, false);
@@ -119,6 +119,10 @@ void issue_record_event_commands(
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
                 expected_num_workers_completed[offset_index]);
         }
+    }
+
+    if (num_worker_counters == 0) {
+        command_sequence.add_dispatch_wait_with_prefetch_stall(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
     }
 
     std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds(num_command_queues);
@@ -181,6 +185,31 @@ void issue_wait_for_event_commands(
 
     command_sequence.add_dispatch_wait(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, last_completed_event_address, 0, event_id);
+
+    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
+
+    sysmem_manager.fetch_queue_reserve_back(cq_id);
+
+    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+}
+
+void issue_wait_for_workers_commands(
+    uint8_t cq_id, SystemMemoryManager& sysmem_manager, SubDeviceId sub_device_id, uint32_t count) {
+    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
+    calculator.add_dispatch_wait();
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+
+    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+
+    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
+    // Unlike an event record, this waits for an earlier count than the queue has reached, so later programs on the
+    // sub-device do not delay it.
+    command_sequence.add_dispatch_wait(
+        CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+        0,
+        metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
+        count);
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
 

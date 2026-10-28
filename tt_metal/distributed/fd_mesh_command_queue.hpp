@@ -6,6 +6,8 @@
 
 #include "mesh_command_queue_base.hpp"
 
+#include <tt-metalium/experimental/queue_fence.hpp>
+
 #include <unordered_map>
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
@@ -67,6 +69,8 @@ private:
         const MeshBuffer& buffer);
 
     void increment_num_entries_in_completion_queue();
+    // The worker count a wait for the fence must reach, or nothing if the fence has completed.
+    std::optional<uint32_t> fence_wait_count(const experimental::QueueFence& fence) const;
     MeshEvent enqueue_record_event_helper(
         ttsl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
@@ -121,6 +125,9 @@ private:
     std::vector<SubDeviceSetupCommands> sub_device_setup_commands_;
 
     DispatchArray<uint32_t> expected_num_workers_completed_{};
+    // Advances whenever a sub-device's entry of expected_num_workers_completed_ restarts, which happens behind a wait
+    // for its earlier programs: a fence of an earlier epoch is ordered before every later command of this queue.
+    DispatchArray<uint64_t> worker_counter_epochs_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
     // CrossNode programs rewrite a program-owned config Buffer at launch. For each
     // program id, remember the worker-completion count that launch will report when
@@ -287,6 +294,10 @@ public:
         ttsl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
     void enqueue_wait_for_event(const MeshEvent& sync_event) override;
+    // See tt-metalium/experimental/queue_fence.hpp.
+    experimental::QueueFence fence(SubDeviceId sub_device_id);
+    void enqueue_wait_for_fence(const experimental::QueueFence& fence);
+    MeshEvent enqueue_record_event_for_fence(const experimental::QueueFence& fence);
     void drain_events_from_completion_queue();
     void verify_reported_events_after_draining(const MeshEvent& event);
     void finish(ttsl::Span<const SubDeviceId> sub_device_ids = {}) override;

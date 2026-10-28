@@ -45,6 +45,10 @@ void issue_record_event_commands(
 void issue_wait_for_event_commands(
     uint8_t cq_id, uint8_t event_cq_id, SystemMemoryManager& sysmem_manager, uint32_t event_id);
 
+// Makes the dispatcher of cq_id wait until count workers of sub_device_id have completed on that queue.
+void issue_wait_for_workers_commands(
+    uint8_t cq_id, SystemMemoryManager& sysmem_manager, SubDeviceId sub_device_id, uint32_t count);
+
 void read_events_from_completion_queue(
     ReadEventDescriptor& event_descriptor,
     ChipId mmio_device_id,
