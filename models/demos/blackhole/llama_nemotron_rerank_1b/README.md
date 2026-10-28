@@ -190,6 +190,13 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
   in [-69, 26] (every row's max >= -1.01), which is what made a max-free exp possible. ttnn's SDPA ignores
   SDPAProgramConfig.matmul_math_fidelity (only the ring-joint variant reads it): its matmuls run at the
   compute config's fidelity.
+* FF1 + FF3 on the model's dataflow (minimal_matmul's legacy compute.cpp with multicast in0 / in1 and deeper
+  weight CBs): 4927-5655 us against minimal_matmul's 3609 us in every orientation / NOC / RISC / writer
+  arrangement. minimal_matmul binds the Metal 2.0 forks (compute_metal2.cpp etc.), whose SwiGLU runs on the
+  pack thread inside the last K block (swiglu_in_k_loop); the legacy kernel runs it as a separate pass. Inside
+  minimal_matmul a 16 x 8 weight block read takes ~15 k cycles against ~6 k alone: DRAM reads saturate at
+  ~287 B/cycle (~390 GB/s) over any number of reading cores (perf_tools/probe_dram_read.py), and the read
+  queue is shared with the activation reads and the output writes.
 * bs1 (34 %): the matmuls at 512 rows run at 27-52 % of their limit; FF2 at LoFi is bound by its weight read.
   DRAM-sharded weights are the next step. 1 x 128 / 1 x 512 read ~0.3 ms slower than in the previous README
   (5.97 / 7.50 ms), not yet traced to a change.
