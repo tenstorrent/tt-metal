@@ -391,3 +391,31 @@ Build fixes after fork_op.py (no behaviour change):
 - Needed by: rebase onto llk_helper_library @ `6b80daf43e3` (2026-10-27); the fork does not build without #61291
 - Files: 50 merged files under `device/`, `sdpa.{cpp,hpp}`, `sdpa_nanobind.cpp`, `sparse_sdpa.cpp`, `sparse_sdpa_msa.{cpp,hpp}`; new
   `device/kernels/sparse_sdpa_msa_common.hpp`; `README.md` (sync SHA)
+
+### sparse_sdpa: opt-in kv_format ROW_BFP4 (bfloat4_b row records + a bf16 window tensor)
+- What: `ttnn.bringup.SparseKVFormat.ROW_BFP4` with `kv_window=` (default: none; any other format refuses it). kv is
+  `[B, 1, T, K_DIM/16 + K_DIM/2]` uint8 row records (288 B at K_DIM 512: K_DIM/16 shared exponents, then the nibbles,
+  value 2i in the low nibble of byte i; written by `ttnn.bringup.ckv_bfp4`), kv_window `[1, 1, Tw, K_DIM]` bf16. The
+  index row is `[window k_chunk | top-k]`, each part with its own sentinel tail (a top-k part with no valid key is
+  allowed). Chunk 0 gathers the window rows and is tilized in bf16 as before. Chunks >= 1 gather the records into a
+  staging buffer (row stride = the kv page's DRAM-aligned size) on both NoCs, and each data-movement RISC shuffles its
+  own rows into the chunk's bfloat4_b tiles `[Skt, DHt]` (new double-buffered `cb_k4`); both matmuls read them as they
+  are (no tilize, no scale multiply). The RISCs split rows on a 16-row boundary, so a face's exponent bytes come from
+  one RISC. The window chunk gets its own boundary mask (control word WINDOW_VALID).
+- Default unchanged: everything is behind the define `SPARSE_SDPA_ROW_BFP4` (reader, writer, compute), added only for
+  ROW_BFP4, with its compile-time args (after each block's END) and the kv_window address (after the fixed common args)
+  only then. The request and control pages keep their sizes. The compute's matmul / reconfig calls take the chunk's K
+  CB as a value equal to `cb_k_in` without the define. The program hash adds kv_window's memory config (kv_format
+  already in it). The gather helper gained a destination-stride argument (default: the row size).
+- Why: deepseek_v41_flash_d_p FIX.8, the compressed KV attention table in 4 bits at the reference's width (F208):
+  3.56x less DRAM, gather traffic and L1 than bf16 rows; the device packer alone truncates bfp4 in effect, so the rows
+  are written by ckv_bfp4 (SFPU round to nearest even).
+- Tests: `tests/unit/test_sparse_sdpa_row_bfp4.py` (6 cases, one device, K_DIM = v_dim 512, top-k 512 after a 128
+  window, sink): a full window equals the BF16 path bit for bit on one bf16 table holding the same values (H 32 / 64,
+  fp32 dest off / on, top-k parts of 0 / 1 / 31 / 32 / 200 / 512 keys); a partial window (1 / 17 / 32 / 100 / 127 keys)
+  vs float32: rel 0.0249 (the BF16 path with the compacted list: 0.0250); deterministic; the refusals.
+- Needed by: deepseek_v41_flash_d_p FIX.8 (CKV_FORMAT=bfp4_rows)
+- Files: `sparse_sdpa.hpp`, `sparse_sdpa.cpp`, `sdpa_nanobind.cpp`, `device/sparse_sdpa_device_operation*.{hpp,cpp}`,
+  `device/sparse_sdpa_program_factory.cpp`, `device/kernels/sparse_sdpa_common.hpp`,
+  `device/kernels/dataflow/sparse_sdpa_{reader,writer,gather}.{cpp,hpp}`, `device/kernels/compute/sparse_sdpa_compute.cpp`,
+  `tests/unit/test_sparse_sdpa_row_bfp4.py`

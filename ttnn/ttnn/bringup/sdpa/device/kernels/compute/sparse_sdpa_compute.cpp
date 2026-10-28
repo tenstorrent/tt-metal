@@ -177,6 +177,10 @@ void kernel_main() {
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_Q_IN);
     constexpr uint32_t cb_k_rm = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_K_RM);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_K_IN);
+#ifdef SPARSE_SDPA_ROW_BFP4
+    // ROW_BFP4 (fork option): chunks >= 1 arrive as bfloat4_b tiles the dataflow kernels shuffled from row records
+    constexpr uint32_t cb_k4 = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::END);
+#endif
     constexpr uint32_t cb_neginf = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_NEGINF);
     constexpr uint32_t cb_mask_part = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_MASK_PART);
     constexpr uint32_t cb_scale = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_SCALE);
@@ -234,6 +238,10 @@ void kernel_main() {
             cb_ctrl, /*tile=*/0, /*element_offset=*/sparse_sdpa::control_message::ACTIVE_CHUNKS);
         const uint32_t num_valid_keys =
             ckernel::read_tile_value(cb_ctrl, /*tile=*/0, /*element_offset=*/sparse_sdpa::control_message::VALID_KEYS);
+#ifdef SPARSE_SDPA_ROW_BFP4
+        const uint32_t window_valid = ckernel::read_tile_value(
+            cb_ctrl, /*tile=*/0, /*element_offset=*/sparse_sdpa::control_message::WINDOW_VALID);
+#endif
         ctrl_cb.pop_front(1);
 
         // Flash running state, ping-pong. Reset every token; all buffers start empty.
@@ -242,6 +250,13 @@ void kernel_main() {
         CircularBuffer out_prev(cb_out_a), out_cur(cb_out_b);
 
         for (uint32_t chunk = 0; chunk < num_active_chunks; ++chunk) {
+#ifdef SPARSE_SDPA_ROW_BFP4
+            const bool bfp4_chunk = chunk > 0;  // chunk 0 = the bf16 window, tilized below
+            const uint32_t cb_k = bfp4_chunk ? cb_k4 : cb_k_in;
+#else
+            constexpr uint32_t cb_k = cb_k_in;
+#endif
+            CircularBuffer k_cur(cb_k);
             if constexpr (scaled_kv) {
                 // Reconstruct only the scaled latent field into persistent BFP8 tiles. RoPE stays in its
                 // separate BF16 tiled buffer, avoiding both a full BF16 K and the RoPE copy into it.
@@ -317,13 +332,16 @@ void kernel_main() {
                 k_in_cb.push_back(Skt * vDHt);
             } else {
                 // tilize K rows -> [Skt, DHt] (waits on reader cb_k_rm -> absorbs the K-read stall)
-                compute_kernel_lib::tilize<DHt, cb_k_rm, cb_k_in>(
-                    /*num_blocks=*/Skt, /*total_input_pages=*/Skt * tt::constants::TILE_HEIGHT);
+#ifdef SPARSE_SDPA_ROW_BFP4
+                if (!bfp4_chunk)
+#endif
+                    compute_kernel_lib::tilize<DHt, cb_k_rm, cb_k_in>(
+                        /*num_blocks=*/Skt, /*total_input_pages=*/Skt * tt::constants::TILE_HEIGHT);
             }
             // fp8 K tilize leaves srcA in fp8. QK reads K (transposed -> srcA) and Q (srcB), so restore
             // srcA=cb_k_in (bfp8 for fp8 K), srcB=cb_q_in. Reconfigure the tiled descriptor geometry/strides;
             // mm_no_mop_init_short only programs the matmul MOP.
-            reconfig_full_operand(cb_k_in, cb_q_in);
+            reconfig_full_operand(cb_k, cb_q_in);
             // K tilize also leaves the packer in cb_k_in's format+strides (bfp8 for fp8). Restore bf16 once per
             // chunk for the downstream packs (cb_qk_im/max/sum/out share its geometry); configure_pack_width in
             // the qg loop refreshes only the MOP. No-op for bf16.
@@ -331,7 +349,12 @@ void kernel_main() {
 
             const bool is_first = (chunk == 0);
             const bool is_last = (chunk == num_active_chunks - 1);
+#ifdef SPARSE_SDPA_ROW_BFP4
+            // the window chunk has its own sentinel tail; the top-k chunks' tail ends the list
+            const bool has_mask = is_last || (chunk == 0 && window_valid < Skt * tt::constants::TILE_WIDTH);
+#else
             const bool has_mask = is_last;  // only the last active chunk can hold sentinels
+#endif
 
             // cb_qk_im / sum_cur / out_cur span all Sqt rows; the qg loop fills them band-by-band (sub_exp & PV
             // pack at absolute row offsets; reduce/corr reserve+push per band).
@@ -342,7 +365,7 @@ void kernel_main() {
                 k_in_cb.wait_front(Skt * vDHt);
                 rope_tile_cb.wait_front(Skt * (DHt - vDHt));
             } else {
-                k_in_cb.wait_front(Skt * DHt);  // shared by every query group (QK + PV)
+                k_cur.wait_front(Skt * DHt);  // shared by every query group (QK + PV)
             }
             q_in_cb.wait_front(Sqt * DHt);
 
@@ -350,7 +373,11 @@ void kernel_main() {
             // -inf. Key tiles [full_start, Skt) are fully masked (cb_neginf); a mid-tile boundary masks the
             // straddling tile part_t via cb_mask_part.
             const uint32_t k_chunk = Skt * tt::constants::TILE_WIDTH;
+#ifdef SPARSE_SDPA_ROW_BFP4
+            const uint32_t valid_last = chunk == 0 ? window_valid : num_valid_keys - (num_active_chunks - 1) * k_chunk;
+#else
             const uint32_t valid_last = num_valid_keys - (num_active_chunks - 1) * k_chunk;
+#endif
             const uint32_t full_start = (valid_last + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
             const uint32_t part_t = valid_last / tt::constants::TILE_WIDTH;
             const bool has_part_mask = has_mask && (valid_last % tt::constants::TILE_WIDTH != 0);
@@ -370,8 +397,8 @@ void kernel_main() {
                 {
 #ifdef SPARSE_SDPA_FP32_SCORES
                     // Float32 scores: the previous group left the bf16 state (srcA / srcB / packer); QK reads
-                    // srcA=cb_k_in, srcB=cb_q_in and packs the Float32 cb_qk_im.
-                    reconfig_data_format(cb_k_in, cb_q_in);
+                    // srcA=cb_k, srcB=cb_q_in and packs the Float32 cb_qk_im.
+                    reconfig_data_format(cb_k, cb_q_in);
                     pack_reconfig_data_format(cb_qk_im);
 #endif
                     if constexpr (scaled_kv) {
@@ -380,13 +407,13 @@ void kernel_main() {
                         // therefore remain DHt even though their contraction widths are vDHt and rope_DHt.
                         constexpr uint32_t q_row_stride = DHt;
                         // Latent contribution from the scaled mixed-format cache.
-                        reconfig_data_format(cb_k_in, cb_q_in);
-                        mm_no_mop_init_short(cb_q_in, cb_k_in, /*transpose=*/true, 1, qsb, q_row_stride);
+                        reconfig_data_format(cb_k, cb_q_in);
+                        mm_no_mop_init_short(cb_q_in, cb_k, /*transpose=*/true, 1, qsb, q_row_stride);
                         configure_row_pack_width(cb_qk_im, 1);
                         for (uint32_t kt = 0; kt < Skt; ++kt) {
                             blocked_matmul_and_pack<true, /*in1_stride=*/1, /*out_num_cols=*/KT_stride>(
                                 cb_q_in,
-                                cb_k_in,
+                                cb_k,
                                 cb_qk_im,
                                 /*in0_index_start=*/row_base * DHt,
                                 /*in1_index_start=*/kt * vDHt,
@@ -421,7 +448,7 @@ void kernel_main() {
                         pack_reconfig_l1_acc(0);
                     } else {
                         // scores[q,sk]=ΣQ·K. in1=K, transpose=true (within-tile transpose => Kᵀ).
-                        mm_no_mop_init_short(cb_q_in, cb_k_in, /*transpose=*/true, 1, qsb, DHt);
+                        mm_no_mop_init_short(cb_q_in, cb_k, /*transpose=*/true, 1, qsb, DHt);
                         configure_row_pack_width(cb_qk_im, 1);
 #ifdef SPARSE_SDPA_FP32_SCORES
                         // blocked_matmul_and_pack with the scores rounded to TF32 (nearest) in DEST before the pack
@@ -430,7 +457,7 @@ void kernel_main() {
                             for (uint32_t inner = 0; inner < DHt; ++inner) {
                                 sdpa_matmul_block_no_mop(
                                     cb_q_in,
-                                    cb_k_in,
+                                    cb_k,
                                     row_base * DHt + inner,
                                     kt * DHt + inner,
                                     /*dst_index=*/0,
@@ -452,7 +479,7 @@ void kernel_main() {
                         for (uint32_t kt = 0; kt < Skt; ++kt) {
                             blocked_matmul_and_pack<true, /*in1_stride=*/1, /*out_num_cols=*/KT_stride>(
                                 cb_q_in,
-                                cb_k_in,
+                                cb_k,
                                 cb_qk_im,
                                 /*in0_index_start=*/row_base * DHt,
                                 /*in1_index_start=*/kt * DHt,
@@ -471,7 +498,7 @@ void kernel_main() {
                 }
 
                 {
-                    // QK left srcA=cb_k_in, srcB=cb_q_in. The mask/reduce/sub_exp read cb_qk_im (srcA) + bf16
+                    // QK left srcA=cb_k, srcB=cb_q_in. The mask/reduce/sub_exp read cb_qk_im (srcA) + bf16
                     // scalers (srcB); restore both to bf16. No-op for bf16 Q/K.
                     reconfig_data_format(cb_qk_im, cb_scale);
                     if (has_mask) {
@@ -615,9 +642,9 @@ void kernel_main() {
                 {
                     qk_cb.wait_front((qg + 1) * qsb * KT_stride);
                     // out[q,vd]=Σprobs·K, V = the latent feature cols. PV reads V into srcA and
-                    // probs (cb_qk_im) into srcB (operands swap); set srcA=cb_k_in, srcB=cb_qk_im.
-                    reconfig_data_format(cb_k_in, cb_qk_im);
-                    mm_no_mop_init_short(cb_qk_im, cb_k_in, /*transpose=*/false, 1, qsb, Skt);
+                    // probs (cb_qk_im) into srcB (operands swap); set srcA=cb_k, srcB=cb_qk_im.
+                    reconfig_data_format(cb_k, cb_qk_im);
+                    mm_no_mop_init_short(cb_qk_im, cb_k, /*transpose=*/false, 1, qsb, Skt);
 #ifdef SPARSE_SDPA_HIGH_PRECISION
                     pack_reconfig_data_format(out_cur.get_cb_id());  // Float32 running out
 #endif
@@ -630,7 +657,7 @@ void kernel_main() {
                         for (uint32_t inner = 0; inner < Skt; ++inner) {
                             sdpa_matmul_block_no_mop(
                                 cb_qk_im,
-                                cb_k_in,
+                                cb_k,
                                 row_base * Skt + inner,
                                 vd + inner * DHt,
                                 /*dst_index=*/0,
@@ -652,7 +679,7 @@ void kernel_main() {
                     for (uint32_t vd = 0; vd < vDHt; ++vd) {
                         blocked_matmul_and_pack<false, /*in1_stride=*/scaled_kv ? vDHt : DHt, /*out_num_cols=*/vDHt>(
                             cb_qk_im,
-                            cb_k_in,
+                            cb_k,
                             out_cur.get_cb_id(),
                             /*in0_index_start=*/row_base * Skt,
                             /*in1_index_start=*/vd,
@@ -767,7 +794,7 @@ void kernel_main() {
                 k_in_cb.pop_front(Skt * vDHt);
                 rope_tile_cb.pop_front(Skt * (DHt - vDHt));
             } else {
-                k_in_cb.pop_front(Skt * DHt);
+                k_cur.pop_front(Skt * DHt);
             }
 
             swap_cb(max_prev, max_cur);  // prev <-> cur for the next chunk

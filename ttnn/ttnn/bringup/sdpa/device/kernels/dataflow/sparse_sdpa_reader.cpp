@@ -64,7 +64,19 @@ void kernel_main() {
 
     // kv carries a RUNTIME tensor shape (its T dim is common runtime args, not compile-time), so its accessor
     // spans both the compile-time AND common-runtime arg streams. Thread both offsets through all three.
-    constexpr auto q_args = TensorAccessorArgs<sparse_sdpa::reader_ct_arg::END, sparse_sdpa::reader_common_arg::END>();
+#ifdef SPARSE_SDPA_ROW_BFP4
+    // ROW_BFP4 (fork option): kv = bfloat4_b row records (chunks >= 1), kv_window = the bf16 rows of chunk 0
+    constexpr uint32_t ct_rb = sparse_sdpa::reader_ct_arg::END;
+    constexpr uint32_t cb_k4_rm = get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::CB_K4_RM);
+    constexpr uint32_t cb_k4 = get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::CB_K4);
+    constexpr uint32_t k4_stride = get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::K4_ROW_STRIDE);
+    constexpr uint32_t k4_row_bytes = sparse_sdpa::row_bfp4_bytes(k_dim);
+    constexpr uint32_t k4_DHt = k_dim / tt::constants::TILE_WIDTH;
+    constexpr uint32_t k4_tiles = (k_chunk / tt::constants::TILE_HEIGHT) * k4_DHt;
+#endif
+    constexpr auto q_args = TensorAccessorArgs<
+        sparse_sdpa::reader_ct_arg::END + sparse_sdpa::ROW_BFP4_CT_COUNT,
+        sparse_sdpa::reader_common_arg::END + sparse_sdpa::ROW_BFP4_COMMON_COUNT>();
     constexpr auto kv_args =
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto idx_args =
@@ -92,6 +104,14 @@ void kernel_main() {
     const auto q = TensorAccessor(q_args, q_addr);
     const auto kv = TensorAccessor(kv_args, kv_addr);
     const auto idx = TensorAccessor(idx_args, idx_addr);
+#ifdef SPARSE_SDPA_ROW_BFP4
+    constexpr auto kvw_args =
+        TensorAccessorArgs<idx_args.next_compile_time_args_offset(), idx_args.next_common_runtime_args_offset()>();
+    const auto kvw = TensorAccessor(kvw_args, get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::END));
+    experimental::CB k4_rm_cb(cb_k4_rm), k4_cb(cb_k4);
+    k4_rm_cb.reserve_back(k_chunk);  // staging rows of one chunk, reused (never pushed)
+    const uint32_t k4_rm_l1 = k4_rm_cb.get_write_ptr();
+#endif
     // Reader-internal scratch for one token's index row (reserved once, reused).
     idx_cb.reserve_back(1);
     const uint32_t idx_l1 = idx_cb.get_write_ptr();
@@ -124,7 +144,38 @@ void kernel_main() {
             }
             nv = lo == 0 ? 1 : lo;  // contract guarantees >=1 valid; guard anyway
         }
+#ifdef SPARSE_SDPA_ROW_BFP4
+        // [window k_chunk | top-k]: each part has its own sentinel tail. nv0 = the window's valid keys (>= 1),
+        // nvk = the top-k's (may be 0); VALID_KEYS keeps the meaning "keys up to the last chunk's boundary".
+        uint32_t nv0 = k_chunk, nvk = topk - k_chunk;
+        {
+            uint32_t lo = 0, hi = k_chunk;
+            while (lo < hi) {
+                const uint32_t mid = (lo + hi) >> 1;
+                if (idx_ptr[mid] == sentinel) {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            nv0 = lo == 0 ? 1 : lo;
+            lo = k_chunk;
+            hi = topk;
+            while (lo < hi) {
+                const uint32_t mid = (lo + hi) >> 1;
+                if (idx_ptr[mid] == sentinel) {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            nvk = lo - k_chunk;
+        }
+        nv = nvk ? k_chunk + nvk : nv0;
+        const uint32_t n_active = 1 + (nvk + k_chunk - 1) / k_chunk;
+#else
         const uint32_t n_active = (nv + k_chunk - 1) / k_chunk;
+#endif
 
         // hand the active chunk count + valid-key count to compute (it can't issue DRAM reads to derive
         // them). nv lets compute place the boundary mask (which key tiles of the last chunk to -inf).
@@ -133,11 +184,73 @@ void kernel_main() {
             volatile tt_l1_ptr uint32_t* cp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
             cp[sparse_sdpa::control_message::ACTIVE_CHUNKS] = n_active;
             cp[sparse_sdpa::control_message::VALID_KEYS] = nv;
+#ifdef SPARSE_SDPA_ROW_BFP4
+            cp[sparse_sdpa::control_message::WINDOW_VALID] = nv0;
+#endif
         }
         ctrl_cb.push_back(1);
 
         for (uint32_t chunk = 0; chunk < n_active; ++chunk) {
             const uint32_t base = chunk * k_chunk;
+#ifdef SPARSE_SDPA_ROW_BFP4
+            const uint32_t valid = chunk == 0 ? nv0 : ((nv - base) < k_chunk ? (nv - base) : k_chunk);
+            if (chunk > 0) {
+                // bfloat4_b row records -> staging rows (stride k4_stride, DRAM-read aligned) -> tiles in cb_k4.
+                // The writer gathers and shuffles rows [0, half), this RISC [half, valid); the sentinel tail rows
+                // are zeroed in staging and shuffled as zero tiles rows (exponent 0, mantissa 0). The split is a
+                // multiple of 16 rows: a face's 16 exponent bytes (one per row) then come from one RISC only.
+                const uint32_t half = (valid >> 1) & ~(tt::constants::FACE_HEIGHT - 1);
+                k4_cb.reserve_back(k4_tiles);
+                const uint32_t tiles_l1 = k4_cb.get_write_ptr();
+                kreq_cb.reserve_back(1);
+                {
+                    volatile tt_l1_ptr uint32_t* request =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+                    request[sparse_sdpa::gather_request::BASE] = base;
+                    request[sparse_sdpa::gather_request::SPLIT] = half;
+                    request[sparse_sdpa::gather_request::IS_LAST] = chunk == n_active - 1;
+                    request[sparse_sdpa::gather_request::DST_L1] = k4_rm_l1;
+                    request[sparse_sdpa::gather_request::TILE_DST_L1] = tiles_l1;
+                    request[sparse_sdpa::gather_request::KIND] = sparse_sdpa::gather_request::KIND_BFP4;
+                }
+                kreq_cb.push_back(1);
+                sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::SCALED_K_TRID_RING>(
+                    noc, kv, k4_rm_l1, idx_ptr, base, half, valid, k4_row_bytes, kv_batch_page_offset, k4_stride);
+                if (valid < k_chunk) {
+                    noc.async_write_zeros(k4_rm_cb, (k_chunk - valid) * k4_stride, {.offset_bytes = valid * k4_stride});
+                    noc.write_zeros_l1_barrier();
+                }
+                sparse_sdpa::shuffle_rows_to_bfp4_tiles<k4_DHt>(k4_rm_l1, k4_stride, tiles_l1, half, k_chunk);
+                kack_cb.wait_front(1);  // the writer's rows are gathered and shuffled
+                kack_cb.pop_front(1);
+                k4_cb.push_back(k4_tiles);
+            } else {
+                // chunk 0: the window's bf16 rows (kv_window), tilized by compute as a BF16 kv
+                k_cb.reserve_back(k_chunk);
+                const uint32_t k_write_ptr = k_cb.get_write_ptr();
+                const uint32_t half = valid >> 1;
+                kreq_cb.reserve_back(1);
+                {
+                    volatile tt_l1_ptr uint32_t* request =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+                    request[sparse_sdpa::gather_request::BASE] = base;
+                    request[sparse_sdpa::gather_request::SPLIT] = half;
+                    request[sparse_sdpa::gather_request::IS_LAST] = chunk == n_active - 1;
+                    request[sparse_sdpa::gather_request::DST_L1] = k_write_ptr;
+                    request[sparse_sdpa::gather_request::KIND] = sparse_sdpa::gather_request::KIND_WINDOW;
+                }
+                kreq_cb.push_back(1);
+                sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::K_TRID_RING>(
+                    noc, kvw, k_write_ptr, idx_ptr, base, half, valid, k_row_bytes, 0);
+                kack_cb.wait_front(1);
+                kack_cb.pop_front(1);
+                if (valid < k_chunk) {
+                    noc.async_write_zeros(k_cb, (k_chunk - valid) * k_row_bytes, {.offset_bytes = valid * k_row_bytes});
+                    noc.write_zeros_l1_barrier();
+                }
+                k_cb.push_back(k_chunk);
+            }
+#else
             const uint32_t valid = (nv - base) < k_chunk ? (nv - base) : k_chunk;  // (0, k_chunk]
 
             if constexpr (scaled_kv) {
@@ -233,12 +346,18 @@ void kernel_main() {
                 }
                 k_cb.push_back(k_chunk);
             }
+#endif
 
             // Boundary mask: only the LAST active chunk can have sentinels. Its key tile that straddles
             // `valid` (tile valid/32) needs cols >= valid%32 set to -inf; the tiles after it are fully
             // masked (compute bcast-adds the persistent cb_neginf there). Build the single partial-boundary
             // tile here only when the boundary lands mid-tile; row 0 only (compute adds it row-broadcast).
-            if (chunk == n_active - 1 && (valid % tt::constants::TILE_WIDTH) != 0) {
+#ifdef SPARSE_SDPA_ROW_BFP4
+            const bool masked_chunk = chunk == n_active - 1 || chunk == 0;  // the window has its own tail
+#else
+            const bool masked_chunk = chunk == n_active - 1;
+#endif
+            if (masked_chunk && (valid % tt::constants::TILE_WIDTH) != 0) {
                 mask_part_cb.reserve_back(1);
                 {
                     const uint32_t first_masked_col = valid % tt::constants::TILE_WIDTH;
