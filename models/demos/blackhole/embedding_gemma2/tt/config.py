@@ -92,10 +92,80 @@ L1_ACT_MAX_TOKENS = 4096
 RESIDUAL_IN_L1 = os.environ.get("EG2_RESIDUAL_L1", "1") == "1"
 
 
+# ---------------------------------------------------------------------------------- geometry
+# Compute grid (columns x rows). P150a: 13 x 10 (14 Tensix columns, one column for dispatch, which
+# is the Blackhole default axis). Galaxy target: 12 x 10. `EMBEDDING_GEMMA2_GRID=12x10` selects the
+# grid for any entry point; unset, each entry point uses its default (the prefill harness
+# tests/perf/prefill.py: 12 x 10; tests, demo, perf.py: the device's grid, 13 x 10 on a P150a).
+#
+# How 12 x 10 is reached on a P150a (measured, doc/prefill/01-baseline/work_log.md, E9.1-r1):
+# `DispatchCoreConfig(axis=COL)` is already the Blackhole default and gives (13, 10); ROW dispatch
+# is rejected without fabric mux. The runtime option TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="11,9"
+# (read once per process, before the first device open) makes the device report (12, 10), so every
+# op, including ops that pick their own grid (norms, eltwise, minimal_matmul), runs on 12 x 10.
+# `request_device_grid` sets it; `compute_grid` is the one grid read for text code (device grid,
+# capped by the switch as a guard).
+GRID_ENV = "EMBEDDING_GEMMA2_GRID"
+P150_GRID = (13, 10)
+GALAXY_GRID = (12, 10)
+_TT_GRID_OVERRIDE_ENV = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE"
+
+
+def parse_grid(text: str) -> tuple[int, int]:
+    """'12x10' (columns x rows) -> (12, 10)."""
+    try:
+        cols, rows = (int(v) for v in text.lower().replace(" ", "").split("x"))
+    except ValueError as err:
+        raise ValueError(f"{GRID_ENV}={text!r}: expected <columns>x<rows>, e.g. 12x10") from err
+    if cols < 1 or rows < 1:
+        raise ValueError(f"{GRID_ENV}={text!r}: grid must be positive")
+    return cols, rows
+
+
+def requested_grid(default: tuple[int, int] | None = None) -> tuple[int, int] | None:
+    """The grid `EMBEDDING_GEMMA2_GRID` asks for, else `default` (None: the device's own grid)."""
+    text = os.environ.get(GRID_ENV, "").strip()
+    return parse_grid(text) if text else default
+
+
+def request_device_grid(grid: tuple[int, int] | None) -> None:
+    """Make devices opened later in this process report `grid` (None: leave the device grid).
+
+    Must run before the first device open of the process: the runtime reads the override once.
+    """
+    if grid is None:
+        return
+    want = f"{grid[0] - 1},{grid[1] - 1}"
+    have = os.environ.get(_TT_GRID_OVERRIDE_ENV)
+    if have is not None and have.replace(" ", "") != want:
+        raise RuntimeError(f"{_TT_GRID_OVERRIDE_ENV}={have} conflicts with the requested grid {grid}")
+    os.environ[_TT_GRID_OVERRIDE_ENV] = want
+
+
+def check_device_grid(device, grid: tuple[int, int] | None) -> tuple[int, int]:
+    """Raise unless the open device reports `grid` (None: any). Returns the device grid."""
+    g = device.compute_with_storage_grid_size()
+    if grid is not None and (g.x, g.y) != tuple(grid):
+        raise RuntimeError(
+            f"device grid ({g.x}, {g.y}) != requested {tuple(grid)}: the grid override is read once per "
+            f"process, before the first device open; run this entry point in its own process"
+        )
+    return g.x, g.y
+
+
+def compute_grid(device) -> ttnn.CoreCoord:
+    """The compute grid text code configures ops for: the device grid, capped by `EMBEDDING_GEMMA2_GRID`."""
+    g = device.compute_with_storage_grid_size()
+    cap = requested_grid()
+    if cap is None:
+        return g
+    return ttnn.CoreCoord(min(g.x, cap[0]), min(g.y, cap[1]))
+
+
 def act_memory_config(device, batch: int, seq_len: int, width: int) -> ttnn.MemoryConfig:
     """L1 interleaved for a bf16 [batch, 1, seq_len, width] tile tensor if it fits, else DRAM."""
     n = 2 * int(batch) * int(seq_len) * int(width)
-    grid = device.compute_with_storage_grid_size()
+    grid = compute_grid(device)
     if batch * seq_len <= L1_ACT_MAX_TOKENS and n <= L1_ACT_BYTES_PER_BANK * grid.x * grid.y:
         return ttnn.L1_MEMORY_CONFIG
     return ttnn.DRAM_MEMORY_CONFIG

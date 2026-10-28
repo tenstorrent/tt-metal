@@ -51,6 +51,11 @@ generated/embedding_gemma2_prefill/):
                round_trip (h2d + execute_trace + embedding readback; the request a caller sees
                after host prep)
 
+Grid: 12 x 10 compute grid by default (contract compute_grid, Galaxy target; on a P150a the device
+is opened with TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=11,9, see tt/config.py), recorded as
+`compute_grid` in every record. EMBEDDING_GEMMA2_GRID=13x10 runs on the P150 grid. The override is
+read once per process: run this file in its own pytest process.
+
 Other env: EMBEDDING_GEMMA2_PREFILL_BUCKETS (comma list, overrides the bucket selection),
 EMBEDDING_GEMMA2_PREFILL_REFS (reference cache, default generated/embedding_gemma2_prefill/refs),
 EMBEDDING_GEMMA2_PREFILL_TRACE_MB (trace region, default 128), EMBEDDING_GEMMA2_SUSTAINED_S (30),
@@ -78,11 +83,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.blackhole.embedding_gemma2.conftest import DEVICE_PARAMS, MODEL_ID
+from models.demos.blackhole.embedding_gemma2.conftest import DEVICE_PARAMS, MODEL_ID, open_eg2_device
 from models.demos.blackhole.embedding_gemma2.tests.common import COSINE_EMBEDDING, make_batch, pcc
 from models.demos.blackhole.embedding_gemma2.tests.perf import prefill_telemetry as telemetry
 from models.demos.blackhole.embedding_gemma2.tests.perf.perf import _git, _stats
 from models.demos.blackhole.embedding_gemma2.tests.perf.prefill_refs import load_ref, logical_len
+from models.demos.blackhole.embedding_gemma2.tt.config import GALAXY_GRID, GRID_ENV, requested_grid
 from models.demos.blackhole.embedding_gemma2.tt.weights import resolve_snapshot
 
 MODEL_DIR = Path(__file__).resolve().parents[2]
@@ -105,6 +111,10 @@ SUSTAINED_WINDOW_MS = 500.0
 HOST_N, HOST_BUDGET_MS = 20, 3000.0
 TRACE_MB = int(os.environ.get("EMBEDDING_GEMMA2_PREFILL_TRACE_MB", "128"))
 RUN_ID = time.strftime("%Y%m%d-%H%M%S")
+# Compute grid (contract compute_grid [12, 10], the Galaxy target): EMBEDDING_GEMMA2_GRID overrides
+# (e.g. 13x10 for the P150 grid). The device is opened on it and checked (conftest.open_eg2_device).
+GRID = requested_grid(GALAXY_GRID)
+_DEVICE_GRID: list[int] | None = None  # what the open device reports; in every record
 
 
 def _flag(name: str) -> bool:
@@ -142,7 +152,12 @@ CASES = [
 
 # ---------------------------------------------------------------------- records
 def _emit(rec: dict) -> dict:
-    rec = {"run_id": RUN_ID, "time": time.strftime("%Y-%m-%d %H:%M:%S"), **rec}
+    rec = {
+        "run_id": RUN_ID,
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "compute_grid": _DEVICE_GRID or list(GRID),
+        **rec,
+    }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     with open(OUT_DIR / "prefill.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
@@ -169,6 +184,8 @@ def prefill_run_info():
         "precision_file": str(default_precision_path()),
         "selection": {"all": PREFILL_ALL, **SEL, "buckets": list(BUCKETS), "phases": list(PHASES)},
         "device_params": {**DEVICE_PARAMS, "trace_region_size": TRACE_MB * 1024 * 1024},
+        "compute_grid_request": list(GRID),
+        "grid_env": os.environ.get(GRID_ENV, ""),
         "burst": {"reps": BURST_REPS, "idle_s": BURST_IDLE_S, "target_ms": BURST_TARGET_MS},
         "sustained": {"min_s": SUSTAINED_S, "min_replays": SUSTAINED_REPLAYS, "window_ms": SUSTAINED_WINDOW_MS},
         "board": board,
@@ -197,8 +214,11 @@ class Session:
         if SEL["hf_check"]:
             for b in buckets:  # before the device opens: references are host-RAM heavy
                 self.refs[b] = _get_ref(b)
-        self.device = ttnn.open_device(device_id=0, **{**DEVICE_PARAMS, "trace_region_size": TRACE_MB * 1024 * 1024})
+        global _DEVICE_GRID
+        self.device = open_eg2_device(0, grid=GRID, trace_region_size=TRACE_MB * 1024 * 1024)
         try:
+            g = self.device.compute_with_storage_grid_size()
+            _DEVICE_GRID = [g.x, g.y]
             t0 = time.perf_counter()
             self.enc = TextEncoder.from_pretrained(self.device, str(self.snapshot), max_seq_len=key)
             self.raw = {b: make_batch(self.snapshot, [logical_len(b)]) for b in buckets}

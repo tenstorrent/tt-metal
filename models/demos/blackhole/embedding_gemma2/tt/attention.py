@@ -28,10 +28,12 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.config import (
+    P150_GRID,
     SLIDING,
     AttentionConfig,
     RMSNormConfig,
     act_memory_config,
+    compute_grid,
     compute_kernel_config_hifi4,
 )
 from models.demos.blackhole.embedding_gemma2.tt.linear import linear
@@ -72,7 +74,7 @@ def sdpa_program_config(
 
     Every bucket is a power of two >= 32, so S % chunk == 0 for the power-of-two chunks used here.
     """
-    gx, gy = (device_grid.x, device_grid.y) if device_grid is not None else (13, 10)
+    gx, gy = (device_grid.x, device_grid.y) if device_grid is not None else P150_GRID
     key = (head_dim, batch, seq_len)
     if key in _SDPA_TABLE:
         q_chunk, k_chunk, grid = _SDPA_TABLE[key]
@@ -230,7 +232,7 @@ class Attention(LightweightModule):
                 S,
                 x.shape[0],
                 cfg.num_heads,
-                x.device().compute_with_storage_grid_size(),
+                compute_grid(x.device()),
                 exp_approx=self.sdpa_policy.exp_approx,
             ),
             compute_kernel_config=self.sdpa_compute_kernel_config,

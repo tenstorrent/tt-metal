@@ -25,6 +25,7 @@ import os
 from functools import lru_cache
 
 import ttnn
+from models.demos.blackhole.embedding_gemma2.tt.config import compute_grid
 
 # Default (no policy) fp32 dest accumulation for the 2D-multicast roles; minimal_matmul without a
 # policy always accumulates in fp32. Text calls take both from their MatmulPolicy.
@@ -158,7 +159,7 @@ def linear(
     N = w.shape[-1]
     M = B * shape[1] * S
     x2 = ttnn.reshape(x, (1, 1, M, K)) if B * shape[1] != 1 else x
-    grid = x.device().compute_with_storage_grid_size()
+    grid = compute_grid(x.device())
     pc = None
     # minimal_matmul wins for narrow outputs at large M and for everything at M >= 8192 (E5a
     # mm_grid sweep); the 2D config wins elsewhere.

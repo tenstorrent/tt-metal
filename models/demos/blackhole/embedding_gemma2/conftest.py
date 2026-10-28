@@ -12,7 +12,13 @@ import os
 import pytest
 
 import ttnn
-from models.demos.blackhole.embedding_gemma2.tt.config import TextModelConfig, default_weight_cache_dir
+from models.demos.blackhole.embedding_gemma2.tt.config import (
+    TextModelConfig,
+    check_device_grid,
+    default_weight_cache_dir,
+    request_device_grid,
+    requested_grid,
+)
 from models.demos.blackhole.embedding_gemma2.tt.weights import (
     load_text_config_dict,
     load_text_state_dict,
@@ -91,10 +97,24 @@ def eg2_tokenizer(eg2_snapshot):
     return AutoTokenizer.from_pretrained(str(eg2_snapshot))
 
 
+def open_eg2_device(device_id: int = 0, grid: tuple[int, int] | None = None, **params):
+    """Open the card on the requested compute grid (`EMBEDDING_GEMMA2_GRID`, else `grid`, else the
+    device's own grid: 13 x 10 on a P150a) and check the grid the device reports."""
+    want = requested_grid(grid)
+    request_device_grid(want)
+    device = ttnn.open_device(device_id=device_id, **{**DEVICE_PARAMS, **params})
+    try:
+        check_device_grid(device, want)
+    except Exception:
+        ttnn.close_device(device)
+        raise
+    return device
+
+
 @pytest.fixture(scope="module")
 def eg2_device(request):
     device_id = int(request.config.getoption("device_id", 0) or 0)
-    device = ttnn.open_device(device_id=device_id, **DEVICE_PARAMS)
+    device = open_eg2_device(device_id)
     yield device
     ttnn.close_device(device)
 

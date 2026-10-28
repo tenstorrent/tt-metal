@@ -43,7 +43,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.blackhole.embedding_gemma2.tt.config import FULL, MASK_NEG, SLIDING
+from models.demos.blackhole.embedding_gemma2.tt.config import FULL, MASK_NEG, SLIDING, compute_grid
 
 # E5a default; the text model passes its precision policy's `mask_dtype`
 MASK_DTYPE = ttnn.bfloat4_b
@@ -109,9 +109,7 @@ class AttentionMasks(LightweightModule):
         if seq_len >= BLOCK_MAP_MIN_SEQ:
             from models.demos.blackhole.embedding_gemma2.tt.attention import sdpa_program_config
 
-            pc = sdpa_program_config(
-                self.sliding_head_dim, seq_len, 1, self.num_heads, self.device.compute_with_storage_grid_size()
-            )
+            pc = sdpa_program_config(self.sliding_head_dim, seq_len, 1, self.num_heads, compute_grid(self.device))
             self.block_maps[seq_len] = ttnn.from_torch(
                 band_block_map(seq_len, self.sliding_window, pc.q_chunk_size, pc.k_chunk_size),
                 dtype=ttnn.int32,
