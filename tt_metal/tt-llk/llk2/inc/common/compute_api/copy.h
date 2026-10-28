@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute API: copy. Single thread, arch-independent. Every TRISC runs this same call; llk-lib's per-thread calls
-// execute only on their own thread.
+// execute only on their own thread. src's L1 address is read only on the unpack thread; it needs to be valid only
+// there (tensor/tensor.h).
 //
 //   copy(src, acc);                                        // acc = src; src: [M, N] in L1, acc: [M, N] in Dest
 //   copy<copy_modifiers{.transpose = true}>(src, acc);     // acc = each tile of src transposed (width <-> height)
@@ -27,8 +28,8 @@ namespace llk2
 {
 
 /// acc = src, tile i to tile i, each tile transposed when Mods.transpose is set.
-template <copy_modifiers Mods = copy_modifiers {}, const TensorSpec<tensor_rank>& S, class RS, const TensorSpec<tensor_rank>& D, class RD>
-inline __attribute__((always_inline)) void copy(const Tensor<S, RS>& src, const Tensor<D, RD>& acc)
+template <copy_modifiers Mods = copy_modifiers {}, const TensorSpec<tensor_rank>& S, const TensorSpec<tensor_rank>& D>
+inline __attribute__((always_inline)) void copy(const Tensor<S>& src, const Tensor<D>& acc)
 {
     static_assert(D.storage == Storage::Dest, "copy writes Dest");
     static_assert(accepted<copy_op, S, S, Mods>, "copy takes 32x32 tiles in L1, in a float format the unpacker can write to Src or Dest");
