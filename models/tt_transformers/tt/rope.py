@@ -864,7 +864,11 @@ class RotarySetup(LightweightModule):
                     # Use batch_size (which is doubled_batch_size for fused QK) to determine the number of cores
                     if batch_size % 32 == 0:
                         return ttnn.CoreGrid(y=8, x=8)
-                    return ttnn.num_cores_to_corerangeset(batch_size, core_grid, row_wise=True)
+                    # Attention places fused Q/K shards in rows of 8 cores (to_qk_fused_memory_config); laid out
+                    # over the full 12-wide grid, a 16-core batch (batch 8) put K's cos/sin on other cores.
+                    return ttnn.num_cores_to_corerangeset(
+                        batch_size, ttnn.CoreCoord(8, core_grid.y), row_wise=True
+                    )
             else:
                 return ttnn.num_cores_to_corerangeset(batch_size, core_grid, row_wise=True)
 

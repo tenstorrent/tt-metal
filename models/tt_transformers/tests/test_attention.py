@@ -49,7 +49,7 @@ from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 )
 @pytest.mark.parametrize(
     "batch_size",
-    (1, 32),
+    (1, 4, 8, 16, 32),
 )
 @pytest.mark.parametrize(
     "max_seq_len",
