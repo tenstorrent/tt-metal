@@ -215,7 +215,8 @@ the MiMo Blackhole Galaxy entries) makes `vllm-tt-metal/src/run_vllm_api_server.
 serve the same proxy (`engine_proxy.py`) on the service port, so every workflow talks to one endpoint.
 - **Checked on the host:** the launcher with the dev catalog's MiMo runtime spec (1M context) came up with all 4
   engines healthy in 250 s. SPEED-Bench c=16 through it gave 958 tok/s greedy and 938 sampled, and SIGTERM stopped
-  every engine in 8 s.
+  every engine in 8 s. The MTP entry gave 1122 greedy and 1038 sampled. Every verify was accepted on device and 96%
+  were chained.
 - **Image:** it needs the vllm-tt-plugin branch above.
 
 Shared prefixes, through the proxy with and without prefix routing (`--min-match-chars` 1e12 turns it off):
