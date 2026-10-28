@@ -20,9 +20,9 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <umd/device/firmware/firmware_info_provider.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/firmware/firmware_info_provider.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
+#include <tt-umd/types/arch.hpp>
 
 using namespace tt::tt_metal;
 

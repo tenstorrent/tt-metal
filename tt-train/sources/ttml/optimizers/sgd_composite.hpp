@@ -5,12 +5,15 @@
 #pragma once
 
 #include <unordered_set>
+#include <vector>
 
 #include "optimizers/optimizer_base.hpp"
 #include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
 
+// Defaults for every param group. Groups can override lr, momentum, dampening and weight_decay;
+// nesterov applies to the whole optimizer.
 struct SGDCompositeConfig {
     float lr{1e-3F};
     float momentum{0.0F};
@@ -25,7 +28,10 @@ public:
         return "SGDComposite";
     }
 
-    explicit SGDComposite(ttml::serialization::NamedParameters parameters, const SGDCompositeConfig& config);
+    explicit SGDComposite(
+        ttml::serialization::NamedParameters parameters,
+        const SGDCompositeConfig& config,
+        std::vector<ParamGroup> param_groups = {});
 
     void zero_grad() override;
 
@@ -37,17 +43,9 @@ public:
     [[nodiscard]] size_t get_steps() const override;
     void set_steps(size_t steps) override;
 
-    [[nodiscard]] float get_lr() const override {
-        return m_config.lr;
-    }
-
-    void set_lr(float lr) override {
-        m_config.lr = lr;
-    }
-
 private:
     size_t m_steps{0};
-    SGDCompositeConfig m_config;
+    bool m_nesterov{false};
     ttml::serialization::NamedParameters m_theta;
     // Buffers that have received at least one update. PyTorch seeds a fresh momentum
     // buffer with the raw gradient (buf = g), so each buffer's first update must skip

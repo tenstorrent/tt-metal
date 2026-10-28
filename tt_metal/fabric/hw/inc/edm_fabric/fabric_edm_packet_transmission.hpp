@@ -257,7 +257,8 @@ FORCE_INLINE
                 chunk_size,
                 transaction_id,
                 tt::tt_fabric::local_chip_data_cmd_buf,
-                tt::tt_fabric::edm_to_local_chip_noc);
+                tt::tt_fabric::edm_to_local_chip_noc,
+                tt::tt_fabric::forward_and_local_write_noc_vc);
             offset += chunk_size;
             shift_to_next_chunk(packet_encoding);
 
@@ -270,7 +271,8 @@ FORCE_INLINE
                     chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
-                    tt::tt_fabric::edm_to_local_chip_noc);
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
                 offset += chunk_size;
                 shift_to_next_chunk(packet_encoding);
 
@@ -283,7 +285,8 @@ FORCE_INLINE
                         chunk_size,
                         transaction_id,
                         tt::tt_fabric::local_chip_data_cmd_buf,
-                        tt::tt_fabric::edm_to_local_chip_noc);
+                        tt::tt_fabric::edm_to_local_chip_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc);
                     offset += chunk_size;
                     shift_to_next_chunk(packet_encoding);
                 }
@@ -301,7 +304,8 @@ FORCE_INLINE
                     final_chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
-                    tt::tt_fabric::edm_to_local_chip_noc);
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
             } else if (chunk_encoding != ChunkEncoding::CHUNK_ENCODING_NOP) {
                 if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH) {
                     flush_write_to_noc_pipeline(rx_channel_id);

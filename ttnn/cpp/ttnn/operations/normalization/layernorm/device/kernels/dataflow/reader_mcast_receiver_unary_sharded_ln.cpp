@@ -81,16 +81,16 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_y; ++i) {
         remote_noc_y[i] = get_vararg(num_x + i);
     }
-    df::L1Ptr in0_remote_noc_x = reinterpret_cast<df::L1Ptr>(remote_noc_x);
-    df::L1Ptr in0_remote_noc_y = reinterpret_cast<df::L1Ptr>(remote_noc_y);
+    auto* in0_remote_noc_x = reinterpret_cast<df::L1Ptr>(remote_noc_x);
+    auto* in0_remote_noc_y = reinterpret_cast<df::L1Ptr>(remote_noc_y);
 
     // ---------------------------------------------------------------------------
     // Set up experimental API objects
     // ---------------------------------------------------------------------------
     Noc noc;
-    Semaphore reduce_receiver_sem(sem::reduce_receiver);
-    Semaphore reduce_sender_sem(sem::reduce_sender);
-    Semaphore reduce_second_stage_sem(sem::reduce_second_stage);
+    Semaphore<> reduce_receiver_sem(sem::reduce_receiver);
+    Semaphore<> reduce_sender_sem(sem::reduce_sender);
+    Semaphore<> reduce_second_stage_sem(sem::reduce_second_stage);
     const UnicastEndpoint remote_ep;
 
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
@@ -104,7 +104,8 @@ void kernel_main() {
 
     // Compute the NOC coordinates for remote cores that interact with this core
     constexpr df::NumNocAddrs num_remote_noc_addrs_first_stage = is_all_to_all_worker ? num_blocks_first_stage : 1;
-    constexpr df::NumNocAddrs num_remote_noc_addrs_second_stage = is_all_to_all_worker ? num_blocks_second_stage : 1;
+    // Single-stage reduce has num_blocks_second_stage = 0; keep the (unused) array non-zero-length
+    constexpr df::NumNocAddrs num_remote_noc_addrs_second_stage = use_two_stage_reduce ? num_blocks_second_stage : 1;
     df::RemoteNocCoords<num_remote_noc_addrs_first_stage> remote_coords_first_stage{};
     df::RemoteNocCoords<num_remote_noc_addrs_second_stage> remote_coords_second_stage{};
     if constexpr (is_all_to_all_worker) {
@@ -176,14 +177,12 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_tiles_to_read; i++) {
                 dfb_external_obj.reserve_back(static_cast<uint16_t>(num_blocks_first_stage * num_tiles_scaler));
                 uint32_t write_offset = 0;
-                for (uint32_t block = 0; block < num_blocks_first_stage; block++) {
+                for (const auto& coord : remote_coords_first_stage) {
                     noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                         remote_ep,
                         dfb_external_obj,
                         num_tiles_scaler * single_tile_size_bytes,
-                        {.noc_x = remote_coords_first_stage[block].x,
-                         .noc_y = remote_coords_first_stage[block].y,
-                         .addr = l1_read_addr_ex_par},
+                        {.noc_x = coord.x, .noc_y = coord.y, .addr = l1_read_addr_ex_par},
                         {.offset_bytes = write_offset});
                     write_offset += num_tiles_scaler * single_tile_size_bytes;
                 }

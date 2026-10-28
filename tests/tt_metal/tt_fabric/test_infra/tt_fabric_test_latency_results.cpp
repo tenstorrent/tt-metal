@@ -62,7 +62,7 @@ void LatencyResultsManager::create_latency_kernels_for_device(
             responder_device_id,
             sender_config.parameters.payload_size_bytes,
             sender_config.parameters.num_packets,
-            sender_config.parameters.noc_send_type,
+            sender_config.parameters.noc_send_type.type,
             responder_virtual_core);
     } else if (has_receiver) {
         TT_FATAL(receivers.size() == 1, "Latency test should have exactly one receiver per device");
@@ -79,7 +79,7 @@ void LatencyResultsManager::create_latency_kernels_for_device(
 
         uint32_t payload_size = sender_config.parameters.payload_size_bytes;
         uint32_t num_samples = sender_config.parameters.num_packets;
-        NocSendType noc_send_type = sender_config.parameters.noc_send_type;
+        NocSendType noc_send_type = sender_config.parameters.noc_send_type.type;
         FabricNodeId sender_device_id = sender_config.src_node_id;
 
         uint32_t sender_send_buffer_address = sender_device->get_latency_send_buffer_address();
@@ -144,6 +144,11 @@ void LatencyResultsManager::setup_latency_test_workers(
     const auto& sender = config.senders[0];
     const auto& pattern = sender.patterns[0];
     const auto& dest = pattern.destination.value();
+    // The latency kernels build plain packets of the given type.
+    TT_FATAL(
+        pattern.ntype.value().options == NocSendTypeOptions{},
+        "Latency test mode does not support ntype options (got '{}')",
+        noc_send_type_label(pattern.ntype.value()));
 
     // Use default core if not specified (latency tests typically use a fixed core)
     CoreCoord sender_core = sender.core.value_or(CoreCoord{0, 0});
