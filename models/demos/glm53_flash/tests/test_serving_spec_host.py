@@ -486,6 +486,17 @@ def test_prefill_fill_device_call_sequence(monkeypatch):
         uint32, bfloat16, float32 = "u32", "bf16", "f32"
         ROW_MAJOR_LAYOUT, TILE_LAYOUT, DRAM_MEMORY_CONFIG = "RM", "TILE", "DRAM"
 
+        class BufferType:
+            DRAM = "DRAM"
+
+        class device:  # the footprint fingerprint (GLM53SpecEngine.dram_allocated): a constant on the host
+            @staticmethod
+            def get_memory_view(dev, kind):
+                class _View:
+                    total_bytes_allocated_per_bank = 0
+
+                return _View()
+
         @staticmethod
         def deallocate(t):
             freed.append(t.tag)
