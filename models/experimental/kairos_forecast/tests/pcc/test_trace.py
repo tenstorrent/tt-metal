@@ -5,6 +5,8 @@ after all buffers exist, each replayed on inputs it was not captured with, inter
 forward and the golden. Paper is captured on a transformed paper context (rows reversed, x 1.5 + 0.1) and then
 replayed on the golden paper input, scored against the golden head (D3 item 6). ttnn's "active trace" allocation
 warning fails the test (tests/conftest.py), so the eager references run before the first capture."""
+import os
+
 import pytest
 import torch
 
@@ -68,5 +70,24 @@ def test_trace_fresh_inputs(device, prec):
             if gold is not None:
                 assert g >= (0.999 if prec == "accuracy" else 0.995)
         print(f"trace {prec}: {tr.captures} captures")
+    finally:
+        tr.release()
+
+
+@pytest.mark.skipif(not os.environ.get("KAIROS_TRACE_ALLOC_CONTROL"), reason="positive control: its own job")
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 64 << 20}], indirect=True)
+def test_trace_alloc_control(device):
+    """Positive control for tests/conftest.py (v1.13): allocate under a live trace; this test must FAIL.
+    Run alone: KAIROS_TRACE_ALLOC_CONTROL=1 pytest ...test_trace.py -k alloc_control (tt-metal warns once per process)."""
+    import ttnn
+
+    from models.experimental.kairos_forecast.tt.common import upload
+
+    W = DF.load_weights()
+    tr = TracedKairos(TtKairos(device, W, Precision.accuracy()))
+    try:
+        tr.forward(golden_pair("single_gift")[0])
+        upload(device, torch.zeros(32, 32))  # allocation while the trace is alive
+        ttnn.synchronize_device(device)
     finally:
         tr.release()
