@@ -29,6 +29,13 @@ was; ``commit(slot, accepted)`` advances it (the drafts up to the first mismatch
 bonus token are the step's output). A slot stepping with ``K = 0`` is a plain row of the same graph. One live slot
 per rank at most (its rows are ``u .. u + K`` of its rank's tile, within the MoE's real rows), the captures keyed by
 the live rows' layout.
+
+With a drafter attached (``attach_drafter``; its rings at the pool's ``ring_slots``, position-based) a step with
+``K >= 1`` drafts runs the drafter inside its own graph after the sampler (``TtDSparkDrafter.fused_draft``): every
+verify row's tap (computed in the step) is written to the drafter's rings at the row's slot and the drafter proposes
+on every accept outcome's block at once, so ``decode`` also returns, in ``drafts[slot][a]``, the five drafts that
+follow accepting ``a`` of the block; the round's host side is the accept,
+the commit and the next step's inputs.
 """
 
 from __future__ import annotations
@@ -47,7 +54,9 @@ from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import range_scores
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.pool import RING, scatter_rows
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
+from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 SENTINEL32 = -1  # int32 host value of the uint32 sentinel
 
@@ -83,15 +92,36 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         # address per capture (``taps`` after a step: the drafter's ``stage(tap32=)`` input)
         self.taps = None
         self.capture_taps: dict[str, ttnn.Tensor] = {}
+        self.drafter = None  # ``attach_drafter``
+        self.drafts: dict[int, list[list[int]]] = {}  # slot -> per accept outcome a: the five drafts after it
+        self.draft_layout: tuple | None = None  # (user, blocks) of the fused draft call this step, or None
+
+    def attach_drafter(self, drafter, users: list[int] | None = None, max_k: int = 3) -> None:
+        """Run ``drafter`` (a ``TtDSparkDrafter`` at this pool's ``ring_slots``) inside the steps with drafts; its
+        constants for the live user indices ``users`` (default: every one) and ``K <= max_k`` are allocated now."""
+        assert drafter.ring_slots == self.ring_slots, (drafter.ring_slots, self.ring_slots)
+        assert self.model.dspark is not None, "the fused draft call needs the model's seeder (dspark_weights)"
+        self.drafter = drafter
+        drafter.prepare_fused(list(range(self.users)) if users is None else users, max_k + 1)
 
     # --- the step's layout ---------------------------------------------------------------------------------------
     def variant(self, tokens: dict) -> str:
-        """The capture key: the live rows' layout (rank, user, rows) of the step."""
+        """The capture key: the live rows' layout (rank, user, rows) of the step, and whether the drafter runs."""
         parts = []
         for slot, block in sorted(tokens.items()):
             r, u = divmod(slot, self.users)
             parts.append(f"{r}.{u}.{len(block)}")
-        return "v:" + ",".join(parts)
+        return ("vd:" if self._fused_layout(tokens) else "v:") + ",".join(parts)
+
+    def _fused_layout(self, tokens: dict) -> tuple | None:
+        """(user, blocks) of the fused draft call for ``tokens``: every live slot has the same user index and
+        block length (the drafter's graph is one per rank), at least one draft; else None."""
+        if self.drafter is None or not tokens:
+            return None
+        layouts = {(slot % self.users, len(block)) for slot, block in tokens.items()}
+        assert len(layouts) == 1, f"the fused draft call needs one (user, rows) layout on every live rank: {layouts}"
+        ((user, rows),) = layouts
+        return (user, rows) if rows > 1 else None
 
     def join(self, slot: int, tokens: torch.Tensor, state) -> None:
         super().join(slot, tokens, state)
@@ -178,7 +208,23 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             ints[f"comp{src}"], ints[f"key{src}"] = comp.to(torch.int32), key.to(torch.int32)
             visible_cols[f"uoff{src}"] = (user_of * slot.rows + pool.comp_row(src)).float()
         tick("addresses")
-        inputs = self.packer.pack(ints, floats, rope, visible_cols)
+        wide = {}
+        self.draft_layout = self._fused_layout(tokens)
+        if self.drafter is not None:
+            # the fused draft call's rows (the packer's layout is fixed, so a plain step carries them too): every
+            # verify row's ring slot and fp32 RoPE pair (the ring write), the block rows' bf16 pair (block a's
+            # row i at p + a + 1 + i; the rows past the blocks at p + 1 + row)
+            user, blocks = self.draft_layout or (0, 1)
+            ints["dring"] = torch.where(active, slot_of, torch.full_like(slot_of, SENTINEL32)).to(torch.int32)
+            cos, sin = cos_sin(cfg, False, positions.flatten())
+            wide["dcos"], wide["dsin"] = cos.view(sp * ROWS, -1), sin.view(sp * ROWS, -1)
+            base = positions[:, user].view(sp, 1)  # the live slot's frontier p per rank
+            offs = torch.arange(ROWS).view(1, ROWS)
+            offs = torch.where(offs < 5 * blocks, offs // 5 + 1 + offs % 5, offs + 1)
+            bpos = torch.where(active[:, user].view(sp, 1), base + offs, torch.zeros(sp, ROWS, dtype=torch.int64))
+            rope["dblock"] = self.rope_tables.rows(False, bpos)
+            tick("draft_rows")
+        inputs = self.packer.pack(ints, floats, rope, visible_cols, wide)
         inputs["wslots"] = pool.per_rank(
             wslots.float().view(sp, 1, ROWS, RING), ttnn.float32, ttnn.TILE_LAYOUT, device=False
         )
@@ -252,8 +298,14 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
                 for layer, x in capture.blocks:
                     self.on_block(layer, x)
         t6 = time.time()
-        row = DeviceSampler.to_host(logits)
-        out = {slot: [int(row[(slot // self.users) * ROWS + r]) for r in rows] for slot, rows in self.rows.items()}
+        read = DeviceSampler.rows_to_host(logits)  # [sp, 32 (+ 32 drafts)]
+        out = {slot: [int(read[slot // self.users, r]) for r in rows] for slot, rows in self.rows.items()}
+        self.drafts = {}
+        if self.draft_layout is not None:
+            blocks = self.draft_layout[1]
+            for slot in self.rows:
+                r = slot // self.users
+                self.drafts[slot] = [[int(v) for v in read[r, ROWS + 5 * a : ROWS + 5 * a + 5]] for a in range(blocks)]
         if mode == "eager":
             ttnn.deallocate(logits)
         self.last["read_s"] = round(time.time() - t6, 4)
@@ -300,6 +352,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         self.inputs = dict(self.packer.unpack(self.buffers), engram=self.buffers.get("engram", {}))
         self.inputs["token"] = ttnn.reshape(self.inputs["token"], (1, 1, ROWS))
         self.inputs["wslots"] = self.buffers["wslots"]
+        if "dcos" in self.inputs:
+            self.inputs["dmain"] = (self.inputs["dcos"], self.inputs["dsin"])
         self._windows, self._uoff = {}, {}
         self._commit_carries()
         selection = {}
@@ -324,7 +378,33 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             self.taps = ttnn.concat(taps, dim=3)
         final = ttnn.typecast(model.blocks[-1].residual.final_collapse(x, pre), ttnn.bfloat16)
         logits, _ = model.head(final, 0)
-        return self.sampler(logits, self.inputs)
+        ids = self.sampler.sample(logits, self.inputs)  # [1, 1, 1, ROWS]: the rows' argmaxes
+        if self.draft_layout is not None:
+            user, blocks = self.draft_layout
+            drafts = self.drafter.fused_draft(self.taps, ids, self.inputs, user, blocks)
+            ids = ttnn.concat([ids, drafts], dim=3)  # [1, 1, 1, 64]
+        return self.sampler.gather(ids)
+
+    def _capture_step(self, c1: bool = False):
+        """The step's capture, the drafter's MoEs on the trace controller too when its call is in the graph."""
+        if self.draft_layout is None:
+            return super()._capture_step(c1)
+        from models.demos.deepseek_v3_d_p.tt.v41.decode import _Trace
+
+        controller = SubDeviceTraceController(self.mesh_device)
+        moes = list(self.moes) + [stage.ffn for stage in self.drafter.stages]
+        for moe in moes:
+            moe.set_trace_controller(controller)
+        blocks = []
+        ttnn.synchronize_device(self.mesh_device)
+        controller.begin_capture()
+        try:
+            logits = self._forward(lambda layer, x: blocks.append((layer, x)), c1=c1)
+        finally:
+            controller.end_capture()
+            for moe in moes:
+                moe.set_trace_controller(None)
+        return _Trace(controller, logits, 0, blocks)
 
     def _window_rows(self, layer: int):
         """``sparse_sdpa`` window rows of the step ``[1, 1, ROWS, RING]`` uint32: each row's slots offset by its

@@ -18,6 +18,10 @@ Phases, all on one model and one prefill of ``V41_VR_PROMPT`` tokens of real tex
 
 ``V41_VR_SEQ`` is the pool's capacity (the served 1,054,720 by default), ``V41_VR_OUT`` takes the JSON record, which
 also carries the DRAM a chip (allocated and free) after the model, the decoder and the drafter.
+
+``V41_VR_FUSED=1`` (default): the drafter runs inside the verify step's capture on every accept outcome (one
+replay and one readback a round; the first round's drafts come from one standalone draft call after the join);
+``0``: a standalone (traced) draft call before every verify step, the taps selected from the step's tile.
 """
 
 import json
@@ -68,6 +72,7 @@ def test_v41_verify_rows(mesh_device, device_params):
     n_tokens = int(os.environ.get("V41_VR_TOKENS", 24))
     ks = [int(k) for k in os.environ.get("V41_VR_KS", "1,2,3").split(",") if k]
     warmup = int(os.environ.get("V41_VR_WARMUP", 2))
+    fused = os.environ.get("V41_VR_FUSED", "1") == "1"
     ckpt = resolve_checkpoint()
     if ckpt is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
@@ -80,6 +85,7 @@ def test_v41_verify_rows(mesh_device, device_params):
     text = orc.text_tokens(prompt_len + 8)[0]
     prompt = text[:prompt_len]
     record = {
+        "fused": fused,
         "taps": os.environ.get("V41_VR_TAPS", "step"),
         "layers": layers,
         "n_layers": len(layers),
@@ -135,7 +141,10 @@ def test_v41_verify_rows(mesh_device, device_params):
         shared_head=model.head,
         trace=True,
         warmup=warmup,
+        ring_slots=decoder.ring_slots if fused else 128,
     )
+    if fused:
+        decoder.attach_drafter(drafter)
     record["drafter_build_s"] = round(time.time() - t0, 1)
     record["drafter_build_detail_s"] = drafter.build_s
     record["dram_after_drafter"] = _dram(mesh_device)
@@ -164,7 +173,7 @@ def test_v41_verify_rows(mesh_device, device_params):
 
     def rejoin():
         decoder.join(0, prompt, state)
-        drafter.load_rings_from_device(state.dspark_rings)
+        drafter.load_rings_from_device(state.dspark_rings, start=prompt_len)
 
     # --- plain: one row a step ---
     rejoin()
@@ -200,24 +209,34 @@ def test_v41_verify_rows(mesh_device, device_params):
         tok, frontier = first, prompt_len  # the next token to process and its position
         tap = None  # the frontier - 1 tap: the prefill's seeding wrote its slot
         tap_row = None
+        if fused:
+            # the first drafts: one standalone draft call (no ring write: the prefill seeded the slot)
+            t0 = time.time()
+            drafter.stage(drafter.host_inputs(tok, None, frontier - 1, write=False))
+            drafts = drafter.run(tok)[:k]
+            first_draft_s = round(time.time() - t0, 4)
+            logger.info(f"K={k} first drafts {drafts} in {first_draft_s} s ({drafter.last})")
         while len(committed) - 1 < n_tokens:
             t0 = time.time()
-            inputs = drafter.host_inputs(tok, None, frontier - 1, write=tap is not None, tap_row=tap_row or 0)
-            if taps_mode == "streams":
-                tap_dev = (
-                    drafter.tap_rows_from_streams([streams[l] for l in stream_layers], tap_row)
-                    if tap is not None
-                    else None
-                )
-                drafter.stage(inputs, tap_dev)
-                if tap_dev is not None:
-                    ttnn.deallocate(tap_dev)
+            if fused:
+                t1 = t2 = t3 = t0
             else:
-                drafter.stage(inputs, tap32=decoder.taps if tap is not None else None)
-            t1 = time.time()
-            drafts = drafter.run(tok)[:k]
-            t2 = time.time()
-            t3 = time.time()
+                inputs = drafter.host_inputs(tok, None, frontier - 1, write=tap is not None, tap_row=tap_row or 0)
+                if taps_mode == "streams":
+                    tap_dev = (
+                        drafter.tap_rows_from_streams([streams[l] for l in stream_layers], tap_row)
+                        if tap is not None
+                        else None
+                    )
+                    drafter.stage(inputs, tap_dev)
+                    if tap_dev is not None:
+                        ttnn.deallocate(tap_dev)
+                else:
+                    drafter.stage(inputs, tap32=decoder.taps if tap is not None else None)
+                t1 = time.time()
+                drafts = drafter.run(tok)[:k]
+                t2 = time.time()
+                t3 = time.time()
             block = [tok] + drafts
             argmax = decoder.decode({0: block})[0]
             t4 = time.time()
@@ -227,6 +246,8 @@ def test_v41_verify_rows(mesh_device, device_params):
             tok = emitted[-1]
             tap, tap_row = True, decoder.rows[0][a]
             frontier += a + 1
+            if fused:
+                drafts = decoder.drafts[0][a][:k]  # the drafts of the accepted outcome, out of the same replay
             t5 = time.time()
             entry = {
                 "frontier": frontier - a - 1,
@@ -237,9 +258,9 @@ def test_v41_verify_rows(mesh_device, device_params):
                 "wall_s": round(t5 - t0, 4),
                 "draft_inputs_s": round(t1 - t0, 4),
                 "draft_s": round(t2 - t1, 4),
-                "draft_mode": drafter.last.get("mode"),
-                "draft_device_s": drafter.last.get("device_s"),
-                "draft_read_s": drafter.last.get("read_s"),
+                "draft_mode": decoder.last.get("mode") if fused else drafter.last.get("mode"),
+                "draft_device_s": None if fused else drafter.last.get("device_s"),
+                "draft_read_s": None if fused else drafter.last.get("read_s"),
                 "verify_s": round(t4 - t3, 4),
                 "verify_mode": decoder.last.get("mode"),
                 "verify_device_s": decoder.last.get("device_s"),
@@ -248,6 +269,8 @@ def test_v41_verify_rows(mesh_device, device_params):
                 "verify_read_s": decoder.last.get("read_s"),
                 "commit_s": round(t5 - t4, 4),
             }
+            if fused:
+                entry["next_drafts"] = decoder.drafts[0]
             rounds.append(entry)
             logger.info(f"K={k} round {json.dumps(entry)}")
         committed = committed[: n_tokens + 1]
@@ -275,6 +298,8 @@ def test_v41_verify_rows(mesh_device, device_params):
             ),
             "matches_plain": committed == plain,
         }
+        if fused:
+            summary["first_draft_s"] = first_draft_s
         if committed != plain:
             n = next((i for i, (x, y) in enumerate(zip(committed, plain)) if x != y), min(len(committed), len(plain)))
             mismatches.append(f"K={k}: committed text differs from the plain text at token {n}")

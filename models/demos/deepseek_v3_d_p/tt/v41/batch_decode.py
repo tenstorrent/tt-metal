@@ -125,6 +125,8 @@ class StepPacker:
         self.float_rows: list[str] = []
         self.rope_cols: list[str] = []
         self.visible_cols: list[str] = []
+        self.wide_cols: list[str] = []
+        self.wide_widths: list[int] = []
         self.rope_width = 0
         self.one_host: torch.Tensor | None = None  # the "one" mode's host rows, reused every step
 
@@ -136,19 +138,30 @@ class StepPacker:
         assert have == keys, (have, keys)
         return have
 
-    def pack(self, ints: dict, floats: dict, rope: dict, visible: dict) -> dict:
+    def pack(self, ints: dict, floats: dict, rope: dict, visible: dict, wide: dict | None = None) -> dict:
         """``ints`` name -> int32 ``[sp, ROWS]``; ``floats`` name -> fp32 ``[sp, ROWS]``; ``rope`` name -> (cos, sin)
-        bf16 ``[sp * ROWS, rope_dim]``; ``visible`` name -> fp32 ``[sp, ROWS]`` -> the host tensors (per rank)."""
+        bf16 ``[sp * ROWS, rope_dim]``; ``visible`` name -> fp32 ``[sp, ROWS]``; ``wide`` name -> fp32
+        ``[sp * ROWS, w]`` (``w`` a multiple of 32; tiled columns after the visible ones in the same tensor) -> the
+        host tensors (per rank)."""
         sp, pool = self.sp, self.pool
         out = {}
+        if wide:
+            cols = self._order(self.wide_cols, wide)
+            self.wide_widths = [wide[k].shape[1] for k in cols]
+            assert all(w % 32 == 0 for w in self.wide_widths), self.wide_widths
+            extra = torch.cat([wide[k].float().view(sp, 1, ROWS, -1) for k in cols], dim=3)
+        else:
+            extra = None
         if self.mode == "one":
             out[self.ONE] = self._pack_one(ints, floats, rope)
-            if visible:
+            if visible or extra is not None:
                 cols = self._order(self.visible_cols, visible)
                 packed = torch.zeros(sp, 1, ROWS, 32, dtype=torch.float32)
                 for j, k in enumerate(cols):
                     packed[:, 0, :, j] = visible[k].float()
-                out[self.VISIBLE] = pool.per_rank(packed, ttnn.float32, ttnn.TILE_LAYOUT, device=False)
+                if extra is not None:
+                    packed = torch.cat([packed, extra], dim=3)
+                out[self.VISIBLE] = pool.per_rank(packed.contiguous(), ttnn.float32, ttnn.TILE_LAYOUT, device=False)
             return out
         rows = self._order(self.int_rows, ints)
         packed = torch.stack([ints[k].to(torch.int32) for k in rows], dim=1).view(sp, 1, len(rows), ROWS)
@@ -160,12 +173,14 @@ class StepPacker:
         cols = self._order(self.rope_cols, rope)
         packed = torch.cat([t for k in cols for t in rope[k]], dim=1).view(sp, 1, ROWS, -1)
         out[self.ROPE] = pool.per_rank(packed.contiguous(), ttnn.bfloat16, ttnn.TILE_LAYOUT, device=False)
-        if visible:
+        if visible or extra is not None:
             cols = self._order(self.visible_cols, visible)
             packed = torch.zeros(sp, 1, ROWS, 32, dtype=torch.float32)
             for j, k in enumerate(cols):
                 packed[:, 0, :, j] = visible[k].float()
-            out[self.VISIBLE] = pool.per_rank(packed, ttnn.float32, ttnn.TILE_LAYOUT, device=False)
+            if extra is not None:
+                packed = torch.cat([packed, extra], dim=3)
+            out[self.VISIBLE] = pool.per_rank(packed.contiguous(), ttnn.float32, ttnn.TILE_LAYOUT, device=False)
         return out
 
     @staticmethod
@@ -223,11 +238,18 @@ class StepPacker:
             out[k] = tuple(
                 ttnn.slice(rope, [0, 0, 0, (2 * i + j) * pair], [1, 1, ROWS, (2 * i + j + 1) * pair]) for j in range(2)
             )
-        if self.visible_cols:
+        self._unpack_visible(buffers, out)
+        return out
+
+    def _unpack_visible(self, buffers: dict, out: dict) -> None:
+        if self.visible_cols or self.wide_cols:
             visible = buffers[self.VISIBLE]
             for j, k in enumerate(self.visible_cols):
                 out[k] = ttnn.slice(visible, [0, 0, 0, j], [1, 1, ROWS, j + 1])
-        return out
+            start = 32
+            for k, w in zip(self.wide_cols, self.wide_widths):
+                out[k] = ttnn.slice(visible, [0, 0, 0, start], [1, 1, ROWS, start + w])
+                start += w
 
     def unpack(self, buffers: dict) -> dict:
         """The device buffers of ``pack`` -> the graph's tensors by name: the int and float rows as ``[1, 1, 1,
@@ -251,10 +273,7 @@ class StepPacker:
                 ttnn.slice(rope, [0, 0, 0, (2 * i + j) * width], [1, 1, ROWS, (2 * i + j + 1) * width])
                 for j in range(2)
             )
-        if self.visible_cols:
-            visible = buffers[self.VISIBLE]
-            for j, k in enumerate(self.visible_cols):
-                out[k] = ttnn.slice(visible, [0, 0, 0, j], [1, 1, ROWS, j + 1])
+        self._unpack_visible(buffers, out)
         return out
 
 
@@ -302,6 +321,11 @@ class DeviceSampler:
     def __call__(self, logits, buffers: dict):
         """``logits`` ``[1, 1, ROWS, vocab/tp]`` fp32 tiled per chip (consumed) -> the sampled ids of every rank's
         rows on every chip (``to_host`` reads them)."""
+        return self.gather(self.sample(logits, buffers))
+
+    def sample(self, logits, buffers: dict):
+        """``logits`` (consumed) -> this rank's sampled ids ``[1, 1, 1, ROWS]`` uint32 row-major (the same on the
+        rank's TP chips)."""
         if self.debug is not None:
             self.debug["logits"] = ttnn.clone(logits)
         values, indices = self.candidates(logits)
@@ -323,17 +347,25 @@ class DeviceSampler:
         ids = ttnn.sampling(values, indices, buffers["k"], buffers["p"], buffers["temp"])
         if self.debug is not None:
             self.debug["ids"] = ids
-        # the ids as one tile per rank (the 128-byte row of ids gathered by all_gather_async arrived on the other
-        # ranks' chips as stale memory), gathered over SP: [1, 1, sp * 32, 32] uint32 tiled, rows [r * 32, (r + 1)
-        # * 32) rank r's ids, every row the same
-        tile = ttnn.to_layout(ttnn.concat([ids] * ROWS, dim=2), ttnn.TILE_LAYOUT)
+        return ids
+
+    def gather(self, row):
+        """A rank's row ``[1, 1, 1, W]`` uint32 row-major (``W`` a multiple of 32) -> one tile per rank gathered over
+        SP: ``[1, 1, sp * 32, W]`` uint32 tiled, rows ``[r * 32, (r + 1) * 32)`` rank r's row, every row the same
+        (the 128-byte row of ids gathered by all_gather_async arrived on the other ranks' chips as stale memory)."""
+        tile = ttnn.to_layout(ttnn.concat([row] * ROWS, dim=2), ttnn.TILE_LAYOUT)
         return self.gather_sp(tile, dim=2)
 
     @staticmethod
     def to_host(gathered) -> torch.Tensor:
         """``__call__``'s result -> ``[sp * ROWS]`` int64 ids, ``r * ROWS + u`` rank r's row u."""
-        t = ttnn.to_torch(ttnn.get_device_tensors(gathered)[0])[0, 0].to(torch.int64)  # [sp * 32, 32]
-        return t.view(-1, ROWS, ROWS)[:, 0, :].reshape(-1)
+        return DeviceSampler.rows_to_host(gathered).reshape(-1)
+
+    @staticmethod
+    def rows_to_host(gathered) -> torch.Tensor:
+        """``gather``'s result -> ``[sp, W]`` int64: rank r's row."""
+        t = ttnn.to_torch(ttnn.get_device_tensors(gathered)[0])[0, 0].to(torch.int64)  # [sp * 32, W]
+        return t.view(-1, ROWS, t.shape[1])[:, 0, :]
 
 
 class TtV41BatchDecoder(TtV41Decoder):
