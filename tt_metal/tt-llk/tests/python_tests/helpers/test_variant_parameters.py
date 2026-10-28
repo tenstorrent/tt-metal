@@ -308,6 +308,17 @@ def _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim: int, rt
 
 
 @dataclass
+class MATMUL_L1_ACC(TemplateParameter):
+    """Blackhole matmul pack thread with the packer L1 accumulate switch on, as the ttnn bmm kernels run the later K blocks of a spilled output
+    (llk_pack_reconfig_l1_acc(1) after the first pack). The perf loop accumulates into the same L1 tiles; the values do not matter."""
+
+    l1_acc: L1Accumulation = L1Accumulation.No
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_L1_ACC {1 if self.l1_acc == L1Accumulation.Yes else 0}"
+
+
+@dataclass
 class MATMUL_ROW_END_FOLD(TemplateParameter):
     """Blackhole math: the default row form of a block that walks down the held operand (rt_dim > ct_dim) ends each row on a MVMUL that frees both sources and clears the counters, no SETRWC per row."""
 
