@@ -150,6 +150,8 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
             num_available_cores);
         min_num_links = fitted_links;
     }
+    // Row-major order may put every link's core on one NOC row. Unlike for unicast's link-directions, that is no
+    // bottleneck: a core moves only ~14 GB/s (BH, 26 MB ring); one core per row is within 1% at 8-26 MB, line and ring.
     auto [worker_core_range, worker_cores] = ttnn::ccl::choose_worker_cores(
         min_num_links,
         num_workers_per_link,
