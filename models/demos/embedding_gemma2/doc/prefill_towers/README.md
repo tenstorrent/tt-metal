@@ -173,7 +173,8 @@ an added Tracy case (`test_tracy_audio_forward[b1_s256]`).
 ## Not done / next stages
 
 - 04 attention: vision SDPA is 33.6 % of the forward after this unit (315 us per layer, 5.2x the model
-  floor); its chunk / grid table still holds the 13 x 10 entry capped to 12 x 10.
+  floor); its chunk / grid table still holds the 13 x 10 entry capped to 12 x 10. Done in E10.2:
+  `02-attention/README.md` (vision SDPA q256 k256, audio rel-shift without the gather).
 - 05 memory: the vision gelu(gate) * up multiply (144 us per layer, NoC-bound on interleaved L1 inputs,
   31.7x its floor after h moved to L1) wants a block-sharded MLP chain; audio block-sharded RMSNorm reshards
   (18 ops per layer); DRAM-sharded FFN weights at 1 x 256 (weight-bound, 3.4x); the conv0 input relayout.
