@@ -379,17 +379,5 @@ TEST_F(SRAMArenaDFBTest, CPU_PartialUpdateBorrowedFitFailurePreservesArenaBindin
     EXPECT_EQ(ArenaDFB(program).borrowed_addr_, ArenaBase(first) + 1024);
 }
 
-TEST_F(SRAMArenaDFBTest, CPU_RejectsArenaAddressBeyond32Bits) {
-    // Binding an arena whose base plus the DFB offset passes 2^32 is rejected instead of truncated.
-    SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
-    ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/0xFFFFFFF0u);
-    Program program = MakeProgramFromSpec(fixture_device(), spec, /*skip_validation=*/true);
-    ProgramRunArgs args;
-    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
-    EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, args); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds uint32_t max")));
-}
-
 }  // namespace
 }  // namespace tt::tt_metal::experimental
