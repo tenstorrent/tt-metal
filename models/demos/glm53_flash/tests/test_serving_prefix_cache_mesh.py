@@ -370,6 +370,16 @@ def test_served_vllm_cached_prefix_miss_with_budget_split(mesh_device, monkeypat
     a.release_request(1)
     for key in a.apc.retained_slots():
         a.apc.forget(*key)
+    # B2: the SAME chunk plan as B (1024, 1024, 128, 172) through plain continuations (no cached-prefix miss): splits
+    # the adapter's miss / recompute path from the chunk plan's own numerics
+    srv.prefill(2, Bp[:CHUNK], 0)
+    srv.prefill(2, Bp[: 2 * CHUNK], CHUNK)
+    srv.prefill(2, Bp[:split_end], 2 * CHUNK)
+    lb2 = srv.prefill(2, Bp, split_end)
+    toks_b2, outs_b2 = srv.generate(2, lb2, n, N_CHECK)
+    a.release_request(2)
+    for key in a.apc.retained_slots():
+        a.apc.forget(*key)
     # the from-scratch references (the adapter's own 1024-token chunk plan from 0)
     ra = srv.prefill(0, A, 0)
     same_a = (a.slots.physical(0).row, a.slots.physical(0).user) == (sa.row, sa.user)
@@ -383,7 +393,17 @@ def test_served_vllm_cached_prefix_miss_with_budget_split(mesh_device, monkeypat
         f"budget split: A tokens {toks_a} ref {rtoks_a} (same slot {same_a}, prefill logits equal {torch.equal(la, ra)}); "
         f"B tokens {toks_b} ref {rtoks_b} (same slot {same_b}, equal {torch.equal(lb, rb)}); apc {a.apc.stats}"
     )
+    pb_b2 = [_pcc(x, y) for x, y in zip([lb] + outs_b, [lb2] + outs_b2)]
+    logger.info(
+        f"budget split: B (miss path) vs B2 (plain continuations, same plan) per step pcc {[f'{v:.6f}' for v in pb_b2]}; tokens B {toks_b} B2 {toks_b2}"
+    )
     _assert_agree("A continued at 2048 vs from scratch", [la] + outs_a, [ra] + routs_a)
+    _assert_agree(
+        "B2: the plan 1024+1024+128+172 by plain continuations vs from scratch",
+        [lb2] + outs_b2,
+        [rb] + routs_b,
+        pcc_min=0.99,
+    )
     # B's prefill ran a different chunk plan than its reference (1024 + 1024 + 128 + 172 vs 1024 + 1024 + 300): the
     # sequence-parallel KDA scan groups the recurrence by the chunk length, so the carries differ at the ulp and the MoE
     # flips near-tie expert choices (0.998 on the prefill logits at 4 layers; tests/test_mesh_local_kda.py
