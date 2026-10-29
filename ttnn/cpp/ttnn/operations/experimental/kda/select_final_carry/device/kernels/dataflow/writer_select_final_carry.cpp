@@ -72,9 +72,10 @@ void kernel_main() {
     const uint8_t barrier_y = get_arg_val<uint32_t>(arg++);
     const uint32_t num_connections = get_arg_val<uint32_t>(arg++);
 
-    auto write_route = PacketHeaderPool::allocate_header_n(num_connections);
-    auto scatter_route = PacketHeaderPool::allocate_header_n(num_connections);
-    auto semaphore_route = PacketHeaderPool::allocate_header_n(num_connections);
+    // The multicast routes, one header per connection each; unicast_peers sends with one header of its own instead.
+    const uint8_t write_route = unicast_peers ? 0 : PacketHeaderPool::allocate_header_n(num_connections);
+    const uint8_t scatter_route = unicast_peers ? 0 : PacketHeaderPool::allocate_header_n(num_connections);
+    const uint8_t semaphore_route = unicast_peers ? 0 : PacketHeaderPool::allocate_header_n(num_connections);
     tt::tt_fabric::RoutingPlaneConnectionManager fabric;
     open_connections(fabric, num_connections, arg);
     const size_t peer_args = arg;
@@ -101,28 +102,30 @@ void kernel_main() {
             fabric, semaphore_route, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{address, 0});
     };
 
-    uint8_t starts[] = {static_cast<uint8_t>(start_hops_forward), static_cast<uint8_t>(start_hops_backward)};
-    uint8_t ranges[] = {static_cast<uint8_t>(range_hops_forward), static_cast<uint8_t>(range_hops_backward)};
-    // Connections are packed in destination order, so a rank with only a backward neighbor sends on connection 0.
-    if (ranges[0] == 0) {
-        starts[0] = starts[1];
-        ranges[0] = ranges[1];
+    if constexpr (!unicast_peers) {
+        uint8_t starts[] = {static_cast<uint8_t>(start_hops_forward), static_cast<uint8_t>(start_hops_backward)};
+        uint8_t ranges[] = {static_cast<uint8_t>(range_hops_forward), static_cast<uint8_t>(range_hops_backward)};
+        // Connections are packed in destination order, so a rank with only a backward neighbor sends on connection 0.
+        if (ranges[0] == 0) {
+            starts[0] = starts[1];
+            ranges[0] = ranges[1];
+        }
+        fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+            fabric, write_route, starts, ranges, nullptr, page_size);
+        if constexpr (packet_pages > 1) {
+            fabric_multicast_noc_scatter_write_set_state<
+                UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+                fabric,
+                scatter_route,
+                starts,
+                ranges,
+                NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
+                page_size * 2);
+        }
+        fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            fabric, semaphore_route, starts, ranges, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1u});
     }
-    fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-        fabric, write_route, starts, ranges, nullptr, page_size);
-    if constexpr (packet_pages > 1) {
-        fabric_multicast_noc_scatter_write_set_state<
-            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-            fabric,
-            scatter_route,
-            starts,
-            ranges,
-            NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(page_size)}),
-            page_size * 2);
-    }
-    fabric_multicast_noc_unicast_atomic_inc_set_state<
-        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-        fabric, semaphore_route, starts, ranges, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1u});
 
     // Every rank on the line must have entered this program before the owner overwrites its output.
     increment_others(safe_get_noc_addr(barrier_x, barrier_y, barrier_semaphore, 0));

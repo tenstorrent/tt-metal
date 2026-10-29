@@ -110,8 +110,9 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         assemble_carry();
     } else {
         // The host computes the connection arguments without this kernel's semaphore ids; bind them before opening.
-        const uint32_t teardown[] = {sem::teardown0.id, sem::teardown1.id};
-        const uint32_t buffer_index[] = {sem::buffer_index0.id, sem::buffer_index1.id};
+        const uint32_t teardown[] = {sem::teardown0.id, sem::teardown1.id, sem::teardown2.id, sem::teardown3.id};
+        const uint32_t buffer_index[] = {
+            sem::buffer_index0.id, sem::buffer_index1.id, sem::buffer_index2.id, sem::buffer_index3.id};
         auto* connection_arg_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(named_runtime_args));
         for (uint32_t c = 0; c < num_connections; ++c) {
             connection_arg_words[c * connection_args + teardown_arg] = teardown[c];
@@ -129,7 +130,8 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         const auto semaphore_noc_address = [](uint32_t address) {
             return safe_get_noc_addr(my_x[0], my_y[0], address, 0);
         };
-        uint8_t ranges[2] = {0, 0};
+        // Connections past the two SP neighbors only carry unicasts (unicast_peers).
+        uint8_t ranges[max_fabric_connections] = {};
         if constexpr (forward_connection != no_fabric_connection) {
             ranges[forward_connection] = forward_range;
         }

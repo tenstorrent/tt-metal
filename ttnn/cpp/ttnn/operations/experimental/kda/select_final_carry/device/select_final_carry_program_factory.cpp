@@ -24,6 +24,9 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
+// The final carry's fabric connections: the SP neighbors, and on a turning 2D axis the links peer routes leave on.
+constexpr uint32_t max_fabric_connections = 4;
+
 constexpr uint32_t tiles_cb = 0;
 constexpr uint32_t mode_cb = 1;
 // A few tiles per copy worker keep the unsplit copy latency-bound.
@@ -195,34 +198,18 @@ tt::tt_metal::ProgramDescriptor build_program(
             std::vector<uint32_t> writer_rt = {0, copy.begin, copy.end, send.begin, send.end, fabric_worker};
             if (fabric_worker) {
                 const auto worker = mesh->worker_core_from_logical_core(core);
-                const uint32_t connections = uint32_t(forward.has_value()) + uint32_t(backward.has_value());
-                writer_rt.insert(
-                    writer_rt.end(),
-                    {arrival_address,
-                     static_cast<uint32_t>(drain_core.x),
-                     static_cast<uint32_t>(drain_core.y),
-                     uint32_t(link == 0),
-                     attrs.num_links,
-                     barrier_address,
-                     static_cast<uint32_t>(worker.x),
-                     static_cast<uint32_t>(worker.y),
-                     connections});
+                const auto source = mesh->get_fabric_node_id(coord);
                 std::vector<tt::tt_fabric::FabricNodeId> destinations;
                 for (const auto& neighbor : {forward, backward}) {
                     if (neighbor) {
                         destinations.push_back(mesh->get_fabric_node_id(*neighbor));
                     }
                 }
-                tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-                    mesh->get_fabric_node_id(coord),
-                    destinations,
-                    {static_cast<uint32_t>(link)},
-                    desc,
-                    writer_id,
-                    core,
-                    writer_rt);
+                // Per other rank: the connection its route leaves on, its chip and mesh. A route may leave on a link
+                // that is neither SP neighbor's (a shortcut across the LoudBox 2x4 mesh): it gets a connection of its
+                // own, which carries only unicasts.
+                std::vector<uint32_t> peer_args;
                 if (unicast_peers) {
-                    const auto source = mesh->get_fabric_node_id(coord);
                     std::vector<CoreCoord> connection_eth_cores;
                     for (const auto& destination : destinations) {
                         connection_eth_cores.push_back(
@@ -233,17 +220,36 @@ tt::tt_metal::ProgramDescriptor build_program(
                         peer_coord[axis] = (coord[axis] + step) % sp_size;
                         const auto peer = mesh->get_fabric_node_id(peer_coord);
                         const auto first_hop = tt::tt_fabric::get_forwarding_eth_core(*mesh, source, peer, link);
-                        const auto connection =
+                        auto connection =
                             std::find(connection_eth_cores.begin(), connection_eth_cores.end(), first_hop);
-                        TT_FATAL(
-                            connection != connection_eth_cores.end(),
-                            "select_final_carry: the route to SP rank {} does not leave through a neighbor's link",
-                            peer_coord[axis]);
-                        writer_rt.push_back(static_cast<uint32_t>(connection - connection_eth_cores.begin()));
-                        writer_rt.push_back(peer.chip_id);
-                        writer_rt.push_back(*peer.mesh_id);
+                        if (connection == connection_eth_cores.end()) {
+                            TT_FATAL(
+                                destinations.size() < max_fabric_connections,
+                                "select_final_carry: the routes to the other SP ranks leave on more than {} links",
+                                max_fabric_connections);
+                            destinations.push_back(peer);
+                            connection_eth_cores.push_back(first_hop);
+                            connection = connection_eth_cores.end() - 1;
+                        }
+                        peer_args.push_back(static_cast<uint32_t>(connection - connection_eth_cores.begin()));
+                        peer_args.push_back(peer.chip_id);
+                        peer_args.push_back(*peer.mesh_id);
                     }
                 }
+                writer_rt.insert(
+                    writer_rt.end(),
+                    {arrival_address,
+                     static_cast<uint32_t>(drain_core.x),
+                     static_cast<uint32_t>(drain_core.y),
+                     uint32_t(link == 0),
+                     attrs.num_links,
+                     barrier_address,
+                     static_cast<uint32_t>(worker.x),
+                     static_cast<uint32_t>(worker.y),
+                     static_cast<uint32_t>(destinations.size())});
+                tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                    source, destinations, {static_cast<uint32_t>(link)}, desc, writer_id, core, writer_rt);
+                writer_rt.insert(writer_rt.end(), peer_args.begin(), peer_args.end());
             }
             tt::tt_metal::KernelDescriptor::RTArgList writer_list;
             writer_list.reserve(writer_rt.size());
