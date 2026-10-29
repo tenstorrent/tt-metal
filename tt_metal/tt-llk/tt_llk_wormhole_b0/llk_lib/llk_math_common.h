@@ -33,6 +33,10 @@ template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+
+    // ADDR_MOD_7 is invariant state: zero advance, so it behaves like a NOOP.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+
     std::uint32_t int8_math_enabled     = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
     std::uint32_t config_data           = alu_src_format_cfg(srca_data_format, srcb_data_format) | (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
     constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
