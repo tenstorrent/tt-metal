@@ -25,9 +25,10 @@ class MiniMaxM27Config:
     # Pages one of combine_fabric2d's forwarding channels holds. The region is split by movement class,
     # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
     # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
-    # length. Carried over from what the reduction factor it replaces produced at ring8 / 5k; not yet
-    # swept on its own axis.
-    COMBINE_FWD_VC_PAGES = 134
+    # length. The depth dispatch settled on for this model. Combine is not dispatch here: at ring8 / 5k
+    # this costs +26% on the hot-expert case against the 134 it replaces, traded for the 15 MB it gives
+    # back. Sweep this one on its own axis before relying on it where latency is the scarcer thing.
+    COMBINE_FWD_VC_PAGES = 32
     # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
     # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
     # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
