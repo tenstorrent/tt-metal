@@ -50,6 +50,7 @@ void ValidateResourceUsage(const ValidationContext& ctx, tt::ARCH arch) {
     ValidateTensorParametersUsed(ctx);
     ValidatePerNodeTensorPlacement(ctx);
     ValidatePrefetcherPipesUsed(ctx);
+    ValidateSRAMArenaParametersUsed(ctx);
 }
 
 }  // namespace tt::tt_metal::experimental

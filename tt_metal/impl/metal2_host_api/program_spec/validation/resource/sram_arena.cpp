@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <unordered_set>
 #include <variant>
 
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
@@ -52,6 +53,26 @@ void ValidateSRAMArenaAllocation(
             source.arena);
     }
     ValidateSRAMArenaCapacity(source, properties, resource, size_per_node);
+}
+
+void ValidateSRAMArenaParametersUsed(const ValidationContext& ctx) {
+    std::unordered_set<SRAMArenaParamName> used_arenas;
+    for (const auto& dfb : ctx.spec.dataflow_buffers) {
+        if (const auto& allocation = dfb.advanced_options.allocation_override) {
+            used_arenas.insert(allocation->arena);
+        }
+    }
+    for (const auto& scratchpad : ctx.spec.scratchpads) {
+        if (const auto& allocation = scratchpad.advanced_options.allocation_override) {
+            used_arenas.insert(allocation->arena);
+        }
+    }
+    for (const auto& parameter : ctx.spec.advanced_options.sram_arena_parameters) {
+        TT_FATAL(
+            used_arenas.contains(parameter.unique_id),
+            "SRAMArenaParameter '{}' is not used by any DFB or scratchpad.",
+            parameter.unique_id);
+    }
 }
 
 }  // namespace tt::tt_metal::experimental

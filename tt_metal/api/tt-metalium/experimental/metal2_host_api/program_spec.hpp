@@ -73,6 +73,8 @@ struct WorkUnitSpec {
 
 // A ProgramSpec describes a complete Program (its immutable properties).
 struct ProgramSpec {
+    // Invariant: Each SRAM arena parameter is used by a DFB or scratchpad allocation override.
+
     // Human-readable name (debug/messaging only; no uniqueness invariant).
     std::string name;
 

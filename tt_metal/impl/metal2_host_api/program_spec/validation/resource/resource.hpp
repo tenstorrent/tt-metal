@@ -67,6 +67,7 @@ void ValidatePrefetcherPipeLanesAndRelays(
 
 // sram_arena.cpp
 void ValidateSRAMArenaParameter(const SRAMArenaParameter& parameter);
+void ValidateSRAMArenaParametersUsed(const ValidationContext& ctx);
 void ValidateSRAMArenaAllocation(
     const SRAMArenaSource& source,
     const CollectedSpecData& collected,
