@@ -3922,7 +3922,10 @@ def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
         lines[0],
     )
     phases = lines[0].split("phases ms/call: ")[1].split(" | prefills")[0]
+    # the first proposal follows the prefill's (plain) step; then the proposal's own phases and the runner's
+    # boundaries around the verify step
     assert {name for name, _ms in (p.split(" ") for p in phases.split(", "))} == {
+        "gap_vp_p",
         "tables",
         "refresh",
         "reseed",
@@ -3931,7 +3934,7 @@ def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
         "gap_pv_v",
         "verify",
         "gap_vp_v",
-    }, phases  # the proposal's own phases and the runner's boundaries around the verify step
+    }, phases
     assert lines[1].startswith("Gemma4MTP adaptive stats: window 4 steps | (1,5)@1024: 4 steps, 24 tokens, 4 clean")
     assert "| reseeds 0 | total 4 steps, " in lines[1] and "| phases ms/call: tables" in lines[1]
     assert "| prefills 0 | calibrated: none" in lines[1] and "dirty" not in lines[1]
