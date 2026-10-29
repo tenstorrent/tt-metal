@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "llk_sfpu/ckernel_sfpu_conversions.h"
 #include "llk_sfpu/ckernel_sfpu_expm1_cw.h"
 #include "llk_sfpu/ckernel_sfpu_mask.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt_custom.h"
@@ -57,6 +58,22 @@ inline void calculate_mask_binary(const std::uint32_t /*dst_index_in0*/, const s
     else
     {
         calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
+    }
+}
+
+// Runs _float_to_int32_positive_ on the raw fp32 words of in0 and writes the int32 result to out, both
+// as raw 32-bit Dest words, so every exponent edge of the helper is checked bit-exactly.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_float_to_int32_positive_binary(
+    const std::uint32_t dst_index_in0, const std::uint32_t /*dst_index_in1*/, const std::uint32_t dst_index_out)
+{
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        const sfpi::vInt in = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = _float_to_int32_positive_(sfpi::as<sfpi::vFloat>(in));
+        sfpi::dst_reg++;
     }
 }
 
