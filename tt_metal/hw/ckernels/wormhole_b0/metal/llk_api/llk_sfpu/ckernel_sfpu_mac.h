@@ -31,19 +31,6 @@ inline void mac_init() {
         MAC_REPLAY_SLOT + mac_replay_len<is_fp32_dest_acc_en> <= ckernel::math::replay_buf_offset,
         "the recorded mac body must fit in the SFPU replay slots");
 
-    // The ternary SFPU dispatch sets addr_mod_base=1 (via set_addr_mod_base()),
-    // which shifts instruction addr_mod fields 0..3 to hardware slots 4..7.
-    // So SFPSTORE with ADDR_MOD_2 in the instruction actually uses hardware
-    // slot 6 at runtime.  We must configure hardware slot 6 (ADDR_MOD_6), not
-    // slot 2, for the dest auto-advance to work correctly.
-    // (SfpuType::where uses the same slot, but with an increment of 2.)
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 4},
-    }
-        .set(ADDR_MOD_6);
-
     // Record the replay sequence once at init time with fixed dest offsets.
     // All callers use tile indices (0, 1, 2, 0), i.e. dst_reg[0], dst_reg[32], dst_reg[64]
     // (sfpi indexes dst_reg in rows; the row stride is 2, so tile n starts at row n * 32).
@@ -116,10 +103,16 @@ inline void calculate_mac(
 
     static_assert(ITERATIONS % 2 == 0, "the recorded body covers two rows");
 
+    // The recorded second-row SFPSTORE advances dest through ADDR_MOD_6 past the two rows just written.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d += 2) {
         lltt::replay(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
     }
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 }  // namespace ckernel::sfpu
