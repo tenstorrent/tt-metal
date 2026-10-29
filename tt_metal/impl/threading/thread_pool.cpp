@@ -362,8 +362,7 @@ public:
 
     using Participants = ttsl::SmallVector<NumaAwareExecutor*, 32>;  // 32: one per Galaxy device
 
-    // Words tagged with a job's generation in the high half: the published word carries the slot in the low half,
-    // state_ the holder count.
+    // Packs a generation into the high half and a slot or holder count into the low half.
     static constexpr uint64_t pack(uint32_t generation, uint32_t slot_or_holders) {
         return (static_cast<uint64_t>(generation) << GENERATION_SHIFT) | slot_or_holders;
     }
