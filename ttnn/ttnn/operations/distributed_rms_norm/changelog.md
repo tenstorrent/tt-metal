@@ -124,3 +124,25 @@ mix-up), `test_distributed_rms_norm_perf.py` (perf driver); both run with `--no-
   + one pass block of x (~800 KB) — Refinement 1a.
 - Tests added: `test_distributed_rms_norm_l1_fallbacks.py` (every ladder rung forced on small shapes, >8-wave pass
   regime, scratch-backed CBs, 4 resharding placements; 22 cases), `test_distributed_rms_norm_r1_debug.py` (opt-in).
+
+## Refinement 1a — long-prefill L1: x re-read (two-pass) streaming or a credit-managed landing ring
+- Date: 2026-10-29
+- What was done: lever (a), x re-read, as the last rung of the L1 ladder (interleaved input only; `reread_options`
+  is tried after every other rung at every wave count, so every plan that fit before is unchanged). Phase A: the
+  reader streams x one tile-row at a time into `cb_x_tiles` (`x_depth·SQ·WS`, pad tiles / W-pad columns zeroed per
+  row), compute squares + collapses each round and pops it. Phase B: the writer re-reads x one (wave, chunk,
+  tile-row) item ahead of the matching store into the new `cb_x_reread` (`STREAM_DEPTH·C`); compute does x·γ per row
+  (`cb_x_gamma` = `C`) then × inv_rms → `cb_output`. The exchange, waves, passes and landing layout are unchanged.
+  Reused: the Phase A square/collapse helper path (`square_collapse_rows`), the per-chunk γ chain and `scale_chunk`,
+  the writer's γ-stream item pattern and store loop, the ladder / `cb_table()` single source. Added: `plan.reread`
+  knob, `CB_X_REREAD`, reader `stream_wave`, writer `push_x_item`, compute re-read branches (one CT arg each).
+- Accuracy achieved: 131072 × 3584 per device (bf16, RM γ, HiFi4, 16-bit DEST, 2×2 mesh, cluster_axis 1): PCC ≥ 0.995
+  per 8192-row block on every chip; forced `reread-*` rungs at the acceptance PCC (bf16 0.995).
+- Golden test progress: `test_ds_distributed_norm` prefill 128 / 1024 / 8192 / 32768 + `test_regression`: 17 passed
+  (5 skipped: real-weights checkpoint absent). The 131072 cell runs the op successfully but the test process was
+  OOM-killed on the host in this session (torch reference ~95 GB, ~100 GB free on the shared box) — host limit.
+- Issues encountered: deadlock hazard on the streamed rung — the reader pushes wave w+1 before servicing wave w, so
+  `cb_partial_col` / `cb_chip_partial` must stay two waves deep (the rung pins `combine_depth = COMBINE_DEPTH`).
+  Measured landing ≈ 540 KB per bank at 131072 rows, independent of the wave count (it holds every row's records).
+- Tests added: 4 `reread-*` rungs in `test_distributed_rms_norm_l1_fallbacks.py`;
+  `test_distributed_rms_norm_long_prefill.py` (opt-in host-memory-light 131072-row twin of the golden cell).

@@ -112,7 +112,7 @@ and 32768 pass). Remaining: `test_ds_distributed_norm[random_weights-prefill-131
 32×1792 12.45 (13.07), 2048×1280 43.05 median vs 42.67 measured the same session on the pre-refinement code;
 `plan_summary` of the three perf cases unchanged.
 
-### [ ] Refinement 1a — long-prefill L1: x re-read (two-pass) streaming or a credit-managed landing ring
+### [x] Refinement 1a — long-prefill L1: x re-read (two-pass) streaming or a credit-managed landing ring
 
 **Goal**: `test_ds_distributed_norm[random_weights-prefill-131072]` (4096 tile-rows × 3584 per device, bf16, RM γ,
 16-bit DEST, interleaved) — the last cell of Refinement 1. Nothing to add to SUPPORTED.
@@ -129,6 +129,15 @@ per-slot credit from the collecting roots back to the senders (cross-chip back-p
 
 **Done when**: the 131072 translated cell passes; acceptance, rung tests (`test_distributed_rms_norm_l1_fallbacks.py`)
 and the golden slices stay green; the three perf cases' plans unchanged.
+
+**Outcome** (implementer): lever (a), x re-read, built as the last ladder rung (`reread_options`, interleaved only;
+every earlier rung keeps its rank, so every plan that fit — including the three perf cases' — is unchanged). The
+131072 × 3584 prefill now runs on device: `test_distributed_rms_norm_long_prefill.py` (same shape / dtype / RM γ /
+16-bit DEST, opt-in `DRMS_LONG_PREFILL=1`) passes with PCC ≥ 0.995 per 8192-row block on all 4 chips. The golden cell
+itself was OOM-killed on the host in this session (its torch reference over 2 × 131072 × 7168 grew the process by
+~95 GB while the box had ~100 GB free) — a host-memory limit of the harness, not of the op. Rung tests: 4 forced
+`reread-*` cases (D3 / W-pad RM γ streamed / passes / no γ / SQ 2 + x_depth 1). Regression net: acceptance +
+L1-fallback tests 218 passed, golden DeepSeek prefill 128…32768 + regression 17 passed. Lever (b) not needed.
 
 ### [ ] Refinement 2 — LOCAL: bring the per-chip local work toward the DRAM roofline on the perf-flagged case
 

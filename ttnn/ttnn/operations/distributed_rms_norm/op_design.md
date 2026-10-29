@@ -501,3 +501,17 @@ to the writer's output `TensorAccessor` (non-local writes to the output's shard 
 
 **Not built**: the 131,072-row prefill (translated `test_ds_distributed_norm`): the landing scratch holds every row's
 records for every wave (~650 KB per bank at 12 waves) and one pass block of x needs ~800 KB — Refinement 1a.
+
+## Refinement 1a — x re-read rung (implementer)
+
+Long prefill (131072 × 3584 per device) leaves no ladder rung that fits: the landing scratch holds every row's records
+(≈ `T/L · G · 128 B` ≈ 540 KB per bank, independent of the wave count), and resident x scales with the wave (`T·Wt/N`
+tiles per core / 12 waves at most). The new last rung (`reread_options`, interleaved input only, tried after every
+other rung of every wave count, so all earlier plans keep their rank and plan) makes the x footprint independent of the
+wave: Phase A — the reader streams x one tile-row at a time into `cb_x_tiles` (`x_depth·SQ·WS`, pads zeroed per row),
+compute squares + collapses each round and pops it; Phase B — the writer re-reads x one (wave, chunk, tile-row) item
+ahead of the matching store into `cb_x_reread` (`STREAM_DEPTH·C`), compute does x·γ (per row, `cb_x_gamma` = `C`) then
+× inv_rms → `cb_output`. x is read twice from DRAM on this rung only. The exchange, waves, passes and landing layout are
+unchanged. Deadlock note: with x streamed, the reader pushes wave w+1 before servicing wave w, so `cb_partial_col`
+(and `cb_chip_partial`) must stay two waves deep on this rung. Option (b) of the queue (a credit-managed landing ring)
+was not needed and was not built.

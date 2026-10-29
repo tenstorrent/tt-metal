@@ -143,3 +143,16 @@ grown / shrunk on demand.
 **Data movement** (fallback rungs only; Phase 0 unchanged): streamed γ reads each slice chunk's row-0 prefix once per
 (wave with rows) instead of once per kernel — γ DRAM bytes × waves (≤ 12) on the cores that stream; x, out: one DRAM
 crossing each in every rung (passes keep x resident per pass block; no re-read).
+
+## Refinement 1a deltas (implementer) — the x re-read rung (interleaved only, last resort)
+
+| CB | Before | x re-read rung (`plan.reread`) | Shares with / why not |
+|----|--------|--------------------------------|-----------------------|
+| `cb_x_tiles` (interleaved) | `x_depth·R_pass·WS` (x resident for the pass) | `x_depth·SQ·WS` (`SQ = 1`, `x_depth` 2 then 1): x streamed per square→collapse round, popped after the collapse | not `cb_x_reread`: Phase A streams it while the writer already prefetches Phase B items (concurrent) |
+| `cb_x_reread` (new, index 8) | — | `STREAM_DEPTH·C` pages, input dtype; writer → compute, one (wave, chunk, tile-row) item of `C` tiles | not `cb_x_tiles`: different producer (writer vs reader) — single-producer rule; not `cb_output`: concurrent (consumed into it) |
+| `cb_x_gamma` | chunk `q_w·C` | `C` (x·γ of one tile-row chunk) | as before |
+| `cb_partial_col` | `combine_depth·q_w` | kept at `COMBINE_DEPTH = 2`: the streamed reader pushes wave w+1 before servicing wave w — a single-wave `cb_partial_col` would deadlock | — |
+
+Data-movement budget on this rung: **x crosses DRAM twice** (Phase A square, Phase B scale), out once, γ as before.
+Taken only when no other rung fits (target cell: 131072 × 3584 per device, bf16, RM γ, 16-bit DEST: the landing
+scratch of ~540 KB per bank leaves ~918 KB, and one wave of resident x needs ≥ 720 KB on top of the other CBs).
