@@ -105,9 +105,13 @@ class ResidentDFlash:
     rows [t, d_1 .. d_R-1] at p .. p + R - 1, accepts the longest prefix of drafts that equal the greedy tokens of
     the rows before them (a of them), extends the drafter's context with the taps of rows 0 .. a and continues
     from row a (the bonus token, the greedy token of row a, becomes the pending one at p + a + 1). The prompt goes
-    through the same verify steps, R tokens per step."""
+    through the same verify steps, R tokens per step; with the pipeline-parallel prefill (prefill=True) a longer prompt
+    is prefilled up to its last `window` tokens and handed off, and only those go through verify steps: they give the
+    drafter its whole context (its sliding window), as the prefill writes no taps."""
 
-    def __init__(self, mesh, ck, max_pos=4096, R=8, layers=None, weights_dir=None):
+    PREFILL_CHUNKS = (128, 256, 512, 1024)
+
+    def __init__(self, mesh, ck, max_pos=4096, R=8, layers=None, weights_dir=None, prefill=False, window=2048):
         from models.demos.blackhole.qwen36.tt.dflash2 import load_config
         from qwen36_resident.model import Dims, ResidentModel, State, is_attn
 
@@ -121,6 +125,14 @@ class ResidentDFlash:
         self.emb = emb.float()
         weights_dir = weights_dir or os.environ.get("DFLASH_WEIGHTS", DEFAULT_WEIGHTS)
         tap_layers = list(load_config(weights_dir)["taps"])
+        self.pp, self.window = None, window
+        if prefill:
+            from qwen36_resident.prefill.pp_prefill import PPPrefill
+
+            C = max(self.PREFILL_CHUNKS)
+            max_len = -(-max_pos // C) * C
+            max_pos = max_len + 64
+            self.pp = PPPrefill(mesh, ck, layers, interval, chunk=list(self.PREFILL_CHUNKS), max_len=max_len)
         self.taps = tap_buffers(mesh, len(tap_layers), R)
         st = State(d, layers - n_attn, n_attn, 0, max_pos, zero=True, kv=False)
         self.m = ResidentModel(
@@ -147,6 +159,9 @@ class ResidentDFlash:
         self.drafter.extend_context(0, 0, traced=False)
         self.drafter.draft(0, 1, traced=False)
         ttnn.synchronize_device(mesh)
+        if self.pp is not None:
+            self.pp.capture()
+            self.pp.handoff(self.m, 1)  # compiles the handoff kernels
         self.m.reset()
         self.m.capture_trace()
         self.drafter.arm_traces()
@@ -167,7 +182,14 @@ class ResidentDFlash:
         self.ring = self.slot = 0
         self.prev = None
         P, R = len(ids), self.R
-        for p0 in range(0, P, R):
+        start = 0
+        if self.pp is not None and P > self.window:
+            # the prefill and its handoff (GDN states into the committed base, conv histories at ring 0, KV)
+            start = P - self.window
+            self.pp.reset()
+            self.pp.run(torch.tensor(ids[:start]))
+            self.pp.handoff(self.m, start)
+        for p0 in range(start, P, R):
             k = min(R, P - p0)
             self._step(list(ids[p0 : p0 + k]) + [ids[p0 + k - 1]] * (R - k), p0)
             if draft_context:
@@ -223,15 +245,22 @@ class ResidentDFlash:
             stats.update({f"{k}_ms": med(v) for k, v in parts.items()})
         return gen[:n_new], stats
 
-    def greedy(self, ids, n_new):
-        """the verify model's own greedy tokens, one token per step (row 0; the reference spec decode reproduces)"""
+    def greedy(self, ids, n_new, other=None):
+        """the verify model's own greedy tokens, one token per step (row 0; the reference spec decode reproduces).
+        other (another decode's tokens): also returns, per generated position, this decode's logit of its own token
+        minus its logit of the other's token (0 where they agree; the margin by which they differ)"""
         ids = [int(t) for t in ids]
         t = self._prompt(ids, draft_context=False)
-        gen, p = [t], len(ids)
+        gen, p, gaps = [t], len(ids), [0.0]
         while len(gen) < n_new:
             self._step([t] * self.R, p)
             t = self.m.argmax()[0]
+            if other is not None and len(gen) < len(other) and other[len(gen)] != t:
+                lg = self.m.logits()[0][:, : self.d.vocab_chip].reshape(-1)[: self.vocab]
+                gaps.append(float(lg[t] - lg[other[len(gen)]]))
+            else:
+                gaps.append(0.0)
             gen.append(t)
             self._commit(0)
             p += 1
-        return gen
+        return (gen, gaps) if other is not None else gen

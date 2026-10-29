@@ -14,6 +14,7 @@ import json
 import sys
 import time
 
+import torch
 from transformers import AutoTokenizer
 
 from qwen36_resident import weights as Q
@@ -51,6 +52,13 @@ def main():
     ap.add_argument("--new", type=int, default=128)
     ap.add_argument("--timing", type=int, default=3, help="prompts that also get a timed pass (parts synchronized)")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument(
+        "--long",
+        default="",
+        help="corpus prompt lengths: the prefill + handoff path (all but the drafter's window prefilled) against the "
+        "prompt through verify steps only (builds the pipeline-parallel prefill)",
+    )
+    ap.add_argument("--corpus", default="/home/ttuser/experiments/qwen36_27b/profiles/resident/256k/corpus_ids.pt")
     a = ap.parse_args()
     faulthandler.dump_traceback_later(600, repeat=True, file=sys.stderr)
     path = Q.checkpoint_dir()
@@ -60,9 +68,38 @@ def main():
     rows = []
     try:
         t0 = time.time()
-        spec = ResidentDFlash(mesh, ck)
+        longs = [int(x) for x in a.long.split(",") if x]
+        spec = ResidentDFlash(mesh, ck, max_pos=max(longs + [2048]) + a.new + 256, prefill=bool(longs))
         log(f"built in {time.time() - t0:.0f} s")
-        ps = prompts()[: a.limit or None]
+        corpus = torch.load(a.corpus)["ids"] if longs else None
+        for T in longs:
+            ids = corpus[:T].tolist()
+            time.sleep(2)
+            gen_pp, st_pp = spec.generate(ids, a.new)
+            window = spec.window
+            spec.window = 1 << 30  # every prompt token through verify steps
+            gen_v, st_v = spec.generate(ids, a.new)
+            spec.window = window
+            first = next((k for k in range(a.new) if gen_pp[k] != gen_v[k]), None)
+            rows.append(
+                dict(
+                    name=f"long{T}",
+                    kind="long",
+                    prompt_len=T,
+                    spec=gen_pp,
+                    verify_prompt=gen_v,
+                    identical=gen_pp == gen_v,
+                    first_diff=first,
+                    stats=st_pp,
+                    stats_verify_prompt=st_v,
+                )
+            )
+            log(
+                f"long T={T}: prefill+handoff vs verify-step prompt: identical {gen_pp == gen_v} (first diff {first}); "
+                f"first token {st_pp['first_token_s']:.2f} s vs {st_v['first_token_s']:.2f} s, tok/s {st_pp['tok_s']:.1f} "
+                f"vs {st_v['tok_s']:.1f}, accepted/iter {st_pp['mean_accept']:.2f} vs {st_v['mean_accept']:.2f}"
+            )
+        ps = prompts()[: a.limit or None] if not longs else []
         for p in ps:
             ids = chat_ids(tok, dict(content=p["content"], thinking=p["thinking"]))
             time.sleep(2)  # chip 1 throttles under sustained load: short bursts
@@ -70,8 +107,11 @@ def main():
             if len(rows) < a.timing:
                 _, timed = spec.generate(ids, a.new, timing=True)
                 stats.update({k: v for k, v in timed.items() if k.endswith("_ms") and k != "ms_per_iter"})
-            ref = spec.greedy(ids, a.new)
+            ref, gaps = spec.greedy(ids, a.new, other=gen)
             first = next((k for k in range(a.new) if gen[k] != ref[k]), None)
+            # where the spec tokens first differ: the reference's margin of its token over the spec token (a near-tie
+            # when within a bf16 step of the logits, about 0.06-0.25 at their scale)
+            first_gap = gaps[first] if first is not None else None
             rows.append(
                 dict(
                     p,
@@ -80,12 +120,16 @@ def main():
                     greedy=ref,
                     identical=gen == ref,
                     first_diff=first,
+                    first_diff_margin=first_gap,
                     stats=stats,
                     text=tok.decode(gen, skip_special_tokens=True),
                 )
             )
             s = {k: (round(v, 2) if isinstance(v, float) else v) for k, v in stats.items() if k != "accepts"}
-            log(f"{p['name']}: P={len(ids)} lossless {gen == ref} (first diff {first}) {json.dumps(s)}")
+            log(
+                f"{p['name']}: P={len(ids)} lossless {gen == ref} (first diff {first}, reference margin there "
+                f"{first_gap}) {json.dumps(s)}"
+            )
         for kind in ("chat", "code"):
             rs = [r for r in rows if r["kind"] == kind]
             if rs:

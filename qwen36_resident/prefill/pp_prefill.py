@@ -1198,9 +1198,16 @@ class PPPrefill:
         hist = cat[[p for p, _ in order], [k for _, k in order]]  # [G, 3, CONV_CH], GDN copy order
         packed = hist[:, :, local[:, hsrc]].permute(2, 0, 1, 3)  # [chips, G, age, K * 32]
         verify = getattr(model, "verify", False)
-        if getattr(model, "R", 0) > 2:
-            raise NotImplementedError("conv history handoff into a verify model of R > 2 rows (its single-row ring)")
-        if verify:
+        R = getattr(model, "R", 0)
+        written = CONV_K - 1  # compact slots per GDN copy
+        if R > 2:
+            # the ring of single-row slots at ring step 0 (streamer_common.hpp): history rows 0..2 are rows 0..2 of the
+            # first block's R-row tiles (one slot written per copy)
+            ages = packed.reshape(d.n, G, CONV_K - 1, K, 2, 16)
+            compact = torch.zeros(d.n, G, 1, K, 2, R, 16, dtype=packed.dtype)
+            compact[:, :, 0, :, :, : CONV_K - 1] = ages.permute(0, 1, 3, 4, 2, 5)
+            written = 1
+        elif verify:
             # pair slots at ring step 0 (see streamer_common.hpp): slot j holds ages (j, j + 1) as the rows of
             # each conv tile (row 1 of slot 2 unused), in the 2 x 32 tile order (per face, row 0 then row 1)
             ages = packed.reshape(d.n, G, CONV_K - 1, K, 2, 16)
@@ -1211,10 +1218,10 @@ class PPPrefill:
             compact = torch.zeros(d.n, G, CONV_K - 1, K * TILE, dtype=packed.dtype)
             for age in range(CONV_K - 1):
                 compact[:, torch.arange(G), (n_tokens * uses + age) % 3] = packed[:, :, age]
-        rows_per_tile, slots = (2, 4) if verify else (1, 3)
+        rows_per_tile, slots = (R, 16 // R) if R > 2 else ((2, 4) if verify else (1, 3))
         chunk = 64 * rows_per_tile
         compact_t = ttnn.from_torch(
-            compact.reshape(d.n * G * (CONV_K - 1) * K, TILE * rows_per_tile),
+            compact.reshape(d.n * G * written * K, TILE * rows_per_tile),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh,
@@ -1239,7 +1246,7 @@ class PPPrefill:
                     kernel_source=KDIR + "hist_scatter.cpp",
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=all_cores,
-                    compile_time_args=[K, copies, rows_per_tile, slots, model._blk * TILE * model.batch],
+                    compile_time_args=[K, copies, rows_per_tile, slots, model._blk * TILE * model.batch, written],
                     runtime_args=rt,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
