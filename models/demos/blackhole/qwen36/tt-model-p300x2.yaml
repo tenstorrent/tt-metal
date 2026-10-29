@@ -107,7 +107,7 @@ serve_profiles:
   - name: single-user-mtp
     description: One request at a time with lossless MTP speculative decoding (greedy only).
     max_num_seqs: 1
-    max_model_len: 32768                 # TBD: validated at 32768 (lane serve); 256K not measured yet
+    max_model_len: 32768                 # as validated (lane serve); MTP at 256K is not measured, so it stays here
     env:
       TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentMTPForCausalLM"
   - name: multi-user
@@ -204,12 +204,12 @@ card:
 
     | users | context 128 | context 4K | context 32K | context 128K |
     |---|---|---|---|---|
-    | 1 | 69 / 69 | 69 / 69 | 64 / 64 | 54 / 54 |
-    | 2 | 66 / 132 | 66 / 131 | 58 / 117 | 44 / 87 |
-    | 4 | 60 / 240 | 60 / 239 | 48 / 194 | 31 / 124 |
-    | 8 | 50 / 397 | 49 / 394 | 36 / 284 | 19 / 155 |
+    | 1 | 70 / 70 | 69 / 69 | 65 / 65 | 55 / 55 |
+    | 2 | 67 / 134 | 66 / 133 | 59 / 118 | 44 / 88 |
+    | 4 | 61 / 243 | 60 / 241 | 49 / 196 | 31 / 124 |
+    | 8 | 50 / 401 | 50 / 398 | 36 / 285 | 19 / 156 |
 
-    Which profile: for a single user, `single-user` is faster (about 86 t/s/u at short context against about 69 t/s/u for one user on `multi-user`, whose 8-row launch costs about 3 ms more per step). From 2 concurrent users on, `multi-user` gives more total throughput at every context: 1.3-1.5x at 2 users and 2.4-4.6x at 8 users (device step time, 128 to 128K context).
+    Which profile: for a single user, `single-user` is faster (about 86 t/s/u at short context against about 70 t/s/u for one user on `multi-user`, whose 8-row launch costs about 2.7 ms more per step). From 2 concurrent users on, `multi-user` gives more total throughput at every context: 1.3-1.6x at 2 users and 2.4-4.7x at 8 users (device step time, 128 to 128K context).
 
     ### Benchmarks (tt-inference-server `--workflow benchmarks`)
     | profile | users | ISL / OSL | t/s | t/s/u | TTFT |
@@ -224,7 +224,7 @@ card:
     | prompt | single-user-dflash2 t/s/u | single-user t/s/u |
     |---|---|---|
     | 32K | ~120 | ~79 |
-    | 64K | ~207 | TBD |
+    | 64K | ~207 | — |
     | 128K | ~106 | ~66 |
     | 250K | ~160 | ~49 |
 
