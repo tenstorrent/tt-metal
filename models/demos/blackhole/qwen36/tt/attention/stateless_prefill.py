@@ -13,7 +13,6 @@ from models.demos.blackhole.qwen36.tt.prefill_matmul import prefill_linear
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention import (
     _get_sdpa_compute_kernel_config,
     _get_sdpa_program_config,
-    apply_rotary_pos_emb_ttnn,
 )
 
 
@@ -48,6 +47,26 @@ def _fused_weight(attn):
     return fw
 
 
+def _partial_rope(x, cos, sin):
+    """HF rotate-half RoPE on the first cos.shape[-1] dims of x [B, H, S, D] (fused op); the tail passes through.
+    cos/sin [1, S, rd]."""
+    B, H, S, D = x.shape
+    rd = cos.shape[-1]
+    cos = ttnn.reshape(cos, (1, 1, S, rd))
+    sin = ttnn.reshape(sin, (1, 1, S, rd))
+    x_rot = ttnn.reshape(ttnn.slice(x, (0, 0, 0, 0), (B, H, S, rd)), (1, B * H, S, rd))
+    roped = ttnn.experimental.rotary_embedding_hf(x_rot, cos, sin, is_decode_mode=False)
+    ttnn.deallocate(x_rot)
+    roped = ttnn.reshape(roped, (B, H, S, rd))
+    if rd == D:
+        return roped
+    x_pass = ttnn.slice(x, (0, 0, 0, rd), (B, H, S, D))
+    res = ttnn.concat([roped, x_pass], dim=-1)
+    ttnn.deallocate(roped)
+    ttnn.deallocate(x_pass)
+    return res
+
+
 def stateless_attention_prefill(attn, x, cos, sin):
     """x [B, S, dim] bf16 TILE DRAM, S a multiple of 32 -> [B, S, dim]. Same weights, norms, RoPE, SDPA configs and
     gate as the generic prefill (Qwen36GatedAttention.forward, no page table), without the KV cache."""
@@ -72,7 +91,10 @@ def stateless_attention_prefill(attn, x, cos, sin):
     # Per-head q/k norm (weights carry the +1 offset), partial RoPE.
     q = ttnn.rms_norm(q, weight=w.q_norm, epsilon=cfg.norm_eps)
     k = ttnn.rms_norm(k, weight=w.k_norm, epsilon=cfg.norm_eps)
-    q, k = apply_rotary_pos_emb_ttnn(q, k, cos, sin)
+    q_n, k_n = q, k
+    q, k = _partial_rope(q_n, cos, sin), _partial_rope(k_n, cos, sin)
+    ttnn.deallocate(q_n)
+    ttnn.deallocate(k_n)
 
     attn_out = ttnn.transformer.scaled_dot_product_attention(
         q,
