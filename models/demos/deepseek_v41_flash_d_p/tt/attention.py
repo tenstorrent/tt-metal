@@ -52,6 +52,8 @@ Chain (one path on every box; nothing on the host per chunk except picking load-
                    inverse RoPE with the chip's cos / sin rows (RopeTable.rows(tp_split=True)); wo_a all groups, wo_b
                    full -> [S/(SP TP), H] bf16 -> ONE all_to_all over axis 1 (split H, concat rows) -> [S/SP, H/TP]
                    (no seq -> head all_to_all, no TP reduce-scatter of a wo_b partial)
+    ATTN_SP32=on   (P.10, default) q_resid / kv arrive as the chip's own S/(SP TP) rows (tt/model.py): no q_resid
+                   mesh_partition; the window KV is gathered over TP (the SP row's block in order), then over SP
 
 The served cache (TtWindowCache): position g on mesh row (g / W) % SP, column ((g mod W) / (W / TP)), local row
 (g / S) (W / TP) + g mod (W / TP) (W = S / SP; update_padded_kv_cache's sp x tp linearized block-cyclic order),
@@ -477,8 +479,14 @@ class TtWindowAttention:
         ROW_MAJOR, replicated, natural order (rope tail as stored). Release both with ``_release_window``."""
         g = self.geo
         full = kv
+        if g.tp > 1 and kv.shape[-2] == g.q_rows:
+            # ATTN_SP32=on (P.10): kv of the chip's own rows: over TP first (the SP row's block in order), then SP
+            full = ccl.all_gather(kv, 2, TP_AXIS)  # [1, 1, S/SP, 512] bf16
         if g.sp > 1:
-            full = ccl.all_gather(kv, 2, SP_AXIS)  # [1, 1, S, 512] bf16
+            nxt = ccl.all_gather(full, 2, SP_AXIS)  # [1, 1, S, 512] bf16
+            if full is not kv:
+                dealloc(full)
+            full = nxt
         if self.fold and end - start == g.chunk:  # GLUE_FOLD=on (P.19): no pad rows, the mask would multiply by 1
             masked = full
         else:
@@ -591,7 +599,8 @@ class TtWindowAttention:
         """q_resid -> scaled, roped q heads [1, H, S/(SP TP), 512] bf16 ROW_MAJOR (after the reshard)."""
         if self.sp32:  # ATTN_SP32_PROJ=on (P.9): the chip's own rows, every head: no reshard
             xr = q_resid
-            if self.geo.tp > 1:
+            # (ATTN_SP32=on, P.10: q_resid is already the chip's own rows)
+            if self.geo.tp > 1 and q_resid.shape[-2] != self.geo.q_rows:
                 xr = ttnn.mesh_partition(q_resid, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
             qb = self._q_stock(xr, cos, sin)
             if xr is not q_resid:
@@ -762,9 +771,15 @@ class TtWindowAttention:
         dealloc(z)
         return out
 
+    def chunk_of(self, rows: int) -> int:
+        """The chunk's token count from the rows of q_resid a chip holds: S/SP (row-split, TP-replicated) or the
+        chip's own S/(SP TP) (ATTN_SP32=on, P.10)."""
+        g = self.geo
+        return rows * g.sp * (g.tp if rows == g.q_rows else 1)
+
     def __call__(self, q_resid, kv, start: int, end: int | None, cache: TtWindowCache) -> ttnn.Tensor:
         g = self.geo
-        s = q_resid.shape[-2] * g.sp
+        s = self.chunk_of(q_resid.shape[-2])
         assert s == g.chunk, f"chunk of {s} rows; the window tables were built for {g.chunk}"
         end = start + s if end is None else int(end)
         cos, sin = self._rope_rows(start, s)

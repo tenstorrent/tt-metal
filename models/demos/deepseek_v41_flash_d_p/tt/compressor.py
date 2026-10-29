@@ -444,8 +444,16 @@ class TtCompressor:
     ``write(ckv, k, start, end, caches)``: the served-cache write of the groups complete by ``end``. Does not consume
     its input."""
 
-    def __init__(self, mesh, w: dict[str, torch.Tensor], cfg, ratio: int, rope: CompressRope, tables):
+    def __init__(
+        self, mesh, w: dict[str, torch.Tensor], cfg, ratio: int, rope: CompressRope, tables, full_rows: bool = False
+    ):
         self.mesh, self.ratio, self.rope, self.tables = mesh, ratio, rope, tables
+        # ATTN_SP32=on (P.10, ``full_rows``): x is the chip's own rows with whole hidden rows [1, 1, S/(SP TP), H]:
+        # [wkv | wgate] replicated, the projection's whole sum over the hidden in one matmul (fp32 DEST, fp32 out),
+        # then ONE all_gather over TP of the chip's rows -> [S/SP, 512 | 1024] (the SP row's block, replicated over
+        # TP) in place of the TP sum; the rest as before. (Pooling 160 rows a chip would give 80 compressed rows on
+        # 8x4, not whole tiles, and two 32-way gathers (ckv, k) where this takes one TP gather + the SP gathers.)
+        self.full_rows = full_rows
         self.hd, self.idx, rd = cfg.head_dim, cfg.index_dim, cfg.rope_dim
         assert ratio in (1, 2), ratio
         # ROPE_IMPL=on (P.17): every weight in checkpoint order (the stock rope reads interleaved pairs)
@@ -462,6 +470,8 @@ class TtCompressor:
         assert hidden % (32 * tp) == 0, f"hidden {hidden} does not split into tiles over TP {tp}"
         assert torch.equal(w_t.bfloat16().float(), w_t), "compressor weights must be bf16-exact (as stored)"
         dims = (None, 2) if TP_AXIS == 1 else (2, None)
+        if full_rows:
+            dims = None  # replicated
         self.proj_w = _upload(mesh, w_t.reshape(1, 1, hidden, -1), ttnn.bfloat16, ttnn.TILE_LAYOUT, dims)
         # BF16_ACTIVATIONS=on (P.20, ROPE_IMPL=on): the normed latent written bf16 (the GPU code's norm(kv.to(dtype))),
         # read as is by the rope (ckv) and by wk, which writes bf16 too (the GPU code's bf16 wk)
@@ -518,12 +528,22 @@ class TtCompressor:
         r = self.ratio
         rows = x.shape[-2]
         assert start % 32 == 0 and rows % r == 0, (start, rows, r)
-        # INDEXER_GLUE=on (P.16): the TP partial written in the CCL's partial dtype (bf16 under fabric_bf16: the RS's
-        # input, q_a's choice, P.6), not fp32 + a typecast in tt/ccl.py
-        pdt = ccl.partial_dtype(self.mesh) if self.glue_partial else ttnn.float32
-        part = self._mm(x, self.proj_w, dtype=pdt)
-        p = tp_sum(self.mesh, part)
-        dealloc(part)
+        if self.full_rows:  # ATTN_SP32=on (P.10): the chip's rows' whole sum, gathered over TP (a data move)
+            part = self._mm(x, self.proj_w, dtype=ttnn.float32)
+            if self.mesh.shape[TP_AXIS] > 1:
+                p = ccl.all_gather(part, 2, TP_AXIS)
+                dealloc(part)
+            else:
+                p = part
+            rows = p.shape[-2]
+            assert rows % r == 0, (rows, r)
+        else:
+            # INDEXER_GLUE=on (P.16): the TP partial written in the CCL's partial dtype (bf16 under fabric_bf16: the
+            # RS's input, q_a's choice, P.6), not fp32 + a typecast in tt/ccl.py
+            pdt = ccl.partial_dtype(self.mesh) if self.glue_partial else ttnn.float32
+            part = self._mm(x, self.proj_w, dtype=pdt)
+            p = tp_sum(self.mesh, part)
+            dealloc(part)
         if r > 1:
             pooled = self._pool(p)
             dealloc(p)

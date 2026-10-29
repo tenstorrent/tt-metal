@@ -913,3 +913,13 @@ guards around the CUR walls ~412-438); the A/B decides.
   next to its goldens must FAIL loudly ("no margin source"), never fall back (F138); F216 - `overseer close-fix
   FIX.n --why` for a fix job that needs no gate (records only). CPU job: testing/official_floor.py for the galaxy
   goldens (nice 19), then the two attention component tests against the real limits.
+- 13:25 OWNER: everything served in bf16 (compressed KV, window KV, index keys records) is TEMPORARY. Once the reference
+  precision is proven end to end, the serving side (contract + tt-d-gen + decode) changes to the low-bit formats and
+  the bf16 served copies / their writes go. Plan items and artifacts say so.
+- 13:35 OWNER: queue P.11 after P.4 / P.5 (write into tasks.yaml at the next gap, not while P.10's agent runs):
+  CKV_PACK_BEFORE_GATHER - each chip rounds + packs ITS OWN compressed rows into the 320 B bfp4 records right after the
+  compressor's RoPE (fused into the compressor tail where possible), writes its served bf16 rows locally from the
+  rounded values, and all-gathers the 320 B records instead of 1024 B bf16 rows (3.2x less gather traffic; each row
+  packed once instead of on all SP / 32 chips); the attention table appends the gathered records directly. Same for the
+  window KV once it is bfp8 blocks (after the 2x2's integration). Bit-identical table bytes to today's path; A/B as
+  usual; matters more after P.10 (32-way compressor gathers).

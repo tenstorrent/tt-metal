@@ -653,6 +653,18 @@ TABLE = {
         "head all_to_all + the wo_b TP reduce-scatter (no bf16 TP partial sum). off = heads split over TP with the two "
         "head <-> seq all_to_all and the wo_b reduce-scatter (the path before P.9)",
     ),
+    "ATTN_SP32": Setting(
+        "on",
+        ("on", "off"),
+        "P.10 (galaxy 8x4, owner decision 2026-10-29, option A of the SP=32 study, on top of ATTN_SP32_PROJ=on; needs "
+        "ROPE_IMPL=on and NORM_IMPL=on, else off): on = the rest of attention on the chip's own S/(SP TP) rows "
+        "(tt/model.py TtDS41Block.sp32): ONE all_to_all of attn_in [S/SP, H/TP] -> [S/(SP TP), H] over TP, attn_norm "
+        "a local whole-row norm (no statistics gather), [wq_a | wkv] replicated (one matmul, full K in fp32 DEST, no "
+        "q_a TP sum), q_norm / kv_norm / RoPE on the chip's rows only (no 4x redundant copies), the window KV gathered "
+        "over TP then SP, the compressor's [wkv | wgate] replicated (its TP sum replaced by one all_gather of the "
+        "chip's rows), the indexer's weights_proj replicated (no TP sum of the gates); + ~0.3 GiB a chip. off = "
+        "attn_norm / q_a / kv / compressor / gates hidden-split with their TP sums (the path before P.10)",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8

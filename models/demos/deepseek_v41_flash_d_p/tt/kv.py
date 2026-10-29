@@ -74,7 +74,10 @@ class TtWindowKv:
         rows = p.shape[-2]
         # kv_norm on p's wkv columns (NORM_IMPL=on, P.18: read in place by the fork's input_window; off: a slice)
         kn = self.norm(p, window=(self.k0, self.k1))
-        cos, sin = self.rope.rows(start, rows * self.mesh.shape[0])
+        if self.proj.full_rows:  # ATTN_SP32=on (P.10): the chip's own S/(SP TP) rows, their cos / sin rows
+            cos, sin = self.rope.rows(start, rows * self.mesh.shape[0] * self.mesh.shape[1], tp_split=True)
+        else:
+            cos, sin = self.rope.rows(start, rows * self.mesh.shape[0])
         if self.stock:  # ROPE_IMPL=on (P.17): one stock rotary op on the bf16 norm output
             out = rope_stock(kn, cos, sin, self.rope.trans)
             dealloc(kn)
