@@ -112,15 +112,20 @@ inline constexpr auto kFallbackWallClockPeriod = std::chrono::milliseconds(1);
 class ClockSolver {
 public:
     // Starts a capture on `ctx` whose map starts at `bases`. Every device in `ctx` must have a path over its links to
-    // the root (device index 0).
-    ClockSolver(const CaptureContext& ctx, const ClockBases& bases);
+    // the root (device index 0). `burst_period` is how often the caller reads a refclk burst; the host line fits the
+    // last second of bursts, or the last three when they are further apart.
+    ClockSolver(
+        const CaptureContext& ctx,
+        const ClockBases& bases,
+        std::chrono::milliseconds burst_period = kRefclkBurstPeriod);
     ~ClockSolver();
     ClockSolver(const ClockSolver&) = delete;
     ClockSolver& operator=(const ClockSolver&) = delete;
 
     const ClockMap& map() const { return map_; }
-    // Hands each later change to the map to `mirror` too, on the thread that feeds the solver.
-    void mirror_map(std::function<void(const ClockUpdate&)> mirror) { map_.mirror(std::move(mirror)); }
+    // Joins a capture its bases started: the root chip's refclk words widen from `root_refclk_now` rather than from the
+    // capture's start.
+    void resume(int64_t root_refclk_now) { chips_[CaptureContext::kRootDevice].last_refclk = root_refclk_now; }
 
     void on_record(uint32_t dev, uint32_t core, const kernel_profiler::SyncRecord& record);
     // Publishes what the batch's records added to the map, and returns whether anything was published.
@@ -199,6 +204,8 @@ private:
     void plot_aiclk_mean(double until);
 
     const ClockBases bases_;
+    const size_t window_bursts_;
+    const double node_ticks_;  // the burst period in root refclk ticks; host nodes are placed at multiples of it
     ClockMap map_;
     ClockMap::Reader reader_;
     const CaptureContext& ctx_;

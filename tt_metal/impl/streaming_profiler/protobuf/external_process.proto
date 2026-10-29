@@ -1,0 +1,239 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// What a Metal process sends the external process over their one-way connection, one Envelope per length-prefixed
+// frame: a CaptureDescriptor with every call site loaded so far, then a CallSites for each image that loads later, then
+// CaptureEnded if the capture ends rather than the process dying. Every record in the external process's rings has its
+// call site in an earlier message. The devices write the records and clock sync measurements themselves, into rings the external process
+// owns, as the CaptureDescriptor describes.
+
+syntax = "proto3";
+
+package tt.streaming_profiler.proto;
+
+// ---- Capture descriptor ------------------------------------------------------------------------------------------
+
+message CoreCoord {
+  uint32 x = 1;
+  uint32 y = 2;
+}
+
+message ChipCoreCoord {
+  uint32 pci_device_number = 1;
+  CoreCoord virtual_coord = 2;
+}
+
+enum CoreType {
+  CORE_TYPE_UNSPECIFIED = 0;
+  CORE_TYPE_TENSIX = 1;
+  CORE_TYPE_ETH = 2;
+  CORE_TYPE_DRAM = 3;
+  CORE_TYPE_L2CPU = 4;
+}
+
+// A core whose records can reach the external process.
+message Core {
+  CoreCoord virtual_coord = 1;   // what a record frame names its core by
+  CoreType core_type = 2;        // with a record's RISC slot, gives its Processor
+  CoreCoord logical_coord = 3;   // what programs address it by; unique only within its core type
+  CoreCoord physical_coord = 4;  // its NoC 0 position on the die
+  int64 clock_offset_ticks = 5;  // add to this core's timestamps to put them on its chip's clock
+}
+
+// Where the device takes a ring of the external process's: the endpoint's control block (a device-side
+// EndpointControlBlock), which the external process fills in to point the device at its ring.
+message Endpoint {
+  CoreCoord virtual_coord = 1;          // the core holding the control block
+  uint64 control_block_address = 2;     // its address in that core's NoC address space
+  uint32 max_lead_bytes = 3;            // how far past its last shown bytes_sent the device may already have written
+  uint32 ring_size_multiple_bytes = 4;  // the ring's size must be a multiple of this
+}
+
+// A 64-bit counter the host reads in two 32-bit words. Reading the low word latches the high word, for every reader:
+// read the low word, the high word, then the low word again, and read again if the second low word is smaller.
+message Counter {
+  CoreCoord virtual_coord = 1;
+  uint64 low_word_address = 2;
+  uint64 high_word_address = 3;
+}
+
+// A chip that measures its wall clock against its refclk on the device and sends the measurements as clock sync
+// frames.
+message ClockSync {
+  Endpoint endpoint = 1;        // where it sends its clock sync frames
+  optional Counter refclk = 2;  // set when the host reads this chip's refclk directly; otherwise the chip reaches one
+                                // over clock_sync_links
+}
+
+message Chip {
+  uint32 pci_device_number = 1;  // N in /dev/tenstorrent/N: the chip's id everywhere in this protocol
+  repeated Core cores = 2;
+  repeated Endpoint record_endpoints = 3;
+  oneof clock {                // how this chip's wall clock, which its timestamps count, reaches host time
+    Counter wall_clock = 4;    // the host reads it directly
+    ClockSync clock_sync = 5;  // through its refclk
+  }
+}
+
+message Link {
+  ChipCoreCoord transmitter = 1;  // sends each sync round's forward frames
+  ChipCoreCoord receiver = 2;     // sends the return frames
+}
+
+// Where a value sits in each frame, or in each packet for packet fields: `bit_size` bits from bit `bit_offset`,
+// counting from the frame's or packet's start. Bit n is bit n % 8 of byte n / 8.
+message BitField {
+  uint32 bit_offset = 1;
+  uint32 bit_size = 2;
+}
+
+// The relays' frame format, which an endpoint's ring holds. A word is 32 bits. Every frame starts with a prefix that
+// names its core, and is padded to whole socket pages. protocol_version fixes the logic described here and the clock
+// sync records' layouts. This message gives the fixed sizes, and where each frame holds its own values.
+//
+// Record frames, in a record endpoint's ring. Each RISC writes packets into a ring buffer in its core's memory, at ring
+// positions that only grow; a position's slot is the position modulo the buffer's size. A frame has one RISC slot per
+// entry of packet_range_start_fields. Each time a relay visits a core with new packets it builds a frame: the prefix,
+// the control block, then for each RISC slot in order its packet range, the packets at positions [start, end) written
+// since the last visit. Each non-empty packet range starts with 0-3 blank words, which make its frame position equal
+// its first word's slot modulo 4, the NoC's PCIe write alignment. The Metal process receives whole frames. The external
+// process receives, from each frame with routed records (records for the external process), the pages holding the
+// prefix and control block, or those before the routed first page if fewer, then the pages from the routed first page
+// to the routed end page. Those pages cover every packet range with routed records and may cover others; the reader
+// keeps only routed records. A packet range may stop early at the pages' end, after its last routed record.
+//
+// Clock sync frames, in a clock sync endpoint's ring: the prefix, then one core's new clock sync records, from the
+// chip's wall-clock core or from a link's Ethernet core.
+message FrameLayout {
+  // Every frame
+  uint32 socket_page_size_words = 1;
+  uint32 prefix_length_words = 2;
+  BitField frame_payload_length_field = 3;          // in the prefix: the words after the prefix, before the padding
+  BitField core_coord_x_field = 4;                  // in the prefix: the core's virtual coordinate
+  BitField core_coord_y_field = 5;
+
+  // Record frames
+  uint32 control_block_length_words = 6;            // right after the prefix
+  uint32 risc_ring_buffer_size_words = 7;           // a power of two
+  uint32 whole_ring_buffer_threshold_words = 8;     // a packet range that wraps past the end of its ring buffer ships
+                                                    // as the whole buffer, slot 0 first, when the buffer's unused words
+                                                    // are at most this
+  BitField routed_first_page_field = 9;             // in word 0
+  BitField routed_end_page_field = 10;              // in word 0
+  repeated BitField packet_range_start_fields = 11; // one per RISC slot, in slot order: its range's start position
+  repeated BitField packet_range_end_fields = 12;   // one per RISC slot, in slot order: its range's end position
+}
+
+// How to read the packets in a packet range, which the RISCs write. A routed record's packet is its first word, its
+// 64-bit time as two words (low word first), then its payload; protocol_version fixes that.
+message PacketFormat {
+  BitField packet_type_field = 1;
+  uint32 record_packet_type = 2;                    // the packet type of a record
+  BitField record_length_field = 3;                 // a record's words, its first word included
+  BitField routed_field = 4;                        // set in a record for the external process
+  BitField call_site_id_field = 5;
+  map<uint32, uint32> non_record_packet_lengths_words = 6;  // every other packet type: its packet's length
+}
+
+// What a Metal process sends first: its chips, where the external process points the devices at its rings, how it
+// maps the chips' clocks to host time, how to read the rings, and every call site loaded so far whose records go to the
+// external process. The external process points the devices at its rings only after reading it.
+message CaptureDescriptor {
+  uint32 protocol_version = 1;         // bumped only by a change an older reader would misread
+  repeated Chip chips = 2;
+  repeated Link clock_sync_links = 3;  // links whose two ends measure each other's refclk; empty when none do
+  FrameLayout frame_layout = 4;
+  PacketFormat packet_format = 5;
+  repeated CallSite call_sites = 6;
+}
+
+// ---- Call sites ----------------------------------------------------------------------------------------------------
+
+// How to read a field's bits.
+enum FieldType {
+  FIELD_TYPE_UNSPECIFIED = 0;
+  FIELD_TYPE_BOOL = 1;
+  FIELD_TYPE_CHAR = 2;        // plain char; signed char and unsigned char are INT8 and UINT8
+  FIELD_TYPE_UINT8 = 3;       // an enum is its underlying integer type
+  FIELD_TYPE_UINT16 = 4;
+  FIELD_TYPE_UINT32 = 5;
+  FIELD_TYPE_UINT64 = 6;
+  FIELD_TYPE_INT8 = 7;
+  FIELD_TYPE_INT16 = 8;
+  FIELD_TYPE_INT32 = 9;
+  FIELD_TYPE_INT64 = 10;
+  FIELD_TYPE_FLOAT32 = 11;
+  FIELD_TYPE_FLOAT64 = 12;
+  FIELD_TYPE_STRING = 13;     // metadata only; the text arrives in MetadataField.text
+  FIELD_TYPE_TIMESTAMP = 14;  // a 64-bit tick count of the publishing core's timer
+}
+
+message SourceLocation {
+  string file = 1;      // the source file's path, as the kernel's compiler was given it
+  string function = 2;  // the enclosing function's signature as the compiler prints it, e.g. "void kernel_main()"
+  uint32 line = 3;
+}
+
+// One field of the call site's metadata struct, with the value the call site sets it to.
+message MetadataField {
+  FieldType type = 1;
+  oneof value {
+    uint64 bits = 2;  // any type but STRING: the field's bits, sign-extended for a signed integer
+    string text = 3;  // STRING: the text
+  }
+}
+
+message Metadata {
+  string type_name = 1;               // the metadata struct's full C++ name, with its namespaces
+  repeated MetadataField fields = 2;  // in declaration order, with nested structs and arrays flattened
+}
+
+// One field of a payload value: what it holds and where it lies in a record's payload. Bit n of the payload is bit
+// n % 8 of byte n / 8.
+message PayloadField {
+  FieldType type = 1;
+  uint32 bit_offset = 2;  // where it starts in the payload
+  uint32 bit_size = 3;    // the type's width, or less for a bit-field
+}
+
+// One value the DevicePublish call passes, which together make up a record's payload: a plain value, an enum, a
+// struct, or an array of any of these.
+message PayloadValue {
+  oneof element_type {
+    FieldType scalar = 1;    // a plain value; its one field has this type
+    string enum_name = 2;    // full C++ name, with its namespaces; its one field has the enum's underlying integer type
+    string struct_name = 3;  // full C++ name, with its namespaces
+  }
+  optional uint32 array_length = 4;  // set only when the value is an array
+  repeated PayloadField fields = 5;  // in declaration order, with nested structs and arrays flattened; element after
+                                     // element
+}
+
+message CallSite {
+  uint32 id = 1;  // what its records name it by; unique within the Metal process that sends it
+  SourceLocation location = 2;
+  Metadata metadata = 3;
+  repeated PayloadValue values = 4;
+}
+
+// Call sites of an image that loads after the CaptureDescriptor went out, whose records go to the external process. The
+// Metal process sends them before the image can run.
+message CallSites {
+  repeated CallSite call_sites = 1;
+}
+
+// ---- End and envelope ----------------------------------------------------------------------------------------------
+
+// The Metal process ended its capture: every endpoint's last write has landed and its bytes_sent is final. It sends
+// this last and then closes the connection. A connection that closes without it means the Metal process died, and its
+// relays may still be writing until the external process turns their writes off.
+message CaptureEnded {}
+
+message Envelope {
+  oneof message {
+    CaptureDescriptor capture_descriptor = 1;
+    CallSites call_sites = 2;
+    CaptureEnded capture_ended = 3;
+  }
+}

@@ -46,6 +46,7 @@ struct CallSite {
     // An argument the call passes, a payload struct being one.
     struct Argument {
         std::string_view type;  // empty for a plain argument
+        bool is_enum = false;   // whether `type` names an enum rather than a struct
         uint32_t first_field = 0;
         bool is_array = false;
         std::vector<FieldBits> field_bits;  // where its fields lie in it, in one element for an array
@@ -64,6 +65,8 @@ struct CallSite {
     };
     std::vector<PacketLayout> packet_layouts;
     bool timestamps_as_deltas = false;  // whether its short and medium forms send Timestamps as distances
+
+    bool sends_to_external_process = false;  // whether its records go to the external process too
 };
 
 }  // namespace tt::llrt
@@ -117,6 +120,14 @@ CallSites& process_call_sites();
 // to process_call_sites(). Does nothing for an ELF without call sites. Throws when the id space runs out, and when a
 // call site sends a type whose fields contradict another showing of its name.
 void load_call_sites(const std::string& elf_path, ll_api::ElfFile& elf);
+
+// Has `listener` called once each image's call sites are read, on the thread that loads the image, before the image can
+// run. An empty listener removes it, and returns once no call to the last one is in flight.
+void set_call_site_listener(std::function<void()> listener);
+
+// The ids of this process's call sites whose records go to the external process, in the order their images loaded,
+// from the `first`th on.
+std::vector<uint32_t> ids_of_call_sites_sending_to_external_process(size_t first);
 
 // Notes the field codes of a type a host callback reads, which every call site's showing of the name must match.
 // Throws when this process's kernels show it with other fields.

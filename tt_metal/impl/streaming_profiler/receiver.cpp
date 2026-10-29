@@ -27,6 +27,7 @@
 #include <umd/device/io_window/io_window.hpp>
 #include <umd/device/pcie/tlb_handle.hpp>
 #include <umd/device/pcie/tlb_window.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/io_window_config.hpp>
 
@@ -34,6 +35,7 @@
 #include "impl/streaming_profiler/service.hpp"
 #include "llrt/call_sites.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "protobuf/external_process.pb.h"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -51,9 +53,10 @@ constexpr uint32_t kProbeSleepCapUs = 100;
 constexpr uint64_t kSiiBase = 0xFFFFFFFFF0000000ull;
 constexpr uint32_t kCfrLo = 0xA8, kCfrHi = 0xAC;
 // A Tensix core's RISC debug register block, and its wall clock's low and high words inside it
-// (RISCV_DEBUG_REG_WALL_CLOCK_L and _H). Reading the low word latches the high word.
+// (RISCV_DEBUG_REG_WALL_CLOCK_L and _H).
 constexpr uint64_t kRiscDebugRegs = 0xFFB12000ull;
-constexpr uint32_t kWallClockLo = 0x1F0, kWallClockHi = 0x1F8;
+constexpr uint32_t kWallClockLo = kTensixWallClockLowWord - kRiscDebugRegs,
+                   kWallClockHi = kTensixWallClockHighWord - kRiscDebugRegs;
 
 constexpr uint32_t kWallClockReads = 30;
 
@@ -102,29 +105,61 @@ std::pair<int64_t, uint64_t> read_wall_clock(tt::umd::IoWindow& window) {
 }  // namespace
 
 RootRefclkWindow::RootRefclkWindow(tt::Cluster& cluster, uint32_t chip_id) :
-    numa_node_(static_cast<int>(cluster.get_numa_node_for_device(chip_id))),
-    window_(open_sii_window(cluster, chip_id)),
-    lo_(mapped_word(*window_, kCfrLo)),
-    hi_(mapped_word(*window_, kCfrHi)) {
-    // Reading LO holds HI until LO is read again, and nothing else reads this timer, so the pair is consistent.
-    const uint32_t lo = *lo_;
-    const uint32_t hi = *hi_;
-    bases_ = {.root_refclk = static_cast<int64_t>(kernel_profiler::join_words(hi, lo)), .tsc = tsc_now()};
+    RootRefclkWindow(
+        static_cast<int>(cluster.get_numa_node_for_device(chip_id)),
+        open_sii_window(cluster, chip_id),
+        kCfrLo,
+        kCfrHi) {}
+
+RootRefclkWindow::RootRefclkWindow(
+    tt::umd::TTDevice& device, tt_xy_pair core, uint64_t low_word_address, uint64_t high_word_address) :
+    RootRefclkWindow(
+        -1,
+        device.create_io_window(
+            tt::umd::TargetIoWindowConfig{.core_start = core, .addr = std::min(low_word_address, high_word_address)},
+            tt::umd::HostIoWindowConfig{
+                .mapping = tt::umd::HostMemoryCaching::UC,
+                .size = std::max(low_word_address, high_word_address) - std::min(low_word_address, high_word_address) +
+                        sizeof(uint32_t)}),
+        low_word_address - std::min(low_word_address, high_word_address),
+        high_word_address - std::min(low_word_address, high_word_address)) {}
+
+RootRefclkWindow::RootRefclkWindow(
+    int numa_node, std::unique_ptr<tt::umd::IoWindow> window, uint64_t low_offset, uint64_t high_offset) :
+    numa_node_(numa_node),
+    window_(std::move(window)),
+    lo_(mapped_word(*window_, low_offset)),
+    hi_(mapped_word(*window_, high_offset)) {
+    bases_ = {.root_refclk = static_cast<int64_t>(read_whole()), .tsc = tsc_now()};
 }
 
 RootRefclkWindow::~RootRefclkWindow() = default;
 
+uint64_t RootRefclkWindow::pcie_timer_low_word_address() { return kSiiBase + kCfrLo; }
+uint64_t RootRefclkWindow::pcie_timer_high_word_address() { return kSiiBase + kCfrHi; }
+
+uint64_t RootRefclkWindow::read_whole() const {
+    // The high word changes only when the low word wraps, so another reader's latch between the two low reads can only
+    // change it if the second low word is smaller.
+    while (true) {
+        const uint32_t lo = *lo_;
+        const uint32_t hi = *hi_;
+        if (*lo_ >= lo) {
+            return kernel_profiler::join_words(hi, lo);
+        }
+    }
+}
+
 RefclkBurst RootRefclkWindow::read_burst() {
     // LO wraps every 86 s and bursts can be further apart, so HI is re-read each burst.
     RefclkBurst reads;
-    uint32_t hi = 0, lo_last = 0;
+    const uint64_t whole = read_whole();
+    uint32_t hi = static_cast<uint32_t>(whole >> 32), lo_last = static_cast<uint32_t>(whole);
     for (uint32_t i = 0; i < kRefclkBurstReads; i++) {
         const int64_t before = tsc_now();
         const uint32_t lo = *lo_;
         const int64_t after = tsc_now();
-        if (i == 0) {
-            hi = *hi_;
-        } else if (lo < lo_last) {
+        if (lo < lo_last) {
             hi++;
         }
         lo_last = lo;
@@ -189,19 +224,10 @@ std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::Me
     static_cast<void>(ns_per_tsc_tick());
     service().register_builtin_consumers(mc.rtoptions());
     std::unique_ptr<DeviceReceiver> receiver(new DeviceReceiver(mc.get_cluster(), std::move(programs)));
-    if (const auto& relays = receiver->programs_->external_relays(); !relays.empty()) {
+    if (receiver->programs_->has_external_process()) {
         DevicePrograms& programs_ref = *receiver->programs_;
         receiver->external_ = std::make_unique<external::ExternalProcessClient>(
-            external::Hello{
-                .relays = relays,
-                .devices = receiver->capture_context().devices,
-                .bases = receiver->root_refclk_.bases()},
-            [&programs_ref](const external::RelayBuffer& buffer) {
-                return programs_ref.attach_external(buffer.relay, buffer.noc_addr, buffer.bytes);
-            },
-            [&programs_ref](uint32_t relay) { programs_ref.detach_external(relay); });
-        receiver->clock_solver_.mirror_map(
-            [connection = receiver->external_.get()](const ClockUpdate& update) { connection->send(update); });
+            programs_ref.capture_descriptor(), [&programs_ref] { programs_ref.detach_external(); });
     }
     service().attach_receiver(*receiver);
     for (uint32_t d = 0; d < receiver->capture_context().devices.size(); d++) {
@@ -233,7 +259,10 @@ DeviceReceiver::~DeviceReceiver() {
     sync_thread_.request_stop();
     wake_sync_thread();
     sync_thread_.join();
-    // The sync thread has finished the clock map, and the connection sends the external process its last changes.
+    // The relays have stopped and their last writes have landed.
+    if (external_) {
+        external_->end_capture();
+    }
     external_.reset();
     service().detach_receiver(*this);
     for (uint32_t d = 0; d < capture_context().devices.size(); d++) {

@@ -23,9 +23,9 @@ constexpr uint32_t kSyncRingAddr = get_named_compile_time_arg_val("sync_ring");
 constexpr uint32_t kLinkRingAddr = get_named_compile_time_arg_val("link_ring");
 constexpr bool kSyncCheck = get_named_compile_time_arg_val("sync_check") != 0;
 constexpr uint32_t kCheckXy = get_named_compile_time_arg_val("check_xy");
-// The external socket's config; 0 means no external process.
-constexpr uint32_t kExternalConfigAddr = get_named_compile_time_arg_val("external_socket_config_addr");
-constexpr bool kExternal = kExternalConfigAddr != 0;
+// The EndpointControlBlocks of the external process's record ring and clock sync ring.
+constexpr uint32_t kExternalEndpointAddr = get_named_compile_time_arg_val("external_endpoint_addr");
+constexpr uint32_t kExternalClockSyncEndpointAddr = get_named_compile_time_arg_val("external_clock_sync_endpoint_addr");
 
 constexpr uint32_t kNumEthRisc = 2;  // ERISC0 and ERISC1, the only lanes an eth core has
 constexpr uint32_t kSyncRecordBytes = sizeof(kernel_profiler::SyncRecord);
@@ -88,10 +88,12 @@ struct EthRelay {
     std::array<Core, 1 + kernel_profiler::kEthRelayMaxDrained> cores;
     uint32_t wall_clock_head = 0;
     uint32_t check_head = 0;
-    // The external socket, which follows ResidentCtrl::external.attach.
+    // The sockets to the external process's rings, which follow their endpoints' control blocks.
     SocketSenderInterface external{};
     uint32_t external_attach = 0;
     uint32_t external_copied = 0;
+    SocketSenderInterface external_clock_sync{};
+    uint32_t external_clock_sync_attach = 0;
 
     EthRelay() {
         cores[0] = {.xy = kWallClockXy, .control_vector_l1 = kWallClockControlVectorL1};
@@ -140,11 +142,31 @@ struct EthRelay {
             const uint32_t batch = std::min({left, kernel_profiler::kSyncFrameRecords, ring.capacity - slot});
             noc_async_read(noc_at(ring.xy, ring.addr + slot * kSyncRecordBytes), kStageBody, batch * kSyncRecordBytes);
             noc_async_read_barrier();
-            ship(sockets[kSync], ring.xy, kPrefixWords + batch * kernel_profiler::kSyncRecordWords);
+            ship_sync(ring.xy, kPrefixWords + batch * kernel_profiler::kSyncRecordWords);
             head += batch;
             write_word(ring.xy, ring.head_addr, head);
         }
         return head != first;
+    }
+
+    // A sync frame goes to the Metal process and, unless it holds the sync check's readings, to the external
+    // process, which builds a clock map of its own from these records.
+    void ship_sync(uint32_t xy, uint32_t frame_words) {
+        ship(sockets[kSync], xy, frame_words);
+        if (external_clock_sync_attach != 0 && (!kSyncCheck || xy != kCheckXy)) {
+            copy_sync(xy, frame_words);
+        }
+    }
+
+    __attribute__((noinline)) void copy_sync(uint32_t xy, uint32_t frame_words) {
+        volatile tt_l1_ptr uint32_t* frame = l1_words(kStageAddr);
+        const uint32_t bytes = page_round(frame_words * 4u);
+        frame[kernel_profiler::SPSC_PREFIX_XY] = xy;
+        frame[kernel_profiler::SPSC_PREFIX_PAYLOAD_WORDS] = frame_words - kPrefixWords;
+        staged_store_fence();
+        push_fifo(external_clock_sync, kStageAddr, external_clock_sync.write_ptr, bytes);
+        socket_push_pages(external_clock_sync, bytes / kPageBytes);
+        notify_bytes_sent(external_clock_sync);
     }
 
     // Ships the new records in the sync ring of the wall-clock or check core at `xy`, and returns whether it shipped
@@ -219,10 +241,7 @@ struct EthRelay {
             lane_end[risc] = frame_words;
         }
         noc_async_read_barrier();
-        uint32_t mark = 0;
-        if constexpr (kExternal) {
-            mark = mark_routed(core, block, takes, lane_start, lane_end);
-        }
+        const uint32_t mark = mark_routed(core, block, takes, lane_start, lane_end);
         for (uint32_t risc = 0; risc < kNumEthRisc; risc++) {
             if (takes[risc] != 0) {
                 core.heads[risc] += takes[risc];
@@ -286,9 +305,7 @@ struct EthRelay {
                     const uint32_t data =
                         lane_start[risc] + kernel_profiler::spsc_span_pack_pad(start, lane_start[risc]);
                     const uint32_t w0 = frame[data + ahead];
-                    const uint32_t body_words =
-                        (w0 >> kernel_profiler::ppfmt::LENGTH_SHIFT) & kernel_profiler::ppfmt::LENGTH_MASK;
-                    const uint32_t record_end = data + ahead + 1u + body_words;
+                    const uint32_t record_end = data + ahead + kernel_profiler::ppfmt::packet_words(w0);
                     hi = record_end < hi ? record_end : hi;
                 }
             }
@@ -323,16 +340,22 @@ struct EthRelay {
         external_copied++;
     }
 
-    // Points the external socket at the external process's buffer, or turns its copies off, as the host asks.
-    void follow_attach(volatile tt_l1_ptr kernel_profiler::ResidentCtrl* ctrl, uint32_t attach) {
-        // Every copy has landed before the external process may free the buffer it went to.
-        noc_async_writes_flushed();
-        if (attach != 0) {
-            external = create_sender_socket_interface(kExternalConfigAddr);
-            set_sender_socket_page_size(external, kPageBytes);
+    // Points `socket` at the ring the control block at `endpoint_addr` describes, or stops its writes, as the external
+    // process asks there.
+    void follow_endpoint(uint32_t endpoint_addr, SocketSenderInterface& socket, uint32_t& attach) {
+        auto* endpoint = reinterpret_cast<volatile tt_l1_ptr kernel_profiler::EndpointControlBlock*>(endpoint_addr);
+        const uint32_t enable = endpoint->ring_write_enable;
+        if (enable == attach) {
+            return;
         }
-        external_attach = attach;
-        ctrl->external.attached = attach;
+        // Every write has landed before the external process may free the ring it went to.
+        noc_async_writes_flushed();
+        if (enable != 0) {
+            point_socket_at(socket, endpoint_addr, sockets[kSync]);
+            set_sender_socket_page_size(socket, kPageBytes);
+        }
+        attach = enable;
+        endpoint->ring_write_enable_acknowledged = enable;
     }
 
     bool sweep() {
@@ -344,9 +367,7 @@ struct EthRelay {
     }
 
     void finish(volatile tt_l1_ptr kernel_profiler::ResidentCtrl* ctrl) {
-        if constexpr (kExternal) {
-            ctrl->external.copied = external_copied;
-        }
+        ctrl->external_frames = external_copied;
         ctrl->done = kernel_profiler::kResidentAwaitingAcksWord;
         for (SocketSenderInterface& socket : sockets) {
             socket_barrier(socket);
@@ -365,9 +386,6 @@ struct EthRelay {
 void kernel_main() {
     volatile tt_l1_ptr kernel_profiler::ResidentCtrl* ctrl =
         reinterpret_cast<volatile tt_l1_ptr kernel_profiler::ResidentCtrl*>(kCtrlAddr);
-    if constexpr (kExternal) {
-        ctrl->external.attached = 0;
-    }
     EthRelay relay;
     while (ctrl->go == 0u && ctrl->stop == 0u) {
         ctrl->heartbeat++;
@@ -378,12 +396,9 @@ void kernel_main() {
         invalidate_l1_cache();
         // By the time stop is set, the check and wall-clock cores have stopped, so their tails are final.
         stop = ctrl->stop != 0u;
-        if constexpr (kExternal) {
-            const uint32_t attach = ctrl->external.attach;
-            if (attach != relay.external_attach) {
-                relay.follow_attach(ctrl, attach);
-            }
-        }
+        relay.follow_endpoint(kExternalEndpointAddr, relay.external, relay.external_attach);
+        relay.follow_endpoint(
+            kExternalClockSyncEndpointAddr, relay.external_clock_sync, relay.external_clock_sync_attach);
         const bool busy = relay.sweep();
         const bool drained = relay.drain(stop || !busy ? PartialFrame::Send : PartialFrame::Hold);
         idle_wait(gap, drained || busy, [] {});

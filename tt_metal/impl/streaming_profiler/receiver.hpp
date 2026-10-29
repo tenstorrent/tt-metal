@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <utility>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -24,7 +25,8 @@ namespace tt {
 class Cluster;
 namespace umd {
 class IoWindow;
-}
+class TTDevice;
+}  // namespace umd
 }  // namespace tt
 
 namespace tt::tt_metal {
@@ -136,12 +138,24 @@ struct ReceiverStream {
     std::span<const std::atomic<uint64_t>> marks;   // frame boundaries, one per kMarkBytes of `fifo`
 };
 
-// Reads the root chip's refclk from the host through the PCIe tile's count-from-reset timer. That timer counts the same
-// distributed clock as the eth tiles, sits one NoC hop from the PCIe entry, and nothing else reads it, so its high word
-// holds between the two halves of a read. It must be destroyed before its device is torn down.
+// A Tensix core's wall clock, in its RISC debug registers. Reading the low word latches the high word.
+inline constexpr uint64_t kTensixWallClockLowWord = 0xFFB121F0, kTensixWallClockHighWord = 0xFFB121F8;
+
+// Reads the root chip's refclk from the host through the PCIe tile's count-from-reset timer, which counts the same
+// distributed clock as the eth tiles and sits one NoC hop from the PCIe entry. Reading its low word latches its high
+// word for every reader, and the Metal process and the external process both read it, so a read takes the low word,
+// the high word, then the low word again, and starts over when the low word wrapped in between. It must be destroyed
+// before its device is torn down.
 class RootRefclkWindow {
 public:
+    // The PCIe tile's timer on chip `chip_id`.
     RootRefclkWindow(tt::Cluster& cluster, uint32_t chip_id);
+    // The counter whose low and high words are at `low_word_address` and `high_word_address` of core `core`
+    // (translated) on `device`.
+    RootRefclkWindow(tt::umd::TTDevice& device, tt_xy_pair core, uint64_t low_word_address, uint64_t high_word_address);
+    // The PCIe tile's timer's low and high words, in the tile's own address space.
+    static uint64_t pcie_timer_low_word_address();
+    static uint64_t pcie_timer_high_word_address();
     ~RootRefclkWindow();
 
     // The refclk and the host TSC when the window opened.
@@ -152,6 +166,11 @@ public:
     RefclkBurst read_burst();
 
 private:
+    RootRefclkWindow(
+        int numa_node, std::unique_ptr<tt::umd::IoWindow> window, uint64_t low_offset, uint64_t high_offset);
+    // The timer's value, read so that another reader's latch can't tear it.
+    uint64_t read_whole() const;
+
     const int numa_node_;
     std::unique_ptr<tt::umd::IoWindow> window_;
     // The timer's low and high words in the window's mapping.

@@ -12,6 +12,7 @@
 // producer for this backend is DevicePublish's ring, internal/debug/device_publish_ring.h, under
 // -DDEVICE_OBSERVABILITY.
 
+#include <cstddef>
 #include <cstdint>
 
 #include "hostdev/profiler_common.h"
@@ -115,6 +116,25 @@ static_assert(
         SPSC_ROUTED_AT_0 * 2 + PROFILER_SPSC_TENSIX_RISC <= 32 * 2 && SPSC_LINK_SYNC_TAIL == 31,
     "lane state, the tails and the routed halfwords must fit the tails' 64 B block in that order");
 
+// Where a relay writes one of the external process's rings, at the address the capture descriptor names for its
+// endpoint. To start the writes, the external process fills in the ring's fields and then sets ring_write_enable; the
+// relay sets ring_write_enable_acknowledged once it writes there. To stop them, the external process clears
+// ring_write_enable, and the relay clears ring_write_enable_acknowledged once its last write has landed. The Metal
+// process zeroes the block before the relay starts, and clears ring_write_enable when its link to the external process
+// closes. The layout is part of the protocol: protocol_version changes with it.
+// Both addresses are multiples of 16 bytes, the NoC's PCIe write alignment.
+struct EndpointControlBlock {
+    std::uint64_t ring_noc_address;        // the ring's address in the chip's PCIe space
+    std::uint64_t bytes_sent_noc_address;  // where the relay writes how many bytes it has written to the ring
+    std::uint32_t ring_size_bytes;
+    std::uint32_t ring_write_enable;
+    std::uint32_t ring_write_enable_acknowledged;
+    std::uint32_t reserved;
+};
+static_assert(
+    sizeof(EndpointControlBlock) == 32 && offsetof(EndpointControlBlock, ring_write_enable) == 20 &&
+    offsetof(EndpointControlBlock, ring_write_enable_acknowledged) == 24);
+
 // The host writes this to a resident core's stop word. The core then finishes its queued work and exits.
 constexpr std::uint32_t kResidentStopQuiesce = 1;
 // A relay writes this to its done word when everything is shipped and only the host's acks are outstanding.
@@ -135,14 +155,8 @@ struct ResidentCtrl {
         std::uint32_t dropped;
     } sync;
     std::uint32_t stop;
-    // Only the relays use these. The host writes attach, a nonzero generation once it has pointed the external
-    // socket's config at the external process's buffer and 0 to detach it; the relay echoes it in attached once it
-    // follows, and counts the frames it copied.
-    struct {
-        std::uint32_t attach;
-        std::uint32_t attached;
-        std::uint32_t copied;
-    } external;
+    // Only the relays use this: the frames whose routed records they sent to the external process.
+    std::uint32_t external_frames;
 };
 // Each core a DRISC relay drains has a record of this many bytes in the relay's L1 scratch. It is a power of two so the
 // relay indexes records with a shift.

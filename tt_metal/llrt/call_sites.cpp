@@ -108,10 +108,15 @@ std::string_view store_string(std::string_view text) {
     return *texts.emplace(text).first;
 }
 
-// This process's images' share of its call sites: the next id an image gets.
+// This process's images' share of its call sites: the next id an image gets, and which ids send to the external
+// process.
 struct ProcessImages {
     std::mutex mutex;
     uint32_t next_id = 0;
+    // The ids of the images' call sites whose records go to the external process, in load order.
+    std::vector<uint32_t> ids_sending_to_external_process;
+    std::mutex listener_mutex;  // held through each call, so removing the listener waits out the calls in flight
+    std::function<void()> listener;
 };
 
 ProcessImages& process_images() {
@@ -264,6 +269,7 @@ std::vector<ArgumentField> read_arguments(
         }
         site.arguments.push_back(
             {.type = strings.at(argument.type),
+             .is_enum = argument.type != 0 && argument.field_bits == 0,
              .first_field = first_field,
              .is_array = argument.is_array != 0,
              .field_bits = std::move(bits)});
@@ -326,7 +332,8 @@ void add_call_sites(const std::string& elf_path, const ll_api::ElfFile& elf) {
             .metadata_type = strings.at(descriptor.metadata_type),
             .metadata_codes = contents.read_table<uint16_t>(descriptor.metadata_codes, descriptor.metadata_field_count),
             .payload_codes = contents.read_table<uint16_t>(descriptor.payload_codes, descriptor.payload_field_count),
-            .payload_publish_time_field = descriptor.payload_publish_time_field};
+            .payload_publish_time_field = descriptor.payload_publish_time_field,
+            .sends_to_external_process = descriptor.sends_to_external_process != 0};
         site.metadata_bits =
             read_field_bits(contents, descriptor.metadata_field_bits, site.metadata_codes, site.metadata_type);
         site.metadata =
@@ -337,7 +344,8 @@ void add_call_sites(const std::string& elf_path, const ll_api::ElfFile& elf) {
                 descriptor.payload_arguments, descriptor.payload_argument_count),
             contents,
             strings);
-        // Only a payload whose Timestamps travel as distances has a full form.
+        // Only a payload whose Timestamps travel as distances has a full form, unless its records go to the external
+        // process too, which then take the full form only and so send no distances.
         const auto layouts =
             contents.read_table<api::detail::PacketLayout>(descriptor.packet_layouts, descriptor.packet_layout_count);
         site.timestamps_as_deltas =
@@ -354,7 +362,13 @@ void add_call_sites(const std::string& elf_path, const ll_api::ElfFile& elf) {
                      layout.timestamp_width,
                      contents.read_table<api::detail::ArgumentSlice>(layout.slices, layout.slice_count))});
         }
+        const bool sends_to_external_process = site.sends_to_external_process;
         process_call_sites().add(descriptor.id, std::move(site));
+        if (sends_to_external_process) {
+            ProcessImages& images = process_images();
+            const std::lock_guard lock(images.mutex);
+            images.ids_sending_to_external_process.push_back(descriptor.id);
+        }
     }
 }
 
@@ -384,6 +398,23 @@ void load_call_sites(const std::string& elf_path, ll_api::ElfFile& elf) {
 
     add_call_sites(elf_path, elf);
     log_debug(tt::LogLLRuntime, "streaming profiler: '{}' -> call site ids [{}, {})", elf_path, base, base + count);
+    const std::lock_guard listening(images.listener_mutex);
+    if (images.listener) {
+        images.listener();
+    }
+}
+
+void set_call_site_listener(std::function<void()> listener) {
+    ProcessImages& images = process_images();
+    const std::lock_guard listening(images.listener_mutex);
+    images.listener = std::move(listener);
+}
+
+std::vector<uint32_t> ids_of_call_sites_sending_to_external_process(size_t first) {
+    ProcessImages& images = process_images();
+    const std::lock_guard lock(images.mutex);
+    const std::vector<uint32_t>& ids = images.ids_sending_to_external_process;
+    return std::vector<uint32_t>(ids.begin() + first, ids.end());
 }
 
 CallSites& process_call_sites() {

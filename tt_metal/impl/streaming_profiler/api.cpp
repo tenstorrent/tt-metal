@@ -20,7 +20,6 @@
 
 #include <tt_stl/assert.hpp>
 
-#include "context/metal_context.hpp"
 #include "hostdev/profiler_zone_id.h"
 #include "hostdev/record_site.h"
 #include "impl/streaming_profiler/decode.hpp"
@@ -403,18 +402,13 @@ namespace internal = tt::tt_metal::streaming_profiler;
 Callback detail::register_callback(
     std::string name,
     std::span<const RecordTypeDescriptor> record_types,
-    std::function<void(const BatchData&)> callback) {
+    std::function<void(const BatchData&)> callback,
+    bool external_process) {
     static std::atomic<uint32_t> anonymous{0};
     if (name.empty()) {
         name = "callback-" + std::to_string(++anonymous);
     }
-    // A process with callbacks and no MetalContext may be the external process, so it listens for Metal processes
-    // until it creates a MetalContext of its own.
-    bool metal = false;
-    for (int context = 0; context < static_cast<int>(MAX_CONTEXT_COUNT); context++) {
-        metal |= MetalContext::instance_exists(ContextId{context});
-    }
-    if (!metal) {
+    if (external_process) {
         internal::serve_metal_processes();
     }
     for (const RecordTypeDescriptor& record_type : record_types) {

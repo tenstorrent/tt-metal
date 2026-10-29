@@ -40,7 +40,6 @@
 #include "dispatch/topology.hpp"
 #include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
-#include "impl/streaming_profiler/external_receiver.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/mock_device/mock_device.hpp>
 #include "device/device_manager.hpp"
@@ -521,8 +520,6 @@ void MetalContext::teardown_dispatch_state() {
 MetalContext::MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_env) :
     env_(&metal_env), context_id_(context_id) {
     check_context_id(context_id);
-    // A process that registered streaming profiler callbacks before this listened as the external process until now.
-    streaming_profiler::stop_serving_metal_processes();
     // Construct before the dispatch managers: dispatch core (re)initialization queries it to exclude
     // claimed service cores from the FD pool.
     service_core_manager_ = std::make_unique<internal::ServiceCoreManager>(MetalEnvAccessor(*this->env_).impl(), *this);

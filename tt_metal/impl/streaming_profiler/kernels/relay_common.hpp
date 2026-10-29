@@ -130,6 +130,25 @@ inline void send_bytes_sent(const SocketSenderInterface& sender, uint32_t bytes_
 }
 inline void send_bytes_sent(const SocketSenderInterface& sender) { send_bytes_sent(sender, sender.bytes_sent); }
 
+// Points `socket` at the ring the EndpointControlBlock at `block_addr` describes. It goes through the same PCIe tile as
+// `own`, the relay's socket to the Metal process, and stages its bytes_sent in the word after the block, which sits on
+// 16 B like the bytes_sent it is written to. It sets each field in place: zeroing or copying the struct would pull in
+// memset and memcpy, which the DRISC relay has no room for.
+inline void point_socket_at(SocketSenderInterface& socket, uint32_t block_addr, const SocketSenderInterface& own) {
+    const auto* block = reinterpret_cast<const volatile tt_l1_ptr kernel_profiler::EndpointControlBlock*>(block_addr);
+    socket.config_addr = block_addr + sizeof(kernel_profiler::EndpointControlBlock);
+    socket.write_ptr = 0;
+    socket.bytes_sent = 0;
+    socket.num_downstreams = 1;
+    socket.is_d2h = 1;
+    socket.downstream_fifo_addr = static_cast<uint32_t>(block->ring_noc_address);
+    socket.d2h.data_addr_hi = static_cast<uint32_t>(block->ring_noc_address >> 32);
+    socket.downstream_bytes_sent_addr = static_cast<uint32_t>(block->bytes_sent_noc_address);
+    socket.d2h.bytes_sent_addr_hi = static_cast<uint32_t>(block->bytes_sent_noc_address >> 32);
+    socket.downstream_fifo_total_size = block->ring_size_bytes;
+    socket.d2h.pcie_xy_enc = own.d2h.pcie_xy_enc;
+}
+
 // Sends the socket's bytes_sent to the host once the PCIe tile has acked every push before it. socket_notify_receiver
 // moves write_cmd_buf to another VC, so bytes_sent could overtake its data. Using the same VC isn't enough either,
 // because the PCIe tile turns each NoC write into separate PCIe transactions with no ordering between them (a 4 B
