@@ -224,9 +224,13 @@ class Qwen36ResidentRowsForCausalLM(ResidentRowsAdapter):
             rows=True,
         )
         del w
+        # contract section 6a: everything that allocates comes before the captures, which replay the L1 layout they
+        # see. The warm-ups compile the handoff / hist_scatter programs and make clear_slot's buffers and semaphore
+        # (both write slot 0, which holds nothing yet).
+        self.pp.handoff(model, 1, block_table=[0], slot=0)
+        model.clear_slot(0)
         model.capture_trace()
         self.pp.capture()
-        self.pp.handoff(model, 1, block_table=[0], slot=0)  # compiles the handoff and hist_scatter programs
         if model.sample:
             model.reset(state=False)  # zero the feeding hubs' counters while idle
         self.engine = RowsEngine(

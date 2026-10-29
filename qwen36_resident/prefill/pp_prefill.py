@@ -1007,12 +1007,9 @@ class PPPrefill:
             ttnn.copy_host_to_device_tensor(self._zeros["carry"], self.carry[j])
         ttnn.synchronize_device(self.mesh)
 
-    def run(self, token_ids, timings=None, chunk=None):
-        """prefill the prompt token_ids [T]: one tick per chunk plus the pipeline drain"""
-        import time
-
-        T = token_ids.shape[0]
-        assert T <= self.max_len
+    def _check_trace_layout(self):
+        """before replaying the captured ticks (run, run_span): the decode models' L1 layout must still be the one at
+        capture(), and nothing allocated since may reach the traced programs' CB region (model.TraceL1Guard)"""
         if getattr(self, "_l1_layout", None) is not None:
             if l1_layout() != self._l1_layout:
                 raise RuntimeError(
@@ -1020,6 +1017,14 @@ class PPPrefill:
                     "overwrite the new model's L1 buffers; call capture() again after building it (model.l1_layout)"
                 )
             self._trace_guard.check(full=True)
+
+    def run(self, token_ids, timings=None, chunk=None):
+        """prefill the prompt token_ids [T]: one tick per chunk plus the pipeline drain"""
+        import time
+
+        T = token_ids.shape[0]
+        assert T <= self.max_len
+        self._check_trace_layout()
         self._use(chunk or self.pick_chunk(T))
         n, C = self.n, self.C
         chunks = (T + C - 1) // C
@@ -1074,6 +1079,7 @@ class PPPrefill:
             raise ValueError(
                 f"run_span: chunk {C} differs from the prompt's first span ({getattr(self, '_span_chunk', None)})"
             )
+        self._check_trace_layout()
         self._use(C)
         n = self.n
         chunks = (n_tokens + C - 1) // C

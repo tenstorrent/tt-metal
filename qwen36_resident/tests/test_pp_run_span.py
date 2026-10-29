@@ -24,7 +24,9 @@ def stub():
     def use(C):
         raise Reached(C)
 
-    return SimpleNamespace(_geo={1024: {}, 512: {}}, max_len=8192, C=1024, n=4, _use=use)
+    return SimpleNamespace(
+        _geo={1024: {}, 512: {}}, max_len=8192, C=1024, n=4, _use=use, _check_trace_layout=lambda: None
+    )
 
 
 def span(pp, T, first_chunk, n_tokens, drain, chunk=1024):
@@ -61,6 +63,18 @@ def test_the_chunk_size_is_fixed_by_the_first_span():
         span(pp, 1024, 0, 1024, False, 1024)
     with pytest.raises(ValueError, match="differs"):  # allow-pytest.raises: run with --noconftest
         span(pp, 512, 2, 1536, False, 512)
+
+
+def test_a_span_checks_the_trace_layout_as_run_does():
+    """contract section 6a: run_span replays the captured ticks too, so it refuses a changed L1 layout before any"""
+    pp = stub()
+
+    def changed():
+        raise RuntimeError("the decode models' L1 layout changed")
+
+    pp._check_trace_layout = changed
+    with pytest.raises(RuntimeError, match="L1 layout"):  # allow-pytest.raises: run with --noconftest
+        span(pp, 1024, 0, 1024, False, 1024)
 
 
 def test_the_checks_survive_python_O():
