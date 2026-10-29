@@ -50,28 +50,13 @@ static_assert(PKT_HDR_DRAIN_OFF < PKT_HDR_CREDIT_OFF, "credit header overlaps th
 static_assert(PKT_HDR_CREDIT_OFF < DRAIN_SINK_OFF, "drain sink overlaps the credit packet header");
 static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring");
 
-// Forwarding buffer: Sending data farther than to the immediate neighboring chip (e.g. 1 -> 2 -> 3)
-// is not left to fabric to do. Op manages it. Multihop data movement is broken down to single hops.
-// Fabric doesn't have enough context to properly orchestrate traffic nor deep enough buffers to not
-// block '1 -> 2' data movements if both '1 -> 2 -> 3' and '2 -> 3' movements are fighting for the
-// 2-3 link. Thus DRAM buffer for forwarding is introduced. Chip 1 sends everything going to chips
-// 2, 3, 4 and 5 to chip 2. What is destined for chip 2 is written to its final DRAM address by the
-// receiver eRisc. Everything else goes to forwardign buffer. Op manages when will sender cores send
-// "home-made" tokens and when will they send tokens from the forwarding buffer.
+// Forwarding buffer: a multihop movement (1 -> 2 -> 3) is broken into single hops and staged in DRAM here
+// rather than left to fabric, which has neither the context to order the traffic nor buffers deep enough to
+// keep a '1 -> 2' movement from blocking behind a '1 -> 2 -> 3' one contending for the same link. Chip 1
+// sends everything bound for chips 2..5 to chip 2; what is for chip 2 the receiver eRisc writes to its final
+// DRAM address and the rest lands here.
 //
-// How deep each channel is is args.fwd_vc_pages, a page count carried in the model's config. Any depth is
-// free of correctness risk, which is the point of splitting the region by movement class: every chain of
-// classes ends in one that delivers to the next chip's output and so needs no space anywhere, meaning a
-// blocked chip always has a legal move and no size can deadlock the ring. See the channel notes in
-// combine_fabric2d_assignments.hpp.
-//
-// What too shallow a channel costs is throughput, and where that curve bends is a measurement, not a
-// derivation -- which is why it is an op parameter rather than a constant here.
-
-// Nothing here is derived from how much traffic a launch carries. It used to be: the region was sized
-// from an upper bound on a destination's whole return volume and then divided by a reduction factor.
-// Credit return made that obsolete -- a producer waits for a page rather than assuming one -- and a
-// channel is just a pipeline buffer, so its depth is given rather than computed.
+// A channel is a pipeline buffer, so its depth is given rather than computed from a launch's traffic.
 uint32_t fwd_pages_per_stream(const CombineFabric2dParams& args) {
     return num_vcs(ring_extent(args)) * args.fwd_vc_pages;
 }
@@ -208,9 +193,12 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 //                    rides the opposite direction's sender on this chip, which already points that way.
 //   `vc_outbox[v]`   that courier's queue, filled across this chip by the opposite stream's reader.
 //
-// `credit_done` is that reader telling the courier it will queue nothing more. Counters that cross a chip
-// boundary are drained by subtraction at end of stream; the two that stay on one chip are simply zeroed,
-// because a chip's whole program finishes before its next launch starts.
+// `unt_freed` is per consumer rather than one counter they share: a group's senders take alternating halves
+// of each run and so run far apart, and a shared count would let the leading one's credit release a slot the
+// trailing one is still reading.
+//
+// Nothing zeroes any of these between launches, so each kernel undoes its own launch's count: the ones that
+// cross a chip boundary by subtraction at end of stream, the ones that stay on one chip by zeroing.
 struct RingSemaphores {
     tt::tt_metal::GlobalSemaphore final_arrived;
     tt::tt_metal::GlobalSemaphore launch_credit;
@@ -277,12 +265,9 @@ struct ForwardingBuffer {
     uint32_t pages_per_stream = 0;
 };
 
-// Never initialised and never read back: pure staging for tokens passing through a chip. One page per token,
-// and the page is token + forwarding metadata so a single fabric write lands both. Fused into ONE page rather
-// than split across payload and metadata regions precisely because nothing outside the op reads it — so the
-// "one page = one token" property the caller's regions must keep does not apply here, and it saves a DRAM
-// read and a DRAM write per forwarded token.
-//
+// Never initialised and never read back: pure staging for tokens passing through a chip. A page is the token
+// and its forwarding metadata fused, so one fabric write lands both and a forwarded token costs one DRAM read
+// and one DRAM write.
 ForwardingBuffer allocate_forwarding_buffer(
     ttnn::MeshDevice* mesh, const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
     ForwardingBuffer fwd;
@@ -331,8 +316,7 @@ KernelPlan make_kernel_plan(
         plan.vc_outbox_addr.push_back(static_cast<uint32_t>(sems.vc_outbox[v].address()));
     }
     // Which of the `num_routed_experts` columns this chip hosts. The dispatch group is this device's position
-    // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate. Same
-    // derivation as the production reader's compile-time `offset`.
+    // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate.
     const uint32_t experts_per_group = args.experts_per_chip * ring_extent(args);
     const uint32_t my_group = args.device->shape().dims() > 1 ? coord[static_cast<int32_t>(args.axis == 0 ? 1 : 0)] %
                                                                     num_dispatch_groups(args, tensor_args)
@@ -434,11 +418,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         KernelPlan plan = chip_plan;
         plan.stream = stream;
         const auto& downstream = placement.at(self.downstream_coord).streams.at(stream);
-        // Same link, other direction. Its sender on this chip points upstream of us, which is where our
-        // reader's credits must go; its worker on the downstream chip is where our sender posts the credits
-        // it carries. `stream ^ 1` is that stream, since make_stream_id puts the direction in bit 0, and
-        // reverse_stream() is defined as exactly that -- so the downstream chip's stream back toward us,
-        // which the launch credit releases, is the very same core. One placement, both credits.
+        // Same link, other direction: its sender on this chip points upstream of us, which is where our
+        // reader's credits must go, and its worker on the downstream chip is where our sender posts the
+        // credits it carries. One placement, both credits.
         const StreamId opposite_stream = reverse_stream(stream);
         const auto& opposite = placement.at(coord).streams.at(opposite_stream);
         const auto& downstream_opposite = placement.at(self.downstream_coord).streams.at(opposite_stream);
