@@ -6,6 +6,7 @@ Run:
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
 The prefill conv-path tests at the end (test_conv_paths_*, test_kda_*) use random data and need no checkpoint.
 """
+
 import os
 
 import pytest
@@ -258,7 +259,10 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
       (a) writing B users one slot at a time (in reverse order, so each write must preserve the
           rows written before it) then ONE batched decode matches B independent B=1 runs, row by row;
       (b) remap_slots(reverse) makes decode row i carry user (B-1-i)'s state, and the permuted state
-          is exactly the pre-remap rows reindexed (no cross-row contamination).
+          is exactly the pre-remap rows reindexed (no cross-row contamination);
+      (c) a SECOND batched decode after the remap matches, row by row, each user's second B=1 decode: the
+          conv history (fused path: _conv_hist_rm) and the recurrent state were permuted together, so decode
+          continues every user's own sequence in its new slot.
     """
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
@@ -277,15 +281,18 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
 
     xp = [torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16) for _ in range(B)]
     xd = [torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16) for _ in range(B)]
+    xd2 = [torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16) for _ in range(B)]  # second decode token
 
-    # ---- reference: B independent B=1 prefill(capture_state) + decode ----
-    ref_rows = []
+    # ---- reference: B independent B=1 prefill(capture_state) + two decode steps ----
+    ref_rows, ref_rows2 = [], []
     for u in range(B):
         g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         g.reset_state()
         g.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+        out_u2 = g.forward_decode(replicate_to_device(mesh_device, xd2[u]))
+        ref_rows2.append(ttnn.to_torch(out_u2, mesh_composer=comp)[0, 0, 0].float())
 
     # ---- batched via write_slot: each user prefilled B=1, its state written into ITS slot ----
     gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
@@ -320,6 +327,15 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
             max_diff = max(max_diff, (post[d * B + i] - pre[d * B + remap[i]]).abs().max().item())
     assert max_diff < 1e-3, f"remap_slots rec mismatch: max_diff={max_diff}"
     logger.info(f"remap_slots (B={B}) exact-permutation max_diff = {max_diff:.2e}")
+
+    # ---- (c) decode AFTER the remap: row i now carries user (B-1-i); its second token is xd2[B-1-i] ----
+    x_dec2 = torch.cat([xd2[remap[i]] for i in range(B)], dim=2)
+    out2_t = ttnn.to_torch(gb.forward_decode(replicate_to_device(mesh_device, x_dec2)), mesh_composer=comp)
+    assert not torch.isnan(out2_t).any() and not torch.isinf(out2_t).any(), "NaN/Inf in decode after remap"
+    pccs2 = [compute_pcc(ref_rows2[remap[i]], out2_t[0, 0, i].float()) for i in range(B)]
+    bad2 = [(i, p) for i, p in enumerate(pccs2) if p < thr]
+    assert not bad2, f"decode after remap_slots: rows below PCC {thr}: {bad2} (min={min(pccs2):.5f})"
+    logger.info(f"decode after remap_slots (B={B}) worst PCC = {min(pccs2):.5f}")
     logger.info(f"PASSED: write_slot + remap_slots (B={B})")
 
 
@@ -554,17 +570,20 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
 
 
 def _snapshot_layer_state(gdn, mesh_device):
-    """Host copy of one GDN layer's (rec_state, conv_carry, conv_states)."""
+    """Host copy of one GDN layer's (rec_state, conv_carry, conv_states, fused-decode conv history). With the fused
+    decode path on, decode reads its conv history from the fused buffer rather than conv_states, so it must be part
+    of the snapshot too (None when that path is off)."""
     comp = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     return (
         ttnn.to_torch(gdn.rec_state, mesh_composer=comp),
         ttnn.to_torch(gdn.conv_carry, mesh_composer=comp) if gdn.conv_carry is not None else None,
         [ttnn.to_torch(c, mesh_composer=comp) for c in gdn.conv_states] if gdn.conv_states is not None else None,
+        gdn.snapshot_fused_decode_state(),
     )
 
 
 def _restore_layer_state(gdn, mesh_device, snap):
-    rec, carry, convs = snap
+    rec, carry, convs, fused_hist = snap
     mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
 
     def _back(t, dtype):
@@ -582,6 +601,7 @@ def _restore_layer_state(gdn, mesh_device, snap):
             cc = _back(cs, gdn.conv_states[j].dtype)
             ttnn.copy(cc, gdn.conv_states[j])
             ttnn.deallocate(cc)
+    gdn.restore_fused_decode_state(fused_hist)
 
 
 @torch.no_grad()
@@ -1267,3 +1287,445 @@ def test_kda_channel_chunk_size(channels, expected):
 def test_kda_channel_chunk_size_rejects_unaligned(expect_error):
     with expect_error(ValueError, "no tile-aligned channel chunk divides 100"):
         kda_channel_chunk_size(100)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Fused batched decode (QWEN36_GDN_FUSED_DECODE, max_batch_size > 1, every decode width 1..Bmax).
+# Random weights, no checkpoint (needs the model's config.json via HF_MODEL).
+# ---------------------------------------------------------------------------------------------------------------
+
+BATCHED_DECODE_PCC = 0.999
+# (Bmax, per-step decode widths): one sequence of consecutive decode steps; steps with a width below Bmax run on the
+# state prefix [0:w] and must leave the idle users' state (rec_state rows, conv history rows) untouched, so a width
+# switch (8 -> 1 -> 8) must not disturb anything. Bmax=8: every width is <= SCAN_MAX (fused chunk_gated_delta_rule);
+# Bmax=32: widths 1 and 8 take the fused path (conv history format "hist"), 16 and 32 the ENTIRE original decode
+# (shift-register conv_states, format "states"); a switch across the two classes runs the in-place format sync
+# (prepare_decode_width) and the carried conv state must match the references' shift register.
+BATCHED_DECODE_SCHEDULES = [
+    pytest.param(8, (1, 1, 1, 1), id="B8-w1"),
+    pytest.param(8, (2, 2, 2, 2), id="B8-w2"),
+    pytest.param(8, (4, 4, 4, 4), id="B8-w4"),
+    pytest.param(8, (8, 8, 8, 8), id="B8-w8"),
+    pytest.param(8, (8, 1, 8, 4), id="B8-switch-8-1-8-4"),
+    pytest.param(32, (1, 1, 1, 1), id="B32-w1"),
+    pytest.param(32, (8, 8, 8, 8), id="B32-w8"),
+    pytest.param(32, (16, 16, 16, 16), id="B32-w16"),
+    pytest.param(32, (32, 32, 32, 32), id="B32-w32"),
+    pytest.param(32, (32, 1, 16, 8), id="B32-switch-32-1-16-8"),
+    pytest.param(32, (1, 32, 8, 16, 4), id="B32-switch-1-32-8-16-4"),
+]
+
+
+def _mesh_cat0(mesh, t):
+    """Per-device host copies stacked on dim 0: [num_devices * dim0, ...]."""
+    return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float()
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("Bmax, widths", BATCHED_DECODE_SCHEDULES)
+def test_gdn_tp_fused_batched_decode(mesh_device, Bmax, widths, reset_seeds, ensure_gc, monkeypatch):
+    """Fused batched GDN decode at every width vs B independent single-user ORIGINAL-path decodes.
+
+    The batched layer (QWEN36_GDN_FUSED_DECODE=1, max_batch_size=Bmax, persistent state) is seeded with random
+    per-user conv history + recurrent state through assemble_batched_state; the references are Bmax separate
+    max_batch_size=1 layers on the original shift-register path (QWEN36_GDN_FUSED_DECODE=0) seeded with the SAME
+    per-user state. Each step feeds one token to users [0:w]: the batched layer decodes at width w (a bucketed
+    step), the references of users [0:w] decode one B=1 step, users [w:Bmax] do not move. Per step and row: output
+    PCC >= 0.999, the recurrent state of every row matches its reference (idle rows: bitwise unchanged), the
+    conv history rows match the references' shift register, and nothing is NaN/Inf (idle rows included)."""
+    os.environ.setdefault("HF_MODEL", model_path())
+    mesh = mesh_device
+    nd = mesh.get_num_devices()
+    args = Qwen36ModelArgs(mesh, max_batch_size=Bmax, max_seq_len=256)
+    args1 = Qwen36ModelArgs(mesh, max_batch_size=1, max_seq_len=256)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = random_gdn_state_dict(args, seed=li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh) if nd > 1 else None
+    monkeypatch.setenv("QWEN36_GDN_FUSED_DECODE", "1")
+    tw = load_gdn_weights_tp(mesh, sd, args)  # holds the fused-decode weights; the original path ignores them
+    gb = TPGatedDeltaNet(mesh, args, tw, tt_ccl)
+    assert gb._fused_batched, "fused batched decode is not active (QWEN36_GDN_FUSED_DECODE / build support)"
+    monkeypatch.setenv("QWEN36_GDN_FUSED_DECODE", "0")
+    refs = [TPGatedDeltaNet(mesh, args1, tw, tt_ccl) for _ in range(Bmax)]
+    assert not any(r._fused_decode for r in refs)
+    logger.info(f"Bmax={Bmax} widths={widths} SCAN_MAX={gb._scan_max_b}")
+
+    Nv, Dk, Dv, C = args.gdn_nv_tp, args.gdn_dk, args.gdn_dv, args.gdn_qkv_dim_tp
+    rec0 = [0.1 * torch.randn(1, Nv, Dk, Dv, dtype=torch.float32) for _ in range(Bmax)]
+    hist0 = [torch.randn(1, args.gdn_conv_kernel_size - 1, C, dtype=torch.bfloat16) for _ in range(Bmax)]
+
+    def rec_tt(u):
+        return ttnn.from_torch(
+            rec0[u],
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+
+    def hist_tt(u):
+        return replicate_to_device(mesh, hist0[u])
+
+    gb._stable_state = True
+    gb.reset_state()  # persistent buffers + width constants, before any decode
+    gb.assemble_batched_state([rec_tt(u) for u in range(Bmax)], [hist_tt(u) for u in range(Bmax)])
+    for u in range(Bmax):
+        refs[u].assemble_batched_state([rec_tt(u)], [hist_tt(u)])
+
+    def snapshot():
+        """rec_state + the conv history in the format the current width class maintains (hist or conv_states)."""
+        if gb._conv_fmt == "packed":  # gdn_decode_step op: the packed history is authoritative -> RM (exact)
+            gb._unpack_conv_hist()
+        if gb._conv_fmt == "states":
+            hist = torch.stack([_mesh_cat0(mesh, gb.conv_states[m]).reshape(nd, Bmax, C) for m in (1, 2, 3)], dim=2)
+        else:
+            hist = _mesh_cat0(mesh, gb._conv_hist_rm).reshape(nd, Bmax, 3, C)
+        return _mesh_cat0(mesh, gb.rec_state).reshape(nd, Bmax, Nv, Dk, Dv), hist
+
+    for step, w in enumerate(widths):
+        fused_class = w <= gb._scan_max_b
+        gb.prepare_decode_width(w)  # eager in-place conv-format sync when the width class changed
+        assert gb._conv_fmt == ("packed" if gb._decode_op else "hist" if fused_class else "states")
+        rec_pre, hist_pre = snapshot()
+        x = torch.randn(1, 1, w, args.dim, dtype=torch.bfloat16)
+        out = ttnn.to_torch(gb.forward_decode(replicate_to_device(mesh, x)), mesh_composer=tp_composer(mesh))
+        assert out.shape[-2] == w, f"step {step}: decode output has {out.shape[-2]} rows, expected {w}"
+        assert torch.isfinite(out.float()).all(), f"step {step} (w={w}): NaN/Inf in the decode output"
+        rec_post, hist_post = snapshot()
+        assert torch.isfinite(rec_post).all() and torch.isfinite(hist_post).all(), f"step {step}: NaN/Inf in state"
+        # Idle users: state untouched, bit for bit.
+        assert torch.equal(rec_post[:, w:], rec_pre[:, w:]), f"step {step} (w={w}): idle rec_state rows changed"
+        if fused_class:  # the original decode shifts zeros into idle conv_states rows (don't-care slots)
+            assert torch.equal(
+                hist_post[:, w:], hist_pre[:, w:]
+            ), f"step {step} (w={w}): idle conv history rows changed"
+
+        worst = 1.0
+        for u in range(w):
+            ref_out = refs[u].forward_decode(replicate_to_device(mesh, x[:, :, u : u + 1]))
+            ref_t = ttnn.to_torch(ref_out, mesh_composer=tp_composer(mesh))[0, 0, 0].float()
+            pcc = compute_pcc(ref_t, out[0, 0, u].float())
+            ref_rec = _mesh_cat0(mesh, refs[u].rec_state).reshape(nd, Nv, Dk, Dv)
+            ref_hist = torch.stack([_mesh_cat0(mesh, refs[u].conv_states[m]).reshape(nd, C) for m in (1, 2, 3)], dim=1)
+            pcc_rec = compute_pcc(ref_rec, rec_post[:, u])
+            pcc_hist = compute_pcc(ref_hist, hist_post[:, u])
+            worst = min(worst, pcc, pcc_rec, pcc_hist)
+            assert pcc >= BATCHED_DECODE_PCC, f"step {step} (w={w}) user {u}: output PCC {pcc:.5f}"
+            assert pcc_rec >= BATCHED_DECODE_PCC, f"step {step} (w={w}) user {u}: rec_state PCC {pcc_rec:.5f}"
+            assert pcc_hist >= BATCHED_DECODE_PCC, f"step {step} (w={w}) user {u}: conv history PCC {pcc_hist:.5f}"
+        logger.info(f"step {step} width {w}: worst (output/rec/hist) PCC over {w} users = {worst:.5f}")
+    logger.info(f"PASSED: fused batched GDN decode Bmax={Bmax} widths={widths}")
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE,
+            "trace_region_size": 268435456,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4")], indirect=True)
+@pytest.mark.parametrize("Bmax, width", [pytest.param(8, 1, id="B8-w1"), pytest.param(8, 8, id="B8-w8")])
+def test_gdn_tp_fused_batched_decode_trace(mesh_device, Bmax, width, reset_seeds, ensure_gc):
+    """The fused batched decode step captured in a trace replays bit-exactly like the eager step.
+
+    Catches an allocation or host write inside the traced step (width constants / history must exist before the
+    capture) and a non-in-place state update: from the same seeded state, one eager step vs one replayed step must
+    give identical outputs, recurrent state and conv history."""
+    os.environ.setdefault("HF_MODEL", model_path())
+    mesh = mesh_device
+    args = Qwen36ModelArgs(mesh, max_batch_size=Bmax, max_seq_len=256)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = random_gdn_state_dict(args, seed=li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh)
+    tw = load_gdn_weights_tp(mesh, sd, args)
+    gb = TPGatedDeltaNet(mesh, args, tw, tt_ccl)
+    assert gb._fused_batched
+    gb._stable_state = True
+    gb.reset_state()
+    Nv, Dk, Dv, C = args.gdn_nv_tp, args.gdn_dk, args.gdn_dv, args.gdn_qkv_dim_tp
+    rep = ttnn.ReplicateTensorToMesh(mesh)
+    gb.assemble_batched_state(
+        [
+            ttnn.from_torch(
+                0.1 * torch.randn(1, Nv, Dk, Dv),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                mesh_mapper=rep,
+            )
+            for _ in range(Bmax)
+        ],
+        [replicate_to_device(mesh, torch.randn(1, 3, C, dtype=torch.bfloat16)) for _ in range(Bmax)],
+    )
+    comp = tp_composer(mesh)
+    rec_seed = ttnn.to_torch(gb.rec_state, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+    hist_seed = gb.snapshot_fused_decode_state()
+
+    def reseed():
+        src = ttnn.from_torch(
+            rec_seed,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        )
+        ttnn.copy(src, gb.rec_state)
+        ttnn.deallocate(src)
+        gb.restore_fused_decode_state(hist_seed)
+        gb.prepare_decode_width(width)  # restore leaves the RM history valid only: re-pack before the replay
+
+    def state():
+        if gb._conv_fmt == "packed":
+            gb._unpack_conv_hist()
+        return (
+            ttnn.to_torch(gb.rec_state, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float(),
+            ttnn.to_torch(gb._conv_hist_rm, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float(),
+        )
+
+    x_buf = replicate_to_device(mesh, torch.randn(1, 1, width, args.dim, dtype=torch.bfloat16))
+    out = gb.forward_decode(x_buf)  # eager step (also compiles every program before the capture)
+    eager_out = ttnn.to_torch(out, mesh_composer=comp).float()
+    eager_rec, eager_hist = state()
+    ttnn.deallocate(out)
+
+    reseed()
+    ttnn.synchronize_device(mesh)
+    tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+    out_t = gb.forward_decode(x_buf)
+    ttnn.end_trace_capture(mesh, tid, cq_id=0)
+    reseed()
+    ttnn.synchronize_device(mesh)
+    ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+    replay_out = ttnn.to_torch(out_t, mesh_composer=comp).float()
+    replay_rec, replay_hist = state()
+    ttnn.release_trace(mesh, tid)
+
+    assert torch.equal(eager_out, replay_out), "traced decode output differs from the eager step"
+    assert torch.equal(eager_rec, replay_rec), "traced decode rec_state differs from the eager step"
+    assert torch.equal(eager_hist, replay_hist), "traced decode conv history differs from the eager step"
+    logger.info(f"PASSED: traced fused batched GDN decode Bmax={Bmax} width={width} == eager")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Grouped short prefill (Bg users x bucket Tb in one pass): TPGatedDeltaNet.forward_prefill_group / _kda_conv_group
+# against the existing B=1 masked prefill, row by row.
+# ---------------------------------------------------------------------------------------------------------------
+
+
+def _group_valid_lens(Bg, Tb, seed):
+    """Per-row valid lengths drawn from {1, 2, 3, Tb-1, Tb, random}, deterministic. The LAST row is the dummy row
+    the model pads a group with (valid_len 1)."""
+    import random
+
+    rng = random.Random(seed)
+    pool = [1, 2, 3, Tb - 1, Tb, rng.randint(4, Tb - 2)]
+    rng.shuffle(pool)
+    lens = [pool[i % len(pool)] for i in range(Bg - 1)] + [1]
+    return lens
+
+
+def _mask_torch(lens, Tb, n_hist=3):
+    """(bg [B,Tb,1] fp32, conv_sel [B,n_hist,Tb] fp32 0/1): the same construction as model._short_trace_host_torch."""
+    B = len(lens)
+    bg = torch.zeros(B, Tb, 1, dtype=torch.float32)
+    conv_sel = torch.zeros(B, n_hist, Tb, dtype=torch.float32)
+    for u, vl in enumerate(lens):
+        bg[u, :vl, :] = 1.0
+        for j in range(n_hist):
+            i = vl - n_hist + j
+            if i >= 0:
+                conv_sel[u, j, i] = 1.0
+    return bg, conv_sel
+
+
+def _rep_dev(mesh, t, dtype, layout=ttnn.TILE_LAYOUT):
+    return ttnn.from_torch(t, dtype=dtype, layout=layout, device=mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+
+
+def _all_devs(t):
+    """[n_dev, ...] torch stack of every device's copy (heads/channels differ per device, so compare all of them)."""
+    return torch.stack([ttnn.to_torch(d) for d in ttnn.get_device_tensors(t)])
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("Tb", [128, 256], ids=lambda t: f"Tb{t}")
+@pytest.mark.parametrize("Bg", [2, 4, 8], ids=lambda b: f"Bg{b}")
+@pytest.mark.parametrize("weights", ["checkpoint", "random"])
+def test_gdn_prefill_group_matches_per_row(mesh_device, Bg, Tb, weights, reset_seeds, ensure_gc, request):
+    """forward_prefill_group (Bg users, one pass) == Bg B=1 masked forward_prefill calls (from zero state).
+
+    Per row (valid_len drawn from {1, 2, 3, Tb-1, Tb, random}; the last row is a valid_len-1 dummy): final
+    recurrent state and the new conv state must equal the B=1 call's bit for bit (every device), the output rows
+    [:valid_len] must have PCC > 0.9999. Then the group is re-run with different garbage in the dummy row: every
+    other row's output / state / conv must be unchanged bit for bit (dummy rows cannot perturb real rows).
+    Bg=8 -> BH=96 (the op's phased path), Bg=4 -> BH=48 (fused path)."""
+    os.environ.setdefault("HF_MODEL", model_path())
+    mesh = mesh_device
+    nd = mesh.get_num_devices()
+    args = Qwen36ModelArgs(mesh, max_batch_size=1, max_seq_len=2048)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = load_gdn_layer(args.CKPT_DIR, li) if weights == "checkpoint" else random_gdn_state_dict(args, seed=li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh) if nd > 1 else None
+    tw = load_gdn_weights_tp(mesh, sd, args)
+    gdn = TPGatedDeltaNet(mesh, args, tw, tt_ccl)
+    gdn.reset_state()
+    C, K1 = gdn.qkv_dim_tp, gdn.K - 1
+    comp = tp_composer(mesh)
+    lens = _group_valid_lens(Bg, Tb, seed=1000 + 10 * Bg + Tb)
+    dummy = Bg - 1
+    logger.info(f"Bg={Bg} Tb={Tb} weights={weights} valid_lens={lens}")
+
+    torch.manual_seed(4242 + Bg + Tb)
+    x = torch.randn(Bg, Tb, args.dim, dtype=torch.bfloat16)  # rows beyond valid_len are garbage on purpose
+
+    # ---- reference: B=1 masked prefill per row ----
+    bg_t, sel_t = _mask_torch(lens, Tb)
+    ref = []
+    for i in range(Bg):
+        masks_i = {
+            "bg": _rep_dev(mesh, bg_t[i : i + 1], ttnn.float32),
+            "conv_sel": _rep_dev(mesh, sel_t[i : i + 1], ttnn.bfloat16),
+        }
+        x_i = shard_to_device(mesh, x[i].reshape(1, 1, Tb, args.dim), dim=-1)
+        out, fs, cs = gdn.forward_prefill(x_i, chunk_size=128, prefill_masks=masks_i, return_state=True)
+        ref.append(
+            {
+                "out": ttnn.to_torch(out, mesh_composer=comp)[0, 0].float(),  # [Tb, dim]
+                "rec": _all_devs(fs),  # [nd, 1, Nv, Dk, Dv]
+                "conv": _all_devs(cs),  # [nd, 1, 3, C]
+            }
+        )
+        for t in (out, fs, cs, x_i, masks_i["bg"], masks_i["conv_sel"]):
+            ttnn.deallocate(t)
+
+    # ---- group ----
+    scratch = gdn.alloc_group_scratch(Bg)
+    masks = {
+        "bg": _rep_dev(mesh, bg_t, ttnn.float32),
+        "conv_sel": _rep_dev(mesh, sel_t, ttnn.bfloat16),
+        "zeros_pad": _rep_dev(mesh, torch.zeros(Bg, 32, C, dtype=torch.bfloat16), ttnn.bfloat16),
+    }
+
+    def run_group(xg):
+        x_tt = shard_to_device(mesh, xg.reshape(1, 1, Bg * Tb, args.dim), dim=-1)
+        out = gdn.forward_prefill_group(x_tt, Bg, Tb, masks, scratch)
+        o = ttnn.to_torch(out, mesh_composer=comp)[0, 0].float()  # [Bg*Tb, dim]
+        ttnn.deallocate(out)
+        ttnn.deallocate(x_tt)
+        rec = _all_devs(scratch.rec)  # [nd, Bg, Nv, Dk, Dv]
+        conv = [_all_devs(scratch.conv[m]) for m in range(gdn.K)]  # K x [nd, 1, Bg, C]
+        return o, rec, conv
+
+    o1, rec1, conv1 = run_group(x)
+
+    thr = 0.9999
+    problems = []
+    for i in range(Bg):
+        vl = lens[i]
+        rec_eq = torch.equal(rec1[:, i : i + 1], ref[i]["rec"])
+        rec_diff = (rec1[:, i : i + 1].float() - ref[i]["rec"].float()).abs().max().item()
+        conv_eq = all(torch.equal(conv1[m][:, 0, i : i + 1], ref[i]["conv"][:, 0, m - 1 : m]) for m in range(1, gdn.K))
+        zero0 = torch.count_nonzero(conv1[0]).item() == 0
+        got = o1[i * Tb : i * Tb + vl]
+        pcc = compute_pcc(ref[i]["out"][:vl], got)
+        out_eq = torch.equal(ref[i]["out"][:vl], got)
+        logger.info(
+            f"row {i} vl={vl}: rec bit-exact={rec_eq} (max-abs {rec_diff:.3e}) conv bit-exact={conv_eq} "
+            f"conv[0] zero={zero0} out pcc={pcc:.6f} out bit-exact={out_eq}"
+        )
+        if not rec_eq:
+            problems.append(f"row {i} vl={vl}: rec state differs (max-abs {rec_diff:.3e})")
+        if not conv_eq:
+            problems.append(f"row {i} vl={vl}: conv new state differs")
+        if not zero0:
+            problems.append(f"row {i}: conv[0] not zero")
+        if not pcc >= thr:
+            problems.append(f"row {i} vl={vl}: output pcc {pcc:.6f} < {thr}")
+
+    # ---- dummy-row / padding isolation: new garbage in the dummy row only ----
+    x2 = x.clone()
+    x2[dummy] = torch.randn(Tb, args.dim, dtype=torch.bfloat16) * 3.0
+    o2, rec2, conv2 = run_group(x2)
+    real = [i for i in range(Bg) if i != dummy]
+    for i in real:
+        if not torch.equal(o1[i * Tb : (i + 1) * Tb], o2[i * Tb : (i + 1) * Tb]):
+            problems.append(f"row {i}: output changed when the dummy row's input changed")
+        if not torch.equal(rec1[:, i], rec2[:, i]):
+            problems.append(f"row {i}: rec state changed when the dummy row's input changed")
+        for m in range(1, gdn.K):
+            if not torch.equal(conv1[m][:, 0, i], conv2[m][:, 0, i]):
+                problems.append(f"row {i}: conv[{m}] changed when the dummy row's input changed")
+    assert not problems, "\n".join(problems)
+    logger.info(f"PASSED: forward_prefill_group Bg={Bg} Tb={Tb} == per-row B=1 masked prefill")
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("Tb", [128, 256], ids=lambda t: f"Tb{t}")
+@pytest.mark.parametrize("Bg", [2, 4, 8], ids=lambda b: f"Bg{b}")
+def test_kda_conv_group_matches_b1(mesh_device, Bg, Tb, reset_seeds, ensure_gc, request):
+    """_kda_conv_group (pad-and-slice into the batch-1 KDA op) vs the B=1 kda_conv_prefill per row, from a zero
+    history: q/k/v bit-identical on EVERY row, including each user's first K-1 rows (which would read the
+    previous user's tokens if the zero pad did not separate the rows), and new_state (one-hot select) too."""
+    mesh = mesh_device
+    kd, vd = 512, 1536  # 27B at TP4
+    C = 2 * kd + vd
+    widths = (kd, kd, vd)
+    lens = _group_valid_lens(Bg, Tb, seed=2000 + 10 * Bg + Tb)
+    torch.manual_seed(227)
+    x = torch.randn(Bg, Tb, C).to(torch.bfloat16)  # nonzero everywhere, incl. the first rows of each user
+    w = (torch.randn(C, CONV_K) * 0.3).to(torch.bfloat16)
+    taps = _taps(mesh, w)
+
+    gdn = TPGatedDeltaNet.__new__(TPGatedDeltaNet)  # weight-free instance holding only what the method reads
+    gdn.mesh, gdn.K = mesh, CONV_K
+    gdn.qkv_dim_tp, gdn.key_dim_tp, gdn.value_dim_tp = C, kd, vd
+    gdn.tw = {"conv_taps": taps}
+    gdn._kda_actual_start = gdn._kda_zero_history = None
+    gdn._ensure_kda_consts()
+
+    _, sel_t = _mask_torch(lens, Tb)
+    conv_sel = _rep_dev(mesh, sel_t, ttnn.bfloat16)
+    zeros_pad = _rep_dev(mesh, torch.zeros(Bg, 32, C, dtype=torch.bfloat16), ttnn.bfloat16)
+    qkv = _rep_dev(mesh, x, ttnn.bfloat16)
+    gq, gk, gv, gns = gdn._kda_conv_group(qkv, conv_sel, zeros_pad)
+    got = [_dev0(t) for t in (gq, gk, gv, gns)]
+    assert tuple(got[0].shape) == (Bg, Tb, kd) and tuple(got[2].shape) == (Bg, Tb, vd), [tuple(g.shape) for g in got]
+    assert tuple(got[3].shape)[:2] == (Bg, CONV_K - 1), tuple(got[3].shape)
+
+    bad = []
+    for i in range(Bg):
+        qkv_i = _rep_dev(mesh, x[i : i + 1], ttnn.bfloat16)
+        sel_i = _rep_dev(mesh, sel_t[i : i + 1], ttnn.bfloat16)
+        rq, rk, rv, rns = kda_conv_prefill(
+            qkv_i, Tb, gdn._kda_zero_history, taps, widths, gdn._kda_actual_start, conv_sel=sel_i
+        )
+        for label, g, r in zip(("q", "k", "v", "new_state"), got, (rq, rk, rv, rns)):
+            rt = _dev0(r)
+            gt = g[i : i + 1]
+            if not torch.equal(gt, rt):
+                d = (gt.float() - rt.float()).abs().max().item()
+                head = (
+                    (gt[:, :CONV_K].float() - rt[:, :CONV_K].float()).abs().max().item()
+                    if label != "new_state"
+                    else 0.0
+                )
+                bad.append(f"row {i} (vl={lens[i]}) {label}: max-abs {d:.3e} (first K rows {head:.3e})")
+        for t in (qkv_i, sel_i, rq, rk, rv, rns):
+            ttnn.deallocate(t)
+    assert not bad, "\n".join(bad)
+    logger.info(f"PASSED: _kda_conv_group Bg={Bg} Tb={Tb} bit-identical to per-row B=1 conv")

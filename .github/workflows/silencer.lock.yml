@@ -908,6 +908,8 @@ jobs:
                           "galaxy-fabric-multi-mesh-4x4-2x4s",
                           "galaxy-fabric-multi-mesh-2x8-2x4s",
                           "bh-galaxy-fabric-torus-stability",
+                          "galaxy-fabric-2x2-channel-trimming-nonz",
+                          "galaxy-fabric-2x2-channel-trimming-z",
                           "bh-galaxy-socket-pipeline",
                           "bh-galaxy-tensor-prefetcher",
                           "bh-galaxy-complete-host-tensor-dual-rank"
@@ -1441,7 +1443,7 @@ jobs:
                       },
                       "run-blackhole-profiler": {
                         "default": true,
-                        "description": "Blackhole profiler",
+                        "description": "Blackhole profiler (single card and LoudBox)",
                         "type": "boolean"
                       },
                       "run-galaxy-profiler": {
@@ -1506,7 +1508,7 @@ jobs:
                           "llama3.1-8b-dp-galaxy",
                           "llama3.3-70b-galaxy",
                           "qwen3-32b-galaxy",
-                          "qwen3.6-27b",
+                          "qwen3.8-27b",
                           "qwen3.6-35b-a3b",
                           "gpt-oss-120b",
                           "whisper",
@@ -1606,7 +1608,7 @@ jobs:
                           "all",
                           "llama3.1-8b",
                           "qwen3-32b-galaxy",
-                          "qwen3.6-27b",
+                          "qwen3.8-27b",
                           "qwen3.6-35b-a3b",
                           "gpt-oss-120b",
                           "minimax-m3",
@@ -2304,7 +2306,7 @@ jobs:
                           "meta-llama/Llama-3.1-8B-Instruct",
                           "meta-llama/Llama-3.3-70B-Instruct",
                           "Qwen/Qwen3-32B",
-                          "Qwen/Qwen3.6-27B",
+                          "Qwen/Qwen3.8-27B",
                           "Qwen/Qwen2.5-VL-72B-Instruct",
                           "Qwen/Qwen2.5-VL-7B-Instruct",
                           "Qwen/Qwen3-VL-32B-Instruct",

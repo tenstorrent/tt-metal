@@ -389,10 +389,10 @@
   team: models
   budget_type: vllm
 
-# ── Qwen 3.6 ───────────────────────────────────────────────────────
+# ── Qwen 3.8 ───────────────────────────────────────────────────────
 
-- name: "Qwen3.6-27B (multimodal B=1)"
-  model: Qwen/Qwen3.6-27B
+- name: "Qwen3.8-27B (multimodal B=1)"
+  model: Qwen/Qwen3.8-27B
   coherence-test: true
   server-timeout: 30
   benchmark-timeout: 10
@@ -410,8 +410,8 @@
   team: models
   budget_type: vllm
 
-- name: "Qwen3.6-27B (batch=8)"
-  model: Qwen/Qwen3.6-27B
+- name: "Qwen3.8-27B (batch=8)"
+  model: Qwen/Qwen3.8-27B
   coherence-test: true
   server-timeout: 35
   benchmark-timeout: 10

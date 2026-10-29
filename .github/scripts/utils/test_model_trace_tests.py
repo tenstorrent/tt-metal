@@ -71,8 +71,8 @@ def test_time_budget_skips_trace_config_and_counts_generated_sweeps():
 
 
 def test_audit_filters_keep_exact_models_and_skus(registry, sku_config):
-    matrix = trace_tests.audit_matrix(registry, sku_config, skus="bh_quietbox_2", model="QWEN3.6-27B,gemma-4-26b-a4b")
-    assert {entry["model"] for entry in matrix} == {"qwen3.6-27b", "gemma-4-26b-a4b"}
+    matrix = trace_tests.audit_matrix(registry, sku_config, skus="bh_quietbox_2", model="QWEN3.8-27B,gemma-4-26b-a4b")
+    assert {entry["model"] for entry in matrix} == {"qwen3.8-27b", "gemma-4-26b-a4b"}
     assert {entry["sku"] for entry in matrix} == {"bh_quietbox_2"}
     with pytest.raises(ValueError, match="No e2e tests match"):  # allow-pytest.raises: empty audits must fail visibly
         trace_tests.audit_matrix(registry, sku_config, model="resnet50")

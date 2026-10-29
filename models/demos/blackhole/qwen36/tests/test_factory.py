@@ -29,7 +29,7 @@ import torch
 import ttnn
 
 # TP tests default to the 27B variant; single-device unit tests setdefault 9B.
-_DEFAULT_HF_MODEL = "Qwen/Qwen3.6-27B"
+_DEFAULT_HF_MODEL = "Qwen/Qwen3.8-27B"
 _PCC_THRESHOLDS_PATH = os.path.join(os.path.dirname(__file__), "pcc_thresholds.json")
 
 # Prefill length buckets gated by --max-prefill (see conftest). Lengths above the
@@ -337,7 +337,15 @@ def parametrize_mesh_tp(max_tp=8):
         fn = pytest.mark.parametrize(
             "device_params",
             # l1_small_size required by ttnn.conv1d in the GDN prefill path
-            [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE}],
+            [
+                {
+                    # QWEN36_FABRIC_RING=1: a Galaxy column's Ring CCLs need the ring (torus) fabric.
+                    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING
+                    if os.environ.get("QWEN36_FABRIC_RING") == "1"
+                    else ttnn.FabricConfig.FABRIC_1D,
+                    "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE,
+                }
+            ],
             indirect=True,
         )(fn)
         fn = pytest.mark.parametrize("mesh_device", [pytest.param(shape, id=f"{shape[0]}x{shape[1]}")], indirect=True)(

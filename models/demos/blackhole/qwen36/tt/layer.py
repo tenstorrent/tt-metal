@@ -89,6 +89,12 @@ class Qwen36DecoderLayer:
             (not self.is_full_attention and getattr(args, "gdn_qkvz_weight_memcfg", None) is not None)
             or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
         )
+        # QWEN36_DECODE_ALLREDUCE=1 (decode only): replicated 40-core L1 residual + one all_reduce_async per
+        # row-parallel output (see tp_common.DecodeResidualAllReduce). None when off/unsupported; the shared
+        # persistent buffer is allocated here, at construction, never inside a trace. Prefill never uses it.
+        from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+
+        self._decode_ar = _tpc.get_decode_allreduce(args, tt_ccl) if self.num_devices > 1 else None
         self.attention_norm = self._make_norm(
             mesh_device,
             args,
@@ -222,6 +228,7 @@ class Qwen36DecoderLayer:
         chunk_start_idx_tensor=None,
         valid_len=None,
         gdn_collect=False,
+        gdn_masks=None,
         gdn_recurrent=False,
         gdn_seed=False,
         decode_cfg=False,
@@ -232,10 +239,15 @@ class Qwen36DecoderLayer:
         n_users=1,
         state_blk_idx=None,
         conv_sel=None,
+        prefill_group=None,
         gdn_capture_state=True,
         gdn_carry_state=True,
         sp=None,
     ):
+        # prefill_group (TP prefill only): dict for a GROUPED short prefill of Bg users x Tb bucket rows laid out
+        # user-major in x [1,1,Bg*Tb,dim]: keys Bg, Tb, cos, sin, csi, full_pts / chunk_pts (per-user device page
+        # tables), gdn_masks, gdn_scratch ({id(gdn layer): alloc_group_scratch(Bg)}). Full attention runs per user on
+        # its row slice (own KV pages), GDN runs once for the whole group (forward_prefill_group).
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
@@ -258,6 +270,13 @@ class Qwen36DecoderLayer:
         # full-dim activation they expect. This is the weight-load amortization that makes verifying
         # K+1 tokens cost ~one decode step instead of ~K+1.
         _norm_mode = Mode.DECODE if (decode_cfg or mode != "prefill") else Mode.PREFILL
+        # Replicated-residual decode (QWEN36_DECODE_ALLREDUCE=1): dispatch on the tensor itself — a full-width
+        # input is the replicated RES40 residual; a fractured one (flag off, or a caller that bypassed the model
+        # entry) takes the unchanged fractured path below.
+        _dar = self._decode_ar
+        if _dar is not None and not (mode == "decode" and x.shape[-1] == self.args.dim):
+            _dar = None
+        _dar_kw = {"decode_ar": _dar} if _dar is not None else {}
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
@@ -281,13 +300,37 @@ class Qwen36DecoderLayer:
             _attn_norm_config = _ff_norm_config = (
                 {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
             )
-        attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
+        if _dar is not None:
+            attn_input = _dar.rms_norm(x, self.attention_norm.norm)
+        else:
+            attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
         if self.num_devices > 1:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
             # output is fractured along dim=3. cos/sin are in rope_tp format.
             if self.is_full_attention:
-                if mode == "prefill":
+                if mode == "prefill" and prefill_group is not None:
+                    pg = prefill_group
+                    Bg, Tb = pg["Bg"], pg["Tb"]
+                    D = attn_input.shape[-1]
+                    outs = []
+                    for i in range(Bg):
+                        xi = ttnn.slice(attn_input, (0, 0, i * Tb, 0), (1, 1, (i + 1) * Tb, D))
+                        oi = self.attention.forward_prefill_paged(
+                            xi,
+                            pg["cos"],
+                            pg["sin"],
+                            pg["full_pts"][i],
+                            chunk_page_table=pg["chunk_pts"][i],
+                            chunk_start_idx=0,
+                            chunk_start_idx_tensor=pg["csi"],
+                        )
+                        ttnn.deallocate(xi)
+                        outs.append(oi)
+                    attn_output = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    for oi in outs:
+                        ttnn.deallocate(oi)
+                elif mode == "prefill":
                     # Contract/vLLM path supplies a page_table → paged KV prefill; the
                     # demo path (no page_table) uses the internal concat caches.
                     if page_table is not None:
@@ -318,13 +361,24 @@ class Qwen36DecoderLayer:
                         alias_kv_write=alias_kv_write,
                         spec_verify_mode=spec_verify_mode,
                         spec_page_table=spec_page_table,
+                        **_dar_kw,
                         spec_n_users=n_users,
                         spec_user_page_table=spec_user_page_table,
                     )
             else:
                 # GDN carries its recurrent/conv state internally (capture_state on
                 # prefill, read on decode); it has no paged KV, so page_table is N/A.
-                if mode == "prefill":
+                if mode == "prefill" and prefill_group is not None:
+                    pg = prefill_group
+                    attn_output = self.attention.forward_prefill_group(
+                        attn_input,
+                        pg["Bg"],
+                        pg["Tb"],
+                        pg["gdn_masks"],
+                        pg["gdn_scratch"][id(self.attention)],
+                        chunk_size=chunk_size,
+                    )
+                elif mode == "prefill":
                     if gdn_recurrent and gdn_seed:
                         # Spec-decode seed: the verify's conv1d + fused recurrent arithmetic, run
                         # against the durable state and without the deferred-commit selectors.
@@ -349,6 +403,8 @@ class Qwen36DecoderLayer:
                             attn_input, chunk_size=chunk_size, valid_len=valid_len
                         )
                     else:
+                        # gdn_masks: persistent device masks of the traced masked-bucket prefill (None: unchanged call).
+                        _gm = {"prefill_masks": gdn_masks} if gdn_masks is not None else {}
                         attn_output = self.attention.forward_prefill(
                             attn_input,
                             chunk_size=chunk_size,
@@ -356,9 +412,10 @@ class Qwen36DecoderLayer:
                             capture_state=gdn_capture_state,
                             carry_state=gdn_carry_state,
                             sp=sp,
+                            **_gm,
                         )
                 else:
-                    attn_output = self.attention.forward_decode(attn_input)
+                    attn_output = self.attention.forward_decode(attn_input, row_pos=position_tensor, **_dar_kw)
         elif self.is_full_attention:
             attn_output = self.attention.forward(
                 attn_input,
@@ -377,15 +434,18 @@ class Qwen36DecoderLayer:
             )
         ttnn.deallocate(attn_input)
 
-        h = ttnn.add(x, attn_output)
+        h = _dar.add(x, attn_output) if _dar is not None else ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)
 
-        ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
+        if _dar is not None:
+            ff_input = _dar.rms_norm(h, self.ffn_norm.norm)
+        else:
+            ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
-        ff_output = self.feed_forward.forward(ff_input, mode=mode)
+        ff_output = self.feed_forward.forward(ff_input, mode=mode, **_dar_kw)
         ttnn.deallocate(ff_input)
 
-        output = ttnn.add(h, ff_output)
+        output = _dar.add(h, ff_output) if _dar is not None else ttnn.add(h, ff_output)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_output)
 

@@ -1976,7 +1976,7 @@ targets:
             owner_id: U08FBKRKTB8 # Kohei Yamaguchi
             team: models
   qwen3.6-27b:
-    aliases: ["Qwen3.6-27B", "Qwen/Qwen3.6-27B"]
+    aliases: ["Qwen3.6-27B", "Qwen/Qwen3.6-27B", "Qwen3.8-27B", "Qwen/Qwen3.8-27B"]
     skus:
       # bh_quietbox_2 normalizes to canonical p300x2 (2x P300 = 4 dies, labeled P150x4).
       # TTFT (prefill_time_to_first_token) is in ms; decode is batch_size=1 so t/s == t/s/u.
@@ -2071,12 +2071,17 @@ targets:
             owner_id: U08HL8X1ECD # Aniruddha Tupe
             team: models
           # accuracy_512 (text_demo.py): measured 98.63 / 100.00 on bh_quietbox_2, 2026-09-18.
+          # 2026-10-20: 96.68 / 99.80 with the default fused gdn_decode_step op at B=1 (fp32 recurrent
+          # state). Top-1 vs the reference flips on near-ties at 512 tokens (98.44 with
+          # QWEN36_GDN_DECODE_STEP_OP=0, but accuracy_1536 is 95.77 op-on vs 95.31 op-off, and
+          # teacher-forced NLL over 4096 steps is 0.770 op-on vs 0.864 op-off), so the op is kept
+          # and the target lowered.
           - batch_size: 1
             seq_len: 512
             status: active
             perf: {}
             accuracy:
-              top1: 97
+              top1: 96
               top5: 99
             owner_id: U08HL8X1ECD # Aniruddha Tupe
             team: models
