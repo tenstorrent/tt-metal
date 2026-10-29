@@ -176,6 +176,8 @@ TEST_F(DynamicLengthLaunchTest, RejectsOversizedPlaceholderWithTensor) {
 // A scalar captured below capacity would replay that length against any later input.
 TEST_F(DynamicLengthLaunchTest, TraceCaptureRequiresScalarAtCapacity) {
     const auto input = make_input();
+    // Capture cannot compile a new program, so the capacity-sized program has to be cached first.
+    launch<LengthOp>({.length = kCapacity}, {.input = input});
     const auto trace_id = ttnn::operations::trace::begin_trace_capture(device_, ttnn::QueueId(0));
     struct Release {
         tt::tt_metal::distributed::MeshDevice* device;
