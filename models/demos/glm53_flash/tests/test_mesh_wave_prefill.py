@@ -224,3 +224,84 @@ def test_wave_prefill_vs_sequence_parallel(mesh_device, expect_error):
     assert _same_state(row1_before, _kda_slot_state(model, 1, 0)), "(v) the idle row's slot changed under the trace"
     model.release_wave_traces()
     logger.info("waves: (v) traced PASS")
+
+
+DUMP = Path("bringup/references/glm53_flash/L45_S128")
+
+
+def _host_first_token(cfg, layers) -> int:
+    """The dump's HF first token after the whole 128-token prompt: the host head on HF's last-layer row 127."""
+    from models.demos.glm53_flash.reference.checkpoint import FINAL_NORM_KEY, LM_HEAD_KEY, load_tensors, shard_headers
+
+    snapshot = default_snapshot_dir()
+    ref = torch.load(DUMP / f"layer{layers[-1]}_prefill.pt")["x_out"][0]  # [128, 4, 4096]
+    w = load_tensors(snapshot, [FINAL_NORM_KEY, LM_HEAD_KEY], shard_headers(snapshot))
+    h = ref.float().mean(1)[-1:]
+    hn = h * torch.rsqrt(h.pow(2).mean(-1, keepdim=True) + cfg.rms_norm_eps) * w[FINAL_NORM_KEY].float()
+    return int((hn @ w[LM_HEAD_KEY].float().t()).argmax(-1)[0])
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+def test_wave_first_token_vs_hf(mesh_device):
+    """The accuracy gate of waves (doc/mesh/row_ownership.md test 3): the dump's 128-token prompt through SP, through
+    one wave with the prompt on EVERY row (identical inputs: the rows' outputs bit-identical), on row 0 with the other
+    rows idle, and through the captured wave: every first token equals the host head on HF's rows (102647 on 45
+    layers). Then the throughput point: one wave of ``rows`` x 2048-token prompts against the SP prefill of one
+    ``rows`` x 2048-token chunk (the same rows per chip; the wave does ``rows`` prompts in that time)."""
+    snapshot = default_snapshot_dir()
+    cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
+    layers = _layers()
+    assert layers[0] == 0, "the dump's prompt embeddings start at layer 0"
+    prompt = torch.load(DUMP / "prefill_input.pt")["prompt_ids"].reshape(-1)[:128].long()
+    hf_first = _host_first_token(cfg, layers)
+    rows = MESH[0]
+    T_big = 2048
+    model = GLM53MeshModel(
+        mesh_device, cfg, layers, max_batch=B, max_seq_len=rows * T_big + 256, weight_cache_path=CACHE_ROOT
+    )
+    assert model.mesh.rows == rows > 1
+    logger.info(f"wave gate: {len(layers)} layers on {MESH}, HF first token {hf_first}")
+    first_sp, logits_sp = _timed("SP prefill (128 tokens)", lambda: _sp(model, prompt, user=0))
+    all_rows = _timed(
+        f"wave: the prompt on all {rows} rows",
+        lambda: model.prefill_wave(_wave(model, {r: (prompt, 0) for r in range(rows)}, user=0)),
+    )
+    row0 = model.prefill_wave(_wave(model, {0: (prompt, 0)}, user=0))
+    firsts = {r: all_rows[r][0] for r in range(rows)}
+    same_rows = all(torch.equal(all_rows[0][1], all_rows[r][1]) for r in range(1, rows))
+    p_sp = pcc(logits_sp, all_rows[0][1])
+    logger.info(
+        f"first tokens: HF {hf_first}, SP {first_sp}, wave rows {firsts}, row 0 alone {row0[0][0]}; rows bit-identical "
+        f"{same_rows}; wave vs SP logits pcc {p_sp:.6f}"
+    )
+    assert first_sp == hf_first, "the SP first token must match HF"
+    assert all(v == hf_first for v in firsts.values()) and row0[0][0] == hf_first and same_rows and p_sp > PCC_BAR_SP
+    model.capture_waves([256])
+    traced = _timed(
+        "traced wave (256 per row)",
+        lambda: model.prefill_traced_wave(_wave(model, {r: (prompt, 0) for r in range(rows)}, user=0)),
+    )
+    assert all(traced[r][0] == hf_first for r in range(rows)) and torch.equal(traced[0][1], all_rows[0][1])
+    model.release_wave_traces()
+    # throughput: rows x T_big-token prompts in one wave vs the SP prefill of one rows x T_big chunk
+    torch.manual_seed(2)
+    big = [torch.randint(1000, 20000, (T_big,), dtype=torch.long) for _ in range(rows)]
+    sp_chunk = torch.cat(big)
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    streams, logits, owner = model.prefill(sp_chunk, user=1)
+    ttnn.synchronize_device(mesh_device)
+    t_sp = time.perf_counter() - t0
+    ttnn.deallocate(streams)
+    ttnn.deallocate(logits)
+    for _ in range(2):  # the first wave at this length compiles its programs
+        t0 = time.perf_counter()
+        model.prefill_wave(_wave(model, {r: (big[r], 0) for r in range(rows)}, user=1))
+        ttnn.synchronize_device(mesh_device)
+        t_wave = time.perf_counter() - t0
+    logger.info(
+        f"PERF waves on {MESH}: SP prefill of one {rows * T_big}-token chunk {t_sp * 1e3:.0f} ms vs one wave of {rows} x "
+        f"{T_big}-token prompts {t_wave * 1e3:.0f} ms (warm): {rows * T_big / t_sp:.0f} vs {rows * T_big / t_wave:.0f} tok/s"
+    )
