@@ -561,8 +561,42 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
                 )
             except AssertionError as e:
                 failures.append(str(e))
+        # (g2) the control for the bar: the same length ALONE through waves (one member, the other rows idle; the
+        # SP-eligibility check disabled so the planner does not route the lone prompt to SP) vs its SP path, so the
+        # pairing's effect separates from the wave scan's own drift (the local KDA scan groups the recurrence
+        # differently from the sequence-parallel one; bf16 over 45 layers x 64 K)
+        pg2 = _served_ids(LONG_PROMPTS[0], 44, vocab)
+        sp_eligible, a.slots.sp_eligible = a.slots.sp_eligible, lambda *_: False
+        try:
+            first2 = None
+            steps2 = vllm_steps((int(pg2.numel()),), LONG_STEP_CHUNK, LONG_STEP_BUDGET, (0,))
+            for st in steps2:
+                ((_, s0, e),) = st
+                first2 = step_prefill([(24, pg2[:e], s0)])[24]
+            row2 = a.slots.physical(24).row
+            lone_carries = kda_carries(row2, a.slots.physical(24).user)
+            outs2 = decode_jointly({24: first2}, {24: int(pg2.numel())})
+            got2 = [first2] + outs2[24]
+            a.release_request(24)
+        finally:
+            a.slots.sp_eligible = sp_eligible
+        *ref2, sp2_carries = reference(pg2, snapshot_row=row2)
+        worst2 = sorted((pcc(lone_carries[k], sp2_carries[k]), k) for k in sp2_carries if k.endswith("rec"))
+        logger.info(
+            f"(g2) lone wave prompt on row {row2}: first token {int(first2.argmax())} (SP {int(ref2[0].argmax())}), "
+            f"pcc {pcc(first2, ref2[0]):.5f}, decode steps "
+            + ", ".join(f"{int(g.argmax())}/{int(r.argmax())} {pcc(g, r):.4f}" for g, r in zip(got2[1:], ref2[1:]))
+            + "; lowest recurrent carry pcc "
+            + ", ".join(f"{k} {v:.4f}" for v, k in worst2[:4])
+        )
+        if dump:
+            torch.save({"waves": got2, "sp": ref2, "kda_wave": lone_carries, "kda_sp": sp2_carries}, dump + ".lone")
+        try:
+            _assert_agree(f"(g2) lone wave prompt {int(pg2.numel())} vs SP", got2, ref2, pcc_min=PCC_BAR_SP)
+        except AssertionError as e:
+            failures.append(str(e))
         assert not failures, "; ".join(failures)
-        logger.info("served waves: PASS (g) four long prompts in paired waves")
+        logger.info("served waves: PASS (g) four long prompts in paired waves, (g2) a lone wave prompt")
         return
 
     # (a) two fresh prompts in one step on slot index 0 of rows 0 and 1: one traced wave (both within 1024)
