@@ -144,7 +144,7 @@ class MATMUL_ROW_MOP(TemplateParameter):
         return "#define MATMUL_ROW_MOP"
 
     @staticmethod
-    def for_block(formats, dest_acc, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int, sections: int = 1) -> list:
+    def for_block(formats, dest_acc, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int, sections: int = 1, several_blocks: bool = False) -> list:
         """[MATMUL_ROW_MOP()] where the ttnn matmul kernels run the opt-in row MOP for a half-sync block of the sweep (one inner block, so
         the section packs to the output format): helpers/matmul_prod_keys.py m2_row_mop, less the cells that keep main's form."""
         from helpers.matmul_prod_keys import forced_form, main_form_cell, m2_row_mop
@@ -163,9 +163,9 @@ class MATMUL_ROW_MOP(TemplateParameter):
             and {formats.input_format, formats.input_format_B} == {DataFormat.Float16_b, DataFormat.Bfp8_b}
         ):
             return []
-        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B, ct=ct_dim, rt=rt_dim):
+        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, several_blocks, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B, ct=ct_dim, rt=rt_dim):
             return []
-        if dest_sync == DestSync.Half and forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, rt_dim, ct_dim, False, sections, in_format_b=formats.input_format_B):
+        if dest_sync == DestSync.Half and forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, rt_dim, ct_dim, several_blocks, sections, in_format_b=formats.input_format_B):
             return []
         return [MATMUL_ROW_MOP()] if m2_row_mop(math_fidelity, rt_dim, ct_dim, kt_dim, fp32_dest, out_format, out_format) else []
 
@@ -328,6 +328,25 @@ class MATMUL_L1_ACC(TemplateParameter):
 
 
 @dataclass
+class MATMUL_NB(TemplateParameter):
+    """Blackhole matmul pack thread of an output of nb inner K blocks with packer L1 accumulate: block 0 of every nb writes its partials,
+    the others accumulate onto them, each switch a reconfigure of the packer as the ttnn bmm kernels do. Only with MATMUL_L1_ACC on."""
+
+    matmul_nb: int = 2
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_NB {self.matmul_nb}"
+
+
+@dataclass
+class MATMUL_WIDE_WALK(TemplateParameter):
+    """Blackhole matmul unpack whose MOP walk over in0 may leave the 16 tile PERF_ADDRESS ring: it reads on through the L1 below the perf counters (the data does not matter)."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_WIDE_WALK"
+
+
+@dataclass
 class MATMUL_ROW_END_FOLD(TemplateParameter):
     """Blackhole math: the default row form of a block that walks down the held operand (rt_dim > ct_dim) ends each row on a MVMUL that frees both sources and clears the counters, no SETRWC per row."""
 
@@ -464,8 +483,8 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         )
 
     @staticmethod
-    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0, sections: int = 1, in0_r_dim: int = 32, unfuse_cells: bool = False) -> list:
-        keys = MATMUL_FORM_KEYS._for_block(formats, kt_dim, ct_dim, rt_dim, math_fidelity, dest_sync, dest_acc, unfuse_one_tile, throttle, sections, in0_r_dim, unfuse_cells)
+    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0, sections: int = 1, in0_r_dim: int = 32, unfuse_cells: bool = False, several_blocks: bool = False) -> list:
+        keys = MATMUL_FORM_KEYS._for_block(formats, kt_dim, ct_dim, rt_dim, math_fidelity, dest_sync, dest_acc, unfuse_one_tile, throttle, sections, in0_r_dim, unfuse_cells, several_blocks)
         # a Bfp8_b pack below HiFi3 (the unfused post cells) reads slower without the half-sync flip's base write (the bound phase moves): the kernels keep it
         keep = formats.output_format == DataFormat.Bfp8_b and math_fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2)
         for k in keys:
@@ -474,7 +493,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         return keys
 
     @staticmethod
-    def _for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0, sections: int = 1, in0_r_dim: int = 32, unfuse_cells: bool = False) -> list:
+    def _for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0, sections: int = 1, in0_r_dim: int = 32, unfuse_cells: bool = False, several_blocks: bool = False) -> list:
         """[MATMUL_FORM_KEYS(...)] on Blackhole, else []; row_le_8 when the block's row (the larger of ct_dim and rt_dim) has 8 tiles or fewer."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
@@ -545,11 +564,11 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
             # a LoFi cell that keeps main's form does not take a forced one
             forced = "" if math_fidelity == MathFidelity.LoFi and mixed_main_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.input_format_B, formats.output_format, dest_sync == DestSync.Full, ct_dim, rt_dim) else (
-                forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, dest_sync == DestSync.Full, rt_dim, ct_dim, False, sections, in_format_b=formats.input_format_B)
+                forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, dest_sync == DestSync.Full, rt_dim, ct_dim, several_blocks, sections, in_format_b=formats.input_format_B)
             )
             if forced:
                 return [MATMUL_FORM_KEYS(1 if kt_dim == 1 else 2, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, False, forced)]
-            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B, ct=ct_dim, rt=rt_dim):
+            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, several_blocks, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B, ct=ct_dim, rt=rt_dim):
                 return [MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, unfused)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
         return [
@@ -655,6 +674,14 @@ class MATMUL_MIXED_STRIDE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return "#define MATMUL_MIXED_STRIDE"
+
+
+@dataclass
+class MATMUL_OPERAND_SIZES(TemplateParameter):
+    """Blackhole math matmul test with operands of different formats and tile shapes: unpacker 0 (in1) is configured with TILE_SIZE_UNPACK_A and unpacker 1 (in0) with TILE_SIZE_UNPACK_B."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_OPERAND_SIZES"
 
 
 @dataclass

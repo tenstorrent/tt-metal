@@ -192,7 +192,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t last_b = tile_b + CT_DIM - 1;
                     if (perf_ring)
                     {
+#ifdef MATMUL_WIDE_WALK
+                        LLK_ASSERT(
+                            (last_a + 1) * MATMUL_TILE_SIZE_IN0 <= (PERF_COUNTERS_BASE_ADDR - PERF_INPUT_A) / 16 &&
+                                (last_b + 1) * MATMUL_TILE_SIZE_IN1 <= (PERF_COUNTERS_BASE_ADDR - PERF_INPUT_B) / 16,
+                            "unpack MOP walk leaves the L1 below the perf counters");
+#else
+#line 195
                         LLK_ASSERT(last_a < PERF_RING_TILES && last_b < PERF_RING_TILES, "unpack MOP walk exceeds the 16-tile PERF_ADDRESS ring");
+#endif
+#line 196
                     }
                     else
                     {
@@ -480,10 +489,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
                 _llk_packer_wait_for_math_done_();
 #if defined(ARCH_BLACKHOLE) && MATMUL_L1_ACC == 1
+#if defined(MATMUL_NB) && MATMUL_NB > 1
+                // the first of every MATMUL_NB inner blocks writes its partials, the later ones accumulate onto them
+                if (loop % MATMUL_NB == 0)
+                {
+                    reconfigure_packer_l1_acc(0);
+                }
+                else if (loop % MATMUL_NB == 1)
+                {
+                    reconfigure_packer_l1_acc(1);
+                }
+#else
+#line 483
                 if (loop == 0)
                 {
                     reconfigure_packer_l1_acc(1);
                 }
+#endif
+#line 487
 #endif
                 // Pack dest occupancy (RT×CT).
                 for (std::uint32_t i = 0; i < CT_DIM * RT_DIM; i++)
