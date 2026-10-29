@@ -463,7 +463,30 @@ void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, 
     }
 }
 
-void Inspector::global_semaphore_reset(const distributed::MeshBuffer* buffer, uint32_t value) noexcept {
+void Inspector::global_semaphore_created(
+    const void* key, uint64_t address, const CoreRangeSet& cores, const distributed::MeshDevice& device) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        inspector::GlobalSemaphoreData semaphore_data;
+        semaphore_data.address = address;
+        semaphore_data.cores = cores;
+        for (const auto* chip : device.get_devices()) {
+            semaphore_data.chip_ids.push_back(chip->id());
+        }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->global_semaphores_data.insert_or_assign(key, std::move(semaphore_data));
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log global semaphore created: {}", e.what());
+    }
+}
+
+void Inspector::global_semaphore_reset(const void* key, uint32_t value) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -473,11 +496,27 @@ void Inspector::global_semaphore_reset(const distributed::MeshBuffer* buffer, ui
     }
     try {
         std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
-        if (auto it = data->global_semaphores_data.find(buffer); it != data->global_semaphores_data.end()) {
+        if (auto it = data->global_semaphores_data.find(key); it != data->global_semaphores_data.end()) {
             it->second.reset_value = value;
         }
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log global semaphore reset: {}", e.what());
+    }
+}
+
+void Inspector::global_semaphore_destroyed(const void* key) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->global_semaphores_data.erase(key);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log global semaphore destroyed: {}", e.what());
     }
 }
 

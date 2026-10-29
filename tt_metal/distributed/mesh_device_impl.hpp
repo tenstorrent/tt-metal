@@ -69,6 +69,8 @@ class AllocatorImpl;
 class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
+class GlobalSemaphorePool;
+class GlobalSemaphorePoolReservation;
 namespace streaming_profiler {
 class Receiver;
 }
@@ -214,6 +216,11 @@ private:
     // if the MeshDevice closes before their owning pipes are destroyed (mirrors
     // the MeshBuffer / weak_ptr<MeshDevice> pattern).
     std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
+
+    // Set by experimental::ReserveGlobalSemaphorePool() and released in close_impl(). The outermost open mesh owns
+    // the pool; its submeshes share it and keep the same L1 block reserved in their own allocator.
+    std::shared_ptr<::tt::tt_metal::GlobalSemaphorePool> global_semaphore_pool_;
+    std::unique_ptr<::tt::tt_metal::GlobalSemaphorePoolReservation> global_semaphore_pool_mirror_;
 
     // Owns the Tensor prefetcher (DRISC) subsystem. Lazily constructed on first call
     // to experimental::StartTensorPrefetcher; torn down in close_impl() before the
@@ -388,6 +395,10 @@ public:
         size_t worker_l1_size,
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
+    // See experimental::ReserveGlobalSemaphorePool().
+    void reserve_global_semaphore_pool(uint32_t num_slots);
+    void release_global_semaphore_pool();
+    void adopt_global_semaphore_pool(const std::shared_ptr<::tt::tt_metal::GlobalSemaphorePool>& pool);
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
     void init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device);
     void trigger_realtime_profiler_sync_check();
@@ -397,6 +408,11 @@ public:
     // sender config pages. Constructed eagerly in initialize_impl() when the
     // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
     ::tt::tt_metal::DriscL1Arena& drisc_l1_arena() const;
+
+    // Null until experimental::ReserveGlobalSemaphorePool() is called.
+    const std::shared_ptr<::tt::tt_metal::GlobalSemaphorePool>& global_semaphore_pool() const {
+        return global_semaphore_pool_;
+    }
 
     // Lazily-constructed Tensor prefetcher (DRISC) subsystem. The first call materializes
     // the manager bound to this mesh device; subsequent calls return the same instance.

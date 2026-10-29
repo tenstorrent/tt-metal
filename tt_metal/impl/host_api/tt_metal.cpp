@@ -979,6 +979,9 @@ GlobalSemaphore CreateGlobalSemaphore(
     return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type));
 }
 
+GlobalSemaphore CreateGlobalSemaphore(distributed::MeshDevice& device, const CoreRangeSet& cores) {
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, cores));
+}
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
     MetalContext& metal_ctx = MetalContext::instance(program.impl().get_context_id());
     metal_ctx.device_manager()->check_dispatch_mode(metal_ctx.rtoptions().get_fast_dispatch());

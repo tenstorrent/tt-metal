@@ -234,7 +234,6 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/semaphore_binding_token.h
     inc/api/dataflow/global_semaphore.h
     inc/api/dataflow/global_semaphore_binding_token.h
-    inc/api/dataflow/global_semaphore_fabric.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h
     inc/hostdev/buf_rw_common.h

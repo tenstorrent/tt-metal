@@ -17,6 +17,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include "gmock/gmock.h"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -37,6 +38,7 @@
 #include <tt-metalium/experimental/device.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
+#include "impl/buffers/global_semaphore_pool.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -361,6 +363,55 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
         EXPECT_EQ(
             control_plane.get_fabric_node_id_from_physical_chip_id(mesh_device_->impl().get_device(coord)->id()),
             fabric_node_id);
+    }
+}
+
+void ExpectGlobalSemaphoreValue(
+    MeshDevice& mesh_device, const CoreRangeSet& cores, DeviceAddr address, uint32_t expected) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    for (IDevice* device : mesh_device.get_devices()) {
+        for (const CoreCoord& core : corerange_to_cores(cores)) {
+            const auto words =
+                cluster.read_core(device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
+            EXPECT_EQ(words.at(0), expected) << "device " << device->id() << " core " << core.str();
+        }
+    }
+}
+
+TEST_F(MeshDeviceTest, PoolGlobalSemaphoreHasOneAddressAndResetsEveryChip) {
+    experimental::ReserveGlobalSemaphorePool(*mesh_device_, 16);
+    if (mesh_device_->impl().global_semaphore_pool() == nullptr) {
+        GTEST_SKIP() << "Skipping: TT_METAL_GLOBAL_SEMAPHORE_POOL_SLOTS=0";
+    }
+    const CoreRangeSet cores(std::vector<CoreRange>{CoreRange({0, 0}, {1, 1}), CoreRange({3, 2}, {3, 2})});
+    auto sem = CreateGlobalSemaphore(*mesh_device_, cores);
+    ExpectGlobalSemaphoreValue(*mesh_device_, cores, sem.address(), 0);
+    sem.reset_semaphore_value(0x1234);
+    ExpectGlobalSemaphoreValue(*mesh_device_, cores, sem.address(), 0x1234);
+    sem.reset_semaphore_value(0);
+    ExpectGlobalSemaphoreValue(*mesh_device_, cores, sem.address(), 0);
+}
+
+TEST_F(MeshDevice2x4Test, SubmeshesShareTheParentsGlobalSemaphorePool) {
+    experimental::ReserveGlobalSemaphorePool(*mesh_device_, 16);
+    const auto& pool = mesh_device_->impl().global_semaphore_pool();
+    if (pool == nullptr) {
+        GTEST_SKIP() << "Skipping: TT_METAL_GLOBAL_SEMAPHORE_POOL_SLOTS=0";
+    }
+    const CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
+    auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 2});
+    std::vector<GlobalSemaphore> sems;
+    for (const auto& submesh : submeshes) {
+        EXPECT_EQ(submesh->impl().global_semaphore_pool(), pool);
+        sems.push_back(CreateGlobalSemaphore(*submesh, cores));
+        sems.back().reset_semaphore_value(static_cast<uint32_t>(sems.size()));
+    }
+    EXPECT_EQ(pool->num_live(), submeshes.size());
+    for (size_t i = 0; i < submeshes.size(); i++) {
+        for (size_t j = 0; j < i; j++) {
+            EXPECT_NE(sems[i].address(), sems[j].address());
+        }
+        ExpectGlobalSemaphoreValue(*submeshes[i], cores, sems[i].address(), static_cast<uint32_t>(i + 1));
     }
 }
 

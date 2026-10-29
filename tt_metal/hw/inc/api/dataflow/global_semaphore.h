@@ -4,8 +4,6 @@
 
 #pragma once
 
-#define TT_METAL_GLOBAL_SEMAPHORE_H_
-
 #if defined(COMPILE_FOR_TRISC)
 #error "GlobalSemaphore is only available to data-movement kernels"
 #endif
@@ -22,8 +20,17 @@
 #include "api/dataflow/semaphore_dm_impl.h"
 #include "internal/risc_attribs.h"
 
-#if defined(GLOBAL_SEMAPHORE_WITH_FABRIC)
-// Target chips for the fabric calls below: hop counts on a 1D line or ring, device and mesh ids on a 2D mesh.
+// The runtime defines ROUTING_MODE in kernels built with fabric enabled. FABRIC_2D selects mesh addressing,
+// otherwise line addressing is used.
+#if defined(ROUTING_MODE)
+#if defined(FABRIC_2D)
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
+#else
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+#endif
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+
+// Destination chips for the fabric calls: hop counts on a 1D line or ring, device and mesh ids on a 2D mesh.
 #if defined(FABRIC_2D)
 struct ToChip {
     uint8_t dst_dev_id;
@@ -65,18 +72,21 @@ namespace fabric_api = tt::tt_fabric::linear::experimental;
 #endif
 
 /**
- * @brief A semaphore shared by kernels across programs and chips.
+ * @brief A semaphore that kernels can share across programs and chips.
  *
- * Construct it from a GlobalSemaphoreBindingToken: `GlobalSemaphore s(token);`. The constructor reads the
- * semaphore's address from the common runtime arg the token names. The address is the same on every core and
- * chip, so the remote calls below only need the target core.
+ * Construct it from a GlobalSemaphoreBindingToken: `GlobalSemaphore s(token);`. The token names the common
+ * runtime arg that holds the semaphore's address. The address is the same on every core and chip, so the
+ * remote calls only need the destination core.
  *
- * up() and down() are atomic. value(), wait() and set() are plain loads and stores.
+ * Use it as a counter. Producers call up(), on this core, another core, or another chip. The one consumer core
+ * calls down() or wait_min(). up() and down() are atomic, so increments that arrive at the same time are not
+ * lost.
  *
- * Only the core that waits on the semaphore should call down(); other cores only call up(). Don't mix down()
- * with wait() + set(0) on the same semaphore, because set() can overwrite an increment that is still in flight.
+ * Advanced: set() and wait() are plain stores and loads. set() can overwrite an increment that is still in
+ * flight, and wait() can miss a value that changes quickly. Only use them when nothing else is changing the
+ * semaphore at the same time, and don't mix them with down() on the same semaphore.
  *
- * To signal other chips, include api/dataflow/global_semaphore_fabric.h instead of this header.
+ * The fabric calls (to other chips) are available in kernels built with fabric enabled.
  */
 class GlobalSemaphore {
 public:
@@ -85,23 +95,23 @@ public:
 
     // ---- This core's copy ----
 
-    // Reads the current value from L1 (not cached), so it can be polled.
-    FORCE_INLINE uint32_t value() const { return semaphore_detail::load(l1_addr_, SCOPE); }
-
-    // Waits until the value equals v.
-    FORCE_INLINE void wait(uint32_t v) const { semaphore_detail::wait<CORE_TYPE>(l1_addr_, SCOPE, v); }
-
-    // Waits until the value is at least v.
-    FORCE_INLINE void wait_min(uint32_t v) const { semaphore_detail::wait_min<CORE_TYPE>(l1_addr_, SCOPE, v); }
-
-    // Writes v. Not atomic.
-    FORCE_INLINE void set(uint32_t v) { semaphore_detail::set<CORE_TYPE>(l1_addr_, SCOPE, v); }
-
     // Adds v atomically.
     FORCE_INLINE void up(uint32_t v = 1) { semaphore_detail::up<CORE_TYPE>(l1_addr_, SCOPE, v); }
 
     // Waits until the value is at least v, then subtracts v atomically.
     FORCE_INLINE void down(uint32_t v = 1) { semaphore_detail::down<CORE_TYPE>(l1_addr_, SCOPE, v); }
+
+    // Waits until the value is at least v.
+    FORCE_INLINE void wait_min(uint32_t v) const { semaphore_detail::wait_min<CORE_TYPE>(l1_addr_, SCOPE, v); }
+
+    // Reads the current value from L1 (not cached), so it can be polled.
+    FORCE_INLINE uint32_t value() const { return semaphore_detail::load(l1_addr_, SCOPE); }
+
+    // Advanced: waits until the value equals v exactly.
+    FORCE_INLINE void wait(uint32_t v) const { semaphore_detail::wait<CORE_TYPE>(l1_addr_, SCOPE, v); }
+
+    // Advanced: writes v. Not atomic.
+    FORCE_INLINE void set(uint32_t v) { semaphore_detail::set<CORE_TYPE>(l1_addr_, SCOPE, v); }
 
     // ---- Another core on the same chip (NoC) ----
 
@@ -139,10 +149,10 @@ public:
         semaphore_detail::inc_multicast(l1_addr_, noc, x_start, y_start, x_end, y_end, v, num_dests);
     }
 
-#if defined(GLOBAL_SEMAPHORE_WITH_FABRIC)
+#if defined(ROUTING_MODE)
     // ---- Another chip (fabric) ----
-    // Same as the NoC up(), but for core (noc_x, noc_y) on another chip. Pass ToChip for one chip or ToChips
-    // for several. noc is the NoC the destination core uses.
+    // Like the NoC up(), but for core (noc_x, noc_y) on another chip. Pass ToChip for one chip or ToChips for
+    // several. noc_x and noc_y are coordinates on `noc`.
 
     template <
         typename FabricSender,
@@ -154,11 +164,11 @@ public:
         FabricSender& sender,
         volatile PACKET_HEADER_TYPE* hdr,
         ChipTarget chip,
+        const Noc& noc,
         uint32_t noc_x,
         uint32_t noc_y,
         uint32_t v = 1,
-        bool flush = true,
-        uint8_t noc = 0) {
+        bool flush = true) {
         const tt::tt_fabric::NocUnicastAtomicIncCommandHeader cmd{fabric_noc_addr(noc_x, noc_y, noc), v, flush};
 #if defined(FABRIC_2D)
         if constexpr (std::is_same_v<ChipTarget, ToChip>) {
@@ -184,11 +194,11 @@ public:
     FORCE_INLINE void up(
         tt::tt_fabric::RoutingPlaneConnectionManager& mgr,
         uint8_t route_id,
+        const Noc& noc,
         uint32_t noc_x,
         uint32_t noc_y,
         uint32_t v = 1,
-        bool flush = true,
-        uint8_t noc = 0) {
+        bool flush = true) {
         tt::tt_fabric::mesh::experimental::fabric_unicast_noc_unicast_atomic_inc(
             mgr,
             route_id,
@@ -200,11 +210,11 @@ public:
         tt::tt_fabric::RoutingPlaneConnectionManager& mgr,
         uint8_t route_id,
         uint8_t* num_hops,
+        const Noc& noc,
         uint32_t noc_x,
         uint32_t noc_y,
         uint32_t v = 1,
-        bool flush = true,
-        uint8_t noc = 0) {
+        bool flush = true) {
         tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
             mgr,
             route_id,
@@ -243,7 +253,7 @@ public:
         const uint64_t payload_noc_addr =
             noc_traits_t<Dst>::template dst_addr<Noc::AddressType::NOC>(dst, noc, dst_args);
         const tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader cmd{
-            payload_noc_addr, fabric_noc_addr(noc_x, noc_y, noc.get_noc_id()), v, flush};
+            payload_noc_addr, fabric_noc_addr(noc_x, noc_y, noc), v, flush};
 #if defined(FABRIC_2D)
         if constexpr (std::is_same_v<ChipTarget, ToChip>) {
             tt::tt_fabric::mesh::experimental::fabric_unicast_noc_fused_unicast_with_atomic_inc(
@@ -263,17 +273,16 @@ public:
 #endif
     }
 
-    // For loops that signal many times: set up the packet header once here, then send it with up_with_state().
-    // Wraps the fabric *_set_state / *_with_state calls.
+    // For loops that signal many times: fill the packet header once here, then send it with up_with_state().
     template <typename ChipTarget, typename = std::enable_if_t<global_semaphore_detail::is_chip_target_v<ChipTarget>>>
     FORCE_INLINE void up_set_state(
         volatile PACKET_HEADER_TYPE* hdr,
         ChipTarget chip,
+        const Noc& noc,
         uint32_t noc_x,
         uint32_t noc_y,
         uint32_t v = 1,
-        bool flush = true,
-        uint8_t noc = 0) {
+        bool flush = true) {
         constexpr auto mask = UnicastAtomicIncUpdateMask::All;
         const tt::tt_fabric::NocUnicastAtomicIncCommandHeader cmd{fabric_noc_addr(noc_x, noc_y, noc), v, flush};
 #if defined(FABRIC_2D)
@@ -309,7 +318,7 @@ public:
         typename FabricSender,
         typename = std::enable_if_t<global_semaphore_detail::is_fabric_sender_v<FabricSender>>>
     FORCE_INLINE void up_with_state(
-        FabricSender& sender, volatile PACKET_HEADER_TYPE* hdr, uint32_t noc_x, uint32_t noc_y, uint8_t noc = 0) {
+        FabricSender& sender, volatile PACKET_HEADER_TYPE* hdr, const Noc& noc, uint32_t noc_x, uint32_t noc_y) {
         global_semaphore_detail::fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
             UnicastAtomicIncUpdateMask::DstAddr>(
             &sender, hdr, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{fabric_noc_addr(noc_x, noc_y, noc), 0});
@@ -320,14 +329,14 @@ private:
     static constexpr ProgrammableCoreType CORE_TYPE = ProgrammableCoreType::TENSIX;
     static constexpr SemScope SCOPE = SemScope::EXTERNAL;
 
-#if defined(GLOBAL_SEMAPHORE_WITH_FABRIC)
+#if defined(ROUTING_MODE)
 #if defined(FABRIC_2D)
     static FORCE_INLINE tt::tt_fabric::mesh::experimental::MeshMcastRange mcast_range(const ToChips& chip) {
         return tt::tt_fabric::mesh::experimental::MeshMcastRange{chip.e, chip.w, chip.n, chip.s};
     }
 #endif
-    FORCE_INLINE uint64_t fabric_noc_addr(uint32_t noc_x, uint32_t noc_y, uint8_t noc) const {
-        return safe_get_noc_addr(noc_x, noc_y, l1_addr_, noc);
+    FORCE_INLINE uint64_t fabric_noc_addr(uint32_t noc_x, uint32_t noc_y, const Noc& noc) const {
+        return safe_get_noc_addr(noc_x, noc_y, l1_addr_, noc.get_noc_id());
     }
 #endif
     uint32_t l1_addr_;

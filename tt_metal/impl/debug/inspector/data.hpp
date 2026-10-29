@@ -78,7 +78,8 @@ private:
     bool mesh_socket_logging_enabled{false};
     std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
     std::unordered_map<const distributed::MeshBuffer*, inspector::MeshSocketData> mesh_sockets_data;
-    std::unordered_map<const distributed::MeshBuffer*, inspector::GlobalSemaphoreData> global_semaphores_data;
+    // Keyed by the semaphore's MeshBuffer, or by its pool slot lease.
+    std::unordered_map<const void*, inspector::GlobalSemaphoreData> global_semaphores_data;
     static constexpr size_t kRuntimeEntriesCapacity = 8192;
     std::array<inspector::MeshWorkloadRuntimeEntry, kRuntimeEntriesCapacity> runtime_entries{};
     size_t runtime_entries_write_pos{0};

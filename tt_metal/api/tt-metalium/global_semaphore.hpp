@@ -13,6 +13,8 @@
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 
@@ -57,6 +59,19 @@ public:
     DeviceAddr address() const;
 
     void reset_semaphore_value(uint32_t reset_value) const;
+
+    /**
+     * @brief Sets the semaphore to `reset_value` on all its cores and chips, and waits until the write is done.
+     *
+     * The write waits only for programs on `sub_device_ids` (default: the sub-device stall group). This lets a
+     * kernel running on another sub-device see the new value, for example a kernel waiting on a flag.
+     *
+     * Make sure no kernel is updating the semaphore while it is reset. Chips on other hosts are not written, and
+     * a reset cannot be captured in a trace.
+     *
+     * `sub_device_ids` is only supported for semaphores from CreateGlobalSemaphore(device, cores).
+     */
+    void reset_semaphore_value(uint32_t reset_value, ttsl::Span<const SubDeviceId> sub_device_ids) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("cores", "buffer_type");
     std::tuple<CoreRangeSet, BufferType> attribute_values() const;

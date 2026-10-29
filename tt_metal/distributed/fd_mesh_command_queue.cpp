@@ -653,7 +653,7 @@ void FDMeshCommandQueue::enqueue_write_to_core_ranges(
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
-    // Named: ranges() returns a view into the merged set, which must outlive the loop.
+    // ranges() returns a view, so the merged set must stay alive for the loop.
     const CoreRangeSet merged = logical_worker_cores.merge_ranges();
     for (auto* device : mesh_device_->get_devices()) {
         for (const CoreRange& range : merged.ranges()) {

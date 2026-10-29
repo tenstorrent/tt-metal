@@ -281,6 +281,8 @@ class RunTimeOptions {
 
     size_t pinned_memory_cache_limit_bytes = 4ULL * 1024 * 1024 * 1024;
 
+    std::optional<uint32_t> global_semaphore_pool_slots;
+
     // Firmware throttler TDP limit [W] to apply when the cluster opens, or the restore sentinel.
     std::optional<uint32_t> tdp_limit_watts;
 
@@ -785,6 +787,9 @@ public:
 
     size_t get_pinned_memory_cache_limit_bytes() const { return pinned_memory_cache_limit_bytes; }
     void set_pinned_memory_cache_limit_bytes(size_t limit_bytes) { pinned_memory_cache_limit_bytes = limit_bytes; }
+
+    std::optional<uint32_t> get_global_semaphore_pool_slots() const { return global_semaphore_pool_slots; }
+    void set_global_semaphore_pool_slots(std::optional<uint32_t> slots) { global_semaphore_pool_slots = slots; }
 
     std::optional<uint32_t> get_tdp_limit_watts() const { return tdp_limit_watts; }
     void set_tdp_limit_watts(std::optional<uint32_t> limit_watts) { tdp_limit_watts = limit_watts; }
