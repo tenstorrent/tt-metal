@@ -127,15 +127,17 @@ void kernel_main() {
         r[NOC_RESULT_TRANSFERS] = 0;
     }
 
-    for (uint32_t iter = 0; iter < iterations; iter++) {
-        for (uint32_t pattern = 0; pattern < NOC_PATTERN_COUNT; pattern++) {
-            for (uint32_t d = 0; d < num_dests; d++) {
-                const uint32_t x = get_arg_val<uint32_t>(2 + d * 3);
-                const uint32_t y = get_arg_val<uint32_t>(3 + d * 3);
-                const uint32_t dst_addr = get_arg_val<uint32_t>(4 + d * 3);
-                volatile uint32_t* r = results + d * NOC_RESULT_WORDS;
+    // Destination-outer, so a later abort can never leave a partially tested destination marked done.
+    for (uint32_t d = 0; d < num_dests; d++) {
+        const uint32_t x = get_arg_val<uint32_t>(2 + d * 3);
+        const uint32_t y = get_arg_val<uint32_t>(3 + d * 3);
+        const uint32_t dst_addr = get_arg_val<uint32_t>(4 + d * 3);
+        const uint64_t dst_noc_addr = get_noc_addr(x, y, dst_addr);
+        volatile uint32_t* r = results + d * NOC_RESULT_WORDS;
+        progress[NOC_PROGRESS_DEST] = d;
 
-                progress[NOC_PROGRESS_DEST] = d;
+        for (uint32_t iter = 0; iter < iterations; iter++) {
+            for (uint32_t pattern = 0; pattern < NOC_PATTERN_COUNT; pattern++) {
                 progress[NOC_PROGRESS_PATTERN] = pattern;
                 progress[NOC_PROGRESS_ITERATION] = iter;
 
@@ -144,7 +146,6 @@ void kernel_main() {
                     rb[i] = ~src[i];
                 }
 
-                const uint64_t dst_noc_addr = get_noc_addr(x, y, dst_addr);
                 // Keep many packets in flight, like the fabric EDM does when forwarding to local cores.
                 for (uint32_t b = 0; b < burst; b++) {
                     for (uint32_t off = 0; off < slice_size; off += packet_size) {
@@ -186,10 +187,10 @@ void kernel_main() {
                 }
                 r[NOC_RESULT_MISMATCHES] = r[NOC_RESULT_MISMATCHES] + mismatches;
                 r[NOC_RESULT_TRANSFERS] = r[NOC_RESULT_TRANSFERS] + 1;
-                r[NOC_RESULT_STATUS] = NOC_STATUS_DONE;
                 progress[NOC_PROGRESS_HEARTBEAT] = progress[NOC_PROGRESS_HEARTBEAT] + 1;
             }
         }
+        r[NOC_RESULT_STATUS] = NOC_STATUS_DONE;
     }
 
     progress[NOC_PROGRESS_STATE] = NOC_STATE_DONE;
