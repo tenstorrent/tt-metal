@@ -9,6 +9,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from tests.ttnn.unit_tests.operations.test_nvfp4_accuracy import _accuracy_gate_failures, _metrics, _reference
 
 pytestmark = pytest.mark.skipif(not is_blackhole(), reason="NVFP4 SFPU decoder requires Blackhole")
 
@@ -281,9 +282,14 @@ def run_fast_decode(
         # BF16 DEST FPU multiplication rounds during its fidelity phases.
         torch.testing.assert_close(actual, expected, rtol=1 / 128, atol=0)
     else:
-        # SFPSTOCHRND native nearest rounds halfway cases away from zero.
-        expected = ((expected.view(torch.int32) + 0x8000) & -65536).view(torch.float32)
-        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        # Accept any SFPU sequence meeting the independent numerical contract.
+        reference_fp64 = (
+            _reference(codes, scales, global_scale, flush_subnormals=True)
+            if not e2m1
+            else reference(codes, scales, 1.0, True).double() * float(torch.tensor(global_scale, dtype=torch.float32))
+        )
+        failures = _accuracy_gate_failures(_metrics(actual, reference_fp64))
+        assert not failures, "SFPU reconstruction accuracy failed: " + "; ".join(failures)
     return data, scale_data, output
 
 

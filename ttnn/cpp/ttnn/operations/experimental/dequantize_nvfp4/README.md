@@ -32,6 +32,10 @@ Subnormal operands/results follow a flush-to-zero contract. BFP8 comparisons
 remain diagnostic; the relaxed path can exceed BFP8's aggregate error on
 targeted tensor scales. The separate FPU tensor-scale path uses HiFi4.
 
+The [worktree optimization harness](HARNESS.md) evaluates kernel-only candidates
+through the safe pytest runner, with Tracy L1-to-L1 timing and optional repeated
+math diagnostics. It records accuracy, source provenance, profiles, and disassembly.
+
 ## Preparing and converting data
 
 Prepare codes once when loading weights. `pack` rearranges codes; it does not

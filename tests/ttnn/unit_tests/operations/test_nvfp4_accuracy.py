@@ -77,7 +77,7 @@ def _corpus():
 def _reference(codes, scales, global_scale, *, flush_subnormals=False):
     lut = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], dtype=torch.float64)
     values = lut[codes.long() & 7] * torch.where((codes & 8) != 0, -1.0, 1.0)
-    exponent, mantissa = scales >> 3, scales & 7
+    exponent, mantissa = scales.long() >> 3, scales.long() & 7
     scale = torch.where(
         exponent == 0, mantissa.double() * 2**-9, torch.ldexp(1 + mantissa.double() / 8, exponent - 7)
     )
@@ -176,7 +176,7 @@ def test_nvfp4_accuracy_survey(device, tmp_path):
     ]:
         uploaded.append(ttnn.from_torch(host, dtype=dtype, layout=layout, device=device))
     kernel = (
-        Path(__file__).resolve().parents[4]
+        Path(os.environ.get("NVFP4_KERNEL_ROOT", Path(__file__).resolve().parents[4]))
         / "ttnn/cpp/ttnn/operations/experimental/dequantize_nvfp4/device/kernels/compute/nvfp4_sfpu.hpp"
     )
     report = {
