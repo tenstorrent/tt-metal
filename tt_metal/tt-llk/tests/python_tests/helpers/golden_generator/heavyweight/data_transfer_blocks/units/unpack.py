@@ -3,14 +3,13 @@
 
 """The unpacker: L1 -> SrcA/SrcB/SrcS/Dest.
 
-Owns the two legality tables that vary by architecture, the ``L1 -> src
-format`` mapping, and the transfers themselves.
+Owns the two legality tables that vary by architecture, the L1 -> src format
+mapping, and the transfers themselves.
 
-It also owns the **Dest format derivation**. That looks misplaced until you
-remember the rule: Dest takes the format the *unpacker* landed in the src
-register, never the pack format. So "what Dest format does this input imply" is
-a question about the unpacker's output, and belongs here rather than with the
-FPU that writes Dest or the packer that reads it.
+It also derives the **Dest format**, which belongs here because Dest takes the
+format the unpacker landed in the src register, never the pack format.
+
+See `README.md`, "units/unpack.py".
 """
 
 from typing import FrozenSet, Mapping, Optional, Union
@@ -44,21 +43,15 @@ class Unpack:
         to_dest_formats: Optional[Mapping[DataFormat, FrozenSet[DataFormat]]] = None,
         has_srcs: bool = False,
     ) -> None:
-        #: Legal ``L1 format -> src-register format`` pairs. Empty means the
-        #: architecture is not modelled at this level of detail, and the weaker
-        #: "is it a src storage format at all" check applies instead; it is not
-        #: a claim that everything is legal.
+        #: Legal L1 -> src-register pairs. Empty means unmodelled at this
+        #: level of detail, not that everything is legal.
         self.to_src_formats = to_src_formats or {}
 
-        #: Legal ``L1 format -> Dest format`` pairs for the unpack-to-Dest
-        #: path, a different table from :attr:`to_src_formats`. Notably the
-        #: unpacker does not widen: a narrow input cannot land in a 32-bit
-        #: Dest. Empty means unmodelled.
+        #: Legal L1 -> Dest pairs, a different table. The unpacker does not
+        #: widen, so a narrow input has no 32-bit Dest target.
         self.to_dest_formats = to_dest_formats or {}
 
-        #: Whether this architecture has a SrcS register at all. Only Quasar
-        #: does; without this the SrcS block would answer for a register that
-        #: does not exist, returning full-fp32 "SrcS" values elsewhere.
+        #: Whether this architecture has a SrcS register. Quasar only.
         self.has_srcs = has_srcs
 
         self.l1 = l1
@@ -70,10 +63,9 @@ class Unpack:
     def src_format(self, l1_format: DataFormat) -> DataFormat:
         """The src-register storage format the unpacker lands `l1_format` in.
 
-        Raises if this architecture has no such L1 format -- the mapping is
-        derived from exponent-family predicates that answer for every
-        ``DataFormat``, so without this check it would return a plausible
-        answer for a format the hardware cannot read.
+        Raises if this architecture has no such L1 format: the mapping is derived
+        from exponent-family predicates that answer for every ``DataFormat``, so
+        without the check it would answer for a format the hardware cannot read.
         """
         self.l1.check(l1_format)
         return self._src_format(l1_format)
@@ -81,15 +73,9 @@ class Unpack:
     def _src_format(self, l1_format: DataFormat) -> DataFormat:
         """The mapping itself, unchecked.
 
-        Float32 and Tf32 land in Tf32 (8-bit exponent, 10-bit mantissa).
-        Everything else resolves to one of the two 16-bit exponent families,
-        and integer formats pass through unchanged.
-
-        A format reaching the final pass-through stays in the src register as
-        itself, which is only right for integers. A float that lands there is a
-        format whose exponent family is unknown to
-        :mod:`helpers.format_config` and which therefore needs a case here --
-        see ``Fp8_e4m3``.
+        A format reaching the final pass-through stays as itself, which is only
+        right for integers. A float landing there needs a case adding. See
+        ``Fp8_e4m3``.
         """
         if l1_format in (DataFormat.Float32, DataFormat.Tf32):
             return DataFormat.Tf32
@@ -98,13 +84,9 @@ class Unpack:
             # the pack format, so math and Dest see bf16.
             return DataFormat.Float16_b
         if l1_format is DataFormat.Fp8_e4m3:
-            # An L1-only encoding: every architecture that has it widens it to
-            # Float16 in the register, alongside Float16 and Lf8 in the
-            # A-format exponent family. It needs naming explicitly because it
-            # reports neither exponent family -- is_exponent_A() and
-            # is_exponent_B() are both False for it -- so without this it would
-            # fall through to the pass-through below and stay Fp8_e4m3 in a src
-            # register, which no architecture does.
+            # L1-only, widened to Float16 in the register. Named explicitly
+            # because it reports neither exponent family, so it would
+            # otherwise fall through and stay Fp8_e4m3 in a src register.
             return DataFormat.Float16
         if l1_format.is_exponent_A():
             return DataFormat.Float16
@@ -118,26 +100,9 @@ class Unpack:
         """The storage format the unpacker lands `l1_format` in for SrcS.
 
         SrcS does not narrow Float32 to Tf32 the way SrcA/SrcB must, and with
-        accumulation on it widens instead:
-
-        * MX lands in Float16_b, as it does in SrcA.
-        * Float32 stays Float32, with or without `dest_acc`.
-        * With `dest_acc`, Float16 and Float16_b stay themselves -- the
-          unpacker cannot convert fp16 to a 32-bit SrcS datum -- and every
-          other float widens to Float32.
-        * Otherwise a format lands as it would in SrcA.
-
-        Integer formats pass through unchanged, and that is a **deliberate
-        divergence** from ``infer_unpack_out`` in
-        :mod:`helpers.data_format_inference`, which the float cases above do
-        follow. Its SrcS branch returns Float32 for everything except
-        Float16/Float16_b once ``dest_acc`` is on, so an Int8 input is
-        programmed as a Float32 SrcS -- a conversion the unpacker does not
-        perform, and one that would make a golden report 1.0 where the device
-        holds the integer 1. The blanket widening reads as a rule written for
-        the float path; integer SrcS with accumulation is not swept, so nothing
-        has forced the question. Left as-is here rather than copied, and noted
-        so the next reader does not "fix" the divergence by aligning with it.
+        accumulation on it widens instead. Integers pass through unchanged, which
+        is a deliberate divergence from ``infer_unpack_out``. See `README.md`,
+        "SrcS and the integer divergence".
         """
         self.check_has_srcs()
         self.l1.check(l1_format)
@@ -172,24 +137,15 @@ class Unpack:
     ) -> bool:
         """Whether this unpacker can land `l1_format` as `src_format`.
 
-        The pair matters, not just the target. A src-register format being
-        real, and an L1 format being readable, does not make the conversion
-        between them something the unpacker can do -- Int32 reaches Dest and
-        SrcS but never SrcA/SrcB, and an integer input does not become a float
-        in a src register.
-
-        An architecture that leaves :attr:`to_src_formats` empty is simply
-        unmodelled here and gets the older, weaker check. SrcS is a different
-        destination with its own rules, including the Float32 that SrcA/SrcB
-        cannot hold, and is checked by :meth:`is_valid_srcs_format` instead.
+        The pair matters, not just the target: a real src format and a readable L1
+        format do not make the conversion between them something the unpacker can
+        do. An architecture with an empty table gets the older, weaker check. SrcS
+        has its own rules in :meth:`is_valid_srcs_format`.
         """
-        # No 32-bit datum reaches SrcA/SrcB on any architecture modelled here,
-        # so this holds whether or not the pair table is populated. Wormhole's
-        # cunpack_common.h is explicit for the integers -- Int32's "SrcA/SrcB
-        # path: NOT possible (ISA doc explicitly states 'Not possible')", and
-        # UInt32 valid only when targeting Dest -- and without this the
-        # fallback's `src_format == l1_format` arm would hand back full int32
-        # values for a register that cannot hold them.
+        # No 32-bit datum reaches SrcA/SrcB on any architecture here, table
+        # or no table. Without this the fallback's `src_format == l1_format`
+        # arm would hand back int32 values for a register that cannot hold
+        # them.
         if src_format in (DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32):
             return False
         if self.to_src_formats:
@@ -221,23 +177,16 @@ class Unpack:
         """Read L1, then apply src-register storage precision.
 
         Which src formats an L1 format can land in is per-architecture and
-        enforced -- see :meth:`is_valid_src_format`. Within that, `src_format`
-        defaults to the one the LLK would pick for `l1_format`.
+        enforced. Within that, `src_format` defaults to the one the LLK would pick.
         """
-        # Validate whichever format we end up with, defaulted or not. Checking
-        # only the explicit one would exempt exactly the common path, and the
-        # default is derived from the input rather than from what the unpacker
-        # can actually do -- which is how an Int32 input reached SrcA.
+        # Validate whichever format we end up with. Checking only the
+        # explicit one would exempt the common path, and the default comes
+        # from the input rather than from what the unpacker can do.
         defaulted = src_format is None
         if defaulted:
-            # A wide float input does not determine the src family on its own,
-            # the same ambiguity dest_format_for refuses. With dest_acc off the
-            # device picks Float16 or Float16_b from the *output* format
-            # (infer_unpack_out), and both clip: Float16 saturates above 65504
-            # and flushes below 2**-14. Defaulting to Tf32 here would keep the
-            # full fp32 range and silently disagree with silicon at the edges.
-            # With dest_acc on the device really does use Tf32, so that case
-            # needs no caller input.
+            # Same ambiguity dest_format_for refuses: with dest_acc off the
+            # family comes from the *output* format, and both choices clip
+            # where Tf32 would not. With dest_acc on it really is Tf32.
             if l1_format in (
                 DataFormat.Float32,
                 DataFormat.Tf32,
@@ -295,13 +244,12 @@ class Unpack:
     ) -> torch.Tensor:
         """Values visible in SrcS.
 
-        SrcS uses a per-slice L1 layout rather than one flat block list, so the
-        buffer must have been packed with ``use_srcs=True``. `dest_acc` selects
-        the storage format; the slice layout follows the resolved src format's
-        width instead, which is what the hardware keys on.
+        SrcS uses a per-slice L1 layout, so the buffer must have been packed with
+        ``use_srcs=True``. `dest_acc` selects the storage format, while the slice layout
+        follows the resolved src format's width instead.
 
-        Not a delegate of :meth:`l1_to_src`: SrcS has its own format rules, and
-        under SrcA's a Float32 input would lose the 13 mantissa bits SrcS keeps.
+        Not a delegate of :meth:`l1_to_src`: under SrcA's rules a Float32 input
+        would lose the 13 mantissa bits SrcS keeps.
         """
         self.check_has_srcs()
         self.l1.check(l1_format)
@@ -317,13 +265,9 @@ class Unpack:
                 f"stays as itself."
             )
         geometry.setdefault("use_srcs", True)
-        # The slice layout follows the SrcS element width, not dest_acc. On
-        # device ``_is_srcs_32bit_mode_`` keys on the UNP_S destination format
-        # -- 32-bit only for Float32, Int32 and Tf32 -- and the harness derives
-        # it the same way, from ``unpack_S_dst.is_32_bit()``. MX lands in SrcS
-        # as Float16_b, so an MX buffer holds 144-byte slices whatever dest_acc
-        # says; reading it at 80 would take the wrong stride through data the
-        # device wrote.
+        # Slice layout follows the SrcS element width, not dest_acc: 32-bit
+        # only for Float32, Int32 and Tf32. MX lands as Float16_b, so an MX
+        # buffer keeps 144-byte slices whatever dest_acc says.
         values = self.l1.read(
             l1_bytes, l1_format, dest_acc=src_format.is_32_bit(), **geometry
         )
@@ -340,9 +284,9 @@ class Unpack:
     ) -> torch.Tensor:
         """Load an L1 buffer straight into Dest, bypassing the src registers.
 
-        The path an op takes to seed Dest before a feedback loop. The value
-        lands at Dest precision, not src-register precision, so it keeps more
-        mantissa than the same buffer read through :meth:`l1_to_src` would.
+        The path an op takes to seed Dest before a feedback loop. The value lands
+        at Dest precision, so it keeps more mantissa than the same buffer read
+        through :meth:`l1_to_src` would.
         """
         self.l1.check(l1_format)
         dest_format = self.resolve_dest_format(dest_format, l1_format, dest_acc)
@@ -356,9 +300,8 @@ class Unpack:
                     f"formats for it: {sorted(str(f) for f in legal)}."
                 )
         values = self.l1.read(l1_bytes, l1_format, **geometry)
-        # The unpacker truncates on this path -- there is no rounding stage in
-        # the unpack datapath, unlike the FPU's write to Dest that the FPU
-        # block models. Narrowing with a plain cast would round.
+        # The unpacker truncates here, since there is no rounding stage on this
+        # path, unlike the FPU's write to Dest. A plain cast would round.
         if dest_format in (DataFormat.Float16_b, DataFormat.Tf32):
             values = truncate_mantissa(values, BF16_MANT_BITS)
         return to_dest_storage(values, dest_format)
@@ -374,30 +317,18 @@ class Unpack:
     ) -> DataFormat:
         """The Dest format for an op whose *input* was `l1_input_format`.
 
-        Dest takes the src register's format, so the input format decides the
-        family and `dest_acc` picks the 32- or 16-bit member of it.
+        Dest takes the src register's format, so the input decides the family and
+        `dest_acc` picks the 32- or 16-bit member.
 
-        **Except for Float32 and Tf32 input, where the input format is not
-        enough to decide.** A 19-bit src datum cannot hold an fp32, and both
-        families are legal targets: Float16 keeps 10 mantissa bits but only a
-        5-bit exponent, so values outside roughly [6.1e-05, 65504] saturate to
-        zero or infinity, while Float16_b/Tf32 keeps fp32's range and narrows
-        Dest to bf16's 7 mantissa bits instead. Which one the kernel gets is a
-        harness decision -- ``infer_unpack_out`` picks the family from the
-        *output* format, to limit exponent mixing -- and guessing it here would
-        model a different kernel than the one under test. So raise, and let the
-        caller pass the formats it configured.
-
-        `dest_acc` resolves it: a 32-bit Dest is Float32 for either family, and
-        the harness lands the src in Tf32, which is what :meth:`src_format`
-        returns.
+        **Float32 and Tf32 input raise**, because the input format alone does not
+        decide the family and guessing would model a different kernel. See
+        `README.md`, "The two families a wide float could land in".
         """
         self.l1.check(l1_input_format)
         dest_acc = as_dest_acc(dest_acc)
         if l1_input_format.is_integer():
-            # The same pairing resolve_dest_format enforces for an explicit
-            # format: a 32-bit Dest exists exactly when accumulation is on.
-            # Deriving the format is not a reason to skip the check.
+            # Same pairing resolve_dest_format enforces: deriving the format
+            # is not a reason to skip the check.
             if dest_acc:
                 if l1_input_format not in INT32_DEST_COMPATIBLE:
                     raise ValueError(
@@ -447,14 +378,10 @@ class Unpack:
     ) -> DataFormat:
         """The Dest format to run with: derived from the input, or validated.
 
-        With `dest_format` left as ``None`` this is :meth:`dest_format_for`.
-        Given one explicitly, it is checked against `dest_acc` instead of taken
-        on trust, because the two are not independent settings: a Dest slot is
-        32-bit exactly when accumulation is on, so ``Float32`` with
-        ``dest_acc=False`` describes a machine state that cannot exist. Left
-        unchecked that combination runs and produces a plausible answer at the
-        wrong precision -- full fp32 where the device had 16 bits, or the
-        reverse -- which is indistinguishable from a maths bug downstream.
+        An explicit `dest_format` is checked against `dest_acc` rather than taken
+        on trust. Dest is 32-bit exactly when accumulation is on, so ``Float32``
+        with ``dest_acc=False`` describes a state that cannot exist, and left
+        unchecked it runs at the wrong precision and looks like a maths bug.
         """
         dest_acc = as_dest_acc(dest_acc)
         if dest_format is None:
