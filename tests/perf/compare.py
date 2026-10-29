@@ -33,15 +33,20 @@ class Policy:
     enforce: bool = True
     # Ordered (regex, {"regression_pct": .., "improvement_pct": ..}) pairs; the first match wins.
     overrides: tuple = ()
+    # (environment, {"regression_pct": .., "improvement_pct": ..}) pairs that replace the suite defaults there.
+    environments: tuple = ()
 
-    def thresholds(self, case: str) -> tuple[float, float]:
+    def thresholds(self, case: str, environment: str | None = None) -> tuple[float, float]:
+        defaults = dict(self.environments).get(environment, {})
+        regression_pct = float(defaults.get("regression_pct", self.regression_pct))
+        improvement_pct = float(defaults.get("improvement_pct", self.improvement_pct))
         for pattern, values in self.overrides:
             if re.search(pattern, case):
                 return (
-                    float(values.get("regression_pct", self.regression_pct)),
-                    float(values.get("improvement_pct", self.improvement_pct)),
+                    float(values.get("regression_pct", regression_pct)),
+                    float(values.get("improvement_pct", improvement_pct)),
                 )
-        return self.regression_pct, self.improvement_pct
+        return regression_pct, improvement_pct
 
 
 @dataclass
@@ -138,7 +143,7 @@ def compare(
         elif golden_value is None:
             result.status = NEW
         else:
-            regression_pct, improvement_pct = policy.thresholds(case)
+            regression_pct, improvement_pct = policy.thresholds(case, environment)
             result.status = classify(actual, golden_value, metrics[metric], regression_pct, improvement_pct)
             retry_value = retry.get(case, {}).get(metric)
             if result.status != PASS and retry_value is not None:

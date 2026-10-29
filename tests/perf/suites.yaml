@@ -10,4 +10,6 @@
 #     env: {NAME: value}  values may use {rep}, {rep_dir}, {scratch} (deleted after the process) and {env[NAME]};
 #                         applied to both kinds, with {rep} = 0 for google_benchmark
 #     env_unset: [NAME, ...]
-#     policy: {regression_pct: X, improvement_pct: Y, enforce: true, overrides: {case_regex: {regression_pct: Z}}}
+#     policy: {regression_pct: X, improvement_pct: Y, enforce: true, overrides: {case_regex: {regression_pct: Z}},
+#              environments: {environment: {regression_pct: X, improvement_pct: Y}}}
+#             Environment values replace the suite defaults there; a matching case override still wins.
