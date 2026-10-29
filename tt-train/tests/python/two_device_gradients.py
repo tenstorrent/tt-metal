@@ -38,8 +38,11 @@ def device():
 
 
 def one_parameter(gradient):
-    """A ``NamedParameters`` holding one parameter whose value and gradient are the device tensor ``gradient``."""
-    parameter = ttml.autograd.create_tensor(gradient)
+    """A ``NamedParameters`` holding one data-parallel parameter: a replicated value, and ``gradient`` as its gradient."""
+    value = np.zeros(tuple(gradient.shape), dtype=np.float32)
+    parameter = ttml.autograd.Tensor.from_numpy(
+        value, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, ttnn.replicate_tensor_to_mesh_mapper(device())
+    )
     parameter.set_grad(gradient)
     parameters = ttml.NamedParameters()
     parameters["parameter"] = parameter

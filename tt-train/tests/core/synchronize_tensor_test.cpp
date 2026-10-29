@@ -228,8 +228,17 @@ TEST_F(SynchronizeTensorTest, SynchronizeGradientsTakesTheConfiguredReduceDtypeU
     const auto fp32 = core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::FLOAT32);
     const auto bf16 = core::distributed::synchronize_tensor(gradients, {kDdpAxis});
     ASSERT_FALSE(per_device(fp32)[0] == per_device(bf16)[0]);
+    auto* device = &autograd::ctx().get_device();
+    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     const auto synchronize = [&](std::optional<ttnn::DataType> reduce_dtype) {
-        auto parameter = autograd::create_tensor(gradients, /* requires_grad */ true);
+        // A data-parallel parameter: a replicated value, a gradient that differs per device.
+        auto parameter = autograd::create_tensor(
+            core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+                xt::zeros<float>(std::array<std::size_t, 4>{1U, 1U, 64U, 128U}),
+                device,
+                ttnn::Layout::TILE,
+                replicate.get()),
+            /* requires_grad */ true);
         parameter->set_grad(gradients);
         core::distributed::synchronize_gradients({{"parameter", parameter}}, {kDdpAxis}, reduce_dtype);
         return parameter->get_grad();
