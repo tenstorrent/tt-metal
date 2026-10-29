@@ -5,6 +5,7 @@
 import pytest
 import torch
 from diffusers import WanTransformer3DModel
+from huggingface_hub import constants as hf_constants
 from loguru import logger
 
 import ttnn
@@ -91,6 +92,7 @@ def test_wan_attention(
         subfolder="transformer",
         torch_dtype=torch_dtype,
         trust_remote_code=True,
+        local_files_only=hf_constants.HF_HUB_OFFLINE,  # diffusers ignores HF_HUB_OFFLINE for sharded checkpoints
     )
     parent_torch_model.eval()
 

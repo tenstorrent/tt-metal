@@ -7,6 +7,7 @@ import time
 import pytest
 import torch
 from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
+from huggingface_hub import constants as hf_constants
 from loguru import logger
 
 import ttnn
@@ -59,7 +60,11 @@ def _load_model_and_golden(test_name, param_id):
     golden = load_golden(commit_hash, test_name, param_id)
 
     torch_model = TorchWanTransformer3DModel.from_pretrained(
-        CHECKPOINT_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True
+        CHECKPOINT_NAME,
+        subfolder="transformer",
+        torch_dtype=torch.float32,
+        trust_remote_code=True,
+        local_files_only=hf_constants.HF_HUB_OFFLINE,  # diffusers ignores HF_HUB_OFFLINE for sharded checkpoints
     )
     return commit_hash, golden, torch_model
 
