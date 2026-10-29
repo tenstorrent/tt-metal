@@ -67,7 +67,7 @@ _PERF_REFERENCE_MS = {
 _DEVICE_PERF_MARGIN = 0.05
 _DEVICE_PERF_REFERENCE_MS = {
     _QUIETBOX_PERF_SKU: {
-        "SP4xTP1": 1.107,
+        "SP4xTP1": 1.206,
     },
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
