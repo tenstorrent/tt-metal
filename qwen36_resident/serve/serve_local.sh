@@ -18,7 +18,7 @@
 #   SERVED_MODEL_NAME (Qwen/Qwen3.8-27B), MAX_MODEL_LEN (32768), VLLM_VENV (a venv with vLLM 0.26 + vllm-tt-plugin),
 #   VLLM_TT_PLUGIN_SRC (put a plugin source tree first on PYTHONPATH), TT_VISIBLE_DEVICES (0,1,2,3);
 #   multi: MAX_NUM_SEQS, PREFILL_CHUNK_TOKENS, SAMPLE_ON_DEVICE, RESIDENT_MAX_TOKENS_ALL_USERS (KV pool tokens, default
-#   MAX_MODEL_LEN per user).
+#   MAX_MODEL_LEN per user), RESIDENT_ATTN_WORKERS / RESIDENT_HEAD_GROUPS (default 28 / 4 for this profile).
 set -euo pipefail
 PROFILE=${1:?usage: serve_local.sh plain|mtp|dflash2|multi [vllm serve args...]}
 shift
@@ -48,6 +48,9 @@ case $PROFILE in
   dflash2) export TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentDFlashForCausalLM ;;
   multi)
     SEQS=${MAX_NUM_SEQS:-8}
+    # the rows build's attention / GDN core split: 28 attention workers, 4 GDN head groups (accuracy-gated, -6 to -9 %
+    # step time at <= 32K); the single-user profiles keep the defaults (32 workers)
+    export RESIDENT_ATTN_WORKERS=${RESIDENT_ATTN_WORKERS:-28} RESIDENT_HEAD_GROUPS=${RESIDENT_HEAD_GROUPS:-4}
     SAMPLING=''
     [ "${SAMPLE_ON_DEVICE:-0}" = 1 ] && SAMPLING=', "sample_on_device_mode": "decode_only"'
     TT_CONFIG="{\"tt\": {\"trace_region_size\": 134217728, \"prefill_chunk_tokens\": ${PREFILL_CHUNK_TOKENS:-1024}$SAMPLING}}"
