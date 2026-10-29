@@ -23,6 +23,11 @@ class GroupedQueryAttention(AbstractModuleBase):
 
     ``use_composite_sdpa`` selects ``scaled_dot_product_attention_composite``,
     which also accepts non-broadcast masks such as ``(B, 1, S, S)``.
+
+    ``head_dim`` defaults to ``embedding_size // num_heads``. Given explicitly (Mistral-style
+    checkpoints), the projections are ``embedding_size -> (num_heads + 2 * num_groups) * head_dim``
+    and ``num_heads * head_dim -> embedding_size``, so the attention width need not equal the
+    residual width.
     """
 
     def __init__(
@@ -36,12 +41,13 @@ class GroupedQueryAttention(AbstractModuleBase):
         use_tp: bool = False,
         out_proj_init: Optional[Callable] = None,
         use_composite_sdpa: bool = False,
+        head_dim: Optional[int] = None,
     ) -> None:
         super().__init__()
 
-        if embedding_size % num_heads != 0:
+        if head_dim is None and embedding_size % num_heads != 0:
             raise ValueError(
-                "Embedding size must be divisible by the number of attention heads. "
+                "Embedding size must be divisible by the number of attention heads when head_dim is not given. "
                 f"Provided embedding_size={embedding_size}, num_heads={num_heads}"
             )
 
@@ -54,13 +60,17 @@ class GroupedQueryAttention(AbstractModuleBase):
             else ttml.ops.attention.scaled_dot_product_attention
         )
 
-        head_dim = embedding_size // num_heads
+        if head_dim is None:
+            head_dim = embedding_size // num_heads
+        self.head_dim = head_dim
+        # Width of the concatenated query heads: the out-projection's input.
+        attention_width = num_heads * head_dim
         # Fused Q+K+V: on one device the rows are [Q | K | V]. Under TP, device d takes a contiguous
         # slice and reads it as [Q_d | K_d | V_d], so the full weight is
         # [Q_0 | K_0 | V_0 | Q_1 | K_1 | V_1 | ...] and its row order changes with the TP size.
         # Checkpoints re-shard it without knowing this order:
         # https://github.com/tenstorrent/tt-metal/issues/60900
-        qkv_dim = (num_heads + 2 * num_groups) * head_dim  # == embedding_size + 2 * num_groups * head_dim
+        qkv_dim = (num_heads + 2 * num_groups) * head_dim
 
         # Head/group counts stored here are LOCAL (per-device) so that splitting
         # in heads_creation matches the sharded activation width.
@@ -86,7 +96,7 @@ class GroupedQueryAttention(AbstractModuleBase):
                 axis_name="tp",
             )
             self.out_linear = RowParallelLinear(
-                embedding_size,
+                attention_width,
                 embedding_size,
                 has_bias=bias_linears,
                 weight_init=out_proj_init,
@@ -102,7 +112,7 @@ class GroupedQueryAttention(AbstractModuleBase):
                 bias_init=ttml.init.zeros(),
             )
             self.out_linear = LinearLayer(
-                embedding_size,
+                attention_width,
                 embedding_size,
                 bias_linears,
                 weight_init=out_proj_init,

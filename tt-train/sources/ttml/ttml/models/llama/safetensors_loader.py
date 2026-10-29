@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import ExitStack
 from collections import Counter
@@ -48,6 +49,11 @@ _NOT_WEIGHTS = ("rotary_emb.inv_freq",)
 _TIED_NAMES = ("Llama/fc/weight", "Llama/tok_emb/weight")
 
 
+def _tied_names(root: str) -> tuple[str, str]:
+    """``_TIED_NAMES`` for a model whose root module is named *root* (a subclass such as ``Mistral``)."""
+    return tuple(name.replace("Llama/", f"{root}/", 1) for name in _TIED_NAMES)
+
+
 def _canonical(name: str) -> str:
     name = name.removeprefix("model.")
     return _NAME_ALIASES.get(name, name)
@@ -58,9 +64,17 @@ class _Checkpoint:
     Each tensor is read only when asked for, and comes back 2-D as ``[out, in]``."""
 
     def __init__(self, directory: str | os.PathLike) -> None:
-        files = sorted(Path(directory).glob("*.safetensors"))
+        directory = Path(directory)
+        index = directory / "model.safetensors.index.json"
+        if index.is_file():
+            # HF's shard index names the files that make up the model; anything else in the directory
+            # (e.g. Mistral's `consolidated.safetensors`, a second copy in another key format) is not read.
+            with open(index) as f:
+                files = sorted({directory / name for name in json.load(f)["weight_map"].values()})
+        else:
+            files = sorted(directory.glob("*.safetensors"))
         if not files:
-            raise FileNotFoundError(f"No .safetensors files found in {Path(directory)}")
+            raise FileNotFoundError(f"No .safetensors files found in {directory}")
 
         self._files = ExitStack()
         self._where: dict[str, tuple[safe_open, str]] = {}
@@ -227,19 +241,21 @@ def _load_plan(
     )
 
 
-def _rules(config: LlamaConfig, parameter_names: set[str]) -> Iterator[_Rule]:
-    """The whole HF -> TTML mapping for a Llama built from *config*."""
+def _rules(config: LlamaConfig, parameter_names: set[str], root: str = "Llama") -> Iterator[_Rule]:
+    """The whole HF -> TTML mapping for a Llama built from *config*. *root* is the model's module name
+    (the class name: ``Llama``, or a subclass such as ``Mistral``), which prefixes every parameter."""
     embedding_shape = (config.vocab_size, config.hidden_size)
+    tied_names = _tied_names(root)
     if config.weight_tying == WeightTyingType.Enabled:
-        tied = next((name for name in _TIED_NAMES if name in parameter_names), _TIED_NAMES[0])
+        tied = next((name for name in tied_names if name in parameter_names), tied_names[0])
         yield _Rule(tied, ("embed_tokens.weight",), source_shape=embedding_shape)
     else:
-        yield _Rule("Llama/tok_emb/weight", ("embed_tokens.weight",), source_shape=embedding_shape)
-        yield _Rule("Llama/fc/weight", ("lm_head.weight",), source_shape=embedding_shape)
-    yield _Rule("Llama/ln_fc/gamma", ("norm.weight",))
+        yield _Rule(f"{root}/tok_emb/weight", ("embed_tokens.weight",), source_shape=embedding_shape)
+        yield _Rule(f"{root}/fc/weight", ("lm_head.weight",), source_shape=embedding_shape)
+    yield _Rule(f"{root}/ln_fc/gamma", ("norm.weight",))
 
     # As the model sizes them: GroupedQueryAttention and LlamaMLP.
-    head_dim = config.hidden_size // config.num_attention_heads
+    head_dim = config.head_dim or config.hidden_size // config.num_attention_heads
     q_rows, kv_rows = config.num_attention_heads * head_dim, config.num_key_value_heads * head_dim
     intermediate_size = config.intermediate_size or compute_swiglu_intermediate_size(config.hidden_size)
 
@@ -251,7 +267,7 @@ def _rules(config: LlamaConfig, parameter_names: set[str]) -> Iterator[_Rule]:
         ]
 
     for layer in range(config.num_hidden_layers):
-        param, hf = f"Llama/blocks/{layer}", f"layers.{layer}"
+        param, hf = f"{root}/blocks/{layer}", f"layers.{layer}"
         yield _Rule(f"{param}/attention_norm/gamma", (f"{hf}.input_layernorm.weight",))
         yield _Rule(f"{param}/mlp_norm/gamma", (f"{hf}.post_attention_layernorm.weight",))
         # Block order is the contract with heads_creation, which reads [Q | K | V].
@@ -377,7 +393,7 @@ def load_from_safetensors(model: Llama, safetensors_path: str | os.PathLike) -> 
     """
     parameters = model.parameters()
     parameter_names = set(parameters)
-    rules = list(_rules(model.config, parameter_names))
+    rules = list(_rules(model.config, parameter_names, root=model.get_name()))
     tp = _tp_axis()
     mesh_size = tp.size if tp else 1
 

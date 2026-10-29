@@ -105,6 +105,19 @@ class TestLlamaConfigFromHf:
         from_dir = LlamaConfig.from_hf(tmp_path, max_position_embeddings=256)
         assert from_dir == LlamaConfig.from_hf(HF_LLAMA_3_2_1B, max_position_embeddings=256)
 
+    def test_reads_an_explicit_head_dim(self):
+        """Mistral-style checkpoints set head_dim so that heads * head_dim != hidden_size."""
+        hf = {**HF_LLAMA_3_2_1B, "hidden_size": 2560, "num_attention_heads": 16, "head_dim": 128}
+        config = LlamaConfig.from_hf(hf, max_position_embeddings=256)
+        assert (config.head_dim, config.attention_head_dim) == (128, 128)
+
+    def test_head_dim_defaults_to_hidden_over_heads(self):
+        config = LlamaConfig.from_hf(HF_LLAMA_3_2_1B, max_position_embeddings=256)
+        assert config.head_dim == 64 and config.attention_head_dim == 64
+        hf = {k: v for k, v in HF_LLAMA_3_2_1B.items() if k != "head_dim"}
+        config = LlamaConfig.from_hf(hf, max_position_embeddings=256)
+        assert config.head_dim is None and config.attention_head_dim == 64
+
     def test_key_value_heads_default_to_the_attention_heads(self):
         hf = {k: v for k, v in HF_LLAMA_3_2_1B.items() if k != "num_key_value_heads"}
         assert LlamaConfig.from_hf(hf, max_position_embeddings=256).num_key_value_heads == 32
@@ -139,11 +152,10 @@ class TestLlamaConfigFromHf:
             # The loader leaves biases at init, so a checkpoint that ships them cannot load.
             ({"attention_bias": True}, "attention_bias"),
             ({"hidden_act": "gelu"}, "hidden_act 'gelu'"),
-            ({"head_dim": 128}, "head_dim"),
             ({"rope_scaling": {"rope_type": "yarn", "factor": 4.0}}, "rope type 'yarn'"),
             ({"quantization_config": {"quant_method": "fp8"}}, "quantized checkpoints"),
         ],
-        ids=["model_type", "mlp_bias", "attention_bias", "hidden_act", "head_dim", "rope_type", "quantized"],
+        ids=["model_type", "mlp_bias", "attention_bias", "hidden_act", "rope_type", "quantized"],
     )
     def test_rejects_what_the_model_cannot_express(self, patch, message, expect_error):
         with expect_error(ValueError, message):
@@ -165,6 +177,26 @@ class TestLlama:
         assert model is not None
         assert isinstance(model, Llama)
         assert model.config == tiny_config
+
+    def test_explicit_head_dim_sizes_the_attention_projections(self, tiny_config):
+        """head_dim=32 with 2 heads and 1 kv head: qkv is 128 -> (2 + 2) * 32, out-proj is 2 * 32 -> 128;
+        with hidden 128 and head_dim 32 the attention width (64) differs from the stream (128)."""
+        cfg = replace(tiny_config, hidden_size=128, head_dim=32)
+        model = Llama(cfg)
+        attention = model.blocks[0].attention
+        assert attention.head_dim == 32
+        assert tuple(attention.qkv_linear.weight.tensor.shape()) == (1, 1, (2 + 2 * 1) * 32, 128)
+        assert tuple(attention.out_linear.weight.tensor.shape()) == (1, 1, 128, 2 * 32)
+        model.eval()
+        seq_len = cfg.max_position_embeddings
+        tokens = np.random.randint(0, cfg.vocab_size, size=(1, 1, 1, seq_len)).astype(np.uint32)
+        input_tensor = ttml.autograd.Tensor.from_numpy(
+            tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+        )
+        logits = model(input_tensor, create_causal_mask(seq_len))
+        assert tuple(logits.shape()) == (1, 1, seq_len, cfg.vocab_size)
+        assert np.all(np.isfinite(logits.to_numpy(ttnn.DataType.FLOAT32)))
+        ttml.autograd.AutoContext.get_instance().reset_graph()
 
     def test_norm_epsilon_reaches_every_norm(self, tiny_config):
         model = Llama(replace(tiny_config, rms_norm_eps=1e-3))

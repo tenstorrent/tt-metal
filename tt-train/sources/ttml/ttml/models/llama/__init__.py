@@ -73,6 +73,9 @@ class LlamaConfig:
     num_key_value_heads: int = 2
     vocab_size: int = 256
     max_position_embeddings: int = 256
+    # Width of one attention head. None means ``hidden_size // num_attention_heads`` (Llama); Mistral-style
+    # checkpoints set it explicitly, so ``num_attention_heads * head_dim`` can differ from ``hidden_size``.
+    head_dim: Optional[int] = None
     rope_theta: float = 10000.0
     attention_bias: bool = False
     rms_norm_eps: float = 1e-5
@@ -106,11 +109,13 @@ class LlamaConfig:
                 "Number of key/value heads must be a positive integer. "
                 f"Provided num_key_value_heads={self.num_key_value_heads}"
             )
-        if self.hidden_size % self.num_attention_heads != 0:
+        if self.head_dim is None and self.hidden_size % self.num_attention_heads != 0:
             raise ValueError(
-                "Hidden size must be divisible by the number of attention heads. "
+                "Hidden size must be divisible by the number of attention heads when head_dim is not given. "
                 f"Provided hidden_size={self.hidden_size}, num_attention_heads={self.num_attention_heads}"
             )
+        if self.head_dim is not None and (self.head_dim <= 0 or self.head_dim % 32 != 0):
+            raise ValueError(f"head_dim must be a positive multiple of 32, got {self.head_dim}")
         if self.num_attention_heads % self.num_key_value_heads != 0:
             raise ValueError(
                 "Number of attention heads must be divisible by the number of key/value heads. "
@@ -147,6 +152,11 @@ class LlamaConfig:
                     f"intermediate_size={intermediate_size}, tp_size={tp_size}"
                 )
 
+    @property
+    def attention_head_dim(self) -> int:
+        """The head width the attention actually uses."""
+        return self.head_dim if self.head_dim is not None else self.hidden_size // self.num_attention_heads
+
     @classmethod
     def from_hf(cls, hf_config: str | os.PathLike | Mapping, max_position_embeddings: int, **overrides) -> LlamaConfig:
         """The architecture of a HuggingFace Llama checkpoint, read from its ``config.json``."""
@@ -166,9 +176,9 @@ class LlamaConfig:
             raise ValueError(f"hidden_act {hidden_act!r} is not supported, only 'silu'")
         hidden_size = hf_config["hidden_size"]
         num_heads = hf_config["num_attention_heads"]
-        head_dim = hf_config.get("head_dim", hidden_size // num_heads)
-        if head_dim * num_heads != hidden_size:
-            raise ValueError(f"head_dim {head_dim} * num_attention_heads {num_heads} != hidden_size {hidden_size}")
+        head_dim = hf_config.get("head_dim")
+        if head_dim is None and hidden_size % num_heads != 0:
+            raise ValueError(f"hidden_size {hidden_size} is not divisible by num_attention_heads {num_heads}")
 
         # transformers v5 writes rope_theta and the scaling as rope_parameters; v4 as rope_theta and rope_scaling.
         rope = hf_config.get("rope_parameters") or hf_config.get("rope_scaling") or {}
@@ -191,6 +201,7 @@ class LlamaConfig:
             num_hidden_layers=hf_config["num_hidden_layers"],
             num_attention_heads=num_heads,
             num_key_value_heads=hf_config.get("num_key_value_heads", num_heads),
+            head_dim=head_dim,
             vocab_size=hf_config["vocab_size"],
             max_position_embeddings=max_position_embeddings,
             rope_theta=rope.get("rope_theta", hf_config.get("rope_theta", 10000.0)),
@@ -269,7 +280,7 @@ class Llama(AbstractModuleBase):
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight
 
-        head_dim = config.hidden_size // config.num_attention_heads
+        head_dim = config.attention_head_dim
 
         rope_scaling_params = ttml.ops.rope.RopeScalingParams()
         if config.rope_scaling.scaling_factor != 0.0 and config.rope_scaling.original_context_length != 0:
@@ -290,11 +301,12 @@ class Llama(AbstractModuleBase):
         # variance at init grows ~linearly with the number of such additions.
         # Std is the usual 1/sqrt(fan_in) damped by 1/sqrt(N), where N is the total number of
         # residual additions. Each block adds into the stream twice (after attention and after
-        # the MLP), so N = 2 * num_hidden_layers. fan_in differs between the two: hidden_size
-        # for out-proj, intermediate_size for down-proj.
+        # the MLP), so N = 2 * num_hidden_layers. fan_in differs between the two: the attention
+        # width (num_heads * head_dim) for out-proj, intermediate_size for down-proj.
         intermediate_size = config.intermediate_size or compute_swiglu_intermediate_size(config.hidden_size)
         num_residual_writes = 2 * config.num_hidden_layers
-        out_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(config.hidden_size * num_residual_writes))
+        attention_width = config.num_attention_heads * head_dim
+        out_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(attention_width * num_residual_writes))
         down_proj_init = ttml.init.normal(0.0, 1.0 / sqrt(intermediate_size * num_residual_writes))
 
         # Transformer blocks (ModuleList auto-registers all blocks)
@@ -304,6 +316,7 @@ class Llama(AbstractModuleBase):
                     hidden_size=config.hidden_size,
                     num_attention_heads=config.num_attention_heads,
                     num_key_value_heads=config.num_key_value_heads,
+                    head_dim=head_dim,
                     rope_params=rope_params,
                     attention_dropout=config.attention_dropout,
                     mlp_dropout=config.mlp_dropout,
@@ -320,6 +333,10 @@ class Llama(AbstractModuleBase):
         )
 
         self.ln_fc = RMSNormLayer(config.hidden_size, config.rms_norm_eps)
+
+    def _embed(self, input_ids: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        """The token embedding lookup; subclasses override it (e.g. a no-untilize path for a frozen table)."""
+        return self.tok_emb(input_ids)
 
     def forward(
         self,
@@ -341,7 +358,7 @@ class Llama(AbstractModuleBase):
             input_val_padded = ttnn.pad(input.get_value(), padding=padding, value=0.0)
             input_padded = ttml.autograd.create_tensor(input_val_padded)
 
-        tok_emb_out = self.tok_emb(input_padded)
+        tok_emb_out = self._embed(input_padded)
 
         out = tok_emb_out
         if padded_seq_len != actual_seq_len:

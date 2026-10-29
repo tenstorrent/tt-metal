@@ -51,15 +51,16 @@ def calculate_flops_per_token(config, seq_len: int) -> int:
     #   - down_proj: intermediate_size × hidden_size
     #   - mlp_norm: hidden_size
 
-    head_dim = config.hidden_size // config.num_attention_heads
+    head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+    q_size = config.num_attention_heads * head_dim
     kv_size = config.num_key_value_heads * head_dim
 
     attention_params = (
-        config.hidden_size * config.hidden_size
-        + config.hidden_size * kv_size  # q_proj
+        config.hidden_size * q_size  # q_proj
         + config.hidden_size * kv_size  # k_proj
-        + config.hidden_size * config.hidden_size  # v_proj
-        + config.hidden_size  # o_proj  # attention_norm
+        + config.hidden_size * kv_size  # v_proj
+        + q_size * config.hidden_size  # o_proj
+        + config.hidden_size  # attention_norm
     )
 
     mlp_params = (
@@ -84,7 +85,7 @@ def calculate_flops_per_token(config, seq_len: int) -> int:
     # Standard LLM FLOPs formula
     L = config.num_hidden_layers
     H = config.num_attention_heads
-    Q = config.hidden_size // config.num_attention_heads
+    Q = head_dim
     T = seq_len
 
     flops = 6 * N + 12 * L * H * Q * T
