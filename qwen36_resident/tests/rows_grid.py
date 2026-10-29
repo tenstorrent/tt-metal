@@ -21,7 +21,8 @@ may flip them).
 
 Row orders (--orders): the a active rows are an order's first a. A B = 8 build splits each GDN value head over G head
 cores (core g takes rows 8 g / G ..), so the rows a step activates decide how much of the GDN work runs in parallel:
-"0,4,1,5,2,6,3,7" spreads users over G = 2 groups. --no-pp: the embedding table alone (no prefill model, smoke, B = 1),
+"0,4,1,5,2,6,3,7" spreads users over G = 2 groups; "auto" (the default) is model.row_order(), the served fill order.
+--no-pp: the embedding table alone (no prefill model, smoke, B = 1),
 for quick probes, e.g. of RESIDENT_ATTN_WORKERS / RESIDENT_HEAD_GROUPS.
 
 usage: python -m qwen36_resident.tests.rows_grid --corpus corpus_ids.pt [--max-len 262144] [--contexts ...]
@@ -86,8 +87,9 @@ def main():
     ap.add_argument("--no-b1", action="store_true")
     ap.add_argument(
         "--orders",
-        default="0,1,2,3,4,5,6,7",
-        help="';'-separated row orders: a active rows are an order's first a (later orders skip active sets measured)",
+        default="auto",
+        help="';'-separated row orders: a active rows are an order's first a (later orders skip active sets measured); "
+        "auto: model.row_order()",
     )
     ap.add_argument("--no-pp", action="store_true", help="no prefill model: embedding table only, no smoke, no B=1")
     ap.add_argument("--out")
@@ -96,8 +98,6 @@ def main():
     ids = torch.load(a.corpus)["ids"]
     contexts = [int(t) for t in a.contexts.split(",")]
     actives = [int(x) for x in a.active.split(",")]
-    orders = [[int(x) for x in o.split(",")] for o in a.orders.split(";")]
-    assert all(sorted(o) == list(range(B)) for o in orders)
     a.no_b1 |= a.no_pp
     t_start = time.time()
     out = dict(args=vars(a), dram_gb={}, step_ms={}, aiclk={}, fed_ok={})
@@ -214,6 +214,9 @@ def main():
             return ms, ok
 
         # (order index, active rows): an order's first a rows, each active set once
+        orders = [m.row_order() if o == "auto" else [int(x) for x in o.split(",")] for o in a.orders.split(";")]
+        assert all(sorted(o) == list(range(B)) for o in orders)
+        out["orders"] = orders
         points = []
         for oi, order in enumerate(orders):
             for act in actives:
@@ -221,7 +224,7 @@ def main():
                 if all(on != p for _, p in points):
                     points.append((oi, on))
         for T in contexts:
-            for oi, on in points:
+            for _, on in points:
                 act = len(on)
                 x0 = torch.zeros(B, 5120)
                 for k, s in enumerate(on):
@@ -235,7 +238,7 @@ def main():
                         for s, f in enumerate(fed)
                     )
 
-                key = f"rows, {act} active, T={T}" + ("" if oi == 0 else f", rows {''.join(map(str, on))}")
+                key = f"rows, {act} active, T={T}, rows {''.join(map(str, on))}"
                 ms, ok = time_fed(m, tok, check)
                 out["step_ms"][key], out["fed_ok"][key], out["aiclk"][key] = ms, ok, clk = ms, ok, aiclk()
                 phase(f"{key}: step {ms:.3f} ms ({act / ms * 1e3:.1f} tok/s total); fed ok {ok}; AICLK {clk}")

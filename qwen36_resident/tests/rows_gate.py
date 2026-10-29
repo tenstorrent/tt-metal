@@ -8,6 +8,9 @@ runs a probe user P through the same inputs in several placements:
   neighbours P in slot 0 beside 7 users;
   row        P in slot 5 beside 7 users;
   launch     P in slot 11 (launch 1) beside 7 users there and 8 in launch 0;
+  alone_last P in slot 7, nobody else (the GDN head groups of rows 0 .. 6 idle, the collector's included);
+  sparse     P in slot 2 beside slots 0 and 4 only (at G = 4 head groups: the last group idle, two non-collector
+             groups running);
   churn      P in slot 2; users join slot 6 (state written, then a masked first-step launch with only them active and
              preserve set) and leave it, a neighbour pauses, and P itself pauses for some steps (preserve set).
 P's x after each of its steps must be bit-identical in every placement. The state of every slot that has live state
@@ -134,6 +137,12 @@ def main():
             + [dict(run=with_neighbours(5, range(8), 3)) for _ in range(S - 1)],
             "launch": [dict(join=with_neighbours(11, range(16), 5), run=with_neighbours(11, range(16), 5))]
             + [dict(run=with_neighbours(11, range(16), 5)) for _ in range(S - 1)],
+            # GDN head groups (core g of a value head runs rows 8 g / G ..) with no active row: P alone in the last
+            # row (every other group idle, the collector's too); P in slot 2 beside slots 0 and 4 (at G = 4 the
+            # last group idle while two non-collector groups run)
+            "alone_last": [dict(join={7: "P"}, run={7: "P"})] + [dict(run={7: "P"}) for _ in range(S - 1)],
+            "sparse": [dict(join=with_neighbours(2, (0, 4), 1), run=with_neighbours(2, (0, 4), 1))]
+            + [dict(run=with_neighbours(2, (0, 4), 1)) for _ in range(S - 1)],
         }
         # churn: P in slot 2, neighbour N1 in slot 4; J0 joins slot 6 (masked first step), runs, leaves; P pauses
         # (its neighbours run with preserve); J1 joins slot 6, N1 pauses meanwhile; J2 joins launch 1's slot 9
