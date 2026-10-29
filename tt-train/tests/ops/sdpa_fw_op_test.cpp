@@ -2044,6 +2044,39 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     EXPECT_FALSE(xt::allclose(out_a2, out_a, 1e-3F, 1e-3F)) << "hit reproduced the first inputs: stale addresses";
     EXPECT_LT(xt::mean(xt::abs(out_a2 - out_b2))(), kCrossChunkingMeanAbsTol)
         << "the hits on the second inputs must agree with each other";
+
+    // The mask address is a reader runtime arg of its own: a hit with a second live mask tensor (same shape,
+    // other values and address) must read the new mask, not the first one.
+    const std::array<std::size_t, 4> mask_shape{1U, 1U, 256U, 256U};
+    xt::xarray<float> lower = xt::tril(xt::ones<float>({256UL, 256UL}));
+    lower.reshape(mask_shape);
+    xt::xarray<float> upper = xt::triu(xt::ones<float>({256UL, 256UL}));
+    upper.reshape(mask_shape);
+    const ttnn::Tensor causal_mask = core::from_xtensor(lower, device);
+    const ttnn::Tensor anticausal_mask = core::from_xtensor(upper, device);  // both stay alive
+    const auto entries_before_masked = device->num_program_cache_entries();  // the uploads cache their own ops
+    auto run_masked = [&](const ttnn::Tensor& mask) {
+        return core::to_xtensor(metal::sdpa_fw(
+                                    first.query,
+                                    first.key,
+                                    first.value,
+                                    metal::AttentionMaskType::Arbitrary,
+                                    mask,
+                                    0.0F,
+                                    false,
+                                    std::nullopt,
+                                    a)[0]
+                                    .value());
+    };
+    const xt::xarray<float> out_causal = run_masked(causal_mask);
+    const auto entries_masked = device->num_program_cache_entries();
+    EXPECT_EQ(entries_masked, entries_before_masked + 1U) << "the mask tensor variant is its own program";
+    const xt::xarray<float> out_anticausal = run_masked(anticausal_mask);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_masked) << "the second mask must hit";
+    EXPECT_LT(xt::mean(xt::abs(out_causal - out_a))(), kCrossChunkingMeanAbsTol)
+        << "the lower-triangular mask tensor must agree with the causal kernel mask";
+    EXPECT_FALSE(xt::allclose(out_anticausal, out_causal, 1e-3F, 1e-3F))
+        << "hit reproduced the first mask: stale mask address";
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
