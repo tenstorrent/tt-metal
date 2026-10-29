@@ -149,7 +149,7 @@ output = ttnn.experimental.dequantize_nvfp4(
     packed_tt, scales_tt, global_scale=0.75, experimental_fast=True,
     fpu_tensor_scale=True,  # Requested combination: apply tensor scale on the FPU.
 )
-# fpu_tensor_scale=False uses one SFPU multiplication instead; it benchmarks faster.
+# fpu_tensor_scale=False keeps tensor scaling in the SFPU; it benchmarks faster.
 ```
 
 Offline preparation transposes each output 32x32 tile before packing its four
@@ -161,11 +161,12 @@ per packed tile. Upload this prepared scale tensor as BF16 ROW_MAJOR. E2M1
 scale preparation additionally takes `scale_format=Nvfp4ScaleFormat.E2M1`.
 
 The reader fetches these compact rows into a separate CB. Each 32-byte CB
-page is one 16-element scale row; its tile metadata describes the 16x16 face
-that the unpacker broadcasts into DEST. ROW broadcast replicates a scale
-vertically in hardware. Two SFPU loads supply the even/odd-column scale
-vectors for all eight vectors in a face; there are no scalar L1 scale loads,
-per-lane scale selection shifts, or cross-lane exchanges in the decoder.
+page is one 16-element scale row. Sixteen contiguous pages form a 16x16
+BF16 tile, copied to DEST once per packed tile. An SFPU transpose expands
+its rows into the even/odd-column vectors needed by each plane and face.
+Two loads then supply all scales for a face, without further unpacker
+broadcasts. Expansion runs from the last plane backwards to preserve the
+compact source values. One SFPU context covers expansion and all face decodes.
 
 A branch-free LUT decoder maps the magnitude bits to floating-point
 `1,1.5,2,3,4,6,8,12`, then applies `x-1` below 2 and `x/2` otherwise. This
@@ -178,7 +179,10 @@ Both variants round the tensor scale to BF16 once. With
 `fpu_tensor_scale=True`, a reusable BF16 scale tile is generated on the
 reader RISC and HiFi4 FPU DEST reuse multiplies each decoded tile. With
 `fpu_tensor_scale=False`, the SFPU applies that BF16 scalar before its native
-rounding, avoiding the extra FPU multiply and operand reconfiguration.
+rounding, avoiding the extra FPU multiply and operand reconfiguration. For
+tensor scales in `[2**-100, 2**100]`, it folds the scalar into the two scale
+vectors once per face. Those FP32 products are exact and normal; extreme
+scales retain the original multiplication order to preserve FTZ behavior.
 The FPU variant rounds during its BF16 accumulation phases: tests bound its
 error by relative tolerance `1/128` against the exact product of the BF16
 operands. The SFPU variant is checked exactly against native nearest,
@@ -347,3 +351,21 @@ Reports are timestamped `2026_10_27_16_31_43` (fresh original baseline),
 number is the median of calls 3 through 8, with 64 output tiles on the
 busiest core and the profiler-reported 1,350 MHz clock. Temporary repeated
 kernels were restored after measurement; only the selected decoder remains.
+
+
+### Worktree-loop measurements, October 29
+
+The [first bounded optimization run](OPTIMIZATION_2026_10_29.md) retained a
+kernel-only candidate with shared SFPU setup, one compact-scale unpack,
+scale expansion in DEST, unrolled plane/face loops, and reduced register
+moves. Fresh paired measurements reduced complete L1-to-L1 conversion from
+830.47 to 676.37 cycles per output tile (**18.6% less time**). A separate
+run on the formatted branch measured 677.29 cycles/tile, 32.11 us, 261.3
+billion values/s, or **522.5 GB/s of BF16 output**. The repeated math diagnostic
+fell from 590.22 to about 441.38 cycles/tile; its extra staging is amortized
+and its compiled scheduling may differ from the production binary.
+
+The reconstruction gate statistics are unchanged: max 1.4375 ULP, worst
+case mean 0.81677, median 0.75, and minimum SNR 46.23565 dB. The default
+precise path and host packing contract are unchanged. The reader/writer
+kernels are retained; a sub-threshold writer-batching trial was discarded.

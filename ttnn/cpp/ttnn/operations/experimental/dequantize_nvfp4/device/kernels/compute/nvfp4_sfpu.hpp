@@ -77,14 +77,48 @@ inline void nvfp4_decode_plane(const volatile uint32_t* scales, uint32_t plane, 
     }
     _llk_math_eltwise_sfpu_done_();
 }
-// The unpacker broadcasts one compact row of BF16 scales into D1 face 0.
+sfpi_inline void nvfp4_convert_begin() { _llk_math_eltwise_sfpu_start_(0); }
+sfpi_inline void nvfp4_convert_end() { _llk_math_eltwise_sfpu_done_(); }
+
+// Expand the compact 16x16 scale tile in D1 to face-broadcast vectors.
+// Descending planes preserve the compact input vectors until they are read.
+sfpi_inline void nvfp4_expand_scale_vectors() {
+#pragma GCC unroll 4
+    for (int plane = 3; plane >= 0; --plane) {
+        sfpi::vFloat a = sfpi::dst_reg[32 + plane * 2].mode<sfpi::DataLayout::F16b>();
+        sfpi::vFloat b = a, c = a, d = a;
+        sfpi::vFloat e = sfpi::dst_reg[33 + plane * 2].mode<sfpi::DataLayout::F16b>();
+        sfpi::vFloat f = e, g = e, h = e;
+        sfpi::subvec_transp(a, b, c, d, e, f, g, h);
+        sfpi::dst_reg[32 + plane * 8].mode<sfpi::DataLayout::F16b>() = a;
+        sfpi::dst_reg[33 + plane * 8].mode<sfpi::DataLayout::F16b>() = e;
+        sfpi::dst_reg[34 + plane * 8].mode<sfpi::DataLayout::F16b>() = b;
+        sfpi::dst_reg[35 + plane * 8].mode<sfpi::DataLayout::F16b>() = f;
+        sfpi::dst_reg[36 + plane * 8].mode<sfpi::DataLayout::F16b>() = c;
+        sfpi::dst_reg[37 + plane * 8].mode<sfpi::DataLayout::F16b>() = g;
+        sfpi::dst_reg[38 + plane * 8].mode<sfpi::DataLayout::F16b>() = d;
+        sfpi::dst_reg[39 + plane * 8].mode<sfpi::DataLayout::F16b>() = h;
+    }
+}
+
+// D1 contains the expanded even/odd scale vectors for every plane and face.
 // Input D0 is transposed offline, so each column is a quantization group.
-// Two loads supply all scale lanes for the eight vectors in this face.
+// The caller keeps one SFPU context open across expansion and all face decodes.
 template <bool fpu_tensor_scale>
-inline void nvfp4_decode_column_face(uint32_t plane, uint32_t face, float global_scale) {
-    _llk_math_eltwise_sfpu_start_(0);
-    const sfpi::vFloat even_scales = sfpi::dst_reg[32].mode<sfpi::DataLayout::F16b>();
-    const sfpi::vFloat odd_scales = sfpi::dst_reg[33].mode<sfpi::DataLayout::F16b>();
+sfpi_inline void nvfp4_decode_column_face(uint32_t plane, uint32_t face, float global_scale) {
+    sfpi::vFloat even_scales = sfpi::dst_reg[32 + plane * 8 + face * 2].mode<sfpi::DataLayout::F16b>();
+    sfpi::vFloat odd_scales = sfpi::dst_reg[33 + plane * 8 + face * 2].mode<sfpi::DataLayout::F16b>();
+    // Fold the tensor scale into each scale vector once when all intermediate
+    // values stay normal. E4M3 scales lie in [2^-9,448] when nonzero, so
+    // this conservative exponent range keeps every nonzero intermediate normal.
+    // Products fit FP32 exactly; the original order handles extreme scales.
+    const bool fold_tensor_scale = global_scale >= 0x1p-100f && global_scale <= 0x1p100f;
+    if constexpr (!fpu_tensor_scale) {
+        if (fold_tensor_scale) {
+            even_scales *= global_scale;
+            odd_scales *= global_scale;
+        }
+    }
     // Reinterpret the 3 magnitude bits as 1,1.5,2,3,4,6,8,12.
     // A single LUT instruction maps x<2 to x-1 and x>=2 to x/2,
     // giving exactly 0,.5,1,1.5,2,3,4,6 without predication.
@@ -98,17 +132,21 @@ inline void nvfp4_decode_column_face(uint32_t plane, uint32_t face, float global
         // rebiases its raw exponent bits without floating-point arithmetic.
         // SFPSETSGN reads only bit 31, so higher packed nibbles need no mask.
         sfpi::vUInt code = packed >> (plane * 4);
-        sfpi::vFloat synthetic = sfpi::addexp(sfpi::as<sfpi::vFloat>((code & 7) << 22), 127);
-        synthetic = sfpi::copysgn(synthetic, sfpi::as<sfpi::vFloat>(code << 28));
-        sfpi::vFloat value = sfpi::lut(synthetic, small, small, large);
+        // Logical shifts discard higher nibbles and place the low three bits
+        // at bit positions 22..24 without keeping a mask register live.
+        sfpi::vFloat magnitude = sfpi::addexp(sfpi::as<sfpi::vFloat>((code << 29) >> 7), 127);
+        sfpi::vFloat synthetic = sfpi::copysgn(magnitude, sfpi::as<sfpi::vFloat>(code << 28));
+        // Magnitude is always >= 1, so the LUT's first segment is unreachable.
+        sfpi::vFloat value = sfpi::lut(synthetic, sfpi::as<sfpi::vLut8si>(magnitude), small, large);
         value *= (vec & 1) ? odd_scales : even_scales;
         if constexpr (!fpu_tensor_scale) {
-            value *= global_scale;
+            if (!fold_tensor_scale) {
+                value *= global_scale;
+            }
         }
         // Map directly to SFPSTOCHRND's native nearest rounding.
         const sfpi::vFloat16b rounded = sfpi::convert<sfpi::vFloat16b>(value, sfpi::RoundMode::Nearest);
         sfpi::dst_reg[(plane + 2) * 32 + index].mode<sfpi::DataLayout::F16b>() = rounded;
     }
-    _llk_math_eltwise_sfpu_done_();
 }
 }  // namespace ckernel::sfpu

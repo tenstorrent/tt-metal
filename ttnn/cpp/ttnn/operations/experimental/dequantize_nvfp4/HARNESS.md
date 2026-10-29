@@ -45,7 +45,9 @@ hashes did not change during evaluation.
    Divide the math-thread duration by repetitions and output tiles per core.
    This is a `MATH_ISOLATE`-style amortized DEST-to-DEST diagnostic using Tracy,
    not the separate LLK harness's literal `PerfRunType::MATH_ISOLATE`. Input
-   staging, broadcast, transpose and packing are amortized, not absent.
+   staging, scale expansion, transpose and packing are amortized, not absent.
+   Repetition can change compiler constant-hoisting/scheduling; only the
+   production L1-to-L1 measurement ranks candidates.
 
 All tests use the trusted checkout. JUnit XML must show actual successful
 execution, because Tracy can mask a pytest failure with exit code zero.
@@ -117,3 +119,8 @@ and evaluator intact when an experiment fails.
 Before searching, verify an unchanged worktree passes and a deliberately bad
 candidate is rejected before profiling. Hardware-free parser checks live in
 `tests/scripts/test_nvfp4_harness.py`; use the safe runner for those too.
+
+
+The [October 29 run report](OPTIMIZATION_2026_10_29.md) records the first
+nine-candidate search, canary rejection, paired measurements, and retained
+implementation. Its generated evidence is under `generated/nvfp4_loop/`.

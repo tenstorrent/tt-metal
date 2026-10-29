@@ -4,7 +4,6 @@
 
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/transpose_dest.h"
 #include "api/dataflow/circular_buffer.h"
@@ -31,14 +30,21 @@ void kernel_main() {
         copy_init(0);
         copy_tile(0, 0, 0);
         reconfig_full_operand(1, 1);
-        unary_bcast_init<BroadcastType::ROW>(1);
+        copy_init(1);
+        // Sixteen contiguous 32-byte CB pages form one 16x16 scale tile.
+        // Expand its rows once in DEST instead of broadcasting every face.
+        copy_tile(1, 0, 1);
+        MATH((sfpu::nvfp4_convert_begin()));
+        MATH((sfpu::nvfp4_expand_scale_vectors()));
+#pragma GCC unroll 4
         for (uint32_t plane = 0; plane < planes; ++plane) {
+#pragma GCC unroll 4
             for (uint32_t face = 0; face < 4; ++face) {
-                unary_bcast<BroadcastType::ROW>(1, plane * 4 + face, 1);
                 MATH((sfpu::nvfp4_decode_column_face<fpu_tensor_scale>(
                     plane, face, sfpu::Converter::as_float(global_bf16_bits))));
             }
         }
+        MATH((sfpu::nvfp4_convert_end()));
         // Undo the offline 32x32 transposition entirely in DEST.
         transpose_dest_init();
         for (uint32_t plane = 0; plane < planes; ++plane) {
