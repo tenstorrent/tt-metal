@@ -121,6 +121,15 @@ inline void push_fifo(const SocketSenderInterface& sender, uint32_t src, uint32_
 // std::atomic_thread_fence's `fence rw,rw` does not.
 FORCE_INLINE void staged_store_fence() { asm volatile("fence" ::: "memory"); }
 
+// Writes `bytes_sent` to the host as the socket's. Every push it covers must already be acked.
+inline void send_bytes_sent(const SocketSenderInterface& sender, uint32_t bytes_sent) {
+    reinterpret_cast<volatile tt_l1_ptr sender_socket_md*>(sender.config_addr)->bytes_sent = bytes_sent;
+    staged_store_fence();
+    const uint64_t dst = kernel_profiler::join_words(sender.d2h.bytes_sent_addr_hi, sender.downstream_bytes_sent_addr);
+    write_to_host(sender.d2h.pcie_xy_enc, sender.config_addr, dst, 4u);
+}
+inline void send_bytes_sent(const SocketSenderInterface& sender) { send_bytes_sent(sender, sender.bytes_sent); }
+
 // Sends the socket's bytes_sent to the host once the PCIe tile has acked every push before it. socket_notify_receiver
 // moves write_cmd_buf to another VC, so bytes_sent could overtake its data. Using the same VC isn't enough either,
 // because the PCIe tile turns each NoC write into separate PCIe transactions with no ordering between them (a 4 B
@@ -128,8 +137,5 @@ FORCE_INLINE void staged_store_fence() { asm volatile("fence" ::: "memory"); }
 inline void notify_bytes_sent(const SocketSenderInterface& sender) {
     while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
     }
-    reinterpret_cast<volatile tt_l1_ptr sender_socket_md*>(sender.config_addr)->bytes_sent = sender.bytes_sent;
-    staged_store_fence();
-    const uint64_t dst = kernel_profiler::join_words(sender.d2h.bytes_sent_addr_hi, sender.downstream_bytes_sent_addr);
-    write_to_host(sender.d2h.pcie_xy_enc, sender.config_addr, dst, 4u);
+    send_bytes_sent(sender);
 }

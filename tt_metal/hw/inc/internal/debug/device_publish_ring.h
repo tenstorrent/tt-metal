@@ -80,8 +80,11 @@ constexpr uint32_t myRiscID = PROCESSOR_INDEX;
 constexpr uint32_t RING_CAPACITY = PROFILER_L1_VECTOR_SIZE;  // words
 constexpr uint32_t TAIL_INDEX = SPSC_RING_TAIL_0 + myRiscID;
 constexpr uint32_t HEAD_INDEX = SPSC_RING_HEAD_0 + myRiscID;
-constexpr uint32_t STATE_TIMER_INDEX = SPSC_STATE_TIMER_0 + myRiscID;
 constexpr uint32_t STATE_PROG_INDEX = spsc_state_prog_word(myRiscID);
+// This RISC's halfwords of SPSC_STATE_TIMER_0 and SPSC_ROUTED_AT_0.
+FORCE_INLINE volatile tt_l1_ptr uint16_t* halfword_slot(uint32_t word) {
+    return reinterpret_cast<volatile tt_l1_ptr uint16_t*>(&profiler_control_buffer[word]) + myRiscID;
+}
 static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in the SPSC control layout");
 
 // A value no clock high half or runtime id takes, which these words hold when they have none: no timer packet yet, no
@@ -147,7 +150,8 @@ FORCE_INLINE void publish_tail() { publish_tail(wIndex); }
 
 // A lane-state slot must never show a value the published tail does not cover, so the tail goes first and a fence
 // separates the two stores (see SPSC_STATE_TIMER_0).
-FORCE_INLINE void publish_state(uint32_t index, uint32_t value) {
+template <typename Slot>
+FORCE_INLINE void publish_state(volatile tt_l1_ptr Slot* slot, Slot value) {
     if constexpr (VALIDATES_LAUNCH) {
         if (!launchValid) {
             return;
@@ -155,7 +159,7 @@ FORCE_INLINE void publish_state(uint32_t index, uint32_t value) {
     }
     publish_tail();
     asm volatile("fence" ::: "memory");
-    profiler_control_buffer[index] = value;
+    *slot = value;
 }
 
 // The fence pays the posted ring stores' latency, so paying it once per SPSC_PUBLISH_BATCH_WORDS is most of
@@ -237,7 +241,7 @@ FORCE_INLINE void ring_write_sticky_timer(uint32_t time_hi) {
         g_timer_written_at = wIndex;
         ring_write_words(ppfmt::w0(PacketType::TimerHigh, time_hi));
         g_prev_timer_hi = time_hi;
-        publish_state(STATE_TIMER_INDEX, time_hi);
+        publish_state(halfword_slot(SPSC_STATE_TIMER_0), static_cast<uint16_t>(time_hi));
     }
 }
 
@@ -360,7 +364,7 @@ FORCE_INLINE void ring_ensure_room(uint32_t words) {
 // read before the room check, so a stall the check waits out follows the record rather than lengthening it. Inlined at
 // its call site (kAtCallSite), the record's time goes through the slow check and back, so the call site keeps no
 // register across that call; an out-of-line writer's frame lasts only its call, so it keeps the time itself.
-template <typename Writer, bool kImmediately, bool kAtCallSite, typename... Inputs>
+template <typename Writer, bool kImmediately, bool kRouted, bool kAtCallSite, typename... Inputs>
 FORCE_INLINE void write_record(uint32_t header, Inputs... inputs) {
     uint32_t time_hi, time_lo;
     read_wall_clock(time_hi, time_lo);
@@ -371,25 +375,33 @@ FORCE_INLINE void write_record(uint32_t header, Inputs... inputs) {
     }
     const uint32_t start = wIndex;
     const uint32_t end = Writer::write(header, time_hi, time_lo, inputs...);
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC) || \
+    defined(COMPILE_FOR_AERISC)
+    // This RISC's halfword of SPSC_ROUTED_AT_0 lands before the tail that covers the record, which publish_tail's fence
+    // orders, so a relay sees it change in the frame that ships the record or the one before it.
+    if constexpr (kRouted) {
+        *halfword_slot(SPSC_ROUTED_AT_0) = static_cast<uint16_t>(start);
+    }
+#endif
     if constexpr (kImmediately) {
         publish_tail(end);
     } else {
         publish_tail_batched(start, end);
     }
 }
-template <typename Writer, bool kImmediately, typename... Inputs>
+template <typename Writer, bool kImmediately, bool kRouted, typename... Inputs>
 [[gnu::noinline]] void write_record_out_of_line(uint32_t header, Inputs... inputs) {
-    write_record<Writer, kImmediately, false>(header, inputs...);
+    write_record<Writer, kImmediately, kRouted, false>(header, inputs...);
 }
 
 // write_record, inlined into the call site when the writer is inlined, unless the call site asked for kNoInline, which
 // only an inlined writer passes.
-template <typename Writer, bool kImmediately = false, bool kNoInline = false, typename... Inputs>
+template <typename Writer, bool kImmediately = false, bool kRouted = false, bool kNoInline = false, typename... Inputs>
 WRITER_INLINE_ATTR void publish_with(uint32_t header, Inputs... inputs) {
     if constexpr (kNoInline) {
-        write_record_out_of_line<Writer, kImmediately>(header, inputs...);
+        write_record_out_of_line<Writer, kImmediately, kRouted>(header, inputs...);
     } else {
-        write_record<Writer, kImmediately, kWriterInlined>(header, inputs...);
+        write_record<Writer, kImmediately, kRouted, kWriterInlined>(header, inputs...);
     }
 }
 
@@ -408,7 +420,7 @@ FORCE_INLINE void set_host_counter(uint32_t counter_value) {
     if constexpr (VALIDATES_LAUNCH) {
         g_prog_pending = counter_value;
     }
-    publish_state(STATE_PROG_INDEX, counter_value);
+    publish_state(&profiler_control_buffer[STATE_PROG_INDEX], counter_value);
 }
 
 FORCE_INLINE void set_launch_valid(bool condition) {
@@ -417,7 +429,7 @@ FORCE_INLINE void set_launch_valid(bool condition) {
         publish_tail();
         asm volatile("fence" ::: "memory");
         if (g_prev_timer_hi != kUnset) {
-            profiler_control_buffer[STATE_TIMER_INDEX] = g_prev_timer_hi;
+            *halfword_slot(SPSC_STATE_TIMER_0) = static_cast<uint16_t>(g_prev_timer_hi);
         }
         if (g_prog_pending != kUnset) {
             profiler_control_buffer[STATE_PROG_INDEX] = g_prog_pending;

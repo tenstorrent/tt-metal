@@ -208,11 +208,15 @@ public:
         uint64_t order_regressions;
     };
 
-    // `dev`, `lanes` (the device's, which its records point at) and `routes` must outlive the decoder.
+    // `dev`, `lanes` (the device's, which its records point at) and `routes` must outlive the decoder. `clocks` and
+    // `dev_index` give the chip's clock sync, which a restarted lane's timer slot is widened around; without one, the
+    // lane's last high word is used.
     StreamDecoder(
         const CaptureContext::Device& dev,
         std::span<const experimental::device_observability::detail::RecordLane> lanes,
-        RecordRoutes& routes);
+        RecordRoutes& routes,
+        const ClockMap* clocks = nullptr,
+        uint32_t dev_index = 0);
     // Decodes the frames into `out` and returns what it produced. ConsumerBatches sizes `out`. `undelivered` is how
     // many of the earlier outputs the caller still holds, which it delivers oldest first. A call may repair a lane's
     // last record in place in any of those, so they must stay writable until delivered.
@@ -248,7 +252,11 @@ private:
     static constexpr size_t kHeadsPerLoad = 8;
     static_assert(profiler::kSpscNRiscDecode <= kHeadsPerLoad);
     std::vector<std::array<uint32_t, kHeadsPerLoad>> heads_;
+    uint32_t timer_reference(const SpscLane& lane) const;
+
     const CaptureContext::Device& dev_;
+    const ClockMap* clocks_;
+    uint32_t dev_index_;
     uint64_t decoded_seq_ = 0, delivered_seq_ = 0;
     RecordRoutes& routes_;
     // Copies of the routes' tables, which the decode loop reads as members: as its locals they spill.

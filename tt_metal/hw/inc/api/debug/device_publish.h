@@ -11,7 +11,8 @@
 //     DevicePublish<Name{"y"_s}, kPublishBatched>(count);  // options follow the metadata
 //     DevicePublish<kPublishBatched>(count);  // or stand alone when there is none
 //     DevicePublish<>(count);  // with neither, the host reads Record<uint32_t, void>
-//     DevicePublish<Name{"z"_s}, kNoInline>(count);  // only a call here, even when DevicePublish is inlined
+//     DevicePublish<Name{"z"_s}, kSendToExternalProcess>(count);  // the external process gets it too
+//     DevicePublish<Name{"w"_s}, kNoInline>(count);  // only a call here, even when DevicePublish is inlined
 //
 // A record is visible to the host as soon as it is written. kPublishBatched lets it wait for its RISC's next batch of
 // records, or the launch's end, which saves a fence per record for a tool that publishes often.

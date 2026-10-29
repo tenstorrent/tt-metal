@@ -20,11 +20,13 @@
 
 #include <tt_stl/assert.hpp>
 
+#include "context/metal_context.hpp"
 #include "hostdev/profiler_zone_id.h"
 #include "hostdev/record_site.h"
 #include "impl/streaming_profiler/decode.hpp"
 #include "impl/streaming_profiler/service.hpp"
 #include "impl/streaming_profiler/sync/clock_map.hpp"
+#include "impl/streaming_profiler/external_receiver.hpp"
 #include "llrt/call_sites.hpp"
 
 namespace api = tt::tt_metal::experimental::device_observability;
@@ -346,10 +348,11 @@ const PayloadToRecordByWidth* RecordRoutes::payload_to_record_by_width(
     for (const tt::llrt::CallSite::PacketLayout& layout : site.packet_layouts) {
         by_width[uint32_t(layout.timestamp_width)] = payload_to_record(site, layout, field_offsets);
     }
-    // The payload is already the records' data when the site has one form and each field sits in it as in a record,
-    // past its head.
+    // The packet's payload is already the records' payload when the site has one form, a medium one as spsc_record()
+    // reads it, and each field sits in it as in a record, past its head.
     const bool as_is =
         site.packet_layouts.size() == 1 &&
+        site.packet_layouts[0].timestamp_width == api::detail::TimestampWidth::Bits32 &&
         std::ranges::all_of(
             by_width[uint32_t(site.packet_layouts[0].timestamp_width)].fields, [](const PayloadToRecord::Field& field) {
                 return field.op == PayloadToRecord::Op::Copy && field.bit % 8 == 0 &&
@@ -404,6 +407,15 @@ Callback detail::register_callback(
     static std::atomic<uint32_t> anonymous{0};
     if (name.empty()) {
         name = "callback-" + std::to_string(++anonymous);
+    }
+    // A process with callbacks and no MetalContext may be the external process, so it listens for Metal processes
+    // until it creates a MetalContext of its own.
+    bool metal = false;
+    for (int context = 0; context < static_cast<int>(MAX_CONTEXT_COUNT); context++) {
+        metal |= MetalContext::instance_exists(ContextId{context});
+    }
+    if (!metal) {
+        internal::serve_metal_processes();
     }
     for (const RecordTypeDescriptor& record_type : record_types) {
         tt::llrt::add_host_type(record_type.metadata_type, record_type.metadata_codes);

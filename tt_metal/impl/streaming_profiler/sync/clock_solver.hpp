@@ -119,6 +119,8 @@ public:
     ClockSolver& operator=(const ClockSolver&) = delete;
 
     const ClockMap& map() const { return map_; }
+    // Hands each later change to the map to `mirror` too, on the thread that feeds the solver.
+    void mirror_map(std::function<void(const ClockUpdate&)> mirror) { map_.mirror(std::move(mirror)); }
 
     void on_record(uint32_t dev, uint32_t core, const kernel_profiler::SyncRecord& record);
     // Publishes what the batch's records added to the map, and returns whether anything was published.

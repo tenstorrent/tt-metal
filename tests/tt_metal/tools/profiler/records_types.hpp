@@ -378,3 +378,18 @@ constexpr uint64_t stamp_delta(uint32_t iteration, uint32_t which) {
 }
 
 }  // namespace semantics_test
+
+// The record test_streaming_profiler_external's kernel publishes to each destination.
+namespace external_test {
+
+// Which of the test's two call sites sent it, the iteration that sent it, and a value derived from both.
+struct Reading {
+    uint32_t destination;  // 0 this process alone, 1 the external process too
+    uint32_t iteration;
+    uint32_t value;
+};
+using records_test::Name;
+
+constexpr uint32_t reading_value(uint32_t destination, uint32_t iteration) { return iteration * 7 + destination; }
+
+}  // namespace external_test

@@ -818,7 +818,7 @@ struct SlotStore {
 
 // The writer of every record. Source is where it reads the record's arguments, as record_source gives them or as
 // RegisterWords. A payload with Timestamps writes the shortest form they fit; any other payload is always medium.
-template <typename Payload, typename Source>
+template <typename Payload, typename Source, bool kAlwaysBits64 = false>
 struct RecordWriter {
     using Width = detail::TimestampWidth;
 
@@ -857,7 +857,9 @@ private:
     static FORCE_INLINE uint32_t
     write_record(uint32_t header, uint32_t time_hi, uint32_t time_lo, const Source& source, std::index_sequence<K...>) {
         const OutgoingRecord record{source, time_hi, time_lo, {timestamp_bits<K>(source)...}};
-        if constexpr (kSendsDeltas<Payload>) {
+        if constexpr (kAlwaysBits64) {
+            return write_at_width<Width::Bits64>(header, record);
+        } else if constexpr (kSendsDeltas<Payload>) {
             return write_narrowest(header, record, kDeltaIndices);
         } else {
             return write_at_width<Width::Bits32>(header, record);
@@ -977,9 +979,10 @@ private:
     static constexpr uint32_t kWords = kLayout<Payload, kWidth>.packet_words;
 
     // A record stores as one block when it fits before the ring's end and is long enough for the check to pay for
-    // itself: a medium record with payload, or one with a run. Otherwise, a short record of a word or two or one that
-    // doesn't fit, each word goes to its own ring index, which wraps. Either way the write index stays in a register
-    // and wIndex is stored once. Returns the write index past the record.
+    // itself: a medium or full record with payload, or one with a run. Otherwise, a short record of a word or two or
+    // one that doesn't fit, each word goes to its own ring index, which wraps. Either way the write index stays in a
+    // register and wIndex is stored once. Only a call site whose records all take the full form writes that form here.
+    // Returns the write index past the record.
     template <Width kWidth, typename Record>
     static FORCE_INLINE uint32_t write_at_width(uint32_t header, const Record& record) {
         constexpr bool kBlock = kWords<kWidth> > 2 && (kWidth != Width::Bits16 || kPayload<kWidth>.has_run ||
@@ -1137,12 +1140,15 @@ FORCE_INLINE uint32_t register_word(const Source& source) {
 
 // A record with a run crosses the writer's call by its source's address, which the run copies from; any other record
 // as its register words, so a small record stays in registers when the writer isn't inlined.
-template <bool kImmediately, bool kNoInline, typename Payload, typename Source, size_t... A>
+template <bool kImmediately, bool kRouted, bool kNoInline, typename Payload, typename Source, size_t... A>
 FORCE_INLINE void publish_record(uint32_t header, const Source& source, std::index_sequence<A...>) {
+    // A record for the external process takes the full form and is published at once (check_options rules out
+    // kPublishBatched), with its RISC's SPSC_ROUTED_AT_0 halfword changed ahead of its tail (publish_with), so a relay
+    // never ships it without seeing the change.
     if constexpr (kReadsArgumentsInPlace<Payload>) {
-        publish_with<RecordWriter<Payload, Source>, kImmediately, kNoInline>(header, &source);
+        publish_with<RecordWriter<Payload, Source, kRouted>, kImmediately, kRouted, kNoInline>(header, &source);
     } else {
-        publish_with<RecordWriter<Payload, RegisterWords<Payload>>, kImmediately, kNoInline>(
+        publish_with<RecordWriter<Payload, RegisterWords<Payload>, kRouted>, kImmediately, kRouted, kNoInline>(
             header, register_word<Payload, A>(source)...);
     }
 }

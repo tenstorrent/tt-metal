@@ -26,9 +26,14 @@
 
 namespace tt::tt_metal::experimental::device_observability {
 /** @brief The DevicePublish option that lets a record wait for its RISC's next batch of records, or the launch's end,
- * before the host sees it, which saves a fence per record. */
+ * before the host sees it, which saves a fence per record. It doesn't combine with kSendToExternalProcess, whose
+ * records are published at once. */
 inline constexpr struct PublishBatched {
 } kPublishBatched{};
+/** @brief The DevicePublish option that also sends the record to the external process, a process on this host that
+ * registered callbacks without opening devices of its own. The Metal process gets it too. */
+inline constexpr struct SendToExternalProcess {
+} kSendToExternalProcess{};
 /** @brief The DevicePublish option that writes the record out of line even when DevicePublish is inlined, so the call
  * site costs only a call. */
 inline constexpr struct NoInline {
@@ -55,14 +60,20 @@ inline constexpr bool is_publish_time_option<detail::PublishTimeIn<kField>> = tr
 // Whether T is one of DevicePublish's options rather than metadata.
 template <typename T>
 inline constexpr bool is_publish_option =
-    std::is_same_v<std::remove_cv_t<T>, PublishBatched> || std::is_same_v<std::remove_cv_t<T>, NoInline> ||
-    is_publish_time_option<std::remove_cv_t<T>>;
+    std::is_same_v<std::remove_cv_t<T>, PublishBatched> || std::is_same_v<std::remove_cv_t<T>, SendToExternalProcess> ||
+    std::is_same_v<std::remove_cv_t<T>, NoInline> || is_publish_time_option<std::remove_cv_t<T>>;
 
 template <typename... Options>
 constexpr bool check_options() {
     constexpr bool known = (is_publish_option<Options> && ...);
-    static_assert(known, "unknown DevicePublish option; the options are kPublishBatched and kNoInline");
-    return known;
+    static_assert(
+        known, "unknown DevicePublish option; the options are kPublishBatched, kSendToExternalProcess and kNoInline");
+    constexpr bool batched_and_external = (std::is_same_v<std::remove_cv_t<Options>, PublishBatched> || ...) &&
+                                          (std::is_same_v<std::remove_cv_t<Options>, SendToExternalProcess> || ...);
+    static_assert(
+        !batched_and_external,
+        "kPublishBatched doesn't combine with kSendToExternalProcess, whose records are published at once");
+    return known && !batched_and_external;
 }
 template <typename Option, auto... Options>
 inline constexpr bool kHasOption = (std::is_same_v<std::remove_cv_t<decltype(Options)>, Option> || ...);
@@ -220,16 +231,20 @@ constexpr detail::PacketLayout call_site_layout() {
         .slices = section_layout_slices<Payload, kWidth>.data(),
         .slice_count = uint32_t(section_layout_slices<Payload, kWidth>.size())};
 }
-// The forms a call site keeps, shortest first.
-template <typename Payload>
+// The forms a call site keeps, shortest first: only the full one for records that go to the external process
+// (CallSiteDescriptor::sends_to_external_process says why).
+template <typename Payload, bool kAlwaysBits64>
 [[gnu::section(DEVICE_PUBLISH_DESCRIPTOR_CONTENTS_SECTION_NAME), maybe_unused]] static const auto section_layouts = [] {
-    constexpr bool kBits16 = kHasBits16<Payload>, kBits64 = kSendsDeltas<Payload>;
-    std::array<detail::PacketLayout, kBits16 + 1 + kBits64> list{};
+    constexpr bool kBits16 = !kAlwaysBits64 && kHasBits16<Payload>, kBits32 = !kAlwaysBits64;
+    constexpr bool kBits64 = kAlwaysBits64 || kSendsDeltas<Payload>;
+    std::array<detail::PacketLayout, kBits16 + kBits32 + kBits64> list{};
     size_t n = 0;
     if constexpr (kBits16) {
         list[n++] = call_site_layout<Payload, detail::TimestampWidth::Bits16>();
     }
-    list[n++] = call_site_layout<Payload, detail::TimestampWidth::Bits32>();
+    if constexpr (kBits32) {
+        list[n++] = call_site_layout<Payload, detail::TimestampWidth::Bits32>();
+    }
     if constexpr (kBits64) {
         list[n] = call_site_layout<Payload, detail::TimestampWidth::Bits64>();
     }
@@ -251,7 +266,7 @@ struct Described<PublishTimePayload<kField>> {
 template <auto kLocation, auto kMetadata, typename Payload>
 [[gnu::section(DEVICE_PUBLISH_IDS_SECTION_NAME), maybe_unused]] static char call_site_handle = 0;
 
-template <auto kLocation, auto kMetadata, typename Payload>
+template <auto kLocation, auto kMetadata, typename Payload, bool kWholeTime>
 [[gnu::section(DEVICE_PUBLISH_DESCRIPTORS_SECTION_NAME),
   maybe_unused]] static const detail::CallSiteDescriptor call_site_descriptor = {
     .file = kLocation.file.hash,
@@ -269,8 +284,8 @@ template <auto kLocation, auto kMetadata, typename Payload>
     .payload_arguments = section_arguments<typename Described<Payload>::type>.data(),
     .payload_argument_count = uint32_t(section_arguments<typename Described<Payload>::type>.size()),
     .payload_publish_time_field = uint32_t(kUnsentLeaf<Payload>),
-    .packet_layouts = section_layouts<Payload>.data(),
-    .packet_layout_count = uint32_t(section_layouts<Payload>.size()),
+    .packet_layouts = section_layouts<Payload, kWholeTime>.data(),
+    .packet_layout_count = uint32_t(section_layouts<Payload, kWholeTime>.size()),
 };
 
 // A call site, unique to the file, line and function TT_DEVICE_PUBLISH_INTERNAL names: DevicePublish's entry point in
@@ -288,10 +303,14 @@ struct CallSite {
             using Payload =
                 typename CallPayloadOf<RecordPayload<Arguments...>, std::remove_cv_t<decltype(Options)>...>::type;
             constexpr bool immediately = !kHasOption<PublishBatched, Options...>;
+            constexpr bool external = kHasOption<SendToExternalProcess, Options...>;
             // Only an inlined writer needs keeping out of line; otherwise every call site shares one.
             constexpr bool no_inline = kHasOption<NoInline, Options...> && kWriterInlined;
-            const uint32_t header = site_header<kMetadata, Payload, ppfmt::record_w0(kFirstPacketWords<Payload>)>();
-            publish_record<immediately, no_inline, Payload>(
+            const uint32_t header = site_header<
+                kMetadata,
+                Payload,
+                ppfmt::record_w0(kFirstPacketWords<Payload>) | (external ? ppfmt::TO_EXTERNAL : 0u)>();
+            publish_record<immediately, external, no_inline, Payload>(
                 header,
                 record_source(arguments...),
                 std::make_index_sequence<std::tuple_size_v<decltype(RegisterWords<Payload>::words)>>{});
@@ -327,7 +346,7 @@ private:
         asm("lui %0, %%hi(%1+%3)\n\taddi %0, %0, %%lo(%1+%3)  # %2"
             : "=r"(header)
             : "i"(&call_site_handle<kLocation, kMetadata, Payload>),
-              "i"(&call_site_descriptor<kLocation, kMetadata, Payload>),
+              "i"(&call_site_descriptor < kLocation, kMetadata, Payload, (kTypeAndLength & ppfmt::TO_EXTERNAL) != 0 >),
               "i"(kTypeAndLength));
         return header;
     }

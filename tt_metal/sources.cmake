@@ -213,6 +213,8 @@ set(TT_METAL_SOURCES
     impl/streaming_profiler/api.cpp
     impl/streaming_profiler/decode.cpp
     impl/streaming_profiler/device_programs.cpp
+    impl/streaming_profiler/external_connection.cpp
+    impl/streaming_profiler/external_receiver.cpp
     impl/streaming_profiler/ops_csv.cpp
     impl/streaming_profiler/receiver.cpp
     impl/streaming_profiler/service.cpp

@@ -63,13 +63,14 @@ enum SpscControlBuffer {
     SPSC_RING_HEAD_0 = 0,
     // [PROFILER_SPSC_MAX_RISC, 2*): ring tail per RISC, producer-written, monotonic word count.
     SPSC_RING_TAIL_0 = PROFILER_SPSC_MAX_RISC,
-    // For each Tensix RISC, the wall clock's high word and the runtime id in effect at its published tail. After a lost
-    // frame, the decoder restarts the lane from these. The producer writes its tail, fences, then writes these, so a
-    // reader that sees them no later than the tail never gets a value the frame doesn't already carry. They sit in the
-    // words of the tails' 64 B block (words 16 to 31) that no Tensix RISC's head or tail uses, so the relay's single
-    // 64 B read gets them together with the tails. spsc_state_prog_word gives each RISC's runtime id word.
+    // For each Tensix RISC, the low 16 bits of the wall clock's high word and the runtime id in effect at its published
+    // tail. After a lost frame, the decoder restarts the lane from these, taking the high word nearest the one it last
+    // knew. The producer writes its tail, fences, then writes these, so a reader that sees them no later than the tail
+    // never gets a value the frame doesn't already carry. They sit ahead of the tails in the words of the tails' 64 B
+    // block (words 16 to 31), so the relay's single 64 B read gets them together with the tails: a halfword per RISC
+    // from SPSC_STATE_TIMER_0, then a word per RISC from SPSC_STATE_PROG_0.
     SPSC_STATE_TIMER_0 = 16,
-    SPSC_STATE_PROG_0 = 21,
+    SPSC_STATE_PROG_0 = 19,
     // While this is set, a producer waits when its ring is full. While it is clear, the producer overwrites old data
     // instead. The host clears it on every Tensix core when a capture starts and sets it only on the cores its relays
     // serve. A core nobody drains, such as a dispatch core, then overwrites its ring instead of waiting on it, which
@@ -86,6 +87,11 @@ enum SpscControlBuffer {
     // core's profiler rings. That ring's tail is word 31, in the same 64 B block (words 16 to 31) as the profiler
     // rings' tails, so that the eth relay's one read of that block gets all of them.
     SPSC_LINK_SYNC_TAIL = 31,
+    // On a worker core, which runs no link sync, the words from here to word 31 instead hold a halfword per Tensix
+    // RISC: the low 16 bits of the ring position of its newest record for the external process. The RISC writes it
+    // before the tail that covers the record, and it sits after the tails, so a read that sees that tail sees it too:
+    // the record is in the frame in which the halfword changed or the core's next one.
+    SPSC_ROUTED_AT_0 = SPSC_RING_TAIL_0 + PROFILER_SPSC_TENSIX_RISC,
     SPSC_LINK_SYNC_HEAD = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // how far the eth relay has read that ring
     // The host starts and stops the port by writing a LinkSyncCtl here, and the port writes kResidentDoneWord to the
     // done word once it has stopped.
@@ -93,10 +99,7 @@ enum SpscControlBuffer {
     SPSC_LINK_SYNC_DONE,
     SPSC_CONTROL_END,  // first unused word; grow the layout here
 };
-// Runtime-id slot of Tensix RISC `risc`: 21..23, then 29..30 past the tails.
-constexpr std::uint32_t spsc_state_prog_word(std::uint32_t risc) {
-    return risc < 3 ? SPSC_STATE_PROG_0 + risc : SPSC_RING_TAIL_0 + PROFILER_SPSC_TENSIX_RISC + (risc - 3);
-}
+constexpr std::uint32_t spsc_state_prog_word(std::uint32_t risc) { return SPSC_STATE_PROG_0 + risc; }
 
 // Bounds the SPSC backend's whole control block against the DRAM profiler's L1 control vector, which it
 // overlays. Deliberately not asserted on DRAM_PROFILER_ADDRESS_T2_0: that entry is already out of bounds
@@ -107,10 +110,10 @@ static_assert(
     "SPSC/drainer control layout overflows the profiler L1 control vector");
 static_assert(
     PROFILER_SPSC_TENSIX_RISC == 5 && SPSC_STATE_TIMER_0 >= PROFILER_SPSC_TENSIX_RISC &&
-        SPSC_STATE_TIMER_0 + PROFILER_SPSC_TENSIX_RISC <= SPSC_STATE_PROG_0 &&
-        SPSC_STATE_PROG_0 + 3 == SPSC_RING_TAIL_0 &&
-        spsc_state_prog_word(PROFILER_SPSC_TENSIX_RISC - 1) < SPSC_LINK_SYNC_TAIL && SPSC_LINK_SYNC_TAIL < 32,
-    "lane state and the link sync tail must fit the unowned words of the tails' 64 B block");
+        SPSC_STATE_TIMER_0 * 2 + PROFILER_SPSC_TENSIX_RISC <= SPSC_STATE_PROG_0 * 2 &&
+        spsc_state_prog_word(PROFILER_SPSC_TENSIX_RISC - 1) < SPSC_RING_TAIL_0 &&
+        SPSC_ROUTED_AT_0 * 2 + PROFILER_SPSC_TENSIX_RISC <= 32 * 2 && SPSC_LINK_SYNC_TAIL == 31,
+    "lane state, the tails and the routed halfwords must fit the tails' 64 B block in that order");
 
 // The host writes this to a resident core's stop word. The core then finishes its queued work and exits.
 constexpr std::uint32_t kResidentStopQuiesce = 1;
@@ -132,6 +135,14 @@ struct ResidentCtrl {
         std::uint32_t dropped;
     } sync;
     std::uint32_t stop;
+    // Only the relays use these. The host writes attach, a nonzero generation once it has pointed the external
+    // socket's config at the external process's buffer and 0 to detach it; the relay echoes it in attached once it
+    // follows, and counts the frames it copied.
+    struct {
+        std::uint32_t attach;
+        std::uint32_t attached;
+        std::uint32_t copied;
+    } external;
 };
 // Each core a DRISC relay drains has a record of this many bytes in the relay's L1 scratch. It is a power of two so the
 // relay indexes records with a shift.
@@ -229,6 +240,12 @@ constexpr bool spsc_span_wrap_image(std::uint32_t start, std::uint32_t extent, s
 }
 
 inline std::uint32_t spsc_span_w0() { return ppfmt::w0(PacketType::Frame, 0); }
+// A DRISC relay marks a frame whose lanes carry records for the external process in its word 0: SPSC_SPAN_TO_EXTERNAL,
+// and the pages [first, end) of the frame that hold those lanes' runs. Decoders read only the type.
+constexpr static std::uint32_t SPSC_SPAN_TO_EXTERNAL = 1u << 0;
+constexpr static std::uint32_t SPSC_SPAN_ROUTED_FIRST_SHIFT = 1;
+constexpr static std::uint32_t SPSC_SPAN_ROUTED_END_SHIFT = 10;
+constexpr static std::uint32_t SPSC_SPAN_ROUTED_PAGE_MASK = 0x1FFu;
 
 // Control block of a packed frame: control-vector words SPSC_WIRE_CV_BASE..+16 exactly as the relay's one 64 B NoC
 // read of them lands in the frame -- the lanes' state slots and their tails. The heads and XY the relay adds go in
@@ -239,11 +256,12 @@ constexpr static std::uint32_t SPSC_WIRE_CV_BASE = 16;
 // reads plus this: a host reader that copied a frame proves the device had not reached it.
 constexpr static std::uint32_t SPSC_NOTIFY_CAP_BYTES = 128u * 1024u;
 enum SpscWireCtrl : std::uint32_t {
-    SPSC_WIRE_TIMER_0 = SPSC_STATE_TIMER_0 - SPSC_WIRE_CV_BASE,  // 0..4
+    SPSC_WIRE_TIMER_0 = SPSC_STATE_TIMER_0 - SPSC_WIRE_CV_BASE,  // halfwords 0..4 from here
     SPSC_WIRE_TAIL_0 = SPSC_RING_TAIL_0 - SPSC_WIRE_CV_BASE,     // 8..12
     SPSC_WIRE_LINK_SYNC_TAIL = SPSC_LINK_SYNC_TAIL - SPSC_WIRE_CV_BASE,
+    SPSC_WIRE_ROUTED_AT_0 = SPSC_ROUTED_AT_0 - SPSC_WIRE_CV_BASE,  // halfwords 0..4 from here
 };
-constexpr std::uint32_t spsc_wire_prog_word(std::uint32_t risc) {  // 5..7, 13..14
+constexpr std::uint32_t spsc_wire_prog_word(std::uint32_t risc) {  // 3..7
     return spsc_state_prog_word(risc) - SPSC_WIRE_CV_BASE;
 }
 enum SpscWirePrefix : std::uint32_t {
