@@ -47,7 +47,7 @@ namespace ckernel::sfpu {
 //       interleaved: the chain crosses SFPU units (MAD -> swap -> round ->
 //       cast -> MAD ... -> setexp) and stalls when run alone.
 //       Measured on Blackhole over all 65536 bf16 encodings, scoring the
-//       49,711 whose exact answer is a normal bf16: max 0.514 ULP end-to-end.
+//       49,711 whose exact answer is a normal bf16: max 0.513 ULP end-to-end.
 // ======================================================================
 
 // FP32: h(u) = (ln(1+u)/u - 1)/u on (0, 1], degree 8. H6..H8 live in the
@@ -67,17 +67,17 @@ constexpr float SOFTPLUS_FP32_H8 = -4.57976572e-03f;
 constexpr float SOFTPLUS_BF16_NEG_ONE_LN2 = -1.4426950216293334961f;
 constexpr float SOFTPLUS_BF16_EXP_BIAS = 127.0f;
 
-// BF16: p(f) ~ 2^f on [0, 1), p(f) = 1 + f*(P1 + f*(P2 + f*P3)), 1.05e-4 relative.
-// p(0) = 1 exactly and p(1) = 2 - 2^-16 by construction (P1 = 1 - 2^-16 - P2 - P3), so
-// p(f) stays inside [1, 2) and SFPSETEXP can place it under exponent k unchanged.
+// BF16: p(f) ~ 2^f on [0, 1), p(f) = 1 + f*(P1 + f*(P2 + f*P3)), 1.14e-4 relative.
+// p(0) = 1 exactly. p(1) = 2 - 9*2^-16: P1 was not retuned with P2, so it is no
+// longer 1 - 2^-16 - P2 - P3. p stays below 2, so SFPSETEXP is unchanged.
 // P1 is fp32 (vConstFloatPrgm1); P0, P2, P3 are exactly representable in fp16.
 constexpr float SOFTPLUS_BF16_P0 = 1.0f;
 constexpr float SOFTPLUS_BF16_P1 = 0.6954193115234375f;
 constexpr float SOFTPLUS_BF16_P2 = 0.226318359375f;  // 1854 * 2^-13
 constexpr float SOFTPLUS_BF16_P3 = 0.078125f;        // 5 * 2^-6
 
-// BF16: h(u) = (ln(1+u)/u - 1)/u on [0, 1], degree 3, h(0) left free (6.7e-5 relative
-// on f = u*(1 + u*h)). All four are fp16-exact; H1 sits in vConstFloatPrgm2.
+// BF16: h(u) = (ln(1+u)/u - 1)/u on [0, 1], degree 3, h(0) left free (8.4e-5 relative
+// on f = u*(1 + u*h), worst at u = 0.90). All four are fp16-exact; H1 sits in vConstFloatPrgm2.
 // The coefficients (with P2 above) were tuned on the fp16 grid against every bf16
 // input: max 0.513 ULP end-to-end.
 constexpr float SOFTPLUS_BF16_H0 = -0.497802734375f;   // -1019 * 2^-11
@@ -100,7 +100,8 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
     // wraps and setexp returns garbage on about [-1.74e7, -8.7e6], where the
     // true exp is already 0. -2^21 is bf16-exact, still inside that domain, and
     // the clamped k underflows through the new_exp > 0 flush. The clamp is a
-    // no-op for every nonzero fp32 exp (x > ~-88).
+    // no-op for every nonzero fp32 exp (x > ~-88). A -NaN also compares below
+    // the bound; the fp32 body returns it via is_nan and does not reach here.
     x = sfpi::max(x, -2097152.0f);
 
     // Range reduction: x = k*ln(2) + r
@@ -217,40 +218,47 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
     // swap (no copy needed) and the predicated store keeps the identity lanes.
     v_if(t <= threshold) {
 #ifdef INP_FLOAT32
-        // a = |t| via setsgn (clear sign bit, no branch). max(t, 0) does not
-        // depend on the exp and is done before that chain.
-        sfpi::vFloat a = sfpi::setsgn(t, 0);
-        sfpi::vFloat sp = sfpi::max(t, 0.0f);
+        // SFPSWAP orders -NaN below every finite value, so max(t, 0) and the exp
+        // clamp would both return a finite result. Hand the NaN back first.
+        v_if(sfpi::is_nan(t)) { sfpi::dst_reg[0] = t; }
+        v_else {
+            // a = |t| via setsgn (clear sign bit, no branch). max(t, 0) does not
+            // depend on the exp and is done before that chain.
+            sfpi::vFloat a = sfpi::setsgn(t, 0);
+            sfpi::vFloat sp = sfpi::max(t, 0.0f);
 
-        // f(a) = u*(1 + u*h(u)), u = exp(-a). Covers a >= 0, including the
-        // old tail, so there is no a > 5 branch.
-        sfpi::vFloat u = softplus_exp_negative(-a);
-        sfpi::vFloat h = PolynomialEvaluator::eval(
-            u,
-            SOFTPLUS_FP32_H0,
-            SOFTPLUS_FP32_H1,
-            SOFTPLUS_FP32_H2,
-            SOFTPLUS_FP32_H3,
-            SOFTPLUS_FP32_H4,
-            SOFTPLUS_FP32_H5,
-            sfpi::vConstFloatPrgm2,  // H6
-            sfpi::vConstFloatPrgm1,  // H7
-            sfpi::vConstFloatPrgm0   // H8
-        );
-        sfpi::vFloat residual = u * (1.0f + u * h);
+            // f(a) = u*(1 + u*h(u)), u = exp(-a). Covers a >= 0, including the
+            // old tail, so there is no a > 5 branch.
+            sfpi::vFloat u = softplus_exp_negative(-a);
+            sfpi::vFloat h = PolynomialEvaluator::eval(
+                u,
+                SOFTPLUS_FP32_H0,
+                SOFTPLUS_FP32_H1,
+                SOFTPLUS_FP32_H2,
+                SOFTPLUS_FP32_H3,
+                SOFTPLUS_FP32_H4,
+                SOFTPLUS_FP32_H5,
+                sfpi::vConstFloatPrgm2,  // H6
+                sfpi::vConstFloatPrgm1,  // H7
+                sfpi::vConstFloatPrgm0   // H8
+            );
+            sfpi::vFloat residual = u * (1.0f + u * h);
 
-        // t >= 0: softplus(t) = t + f(t). t < 0: softplus(t) = f(|t|).
-        sp = sp + residual;
+            // t >= 0: softplus(t) = t + f(t). t < 0: softplus(t) = f(|t|).
+            sp = sp + residual;
 
-        sfpi::vFloat result = beta_reciprocal * sp;
-        // Round-to-nearest for bf16 destination (SFPSTORE defaults to truncation)
-        if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            sfpi::vFloat result = beta_reciprocal * sp;
+            // Round-to-nearest for bf16 destination (SFPSTORE defaults to truncation)
+            if constexpr (!is_fp32_dest_acc_en) {
+                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            }
+            sfpi::dst_reg[0] = result;
         }
+        v_endif;
 #else
         sfpi::vFloat result = softplus_bf16_eval<is_fp32_dest_acc_en>(t, beta_reciprocal);
-#endif
         sfpi::dst_reg[0] = result;
+#endif
     }
     v_endif;
 }

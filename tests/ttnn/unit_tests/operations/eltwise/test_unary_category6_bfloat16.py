@@ -802,20 +802,14 @@ def test_softplus_op(device, beta, threshold_val):
     _assert_excluded_region(~finite, "softplus non-finite", max_fraction=0.05)
     assert_with_pcc(golden[finite], result[finite], pcc=0.999)
 
-    # PCC over the whole grid is dominated by the pass-through arm (x up to ~3e38), so it is
-    # blind to the softplus arm itself: the bf16 kernel used to clamp the residual to 0 for
-    # |beta*x| > 5, returning exactly 0 for every beta*x < -5 while the exact answer was still a
-    # normal bf16, and PCC stayed ~1.0 through that. Gate the whole softplus arm (every lane
-    # the kernel evaluates, t <= threshold) on ULP instead. t > -80 stays above the point where
-    # exp(t) itself drops through the fp32 normal floor.
+    # PCC misses a flushed tail (the pass-through arm dominates). Gate t <= threshold at 1 ULP.
     golden_bf16 = golden.to(torch.bfloat16)
     result_bf16 = result.to(torch.bfloat16)
     t = beta * input_tensor
     arm = finite & (t <= threshold_val) & (t > -80.0)
     tail = arm & (t < -5.0)
     assert tail.any(), f"softplus(beta={beta}, threshold={threshold_val}) negative-tail window is empty"
-    # Positive beta keeps softplus in (0, inf). Negative beta flips the sign, so the
-    # zero-tail regression is the ULP check below rather than a positivity check.
+    # Positive beta stays in (0, inf). Negative beta is covered by the ULP check.
     if beta > 0:
         assert torch.all(
             result_bf16[tail] > 0

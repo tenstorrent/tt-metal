@@ -483,6 +483,28 @@ class SFPU_POLYGAMMA_ORDER(TemplateParameter):
 
 
 @dataclass
+class SFPU_SOFTPLUS_PARAMS(TemplateParameter):
+    """beta, 1/beta and the linear threshold for softplus, as fp32 bit patterns.
+
+    Macros, like :class:`SFPU_POLYGAMMA_ORDER`: sfpu_operations.h keeps the
+    beta = 1, threshold = 20 defaults under ``#ifndef``.
+    """
+
+    softplus_beta: float = 1.0
+    softplus_threshold: float = 20.0
+
+    def convert_to_cpp(self) -> str:
+        beta = self.softplus_beta
+        if beta == 0.0:
+            raise ValueError("softplus beta 0 is not a finite 1/beta")
+        return (
+            f"#define SOFTPLUS_TEST_BETA {_fp32_bits(beta):#x}u\n"
+            f"#define SOFTPLUS_TEST_BETA_RECIP {_fp32_bits(1.0 / beta):#x}u\n"
+            f"#define SOFTPLUS_TEST_THRESHOLD {_fp32_bits(self.softplus_threshold):#x}u"
+        )
+
+
+@dataclass
 class SFPU_DROPOUT_PARAMS(TemplateParameter):
     """Dropout probability (p * INT_MAX), seed and scale, as macros (the header selects on ``#ifdef``).
 

@@ -46,7 +46,7 @@ from helpers.sfpu_dispatch_constants import (
     RELU_MIN_THRESHOLD,
     UNARY_MAX_MIN_VALUE,
 )
-from helpers.sfpu_domains import op_edge_points, sfpu_unary_ops
+from helpers.sfpu_domains import for_op, op_edge_points, sfpu_unary_ops
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -438,11 +438,10 @@ def prepare_inputs_for_operation(
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     elif mathop == MathOperation.Softplus:
-        # Span the negative tail (t < -5, toward the bf16 floor), both signs, and past the
-        # linear threshold (20). -80 keeps exp(-|x|) a normal fp32 so the golden does not
-        # underflow ahead of bf16 (mirrors sfpu_domains' Softplus spec).
-        min_val = -80.0
-        max_val = 30.0
+        # for_op spans the t < -5 tail and the linear threshold.
+        spec = for_op(mathop, input_format).spec_A
+        min_val = spec.low
+        max_val = spec.high
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     elif mathop in ROUNDING_OPS:
@@ -1343,6 +1342,14 @@ def run_eltwise_unary_sfpu_quasar(
         res_tensor,
         formats.output_format,
     ), "Assert against golden failed"
+
+    if mathop == MathOperation.Softplus:
+        # Default beta is 1. atol 0.05 lets a flush to 0 through, so require t < -5 > 0.
+        tail = src_A.to(torch.float32) < -5.0
+        assert bool(tail.any()), "softplus stimulus never reaches t < -5"
+        assert torch.all(
+            res_tensor.to(torch.float32)[tail] > 0
+        ), "softplus flushed the negative tail to 0"
 
 
 @pytest.mark.quasar

@@ -706,6 +706,14 @@ def test_softplus(device, beta, threshold_val):
     assert_allclose(expected_result=golden[curve], actual_result=result[curve], rtol=5.1e-4, atol=0)
 
 
+def test_softplus_negative_nan(device):
+    """A NaN input, including -NaN, must come back as NaN on the fp32 path."""
+    words = torch.tensor([0x7FC00000, 0xFFC00000], dtype=torch.uint32).repeat(512)
+    src = words.view(torch.float32).reshape(1, 1, 32, 32)
+    result = ttnn.to_torch(ttnn.softplus(to_float32_tt_tensor(src, device), beta=1.0, threshold=20.0))
+    assert torch.isnan(result).all()
+
+
 def test_softplus_tail_breakdown(device):
     """softplus(x) for beta * x <= -2^23, default beta and threshold.
 

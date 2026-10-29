@@ -134,10 +134,8 @@ def test_squared_sum_fp32_activ(device):
     ids=["softplus", "erf"],
 )
 def test_add_fp32_activ_matches_standalone(device, activation, standalone, torch_fn):
-    # A fused activation on float32 must run the float32 SFPU variant, as the standalone op does: the bf16
-    # variant of softplus is fitted to bf16 accuracy (about 1e-4 relative, so ~1e-4 absolute near x = 0),
-    # which the 1e-5 agreement with the standalone fp32 op below rejects, and the bf16 variant of erf is
-    # about 1e4 times less accurate.
+    # Fused float32 must use the float32 SFPU variant. The bf16 softplus (~1e-4) and erf
+    # miss the 1e-5 agreement with the standalone op below.
     x_torch = torch.linspace(-16.0, 8.0, 1024, dtype=torch.float32).reshape(1, 1, 32, 32)
     y_torch = torch.zeros_like(x_torch)
     z_torch = torch_fn(x_torch)
