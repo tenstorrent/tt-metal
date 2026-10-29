@@ -4,13 +4,18 @@
 
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 // log_info / log_warning in native_tuning(). Included explicitly rather than left to arrive
 // transitively: this target is a unity build, so a missing include here still compiles.
 #include <tt-logger/tt-logger.hpp>
 
+#include <algorithm>
 #include <cstdlib>
+#include <numeric>
+#include <string_view>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
@@ -37,120 +42,6 @@ struct fmt::formatter<ttnn::operations::experimental::quasar::binary_ng::Lowerca
 };
 
 namespace ttnn::operations::experimental::quasar::binary_ng {
-
-BinaryNgKernelConfig::BinaryNgKernelConfig(SubtileBroadcastType subtile_broadcast_type) {
-    switch (subtile_broadcast_type) {
-        case SubtileBroadcastType::NONE:
-            reader_kernel = KernelName::ReaderNoBcast;
-            compute_kernel = KernelName::ComputeNoBcast;
-            writer_kernel = KernelName::WriterScalar;
-            bcast_input = std::nullopt;
-            break;
-
-        case SubtileBroadcastType::SCALAR_A:;
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 0;
-            break;
-
-        case SubtileBroadcastType::SCALAR_B:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 1;
-            break;
-
-        case SubtileBroadcastType::ROW_A:
-        case SubtileBroadcastType::ROW_B:
-            compute_kernel = KernelName::ComputeNoBcast;
-            bcast_input = std::nullopt;
-            break;
-
-        case SubtileBroadcastType::COL_A:
-        case SubtileBroadcastType::ROW_B_COL_A:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 0;
-            break;
-
-        case SubtileBroadcastType::COL_B:
-        case SubtileBroadcastType::ROW_A_COL_B:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 1;
-            break;
-    }
-}
-
-std::string BinaryNgKernelConfig::bcast_input_str() const {
-    if (bcast_input.has_value()) {
-        return std::to_string(*bcast_input);
-    }
-    return "";
-}
-
-std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op) {
-    constexpr std::string_view root = "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels";
-    constexpr std::string_view root_ng = "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_ng";
-    constexpr std::string_view dataflow = "{}/dataflow/{}";
-    constexpr std::string_view compute = "{}/compute/{}";
-
-    switch (kernel_name) {
-        case KernelName::ReaderNoBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_no_bcast.cpp");
-        case KernelName::ReaderRowBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_row_bcast.cpp");
-        case KernelName::ReaderColBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_col_bcast.cpp");
-        case KernelName::ReaderRowBColABcastNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_row_col_mixed_bcast.cpp");
-        case KernelName::ReaderScalarBcastNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_scalar_bcast.cpp");
-        case KernelName::ReaderRmNoBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_rm_no_bcast.cpp");
-        case KernelName::ReaderRmRowBcastNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_row_bcast.cpp");
-        case KernelName::ReaderRmColBcastNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_col_bcast.cpp");
-        case KernelName::ReaderRmRowBColABcastNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_row_col_mixed_bcast.cpp");
-        case KernelName::ReaderRmScalarBcastNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_scalar_bcast.cpp");
-        case KernelName::ReaderRmScalarOpNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_scalar_op.cpp");
-        case KernelName::WriterRmNoBcastNg: return fmt::format(dataflow, root_ng, "writer_interleaved_rm_no_bcast.cpp");
-        case KernelName::WriterNoBcastNg: return fmt::format(dataflow, root_ng, "writer_interleaved_no_bcast.cpp");
-        case KernelName::ReaderNoBcast: return fmt::format(dataflow, root, "reader_interleaved_no_bcast.cpp");
-        case KernelName::WriterScalar: return fmt::format(dataflow, root, "writer_interleaved_scalar.cpp");
-        case KernelName::ComputeNoBcast:
-            return fmt::format(
-                compute,
-                root,
-                is_where_op ? "eltwise_where_no_bcast.cpp"
-                            : (is_sfpu ? "eltwise_binary_sfpu_no_bcast.cpp" : "eltwise_binary_no_bcast.cpp"));
-        case KernelName::ComputeBcast:
-            return fmt::format(
-                compute,
-                root,
-                is_where_op ? "eltwise_where_sfpu.cpp" : (is_sfpu ? "eltwise_binary_sfpu.cpp" : "eltwise_binary.cpp"));
-        case KernelName::ComputeScalar:
-            return fmt::format(
-                compute,
-                root,
-                is_where_op ? "eltwise_where_sfpu_scalar.cpp"
-                            : (is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp"));
-        case KernelName::ComputeRowBcastNg:
-            return fmt::format(
-                compute,
-                root_ng,
-                is_where_op ? "eltwise_where_sfpu_row_bcast.cpp"
-                            : (is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp"));
-        case KernelName::ComputeColBcastNg:
-            return fmt::format(
-                compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_col_bcast.cpp" : "eltwise_binary_col_bcast.cpp");
-        case KernelName::ComputeScalarBcastNg:
-            return fmt::format(
-                compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_scalar_bcast.cpp" : "eltwise_binary_scalar_bcast.cpp");
-        case KernelName::ComputeRowColBcastNg:
-            return fmt::format(
-                compute,
-                root_ng,
-                is_where_op ? "eltwise_where_sfpu_row_col_bcast.cpp"
-                            : (is_sfpu ? "eltwise_binary_sfpu_row_col_bcast.cpp" : "eltwise_binary_row_col_bcast.cpp"));
-        default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
-    }
-}
 
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
@@ -784,9 +675,29 @@ bool is_native_L1_sharding(
         return false;
     }
 
+    // Native sharding aliases operand buffers as circular buffers, which Metal permits only for L1. This
+    // predicate is a router, not a validator: declining sends the op to the TensorAccessor path, which
+    // serves DRAM-sharded tensors.
+    const bool a_is_l1 = a.memory_config().buffer_type() == BufferType::L1;
+    const bool c_is_l1 = c.buffer_type() == BufferType::L1;
+
+    // Distinct from a mismatch: an ND_SHARDED config carries nd_shard_spec instead of shard_spec, so
+    // there is nothing to compare and we decline rather than compare across representations. For the scalar
+    // and subtile-broadcast branches below, this also keeps is_uneven() -- which dereferences shard_spec()
+    // after testing only is_sharded() -- off an ND-sharded `a`. The identical-shape branch does not use it
+    // and still reaches is_uneven() with an ND-sharded pair; that is tracked separately.
+    const bool shard_specs_comparable = a.memory_config().shard_spec().has_value() && c.shard_spec().has_value();
+    // Per-core work comes from a's shard while the output buffer is aliased as a CB, so a and c must
+    // agree or the output is addressed on cores where it is not allocated -- which hangs the device. An
+    // unsupplied output config is derived from a's, so the common case still matches. ShardSpec equality
+    // covers grid, shape and orientation but not the memory layout, and HEIGHT and BLOCK sharding place
+    // shard i on different cores for the same spec, so the layouts must match as well.
+    const bool c_shard_matches_a = shard_specs_comparable && c.memory_layout() == a.memory_config().memory_layout() &&
+                                   *c.shard_spec() == *a.memory_config().shard_spec();
+
     // Scalar value path (b is not a tensor)
     if (!b.has_value() && a.memory_config().is_sharded()) {
-        return !is_uneven(a);
+        return a_is_l1 && c_is_l1 && c_shard_matches_a && !is_uneven(a);
     }
 
     if (!b.has_value()) {
@@ -798,10 +709,12 @@ bool is_native_L1_sharding(
     bool a_is_sharded = a.memory_config().is_sharded();
     bool b_is_sharded = b->memory_config().is_sharded();
     bool a_not_broadcast = (output_shape == a.logical_shape());
-    bool a_sharded_ok = a_is_sharded && a_not_broadcast && !is_uneven(a);
+    // Gates the subtile-broadcast branch below, its only consumer.
+    bool a_native_cb_eligible =
+        a_is_sharded && a_not_broadcast && a_is_l1 && c_is_l1 && c_shard_matches_a && !is_uneven(a);
 
     // avoid complex case when a and b are both sharded
-    if (a_sharded_ok && !b_is_sharded) {
+    if (a_native_cb_eligible && !b_is_sharded) {
         auto subtile_bcast = get_subtile_broadcast_type(
             a.logical_shape()[-2], a.logical_shape()[-1], b->logical_shape()[-2], b->logical_shape()[-1]);
         [[maybe_unused]] bool is_height = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
@@ -857,6 +770,74 @@ bool is_native_L1_sharding(
     return false;
 }
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+std::optional<AllShardSpecs> get_shard_specs(
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c) {
+    bool a_sharded = a.memory_config().is_sharded();
+    bool b_sharded = b.has_value() && b->memory_config().is_sharded();
+    bool c_sharded = c.memory_config().is_sharded();
+
+    if ((!a_sharded && !b_sharded) && !c_sharded) {
+        return std::nullopt;
+    }
+
+    if (!is_native_L1_sharding(a, b, c.memory_config())) {
+        return std::nullopt;
+    }
+
+    // If the output is unevenly sharded, only allow when all tensors share the same shard spec
+    // (each core sees identical tile counts for a, b, c -- no deadlock risk).
+    if (is_uneven(c)) {
+        bool all_specs_match =
+            b.has_value() && a_sharded && b_sharded && c_sharded && a.memory_config().shard_spec().has_value() &&
+            b->memory_config().shard_spec().has_value() && c.memory_config().shard_spec().has_value() &&
+            *a.memory_config().shard_spec() == *b->memory_config().shard_spec() &&
+            *a.memory_config().shard_spec() == *c.memory_config().shard_spec();
+        if (!all_specs_match) {
+            return std::nullopt;
+        }
+    }
+
+    const auto& a_shape = a.padded_shape();
+    auto b_shape = b.has_value() ? b->padded_shape() : ttnn::Shape{1, 1};
+    const auto& c_shape = c.padded_shape();
+
+    TT_FATAL(get_shard_spec(c).has_value(), "C must have a shard spec");
+    return AllShardSpecs{
+        a_sharded ? *get_shard_spec(a) : adjust_to_shape(*get_shard_spec(c), c_shape, a_shape),
+        b_sharded ? *get_shard_spec(*b) : adjust_to_shape(*get_shard_spec(c), c_shape, b_shape),
+        *get_shard_spec(c)};
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+std::optional<AllShardVolumes> get_shard_volumes(
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c) {
+    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c);
+
+    if (not shard_specs.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto a_sharded = a.memory_config().is_sharded();
+    const auto b_sharded = b.has_value() and b->memory_config().is_sharded();
+    const auto c_sharded = c.memory_config().is_sharded();
+    const auto tile_hw = c.tile().get_tile_hw();
+
+    return AllShardVolumes{
+        .a_shard_volume = a_sharded ? shard_specs->a_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+        .b_shard_volume = b_sharded ? shard_specs->b_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+        .c_shard_volume = c_sharded ? shard_specs->c_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+    };
+}
+
 ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b) {
     // Broadcasting Rules Overview:
     // - If the two tensors have different ranks, we virtually pad the smaller-rank tensor's shape
@@ -897,60 +878,129 @@ MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const
         adjusted_shard_spec);
 }
 
+uint32_t native_compute_threads(const NativeTuning& tuning) {
+    // The rule: all four Neos compute.
+    constexpr uint32_t kRuleComputeThreads = 4;
+    return tuning.compute_threads.env.value_or(kRuleComputeThreads);
+}
+
+uint32_t native_max_tiles_per_cycle(bool sfpu, bool dst_32bit) {
+    // The factory's compute config runs half sync, the default, so a section is half of the DST.
+    return ttnn::get_dest_reg_count(ttnn::ComputeKernelConfig{.fp32_dest_acc_en = dst_32bit}) / (sfpu ? 2u : 1u);
+}
+
+bool native_compute_batch_exact(const NativeConfig& config, bool sfpu) {
+    // TODO: return true for the FPU kernel too once llk_unpack_AB steps a batch by the ring stride, as llk_unpack_A
+    // does. The rule then batches the FPU kernel at 8 at 4,4,2 and 1,4,1, and the two batching-defect tests pass.
+    return sfpu || (config.reader_threads == 1 && config.compute_threads == 1 && config.writer_threads == 1);
+}
+
+NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves) {
+    // The rule: where an input moves, a reader thread per compute thread; where the output moves, a writer
+    // thread per compute thread, within the 6 user DM cores that the readers leave. A borrowed operand moves
+    // nothing, so its reader or writer runs one thread. The DM batch is 8 tiles per barrier, and the compute
+    // batch is as many tiles as a DST section holds where the batch comes out right: 4 on the SFPU kernel in a 16-bit
+    // DST and 2 in a 32-bit DST, and 8 on the FPU kernel at R = C = W = 1 only. Beside a DRAM operand both are 1, as in
+    // the legacy binary_ng: the batching gains are craq-sim numbers, with no DRAM time.
+    constexpr uint32_t kRuleDmBatch = 8;
+    const uint32_t rule_dm_batch = moves.dram ? 1u : kRuleDmBatch;
+    NativeConfig config;
+    config.compute_threads = native_compute_threads(tuning);
+    config.reader_threads = moves.inputs ? tuning.reader_threads.env.value_or(config.compute_threads) : 1u;
+    // At least one writer thread: W = 0 would pass the R + W check and make the gate's ratio check divide by
+    // zero. A set R that leaves no DM core then fails that check instead.
+    const uint32_t writer_room =
+        config.reader_threads < kNativeUserDmCores ? kNativeUserDmCores - config.reader_threads : 1u;
+    config.writer_threads =
+        moves.output ? tuning.writer_threads.env.value_or(std::min(config.compute_threads, writer_room)) : 1u;
+    config.dm_batch = tuning.dm_batch.env.value_or(rule_dm_batch);
+    // A compute thread beside more reader or writer threads owns several tile counters of that ring, and a
+    // batch reads or fills one counter, not the thread's own tile sequence. So the rule batches only where
+    // each compute thread owns one counter of each ring.
+    const bool one_counter_per_compute_thread =
+        config.reader_threads <= config.compute_threads && config.writer_threads <= config.compute_threads;
+    // Batch only where every tile of a batch comes out right: on the FPU kernel that is ring stride 1 alone.
+    const bool rule_batches =
+        !moves.dram && one_counter_per_compute_thread && native_compute_batch_exact(config, moves.sfpu);
+    config.tiles_per_cycle = tuning.tiles_per_cycle.env.value_or(
+        rule_batches ? native_max_tiles_per_cycle(moves.sfpu, moves.dst_32bit) : 1u);
+    // Two batches of either kind per thread, so a batch is double-buffered, and a multiple of each, so no batch
+    // straddles the ring end: 16 at the rule's DM batch of 8, 2 beside DRAM.
+    const uint32_t batch_lcm = std::lcm(config.dm_batch, config.tiles_per_cycle);
+    const uint32_t two_batches = 2 * std::max(config.dm_batch, config.tiles_per_cycle);
+    config.entries_per_thread = tuning.entries_per_thread.env.value_or(tt::round_up(two_batches, batch_lcm));
+    return config;
+}
+
+std::string describe_native_value(const NativeKnob& knob, uint32_t value) {
+    return fmt::format("{} ({})", value, knob.env.has_value() ? knob.name : "rule");
+}
+
 const NativeTuning& native_tuning() {
-    // Lambdas, not file-scope helpers: this is a unity build, so `env_bool`/`env_u32` at file scope
+    // Lambdas, not file-scope helpers: this is a unity build, so `env_bool`/`read_knob` at file scope
     // would collide with any sibling in the same blob (an anonymous namespace does not help).
     static const NativeTuning tuning = [] {
-        // Unset, empty and "0" all mean OFF -- the A/B reference arm depends on =0 meaning off.
+        // Unset, empty and "0" all mean OFF.
         const auto env_bool = [](const char* name) {
             const char* v = std::getenv(name);
             return v != nullptr && v[0] != '\0' && v[0] != '0';
         };
+        // TTNN_QSR_NATIVE: unset, empty or "1" runs the native factory, and "0" runs the Metal 2.0 factory as the A/B
+        // reference arm. Any other value is refused, so that a spelling such as "false" cannot leave it on.
+        const auto native_switch = [] {
+            const char* v = std::getenv("TTNN_QSR_NATIVE");
+            if (v == nullptr || v[0] == '\0' || std::string_view(v) == "1") {
+                return true;
+            }
+            TT_FATAL(std::string_view(v) == "0", "TTNN_QSR_NATIVE must be 0 or 1, got '{}'", v);
+            return false;
+        };
         // max_value is per-knob and required: strtol returns long, so 4294967296 passes `> 0` and then
         // truncates to 0, and the gate's max(p,c) % min(p,c) then divides by zero. Depth 40 is a normal
-        // sweep point; 40 reader threads is not -- hence different bounds.
-        const auto env_u32 = [](const char* name, uint32_t fallback, uint32_t max_value) {
-            const char* v = std::getenv(name);
+        // sweep point; 40 reader threads is not -- hence different bounds. Unset or empty leaves the rule.
+        const auto read_knob = [](NativeKnob& knob, uint32_t max_value) {
+            const char* v = std::getenv(knob.name);
             if (v == nullptr || v[0] == '\0') {
-                return fallback;
+                return;
             }
             char* end = nullptr;
             const long parsed = std::strtol(v, &end, 10);
             TT_FATAL(
                 end != nullptr && *end == '\0' && parsed > 0 && parsed <= static_cast<long>(max_value),
                 "{} must be a decimal integer in [1, {}], got '{}'",
-                name,
+                knob.name,
                 max_value,
                 v);
-            return static_cast<uint32_t>(parsed);
+            knob.env = static_cast<uint32_t>(parsed);
         };
-        // 8 covers every legal thread count; depth's ceiling is the platform's uint8_t cliff at 255.
+        // 8 covers every legal thread count and the 8 tiles of a 16-bit DST section; depth's ceiling is the platform's
+        // uint8_t cliff at 255.
         constexpr uint32_t kMaxThreads = 8;
+        constexpr uint32_t kMaxBatch = 8;
         constexpr uint32_t kMaxEntriesPerThread = 255;
 
         NativeTuning t;
-        t.enabled = env_bool("TTNN_QSR_NATIVE");
+        t.enabled = native_switch();
         t.implicit_sync = env_bool("TTNN_QSR_IMPLICIT_SYNC");
-        t.entries_per_thread = env_u32("TTNN_QSR_ENTRIES_PER_THREAD", 2, kMaxEntriesPerThread);
-        // EXPERIMENTAL: 0 keeps the derived value. env_u32 rejects 0, so read it separately.
-        t.tiles_per_cycle =
-            std::getenv("TTNN_QSR_TILES_PER_CYCLE") == nullptr ? 0u : env_u32("TTNN_QSR_TILES_PER_CYCLE", 1, 8);
-        t.dm_batch = env_u32("TTNN_QSR_DM_BATCH", 1, 8);
-        t.reader_threads = env_u32("TTNN_QSR_READER_THREADS", 1, kMaxThreads);
-        t.compute_threads = env_u32("TTNN_QSR_COMPUTE_THREADS", 1, kMaxThreads);
-        t.writer_threads = env_u32("TTNN_QSR_WRITER_THREADS", 1, kMaxThreads);
+        read_knob(t.reader_threads, kMaxThreads);
+        read_knob(t.compute_threads, kMaxThreads);
+        read_knob(t.writer_threads, kMaxThreads);
+        read_knob(t.entries_per_thread, kMaxEntriesPerThread);
+        read_knob(t.dm_batch, kMaxBatch);
+        read_knob(t.tiles_per_cycle, kMaxBatch);
 
         // Only when enabled: with the native path off nothing reads these, so an unconditional throw
-        // would have no protective value and would kill the fallback reference arm on any arch.
+        // would have no protective value and would kill the fallback reference arm.
         if (!t.enabled) {
-            const bool any_knob_set = t.implicit_sync || t.entries_per_thread != 2 || t.reader_threads != 1 ||
-                                      t.compute_threads != 1 || t.writer_threads != 1 || t.tiles_per_cycle != 0 ||
-                                      t.dm_batch != 1;
+            const bool any_knob_set = t.implicit_sync || t.reader_threads.env.has_value() ||
+                                      t.compute_threads.env.has_value() || t.writer_threads.env.has_value() ||
+                                      t.entries_per_thread.env.has_value() || t.dm_batch.env.has_value() ||
+                                      t.tiles_per_cycle.env.has_value();
             if (any_knob_set) {
                 log_warning(
                     tt::LogOp,
-                    "TTNN_QSR_* tuning knobs are set but TTNN_QSR_NATIVE is off, so they have NO effect "
-                    "and the fallback factory will run. Set TTNN_QSR_NATIVE=1 to use them.");
+                    "TTNN_QSR_* tuning knobs are set but TTNN_QSR_NATIVE=0 turns the native factory off, so they "
+                    "have NO effect and the fallback factory will run. Unset TTNN_QSR_NATIVE to use them.");
             }
             return t;
         }
@@ -961,30 +1011,56 @@ const NativeTuning& native_tuning() {
             !t.implicit_sync,
             "TTNN_QSR_IMPLICIT_SYNC is parsed but not consumed. Enabling it requires restoring the "
             "guarantee that no thread draws zero tiles, which the uneven-tile-count support removed.");
-        // Also enforced in program_spec.cpp, but a throw here names the knob.
+        // The NoC path runs the most DM threads; a borrowed input or output runs one reader or writer thread.
+        const NativeConfig noc = resolve_native_config(t, {.inputs = true, .output = true});
+        // Also enforced in program_spec.cpp, but a throw here names the knob. The rule's value, 4, passes.
         TT_FATAL(
-            t.compute_threads == 1 || t.compute_threads == 2 || t.compute_threads == 4,
+            noc.compute_threads == 1 || noc.compute_threads == 2 || noc.compute_threads == 4,
             "TTNN_QSR_COMPUTE_THREADS must be 1, 2 or 4, got {}",
-            t.compute_threads);
+            noc.compute_threads);
         TT_FATAL(
-            t.reader_threads + t.writer_threads <= 6,
-            "TTNN_QSR_READER_THREADS + TTNN_QSR_WRITER_THREADS must be <= 6 (Quasar has 6 user DM "
-            "cores), got {} + {}",
-            t.reader_threads,
-            t.writer_threads);
-        // Once, so an A/B log is self-describing. num_entries is DERIVED (entries_per_thread x the
-        // endpoint's max(producers, consumers)), so the depth reaching the credit register is not this
-        // number.
+            noc.reader_threads + noc.writer_threads <= kNativeUserDmCores,
+            "binary_ng Quasar-native: R + W must be <= 6 (Quasar has 6 user DM cores), got R={} + W={}",
+            describe_native_value(t.reader_threads, noc.reader_threads),
+            describe_native_value(t.writer_threads, noc.writer_threads));
+        // Once, so an A/B log is self-describing: each value names its source, the knob or the rule.
+        // num_entries is DERIVED (entries_per_thread x the endpoint's max(producers, consumers)), so the
+        // depth reaching the credit register is not this number.
+        // The program shapes can differ in their threads, batches and depth, so each gives its own. A DRAM
+        // operand changes only the batches and the depth, the same in every shape, so the DRAM part names those.
+        const NativeConfig noc_dram = resolve_native_config(t, {.inputs = true, .output = true, .dram = true});
+        const NativeConfig output_borrowed = resolve_native_config(t, {.inputs = true, .output = false});
+        const NativeConfig inputs_borrowed = resolve_native_config(t, {.inputs = false, .output = true});
+        const NativeConfig all_borrowed = resolve_native_config(t, {});
+        const NativeConfig noc_sfpu = resolve_native_config(t, {.inputs = true, .output = true, .sfpu = true});
+        const NativeConfig noc_sfpu_32bit =
+            resolve_native_config(t, {.inputs = true, .output = true, .sfpu = true, .dst_32bit = true});
         log_info(
             tt::LogOp,
-            "binary_ng Quasar-native ENABLED: R={} C={} W={} entries_per_thread={} tiles_per_cycle={} "
-            "dm_batch={}. Sync is EXPLICIT.",
-            t.reader_threads,
-            t.compute_threads,
-            t.writer_threads,
-            t.entries_per_thread,
-            t.tiles_per_cycle,
-            t.dm_batch);
+            "binary_ng Quasar-native ENABLED. Where the operands move over the NoC, all in L1: R={} C={} W={} "
+            "entries_per_thread={} dm_batch={} tiles_per_cycle={}. Where an operand is in DRAM: "
+            "entries_per_thread={} dm_batch={} tiles_per_cycle={}. Where the output is borrowed and an input moves: "
+            "R={} W=1 tiles_per_cycle={}. Where the inputs are borrowed and the output moves: R=1 W={} "
+            "tiles_per_cycle={}. Where all of them are borrowed: R=1 W=1 tiles_per_cycle={}. Where the SFPU kernel "
+            "runs, "
+            "all in L1 over the NoC: tiles_per_cycle={} in a 16-bit DST, tiles_per_cycle={} in a 32-bit DST. Sync "
+            "is EXPLICIT.",
+            describe_native_value(t.reader_threads, noc.reader_threads),
+            describe_native_value(t.compute_threads, noc.compute_threads),
+            describe_native_value(t.writer_threads, noc.writer_threads),
+            describe_native_value(t.entries_per_thread, noc.entries_per_thread),
+            describe_native_value(t.dm_batch, noc.dm_batch),
+            describe_native_value(t.tiles_per_cycle, noc.tiles_per_cycle),
+            describe_native_value(t.entries_per_thread, noc_dram.entries_per_thread),
+            describe_native_value(t.dm_batch, noc_dram.dm_batch),
+            describe_native_value(t.tiles_per_cycle, noc_dram.tiles_per_cycle),
+            describe_native_value(t.reader_threads, output_borrowed.reader_threads),
+            describe_native_value(t.tiles_per_cycle, output_borrowed.tiles_per_cycle),
+            describe_native_value(t.writer_threads, inputs_borrowed.writer_threads),
+            describe_native_value(t.tiles_per_cycle, inputs_borrowed.tiles_per_cycle),
+            describe_native_value(t.tiles_per_cycle, all_borrowed.tiles_per_cycle),
+            describe_native_value(t.tiles_per_cycle, noc_sfpu.tiles_per_cycle),
+            describe_native_value(t.tiles_per_cycle, noc_sfpu_32bit.tiles_per_cycle));
         return t;
     }();
     return tuning;

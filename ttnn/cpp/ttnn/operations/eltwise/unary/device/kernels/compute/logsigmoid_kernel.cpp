@@ -15,19 +15,22 @@ namespace ckl = compute_kernel_lib;
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
 
+    DataflowBuffer dfb_in_obj(dfb::in);
+    DataflowBuffer dfb_out_obj(dfb::out);
     compute_kernel_hw_startup(dfb::in, dfb::out);
 
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(num_tiles),
         ckl::CopyTile<
             ckl::input(dfb::in, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D0>{},
+            ckl::Dst::D0>{dfb_in_obj},
         ckl::CopyTile<
             ckl::input(dfb::in, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D1>{},
+            ckl::Dst::D1>{dfb_in_obj},
         ckl::Negative<ckl::Dst::D1>{},
         ckl::Exp<ckl::Approx::Fast, ckl::Dst::D1>{},
         ckl::Logsigmoid<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
-            dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb_out_obj});
 }

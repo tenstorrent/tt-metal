@@ -46,17 +46,17 @@ void kernel_main() {
     bool first = true;
     for (uint32_t out_page_idx = start_output_page_idx; out_page_idx < end_output_page_idx; ++out_page_idx) {
         mapping_cb.reserve_back(One_Tile_Reserve);
-        uint32_t map_l1_addr;
+        volatile tt_l1_ptr SegmentMapData* map_ptr;
         {
             // Hold the write lock across the NOC fill of this entry. Taken right after reserve_back, so
             // get_ptr() is the pre-push write pointer. The lock is what makes the NOC write into this DFB
             // legal -- every NOC write into a DFB region must be fully covered by a lock the writing
             // processor holds. It does NOT cover the parse below: that runs after the release (and after
-            // push_back), and is coherent only because map_l1_addr is the uncached L1 alias on Quasar DM,
+            // push_back), and is coherent only because map_ptr is the uncached L1 alias on Quasar DM,
             // so the loads re-fetch from TL1.
             const auto map_lock = mapping_cb.scoped_write_lock(One_Tile_Reserve);
             const auto map_mem = map_lock.get_ptr();  // CoreLocalMem: the NOC dst, no rewrap needed
-            map_l1_addr = static_cast<uint32_t>(map_mem.get_address());
+            map_ptr = &map_lock.get_ptr<SegmentMapData>()[0];
             // [#48552] async_read_barrier is a no-op on Quasar (scmdbuf_tr_ack stubbed) and a repeated read
             // into the reused num_entries=1 slot doesn't re-deliver. Use the TRID read +
             // is_read_trid_flushed poll (the mechanism padded_slice relies on) so the transaction actually
@@ -74,7 +74,6 @@ void kernel_main() {
         }
         mapping_cb.push_back(1);
 
-        auto map_ptr = reinterpret_cast<volatile tt_l1_ptr SegmentMapData*>(map_l1_addr);
         uint32_t previous_input_page_idx = std::numeric_limits<uint32_t>::max();
         for (uint32_t map_idx = 0; map_idx < Max_Map_Entries; ++map_idx) {
             if (map_ptr[map_idx].num_elements == 0) {

@@ -13,8 +13,8 @@ unless ``--arch`` is passed. Comparison is the union of values on each axis.
 is the other side's axes (``dest_sync_dest_acc``) splits when slot types match.
 ``CROSS_ARCH_FUNCTION_EXCEPTIONS`` pairs a function that lives in another module.
 Format lists print shared values first, then side-only values, each alphabetical.
-``iterations``, ``loop_factor``, ``run_types``, ``is_perf``, and
-``implied_math_format`` are shown and ignored. Composite axes are repeated one
+``iterations``, ``loop_factor``, ``run_types``, and ``is_perf`` are shown and
+ignored. Composite axes are repeated one
 field at a time. ``--csv DIR`` writes that table.
 
     python compare_test_and_perf.py
@@ -85,8 +85,11 @@ def _reload_local_dependencies(module: ModuleType, root: Path) -> None:
 
 
 def import_test_module(path: Path, root: Path, arch: str) -> ModuleType:
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+    # tt_llk_perf lives outside the test tree; the pytest plugin adds it, this script must too.
+    tools_python = str(root.parent.parent / "tools" / "python")
+    for import_root in (tools_python, str(root)):
+        if import_root not in sys.path:
+            sys.path.insert(0, import_root)
     os.environ.setdefault("LLK_HOME", str(root.parent.parent))
     os.environ["CHIP_ARCH"] = arch
     _clear_chip_arch_cache()
@@ -98,39 +101,6 @@ def import_test_module(path: Path, root: Path, arch: str) -> ModuleType:
         _clear_chip_arch_cache()
         return importlib.reload(loaded)
     return importlib.import_module(dotted)
-
-
-_IGNORED_LEAF_NAMES = frozenset({"implied_math_format", "ImpliedMathFormat"})
-
-
-def _is_ignored_leaf(name: str, leaf: Any) -> bool:
-    tail = name.rsplit(".", 1)[-1].split("#", 1)[0]
-    if tail in _IGNORED_LEAF_NAMES:
-        return True
-    return isinstance(leaf, enum.Enum) and type(leaf).__name__ == "ImpliedMathFormat"
-
-
-def coverage_canon(value: Any) -> str | None:
-    """Canon used for coverage. Drops packed implied_math_format fields."""
-    if isinstance(value, enum.Enum) and type(value).__name__ == "ImpliedMathFormat":
-        return None
-    if is_dataclass(value) and not isinstance(value, type):
-        members = []
-        for field in fields(value):
-            if field.name in _IGNORED_LEAF_NAMES:
-                continue
-            piece = coverage_canon(getattr(value, field.name))
-            if piece is not None:
-                members.append(f"{field.name}={piece}")
-        return f"{type(value).__name__}({', '.join(members)})"
-    if (
-        isinstance(value, (list, tuple))
-        and value
-        and not all(isinstance(item, _SCALAR_TYPES) for item in value)
-    ):
-        parts = [coverage_canon(item) for item in value]
-        return "[" + ", ".join(part for part in parts if part is not None) + "]"
-    return canon(value)
 
 
 def canon(value: Any) -> str:
@@ -210,7 +180,7 @@ def axis_value_sets(pmarks: list) -> Sweep:
         canonical_row = {}
         raw_row = {}
         for name, val in zip(axis_names, row):
-            key = coverage_canon(val) or canon(val)
+            key = canon(val)
             canonical_row[name] = key
             raw_row[name] = val
             if key not in seen[name]:
@@ -414,8 +384,6 @@ def parameter_values(sweep: Sweep, ignored_axes: frozenset[str]) -> Parameters:
         for value in values:
             leaves = flatten_axis_value(value, axis)
             for name, leaf in leaves:
-                if _is_ignored_leaf(name, leaf):
-                    continue
                 kept_names.append(name)
                 axis_params.add(name)
                 key = canon(leaf)
@@ -529,7 +497,7 @@ def pair_functions(
 
 
 MEASUREMENT_AXES = frozenset({"iterations", "loop_factor", "run_types", "is_perf"})
-IGNORED_AXES = MEASUREMENT_AXES | frozenset({"implied_math_format"})
+IGNORED_AXES = MEASUREMENT_AXES
 
 
 @dataclass(frozen=True)

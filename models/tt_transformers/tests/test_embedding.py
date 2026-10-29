@@ -77,6 +77,11 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
     prompts = ["Joy"] * 32
     pt_input = torch.tensor([model_args.encode_prompt(prompt, instruct=False) for prompt in prompts])
     reference_output = reference_emb(pt_input)
+    ref_scale = getattr(reference_emb, "embed_scale", None)
+    if use_scaled_embedding and ref_scale is None:
+        reference_output = reference_output * model_args.embed_scale
+    elif not use_scaled_embedding and ref_scale is not None:
+        reference_output = reference_output / ref_scale
     logger.info(f"reference_output: {reference_output.shape}")
 
     tt_input = ttnn.from_torch(
@@ -103,3 +108,7 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
         logger.warning("embedding Failed!")
 
     assert passing, f"embedding output does not meet PCC requirement {0.99}."
+    # PCC ignores a constant factor, so it cannot catch a wrong embed_scale.
+    assert torch.allclose(
+        tt_output_torch.float(), reference_output.float(), rtol=1e-2, atol=1e-3
+    ), f"embedding output magnitude does not match the reference: {comp_allclose(reference_output, tt_output_torch)}"
