@@ -569,14 +569,22 @@ def _prefill_whole(adapter, vslot, n=5):
     return adapter.slots.res_of[vslot]
 
 
-def test_rows_fill_in_the_model_row_order():
-    """contract section 2: the lowest launch with a free row, its rows in model.row_order() (rows of different head
-    cores run in parallel); a freed row is reused first; launch 1 only when launch 0 is full"""
-    adapter, _ = make_adapter(16, 128, False)
-    assert [_prefill_whole(adapter, v) for v in range(3)] == [0, 4, 1]
-    adapter.release_request(1)  # resident slot 4
-    assert _prefill_whole(adapter, 1) == 4
-    assert [_prefill_whole(adapter, v) for v in range(3, 9)] == [5, 2, 6, 3, 7, 8]
+@pytest.mark.parametrize("order", [[0, 4, 1, 5, 2, 6, 3, 7], [0, 2, 4, 6, 1, 3, 5, 7]], ids=["G2", "G4"])
+def test_rows_fill_in_the_model_row_order(order):
+    """contract section 2: launch 0 fills before launch 1, a launch's rows in model.row_order() order (read from the
+    model: G=2 and G=4 head groups give different orders); a freed row is refilled first, in that order"""
+    adapter, model = make_adapter(16, 128, False)
+    model.row_order = lambda: list(order)
+    assert [_prefill_whole(adapter, v) for v in range(8)] == order, "the first 8 admits, in row order"
+    assert _prefill_whole(adapter, 8) == 8, "the 9th: launch 1"
+    assert _prefill_whole(adapter, 9) == 8 + order[1]
+    freed = [order[5], order[2]]
+    adapter.release_request(order.index(freed[0]))
+    adapter.release_request(order.index(freed[1]))
+    assert [_prefill_whole(adapter, v) for v in (order.index(freed[0]), order.index(freed[1]))] == sorted(
+        freed, key=order.index
+    ), "freed rows of launch 0 come back before launch 1's, in row order"
+    assert _prefill_whole(adapter, 10) == 8 + order[2]
 
 
 def test_without_row_order_the_head_groups_give_the_order():
