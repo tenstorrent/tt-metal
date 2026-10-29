@@ -984,3 +984,28 @@ line that DRAM holds row records, tiles only in L1).
   command line (killed by pid). Lesson for agents too: a waiter on pgrep -f matches itself; wait on a pid.
   Selftests: 2 fail before and after F225 (test_e2e_runtime fixed threshold in xing40 server_rules.py:393;
   test_fork_cases volatile cache key, timeout) - to look at.
+- 16:35 FIX.13 RESULT (agent, device dumps L0-L20, no code change): DS41-141 is rounding, not a bug, and I accept it:
+  the pad tail is bit-neutral (rows [0, 2536) identical with a pad or a real tail), P.9 on = off per chip / column at
+  L0-L3, and over all 286 128-row windows of the prompt P.9 moves the window_kv PCC by mean -0.00005 (std 0.0032),
+  while with P.9 OFF 191 of 286 windows already miss the limit. The check is miscalibrated: its limit is calib x the
+  reference's drift over the WHOLE state (state_threshold -> e2e_limits.state_limit), applied to one 128-row window,
+  which is far noisier; the single window it samples passed by chance before P.9. Waiver kept (reason to update).
+  FIX.13's gate re-runs K.1's 5 contract units (~40 device-min, BRINGUP_TASK differs from P.10's same tests): waste of
+  the F216 kind; let it run while the Galaxy has nothing else (stop + close by hand if FIX.14 arrives).
+  OWNER 16:35: queue the framework fix -> F227 (F226 taken by the 2x2: state waivers) (overseer, framework; at the next gap, selftest + BREADCRUMBS):
+  a "last-window" contract comparison gets its limit from the reference's drift over the SAME kind of rows: the drift
+  file (reference.drift, testing/e2e_limits.py) records per state and layer the reference's PCC over each window-size
+  range of the rung (the worst window, or the window the check reads), and e2e_limits gives the contract test that
+  limit for mode "last-window" (the full-range check keeps the whole-state limit). The contract tests (caches.py
+  golden_failures / server_rules.state_threshold, frozen) pass the mode: a re-freeze of DeepSeek's contract tests,
+  owner approval at the time. Cost: the drift needs the official-numerics run's state per row for the rung; check
+  whether the G task kept it (else a CPU run at real size, hours: batch it with official_floor.json, DS41-140 / F215).
+  When it lands: re-run test_adapter_acks / test_runner_contract once and remove tests.unit_waivers' DS41-141 entry.
+  Also open: the 2x2 reports swap tests dec_reindex L21, dec_reuse L21, enc_reuse L03 at ~0.03 vs 0.01 limits even on
+  the bf16 path and with P.9 off - NOT DS41-141; 2x2 asked to compare err / limit with the last pass and bisect
+  (FIX.9's shared-expert bfp8 first suspect). Queue a Galaxy fix job when it names a cause.
+- 16:55 The 2x2 pushed READY FOR GALAXY (df92663a019, on top of FIX.12): window KV bfloat8_b blocks, index K / Q
+  bfloat4_b, default on; owner accepted its waivers 16:50 (tests.waivers indexer, state.topk_idx: the reference's own fp4
+  selection error, F226). Its swap-test failures: 5 fail identically with the formats off - the swap limits lost the
+  reference arithmetic at FIX.6 (LOWBIT_PHASE1.md section 8; owner to decide). FIX.13 stopped by hand (abort; no code
+  changed, records committed; FIX.13 stays TODO in state like FIX.11 - F216). Next: merge, rebuild, FIX.14.
