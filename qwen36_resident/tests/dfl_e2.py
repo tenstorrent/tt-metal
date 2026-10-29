@@ -234,7 +234,15 @@ def read_timeline(model, layers, interval):
             t = ts[chip * S + i].reshape(layers, 32)
             ends = t[:, 3]
             dur = (ends[1:] - ends[:-1]) % 2**32
-            per_core.append(dict(dur=dur.tolist(), stall=t[1:, 4:8].tolist(), span=int((ends[-1] - ends[0]) % 2**32)))
+            # compute's phase ends (streamer_compute.cpp marks 0..9): per layer the ticks of rmsnorm, projection, conv,
+            # out-projection (incl. the wait for the mixer), the gap to the mlp half, rmsnorm, gate|up, silu, down
+            c = t[:, 16:26]
+            phases = ((c[1:, 1:] - c[1:, :-1]) % 2**32).tolist()
+            per_core.append(
+                dict(
+                    dur=dur.tolist(), stall=t[1:, 4:8].tolist(), span=int((ends[-1] - ends[0]) % 2**32), phases=phases
+                )
+            )
         rows.append(per_core)
     return rows
 
@@ -255,13 +263,25 @@ def summarize_timeline(tl, layers, interval, step_ms):
                 kind = "attn" if is_attn(l, interval) else "gdn"
                 kinds[kind].append(dur)
                 stalls[kind].append(st)
+    phases = {"attn": [], "gdn": []}
+    for chip in tl:
+        for c in chip:
+            for k, ph in enumerate(c["phases"]):
+                phases["attn" if is_attn(k + 1, interval) else "gdn"].append(ph)
     out = {}
     for kind in kinds:
         if not kinds[kind]:
             continue
         m = sum(kinds[kind]) / len(kinds[kind])
         s = torch.tensor(stalls[kind], dtype=torch.float64).mean(0).tolist()
-        out[kind] = dict(layer_ms=m * tick_ms, stall_ms=[x * tick_ms for x in s], layers=len(kinds[kind]) // len(spans))
+        ph = torch.tensor(phases[kind], dtype=torch.float64).median(0).values.tolist()
+        out[kind] = dict(
+            layer_ms=m * tick_ms,
+            stall_ms=[x * tick_ms for x in s],
+            layers=len(kinds[kind]) // len(spans),
+            # rms1->proj, proj->conv, conv->out, out->mlp, mlp->rms2, rms2->gu, gu->silu, silu->down (median, us)
+            phase_us=[round(x * tick_ms * 1e3, 1) for x in ph],
+        )
     out["tick_ms"] = tick_ms
     return out
 
@@ -277,6 +297,7 @@ def run_proxy(mesh, a):
     g = torch.Generator().manual_seed(3)
     for cfg in a.configs.split(","):
         verify = cfg.startswith("V")
+        R = int(cfg[1:].split("G")[0]) if verify else 0
         B = int(cfg[1:].split("G")[0])
         G = int(cfg.split("G")[1]) if "G" in cfg else 0
         if G:
@@ -286,13 +307,15 @@ def run_proxy(mesh, a):
         sts = State(d, n_gdn, n_attn, 0, max_pos, zero=True, kv=False)
         if not verify and B > 1:
             sts = [sts] + [State(d, n_gdn, n_attn, 0, max_pos, zero=True, kv=False) for _ in range(B - 1)]
-        model = ResidentModel(mesh, d, w, sts, layers, interval, True, verify=verify, timeline=a.timeline)
+        model = ResidentModel(
+            mesh, d, w, sts, layers, interval, True, verify=R if verify else False, timeline=a.timeline
+        )
         clock(f"{cfg}: built (G={model.head_groups}, ring {model.ring_bytes})")
         x0 = torch.randn(B, HIDDEN, generator=g) * 0.05
 
         def tok(p):
             if verify:
-                return model.token_state(x0, [p, p + 1], ring=p, slot=0)
+                return model.token_state(x0, list(range(p, p + R)), ring=p, slot=0)
             if B == 1:
                 return model.token_state(x0[0], p)
             return model.token_state(x0, [p] * B, ring=p)
@@ -327,6 +350,8 @@ def run_proxy(mesh, a):
                 ttnn.synchronize_device(mesh)
                 tl = read_timeline(model, layers, interval)
                 row["timeline"] = summarize_timeline(tl, layers, interval, row["step_ms"])
+                raw = ttnn.to_torch(model.ts_t, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh, dim=0))
+                row["raw_s0"] = (raw[0].to(torch.int64) & 0xFFFFFFFF).reshape(layers, 32).tolist()  # chip 0 streamer 0
             rows[p] = row
             log(
                 f"{cfg} pos {p}: {row['step_ms']:.2f} ms/step device, {row['host_loop_ms']:.2f} ms with host I/O "
