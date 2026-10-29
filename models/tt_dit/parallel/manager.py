@@ -60,6 +60,7 @@ class CCLManager:
         self.rs_ping_pong_idx = [0, 0]
         self.rs_ping_pong_idx_fused = [0, 0]
         self.ag_ping_pong_idx = [0, 0]
+        self.ring_sdpa_ping_pong_idx = [0, 0]
         self.exp_ring_ping_pong_idx = [0, 0]
         self.np_ping_pong_idx = [0, 0]
         self.np_fused_ping_pong_idx = [0, 0]
@@ -92,6 +93,13 @@ class CCLManager:
         # Initialize semaphores for all gather ping pong - separate for each mesh axis
         ag_n_sems = 2 * 2  # 2 semaphores * 2 for ping pong (2 buffers)
         self.ag_ping_pong_semaphores = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
+        }
+
+        # Ring joint SDPA semaphores, separate from the all gather pool so that ring SDPA's all gathers never share a
+        # semaphore set with the AllGatherAsync calls around them (and do not shift the all gather ping pong order)
+        self.ring_sdpa_ping_pong_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
         }
@@ -475,6 +483,21 @@ class CCLManager:
                 ),
             )
         return self._mm_credit_counters_buffer
+
+    def get_ring_sdpa_ping_pong_semaphore(self, mesh_axis):
+        """
+        Get semaphores for ring joint SDPA operations (own pool, not shared with all gather).
+
+        Args:
+            mesh_axis: The mesh axis (0 or 1) to get semaphores for
+
+        Returns:
+            List of 2 semaphores for the current ping pong cycle
+        """
+        cur_idx = self.ring_sdpa_ping_pong_idx[mesh_axis]
+        n_sems = 2
+        self.ring_sdpa_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
+        return self.ring_sdpa_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
     def get_exp_ring_ping_pong_semaphore(self, mesh_axis):
         """
