@@ -4,11 +4,21 @@
 
 #pragma once
 
+#include "ckernel.h"
 #include "llk_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_binary.h"
 
 namespace ckernel::sfpu {
+
+template <bool APPROXIMATION_MODE>
+inline void lerp_init() {
+    // calculate_lerp's second store walks dest through physical addr_mod slot 6, advancing by
+    // the two rows the iteration just wrote (one sfpi row is two dest counter steps), so the
+    // loop body needs no separate increment. The ternary SFPU dispatch sets addr_mod_base, so
+    // the store names ADDR_MOD_2, which maps to physical slot 6.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
 inline void calculate_lerp(
@@ -34,7 +44,7 @@ inline void calculate_lerp(
     // compiler then interleaves the two rows' dependent SFPMADs, and the SFPNOP each of a one-row
     // body's two dependent SFPMADs costs (write latency that nothing else can fill) disappears.
     // Identical instructions on identical operands, only the issue order changes, so the results
-    // are bit-identical to the one-row body.
+    // are bit-identical to the one-row body. The second store advances dest (see lerp_init).
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d += 2) {
         sfpi::vFloat a_in0 = sfpi::dst_reg[off_in0];
@@ -52,8 +62,7 @@ inline void calculate_lerp(
             b_res = float32_to_bf16_rne(b_res);
         }
         sfpi::dst_reg[off_out] = a_res;
-        sfpi::dst_reg[off_out + 1] = b_res;
-        sfpi::dst_reg += 2;
+        sfpi::dst_reg[off_out + 1].mode(ADDR_MOD_2) = b_res;
     }
 }
 

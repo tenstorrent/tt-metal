@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ckernel.h"
+#include "cmath_common.h"
 #include "llk_defs.h"
 #include "lltt.h"
 #include "sfpi.h"
@@ -25,12 +26,17 @@ inline constexpr int mac_replay_len = is_fp32_dest_acc_en ? 10 : 12;
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format>
 inline void mac_init() {
+    // Slots from replay_buf_offset up belong to the FPU; the recording must stay below them.
+    static_assert(
+        MAC_REPLAY_SLOT + mac_replay_len<is_fp32_dest_acc_en> <= ckernel::math::replay_buf_offset,
+        "the recorded mac body must fit in the SFPU replay slots");
+
     // The ternary SFPU dispatch sets addr_mod_base=1 (via set_addr_mod_base()),
     // which shifts instruction addr_mod fields 0..3 to hardware slots 4..7.
     // So SFPSTORE with ADDR_MOD_2 in the instruction actually uses hardware
     // slot 6 at runtime.  We must configure hardware slot 6 (ADDR_MOD_6), not
     // slot 2, for the dest auto-advance to work correctly.
-    // (This matches how SfpuType::where configures ADDR_MOD_6.)
+    // (SfpuType::where uses the same slot, but with an increment of 2.)
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
@@ -56,8 +62,9 @@ inline void mac_init() {
     // 32-bit DST in the mirrored case.  DataLayout::FSrcB is mod 0, i.e. "whatever
     // format DST is configured with".
     //
-    // sfpi defaults the loads to the arch's no-increment addr_mod (ADDR_MOD_3 here), which
-    // is what we want; only the store overrides it, with the auto-advancing mod set above.
+    // sfpi defaults the loads and the first row's store to the arch's no-increment addr_mod
+    // (ADDR_MOD_3 here), which is what we want; only the second row's store overrides it,
+    // with the auto-advancing mod set above.
     constexpr sfpi::DataLayout dst_fmt = is_fp32_dest_acc_en ? sfpi::DataLayout::F32 : sfpi::DataLayout::FSrcB;
 
     lltt::record<lltt::NoExec>(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
@@ -94,7 +101,7 @@ inline void mac_init() {
 // recorded replay sequence, so the operand tiles are always (0, 1, 2) and the
 // result is always written to tile 0.  Passing anything else has no effect.
 //
-// Because the replay slots (0..6) are shared with other SFPU ops, this must be
+// Because the replay slots mac_init records into are shared with other SFPU ops, this must be
 // replayed while mac_init's recording is still the resident one - i.e. a
 // mac_tile call is only valid immediately after mac_tile_init.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
