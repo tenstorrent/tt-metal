@@ -5,9 +5,9 @@
 """Device perf gate for HybridRoutedExpertFfn: per-case device duration over the kimi/glm ISL
 sweep on the x_rm production path, measured with the real-time program profiler.
 
-The cases of test_routed_expert_crossover_perf.py -- same models, sweep, weight placements and
-margins -- plus 32/64/96, which the crossover does not run. On every shared case the union op's
-number sits next to the best-of-both number the two ops it replaces achieve on exactly that case.
+Same models, ISL sweep, weight placements and x_rm input as test_moe_fused_swiglu_perf.py and
+test_single_routed_expert_perf.py, so every case sits next to the two ops the union replaces on
+exactly that case.
 
 One expert over an _ISL_ALLOCATED_TOKENS region with `active_tokens` live rows, and the model's
 own threshold decides which half serves it. The other half still launches on every core and
@@ -64,10 +64,9 @@ _KNEE_TOKENS = 512
 # land at either end of it, which no margin then holds. Recalibrate on the perf runner (it is
 # DDR-speed dependent): each case logs an "RT-CAL" line in this dict's format.
 #
-# Every entry is above the best-of-both number the two ops this one replaces reach on the same
-# case in test_routed_expert_crossover_perf.py -- by 1.9-17.2 us across the sweep, and by 4.0-4.1 us
-# at active=0, where no expert does any work at all and the whole difference is the second pass,
-# the grid barrier and the weight-table load.
+# Every entry is above the faster of the two ops this one replaces on the same case -- by
+# 1.9-17.2 us across the sweep, and by 4.0-4.1 us at active=0, where no expert does any work at all
+# and the whole difference is the second pass, the grid barrier and the weight-table load.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 0): 5_901,
     ("kimi_k2_7", 32): 81_021,
