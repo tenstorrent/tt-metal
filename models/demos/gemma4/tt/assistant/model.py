@@ -191,7 +191,17 @@ class Gemma4AssistantModel:
             emb = ttnn.unsqueeze_to_4D(emb)
         return ttnn.to_layout(emb, ttnn.TILE_LAYOUT)
 
-    def step(self, token_tt, target_hidden, shared_kv, page_tables, pos_uint32, pos_int32, return_logits=True):
+    def step(
+        self,
+        token_tt,
+        target_hidden,
+        shared_kv,
+        page_tables,
+        pos_uint32,
+        pos_int32,
+        return_logits=True,
+        gather_logits=True,
+    ):
         """One drafter step.
 
         Args:
@@ -204,6 +214,8 @@ class Gemma4AssistantModel:
                 for both types in the simple unbounded case).
             pos_uint32: [1,32] uint32 fixed position for RoPE lookup.
             pos_int32: [1] int32 fixed position for SDPA cur_pos.
+            gather_logits: when False (TP > 1), return the chip's vocab slice ``[1, 1, rows, vocab / tp]``
+                instead of the all-gathered logits (the serving records' sharded argmax).
             return_logits: when False, skip the lm_head + its TP all-gather and
                 return ``(None, next_hidden)`` (used to isolate the lm_head/CCL
                 cost in timing harnesses).
@@ -239,7 +251,7 @@ class Gemma4AssistantModel:
         logits = None
         if return_logits:
             logits = ttnn.linear(normed, self.lm_head)
-            if self.mesh_config is not None and self.mesh_config.tp > 1:
+            if gather_logits and self.mesh_config is not None and self.mesh_config.tp > 1:
                 logits = ccl_allgather(logits, self.mesh_config, self.ccl_manager)
 
         next_hidden = ttnn.linear(normed, self.post_projection)

@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.ccl import ccl_allgather
 
 # Device argmax tile rule: the multicore argmax is exact for one 32-row tile,
 # so a serving shape packs ``rows * (drafts + 1) <= 32`` verify rows.
@@ -802,6 +803,11 @@ class SpeculativeDecoder:
         # GEMMA4_SPEC_TRACED_SEED=0 keeps every reseed eager.
         self._srv_seed_traces = {}  # shape -> trace id
         self._srv_traced_seed = os.environ.get("GEMMA4_SPEC_TRACED_SEED", "1") == "1"
+        # The drafter's argmax on its TP-sharded logits (no vocab all-gather; the per-shard multicore argmax over
+        # vocab / tp columns is ~0.05 ms against ~1 ms over the gathered vocab) with the shards' (max, index)
+        # candidates exchanged over the TP axis. GEMMA4_SPEC_SHARDED_DRAFT_ARGMAX=0 keeps the gathered argmax.
+        self._srv_sharded_draft_argmax = os.environ.get("GEMMA4_SPEC_SHARDED_DRAFT_ARGMAX", "1") == "1"
+        self._srv_draft_consts = {}  # (gathered width, vocab slice) -> the candidate mask / column iota / slice offsets
         self._srv_logits = None  # [1, 1, 32, V_padded] the last replay's verify logits (shared by every record)
         self._srv_iota = {}  # key-chunk length -> [1, 1, 1, n] fp32 iota for the in-trace masks
         self._srv_uploaded = {}  # last uploaded small inputs, by key
@@ -2549,6 +2555,7 @@ class SpeculativeDecoder:
         self._srv_pool_v = None
         self._srv_pool_s = None
         self._srv_seed_traces = {}
+        self._srv_draft_consts = {}
         self._srv_logits = None
         self._srv_iota = {}
         self._srv_backbone = None
@@ -2972,7 +2979,13 @@ class SpeculativeDecoder:
                 self._free_tensor_tree(S.get(key))
         self._srv_shape_bufs = {}
         self._srv_frozen = False
-        for t in (self._srv_pool_v, self._srv_pool_s, self._srv_logits, *self._srv_iota.values()):
+        for t in (
+            self._srv_pool_v,
+            self._srv_pool_s,
+            self._srv_logits,
+            *self._srv_iota.values(),
+            *(t for c in self._srv_draft_consts.values() for t in c.values()),
+        ):
             self._free_tensor_tree(t)
         self._srv_pool_v = self._srv_pool_s = self._srv_logits = None
         self._srv_iota = {}
@@ -3205,10 +3218,14 @@ class SpeculativeDecoder:
         tok = S["anchor_tok"]
         draft_cols = []
         for _ in range(K):
-            logits, h_next = self.assistant.step(tok, h, self._shared_kv, S["d_ptl"], S["d_pu"], S["d_pi"])
+            sharded = self._srv_sharded_draft_argmax and self._tp > 1
+            logits, h_next = self.assistant.step(
+                tok, h, self._shared_kv, S["d_ptl"], S["d_pu"], S["d_pi"], gather_logits=not sharded
+            )
             h.deallocate(True)
             h = h_next
-            idx = self._argmax_last(logits, rows=B)  # [1, 1, B] uint32
+            # [1, 1, B] uint32: the sharded argmax exchanges the shards' candidates, the gathered one scans the vocab
+            idx = self._draft_argmax_sharded(logits, rows=B) if sharded else self._argmax_last(logits, rows=B)
             logits.deallocate(True)
             tok = ttnn.reshape(idx, (1, B))
             draft_cols.append(tok)
@@ -3248,6 +3265,94 @@ class SpeculativeDecoder:
         ttnn.copy(vidx, rec["vidx"])
         vidx.deallocate(True)
         return rec["verify_x"], rec["vidx"]
+
+    def _srv_draft_consts_for(self, width, vocab_slice):
+        """The sharded argmax's persistent rows for a gathered width ``width`` (``tp`` slices of ``width / tp``
+        columns, a slice's maximum in its first column): the candidate mask (0 at a slice's first column, a large
+        negative elsewhere), the fp32 column iota and the fp32 offset of each column's slice in the vocab."""
+        key = (int(width), int(vocab_slice))
+        consts = self._srv_draft_consts.get(key)
+        if consts is None:
+            if getattr(self, "_srv_frozen", False):
+                raise RuntimeError(
+                    f"no sharded-argmax rows for a gathered width of {width} after serving_prepare: the eager "
+                    f"bodies made them ({sorted(self._srv_draft_consts)}); a replay never allocates"
+                )
+            per = int(width) // self._tp
+            cols = torch.arange(int(width), dtype=torch.float32)
+            mask = torch.where(cols % per == 0, 0.0, -30000.0).reshape(1, 1, 1, -1).expand(1, 1, SPEC_ROW_TILE, -1)
+            iota = cols.reshape(1, 1, 1, -1).expand(1, 1, SPEC_ROW_TILE, -1)
+            offset = ((cols // per) * float(vocab_slice)).reshape(1, 1, 1, -1).expand(1, 1, SPEC_ROW_TILE, -1)
+            consts = {
+                "mask": self._pv_from_torch(mask.contiguous(), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+                "iota": self._pv_from_torch(iota.contiguous(), ttnn.float32, layout=ttnn.TILE_LAYOUT),
+                "offset": self._pv_from_torch(offset.contiguous(), ttnn.float32, layout=ttnn.TILE_LAYOUT),
+            }
+            self._srv_draft_consts[key] = consts
+        return consts
+
+    def _draft_argmax_sharded(self, logits, rows):
+        """argmax over the vocab of the drafter's TP-sharded logits ``[1, 1, rows, vocab / tp]`` (TILE, one slice
+        per chip): ``[1, 1, rows]`` uint32 ROW_MAJOR, the same on every chip.
+
+        Per chip the slice's argmax (the multicore ROW_MAJOR argmax over ``vocab / tp`` columns) and its maximum;
+        both all-gathered over the TP axis (a 32-row tile per chip), the winning slice picked by an argmax over
+        the gathered maxima with the non-leading columns masked down, and its slice index offset by the slice's
+        first vocab id through a one-hot of the winning column. Ties between slices go to the lowest slice.
+        """
+        R32 = SPEC_ROW_TILE
+        vocab_slice = int(logits.shape[-1])
+        src, padded = logits, None
+        if int(logits.shape[2]) < R32:
+            padded = ttnn.pad(logits, [(0, 0), (0, 0), (0, R32 - int(logits.shape[2])), (0, 0)], value=0.0)
+            src = padded
+        local_idx = self._argmax_last(src, R32)  # [1, 1, 32] uint32 RM: the index within the slice
+        local_max = ttnn.max(src, dim=-1, keepdim=True)  # [1, 1, 32, 1] bf16 TILE
+        if padded is not None and not _same_device_buffer(padded, logits):
+            padded.deallocate(True)
+        idx_t = ttnn.to_layout(ttnn.reshape(local_idx, (1, 1, R32, 1)), ttnn.TILE_LAYOUT)
+        idx_f = ttnn.typecast(idx_t, ttnn.float32)  # [1, 1, 32, 1] fp32 TILE (exact: indices < 2**24)
+        idx_t.deallocate(True)
+        local_idx.deallocate(True)
+        vals_g = ccl_allgather(local_max, self.assistant.mesh_config, self.assistant.ccl_manager, dim=3)
+        idx_g = ccl_allgather(idx_f, self.assistant.mesh_config, self.assistant.ccl_manager, dim=3)
+        local_max.deallocate(True)
+        idx_f.deallocate(True)
+        consts = self._srv_draft_consts_for(int(vals_g.shape[-1]), vocab_slice)
+        masked = ttnn.add(vals_g, consts["mask"])  # only a slice's leading column can win
+        vals_g.deallocate(True)
+        best = self._argmax_last(masked, R32)  # [1, 1, 32] uint32 RM: the winning column
+        masked.deallocate(True)
+        best_t = ttnn.to_layout(ttnn.reshape(best, (1, 1, R32, 1)), ttnn.TILE_LAYOUT)
+        best_f = ttnn.typecast(best_t, ttnn.float32)  # [1, 1, 32, 1]
+        best_t.deallocate(True)
+        best.deallocate(True)
+        diff = ttnn.subtract(consts["iota"], best_f)
+        best_f.deallocate(True)
+        onehot = ttnn.eq(diff, 0.0)  # [1, 1, 32, W] fp32: 1.0 at the winning column
+        diff.deallocate(True)
+        picked = ttnn.multiply(idx_g, onehot)
+        idx_g.deallocate(True)
+        picked_idx = ttnn.sum(picked, dim=-1, keepdim=True)  # the winner's index within its slice
+        picked.deallocate(True)
+        offsets = ttnn.multiply(consts["offset"], onehot)
+        onehot.deallocate(True)
+        offset = ttnn.sum(offsets, dim=-1, keepdim=True)  # the winner's slice start
+        offsets.deallocate(True)
+        glob = ttnn.add(picked_idx, offset)  # [1, 1, 32, 1] fp32
+        picked_idx.deallocate(True)
+        offset.deallocate(True)
+        glob_u = ttnn.typecast(glob, ttnn.uint32)
+        glob.deallocate(True)
+        glob_rm = ttnn.to_layout(glob_u, ttnn.ROW_MAJOR_LAYOUT)
+        glob_u.deallocate(True)
+        out = ttnn.reshape(glob_rm, (1, 1, R32))
+        if rows < R32:
+            sliced = ttnn.slice(out, [0, 0, 0], [1, 1, rows])
+            if not _same_device_buffer(sliced, out):
+                out.deallocate(True)
+            out = sliced
+        return out
 
     def _srv_seed_gather(self, S):
         """Stage 1 of the body: the drafter seed [1, 1, B, backbone] = rows ``seed_idx`` of [pool_v | pool_s].
