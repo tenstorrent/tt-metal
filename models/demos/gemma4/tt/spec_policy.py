@@ -526,8 +526,8 @@ def rank_records(candidates, rows, plain_ms, optimistic=()):
     the rung: the trial's hypothesis for new rows. A measured record (``tokens_per_row``) credits them its
     measured tokens like every other row: what its replays delivered is known, and a wave of new rows
     cannot argue with it (the 26B at eight rows: seven new rows of eight re-trialed a record measured at 1.5
-    tokens a row every wave). The measured credit is bounded above by what the rows' observed acceptance
-    predicts: a pool is an EWMA of the steps last served on the record, and the rows say what they accept now.
+    tokens a row every wave). A row with verifies of its own is credited at most what its observed acceptance
+    predicts: a pool is an EWMA of the steps last served on the record, and the row says what it accepts now.
     """
     n = len(rows)
     if n < 1:
@@ -548,11 +548,17 @@ def rank_records(candidates, rows, plain_ms, optimistic=()):
         if members is not None and (not members or any(i < 0 or i >= n for i in members)):
             raise ValueError(f"record {cand.shape} names members {members} outside the {n} rows")
         inside = range(n) if members is None else members
-        hoped = sum(1 for i in inside if i in optimistic)
-        tokens = sum(rows[i].expected_tokens(k_v) for i in inside if i not in optimistic) + (n - len(inside))
-        tokens += hoped * (k_v + 1)
         if cand.tokens_per_row is not None:
-            tokens = min(tokens, float(cand.tokens_per_row) * len(inside) + (n - len(inside)))
+            # the measured credit, bounded per row by what the row's OWN verifies say it accepts; a row without
+            # a verify of its own (the batch prior only) takes the measurement as it stands
+            m = float(cand.tokens_per_row)
+            tokens = sum(
+                min(m, rows[i].expected_tokens(k_v)) if rows[i].ewma_accepted is not None else m for i in inside
+            ) + (n - len(inside))
+        else:
+            hoped = sum(1 for i in inside if i in optimistic)
+            tokens = sum(rows[i].expected_tokens(k_v) for i in inside if i not in optimistic) + (n - len(inside))
+            tokens += hoped * (k_v + 1)
         gain = (tokens / n) / (cost / plain_ms)
         ranked.append(
             RecordChoice(

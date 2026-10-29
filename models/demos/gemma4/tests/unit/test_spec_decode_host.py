@@ -2622,18 +2622,21 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     # the measured tokens per row of a calibrated record replace the acceptance model
     measured = [RecordCandidate((8, 3), 2048, 35.0, 0.0, tokens_per_row=1.2)]
     assert rank_records(measured, [row], _PLAIN)[0].expected_tokens == pytest.approx(1.2)
-    # ... and is bounded above by the rows' observed acceptance: a pool is the last steps served on the record,
-    # the rows say what they accept now (a 3.9 pool against a row at 0.4 a position credits the row's 1.62)
+    # ... bounded, for a row with verifies of its own, by what it accepts: a pool is the last steps served on
+    # the record, the row says what it accepts now (a 3.9 pool against a row observed at 0.4 a position credits
+    # the row's 1.62); a row the batch prior alone describes takes the measurement as it stands
     generous = [RecordCandidate((8, 3), 2048, 35.0, 0.0, tokens_per_row=3.9)]
-    assert rank_records(generous, [row], _PLAIN)[0].expected_tokens == pytest.approx(row.expected_tokens(3))
-    assert rank_records(generous, [row, row], _PLAIN, optimistic=(1,))[0].expected_tokens == pytest.approx(
-        min(row.expected_tokens(3) + 4.0, 3.9 * 2)
+    assert rank_records(generous, [row], _PLAIN)[0].expected_tokens == pytest.approx(3.9), "no verify of its own"
+    seen = _row([0.4] * 5)
+    seen.observe(2, 5)
+    seen.cond = [0.4] * 5
+    assert rank_records(generous, [seen], _PLAIN)[0].expected_tokens == pytest.approx(seen.expected_tokens(3))
+    assert rank_records(generous, [seen, row], _PLAIN)[0].expected_tokens == pytest.approx(
+        seen.expected_tokens(3) + 3.9
     )
     assert SpecPolicy(SpecPolicyConfig(), 5).decide(measured, [row], _PLAIN, 3) is None
     partial = [RecordCandidate((8, 3), 2048, 55.0, 0.0, members=(0,), tokens_per_row=3.0)]
-    assert rank_records(partial, [row, row], _PLAIN)[0].expected_tokens == pytest.approx(
-        min(3.0, row.expected_tokens(3)) + 1.0
-    ), "the member row's measured credit, bounded by its acceptance, plus the left-out row's plain token"
+    assert rank_records(partial, [row, row], _PLAIN)[0].expected_tokens == pytest.approx(3.0 + 1.0)
 
 
 def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length(expect_error=None):
