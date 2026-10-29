@@ -54,6 +54,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.spec_verify import TtV41VerifyDecoder
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import (
     TtV41Transformer,
     V41GenericPrefillTrace,
+    V41PackTrace,
     V41PrefillTrace,
     prefill_generic,
 )
@@ -134,6 +135,15 @@ def _dram_bytes(mesh_device) -> int:
 def _as_list(v) -> list:
     """A per-row sampling parameter (a tensor, or a list under on-device sampling) as a list."""
     return v.tolist() if hasattr(v, "tolist") else list(v)
+
+
+def _trace_bytes(mesh_device) -> int:
+    """Bytes allocated in the trace region per chip (0 when unavailable: a report, not a gate)."""
+    try:
+        view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.TRACE)
+        return int(view.total_bytes_allocated_per_bank * view.num_banks)
+    except Exception:
+        return 0
 
 
 def _l1_probe(mesh_device, tag: str) -> None:
@@ -231,7 +241,7 @@ class DeepseekV41ForCausalLM:
         # the packed prefill state and its layouts (TT_V41_PACK, TT_V41_PACK_LAYOUTS)
         self.pack_state: V41PrefillState | None = None
         self.pack_layouts: list[tuple] = []
-        self.pack_traces: dict = {}  # layout -> its capture (V41PackTrace)
+        self.pack_traces: dict[tuple, V41PackTrace] = {}  # layout -> its capture
         self.pack_last: dict = {}  # the last packed call (the tests read it)
         ratios = {C.compress_ratio(l) for l in model.layers}
         layouts = parse_pack_layouts(os.environ.get(PACK_LAYOUTS), model.chunk, ratios) if pack_enabled() else []
@@ -1032,6 +1042,33 @@ class DeepseekV41ForCausalLM:
                         f" ({len(trace.controllers)} captures {sorted(map(str, trace.captured_at))}, "
                         f"{trace.num_segments} segments)"
                     )
+            if self.pack_state is not None and os.environ.get("TT_V41_PACK_TRACE", "1") == "1":
+                # per layout its packed chunk's capture (the state at the pack's end after it), then the joins of
+                # its segments into every slot at the segments' width (one capture per distinct (offset, g, slot))
+                joins0, t0, trace0 = len(self.decoder.join_traces), time.time(), _trace_bytes(self.mesh_device)
+                for k, layout in enumerate(self.pack_layouts):
+                    t1 = time.time()
+                    trace = V41PackTrace(
+                        self.model,
+                        layout,
+                        self.pack_state,
+                        self.prefill_buffers[id(self.model)],
+                        warmup=2 if k == 0 else 1,
+                    )
+                    self.pack_traces[layout] = trace
+                    for g, (offset, n) in enumerate(layout):
+                        for slot in range(self.max_batch_size):
+                            self.decoder.capture_join(self.pack_state, slot, self.decoder.join_width(n), (offset, n, g))
+                    logger.info(
+                        f"DeepSeek-V4.1-Flash warm-up: packed prefill of {[n for _, n in layout]} captured in "
+                        f"{time.time() - t1:.1f} s ({trace.num_segments} segments)"
+                    )
+                logger.info(
+                    f"DeepSeek-V4.1-Flash warm-up: {len(self.pack_traces)} packed layouts and "
+                    f"{len(self.decoder.join_traces) - joins0} segment joins captured in {time.time() - t0:.1f} s, "
+                    f"{(_trace_bytes(self.mesh_device) - trace0) / 2**20:.0f} MB of trace region a chip "
+                    f"({_trace_bytes(self.mesh_device) / 2**20:.0f} MB held)"
+                )
             self.prefill_traced = True
             return
         if self.warmed_up:

@@ -865,6 +865,81 @@ class V41PrefillTrace:
         self.controllers = []
 
 
+class V41PackTrace:
+    """Trace perf mode of ``TtV41Transformer.prefill_packed`` for one layout: the packed
+    chunk of ``k`` whole prompts of the layout's lengths, captured once on a packed state and replayed for every
+    pack of that layout. The capture bakes the layout (its window table, the carry buffers' addresses, the scored
+    rows); the token ids, the Engram inputs and the layout's position fills are host copies into the state's fixed
+    buffers before each replay (``prepare_chunk``), as ``V41PrefillTrace``. Construction runs the chunk ``warmup``
+    times eagerly (the compile, then the steady-state resources: the layout's tables, the pack total's MoE padding
+    config, the segment carries), then captures it; the device logits of the ``k`` scored rows are read after the
+    replay. Device tensors allocated after the capture may overlap its freed intermediates (``release()`` before
+    other long-lived device work; the allocation rule for what the served warm-up allocates first)."""
+
+    def __init__(
+        self, model: TtV41Transformer, layout, state: V41PrefillState, buffers: dict | None = None, warmup: int = 2
+    ):
+        assert state.generic, "a generic state (new_state(generic=True))"
+        self.model, self.state = model, state
+        self.layout = tuple((int(o), int(n)) for o, n in layout)
+        self.lengths = [n for _, n in self.layout]
+        self.buffers = {} if buffers is None else buffers
+        prompts = [torch.randint(1, model.config.VOCAB_SIZE, (n,), dtype=torch.int64) for n in self.lengths]
+        t0 = time.perf_counter()
+        for _ in range(warmup):
+            model.prefill_packed(prompts, state, self.buffers)
+        ttnn.synchronize_device(model.mesh_device)
+        self.controller = None
+        self.scored = None
+        _, segments = model.prefill_packed(prompts, state, self.buffers, step=self._capture)
+        assert segments == self.layout, (segments, self.layout)
+        self.last: dict = {}
+        logger.info(
+            f"packed prefill: layout {self.layout} captured in {time.perf_counter() - t0:.1f} s "
+            f"({self.controller.num_segments} segments)"
+        )
+
+    def _capture(self, forward: Callable):
+        controller = SubDeviceTraceController(self.model.mesh_device)
+        moes = [block.ffn for block in self.model.blocks]
+        for moe in moes:
+            moe.set_trace_controller(controller)
+        ttnn.synchronize_device(self.model.mesh_device)
+        controller.begin_capture()
+        try:
+            self.scored = forward()
+        finally:
+            controller.end_capture()
+            for moe in moes:
+                moe.set_trace_controller(None)
+        self.controller = controller
+        return self.scored
+
+    @property
+    def num_segments(self) -> int:
+        return self.controller.num_segments
+
+    def run(self, prompts: list[torch.Tensor]) -> tuple[torch.Tensor, tuple]:
+        """``prompts`` of the layout's lengths -> (fp32 logits ``[k, vocab]``, the layout) as ``prefill_packed``;
+        ``self.last`` the phases (``wait``: the replay's device time from its issue)."""
+        assert [int(t.numel()) for t in prompts] == self.lengths, ([int(t.numel()) for t in prompts], self.lengths)
+        self.last = {}
+
+        def step(forward: Callable):
+            self.controller.replay(blocking=False)
+            t0 = time.perf_counter()
+            ttnn.synchronize_device(self.model.mesh_device)
+            self.last["wait"] = time.perf_counter() - t0
+            return self.scored
+
+        return self.model.prefill_packed(prompts, self.state, self.buffers, timings=self.last, step=step)
+
+    def release(self) -> None:
+        if self.controller is not None:
+            self.controller.release()
+            self.controller = None
+
+
 class V41GenericPrefillTrace:
     """Trace perf mode of the chunk loop for text prompts of any length: position-generic captures.
 
