@@ -197,7 +197,7 @@ class TPAttention:
         self.paged_v = v_cache
         self.use_paged = True
 
-    def _qkv(self, x, decode_qkv3_l1=False):
+    def _qkv(self, x, decode_qkv3_l1=False, wide_prefill=False):
         """Q+gate/K/V projections → (qg, kp, vp). Fused path: one matmul, then slice.
 
         decode_qkv3_l1: lean decode only -- land the short-lived q|k|v block in L1 straight from the slice
@@ -244,6 +244,10 @@ class TPAttention:
         qkv3_dim = self.NH * self.HD + 2 * self.NKV * self.HD
         gate_dim = self.NH * self.HD
         sh = list(qkv.shape)
+        if wide_prefill and sh[2] > tpc.TILE_SIZE:
+            # Note 57 (E): prefill hands the whole matmul output to _make_heads, which slices q / kv / gate
+            # straight from it (pure slices, no qkv3 intermediate copy). Sentinel: kp is None, vp is None.
+            return qkv, None, None
         # qkv3 short-lived (split by _make_heads then freed) -> L1 in PREFILL only; decode keeps DRAM
         # (L1 qkv3 breaks the decode trace -- presumably because _make_heads_decode's to_memory_config(L1->L1) is
         # an alias that its deallocate then frees; the lean decode path slices into L1 itself and never takes
@@ -341,7 +345,11 @@ class TPAttention:
         if vp is None:
             # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is the contiguous [q|k|v] block,
             # kp is the gate. Slice q and (already-contiguous) kv directly — no concat needed.
-            gate_flat = kp
+            if kp is None:
+                # Note 57 (E): qg is the whole [q|k|v|gate] matmul output (see _qkv wide_prefill).
+                gate_flat = ttnn.slice(qg, (0, 0, 0, NH * HD + 2 * NKV * HD), (1, 1, S, 2 * NH * HD + 2 * NKV * HD))
+            else:
+                gate_flat = kp
             # q_flat, kv feed nlp_create_qkv_heads then free immediately -> L1 (short-lived, no clash).
             q_flat = ttnn.slice(qg, (0, 0, 0, 0), (1, 1, S, NH * HD), memory_config=ttnn.L1_MEMORY_CONFIG)
             kv = ttnn.slice(
@@ -489,7 +497,7 @@ class TPAttention:
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         S = x.shape[-2]
 
-        qg, kp, vp = self._qkv(x)
+        qg, kp, vp = self._qkv(x, wide_prefill=True)
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
@@ -1422,7 +1430,7 @@ class TPAttention:
             chunk_start_idx = 0
         S = x.shape[-2]
 
-        qg, kp, vp = self._qkv(x)
+        qg, kp, vp = self._qkv(x, wide_prefill=True)
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 

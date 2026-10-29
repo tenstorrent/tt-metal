@@ -75,11 +75,21 @@ from models.demos.blackhole.qwen36.tt.spec_fused import (
     fused_greedy_walk,
 )
 from models.demos.blackhole.qwen36.tt.spec_fused_sampled import (
+    OVF_CERT,
+    STATS_LT_ROW,
     FusedSampledDevice,
     audit_boundary_users,
     fused_sampled_reference,
     host_redo_walk,
+    merge_redo,
 )
+from models.demos.blackhole.qwen36.tt.spec_logprobs import (
+    DeviceCandidates,
+    candidates_from_device,
+    candidates_from_logits,
+    permute_candidates,
+)
+from models.demos.blackhole.qwen36.tt.spec_shadow import StatsShadow
 from models.demos.blackhole.qwen36.tt.tp_common import (
     engine_spec_buckets,
     pack_u32_rows,
@@ -91,6 +101,8 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_chain_audit_every,
     spec_chain_enabled,
     spec_chain_sampled_enabled,
+    spec_device_logprobs_enabled,
+    spec_device_topp_enabled,
     spec_fast_join_enabled,
     spec_fast_prefill_enabled,
     spec_fused_audit_enabled,
@@ -103,6 +115,8 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_join_fast_enabled,
     spec_join_trace_enabled,
     spec_row_delta_enabled,
+    spec_stats_shadow_every,
+    spec_stats_trace_enabled,
     verify_device_topk_m,
 )
 
@@ -150,6 +164,9 @@ class VerifyResult:
     accepted_counts: torch.Tensor | None = None
     # decode_forward(defer_read=True): the FusedHandle of the enqueued step (no host tensors above; see MTPSpecEngine._decode_forward_deferred)
     handle: object = None
+    # phase 2 (work/research_1026/67): the logprob payload (spec_logprobs.DeviceCandidates, runner slots) of a sync "fused_sample"
+    # step whose spec_sampling asked for logprobs (num_logprobs >= 0 on some row); None otherwise
+    candidates: object = None
 
 
 @dataclass
@@ -160,6 +177,7 @@ class FusedStep:
     committed: torch.Tensor
     counts: torch.Tensor
     drafts: "DraftResult | None" = None
+    candidates: "DeviceCandidates | None" = None  # logprob payload, ENGINE rows (see MTPSpecEngine._need_stats)
 
 
 @dataclass
@@ -797,12 +815,21 @@ class FusedHandle:
             self.nv_own
         ) = self.tokens = self.start_host = self.mi_host = self.aux = self.pt = self.sampling = None
         self.lo = self.hi = self.exact = self.fin = self.draft_result = self.perm = None
+        self.cand_t = None  # (union vals, union ids, stats) host copies when a row asked for logprobs (phase 2)
+        self.shadow_t = (
+            None  # the same reads of a probe step (QWEN36_SPEC_STATS_SHADOW_EVERY); no payload is built from them
+        )
         self.parity, self.cap, self.skip, self.finished = 0, 0, [], False
         self.gen = None  # per-engine-row generations at creation (see MTPSpecEngine._row_gens)
         self.bucket = None  # verify row bucket of the step (QWEN36_SPEC_BUCKETS; None while the flag is off)
 
     def wait(self):
         return self._eng._def_wait(self)
+
+    def candidates(self):
+        """The logprob payload (spec_logprobs.DeviceCandidates, runner slots) of this step, or None when no row asked for logprobs.
+        Call after ``wait()``; no device call (the data is cached by then)."""
+        return self._eng._def_cands(self)
 
 
 class _ProposePlan:
@@ -920,6 +947,14 @@ class MTPSpecEngine:
         # stage S2: the SAMPLED accept (FusedSampledDevice sharing the S1 buffers) and its trace; audit boundary count
         self._fs = None
         self._fs_trace = None
+        # phase 2: the certificate variant of the sampled accept (a step with a top_k = 0 row), same outputs; counters of the sync steps
+        # that carried a certificate row and of those whose certificate failed
+        self._fs_trace_c = None
+        self.cert_steps = self.cert_failed_steps = 0
+        # phase 2 step S8: the failure-rate probe (QWEN36_SPEC_STATS_SHADOW_EVERY; 0 = off, no extra work), its counters, the eligible-step count
+        self._shadow_every = spec_stats_shadow_every()
+        self._shadow = None
+        self._shadow_seen = 0
         self.fused_boundary_diffs = 0
         self.fused_fallbacks = {}  # reason -> count of fused_sample steps that ran the argmax path
         self.fused_steps = 0  # fused_sample verify steps (eligible + fallback)
@@ -1236,10 +1271,14 @@ class MTPSpecEngine:
     _dr_rs_dirty = False  # the device wrote _dr_rs_pt (fused step): _dr_rs_cache no longer mirrors it
     # class defaults of the fused-step state (set per instance in __init__; engines built without it read these)
     _fa = _fa_trace = _fused_cache = _fa_pt_host = None
-    _fs = _fs_trace = None
+    _fs = _fs_trace = _fs_trace_c = None
     _fs_standin = ()
-    fused_steps = fused_boundary_diffs = 0
+    fused_steps = fused_boundary_diffs = cert_steps = cert_failed_steps = 0
     fused_sampled_steps = fused_audited_steps = 0
+    _shadow_every = (
+        _shadow_seen
+    ) = 0  # QWEN36_SPEC_STATS_SHADOW_EVERY probe (S8); off in an engine built without __init__
+    _shadow = None
     # QWEN36_SPEC_CHAIN (stage S3c) class defaults: with the flag off every one of these stays None / 0 and no hook does anything
     _ch_g = _ch_s = _ch_trace_g = _ch_trace_s = None
     _ch_standins = ()
@@ -1857,6 +1896,37 @@ class MTPSpecEngine:
         )  # freed at shutdown (the live ones are trace outputs)
         self._fs.body()  # compiles every program of the sampled body (stand-in union / ids, zero inputs)
         ttnn.synchronize_device(self.mesh)
+        self._prepare_stats_trace()
+        self._prepare_cert_body()
+
+    def _prepare_cert_body(self):
+        """Phase 2: compile the certificate variant of the sampled accept (body(cert=True)) over the model's stats buffer. Needs the
+        stats trace (prepare_verify_stats ran) and QWEN36_SPEC_DEVICE_TOPP on; else no variant is captured and a top_k = 0 row
+        takes the "top_k_range" fallback. A build error is raised (no silent downgrade)."""
+        model, fs = self.model, self._fs
+        if fs is None or not spec_device_topp_enabled() or not getattr(model, "_vfy_stats_ready", False):
+            logger.info("[spec_engine] top-p certificate accept off (QWEN36_SPEC_DEVICE_TOPP=0 or no stats trace)")
+            return
+        fs.bind_stats(model._vfy_stats_out)
+        fs.body(cert=True)  # compiles the variant's extra programs; the plain body's are cached
+        ttnn.synchronize_device(self.mesh)
+
+    def _prepare_stats_trace(self):
+        """Phase 2 (work/research_1026/67): warm the model's stats traces (fp32 sums over the vocabulary of each verify row, for
+        device logprobs / the top-p certificate) over this engine's samp_in. The model captures them with its verify traces.
+        Off with QWEN36_SPEC_DEVICE_LOGPROBS=0 and QWEN36_SPEC_DEVICE_TOPP=0, or for a model without the stats API. A build error
+        is raised (no silent downgrade): the serving flag stays off until a model passes."""
+        model = self.model
+        if not spec_stats_trace_enabled() or not hasattr(model, "prepare_verify_stats"):
+            logger.info(
+                "[spec_engine] stats trace off (QWEN36_SPEC_DEVICE_LOGPROBS=0 and QWEN36_SPEC_DEVICE_TOPP=0, or no model API)"
+            )
+            return
+        samp_in = getattr(self._fs, "samp_in", None)
+        if samp_in is None:
+            return
+        model.prepare_verify_stats(samp_in)
+        logger.info("[spec_engine] stats trace warmed (captured with the verify traces)")
 
     def _capture_fused(self):
         """Inside capture_decode's guarded scope, after the verify trace exists: bind its ids output and capture the
@@ -1926,6 +1996,16 @@ class MTPSpecEngine:
         ttnn.synchronize_device(self.mesh)
         logger.info("[spec_engine] fused sampled accept trace captured (union top-k -> sampled walk + drafter inputs)")
         self._log_trace_memory("accept_s")
+        # the certificate variant: same buffers, selected by a top_k = 0 row (sync steps only)
+        if getattr(fs, "stats_in", None) is not None:
+            self._fs_trace_c = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            fs.body(cert=True)
+            ttnn.end_trace_capture(self.mesh, self._fs_trace_c, cq_id=0)
+            ttnn.synchronize_device(self.mesh)
+            logger.info(
+                "[spec_engine] top-p certificate accept trace captured (full-vocabulary nucleus of top_k = 0 rows)"
+            )
+            self._log_trace_memory("accept_c")
 
     def _seed_buffers(self):
         """The device buffers a seed trace bakes in, per GDN layer (compared by identity at replay)."""
@@ -2041,6 +2121,9 @@ class MTPSpecEngine:
         top-k, drafter K ids) hold uninitialized memory until a B-row replay writes them. A bucket replay writes only its own rows,
         so the rows >= b would stay garbage (the host reads all B rows of the K ids). Write zeros once, in place (no new
         allocation: the addresses the traces baked in do not move). Flag off: nothing."""
+        zero_stats = getattr(self.model, "zero_verify_stats", None)
+        if zero_stats is not None:
+            zero_stats()  # the stats buffer is finite before its first replay
         if not self._bucketed():
             return
         m = self.model
@@ -2096,6 +2179,7 @@ class MTPSpecEngine:
             "_vfy_rows_out",
             "_vfy_topk_vals_out",
             "_vfy_topk_ids_out",
+            "_vfy_stats_out",
             "_vfy_token_buf",
             "_vfy_aux_buf",
         ):
@@ -2130,6 +2214,8 @@ class MTPSpecEngine:
         """Release the traces and every persistent engine buffer; a later prepare starts over."""
         model = self.model
         t0 = time.time()
+        if self._shadow is not None and self._shadow.steps:
+            logger.info(self._shadow.line())  # S8 probe: the final counters
         logger.info("[spec_engine] shutdown: releasing traces")
         model.release_verify_trace()
         model._vfy_prepared_key = None
@@ -2161,6 +2247,9 @@ class MTPSpecEngine:
         if self._fs_trace is not None:
             ttnn.release_trace(self.mesh, self._fs_trace)
             self._fs_trace = None
+        if self._fs_trace_c is not None:
+            ttnn.release_trace(self.mesh, self._fs_trace_c)
+            self._fs_trace_c = None
         if self._fs is not None:
             fs = self._fs
             for t in (
@@ -3599,6 +3688,11 @@ class MTPSpecEngine:
         if spec_sampling is not None and spec_mode != "fused_sample":
             raise ValueError(f"spec_sampling needs spec_mode 'fused_sample', got {spec_mode!r}")
         if defer_read:
+            if spec_sampling is not None and bool(self._cert_rows(spec_sampling).any()):
+                raise ValueError(
+                    "defer_read=True with a top-p certificate row (top_k = 0, top_p < 1) is not allowed: a failed certificate needs the "
+                    "exact redo, so the step runs synchronously (defer_read=False)"
+                )
             if (
                 spec_sampling is not None
                 and not spec_chain_sampled_enabled()
@@ -3662,12 +3756,7 @@ class MTPSpecEngine:
         if narrow_col0 and spec_mode == "logits":
             kw["narrow"] = True
         if spec_mode == "fused_sample":
-            sampling = None
-            if spec_sampling is not None:
-                names = ("temperature", "top_k", "top_p", "greedy", "uniforms")
-                sampling = dict(zip(names, self._to_rows(*(spec_sampling[n] for n in names))))
-                if bool(torch.as_tensor(sampling["greedy"]).all()):
-                    sampling = None  # nothing sampled: the S1 step
+            sampling = self._engine_sampling(spec_sampling)  # None: nothing sampled and no logprobs row (the S1 step)
             ids, _, fz = self.verify(
                 clean,
                 start0,
@@ -3689,11 +3778,13 @@ class MTPSpecEngine:
                     self._chain_prev, self._chain_cand = self._chain_cand, None
                 else:
                     self._chain_drop("prev_not_fused")
+            cands = None if fz.candidates is None else self._cands_to_slots(fz.candidates)
             return VerifyResult(
                 spec_mode,
                 mask_unused_columns(ids, num_valid_drafts),
                 accepted_token_ids=committed.to(torch.int32),
                 accepted_counts=counts.to(torch.int32),
+                candidates=cands,
             )
         ids, logits = self.verify(
             clean,
@@ -3767,6 +3858,7 @@ class MTPSpecEngine:
                 + (", ".join(f"{k}={v}" for k, v in sorted(fb.items())) or "none")
                 + f"; audited {self.fused_audited_steps}, boundary_diffs {self.fused_boundary_diffs}"
                 + f", row_delta_mixed_steps {self.__dict__.get('row_delta_mixed_steps', 0)}"
+                + (f"; cert steps {self.cert_steps}, failed {self.cert_failed_steps}" if self.cert_steps else "")
                 + (
                     f"; chain steps {self.chain_steps}, breaks "
                     + (
@@ -3813,13 +3905,18 @@ class MTPSpecEngine:
         plugin's uniforms)."""
         self._fused_note(reason)
         if sampling is not None:
-            return ids, None, self._host_walk_step(logits, tokens, num_valid, sampling)
+            cands = self._cand_from_logits(logits) if self._need_cands(sampling) else None
+            fz = self._host_walk_step(logits, tokens, num_valid, sampling)
+            fz.candidates = cands
+            return ids, None, fz
         committed, counts = fused_greedy_walk(ids, tokens, num_valid, self.K)
         return ids, None, FusedStep(committed.to(torch.int32), counts.to(torch.int32), None)
 
-    def _host_walk_step(self, logits, tokens, num_valid, sampling):
+    def _host_walk_step(self, logits, tokens, num_valid, sampling, users=None, dev=None):
         """The exact host walk of a sampled fused step on the full logits (engine rows): a FusedStep without drafts, so the
-        propose that follows runs the normal path."""
+        propose that follows runs the normal path. ``users`` (with ``dev`` = the device (committed [B, T], counts [B])): redo only
+        those users and keep the device result for the others; a user's walk reads only its own rows, tokens, uniforms and
+        parameters, so the merge equals a full redo."""
         B, K = self.B, self.K
         committed, counts = host_redo_walk(
             torch.as_tensor(logits).reshape(B * (K + 1), -1)[:, : self.vocab],
@@ -3829,7 +3926,10 @@ class MTPSpecEngine:
             B=B,
             K=K,
             num_valid=num_valid,
+            users=users,
         )
+        if users is not None:
+            committed, counts = merge_redo(dev[0], dev[1], committed, counts, users)
         return FusedStep(committed, counts, None)
 
     def _fused_ineligible(self, start_pos, nv, active):
@@ -3939,7 +4039,7 @@ class MTPSpecEngine:
         self._chain_note_step("g", committed, counts, steps, start_pos, active)
         return self._fused_finish(ids, committed, counts, steps, start_pos, active, declined)
 
-    def _fused_finish(self, ids, committed, counts, steps, start_pos, active, declined):
+    def _fused_finish(self, ids, committed, counts, steps, start_pos, active, declined, cands=None):
         """Tail shared by the greedy and the sampled fused step: the propose bookkeeping from the device commit."""
         K = self.K
         committed, counts = committed.to(torch.int32), counts.to(torch.int32)
@@ -3955,7 +4055,7 @@ class MTPSpecEngine:
             self.mtp_extra_steps += 1
         out = self._propose_finish(plan, drafts)
         self._fused_note(None)
-        return ids, None, FusedStep(committed, counts, out)
+        return ids, None, FusedStep(committed, counts, out, cands)
 
     # --------------------------------------------------------------------- #
     # Chain mode (QWEN36_SPEC_CHAIN, stage S3c): the device builds the next verify's inputs
@@ -4353,12 +4453,7 @@ class MTPSpecEngine:
         cmask = None if cr is None else (self._to_rows(cr)[0] & active)
         if cmask is not None and not bool(cmask.any()):
             cmask = None
-        sampling = None
-        if spec_sampling is not None:
-            names = ("temperature", "top_k", "top_p", "greedy", "uniforms")
-            sampling = dict(zip(names, self._to_rows(*(spec_sampling[n] for n in names))))
-            if bool(torch.as_tensor(sampling["greedy"]).all()):
-                sampling = None
+        sampling = self._engine_sampling(spec_sampling)
         kind_s = sampling is not None
         # ---- which rows chain
         if self._bucketed():
@@ -4460,6 +4555,10 @@ class MTPSpecEngine:
         order of _verify_fused / _verify_fused_sampled up to the drafter trace, the GDN parity flipped at enqueue, then the
         non-blocking reads and one event. NO synchronize. Returns the FusedHandle."""
         B, T, K = self.B, self.T, self.K
+        if kind == "s" and bool(self._cert_rows(sampling).any()):
+            raise ValueError(
+                "a deferred step cannot carry a top-p certificate row (top_k = 0, top_p < 1): run it synchronously"
+            )
         fa, fs, model = self._fa, self._fs, self.model
         self._check_scratch(pt)
         declined = aux[2, :B].bool()
@@ -4503,7 +4602,13 @@ class MTPSpecEngine:
             dpt = pt.clone()
             dpt[declined] = self._scratch_block
         self._stage_table(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        extra = {"execute_topk": True} if kind == "s" else {}
+        need_stats = kind == "s" and self._need_cands(sampling)  # a deferred step has no certificate row (guard above)
+        shadow = kind == "s" and self._shadow_due(
+            sampling
+        )  # S8 probe step: the same stats replay and reads, no payload
+        extra = (
+            {"execute_topk": True, **({"execute_stats": True} if need_stats or shadow else {})} if kind == "s" else {}
+        )
         read = lambda t: ttnn.from_device(ttnn.get_device_tensors(t)[0], blocking=False)
         audit = None
         if chain is None:
@@ -4539,9 +4644,13 @@ class MTPSpecEngine:
             if spec_fused_audit_enabled() and n_s % spec_fused_audit_every() == 0:
                 ids_t = read(model._vfy_ids_out)
                 union = (read(fs.union_vals_in), read(fs.union_ids_in))
+        cand_t = (
+            self._cand_enqueue_reads(union) if need_stats or shadow else None
+        )  # same queue slot as the audit union read (read once)
         event = ttnn.record_event(self.mesh, 0)
         h = FusedHandle(self, self._def_next_tip(), kind)
         h.event, h.res_t, h.aux_t, h.dr_ts, h.ids_t, h.union, h.audit = event, res_t, aux_t, dr_ts, ids_t, union, audit
+        h.cand_t, h.shadow_t = (None, cand_t) if shadow else (cand_t, None)
         h.res_rows = 2 if kind == "g" else 3
         h.active, h.declined, h.cmask, h.prev = active.clone(), declined.clone(), cmask, prev
         h.nvv = torch.as_tensor(nv).to(torch.int64).reshape(B).clone()
@@ -4576,7 +4685,7 @@ class MTPSpecEngine:
         counts = torch.as_tensor(fz.counts).to(torch.int64).reshape(B)
         p0 = torch.as_tensor(start0).to(torch.int64).reshape(B).clone()
         h.active, h.perm = torch.as_tensor(active).bool().clone(), self._phys_perm
-        h._data = dict(committed=committed, counts=counts, p0=p0, steps=None)
+        h._data = dict(committed=committed, counts=counts, p0=p0, steps=None, candidates=fz.candidates)
         h.exact = (p0, counts.clone())
         h._readout = self._def_readout(h, h._data)
         self._def_last = h
@@ -4594,6 +4703,15 @@ class MTPSpecEngine:
     def _def_wait(self, h):
         self._def_data(h)
         return h._readout
+
+    def _def_cands(self, h):
+        """The handle's payload in runner slots (None = no logprobs row). Pure host work on the cached step data."""
+        c = self._def_data(h).get("candidates")
+        return None if c is None else self._perm_cands(c, h.perm)
+
+    @staticmethod
+    def _perm_cands(c, perm):
+        return c if perm is None else permute_candidates(c, perm[0])
 
     def _def_data(self, h, engine_thread=False):
         """The step's host data (engine rows), after its device work finished: event_synchronize on the reader thread, or one
@@ -4626,7 +4744,12 @@ class MTPSpecEngine:
             n_chain_audit=0,
             n_s_audit=0,
             boundary=0,
+            candidates=None if h.cand_t is None else self._cand_build(h.cand_t),  # reader thread, inside the event wait
         )
+        if (
+            h.shadow_t is not None
+        ):  # S8 probe, reader thread: count the certificate margin of the step (no effect on the step)
+            self._shadow_note(h.shadow_t, d["counts"], h.active & ~h.declined, h.sampling)
         if h.ids_t is not None:
             d["ids"] = torch.as_tensor(
                 [int(v) for v in ttnn.to_torch(h.ids_t).reshape(-1)[: B * T]], dtype=torch.int32
@@ -4792,24 +4915,137 @@ class MTPSpecEngine:
             nv_rows[u] = n
         return clean, start0, acc_rows, nv_rows
 
+    _SAMPLING_NAMES = ("temperature", "top_k", "top_p", "greedy", "uniforms")
+
+    def _engine_sampling(self, spec_sampling):
+        """The plugin's ``spec_sampling`` (runner slots) as the engine-row dict of a step, or None. Phase 2: the optional key
+        ``num_logprobs`` int32 [B] (-2 = no logprobs, 0.. = top-N) rides along; a step with a logprobs row keeps the dict (so the
+        S2 sampled step runs, the S1 greedy step has no topk / stats trace) even when every row is greedy."""
+        if spec_sampling is None:
+            return None
+        names = self._SAMPLING_NAMES + (("num_logprobs",) if spec_sampling.get("num_logprobs") is not None else ())
+        sampling = dict(zip(names, self._to_rows(*(spec_sampling[n] for n in names))))
+        if bool(torch.as_tensor(sampling["greedy"]).all()) and not self._need_cands(sampling):
+            return None  # nothing sampled, no logprobs: the S1 step
+        return sampling
+
+    @staticmethod
+    def _need_cands(sampling):
+        """True when some row of this step asks for logprobs (``num_logprobs`` >= 0): the step reads the union + stats into the payload."""
+        nl = None if sampling is None else sampling.get("num_logprobs")
+        return nl is not None and bool((torch.as_tensor(nl) >= 0).any())
+
+    @staticmethod
+    def _cert_rows(sampling):
+        """[B] bool: the certificate rows of a step (runner slots or engine rows): sampled, top_k <= 0 (the whole vocabulary) and
+        top_p < 1. top_k <= 0 with top_p >= 1 is not one (it stays "top_k_range", the host walk)."""
+        greedy = torch.as_tensor(sampling["greedy"]).bool()
+        return ~greedy & (torch.as_tensor(sampling["top_k"]) <= 0) & (torch.as_tensor(sampling["top_p"]) < 1.0)
+
+    @classmethod
+    def _need_stats(cls, sampling):
+        """The step replays the stats trace: a logprobs row or a certificate row (L_T of the top-p certificate)."""
+        return sampling is not None and (cls._need_cands(sampling) or bool(cls._cert_rows(sampling).any()))
+
+    def _stats_ok(self):
+        """The model built the stats trace and the logprobs kill switch is on (QWEN36_SPEC_DEVICE_LOGPROBS)."""
+        return bool(getattr(self.model, "_vfy_stats_ready", False)) and spec_device_logprobs_enabled()
+
+    def _cert_ok(self):
+        """The certificate accept trace exists (QWEN36_SPEC_DEVICE_TOPP on, stats trace ready at capture) and the stats are still there."""
+        return self._fs_trace_c is not None and bool(getattr(self.model, "_vfy_stats_ready", False))
+
+    def _accept_trace(self, sampling):
+        """The sampled accept trace of a SYNC step: the certificate variant when a live row is a certificate row, else the plain one
+        (normal steps replay the same trace as without the certificate)."""
+        return self._fs_trace_c if bool(self._cert_rows(sampling).any()) else self._fs_trace
+
+    def _cands_to_slots(self, cand):
+        """DeviceCandidates engine rows -> runner slots (the same permutation as _to_slots)."""
+        return cand if self._phys_perm is None else permute_candidates(cand, self._phys_perm[0])
+
+    def _cand_enqueue_reads(self, union=None):
+        """Non-blocking D2H copies of what the logprob payload needs, on the step's queue: the replicated union (vals bf16, local ids
+        uint32 [32, TP*M]; ``union`` = the pair the audit already read) and the stats buffer (fp32 [64, 1]). Returns (vals, ids, stats).
+        """
+        fs, model = self._fs, self.model
+        read = lambda t: ttnn.from_device(ttnn.get_device_tensors(t)[0], blocking=False)
+        if union is None:
+            union = (read(fs.union_vals_in), read(fs.union_ids_in))
+        return union[0], union[1], read(model._vfy_stats_out)
+
+    def _shadow_due(self, sampling):
+        """S8 probe: True on every N-th eligible step (QWEN36_SPEC_STATS_SHADOW_EVERY = N). Eligible: a fused sampled step without a
+        logprobs or certificate row, with the stats trace built. N = 0 (default): False before anything is counted or read.
+        """
+        n = self._shadow_every
+        if n <= 0 or self._fs is None or not bool(getattr(self.model, "_vfy_stats_ready", False)):
+            return False
+        if self._need_stats(sampling):
+            return False
+        self._shadow_seen += 1
+        return self._shadow_seen % n == 0
+
+    def _shadow_note(self, reads, counts, active, sampling):
+        """S8 probe: feed the host copies of _cand_enqueue_reads (after their synchronize / event) to the counters. Any error turns the
+        probe off (a debug aid must not change a step)."""
+        try:
+            B, T, fs = self.B, self.T, self._fs
+            if self._shadow is None:
+                self._shadow = StatsShadow(self._shadow_every)
+            vals = ttnn.to_torch(reads[0]).reshape(-1, fs.TP * fs.M)[: B * T]
+            stats = ttnn.to_torch(reads[2]).reshape(-1).to(torch.float32)
+            live = active & ~torch.as_tensor(sampling["greedy"]).bool()
+            self._shadow.record(vals, stats, counts, live, sampling["temperature"], B, T, fs.M)
+        except Exception as e:  # noqa: BLE001
+            self._shadow_every = 0
+            logger.warning(f"[spec_engine] stats shadow probe off after an error: {e!r}")
+
+    def _cand_build(self, reads):
+        """The payload (engine rows) from the host copies of _cand_enqueue_reads (after their synchronize / event)."""
+        B, T, fs = self.B, self.T, self._fs
+        width = fs.TP * fs.M
+        vals = ttnn.to_torch(reads[0]).reshape(-1, width)[: B * T]
+        idx = ttnn.to_torch(reads[1]).reshape(-1, width)[: B * T]
+        stats = ttnn.to_torch(reads[2]).reshape(-1).to(torch.float32)  # rows 0..31 L_raw, 32..63 L_T (certificate)
+        return candidates_from_device(vals, idx, None, stats[: B * T], fs.per_shard, B, T, M=fs.M)
+
+    def _cand_from_logits(self, logits):
+        """The same payload from FULL logits (engine rows; [B, T, V] or [B*T, V]): the engine fallback paths."""
+        B, T = self.B, self.T
+        return candidates_from_logits(
+            torch.as_tensor(logits).reshape(B * T, -1)[:, : self.vocab], B, T, M=self._cand_m()
+        )
+
+    def _cand_m(self):
+        fs = self._fs
+        return int(fs.M) if fs is not None else int(getattr(self.model, "_vfy_topk_m", None) or 64)
+
     def _sampled_ineligible(self, sampling):
         """Reason a sampled fused step cannot run the sampled accept trace (None = it can), beyond _fused_ineligible's."""
         fs = self._fs
         if fs is None or self._fs_trace is None:
             return "no_sampled_trace"
+        if self._need_cands(sampling) and not self._stats_ok():
+            return "no_stats_trace"  # logprobs asked, no stats trace (kill switch off): the host payload from the full logits
         k = torch.as_tensor(sampling["top_k"]).to(torch.int64)
         greedy = torch.as_tensor(sampling["greedy"]).bool()
-        if bool((~greedy & ((k < 1) | (k > fs.M - 1))).any()):
+        cert = (
+            self._cert_rows(sampling) if self._cert_ok() else torch.zeros_like(greedy)
+        )  # no certificate trace: top_k = 0 is out of range
+        if bool((~greedy & ~cert & ((k < 1) | (k > fs.M - 1))).any()):
             return "top_k_range"
         return None
 
     def _verify_fused_sampled(self, tokens, start_pos, pt, active, nv, args, kw, sampling, aux):
         """Stage S2 step. Call order: stage aux, samp (pack_samp_host), pt rows / MTP table when changed; enqueue verify, topk
-        (execute only, no host read), sampled accept trace, drafter trace; enqueue the non-blocking drafter-id reads; ONE
-        synchronize; read ids, result [3, W] (committed, counts, overflow) and the draft ids (+ the union in audit mode).
-        An ``overflow`` flag on any user (a top-k tie group reached the last union candidate) redoes the whole step on the host:
-        the full logits (logits trace on the intact verify rows) walked by host_redo_walk with the SAME uniforms; the result
-        carries no drafts, so the propose that follows runs normally (and rewrites what the drafter trace wrote)."""
+        (execute only, no host read), stats trace (a logprobs or certificate row), sampled accept trace (the certificate variant when
+        a row is a certificate row), drafter trace; enqueue the non-blocking drafter-id reads; ONE synchronize; read ids, result
+        [3, W] (committed, counts, overflow) and the draft ids (+ the union in audit mode).
+        An ``overflow`` word on a user (bit 1: a top-k tie group reached the last union candidate; bit 2: the top-p certificate
+        failed) redoes that user on the host: the full logits (logits trace on the intact verify rows) walked by host_redo_walk
+        with the SAME uniforms; the other users keep the device result. The result carries no drafts, so the propose that
+        follows runs normally (and rewrites what the drafter trace wrote)."""
         B, T, K = self.B, self.T, self.K
         if self._def_ctx is not None:  # decode_forward(defer_read=True): enqueue, no synchronize
             return None, None, self._def_enqueue("s", tokens, start_pos, pt, active, nv, args, kw, sampling, aux)
@@ -4832,16 +5068,20 @@ class MTPSpecEngine:
             dpt = pt.clone()
             dpt[declined] = self._scratch_block
         self._stage_table(dpt, self._mtp_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        need_stats = self._need_stats(sampling)  # phase 2: a logprobs or certificate row: the stats replay
+        need_cands = self._need_cands(sampling)  # a logprobs row: the union / stats reads for the payload
+        shadow = self._shadow_due(sampling)  # S8 probe step: the same stats replay and reads, no payload
+        n_cert = int(self._cert_rows(sampling).sum())
+        ex = {"execute_topk": True, **({"execute_stats": True} if need_stats or shadow else {})}
         if chain is None:
-            handle = model.verify_stage_and_enqueue(*args, **kw, execute_topk=True)  # verify, then topk (no host read)
+            handle = model.verify_stage_and_enqueue(*args, **kw, **ex)  # verify, then topk (+ stats), no host read
         else:
             self._chain_exec(chain)
-            handle = model.verify_stage_and_enqueue(
-                *args, **kw, execute_topk=True, skip_tokens_h2d=True, skip_aux_h2d=True
-            )
-        ttnn.execute_trace(self.mesh, self._fs_trace, cq_id=0, blocking=False)
+            handle = model.verify_stage_and_enqueue(*args, **kw, **ex, skip_tokens_h2d=True, skip_aux_h2d=True)
+        ttnn.execute_trace(self.mesh, self._accept_trace(sampling), cq_id=0, blocking=False)
         ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
         dr_handles = self._ids_enqueue_reads(self._dr_outs)
+        cand_reads = self._cand_enqueue_reads() if need_cands or shadow else None
         ttnn.synchronize_device(self.mesh)  # the only one of the step
         ids, vfeed, _ = model.verify_after_external_sync(handle)
         self._vfeed = vfeed
@@ -4852,17 +5092,28 @@ class MTPSpecEngine:
         committed, counts, overflow = res[0, : B * T].reshape(B, T), res[1, :B], res[2, :B]
         if chain is not None:
             self._chain_audit(expect)
+        self.cert_steps += n_cert > 0
         if bool(overflow.any()):
             self._fused_note("overflow_redo")
+            self.cert_failed_steps += bool((overflow & OVF_CERT).any())
+            redo = overflow.nonzero().reshape(-1).tolist()  # only the flagged users: the others keep the device result
             logits = model.fetch_verify_logits()  # logits trace over the intact _vfy_normed_out: one more round trip
-            return ids, None, self._host_walk_step(logits, tokens, nv, sampling)
+            fz = self._host_walk_step(logits, tokens, nv, sampling, users=redo, dev=(committed, counts))
+            if (
+                need_cands
+            ):  # the redo owns the step: its payload comes from the same full logits (exact, no device stats)
+                fz.candidates = self._cand_from_logits(logits)
+            return ids, None, fz
+        cands = self._cand_build(cand_reads) if need_cands else None
+        if shadow:
+            self._shadow_note(cand_reads, counts[:B], active.bool() & ~declined, sampling)
         n_sampled = self.fused_sampled_steps
         self.fused_sampled_steps = n_sampled + 1
         if spec_fused_audit_enabled() and n_sampled % spec_fused_audit_every() == 0:
             self.fused_audited_steps += 1
             self._audit_sampled(ids, committed, counts, tokens, nv, pt, aux, sampling)
         self._chain_note_step("s", committed, counts, steps, start_pos, active)
-        return self._fused_finish(ids, committed, counts, steps, start_pos, active, declined)
+        return self._fused_finish(ids, committed, counts, steps, start_pos, active, declined, cands)
 
     def _audit_sampled(self, ids, committed, counts, tokens, nv, pt, aux, sampling):
         """QWEN36_SPEC_FUSED_AUDIT (default on): read the union back (two extra reads) and recompute the step with
@@ -4874,16 +5125,21 @@ class MTPSpecEngine:
         width = fs.TP * fs.M
         vals = ttnn.to_torch(ttnn.get_device_tensors(fs.union_vals_in)[0]).reshape(-1, width)[: B * T]
         idx = ttnn.to_torch(ttnn.get_device_tensors(fs.union_ids_in)[0]).reshape(-1, width)[: B * T]
-        n = self._audit_sampled_core(vals, idx, ids, committed, counts, tokens, nv, pt, aux, sampling)
+        full_norm = None
+        if bool(self._cert_rows(sampling).any()):  # a certificate step: L_T of the stats trace, rows 32.. of its buffer
+            stats = ttnn.to_torch(ttnn.get_device_tensors(self.model._vfy_stats_out)[0]).reshape(-1).to(torch.float32)
+            full_norm = stats[STATS_LT_ROW : STATS_LT_ROW + B * T]
+        n = self._audit_sampled_core(vals, idx, ids, committed, counts, tokens, nv, pt, aux, sampling, full_norm)
         if n:
             self.fused_boundary_diffs += n
             logger.info(
                 f"[spec_engine] fused sampled audit: float32 boundary difference users (total {self.fused_boundary_diffs})"
             )
 
-    def _audit_sampled_core(self, vals, idx, ids, committed, counts, tokens, nv, pt, aux, sampling):
+    def _audit_sampled_core(self, vals, idx, ids, committed, counts, tokens, nv, pt, aux, sampling, full_norm=None):
         """The check of _audit_sampled on host tensors (also the deferred read-time audit). Returns the number of users whose
-        difference is a float32 boundary (explained); raises RuntimeError on any other difference."""
+        difference is a float32 boundary (explained); raises RuntimeError on any other difference. ``full_norm`` [B*T] (L_T):
+        a certificate step's reference and boundary zone use it."""
         B, T, K = self.B, self.T, self.K
         fs = self._fs
         tok_flat = torch.as_tensor(tokens).reshape(-1)
@@ -4904,12 +5160,15 @@ class MTPSpecEngine:
             top_p=sampling["top_p"],
             uniforms=sampling["uniforms"],
             num_valid=nv,
+            full_norm=full_norm,
         )
         same = torch.equal(ref.committed.to(torch.int64), committed) and torch.equal(ref.counts.to(torch.int64), counts)
         if same:
             return 0
         drafts = torch.as_tensor(tokens).reshape(B, T)[:, 1:]
-        explained = audit_boundary_users(ref, sampling["uniforms"], committed, counts, drafts, nv, B=B, K=K, M=fs.M)
+        explained = audit_boundary_users(
+            ref, sampling["uniforms"], committed, counts, drafts, nv, B=B, K=K, M=fs.M, top_p=sampling["top_p"]
+        )
         bad = [
             u
             for u in range(B)

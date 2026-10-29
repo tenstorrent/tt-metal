@@ -528,3 +528,103 @@ def test_host_redo_walk_equals_the_plugin_full_logits_walk():
         bad += int(not same)
     print(f"\n[redo] cases={n_cmp} mismatching={bad}")
     assert bad <= 2, "only float32 uniform rounding boundaries (|p - u| < 1e-7) may differ"
+
+
+def test_certificate_reference_equals_the_host_redo_for_passing_rows(expect_error):
+    """H5 (phase 2): fused_sampled_reference(full_norm=) with certificate rows (top_k = 0, top_p < 1) commits what
+    host_redo_walk (float64, whole vocabulary) commits with the same uniforms, except float32 boundary classes
+    (audit_boundary_users). Overflow bit 2 is set exactly when an examined row failed q >= p + eps, bit 1 never for a
+    certificate row; a reference without full_norm still rejects top_k = 0."""
+    from models.demos.blackhole.qwen36.tt.spec_fused_sampled import (
+        CERT_EPS,
+        OVF_CERT,
+        OVF_TIE,
+        audit_boundary_users,
+        host_redo_walk,
+    )
+    from models.demos.blackhole.qwen36.tt.spec_logprobs import stats_from_logits
+
+    S, per, Bc = 8, 512, 4
+    V = S * per
+    R = Bc * T
+    g = torch.Generator().manual_seed(5150)
+    n_users = n_pass = n_fail = n_diff = n_bound = 0
+    for case in range(300):
+        B = Bc
+        scale = torch.rand(R, 1, generator=g) * 4 + 1.5
+        x = (torch.randn(R, V, generator=g) * scale).to(torch.bfloat16).float()
+        for r in range(R):  # a few strong tokens so that many rows pass
+            if float(torch.rand((), generator=g)) < 0.6:
+                x[r, torch.randint(0, V, (4,), generator=g)] += torch.tensor([9.0, 8.0, 7.0, 6.0])
+        x = x.to(torch.bfloat16).float()
+        greedy = torch.tensor([False, False, False, False])
+        greedy[int(torch.randint(0, 4, (), generator=g))] = bool(case % 3 == 0)
+        temp = torch.rand(B, generator=g) * 1.2 + 0.3
+        top_k = torch.tensor([0, 0, 0, 0])
+        top_k[3] = int(torch.randint(1, 64, (), generator=g)) if case % 2 == 0 else 0  # one ordinary top-k row
+        top_p = torch.tensor([0.5, 0.8, 0.9, 0.95, 0.99])[torch.randint(0, 5, (B,), generator=g)]
+        nv = torch.randint(0, K + 1, (B,), generator=g)
+        # union exactly as the topk trace
+        vs, ls = [], []
+        for s in range(S):
+            sh = x[:, s * per : (s + 1) * per]
+            o = torch.sort(sh, dim=1, descending=True, stable=True).indices[:, :M]
+            ls.append(o)
+            vs.append(sh.gather(1, o))
+        uv, ul = torch.cat(vs, 1).to(torch.bfloat16), torch.cat(ls, 1)
+        order = torch.sort(x, dim=1, descending=True, stable=True).indices
+        drafts = order.reshape(B, T, V)[:, :K, :6].gather(2, torch.randint(0, 6, (B, K, 1), generator=g)).squeeze(2)
+        tok = torch.cat([torch.zeros(B, 1, dtype=torch.int64), drafts], dim=1)
+        aux = fused_accept_aux_host(
+            nv,
+            torch.randint(1, 60, (B,), generator=g),
+            torch.ones(B, dtype=torch.bool),
+            torch.zeros(B, dtype=torch.bool),
+            CAP,
+            K,
+            SCRATCH,
+            0,
+            4096,
+        )
+        pt = torch.randint(1, 4000, (B, NB), generator=g, dtype=torch.int32)
+        torch.manual_seed(case)
+        uni = predraw_uniforms({}, B, K, nv)
+        trow = torch.where(greedy | (temp <= 0), torch.ones(B), temp).repeat_interleave(T)
+        _, _, l_t = stats_from_logits(x, trow)
+        kw = dict(B=B, K=K, per_shard=per, M=M, greedy=greedy, temperature=temp, top_k=top_k, top_p=top_p, uniforms=uni)
+        with expect_error(ValueError, "top_k outside"):
+            if bool((~greedy & (top_k == 0)).any()):
+                fused_sampled_reference(uv, ul, tok.reshape(-1), order[:, 0], aux, pt, **kw)
+            else:
+                raise ValueError("top_k outside (no certificate row in this case)")
+        ref = fused_sampled_reference(
+            uv, ul, tok.reshape(-1), order[:, 0], aux, pt, full_norm=l_t.to(torch.float32), **kw
+        )
+        redo_c, redo_n = host_redo_walk(
+            x, tok, {"temperature": temp, "top_k": top_k, "top_p": top_p, "greedy": greedy}, uni, B=B, K=K, num_valid=nv
+        )
+        cert = ~greedy & (top_k == 0)
+        examined = torch.arange(T)[None, :] <= (ref.counts - 1)[:, None]
+        q = ref.cert_q.reshape(B, T)
+        fail_rows = (q - top_p[:, None] < CERT_EPS) & cert[:, None] & (q < 1.0 + 1e-9)
+        want_bit = ((fail_rows & examined).any(1) & cert).to(torch.int32) * OVF_CERT
+        assert torch.equal(ref.overflow & OVF_CERT, want_bit), (case, ref.overflow, want_bit)
+        assert not bool(((ref.overflow & OVF_TIE) != 0)[cert].any())
+        bound = audit_boundary_users(ref, uni, redo_c, redo_n, tok[:, 1:], nv, B=B, K=K, M=M, top_p=top_p)
+        for u in range(B):
+            n_users += 1
+            if int(ref.overflow[u]) != 0:
+                n_fail += int(bool(cert[u]))
+                continue
+            n_pass += 1
+            same = int(ref.counts[u]) == int(redo_n[u]) and torch.equal(
+                ref.committed[u, : int(redo_n[u])], redo_c[u, : int(redo_n[u])]
+            )
+            if not same:
+                n_diff += 1
+                assert u in bound, (case, u, ref.committed[u], redo_c[u], ref.counts[u], redo_n[u])
+                n_bound += 1
+    print(
+        f"\n[cert ref] users={n_users} pass={n_pass} cert_fail_users={n_fail} differing={n_diff} explained_boundary={n_bound}"
+    )
+    assert n_pass > 0.3 * n_users and n_fail > 0 and n_diff <= 0.02 * n_pass

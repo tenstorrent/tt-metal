@@ -66,6 +66,12 @@ class _VfyBucket:
         self.b, self.rows = b, rows
         self.dl = None  # _DeviceDecodeLoop(batch=rows)
         self.trace_id = self.logits_trace_id = self.topk_trace_id = None
+        self.stats_trace_id = (
+            None  # the stats trace (QWEN36_SPEC_DEVICE_LOGPROBS / _TOPP), see _forward_verify_stats_body
+        )
+        self.shard_spec = (
+            None  # (shape, dtype, layout, memory_config) of this bucket's shard logits (stats warm stand-in)
+        )
         self.normed = self.shard_logits = self.logits_out = self.logits_rm_out = None  # bucket-local trace outputs
         self.narrow_ready = False
         self.handoff = {}  # "ids", "rows", "topk_vals", "topk_ids" -> destination tensor
@@ -2463,6 +2469,177 @@ class Qwen36Model:
             return None, None
         return g_vals, g_idx
 
+    def _forward_verify_stats_body(self, bk=None, x=None, uv=None):
+        """Fourth verify trace (QWEN36_SPEC_DEVICE_LOGPROBS / QWEN36_SPEC_DEVICE_TOPP, work/research_1026/67 section 3): per engine
+        row r, over the WHOLE vocabulary (TP shards x vocab/TP),
+            L_raw[r] = sum exp(x - M_r)            (raw logsumexp = M_r + log L_raw)
+            L_T[r]   = sum exp((x - M_r) / T_r)    (top-p normaliser of the row's temperature)
+        with M_r the row's global maximum, read from the topk trace's union ``_vfy_topk_vals_out`` (it holds every shard's
+        maximum, so max over its TP*M columns is the global maximum) and T_r the row's temperature from the engine's samp_in row 0
+        (greedy / non-positive temperature rows use T = 1). Everything is fp32 (accurate exp, HiFi4, fp32 destination
+        accumulation: bf16 accumulation is off by 0.25 in lse); the two sums are stacked on the row axis and reduced by ONE
+        ttnn.sum, then all-gathered over the shards and added. The result is written in place into ``_vfy_stats_out`` fp32
+        [1,1,64,1]: rows 0..31 = L_raw, rows 32..63 = L_T (row r = engine row r; rows past R hold finite or garbage values the
+        host must ignore). Replayed by verify_stage_and_enqueue(execute_stats=True) right after the topk trace; reads that trace's
+        union, so the topk trace must have run in the same step.
+        ``bk``: a row bucket (reads its ``shard_logits``, R = b*T rows, padded to 32). ``x`` / ``uv``: explicit inputs (warm-up
+        stand-ins)."""
+        TL, f32 = ttnn.TILE_LAYOUT, ttnn.float32
+        T = self._vfy_T
+        if x is None:
+            x = self._vfy_shard_logits_out if bk is None else bk.shard_logits
+        if uv is None:
+            uv = self._vfy_topk_vals_out
+        rows = int(x.shape[2])
+        nu = rows // T
+        sc = self._vfy_stats_consts
+        # 1 / T per engine row [1,1,32,1]
+        samp = ttnn.to_layout(self._vfy_stats_samp, TL)  # [4+B, W] fp32
+        sampt = ttnn.transpose(samp, 0, 1)  # [W, 4+B]
+        ttnn.deallocate(samp)
+        temp = ttnn.slice(sampt, [0, 0], [nu, 1])
+        greedy = ttnn.slice(sampt, [0, 3], [nu, 4])
+        ttnn.deallocate(sampt)
+        bad = ttnn.maximum(greedy, ttnn.typecast(ttnn.le(temp, sc["zero"]), f32))
+        t_eff = ttnn.add(ttnn.multiply(temp, ttnn.rsub(bad, 1.0)), bad)
+        inv = ttnn.reciprocal(t_eff)  # [nu, 1]
+        inv_r = ttnn.reshape(ttnn.multiply(inv, sc["ones_t"]), (rows, 1))
+        if rows < 32:
+            inv_r = ttnn.pad(inv_r, [(0, 32 - rows), (0, 0)], value=1.0)
+        inv_r = ttnn.reshape(inv_r, (1, 1, 32, 1))
+        # logits - M, in fp32
+        xp = ttnn.pad(x, [(0, 0), (0, 0), (0, 32 - rows), (0, 0)], value=-1e30) if rows < 32 else x
+        x32 = ttnn.typecast(xp, f32)
+        mg = ttnn.typecast(ttnn.max(uv, dim=-1, keepdim=True), f32)  # [1,1,32,1]
+        d = ttnn.subtract(x32, mg)
+        ttnn.deallocate(x32)
+        dT = ttnn.multiply(d, inv_r)
+        e_raw = ttnn.exp(d, fast_and_approximate_mode=False)
+        ttnn.deallocate(d)
+        e_T = ttnn.exp(dT, fast_and_approximate_mode=False)
+        ttnn.deallocate(dT)
+        st = ttnn.concat([e_raw, e_T], dim=2)  # [1,1,64,W]
+        ttnn.deallocate(e_raw)
+        ttnn.deallocate(e_T)
+        s = ttnn.sum(st, dim=-1, keepdim=True, compute_kernel_config=self._vfy_stats_cc)  # [1,1,64,1]
+        ttnn.deallocate(st)
+        g = ttnn.all_gather(s, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1,1,TP*64,1]
+        ttnn.deallocate(s)
+        g = ttnn.reshape(g, (1, self.num_devices, 64, 1))
+        tot = ttnn.sum(g, dim=1, keepdim=True, compute_kernel_config=self._vfy_stats_cc)  # [1,1,64,1]
+        ttnn.copy(tot, self._vfy_stats_out)
+        ttnn.deallocate(tot)
+        ttnn.deallocate(g)
+        for t in (inv, inv_r, mg, temp, greedy, bad, t_eff):
+            ttnn.deallocate(t)
+
+    def prepare_verify_stats(self, samp_in):
+        """Warm the stats trace bodies (B-row and every prepared row bucket) and allocate their persistent buffers, after
+        prepare_verify_trace / prepare_verify_buckets and before ANY capture (capture forbids cache misses). ``samp_in`` = the
+        engine's sampled-accept staging tensor (fp32 ROW_MAJOR [4+B, W]); the stats traces read its temperature / greedy rows
+        and it must stay allocated at this address. Needs the verify topk trace (``_vfy_topk``). Idempotent. record_verify_trace /
+        record_verify_bucket then capture the traces. Raises when the stats ops cannot be built (no silent downgrade).
+        """
+        if getattr(self, "_vfy_stats_ready", False):
+            return
+        assert getattr(self, "_vfy_prepared_key", None) is not None, "call prepare_verify_trace first"
+        if not getattr(self, "_vfy_topk", False):
+            raise ValueError("the stats trace needs the verify topk trace (QWEN36_VERIFY_DEVICE_TOPK=1)")
+        dev = self.device
+        rep = ttnn.ReplicateTensorToMesh(dev)
+        B, T = self._vfy_B, self._vfy_T
+        f32, TL = ttnn.float32, ttnn.TILE_LAYOUT
+        samp_shape = tuple(int(d) for d in samp_in.shape)
+        if len(samp_shape) != 2 or samp_shape[0] != 4 + B or samp_in.dtype != f32:
+            raise ValueError(f"stats samp_in must be fp32 [4+{B}, W], got {samp_shape} {samp_in.dtype}")
+
+        def dev_t(t, dt=f32):
+            return ttnn.from_torch(
+                t, dtype=dt, layout=TL, device=dev, mesh_mapper=rep, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+
+        self._vfy_stats_samp = samp_in
+        self._vfy_stats_cc = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,  # REQUIRED: bf16 accumulation of the 31040-term sums is off by 0.25 in lse (S0)
+            packer_l1_acc=False,
+        )
+        self._vfy_stats_consts = {"zero": dev_t(torch.zeros(1, 1)), "ones_t": dev_t(torch.ones(1, T))}
+        self._vfy_stats_out = dev_t(torch.zeros(1, 1, 64, 1))
+        self._vfy_stats_standins = []
+        specs = [(None, self._vfy_specs["shard_logits"])] + [
+            (bk, bk.shard_spec)
+            for _, bk in sorted((getattr(self, "_vfy_bk", None) or {}).items(), reverse=True)
+            if bk.shard_spec is not None
+        ]
+        tv_shape, tv_dt, tv_layout, tv_mc = self._vfy_specs["topk_vals"]
+        uv = ttnn.from_torch(
+            torch.zeros(*tv_shape, dtype=torch.bfloat16),
+            dtype=tv_dt,
+            layout=tv_layout,
+            device=dev,
+            memory_config=tv_mc,
+            mesh_mapper=rep,
+        )
+        try:
+            for bk, (shape, dt, layout, mc) in specs:
+                x = ttnn.from_torch(
+                    torch.zeros(*shape, dtype=torch.bfloat16),
+                    dtype=dt,
+                    layout=layout,
+                    device=dev,
+                    memory_config=mc,
+                    mesh_mapper=rep,
+                )
+                self._forward_verify_stats_body(bk, x=x, uv=uv)
+                ttnn.deallocate(x)
+            ttnn.synchronize_device(dev)
+        finally:
+            ttnn.deallocate(uv)
+        self._vfy_stats_ready = True
+
+    def _capture_stats_trace(self, bk=None):
+        """Capture the stats trace of the B-row traces (bk None) or of row bucket ``bk``; returns the trace id. No-op (None)
+        when prepare_verify_stats did not run."""
+        if not getattr(self, "_vfy_stats_ready", False):
+            return None
+        tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+        self._forward_verify_stats_body(bk)
+        ttnn.end_trace_capture(self.device, tid, cq_id=0)
+        return tid
+
+    def zero_verify_stats(self):
+        """Write zeros into the stats buffer in place (trace capture runs no op, so it would hold uninitialized memory until the
+        first stats replay). No-op without a stats trace."""
+        if not getattr(self, "_vfy_stats_ready", False):
+            return
+        h = ttnn.from_torch(
+            torch.zeros(1, 1, 64, 1),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        ttnn.copy_host_to_device_tensor(h, self._vfy_stats_out)
+
+    def fetch_verify_stats(self, rows=None):
+        """Synchronize and read the stats buffer of the LAST stats replay: (L_raw [rows], L_T [rows]) float32 torch, rows <= 32
+        (default every row of the B-row shape). Tests and the audit; the serving path reads it with the step outputs."""
+        assert getattr(self, "_vfy_stats_ready", False), "no stats trace"
+        ttnn.synchronize_device(self.device)
+        t = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_stats_out)[0]).reshape(64).to(torch.float32)
+        n = self._vfy_B * self._vfy_T if rows is None else int(rows)
+        return t[:n].clone(), t[32 : 32 + n].clone()
+
+    def release_verify_stats(self):
+        """Free the stats trace buffers (the traces themselves are released with their verify trace)."""
+        for t in (getattr(self, "_vfy_stats_out", None), *(getattr(self, "_vfy_stats_consts", None) or {}).values()):
+            if t is not None:
+                ttnn.deallocate(t)
+        self._vfy_stats_out, self._vfy_stats_consts, self._vfy_stats_samp = None, None, None
+        self._vfy_stats_ready = False
+
     def _vfy_setup_device_topk(self):
         """Resolve QWEN36_VERIFY_DEVICE_TOPK (default ON) and QWEN36_VERIFY_TOPK_M (default 64) for this verify
         bucket: ``_vfy_topk`` (bool), ``_vfy_topk_m`` (M candidates per shard) and ``_vfy_topk_w`` (the
@@ -2608,7 +2785,11 @@ class Qwen36Model:
         if getattr(self, "_vfy_topk_trace_id", None) is not None:
             ttnn.release_trace(self.mesh_device, self._vfy_topk_trace_id)
             self._vfy_topk_trace_id = None
+        if getattr(self, "_vfy_stats_trace_id", None) is not None:
+            ttnn.release_trace(self.mesh_device, self._vfy_stats_trace_id)
+            self._vfy_stats_trace_id = None
         self.release_verify_buckets()
+        self.release_verify_stats()
 
     def release_verify_buckets(self):
         """Release every row bucket's traces and bucket-local buffers (dl constants, stand-ins, trace outputs). No-op when
@@ -2617,7 +2798,7 @@ class Qwen36Model:
         bks = getattr(self, "_vfy_bk", None) or {}
         for b in sorted(bks):
             bk = bks[b]
-            for name in ("trace_id", "logits_trace_id", "topk_trace_id"):
+            for name in ("trace_id", "logits_trace_id", "topk_trace_id", "stats_trace_id"):
                 if getattr(bk, name) is not None:
                     ttnn.release_trace(self.mesh_device, getattr(bk, name))
                     setattr(bk, name, None)
@@ -2870,6 +3051,7 @@ class Qwen36Model:
                 self._vfy_shard_logits_out = outs[5]
                 _tk = self._forward_verify_topk_body()
                 self._vfy_specs["topk_vals"], self._vfy_specs["topk_ids"] = (self._tensor_spec(t) for t in _tk)
+                self._vfy_specs["shard_logits"] = self._tensor_spec(self._vfy_shard_logits_out)
                 for t in _tk:
                     ttnn.deallocate(t)
                 ttnn.deallocate(self._vfy_shard_logits_out)
@@ -2919,6 +3101,8 @@ class Qwen36Model:
                 self._vfy_topk_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
                 self._vfy_topk_vals_out, self._vfy_topk_ids_out = self._forward_verify_topk_body()
                 ttnn.end_trace_capture(dev, self._vfy_topk_trace_id, cq_id=0)
+                # prepare_verify_stats ran (QWEN36_SPEC_DEVICE_LOGPROBS / _TOPP): a fourth, small trace (fp32 sums over the vocabulary)
+                self._vfy_stats_trace_id = self._capture_stats_trace()
         self._vfy_capture_count = getattr(self, "_vfy_capture_count", 0) + 1
         if getattr(self, "_vfy_bk", None):
             self._log_trace_memory(f"V{B}")
@@ -2995,6 +3179,8 @@ class Qwen36Model:
         bk.dl = self._vfy_new_dl(bk.rows)
         torch_dt = {ttnn.bfloat16: torch.bfloat16, ttnn.uint32: torch.int32}
         for name, (shape, dt, layout, mc) in self._vfy_specs.items():
+            if name == "shard_logits":  # the stats warm stand-in spec, not a hand-off target
+                continue
             bk.handoff[name] = ttnn.from_torch(
                 torch.zeros(*shape, dtype=torch_dt[dt]),
                 dtype=dt,
@@ -3014,6 +3200,7 @@ class Qwen36Model:
         bk.normed = None
         if self._vfy_topk:
             bk.shard_logits = outs[5]
+            bk.shard_spec = self._tensor_spec(outs[5])
             self._forward_verify_topk_body(bk)
             ttnn.deallocate(bk.shard_logits)
             bk.shard_logits = None
@@ -3050,6 +3237,7 @@ class Qwen36Model:
             bk.topk_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
             self._forward_verify_topk_body(bk)
             ttnn.end_trace_capture(dev, bk.topk_trace_id, cq_id=0)
+            bk.stats_trace_id = self._capture_stats_trace(bk)
         for t in bk.standins:  # warm-pass hand-off targets, used by no trace
             ttnn.deallocate(t)
         bk.standins = []
@@ -3128,6 +3316,7 @@ class Qwen36Model:
         read_topk=False,
         read_col0=False,
         execute_topk=False,
+        execute_stats=False,
         skip_tokens_h2d=False,
         skip_aux_h2d=False,
         skip_kv_check=False,
@@ -3138,6 +3327,8 @@ class Qwen36Model:
         main trace plus the optional logits / topk traces with ``blocking=False``. No synchronize and no readback.
         ``execute_topk`` (QWEN36_SPEC_FUSED stage S2): enqueue the topk trace but do not read it back (the handle says
         read_topk=False); the fused sampled accept trace consumes ``_vfy_topk_vals_out`` / ``_vfy_topk_ids_out`` on the device.
+        ``execute_stats`` (phase 2, work/research_1026/67): also enqueue the stats trace right after the topk trace (needs a topk
+        replay in the same call and prepare_verify_stats before capture); results stay on the device (fetch_verify_stats).
         ``skip_tokens_h2d`` / ``skip_aux_h2d`` (QWEN36_SPEC_CHAIN, stage S3c): the chain trace already wrote the token buffer / the
         packed aux buffer on the device, so the host copy is not made (the arguments still feed the page-table and KV-write checks);
         skipping the aux copy forgets the host mirror ``_vfy_aux_staged`` (it no longer describes the device words).
@@ -3170,6 +3361,12 @@ class Qwen36Model:
         if read_topk or execute_topk:
             if _topk_tid is None:
                 raise ValueError("verify_traced(read_topk=True) needs QWEN36_VERIFY_DEVICE_TOPK=1 at capture")
+        _stats_tid = getattr(self, "_vfy_stats_trace_id", None) if bk is None else bk.stats_trace_id
+        if execute_stats:
+            if not (read_topk or execute_topk):
+                raise ValueError("execute_stats needs a topk replay in the same step (the stats read its union)")
+            if _stats_tid is None:
+                raise ValueError("execute_stats needs a captured stats trace (prepare_verify_stats before capture)")
         T, B = self._vfy_T, self._vfy_B
         rows = B * T
         assert len(tokens) == B, f"expected {B} users, got {len(tokens)}"
@@ -3278,6 +3475,8 @@ class Qwen36Model:
             ttnn.execute_trace(dev, _logits_tid, cq_id=0, blocking=False)
         if read_topk or execute_topk:
             ttnn.execute_trace(dev, _topk_tid, cq_id=0, blocking=False)
+        if execute_stats:
+            ttnn.execute_trace(dev, _stats_tid, cq_id=0, blocking=False)
         if flip_parity and _fused:
             for dn in self._vfy_gdn:
                 dn._spec_win_par ^= 1

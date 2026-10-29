@@ -130,6 +130,35 @@ def spec_fused_sampled_enabled():
     return os.environ.get("QWEN36_SPEC_FUSED_SAMPLED", "1") != "0"
 
 
+def spec_device_logprobs_enabled():
+    """QWEN36_SPEC_DEVICE_LOGPROBS (default "1"): the engine builds the stats trace (fp32 sums over the vocabulary per verify
+    row; work/research_1026/67) that device logprobs need. Model-side kill switch; it also decides the model capability supports_spec_device_logprobs.
+    Needs the verify topk trace and the sampled accept (QWEN36_SPEC_FUSED=1, QWEN36_SPEC_FUSED_SAMPLED)."""
+    return os.environ.get("QWEN36_SPEC_DEVICE_LOGPROBS", "1") != "0"
+
+
+def spec_device_topp_enabled():
+    """QWEN36_SPEC_DEVICE_TOPP (default "1"): same stats trace, for the full-vocabulary top-p certificate. Model-side kill
+    switch; it also decides the model capability supports_spec_device_top_p."""
+    return os.environ.get("QWEN36_SPEC_DEVICE_TOPP", "1") != "0"
+
+
+def spec_stats_shadow_every():
+    """QWEN36_SPEC_STATS_SHADOW_EVERY (default "0" = off; integer N >= 1): debug probe of the top-p certificate (phase 2 step S8,
+    tt/spec_shadow.py). Every N-th fused sampled step that has no logprobs and no certificate row also replays the stats trace and
+    reads the union + stats; the host counts how often the certificate would fail. Needs the stats trace. Model-side only.
+    """
+    try:
+        return max(0, int(os.environ.get("QWEN36_SPEC_STATS_SHADOW_EVERY", "0")))
+    except ValueError:
+        return 0
+
+
+def spec_stats_trace_enabled():
+    """The stats trace is built when either QWEN36_SPEC_DEVICE_LOGPROBS or QWEN36_SPEC_DEVICE_TOPP is on."""
+    return spec_device_logprobs_enabled() or spec_device_topp_enabled()
+
+
 def spec_row_delta_enabled():
     """QWEN36_SPEC_ROW_DELTA (default "1"; "0" = today's decline): the fused / sampled / chain device bodies add a PER-ROW M-RoPE
     delta (fused aux row 6, chain overlay last row), so a batch of rows with different deltas (an image row plus text rows)

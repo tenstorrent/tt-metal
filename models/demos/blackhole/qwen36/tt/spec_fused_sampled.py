@@ -39,13 +39,21 @@ from models.demos.blackhole.qwen36.tt.tp_common import pack_u32_rows, rope_row_i
 
 UNION_PAD_WIDTH = 1024  # ttnn.topk multi-core needs width >= 1024 at one tile row, k <= 64
 PAD_VALUE = -1e30
+CERT_EPS = (
+    1e-5  # top-p certificate margin: a row fails when q - p < CERT_EPS (fp32 error of Zc, Z and the division ~1e-6)
+)
+OVF_TIE = 1  # overflow word bit: a top-k tie group reached the last candidate
+OVF_CERT = 2  # overflow word bit: the full-vocabulary top-p certificate failed (reference and the device variant body(cert=True))
+STATS_LT_ROW = 32  # first row of the L_T half of the model's stats buffer fp32 [1,1,64,1] (rows 0..31 = L_raw)
 _ONE_MINUS = float(torch.nextafter(torch.tensor(1.0, dtype=torch.float32), torch.tensor(0.0, dtype=torch.float32)))
 
 
 class FusedSampledOut(NamedTuple):
     committed: torch.Tensor  # [B, T] int32, -1 past count
     counts: torch.Tensor  # [B] int32 in [1, T]
-    overflow: torch.Tensor  # [B] int32 word: 1 = a row the walk examined hit the overflow rule -> redo the step on the host
+    overflow: (
+        torch.Tensor
+    )  # [B] int32 word: OVF_TIE (1) = an examined row hit the top-k tie rule, OVF_CERT (2) = the top-p certificate failed -> redo the step on the host
     pack: torch.Tensor  # [2K+5, W] int32 (uint32 words) = _dr_pack_host's pack
     rs_pt: torch.Tensor  # [R, nb] int32
     mtp_pt: torch.Tensor  # [B, nb] int32
@@ -57,6 +65,9 @@ class FusedSampledOut(NamedTuple):
     cand_ids: torch.Tensor  # [R, M] int64 global ids in (value desc, id asc) order
     p_d: torch.Tensor  # [B, K] fp32 prob mass of each draft token (0 when not a candidate / dropped)
     cum: torch.Tensor  # [R, M] fp32 reverse cumsum of the top-p softmax (top-p boundary audits)
+    cert_q: torch.Tensor = (
+        None  # [R] fp32 candidate mass fraction q = Zc / Z of certificate rows (1.0 elsewhere); None without full_norm
+    )
 
 
 def union_topk_stable(union_vals, union_local_ids, per_shard, M):
@@ -121,6 +132,18 @@ def fused_drafter_reference(committed, counts, aux, pt, *, B, K):
     return pack, rs_pt.to(torch.int32), mtp_pt.to(torch.int32), declined, num_valid_out, not bool(declined.all())
 
 
+def certificate_cut(zc, full_norm, top_p, eps=CERT_EPS):
+    """Top-p certificate of a full-vocabulary row (work/research_1026/67 section 5.1). ``zc`` = sum over the first M candidates
+    of exp(v_i - v_0) (v = logit / T), ``full_norm`` = the same sum over the whole vocabulary (L_T of the stats trace), ``top_p``.
+    q = zc / max(full_norm, zc) in (0, 1]. When q >= p + eps every position past the candidates is dropped by the nucleus rule
+    and, inside the candidates, position i is dropped iff S_i / zc <= 1 - p / q (S_i = candidate mass from i on). Returns
+    (q, omp_eff = 1 - p / q, fail = q - p < eps); a failing row can only be a false "fail", never a false "pass"."""
+    zc = torch.as_tensor(zc).to(torch.float32)
+    q = zc / torch.maximum(torch.as_tensor(full_norm).to(torch.float32), zc)
+    p = torch.as_tensor(top_p).to(torch.float32)
+    return q, 1.0 - p / q, (q - p) < eps
+
+
 def fused_sampled_reference(
     union_vals,
     union_local_ids,
@@ -139,6 +162,7 @@ def fused_sampled_reference(
     top_p,
     uniforms,
     num_valid=None,
+    full_norm=None,
 ):
     """Fused sampled (and greedy-mixed) accept + drafter inputs, float32, the device algorithm.
 
@@ -147,7 +171,11 @@ def fused_sampled_reference(
     ``aux``: spec_fused.fused_accept_aux_host output (num_valid, active, decline words, p0, consts). ``pt`` [B, nb].
     greedy [B] bool, temperature [B] fp32, top_k [B] int (1..M-1 for a sampled row), top_p [B] fp32 (1.0 = off),
     uniforms [B, K+2] fp32. ``num_valid`` [B] defaults to aux row 0. An inactive row (aux active = 0) takes the greedy path.
-    A user whose ``overflow`` is 1 has meaningless committed/counts/drafter fields: redo the step on the host."""
+    ``full_norm`` [R] fp32 (optional): L_T = sum over the WHOLE vocabulary of exp((x - max) / T) per row (the stats trace). With it a
+    sampled row with top_k = 0 (full vocabulary) and top_p < 1 is a certificate row: keep all M candidates, nucleus cut
+    ``1 - p / q`` (certificate_cut); overflow bit OVF_CERT when the certificate fails, never OVF_TIE for it. Without it top_k = 0
+    stays out of range as before.
+    A user whose ``overflow`` is not 0 has meaningless committed/counts/drafter fields: redo the step on the host."""
     T, R = K + 1, B * (K + 1)
     aux64 = torch.as_tensor(aux).to(torch.int64) & 0xFFFFFFFF
     nv = aux64[AUX_NUM_VALID, :B] if num_valid is None else torch.as_tensor(num_valid).reshape(B).to(torch.int64)
@@ -158,10 +186,12 @@ def fused_sampled_reference(
     kk = torch.as_tensor(top_k).reshape(B).to(torch.int64)
     pp = torch.as_tensor(top_p).reshape(B).to(torch.float32)
     uni = torch.as_tensor(uniforms).reshape(B, K + 2).to(torch.float32)
-    bad = ~greedy & ((kk < 1) | (kk > M - 1))
+    cert = ~greedy & (kk <= 0) if full_norm is not None else torch.zeros_like(greedy)
+    bad = ~greedy & ~cert & ((kk < 1) | (kk > M - 1))
     if bool(bad.any()):
         raise ValueError(f"rows {bad.nonzero().reshape(-1).tolist()}: top_k outside [1, {M - 1}] cannot run fused")
     kk = torch.where(greedy, torch.ones_like(kk), kk)
+    kk = torch.where(cert, torch.full_like(kk, M), kk)  # certificate rows keep every candidate (kth = v[M - 1])
     toks = torch.as_tensor(tok_buf).reshape(-1)[:R].to(torch.int64).reshape(B, T)
     drafts = toks[:, 1:]  # [B, K]
     am = torch.as_tensor(ids).reshape(-1)[:R].to(torch.int64).reshape(B, T)
@@ -174,13 +204,23 @@ def fused_sampled_reference(
     keep = v >= kth
     neg = float("-inf")
     overflow_row = (v[:, M - 1 :] >= kth) & (kth > neg)  # [R, 1]
-    overflow_row = overflow_row.reshape(B, T)
+    overflow_row = overflow_row.reshape(B, T) & ~cert[:, None]
     v = torch.where(keep, v, torch.full_like(v, neg))
     # 3. top-p after the top-k cut (softmax over kept, reverse cumsum, drop tail mass <= 1 - p, never column 0)
     e = torch.exp(v - v[:, :1])
     p0 = e / e.sum(dim=1, keepdim=True)
     cum = p0.flip(1).cumsum(dim=1).flip(1)
-    drop = cum <= (1.0 - pp).repeat_interleave(T)[:, None]
+    omp = (1.0 - pp).repeat_interleave(T)
+    cert_q = None
+    cert_fail = torch.zeros(B, T, dtype=torch.bool)
+    if full_norm is not None:
+        fnorm = torch.as_tensor(full_norm).reshape(-1)[:R].to(torch.float32)
+        q, omp_c, fail_c = certificate_cut(e.sum(dim=1), fnorm, pp.repeat_interleave(T))
+        cr = cert.repeat_interleave(T)
+        omp = torch.where(cr, omp_c, omp)
+        cert_q = torch.where(cr, q, torch.ones_like(q))
+        cert_fail = (fail_c & cr).reshape(B, T)
+    drop = cum <= omp[:, None]
     drop[:, 0] = False
     e = torch.where(drop, torch.zeros_like(e), e)
     prob = e / e.sum(dim=1, keepdim=True)  # [R, M]
@@ -217,7 +257,8 @@ def fused_sampled_reference(
     committed = torch.where(greedy[:, None], g_committed, s_committed)
     # 7. overflow word: rows the walk examined are columns 0..m of the SAMPLED walk
     examined = cols <= m[:, None]
-    overflow = ((overflow_row & examined).any(dim=1) & ~greedy).to(torch.int32)
+    overflow = ((overflow_row & examined).any(dim=1) & ~greedy).to(torch.int32) * OVF_TIE
+    overflow = overflow + ((cert_fail & examined).any(dim=1) & ~greedy).to(torch.int32) * OVF_CERT
     # 8. drafter inputs
     pack, rs_pt, mtp_pt, declined, nv_out, runs = fused_drafter_reference(committed, counts, aux, pt, B=B, K=K)
     return FusedSampledOut(
@@ -234,6 +275,7 @@ def fused_sampled_reference(
         gids,
         p_d,
         cum,
+        cert_q,
     )
 
 
@@ -311,7 +353,7 @@ class FusedSampledDevice(FusedGreedyDevice):
              samp_in fp32 RM [4+B, W] (pack_samp_host), pt_rows_in int32 RM [R,nb].
     Outputs: pack_out uint32 RM [2K+5,W], rs_pt_out int32 RM [R,nb] (as S1, computed from the sampled committed/counts),
              result_out int32 RM [3,W]: row 0 committed flattened r = u*T+j (-1 past the count), row 1 counts[B],
-             row 2 overflow flag [B] (1 = redo on the host). Zero past their length.
+             row 2 overflow word [B] (OVF_TIE 1 / OVF_CERT 2; non-zero = redo on the host). Zero past their length.
     All math is fp32 TILE (token ids and positions < 2^24 are exact); exp is the accurate (non fast) mode.
     Every per-row quantity is kept per ENGINE ROW ([R, .]); the per-user pick is a row-select (j == m) + reshape [B, T] + sum.
     """
@@ -335,9 +377,11 @@ class FusedSampledDevice(FusedGreedyDevice):
         rs_pt_out=None,
         aux_in=None,
         pt_rows_in=None,
+        stats_in=None,
     ):
         """``aux_in`` / ``pt_rows_in``: the S1 device's staging buffers to share (the engine stages them once per step for
-        whichever accept trace runs); default: own buffers."""
+        whichever accept trace runs); default: own buffers. ``stats_in``: the model's stats buffer (fp32 TILE [1,1,64,1], L_T in
+        rows 32..) for the certificate variant body(cert=True); None until bind_stats."""
         import ttnn
 
         self = cls()
@@ -394,6 +438,10 @@ class FusedSampledDevice(FusedGreedyDevice):
         self.c_one = f(torch.ones(1, 1))
         self.c_zero = f(torch.zeros(1, 1))
         self.c_zero_b = f(torch.zeros(B, 1))
+        self.c_eps = f(torch.full((1, 1), CERT_EPS))
+        self.stats_in = None
+        if stats_in is not None:
+            self.bind_stats(stats_in)
         self.c_off = cls._dev(
             mesh, (torch.arange(TPM) // M * per_shard).reshape(1, TPM).repeat(32, 1).to(torch.int32), u32, TL
         )
@@ -411,6 +459,14 @@ class FusedSampledDevice(FusedGreedyDevice):
             got = (tuple(int(d) for d in t.shape), t.dtype)
             assert got == ((1, 1, 32, TPM), dt), f"bound {name}: {got}"
         self.union_vals_in, self.union_ids_in = vals, ids
+
+    def bind_stats(self, stats):
+        """Point the certificate variant at the stats trace's output buffer (it exists after prepare_verify_stats)."""
+        import ttnn
+
+        got = (tuple(int(d) for d in stats.shape), stats.dtype)
+        assert got == ((1, 1, 2 * STATS_LT_ROW, 1), ttnn.float32), f"bound stats_in: {got}"
+        self.stats_in = stats
 
     def stage_union(self, union_vals, union_local_ids):
         """Standalone use: host -> device copy of the union (torch [R, TP*M]; rows R..31 zero)."""
@@ -455,8 +511,13 @@ class FusedSampledDevice(FusedGreedyDevice):
         self.stage_union(union_vals, union_local_ids)
         self.stage_samp(temperature, top_k, top_p, greedy, uniforms)
 
-    def body(self):
-        """The trace-capturable sequence. No host round trip, no data-dependent shape, outputs written with ttnn.copy."""
+    def body(self, cert=False):
+        """The trace-capturable sequence. No host round trip, no data-dependent shape, outputs written with ttnn.copy.
+        ``cert=True`` (phase 2, work/research_1026/67 section 5.2): the certificate variant. A sampled row with top_k = 0 keeps all
+        M candidates, takes L_T from ``stats_in`` and cuts the nucleus at 1 - p / q (q = Zc / max(L_T, Zc)); the overflow word gets
+        bit 2 (OVF_CERT) when q - p < CERT_EPS in an examined column. Every other op and every non-certificate row is the plain
+        body's (a certificate mask of 0 adds exactly 0): the plain body is NOT changed, ``cert=False`` records the same ops as before.
+        """
         import ttnn
 
         B, K, T, R, W, nb, M = self.B, self.K, self.T, self.R, self.W, self.nb, self.M
@@ -491,6 +552,14 @@ class FusedSampledDevice(FusedGreedyDevice):
         temp_r = expand(add(mul(temp, rsub(bad, 1.0)), bad))  # [R,1]
         kidx_r = expand(sub(add(mul(topk_u, rsub(g, 1.0)), g), 1.0))  # top_k - 1
         omp_r = expand(rsub(topp, 1.0))  # 1 - top_p
+        if cert:
+            assert self.stats_in is not None, "body(cert=True) needs bind_stats first"
+            lt = ttnn.slice(
+                ttnn.reshape(self.stats_in, (2 * STATS_LT_ROW, 1)), [STATS_LT_ROW, 0], [STATS_LT_ROW + R, 1]
+            )  # L_T [R,1]
+            cert_r = expand(mul(fl(ttnn.le(topk_u, self.c_zero)), rsub(g, 1.0)))  # [R,1] sampled row with top_k = 0
+            topp_r = expand(topp)
+            kidx_r = add(kidx_r, mul(cert_r, rsub(kidx_r, float(M - 1))))  # kth = v[M - 1]: keep every candidate
         # ---- 1. union -> global top-M (value desc, gid asc): gid = local + (col // M) * per_shard
         uv = ttnn.reshape(tl(self.union_vals_in), (32, TPM))
         uvp = cat([uv, self.c_pad_v], 1) if self.c_pad_v is not None else uv
@@ -507,6 +576,14 @@ class FusedSampledDevice(FusedGreedyDevice):
         ovf_row = fl(ttnn.ge(ttnn.slice(v, [0, M - 1], [R, M]), kth))  # [R,1]
         # ---- 3. top-p after the top-k cut (reverse cumsum of the softmax, drop tail mass <= 1 - p, never column 0)
         e = mul(ttnn.exp(sub(v, ttnn.slice(v, [0, 0], [R, 1])), fast_and_approximate_mode=False), keepm)
+        if cert:
+            zc = sumk(e)
+            q = ttnn.divide(
+                zc, ttnn.maximum(lt, zc)
+            )  # candidate mass fraction, (0, 1] and finite for any stats content
+            omp_r = add(omp_r, mul(cert_r, sub(rsub(ttnn.divide(topp_r, q), 1.0), omp_r)))
+            fail_row = mul(cert_r, fl(ttnn.lt(sub(q, topp_r), self.c_eps)))  # [R,1]
+            ovf_row = mul(ovf_row, rsub(cert_r, 1.0))  # no top-k tie rule on a certificate row
         p0m = ttnn.divide(e, sumk(e))
         cum = ttnn.cumsum(p0m, dim=1, reverse_order=True)
         drop = mul(fl(ttnn.le(cum, omp_r)), self.c_notfirst)
@@ -554,8 +631,12 @@ class FusedSampledDevice(FusedGreedyDevice):
         committed = add(mul(g_comm, g), mul(s_comm, ng))  # [B,T]
         cnt = add(m, 1.0)
         # ---- 7. overflow word: rows 0..m of a sampled user
-        ovf = ttnn.gt(sumk(per_user(mul(ovf_row, fl(ttnn.le(self.c_jr, m_r))))), self.c_zero_b)
+        examined = fl(ttnn.le(self.c_jr, m_r))
+        ovf = ttnn.gt(sumk(per_user(mul(ovf_row, examined))), self.c_zero_b)
         ovf = mul(fl(ovf), ng)  # [B,1]
+        if cert:  # bit 2: the certificate failed in an examined column
+            ovf_c = ttnn.gt(sumk(per_user(mul(fail_row, examined))), self.c_zero_b)
+            ovf = add(ovf, mul(mul(fl(ovf_c), ng), float(OVF_CERT)))
         # ---- 8. drafter inputs (S1 tail; pending = committed[m])
         one_hot = fl(ttnn.eq(self.c_iota_t, m))
         ndec = rsub(dec, 1.0)
@@ -593,14 +674,20 @@ class FusedSampledDevice(FusedGreedyDevice):
 # --------------------------------------------------------------------------- #
 # Overflow redo (host, full logits, float64) and the audit's boundary classification
 # --------------------------------------------------------------------------- #
-def _row_distribution(logit_row, temp, k, p):
+ROW_DIST_PREFIX = (
+    4096  # candidates the fast row distribution sorts (the rest is bounded by a full-vocabulary normaliser)
+)
+
+
+def _row_distribution_full(logit_row, temp, k, p):
     """One engine row's sampling distribution on the FULL logits, float64: temperature, top-k with ties kept, top-p (tail mass
     <= 1 - p dropped, never the first). Returns (ids int64 [V'], prob float64 [V']) in (value desc, id asc) order; V' is the
-    vocabulary (entries cut by top-k / top-p have probability 0)."""
+    vocabulary (entries cut by top-k / top-p have probability 0). A top-k <= 0 or >= V means "off". Reference
+    implementation: a float64 sort of the whole vocabulary (about 35 ms per row); _row_distribution is the fast twin."""
     v = torch.as_tensor(logit_row).to(torch.float64) / float(temp)
     order = torch.sort(v, descending=True, stable=True).indices  # ties: ascending id (stable on the id-ordered row)
     vs = v[order]
-    k = max(1, min(int(k), vs.numel()))
+    k = vs.numel() if int(k) <= 0 else min(int(k), vs.numel())
     keep = vs >= vs[k - 1]
     vs = torch.where(keep, vs, torch.full_like(vs, float("-inf")))
     e = torch.exp(vs - vs[0])
@@ -613,6 +700,74 @@ def _row_distribution(logit_row, temp, k, p):
     return order, e / e.sum()
 
 
+_TAIL_SKIP = 1.5  # go straight to the full sort when the estimated tail mass past the prefix is above this x (1 - p)
+
+
+def _tail_beyond_prefix_estimate(x, temp, prefix):
+    """Cheap (about 1 ms) estimate of the probability mass of the entries below the ``prefix``-th largest value: the normaliser is the
+    exact float32 exp-sum, the threshold and the numerator come from a 1/16 strided sample (the mass past the prefix is spread over
+    many entries, so the sample is good for the flat rows this is for). It only CHOOSES the path of _row_distribution (a flat row
+    would fail the exact tail check after a 6 ms attempt); the exact check stays, so a wrong estimate costs time, never exactness.
+    """
+    x32 = x.to(torch.float32)
+    e = torch.exp((x32 - x32.max()) / float(temp))
+    xs, es = x32[::16], e[::16]
+    thr = torch.kthvalue(xs, max(1, xs.numel() - prefix // 16 + 1)).values  # about the prefix-th largest value
+    return float(
+        16.0 * torch.where(xs < thr, es, torch.zeros_like(es)).sum(dtype=torch.float64) / e.sum(dtype=torch.float64)
+    )
+
+
+def _row_distribution(logit_row, temp, k, p, prefix=ROW_DIST_PREFIX):
+    """_row_distribution_full without the full sort (about 5 ms instead of 35 ms per row): sort only the entries >= the
+    ``prefix``-th largest value (ties at the threshold stay together, so the order is still (value desc, id asc)). Exact
+    cases: (a) top-k active and its ties lie inside the prefix: nothing beyond the prefix is kept; (b) top-k off and top-p < 1
+    and the mass beyond the prefix, from a full-vocabulary float64 normaliser, is <= 1 - p: every position beyond the
+    prefix is dropped by the nucleus rule, and inside it the cut uses the full normaliser. Anything else (a prefix too
+    short, p = 1 without a small top-k, a huge tie group) falls back to _row_distribution_full. Returns the TRUNCATED
+    (ids int64 [n], prob float64 [n]): the dropped tail has probability 0 and is not listed, which does not change an
+    inverse CDF, a hit test or a draft-removal. Equal to _row_distribution_full's first n entries (ties and all)."""
+    x = torch.as_tensor(logit_row)
+    V = x.numel()
+    k = V if int(k) <= 0 else min(int(k), V)
+    if V <= 2 * prefix or (k >= V and float(p) >= 1.0) or (k < V and k > prefix):
+        return _row_distribution_full(logit_row, temp, k, p)
+    if k >= V and _tail_beyond_prefix_estimate(x, temp, prefix) > _TAIL_SKIP * (1.0 - float(p)):
+        return _row_distribution_full(
+            logit_row, temp, k, p
+        )  # a flat row: the nucleus reaches far past the prefix (bench: s3_redo_bench)
+    v = x.to(torch.float64) / float(temp)
+    thr = torch.topk(v, prefix).values[-1]
+    ids = (v >= thr).nonzero().reshape(-1)  # ascending ids
+    if ids.numel() > 2 * prefix:  # a huge tie group at the threshold
+        return _row_distribution_full(logit_row, temp, k, p)
+    vs0 = v[ids]
+    order = torch.sort(vs0, descending=True, stable=True).indices
+    ids, vs = ids[order], vs0[order]
+    n = vs.numel()
+    if k < V:
+        if k > n:
+            return _row_distribution_full(logit_row, temp, k, p)
+        keep = vs >= vs[k - 1]
+        vs = torch.where(keep, vs, torch.full_like(vs, float("-inf")))
+        e = torch.exp(vs - vs[0])
+        z = e.sum()
+        tail = 0.0
+    else:
+        e = torch.exp(vs - vs[0])
+        z = torch.exp(v - vs[0]).sum()  # full-vocabulary normaliser
+        tail = float((z - e.sum()) / z)
+        if tail > 1.0 - float(p):  # the nucleus may reach beyond the prefix
+            return _row_distribution_full(logit_row, temp, k, p)
+    p0 = e / z
+    if float(p) < 1.0:
+        cum = p0.flip(0).cumsum(0).flip(0) + tail
+        drop = cum <= (1.0 - float(p))
+        drop[0] = False
+        e = torch.where(drop, torch.zeros_like(e), e)
+    return ids, e / e.sum()
+
+
 def _inverse_cdf_f64(w, u):
     """The plugin's / device's inverse CDF on weights w [N] >= 0 (scale free): first bucket whose cdf > u * total, clamped to
     the last positive weight."""
@@ -622,7 +777,7 @@ def _inverse_cdf_f64(w, u):
     return min(pick, last)
 
 
-def host_redo_walk(full_logits, tok_buf, params, uniforms, *, B, K, num_valid):
+def host_redo_walk(full_logits, tok_buf, params, uniforms, *, B, K, num_valid, users=None):
     """The exact accept walk of one verify step on the FULL logits, for the step the device flagged ``overflow`` (a top-k tie
     group reached the last union candidate, so the candidates cannot decide it). Same decisions as accept_sampled_support's
     reference path with the same ``uniforms`` [B, K+2] (column 0 bonus, 1..K accepts, K+1 correction): float64 arithmetic,
@@ -632,7 +787,9 @@ def host_redo_walk(full_logits, tok_buf, params, uniforms, *, B, K, num_valid):
 
     full_logits [R, V] (rows u*T+j, any float dtype), tok_buf [R] or [B, T] (column j token; drafts = columns 1..K), params:
     dict temperature [B] / top_k [B] / top_p [B] / greedy [B] bool, num_valid [B]. Only the rows the walk examines are
-    evaluated. Returns (committed [B, T] int32, -1 past the count; counts [B] int32 in [1, T])."""
+    evaluated. ``users`` (optional iterable of user indices): redo only those users; the other users come back as
+    committed = -1 and counts = 1 (meaningless: merge_redo keeps the device result for them). A top_k <= 0 or >= V means off.
+    Returns (committed [B, T] int32, -1 past the count; counts [B] int32 in [1, T])."""
     T, R = K + 1, B * (K + 1)
     logits = torch.as_tensor(full_logits)
     assert logits.shape[0] >= R, (tuple(logits.shape), R)
@@ -650,7 +807,8 @@ def host_redo_walk(full_logits, tok_buf, params, uniforms, *, B, K, num_valid):
         row = logits[r].to(torch.float32)
         return int((row == row.max()).nonzero()[0])
 
-    for u in range(B):
+    todo = range(B) if users is None else sorted({int(u) for u in users})
+    for u in todo:
         n = nv[u]
         if greedy[u] or temp[u] <= 0:
             m = 0
@@ -682,11 +840,26 @@ def host_redo_walk(full_logits, tok_buf, params, uniforms, *, B, K, num_valid):
     return committed, counts
 
 
-def audit_boundary_users(ref, uniforms, committed, counts, drafts, num_valid, *, B, K, M, eps=1e-5):
+def merge_redo(dev_committed, dev_counts, redo_committed, redo_counts, users):
+    """Per-user merge of a subset redo into the device result: users in ``users`` take the host redo, every other user keeps
+    the device committed row and count (a user's result does not depend on the other users). Returns (committed, counts)
+    as new int32 tensors."""
+    committed = torch.as_tensor(dev_committed).to(torch.int32).clone()
+    counts = torch.as_tensor(dev_counts).to(torch.int32).clone()
+    idx = torch.as_tensor(sorted({int(u) for u in users}), dtype=torch.int64)
+    if idx.numel():
+        committed[idx] = torch.as_tensor(redo_committed).to(torch.int32)[idx]
+        counts[idx] = torch.as_tensor(redo_counts).to(torch.int32)[idx]
+    return committed, counts
+
+
+def audit_boundary_users(ref, uniforms, committed, counts, drafts, num_valid, *, B, K, M, eps=1e-5, top_p=None):
     """Users whose device result differs from ``ref`` (fused_sampled_reference) but only by a float32 boundary: an examined draft
     probability within ``eps`` of its uniform (accept test), or the inverse-CDF threshold within ``eps`` (relative to the total)
     of a bucket edge of the corrected / bonus row. Returns {user: reason} for the explained ones; a differing user that is not in
-    it is a real mismatch. ``drafts`` [B, K], ``num_valid`` [B]."""
+    it is a real mismatch. ``drafts`` [B, K], ``num_valid`` [B]. With ``top_p`` [B] and a reference built with ``full_norm``
+    (ref.cert_q), a certificate row of the user within ``eps`` of the certificate margin (|q - p| < eps) or of the nucleus
+    cut (|cum - (1 - p / q)| < eps) in an examined column is the explained reason "cert"."""
     committed, counts = torch.as_tensor(committed).to(torch.int64), torch.as_tensor(counts).to(torch.int64)
     rc, rn = ref.committed.to(torch.int64), ref.counts.to(torch.int64)
     uni = torch.as_tensor(uniforms).reshape(B, K + 2).to(torch.float64)
@@ -704,6 +877,19 @@ def audit_boundary_users(ref, uniforms, committed, counts, drafts, num_valid, *,
         if any(abs(float(ref.p_d[u, j]) - float(uni[u, 1 + j])) < eps for j in tests):
             out[u] = "accept"
             continue
+        if ref.cert_q is not None and top_p is not None:
+            pu = float(torch.as_tensor(top_p).reshape(B)[u])
+            reach = min(T, max(int(counts[u]), int(rn[u])))
+            for c in range(reach):
+                q = float(ref.cert_q[u * T + c])
+                if q >= 1.0:
+                    continue
+                cut = 1.0 - pu / q
+                if abs(q - pu) < eps or bool(((ref.cum[u * T + c].double() - cut).abs() < eps).any()):
+                    out[u] = "cert"
+                    break
+            if u in out:
+                continue
         if int(rn[u]) == int(counts[u]):  # same m: only the pick differs
             m = int(rn[u]) - 1
             w = ref.prob.reshape(B, T, M)[u, m].to(torch.float64).clone()

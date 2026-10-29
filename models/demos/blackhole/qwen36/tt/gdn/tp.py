@@ -179,6 +179,7 @@ def kda_conv_prefill(
     xin_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     conv_sel=None,
     emit_state=True,
+    wide_input=False,
 ):
     """Depthwise causal conv (K=4) + SiLU + q/k/v split in ONE program (ttnn.experimental.kda.qkv_causal_conv1d_silu).
 
@@ -195,14 +196,21 @@ def kda_conv_prefill(
                   valid_len-3+j < 0, exact for a from-scratch history of zeros). None: the static last-3-rows slice.
     Returns q [1,T,Q], k [1,T,K], v [1,T,V] bf16 TILE DRAM, and new_state [1, 3, C] bf16 TILE DRAM: the chunk's
     last three INPUT rows, i.e. the next chunk's history (the op does not emit it).
+    wide_input: qkv is the whole TILE DRAM projection [1, T, W>=C] whose conv columns are 0..C-1 (note 57 A): the op
+                  reads it in place via input_column_offset=0 (no untilize/tilize round trip). The caller frees it.
     emit_state=False skips new_state (returned as None), for callers that keep their own carry (the spec verify).
     """
-    C = qkv.shape[-1]
+    C = sum(widths)
     n_hist = history.shape[1]  # K - 1 = 3 rows, the op's fixed history depth
     assert qkv.shape[1] == T, f"kda_conv_prefill: T={T} but qkv has {qkv.shape[1]} rows"
     _dram = ttnn.DRAM_MEMORY_CONFIG
     # The op's input contract is row-major: one untilize of the conv columns.
-    xin = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=xin_memory_config)
+    if wide_input:
+        # Note 57 (A): TILE input straight into the op (columns 0..C-1 of the projection, offset 0).
+        assert qkv.layout == ttnn.TILE_LAYOUT and qkv.shape[-1] >= C, (qkv.layout, qkv.shape, C)
+        xin = qkv
+    else:
+        xin = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=xin_memory_config)
     hist = history if history.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(history, ttnn.ROW_MAJOR_LAYOUT)
     q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
         xin,
@@ -215,18 +223,21 @@ def kda_conv_prefill(
         # predecessor_carry against history and never reads it, so alias history as its docstring says.
         predecessor_carry=hist,
         memory_config=_dram,
+        input_column_offset=0,
     )
     if hist is not history:
         ttnn.deallocate(hist)
     if not emit_state:
-        ttnn.deallocate(xin)
+        if not wide_input:
+            ttnn.deallocate(xin)
         return q, k, v, None
     # Next chunk's history: the last three input rows, taken from the row-major copy (page reads, no
     # untilize), then re-tiled because the layer-wide carry (conv_carry, decode seeding, per-user assembly)
     # is TILE.
     if conv_sel is not None:
         assert conv_sel.shape[1] == n_hist and conv_sel.shape[-1] == T, (conv_sel.shape, n_hist, T)
-        ttnn.deallocate(xin)
+        if not wide_input:
+            ttnn.deallocate(xin)
         # bf16 one-hot x bf16 values from the TILE projection output (same values the RM copy holds), HiFi4 + fp32
         # accumulate: exactly one nonzero term per output element -> bit-exact row selection.
         # DRAM operand: an L1-resident qkv could clash with the matmul's static CBs (the op sees a 3-row LHS).
@@ -236,6 +247,16 @@ def kda_conv_prefill(
         )
         if qkv_d is not qkv:
             ttnn.deallocate(qkv_d)
+        if new_state.shape[-1] != C:  # wide_input: keep the conv columns (tile-aligned slice, lossless)
+            ns = ttnn.slice(new_state, (0, 0, 0), (1, n_hist, C), memory_config=_dram)
+            ttnn.deallocate(new_state)
+            new_state = ns
+        return q, k, v, new_state
+    if wide_input:
+        # Note 57 (A): last tile-row block (aligned, pure tile copy), then the last n_hist rows of it; stays TILE.
+        blk = ttnn.slice(xin, (0, T - tpc.TILE_SIZE, 0), (1, T, C), memory_config=_dram)
+        new_state = ttnn.slice(blk, (0, tpc.TILE_SIZE - n_hist, 0), (1, tpc.TILE_SIZE, C), memory_config=_dram)
+        ttnn.deallocate(blk)
         return q, k, v, new_state
     new_state = ttnn.slice(xin, (0, T - n_hist, 0), (1, T, C), memory_config=_dram)
     ttnn.deallocate(xin)
@@ -980,7 +1001,7 @@ class TPGatedDeltaNet:
                 mesh_mapper=rep_map,
             )
 
-    def _kda_conv_prefill(self, qkv, T, conv_state, conv_sel=None):
+    def _kda_conv_prefill(self, qkv, T, conv_state, conv_sel=None, wide_input=False):
         """kda_conv_prefill on this layer's taps and widths. conv_state: the previous chunk's carry
         [1, K-1, C] TILE, or None from scratch. conv_sel: optional persistent one-hot [1, K-1, T] selector of the last
         real rows (traced masked bucket, from-scratch only). Returns (q, k, v, new_state), see kda_conv_prefill."""
@@ -988,7 +1009,14 @@ class TPGatedDeltaNet:
         history = conv_state if conv_state is not None else self._kda_zero_history
         kd, vd = self.key_dim_tp, self.value_dim_tp
         return kda_conv_prefill(
-            qkv, T, history, self.tw["conv_taps"], (kd, kd, vd), self._kda_actual_start, conv_sel=conv_sel
+            qkv,
+            T,
+            history,
+            self.tw["conv_taps"],
+            (kd, kd, vd),
+            self._kda_actual_start,
+            conv_sel=conv_sel,
+            wide_input=wide_input,
         )
 
     # ------------------------------------------------------------------ #
@@ -1957,7 +1985,7 @@ class TPGatedDeltaNet:
             self.args.gdn_value_dim_tp,
         )
 
-    def _project_qkvzab(self, x, S, out_mc=None):
+    def _project_qkvzab(self, x, S, out_mc=None, wide_qkv=False):
         """Project x → (qkv, z, a, b). Fused path: one [qkv|z|a|b] matmul then slice.
         out_mc: placement of the qkvzab matmul + slices. None → DRAM; prefill+decode now pass L1 to
         keep qkvzab + q/k/v/z/a/b resident (was DRAM to spare NoC traffic — re-measure if reverting)."""
@@ -1992,7 +2020,10 @@ class TPGatedDeltaNet:
                     out_memory_config=_proj_mc,
                     compute_cfg=self.cfg_in if S <= tpc.TILE_SIZE else self.cfg,
                 )
-            qkv = ttnn.slice(qkvzab, (0, 0, 0), (1, S, qz), memory_config=out_mc)
+            # Note 57 (A): wide_qkv (prefill KDA conv) keeps the whole DRAM qkvzab as `qkv` (conv columns 0..qz-1,
+            # width 4120 != qz); the caller frees it after the conv op. L1 qkvzab: old slice path.
+            _wide = wide_qkv and qkvzab.memory_config().buffer_type == ttnn.BufferType.DRAM
+            qkv = qkvzab if _wide else ttnn.slice(qkvzab, (0, 0, 0), (1, S, qz), memory_config=out_mc)
             # z (output gate) lives across the chunk kernel (gated = out_f * silu(z)); L1 z (6MB@S=2048)
             # clashes with the scan kernel CBs -> keep DRAM in chunk-prefill; decode (small S) keeps out_mc.
             _z_mc = ttnn.DRAM_MEMORY_CONFIG if (self._fuse_agmm and S > tpc.TILE_SIZE) else out_mc
@@ -2001,7 +2032,8 @@ class TPGatedDeltaNet:
             # Grab the enclosing tile-aligned block once (no untilize), then split a/b from it (test_gdn_slice_opt).
             _ab_end = min(az + -(-2 * Nv // tpc.TILE_SIZE) * tpc.TILE_SIZE, qkvzab.shape[-1])  # 2*Nv up to a tile
             ab = ttnn.slice(qkvzab, (0, 0, az), (1, S, _ab_end), memory_config=out_mc)
-            ttnn.deallocate(qkvzab)
+            if not _wide:
+                ttnn.deallocate(qkvzab)
             a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv), memory_config=out_mc)
             b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=out_mc)
             ttnn.deallocate(ab)
@@ -2056,17 +2088,24 @@ class TPGatedDeltaNet:
             self.reset_state()
 
         # Prefill qkvzab in L1: keeps proj + q/k/v/z/a/b resident for conv+gate prep.
-        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=ttnn.L1_MEMORY_CONFIG if tpc.prefill_l1_rows_ok(T) else None)
+        _use_kda = self._gdn_kda_conv and valid_len is None
+        qkv, z, a, b = self._project_qkvzab(
+            x, T, out_mc=ttnn.L1_MEMORY_CONFIG if tpc.prefill_l1_rows_ok(T) else None, wide_qkv=_use_kda
+        )
 
         # Causal conv + SiLU; conv_state = previous chunk's last K-1 inputs (None/zero from scratch).
         # q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes it.
         _cstate = self.conv_carry if carry else None
         kd = self.key_dim_tp
-        if self._gdn_kda_conv and valid_len is None:
+        if _use_kda:
             # KDA op: conv + SiLU + q/k/v split in one program; its outputs are already the three
             # token-major tensors the flat-qkv path wants (masked buckets keep the MAC FIR below).
             q, k, v, conv_new_state = self._kda_conv_prefill(
-                qkv, T, _cstate, conv_sel=None if prefill_masks is None else prefill_masks["conv_sel"]
+                qkv,
+                T,
+                _cstate,
+                conv_sel=None if prefill_masks is None else prefill_masks["conv_sel"],
+                wide_input=qkv.shape[-1] != self.qkv_dim_tp,
             )
             ttnn.deallocate(qkv)
             if self._gdn_flat_qkv:

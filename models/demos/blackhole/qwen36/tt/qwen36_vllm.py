@@ -32,7 +32,10 @@ from models.demos.blackhole.qwen36.tt.spec_engine import rows_to_engine, slot_ma
 from models.demos.blackhole.qwen36.tt.tp_common import (
     fabric_router_config,
     spec_chain_enabled,
+    spec_device_logprobs_enabled,
+    spec_device_topp_enabled,
     spec_fused_enabled,
+    spec_fused_sampled_enabled,
     spec_hostset_enabled,
     spec_prefill_overlap_enabled,
     verify_device_topk_m,
@@ -137,6 +140,15 @@ def _live_rows(start_pos, n):
         return None
     pos = start_pos.flatten().tolist() if hasattr(start_pos, "flatten") else list(start_pos)
     return [int(p) != -1 for p in pos] if len(pos) == n else None
+
+
+def _plugin_candidates(cand):
+    """The plugin's ``SpecCandidates`` (docs/SPEC_DECODE_CONTRACT.md) from the engine's ``DeviceCandidates``: the same three tensors
+    (ids int32 [B, T, M], values fp32 [B, T, M], lse fp32 [B, T]). The plugin owns the type; this module imports it lazily.
+    """
+    from vllm_tt_plugin.spec_decode import SpecCandidates
+
+    return SpecCandidates(ids=cand.ids, values=cand.values, lse=cand.lse)
 
 
 def _build_model_capabilities():
@@ -1142,6 +1154,14 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # decode_forward(finishing_slots=[runner slots]): requests left out of a step only because the step in flight ends them at
         # max_tokens. The engine frees their rows without parking (spec_engine._apply_finishing). Only meaningful with spec.
         "supports_finishing_slots": True,
+        # Device logprobs (num_logprobs 0..20 in spec_sampling, raw logprobs from the top-64 + logsumexp payload) and the
+        # full-vocabulary top-p certificate (top_k 0 with top_p < 1). Both need the fused sampled accept and the stats trace.
+        "supports_spec_device_logprobs": bool(
+            spec_fused_enabled() and spec_fused_sampled_enabled() and spec_device_logprobs_enabled()
+        ),
+        "supports_spec_device_top_p": bool(
+            spec_fused_enabled() and spec_fused_sampled_enabled() and spec_device_topp_enabled()
+        ),
         "output_tokens_per_step": 1,
         "supports_sample_on_device": False,
     }
@@ -1452,6 +1472,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             spec_mode == "fused_sample" and defer_read
         ):  # stage S4b: no host tensors; the reader thread resolves the handle
             return VerifyOutput(spec_mode=res.spec_mode, handle=res.handle)
+        cand = getattr(res, "candidates", None)
         if spec_mode == "fused_sample":  # QWEN36_SPEC_FUSED: greedy rows (S1) or, with spec_sampling, sampled rows (S2)
             return VerifyOutput(
                 spec_mode=res.spec_mode,
@@ -1459,6 +1480,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 accepted_token_ids=res.accepted_token_ids,
                 accepted_counts=res.accepted_counts,
                 hidden=None,
+                # phase 2: the logprob payload, only when a row asked for it (an older plugin never does, so its VerifyOutput
+                # never sees the keyword)
+                **({} if cand is None else {"candidates": _plugin_candidates(cand)}),
             )
         if spec_mode == "topk":
             # The candidates plus the lazy full-logits fallback (one device round trip; the plugin walks acceptance on
@@ -1484,13 +1508,29 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             from vllm_tt_plugin.spec_decode import FusedReadout
 
             ids, counts, p0 = tt_out.wait()
-            return FusedReadout(accepted_token_ids=ids, accepted_counts=counts, p0=p0)
+            cand = tt_out.candidates()  # None unless a row of the step asked for logprobs (phase 2)
+            return FusedReadout(
+                accepted_token_ids=ids,
+                accepted_counts=counts,
+                p0=p0,
+                **({} if cand is None else {"candidates": _plugin_candidates(cand)}),
+            )
         if async_read and hasattr(tt_out, "spec_mode") and getattr(tt_out, "handle", None) is None:
             # Non-deferred VerifyOutput (sampled fused_sample, topk): already host when every present tensor field is.
             fields = [
                 getattr(tt_out, n, None)
-                for n in ("argmax_ids", "accepted_token_ids", "accepted_counts", "logits", "topk_values", "topk_ids")
+                for n in (
+                    "argmax_ids",
+                    "accepted_token_ids",
+                    "accepted_counts",
+                    "logits",
+                    "topk_values",
+                    "topk_ids",
+                )
             ]
+            cand = getattr(tt_out, "candidates", None)  # the logprob payload is host when its three tensors are
+            if cand is not None:
+                fields += [cand.ids, cand.values, cand.lse]
             if all(f is None or isinstance(f, torch.Tensor) for f in fields):
                 return tt_out, []
         if async_read and isinstance(tt_out, torch.Tensor):
@@ -1502,7 +1542,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     def _check_spec_sampling(self, ss, spec_mode, B):
         """Validate the plugin's ``spec_sampling`` (stage S2; docs/SPEC_DECODE_CONTRACT.md): host tensors over the padded rows
         B: temperature fp32 [B], top_k int32 [B], top_p fp32 [B], greedy bool [B], uniforms fp32 [B, K+2]. Only a
-        fused_sample verify may carry it. Returns the dict (tensors) or None."""
+        fused_sample verify may carry it. A sampled row with top_k 0 and top_p < 1 (full-vocabulary nucleus; the engine's
+        certificate row) needs the capability supports_spec_device_top_p. Returns the dict (tensors) or None."""
         if ss is None:
             return None
         if spec_mode != "fused_sample":
@@ -1515,6 +1556,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             "greedy": ((B,), torch.bool),
             "uniforms": ((B, K + 2), torch.float32),
         }
+        if "num_logprobs" in ss:  # phase 2 (optional): int32 [B], -2 = no logprobs, 0..max_logprobs = top-N
+            want["num_logprobs"] = ((B,), torch.int32)
         if set(ss) != set(want):
             raise ValueError(f"spec_sampling keys {sorted(ss)} != {sorted(want)}")
         for name, (shape, dtype) in want.items():
@@ -1525,6 +1568,21 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         u = ss["uniforms"]
         if bool(((u < 0) | (u >= 1.0)).any()):
             raise ValueError("spec_sampling['uniforms'] must lie in [0, 1)")
+        cert = (
+            ~ss["greedy"] & (ss["top_k"] <= 0) & (ss["top_p"] < 1.0)
+        )  # top_k 0 = the whole vocabulary (the plugin's "off")
+        if bool(cert.any()) and not self.model_capabilities.get("supports_spec_device_top_p", False):
+            raise ValueError(
+                "spec_sampling top_k = 0 with top_p < 1 on a sampled row needs the supports_spec_device_top_p capability"
+            )
+        if "num_logprobs" in ss:
+            nl = ss["num_logprobs"]
+            if bool(((nl < -2) | (nl > 20)).any()):
+                raise ValueError("spec_sampling['num_logprobs'] must lie in [-2, 20] (-2 = no logprobs)")
+            if bool((nl >= 0).any()) and not self.model_capabilities.get("supports_spec_device_logprobs", False):
+                raise ValueError(
+                    "spec_sampling['num_logprobs'] >= 0 needs the supports_spec_device_logprobs capability"
+                )
         return ss
 
     def _decode_narrow(self, tokens, start_pos, page_table, kwargs, remap=None):
