@@ -61,6 +61,8 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
+PACK_BLOCK_MIN_TILES = 4
+
 PACK_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
@@ -206,6 +208,10 @@ def test_pack(
             )
         num_blocks = tile_cnt_A // num_tiles_in_block
 
+    # llk_pack_block (LLK_PACK_BLOCK_MIN_TILES in llk_pack_tile_api.h) packs shorter blocks one tile at a time
+    # (negated in the report: its own key, the build is the per-tile one)
+    pack_block_arg = -int(pack_block) if pack_block and num_tiles_in_block < PACK_BLOCK_MIN_TILES else pack_block
+
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
@@ -219,7 +225,7 @@ def test_pack(
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(),
             DEST_SYNC(dest_sync),
-            PACK_BLOCK(pack_block),
+            PACK_BLOCK(pack_block_arg),
             PACK_SRC_FROM_OUTPUT(),
             PACK_RMW_DEST(),
         ],

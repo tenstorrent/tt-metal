@@ -1575,10 +1575,12 @@ class PACK_BLOCK(TemplateParameter):
     pack_block: bool = False  # 2 and 3 are ints: the block calls llk_pack_block makes, not the opt-in fast forms; 3: the W offset forms
 
     def convert_to_cpp(self) -> str:
+        # negative: a block too short for llk_pack_block, which packs it one tile at a time as main does
+        en = bool(self.pack_block) and self.pack_block > 0
         return (
-            f"constexpr bool pack_block_en = {str(bool(self.pack_block)).lower()};\n"
-            f"constexpr bool pack_block_default = {str(self.pack_block == 2).lower()};\n"
-            f"constexpr bool pack_block_w = {str(self.pack_block == 3).lower()};"
+            f"constexpr bool pack_block_en = {str(en).lower()};\n"
+            f"constexpr bool pack_block_default = {str(en and self.pack_block == 2).lower()};\n"
+            f"constexpr bool pack_block_w = {str(en and self.pack_block == 3).lower()};"
         )
 
 
