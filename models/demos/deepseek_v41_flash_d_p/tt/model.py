@@ -656,6 +656,16 @@ class TtDS41Model:
                 i: TtEngramRows(mesh, hasher, EngramTable(ck, i), i) for i in self.layers if cfg.is_engram(i)
             }
         self._engram_dev = {}
+        # ENGRAM_ASYNC=on (P.6): one worker thread fills the engram rows begin_chunk allocated, layer by layer, while
+        # the main thread dispatches; take_engram_rows waits for its layer's job. engram_times: per layer the last
+        # chunk's host ms (hash, lookup / pack, wrap, upload on the worker; wait = what the main thread still waited)
+        self._engram_jobs = {}
+        self._engram_pool = None
+        if self.engram and settings.get("ENGRAM_ASYNC") == "on":
+            from concurrent.futures import ThreadPoolExecutor
+
+            self._engram_pool = ThreadPoolExecutor(1, thread_name_prefix="engram-async")
+        self.engram_times = {}
         # embedding: [V, H/TP] bf16 ROW_MAJOR per chip (the chip's hidden columns), replicated over SP
         emb = ck.get("embed.weight")
         assert emb.dtype == torch.bfloat16, emb.dtype  # the device copy is then exact
@@ -744,6 +754,9 @@ class TtDS41Model:
             st.memo.clear()
         if not self.engram:
             return
+        self.wait_engram()  # a job of the last chunk whose layer did not run: done before its tensor is freed
+        if self._engram_pool is not None:
+            return self._begin_engram_async(tokens, start)
         for i, rows in self.engram.items():
             if start == 0 or st is None:
                 tail = rows.new_tail()
@@ -755,7 +768,38 @@ class TtDS41Model:
             _free(self._engram_dev.pop(i, None))
             self._engram_dev[i] = dev
 
+    def _begin_engram_async(self, tokens: torch.Tensor, start: int) -> None:
+        """ENGRAM_ASYNC=on: on this thread only the new tails (3 ids a layer) and the device rows' allocation (the
+        order the off path allocates in); the hash, lookup, pack and upload go to the worker, layer order."""
+        st = self.state
+        ids = tokens.reshape(-1).clone()  # (the caller may reuse its tensor while the worker reads it)
+        for i, rows in self.engram.items():
+            tail = rows.new_tail() if start == 0 or st is None else st.tail[i]
+            tail = tail.long().clone()
+            new_tail = rows.next_tail(ids, tail)
+            if st is not None:
+                st.tail[i] = new_tail
+            _free(self._engram_dev.pop(i, None))
+            dev = rows.allocate(ids.numel())
+            self._engram_dev[i] = dev
+            self._engram_jobs[i] = self._engram_pool.submit(rows.fill, dev, ids, tail, None, new_tail)
+
+    def wait_engram(self) -> None:
+        """ENGRAM_ASYNC=on: every engram job of this chunk done (its rows enqueued on CQ 0)."""
+        for i in list(self._engram_jobs):
+            self._wait_job(i)
+
+    def _wait_job(self, layer: int) -> None:
+        job = self._engram_jobs.pop(layer, None)
+        if job is None:
+            return
+        t0 = time.perf_counter()
+        times = job.result()
+        times["wait"] = (time.perf_counter() - t0) * 1e3
+        self.engram_times[layer] = times
+
     def take_engram_rows(self, layer: int) -> ttnn.Tensor:
+        self._wait_job(layer)  # ENGRAM_ASYNC=on: layer 1 waits for its own job only, layer 14 for its own
         t = self._engram_dev.pop(layer, None)
         assert t is not None, f"layer {layer}: no engram rows for this chunk (begin_chunk(tokens, start) first)"
         return t

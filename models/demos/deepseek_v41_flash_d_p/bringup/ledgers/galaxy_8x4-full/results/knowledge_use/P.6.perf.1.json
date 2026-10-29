@@ -1,0 +1,56 @@
+{
+ "used": [
+  {
+   "id": "DS41-99",
+   "how": "its 'host thread' lever for the engram lookup is what P.6 builds; begin_chunk's host time is on the wall of a host-bound chunk, so the worker overlaps it with layer dispatch",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-133",
+   "how": "numba launches from the new worker thread go through engram_bfp8._run, which keeps torch's thread count; perf_engram_host.py already checks a launch from another thread",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "testing/host_transfers.py wraps ttnn module attributes process-wide: a transfer a background thread issues for begin_chunk counts against whichever layer the main thread is in; the worker calls copy_host_to_device_tensor through a reference bound at import",
+  "MeshDevice has no Python binding for its CQ count (num_hw_cqs); the harness and tt-d-gen open one CQ",
+  "ttnn.to_device does not release the GIL; copy_host_to_device_tensor does. tensor_from_bfp8_bytes + .tobytes() hold the GIL for ~35 ms a 5120-token layer (two 33 MB copies); a host tensor's shard bytes are writable in place through torch.from_dlpack(host.host_buffer().get_shard(coord))",
+  "P.6's gate command sets BRINGUP_PROFILE_WALL=1 on test_profile.py, so gate.with_clean_wall adds no profiled run and device_ms_total is always MISSING; the gate needs the plain profiled run as a second segment (tasks.yaml)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: the same rows and bytes, only moved to a worker thread (tt/perf_engram_async.py: device bytes equal to the off path's)"
+  }
+ ],
+ "cited_only": [
+  "DS41-136"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.6",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-29T02:12:31",
+  "head": "c3425eb793b",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.6.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.6.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_bfp8.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_engram_async.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_trace.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
