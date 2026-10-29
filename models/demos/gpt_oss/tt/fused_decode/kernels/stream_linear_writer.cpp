@@ -55,6 +55,10 @@
 #endif
 #include "router_topk.hpp"
 #include "bfp8_row.hpp"
+#ifdef LM_RESCORE
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#endif
 
 #ifndef ROWS
 #define ROWS 1
@@ -362,8 +366,13 @@ void kernel_main() {
     constexpr uint32_t j0 = 0;
     constexpr uint32_t j1 = kx;
 #endif
+    // More than 32 heads (one user, TP = 1: 64 SDPA output heads): head h is row h % 32 of tile row h / 32 (pages
+    // (h / 32) * x_pages ..). The multi-row (M users) layouts keep at most 32 heads per user.
+    constexpr uint32_t x_row_tiles = x_pages > 0 ? (kx / gather_pages + 31) / 32 : 1;
+    static_assert(rows == 1 || x_row_tiles <= 1, "multi-row activations: at most 32 heads per user");
     for (uint32_t j = j0; x_pages > 0 && j < j1; ++j) {
-        const uint32_t row = j / gather_pages;
+        const uint32_t row = (j / gather_pages) % 32;
+        [[maybe_unused]] const uint32_t row_tile = (j / gather_pages) / 32;
 #ifndef X_SPEC_TT
         const uint32_t off = row < 16 ? row * half_row : 2 * face_bytes + (row - 16) * half_row;  // faces 0/1, 2/3
 #endif
@@ -375,7 +384,7 @@ void kernel_main() {
             const uint32_t prow = 8 * (r % 4) + row % 8;
             const uint32_t off = prow < 16 ? prow * half_row : 2 * face_bytes + (prow - 16) * half_row;
 #else
-            const uint32_t page = r * gather_pages + j % gather_pages;
+            const uint32_t page = (r + row_tile) * gather_pages + j % gather_pages;
 #endif
             const uint64_t src = x_stage_pages > 0 ? get_noc_addr(x_stage + page * 2048) : s_x.get_noc_addr(page);
             noc_async_read(src + off, x_l1 + j * tiny_bytes + r * half_row, half_row);
@@ -455,9 +464,43 @@ void kernel_main() {
         if (n < n_tiles) {
             const uint32_t src = get_read_ptr(cb_out);
             if constexpr (out_mode == 4 && rows == 1) {
+#ifdef ROUTER_MERGE
+                // More than 32 experts (gpt-oss-120b: 128 over ROUTER_MERGE router cores, one 32-expert column each):
+                // this core's top-4 merge entries go to slot n of the merge core's list (cb_scr + 64; the merge core
+                // = column 0's, NOC coordinates in runtime args ROUTER_MERGE_ARG, +1), then its semaphore
+                // ROUTER_MERGE_SEM; the merge core picks the top-4 of the lists and writes the ids and softmax scores.
+                static_assert(q_cols == 4 && cols == 1, "router merge: top-4, one 32-expert column per router core");
+                {
+                    volatile tt_l1_ptr uint32_t* mine = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exp_chunks + 32);
+                    router_topk::top4_entries(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src), n * 32, mine);
+                    const uint32_t mx = get_arg_val<uint32_t>(ROUTER_MERGE_ARG);
+                    const uint32_t my = get_arg_val<uint32_t>(ROUTER_MERGE_ARG + 1);
+                    noc_async_write(exp_chunks + 32, get_noc_addr(mx, my, exp_chunks + 64 + 16 * n), 16);
+                    noc_async_write_barrier();
+                    noc_semaphore_inc(get_noc_addr(mx, my, get_semaphore(ROUTER_MERGE_SEM)), 1);
+                    noc_async_atomic_barrier();
+                    if (n == 0) {
+                        noc_semaphore_wait(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ROUTER_MERGE_SEM)),
+                            ROUTER_MERGE);
+                        invalidate_l1_cache();
+                        router_topk::merge4_softmax<ROUTER_MERGE>(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exp_chunks + 64),
+                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(exp_chunks));
+                        noc_async_write(exp_chunks, s_out.get_noc_addr(0), chunk);
+                        noc_async_write(exp_chunks + chunk, s_k.get_noc_addr(0), chunk);
+                    }
+                }
+#elif defined(ROUTER_FAST_TOPK)
+                static_assert(q_cols == 4 && k_cols == 32, "fast router top-k: top-4 of 32");
+                router_topk::topk4_softmax_fast(
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src),
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(exp_chunks));
+#else
                 router_topk::topk_softmax<q_cols, k_cols>(
                     reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src),
                     reinterpret_cast<volatile tt_l1_ptr uint16_t*>(exp_chunks));
+#endif
                 noc_async_write(exp_chunks, s_out.get_noc_addr(0), chunk);
                 noc_async_write(exp_chunks + chunk, s_k.get_noc_addr(0), chunk);
             } else if constexpr (out_mode == 4) {
@@ -650,7 +693,9 @@ void kernel_main() {
 #endif
             else {
                 const uint32_t m = n < q_cols ? n : (n < q_cols + k_cols ? n - q_cols : n - q_cols - k_cols);
-                const uint32_t h = m / head_tiles;
+                // head h >= 32 (one user with more than 32 heads, TP = 1): row h % 32 of tile row h / 32
+                const uint32_t h = (m / head_tiles) % 32;
+                [[maybe_unused]] const uint32_t h_tile = (m / head_tiles) / 32;
 #ifndef Q_SPEC_TT
                 const uint32_t off = h < 16 ? h * half_row : 2 * face_bytes + (h - 16) * half_row;
 #endif
@@ -662,7 +707,7 @@ void kernel_main() {
                     const uint32_t prow = 8 * (r % 4) + h % 8;
                     const uint32_t off = prow < 16 ? prow * half_row : 2 * face_bytes + (prow - 16) * half_row;
 #else
-                    const uint32_t page = r * head_tiles + m % head_tiles;
+                    const uint32_t page = (r + h_tile) * head_tiles + m % head_tiles;
 #endif
                     const uint64_t dst = n < q_cols            ? s_out.get_noc_addr(page, off)
                                          : n < q_cols + k_cols ? s_k.get_noc_addr(page, off)
@@ -717,6 +762,73 @@ void kernel_main() {
         noc_async_write(x_l1, s_out.get_noc_addr(0, list_idx * 8 * rows), 8 * rows);
 #endif
     }
+#ifdef LM_RESCORE
+    // Two-stage LM head (fused_decode/terminal.py LM_RESCORE): the outputs above came from the BFP4 weights. The
+    // distinct columns of this core's LM_RESCORE best ids go to the reader (cb LM_RS_CB + program semaphore LM_RS_SEM)
+    // and their count to compute (mailbox); their BF8 outputs then overwrite those columns of the folded logits and
+    // replace the top-K: the candidates come from the rescored columns only.
+    {
+        uint32_t cand[LM_RESCORE];
+        uint32_t nc = 0;
+        for (uint32_t i = 0; i < LM_RESCORE && i < K; ++i) {
+            if (top_idx[i] == 0xFFFFFFFFu) {
+                break;
+            }
+            const uint32_t col = top_idx[i] / 32;
+            bool seen = false;
+            for (uint32_t q = 0; q < nc; ++q) {
+                seen |= cand[q] == col;
+            }
+            if (!seen) {
+                cand[nc++] = col;
+            }
+        }
+        volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(LM_RS_CB));
+        sc[0] = nc;
+        for (uint32_t q = 0; q < nc; ++q) {
+            sc[1 + q] = cand[q] - col0;
+        }
+        asm volatile("fence" ::: "memory");
+        noc_semaphore_inc(get_noc_addr(get_semaphore(LM_RS_SEM)), 1);
+        noc_async_atomic_barrier();
+        ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, nc);
+        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, nc);
+        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, nc);
+        for (uint32_t i = 0; i < K; ++i) {
+            top_key[i] = 0;
+            top_idx[i] = 0xFFFFFFFFu;
+        }
+        for (uint32_t q = 0; q < nc; ++q) {
+            cb_wait_front(cb_out, 1);
+            const uint32_t n = cand[q];
+            const uint32_t src = get_read_ptr(cb_out);
+            const uint32_t h = n / head_tiles;
+            const uint32_t off = h < 16 ? h * half_row : 2 * face_bytes + (h - 16) * half_row;
+            const uint64_t dst = s_out.get_noc_addr(n % head_tiles, off);
+            noc_async_write(src, dst, half_row);
+            noc_async_write(src + row_face, dst + face_bytes, half_row);
+            volatile tt_l1_ptr uint16_t* val = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src);
+            for (uint32_t j = 0; j < 32; ++j) {
+                const uint32_t b = val[j];
+                const uint32_t key = (b & 0x8000) ? (~b & 0xFFFFu) : (b | 0x8000u);
+                const uint32_t idx = n * 32 + j;
+                // candidate columns are not in index order: ties go to the lower index explicitly
+                if (key > top_key[K - 1] || (key == top_key[K - 1] && idx < top_idx[K - 1])) {
+                    uint32_t i = K - 1;
+                    while (i > 0 && (top_key[i - 1] < key || (top_key[i - 1] == key && top_idx[i - 1] > idx))) {
+                        top_key[i] = top_key[i - 1];
+                        top_idx[i] = top_idx[i - 1];
+                        --i;
+                    }
+                    top_key[i] = key;
+                    top_idx[i] = idx;
+                }
+            }
+            noc_async_writes_flushed();
+            cb_pop_front(cb_out, 1);
+        }
+    }
+#endif
     if constexpr (topk) {
         // The list goes out through the (now drained) weight-gather staging of cb_x: K keys then K indices.
         volatile tt_l1_ptr uint32_t* list = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(x_l1);

@@ -164,7 +164,8 @@ class DecodeBoundary:
         self.cluster_axis = cluster_axis
         self.tiles = flat_tiles(hidden)  # pages of one vector
         self.all = rowtile_pages(hidden, rows)  # pages of a flat buffer (rows tokens in the row-tile layout)
-        self.ring = mesh_device.shape[cluster_axis]
+        # TP=1 (one chip): the mesh config has no TP axis; a ring of one device
+        self.ring = mesh_device.shape[cluster_axis] if cluster_axis is not None else 1
         self.fwd_hops = self.ring // 2
         self.bwd_hops = self.ring - 1 - self.fwd_hops
         self.memory_config = flat_memory_config(mesh_device, hidden, self.all)
@@ -209,7 +210,8 @@ class DecodeBoundary:
                 for name in sites
             }
         self.payload = self.all * PAGE
-        max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+        # TP=1 (a ring of one device): no fabric; each producer's partial is already the full sum (see _parts).
+        max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes()) if self.ring > 1 else self.payload
         self.chunk = min(self.payload, max_payload // PAGE * PAGE)
         self.chunks = -(-self.payload // self.chunk)
         phys = mesh_device.worker_core_from_logical_core(self.core)
@@ -491,7 +493,10 @@ class DecodeBoundary:
             return self._parts_mc(residual, gamma, partial, site, entry, norm, sent)
         assert self.rows == 1 and entry != "zero", "multi-row boundaries run on helper cores (_parts_mc)"
         reduced = None
-        if partial is not None and self.ccl == "ttnn":
+        # TP=1: the producer's flat partial is the full sum: the boundary reads it as its one receive slot, with no
+        # semaphore wait (expected = 0) and nothing to send; the producer op finished before this one started.
+        direct = partial is not None and self.ring == 1
+        if partial is not None and self.ccl == "ttnn" and not direct:
             scratch, ar_sem = self.ar_sites[site]
             reduced = ttnn.experimental.all_reduce_async(
                 partial,
@@ -505,12 +510,12 @@ class DecodeBoundary:
                 num_links=1,
             )
             partial = None
-        ccl = partial is not None
+        ccl = partial is not None and not direct
         out_res = self._empty_flat()
         out_x = self._empty_flat() if norm else None
-        recv, sem = self.sites[site] if ccl else (reduced, None)
+        recv, sem = self.sites[site] if ccl else ((partial if direct else reduced), None)
         sem_addr = ttnn.get_global_semaphore_address(sem) if ccl else 0
-        slots = self.ring if ccl else (1 if reduced is not None else 0)
+        slots = self.ring if ccl else (1 if (reduced is not None or direct) else 0)
         # one increment per sender (link) per source device (kernels/boundary_sender.cpp) + the local copy's
         expected = (self.ring - 1) * min(self.links, self.chunks) + 1 if ccl else 0
         # CB indices clear of the streamed-matmul ops' (0-4, 16), which share programs with this part (consumer_parts).
@@ -569,6 +574,8 @@ class DecodeBoundary:
             io += [partial, recv]
         elif reduced is not None:
             io.append(reduced)
+        elif direct:
+            io.append(partial)
         return kernels, cbs, io, out_res, out_x, (ccl and not sent), reduced, cb_x
 
     def __call__(self, residual, gamma, partial=None, site=None, entry=False, norm=True, sent=False):

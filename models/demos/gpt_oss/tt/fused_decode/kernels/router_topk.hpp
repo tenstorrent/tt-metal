@@ -89,6 +89,149 @@ inline void topk_softmax(volatile tt_l1_ptr uint16_t* logits, volatile tt_l1_ptr
 }  // namespace router_topk
 
 namespace router_topk {
+// topk_softmax for top-4 of 32 in one pass (ROUTER_FAST_TOPK): the logits read as 16 words, a register top-4 by order
+// key (strict >, ascending ids: ties keep the lower id, as topk_softmax's repeated scans), the same Q16 softmax.
+// Same output bits as topk_softmax<4, 32>.
+inline void topk4_softmax_fast(volatile tt_l1_ptr uint16_t* logits, volatile tt_l1_ptr uint16_t* stage) {
+    const volatile tt_l1_ptr uint32_t* w = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(logits);
+    uint32_t k0 = 0, k1 = 0, k2 = 0, k3 = 0, i0 = 0, i1 = 0, i2 = 0, i3 = 0;
+    bool any = false;
+    auto ins = [&](uint32_t b, uint32_t id) __attribute__((always_inline)) {
+        const uint32_t key = (b & 0x8000) ? (~b & 0xFFFFu) : (b | 0x8000u);
+        if (key > k3 || !any) {
+            any = true;
+            if (key > k2) {
+                k3 = k2;
+                i3 = i2;
+                if (key > k1) {
+                    k2 = k1;
+                    i2 = i1;
+                    if (key > k0) {
+                        k1 = k0;
+                        i1 = i0;
+                        k0 = key;
+                        i0 = id;
+                    } else {
+                        k1 = key;
+                        i1 = id;
+                    }
+                } else {
+                    k2 = key;
+                    i2 = id;
+                }
+            } else {
+                k3 = key;
+                i3 = id;
+            }
+        }
+    };
+    for (uint32_t i = 0; i < 16; ++i) {
+        const uint32_t v = w[i];
+        ins(v & 0xFFFFu, 2 * i);
+        ins(v >> 16, 2 * i + 1);
+    }
+    auto raw = [](uint32_t key) -> uint16_t {
+        return static_cast<uint16_t>((key & 0x8000u) ? (key & 0x7FFFu) : (~key & 0xFFFFu));
+    };
+    const uint32_t ids[4] = {i0, i1, i2, i3};
+    const int32_t v0 = bf16_to_q16(raw(k0));
+    const int32_t vals[4] = {v0, bf16_to_q16(raw(k1)), bf16_to_q16(raw(k2)), bf16_to_q16(raw(k3))};
+    uint32_t e[4];
+    uint32_t sum = 0;
+    for (uint32_t j = 0; j < 4; ++j) {
+        e[j] = exp_q16(vals[j] - v0);
+        sum += e[j];
+    }
+    volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
+    st[0] = ids[0] | (ids[1] << 16);
+    st[1] = ids[2] | (ids[3] << 16);
+    st[2] = 0;
+    st[3] = 0;
+    const uint32_t d = sum >> 1;
+    st[4] = q16_to_bf16((e[0] << 15) / d) | (static_cast<uint32_t>(q16_to_bf16((e[1] << 15) / d)) << 16);
+    st[5] = q16_to_bf16((e[2] << 15) / d) | (static_cast<uint32_t>(q16_to_bf16((e[3] << 15) / d)) << 16);
+    st[6] = 0;
+    st[7] = 0;
+}
+}  // namespace router_topk
+
+namespace router_topk {
+// Top-4 of more than 32 experts (ROUTER_MERGE: gpt-oss-120b's 128, one 32-expert logit column per router core). Merge
+// entries: (1 << 31) | order key << 8 | (255 - expert id): larger = better, ties to the lower id (ids < 128).
+inline void top4_insert(uint32_t e, uint32_t& t0, uint32_t& t1, uint32_t& t2, uint32_t& t3) {
+    if (e > t3) {
+        if (e > t2) {
+            t3 = t2;
+            if (e > t1) {
+                t2 = t1;
+                if (e > t0) {
+                    t1 = t0;
+                    t0 = e;
+                } else {
+                    t1 = e;
+                }
+            } else {
+                t2 = e;
+            }
+        } else {
+            t3 = e;
+        }
+    }
+}
+
+// This core's top-4 merge entries of its 32 logits (expert ids id0 .. id0 + 31) into top[0..3], best first.
+inline void top4_entries(volatile tt_l1_ptr uint16_t* logits, uint32_t id0, volatile tt_l1_ptr uint32_t* top) {
+    const volatile tt_l1_ptr uint32_t* w = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(logits);
+    uint32_t t0 = 0, t1 = 0, t2 = 0, t3 = 0;
+    for (uint32_t i = 0; i < 16; ++i) {
+        const uint32_t v = w[i];
+        const uint32_t lo = v & 0xFFFFu, hi = v >> 16;
+        const uint32_t klo = (lo & 0x8000u) ? (~lo & 0xFFFFu) : (lo | 0x8000u);
+        const uint32_t khi = (hi & 0x8000u) ? (~hi & 0xFFFFu) : (hi | 0x8000u);
+        top4_insert(0x80000000u | (klo << 8) | (255u - (id0 + 2 * i)), t0, t1, t2, t3);
+        top4_insert(0x80000000u | (khi << 8) | (255u - (id0 + 2 * i + 1)), t0, t1, t2, t3);
+    }
+    top[0] = t0;
+    top[1] = t1;
+    top[2] = t2;
+    top[3] = t3;
+}
+
+// The top-4 of n_lists x 4 merge entries and the Q16 softmax over their logits (as topk4_softmax_fast): 8 UINT16 ids
+// then 8 BF16 scores (first 4 valid) to `stage`.
+template <uint32_t n_lists>
+inline void merge4_softmax(volatile tt_l1_ptr uint32_t* lists, volatile tt_l1_ptr uint16_t* stage) {
+    uint32_t t[4] = {0, 0, 0, 0};
+    for (uint32_t i = 0; i < 4 * n_lists; ++i) {
+        top4_insert(lists[i], t[0], t[1], t[2], t[3]);
+    }
+    uint32_t ids[4];
+    int32_t vals[4];
+    for (uint32_t j = 0; j < 4; ++j) {
+        ids[j] = 255u - (t[j] & 0xFFu);
+        const uint32_t key = (t[j] >> 8) & 0xFFFFu;
+        vals[j] = bf16_to_q16(static_cast<uint16_t>((key & 0x8000u) ? (key & 0x7FFFu) : (~key & 0xFFFFu)));
+    }
+    uint32_t e[4];
+    uint32_t sum = 0;
+    for (uint32_t j = 0; j < 4; ++j) {
+        e[j] = exp_q16(vals[j] - vals[0]);
+        sum += e[j];
+    }
+    volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
+    st[0] = ids[0] | (ids[1] << 16);
+    st[1] = ids[2] | (ids[3] << 16);
+    st[2] = 0;
+    st[3] = 0;
+    const uint32_t d = sum >> 1;
+    st[4] = q16_to_bf16((e[0] << 15) / d) | (static_cast<uint32_t>(q16_to_bf16((e[1] << 15) / d)) << 16);
+    st[5] = q16_to_bf16((e[2] << 15) / d) | (static_cast<uint32_t>(q16_to_bf16((e[3] << 15) / d)) << 16);
+    st[6] = 0;
+    st[7] = 0;
+}
+}  // namespace router_topk
+
+namespace router_topk {
 // Multi-row router tail (DFlash verify, the fused MoE's router: dflash/moe_fused.py, MOE_EARLY_UNION), in parts so
 // that BRISC and NCRISC split the rows and the union (all the gate|up / down cores need to start) goes out before the
 // softmax weights. words = the [rows, 32] BF16 logits tile (row r: 16 values in face 0 at word 8 r, 16 in face 1 at

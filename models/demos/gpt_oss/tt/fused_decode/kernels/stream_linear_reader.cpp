@@ -120,6 +120,41 @@ void kernel_main() {
         kv_split();  // the K / V column is among the deferred pushes: convert once it is pushed (no deadlock)
     }
 #endif
+#ifdef LM_RESCORE
+    // Two-stage LM head (fused_decode/terminal.py LM_RESCORE), stage 2: once the writer picked this core's candidate
+    // columns (program semaphore LM_RS_SEM; cb LM_RS_CB: [count, local column...]), read those columns of the BF8
+    // weights (runtime arg 4, the same per-bank column layout with LM_RS_COL8-byte columns) into cb LM_RS_CBW.
+    {
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(LM_RS_SEM)), 1);
+        invalidate_l1_cache();
+        volatile tt_l1_ptr uint32_t* cand = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(LM_RS_CB));
+        const uint32_t nc = cand[0];
+        const uint64_t w8_base = get_noc_addr_from_bank_id<true>(bank_id, get_arg_val<uint32_t>(4));
+        noc_async_read_one_packet_set_state<true>(w8_base, LM_RS_PAGE8, vc);
+        // Two column slots, one column in flight ahead (transaction ids 1 / 2; every stage-1 read has completed).
+        cb_reserve_back(LM_RS_CBW, 2 * kt);
+        const uint32_t base8 = get_write_ptr(LM_RS_CBW);
+        for (uint32_t j = 0; j < nc; ++j) {
+            uint32_t dst = base8 + (j & 1) * LM_RS_COL8;
+            uint32_t src8 = cand[1 + j] * LM_RS_COL8;
+            noc_async_read_set_trid(1 + (j & 1));
+            for (uint32_t p = 0; p < LM_RS_COL8 / LM_RS_PAGE8; ++p) {
+                noc_async_read_one_packet_with_state_with_trid(w8_base, src8, dst, 1 + (j & 1));
+                src8 += LM_RS_PAGE8;
+                dst += LM_RS_PAGE8;
+            }
+            if (j > 0) {
+                noc_async_read_barrier_with_trid(1 + ((j - 1) & 1));
+                cb_push_back(LM_RS_CBW, kt);
+                cb_reserve_back(LM_RS_CBW, 2 * kt);
+            }
+        }
+        if (nc > 0) {
+            noc_async_read_barrier_with_trid(1 + ((nc - 1) & 1));
+            cb_push_back(LM_RS_CBW, kt);
+        }
+    }
+#endif
 #ifdef MOE_SPLIT_ROWS
     // Router of the fused MoE (dflash/moe_fused.py, with MOE_EARLY_UNION): the second half of the rows' top-k
     // (stream_linear_writer.cpp runs the first half and the union), from the logits tile in cb_out (the writer pops it
