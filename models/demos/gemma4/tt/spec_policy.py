@@ -181,6 +181,8 @@ SPEC_RETRY_OVERHEAD_ENV = "GEMMA4_SPEC_RETRY_OVERHEAD"
 SPEC_RETRY_OVERHEAD_DEFAULT = "0.03"
 SPEC_TRIAL_GAIN_ENV = "GEMMA4_SPEC_TRIAL_GAIN"
 SPEC_TRIAL_GAIN_DEFAULT = "0.6"
+SPEC_TRIAL_STEPS_ENV = "GEMMA4_SPEC_TRIAL_STEPS"
+SPEC_TRIAL_STEPS_DEFAULT = "3"
 SPEC_PROBE_STEPS_ENV = "GEMMA4_SPEC_PROBE_STEPS"
 SPEC_PROBE_STEPS_DEFAULT = "32"
 SPEC_EWMA_ENV = "GEMMA4_SPEC_EWMA"
@@ -207,6 +209,7 @@ SPEC_POLICY_ENV = (
     SPEC_CALIB_MIN_ENV,
     SPEC_CALIB_PROBE_STEPS_ENV,
     SPEC_TRIAL_GAIN_ENV,
+    SPEC_TRIAL_STEPS_ENV,
 )
 #: The EWMA weight of the request-length estimate (steps per request) the entry horizon is capped by.
 CALIB_EWMA = 0.25
@@ -283,6 +286,7 @@ class SpecPolicyConfig:
     calib_min: int = 8
     calib_probe_steps: int = 256
     trial_gain: float = 0.6
+    trial_steps: int = 3
 
     @classmethod
     def from_env(cls, env=None):
@@ -306,6 +310,7 @@ class SpecPolicyConfig:
             calib_min=_env_int(env, SPEC_CALIB_MIN_ENV, SPEC_CALIB_MIN_DEFAULT, low=1),
             calib_probe_steps=_env_int(env, SPEC_CALIB_PROBE_STEPS_ENV, SPEC_CALIB_PROBE_STEPS_DEFAULT, low=0),
             trial_gain=_env_float(env, SPEC_TRIAL_GAIN_ENV, SPEC_TRIAL_GAIN_DEFAULT, low=0.0),
+            trial_steps=_env_int(env, SPEC_TRIAL_STEPS_ENV, SPEC_TRIAL_STEPS_DEFAULT, low=1),
         )
 
 
@@ -936,6 +941,7 @@ class SpecPolicy:
         self.trial = False
         self.last_reason = None  # why the last decision was what it was ("gain", ..., "exit", "calibrate", "declined")
         self.request_steps = None  # EWMA of the steps a request lived (the entry horizon of a joining row)
+        self.trial_age = 0  # steps the current trial / retry has held its record
         self.since_exit = None  # plain steps since the batch left a record (the entry cooldown); None once back in
 
     def new_row(self):
@@ -1119,6 +1125,11 @@ class SpecPolicy:
         if best is not None:
             choice = dataclasses.replace(best, reason="enter" if best.entry_ms > 0.0 else "gain")
             self.below_exit = 0
+        elif self.speculating and self.trial and held is not None and self.trial_age < cfg.trial_steps:
+            # A trial (a retry, or a new request's first proposal) holds its record for ``trial_steps`` steps
+            # before the gain decides: its first step follows the reseed and accepts few drafts, and a one-step
+            # trial judged on it never refreshes the acceptance pool it is judged by (the 12B rows sweeps).
+            choice = dataclasses.replace(held, reason="trial")
         elif self.speculating and not self.trial and held is not None:
             # Hysteresis: a speculating batch holds its best entry-free record above the exit gain, and
             # leaves only after EXIT_STEPS consecutive decisions below it. A retry is a trial and gets no hold.
@@ -1148,12 +1159,15 @@ class SpecPolicy:
             self.below_exit = 0
             self.last_k = 0
             self.trial = False
+            self.trial_age = 0
             self.last_reason = reason
             return None
         self.last_reason = choice.reason
         self.declined = 0
         self.since_exit = None
+        was_trial = self.trial
         self.trial = choice.reason in ("retry", "trial")
+        self.trial_age = self.trial_age + 1 if (self.trial and was_trial) else (1 if self.trial else 0)
         if int(choice.shape[1]) < int(k_cap) and choice.entry_ms <= 0.0:
             self.below_cap += 1
             if cfg.probe_steps > 0 and self.below_cap >= cfg.probe_steps:
