@@ -144,7 +144,6 @@ def stateless_prefill_forward(gdn, x):
     mega = prefill_linear(x, _projection_weight(gdn), gdn.compute_kernel_config)
     a = mega[:, :, _A_COL : _A_COL + Nv]
     b = mega[:, :, _B_COL : _B_COL + Nv]
-    z = mega[:, :, _Z_COL:]
 
     # Conv + SiLU + q/k/v split from a zero history, reading qkv (columns [0, C) of mega) in place. The op takes one
     # [1, T, W] row: the B rows fold into time, and segment_length=S restarts the history at every row start.
@@ -164,7 +163,6 @@ def stateless_prefill_forward(gdn, x):
         input_column_offset=0,
         segment_length=S,
     )
-    ttnn.deallocate(mega)
 
     # Gates (fp32, the chunk op's contract): beta = sigmoid(b), g = -exp(A_log) * softplus(a + dt_bias). a and b
     # are cast to fp32 first so no intermediate rounds to bf16 (error ~2e-3 vs ~3e-2 on g); the activations run
@@ -218,16 +216,20 @@ def stateless_prefill_forward(gdn, x):
     for t in (q, k, v, beta, g):
         ttnn.deallocate(t)
 
-    # Per-head norm, head -> token relayout, gate (bf16 out), out-projection.
-    z_f = ttnn.reshape(z, (Bp, F * S, Nv * Dv))
-    y = ttnn.experimental.kda.sigmoid_gated_rms_norm(
-        o, z_f, w.o_norm_weight, Nv, epsilon=gdn.norm_eps, output_dtype=ttnn.bfloat16
+    # Per-head norm, head -> token relayout, SiLU gate on z read in place from mega (bf16 out), out-projection.
+    gated = ttnn.experimental.kda.sigmoid_gated_rms_norm(
+        o,
+        ttnn.reshape(mega, (Bp, F * S, mega.shape[-1])),
+        w.o_norm_weight,
+        Nv,
+        epsilon=gdn.norm_eps,
+        output_dtype=ttnn.bfloat16,
+        gate_column_offset=_Z_COL,
+        silu_gate=True,
     )
     ttnn.deallocate(o)
-    gated = ttnn.multiply(y, z_f, dtype=ttnn.bfloat16, memory_config=_dram)
-    ttnn.deallocate(y)
+    ttnn.deallocate(mega)
     gated = ttnn.reshape(gated, (B, S, Nv * Dv))
-    ttnn.deallocate(z_f)
     out = prefill_linear(gated, w.o_proj_weight, gdn.compute_kernel_config)
     ttnn.deallocate(gated)
     return out
