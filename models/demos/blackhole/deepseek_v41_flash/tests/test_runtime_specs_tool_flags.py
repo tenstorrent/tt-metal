@@ -53,11 +53,9 @@ def _val(v):
 
 def test_specs_found():
     # every spec in assets/ is checked below (parametrized over the glob), so a new batch class (B=8) is covered automatically
+    # runtime specs are optional (the release runs from the catalog default); whatever specs are shipped are all checked below.
+    # The batch classes a release ships are enforced on the CATALOG (test_every_catalog_entry_has_renderer_flags, REQUIRE_BATCHES=8).
     assert SPECS, "no assets/runtime_spec_*.json found"
-    assert any("_b4_" in s for s in SPECS)
-    # set REQUIRE_BATCHES=4,8 (comma list) for a release that ships those batch classes: each must have at least one spec
-    for b in [x for x in os.environ.get("REQUIRE_BATCHES", "").split(",") if x]:
-        assert any("_b%s_" % b in os.path.basename(s) for s in SPECS), "no runtime spec for B=%s in assets/" % b
 
 
 @pytest.mark.parametrize("path", SPECS, ids=[os.path.basename(s) for s in SPECS])
