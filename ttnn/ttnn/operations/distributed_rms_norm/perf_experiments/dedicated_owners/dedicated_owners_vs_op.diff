@@ -1,0 +1,904 @@
+diff -ruN '--exclude=__pycache__' '--exclude=*.md' '--exclude=agent_logs' '--exclude=perf_experiments' '--exclude=*.json' -x __init__.py ./distributed_rms_norm_program_descriptor.py perf_experiments/dedicated_owners/drms_do/distributed_rms_norm_program_descriptor.py
+--- ./distributed_rms_norm_program_descriptor.py	2026-10-29 05:33:56.244158537 +0000
++++ perf_experiments/dedicated_owners/drms_do/distributed_rms_norm_program_descriptor.py	2026-10-29 08:07:47.314998671 +0000
+@@ -216,6 +216,8 @@
+     # square -> collapse round through cb_x_tiles (x_depth rounds deep), Phase B's writer re-reads it per
+     # (wave, chunk, tile-row) into cb_x_reread. x is read twice from DRAM, only on this rung.
+     reread: bool = False
++    # dedicated_owners experiment: every wave's owner role of a row-group runs on a dedicated core that reads no x
++    dedicated: bool = False
+
+     def __post_init__(self):
+         if self.PW <= 0:
+@@ -252,7 +254,10 @@
+
+     @property
+     def regions(self):
+-        """cb_gather regions (one per owned wave) live within one pass."""
++        """cb_gather regions (one per owned wave) live within one pass. Dedicated owners: one per (wave, owner slot)
++        with rows of the longest row-group (the owner owns every slot of its group)."""
++        if self.dedicated:
++            return max(1, dedicated_slots(self.rows_max, self.num_waves, self.q_w, self.owners, self.q))
+         return max(1, max_owned_waves(self.PW, self.owners, self.G_w))
+
+     @property
+@@ -270,6 +275,34 @@
+     return max(1, G_w.bit_length())
+
+
++def dedicated_slots(rows, num_waves, q_w, owners, q) -> int:
++    """(wave, owner slot) pairs with rows of a row-group of `rows` tile-rows (dedicated owners' gather regions)."""
++    n = 0
++    for w in range(num_waves):
++        nw = 0 if w * q_w >= rows else min(q_w, rows - w * q_w)
++        for k in range(owners):
++            if k * q < nw:
++                n += 1
++    return n
++
++
++def publish_only() -> bool:
++    return dedicated_mode() in (3, 4)
++
++
++_LAST_SELECTION = {}  # host-side record of the last descriptor's split / owner selection (test printing only)
++
++
++def dedicated_mode() -> int:
++    """dedicated_owners experiment switch (DRMS_DO): 0 baseline (default); 1 dedicated owners (every owner duty) on idle
++    worker cores only (baseline when there are too few); 2 = 1 + re-split the interleaved W-split to free G_h cores
++    when needed; 3 / 4 = 1 / 2 with the dedicated core doing Phase A only (gather, chip sum, publish) while the members
++    keep the baseline's rotating Phase B owners (collect, fold, all-gather)."""
++    import os
++
++    return int(os.environ.get("DRMS_DO", "0") or 0)
++
++
+ def max_owned_waves(num_waves: int, owners: int, G_w: int) -> int:
+     """Most waves one member owns among num_waves consecutive waves (owner k of wave w = member (w * owners + k) mod
+     G_w: the owner slots of consecutive waves are consecutive integers, so each residue appears at most this often)."""
+@@ -618,6 +651,41 @@
+     return fit[1]
+
+
++def _dedicated(input_tensor, workers, sz, budget, out_resident, plan):
++    """dedicated_owners experiment: (plan, owner cores per row-group) or (plan, None) for the baseline. The dedicated
++    path needs a combine regime (G_w > 1), one pass, no x re-read, every (wave, slot) field in SEM_GATHER, the larger
++    cb_gather in L1, and G_h worker cores the split leaves idle (mode 2: re-split on fewer cores until it does)."""
++    mode = dedicated_mode()
++    if mode == 0:
++        return plan, None
++
++    def finish(p):
++        if p.G_w <= 1 or p.passes != 1 or p.reread:
++            return None
++        d = replace(p, dedicated=True)
++        if d.regions * gather_field_bits(d.G_w) > 32 or footprint(sz, d) > budget:
++            return None
++        used = {(m.core.x, m.core.y) for m in d.members}
++        idle = [c for c in workers if (c.x, c.y) not in used]
++        if len(idle) < d.G_h:
++            return None
++        return d, idle[: d.G_h]
++
++    r = finish(plan)
++    if r:
++        return r
++    if mode in (2, 4) and not plan.sharded:
++        for cut in range(1, len(workers) // 2):
++            try:
++                p = local_plan(input_tensor, workers[: len(workers) - cut], sz, budget, out_resident)
++            except NotImplementedError:
++                break
++            r = finish(p)
++            if r:
++                return r
++    return plan, None
++
++
+ def member_of(plan: LocalPlan, w: int, k: int) -> int:
+     """Member index of owner k of wave w (rotated so consecutive waves land on different members)."""
+     return (w * plan.owners + k) % plan.G_w
+@@ -1287,6 +1355,7 @@
+     for _ in range(6):
+         try:
+             plan = local_plan(input_tensor, workers, sz, budget, out_resident)
++            plan, owner_cores = _dedicated(input_tensor, workers, sz, budget, out_resident, plan)
+         except NotImplementedError:
+             # Cached exchange scratch allocated while larger tensors were alive can sit low in L1 and cap the CB
+             # region; free it (it is re-created, top-down, on demand) and re-measure once before refusing.
+@@ -1317,6 +1386,18 @@
+         budget = budget_now
+     virt = lambda c: mesh.worker_core_from_logical_core(c)
+     pack = lambda v: (v.x << 16) | v.y
++    _LAST_SELECTION.clear()
++    _LAST_SELECTION.update(
++        G_w=plan.G_w,
++        G_h=plan.G_h,
++        S=plan.S,
++        rows_max=plan.rows_max,
++        num_waves=plan.num_waves,
++        owners=plan.owners,
++        members=len(plan.members),
++        workers=len(workers),
++        dedicated=[(c.x, c.y) for c in owner_cores] if owner_cores else None,
++    )
+
+     # roots of link l: every core that publishes on link l in some wave
+     groups = {}
+@@ -1327,7 +1408,7 @@
+         for g in range(plan.G_h):
+             for k in range(plan.owners):
+                 l = (g * plan.owners + k) % L
+-                c = groups[g][member_of(plan, w, k)].core
++                c = owner_cores[g] if owner_cores and not publish_only() else groups[g][member_of(plan, w, k)].core
+                 pc = pack(virt(c))
+                 if pc not in roots[l]:
+                     roots[l].append(pc)
+@@ -1346,7 +1427,9 @@
+     n_port_sems = SEM_OWN_STATS_BASE + plan.num_waves
+     assert max(n_worker_sems, n_port_sems + FABRIC_PORT_SEMAPHORES) <= NUM_SEMAPHORES, "NUM_SEMAPHORES"
+
+-    worker_crs = _crs([m.core for m in plan.members])
++    worker_crs = _crs([m.core for m in plan.members] + (list(owner_cores) if owner_cores else []))
++    owner_crs = _crs(list(owner_cores)) if owner_cores else None
++    member_crs = _crs([m.core for m in plan.members])
+
+     # ---- CBs (worker cores): cb_table() is the single source of the allocated CBs and of footprint() ----
+     fmt = {
+@@ -1360,7 +1443,9 @@
+     }
+     scratch = None
+     if scratch_cbs:
+-        scratch, cbs = _scratch_backed_cbs(mesh, worker_crs, len(plan.members), cb_table(plan, sz), fmt, interm)
++        scratch, cbs = _scratch_backed_cbs(
++            mesh, worker_crs, len(plan.members) + len(owner_cores or []), cb_table(plan, sz), fmt, interm
++        )
+     else:
+         cbs = [_cb(idx, fmt.get(idx, interm), ps, n, worker_crs) for idx, ps, n in cb_table(plan, sz)]
+     if plan.sharded:
+@@ -1516,10 +1601,26 @@
+                 rt += port_xy
+                 rt += [sends_own[FWD], sends_own[BWD]]
+                 rt += src_dir
++                if owner_cores:
++                    rt.append(pack(virt(owner_cores[m.group])))
+                 reader_rt[c.x][c.y] = rt
+                 compute_rt[c.x][c.y] = [m.rows, m.V, m.index, masked_core, inv_w_bits, eps_bits]
+                 writer_rt[c.x][c.y] = [out_addr, gamma_addr, m.start_row, m.rows, m.w0, m.V, in_addr]
+
++            # ---- dedicated owner args (one core per row-group; owns every (wave, slot) of its group) ----
++            owner_rd_rt = ttnn.RuntimeArgs()
++            owner_cmp_rt = ttnn.RuntimeArgs()
++            for g, oc in enumerate(owner_cores or []):
++                m0 = groups[g][0]
++                owner_rd_rt[oc.x][oc.y] = (
++                    [m0.rows, p, res.landing_addr, g, n_in[FWD], n_in[BWD]]
++                    + group_coords[g]
++                    + port_xy
++                    + [sends_own[FWD], sends_own[BWD]]
++                    + src_dir
++                )
++                owner_cmp_rt[oc.x][oc.y] = [m0.rows, inv_w_bits, eps_bits]
++
+             # ---- port args ----
+             port_rt = ttnn.RuntimeArgs()
+             peer_of = {
+@@ -1576,7 +1677,7 @@
+             kernels = [
+                 ttnn.KernelDescriptor(
+                     kernel_source=str(KERNEL_DIR / "distributed_rms_norm_reader.cpp"),
+-                    core_ranges=worker_crs,
++                    core_ranges=member_crs,
+                     compile_time_args=reader_ct,
+                     defines=dm_defines,
+                     runtime_args=reader_rt,
+@@ -1584,7 +1685,7 @@
+                 ),
+                 ttnn.KernelDescriptor(
+                     kernel_source=str(KERNEL_DIR / "distributed_rms_norm_writer.cpp"),
+-                    core_ranges=worker_crs,
++                    core_ranges=member_crs,
+                     compile_time_args=writer_ct,
+                     defines=dm_defines,
+                     runtime_args=writer_rt,
+@@ -1592,7 +1693,7 @@
+                 ),
+                 ttnn.KernelDescriptor(
+                     kernel_source=str(KERNEL_DIR / "distributed_rms_norm_compute.cpp"),
+-                    core_ranges=worker_crs,
++                    core_ranges=member_crs,
+                     compile_time_args=compute_ct,
+                     defines=dm_defines,
+                     runtime_args=compute_rt,
+@@ -1612,6 +1713,31 @@
+             # Perf (base Perf 2 dram_noc_balance, re-measured on the fused grid): the westmost logical columns run
+             # their DRAM traffic on the other NoCs (reader NoC1, writer NoC0)
+             kernels = _split_noc_swapped(kernels, [m.core for m in plan.members], noc_swap_cores(plan))
++            if owner_cores:
++                for kd in kernels:
++                    if "port" not in kd.kernel_source:
++                        kd.defines = list(kd.defines) + [("DRMS_DEDICATED", "2" if publish_only() else "1")]
++                owner_defines = dm_defines + ([("DRMS_OWNER_PUBLISH_ONLY", "1")] if publish_only() else [])
++                kernels.append(
++                    ttnn.KernelDescriptor(
++                        kernel_source=str(KERNEL_DIR / "distributed_rms_norm_owner_reader.cpp"),
++                        core_ranges=owner_crs,
++                        compile_time_args=reader_ct[:28],
++                        defines=owner_defines,
++                        runtime_args=owner_rd_rt,
++                        config=ttnn.ReaderConfigDescriptor(),
++                    )
++                )
++                kernels.append(
++                    ttnn.KernelDescriptor(
++                        kernel_source=str(KERNEL_DIR / "distributed_rms_norm_owner_compute.cpp"),
++                        core_ranges=owner_crs,
++                        compile_time_args=compute_ct,
++                        defines=owner_defines,
++                        runtime_args=owner_cmp_rt,
++                        config=compute_cfg,
++                    )
++                )
+             program.kernels = kernels
+             program.cbs = cbs
+             key = "|".join(
+@@ -1667,6 +1793,7 @@
+                     combine_lag(),
+                     noc_swap_columns(),
+                     fold_ahead(plan),
++                    ("dedicated", dedicated_mode(), tuple((c.x, c.y) for c in (owner_cores or []))),
+                 )
+             )
+             program.custom_program_hash = int.from_bytes(hashlib.sha1(key.encode()).digest()[:8], "little") >> 1
+diff -ruN '--exclude=__pycache__' '--exclude=*.md' '--exclude=agent_logs' '--exclude=perf_experiments' '--exclude=*.json' -x __init__.py ./kernels/distributed_rms_norm_compute.cpp perf_experiments/dedicated_owners/drms_do/kernels/distributed_rms_norm_compute.cpp
+--- ./kernels/distributed_rms_norm_compute.cpp	2026-10-29 04:50:08.539186577 +0000
++++ perf_experiments/dedicated_owners/drms_do/kernels/distributed_rms_norm_compute.cpp	2026-10-29 08:07:47.314540730 +0000
+@@ -169,6 +169,9 @@
+     };
+     // my owner slot k in wave w (owner k of wave w = member (w*OWNERS + k) mod G_W), or OWNERS if none
+     auto my_k = [&](uint32_t w) -> uint32_t {
++#if defined(DRMS_DEDICATED) && DRMS_DEDICATED == 1
++        return OWNERS;  // dedicated_owners experiment: a pure member (no chip sum, no fold)
++#endif
+         for (uint32_t k = 0; k < OWNERS; ++k) {
+             if ((w * OWNERS + k) % G_W == my_j) {
+                 return k;
+@@ -344,6 +347,9 @@
+     // ---- chip_sum_wave (owner): Σ over the G_W slice partials of the owned rows ----
+     auto chip_sum = [&](uint32_t w) {
+         if constexpr (COMBINE) {
++#if defined(DRMS_DEDICATED) && DRMS_DEDICATED
++            return;  // dedicated_owners: the dedicated core sums the chip partials
++#endif
+             const uint32_t k = my_k(w);
+             if (k == OWNERS) {
+                 return;
+diff -ruN '--exclude=__pycache__' '--exclude=*.md' '--exclude=agent_logs' '--exclude=perf_experiments' '--exclude=*.json' -x __init__.py ./kernels/distributed_rms_norm_owner_compute.cpp perf_experiments/dedicated_owners/drms_do/kernels/distributed_rms_norm_owner_compute.cpp
+--- ./kernels/distributed_rms_norm_owner_compute.cpp	1970-01-01 00:00:00.000000000 +0000
++++ perf_experiments/dedicated_owners/drms_do/kernels/distributed_rms_norm_owner_compute.cpp	2026-10-29 08:07:47.314674775 +0000
+@@ -0,0 +1,156 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// dedicated_owners experiment: the OWNER compute of one row-group, on a core that reads no x and scales nothing.
++// For every (wave, owner slot) with rows ("slot", (w, k) order): chip_sum (the baseline's reduce<SUM, REDUCE_COL,
++// AccumulateViaAdd, Skip> over the G_W gathered partials -> cb_chip_partial); then for every slot the baseline's
++// cross_device_finalize (copy_tile with UnpackToDestFp32 + SFPU add_binary_tile in group-position order, the row-0
++// finalize) -> cb_rms_root. Same arithmetic, same fold order as distributed_rms_norm_compute.cpp: bit-identical.
++// Order: every chip sum first (its inputs land before any wave's records can return), then the folds in slot order.
++// Raw LLK: the same fold / finalize sequence the baseline compute uses (no new bypass; see that file's header).
++
++#include <stdint.h>
++
++#include "api/compute/compute_kernel_hw_startup.h"
++#include "api/compute/cb_api.h"
++#include "api/compute/eltwise_unary/rsqrt.h"
++#include "api/compute/eltwise_binary_sfpu.h"
++#include "api/compute/tile_move_copy.h"
++#include "api/compute/pack.h"
++#include "api/compute/reg_api.h"
++#include "api/compute/reconfig_data_format.h"
++#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
++
++#if defined(DRMS_PERF_ZONES) && DRMS_PERF_ZONES
++#include "tools/profiler/kernel_profiler.hpp"
++#define DRMS_ZONE(name) DeviceZoneScopedN(name)
++#else
++#define DRMS_ZONE(name)
++#endif
++#ifdef TRISC_MATH
++#include "ckernel_sfpu_sqrt.h"
++#include "sfpu/ckernel_sfpu_converter.h"
++#endif
++
++#ifndef DRMS_OWNER_PUBLISH_ONLY
++#define DRMS_OWNER_PUBLISH_ONLY 0
++#endif
++
++namespace ckl = compute_kernel_lib;
++
++namespace {
++#ifdef TRISC_MATH
++sfpi_inline void finalize_row0_body(const uint32_t inv_w_bits, const uint32_t eps_bits) {
++#pragma GCC unroll 0
++    for (int v = 0; v < 2; v++) {
++        const sfpi::vFloat mean_sq = sfpi::dst_reg[0] * ckernel::sfpu::Converter::as_float(inv_w_bits) +
++                                     ckernel::sfpu::Converter::as_float(eps_bits);
++        sfpi::vFloat t = ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false>(mean_sq);
++        if constexpr (!DST_ACCUM_MODE) {
++            t = sfpi::convert<sfpi::vFloat16b>(t, sfpi::RoundMode::Nearest);
++        }
++        v_if(t == 0.0f) { t = sfpi::setsgn(t, 1); }
++        v_endif;
++        sfpi::dst_reg[0] = t;
++        sfpi::dst_reg++;
++    }
++}
++#endif
++
++constexpr uint32_t cb_reduce_scaler = 2;
++constexpr uint32_t cb_gather = 10;
++constexpr uint32_t cb_rms_root = 11;
++constexpr uint32_t cb_chip_partial = 14;
++constexpr uint32_t cb_stats = 15;
++}  // namespace
++
++void kernel_main() {
++    constexpr uint32_t NW = get_compile_time_arg_val(7);
++    constexpr uint32_t Q_W = get_compile_time_arg_val(8);
++    constexpr uint32_t OWNERS = get_compile_time_arg_val(9);
++    constexpr uint32_t Q = get_compile_time_arg_val(10);
++    constexpr uint32_t G = get_compile_time_arg_val(11);
++    constexpr uint32_t G_W = get_compile_time_arg_val(12);
++
++    const uint32_t rows = get_arg_val<uint32_t>(0);
++    const uint32_t inv_w_bits = get_arg_val<uint32_t>(1);
++    const uint32_t eps_bits = get_arg_val<uint32_t>(2);
++
++    compute_kernel_hw_startup(cb_gather, cb_gather, cb_chip_partial);
++
++    auto n_wave = [&](uint32_t w) -> uint32_t {
++        const uint32_t r0 = w * Q_W;
++        return r0 >= rows ? 0 : ((rows - r0) < Q_W ? rows - r0 : Q_W);
++    };
++    auto n_own = [&](uint32_t w, uint32_t k) -> uint32_t {
++        const uint32_t n = n_wave(w);
++        const uint32_t first = k * Q;
++        return first >= n ? 0 : ((n - first) < Q ? n - first : Q);
++    };
++
++    for (uint32_t w = 0; w < NW; ++w) {
++        for (uint32_t k = 0; k < OWNERS; ++k) {
++            const uint32_t no = n_own(w, k);
++            if (no == 0) {
++                continue;
++            }
++            {
++                DRMS_ZONE("ocm_wait_gather");
++                cb_wait_front(cb_gather, G_W * Q);
++            }
++            DRMS_ZONE("ocm_chipsum");
++            ckl::reduce<
++                ckernel::PoolType::SUM,
++                ckernel::ReduceDim::REDUCE_COL,
++                cb_gather,
++                cb_reduce_scaler,
++                cb_chip_partial,
++                ckl::ReduceInputPolicy::BulkWaitBulkPop,
++                ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
++                ReduceFp32Mode::Fast,
++                ckl::ReduceAlgorithm::AccumulateViaAdd,
++                ckl::ReduceWithinTile::Skip>(
++                ckl::ReduceInputBlockShape::of(G_W, no),
++                ckl::ReduceInputMemoryLayout::with_row_stride(Q),
++                ckl::NoAccumulation{},
++                ckl::NoOp{});
++        }
++    }
++
++    for (uint32_t w = 0; w < NW && !DRMS_OWNER_PUBLISH_ONLY; ++w) {
++        for (uint32_t k = 0; k < OWNERS; ++k) {
++            const uint32_t no = n_own(w, k);
++            if (no == 0) {
++                continue;
++            }
++            {
++                DRMS_ZONE("ocm_wait_stats");
++                cb_wait_front(cb_stats, G * Q);
++            }
++            DRMS_ZONE("ocm_fold");
++            reconfig_data_format_srca(cb_stats);
++            pack_reconfig_data_format(cb_rms_root);
++            cb_reserve_back(cb_rms_root, no);
++            copy_init(cb_stats);
++            add_binary_tile_init();
++            rsqrt_tile_init();
++            for (uint32_t r = 0; r < no; ++r) {
++                tile_regs_acquire();
++                copy_tile(cb_stats, r, 0);
++                for (uint32_t pos = 1; pos < G; ++pos) {
++                    copy_tile(cb_stats, pos * Q + r, 1);
++                    add_binary_tile(0, 1, 0);
++                }
++                MATH((_llk_math_eltwise_unary_sfpu_params_(
++                    finalize_row0_body, 0, ckernel::VectorMode::R, inv_w_bits, eps_bits)));
++                tile_regs_commit();
++                tile_regs_wait();
++                pack_tile(0, cb_rms_root);
++                tile_regs_release();
++            }
++            cb_push_back(cb_rms_root, no);
++            cb_pop_front(cb_stats, G * Q);
++        }
++    }
++    cb_pop_front(cb_reduce_scaler, 1);
++}
+diff -ruN '--exclude=__pycache__' '--exclude=*.md' '--exclude=agent_logs' '--exclude=perf_experiments' '--exclude=*.json' -x __init__.py ./kernels/distributed_rms_norm_owner_reader.cpp perf_experiments/dedicated_owners/drms_do/kernels/distributed_rms_norm_owner_reader.cpp
+--- ./kernels/distributed_rms_norm_owner_reader.cpp	1970-01-01 00:00:00.000000000 +0000
++++ perf_experiments/dedicated_owners/drms_do/kernels/distributed_rms_norm_owner_reader.cpp	2026-10-29 08:17:38.931996928 +0000
+@@ -0,0 +1,335 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// dedicated_owners experiment: the OWNER reader (NCRISC, NoC0) of one row-group, on a worker core that reads no x.
++// It owns every (wave w, owner slot k) of its group that has rows ("slots", in (w, k) order) — the role the baseline
++// rotates over the group's x-reading members. One non-blocking poll over four in-order queues:
++//   gather    the members' partials of slot s landed (SEM_GATHER field s counts G_W) -> push its cb_gather region
++//   publish   compute's chip partial of slot s -> compact fp32 records -> the slot's link ports + own_stats[w]
++//   collect   the link ports' landed notifies cover wave w -> the G records of each row into row 0 of cb_stats
++//   allgather the finalized rows (cb_rms_root) -> one posted 128 B record per row into every member's cb_inv_rms
++// Wire, addresses, records and fold order are the baseline's (distributed_rms_norm_reader.cpp): the members'
++// cb_inv_rms / cb_gather and this core's CBs come from one CB descriptor set over the union of the cores, so the
++// addresses match. One pass only (the host gates the dedicated path to NP == 1).
++// No kernel_lib helper is bypassed beyond what the baseline reader already does (same dataflow primitives).
++
++#include <stdint.h>
++
++#include "api/dataflow/dataflow_api.h"
++#include "api/dataflow/circular_buffer.h"
++#include "api/dataflow/noc.h"
++#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
++
++#if defined(DRMS_PERF_ZONES) && DRMS_PERF_ZONES
++#include "tools/profiler/kernel_profiler.hpp"
++#define DRMS_ZONE(name) DeviceZoneScopedN(name)
++#else
++#define DRMS_ZONE(name)
++#endif
++
++// DRMS_OWNER_PUBLISH_ONLY: Phase A only (gather, publish); the members keep the baseline's rotating Phase B owners
++#ifndef DRMS_OWNER_PUBLISH_ONLY
++#define DRMS_OWNER_PUBLISH_ONLY 0
++#endif
++#ifndef DRMS_ABLATE_EXCHANGE
++#define DRMS_ABLATE_EXCHANGE 0
++#endif
++
++namespace {
++constexpr uint32_t cb_reduce_scaler = 2;
++constexpr uint32_t cb_inv_rms = 4;
++constexpr uint32_t cb_gather = 10;
++constexpr uint32_t cb_rms_root = 11;
++constexpr uint32_t cb_chip_partial = 14;
++constexpr uint32_t cb_stats = 15;
++constexpr uint32_t cb_record_scratch = 17;
++
++constexpr uint32_t RECORD_BYTES = 128;
++constexpr uint32_t STATS_TILE_BYTES = 4096;
++constexpr uint32_t STATS_FACE_BYTES = 1024;
++constexpr uint32_t FWD = 0, BWD = 1, OWN = 2;
++constexpr uint32_t MAX_SLOTS = 32;
++
++FORCE_INLINE uint32_t col0_index(uint32_t r) { return r < 16 ? r * 16 : 512 + (r - 16) * 16; }
++}  // namespace
++
++void kernel_main() {
++    constexpr uint32_t G_W = get_compile_time_arg_val(1);
++    constexpr uint32_t NW = get_compile_time_arg_val(3);
++    constexpr uint32_t Q_W = get_compile_time_arg_val(4);
++    constexpr uint32_t OWNERS = get_compile_time_arg_val(5);
++    constexpr uint32_t Q = get_compile_time_arg_val(6);
++    constexpr uint32_t G = get_compile_time_arg_val(7);
++    constexpr uint32_t L = get_compile_time_arg_val(8);
++    constexpr uint32_t T_I = get_compile_time_arg_val(10);
++    constexpr bool INTERM_FP32 = get_compile_time_arg_val(11) != 0;
++    constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(15);
++    constexpr uint32_t SEM_INV = get_compile_time_arg_val(16);  // publish-only: "own record published" on the B owner
++    constexpr uint32_t SEM_LANDED_BASE = get_compile_time_arg_val(17);
++    constexpr uint32_t SEM_OWN_STATS_BASE = get_compile_time_arg_val(18);
++    constexpr uint32_t SEG_STRIDE = get_compile_time_arg_val(20);
++    constexpr uint32_t GB = get_compile_time_arg_val(22);
++    constexpr uint32_t PW = get_compile_time_arg_val(23);
++    constexpr uint32_t INV_FACE = T_I / 4;
++    constexpr uint32_t INV_HALF = 16 * (T_I / 1024);
++    static_assert(PW == NW, "dedicated owners: one pass only");
++
++    size_t a = 0;
++    const uint32_t rows = get_arg_val<uint32_t>(a++);
++    const uint32_t my_pos = get_arg_val<uint32_t>(a++);
++    const uint32_t landing = get_arg_val<uint32_t>(a++);
++    const uint32_t group = get_arg_val<uint32_t>(a++);
++    const uint32_t n_in_fwd = get_arg_val<uint32_t>(a++);
++    const uint32_t n_in_bwd = get_arg_val<uint32_t>(a++);
++    const uint32_t member_idx = a;
++    a += G_W;
++    const uint32_t port_idx = a;
++    a += 2 * L;
++    const bool sends_own_fwd = get_arg_val<uint32_t>(a++) != 0;
++    const bool sends_own_bwd = get_arg_val<uint32_t>(a++) != 0;
++    const uint32_t srcdir_idx = a;
++    a += G;
++
++    auto member_x = [&](uint32_t m) { return get_arg_val<uint32_t>(member_idx + m) >> 16; };
++    auto member_y = [&](uint32_t m) { return get_arg_val<uint32_t>(member_idx + m) & 0xFFFF; };
++    auto port_noc = [&](uint32_t l, uint32_t d, uint32_t addr) {
++        const uint32_t v = get_arg_val<uint32_t>(port_idx + 2 * l + d);
++        return get_noc_addr(v >> 16, v & 0xFFFF, addr);
++    };
++    auto n_wave = [&](uint32_t w) -> uint32_t {
++        const uint32_t r0 = w * Q_W;
++        return r0 >= rows ? 0 : ((rows - r0) < Q_W ? rows - r0 : Q_W);
++    };
++    auto n_own = [&](uint32_t w, uint32_t k) -> uint32_t {
++        const uint32_t n = n_wave(w);
++        const uint32_t first = k * Q;
++        return first >= n ? 0 : ((n - first) < Q ? n - first : Q);
++    };
++
++    // slots with rows, (w, k) order
++    uint8_t sw[MAX_SLOTS], sk[MAX_SLOTS];
++    uint32_t ns = 0;
++    for (uint32_t w = 0; w < NW; ++w) {
++        for (uint32_t k = 0; k < OWNERS; ++k) {
++            if (n_own(w, k) > 0) {
++                sw[ns] = w;
++                sk[ns] = k;
++                ++ns;
++            }
++        }
++    }
++
++    Noc noc;
++    {
++        DRMS_ZONE("ow_prologue");
++        // chip_sum's reduce takes the scaler CB (1.0)
++        dataflow_kernel_lib::
++            calculate_and_prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
++        // records land in row 0 of faces 0 / 1 of the cb_stats pages: the rest stays zero for the whole call
++        if constexpr (!DRMS_OWNER_PUBLISH_ONLY) {
++            CircularBuffer stats_cb(cb_stats);
++            noc.async_write_zeros(stats_cb, G * Q * STATS_TILE_BYTES, {.offset_bytes = 0});
++            noc.write_zeros_l1_barrier();
++        }
++    }
++    const uint32_t scratch = get_write_ptr(cb_record_scratch);
++    const uint32_t inv_base = get_write_ptr(cb_inv_rms);  // the members' cb_inv_rms base (same CB descriptor)
++    volatile tt_l1_ptr uint32_t* gs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER));
++
++    auto link_of = [&](uint32_t k) { return (group * OWNERS + k) % L; };
++
++    auto gather_done = [&](uint32_t s) -> bool { return ((*gs >> (GB * s)) & ((1u << GB) - 1)) >= G_W; };
++    auto landed_ok = [&](uint32_t w, uint32_t l) -> bool {
++        if constexpr (DRMS_ABLATE_EXCHANGE) {
++            return true;
++        }
++        if (n_in_fwd > 0 && *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
++                                get_semaphore(SEM_LANDED_BASE + 2 * l + FWD)) < (w + 1) * n_in_fwd) {
++            return false;
++        }
++        if (n_in_bwd > 0 && *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
++                                get_semaphore(SEM_LANDED_BASE + 2 * l + BWD)) < (w + 1) * n_in_bwd) {
++            return false;
++        }
++        return true;
++    };
++
++    // publish (w, k): the port counts every owner slot of every wave (own_stats[w] >= publishers of the link), so a
++    // slot without rows (a shorter row-group's last wave) publishes zero records, as the baseline owner does
++    auto publish_wk = [&](uint32_t w, uint32_t k) {
++        DRMS_ZONE("ow_publish");
++        const uint32_t no = n_own(w, k);
++        const uint32_t kp = group * OWNERS + k;
++        const uint32_t l = kp % L;
++        const uint32_t kl = kp / L;
++        volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
++        const uint32_t src = no > 0 ? get_read_ptr(cb_chip_partial) : 0;
++        {
++            DRMS_ZONE("ow_extract");
++            // all 32 column-0 loads of a row first, then the stores (no load-use stall per element; Perf 1's
++            // unpack_inv pattern)
++            for (uint32_t r = 0; r < no; ++r) {
++                const uint32_t tile = src + r * T_I;
++                uint32_t v[32];
++                if constexpr (INTERM_FP32) {
++                    volatile tt_l1_ptr uint32_t* t32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile);
++#pragma GCC unroll 32
++                    for (uint32_t i = 0; i < 32; ++i) {
++                        v[i] = t32[col0_index(i)];
++                    }
++                } else {
++                    volatile tt_l1_ptr uint16_t* t16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile);
++#pragma GCC unroll 32
++                    for (uint32_t i = 0; i < 32; ++i) {
++                        v[i] = static_cast<uint32_t>(t16[col0_index(i)]) << 16;
++                    }
++                }
++#pragma GCC unroll 32
++                for (uint32_t i = 0; i < 32; ++i) {
++                    rec[r * 32 + i] = v[i];
++                }
++            }
++        }
++        if (no > 0) {
++            cb_pop_front(cb_chip_partial, no);
++        }
++        for (uint32_t r = no; r < Q; ++r) {
++            for (uint32_t i = 0; i < 32; ++i) {
++                rec[r * 32 + i] = 0;
++            }
++        }
++        const uint32_t off = landing + (w * G + my_pos) * SEG_STRIDE + kl * Q * RECORD_BYTES;
++        if (sends_own_fwd) {
++            noc_async_write(scratch, port_noc(l, FWD, off), Q * RECORD_BYTES);
++        }
++        if (sends_own_bwd) {
++            noc_async_write(scratch, port_noc(l, BWD, off), Q * RECORD_BYTES);
++        }
++        noc_async_write_barrier();
++        const uint32_t own_stats = get_semaphore(SEM_OWN_STATS_BASE + w);
++        if (sends_own_fwd) {
++            noc_semaphore_inc(port_noc(l, FWD, own_stats), 1);
++        }
++        if (sends_own_bwd) {
++            noc_semaphore_inc(port_noc(l, BWD, own_stats), 1);
++        }
++        if constexpr (DRMS_OWNER_PUBLISH_ONLY) {
++            // the member that collects (w, k) (the baseline's rotating owner) reads this chip's record from the port
++            // too: its landed notifies cover only the remote entries, so tell it the own record is in the port
++            if (no > 0) {
++                const uint32_t m = (w * OWNERS + k) % G_W;
++                noc_semaphore_inc(get_noc_addr(member_x(m), member_y(m), get_semaphore(SEM_INV)), 1);
++            }
++        }
++    };
++
++    auto publish = [&](uint32_t s) { publish_wk(sw[s], sk[s]); };
++    // slots without rows: zero records at once (no data dependency)
++    for (uint32_t w = 0; w < NW; ++w) {
++        for (uint32_t k = 0; k < OWNERS; ++k) {
++            if (n_own(w, k) == 0) {
++                publish_wk(w, k);
++            }
++        }
++    }
++
++    auto collect = [&](uint32_t s) {
++        DRMS_ZONE("ow_collect");
++        const uint32_t w = sw[s], k = sk[s];
++        const uint32_t no = n_own(w, k);
++        const uint32_t kp = group * OWNERS + k;
++        const uint32_t l = kp % L;
++        const uint32_t kl = kp / L;
++        cb_reserve_back(cb_stats, G * Q);
++        const uint32_t st = get_write_ptr(cb_stats);
++        for (uint32_t pos = 0; pos < G; ++pos) {
++            uint32_t d = get_arg_val<uint32_t>(srcdir_idx + pos);
++            if (d == OWN) {
++                d = sends_own_fwd ? FWD : BWD;
++            }
++            const uint32_t off = landing + (w * G + pos) * SEG_STRIDE + kl * Q * RECORD_BYTES;
++            for (uint32_t r = 0; r < no; ++r) {
++                const uint32_t page = st + (pos * Q + r) * STATS_TILE_BYTES;
++                noc_async_read(port_noc(l, d, off + r * RECORD_BYTES), page, RECORD_BYTES / 2);
++                noc_async_read(
++                    port_noc(l, d, off + r * RECORD_BYTES + RECORD_BYTES / 2),
++                    page + STATS_FACE_BYTES,
++                    RECORD_BYTES / 2);
++            }
++        }
++        noc_async_read_barrier();
++        cb_push_back(cb_stats, G * Q);
++    };
++
++    auto allgather = [&](uint32_t s) {
++        DRMS_ZONE("ow_allgather");
++        const uint32_t w = sw[s], k = sk[s];
++        const uint32_t no = n_own(w, k);
++        const uint32_t src = get_read_ptr(cb_rms_root);
++        const uint32_t dst = inv_base + ((w % PW) * Q_W + k * Q) * T_I;
++        for (uint32_t r = 0; r < no; ++r) {
++            volatile tt_l1_ptr uint32_t* pg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + r * T_I);
++            uint32_t v[INV_HALF / 4];
++#pragma GCC unroll 16
++            for (uint32_t i = 0; i < INV_HALF / 4; ++i) {
++                v[i] = pg[INV_FACE / 4 + i];
++            }
++#pragma GCC unroll 16
++            for (uint32_t i = 0; i < INV_HALF / 4; ++i) {
++                pg[INV_HALF / 4 + i] = v[i];
++            }
++        }
++        for (uint32_t m = 0; m < G_W; ++m) {
++            noc_async_write_one_packet_set_state<true>(get_noc_addr(member_x(m), member_y(m), dst), 2 * INV_HALF);
++            for (uint32_t r = 0; r < no; ++r) {
++                noc_async_write_one_packet_with_state<true>(src + r * T_I, dst + r * T_I + INV_FACE);
++            }
++        }
++        noc_async_posted_writes_flushed();
++        cb_pop_front(cb_rms_root, no);
++    };
++
++    // in-order queues: sa <= sc <= sp <= sg <= ns
++    uint32_t sg = 0, sp = 0, sc = 0, sa = 0;
++    // 0 allgather, 1 collect, 2 publish, 3 gather push, 4 none (downstream first: the chain's tail is the critical one)
++    auto ready = [&]() -> uint32_t {
++        invalidate_l1_cache();
++        if (!DRMS_OWNER_PUBLISH_ONLY && sa < sc && cb_pages_available_at_front(cb_rms_root, n_own(sw[sa], sk[sa]))) {
++            return 0;
++        }
++        if (!DRMS_OWNER_PUBLISH_ONLY && sc < sp && landed_ok(sw[sc], link_of(sk[sc])) && cb_pages_reservable_at_back(cb_stats, G * Q)) {
++            return 1;
++        }
++        if (sp < sg && cb_pages_available_at_front(cb_chip_partial, n_own(sw[sp], sk[sp]))) {
++            return 2;
++        }
++        if (sg < ns && gather_done(sg)) {
++            return 3;
++        }
++        return 4;
++    };
++    while (DRMS_OWNER_PUBLISH_ONLY ? sp < ns : sa < ns) {
++        uint32_t r = ready();
++        if (r == 4) {
++            DRMS_ZONE("ow_wait");
++            do {
++                r = ready();
++            } while (r == 4);
++        }
++        if (r == 0) {
++            allgather(sa++);
++        } else if (r == 1) {
++            collect(sc++);
++        } else if (r == 2) {
++            publish(sp++);
++        } else {
++            DRMS_ZONE("ow_gather_push");
++            cb_reserve_back(cb_gather, G_W * Q);
++            cb_push_back(cb_gather, G_W * Q);
++            ++sg;
++        }
++    }
++    noc_async_write_barrier();
++    noc_async_posted_writes_flushed();
++    noc_async_atomic_barrier();
++}
+diff -ruN '--exclude=__pycache__' '--exclude=*.md' '--exclude=agent_logs' '--exclude=perf_experiments' '--exclude=*.json' -x __init__.py ./kernels/distributed_rms_norm_reader.cpp perf_experiments/dedicated_owners/drms_do/kernels/distributed_rms_norm_reader.cpp
+--- ./kernels/distributed_rms_norm_reader.cpp	2026-10-29 07:23:17.233018607 +0000
++++ perf_experiments/dedicated_owners/drms_do/kernels/distributed_rms_norm_reader.cpp	2026-10-29 08:10:57.582094237 +0000
+@@ -52,6 +52,13 @@
+ #ifndef DRMS_ABLATE_READS
+ #define DRMS_ABLATE_READS 0
+ #endif
++// dedicated_owners experiment: every (wave, owner slot) of the row-group is owned by a dedicated core that reads no x
++// (distributed_rms_norm_owner_reader.cpp / _owner_compute.cpp). This core is then a pure member: it contributes its
++// partials to that core's cb_gather region of the slot (region = slot ordinal among the group's slots with rows; one
++// SEM_GATHER field per slot) and only receives inv records — no gather wait, publish, collect or all-gather here.
++#ifndef DRMS_DEDICATED
++#define DRMS_DEDICATED 0
++#endif
+
+ namespace {
+
+@@ -218,6 +225,7 @@
+     const bool sends_own_bwd = get_arg_val<uint32_t>(a++) != 0;
+     const uint32_t srcdir_idx = a;
+     a += G;
++    [[maybe_unused]] const uint32_t owner_xy = DRMS_DEDICATED ? get_arg_val<uint32_t>(a++) : 0;
+
+     auto member_x = [&](uint32_t m) { return get_arg_val<uint32_t>(member_idx + m) >> 16; };
+     auto member_y = [&](uint32_t m) { return get_arg_val<uint32_t>(member_idx + m) & 0xFFFF; };
+@@ -231,7 +239,12 @@
+         return r0 >= rows ? 0 : ((rows - r0) < Q_W ? rows - r0 : Q_W);
+     };
+     auto member_of = [](uint32_t w, uint32_t k) -> uint32_t { return (w * OWNERS + k) % G_W; };
++    // DRMS_DEDICATED 1: the dedicated core owns everything (never an owner here); 2: it owns Phase A only (gather,
++    // chip sum, publish) and this core keeps the baseline's rotating Phase B owner role (collect, fold, all-gather)
+     auto my_k = [&](uint32_t w) -> uint32_t {
++        if constexpr (DRMS_DEDICATED == 1) {
++            return OWNERS;  // never an owner
++        }
+         for (uint32_t k = 0; k < OWNERS; ++k) {
+             if (member_of(w, k) == my_j) {
+                 return k;
+@@ -259,6 +272,20 @@
+         return o % REGIONS;
+     };
+
++    // dedicated owners: slot ordinal of (w, k) among the group's (wave, slot) pairs with rows, in (w, k) order
++    [[maybe_unused]] auto slot_ord = [&](uint32_t w, uint32_t k) -> uint32_t {
++        uint32_t o = 0;
++        for (uint32_t v = 0; v < w; ++v) {
++            for (uint32_t kk = 0; kk < OWNERS; ++kk) {
++                o += n_own(v, kk) > 0 ? 1 : 0;
++            }
++        }
++        for (uint32_t kk = 0; kk < k; ++kk) {
++            o += n_own(w, kk) > 0 ? 1 : 0;
++        }
++        return o;
++    };
++
+     Noc noc;
+     CircularBuffer x_cb(cb_x_tiles);
+
+@@ -476,21 +503,32 @@
+                     if (no == 0) {
+                         continue;
+                     }
+-                    const uint32_t m = member_of(w, k);
+-                    const uint32_t dst = gather_base + ((ordinal(m, w) * G_W + my_j) * Q) * T_I;
+-                    combine_write_tiles<T_I>(src + k * Q * T_I, member_x(m), member_y(m), dst, no);
++                    if constexpr (DRMS_DEDICATED) {
++                        const uint32_t dst = gather_base + ((slot_ord(w, k) * G_W + my_j) * Q) * T_I;
++                        combine_write_tiles<T_I>(src + k * Q * T_I, owner_xy >> 16, owner_xy & 0xFFFF, dst, no);
++                    } else {
++                        const uint32_t m = member_of(w, k);
++                        const uint32_t dst = gather_base + ((ordinal(m, w) * G_W + my_j) * Q) * T_I;
++                        combine_write_tiles<T_I>(src + k * Q * T_I, member_x(m), member_y(m), dst, no);
++                    }
+                 }
+                 noc_async_write_barrier();
+                 for (uint32_t k = 0; k < OWNERS; ++k) {
+                     if (n_own(w, k) > 0) {
+-                        const uint32_t m = member_of(w, k);
+-                        noc_semaphore_inc(get_noc_addr(member_x(m), member_y(m), gsem), 1u << (GB * ordinal(m, w)));
++                        if constexpr (DRMS_DEDICATED) {
++                            noc_semaphore_inc(
++                                get_noc_addr(owner_xy >> 16, owner_xy & 0xFFFF, gsem), 1u << (GB * slot_ord(w, k)));
++                        } else {
++                            const uint32_t m = member_of(w, k);
++                            noc_semaphore_inc(
++                                get_noc_addr(member_x(m), member_y(m), gsem), 1u << (GB * ordinal(m, w)));
++                        }
+                     }
+                 }
+                 cb_pop_front(cb_partial_col, n);
+             }
+         }
+-        const uint32_t k = my_k(w);
++        const uint32_t k = DRMS_DEDICATED ? OWNERS : my_k(w);  // Phase A owner role
+         if (k < OWNERS) {
+             if constexpr (G_W > 1) {
+                 if (n_own(w, k) > 0) {
+@@ -713,7 +751,7 @@
+                 service(w - COMBINE_LAG);
+             }
+         }
+-        if (p == 0) {
++        if (p == 0 && DRMS_DEDICATED != 1) {
+             CircularBuffer stats_cb(cb_stats);
+             noc.async_write_zeros(stats_cb, G * Q * 4096, {.offset_bytes = 0});
+             noc.write_zeros_l1_barrier();
+@@ -723,13 +761,20 @@
+         uint32_t wc = next_owned_rows(w_begin);  // next owned wave (with rows) to collect
+         uint32_t wa = next_owned(w_begin);       // next owned wave whose rows to all-gather
+         uint32_t wi = w_begin;                   // next wave whose inv rows to push
++        [[maybe_unused]] uint32_t n_collected = 0;  // DRMS_DEDICATED 2: collects done (own-record gate on SEM_INV)
+         cb_reserve_back(cb_inv_rms, (w_end - w_begin) * Q_W);
+         inv_base = get_write_ptr(cb_inv_rms);
+         while (wi < w_end || wa < w_end) {
+             if (wc < w_end) {
+                 const uint32_t kp = group * OWNERS + my_k(wc);
+-                if (landed_ok(wc, kp % L) && cb_pages_reservable_at_back(cb_stats, G * Q)) {
++                bool own_ok = true;
++                if constexpr (DRMS_DEDICATED == 2) {
++                    // the dedicated core published this chip's record of wave wc (it publishes in wave order)
++                    own_ok = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_INV)) > n_collected;
++                }
++                if (own_ok && landed_ok(wc, kp % L) && cb_pages_reservable_at_back(cb_stats, G * Q)) {
+                     collect(wc);
++                    ++n_collected;
+                     wc = next_owned_rows(wc + 1);
+                     continue;
+                 }

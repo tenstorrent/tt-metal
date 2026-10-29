@@ -1,0 +1,171 @@
+== do_final_focus.txt
+CORRECT D3-focus d1: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-focus d3: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-focus real: pcc 0.9999985 bit-identical-to-real True
+SELECTION D3-focus d1: {'G_w': 14, 'G_h': 7, 'S': 4, 'rows_max': 3, 'num_waves': 3, 'owners': 1, 'members': 98, 'workers': 106, 'dedicated': [(3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9), (9, 9)]}
+SELECTION D3-focus d3: {'G_w': 14, 'G_h': 7, 'S': 4, 'rows_max': 3, 'num_waves': 3, 'owners': 1, 'members': 98, 'workers': 106, 'dedicated': [(3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9), (9, 9)]}
+SUMMARY D3-focus   d1   op  : traced slowest med  20.74 [20.67, 20.63, 20.75, 21.07, 20.93, 20.73] | untraced last  15.92 [16.08, 15.88, 15.79, 15.71, 16.00, 15.95] | untraced slowest  64.16
+SUMMARY D3-focus   d1   stub: traced slowest med  15.77 [15.82, 15.74, 15.68, 15.74, 15.92, 15.80] | untraced last  15.52 [15.54, 15.50, 15.18, 15.63, 15.65, 15.41] | untraced slowest  15.92
+SUMMARY D3-focus   d3   op  : traced slowest med  20.62 [20.91, 21.27, 20.19, 20.02, 20.85, 20.40] | untraced last  14.79 [14.73, 15.09, 14.75, 14.88, 14.83, 14.75] | untraced slowest  64.72
+SUMMARY D3-focus   d3   stub: traced slowest med  15.01 [15.03, 15.06, 14.99, 14.91, 15.05, 14.97] | untraced last  14.62 [14.62, 14.78, 14.62, 14.59, 14.68, 14.61] | untraced slowest  14.97
+SUMMARY D3-focus   real op  : traced slowest med  20.43 [19.99, 21.09, 20.22, 20.63, 20.90, 20.08] | untraced last  16.42 [16.38, 16.40, 16.50, 16.14, 16.44, 16.62] | untraced slowest  63.30
+SUMMARY D3-focus   real stub: traced slowest med  16.56 [16.56, 16.57, 16.56, 16.51, 16.56, 16.48] | untraced last  16.29 [16.26, 16.25, 16.27, 16.35, 16.32, 16.30] | untraced slowest  16.64
+== do_sweep2.txt
+CORRECT D1 d1: pcc 0.9999984 bit-identical-to-real True
+CORRECT D1 d3: pcc 0.9999984 bit-identical-to-real True
+CORRECT D1 real: pcc 0.9999984 bit-identical-to-real True
+CORRECT D1-HS d1: pcc 0.9999985 bit-identical-to-real True
+CORRECT D1-HS d3: pcc 0.9999985 bit-identical-to-real True
+CORRECT D1-HS real: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-WS d1: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-WS d3: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-WS real: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-WS-nog d1: pcc 0.9999986 bit-identical-to-real True
+CORRECT D3-WS-nog d3: pcc 0.9999986 bit-identical-to-real True
+CORRECT D3-WS-nog real: pcc 0.9999986 bit-identical-to-real True
+CORRECT D3-decode d1: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-decode d3: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-decode real: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-focus d1: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-focus d3: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-focus real: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-nog d1: pcc 0.9999986 bit-identical-to-real True
+CORRECT D3-nog d3: pcc 0.9999986 bit-identical-to-real True
+CORRECT D3-nog real: pcc 0.9999986 bit-identical-to-real True
+CORRECT D3-rmg d1: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-rmg d3: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-rmg real: pcc 0.9999985 bit-identical-to-real True
+SELECTION D1 d1: {'G_w': 1, 'G_h': 8, 'S': 3, 'rows_max': 1, 'num_waves': 1, 'owners': 1, 'members': 8, 'workers': 106, 'dedicated': None}
+SELECTION D1 d3: {'G_w': 1, 'G_h': 8, 'S': 3, 'rows_max': 1, 'num_waves': 1, 'owners': 1, 'members': 8, 'workers': 106, 'dedicated': None}
+SELECTION D1-HS d1: {'G_w': 1, 'G_h': 32, 'S': 16, 'rows_max': 1, 'num_waves': 1, 'owners': 1, 'members': 32, 'workers': 106, 'dedicated': None}
+SELECTION D1-HS d3: {'G_w': 1, 'G_h': 32, 'S': 16, 'rows_max': 1, 'num_waves': 1, 'owners': 1, 'members': 32, 'workers': 106, 'dedicated': None}
+SELECTION D3-WS d1: {'G_w': 64, 'G_h': 1, 'S': 1, 'rows_max': 2, 'num_waves': 2, 'owners': 1, 'members': 64, 'workers': 106, 'dedicated': [(0, 6)]}
+SELECTION D3-WS d3: {'G_w': 64, 'G_h': 1, 'S': 1, 'rows_max': 2, 'num_waves': 2, 'owners': 1, 'members': 64, 'workers': 106, 'dedicated': [(0, 6)]}
+SELECTION D3-WS-nog d1: {'G_w': 64, 'G_h': 1, 'S': 1, 'rows_max': 2, 'num_waves': 2, 'owners': 1, 'members': 64, 'workers': 106, 'dedicated': [(0, 6)]}
+SELECTION D3-WS-nog d3: {'G_w': 64, 'G_h': 1, 'S': 1, 'rows_max': 2, 'num_waves': 2, 'owners': 1, 'members': 64, 'workers': 106, 'dedicated': [(0, 6)]}
+SELECTION D3-decode d1: {'G_w': 14, 'G_h': 1, 'S': 4, 'rows_max': 1, 'num_waves': 1, 'owners': 1, 'members': 14, 'workers': 106, 'dedicated': [(7, 1)]}
+SELECTION D3-decode d3: {'G_w': 14, 'G_h': 1, 'S': 4, 'rows_max': 1, 'num_waves': 1, 'owners': 1, 'members': 14, 'workers': 106, 'dedicated': [(7, 1)]}
+SELECTION D3-focus d1: {'G_w': 14, 'G_h': 7, 'S': 4, 'rows_max': 3, 'num_waves': 3, 'owners': 1, 'members': 98, 'workers': 106, 'dedicated': [(3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9), (9, 9)]}
+SELECTION D3-focus d3: {'G_w': 14, 'G_h': 7, 'S': 4, 'rows_max': 3, 'num_waves': 3, 'owners': 1, 'members': 98, 'workers': 106, 'dedicated': [(3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9), (9, 9)]}
+SELECTION D3-nog d1: {'G_w': 14, 'G_h': 7, 'S': 4, 'rows_max': 3, 'num_waves': 3, 'owners': 1, 'members': 98, 'workers': 106, 'dedicated': [(3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9), (9, 9)]}
+SELECTION D3-nog d3: {'G_w': 14, 'G_h': 7, 'S': 4, 'rows_max': 3, 'num_waves': 3, 'owners': 1, 'members': 98, 'workers': 106, 'dedicated': [(3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9), (9, 9)]}
+SELECTION D3-rmg d1: {'G_w': 14, 'G_h': 7, 'S': 4, 'rows_max': 3, 'num_waves': 3, 'owners': 1, 'members': 98, 'workers': 106, 'dedicated': [(3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9), (9, 9)]}
+SELECTION D3-rmg d3: {'G_w': 14, 'G_h': 7, 'S': 4, 'rows_max': 3, 'num_waves': 3, 'owners': 1, 'members': 98, 'workers': 106, 'dedicated': [(3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9), (9, 9)]}
+SUMMARY D1         d1   op  : traced slowest med  10.38 [11.10, 10.38, 10.26] | untraced last   7.67 [7.67, 7.70, 7.49] | untraced slowest  20.23
+SUMMARY D1         d1   stub: traced slowest med   6.07 [6.07, 6.04, 6.07] | untraced last   6.25 [6.24, 6.25, 6.25] | untraced slowest   6.29
+SUMMARY D1         d3   op  : traced slowest med  10.69 [11.08, 10.36, 10.69] | untraced last   7.68 [7.68, 7.74, 7.58] | untraced slowest  19.02
+SUMMARY D1         d3   stub: traced slowest med   6.06 [6.05, 6.06, 6.06] | untraced last   6.24 [6.24, 6.23, 6.26] | untraced slowest   6.28
+SUMMARY D1         real op  : traced slowest med  10.02 [9.94, 10.02, 10.37] | untraced last   7.62 [7.51, 7.62, 7.67] | untraced slowest  22.02
+SUMMARY D1         real stub: traced slowest med   6.05 [6.07, 6.05, 6.05] | untraced last   6.23 [6.27, 6.21, 6.23] | untraced slowest   6.31
+SUMMARY D1-HS      d1   op  : traced slowest med  11.54 [11.54, 11.59, 11.45] | untraced last   8.77 [8.85, 8.77, 8.75] | untraced slowest  28.27
+SUMMARY D1-HS      d1   stub: traced slowest med   7.18 [7.18, 7.18, 7.18] | untraced last   7.29 [7.30, 7.29, 7.29] | untraced slowest   7.37
+SUMMARY D1-HS      d3   op  : traced slowest med  11.42 [12.15, 11.37, 11.42] | untraced last   8.80 [8.78, 8.88, 8.80] | untraced slowest  27.54
+SUMMARY D1-HS      d3   stub: traced slowest med   7.18 [7.18, 7.18, 7.18] | untraced last   7.29 [7.29, 7.29, 7.29] | untraced slowest   7.37
+SUMMARY D1-HS      real op  : traced slowest med  11.72 [11.85, 11.72, 11.65] | untraced last   8.71 [8.64, 8.80, 8.71] | untraced slowest  29.22
+SUMMARY D1-HS      real stub: traced slowest med   7.18 [7.18, 7.18, 7.18] | untraced last   7.29 [7.26, 7.29, 7.29] | untraced slowest   7.38
+SUMMARY D3-WS      d1   op  : traced slowest med  19.50 [19.50, 19.21, 19.75] | untraced last  14.80 [14.80, 14.80, 14.86] | untraced slowest  50.40
+SUMMARY D3-WS      d1   stub: traced slowest med  14.48 [14.51, 14.48, 14.48] | untraced last  14.57 [14.59, 14.57, 14.54] | untraced slowest  14.66
+SUMMARY D3-WS      d3   op  : traced slowest med  17.63 [17.44, 17.63, 17.87] | untraced last  12.73 [12.66, 12.75, 12.73] | untraced slowest  48.05
+SUMMARY D3-WS      d3   stub: traced slowest med  12.64 [12.64, 12.65, 12.63] | untraced last  12.66 [12.67, 12.65, 12.66] | untraced slowest  12.80
+SUMMARY D3-WS      real op  : traced slowest med  17.43 [17.43, 17.62, 17.39] | untraced last  12.81 [12.81, 12.82, 12.80] | untraced slowest  47.25
+SUMMARY D3-WS      real stub: traced slowest med  12.73 [12.73, 12.69, 12.74] | untraced last  12.76 [12.82, 12.74, 12.76] | untraced slowest  12.84
+SUMMARY D3-WS-nog  d1   op  : traced slowest med  19.77 [19.77, 19.74, 19.98] | untraced last  14.75 [14.70, 14.75, 14.78] | untraced slowest  50.62
+SUMMARY D3-WS-nog  d1   stub: traced slowest med  14.42 [14.43, 14.42, 14.42] | untraced last  14.52 [14.53, 14.52, 14.50] | untraced slowest  14.62
+SUMMARY D3-WS-nog  d3   op  : traced slowest med  17.68 [17.72, 17.68, 17.41] | untraced last  12.70 [12.66, 12.70, 12.70] | untraced slowest  47.20
+SUMMARY D3-WS-nog  d3   stub: traced slowest med  12.57 [12.57, 12.57, 12.56] | untraced last  12.63 [12.62, 12.67, 12.63] | untraced slowest  12.74
+SUMMARY D3-WS-nog  real op  : traced slowest med  17.21 [17.27, 17.21, 17.09] | untraced last  12.76 [12.76, 12.73, 12.80] | untraced slowest  46.85
+SUMMARY D3-WS-nog  real stub: traced slowest med  12.68 [12.68, 12.65, 12.69] | untraced last  12.71 [12.71, 12.73, 12.69] | untraced slowest  12.80
+SUMMARY D3-decode  d1   op  : traced slowest med  11.63 [11.63, 11.66, 11.25] | untraced last   7.54 [7.54, 7.51, 7.60] | untraced slowest  24.34
+SUMMARY D3-decode  d1   stub: traced slowest med   7.24 [7.22, 7.26, 7.24] | untraced last   7.40 [7.43, 7.40, 7.37] | untraced slowest   7.50
+SUMMARY D3-decode  d3   op  : traced slowest med  11.90 [11.90, 11.95, 11.34] | untraced last   8.71 [8.74, 8.71, 7.70] | untraced slowest  22.82
+SUMMARY D3-decode  d3   stub: traced slowest med   7.53 [7.53, 7.52, 7.54] | untraced last   7.64 [7.64, 7.59, 7.64] | untraced slowest   7.74
+SUMMARY D3-decode  real op  : traced slowest med  11.39 [11.27, 11.64, 11.39] | untraced last   7.83 [8.02, 7.83, 7.82] | untraced slowest  24.39
+SUMMARY D3-decode  real stub: traced slowest med   8.58 [8.58, 8.58, 8.59] | untraced last   7.69 [7.69, 7.70, 7.69] | untraced slowest   7.78
+SUMMARY D3-focus   d1   op  : traced slowest med  22.28 [22.49, 22.28, 21.52] | untraced last  16.22 [16.18, 16.22, 16.49] | untraced slowest  64.52
+SUMMARY D3-focus   d1   stub: traced slowest med  16.20 [16.36, 16.08, 16.20] | untraced last  15.90 [15.74, 15.94, 15.90] | untraced slowest  16.26
+SUMMARY D3-focus   d3   op  : traced slowest med  21.22 [20.30, 21.22, 22.39] | untraced last  14.82 [15.04, 14.80, 14.82] | untraced slowest  64.54
+SUMMARY D3-focus   d3   stub: traced slowest med  15.06 [15.15, 15.05, 15.06] | untraced last  14.77 [14.77, 14.78, 14.63] | untraced slowest  15.10
+SUMMARY D3-focus   real op  : traced slowest med  21.08 [20.27, 21.08, 21.12] | untraced last  16.50 [16.50, 16.56, 16.34] | untraced slowest  62.07
+SUMMARY D3-focus   real stub: traced slowest med  16.52 [16.52, 16.43, 16.65] | untraced last  16.25 [16.25, 16.25, 16.39] | untraced slowest  16.84
+SUMMARY D3-nog     d1   op  : traced slowest med  21.55 [21.61, 21.55, 21.37] | untraced last  16.08 [15.99, 16.08, 16.52] | untraced slowest  63.12
+SUMMARY D3-nog     d1   stub: traced slowest med  16.26 [16.26, 16.29, 16.22] | untraced last  15.78 [16.01, 15.74, 15.78] | untraced slowest  16.34
+SUMMARY D3-nog     d3   op  : traced slowest med  20.06 [19.98, 20.50, 20.06] | untraced last  15.02 [14.99, 15.08, 15.02] | untraced slowest  62.73
+SUMMARY D3-nog     d3   stub: traced slowest med  15.06 [14.97, 15.08, 15.06] | untraced last  14.59 [14.59, 14.68, 14.59] | untraced slowest  15.05
+SUMMARY D3-nog     real op  : traced slowest med  20.42 [20.94, 20.42, 20.17] | untraced last  16.20 [16.20, 16.28, 16.18] | untraced slowest  61.76
+SUMMARY D3-nog     real stub: traced slowest med  16.47 [16.47, 16.42, 16.48] | untraced last  16.14 [16.09, 16.14, 16.20] | untraced slowest  16.61
+SUMMARY D3-rmg     d1   op  : traced slowest med  21.05 [21.01, 21.05, 21.94] | untraced last  16.45 [16.53, 16.45, 16.02] | untraced slowest  66.62
+SUMMARY D3-rmg     d1   stub: traced slowest med  16.14 [16.14, 16.12, 16.23] | untraced last  15.78 [15.65, 15.78, 15.81] | untraced slowest  16.45
+SUMMARY D3-rmg     d3   op  : traced slowest med  20.66 [20.34, 20.71, 20.66] | untraced last  14.93 [14.93, 15.08, 14.82] | untraced slowest  65.75
+SUMMARY D3-rmg     d3   stub: traced slowest med  15.12 [15.07, 15.16, 15.12] | untraced last  14.79 [14.79, 14.72, 14.80] | untraced slowest  15.09
+SUMMARY D3-rmg     real op  : traced slowest med  20.60 [20.66, 20.60, 20.46] | untraced last  16.26 [16.50, 16.20, 16.26] | untraced slowest  64.87
+SUMMARY D3-rmg     real stub: traced slowest med  16.53 [16.53, 16.54, 16.53] | untraced last  16.25 [16.33, 16.19, 16.25] | untraced slowest  16.76
+== do_2048.txt
+CORRECT D3-2048 d2: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-2048 d4: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-2048 real: pcc 0.9999985 bit-identical-to-real True
+SELECTION D3-2048 d2: {'G_w': 8, 'G_h': 11, 'S': 5, 'rows_max': 6, 'num_waves': 6, 'owners': 1, 'members': 88, 'workers': 106, 'dedicated': [(4, 8), (5, 8), (6, 8), (7, 8), (8, 8), (9, 8), (10, 8), (0, 9), (1, 9), (2, 9), (3, 9)]}
+SELECTION D3-2048 d4: {'G_w': 8, 'G_h': 11, 'S': 5, 'rows_max': 6, 'num_waves': 6, 'owners': 1, 'members': 88, 'workers': 106, 'dedicated': [(4, 8), (5, 8), (6, 8), (7, 8), (8, 8), (9, 8), (10, 8), (0, 9), (1, 9), (2, 9), (3, 9)]}
+SUMMARY D3-2048    d2   op  : traced slowest med  29.82 [29.70, 29.90, 30.03, 29.73] | untraced last  28.43 [28.95, 28.43, 28.44, 28.25] | untraced slowest  71.22
+SUMMARY D3-2048    d2   stub: traced slowest med  29.17 [29.22, 29.12, 29.09, 29.28] | untraced last  28.25 [28.37, 28.13, 27.98, 28.55] | untraced slowest  29.01
+SUMMARY D3-2048    d4   op  : traced slowest med  29.75 [30.03, 29.86, 29.55, 29.64] | untraced last  28.28 [28.29, 28.37, 28.20, 28.28] | untraced slowest  72.43
+SUMMARY D3-2048    d4   stub: traced slowest med  28.77 [28.84, 28.68, 28.75, 28.80] | untraced last  28.06 [28.12, 28.11, 27.54, 28.01] | untraced slowest  28.71
+SUMMARY D3-2048    real op  : traced slowest med  30.11 [30.48, 30.34, 29.88, 29.84] | untraced last  27.88 [27.75, 27.94, 27.87, 27.88] | untraced slowest  72.24
+SUMMARY D3-2048    real stub: traced slowest med  28.25 [28.20, 28.30, 28.29, 28.13] | untraced last  27.78 [27.81, 27.86, 27.75, 27.64] | untraced slowest  28.34
+== do_decode.txt
+CORRECT D3-decode d1: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-decode d3: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-decode real: pcc 0.9999985 bit-identical-to-real True
+SELECTION D3-decode d1: {'G_w': 14, 'G_h': 1, 'S': 4, 'rows_max': 1, 'num_waves': 1, 'owners': 1, 'members': 14, 'workers': 106, 'dedicated': [(7, 1)]}
+SELECTION D3-decode d3: {'G_w': 14, 'G_h': 1, 'S': 4, 'rows_max': 1, 'num_waves': 1, 'owners': 1, 'members': 14, 'workers': 106, 'dedicated': [(7, 1)]}
+SUMMARY D3-decode  d1   op  : traced slowest med  11.49 [11.36, 11.54, 12.09, 11.44, 11.72, 11.13] | untraced last   7.59 [7.48, 7.60, 7.57, 7.49, 7.62, 8.97] | untraced slowest  23.07
+SUMMARY D3-decode  d1   stub: traced slowest med   7.25 [7.26, 7.27, 7.26, 7.24, 7.25, 7.25] | untraced last   7.42 [7.43, 7.41, 7.41, 7.44, 7.45, 7.38] | untraced slowest   7.50
+SUMMARY D3-decode  d3   op  : traced slowest med  11.44 [11.62, 12.28, 11.28, 11.13, 11.58, 11.29] | untraced last   8.06 [8.38, 8.71, 7.74, 7.73, 8.83, 7.67] | untraced slowest  23.28
+SUMMARY D3-decode  d3   stub: traced slowest med   7.53 [7.56, 7.53, 7.53, 7.53, 7.54, 7.53] | untraced last   7.64 [7.64, 7.68, 7.62, 7.64, 7.67, 7.63] | untraced slowest   7.74
+SUMMARY D3-decode  real op  : traced slowest med  11.25 [11.30, 11.37, 11.04, 11.20, 11.41, 10.93] | untraced last   7.84 [7.94, 7.77, 7.85, 8.39, 7.76, 7.84] | untraced slowest  22.46
+SUMMARY D3-decode  real stub: traced slowest med   8.58 [8.56, 8.58, 8.58, 8.58, 8.57, 8.56] | untraced last   7.68 [7.72, 7.66, 7.66, 7.71, 7.69, 7.66] | untraced slowest   7.75
+== do_lin.txt
+CORRECT D3-WS d1: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-WS d3: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-WS real: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-decode d1: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-decode d3: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-decode real: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-focus d1: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-focus d3: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-focus real: pcc 0.9999985 bit-identical-to-real True
+SELECTION D3-WS d1: {'G_w': 64, 'G_h': 1, 'S': 1, 'rows_max': 2, 'num_waves': 2, 'owners': 1, 'members': 64, 'workers': 108, 'dedicated': [(0, 6)]}
+SELECTION D3-WS d3: {'G_w': 64, 'G_h': 1, 'S': 1, 'rows_max': 2, 'num_waves': 2, 'owners': 1, 'members': 64, 'workers': 108, 'dedicated': [(0, 6)]}
+SELECTION D3-decode d1: {'G_w': 14, 'G_h': 1, 'S': 4, 'rows_max': 1, 'num_waves': 1, 'owners': 1, 'members': 14, 'workers': 108, 'dedicated': [(5, 1)]}
+SELECTION D3-decode d3: {'G_w': 14, 'G_h': 1, 'S': 4, 'rows_max': 1, 'num_waves': 1, 'owners': 1, 'members': 14, 'workers': 108, 'dedicated': [(5, 1)]}
+SELECTION D3-focus d1: {'G_w': 14, 'G_h': 7, 'S': 4, 'rows_max': 3, 'num_waves': 3, 'owners': 1, 'members': 98, 'workers': 108, 'dedicated': [(1, 9), (2, 9), (3, 9), (4, 9), (5, 9), (6, 9), (7, 9)]}
+SELECTION D3-focus d3: {'G_w': 14, 'G_h': 7, 'S': 4, 'rows_max': 3, 'num_waves': 3, 'owners': 1, 'members': 98, 'workers': 108, 'dedicated': [(1, 9), (2, 9), (3, 9), (4, 9), (5, 9), (6, 9), (7, 9)]}
+SUMMARY D3-WS      d1   op  : traced slowest med  20.59 [19.92, 20.59, 24.98] | untraced last  14.61 [14.61, 14.56, 14.64] | untraced slowest  54.83
+SUMMARY D3-WS      d1   stub: traced slowest med  14.46 [14.46, 14.48, 14.44] | untraced last  14.47 [14.45, 14.48, 14.47] | untraced slowest  14.65
+SUMMARY D3-WS      d3   op  : traced slowest med  18.38 [18.29, 18.38, 18.49] | untraced last  12.61 [12.57, 12.63, 12.61] | untraced slowest  53.95
+SUMMARY D3-WS      d3   stub: traced slowest med  12.61 [12.61, 12.61, 12.62] | untraced last  12.58 [12.58, 12.59, 12.58] | untraced slowest  12.76
+SUMMARY D3-WS      real op  : traced slowest med  18.79 [18.79, 18.10, 18.97] | untraced last  12.65 [12.69, 12.64, 12.65] | untraced slowest  50.63
+SUMMARY D3-WS      real stub: traced slowest med  12.68 [12.71, 12.68, 12.68] | untraced last  12.64 [12.64, 12.66, 12.63] | untraced slowest  12.81
+SUMMARY D3-decode  d1   op  : traced slowest med  12.76 [12.93, 12.76, 12.46] | untraced last   8.02 [7.83, 8.02, 9.04] | untraced slowest  26.42
+SUMMARY D3-decode  d1   stub: traced slowest med   7.17 [7.14, 7.17, 7.17] | untraced last   7.27 [7.27, 7.27, 7.29] | untraced slowest   7.41
+SUMMARY D3-decode  d3   op  : traced slowest med  13.36 [12.74, 13.71, 13.36] | untraced last   8.04 [8.06, 7.99, 8.04] | untraced slowest  25.58
+SUMMARY D3-decode  d3   stub: traced slowest med   7.60 [7.60, 7.59, 7.62] | untraced last   7.59 [7.64, 7.56, 7.59] | untraced slowest   7.75
+SUMMARY D3-decode  real op  : traced slowest med  12.39 [12.39, 12.64, 12.12] | untraced last   8.53 [8.27, 8.53, 8.63] | untraced slowest  25.13
+SUMMARY D3-decode  real stub: traced slowest med   7.66 [7.70, 7.64, 7.66] | untraced last   7.64 [7.66, 7.64, 7.61] | untraced slowest   7.77
+SUMMARY D3-focus   d1   op  : traced slowest med  22.50 [22.50, 22.88, 21.98] | untraced last  16.11 [16.11, 15.54, 16.50] | untraced slowest  67.92
+SUMMARY D3-focus   d1   stub: traced slowest med  16.19 [16.18, 16.19, 16.27] | untraced last  15.80 [15.84, 15.80, 15.77] | untraced slowest  16.27
+SUMMARY D3-focus   d3   op  : traced slowest med  22.47 [22.47, 22.83, 21.85] | untraced last  14.83 [14.83, 15.07, 14.78] | untraced slowest  67.14
+SUMMARY D3-focus   d3   stub: traced slowest med  15.16 [15.18, 15.08, 15.16] | untraced last  14.79 [14.65, 14.81, 14.79] | untraced slowest  15.19
+SUMMARY D3-focus   real op  : traced slowest med  22.62 [22.81, 22.62, 22.39] | untraced last  16.19 [16.19, 15.98, 16.23] | untraced slowest  66.09
+SUMMARY D3-focus   real stub: traced slowest med  16.44 [16.44, 16.45, 16.36] | untraced last  16.21 [16.21, 16.24, 16.14] | untraced slowest  16.46
+== do_lin_dec.txt
+CORRECT D3-decode d1: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-decode d3: pcc 0.9999985 bit-identical-to-real True
+CORRECT D3-decode real: pcc 0.9999985 bit-identical-to-real True
+SELECTION D3-decode d1: {'G_w': 14, 'G_h': 1, 'S': 4, 'rows_max': 1, 'num_waves': 1, 'owners': 1, 'members': 14, 'workers': 108, 'dedicated': [(5, 1)]}
+SELECTION D3-decode d3: {'G_w': 14, 'G_h': 1, 'S': 4, 'rows_max': 1, 'num_waves': 1, 'owners': 1, 'members': 14, 'workers': 108, 'dedicated': [(5, 1)]}
+SUMMARY D3-decode  d1   op  : traced slowest med  12.64 [12.70, 12.47, 12.64, 13.00, 12.58, 12.66, 12.36] | untraced last   7.89 [7.89, 7.95, 7.91, 7.88, 7.88, 7.90, 7.88] | untraced slowest  27.96
+SUMMARY D3-decode  d1   stub: traced slowest med   7.17 [7.15, 7.15, 7.18, 7.16, 7.17, 7.20, 7.17] | untraced last   7.24 [7.24, 7.21, 7.26, 7.27, 7.24, 7.21, 7.20] | untraced slowest   7.41
+SUMMARY D3-decode  d3   op  : traced slowest med  12.79 [12.79, 12.79, 12.93, 12.75, 12.91, 12.20, 13.40] | untraced last   8.00 [7.97, 7.99, 8.06, 8.00, 8.05, 8.13, 7.99] | untraced slowest  25.57
+SUMMARY D3-decode  d3   stub: traced slowest med   7.58 [7.58, 7.59, 7.56, 7.58, 7.58, 7.57, 7.60] | untraced last   7.58 [7.60, 7.55, 7.60, 7.58, 7.62, 7.55, 7.51] | untraced slowest   7.76
+SUMMARY D3-decode  real op  : traced slowest med  12.91 [12.62, 12.91, 13.58, 12.83, 13.16, 12.63, 13.02] | untraced last   8.24 [8.14, 8.24, 8.44, 8.34, 8.30, 8.10, 8.11] | untraced slowest  24.54
+SUMMARY D3-decode  real stub: traced slowest med   7.67 [7.66, 7.67, 7.68, 7.65, 7.67, 7.68, 7.68] | untraced last   7.63 [7.67, 7.63, 7.64, 7.63, 7.62, 7.67, 7.61] | untraced slowest   7.78

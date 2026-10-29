@@ -607,3 +607,15 @@ extraction), and that publish time feeds the early chip's last landing; a compac
 per-contributor RISC-V column extraction (≈ 0.25 µs on every core per wave) or a transposed collapse, so its payoff is
 unclear. Lamps L7 (owner placement) / L8 (notify quantum) and multicast inv all-gather (row-groups of 14 consecutive
 workers are not NoC rectangles on this grid) were not built.
+
+## Perf 2 — compact records + fused fold/finalize (coordinator)
+
+Supersedes Refinement 3's record layout in `cb_stats` and its row-0 fold. Collect writes each 128 B cross-device
+record contiguously at the start of `cb_stats` page `r * G + pos` ([row][position]; rows 0–1 of face 0, one NoC read).
+The owner's compute unpacks the G records of a row to DEST in one unpack-to-dest transaction (fp32 DEST; DEST-capacity
+chunks of 4, bf16 DEST uses `copy_tile`), folds them in position order and finalizes them in one SFPU pass over
+vectors 0 / 1 of face 0. It packs the finalized 128 B record as rows 0–1 of face 0 of the `cb_rms_root` page, so the
+all-gather sends it as is (the RISC-V join is gone). The arithmetic is unchanged and bit-identical. The fold hop on
+the critical owner went from 1.07 to 0.25 µs. Measurements and bypass justification: changelog Perf 2, the compute
+kernel head comment, `perf_experiments/fold_finalize/`. The member wire (face 1 of `cb_inv_rms`, column-0 move,
+sentinel) is unchanged.

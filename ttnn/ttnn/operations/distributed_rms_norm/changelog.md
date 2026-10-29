@@ -370,3 +370,134 @@ Artifacts: `perf_experiments/inv_distribution/` (op copy `drms_copy/` with every
 interleaved A/B driver, overflow test, `hop_report.py`), `perf_experiments/owner_offload/` (op copy `drms_oo/` behind
 `DRMS_OO`, `owner_offload_vs_op.diff`, A/B drivers, zone tools, `logs_summary.txt`; zone CSVs dropped). Both drivers
 need `--import-mode=prepend`.
+
+## Perf 2 — perf tournament round 2 (2 experiments): the owner's fold hop and the owner work split
+- Date: 2026-10-29. Perf only; SUPPORTED unchanged. Focus = the perf-flagged LOOSE_CASE 640×1792 (bf16 x, TILE bf16 γ,
+  HiFi4, fp32_dest_acc_en=True, DRAM interleaved, 1×4 ring, Ring, 2 links, cluster_axis 1); every knob of it is in
+  SUPPORTED. Roofline 9.0 µs, target 11.9 µs.
+- Instrumentation: the kernels' permanent `DRMS_ZONE(...)` zones (`DRMS_PERF_ZONES=1`) were reused —
+  `perf_instrumentation.hpp` / `MaybeDeviceZoneScope` still does not exist in this tree. The new fold path keeps the
+  `cmp_wait_stats` (wait) / `cmp_fold` (work) split, with every init hoisted out of the wait zone.
+
+### Measured breakdown (current HEAD = Perf 1, one fresh-cache run per variant, µs)
+Cumulative peel, focus case (traced slowest chip per call / exchange stubbed / untraced last-launched chip):
+| variant | op traced slowest | stub | untraced last-launched |
+|---|---|---|---|
+| full | 20.03 | 16.50 | 16.44 |
+| x reads stubbed | 18.29 | 14.57 | 14.69 |
+| + output writes | 17.13 | 12.08 | 12.29 |
+| + γ reads (every DRAM payload off) | 16.38 | 12.10 | 12.33 |
+| + eltwise chains (every payload off) | 15.50 | 10.38 | 10.62 |
+| eltwise chains alone | 19.91 | 15.30 | 15.01 |
+32×1792: 11.19 / 8.61; 2048×1280: 31.22 / 28.30.
+
+- With every DRAM payload, every eltwise chain AND the exchange stubbed at once, the last-launched chip still takes
+  10.4 µs (> the 9.0 µs roofline). The op is bound by its latency chain: per-core data is tiny (12 tiles per core:
+  S = 4, G_w 14 × G_h 7, 3 one-row waves on 98 of 106 workers).
+- Per chip (zones): chip 0 launched last (`prt_ready_wait` 0.1 µs); chips 1–3 waited 2–7 µs in their ready fence
+  (launch skew). The owner's reader runs Phase A for every wave before Phase B, so on the last-launched chip x reads
+  (0.9 → 8.4 µs) and stores (10.0 → 17.2 µs) do not overlap.
+- Last-launched chip: non-owner cores land their last wave by ≤ 6.5 µs (≈ 410 GB/s, near the box's 447 GB/s eltwise
+  DRAM rate). Owner cores land it at 7.6–8.4 µs: the wave-1 owner's reader gathers/publishes wave 1 before it reaches
+  its wave-2 landing. The last publish is at 10.5 µs.
+- Early (slowest) chip, critical owner, last wave: records landed 18.4 → collect 19.24 → **fold + finalize + pack ≈
+  1.05 µs** (all-gather starts 20.34) → inv all-gather 21.09 → member column-0 move 21.38 → scale 21.87 → last-wave store
+  burst 23.38 (688 KB at ≈ 480 GB/s: at the DRAM rate).
+- Ranked (headroom on the slowest chip, roofline-gated): (1) OVERLAP / work split — owner duties delay the owners'
+  x landings on the last-launched chip (~2 µs on the landings, feeding the last publish); (2) post-exchange chain —
+  the owner's fold hop, 1.05 µs for 32 useful values per record (4 full-tile fp32 `copy_tile`s, 3 full-tile SFPU adds,
+  3 inits, 2 reconfigs); (3) all-gather 0.75 / move 0.3 (Perf 1 graduated, measured since); (4) store tail and member
+  reads — at the DRAM rate, not floated; (5) launch skew — not the op's to remove.
+
+### Portfolio (cap 2) and verdicts
+| idea | kind | verdict | focus (base → cand, µs) | domain |
+|---|---|---|---|---|
+| `fold_finalize`: fold + finalize the G records on row 0 in one fused SFPU pass, one unpack transaction | local compute on the post-exchange chain | **WIN**, graduated | fold hop 1.07 → 0.25; op traced 20.99 → 19.86, untraced last 16.40 → 15.44 (4 interleaved rounds) | everywhere, no exception |
+| `dedicated_owners`: the owner role on the idle workers, x-reading cores pure members | OVERLAP (work split) | **NULL** on the op metric | best (d3): op 20.43 → 20.62 (flat), stub 16.56 → 15.01, untraced last 16.42 → 14.79 (6 rounds) | not graduated |
+
+`fold_finalize` option menu (isolated bench, ns per fold from records landed to `cb_rms_root` visible to NCRISC,
+G = 4, Q = 1 / 2 / 5; **every option bit-identical** to the current fold):
+base 1030 / 1920 / 4548; hoisted inits 994 / 1881 / 4507; G DEST slots + one custom SFPU fold+finalize pass 638 / 1137 /
+2649; row-0-only adds (`VectorMode::R`) 685 / 1246 / 2932; `unary_bcast<ROW>` unpack + custom pass 689 / 1243 / 3104;
+raw ROW unpack-to-dest + custom pass 553 / 968 / 2246; + 128 B record pack 531 / 945 / 2212; one unpack transaction for
+all G records 357 / 598 / 1297; **compact** ([row][position] 128 B records, one 32-datum UNPACR per record in one
+transaction, SFPU on face 0, packs the joined 128 B record) **251 / 412 / 866** (chosen). Finding: each `copy_tile`
+under UnpackToDestFp32 costs one math↔unpack handshake (~80 ns), which is most of the old fold.
+
+`dedicated_owners` (NULL): d3 (a dedicated core per row-group does gather / chip-sum / publish for every wave; collect /
+fold / all-gather stay on the rotating member owners, gated by a new `SEM_INV` handshake from the dedicated core) brings
+the last-launched chip's last landing 8.61 → 6.71 and its last publish 10.75 → 9.45 µs. The early chip's end does not
+move: it is set by the late chip's **wave-0** records (published ~6 µs local in both variants: land → gather →
+chip-sum → publish ≈ 2.4 µs) followed by a write-bandwidth-bound burst of all three waves' stores. d1 (the full owner
+on the dedicated core) is worse (op +0.3…+1.2; D3-WS +2.1 Ring / +1.8 Linear): one core then runs every wave's collect →
+fold → all-gather back to back. Re-splitting to free cores where none are idle (d4, 2048×1280 G_h 13 → 11): stub +0.5,
+last-launched +0.4. Not graduated: the op metric is flat, and it would add two kernels, a handshake and a regime gate.
+Next lever this points at: a shorter path to the first wave's publish on the late chip (e.g. a smaller wave 0).
+
+### Graduated: compact records + fused fold/finalize (compute + reader; host unchanged)
+- reader `collect`: one 128 B NoC read per record into `cb_stats` page `r * G + pos` ([row][position]), the record
+  contiguous at the page start (rows 0–1 of face 0) — was two 64 B reads into row 0 of faces 0 / 1 of page `pos * Q + r`.
+- compute `fold_finalize`: every init (reconfig, `ff_init`, `rsqrt_tile_init`) before the records' wait; per row
+  `ff_fold_chunks<G, Q>`: under fp32 DEST, one unpack-to-dest transaction per DEST-capacity chunk (4 fp32 slots;
+  `ff_unpack_records_to_dest`) + one plain datacopy; under bf16 DEST, `copy_tile` per record (8 slots); then one SFPU
+  pass `ff_fold_body` over vectors 0 / 1 of face 0 — G loads, G − 1 fp32 adds in position order (bf16 DEST: each partial
+  sum round-trips DEST exactly like the per-position `add_binary_tile`), and on the last chunk the unchanged finalize
+  (·1/W + ε, rsqrt, zero inv → −0). The record is packed as rows 0–1 of face 0 (face_r_dim 2, 1 face); the full-tile
+  pack MOP is restored after the push, off the chain.
+- reader `allgather`: the RISC-V join copy (row 0 of face 1 → row 1 of face 0) is deleted — the pack now writes the
+  joined record; the member wire / move are unchanged.
+- Deleted: `finalize_row0_body`, the copy_tile + add_binary_tile fold, the two-half collect, the join copy. No
+  predicate, no dual path, no carve-out (none earned: faster everywhere measured, bit-identical everywhere).
+- Whole op, same-session interleaved A/B, real op (3 rounds, medians; op traced slowest / untraced last-launched /
+  stub, µs): **640×1792 20.71 → 19.38 / 16.31 → 15.40 / 16.61 → 15.65** (every new traced run below every old one);
+  32×1792 11.19 → 10.70 / 7.90 → 6.93 / 8.58 → 6.67; 2048×1280 30.58 → 29.61 / 27.76 → 27.52 / 28.17 → 28.06.
+- Guard set (`test_distributed_rms_norm_perf_guard.py`, current defaults, old kernels → new kernels, op traced slowest /
+  stub slowest µs; pcc 1.00000 everywhere):
+  - Ring, 2 links, axis 1: D3 focus 21.12 → 19.64 / 16.57 → 15.70; RM γ 20.41 → 20.24 / 16.59 → 15.69; no γ 21.07 →
+    19.33 / 16.51 → 15.63; decode 11.42 → 10.00 / 8.58 → 6.66; 2048×1280 29.95 → 29.72 / 28.30 → 28.18; D1 10.44 → 9.78 /
+    6.04 → 5.10; D1-HS 11.39 → 9.98 / 7.18 → 5.91; D3-WS 16.66 → 15.86 / 12.72 → 11.99; D3-WS no γ 17.18 → 16.53 /
+    12.69 → 11.93; passes rung 38.64 → 35.05 / 24.75 → 21.90; chunk-stream rung 22.74 → 21.13 / 17.87 → 16.97; re-read
+    rung 24.67 → 23.61 / 22.21 → 21.33.
+  - Linear, 1 link, axis 0: D3 focus 22.18 → 21.59 / 16.40 → 15.39; RM γ 23.06 → 22.21 / 16.58 → 15.56; no γ 22.74 →
+    21.21 / 16.57 → 15.54; decode 12.87 → 12.45 / 7.67 → 6.70; 2048×1280 36.77 → 35.28 / 29.66 → 28.83; D1 12.26 →
+    10.23 / 6.89 → 5.05; D1-HS 14.15 → 12.62 / 7.83 → 6.17; D3-WS 17.82 → 16.41 / 12.71 → 11.96; D3-WS no γ 17.90 →
+    16.67 / 12.69 → 11.90; passes rung 42.82 → 39.90 / 24.71 → 21.86; chunk-stream rung 23.33 → 23.66 (+0.33, inside the
+    ±0.6–1 µs launch-skew noise of this metric; its stub −0.70) / 18.10 → 17.40; re-read rung 26.63 → 25.00 / 22.29 →
+    21.37.
+  - The subagent's op copy also covered bf16 DEST on the focus case (untraced last 15.50 → 14.89, traced 20.31 →
+    19.80) and fp32 input: bit-exact vs the pre-change op.
+- Accuracy: unchanged arithmetic — same fp32 SFPU add instructions in the same position order (identical sum on every
+  chip), same finalize, −0 sentinel kept. Bit-identical to the pre-change op on all 11 driver cases plus bf16 DEST, fp32
+  input and Linear; bench bit-identical for G = 2, 3, 4, 6, 8, fp32 / bf16 DEST, Q = 1…5 (G > 4 under fp32 DEST takes
+  the DEST-capacity chunk path; G = 8 on hardware covered only by the bench).
+- Tests: unit acceptance + L1 fallbacks 218 passed / 1 skipped (cluster has no ≥ 3-device axis without a wrap link),
+  R3 overflow / sentinel + precision baseline 16 / 16 (`--no-precompile`); golden `test_op_loose` + `test_regression` +
+  `test_ring_mock` 39/39; golden `test_op` INTERLEAVED 3603 passed / 720 xfailed, HEIGHT_SHARDED 3468 passed / 620
+  xfailed, WIDTH_SHARDED 3599 passed / 720 xfailed / 1 failed — the same pre-existing cell as Perf 1 (4096×1024 fp32
+  WIDTH_SHARDED axis 0 Linear 1 link: "per-core footprint 301184 B … exceeds L1 budget 216576 B", a host-side L1 check
+  under suite-order fragmentation), which passes alone → upstream L1-fit work, not perf. Ring cells are pruned at
+  collection on this box's 2×2 system mesh (covered by `test_ring_mock` and the 1×4 drivers).
+- Pre-existing note (not caused by this change, reproduced bit-for-bit by the new path): under bf16 DEST a +inf record
+  finalizes to +0, not −0, in the bench, which the arrival sentinel would read as "not arrived". R3 says the FPU
+  saturates before inf, so it is not reachable in practice; flagged for the next correctness pass.
+- Summary: 2 ideas measured; 1 graduated (focus op −1.3 µs traced slowest, −0.9 µs last-launched, −1.0 µs stub;
+  faster on every guard cell but one inside noise), 1 null; no regression. Focus is now 19.4 µs vs the 11.9 µs target.
+- What binds next (focus, slowest chip): launch skew, then the late chip's path to its first publish (land → gather →
+  chip-sum → publish ≈ 2.4 µs per wave) and the post-landing chain (collect 0.6, all-gather 0.75, move 0.3, scale 0.4,
+  the last-wave store burst at the DRAM rate). `dedicated_owners` d3 is a measured −1.5 µs local (stub) lever kept in
+  its experiment dir, worth re-measuring once the early chip stops being bound by the wave-0 publish.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `copy_tile` (UnpackToDestFp32) | capability | no API unpacks N tiles to DEST in one unpack transaction, or only a sub-face row range: every `copy_tile` pays its own math↔unpack handshake (~80 ns) and moves the whole 4 KiB tile for a 128 B record. `ff_unpack_records_to_dest` is `_llk_unpack_A_` with the MOP replaced by one 32-datum UNPACR per record and a z hop | 638 (G slots via copy_tile + custom pass) | 357 (one transaction) | distributed_rms_norm_compute.cpp:135 |
+| `add_binary_tile` | capability | fixed at the whole tile (VectorMode::RC, 32 vector ops per add) and one SFPU call per position; nothing folds G DEST slots into one accumulator in a single pass. `ff_fold_body` does G loads + G − 1 fp32 adds (same SFPU ops and order) + the finalize over vectors 0 / 1 of face 0 | 1030 (per-position adds) | 638 (one fused pass) | distributed_rms_norm_compute.cpp:107 |
+| `pack_tile` | capability | always packs the output CB's full tile shape; no partial-face pack of the 128 B record. Packed with the face_r_dim 2 / 1-face MOP (`llk_pack_init_impl`), full-tile MOP restored after the push | 553 (full-tile pack) | 531 (record pack; it also enables the compact wire's dropped RISC-V join) | distributed_rms_norm_compute.cpp:220 |
+The compact combination of all three measures 251 ns per G = 4 fold (vs 1030). The bypass justification is also in the
+compute kernel's head comment.
+
+Artifacts: `perf_experiments/fold_finalize/` (isolated bench `test_fold_bench.py` + `kernels/`, op copy `drms_ff/` with
+every option behind `DRMS_FF_VARIANT`, `test_ff_op.py` A/B driver, `test_ff_zones.py`, `test_ff_r3_overflow.py`,
+`graduate/` + `graduate_*.diff`), `perf_experiments/dedicated_owners/` (op copy `drms_do/` behind `DRMS_DO`,
+`dedicated_owners_vs_op.diff`, `test_do_perf.py`, `results_raw.txt`, `zones_focus_summary.txt`, `tools/`). Drivers need
+`--import-mode=prepend`.

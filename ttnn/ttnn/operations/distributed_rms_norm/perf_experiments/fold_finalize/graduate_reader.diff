@@ -1,0 +1,69 @@
+--- kernels/distributed_rms_norm_reader.cpp	2026-10-29 07:23:17.233018607 +0000
++++ perf_experiments/fold_finalize/graduate/kernels/distributed_rms_norm_reader.cpp	2026-10-29 08:23:12.859639033 +0000
+@@ -68,7 +68,6 @@
+ constexpr uint32_t FACE_DIM = 16;
+ constexpr uint32_t RECORD_BYTES = 128;
+ constexpr uint32_t STATS_TILE_BYTES = 4096;  // cb_stats pages are fp32 tiles (STATS_FORMAT)
+-constexpr uint32_t STATS_FACE_BYTES = 1024;  // record values 16..31 -> row 0 of face 1
+ constexpr uint32_t FWD = 0, BWD = 1, OWN = 2;
+
+ // word / element index of column-0 row r (0..31) of a tile: face 0 rows 0-15, face 2 rows 16-31
+@@ -544,8 +543,9 @@
+         }
+         return true;
+     };
+-    // Records land straight in row 0 of their cb_stats page (faces 0 / 1: two 64 B NoC reads per record), so the
+-    // owner's RISC-V never touches the values; compute transposes each page into the column-0 layout of the inv tile.
++    // Records land compact: page r * G + pos ([row][position]), the 128 B record contiguous at the page start (rows 0-1
++    // of face 0) — one NoC read per record, the owner's RISC-V never touches the values; compute unpacks the G records
++    // of a row to DEST in one transaction (perf_experiments/fold_finalize).
+     auto collect = [&](uint32_t w) {
+         DRMS_ZONE("rd_collect");
+         const uint32_t k = my_k(w);
+@@ -562,22 +562,17 @@
+             }
+             const uint32_t off = landing + (w * G + pos) * SEG_STRIDE + kl * Q * RECORD_BYTES;
+             for (uint32_t r = 0; r < no; ++r) {
+-                const uint32_t page = st + (pos * Q + r) * STATS_TILE_BYTES;
+-                noc_async_read(port_noc(l, d, off + r * RECORD_BYTES), page, RECORD_BYTES / 2);
+                 noc_async_read(
+-                    port_noc(l, d, off + r * RECORD_BYTES + RECORD_BYTES / 2),
+-                    page + STATS_FACE_BYTES,
+-                    RECORD_BYTES / 2);
++                    port_noc(l, d, off + r * RECORD_BYTES), st + (r * G + pos) * STATS_TILE_BYTES, RECORD_BYTES);
+             }
+         }
+         noc_async_read_barrier();
+         cb_push_back(cb_stats, G * Q);
+     };
+-    // Compact inv wire: the owner's finalized row 0 (two half-records: row 0 of faces 0 / 1 of a cb_rms_root page)
+-    // goes to face 1 of the member's cb_inv_rms page (never read by the Col-broadcast scaling); the member's reader
+-    // moves it into column 0 before it pushes the page. 2 x H bytes per row per member instead of faces 0 / 2.
+-    // Perf 1: the two halves are joined in place (row 0 of face 1 copied behind row 0 of face 0, i.e. into row 1 of
+-    // face 0, which the finalized page never uses) and sent as ONE posted packet per member: the fan-out is bound by
++    // Compact inv wire: the owner's finalized record (2 x H bytes at the start of a cb_rms_root page — compute packs it
++    // there as rows 0-1 of face 0) goes to face 1 of the member's cb_inv_rms page (never read by the Col-broadcast
++    // scaling); the member's reader moves it into column 0 before it pushes the page.
++    // Perf 1: ONE posted packet per member per row: the fan-out is bound by
+     // per-packet issue cost (~32 ns per 64 B packet, ~50 ns per 128 B one), not bytes, and arrival is detected by the
+     // sentinel, so no ack is needed — the owner only waits for the source to be read (flushed) before it frees the
+     // page; the kernel tail flushes / barriers the posted writes. Measured: perf_experiments/inv_distribution
+@@ -589,18 +584,6 @@
+         if (no > 0) {
+             const uint32_t src = get_read_ptr(cb_rms_root);
+             const uint32_t dst = inv_base + ((w % PW) * Q_W + k * Q) * T_I;
+-            for (uint32_t r = 0; r < no; ++r) {
+-                volatile tt_l1_ptr uint32_t* pg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + r * T_I);
+-                uint32_t v[INV_HALF / 4];
+-#pragma GCC unroll 16
+-                for (uint32_t i = 0; i < INV_HALF / 4; ++i) {
+-                    v[i] = pg[INV_FACE / 4 + i];
+-                }
+-#pragma GCC unroll 16
+-                for (uint32_t i = 0; i < INV_HALF / 4; ++i) {
+-                    pg[INV_HALF / 4 + i] = v[i];
+-                }
+-            }
+             for (uint32_t i = 0; i < G_W; ++i) {
+                 const uint32_t m = rotated(i, my_j, G_W);
+                 noc_async_write_one_packet_set_state<true>(get_noc_addr(member_x(m), member_y(m), dst), 2 * INV_HALF);
