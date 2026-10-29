@@ -2,6 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from .ckv_bfp4 import ckv_bfp4
+from .ckv_bfp4 import bfp_round, ckv_bfp4
 
-__all__ = ["ckv_bfp4"]
+__all__ = ["bfp_round", "ckv_bfp4"]

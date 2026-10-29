@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Per band of 32 rows (16 bf16 tiles across 512 columns), all 16 tiles in a full-sync DEST:
-//   copy -> SFPU round onto the bfloat4_b grid (ckv_round_bfp4.hpp, the host packer's rule)
+//   copy -> SFPU round onto the bfloat4_b grid (CKV_MBITS 3; bfloat8_b: 7) (ckv_round_bfp4.hpp, the host packer's rule)
 //   [CKV_ROUNDED_OUT: the 16 tiles packed as bf16 to cb_rounded]
 //   the 32 row records packed straight into cb_rows by the packer, no data-movement RISC work: a record is
-//   [32 exponents | the same 32 | 256 nibble bytes] (320 B). A bfloat4_b pack writes one stream: the exponents (one
-//   byte per 16 values) from its address, the values Exp_section_size x 16 B later. Each key row is 16 PACRs (a tile
-//   row, both face halves) closed by Last, so stream A (address +0, section 64 B) writes exponents at +0 and values at
-//   +64, and stream B (address +32, section 32 B) the exponents at +32 and the same values again. The values are on
-//   the bfp4 grid, so the pack only copies their bits.
+//   [32 exponents | the same 32 | 256 nibble bytes] (320 B; bfloat8_b: 512 value bytes, 576 B). A bfloat4_b pack writes
+//   one stream: the exponents (one byte per 16 values) from its address, the values Exp_section_size x 16 B later. Each
+//   key row is 16 PACRs (a tile row, both face halves) closed by Last, so stream A (address +0, section 64 B) writes
+//   exponents at +0 and values at +64, and stream B (address +32, section 32 B) the exponents at +32 and the same
+//   values again. The values are on the bfp4 grid, so the pack only copies their bits.
 
 #include <cstdint>
 
@@ -22,6 +22,13 @@
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "ckv_round_bfp4.hpp"
+
+#ifndef CKV_MBITS
+#define CKV_MBITS 3
+#endif
+#ifndef CKV_ROW_BYTES
+#define CKV_ROW_BYTES 320
+#endif
 
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_params.h"
@@ -35,7 +42,7 @@ using namespace ckernel;
 using namespace ckernel::packer;
 
 constexpr uint32_t TILES = 16;       // a band: 512 columns
-constexpr uint32_t ROW_BYTES = 320;  // a record
+constexpr uint32_t ROW_BYTES = CKV_ROW_BYTES;  // a record
 
 // the packer reads one tile row per PACR (two interfaces: face halves) stepping Z over the band's tiles; the row's
 // last PACR closes the L1 stream (Last) and steps the face row and the L1 row (ADDR_MOD_1)
@@ -126,7 +133,8 @@ void kernel_main() {
         tile_regs_acquire();
         for (uint32_t t = 0; t < TILES; ++t) {
             copy_tile(cb_in, t, t);
-            MATH((_llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::ckv_round_bfp4_face, t, VectorMode::RC)));
+            MATH((
+                _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::ckv_round_bfp_face<CKV_MBITS>, t, VectorMode::RC)));
         }
         tile_regs_commit();
         cb_pop_front(cb_in, TILES);

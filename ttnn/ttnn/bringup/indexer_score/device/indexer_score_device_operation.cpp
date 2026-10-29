@@ -648,13 +648,14 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
 
     // q/k are matmul inputs (never packed), so each may be bfp8_b (halves BW); both bfp8 -> LoFi, any bf16
     // -> HiFi2.
+    // fork: bfloat4_b too (the reference's fp4 index query / keys at the device's 4-bit width)
     TT_FATAL(
-        q.dtype() == DataType::BFLOAT16 || q.dtype() == DataType::BFLOAT8_B,
-        "q must be bfloat16 or bfloat8_b (got {})",
+        q.dtype() == DataType::BFLOAT16 || q.dtype() == DataType::BFLOAT8_B || q.dtype() == DataType::BFLOAT4_B,
+        "q must be bfloat16, bfloat8_b or bfloat4_b (got {})",
         q.dtype());
     TT_FATAL(
-        k.dtype() == DataType::BFLOAT16 || k.dtype() == DataType::BFLOAT8_B,
-        "k must be bfloat16 or bfloat8_b (got {})",
+        k.dtype() == DataType::BFLOAT16 || k.dtype() == DataType::BFLOAT8_B || k.dtype() == DataType::BFLOAT4_B,
+        "k must be bfloat16, bfloat8_b or bfloat4_b (got {})",
         k.dtype());
     TT_FATAL(q.layout() == Layout::TILE && k.layout() == Layout::TILE, "q, k must be TILE layout");
 
@@ -1142,7 +1143,9 @@ ttnn::Tensor launch_indexer_score(
 
     // Default math_fidelity follows the matmul-input dtypes (both bfp8 -> LoFi, else HiFi2); a caller config
     // overrides per field. fp32-dest acc / full-sync default off (the only modes the custom LLK is validated for).
-    const bool both_bfp8 = q.dtype() == DataType::BFLOAT8_B && k.dtype() == DataType::BFLOAT8_B;
+    // fork: bfloat4_b counts as block float (LoFi multiplies its 3-bit mantissas exactly)
+    const auto bfp = [](DataType d) { return d == DataType::BFLOAT8_B || d == DataType::BFLOAT4_B; };
+    const bool both_bfp8 = bfp(q.dtype()) && bfp(k.dtype());
     const auto resolved = ttnn::init_device_compute_kernel_config(
         q.device()->arch(),
         compute_kernel_config,
