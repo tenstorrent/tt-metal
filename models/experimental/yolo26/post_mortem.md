@@ -1294,3 +1294,25 @@ Status: ROOT-CAUSED. The chips scale; the shortfall is host read-back of tile-pa
 Not applied: the perf test still reads the 6 tile outputs, so its dp=4 batch-4 number stays 2,406 FPS (mean). Options
 left: untilize only when `num_devices > 1` (+~4 %), or read a packed full-output tensor (boxes + 80 scores, row-major,
 ~5.6 MB per chip; the packed single-output attempt in YOLO26-0023 was slower on one chip, not tried on four).
+
+### YOLO26-0039 addendum (2026-10-29) — why the demo is faster than the perf test on 4 chips
+
+Question: is the demo faster because it uses 1 of the 80 classes while the perf test reads all 80?
+
+Answer: mostly yes; precisely, the demo reads back far less data. The chips do the same work in both: the full model
+runs and all 80 class scores are computed on the chip. Only what is copied back to the host differs:
+
+| | perf test | demo (`pack_outputs`) |
+|---|---|---|
+| read per anchor | 4 box values + 80 class scores | 4 box values + 1 person score |
+| layout | tile, padded (boxes 4 → 32 columns, scores 80 → 96) | row-major, no padding |
+| data per chip per iteration | 8.60 MB | 0.34 MB |
+
+- Of the 8.60 MB, the scores are 6.45 MB (READ, tensor sizes in step 3), so dropping 79 classes is the bulk of the
+  saving; the rest is tile padding (boxes are 2.15 MB padded vs 0.27 MB of data).
+- MEASURED (step 3, same script, only the read-back changed, 4 chips): all outputs 2,449.9 FPS, demo packing
+  2,606.1 FPS. The demo's own measured ceiling, 2,598.5 images/s (YOLO26-0028), matches the packed figure, so the
+  read-back difference accounts for the demo's higher number (INFERRED from the match; the demo was not re-run).
+- It matters only on 4 chips. On 1 chip the read-back is hidden behind compute and the chip is the limit: demo ceiling
+  661 images/s (YOLO26-0026) vs perf test 660 FPS. On 4 chips the reads from each chip run in turn (step 3), so the
+  extra data costs throughput.
