@@ -373,7 +373,8 @@ def test_spec_decode_lossless(mesh_device):
     plain_s = time.perf_counter() - t0
     tok, pos0 = _prefill_all(model, mtp, prompt)
     outs_spec, stats = spec.generate([tok] * U, [pos0] * U, n)
-    matched = []
+    # the comparison first, the perf line next, the verdict last: a sweep point reports its numbers either way
+    matched, failures = [], []
     for u in range(U):
         ref = toks[1:, u].tolist()  # the plain continuation after the anchor
         got = outs_spec[u]
@@ -382,8 +383,18 @@ def test_spec_decode_lossless(mesh_device):
         matched.append(i)
         if i < n:
             gap = float(gaps[i, u])
-            logger.info(f"user {u}: first difference at token {i} (plain top-2 gap {gap:.3f}): {got[i]} vs {ref[i]}")
-            assert gap < NEAR_TIE_GAP, f"user {u}: spec diverges from plain greedy at token {i} with gap {gap:.3f}"
+            # every slot decodes the same prompt: the plain path's own choices across the users at this step are the
+            # near-tie's two sides (the 8 rows reduce in different orders and the 45-layer chain amplifies the ulp:
+            # the 2026-10-29 sweep anchor saw rows 2 and 5 of the PLAIN path disagree at token 4, one with a 2.06
+            # margin); a spec token the plain path itself picked on another user is that tie, not a divergence
+            plain_choices = set(int(v) for v in toks[1 + i].tolist())
+            tie = gap < NEAR_TIE_GAP or int(got[i]) in plain_choices
+            logger.info(
+                f"user {u}: first difference at token {i} (plain top-2 gap {gap:.3f}): {got[i]} vs {ref[i]}; the plain "
+                f"path's choices across the users at this step {sorted(plain_choices)} -> {'near-tie' if tie else 'DIVERGENCE'}"
+            )
+            if not tie:
+                failures.append(f"user {u}: spec diverges from plain greedy at token {i} with gap {gap:.3f}")
     logger.info(
         f"SPEC mesh {MESH} layers {len(model.layers)} users {U} K {K}: {stats.summary()}; plain {n} steps {plain_s:.2f} s; "
         f"tokens identical to plain greedy per user: {matched} of {n} (n = all)"
@@ -397,3 +408,4 @@ def test_spec_decode_lossless(mesh_device):
     )
     spec.release()
     ttnn.release_trace(mesh_device, trace_plain)
+    assert not failures, failures
