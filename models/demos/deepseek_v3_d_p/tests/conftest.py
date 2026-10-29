@@ -116,6 +116,12 @@ def pytest_addoption(parser):
             help="Set by wrapper tests on the child pytest they spawn: every uncollect_if trim "
             "is bypassed, so the wrapper's -k filter fully owns the selection.",
         )
+        parser.addoption(
+            "--mla-determinism-reps",
+            type=int,
+            default=3,
+            help="Forwards per chunk in test_mla determinism rows; rep 0 is the baseline, so >= 2.",
+        )
     except ValueError:
         pass
 
