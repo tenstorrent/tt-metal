@@ -366,6 +366,9 @@ class GLM53DecodeOutput:
     rows: DecodeRowMap
     is_tokens: bool
     on_host: bool = False
+    # the asynchronous ids readback (``read_decode_output(async_read=True)``): one host ttnn tensor per mesh row
+    # ([1,1,B,1] uint32) whose non-blocking read the plugin's event wait completes before ``_read`` converts them
+    pending: Any = None
 
 
 class GLM53SpecEngine:
@@ -2387,12 +2390,22 @@ class GLM53FlashForCausalLM:
         return types["DraftOutput"](draft_token_ids=out_ids, num_valid=out_valid)
 
     def read_decode_output(self, tt_out, async_read: bool = False, sample_rows=None):
-        """Host read of a submission (blocking today; the event list is empty). ``sample_rows`` (selective readback)
-        is not declared and therefore refused."""
+        """Host read of a submission. ``async_read``: the greedy ids are read NON-blocking (one per-row read on the
+        command queue, one recorded event the plugin synchronizes before ``process_decode_output_host``), so the
+        engine thread goes on with the next step's scheduling while the read drains; the logits path (host sampling)
+        and a model without a device stay blocking with an empty event list. ``sample_rows`` (selective readback) is
+        not declared and therefore refused."""
         if sample_rows is not None:
             raise NotImplementedError("selective host readback is not declared by the GLM53 adapter")
         if not isinstance(tt_out, GLM53DecodeOutput):
             raise TypeError(f"read_decode_output expects a GLM53DecodeOutput, got {type(tt_out).__name__}")
+        if async_read and tt_out.is_tokens and not tt_out.on_host and getattr(self.model, "device", None) is not None:
+            ttnn = _ttnn()
+            shards = self.model.mesh.device_tensors(tt_out.ids)
+            cols = self.geometry.cols
+            pending = [shards[r * cols].cpu(blocking=False) for r in range(self.geometry.rows)]
+            event = ttnn.record_event(self.model.device, 0)
+            return GLM53DecodeOutput(ids=None, logits=None, rows=tt_out.rows, is_tokens=True, pending=pending), [event]
         out = self._read(tt_out)
         return (out, []) if async_read else out
 
@@ -2425,6 +2438,11 @@ class GLM53FlashForCausalLM:
         the first place to measure (B x vocab x 2 B per row per step)."""
         if out.on_host:
             return out
+        if out.pending is not None:  # the asynchronous read: the plugin synchronized its event before this call
+            ttnn = _ttnn()
+            host = torch.cat([ttnn.to_torch(t) for t in out.pending], dim=2)  # like GLMMesh.to_host(ids, rows=2)
+            host_ids = host.view(torch.int32).reshape(-1).long()
+            return GLM53DecodeOutput(ids=host_ids, logits=None, rows=out.rows, is_tokens=True, on_host=True)
         if out.is_tokens:
             host_ids = self.model.ids_to_host(out.ids).reshape(-1)
             return GLM53DecodeOutput(ids=host_ids, logits=None, rows=out.rows, is_tokens=True, on_host=True)
