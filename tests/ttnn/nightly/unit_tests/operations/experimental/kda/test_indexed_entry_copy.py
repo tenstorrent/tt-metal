@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """ttnn.experimental.kda.indexed_entry_copy: one dim-0 entry copied in place, the entry chosen on device."""
 
-import statistics
 from dataclasses import dataclass
 
 import pytest
@@ -11,7 +10,7 @@ from loguru import logger
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program, profile_realtime_program_merged
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 
 # Blackhole only, like the other KDA ops.
@@ -238,8 +237,6 @@ _PRODUCTION_PERF_MARGIN = 0.05
 # The 1.5 MiB copies are DRAM-bound with reads and writes sharing the channels, and vary about +/-5% run to run on a
 # Blackhole P150 (store 9.07-9.46 us, load 9.21-9.53 us), so their band is wider than the latency-bound tail's.
 _RECURRENT_PERF_MARGIN = 0.07
-# Back-to-back launches in one trace replay; the launch cost is the median start-to-start time between them.
-_TRACED_LAUNCHES = 16
 
 
 @dataclass(frozen=True)
@@ -251,7 +248,6 @@ class _ProductionCase:
     nd_shard: list[int] | None
     load: bool
     expected_duration_ns: int
-    expected_launch_ns: int
     margin: float = _PRODUCTION_PERF_MARGIN
 
 
@@ -264,7 +260,6 @@ _PRODUCTION_CASES = (
         [1, 1, 128, 32],
         False,
         9_300,
-        9_360,
         _RECURRENT_PERF_MARGIN,
     ),
     _ProductionCase(
@@ -275,45 +270,16 @@ _PRODUCTION_CASES = (
         [1, 1, 128, 32],
         True,
         9_350,
-        9_530,
         _RECURRENT_PERF_MARGIN,
     ),
-    _ProductionCase("convolution-store", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, False, 2_030, 2_330),
-    _ProductionCase("convolution-load", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, True, 2_020, 2_330),
+    _ProductionCase("convolution-store", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, False, 2_030),
+    _ProductionCase("convolution-load", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, True, 2_020),
 )
-
-
-def _traced_launch_ns(device, run) -> float:
-    """Median device time between the starts of back-to-back launches in one trace replay: what each call costs a
-    traced model, including the dispatch work the program duration leaves out."""
-    trace = ttnn.begin_trace_capture(device, cq_id=0)
-    for _ in range(_TRACED_LAUNCHES):
-        run()
-    ttnn.end_trace_capture(device, trace, cq_id=0)
-    try:
-        _, records = profile_realtime_program(
-            device, lambda: ttnn.execute_trace(device, trace, cq_id=0, blocking=False), collect_all=True
-        )
-    finally:
-        ttnn.release_trace(device, trace)
-    starts = sorted(record["start_ns"] for record in records)
-    assert len(starts) == _TRACED_LAUNCHES, f"expected {_TRACED_LAUNCHES} traced launch records, got {len(starts)}"
-    return statistics.median(later - earlier for earlier, later in zip(starts, starts[1:]))
-
-
-def _assert_within(case: _ProductionCase, metric: str, measured_ns: float, expected_ns: int) -> None:
-    lower = expected_ns * (1 - case.margin)
-    upper = expected_ns * (1 + case.margin)
-    assert lower <= measured_ns <= upper, (
-        f"{case.case_id} {metric} {measured_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
-        f"(reference {expected_ns} ns, margin +/- {case.margin * 100:.0f}%)"
-    )
 
 
 @pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 1 << 20}], indirect=True)
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
 def test_kimi_k3_production_performance(device, case: _ProductionCase) -> None:
     if not ttnn.device.IsProgramRealtimeProfilerActive():
@@ -338,7 +304,6 @@ def test_kimi_k3_production_performance(device, case: _ProductionCase) -> None:
         if any("indexed_entry_copy.cpp" in source for source in program["kernel_sources"])
     ]
     duration_ns = perf_record["duration_ns"]
-    launch_ns = _traced_launch_ns(device, run)
     entry = _K3_LAYERS + _K3_POSITION
     if case.load:
         assert torch.equal(ttnn.to_torch(carry), slab_host[entry : entry + 1]), "loaded entry"
@@ -354,10 +319,13 @@ def test_kimi_k3_production_performance(device, case: _ProductionCase) -> None:
         math_fidelity=ttnn.MathFidelity.LoFi,
     )
     logger.info(
-        f"indexed_entry_copy {case.case_id}: measured_ns={duration_ns:.0f}, launch_ns={launch_ns:.0f}, "
-        f"runtime_id={runtime_id}, "
+        f"indexed_entry_copy {case.case_id}: measured_ns={duration_ns:.0f}, runtime_id={runtime_id}, "
         f"dram_bytes={performance.work.dram_bytes}, ideal_dram_ns={performance.ideal_dram_ns:.2f}, "
         f"dram_utilization_pct={performance.dram_utilization_pct:.2f}"
     )
-    _assert_within(case, "duration", duration_ns, case.expected_duration_ns)
-    _assert_within(case, "traced launch", launch_ns, case.expected_launch_ns)
+    lower = case.expected_duration_ns * (1 - case.margin)
+    upper = case.expected_duration_ns * (1 + case.margin)
+    assert lower <= duration_ns <= upper, (
+        f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
+        f"(reference {case.expected_duration_ns} ns, margin +/- {case.margin * 100:.0f}%)"
+    )

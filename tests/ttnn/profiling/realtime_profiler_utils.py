@@ -48,7 +48,6 @@ def profile_realtime_program(
                 {
                     "runtime_id": int(record.runtime_id),
                     "chip_id": int(record.chip_id),
-                    "start_ns": start_timestamp / frequency,
                     "duration_ns": (end_timestamp - start_timestamp) / frequency,
                     "kernel_sources": tuple(str(source) for source in record.kernel_sources),
                 }
