@@ -108,7 +108,7 @@ def _load_env_config() -> None:
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
     # Decode's level count: the levels past MTP_LEVELS are table aliases of level 0's rows, acked with it.
     MTP_DECODE_LEVELS = int(os.environ.get("PREFILL_MTP_DECODE_LEVELS", MTP_LEVELS))
-    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
+    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 16))
     ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
     # Default from the adapter's own depth (see prefill_runner.py's MODEL_CFG.NUM_LAYERS
     # pattern) rather than a literal -- a hardcoded default silently under-covers any model
