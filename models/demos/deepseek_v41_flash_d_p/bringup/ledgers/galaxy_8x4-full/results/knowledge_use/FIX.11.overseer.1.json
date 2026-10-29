@@ -1,0 +1,16 @@
+{
+ "used": [
+  {"id": "K-30", "how": "modelled the HiFi2 sparse_sdpa on the CPU as in0 (q, P) cut to 6 explicit mantissa bits: 0.0074 alone, bias -0.56 %, nothing with the other items on"},
+  {"id": "DS41-137", "how": "modelled the packer's double rounding of the bfp8 GEMM inputs: 0.0117 -> 0.0139, bias +0.65 %; read the device's +0.48 % bias at HiFi4 as this, not a bug"},
+  {"id": "DS41-77", "how": "bfp8 tile packing rounds ties away (+): used for the GEMM-input emulation (ties_away) and to read the HiFi4 bias sign"},
+  {"id": "DS41-68", "how": "HiFi2 saves ~1 % of the chunk; with HiFi4 removing only 5 % of L00's error (0.0171 -> 0.0162) the fidelity stays HiFi2"}
+ ],
+ "contradicted": [],
+ "missing": [
+  "The 8x4 goldens (golden_full/galaxy_8x4) have no official_floor.json, so every component limit there drops the official arithmetic (rule 14) and falls to the input nudge or one bf16 rounding of the output (now DS41-140)"
+ ],
+ "overseer": [
+  {"id": "FIX.11", "answer": "disagree", "evidence": "The L00 limit 0.0033 is 2 x the output's bf16 rounding (0.00166), not the reference's arithmetic: galaxy_8x4/s10240_c5120 has no official_floor.json (noise_floor.arith -> None; nudge 0.00029). On the same galaxy golden input the official reference (bf16, the GPU's) is rel 0.0327 from native on L00 (fp32 0.0323) and 0.0371 on L02 before its fp4 KV (nudge fp4/16 0.0249); the 2x2 official taps give 0.045 / 0.074. The device (0.0171 / 0.0604) is closer to native than the reference. CPU attribution L00: bfp8 GEMM inputs 0.0117 (the reference's fp8 in the device's format, F208: cannot be raised without going above the reference), HiFi2 sdpa 0.0074 alone / 0 in combination, bf16 activations 0.0037, bfp8 weights 0.0030, RoPE bf16 0.0012, P bf16 0.0006, sink bf16 0.00005. Device ATTN_FIDELITY=HiFi4: 0.0171 -> 0.0162. No item narrower than the reference is dominant; L02's excess is the owner's 4-bit KV (bf16 KV 0.018). Recommend generating official_floor.json for the galaxy goldens. Detail: known_issues_detail.md DS41-140; BREADCRUMBS FIX.11."},
+  {"id": "OV-3", "answer": "n/a", "evidence": "no kernel limit worked around; no code changed"}
+ ]
+}
