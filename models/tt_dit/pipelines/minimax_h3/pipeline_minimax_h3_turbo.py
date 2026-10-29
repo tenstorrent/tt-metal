@@ -13,6 +13,7 @@ below half a bfloat16 ulp of the weights, so a round-to-nearest merge would drop
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,7 +24,7 @@ from safetensors import safe_open
 
 import ttnn
 
-from ...experimental.lora.h3_adapter_loader import h3_host_deltas
+from ...experimental.lora.h3_adapter_loader import h3_host_deltas, iter_h3_host_deltas
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3TimestepEmbedding, MiniMaxH3TwoTime
 from .hyperflow_minimax_h3 import MiniMaxH3HyperFlow
 from .pipeline_minimax_h3 import AUDIO_SHIFT, VIDEO_SHIFT, MiniMaxH3Pipeline
@@ -44,6 +45,14 @@ def _round_bf16_stochastic(tensor: torch.Tensor, generator: torch.Generator) -> 
     return ((bits + noise) & ~0xFFFF).view(torch.float32).to(torch.bfloat16)
 
 
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while chunk := handle.read(1 << 24):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
     """`MiniMaxH3Pipeline` with a Turbo adapter; `lora_strength` multiplies the file's `alpha / rank`."""
 
@@ -61,6 +70,7 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
             default_audio_shift=AUDIO_SHIFT,
         ).lora_path
         self.lora_strength = float(lora_strength)
+        self._lora_digest = _file_digest(self.lora_path)
         self._time_embedder_states: dict[str, dict[str, torch.Tensor]] | None = None
         with safe_open(str(self.lora_path), framework="pt", device="cpu") as handle:
             metadata = handle.metadata()
@@ -114,25 +124,30 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
         return super().__call__(prompt, **kwargs)
 
     def _dit_weight_mode(self) -> str:
-        return f"{super()._dit_weight_mode()}_{self.lora_path.stem}_x{self.lora_strength:g}"
+        return f"{super()._dit_weight_mode()}_{self.lora_path.stem}_{self._lora_digest[:12]}_x{self.lora_strength!r}"
 
     def _read_safetensors(self, subfolder: str) -> dict[str, torch.Tensor]:
         state = super()._read_safetensors(subfolder)
         if subfolder != self.transformer_subfolder:
             return state
         host_prefixes = HYPERFLOW_HOST_PREFIXES if self.hyperflow is not None else ()
-        deltas = h3_host_deltas(str(self.lora_path), ("",), scale=self.lora_strength)
         generator = torch.Generator().manual_seed(0)
         merged = 0
-        for key, delta in deltas.items():
+        for key, delta in iter_h3_host_deltas(str(self.lora_path), ("",), scale=self.lora_strength):
             if key.startswith(host_prefixes):
                 continue
-            weight = state[key]
+            weight = state.get(key)
+            if weight is None:
+                raise KeyError(f"turbo adapter target {key} is not in the {self.transformer_subfolder} checkpoint")
+            if weight.shape != delta.shape:
+                raise ValueError(f"turbo adapter target {key}: delta {tuple(delta.shape)} != {tuple(weight.shape)}")
             if weight.dtype == torch.bfloat16:
                 state[key] = _round_bf16_stochastic(weight.float() + delta, generator)
             else:
                 state[key] = weight + delta.to(weight.dtype)
             merged += 1
+        if merged == 0:
+            raise RuntimeError(f"turbo adapter {self.lora_path} has no LoRA targets to merge")
         logger.info(f"turbo adapter {self.lora_path.name}: merged {merged} targets, strength {self.lora_strength:g}")
         return state
 
