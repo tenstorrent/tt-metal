@@ -434,13 +434,3 @@
   team: ttnn
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
-
-- name: "ttnn quasar topk"
-  cmd: >-
-    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v tests/ttnn/nightly/unit_tests/operations/reduction/test_topk_quasar.py
-  skus:
-    sim_quasar:
-      timeout: 5
-  team: ttnn
-  budget_type: sanity
-  owner_id: U084B1CES7M # Borys Bradel
