@@ -544,3 +544,26 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch):
                 f"(e) row {placed[l][0]}: first token {int(firsts[l].argmax())} (SP {int(ref[0].argmax())}), pcc {pcc(firsts[l], ref[0]):.5f}"
             )
         logger.info("served waves: PASS (e) four staggered prompts on rows 0-3")
+
+    # (f) a member whose first chunk is vLLM's budget remainder (224 tokens: 32-aligned, not 128-aligned), continued
+    # at 224 mod 2048 beside another prompt (the served needle stage's late requests: '(2, 0, 224)'): the pool start
+    # 56 sits inside a 32-pool tile
+    pa, pb = _served_ids(4000, 30, vocab), _served_ids(4500, 31, vocab)
+    step_prefill([(14, pa[:2048], 0), (15, pb[:224], 0)])
+    first_a = step_prefill([(14, pa, 2048), (15, pb[:2272], 224)])
+    step_prefill([(15, pb[:4320], 2272)])
+    first_b = step_prefill([(15, pb, 4320)])
+    outs = decode_jointly({14: first_a[14], 15: first_b[15]}, {14: 4000, 15: 4500})
+    gots = {14: [first_a[14]] + outs[14], 15: [first_b[15]] + outs[15]}
+    a.release_request(14)
+    a.release_request(15)
+    ref_a, ref_b = reference(pa), reference(pb)
+    _assert_agree("(f) A (2048 + 1952) vs SP", gots[14], ref_a, pcc_min=PCC_BAR_SP)
+    _assert_agree(
+        "(f) B (224 + 2048 + 2048 + 180: continuations at 224 mod 2048) vs SP", gots[15], ref_b, pcc_min=PCC_BAR_SP
+    )
+    logger.info(
+        f"(f) budget-remainder first chunk: first tokens {int(first_a[14].argmax())} / {int(first_b[15].argmax())} "
+        f"(SP {int(ref_a[0].argmax())} / {int(ref_b[0].argmax())}), pcc {pcc(first_a[14], ref_a[0]):.5f} / {pcc(first_b[15], ref_b[0]):.5f}"
+    )
+    logger.info("served waves: PASS (f) continuations at 224 mod 2048")
