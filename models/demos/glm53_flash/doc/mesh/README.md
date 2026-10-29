@@ -1523,3 +1523,20 @@ plans match HF), and `tt/ttkda` now carries the A0 row-local plumbing, forwarded
   (rows 2 and 5, margins 0.125 and 2.06, the same two tokens swapped). A spec token the plain path picked on another
   user now counts as that tie; the PERF-SPEC line is printed before the verdict. The K sweep is re-pointed and the
   anchor re-queued.
+
+### 2026-10-29 05:08: H1 + H2 are the decode defaults; the served waves pass on the block
+
+- `logits_8x4_h1h2` (45 layers, the natural 128-token dump, `GLM53_HYBRID_GATHER=compact GLM53_HYBRID_COMBINE=allreduce`):
+  logits PCC 0.9952, top-1 93.0 %, top-5 95.5 % = the base's gate numbers exactly, so the compact gather and the
+  all-reduce combine are the defaults (abac4d0f93b; the padded path stays behind `padded` / `rs`). Measured with both
+  on 2026-10-29: the 32-user traced step 61.5 -> 48.7 ms (20.5 tok/s per user); the e2e stage on the flipped tree
+  (`e2e_8x4_B4_h1h2_default`) refreshes the README's 32-user row, and the K sweep runs on the new defaults.
+- `served_waves_block_v6` (the override runtime, the vendored driver with the row-local plumbing, the duplicate
+  `rewind_user` dropped, the near-tie stop in the step comparison): the served adapter under per-row ownership
+  passes its three cases against the SP path from scratch on the (2,4) block at 4 layers: a traced wave of two
+  prompts decoded jointly, a prompt beyond the wave width (a traced 2048 wave + the eager continuation wave at the
+  width, the sparse rows), vLLM's chunked prefill of one request over two steps beside a fresh prompt. The run
+  before it (v5) had the whole served warm-up (both ladders, the waves prepared before and captured after the prefill
+  traces, the seal) and case (a) green; its case (b) "failure" was a reference top-2 gap of exactly 0.000 at step 1.
+- Next: the 45-layer served run with 32 distinct requests (`served_waves_8x4`: the 1 M profile, `max-num-seqs=32`,
+  `GLM53_VLLM_ROWS_INDEPENDENT=1`, stages a-d with the bench at ISL 128 x 32 users), then the catalog (A7).
