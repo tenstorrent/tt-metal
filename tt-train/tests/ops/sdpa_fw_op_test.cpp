@@ -1692,12 +1692,12 @@ void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sw
         base.seed = ttml::autograd::ctx().get_generator()();  // every row sees the same inputs
     }
     xt::xarray<float> default_output;
+    SDPATestConfig default_config = base;
+    default_config.program_config = {};
+    default_config.test_name = base.test_name + "_default";
     {
-        SDPATestConfig config = base;
-        config.program_config = {};
-        config.test_name = base.test_name + "_default";
-        SCOPED_TRACE(config.test_name);
-        run_sdpa_test(config, &default_output);
+        SCOPED_TRACE(default_config.test_name);
+        run_sdpa_test(default_config, &default_output);
     }
     for (const auto& knobs : sweep) {
         SDPATestConfig config = base;
@@ -1719,8 +1719,22 @@ void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sw
         xt::xarray<float> output;
         run_sdpa_test(config, &output);
         const float mean_abs_gap = xt::mean(xt::abs(output - default_output))();
-        EXPECT_LT(mean_abs_gap, kCrossChunkingMeanAbsTol)
-            << config.test_name << " differs from the default chunking by " << mean_abs_gap << " on average";
+        if (knobs.max_pieces > 1U) {
+            // A row that cuts differs from the default by the folds' truncation, relative to the output
+            // (expect_split_matches_unsplit's mean bound), on top of whatever the default's own cuts add.
+            const FoldErrorTerms row_terms = fold_error_terms(config, host_schedule(config));
+            const FoldErrorTerms default_terms = fold_error_terms(default_config, host_schedule(default_config));
+            const float unshared_steps = static_cast<float>(
+                row_terms.partials + row_terms.extra_unsplit_steps + default_terms.partials +
+                default_terms.extra_unsplit_steps);
+            const float mean_rel_tol = 1e-3F + 4.8828125e-4F * unshared_steps;
+            const float mean_rel = mean_abs_gap / xt::mean(xt::abs(default_output))();
+            EXPECT_LT(mean_rel, mean_rel_tol)
+                << config.test_name << " differs from the default chunking by " << mean_rel << " relative on average";
+        } else {
+            EXPECT_LT(mean_abs_gap, kCrossChunkingMeanAbsTol)
+                << config.test_name << " differs from the default chunking by " << mean_abs_gap << " on average";
+        }
     }
 }
 
