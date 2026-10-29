@@ -55,6 +55,9 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
                                   token capacity of each chip's output buffer.
             cluster_axis          mesh axis the ring of chips runs along. Default 0.
             num_links             forwarding links per direction, 1 to 4. Default 1.
+            fwd_vc_pages          pages one forwarding channel holds. The region is split by movement class,
+                                  so no depth can deadlock the ring and this trades only throughput: a
+                                  channel is a pipeline buffer, not a function of how much a launch sends.
             topology              fabric topology of cluster_axis.
             memory_config         memory config of both outputs.
             subdevice_id          sub-device whose Tensix cores the op may use. Defaults to the first
@@ -105,6 +108,7 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         nb::arg("seq_len_per_chip"),
         nb::arg("cluster_axis") = 0,
         nb::arg("num_links") = 1,
+        nb::arg("fwd_vc_pages") = 64,
         nb::arg("topology"),
         nb::arg("memory_config"),
         nb::arg("subdevice_id") = nb::none());
