@@ -6,13 +6,14 @@
 // a rows x 32 tile) for GDN copy g and ring slot `slot`. The decode's history tensor (row-major, one page per
 // (streamer, copy) row of `slots` slots of slot_elems elements) takes it at row rows[k] * copies + g, element
 // slot * slot_elems + tiles[k] * 32 * rows. Batch-1 decode: 1 row, 3 slots; the verify step: 2 rows (its
-// pair slots), 4 slots of which the first 3 are written.
+// pair slots), 4 slots of which the first 3 are written; a verify of R > 2 rows: R rows, 16 / R blocks of which the
+// first is written (its rows 0..2, the ring of single-row slots at step 0).
 //
-// Compile-time args: 0 K, 1 copies, 2 rows per tile, 3 slots per row, 4 slot_elems, 5 one target row (0: whole
-// tiles). Runtime args: 0 compact address, 1 history address, 2 first copy, 3 copies of this core, then K x (row,
-// tile), then (one target row) the target row.
-// Target row (a multi-user decode's slot, rows mode): a compact page holds one row (32 columns, 64 B) and only that
-// row's two face rows of each tile are written, so the other rows keep their history.
+// Compile-time args: 0 K, 1 copies, 2 rows per tile, 3 slots per row, 4 slot_elems, 5 slots written per copy,
+// 6 one target row (0: whole tiles). Runtime args: 0 compact address, 1 history address, 2 first copy, 3 copies of
+// this core, then K x (row, tile), then (one target row) the target row.
+// One target row (a multi-user decode's slot, rows mode): a compact page holds one row (32 columns, 64 B) and only
+// that row's two face rows of each tile are written, so the other rows keep their history.
 
 #include <cstdint>
 
@@ -23,7 +24,8 @@ void kernel_main() {
     constexpr uint32_t copies = get_compile_time_arg_val(1);
     constexpr uint32_t rows = get_compile_time_arg_val(2), slots = get_compile_time_arg_val(3);
     constexpr uint32_t slot_elems = get_compile_time_arg_val(4);
-    constexpr bool one_row = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t written = get_compile_time_arg_val(5);
+    constexpr bool one_row = get_compile_time_arg_val(6) != 0;
     constexpr uint32_t chunk = one_row ? 64 : 64 * rows, row_bytes = slots * slot_elems * 2, cb_buf = 0;
     const uint32_t target = one_row ? get_arg_val<uint32_t>(4 + 2 * K) : 0;
     const uint32_t compact = get_arg_val<uint32_t>(0), hist = get_arg_val<uint32_t>(1);
@@ -33,9 +35,9 @@ void kernel_main() {
     const uint32_t buf = get_write_ptr(cb_buf);
 
     for (uint32_t g = first; g < first + count; g++) {
-        for (uint32_t slot = 0; slot < 3; slot++) {
+        for (uint32_t slot = 0; slot < written; slot++) {
             for (uint32_t k = 0; k < K; k++) {
-                noc_async_read(get_noc_addr((g * 3 + slot) * K + k, src), buf + k * chunk, chunk);
+                noc_async_read(get_noc_addr((g * written + slot) * K + k, src), buf + k * chunk, chunk);
             }
             noc_async_read_barrier();
             for (uint32_t k = 0; k < K; k++) {

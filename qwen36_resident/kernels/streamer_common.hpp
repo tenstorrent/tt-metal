@@ -43,6 +43,14 @@
 // step writes T(k + 2) = (v_k+2, y0), T(k + 3) = y and T(k + 4) = (y1, -). The next step starts at ring
 // step k + 1 (row 0 kept) or k + 2 (both rows kept); only row 0 of the third slot is ever read.
 //
+// Verify of R > 2 rows (DFlash2: rows t, d_1 .. d_R-1 at p .. p + R - 1): the history of a GDN layer is a ring
+// of kRingSlots single-row slots, stored as kRingSlots / R blocks of R-row tiles (block b holds slots
+// b R .. b R + R - 1 as rows 0 .. R - 1). At ring step k the history rows h_0 .. h_2 (inputs at p - 3 .. p - 1)
+// are slots k .. k + 2 (mod kRingSlots), which lie in the two blocks from k's; the step writes its input row r
+// to slot k + 3 + r. The window of tap j (0 = oldest) of row r is the input at p + r - 3 + j: row r - 3 + j of y,
+// or history row r + j, both picked by 0/1 matrices (cb_shift: S_j, then per tap the two blocks' H_j,b, built
+// by the reader for k). After accepting a drafts the next step starts at ring step k + 1 + a.
+//
 // Batch: every activation tile is a batch x 32 tile, row u for user u (face 0 holds columns 0..15 of
 // all rows, face 1 columns 16..31). The weights stream once per step for all users.
 #pragma once
@@ -101,6 +109,7 @@ constexpr uint32_t cb_sumsq = 34;  // fp32 scratch, 2 tiles
 constexpr uint32_t cb_rinv = 35;   // fp32, per-row 1 / rms on the view rows
 constexpr uint32_t cb_eye = 38;    // rmsnorm of a batch > 1: the identity (bf16 32x32)
 constexpr uint32_t cb_shift = 36;  // verify: even-row identity, row R - 1 -> odd R, row R + 1 -> even R
+                                   // (R > 2 rows: S_0..2, then H_j,0 | H_j,1 per tap j, see above)
 
 // token state (DRAM, uint32 words): [0] conv ring step (advances once per step), [1 + u] position of
 // user u; x0 (hidden bf16 as batch x 32 tiles) at kTokX0; per user the rope cos, sin, -sin tiles of its
@@ -144,8 +153,13 @@ constexpr uint32_t sem_addr = get_compile_time_arg_val(55);
 constexpr uint32_t o_heads = get_compile_time_arg_val(56);
 constexpr uint32_t sem_ring = get_compile_time_arg_val(58);
 constexpr bool verify = get_compile_time_arg_val(59) != 0;
-static_assert(!verify || batch == 2, "verify runs two rows of one user");
-constexpr uint32_t kHistSlots = verify ? 4 : 3;  // conv history slots per (streamer, GDN copy) row
+static_assert(!verify || batch >= 2, "verify runs two or more rows of one user");
+constexpr bool verify_pair = verify && batch == 2;  // MTP: pair slots
+constexpr bool verify_rows = verify && batch > 2;   // DFlash2: a ring of single-row slots
+constexpr uint32_t kRingSlots = 16;
+static_assert(!verify_rows || (kRingSlots % batch == 0 && batch + 3 <= kRingSlots), "ring of single-row slots");
+// conv history slots per (streamer, GDN copy) row (verify_rows: blocks of batch single-row slots)
+constexpr uint32_t kHistSlots = verify_rows ? kRingSlots / batch : (verify ? 4 : 3);
 constexpr uint32_t gdn_layers = layers - (attn_interval > 0 ? layers / attn_interval : 0);
 constexpr bool fc_in = get_compile_time_arg_val(60) != 0;
 constexpr bool sample = get_compile_time_arg_val(61) != 0;
