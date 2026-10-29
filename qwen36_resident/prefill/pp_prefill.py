@@ -718,6 +718,12 @@ class PPPrefill:
         the qwen36 prefill heuristic"""
         K, N = MM_SHAPES[key]
         best = MM_BEST.get((key, self.C))
+        if best not in (None, "auto"):
+            # MM_BEST was swept on a 13 x 10 grid; a smaller die (P300: 11 x 10) takes the heuristic instead
+            gx, gy = best[1:3] if best[0] == "1d" else best[:2]
+            grid = self.mesh.compute_with_storage_grid_size()
+            if gx > grid.x or gy > grid.y:
+                best = None
         if best is None:
             try:
                 return tpc.create_prefill_mlp_matmul_program_config(
