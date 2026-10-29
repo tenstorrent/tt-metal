@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <enchantum/enchantum.hpp>
+#include <iterator>
 #include <set>
 
 #include <tt-metalium/constants.hpp>
@@ -93,6 +94,23 @@ void check_same_device(
 
 void check_interleaved(const Tensor& tensor, std::string_view operation_name, std::string_view tensor_name) {
     TT_FATAL(!tensor.is_sharded(), "{}: {} must use interleaved memory", operation_name, tensor_name);
+}
+
+void check_distinct_buffers(
+    std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors, std::string_view operation_name) {
+    for (const auto* first = tensors.begin(); first != tensors.end(); ++first) {
+        if (first->first == nullptr) {
+            continue;
+        }
+        for (const auto* second = std::next(first); second != tensors.end(); ++second) {
+            TT_FATAL(
+                second->first == nullptr || first->first->buffer() != second->first->buffer(),
+                "{}: {} and {} must be different tensors",
+                operation_name,
+                first->second,
+                second->second);
+        }
+    }
 }
 
 void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name) {
@@ -236,6 +254,65 @@ ValueBlockDistribution distribute_value_blocks(
     // Merged ranges keep dispatch to one multicast when the lanes fill the same span.
     result.core_set = tt::tt_metal::CoreRangeSet(lanes).merge_ranges();
     return result;
+}
+
+uint32_t tile_bytes(const Tensor& tensor) {
+    return tensor.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype()));
+}
+
+tt::tt_metal::CoreRangeSet merged_core_set(std::span<const tt::tt_metal::CoreCoord> cores) {
+    return tt::tt_metal::CoreRangeSet(ttsl::Span<const tt::tt_metal::CoreCoord>(cores.data(), cores.size()))
+        .merge_ranges();
+}
+
+bool same_cores(const tt::tt_metal::CoreRangeSet& set, std::span<const tt::tt_metal::CoreCoord> cores) {
+    const auto set_cores = tt::tt_metal::corerange_to_cores(set);
+    return std::set<tt::tt_metal::CoreCoord>(set_cores.begin(), set_cores.end()) ==
+           std::set<tt::tt_metal::CoreCoord>(cores.begin(), cores.end());
+}
+
+std::vector<tt::tt_metal::CoreCoord> shard_cores(const Tensor& tensor) {
+    const auto& shard = *tensor.memory_config().shard_spec();
+    return tt::tt_metal::corerange_to_cores(
+        shard.grid, std::nullopt, shard.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+}
+
+tt::tt_metal::CBDescriptor cb_descriptor(
+    uint32_t index,
+    uint32_t pages,
+    uint32_t page_size,
+    tt::DataFormat format,
+    const tt::tt_metal::CoreRangeSet& cores) {
+    return tt::tt_metal::CBDescriptor{
+        .total_size = pages * page_size,
+        .core_ranges = cores,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = index, .data_format = format, .page_size = page_size}}},
+    };
+}
+
+tt::tt_metal::CBDescriptor sharded_cb_descriptor(uint32_t index, const Tensor& tensor) {
+    const auto& shard = *tensor.memory_config().shard_spec();
+    const uint32_t page = tile_bytes(tensor);
+    auto cb = cb_descriptor(
+        index,
+        shard.shape[0] * shard.shape[1] / tt::constants::TILE_HW,
+        page,
+        tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype()),
+        shard.grid);
+    cb.buffer = tensor.buffer();
+    return cb;
+}
+
+tt::tt_metal::ComputeConfigDescriptor compute_config_descriptor(
+    tt::ARCH arch, const DeviceComputeKernelConfig& compute_kernel_config) {
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        ttnn::get_compute_kernel_config_args(arch, compute_kernel_config);
+    return tt::tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
 }
 
 }  // namespace ttnn::experimental::prim::kda_factory_detail

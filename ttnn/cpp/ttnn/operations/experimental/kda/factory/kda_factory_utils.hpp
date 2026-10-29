@@ -3,12 +3,15 @@
 
 #pragma once
 
+#include <initializer_list>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -36,6 +39,11 @@ void check_matching_dtype(
 void check_same_device(
     const Tensor& reference, const Tensor& candidate, std::string_view operation_name, std::string_view candidate_name);
 void check_interleaved(const Tensor& tensor, std::string_view operation_name, std::string_view tensor_name);
+// A cached program refreshes each buffer argument through its own binding on a program-cache hit; one buffer passed as
+// two arguments leaves the bindings ambiguous, and the cached program would keep reading and writing the first call's
+// buffers. Absent optional tensors are passed as nullptr and skipped.
+void check_distinct_buffers(
+    std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors, std::string_view operation_name);
 void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name);
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name);
 void check_compute_config(const DeviceComputeKernelConfig& config, std::string_view operation_name);
@@ -109,5 +117,21 @@ ValueBlockPeers value_block_peers(const Device& device, const ValueBlockDistribu
         static_cast<uint32_t>(last.x),
         static_cast<uint32_t>(last.y)};
 }
+
+// Descriptor-factory helpers of the KDA generic-program ops.
+uint32_t tile_bytes(const Tensor& tensor);
+// The cores, merged into rectangles (which dispatch writes in one multicast each).
+tt::tt_metal::CoreRangeSet merged_core_set(std::span<const tt::tt_metal::CoreCoord> cores);
+// Whether the set holds exactly these cores.
+bool same_cores(const tt::tt_metal::CoreRangeSet& set, std::span<const tt::tt_metal::CoreCoord> cores);
+// The cores a height-sharded tensor's shards are on, shard by shard.
+std::vector<tt::tt_metal::CoreCoord> shard_cores(const Tensor& tensor);
+tt::tt_metal::CBDescriptor cb_descriptor(
+    uint32_t index, uint32_t pages, uint32_t page_size, tt::DataFormat format, const tt::tt_metal::CoreRangeSet& cores);
+// A circular buffer over a height-sharded L1 tensor's shards, in place.
+tt::tt_metal::CBDescriptor sharded_cb_descriptor(uint32_t index, const Tensor& tensor);
+// The compute kernel's hardware settings; check_compute_config rejects the packer_l1_acc the descriptor cannot carry.
+tt::tt_metal::ComputeConfigDescriptor compute_config_descriptor(
+    tt::ARCH arch, const DeviceComputeKernelConfig& compute_kernel_config);
 
 }  // namespace ttnn::experimental::prim::kda_factory_detail

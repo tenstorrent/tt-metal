@@ -17,15 +17,17 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_DECAY_L1_BYTES_PER_CORE,
     KDA_HISTORY_EXCHANGE_ROWS,
     KDA_HISTORY_EXCHANGE_SEMAPHORES,
+    KDA_INPUT_PROJECTION_L1_BYTES_PER_CORE,
     KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE,
     KDA_QKV_L1_BYTES_PER_CORE,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
+    block_projection_program_config,
     decay_projection_program_config,
     l1_when_it_fits,
-    tuned_projection_matmul_configs,
+    matmul_grid,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
@@ -193,25 +195,11 @@ class ttKDA:
         self.gated_rms_output_dtype = program_config.gated_rms_output_dtype
         if weights is not None and state_dict is not None:
             raise ValueError("pass either constructed KDAWeights or host state_dict, not both")
-        if weights is None:
-            weights = load_kda_weights(
-                mesh_device,
-                config,
-                state_dict,
-                weight_cache_path,
-                cache_name_prefix=f"layer_{layer_idx}.kda",
-                tensor_parallel_axis=tp_axis,
-                projection_dtype=program_config.projection_dtype,
-            )
-        expected_tp_size = tuple(mesh_device.shape)[tp_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
-        if weights.tensor_parallel_size != expected_tp_size or weights.tensor_parallel_axis != tp_axis:
+        self.tensor_parallel_size = tuple(mesh_device.shape)[tp_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
+        if config.num_heads % self.tensor_parallel_size:
             raise ValueError(
-                "KDAWeights placement does not match the layer mesh: "
-                f"weights TP={weights.tensor_parallel_size} axis={weights.tensor_parallel_axis}, "
-                f"layer TP={expected_tp_size} axis={tp_axis}"
+                f"num_heads {config.num_heads} must be divisible by tensor parallel size {self.tensor_parallel_size}"
             )
-        self.weights = weights
-        self.tensor_parallel_size = self.weights.tensor_parallel_size
         self.config = replace(config, num_heads=config.num_heads // self.tensor_parallel_size)
         qkv_channel_chunk_size = _effective_qkv_channel_chunk_size(
             self._convolution_width, program_config.qkv_channel_chunk_size
@@ -256,38 +244,9 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.input_projection_program_config, self.output_projection_program_config = (
-            tuned_projection_matmul_configs(
-                mesh_device.compute_with_storage_grid_size(),
-                self.active_seq_len_local,
-                self.weights.input_projection.shape[-1],
-                *tuple(self.weights.output_projection.shape)[-2:],
-            )
-            if program_config.tuned_projection_matmuls
-            else (None, None)
-        )
-        # The bounded gate's per-head scale is folded into the decay projection, which then applies the sigmoid.
-        decay_width = self.config.num_heads * self.config.head_k_dim
-        self.decay_program_config = decay_projection_program_config(
-            mesh_device.compute_with_storage_grid_size(),
-            self.active_seq_len_local,
-            self.config.head_k_dim,
-            decay_width,
-            ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if self._bounded_gate else None,
-        )
-        # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
-        self.decay_memory_config = l1_when_it_fits(
-            mesh_device, self.active_seq_len_local * decay_width * 2, KDA_DECAY_L1_BYTES_PER_CORE
-        )
-        # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
-        # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
-        self.kda_compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        grid = mesh_device.compute_with_storage_grid_size()
+        # The projection matmuls run on at most max_matmul_cores cores.
+        mm_grid = matmul_grid(grid, program_config.max_matmul_cores)
         self.recurrence = KDARecurrence(
             mesh_device,
             program_config.recurrence,
@@ -298,6 +257,71 @@ class ttKDA:
             value_dim=self.config.head_v_dim,
             # The bounded gate's lower-bound scale is applied by chunk preparation.
             gate_scale=config.gate_lower_bound if self._bounded_gate else 1.0,
+        )
+        if weights is None:
+            weights = load_kda_weights(
+                mesh_device,
+                config,
+                state_dict,
+                weight_cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.kda",
+                tensor_parallel_axis=tp_axis,
+                projection_dtype=program_config.projection_dtype,
+            )
+        if weights.tensor_parallel_size != self.tensor_parallel_size or weights.tensor_parallel_axis != tp_axis:
+            raise ValueError(
+                "KDAWeights placement does not match the layer mesh: "
+                f"weights TP={weights.tensor_parallel_size} axis={weights.tensor_parallel_axis}, "
+                f"layer TP={self.tensor_parallel_size} axis={tp_axis}"
+            )
+        self.weights = weights
+        rows = self.active_seq_len_local // ttnn.TILE_SIZE
+        hidden_tiles = config.hidden_size // ttnn.TILE_SIZE
+        weight_dtype = self.weights.input_projection.dtype
+        self.input_projection_program_config = block_projection_program_config(
+            mm_grid.x,
+            mm_grid.y,
+            rows,
+            self.weights.input_projection.shape[-1] // ttnn.TILE_SIZE,
+            program_config.input_projection_k_block,
+            k_tiles=hidden_tiles,
+            weight_dtype=weight_dtype,
+        )
+        self.output_projection_program_config = block_projection_program_config(
+            mm_grid.x,
+            mm_grid.y,
+            rows,
+            self.weights.output_projection.shape[-1] // ttnn.TILE_SIZE,
+            program_config.output_projection_k_block,
+            k_tiles=self.weights.output_projection.shape[-2] // ttnn.TILE_SIZE,
+            weight_dtype=weight_dtype,
+        )
+        # Only this layer reads the input projection back (the QKV, decay, beta and output-gate columns, all in place):
+        # L1, where it fits, spares its DRAM round trip, which would otherwise follow the last K block.
+        self.input_projection_memory_config = l1_when_it_fits(
+            mesh_device,
+            self.active_seq_len_local * self.weights.input_projection.shape[-1] * 2,
+            KDA_INPUT_PROJECTION_L1_BYTES_PER_CORE,
+        )
+        # The bounded gate's per-head scale is folded into the decay projection, which then applies the sigmoid.
+        decay_width = self.config.num_heads * self.config.head_k_dim
+        self.decay_program_config = decay_projection_program_config(
+            mm_grid,
+            self.active_seq_len_local,
+            self.config.head_k_dim,
+            decay_width,
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if self._bounded_gate else None,
+        )
+        # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
+        self.decay_memory_config = l1_when_it_fits(
+            mesh_device, self.active_seq_len_local * decay_width * 2, KDA_DECAY_L1_BYTES_PER_CORE
+        )
+        self.norm_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -385,16 +409,11 @@ class ttKDA:
         """Run the fused input projection and locate its semantic columns."""
         config = self.config
         weights = self.weights
-        # The tuned schedule writes the projection to L1: it is only read back by this layer (the QKV, decay, beta
-        # and output-gate columns, all in place), and its DRAM write would otherwise sit after the last K block,
-        # outside the compute.
         projected = ttnn.linear(
             hidden_states,
             weights.input_projection,
             program_config=self.input_projection_program_config,
-            memory_config=(
-                ttnn.DRAM_MEMORY_CONFIG if self.input_projection_program_config is None else ttnn.L1_MEMORY_CONFIG
-            ),
+            memory_config=self.input_projection_memory_config,
             compute_kernel_config=self.input_projection_compute_config,
         )
         auxiliary_start = self._convolution_width
@@ -448,7 +467,7 @@ class ttKDA:
             config.num_heads,
             epsilon=config.norm_eps,
             memory_config=self.norm_output_memory_config,
-            compute_kernel_config=self.kda_compute_config,
+            compute_kernel_config=self.norm_compute_config,
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,
         )
@@ -466,6 +485,10 @@ class ttKDA:
             program_config=self.output_projection_program_config,
             compute_kernel_config=self.output_projection_compute_config,
         )
+        return self._reduce_scatter(output)
+
+    def _reduce_scatter(self, output: ttnn.Tensor) -> ttnn.Tensor:
+        """The TP reduction of the output projection's partial sums."""
         if self.tensor_parallel_size > 1:
             output = reduce_scatter_tp_partials(output, self.tt_ccl, self._tp_cluster_axis, self.tp_ccl_topology)
         return output
@@ -502,6 +525,8 @@ class ttKDA:
         self._validate_forward(hidden_states, state, actual_start)
         if actual_end is not None:
             self._validate_runtime_bound(actual_end, "actual_end")
+        # The SP predecessor's relay can write into this rank's landing buffers before its own recurrence starts.
+        self.recurrence.reserve_affine_relay()
         inputs = self._project_inputs(hidden_states)
         q, k, v, new_convolution = ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
             inputs.projected,
@@ -532,6 +557,7 @@ class ttKDA:
             release_gate=True,
         )
         output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
+        ttnn.deallocate(result.output)
         # The norm read the output gate, the projection's last columns in use.
         ttnn.deallocate(inputs.projected)
         output = self._project_output(output)
