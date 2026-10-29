@@ -1497,3 +1497,12 @@ stays bfp8 (the user rule: 4-bit only when accuracy and PCC are retained); its e
   the 2048 wave width, queued); the single-2176-chunk plan of the layer test is the clash's regression check.
 - Also: `e2e_8x4_B32_dispatch` (256 users, 45 layers, the 32-row dispatch expert path) 100.9 ms traced step = 9.9
   tok/s per user, 2538 tok/s aggregate, TTFT 135 ms traced, first token = HF (the README's 256-user row).
+
+### 2026-10-29 04:22: the served APC smoke passes at 45 layers with the fix
+
+`served_apc_8x4_fix` (the 1 M profile, APC on, stages a/b/c, wt_frozen117): stage a first tokens = HF (11505 natural
+prompt, 102647 dump), stage b's four concurrent greedy requests identical across the two rounds (44 / 64 / 64 / 47
+tokens: the round-1 artifacts are gone), stage c's four concurrent 64 K needles retrieved. With the budget-split block
+test and the layer test this closes the served APC correctness item; the catalog flip (D7) is unblocked. The vendored
+driver's L1 budget was confirmed on the block meanwhile (`kda_unaligned_block_r2`: the 1088-local-row chunk runs, all
+plans match HF), and `tt/ttkda` now carries the A0 row-local plumbing, forwarded to the ops only when set.
