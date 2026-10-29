@@ -1,10 +1,11 @@
 # tt-model-p300x2.yaml — Qwen/Qwen3.8-27B on a P300x2 (2x P300 boards = 4 Blackhole chips, (1,4) mesh) via vLLM, on the
 # RESIDENT decode engine (qwen36_resident/: one persistent program per chip per decode step).
-# ONE image, four serve profiles (the default is decided after the benchmark grid; PROVISIONAL below):
+# ONE image, five serve profiles (the default is decided after the benchmark grid; PROVISIONAL below):
 #   single-user-dflash2  one user, lossless DFlash2 speculative decoding (greedy only), up to 256K context
 #   single-user          one user, plain resident decode, full sampling (greedy and top-k <= 32 drawn on device)
 #   single-user-mtp      one user, lossless MTP speculative decoding (greedy only)
 #   multi-user           several users on the rows-mode resident engine (paged KV pool, chunked prefill, device sampling)
+#   multi-user-long      multi-user with a 25 % larger KV pool (no 128-token prefill chunk), for long-context-heavy use
 #   batch32              (TBD) up to 32 users on the old ttnn decode path, only if it beats multi-user at >= 16 users
 # Replaces the ttnn-path manifest of the same repo (branch qwen36-p300x2-pkg, tt-metal b220c901dec, plugin 96d4416,
 # image f6edb50771ac: profiles plain / batch8-dflash2 / single-user-dflash2). tt-model.yaml on this branch is the p150x2
@@ -15,7 +16,8 @@
 #   tt-model push    <builds>/qwen3.8-27b-p300x2 --private
 #
 # OPEN before packaging (search TBD): the plugin ref (resident-mu pushed to the fork), the adapter merge (lane serve's
-# qwen38-res-mu-serve package-ready SHA), the multi-user sizing (lane mu's grid / lane serve's OOM churn), MTP at 256K,
+# qwen38-res-mu-serve package-ready SHA, which must include ae776ee280c: RESIDENT_PREFILL_CHUNKS, without which
+# multi-user-long ignores its chunk list and OOMs at build), the multi-user sizing (lane mu's grid / lane serve's OOM churn), MTP at 256K,
 # the default profile, the card's benchmark cells.
 schema: "5.1"
 repo: changh95/qwen3.8-27b-p300x2
@@ -126,6 +128,24 @@ serve_profiles:
       tt:                                # deep-merged over serve.additional_config.tt
         prefill_chunk_tokens: 1024       # the TT chunk core: chunked prefill between decode steps
         sample_on_device_mode: decode_only   # the rows-mode hub feed (WP7)
+  - name: multi-user-long
+    description: Several concurrent requests with a 25 % larger KV pool for long-context-heavy use (prefill chunks of 256 tokens and up; same decode as multi-user).
+    max_num_seqs: 16
+    env:
+      # KV pool = 30,016 blocks x 64: 0.572 GB/chip free after a 250K prefill + decode (lane mu item 5,
+      # profiles/resident/mu/item5/: with128.json, no128.json, session.log)
+      RESIDENT_MAX_TOKENS_ALL_USERS: "1921024"
+      # no 128-token PP chunk: the prefill drops its 128-chunk SmallMatmul weight copies (3.24 GB/chip) for the pool;
+      # +49 ms TTFT at <= 128-token prompts, +20 ms at 512, none from ~768 tokens (HF accuracy within noise, 32K
+      # bit-identical). Needs RESIDENT_PREFILL_CHUNKS in the adapter (ae776ee280c): without it the build keeps the
+      # 128 copies and OOMs at this pool.
+      RESIDENT_PREFILL_CHUNKS: "256,512,1024"
+      RESIDENT_ATTN_WORKERS: "28"
+      RESIDENT_HEAD_GROUPS: "4"
+    additional_config:
+      tt:                                # deep-merged over serve.additional_config.tt
+        prefill_chunk_tokens: 1024       # the TT chunk core: chunked prefill between decode steps
+        sample_on_device_mode: decode_only   # the rows-mode hub feed (WP7)
   - name: batch32
     description: Up to 32 concurrent requests on the ttnn decode path (plain batched decode, full sampling); kept only where it beats multi-user.
     # TBD: in the package only if it beats multi-user at >= 16 users (device comparison queued). The old package's
@@ -160,7 +180,8 @@ card:
     - Weights: [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) @ `1d4bf0f`; drafter
       [incoai/Qwen3.8-27B-DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) @ `dedf8df`
     - Hardware: P300x2 (QuietBox 2), one (1, 4) Blackhole mesh
-    - Profiles: `single-user-dflash2` (default, TBD), `single-user`, `single-user-mtp`, `multi-user`
+    - Profiles: `single-user-dflash2` (default, TBD), `single-user`, `single-user-mtp`, `multi-user`,
+      `multi-user-long`
     - `single-user-dflash2` and `single-user-mtp` are **greedy only**: every request is decoded greedily (the server logs
       one warning for a request with temperature > 0). Speculation is lossless against the model's own greedy output;
       tokens can differ from `single-user` at bf16 near-ties.
@@ -188,16 +209,16 @@ card:
     }'
     ```
 
-    ### Users x context (`multi-user`)
-    The users share one KV pool of 1,540,096 tokens (24,064 blocks of 64 tokens; 8.7 KB per token per chip). A request can use up to `max_model_len` (262,144), and any mix of requests fits while their contexts add up to the pool. The table gives the context each user gets when all of them are equally long. Up to 8 users decode together in one launch. With 9 to 16 users a second launch runs as well: the aggregate stays at the 8-user level and each user's speed halves.
+    ### Users x context (`multi-user`, `multi-user-long`)
+    The users share one KV pool: 1,540,096 tokens on `multi-user` (24,064 blocks of 64 tokens) and 1,921,024 tokens on `multi-user-long` (30,016 blocks of 64 tokens); 8.7 KB per token per chip. A request can use up to `max_model_len` (262,144), and any mix of requests fits while their contexts add up to the pool. The table gives the context each user gets when all of them are equally long. Up to 8 users decode together in one launch. With 9 to 16 users a second launch runs as well: the aggregate stays at the 8-user level and each user's speed halves.
 
-    | users | context per user |
-    |---|---|
-    | 1-5 | 262,144 |
-    | 6 | 256,640 |
-    | 7 | 219,968 |
-    | 8 | 192,448 |
-    | 16 | 96,192 |
+    | users | context per user, `multi-user` | context per user, `multi-user-long` |
+    |---|---|---|
+    | 1-5 | 262,144 | 262,144 |
+    | 6 | 256,640 | 262,144 |
+    | 7 | 219,968 | 262,144 |
+    | 8 | 192,448 | 240,064 |
+    | 16 | 96,192 | 120,000 |
 
     ### Rows decode, users x context (`multi-user`)
     Decode speed from the device step time with every user at the given context (no host or HTTP overhead); each cell is t/s/u / aggregate t/s:
@@ -210,6 +231,8 @@ card:
     | 8 | 50 / 401 | 50 / 398 | 36 / 285 | 28 / 222 | 19 / 156 |
 
     Which profile: for a single user, `single-user` is faster (about 86 t/s/u at short context against about 70 t/s/u for one user on `multi-user`, whose 8-row launch costs about 2.7 ms more per step). From 2 concurrent users on, `multi-user` gives more total throughput at every context: 1.3-1.6x at 2 users and 2.4-4.7x at 8 users (device step time, 128 to 128K context).
+
+    `multi-user-long` decodes exactly like `multi-user` (same rows decode table) with a 25 % larger KV pool: up to 7 users at the full 256K instead of 5. It prefills in chunks of at least 256 tokens, which costs about +49 ms TTFT on prompts of up to 128 tokens and +20 ms at 512 (none from about 768 tokens): pick it for long-context-heavy use.
 
     ### Benchmarks (tt-inference-server `--workflow benchmarks`)
     | profile | users | ISL / OSL | t/s | t/s/u | TTFT |
@@ -232,3 +255,5 @@ verify:
   - "from qwen36_resident.generator_vllm import Qwen36ResidentForCausalLM, Qwen36ResidentMTPForCausalLM, Qwen36ResidentDFlashForCausalLM; assert Qwen36ResidentDFlashForCausalLM"
   - "from qwen36_resident.dflash import ResidentDFlash, DRAFTER_WEIGHTS; assert DRAFTER_WEIGHTS.endswith('dedf8df68adfb1afeaf7b7480c0a0243108177b4')"
   - "from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM; assert Qwen36ForCausalLM"   # batch32
+  # multi-user-long's chunk list reaches the adapter (ae776ee280c); without it the build keeps the 128 chunk and OOMs
+  - "import os; os.environ['RESIDENT_PREFILL_CHUNKS'] = '256,512,1024'; from qwen36_resident.generator_vllm import PREFILL_CHUNKS; assert PREFILL_CHUNKS == (256, 512, 1024), PREFILL_CHUNKS"
