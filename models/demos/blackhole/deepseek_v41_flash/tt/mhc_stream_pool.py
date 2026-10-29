@@ -25,6 +25,8 @@ capturing = False  # set True by a caller while a trace is being captured: first
 def get(mesh, T, D, tag, role):
     key = (id(mesh), tag, int(T), int(D), role)
     t = _POOL.get(key)
+    if t is not None and not t.is_allocated():  # a caller freed the pooled stream (must not happen in a traced model): re-create, never inside a capture
+        t = None
     if t is None:
         if capturing:
             raise RuntimeError(

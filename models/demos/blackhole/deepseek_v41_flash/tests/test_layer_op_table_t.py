@@ -119,7 +119,8 @@ def test_layer_op_table(mesh_device):
     def fwd(profile=None):
         o, n = layer.forward(x, pre, st, profile=profile)
         ttnn.synchronize_device(md)
-        ttnn.deallocate(o)
+        if os.environ.get("DSV41_MHC_EXPAND_VALID") != "1":  # with the valid-row expand the layer output is the persistent pool buffer (mhc_stream_pool): never freed
+            ttnn.deallocate(o)
         ttnn.deallocate(n)
 
     for _ in range(3):
