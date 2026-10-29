@@ -151,7 +151,7 @@ tt_metal/hal.cpp @ruizhangTT
 tt_metal/hostdevcommon/ @tenstorrent/metalium-runtime # this should go away
 tt_metal/hostdevcommon/**/CMakeLists.txt @tenstorrent/metalium-runtime @tenstorrent/metalium-developers-infra # this should go away
 tt_metal/hostdevcommon/api/hostdevcommon/dispatch_telemetry_types.hpp @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance @tenstorrent/metalium-runtime
-tt_metal/hw/inc/hostdev/profiler_zone_id.h @mo-tenstorrent @yusufbashiTT
+tt_metal/hw/inc/hostdev/debug_event_id.h @mo-tenstorrent @yusufbashiTT
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT
 tt_metal/hw/ckernels/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT
 tt_metal/hw/ckernels/*/metal/llk_api/experimental/ @rtawfik01 @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT @ldjurovicTT @atatuzunerTT
@@ -224,7 +224,7 @@ tt_metal/impl/trace/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-runt
 tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @kstevensTT @ruizhangTT
 tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @ruizhangTT @tenstorrent/metalium-developers-infra
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho
-tt_metal/llrt/zone_meta.* @mo-tenstorrent @yusufbashiTT
+tt_metal/llrt/debug_event_meta.* @mo-tenstorrent @yusufbashiTT
 tt_metal/llrt/**/CMakeLists.txt @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho @tenstorrent/metalium-developers-infra
 tt_metal/llrt/rtoptions.cpp @tenstorrent/metalium-api-owners @jbaumanTT @abhullar-tt
 tt_metal/llrt/rtoptions.hpp @tenstorrent/metalium-api-owners

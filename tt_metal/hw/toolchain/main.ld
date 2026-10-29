@@ -18,7 +18,7 @@ OUTPUT_ARCH(riscv)
 /* Fake VMAs for the kernel profiler's zone-metadata sections below. The value is arbitrary: both
    sections are (INFO), so they are non-ALLOC, never appear in a PT_LOAD and are never placed on the
    device, and the host resolves the pointers they hold by subtracting the section's own sh_addr
-   (llrt/zone_meta.cpp). They only need a defined base so that the link-time pointers from
+   (llrt/debug_event_meta.cpp). They only need a defined base so that the link-time pointers from
    .tt_zone_meta into .tt_zone_str are well-formed. Kept 1 MB apart and clear of the device memory
    map, continuing the ladder the .device_print_strings sections started at 0x6400000. */
 #define TT_ZONE_STR_VMA 0x6600000
@@ -174,7 +174,7 @@ SECTIONS
   }
 
   /* Zone source locations: a fixed-stride array of 16-byte {zone_id, name_ptr, file_ptr, line}
-     records emitted by TT_ZONE_DEFINE_ID (hostdev/profiler_zone_id.h), which the host walks
+     records emitted by TT_ZONE_DEFINE_ID (hostdev/debug_event_id.h), which the host walks
      by that stride. (INFO) for the same reason as above. */
   .tt_zone_meta TT_ZONE_META_VMA (INFO) :
   {

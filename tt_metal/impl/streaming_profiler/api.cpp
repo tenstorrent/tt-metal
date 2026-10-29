@@ -20,10 +20,10 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/indestructible.hpp>
 
-#include "hostdev/profiler_zone_id.h"
+#include "hostdev/debug_event_id.h"
 #include "impl/streaming_profiler/service.hpp"
 #include "impl/streaming_profiler/sync/clock_map.hpp"
-#include "llrt/zone_meta.hpp"
+#include "llrt/debug_event_meta.hpp"
 
 namespace api = tt::tt_metal::experimental::streaming_profiler;
 

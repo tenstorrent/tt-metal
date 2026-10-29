@@ -29,7 +29,7 @@
 #include "llrt.hpp"
 #include "binary_metadata.hpp"
 #include "tt_elffile.hpp"
-#include "zone_meta.hpp"
+#include "debug_event_meta.hpp"
 #include <tt-umd/driver_atomics.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>

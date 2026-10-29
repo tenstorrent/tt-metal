@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "zone_meta.hpp"
+#include "debug_event_meta.hpp"
 
 #include <cstring>
 #include <deque>
@@ -15,7 +15,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/indestructible.hpp>
 
-#include "hostdev/profiler_zone_id.h"
+#include "hostdev/debug_event_id.h"
 #include "tt_elffile.hpp"
 
 namespace tt::llrt {

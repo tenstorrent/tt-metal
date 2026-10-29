@@ -31,7 +31,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "hostdev/profiler_zone_id.h"
+#include "hostdev/debug_event_id.h"
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/base.h>
@@ -66,7 +66,7 @@ namespace tt::tt_metal {
 
 namespace {
 
-// Hands out the tu_id half of a structural zone id (hostdev/profiler_zone_id.h) as -DTT_PROFILER_TU_ID.
+// Hands out the tu_id half of a structural zone id (hostdev/debug_event_id.h) as -DTT_PROFILER_TU_ID.
 // Ids must be unique across TUs and stable across runs (a cached ELF keeps the id in its .tt_zone_meta),
 // hence a file. The key is source identity plus build target: one source compiled for BRISC vs NCRISC can
 // number its zones differently. Compile-time args are left out to keep the registry bounded; two
