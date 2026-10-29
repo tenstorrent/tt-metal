@@ -33,6 +33,9 @@ void kernel_main() {
     compute_kernel_lib::detail::sfpu_reduce_fold_init<PoolType::SUM, format>();
     // The reader always produces the FPU path's zero tile; it is unused here.
     cb_in1_obj.wait_front(onetile);
+#ifdef ARCH_QUASAR
+    dummy_unpack(dfb::in1);
+#endif
 
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         tile_regs_acquire();
