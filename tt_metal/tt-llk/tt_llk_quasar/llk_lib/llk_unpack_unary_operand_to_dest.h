@@ -76,10 +76,6 @@ inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc
 {
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0 /*TRANSPOSE_EN forced false for UNP_DEST*/);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
-    // The placers set only TILE_SEL of the UNP_A L1 / DEST counters; clear their face index here, since the
-    // tilize-to-dest path addresses through it and leaves it non-zero (shifts the first run). Same guard as SrcA tilize.
-    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_unpacr::UNP_A, 0 /*Value*/);
-    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_unpacr::UNP_A, 0 /*Value*/);
     _llk_unpack_unary_operand_to_dest_mop_config_(buf_desc_id);
 }
 
