@@ -394,6 +394,10 @@ def gate(results_by_leg, legs, stage1, gate_base, leg_bases):
     notes = []
     if not legs or len(results_by_leg) < legs:
         notes.append(f"{len(results_by_leg)} of {legs} leg(s) left a stage-2 result.")
+    if len(leg_bases) < len(results_by_leg):
+        notes.append(
+            f"{len(results_by_leg) - len(leg_bases)} leg(s) left no record of their baseline."
+        )
     other = sorted({b for b in leg_bases if b != gate_base})
     if other:
         notes.append(

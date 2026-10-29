@@ -418,3 +418,11 @@ def test_a_test_the_base_does_not_have_is_named(tmp_path):
         "unmeasured",
         "not measured on the base (renamed or new test?)",
     )
+
+
+def test_gate_blocks_when_a_leg_left_no_baseline_record(tmp_path):
+    rows = _cleared(tmp_path)
+
+    _, notes = gate([rows, []], 2, _candidates(tmp_path), "abc", ["abc"])
+
+    assert notes == ["1 leg(s) left no record of their baseline."]
