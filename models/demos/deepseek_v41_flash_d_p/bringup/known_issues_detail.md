@@ -343,3 +343,27 @@ Only bfp8 GEMM inputs are large, and they are the device's 8-bit form of the ref
 the reference's own rounding costs 0.032 on the same input). Raising them would go above the reference. L02's excess
 over its nudge limit comes from the 4-bit compressed KV (CKV_FORMAT=bfp4_rows, owner F208): bf16 KV 0.018, bfp4 0.060.
 Even then the device stays below the reference's own 0.074.
+
+## Quick A/Bs skip the contract tests: P.9 tipped test_adapter_acks unseen
+FIX.12's gate (code e627e29e63e = P.10 + the lowbit phase 1 merge 7f55821f579) failed only test_adapter_acks:
+`chunk 0: ack slot 0 [0, 2536) (last-window 128 rows): 0_window_kv layer 20 nope pcc 0.98855 < 0.98957`.
+The last pass of that unit was FIX.9 (2026-10-29 06:22); P.7-P.10 were judged on quick A/Bs ("full gate pending"),
+which run no contract test. Bisection on the same code, one switch at a time (scripts/run_safe_pytest.sh, logs in
+/scratch/dnijemcevic/fix12/):
+
+| run | L20 nope PCC | result |
+|---|---|---|
+| defaults (P.10 + merge) | 0.98855 | FAIL |
+| DS41_ATTN_SP32=off (P.9 path) | 0.98828 | FAIL |
+| DS41_ATTN_SP32=off DS41_ATTN_SP32_PROJ=off (P.8 path) | - | PASS (0 failures) |
+
+The lowbit merge is bit-identical at 8x4: all 207 accuracy metrics of FIX.12's ladder units equal P.10's to the bit.
+Ladder (quick measure) err_state_window_kv_L20: P.7 / P.8 0.0900, P.9 0.1056, P.10 0.1094 (limit 0.1515);
+err_layer_L19 0.1666 / 0.1654 / 0.1670: L20's input is no worse, only its last-128-row sample moved. P.9 is not
+narrower anywhere: wo_b sums all of K in fp32 DEST and rounds once to bf16 (the reference's output dtype) where the
+P.8 path summed 4 bf16 partials in a bf16 reduce-scatter. So this is DS41-125's gap (the limit is the ring drift at
+positions 10112-10239 of s10240, applied to positions 2408-2535 of a 2536-token prefix) tipped by a rounding
+reshuffle, not an index or layout bug. Nothing raised above the reference; no test or limit changed. Options (owner):
+a waiver for this check, or a per-position drift for the contract's window-KV limit.
+test_runner_contract (the same window-KV check through the tt-d-gen engine) fails with the identical value
+(`slot 0 turn 1 (last-window 128 rows): 0_window_kv layer 20 nope pcc 0.98855 < 0.98957`).

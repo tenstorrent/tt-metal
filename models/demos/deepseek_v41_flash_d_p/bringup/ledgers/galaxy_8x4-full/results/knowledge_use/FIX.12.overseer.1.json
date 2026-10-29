@@ -1,0 +1,55 @@
+{
+ "used": [
+  {
+   "id": "DS41-125",
+   "how": "identified the acks L20 window_kv failure as the known limit/position gap (ring drift at s10240 vs last 128 of [0, 2536)), so I bisected switches instead of hunting an index bug, and changed no limit",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-140",
+   "how": "precision reasoning for P.9: the reference writes wo_b's output bf16, so the fp32-DEST + one bf16 rounding is not above or below the reference; no precision raise considered",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "that the perf picks P.7-P.10 were accepted on quick A/Bs which skip the contract units (test_adapter_acks), so the first full gate after them inherits their contract failures (now DS41-141)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.12",
+   "answer": "done",
+   "evidence": "merge bit-identical at 8x4: 207/207 ladder accuracy metrics equal P.10's; sparse_sdpa compressed 368.0 -> 308.9 us/call, ckv_bfp4 52.3 -> 40.3 us, attention 69.31 -> 67.35 ms, device 206.04 -> 203.81 ms, clean wall 370.7 -> 381.1 (noise). Gate fails only test_adapter_acks L20 (0.98855 < 0.98957), caused by P.9 (DS41_ATTN_SP32_PROJ=off passes), not by the merge: DS41-141; test_runner_contract fails the same check with the same value, test_runner_smoke / test_profile / ladders / contract / kv_layout pass"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no code change; nothing padded"
+  }
+ ],
+ "cited_only": [
+  "DS41-141"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.12",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-29T15:43:28",
+  "head": "e627e29e63e",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.12.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.12_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.12_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.12_runner_smoke.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.12.overseer.1.json"
+  ]
+ }
+}
