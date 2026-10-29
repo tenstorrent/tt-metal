@@ -26,18 +26,38 @@ def enabled():
     return os.environ.get("QWEN36_PREFILL_MINIMAL_MATMUL", "0") == "1"
 
 
+# Measured on Blackhole p150 (11x10), LoFi + fp32 acc, bit-identical to 8/8/8.
+# (K, N) -> (blocks for 4096 <= M < 8192, blocks for M >= 8192); blocks = (M_block, K_block, N_block) in tiles.
+_SHAPE_BLOCKS = {
+    (2048, 8224): ((8, 4, 16), (8, 4, 16)),
+    (2048, 5120): ((8, 4, 16), (8, 16, 8)),
+    (2048, 6144): ((8, 4, 16), (8, 16, 4)),
+    (6144, 2048): ((16, 4, 8), (8, 8, 8)),
+    (2048, 2048): ((16, 4, 8), (8, 4, 8)),
+}
+
+
+def _blocks(m_tiles, k_tiles, n_tiles):
+    m = m_tiles * 32
+    entry = _SHAPE_BLOCKS.get((k_tiles * 32, n_tiles * 32)) if m >= 4096 else None
+    if entry is None:
+        return BLOCK_M, BLOCK_K, BLOCK_N
+    return entry[1] if m >= 8192 else entry[0]
+
+
 def _config(device, m_tiles, k_tiles, n_tiles):
     grid = device.compute_with_storage_grid_size()
-    key = (grid.x, grid.y, m_tiles, k_tiles, n_tiles)
+    bm, bk, bn = _blocks(m_tiles, k_tiles, n_tiles)
+    key = (grid.x, grid.y, m_tiles, k_tiles, n_tiles, bm, bk, bn)
     cfg = _configs.get(key)
     if cfg is None:
         kw = {}
         if SUBBLOCK is not None:
             kw = dict(subblock_h=SUBBLOCK[0], subblock_w=SUBBLOCK[1])
         cfg = _configs[key] = ttnn.MinimalMatmulConfig(
-            M_block_size=max(1, min(BLOCK_M, m_tiles)),
-            K_block_size=max(1, min(BLOCK_K, k_tiles)),
-            N_block_size=max(1, min(BLOCK_N, n_tiles)),
+            M_block_size=max(1, min(bm, m_tiles)),
+            K_block_size=max(1, min(bk, k_tiles)),
+            N_block_size=max(1, min(bn, n_tiles)),
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
             **kw,
         )
