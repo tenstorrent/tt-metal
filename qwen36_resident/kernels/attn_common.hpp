@@ -34,7 +34,11 @@
 // (the streamers' head-output semaphore), 14 eps bits, 15 sem_addr (a worker learns the leader's partial
 // buffer address through it), 16 fanin (partial slots per node of the reduction tree), 17 banks,
 // 18 sem_tail (tail core, local: tail write-backs done; a copy's tail is re-read within a step only after
-// its previous write-back), 19 batch, 20 verify (0 / 1)
+// its previous write-back), 19 batch, 20 verify (0 / 1), 21 round_robin (0 / 1: chunk worker w takes the
+// complete tiles w, w + workers - 1, ... from every bank instead of its own bank's rows, which balances the
+// chunks when workers - 1 is not a multiple of the banks; the partials are summed in another order),
+// 22 two_nocs (0 / 1: a chunk worker's reader alternates its KV reads between both NOCs; its writer issues no
+// reads, so the reader owns the read counters of the writer's NOC too)
 //
 // Verify: the two rows are one user at positions p and p + 1 and share its KV cache (user 0's). Row 1's
 // tail tile holds row 0's new row: on the same tile the tail core reads it after row 0's write-back; when
@@ -72,6 +76,8 @@ constexpr uint32_t banks = get_compile_time_arg_val(17);
 constexpr uint32_t sem_tail = get_compile_time_arg_val(18);
 constexpr uint32_t batch = get_compile_time_arg_val(19);
 constexpr bool verify = get_compile_time_arg_val(20) != 0;
+constexpr bool round_robin = get_compile_time_arg_val(21) != 0;
+constexpr bool two_nocs = get_compile_time_arg_val(22) != 0;
 static_assert(!verify || batch == 2, "verify runs two rows of one user");
 constexpr uint32_t iters = layers * batch;
 static_assert(heads <= 16, "head rows live in the top faces");
@@ -136,21 +142,41 @@ FORCE_INLINE uint32_t row_offset(uint32_t r) { return (r < 16 ? 0 : 2 * kFace) +
 // byte offset of user u's face 0 row inside a batch x 32 tile; its face 1 row is + batch * kFaceRow
 FORCE_INLINE uint32_t user_offset(uint32_t u) { return u * kFaceRow; }
 
-// chunk of chunk worker w at KV tile rows tp (complete position tiles): bank, first row j, row step J,
-// number of rows (0: no chunk)
+// chunk of chunk worker w at tp complete position tiles: its tiles t0, t0 + dt, ... (n of them, 0: no chunk);
+// tile t lives in bank t % banks, row t / banks
 struct Chunk {
-    uint32_t bank, j, J, n;
+    uint32_t t0, dt, n;
 };
 FORCE_INLINE Chunk chunk_of(uint32_t w, uint32_t tp) {
+    if constexpr (round_robin) {
+        constexpr uint32_t W = workers - 1;
+        return {w, W, tp > w ? (tp - w + W - 1) / W : 0};
+    }
     const uint32_t live = tp < banks ? tp : banks;
     if (live == 0) {
-        return {0, 0, 1, 0};
+        return {0, 1, 0};
     }
     const uint32_t b = w % live;
     const uint32_t j = w / live;
     const uint32_t J = (workers - 1 - b + live - 1) / live;
     const uint32_t rows = (tp - b + banks - 1) / banks;  // tiles b, b + banks, ... below tp
-    return {b, j, J, rows > j ? (rows - j + J - 1) / J : 0};
+    return {j * banks + b, J * banks, rows > j ? (rows - j + J - 1) / J : 0};
+}
+
+// whether chunk ch holds tile t
+FORCE_INLINE bool holds(const Chunk& ch, uint32_t t) {
+    return t >= ch.t0 && (t - ch.t0) % ch.dt == 0 && (t - ch.t0) / ch.dt < ch.n;
+}
+
+// the chunk worker whose chunk at tp complete tiles holds tile t < tp
+FORCE_INLINE uint32_t owner_of(uint32_t t, uint32_t tp) {
+    if constexpr (round_robin) {
+        return t % (workers - 1);
+    }
+    const uint32_t live = tp < banks ? tp : banks;
+    const uint32_t b = t % banks;
+    const uint32_t J = (workers - 1 - b + live - 1) / live;
+    return b + live * ((t / banks) % J);
 }
 
 }  // namespace resident_attn

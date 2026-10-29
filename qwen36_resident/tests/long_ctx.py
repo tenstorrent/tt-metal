@@ -440,11 +440,64 @@ def run_resident(a):
         out["cores"] = core_map(mesh, r.model)
         out["dram_view_gb_per_chip"] = dram(mesh)
         log(f"budget per chip (GB): {json.dumps({k: round(v, 3) for k, v in out['budget_gb_per_chip'].items()})}")
+        if a.speed_first:
+            out["speed"] = [speed(r, corpus, int(T), a.tpot_steps, a.greedy) for T in _ints(a.speed)]
         if a.ref:
             out["hf"] = hf_teacher(r, a.ref)
         out["teacher"] = [resident_teacher(r, corpus, int(P), a.steps, a.out_dir, a.tag) for P in _ints(a.teacher)]
-        out["speed"] = [speed(r, corpus, int(T), a.tpot_steps, a.greedy) for T in _ints(a.speed)]
+        if not a.speed_first:
+            out["speed"] = [speed(r, corpus, int(T), a.tpot_steps, a.greedy) for T in _ints(a.speed)]
         out["end"] = dict(zip(("rss_gb", "rss_peak_gb"), host_mem()))
+    finally:
+        if a.out_dir:
+            json.dump(out, open(f"{a.out_dir}/{a.tag}.json", "w"), indent=1)
+        close_mesh(mesh)
+
+
+def run_tpot(a):
+    """decode-only TPOT at positions: the resident decode without the prefill (its KV caches zero-filled: a step's
+    attention cost depends on its position only), hub-fed greedy steps from each position"""
+    from qwen36_resident import weights as Q
+    from qwen36_resident.model import ATTN_2NOC, ATTN_RR, WORKERS, Dims, ResidentModel, State, is_attn
+
+    mesh = open_mesh()
+    clock = Clock(mesh, log)
+    out = dict(max_len=a.max_len, tag=a.tag, workers=WORKERS, round_robin=ATTN_RR, two_nocs=ATTN_2NOC, tpot={})
+    try:
+        ck = Q.Checkpoint(Q.checkpoint_dir())
+        cfg = ck.config
+        layers, interval = cfg["num_hidden_layers"], cfg["full_attention_interval"]
+        d = Dims(mesh.get_num_devices(), mesh.dram_grid_size().x, vocab=cfg["vocab_size"])
+        emb = Q.embedding(ck)
+        embed = ttnn.from_torch(
+            emb.bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        n_attn = sum(is_attn(l, interval) for l in range(layers))
+        st = State(d, layers - n_attn, n_attn, 0, max_pos=a.max_len + 64, zero=True, kv=False)
+        m = ResidentModel(mesh, d, Q.load(ck, d, layers, interval), st, layers, interval, lm_head=True, embed=embed)
+        clock("decode model")
+        out["cores"] = core_map(mesh, m)
+        m.step(m.token_state(emb[0].float(), 0))
+        ttnn.synchronize_device(mesh)
+        m.capture_trace()
+        m.set_sampling(0.0, 1, 1.0, 0)
+        for T in _ints(a.speed):
+            m.reset()
+            m.step(m.token_state(emb[0].float(), T))
+            for _ in range(8):
+                m.step(None)
+            ttnn.synchronize_device(mesh)
+            t0 = time.time()
+            for _ in range(a.tpot_steps):
+                m.step(None)
+            ttnn.synchronize_device(mesh)
+            out["tpot"][T] = (time.time() - t0) / a.tpot_steps * 1e3
+            log(f"decode-only T={T}: TPOT {out['tpot'][T]:.2f} ms")
     finally:
         if a.out_dir:
             json.dump(out, open(f"{a.out_dir}/{a.tag}.json", "w"), indent=1)
@@ -457,7 +510,7 @@ def _ints(s):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["corpus", "ttnn", "resident", "compare"])
+    ap.add_argument("mode", choices=["corpus", "ttnn", "resident", "tpot", "compare"])
     ap.add_argument("--out")
     ap.add_argument("--tokens", type=int, default=262400)
     ap.add_argument("--corpus")
@@ -472,6 +525,7 @@ def main():
     ap.add_argument("--speed", default="")
     ap.add_argument("--tpot-steps", type=int, default=128)
     ap.add_argument("--greedy", type=int, default=32)
+    ap.add_argument("--speed-first", action="store_true", help="the speed runs before the teacher-forced ones")
     ap.add_argument("files", nargs="*")
     a = ap.parse_args()
     faulthandler.dump_traceback_later(300, repeat=True, file=sys.stderr)
@@ -481,6 +535,8 @@ def main():
         run_ttnn(a)
     elif a.mode == "resident":
         run_resident(a)
+    elif a.mode == "tpot":
+        run_tpot(a)
     else:
         x, y = (torch.load(f) for f in a.files)
         log(json.dumps(compare(x["logits"], y["logits"]), indent=1))

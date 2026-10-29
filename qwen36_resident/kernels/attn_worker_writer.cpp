@@ -83,12 +83,9 @@ void kernel_main() {
         }
         if constexpr (verify) {
             const uint32_t tp0 = tail_row[0] * banks + tail_bank[0], tp1 = tail_row[1] * banks + tail_bank[1];
-            // chunk_of's worker for row 0's tile among row 1's complete tiles
-            const uint32_t live = tp1 < banks ? tp1 : banks;
-            const uint32_t b = tp0 % banks;
-            const uint32_t J = (workers - 1 - b + live - 1) / live;
-            const uint32_t owner = b + live * (tail_row[0] % J);
             if (tp1 != tp0) {
+                // chunk_of's worker for row 0's tile among row 1's complete tiles
+                const uint32_t owner = owner_of(tp0, tp1);
                 owner_sem = get_noc_addr(
                     get_arg_val<uint32_t>(tail_args + 4 + 2 * owner),
                     get_arg_val<uint32_t>(tail_args + 5 + 2 * owner),

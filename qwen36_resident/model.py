@@ -60,7 +60,15 @@ PROJ_DT, OUT_DT, GU_DT, DOWN_DT, HEAD_DT = (
     ttnn.bfloat8_b,
     ttnn.bfloat8_b,
 )
-WORKERS, FANIN = 32, 8
+# attention workers (the last one the tail core); more workers split long contexts finer (and change the summation
+# order of the partials). 40 still fits a rectangle of the P300 grid next to the streamers.
+WORKERS = int(os.environ.get("RESIDENT_ATTN_WORKERS", "32"))
+FANIN = 8
+# chunk workers take tiles round robin over all banks (attn_common.hpp chunk_of)
+ATTN_RR = os.environ.get("RESIDENT_ATTN_RR", "0") == "1"
+# chunk workers read their KV tiles over both NOCs (attn_common.hpp two_nocs; the same reads and arithmetic, so
+# the same numbers): 24.1 -> 20.5 ms TPOT at 262K, the KV stream is NOC-bound on one NOC
+ATTN_2NOC = os.environ.get("RESIDENT_ATTN_2NOC", "1") == "1"
 KV_BLOCK = 8  # KV position tiles per streamed block of an attention worker
 (
     SEM_SLOTS,
@@ -350,7 +358,10 @@ def worker_rect(mesh, used, count):
 
 
 def chunk_of(w, tp, banks):
-    """Mirror of attn_common.hpp chunk_of: (bank, j, J, rows) of chunk worker w."""
+    """Mirror of attn_common.hpp chunk_of: (bank, j, J, rows) of chunk worker w (round robin: (None, w,
+    WORKERS - 1, tiles))."""
+    if ATTN_RR:
+        return None, w, WORKERS - 1, (tp - w + WORKERS - 2) // (WORKERS - 1) if tp > w else 0
     live = min(tp, banks)
     if live == 0:
         return 0, 0, 1, 0
@@ -1055,6 +1066,8 @@ class ResidentModel:
                 SEM_LOCAL,
                 B,
                 int(self.verify),
+                int(ATTN_RR),
+                int(ATTN_2NOC),
             ]
             group = d.nv // d.nk
             kv_addrs = [sub["K"].buffer_address(), sub["V"].buffer_address()]
