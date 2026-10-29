@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <exception>
 #include <functional>
@@ -34,6 +35,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/mesh_event.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/cleanup.hpp>
@@ -183,32 +185,29 @@ size_t os_page_size() {
     return page_size;
 }
 
-// A host range widened to whole OS pages, which is what a pin of the range covers.
-struct PinnedSpan {
-    uintptr_t begin = 0;
-    uintptr_t end = 0;
+// The bytes of one source. Kept unwidened: tensors packed into one mapping share boundary pages without sharing
+// bytes, and their pins differ.
+struct HostRange {
+    const std::byte* begin = nullptr;
+    const std::byte* end = nullptr;
 
-    PinnedSpan(const std::byte* base, size_t size) :
-        begin(tt::round_down(reinterpret_cast<uintptr_t>(base), os_page_size())),
-        end(tt::round_up(reinterpret_cast<uintptr_t>(base) + size, os_page_size())) {}
-
-    bool overlaps(const PinnedSpan& other) const { return begin < other.end && other.begin < end; }
+    bool overlaps(const HostRange& other) const { return begin < other.end && other.begin < end; }
 };
 
-std::vector<PinnedSpan> spans_of(const std::vector<Source>& sources) {
-    std::vector<PinnedSpan> spans;
-    spans.reserve(sources.size());
+std::vector<HostRange> ranges_of(const std::vector<Source>& sources) {
+    std::vector<HostRange> ranges;
+    ranges.reserve(sources.size());
     for (const auto& source : sources) {
-        spans.emplace_back(source.base, source.size);
+        ranges.push_back({.begin = source.base, .end = source.base + source.size});
     }
-    return spans;
+    return ranges;
 }
 
 // Pins of device-immutable uploads that returned before their writes completed.
 struct PendingUpload {
     distributed::MeshEvent completion;  // Recorded after the upload's last write.
     std::vector<PinnedMemoryPtr> pins;
-    std::vector<PinnedSpan> spans;   // The host ranges of the upload's sources.
+    std::vector<HostRange> ranges;   // The host ranges of the upload's sources.
     std::vector<MemoryPin> storage;  // Keeps the uploaded memory alive until the pins are released.
 
     const distributed::MeshDevice* device() const { return completion.device(); }
@@ -301,15 +300,19 @@ private:
 
 class PendingUploads {
 public:
+    // Never destroyed: this is first used after the devices exist, so it would be destroyed before them, and closing a
+    // device during exit still drains it.
     static PendingUploads& instance() {
-        static PendingUploads pending;
-        return pending;
+        static ttsl::Indestructible<PendingUploads> pending;
+        return pending.get();
     }
 
     PendingUploads() {
-        // Releasing storage runs its MemoryPin callbacks, which call into the pin cache; constructing it first
-        // destroys it after this one at exit.
+        // Releasing storage runs its MemoryPin callbacks, which call into the pin cache. Constructing the cache
+        // before registering this handler runs the handler, and so finishes the releases queued by then, before the
+        // cache is destroyed at exit.
         experimental::PinnedMemoryCache::instance();
+        std::atexit([] { PendingUploads::instance().wait_for_storage_release(); });
     }
 
     void add(PendingUpload upload) {
@@ -317,18 +320,19 @@ public:
         uploads_.push_back(std::move(upload));
     }
 
-    // Releases uploads to `mesh_device` whose writes have completed, without waiting.
-    void release_completed(const distributed::MeshDevice& mesh_device) {
+    // Releases uploads, to any device, whose writes have completed, without waiting.
+    void release_completed() {
         // Events on one command queue complete in order, so stop at the first incomplete upload per queue.
-        std::set<uint32_t> blocked_cqs;
+        std::set<std::pair<const distributed::MeshDevice*, uint32_t>> blocked_cqs;
         release(take([&](const PendingUpload& upload) {
-            if (upload.device() != &mesh_device || blocked_cqs.contains(upload.cq_id())) {
+            const auto cq = std::make_pair(upload.device(), upload.cq_id());
+            if (blocked_cqs.contains(cq)) {
                 return false;
             }
             if (distributed::EventQuery(upload.completion)) {
                 return true;
             }
-            blocked_cqs.insert(upload.cq_id());
+            blocked_cqs.insert(cq);
             return false;
         }));
     }
@@ -337,15 +341,19 @@ public:
         release(take([&](const PendingUpload& upload) {
             return upload.device() == &mesh_device && (!cq_id.has_value() || upload.cq_id() == *cq_id);
         }));
+        // Another thread may have taken some of them and still be unpinning, which needs the device open.
+        std::unique_lock lock(mutex_);
+        released_cv_.wait(lock, [this] { return num_releasing_ == 0; });
     }
 
     // Waits for, then releases, the pending uploads (to any device, through any command queue) whose sources overlap
     // the host ranges of `sources`.
     void drain_overlapping(const std::vector<Source>& sources) {
-        const auto spans = spans_of(sources);
+        const auto ranges = ranges_of(sources);
         release(take([&](const PendingUpload& upload) {
-            return std::any_of(upload.spans.begin(), upload.spans.end(), [&](const auto& held) {
-                return std::any_of(spans.begin(), spans.end(), [&](const auto& span) { return held.overlaps(span); });
+            return std::any_of(upload.ranges.begin(), upload.ranges.end(), [&](const auto& held) {
+                return std::any_of(
+                    ranges.begin(), ranges.end(), [&](const auto& range) { return held.overlaps(range); });
             });
         }));
     }
@@ -373,12 +381,18 @@ private:
                 ++upload;
             }
         }
+        if (!taken.empty()) {
+            num_releasing_++;
+        }
         return taken;
     }
 
     // Unpins here, outside the lock: each pin first waits for its own writes. The storage the pins read from is
     // released afterwards, in the background.
     void release(std::vector<PendingUpload> uploads) {
+        if (uploads.empty()) {
+            return;
+        }
         std::vector<MemoryPin> storage;
         for (auto& upload : uploads) {
             upload.pins.clear();
@@ -389,10 +403,17 @@ private:
         }
         uploads.clear();
         storage_releaser_.release(std::move(storage));
+        {
+            std::lock_guard lock(mutex_);
+            num_releasing_--;
+        }
+        released_cv_.notify_all();
     }
 
     mutable std::mutex mutex_;
+    std::condition_variable released_cv_;
     std::deque<PendingUpload> uploads_;  // In the order they were added.
+    size_t num_releasing_ = 0;           // Taken batches whose pins are not yet released.
     StorageReleaser storage_releaser_;
 };
 
@@ -601,6 +622,8 @@ void write_shards_chunked(
         std::vector<PinnedMemoryPtr> pins;
     };
     std::deque<InFlightChunk> in_flight;
+    // Waiting on an event looks up the device at each coordinate of its range, so it covers only this host's devices.
+    const auto local_range = mesh_device.get_view().get_local_mesh_coord_range();
     std::vector<distributed::ShardDataTransfer> transfers;
     for (size_t c = 0; c < num_chunks; c++) {
         submit_through(c + 1 + chunks_ahead);
@@ -634,7 +657,8 @@ void write_shards_chunked(
         }
         cq.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/false);
         transfers.clear();  // Its pin references go too; in_flight holds the chunk's pins.
-        in_flight.push_back({.written = cq.enqueue_record_event_to_host(), .pins = std::move(chunk_pins)});
+        in_flight.push_back(
+            {.written = cq.enqueue_record_event_to_host({}, local_range), .pins = std::move(chunk_pins)});
         if (in_flight.size() > k_in_flight_chunks) {
             wait_for_writes(in_flight.front().written);
             in_flight.pop_front();
@@ -647,7 +671,7 @@ void write_shards_chunked(
         return;
     }
     PendingUpload pending{
-        .completion = in_flight.back().written, .spans = spans_of(sources), .storage = std::move(storage)};
+        .completion = in_flight.back().written, .ranges = ranges_of(sources), .storage = std::move(storage)};
     for (auto& chunk : in_flight) {
         pending.pins.insert(
             pending.pins.end(), std::make_move_iterator(chunk.pins.begin()), std::make_move_iterator(chunk.pins.end()));
@@ -670,7 +694,7 @@ bool write_sources(
     const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
     std::vector<Source> sources) {
     auto& mesh_device = *mesh_buffer->device();
-    PendingUploads::instance().release_completed(mesh_device);
+    PendingUploads::instance().release_completed();
     // A pin of a range that an earlier upload's chunk pins still cover may duplicate one of them exactly, which fails
     // the pin (and a failing cached whole-range pin first evicts the cache's other entries for the device). An upload
     // of the range still enqueueing on another thread is not pending yet; a duplicate there fails the same way and is

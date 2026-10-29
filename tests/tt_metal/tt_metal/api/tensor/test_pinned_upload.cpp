@@ -435,7 +435,7 @@ TEST_F(TensixPinnedUploadFixture, HostBaseOffPcieAlignment) {
 
 // Uploads to a mesh of more than one device: shards in separate host buffers pin as separate sources, and a 1x1 host
 // tensor replicated to every device pins once.
-class PinnedUploadMultiDeviceFixture : public GenericMeshDeviceFixture {
+class TensixPinnedUploadMultiDeviceFixture : public GenericMeshDeviceFixture {
 protected:
     void SetUp() override {
         GenericMeshDeviceFixture::SetUp();
@@ -451,7 +451,7 @@ protected:
     }
 };
 
-TEST_F(PinnedUploadMultiDeviceFixture, ShardsInSeparateBuffers) {
+TEST_F(TensixPinnedUploadMultiDeviceFixture, ShardsInSeparateBuffers) {
     const size_t rows = 5 * k_rows_per_chunk + 7;
     const auto mesh_shape = mesh_device_->shape();
     distributed::MeshCoordinateRange range(mesh_shape);
@@ -483,7 +483,7 @@ TEST_F(PinnedUploadMultiDeviceFixture, ShardsInSeparateBuffers) {
     }
 }
 
-TEST_F(PinnedUploadMultiDeviceFixture, OneHostShardReplicatedToEveryDevice) {
+TEST_F(TensixPinnedUploadMultiDeviceFixture, OneHostShardReplicatedToEveryDevice) {
     const size_t rows = 5 * k_rows_per_chunk + 9;
     auto words = iota_words(rows * k_row_words, 23u);
     HostBuffer buffer = host_buffer_over(words);
