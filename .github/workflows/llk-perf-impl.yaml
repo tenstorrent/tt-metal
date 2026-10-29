@@ -467,9 +467,8 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: llk-perf-stage2-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
-          path: |
-            ${{ runner.temp }}/stage2/stage2.json
-            ${{ runner.temp }}/stage2/stage2.base
+          # One search path: with two, upload-artifact uploaded only one of the files in the leg container.
+          path: ${{ runner.temp }}/stage2/stage2.*
           if-no-files-found: ignore
 
       # Shadow steps: after the official upload, report-only, llk-shadow-* artifacts only.
