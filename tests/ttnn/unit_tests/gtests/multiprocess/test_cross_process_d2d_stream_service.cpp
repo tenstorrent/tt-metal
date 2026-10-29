@@ -1278,7 +1278,7 @@ TEST_F(CrossProcessD2DFixture, MismatchedRelayThrows) {
     if (world_size < 2) {
         GTEST_SKIP() << "needs >= 2 ranks; got " << world_size;
     }
-    if (tt::tt_fabric::IsIntermeshVCDisabled()) {
+    if (tt::tt_fabric::is_intermesh_vc_disabled(*mesh_device_)) {
         GTEST_SKIP() << "TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1 forces relay on for both sides";
     }
 

@@ -382,7 +382,12 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
             config = needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through()
                                              : IntermeshVCConfig::full_mesh();
 
-            if (fabric_context_.get_rtoptions().get_disable_fabric_intermesh_vc() && !needs_mesh_pass_through) {
+            if (fabric_context_.get_rtoptions().get_disable_fabric_intermesh_vc() && needs_mesh_pass_through) {
+                log_warning(
+                    tt::LogFabric,
+                    "TT_METAL_FABRIC_DISABLE_INTERMESH_VC is ignored: mesh pass-through needs VC1. The D2D relay "
+                    "stays off");
+            } else if (fabric_context_.get_rtoptions().get_disable_fabric_intermesh_vc()) {
                 config = IntermeshVCConfig::disabled();
                 config.mode = IntermeshVCMode::FULL_MESH;
                 config.intermesh_vc_disabled = true;
@@ -407,6 +412,5 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
     return config;
 }
-
 
 }  // namespace tt::tt_fabric

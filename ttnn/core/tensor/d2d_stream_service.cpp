@@ -305,8 +305,9 @@ std::optional<D2DStageGateConfig> enabled_stage_gate(const D2DStreamConfig& cfg)
 constexpr uint32_t kMaxStageGates = 1024;
 
 // With the intermesh VC disabled, a landed packet can only go N or S, so every stream needs the relay.
-void apply_intermesh_vc_disabled(D2DStreamConfig& cfg) {
-    if (tt::tt_fabric::IsIntermeshVCDisabled()) {
+// Reads the fabric built for `mesh`, which keeps VC1 when meshes need pass-through.
+void apply_intermesh_vc_disabled(D2DStreamConfig& cfg, const distributed::MeshDevice& mesh) {
+    if (tt::tt_fabric::is_intermesh_vc_disabled(mesh)) {
         cfg.relay = true;
     }
 }
@@ -697,8 +698,10 @@ struct RelayPlan {
 // Hops between two coords of one mesh, with wrap-around on the axes the fabric closes into a
 // ring (torus). Only used to pick a cable, so a rough count is enough.
 uint32_t relay_hops(
-    const distributed::MeshCoordinate& a, const distributed::MeshCoordinate& b, const distributed::MeshShape& shape) {
-    const auto fabric = tt::tt_fabric::GetFabricConfig();
+    const distributed::MeshCoordinate& a,
+    const distributed::MeshCoordinate& b,
+    const distributed::MeshShape& shape,
+    tt::tt_fabric::FabricConfig fabric) {
     const bool wrap_y = fabric == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
                         fabric == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
     const bool wrap_x = fabric == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
@@ -715,12 +718,14 @@ uint32_t relay_hops(
 
 // is_sender: this process owns the sender nodes (it asks the control plane about its own chips).
 RelayPlan make_relay_plan(
+    const distributed::MeshDevice& mesh,
     const std::vector<distributed::MeshCoordinate>& coords,
     const std::map<distributed::MeshCoordinate, tt::tt_fabric::FabricNodeId>& sender_nodes,
     const std::map<distributed::MeshCoordinate, tt::tt_fabric::FabricNodeId>& receiver_nodes,
-    const distributed::MeshShape& shape,
     bool is_sender) {
     using tt::tt_fabric::RoutingDirection;
+    const auto& shape = mesh.shape();
+    const auto fabric = tt::tt_fabric::get_fabric_config(mesh);
     const auto& local_nodes = is_sender ? sender_nodes : receiver_nodes;
     const auto& peer_nodes = is_sender ? receiver_nodes : sender_nodes;
 
@@ -735,7 +740,7 @@ RelayPlan make_relay_plan(
               RoutingDirection::S,
               RoutingDirection::W,
               RoutingDirection::Z}) {
-            const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(node, dir);
+            const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(mesh, node, dir);
             for (const auto& [peer_coord, peer_node] : peer_nodes) {
                 auto it = neighbors.find(*peer_node.mesh_id);
                 if (it == neighbors.end() ||
@@ -792,8 +797,8 @@ RelayPlan make_relay_plan(
             if (load[p] >= cap) {
                 continue;
             }
-            const uint32_t cost =
-                relay_hops(c, plan.cables[p].exit_coord, shape) + relay_hops(plan.cables[p].entry_coord, c, shape);
+            const uint32_t cost = relay_hops(c, plan.cables[p].exit_coord, shape, fabric) +
+                                  relay_hops(plan.cables[p].entry_coord, c, shape, fabric);
             if (cost < best_cost || (cost == best_cost && load[p] < load[best])) {
                 best = p;
                 best_cost = cost;
@@ -1673,7 +1678,7 @@ std::shared_ptr<RelayLocal> allocate_relay(
         cfg.share_fabric_links, "D2DStreamService relay: needs share_fabric_links (the relays hold links per lease)");
     TT_FATAL(!enabled_stage_gate(cfg), "D2DStreamService relay: stage_gate is not supported");
     TT_FATAL(
-        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::get_fabric_config(*mesh)),
         "D2DStreamService relay: needs a 2D fabric (the relays route by chip id)");
 
     auto relay = std::make_shared<RelayLocal>();
@@ -1687,7 +1692,7 @@ std::shared_ptr<RelayLocal> allocate_relay(
             is_sender ? socket.get_fabric_node_id(distributed::SocketEndpoint::RECEIVER, c)
                       : mesh->get_fabric_node_id(c));
     }
-    relay->plan = make_relay_plan(coords, relay->sender_nodes, relay->receiver_nodes, mesh->shape(), is_sender);
+    relay->plan = make_relay_plan(*mesh, coords, relay->sender_nodes, relay->receiver_nodes, is_sender);
     relay->common = common;
     relay->max_lanes = cfg.max_sender_lanes;
     relay->word_stride = common.l1_alignment;
@@ -2338,7 +2343,7 @@ Program build_exit_relay_program(
 
     const auto z_links = tt::tt_fabric::get_forwarding_link_indices(*mesh, exit_node, entry_node);
     const uint32_t z_lanes = relay_cable_lanes(*mesh, relay, p);
-    const auto cable_dir = tt::tt_fabric::pipeline_get_forwarding_direction(exit_node, entry_node);
+    const auto cable_dir = tt::tt_fabric::pipeline_get_forwarding_direction(*mesh, exit_node, entry_node);
 
     // Credit connections: one per first-hop direction toward the remote sources.
     std::vector<std::pair<tt::tt_fabric::FabricNodeId, uint32_t>> credit_conns;  // (a node that way, link)
@@ -2349,7 +2354,7 @@ Program build_exit_relay_program(
             continue;
         }
         const auto src_node = relay.sender_nodes.at(cable.slots[k]);
-        const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(exit_node, src_node);
+        const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(*mesh, exit_node, src_node);
         TT_FATAL(dir.has_value(), "D2DStreamService relay: no route from exit chip {} to coord {}", e, cable.slots[k]);
         TT_FATAL(dir != cable_dir, "D2DStreamService relay: a credit route at {} leaves over the cable", e);
         const auto [it, added] = conn_of_dir.emplace(*dir, static_cast<uint32_t>(credit_conns.size()));
@@ -2499,7 +2504,7 @@ Program build_entry_relay_program(
         }
         const auto& t = cable.slots[k];
         const auto t_node = relay.receiver_nodes.at(t);
-        const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(entry_node, t_node);
+        const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(*mesh, entry_node, t_node);
         TT_FATAL(dir.has_value(), "D2DStreamService relay: no route from entry chip {} to coord {}", e, t);
         const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, entry_node, t_node);
         lanes[k] = relay_target_lanes(*mesh, relay, t, p);
@@ -2920,7 +2925,7 @@ D2DStreamService::create_pair(
         "D2DStreamService: sender_mesh shape {} must equal receiver_mesh shape {} (1:1 coord mapping)",
         sender_mesh->shape(),
         receiver_mesh->shape());
-    CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg);
+    CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg, *sender_mesh);
     CMAKE_UNIQUE_NAMESPACE::validate_stage_gate(cfg);
 
     // Run the mapper once; both sides share the per-shard spec + topology.
@@ -3019,7 +3024,7 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
         *ctx->rank(),
         *endpoints.sender_rank);
 
-    CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg);
+    CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg, *sender_mesh);
 
     // Run the mapper locally; the receiver process runs the same mapper on its
     // identically-shaped mesh and derives the same per-shard spec.
@@ -3120,7 +3125,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
         "D2DStreamService::create_receiver must run on the receiver rank (local rank {}, endpoints.receiver_rank {})",
         *ctx->rank(),
         *endpoints.receiver_rank);
-    CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg);
+    CMAKE_UNIQUE_NAMESPACE::apply_intermesh_vc_disabled(cfg, *receiver_mesh);
     CMAKE_UNIQUE_NAMESPACE::validate_stage_gate(cfg);
 
     auto mo = CMAKE_UNIQUE_NAMESPACE::run_mapper(cfg);
