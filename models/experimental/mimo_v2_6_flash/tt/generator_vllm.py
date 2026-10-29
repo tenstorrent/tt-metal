@@ -2072,7 +2072,7 @@ class MiMoV2ForCausalLM:
                 ttnn.synchronize_device(model.mesh_device)
         # Traced later chunks: the same, for a chunk of the step's whole budget and for the longest chunk (an unaligned
         # start moved back), each SDPA program a start can bring.
-        chunk_traces = []
+        chunk_traces = {}  # replica -> its traced later chunks (none: dropped, it runs them eagerly)
         if PREFILL_CHUNK_TRACE and not DFLASH and not all(m.chunk_traces_supported() for m in self.models):
             logger.warning(
                 "MiMo vLLM: traced later prefill chunks (MIMO_PREFILL_CHUNK_TRACE) off: this ttnn build's "
@@ -2084,17 +2084,20 @@ class MiMoV2ForCausalLM:
             lengths = sorted({prefill_padded_len(n, self._chunk_align(), pair) for n in self._chunk_trace_tokens()})
             for lane, model in enumerate(self.models):
                 try:
-                    chunk_traces = model.setup_prefill_chunk_traces(lengths, CHUNK_TRACE_SDPA)
+                    chunk_traces[lane] = model.setup_prefill_chunk_traces(lengths, CHUNK_TRACE_SDPA)
                     model.warm_prefill_chunk_traces()
                 except Exception as e:  # e.g. out of DRAM for their buffers: serve with eager later chunks
                     model.drop_prefill_chunk_traces(f"replica {lane}: setting up later-chunk traces failed: {e}")
-                    chunk_traces = []
+                    chunk_traces[lane] = []
+        # One entry when every replica traces the same chunks; per replica when one dropped them.
+        traced = list(chunk_traces.values())
+        traced = traced[0] if traced and all(t == traced[0] for t in traced) else (chunk_traces or [])
         self.already_warmed_up_prefill = self.prefill_programs_compiled = True
         new = [m.mesh_device.num_program_cache_entries() - p for m, p in zip(self.models, programs)]
         logger.info(
             f"MiMo vLLM: prefill warmed up in {time.time() - t0:.1f}s: {len(chunks)} chunks of up to {max_tokens} "
             f"tokens and {len(batches)} batches through layers {layers}, {new} new programs per replica; "
-            f"traced later chunks {chunk_traces}"
+            f"traced later chunks {traced}"
         )
 
     def _chunk_trace_tokens(self):

@@ -77,6 +77,12 @@ def main():
     )
     parser.add_argument("--users", type=int, default=1, help="requests per busy lane (at most --per-lane)")
     parser.add_argument("--offset", type=int, default=0, help="the first step is --budget - offset tokens")
+    parser.add_argument(
+        "--force-recapture",
+        action="store_true",
+        help="after the runs, recapture every replica's traces as a prefill that compiled new programs does, then "
+        "replay one idle decode step on each (with a --trace-region-size too small for a chunk trace: the fallback)",
+    )
     args = parser.parse_args()
     assert 1 <= args.users <= args.per_lane and 0 <= args.offset < args.budget
     dp, n = 4, args.context
@@ -210,6 +216,16 @@ def main():
                     f"{busy * n / total:.0f} for the Galaxy), {len(step_times)} steps, median step "
                     f"{1e3 * sorted(step_times)[len(step_times) // 2]:.0f} ms, {passes.get('replays', 0)} chunk replays"
                     f"{cmp}"
+                )
+        if args.force_recapture:
+            model._recapture_after_new_programs([m.mesh_device.num_program_cache_entries() - 1 for m in model.models])
+            for lane, m in enumerate(model.models):
+                idle = torch.full((m.max_batch,), -1, dtype=torch.int32)
+                m.decode_read(m.decode_enqueue(torch.zeros(m.max_batch, dtype=torch.int32), idle))
+                used, total = m.trace_region_bytes()
+                say(
+                    f"RECAPTURED replica {lane}: decode replayed; {len(m.chunk_traces)} later-chunk traces; trace region "
+                    f"{used / 2**20:.1f} MB of {total / 2**20:.1f} MB used per device"
                 )
         say(f"decode recaptures {model.decode_recaptures}")
     finally:

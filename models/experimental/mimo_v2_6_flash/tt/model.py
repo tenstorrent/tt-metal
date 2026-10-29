@@ -59,6 +59,11 @@ PREFILL_CHUNK_TRACE = os.environ.get("MIMO_PREFILL_CHUNK_TRACE", "1") == "1"
 # The slack a later-chunk capture needs in the trace region over the largest one captured before it (the traces of a
 # replica differ only in their SDPA programs).
 CHUNK_TRACE_HEADROOM = 1.1
+# What the first later-chunk capture of a replica is checked against (there is no earlier one to go by): a 4096-token
+# chunk's trace takes 20.8 MB per device (TP=8 x DP=4). Only an early out: a capture that does not fit still fails
+# cleanly in tt-metal's own check (MeshTrace::populate_mesh_buffer, which counts a trace against the region only once
+# it fits) and drops the traces.
+CHUNK_TRACE_FIRST_ESTIMATE = 21 << 20
 
 
 def prefill_padded_len(seq_len, start_pos=0, pair_split=False):
@@ -714,6 +719,21 @@ class TtMiMoModel:
         return logits
 
     # ------------------------------------------------------------------ prefill
+    @contextlib.contextmanager
+    def _prefill_rope(self, pinned=None):
+        """Each RoPE setup's shared prefill cos/sin for one chunk or batch (MiMoRotarySetup.begin_prefill_chunk),
+        ended however the pass exits: one that raises (a failed warm pass or capture) leaves no chunk open, so the next
+        prefill can begin its own. ``pinned``: {setup name: {(start, length): [cos, sin]}} the caller owns."""
+        begun = []
+        try:
+            for name, setup in self.rope_setups.items():
+                setup.begin_prefill_chunk(pinned=None if pinned is None else pinned[name])
+                begun.append(setup)
+            yield
+        finally:
+            for setup in begun:
+                setup.end_prefill_chunk()
+
     def _prefill_chunk(self, tokens, slot, start_pos, hidden, layers=None, draft_group=0, after_layer=None):
         """One chunk (``tokens`` 1D torch) at ``start_pos`` through the layers ``layers`` (indices, default all);
         returns the last one's output [1, 1, padded, hidden] and appends (copy, real rows) of every layer's output to
@@ -729,39 +749,36 @@ class TtMiMoModel:
             self.swa_table.prefill(slot, start_pos, start_pos + n, start_pos + padded)
             self._sync_swa_table()
         tables, start = self._prefill_tables(slot, start_pos, padded, layers)
-        for setup in self.rope_setups.values():
-            setup.begin_prefill_chunk()
-        with zone("embed"):
-            x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
-        dflash_acc = None
-        with self._prefill_reduce(padded):
-            for k, i in enumerate(layers):
-                layer = self.layers[i]
-                with zone(f"layer{i:02d}_{'swa' if layer.is_swa else 'global'}{'' if layer.is_moe else '_dense'}"):
-                    y = layer.forward_prefill(
-                        x,
-                        slot,
-                        self._layer_page_table(i),
-                        self.kv_caches[i],
-                        real_len=n,
-                        start_pos=start_pos,
-                        tables=tables[self._table_key(i)],
-                    )
-                x.deallocate(True)
-                x = y
-                if self.dflash is not None:
-                    dflash_acc = self.dflash.prefill_tap(i, x, dflash_acc)
-                if hidden is not None:
-                    hidden[k].append((ttnn.clone(x), n))
-                if after_layer is not None:
-                    after_layer(i)
-        if self.dflash is not None:
-            if dflash_acc is None:
-                dflash_acc = self.dflash.prefill_tap(self.dflash.tap_layers[0], x, None)
-            self.dflash.prefill_context(dflash_acc, start_pos, n, draft_group)
-        # Enqueued: freeing them now is ordered with the work that reads them.
-        for setup in self.rope_setups.values():
-            setup.end_prefill_chunk()
+        # The shared cos/sin are freed as the chunk ends (enqueued: ordered with the work that reads them).
+        with self._prefill_rope():
+            with zone("embed"):
+                x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
+            dflash_acc = None
+            with self._prefill_reduce(padded):
+                for k, i in enumerate(layers):
+                    layer = self.layers[i]
+                    with zone(f"layer{i:02d}_{'swa' if layer.is_swa else 'global'}{'' if layer.is_moe else '_dense'}"):
+                        y = layer.forward_prefill(
+                            x,
+                            slot,
+                            self._layer_page_table(i),
+                            self.kv_caches[i],
+                            real_len=n,
+                            start_pos=start_pos,
+                            tables=tables[self._table_key(i)],
+                        )
+                    x.deallocate(True)
+                    x = y
+                    if self.dflash is not None:
+                        dflash_acc = self.dflash.prefill_tap(i, x, dflash_acc)
+                    if hidden is not None:
+                        hidden[k].append((ttnn.clone(x), n))
+                    if after_layer is not None:
+                        after_layer(i)
+            if self.dflash is not None:
+                if dflash_acc is None:
+                    dflash_acc = self.dflash.prefill_tap(self.dflash.tap_layers[0], x, None)
+                self.dflash.prefill_context(dflash_acc, start_pos, n, draft_group)
         for t in tables.values():
             t.release()
         if start is not None:
@@ -888,11 +905,8 @@ class TtMiMoModel:
         ats = [kv_lib.replicated(self.plan, torch.tensor([0, 0, s, 0], dtype=torch.int32), ttnn.uint32) for s in starts]
         picks_tt = kv_lib.replicated(self.plan, torch.tensor(picks, dtype=torch.int32).reshape(1, -1), ttnn.uint32)
         tokens_tt = self._to_device_tokens(tokens)
-        for setup in self.rope_setups.values():
-            setup.begin_prefill_chunk()
-        logits = self._prefill_batch_device(tokens_tt, tables, ats, picks_tt, num, padded, layers, history_list)
-        for setup in self.rope_setups.values():
-            setup.end_prefill_chunk()
+        with self._prefill_rope():
+            logits = self._prefill_batch_device(tokens_tt, tables, ats, picks_tt, num, padded, layers, history_list)
         # Enqueued: freeing them now is ordered with the work that reads them.
         for t in [*tables.values()]:
             t.release()
@@ -1016,20 +1030,17 @@ class TtMiMoModel:
 
     def _prefill_batch_trace_body(self, trace, num, padded):
         """The traced pass: reads only the trace's persistent inputs, writes the trace's persistent logits."""
-        for name, setup in self.rope_setups.items():
-            setup.begin_prefill_chunk(pinned={(0, padded): trace["rope"][name]})
-        logits = self._prefill_batch_device(
-            trace["tokens"],
-            trace["tables"],
-            trace["ats"],
-            trace["picks"],
-            num,
-            padded,
-            range(len(self.layers)),
-            trace["history"],
-        )
-        for setup in self.rope_setups.values():
-            setup.end_prefill_chunk()
+        with self._prefill_rope({name: {(0, padded): rope} for name, rope in trace["rope"].items()}):
+            logits = self._prefill_batch_device(
+                trace["tokens"],
+                trace["tables"],
+                trace["ats"],
+                trace["picks"],
+                num,
+                padded,
+                range(len(self.layers)),
+                trace["history"],
+            )
         ttnn.copy(logits, trace["logits"])
         logits.deallocate(True)
 
@@ -1204,27 +1215,24 @@ class TtMiMoModel:
         """The traced later chunk: reads only its persistent inputs, writes its persistent logits row."""
         padded, parity = trace["key"][0], trace["key"][4]
         start, inputs = trace["start"], self.chunk_inputs[padded]
-        for name, setup in self.rope_setups.items():
-            setup.begin_prefill_chunk(pinned={(start, padded): inputs["rope"][name]})
-        x = ttnn.embedding(inputs["tokens"], self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        x = ttnn.reshape(x, (1, 1, padded, self.cfg.hidden_size))
-        with self._prefill_reduce(padded):
-            for i, layer in enumerate(self.layers):
-                y = layer.forward_prefill(
-                    x,
-                    parity,
-                    self._layer_page_table(i),
-                    self.kv_caches[i],
-                    start_pos=start,
-                    tables=trace["tables"][self._table_key(i)],
-                )
-                x.deallocate(True)
-                x = y
-        if inputs["history"] is not None:
-            self._history().prefill(x, self.final_norm, inputs["history"], HISTORY_ROWS)
-        logits = self._pick_logits(x, [inputs["at"]], inputs["pick"], 1, padded)
-        for setup in self.rope_setups.values():
-            setup.end_prefill_chunk()
+        with self._prefill_rope({name: {(start, padded): rope} for name, rope in inputs["rope"].items()}):
+            x = ttnn.embedding(inputs["tokens"], self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            x = ttnn.reshape(x, (1, 1, padded, self.cfg.hidden_size))
+            with self._prefill_reduce(padded):
+                for i, layer in enumerate(self.layers):
+                    y = layer.forward_prefill(
+                        x,
+                        parity,
+                        self._layer_page_table(i),
+                        self.kv_caches[i],
+                        start_pos=start,
+                        tables=trace["tables"][self._table_key(i)],
+                    )
+                    x.deallocate(True)
+                    x = y
+            if inputs["history"] is not None:
+                self._history().prefill(x, self.final_norm, inputs["history"], HISTORY_ROWS)
+            logits = self._pick_logits(x, [inputs["at"]], inputs["pick"], 1, padded)
         ttnn.copy(logits, trace["logits"])
         logits.deallocate(True)
 
@@ -1248,10 +1256,11 @@ class TtMiMoModel:
             if trace["id"] is not None:
                 continue
             used, total = self.trace_region_bytes()
-            if total and largest and total - used < largest * CHUNK_TRACE_HEADROOM:
+            need = largest or CHUNK_TRACE_FIRST_ESTIMATE
+            if total and total - used < need * CHUNK_TRACE_HEADROOM:
                 self.drop_prefill_chunk_traces(
                     f"the trace region has {(total - used) / 2**20:.0f} MB of {total / 2**20:.0f} MB free per device "
-                    f"and a later-chunk trace takes {largest / 2**20:.0f} MB"
+                    f"and a later-chunk trace takes {'' if largest else 'about '}{need / 2**20:.0f} MB"
                 )
                 return False
             trace_id = None
@@ -1263,9 +1272,8 @@ class TtMiMoModel:
                 finally:
                     ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
                 ttnn.synchronize_device(self.mesh_device)
-            except (
-                Exception
-            ) as e:  # e.g. "Creating trace buffers of size ... but only ... is allocated for trace region"
+            # e.g. "Creating trace buffers of size ... but only ... is allocated for trace region"
+            except Exception as e:
                 if trace_id is not None:
                     try:
                         ttnn.release_trace(self.mesh_device, trace_id)
