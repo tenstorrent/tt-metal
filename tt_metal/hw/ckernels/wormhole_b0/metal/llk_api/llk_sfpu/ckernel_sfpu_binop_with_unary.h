@@ -27,9 +27,11 @@ template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS, bool is_fp32_
 void calculate_binop_with_scalar(std::uint32_t param) {
     const sfpi::vFloat parameter = Converter::as_float(param);
     // RSUB's RNE constants bound once per face, not re-materialised on every row.
+    // Unassigned unless round_to_bf16_rne, which also gates their use.
+    constexpr bool round_to_bf16_rne = BINOP_MODE == RSUB && !is_fp32_dest_acc_en;
     sfpi::vUInt rne_bias;
     sfpi::vUInt rne_mask;
-    if constexpr (BINOP_MODE == RSUB && !is_fp32_dest_acc_en) {
+    if constexpr (round_to_bf16_rne) {
         rne_bias = kBf16RneBias;
         rne_mask = kBf16RneMask;
     }
@@ -54,7 +56,7 @@ void calculate_binop_with_scalar(std::uint32_t param) {
             // This correction is added for logit(x) = log(x/(1-x)) since bf16 dest stores
             // truncate fp32->bf16 by default, but torch computes rsub result in bf16 with IEEE
             // round-to-nearest-even. The resulting small error is amplified by the log operation.
-            if constexpr (!is_fp32_dest_acc_en) {
+            if constexpr (round_to_bf16_rne) {
                 result = float32_to_bf16_rne(result, rne_bias, rne_mask);
             }
         }

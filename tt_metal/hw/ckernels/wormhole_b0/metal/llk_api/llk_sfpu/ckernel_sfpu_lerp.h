@@ -39,9 +39,11 @@ inline void calculate_lerp(
     const uint off_in2 = dst_index_in2 * dst_tile_size_sfpi;
     const uint off_out = dst_index_out * dst_tile_size_sfpi;
     // RNE constants bound once per face, not re-materialised on every row.
+    // Unassigned unless round_to_bf16_rne, which also gates their use.
+    constexpr bool round_to_bf16_rne = !is_fp32_dest_acc_en;
     sfpi::vUInt rne_bias;
     sfpi::vUInt rne_mask;
-    if constexpr (!is_fp32_dest_acc_en) {
+    if constexpr (round_to_bf16_rne) {
         rne_bias = kBf16RneBias;
         rne_mask = kBf16RneMask;
     }
@@ -64,7 +66,7 @@ inline void calculate_lerp(
         sfpi::vFloat b_diff = b_in1 - b_in0;
         sfpi::vFloat a_res = a_in0 + a_in2 * a_diff;
         sfpi::vFloat b_res = b_in0 + b_in2 * b_diff;
-        if constexpr (!is_fp32_dest_acc_en) {
+        if constexpr (round_to_bf16_rne) {
             a_res = float32_to_bf16_rne(a_res, rne_bias, rne_mask);
             b_res = float32_to_bf16_rne(b_res, rne_bias, rne_mask);
         }
