@@ -1576,7 +1576,7 @@ class GLM53FlashForCausalLM:
                 feature_rows(prefix, row_items)  # the payload must match the prompt before any slot is taken
                 media[i] = (row_items, prefix)
             if start == 0:
-                state = self._allocate_slot(logical)
+                state = self._allocate_slot(logical, end)
             elif state is not None and state.phase == "prefill" and state.prefilled_to == start:
                 pass  # a chunked continuation of this slot's own prompt
             elif state is None and apc is not None:
@@ -1608,7 +1608,7 @@ class GLM53FlashForCausalLM:
                             "pixels (vLLM strips fully cached items): the prefill from 0 is impossible. Needs the "
                             "plugin's hit confirmation hook (doc/serving/prefix_caching.md s.5) or APC off"
                         )
-                    state = self._allocate_slot(logical)
+                    state = self._allocate_slot(logical, end)
                     apc.stats["downgraded"] += 1
                     logger.info(
                         f"[glm53-apc] miss: slot {logical}: no retained slot holds the {start}-token prefix; "
@@ -2384,15 +2384,18 @@ class GLM53FlashForCausalLM:
         return 0 if hit is None else int(hit.position)
 
     # ================================================================================= helpers
-    def _allocate_slot(self, logical: int):
+    def _allocate_slot(self, logical: int, end: int = 0):
         """A fresh prompt's physical slot: the column / row balance, then (APC) a slot without retained content
-        before the least recently used resident prefix; a logical slot still mapped (never released) retains first."""
+        before the least recently used resident prefix; a logical slot still mapped (never released) retains first.
+        ``end``: the first chunk's end; under per-row ownership a prompt no traced wave holds (it prefills eagerly)
+        takes a slot index live on no row, so its chunks run sequence-parallel (``SlotTable.allocate(prefer_sp)``)."""
+        prefer_sp = self.geometry.rows_independent and self.waves.captured_wave_length(int(end)) is None
         if self.apc is None:
-            return self.slots.allocate(logical)
+            return self.slots.allocate(logical, prefer_sp=prefer_sp)
         old = self.slots.physical(logical)
         if old is not None:
             self.apc.release(old.row, old.user)
-        state = self.slots.allocate(logical, slot_rank=self.apc.slot_rank)
+        state = self.slots.allocate(logical, slot_rank=self.apc.slot_rank, prefer_sp=prefer_sp)
         self.apc.begin(state.row, state.user, 0)
         return state
 

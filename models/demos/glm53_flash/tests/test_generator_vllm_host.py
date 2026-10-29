@@ -142,11 +142,36 @@ def test_slot_table_rows_independent_placement():
     tu.release(1)  # (1, 0) frees: the next arrival takes it (the lowest index with a free row)
     s6 = tu.allocate(6)
     assert (s6.row, s6.user) == (1, 0)
-    # the 8x4 at 1 M: 4 users per row, one per column -> the first 8 arrivals land on slot index 0 of rows 0..7
+    # a prompt no traced wave holds (prefer_sp: it prefills eagerly) takes a slot index live on no row first, on the
+    # lowest-load row, and stays SP-eligible (a lone eager 16 K chunk costs what one 2048-row wave costs); once every
+    # index is live somewhere the wave-affine order resumes
+    ts = SlotTable(gu)
+    placed = [(s.row, s.user) for s in (ts.allocate(i, prefer_sp=True) for i in range(6))]
+    assert placed == [(0, 0), (1, 2), (0, 1), (1, 3), (1, 0), (0, 2)]
+    assert all(ts.sp_eligible(i) for i in range(2, 4)) and not any(ts.sp_eligible(i) for i in (0, 1, 4, 5))
+    assert ts.column_loads() == [3, 3] and ts.row_loads() == [3, 3]
+    ts.release(1)  # (1, 2) frees but index 2 stays live on row 0 (request 5): the wave-affine order -> (1, 2), waves
+    s6 = ts.allocate(6, prefer_sp=True)
+    assert (s6.row, s6.user) == (1, 2) and not ts.sp_eligible(6)
+    ts.release(5)  # (0, 2) frees too: index 2 is live on no row, so the next eager arrival is SP-eligible there
+    ts.release(6)
+    s7 = ts.allocate(7, prefer_sp=True)
+    assert (s7.row, s7.user) == (0, 2) and ts.sp_eligible(7)  # rows tie at 2 live each: the lowest row
+    # the 8x4 at 1 M: 4 users per row, one per column -> the first 8 arrivals land on slot index 0 of rows 0..7; eager
+    # prompts land on the diagonal first (four SP-eligible long prompts), then on slot index 0 of the rows free of it
     g8 = ServingGeometry(rows=8, cols=4, users_per_row=4, max_seq_len=1048576, rows_independent=True)
     assert g8.wave_user_order() == [0, 1, 2, 3] and g8.request_capacity == 32 and g8.chunk_unit == 128
     t8 = SlotTable(g8)
     assert [(s.row, s.user) for s in (t8.allocate(i) for i in range(9))] == [(r, 0) for r in range(8)] + [(0, 1)]
+    t8 = SlotTable(g8)
+    assert [(s.row, s.user) for s in (t8.allocate(i, prefer_sp=True) for i in range(9))] == [
+        (r, r) for r in range(4)
+    ] + [(r, 0) for r in range(1, 6)]
+    # without the SP fallback the diagonal buys nothing: the wave-affine order from the first eager arrival
+    t8w = SlotTable(dataclasses.replace(g8, sp_fallback=False))
+    assert [(s.row, s.user) for s in (t8w.allocate(i, prefer_sp=True) for i in range(9))] == [
+        (r, 0) for r in range(8)
+    ] + [(0, 1)]
     # the non-partitioned layout: plain index order
     assert ServingGeometry(rows=2, cols=4, users_per_row=3, max_seq_len=64, partitioned=False).wave_user_order() == [
         0,
@@ -1032,8 +1057,14 @@ def test_wave_prefill_walks_chunks_and_switches_sp_to_waves_one_way():
     kinds = [c[0] for c in m.calls[n0:] if c[0].startswith("prefill")]
     assert kinds == ["prefill"] and m.calls[n0:][0][1:3] == (0, 0), kinds  # one eager SP chunk into user 0 at start 0
     assert a.slots.physical(0).sp_only and a.slots.physical(0).prefilled_to == 2048
-    # a second prompt lands on (1, 0): slot index 0 is no longer free on the other row, so request 0's next chunk
-    # and the new prompt go through waves; the 2148-token continuation is walked in 2048-row device chunks
+    # three eager arrivals take the other slot indices first (SlotTable.allocate(prefer_sp): each stays SP-eligible),
+    # so the next eager prompt must share index 0: it lands on (1, 0), slot index 0 is no longer free on the other
+    # row, and request 0's next chunk and the new prompt go through waves; the 2148-token continuation is walked in
+    # 2048-row device chunks
+    for k in (2, 3, 4):
+        a.slots.allocate(k, prefer_sp=True)
+    assert [(a.slots.physical(k).row, a.slots.physical(k).user) for k in (2, 3, 4)] == [(1, 1), (0, 2), (1, 3)]
+    assert a.slots.sp_eligible(0)
     both = torch.zeros(2, L, dtype=torch.int32)
     both[0] = ids[0]
     both[1, :3000] = torch.arange(3000) % 7 + 1

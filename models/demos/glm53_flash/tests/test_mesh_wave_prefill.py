@@ -329,6 +329,7 @@ LONG_PROMPTS = tuple(int(v) for v in os.environ.get("GLM53_WAVE_TEST_PROMPTS", "
 LONG_STEP_CHUNK = int(os.environ.get("GLM53_WAVE_TEST_STEP_CHUNK", 16384))  # vLLM's per-request chunk (the model's max)
 LONG_STEP_BUDGET = int(os.environ.get("GLM53_WAVE_TEST_STEP_BUDGET", 2 * 16384))  # vLLM's max_num_batched_tokens
 LONG_STEP_ALIGN = int(os.environ.get("GLM53_WAVE_TEST_STEP_ALIGN", 256))  # the catalog's prefill_chunk_alignment
+LONG_DEVICE_CHUNK = int(os.environ.get("GLM53_WAVE_TEST_DEVICE_CHUNK", 16384))  # the served SP device chunk
 
 
 def vllm_steps(
@@ -396,14 +397,11 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
     if long and MESH[0] < 4:
         pytest.skip("the long profile (case g: four prompts advancing in pairs over 16 K spans) needs 4 mesh rows")
     max_seq_len = LONG_MAX_SEQ_LEN if long else SERVED_MAX_SEQ_LEN
+    chunk = LONG_DEVICE_CHUNK if long else SERVED_CHUNK  # the long profile walks the served 16 K SP chunks
     monkeypatch.setenv("GLM53_PARTITION_USERS", "1")
     monkeypatch.setenv("GLM53_PREFILL_PARTITION", "heads2users")
     # the adapter's launcher sets the prefix bucket (max(chunk, max_seq_len / 8 to the chunk)); a direct build must
-    monkeypatch.setenv(
-        "GLM53_PREFIX_BUCKET", str(max(SERVED_CHUNK, -(-(max_seq_len // 8) // SERVED_CHUNK) * SERVED_CHUNK))
-    )
-    if long:  # the ladders' prefix-start walk is the boot cost at 32 K; the sealed cache names any program it misses
-        monkeypatch.setenv("GLM53_VLLM_WARMUP_PREFIX_STARTS", "0")
+    monkeypatch.setenv("GLM53_PREFIX_BUCKET", str(max(chunk, -(-(max_seq_len // 8) // chunk) * chunk)))
     cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
     layers = _layers()
     model = GLM53MeshModel(mesh_device, cfg, layers, max_batch=B, max_seq_len=max_seq_len, weight_cache_path=CACHE_ROOT)
@@ -416,7 +414,7 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
         max_seq_len=max_seq_len,
         partitioned=True,
         rows_independent=True,
-        device_prefill_chunk=SERVED_CHUNK,
+        device_prefill_chunk=chunk,
         pad_token_id=cfg.pad_token_id,
         traced_prefill_lengths=(),  # the SP reference stays eager; the waves are traced (the model's per-row lengths)
         wave_rows=SERVED_W,

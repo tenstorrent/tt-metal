@@ -308,14 +308,18 @@ class SlotTable:
         return [i for i, s in enumerate(self._phys) if s is not None and s.phase == "prefill"]
 
     # ------------------------------------------------------------------ placement
-    def allocate(self, logical: int, *, at: tuple[int, int] | None = None, slot_rank=None) -> SlotState:
+    def allocate(
+        self, logical: int, *, at: tuple[int, int] | None = None, slot_rank=None, prefer_sp: bool = False
+    ) -> SlotState:
         """Give ``logical`` a physical slot for a new prompt. A logical slot the plugin hands out again
         (``empty_slots`` of a prefill) is released first: the plugin reuses a slot only after its previous
         request finished, and a resumed request re-prefills from position 0.
         ``at``: the exact free ``(row, user)`` to take (a prefix-cache hit continues the slot holding the prefix:
         ``SlotPrefixCache``); ``slot_rank(row, user) -> int``: a tie-break after the column / row balance (0 = a slot
         without retained content, higher = more recently used retained content, so an unused slot is consumed before a
-        resident prefix is dropped)."""
+        resident prefix is dropped); ``prefer_sp`` (wave-affine rows with the SP fallback): the prompt prefills eagerly
+        (no traced wave holds it), so a slot index live on no row is taken first (sequence-parallel chunks over every
+        row) and the wave-affine order only once every index is live somewhere."""
         self._check_logical(logical)
         if self._phys[logical] is not None:
             self.release(logical)
@@ -330,14 +334,27 @@ class SlotTable:
                 raise ValueError(f"physical slot {(row, user)} outside the {self.g.rows}x{self.g.users_per_row} slots")
             best = (None, row, user)
         elif self.g.rows_independent and self.g.wave_affinity == "user":
-            # wave-affine: the first slot index (column-interleaved order) with a free row, its lowest free row
-            for user in self.g.wave_user_order():
-                for row in range(self.g.rows):
-                    if (row, user) not in self._occupied:
-                        best = (None, row, user)
+            if prefer_sp and self.g.sp_fallback:
+                # sequence-parallel first: a slot index live on NO row keeps the new request SP-eligible (its chunks
+                # run alone over every row). An eager 2048-row wave costs what a 16 K sequence-parallel chunk costs
+                # (45 layers, 2026-10-29: ~7 s each), so an eager wave pays only near full occupancy: r5's four 64 K
+                # needles in pairs of waves averaged 321 s of TTFT against ~70 s as SP chunks. A short prompt (a traced
+                # wave holds it) keeps the wave-affine order: one traced wave of `rows` members beats `rows` traced SP
+                # calls. The lowest-load row (ties: the lowest).
+                live_users = {u for _, u in self._occupied}
+                for user in self.g.wave_user_order():
+                    if user not in live_users:
+                        best = (None, min(range(self.g.rows), key=lambda r: (row_loads[r], r)), user)
                         break
-                if best is not None:
-                    break
+            if best is None:
+                # wave-affine: the first slot index (column-interleaved order) with a free row, its lowest free row
+                for user in self.g.wave_user_order():
+                    for row in range(self.g.rows):
+                        if (row, user) not in self._occupied:
+                            best = (None, row, user)
+                            break
+                    if best is not None:
+                        break
         else:
             rows = range(self.g.rows) if self.g.rows_independent else (0,)
             # column balance first, then row balance, then the lowest indices
