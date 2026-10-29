@@ -1,4 +1,5 @@
 # Fast smoke subset of ttml_tests: representative coverage of ttml ops, including fused-vs-composite parity checks.
+# The PR gate runs this list under a 10-minute budget (tests/pipeline_reorg/train_pr_gate_tests.yaml).
 # One fully qualified test name per line; blank lines and lines starting with '#' are ignored.
 # Usage (checks that every entry exists, then runs them):
 #   tt-train/tests/ops/run_smoke_tests.sh [extra gtest args]
