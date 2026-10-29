@@ -1550,3 +1550,423 @@ TEST_F(RMSNormCacheHitTest, Backward_DistinctKeysCompileDistinctPrograms_TwoCore
 
     kept.expect_unchanged();
 }
+
+// ----------------------------------------------------------------------------
+// Gated mode (see Section 4): the gate is one more input and dL_dgate one more output, and the program key holds the
+// head count, which is 0 without a gate. The inputs and references are Section 4's, at its kEps. Launch k scales x by
+// 2^k, which is exact, and negates gamma on odd k, so that a launch that reads another launch's x, rms or gamma fails
+// the reference check; each launch draws its own gate and dL_dout.
+// ----------------------------------------------------------------------------
+
+namespace {
+
+// The head-major input [2, 1, S, V] with S = two_core_group_seq_len(0): 2 * cores + 4 tile rows, so both core groups
+// run on any grid. One head takes the two rows as two batch entries, and two heads take them as the heads of one.
+Shape two_core_group_gated_shape(const uint32_t heads) {
+    return Shape{2U / heads, ttml::test_utils::two_core_group_seq_len(0U), heads, kCacheTestC};
+}
+
+// The inputs of launch `launch` on the device, the values the kernels read from them and the reference results. rms
+// is what the forward returns for x, as the backward gets it in training.
+struct ModeInputs {
+    bool gated;
+    Shape shape;
+    Reference expected;
+    ttnn::Tensor x;
+    ttnn::Tensor gamma;
+    std::optional<ttnn::Tensor> gate;
+    ttnn::Tensor rms;
+    ttnn::Tensor dL_dout;
+};
+
+ModeInputs upload_mode_inputs(const Shape& s, const uint32_t launch, const ttnn::DataType x_dtype, const bool gated) {
+    auto in = make_inputs(s, 500U + 10U * launch, x_dtype, gated);
+    in.x *= std::exp2(static_cast<float>(launch));
+    if (launch % 2U == 1U) {
+        in.gamma = -in.gamma;
+    }
+    auto expected = reference(in, in.dy, s);
+    auto rms = to_device(xt::xarray<float>(xt::cast<float>(expected.rms)));
+    return ModeInputs{
+        .gated = gated,
+        .shape = s,
+        .expected = std::move(expected),
+        .x = to_device(in.x, x_dtype),
+        .gamma = to_device(in.gamma),
+        .gate = to_device(in.gate),
+        .rms = std::move(rms),
+        .dL_dout = to_device(in.dy),
+    };
+}
+
+void keep_forward_inputs(KeptTensors& kept, const ModeInputs& in, const std::string& label) {
+    kept.add(in.x, label + " input");
+    kept.add(in.gamma, label + " gamma");
+    if (in.gate.has_value()) {
+        kept.add(*in.gate, label + " gate");
+    }
+}
+
+void keep_backward_inputs(KeptTensors& kept, const ModeInputs& in, const std::string& label) {
+    keep_forward_inputs(kept, in, label);
+    kept.add(in.rms, label + " rms");
+    kept.add(in.dL_dout, label + " dL_dout");
+}
+
+// {output, rms}, or {output} without return_intermediates.
+void expect_mode_fw_matches_reference(
+    const std::vector<ttnn::Tensor>& result, const ModeInputs& in, const std::string& label) {
+    ASSERT_FALSE(result.empty()) << label;
+    expect_close(ttml::core::to_xtensor(result[0]), in.expected.out, label + " output");
+    if (result.size() > 1U) {
+        expect_close(ttml::core::to_xtensor(result[1]), in.expected.rms, label + " rms");
+    }
+}
+
+// {dL_da, dL_dgamma_components, dL_dgate}; dL_dgamma_components only with compute_dgamma and dL_dgate only with a gate.
+void expect_mode_bw_matches_reference(
+    const std::vector<std::optional<ttnn::Tensor>>& result,
+    const ModeInputs& in,
+    const bool compute_dgamma,
+    const std::string& label) {
+    ASSERT_EQ(result.size(), 3U) << label;
+    ASSERT_TRUE(result[0].has_value()) << label;
+    expect_close(ttml::core::to_xtensor(*result[0]), in.expected.dx, label + " dL_da", kDxTol);
+    ASSERT_EQ(result[1].has_value(), compute_dgamma) << label;
+    if (compute_dgamma) {
+        const xt::xarray<double> components = xt::cast<double>(ttml::core::to_xtensor(*result[1]));
+        const xt::xarray<double> dgamma = xt::sum(components, {0, 1, 2}, xt::keep_dims);
+        expect_close(dgamma, in.expected.dgamma, label + " dL_dgamma");
+    }
+    ASSERT_EQ(result[2].has_value(), in.gated) << label;
+    if (in.gated) {
+        expect_dgate_close(ttml::core::to_xtensor(*result[2]), in.expected.dgate, label + " dL_dgate");
+    }
+}
+
+void keep_backward_outputs(
+    KeptTensors& kept, const std::vector<std::optional<ttnn::Tensor>>& result, const std::string& label) {
+    const std::array<const char*, 3> names = {" dL_da", " dL_dgamma_components", " dL_dgate"};
+    for (size_t i = 0; i < std::min(names.size(), result.size()); ++i) {
+        if (result[i].has_value()) {
+            kept.add(*result[i], label + names[i]);
+        }
+    }
+}
+
+std::string dtype_label(const ttnn::DataType x_dtype) {
+    return x_dtype == ttnn::DataType::FLOAT32 ? "fp32 input" : "bf16 input";
+}
+
+}  // namespace
+
+// The gated counterpart of Forward_CacheHitReadsFreshBuffers_TwoCoreGroups, with bf16 and with fp32 input: launch B, on
+// a new input, gamma and gate while launch A's tensors stay alive, reuses A's program.
+TEST_F(RMSNormCacheHitTest, GatedForward_CacheHitReadsFreshBuffers_TwoCoreGroups) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto shape = two_core_group_gated_shape(/*heads=*/2U);
+    KeptTensors kept;
+    uint32_t launch = 0U;
+    for (const auto x_dtype : {ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32}) {
+        const std::string mode = dtype_label(x_dtype);
+        const auto a = upload_mode_inputs(shape, launch++, x_dtype, /*gated=*/true);
+        const auto entries_before_miss = device->num_program_cache_entries();
+        const auto a_result = ttnn::prim::ttml_rmsnorm_fw(a.x, a.gamma, a.gate, /*return_intermediates=*/true, kEps);
+        ASSERT_GT(device->num_program_cache_entries(), entries_before_miss)
+            << mode << ": the first launch must compile a program";
+        ASSERT_EQ(a_result.size(), 2U) << mode;
+        expect_mode_fw_matches_reference(a_result, a, mode + " launch A");
+        keep_forward_inputs(kept, a, mode + " launch A");
+        kept.add(a_result[0], mode + " launch A output");
+        kept.add(a_result[1], mode + " launch A rms");
+
+        // Same specs, new values, launch A's tensors still alive.
+        const auto b = upload_mode_inputs(shape, launch++, x_dtype, /*gated=*/true);
+        const auto entries_before_hit = device->num_program_cache_entries();
+        const auto b_result = ttnn::prim::ttml_rmsnorm_fw(b.x, b.gamma, b.gate, /*return_intermediates=*/true, kEps);
+        EXPECT_EQ(device->num_program_cache_entries(), entries_before_hit)
+            << mode << ": launch B must reuse launch A's program";
+        ASSERT_EQ(b_result.size(), 2U) << mode;
+        test_utils::expect_new_buffers(
+            {a.x, a.gamma, a.gate.value(), a_result[0], a_result[1]},
+            {b.x, b.gamma, b.gate.value(), b_result[0], b_result[1]},
+            mode + " launch B");
+        expect_mode_fw_matches_reference(b_result, b, mode + " launch B (cache hit)");
+    }
+
+    kept.expect_unchanged();
+}
+
+// The gated counterpart of Backward_CacheHitReadsFreshBuffers_TwoCoreGroups, with bf16 and with fp32 input.
+TEST_F(RMSNormCacheHitTest, GatedBackward_CacheHitReadsFreshBuffers_TwoCoreGroups) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto shape = two_core_group_gated_shape(/*heads=*/2U);
+    KeptTensors kept;
+    uint32_t launch = 0U;
+    for (const auto x_dtype : {ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32}) {
+        const std::string mode = dtype_label(x_dtype);
+        const auto a = upload_mode_inputs(shape, launch++, x_dtype, /*gated=*/true);
+        const auto entries_before_miss = device->num_program_cache_entries();
+        const auto a_result = ttnn::prim::ttml_rmsnorm_bw(a.x, a.gamma, a.rms, a.dL_dout, a.gate);
+        ASSERT_GT(device->num_program_cache_entries(), entries_before_miss)
+            << mode << ": the first launch must compile a program";
+        expect_mode_bw_matches_reference(a_result, a, /*compute_dgamma=*/true, mode + " launch A");
+        keep_backward_inputs(kept, a, mode + " launch A");
+        keep_backward_outputs(kept, a_result, mode + " launch A");
+
+        // Same specs, new values, launch A's tensors still alive.
+        const auto b = upload_mode_inputs(shape, launch++, x_dtype, /*gated=*/true);
+        const auto entries_before_hit = device->num_program_cache_entries();
+        const auto b_result = ttnn::prim::ttml_rmsnorm_bw(b.x, b.gamma, b.rms, b.dL_dout, b.gate);
+        EXPECT_EQ(device->num_program_cache_entries(), entries_before_hit)
+            << mode << ": launch B must reuse launch A's program";
+        expect_mode_bw_matches_reference(b_result, b, /*compute_dgamma=*/true, mode + " launch B (cache hit)");
+        test_utils::expect_new_buffers(
+            {a.x,
+             a.gamma,
+             a.gate.value(),
+             a.rms,
+             a.dL_dout,
+             a_result.at(0).value(),
+             a_result.at(1).value(),
+             a_result.at(2).value()},
+            {b.x,
+             b.gamma,
+             b.gate.value(),
+             b.rms,
+             b.dL_dout,
+             b_result.at(0).value(),
+             b_result.at(1).value(),
+             b_result.at(2).value()},
+            mode + " launch B");
+    }
+
+    kept.expect_unchanged();
+}
+
+// The gated counterpart of Forward_PreallocatedOutputsAcrossOptionalPresence_TwoCoreGroups: the head-merged output
+// and the head-major rms given or not, in every combination, on one gated key.
+TEST_F(RMSNormCacheHitTest, GatedForward_PreallocatedOutputsAcrossOptionalPresence_TwoCoreGroups) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto shape = two_core_group_gated_shape(/*heads=*/2U);
+    KeptTensors kept;
+
+    struct Launch {
+        const char* label;
+        bool preallocated_rms;
+        bool preallocated_output;
+        bool repeats_earlier_pattern;
+    };
+    constexpr std::array<Launch, 6> kLaunches = {{
+        {"no preallocation", false, false, false},
+        {"preallocated output and rms", true, true, false},
+        {"preallocated output and rms again", true, true, true},
+        {"preallocated output only", false, true, false},
+        {"preallocated rms only", true, false, false},
+        {"no preallocation again", false, false, true},
+    }};
+    for (uint32_t launch = 0; launch < kLaunches.size(); ++launch) {
+        const auto& pattern = kLaunches[launch];
+        const std::string label = "launch " + std::to_string(launch) + " (" + pattern.label + ")";
+        const auto in = upload_mode_inputs(shape, launch, ttnn::DataType::BFLOAT16, /*gated=*/true);
+        std::optional<ttnn::Tensor> preallocated_rms;
+        std::optional<ttnn::Tensor> preallocated_output;
+        if (pattern.preallocated_rms) {
+            preallocated_rms = test_utils::filled_on_device(shape.rms(), kNotWritten);
+        }
+        if (pattern.preallocated_output) {
+            preallocated_output = test_utils::filled_on_device(shape.head_merged(), kNotWritten);
+        }
+        const auto entries_before = device->num_program_cache_entries();
+        const auto result = ttnn::prim::ttml_rmsnorm_fw(
+            in.x,
+            in.gamma,
+            in.gate,
+            /*return_intermediates=*/true,
+            kEps,
+            preallocated_rms,
+            preallocated_output);
+        const auto entries_after = device->num_program_cache_entries();
+        if (launch == 0U) {
+            ASSERT_GT(entries_after, entries_before) << "the first launch must compile a program";
+        }
+        if (pattern.repeats_earlier_pattern) {
+            EXPECT_EQ(entries_after, entries_before) << label << " must reuse the program of its pattern";
+        }
+        ASSERT_EQ(result.size(), 2U) << label;
+        if (preallocated_output.has_value()) {
+            EXPECT_EQ(result[0].buffer()->address(), preallocated_output->buffer()->address())
+                << label << " must return the preallocated output";
+        }
+        if (preallocated_rms.has_value()) {
+            EXPECT_EQ(result[1].buffer()->address(), preallocated_rms->buffer()->address())
+                << label << " must return the preallocated rms";
+        }
+        expect_mode_fw_matches_reference(result, in, label);
+        keep_forward_inputs(kept, in, label);
+        kept.add(result[0], label + " output");
+        kept.add(result[1], label + " rms");
+    }
+
+    kept.expect_unchanged();
+}
+
+// The gated counterpart of Backward_PreallocatedOutputsAcrossOptionalPresence_TwoCoreGroups, with the preallocated
+// dL_dgate as the third optional output.
+TEST_F(RMSNormCacheHitTest, GatedBackward_PreallocatedOutputsAcrossOptionalPresence_TwoCoreGroups) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto shape = two_core_group_gated_shape(/*heads=*/2U);
+    KeptTensors kept;
+
+    struct Launch {
+        const char* label;
+        bool preallocated_dL_da;
+        bool preallocated_dL_dgamma_components;
+        bool preallocated_dL_dgate;
+        bool repeats_earlier_pattern;
+    };
+    constexpr std::array<Launch, 7> kLaunches = {{
+        {"no preallocation", false, false, false, false},
+        {"preallocated dL_da, dL_dgamma_components and dL_dgate", true, true, true, false},
+        {"preallocated dL_da, dL_dgamma_components and dL_dgate again", true, true, true, true},
+        {"preallocated dL_da only", true, false, false, false},
+        {"preallocated dL_dgamma_components only", false, true, false, false},
+        {"preallocated dL_dgate only", false, false, true, false},
+        {"no preallocation again", false, false, false, true},
+    }};
+    for (uint32_t launch = 0; launch < kLaunches.size(); ++launch) {
+        const auto& pattern = kLaunches[launch];
+        const std::string label = "launch " + std::to_string(launch) + " (" + pattern.label + ")";
+        const auto in = upload_mode_inputs(shape, launch, ttnn::DataType::BFLOAT16, /*gated=*/true);
+        std::optional<ttnn::Tensor> preallocated_dL_da;
+        std::optional<ttnn::Tensor> preallocated_dL_dgamma_components;
+        std::optional<ttnn::Tensor> preallocated_dL_dgate;
+        if (pattern.preallocated_dL_da) {
+            preallocated_dL_da = test_utils::filled_on_device(shape.head_major(), kNotWritten);
+        }
+        if (pattern.preallocated_dL_dgamma_components) {
+            preallocated_dL_dgamma_components = test_utils::filled_on_device(shape.head_major(), kNotWritten);
+        }
+        if (pattern.preallocated_dL_dgate) {
+            preallocated_dL_dgate = test_utils::filled_on_device(shape.head_merged(), kNotWritten);
+        }
+        const auto entries_before = device->num_program_cache_entries();
+        const auto result = ttnn::prim::ttml_rmsnorm_bw(
+            in.x,
+            in.gamma,
+            in.rms,
+            in.dL_dout,
+            in.gate,
+            /*compute_dgamma=*/true,
+            preallocated_dL_da,
+            preallocated_dL_dgamma_components,
+            preallocated_dL_dgate);
+        const auto entries_after = device->num_program_cache_entries();
+        if (launch == 0U) {
+            ASSERT_GT(entries_after, entries_before) << "the first launch must compile a program";
+        }
+        if (pattern.repeats_earlier_pattern) {
+            EXPECT_EQ(entries_after, entries_before) << label << " must reuse the program of its pattern";
+        }
+        ASSERT_EQ(result.size(), 3U) << label;
+        const std::array<const std::optional<ttnn::Tensor>*, 3> preallocated = {
+            &preallocated_dL_da, &preallocated_dL_dgamma_components, &preallocated_dL_dgate};
+        for (size_t i = 0; i < preallocated.size(); ++i) {
+            if (preallocated[i]->has_value() && result[i].has_value()) {
+                EXPECT_EQ(result[i]->buffer()->address(), (*preallocated[i])->buffer()->address())
+                    << label << " must return preallocated output " << i;
+            }
+        }
+        expect_mode_bw_matches_reference(result, in, /*compute_dgamma=*/true, label);
+        keep_backward_inputs(kept, in, label);
+        keep_backward_outputs(kept, result, label);
+    }
+
+    kept.expect_unchanged();
+}
+
+// The plain mode, a gate with one head and a gate with two heads, all on the same [2, 1, S, V] input: the key must tell
+// all three apart, or a gated launch computes without the gate or splits its gate into the wrong heads.
+TEST_F(RMSNormCacheHitTest, Forward_GateAndHeadCountCompileDistinctPrograms_TwoCoreGroups) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    KeptTensors kept;
+
+    struct Launch {
+        const char* label;
+        uint32_t heads;  // 0: plain
+        bool new_key;
+    };
+    constexpr std::array<Launch, 6> kLaunches = {{
+        {"plain", 0U, true},
+        {"gated, one head", 1U, true},
+        {"gated, two heads", 2U, true},
+        {"plain again", 0U, false},
+        {"gated, two heads again", 2U, false},
+        {"gated, one head again", 1U, false},
+    }};
+    for (uint32_t launch = 0; launch < kLaunches.size(); ++launch) {
+        const auto& spec = kLaunches[launch];
+        const std::string label = "launch " + std::to_string(launch) + " (" + spec.label + ")";
+        const bool gated = spec.heads > 0U;
+        const auto in = upload_mode_inputs(
+            two_core_group_gated_shape(gated ? spec.heads : 1U), launch, ttnn::DataType::BFLOAT16, gated);
+        const auto entries_before = device->num_program_cache_entries();
+        const auto result = ttnn::prim::ttml_rmsnorm_fw(in.x, in.gamma, in.gate, /*return_intermediates=*/true, kEps);
+        expect_cache(entries_before, spec.new_key ? CacheExpectation::Miss : CacheExpectation::Hit, label);
+        ASSERT_EQ(result.size(), 2U) << label;
+        expect_mode_fw_matches_reference(result, in, label);
+        keep_forward_inputs(kept, in, label);
+        kept.add(result[0], label + " output");
+        kept.add(result[1], label + " rms");
+    }
+
+    kept.expect_unchanged();
+}
+
+// The backward counterpart of Forward_GateAndHeadCountCompileDistinctPrograms_TwoCoreGroups, each mode with and without
+// compute_dgamma. A launch without compute_dgamma that hit a program with it would write dL_dgamma_components through
+// the address of an earlier launch's, which the kept tensors catch.
+TEST_F(RMSNormCacheHitTest, Backward_GateHeadCountAndDgammaCompileDistinctPrograms_TwoCoreGroups) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    KeptTensors kept;
+
+    struct Launch {
+        const char* label;
+        uint32_t heads;  // 0: plain
+        bool compute_dgamma;
+        bool new_key;
+    };
+    constexpr std::array<Launch, 9> kLaunches = {{
+        {"plain", 0U, true, true},
+        {"plain, no dL_dgamma", 0U, false, true},
+        {"gated, one head", 1U, true, true},
+        {"gated, one head, no dL_dgamma", 1U, false, true},
+        {"gated, two heads", 2U, true, true},
+        {"gated, two heads, no dL_dgamma", 2U, false, true},
+        {"gated, two heads, no dL_dgamma again", 2U, false, false},
+        {"plain again", 0U, true, false},
+        {"gated, one head, no dL_dgamma again", 1U, false, false},
+    }};
+    for (uint32_t launch = 0; launch < kLaunches.size(); ++launch) {
+        const auto& spec = kLaunches[launch];
+        const std::string label = "launch " + std::to_string(launch) + " (" + spec.label + ")";
+        const bool gated = spec.heads > 0U;
+        const auto in = upload_mode_inputs(
+            two_core_group_gated_shape(gated ? spec.heads : 1U), launch, ttnn::DataType::BFLOAT16, gated);
+        const auto entries_before = device->num_program_cache_entries();
+        const auto result =
+            ttnn::prim::ttml_rmsnorm_bw(in.x, in.gamma, in.rms, in.dL_dout, in.gate, spec.compute_dgamma);
+        expect_cache(entries_before, spec.new_key ? CacheExpectation::Miss : CacheExpectation::Hit, label);
+        expect_mode_bw_matches_reference(result, in, spec.compute_dgamma, label);
+        keep_backward_inputs(kept, in, label);
+        keep_backward_outputs(kept, result, label);
+    }
+
+    kept.expect_unchanged();
+}
