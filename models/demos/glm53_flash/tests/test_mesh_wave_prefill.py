@@ -466,12 +466,26 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
                 toks[l] = int(res[l].argmax())
         return outs
 
-    def reference(ids: torch.Tensor) -> list[torch.Tensor]:
-        """The prompt alone in logical 0 (SP-eligible: alone on its slot index) through the eager SP chunks."""
+    def reference(ids: torch.Tensor, snapshot_row: int | None = None) -> list[torch.Tensor]:
+        """The prompt alone in logical 0 (SP-eligible: alone on its slot index) through the eager SP chunks.
+        ``snapshot_row``: also return (last) the KDA carries the SP prefill left on that row, read before the decode."""
         logits = srv.prefill(0, ids, 0)
+        snap = None if snapshot_row is None else kda_carries(snapshot_row, a.slots.physical(0).user)
         _, outs = srv.generate(0, logits, int(ids.numel()), N_DECODE)
         a.release_request(0)
-        return [logits] + outs
+        return [logits] + outs + ([snap] if snap is not None else [])
+
+    def kda_carries(row: int, user: int) -> dict[str, torch.Tensor]:
+        """Every KDA layer's recurrent state and conv history of slot ``user`` on mesh row ``row`` (column 0's chip),
+        on the host: the carry a decode step starts from (read before any decode)."""
+        chip = row * model.mesh.cols
+        out: dict[str, torch.Tensor] = {}
+        for i, dec in enumerate(model.layers):
+            if dec.is_kda and dec.kda_batched is not None:
+                rec = ttnn.to_torch(model.mesh.device_tensors(dec.kda_batched.recurrent)[chip])[user]
+                conv = ttnn.to_torch(model.mesh.device_tensors(dec.kda_batched.convolution)[chip])[:, user]
+                out[f"L{i} rec"], out[f"L{i} conv"] = rec.float().clone(), conv.float().clone()
+        return out
 
     if long:
         # (g) the served needle stage's shape: four prompts (18-21 K by default, the served 65514 x 4 by env) on rows
@@ -495,11 +509,25 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
         assert set(firsts) == set(pg)
         placed = {l: (a.slots.physical(l).row, a.slots.physical(l).user) for l in pg}
         assert sorted(placed.values()) == [(r, 0) for r in range(4)], placed
+        wave_carries = {l: kda_carries(*placed[l]) for l in pg}  # before any decode step touches them
         outs = decode_jointly(firsts, {l: int(ids.numel()) for l, ids in pg.items()})
         gots = {l: [firsts[l]] + outs[l] for l in pg}
         for l in pg:
             a.release_request(l)
-        refs = {l: reference(ids) for l, ids in pg.items()}
+        refs, sp_carries = {}, {}
+        for l, ids in pg.items():
+            *refs[l], sp_carries[l] = reference(ids, snapshot_row=placed[l][0])
+        for l in pg:  # the carry a decode starts from, wave vs SP, per KDA layer (the 2026-10-29 rows-2/3 decode drift)
+            worst = sorted((pcc(wave_carries[l][k], sp_carries[l][k]), k) for k in sp_carries[l] if k.endswith("rec"))
+            worst_conv = sorted(
+                (pcc(wave_carries[l][k], sp_carries[l][k]), k) for k in sp_carries[l] if k.endswith("conv")
+            )
+            logger.info(
+                f"(g) row {placed[l][0]} KDA carries wave vs SP: lowest recurrent pcc "
+                + ", ".join(f"{k} {v:.4f}" for v, k in worst[:4])
+                + "; lowest conv pcc "
+                + ", ".join(f"{k} {v:.4f}" for v, k in worst_conv[:2])
+            )
         for l, ids in pg.items():  # every row's numbers before any verdict (the served corruption sat on rows 2-3)
             logger.info(
                 f"(g) row {placed[l][0]} prompt {int(ids.numel())}: first token {int(firsts[l].argmax())} "
@@ -516,6 +544,8 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
                     "lengths": {l: int(ids.numel()) for l, ids in pg.items()},
                     "waves": gots,
                     "sp": refs,
+                    "kda_wave": wave_carries,
+                    "kda_sp": sp_carries,
                 },
                 dump,
             )
