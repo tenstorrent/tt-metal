@@ -500,3 +500,47 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch):
         f"(SP {int(ref6[0].argmax())} / {int(ref7[0].argmax())}), pcc {pcc(first_a[6], ref6[0]):.5f} / {pcc(first_b[7], ref7[0]):.5f}"
     )
     logger.info("served waves: PASS (a)-(d)")
+
+    # (e) rows beyond the block's two: four long prompts on rows 0-3 of slot index 0 arriving one step apart (the
+    # served needle stage: the requests on rows 2 and 3 degenerated while rows 0 and 1 were right), every wave pairing
+    # four different sparse starts; each against its own SP path from scratch
+    if rows >= 4:
+        lens = (4000, 4500, 5000, 5500)
+        ps = {10 + i: _served_ids(n, 20 + i, vocab) for i, n in enumerate(lens)}
+        firsts: dict[int, torch.Tensor] = {}
+        done: dict[int, int] = {}
+        for step in range(8):
+            reqs = []
+            for i, (l, ids) in enumerate(ps.items()):
+                if step < i or l in done:
+                    continue
+                start = max(0, (step - i)) * 2048
+                end = min(int(ids.numel()), start + 2048)
+                reqs.append((l, ids[:end], start))
+                if end == int(ids.numel()):
+                    done[l] = step
+            if not reqs:
+                break
+            out = step_prefill(reqs)
+            for l, ids, _ in reqs:
+                if done.get(l) == step:
+                    firsts[l] = out[l]
+        assert set(firsts) == set(ps), (sorted(firsts), sorted(ps))
+        placed = {l: (a.slots.physical(l).row, a.slots.physical(l).user) for l in ps}
+        assert sorted(placed.values()) == [(r, 0) for r in range(4)], placed
+        outs = decode_jointly(firsts, {l: int(ids.numel()) for l, ids in ps.items()})
+        gots = {l: [firsts[l]] + outs[l] for l in ps}
+        for l in ps:
+            a.release_request(l)
+        for l, ids in ps.items():
+            ref = reference(ids)
+            _assert_agree(
+                f"(e) row {placed[l][0]} prompt {int(ids.numel())} (staggered waves) vs SP",
+                gots[l],
+                ref,
+                pcc_min=PCC_BAR_SP,
+            )
+            logger.info(
+                f"(e) row {placed[l][0]}: first token {int(firsts[l].argmax())} (SP {int(ref[0].argmax())}), pcc {pcc(firsts[l], ref[0]):.5f}"
+            )
+        logger.info("served waves: PASS (e) four staggered prompts on rows 0-3")
