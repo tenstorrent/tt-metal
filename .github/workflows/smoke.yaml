@@ -80,13 +80,46 @@ jobs:
             tests/pipeline_reorg
           sparse-checkout-cone-mode: true
 
+      # The matrix script must come from main, not from this branch: a branch
+      # cut before prepare_test_matrix.py existed, or before its interface last
+      # changed, still has to build its matrix with the current script rather
+      # than a stale or missing copy of its own (#57555, #57579).
+      #
+      # Referencing the action as @main achieves that too, but a remote `uses:`
+      # makes the runner download the whole tt-metal tree (~425 MB, 25.5k files)
+      # to resolve a 1.6 MB action -- measured at 23-44s of "Set up job" on
+      # every load-test-matrix job, against 0s on a sibling job on the same
+      # runner with no remote `uses:`. This sparse checkout fetches only the
+      # action and the script it runs; actions/checkout applies
+      # --filter=blob:none automatically whenever sparse-checkout is set, so
+      # the other 423 MB is never transferred.
+      #
+      # Must stay AFTER the checkout above: that step cleans its target with
+      # `git clean -ffdx`, which deletes ci-main as an untracked directory if
+      # the workspace is reused.
+      - name: Checkout CI actions from main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: main
+          path: ci-main
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+          sparse-checkout-cone-mode: true
+
       - name: Install dependencies
         run: pip3 install PyYAML
 
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
-        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        # Local path into the main checkout above, so GITHUB_ACTION_PATH -- and
+        # with it the prepare_test_matrix.py the action runs two levels up --
+        # resolves inside ci-main. tests-yaml and sku-config stay relative to
+        # the workspace root, i.e. this branch's own checkout: the config
+        # follows the branch, the script follows main.
+        uses: ./ci-main/.github/actions/prepare-test-matrix
         with:
           tests-yaml: "${{ env.TESTS_YAML_PATH }}"
           enabled-skus: "${{ inputs.enabled-skus }}"
@@ -134,6 +167,7 @@ jobs:
         with:
           sparse-checkout: |
             .github/actions/download-artifact-with-retry
+            .github/actions/upload-artifact-with-job-uuid
             .github/scripts/ccache_log_filter.sh
           sparse-checkout-cone-mode: false
 
@@ -323,7 +357,12 @@ jobs:
           include_passed: false
           fail_on_failure: false
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      # Unlike prepare-test-matrix, this action carries no script and has no
+      # reason to be pinned to main -- it is a thin wrapper around
+      # actions/upload-artifact. It predates the pinning convention
+      # (#18756) rather than being chosen by it, so the branch's own copy
+      # is fine and saves this matrix job the same whole-tree download.
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         with:
