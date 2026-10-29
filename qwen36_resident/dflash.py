@@ -199,6 +199,7 @@ class ResidentDFlash:
         self.m.reset()
         self.m.capture_trace()
         self.drafter.arm_traces()
+        self.stop()
 
     def _step(self, toks, p):
         self.m.step(
@@ -247,6 +248,7 @@ class ResidentDFlash:
                 self.drafter.extend_context(p0, k)
             g = self.m.argmax()
             self._commit(k - 1)
+        self._last_row = k - 1
         return g[k - 1]
 
     def _fill_context(self, n_tokens, host=False):
@@ -284,6 +286,53 @@ class ResidentDFlash:
         self.drafter.fill_context(dev, s0, valid_len=n_tokens - s0)
         for t in dev:
             ttnn.deallocate(t)
+
+    # ------------------------------------------------------------------ serving (one request at a time)
+    def start(self, ids):
+        """A request's prompt (as generate's): returns the logits [vocab] of the last prompt row. The first token is
+        their argmax (first_token), the token the device continues from; next_block returns the tokens after it."""
+        ids = [int(t) for t in ids]
+        assert len(ids) <= self.max_prompt_tokens, f"prompt of {len(ids)} > max_prompt_tokens {self.max_prompt_tokens}"
+        self.stop()  # (a request still open is dropped)
+        self.first_token = int(self._prompt(ids))
+        lg = self.m.logits()[self._last_row]
+        self._p, self._t = len(ids), self.first_token
+        return lg[:, : self.d.vocab_chip].reshape(-1)[: self.vocab].clone()
+
+    def next_block(self, n, limit):
+        """The next n tokens of the request, or fewer once a verify step would pass position min(limit, max_pos)
+        (its rows run at p .. p + R - 1). Each iteration commits 1 .. R tokens; the ones past n wait for the next
+        call."""
+        end = min(int(limit), self.max_pos)
+        while len(self._carry) < n and self._p + self.R <= end:
+            p, t = self._p, self._t
+            drafts = self.drafter.draft(t, p)
+            self._step([t] + drafts, p)
+            g = self.m.argmax()
+            a = 0
+            while a < self.R - 1 and drafts[a] == g[a]:
+                a += 1
+            self._carry += drafts[:a] + [g[a]]
+            self._accepts.append(a)
+            self.drafter.extend_context(p, a + 1)
+            self._commit(a)
+            self._p, self._t = p + a + 1, g[a]
+        block, self._carry = self._carry[:n], self._carry[n:]
+        return block
+
+    def stop(self):
+        """End the request: the tokens not yet returned are dropped (idempotent; safe before any start)"""
+        self._carry, self._p, self._t, self.first_token, self._accepts = [], 0, None, None, []
+
+    def stats(self):
+        """the current request's speculation: verify iterations, tokens committed, mean drafts accepted"""
+        n = len(self._accepts)
+        return dict(iterations=n, committed=n + sum(self._accepts), mean_accept=sum(self._accepts) / n if n else 0.0)
+
+    @property
+    def max_prompt_tokens(self):
+        """the longest prompt start() takes (room for a verify step and the drafter's block past it)"""
+        return self.max_pos - 2 * self.R - 64
 
     def generate(self, ids, n_new, timing=False):
         """greedy spec decode: (n_new generated tokens, stats); timing: synchronize between the parts and time them"""
@@ -338,12 +387,13 @@ class ResidentDFlash:
             stats.update({f"{k}_ms": med(v) for k, v in parts.items()})
         return gen[:n_new], stats
 
-    def greedy(self, ids, n_new, other=None):
+    def greedy(self, ids, n_new, other=None, prefill=False):
         """the verify model's own greedy tokens, one token per step (row 0; the reference spec decode reproduces).
         other (another decode's tokens): also returns, per generated position, this decode's logit of its own token
-        minus its logit of the other's token (0 where they agree; the margin by which they differ)"""
+        minus its logit of the other's token (0 where they agree; the margin by which they differ).
+        prefill: the prompt as generate() takes it (the pipeline-parallel prefill path), else through verify steps"""
         ids = [int(t) for t in ids]
-        t = self._prompt(ids, draft_context=False)
+        t = self._prompt(ids, draft_context=prefill)
         gen, p, gaps = [t], len(ids), [0.0]
         while len(gen) < n_new:
             self._step([t] * self.R, p)
