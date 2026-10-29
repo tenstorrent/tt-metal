@@ -1,0 +1,87 @@
+---
+# The PR Gate "runtime validation smoke cpu-only" test (smoke.yaml with
+# product tt-metalium, test-category pr_gate; the github_hosted_cpu entry in
+# tests/pipeline_reorg/runtime_validation_pr_gate_tests.yaml): the host-only
+# CPU_* cases of tt-metalium-validation-smoke against asan-build's packages.
+# No Tenstorrent device: TT_METAL_MOCK_CLUSTER_DESC_PATH keeps MetalContext
+# in mock mode, as on the GitHub-hosted runner.
+#
+# Differences from the GitHub job, all forced by the platform:
+# - The job pod runs as uid 1000 with no privilege escalation, so
+#   `apt install ./pkgs/*.deb` is not possible. The same package set is
+#   unpacked with dpkg-deb -x into pkgroot/ and found through
+#   TT_METAL_RUNTIME_ROOT and LD_LIBRARY_PATH. Package dependencies are not
+#   resolved by apt; the step lists any the image lacks.
+# - The image is the ci-build chain image, not ci-test (TorrentCI has no
+#   ci-test chain image yet).
+# - The artifact is one tar of the .deb files (see 20-asan-build.yaml).
+# No triggers: run it by hand. needs asan-build for the artifact.
+jobs:
+  - id: smoke-cpu-asan
+    description: "Run the PR Gate runtime validation smoke cpu-only test (CPU_* cases, mock cluster) on the ASan packages"
+    needs: [asan-build]
+    timeout: 1h
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: tt-metal-ci-build}
+        resources:
+          requests: {cpu: '4', memory: 8Gi, ephemeral-storage: 30Gi}
+          limits: {memory: 16Gi, ephemeral-storage: 40Gi}
+    env:
+      - {name: ASAN_OPTIONS, value: color=always}
+      - {name: TSAN_OPTIONS, value: color=always}
+      - {name: UBSAN_OPTIONS, value: "color=always:print_stacktrace=1:halt_on_error=1"}
+      - {name: GTEST_COLOR, value: 'yes'}
+      - {name: TT_METAL_WATCHER_TEST_MODE, value: '1'}
+      - {name: TT_LOGGER_LEVEL, value: warn}
+    artifacts:
+      restore:
+        - from-job: asan-build
+          name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
+          path: packages.tar
+    steps:
+      - id: unpack
+        kind: shell
+        shell:
+          run:
+            - ls -l packages.tar
+            - rm -rf pkgs pkgroot && mkdir -p pkgs pkgroot
+            - tar -xf packages.tar -C pkgs
+            - ls -1sh pkgs
+      - id: install
+        kind: shell
+        shell:
+          run:
+            # The runner uses /bin/sh -eu (dash): no arrays, no nullglob.
+            # smoke.yaml's set for product tt-metalium; tt-metalium-jit is
+            # optional (system SFPI builds do not produce it).
+            - >-
+              ls pkgs/tt-metalium_*.deb pkgs/tt-metalium-jit_*.deb pkgs/tt-metalium-validation_*.deb
+              2>/dev/null > install.list || true
+            - cat install.list
+            - grep -q '/tt-metalium_' install.list && grep -q '/tt-metalium-validation_' install.list
+            - while read -r p; do dpkg-deb -x "$p" pkgroot; done < install.list
+            - >-
+              while read -r p; do echo "$(basename "$p"): $(dpkg-deb -f "$p" Depends)"; done < install.list
+            - >-
+              while read -r p; do dpkg-deb -f "$p" Depends | tr ',' '\n'; done < install.list
+              | sed 's/[(|].*//; s/ //g' | grep -v -e '^tt-metalium' -e '^$' | sort -u
+              | while read -r d; do dpkg -s "$d" >/dev/null 2>&1 || echo "dependency not in image: $d"; done
+            - du -sh pkgroot
+            - ls -l pkgroot/usr/bin
+      - id: smoke-cpu
+        kind: shell
+        shell:
+          run:
+            - export TT_METAL_RUNTIME_ROOT="$PWD/pkgroot/usr/libexec/tt-metalium"
+            - >-
+              export LD_LIBRARY_PATH="$(find "$PWD/pkgroot" -name '*.so*' -printf '%h\n' | sort -u | paste -sd:)"
+            - echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+            - export LSAN_OPTIONS="suppressions=$PWD/pkgroot/usr/share/tt-metalium/lsan.supp"
+            - export TT_METAL_MOCK_CLUSTER_DESC_PATH="$TT_METAL_RUNTIME_ROOT/tt_metal/third_party/umd/tests/cluster_descriptor_examples/wormhole_N150.yaml"
+            - test -f "$TT_METAL_MOCK_CLUSTER_DESC_PATH"
+            - mkdir -p test-reports
+            - ldd pkgroot/usr/bin/tt-metalium-validation-smoke | grep 'not found' || true
+            - pkgroot/usr/bin/tt-metalium-validation-smoke --gtest_filter='*CPU_*' --gtest_output=xml:test-reports/
