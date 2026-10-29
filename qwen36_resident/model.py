@@ -156,7 +156,7 @@ class TraceL1Guard:
     the decode models' registry every replay and the allocator every `every` replays."""
 
     def __init__(self, mesh, what, every=64, cb_top=None):
-        self.mesh, self.what, self.every, self.n = mesh, what, every, 0
+        self.mesh, self.what, self.every, self.n, self.cb_top = mesh, what, every, 0, cb_top
         if cb_top is not None:
             self.low = cb_top
             self.reg = ttnn.get_allocator_base_address(mesh, ttnn.BufferType.L1) + cb_top
@@ -172,9 +172,12 @@ class TraceL1Guard:
             low = l1_low_water(self.mesh)
             bad |= low is not None and (self.low is None or low < self.low)
         if bad:
+            where = (
+                "in its programs' CB region" if self.cb_top is not None else "below the L1 buffers live at its capture"
+            )
             raise RuntimeError(
-                f"an L1 buffer was allocated below the ones live when the {self.what} trace was captured: its replays "
-                "overwrite it; capture the trace again after allocating it (model.TraceL1Guard)"
+                f"{self.what} trace: an L1 buffer now lies {where}, so its replays overwrite it; capture the trace "
+                "again after allocating it (model.TraceL1Guard)"
             )
 
 
