@@ -512,6 +512,7 @@ using namespace unit_tests::compute::sfpu_reduce;
 
 // Column reduce: every pool. Width is swept two ways: num_blocks streams tiles through Dest one at
 // a time, and block_ct_dim = 2 holds a two-tile block in Dest and reduces each tile in place.
+// Disabled due to hang: tenstorrent/tt-metal#59923
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeSfpuReduceColumn) {
     for (auto format : {tt::DataFormat::Float16_b, tt::DataFormat::Float16, tt::DataFormat::Float32}) {
         for (auto pool : {ReducePool::Sum, ReducePool::Avg, ReducePool::Max, ReducePool::Min}) {
@@ -547,6 +548,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeSfpuReduceCol
 
 // Row reduce: SUM, MAX and MIN. sfpu_reduce's static_assert rejects AVG on REDUCE_ROW for every
 // format.
+// Disabled due to hang: tenstorrent/tt-metal#59923
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeSfpuReduceRow) {
     struct BlockShape {
         std::uint32_t ct;
@@ -598,6 +600,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeSfpuReduceInt
 }
 
 // A 16-bit format staged in a 32-bit Dest
+// Disabled due to hang: tenstorrent/tt-metal#59923
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeSfpuReduceWideDest) {
     for (auto pool : {ReducePool::Sum, ReducePool::Avg, ReducePool::Max, ReducePool::Min}) {
         run_single_core_sfpu_reduce(
