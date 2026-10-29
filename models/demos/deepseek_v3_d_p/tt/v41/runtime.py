@@ -359,6 +359,40 @@ class V41PrefillRuntime:
             ttnn.synchronize_device(self.mesh_device)
             self.pf.reset()
             logger.info(f"[v41 runtime] islands warm replay at setup: {time.time() - t0:.2f} s")
+        if os.environ.get("V41_PREFILL_WARM_RAGGED", "0") == "1":
+            self._warm_ragged(kv_caches)
+
+    def _warm_ragged(self, kv_caches) -> None:
+        """DS41F-0119 V41_PREFILL_WARM_RAGGED=1: a request's prefill part is S' = floor128(S - 2541) tokens, so its ragged chunk
+        is one of chunk / 128 lengths. The first request at a NEW length paid +0.3-4.6 s on the request path (bench 10-29:
+        programs keyed by the ragged length -- chunk 0's eager attention and the final chunk's glue / export). Build them here:
+        per length L, (a) a prompt shorter than one chunk (chunk 0 = L) and (b) a full chunk 0 then a final chunk of L, export
+        included. Slot 0; the first real request starts at 0, which resets the slot's states and zeroes its export rows.
+        """
+        t0, n = time.time(), 0
+        C = self.chunk_size
+        pc0 = self._program_cache_entries()
+        lengths = range(128, C, 128) if C > 128 else ()
+        self.pf.use_slot(0)
+        for L in lengths:
+            self.pf.reset()
+            self.pf._chunk([0] * L, 0, self.engram, None)
+            export_chunk(kv_caches, self.pf, 0, 0, L)
+            n += 1
+            if 2 * C <= self.max_seq_len:
+                self.pf.reset()
+                self.pf._chunk([0] * C, 0, self.engram, None)
+                self.pf._chunk([0] * L, C, self.engram, None)
+                export_chunk(kv_caches, self.pf, 0, C, C + L)
+                n += 2
+        ttnn.synchronize_device(self.mesh_device)
+        self.pf.reset()
+        kv_caches.zero_slot(0)
+        pc1 = self._program_cache_entries()
+        logger.info(
+            f"[v41 runtime] warm-ragged: {len(lengths)} lengths, {n} chunks in {time.time() - t0:.1f} s"
+            + (f", program cache {pc0} -> {pc1}" if pc0 is not None and pc1 is not None else "")
+        )
 
     def _warm_all(self, ids, kv_caches, slot: int, start: int) -> None:
         """V41_PREFILL_WARM_ALL=1 (DS41F-0037 C-P1): after the warm-up chunk, run the same ids as dummy chunks at every later
