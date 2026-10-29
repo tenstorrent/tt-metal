@@ -416,6 +416,11 @@ class Qwen36MLP:
             if (x.shape[-2] <= ttnn.TILE_SIZE or (_prefill_tuned and tpc.prefill_l1_rows_ok(x.shape[-2])))
             else mc
         )
+        if decode_ar is not None and w2_pc is not None and hidden.shape[-2] <= ttnn.TILE_SIZE:
+            # QWEN36_DECODE_AR_DIRECT_INPUT=1: keep the partial L1-sharded on the down-proj grid (no RES40 reshard).
+            _rowpar_mc = tpc.rowpar_out_memcfg(w2_pc, w.w2.shape[-1], w.w2)
+            if _rowpar_mc is not None:
+                mc_w2_out = _rowpar_mc
         partial = weight_prefetch.linear(hidden, w.w2, w2_pc, compute_kernel_config=ckc, memory_config=mc_w2_out)
         ttnn.deallocate(hidden)
 

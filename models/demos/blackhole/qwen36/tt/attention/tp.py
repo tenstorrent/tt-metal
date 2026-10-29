@@ -329,17 +329,20 @@ class TPAttention:
             self.args.dim,
         )
 
-    def _wo_proj(self, x, weight):
+    def _wo_proj(self, x, weight, rowpar=False):
         """Row-parallel output projection: DRAM-sharded decode/prefill matmul (K=attn_out_dim_tp),
-        matching the in-proj. Falls back to plain interleaved when no sharded memcfg."""
+        matching the in-proj. Falls back to plain interleaved when no sharded memcfg.
+        rowpar: the output feeds the decode all-reduce (QWEN36_DECODE_AR_DIRECT_INPUT=1 keeps it L1-sharded)."""
         if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
             # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
+            pc = self.args.attn_wo_decode_1d_progcfg
+            out_mc = tpc.rowpar_out_memcfg(pc, weight.shape[-1], weight) if rowpar else None
             return tpc.matmul_1d_decode(
                 x,
                 weight,
-                self.args.attn_wo_decode_1d_progcfg,
+                pc,
                 self.wo_cfg,
-                out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                out_memory_config=out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
             )
         if not self._wo_sharded:
             if x.shape[-2] > tpc.TILE_SIZE:
@@ -1183,7 +1186,7 @@ class TPAttention:
         else:
             gated_flat = ttnn.reshape(gated, (1, B, NH * HD))
             ttnn.deallocate(gated)
-        wo_partial = self._wo_proj(gated_flat, tw["wo"])
+        wo_partial = self._wo_proj(gated_flat, tw["wo"], rowpar=decode_ar is not None)
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         if decode_ar is not None:
@@ -1401,7 +1404,7 @@ class TPAttention:
         ttnn.deallocate(attn_flat)
         ttnn.deallocate(gate)  # gate_flat is a view of it
 
-        wo_partial = self._wo_proj(gated_flat, tw["wo"])
+        wo_partial = self._wo_proj(gated_flat, tw["wo"], rowpar=decode_ar is not None)
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         if decode_ar is not None:
@@ -1526,7 +1529,7 @@ class TPAttention:
         ttnn.deallocate(attn_flat)
         ttnn.deallocate(gate)  # gate_flat is a view of it
 
-        wo_partial = self._wo_proj(gated_flat, tw["wo"])
+        wo_partial = self._wo_proj(gated_flat, tw["wo"], rowpar=decode_ar is not None)
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         if decode_ar is not None:

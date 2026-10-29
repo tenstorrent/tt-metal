@@ -1813,7 +1813,7 @@ class TPGatedDeltaNet:
         ttnn.deallocate(z_p)
         gated = self._select_live_rows(ttnn.reshape(gated, (1, _FUSED_CHUNK_SIZE * B, vd)), B, ttnn.bfloat16, _DRAM)
 
-        partial = self._row_proj(gated, tw["out"])
+        partial = self._row_proj(gated, tw["out"], rowpar=decode_ar is not None)
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
         if decode_ar is not None:
@@ -1867,7 +1867,7 @@ class TPGatedDeltaNet:
             fp32_state=self._decode_step_fp32_state,
         )  # [1, B, Nv*Dv] bf16
         ttnn.deallocate(qkvzab)
-        partial = self._row_proj(gated, tw["out"])
+        partial = self._row_proj(gated, tw["out"], rowpar=decode_ar is not None)
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
         if decode_ar is not None:
@@ -1961,13 +1961,16 @@ class TPGatedDeltaNet:
             ttnn.deallocate(t)
         return tuple(outs)
 
-    def _row_proj(self, x, weight):
+    def _row_proj(self, x, weight, rowpar=False):
         """Row-parallel out projection: DRAM-sharded decode/prefill matmul (K=gdn_value_dim_tp),
-        matching the in-proj. Falls back to plain interleaved on single device (no sharded memcfg)."""
+        matching the in-proj. Falls back to plain interleaved on single device (no sharded memcfg).
+        rowpar: the output feeds the decode all-reduce (QWEN36_DECODE_AR_DIRECT_INPUT=1 keeps it L1-sharded)."""
         if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
             # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
+            pc = self.args.gdn_out_decode_1d_progcfg
+            out_mc = tpc.rowpar_out_memcfg(pc, weight.shape[-1], weight) if rowpar else None
             return tpc.matmul_1d_decode(
-                x, weight, self.args.gdn_out_decode_1d_progcfg, self.cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+                x, weight, pc, self.cfg, out_memory_config=out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
             )
         if not self._out_sharded:
             if x.shape[-2] > tpc.TILE_SIZE:
@@ -3010,7 +3013,7 @@ class TPGatedDeltaNet:
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
 
-        partial = self._row_proj(gated, tw["out"])
+        partial = self._row_proj(gated, tw["out"], rowpar=decode_ar is not None)
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
         if decode_ar is not None:
@@ -3181,7 +3184,7 @@ class TPGatedDeltaNet:
         # Keep only the live row logically; the physical tile geometry is unchanged (a free view).
         gated = ttnn.reshape(gated, ttnn.Shape([1, 1, vd]), gated.padded_shape)
 
-        partial = self._row_proj(gated, tw["out"])
+        partial = self._row_proj(gated, tw["out"], rowpar=decode_ar is not None)
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, 1, partial.shape[-1]))
         if decode_ar is not None:
@@ -4032,7 +4035,7 @@ class TPGatedDeltaNet:
         decode_ar (QWEN36_VERIFY_DAR): all-reduce into the replicated RES40 residual (no zero pad: bucket == R)."""
         tw = self.tw
         mc, rm = ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
-        partial = self._row_proj(gated, tw["out"])
+        partial = self._row_proj(gated, tw["out"], rowpar=decode_ar is not None)
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, R, partial.shape[-1]))
         if decode_ar is not None:

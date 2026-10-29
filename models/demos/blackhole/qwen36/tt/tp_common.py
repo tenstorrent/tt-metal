@@ -1411,6 +1411,70 @@ DECODE_AR_FUSE_ENV = "QWEN36_DECODE_AR_FUSE_RESIDUAL"
 DECODE_AR_FUSE_LIVE_ROWS_ENV = "QWEN36_DECODE_AR_FUSE_LIVE_ROWS"
 DECODE_AR_LIVE_ROWS_ENV = "QWEN36_DECODE_AR_LIVE_ROWS"
 DECODE_AR_LIVE_ROWS_MAX = TILE_SIZE // 2  # rows that fit faces 0/1 of a 32x32 tile (the op's own eligibility bound)
+# ccl-overlap P1a: QWEN36_DECODE_AR_NOC1 (default "0" = off): the decode all_reduce_async's fabric/mcast writer runs on
+# NOC_1 (use_noc1_only=True) instead of the op default NOC_0, so the CCL traffic stays off the NoC the weight / DRISC
+# prefetch streams use. The reader is on NOC_1 either way. Off: the call's arguments are unchanged.
+DECODE_AR_NOC1_ENV = "QWEN36_DECODE_AR_NOC1"
+# ccl-overlap P2: QWEN36_DECODE_AR_DIRECT_INPUT (default "0" = off): the TP8 row-parallel decode producers (MLP down,
+# attn wo, GDN out-proj; the 1D mcast_in0 decode matmuls) write their partial L1 WIDTH_SHARDED on their own grid
+# (decode_rowpar_out_memcfg), and all_reduce() feeds that shard straight to all_reduce_async (which already reads an
+# input grid different from the RES40 output grid) instead of first resharding it to RES40. Same bytes, same sum
+# order: the reduction only reads tiles by index, so the result is identical; it removes one to_memory_config per AR.
+# Prefetch-registered weights keep their old output placement.
+DECODE_AR_DIRECT_ENV = "QWEN36_DECODE_AR_DIRECT_INPUT"
+
+
+def decode_ar_noc1_enabled():
+    """QWEN36_DECODE_AR_NOC1 (default "0" = off): decode all_reduce_async writer on NOC_1 (use_noc1_only=True)."""
+    return os.environ.get(DECODE_AR_NOC1_ENV, "0") == "1"
+
+
+def decode_ar_direct_input_enabled():
+    """QWEN36_DECODE_AR_DIRECT_INPUT (default "0" = off): row-parallel decode partials stay L1 WIDTH_SHARDED on the
+    producer grid and feed the decode all_reduce without the RES40 reshard."""
+    return os.environ.get(DECODE_AR_DIRECT_ENV, "0") == "1"
+
+
+def _is_1d_mcast_in0(progcfg):
+    return isinstance(progcfg, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig) and bool(progcfg.mcast_in0)
+
+
+def rowpar_out_memcfg(progcfg, n, weight=None):
+    """QWEN36_DECODE_AR_DIRECT_INPUT=1: L1 WIDTH_SHARDED memory config for the [.., M<=32, n] output of the 1D
+    mcast_in0 decode matmul `progcfg` (shard [per_core_M*32, per_core_N*32] on its first ceil(n_tiles/per_core_N)
+    cores, row-major over the progcfg grid). None with the flag off, for any other progcfg, when n is not a whole
+    number of shards, or when `weight` streams through the Tensor prefetcher (its matmul keeps its own placement)."""
+    if not decode_ar_direct_input_enabled() or not _is_1d_mcast_in0(progcfg):
+        return None
+    if weight is not None and weight_prefetch.lookup(weight, progcfg) is not None:
+        return None
+    n_tiles = n // TILE_SIZE
+    per_core_n = progcfg.per_core_N
+    if n % TILE_SIZE or progcfg.per_core_M != 1 or n_tiles % per_core_n:
+        return None
+    grid = progcfg.compute_with_storage_grid_size
+    gx, gy = (grid.x, grid.y) if hasattr(grid, "x") else (grid[0], grid[1])
+    ncores = n_tiles // per_core_n
+    if ncores > gx * gy:
+        return None
+    cores = ttnn.num_cores_to_corerangeset(ncores, ttnn.CoreCoord(gx, gy), row_wise=True)
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(cores, [TILE_SIZE, per_core_n * TILE_SIZE], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def decode_ar_direct_input(partial):
+    """True when `partial` can feed the decode all_reduce as is: L1 WIDTH_SHARDED, one 32-row tile row per shard."""
+    if not partial.is_sharded():
+        return False
+    mc = partial.memory_config()
+    if mc.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED or mc.buffer_type != ttnn.BufferType.L1:
+        return False
+    spec = mc.shard_spec
+    padded = list(partial.padded_shape)
+    return spec is not None and spec.shape[0] == TILE_SIZE and math.prod(padded[:-1]) == TILE_SIZE
 
 
 def decode_ar_live_rows_enabled():
@@ -1446,6 +1510,8 @@ class DecodeResidualAllReduce:
         self._armed = None
         self._fused_out = None
         self.live_rows = live_rows
+        self.noc1 = decode_ar_noc1_enabled()
+        self.direct_input = decode_ar_direct_input_enabled()
         # Both-on guard (QWEN36_DECODE_AR_FUSE_RESIDUAL x QWEN36_DECODE_AR_LIVE_ROWS): until the combined op passes
         # its byte-identity test, an all_reduce that fuses a residual does not also pack live rows, unless
         # fuse_live_rows (QWEN36_DECODE_AR_FUSE_LIVE_ROWS=1) opts in.
@@ -1604,9 +1670,13 @@ class DecodeResidualAllReduce:
         shape = list(partial.shape)
         if shape[0] != 1 or shape[1] != 1:
             partial = ttnn.reshape(partial, (1, 1, shape[-4] * shape[-3] * shape[-2], shape[-1]))
-        packed = ttnn.to_memory_config(partial, self.res_mem)
-        if packed is not partial:
-            ttnn.deallocate(partial)
+        if self.direct_input and decode_ar_direct_input(partial):
+            # QWEN36_DECODE_AR_DIRECT_INPUT=1: the producer's own L1 width-sharded grid feeds the op directly.
+            packed = partial
+        else:
+            packed = ttnn.to_memory_config(partial, self.res_mem)
+            if packed is not partial:
+                ttnn.deallocate(partial)
         if packed.dtype != dtype:
             cast = ttnn.typecast(packed, dtype)
             ttnn.deallocate(packed)
@@ -1617,6 +1687,8 @@ class DecodeResidualAllReduce:
             extra["residual_tensor"] = residual
         if self.live_rows and self.live_rows_eligible(packed) and (residual is None or self.fuse_live_rows):
             extra["live_rows_packing"] = True
+        if self.noc1:
+            extra["use_noc1_only"] = True
         out = ttnn.experimental.all_reduce_async(
             packed,
             self.buffer_fp32 if use_fp32 else self.buffer,
@@ -1685,7 +1757,8 @@ def get_decode_allreduce(args, tt_ccl):
             logger.info(
                 f"{DECODE_AR_ENV}=1: decode uses the replicated 40-core L1 residual + all_reduce_async "
                 f"(gdn_fp32={inst.gdn_fp32}, fuse_residual={inst.fuse_residual}, num_links={inst.num_links}, "
-                f"topology={inst.topology}, live_rows={inst.live_rows})"
+                f"topology={inst.topology}, live_rows={inst.live_rows}, noc1={inst.noc1}, "
+                f"direct_input={inst.direct_input})"
             )
     tt_ccl._qwen36_decode_ar = inst
     return inst
