@@ -242,9 +242,22 @@ class MuseLinear:
         return out
 
 
-def allocate_kv_cache(args, mesh_device, num_blocks: int | None = None) -> tuple:
-    """Paged K/V cache for one layer: each [num_blocks, kv_heads_local, block_size, head_dim], zeros, replicated."""
-    n = num_blocks if num_blocks is not None else args.max_num_blocks
+def kv_page_table(args, num_users: int, sliding: bool = False) -> torch.Tensor:
+    """Host page table int32 [num_users, max_num_blocks_per_user]; user u owns blocks [u*n, (u+1)*n).
+    For a sliding layer n = sliding_kv_blocks and the row wraps, so the cache keeps only the last positions (a ring)."""
+    nb = args.max_num_blocks_per_user
+    n = args.sliding_kv_blocks if sliding else nb
+    return (torch.arange(num_users)[:, None] * n + torch.arange(nb) % n).to(torch.int32)
+
+
+def allocate_kv_cache(args, mesh_device, sliding: bool = False) -> tuple:
+    """Paged K/V cache for one layer: each [num_blocks, kv_heads_local, block_size, head_dim], zeros, replicated.
+    Sliding layers hold sliding_kv_blocks per user (see kv_page_table)."""
+    # The KV-update ops require at least one page-table row of blocks (max_num_blocks_per_user).
+    n = max(
+        args.max_batch_size * (args.sliding_kv_blocks if sliding else args.max_num_blocks_per_user),
+        args.max_num_blocks_per_user,
+    )
     shape = [n, args.kv_heads_local, args.block_size, args.head_dim]
     caches = []
     for _ in range(2):
@@ -270,6 +283,12 @@ class MuseGlimmerAttention:
         self.is_sliding = args.is_sliding(layer_idx)
         self.uses_rope = args.uses_rope(layer_idx)
         self.sliding_window = args.sliding_window if self.is_sliding else None
+        # Bounded sliding cache: decode wraps through kv_page_table; the prefill fill must wrap the same way.
+        self.fill_kwargs = (
+            {"cache_position_modulo": args.sliding_kv_blocks * args.block_size}
+            if self.is_sliding and args.sliding_kv_blocks < args.max_num_blocks_per_user
+            else {}
+        )
         self.matmul_cfg = matmul_compute_config(mesh_device)
         self.sdpa_cfg = sdpa_compute_config(mesh_device)
         self.rope_cfg = norm_compute_config(mesh_device)
@@ -376,8 +395,8 @@ class MuseGlimmerAttention:
             k = apply_rope(k, cos, sin)
 
         if page_table is not None:
-            _paged_fill_cache(k_cache, k, page_table, batch_idx=user_id)
-            _paged_fill_cache(v_cache, v, page_table, batch_idx=user_id)
+            _paged_fill_cache(k_cache, k, page_table, batch_idx=user_id, **self.fill_kwargs)
+            _paged_fill_cache(v_cache, v, page_table, batch_idx=user_id, **self.fill_kwargs)
         else:
             kf = k if k.dtype == k_cache.dtype else ttnn.typecast(k, k_cache.dtype)
             vf = v if v.dtype == v_cache.dtype else ttnn.typecast(v, v_cache.dtype)

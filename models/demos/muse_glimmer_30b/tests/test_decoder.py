@@ -66,15 +66,16 @@ def _ref_layer(args, layer_idx, sd):
     return layer.eval()
 
 
-def _page_table(args, batch):
-    nb = args.max_num_blocks_per_user
-    return torch.arange(batch * nb, dtype=torch.int32).reshape(batch, nb)
+def _page_table(args, batch, sliding):
+    from models.demos.muse_glimmer_30b.tt.attention import kv_page_table
+
+    return kv_page_table(args, batch, sliding)
 
 
-def _alloc_kv(args, mesh_device):
+def _alloc_kv(args, mesh_device, sliding):
     from models.demos.muse_glimmer_30b.tt.attention import allocate_kv_cache
 
-    return allocate_kv_cache(args, mesh_device)
+    return allocate_kv_cache(args, mesh_device, sliding)
 
 
 def _ref_forward(ref, args, layer_idx, x):
@@ -132,8 +133,8 @@ def test_decoder_layer_prefill(mesh_device, tp, layer_idx, seq_len):
 
     ccl = MuseCCL(sub)
     layer = MuseGlimmerDecoderLayer(args, sub, ccl, layer_idx, sd, use_weight_cache=False)
-    kv_cache = _alloc_kv(args, sub)
-    page_table = _int_tt(_page_table(args, 1), sub, ttnn.int32)
+    kv_cache = _alloc_kv(args, sub, args.is_sliding(layer_idx))
+    page_table = _int_tt(_page_table(args, 1, args.is_sliding(layer_idx)), sub, ttnn.int32)
     rope = None
     if args.uses_rope(layer_idx):
         tables = RopeTables(sub, args.head_dim, args.rope_theta, args.max_seq_len)
@@ -166,8 +167,8 @@ def test_decoder_layer_decode(mesh_device, tp, layer_idx):
 
     ccl = MuseCCL(sub)
     layer = MuseGlimmerDecoderLayer(args, sub, ccl, layer_idx, sd, use_weight_cache=False)
-    kv_cache = _alloc_kv(args, sub)
-    pt_host = _page_table(args, args.max_batch_size)
+    kv_cache = _alloc_kv(args, sub, args.is_sliding(layer_idx))
+    pt_host = _page_table(args, args.max_batch_size, args.is_sliding(layer_idx))
     page_table = _int_tt(pt_host, sub, ttnn.int32)
     tables = RopeTables(sub, args.head_dim, args.rope_theta, args.max_seq_len) if args.uses_rope(layer_idx) else None
 

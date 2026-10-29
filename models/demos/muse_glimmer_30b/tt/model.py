@@ -11,7 +11,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.muse_glimmer_30b.tt.attention import MuseLinear, allocate_kv_cache, heads_memcfg
+from models.demos.muse_glimmer_30b.tt.attention import MuseLinear, allocate_kv_cache, heads_memcfg, kv_page_table
 from models.demos.muse_glimmer_30b.tt.ccl import MuseCCL
 from models.demos.muse_glimmer_30b.tt.common import (
     RopeTables,
@@ -29,7 +29,7 @@ DECODE_B_PAD = 32  # decode batch is always padded to one tile of rows
 
 
 class MuseGlimmerModel:
-    def __init__(self, args, mesh_device, ccl=None, use_weight_cache=True, kv_num_blocks=None):
+    def __init__(self, args, mesh_device, ccl=None, use_weight_cache=True):
         self.args = args
         self.mesh_device = mesh_device
         self.ccl = ccl if ccl is not None else MuseCCL(mesh_device)
@@ -82,7 +82,19 @@ class MuseGlimmerModel:
         )
         del lm
         gc.collect()
-        self.kv_caches = [allocate_kv_cache(args, mesh_device, kv_num_blocks) for _ in self.layers]
+        self.kv_caches = [allocate_kv_cache(args, mesh_device, args.is_sliding(i)) for i in range(len(self.layers))]
+        # Sliding layers address their ring caches through this fixed table. Rows past max_batch_size stay zero,
+        # like the padded rows of the decode page table. Allocated here so it exists before any trace capture.
+        pt = torch.zeros(DECODE_B_PAD, args.max_num_blocks_per_user, dtype=torch.int32)
+        pt[: args.max_batch_size] = kv_page_table(args, args.max_batch_size, sliding=True)
+        self.sliding_page_table = ttnn.from_torch(
+            pt,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=replicate_mapper(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         self.sampling = None
         self._init_device_sampling()
 
@@ -219,7 +231,8 @@ class MuseGlimmerModel:
         ttnn.deallocate(tokens_tt)
         rope = self.rope.prefill(0, s)
         for i, layer in enumerate(self.layers):
-            nx = layer.forward_prefill(x, rope if a.uses_rope(i) else None, self.kv_caches[i], page_table_tt, user_id)
+            pt = self.sliding_page_table if a.is_sliding(i) and page_table_tt is not None else page_table_tt
+            nx = layer.forward_prefill(x, rope if a.uses_rope(i) else None, self.kv_caches[i], pt, user_id)
             ttnn.deallocate(x)
             x = nx
         return x, s_real, s
@@ -338,21 +351,21 @@ class MuseGlimmerModel:
         x = self.embed(tokens_tt)
         rope = self.rope.decode(rope_idx_tt, memory_config=heads_memcfg(DECODE_B_PAD, self.args.head_dim))
         sb = min(a.max_batch_size, DECODE_B_PAD)
+        tables = {False: page_table_tt, True: self.sliding_page_table}  # keyed by is_sliding
+        sdpa_inputs = {}
         if sb < DECODE_B_PAD:  # SDPA decode splits its cores over all user slots
-            sdpa_inputs = (
-                ttnn.slice(current_pos_tt, [0], [sb]),
-                ttnn.slice(page_table_tt, [0, 0], [sb, page_table_tt.shape[1]]),
-            )
-        else:
-            sdpa_inputs = None
+            pos = ttnn.slice(current_pos_tt, [0], [sb])
+            sdpa_inputs = {s: (pos, ttnn.slice(t, [0, 0], [sb, t.shape[1]])) for s, t in tables.items()}
         for i, layer in enumerate(self.layers):
+            s = a.is_sliding(i)
             nx = layer.forward_decode(
-                x, current_pos_tt, rope if a.uses_rope(i) else None, self.kv_caches[i], page_table_tt, sdpa_inputs
+                x, current_pos_tt, rope if a.uses_rope(i) else None, self.kv_caches[i], tables[s], sdpa_inputs.get(s)
             )
             ttnn.deallocate(x)
             x = nx
-        if sdpa_inputs is not None:
-            for t in sdpa_inputs:
+        if sdpa_inputs:
+            ttnn.deallocate(pos)
+            for _, t in sdpa_inputs.values():
                 ttnn.deallocate(t)
         logits = self.head(x)
         ttnn.deallocate(x)

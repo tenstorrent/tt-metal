@@ -13,7 +13,7 @@ import models.demos.muse_glimmer_30b.tt.attention as attention_mod
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.muse_glimmer_30b.reference.model import Attention, RotaryEmbedding, build_attention_mask
-from models.demos.muse_glimmer_30b.tt.attention import MuseGlimmerAttention, allocate_kv_cache
+from models.demos.muse_glimmer_30b.tt.attention import MuseGlimmerAttention, allocate_kv_cache, kv_page_table
 from models.demos.muse_glimmer_30b.tt.ccl import MuseCCL
 from models.demos.muse_glimmer_30b.tt.common import RopeTables
 from models.demos.muse_glimmer_30b.tt.mesh_utils import mesh_test_params, skip_and_submesh
@@ -63,11 +63,6 @@ def _read(t, mesh_device):
     return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
 
 
-def _page_table(args, num_users):
-    nb = args.max_num_blocks_per_user
-    return torch.arange(num_users * nb, dtype=torch.int32).reshape(num_users, nb)
-
-
 def _run_prefill(mesh_device, tp, layer_idx, seq_len, user_id=0):
     sub = skip_and_submesh(mesh_device, tp)
     args, cfg, ccl, tt_attn, ref = _setup(sub, layer_idx)
@@ -78,8 +73,10 @@ def _run_prefill(mesh_device, tp, layer_idx, seq_len, user_id=0):
     rope = None
     if args.uses_rope(layer_idx):
         rope = RopeTables(sub, args.head_dim, args.rope_theta, args.max_seq_len).prefill(0, seq_len)
-    kv_cache = allocate_kv_cache(args, sub)
-    pt = _to_dev(_page_table(args, args.max_batch_size), sub, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    kv_cache = allocate_kv_cache(args, sub, args.is_sliding(layer_idx))
+    pt = _to_dev(
+        kv_page_table(args, args.max_batch_size, args.is_sliding(layer_idx)), sub, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+    )
     tt_x = _to_dev(x.unsqueeze(0), sub, ttnn.bfloat16, ttnn.TILE_LAYOUT)
 
     tt_out = tt_attn.forward_prefill(tt_x, rope, kv_cache, pt, user_id=user_id)
@@ -122,8 +119,10 @@ def test_attention_decode(mesh_device, tp, layer_idx):
     B = len(lengths)
     H = args.hidden_size
     tables = RopeTables(sub, args.head_dim, args.rope_theta, args.max_seq_len)
-    kv_cache = allocate_kv_cache(args, sub)
-    pt = _to_dev(_page_table(args, args.max_batch_size), sub, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    kv_cache = allocate_kv_cache(args, sub, args.is_sliding(layer_idx))
+    pt = _to_dev(
+        kv_page_table(args, args.max_batch_size, args.is_sliding(layer_idx)), sub, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+    )
 
     hist = [(torch.randn(1, L, H) * 1.0).to(torch.bfloat16) for L in lengths]
     new = (torch.randn(1, B, H) * 1.0).to(torch.bfloat16)  # one new token per user

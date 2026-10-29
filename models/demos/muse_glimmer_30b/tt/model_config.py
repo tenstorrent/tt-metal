@@ -247,6 +247,12 @@ class MuseGlimmerModelArgs:
     def max_num_blocks(self) -> int:
         return self.max_batch_size * self.max_num_blocks_per_user
 
+    @property
+    def sliding_kv_blocks(self) -> int:
+        """Per-user KV blocks of a sliding layer: a ring of the window plus one 256-row prefill pad, so the last
+        `sliding_window` real rows of a padded prompt survive the fill. Never more than the full span."""
+        return min(self.max_num_blocks_per_user, math.ceil((self.sliding_window + 256) / self.block_size))
+
     def is_sliding(self, i: int) -> bool:
         return self.layer_types[i] == "sliding_attention"
 
