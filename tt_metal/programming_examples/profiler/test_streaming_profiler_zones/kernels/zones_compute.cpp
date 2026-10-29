@@ -58,16 +58,16 @@ static constexpr int kWallClockLowIdx = 0;
 
 // ZONE_MODE == 0 keeps the wall-clock spin: it needs durations calibrated in microseconds, which a
 // nop-iteration count cannot express.
-// ZONE_C is a ZONE with a colour, carried to the host as the site's ZoneColorMeta; ZONE_V adds a verbosity level
-// (ZoneVerbosityMeta), and is the example in tools/profiler/STREAMING_PROFILER_ZONE_IDS_WALKTHROUGH.md.
+// ZONE_C is a ZONE with a colour, carried to the host as the site's ZoneColorMeta; ZONE_U adds the unit a consumer
+// should present the duration in (ZoneUnitMeta).
 #if ZONE_MODE
 #define ZONE(NAME, GRADUATED) ZONE_NOPS(NAME, ZONE_CYC)
 #define ZONE_C(NAME, GRADUATED, COLOR) ZONE_NOPS_AS(DeviceZoneScopedNC(NAME, COLOR), ZONE_CYC)
-#define ZONE_V(NAME, GRADUATED, COLOR, VERBOSITY) ZONE_NOPS_AS(DeviceZoneScopedNCV(NAME, COLOR, VERBOSITY), ZONE_CYC)
+#define ZONE_U(NAME, GRADUATED, COLOR, UNIT) ZONE_NOPS_AS(DeviceZoneScopedNCU(NAME, COLOR, UNIT), ZONE_CYC)
 #else
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
 #define ZONE_C(NAME, GRADUATED, COLOR) ZONE_WALL_AS(DeviceZoneScopedNC(NAME, COLOR), GRADUATED)
-#define ZONE_V(NAME, GRADUATED, COLOR, VERBOSITY) ZONE_WALL_AS(DeviceZoneScopedNCV(NAME, COLOR, VERBOSITY), GRADUATED)
+#define ZONE_U(NAME, GRADUATED, COLOR, UNIT) ZONE_WALL_AS(DeviceZoneScopedNCU(NAME, COLOR, UNIT), GRADUATED)
 #endif
 
 // Marker-cost microbench (--bench): bursts of one marker kind, each burst timed against the wall clock, the totals
@@ -118,16 +118,16 @@ void kernel_main() {
 void kernel_main() {
     // Durations span ~1..100 us. CYC = us * 2500, per the ZONE_WALL calibration above.
     for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
-        ZONE_C(ZTAG "_Zone0", 2500u, 0xE6194Bu);    // ~1 us, red
-        ZONE_C(ZTAG "_Zone1", 5000u, 0xF58231u);    // ~2 us, orange
-        ZONE_C(ZTAG "_Zone2", 7500u, 0xFFE119u);    // ~3 us, yellow
-        ZONE_C(ZTAG "_Zone3", 12500u, 0xBFEF45u);   // ~5 us, lime
-        ZONE_C(ZTAG "_Zone4", 20000u, 0x3CB44Bu);   // ~8 us, green
-        ZONE_V(ZTAG "_Zone5", 30000u, 0x42D4F4u, 2);  // ~12 us, cyan, verbosity 2
-        ZONE_C(ZTAG "_Zone6", 50000u, 0x4363D8u);   // ~20 us, blue
-        ZONE_C(ZTAG "_Zone7", 100000u, 0x911EB4u);  // ~40 us, purple
-        ZONE_C(ZTAG "_Zone8", 175000u, 0xF032E6u);  // ~70 us, magenta
-        ZONE_C(ZTAG "_Zone9", 250000u, 0xA9A9A9u);  // ~100 us, grey
+        ZONE_C(ZTAG "_Zone0", 2500u, 0xE6194Bu);                                            // ~1 us, red
+        ZONE_C(ZTAG "_Zone1", 5000u, 0xF58231u);                                            // ~2 us, orange
+        ZONE_C(ZTAG "_Zone2", 7500u, 0xFFE119u);                                            // ~3 us, yellow
+        ZONE_C(ZTAG "_Zone3", 12500u, 0xBFEF45u);                                           // ~5 us, lime
+        ZONE_C(ZTAG "_Zone4", 20000u, 0x3CB44Bu);                                           // ~8 us, green
+        ZONE_U(ZTAG "_Zone5", 30000u, 0x42D4F4u, kernel_profiler::TimeUnit::Microseconds);  // ~12 us, cyan, in us
+        ZONE_C(ZTAG "_Zone6", 50000u, 0x4363D8u);                                           // ~20 us, blue
+        ZONE_C(ZTAG "_Zone7", 100000u, 0x911EB4u);                                          // ~40 us, purple
+        ZONE_C(ZTAG "_Zone8", 175000u, 0xF032E6u);                                          // ~70 us, magenta
+        ZONE_C(ZTAG "_Zone9", 250000u, 0xA9A9A9u);                                          // ~100 us, grey
     }
 }
 #endif  // ZONE_MODE == 2
