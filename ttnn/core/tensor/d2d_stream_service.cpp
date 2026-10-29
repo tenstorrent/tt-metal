@@ -161,7 +161,7 @@ std::map<distributed::MeshCoordinate, DeviceAddr> collect_backing_addrs(
 
 // Looks up `core` on `mesh`. Fails if the chip has no PCIe device of its own.
 PCIeCoreLocation resolve_pcie_core(distributed::MeshDevice& mesh, const distributed::MeshCoreCoord& core) {
-    const auto logical_device_id = mesh.get_device(core.device_coord)->id();
+    const auto logical_device_id = tt::tt_metal::internal::get_device(mesh, core.device_coord)->id();
     const auto pcie_device_id = tt::umd::PCIDevice::get_pci_device_id(static_cast<int>(logical_device_id));
     TT_FATAL(
         pcie_device_id.has_value(),
