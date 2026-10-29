@@ -17,7 +17,7 @@ from models.demos.strands_agent.tt.answers import build_answer
 from models.demos.strands_agent.tt.head import load_config, load_head
 from models.demos.strands_agent.tt.model_config import StrandsDeciderModelArgs
 from models.demos.strands_agent.tt.prompting import EncodedQuestion, encode_request
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import Mode, get_rot_transformation_mat
 
 MAX_BATCH = 32  # prompts per forward (upstream max_batch)
 # Padded tokens per forward (batch * bucket). Per-prompt cost stops falling near 4-8k tokens; larger forwards
@@ -141,9 +141,27 @@ class StrandsDecider:
                     ), "traced forwards need the stateless GDN prefill (no valid_len masks)"
         # cos/sin of the traced buckets live for the whole run: a trace reads them and none may be allocated later.
         self._rope_cache = {}
-        model._build_request_rope(torch.zeros(1, 1, dtype=torch.int32), None)
+        self.trans_mat = ttnn.from_torch(
+            get_rot_transformation_mat(32).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         for S in TRACED_S:
-            self._rope_cache[S] = model.rope.get_prefill_rot_mats(0, S)
+            self._rope_cache[S] = self._build_rope(S)
+
+    def _build_rope(self, S):
+        """cos/sin [1, 1, S, rotary_dim] bf16 TILE for plain 1D RoPE, in the rope-pair layout (cos[2j] = cos[2j + 1])."""
+        model = self.model
+        model._build_request_rope(torch.zeros(1, 1, dtype=torch.int32), None)  # text only: plain 1D RoPE
+        cos_t, sin_t = model.rope.prefill_cos_sin_torch(0, S)  # [S, rd], HF layout cat([c, c])
+        half = cos_t.shape[-1] // 2
+        kw = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
+        return tuple(
+            ttnn.from_torch(t[:, :half].repeat_interleave(2, dim=-1).reshape(1, 1, S, 2 * half).contiguous(), **kw)
+            for t in (cos_t, sin_t)
+        )
 
     @classmethod
     def from_pretrained(cls, mesh_device, max_seq_len=4096, trace=True):
@@ -177,11 +195,10 @@ class StrandsDecider:
         return out
 
     def _rope(self, S):
-        """cos/sin [1, S, head_dim] for plain 1D RoPE: the persistent ones for traced S, else built per call."""
+        """cos/sin [1, 1, S, rotary_dim] in the pair layout: the persistent ones for traced S, else built per call."""
         if S in self._rope_cache:
             return self._rope_cache[S]
-        self.model._build_request_rope(torch.zeros(1, 1, dtype=torch.int32), None)  # text only: plain 1D RoPE
-        return self.model.rope.get_prefill_rot_mats(0, S)
+        return self._build_rope(S)
 
     def _shape(self, seqs, positions):
         """(B, S, P, traced): rows, bucket, select rows and whether the forward may run as a trace.
@@ -251,9 +268,9 @@ class StrandsDecider:
             attn_in = _rms_norm(layer.attention_norm, x)
             attn_in = ttnn.reshape(attn_in, [B, S, dim])
             if layer.is_full_attention:
-                # Stateless: one fused q|k|v|gate projection, heads built straight to [B, H, S, D], plain causal
+                # Stateless: q|k|v and gate projections, heads built straight to [B, H, S, D], plain causal
                 # SDPA; no KV cache is written, so there is nothing to reset.
-                attn_out = stateless_attention_prefill(layer.attention, attn_in, cos, sin)
+                attn_out = stateless_attention_prefill(layer.attention, attn_in, cos, sin, self.trans_mat)
             else:
                 attn_out = recurrent_forward(
                     layer.attention,

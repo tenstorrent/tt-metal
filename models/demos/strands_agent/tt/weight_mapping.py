@@ -15,6 +15,8 @@ STRANDS_DECIDER_HF_MODEL = "StrandsAgents/strands-decider-2B-qwen3.5-v1-2610"
 STRANDS_BASE_HF_MODEL = "Qwen/Qwen3.5-2B-Base"
 ADAPTER_PREFIX = "base_model.model."
 LM_PREFIX = "model.language_model."
+# Layout tag of the TT weight cache: the full-attention q/k head dims are stored rope-pair interleaved.
+WEIGHT_LAYOUT = "rope_pairs"
 
 
 def resolve_checkpoint(repo_or_dir=None) -> Path:
@@ -76,7 +78,45 @@ def load_base_state_dict(base_dir) -> Dict[str, torch.Tensor]:
     return state_dict
 
 
+def rope_pair_perm(head_dim: int, rotary_dim: int) -> torch.Tensor:
+    """perm[p] = original dim stored at position p: (j, j + rd/2) become adjacent (2j, 2j + 1); the tail is unchanged."""
+    half = rotary_dim // 2
+    perm = torch.arange(head_dim)
+    perm[0:rotary_dim:2] = torch.arange(half)
+    perm[1:rotary_dim:2] = torch.arange(half) + half
+    return perm
+
+
+def permute_rope_pairs(state_dict: Dict[str, torch.Tensor], head_dim: int = 256, rotary_dim: int = 64) -> None:
+    """Reorder the q/k head dims of every full-attention layer in place so that RoPE pairs are adjacent.
+
+    HF partial RoPE pairs dims (j, j + rd/2) of each head; the stateless prefill RoPE op rotates adjacent pairs
+    (2j, 2j + 1). Permuting the q_proj (q rows only, not the gate rows), k_proj and q_norm/k_norm outputs the same way
+    leaves q . k per head unchanged (the permutation is orthogonal and applied to both) and lets the op run without
+    slices. The TT weight cache key carries this layout (WEIGHT_LAYOUT)."""
+    perm = rope_pair_perm(head_dim, rotary_dim)
+    D = head_dim
+    for key in [k for k in state_dict if k.endswith(".self_attn.q_proj.weight")]:
+        prefix = key[: -len("q_proj.weight")]
+        q = state_dict[key]  # [Hq * 2D, dim]: per head D q rows, then D gate rows
+        Hq = q.shape[0] // (2 * D)
+        q = q.reshape(Hq, 2, D, -1).clone()
+        q[:, 0] = q[:, 0][:, perm]
+        state_dict[key] = q.reshape(Hq * 2 * D, -1)
+        k = state_dict[prefix + "k_proj.weight"]  # [Hkv * D, dim]
+        state_dict[prefix + "k_proj.weight"] = k.reshape(-1, D, k.shape[-1])[:, perm].reshape(k.shape)
+        for norm in ("q_norm", "k_norm"):
+            state_dict[prefix + norm + ".weight"] = state_dict[prefix + norm + ".weight"][perm]
+        for bias, per_head in (("q_proj.bias", 2 * D), ("k_proj.bias", D)):  # none in the current checkpoints
+            if prefix + bias in state_dict:
+                b = state_dict[prefix + bias].reshape(-1, per_head // D, D).clone()
+                b[:, 0] = b[:, 0][:, perm]
+                state_dict[prefix + bias] = b.reshape(-1)
+
+
 def load_strands_state_dict(base_dir, adapter_dir) -> Dict[str, torch.Tensor]:
     state_dict = load_base_state_dict(base_dir)
     merge_lora(state_dict, adapter_dir)
-    return remap_qwen36_state_dict(state_dict)
+    state_dict = remap_qwen36_state_dict(state_dict)
+    permute_rope_pairs(state_dict)
+    return state_dict

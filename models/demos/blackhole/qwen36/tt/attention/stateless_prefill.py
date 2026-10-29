@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Single-chip stateless gated-attention prefill: plain causal SDPA over [B, H, S, D], no KV cache, no state kept.
 
-Two projections produce q | k | v and the gate; ``nlp_create_qkv_heads`` splits the heads straight into [B, H, S, D], so the
-reshape, chunk and transpose ops of the generic path (gated_attention_forward_ttnn) are gone. Norms, RoPE, SDPA,
+Two projections produce q | k | v and the gate; ``nlp_create_qkv_heads`` splits the heads straight into [B, H, S, D],
+so the reshape, chunk and transpose ops of the generic path (gated_attention_forward_ttnn) are gone. Norms, RoPE, SDPA,
 gate and out-projection are the generic path's own helpers and configs.
 """
 import torch
@@ -63,29 +63,22 @@ def _split_weights(attn):
     return qkv_w, gate_w
 
 
-def _partial_rope(x, cos, sin):
-    """HF rotate-half RoPE on the first cos.shape[-1] dims of x [B, H, S, D] (fused op); the tail passes through.
-    cos/sin [1, S, rd]."""
+def _rope(x, cos, sin, trans_mat):
+    """Partial RoPE of x [B, H, S, D] with one fused op: rotates the first cos.shape[-1] dims, the tail passes through.
+
+    The q/k head dims must be stored rope-pair interleaved (pair (2j, 2j + 1)) and cos/sin [1, 1, S, rd] in the same
+    layout; trans_mat is the 32x32 rotation matrix."""
     B, H, S, D = x.shape
-    rd = cos.shape[-1]
-    cos = ttnn.reshape(cos, (1, 1, S, rd))
-    sin = ttnn.reshape(sin, (1, 1, S, rd))
-    x_rot = ttnn.reshape(ttnn.slice(x, (0, 0, 0, 0), (B, H, S, rd)), (1, B * H, S, rd))
-    roped = ttnn.experimental.rotary_embedding_hf(x_rot, cos, sin, is_decode_mode=False)
-    ttnn.deallocate(x_rot)
-    roped = ttnn.reshape(roped, (B, H, S, rd))
-    if rd == D:
-        return roped
-    x_pass = ttnn.slice(x, (0, 0, 0, rd), (B, H, S, D))
-    res = ttnn.concat([roped, x_pass], dim=-1)
-    ttnn.deallocate(roped)
-    ttnn.deallocate(x_pass)
-    return res
+    out = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+        ttnn.reshape(x, (1, B * H, S, D)), cos, sin, trans_mat, 0, 0, rotary_dim=cos.shape[-1], rotary_offset=0
+    )
+    return ttnn.reshape(out, (B, H, S, D))
 
 
-def stateless_attention_prefill(attn, x, cos, sin):
+def stateless_attention_prefill(attn, x, cos, sin, trans_mat):
     """x [B, S, dim] bf16 TILE DRAM, S a multiple of 32 -> [B, S, dim]. Same weights, norms, RoPE, SDPA configs and
-    gate as the generic prefill (Qwen36GatedAttention.forward, no page table), without the KV cache."""
+    gate as the generic prefill (Qwen36GatedAttention.forward, no page table), without the KV cache. The q/k weights
+    must be rope-pair permuted (see _rope); cos/sin [1, 1, S, rd] in the pair layout."""
     w, cfg = attn.weights, attn.config
     B, S = x.shape[0], x.shape[1]
     Hq, Hkv, D = cfg.num_heads, cfg.num_kv_heads, cfg.head_dim
@@ -104,11 +97,11 @@ def stateless_attention_prefill(attn, x, cos, sin):
     )
     ttnn.deallocate(qkv)
 
-    # Per-head q/k norm (weights carry the +1 offset), partial RoPE.
+    # Per-head q/k norm (weights carry the +1 offset), then fused partial RoPE on the pair-interleaved dims.
     q = ttnn.rms_norm(q, weight=w.q_norm, epsilon=cfg.norm_eps)
     k = ttnn.rms_norm(k, weight=w.k_norm, epsilon=cfg.norm_eps)
     q_n, k_n = q, k
-    q, k = _partial_rope(q_n, cos, sin), _partial_rope(k_n, cos, sin)
+    q, k = _rope(q_n, cos, sin, trans_mat), _rope(k_n, cos, sin, trans_mat)
     ttnn.deallocate(q_n)
     ttnn.deallocate(k_n)
 

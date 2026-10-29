@@ -8,6 +8,7 @@ from pathlib import Path
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.strands_agent.tt.weight_mapping import (
     STRANDS_BASE_HF_MODEL,
+    WEIGHT_LAYOUT,
     load_strands_state_dict,
     resolve_checkpoint,
 )
@@ -40,7 +41,10 @@ class StrandsDeciderModelArgs(Qwen36ModelArgs):
         # Isolate the TT weight cache: weight_cache_path() is rooted at model_cache_path, which (with or without
         # TT_CACHE_PATH) is shared with plain Qwen3.5-2B-Base. Merged weights must never be loaded from, or
         # written to, that cache, so add a per-adapter-revision subdir.
-        self.model_cache_path = self.model_cache_path / "strands_decider" / adapter_revision(self.adapter_dir)
+        # The revision dir carries the weight layout (WEIGHT_LAYOUT), so caches of another layout are never reused.
+        self.model_cache_path = (
+            self.model_cache_path / "strands_decider" / f"{adapter_revision(self.adapter_dir)}_{WEIGHT_LAYOUT}"
+        )
 
     def load_state_dict(self):
         return load_strands_state_dict(self.CKPT_DIR, self.adapter_dir / "lora")
