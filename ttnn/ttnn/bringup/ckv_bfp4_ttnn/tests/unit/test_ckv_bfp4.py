@@ -154,3 +154,29 @@ def test_ckv_bfp8_blocks(device, n, row0, blocks):
         return [table]
 
     determinism.assert_deterministic(lambda: run(ckv), lambda: run(other), first=[table], label=f"blocks n{n}")
+
+
+@pytest.mark.parametrize("blocks", [False, True], ids=["bfp8_rows", "bfp8_blocks"])
+def test_ckv_bfp8_prepared(device, blocks):
+    """prepared=True with dtype=bfloat8_b (records or blocks): byte-equal to the generic_op path over calls at other
+    row0 / tables, and a program of its own (dtype and blocks are in the prepared key)."""
+    mod = importlib.import_module("ttnn.bringup.ckv_bfp4_ttnn.ckv_bfp4")
+    n, rows_total = 64, 256
+    shape = [1, 1, rows_total // 32, ref.BLOCK_BYTES] if blocks else [1, 1, rows_total, 576]
+    tables = {
+        p: [
+            ttnn.from_torch(torch.full(shape, FILL, dtype=torch.uint8), dtype=ttnn.uint8, device=device)
+            for _ in range(2)
+        ]
+        for p in (False, True)
+    }
+    before = len(mod._PREPARED)
+    for i, (t, row0) in enumerate([(0, 0), (0, 96), (1, 32), (0, 192)]):
+        x = _inputs(n, 7 * n + i)
+        ckv = ttnn.from_torch(x.reshape(1, 1, n, 512), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for p in (False, True):
+            ttnn.bringup.ckv_bfp4(ckv, tables[p][t], row0, dtype=ttnn.bfloat8_b, blocks=blocks, prepared=p)
+        a, b = (ttnn.to_torch(tables[p][t]).view(torch.uint8) for p in (False, True))
+        assert torch.equal(a, b), f"call {i}: prepared table != generic_op table"
+    assert len(mod._PREPARED) == before + 1, "the program was not prepared exactly once"
+    assert list(mod._PREPARED.values())[-1][1] is not None, "the program could not be prepared (patch count)"
