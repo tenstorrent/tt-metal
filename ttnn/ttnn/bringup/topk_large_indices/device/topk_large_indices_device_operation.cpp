@@ -293,7 +293,7 @@ Tensor topk_large_indices(
     const std::optional<Tensor>& valid_end_tensor,
     std::optional<tt::tt_metal::NOC> dram_read_noc) {
     auto [operation_attributes, tensor_args] =
-        operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation::invoke(
+        ::ttnn::operations::bringup::topk_large_indices::TopkLargeIndicesDeviceOperation::invoke(
             input_tensor,
             k,
             valid_length,
@@ -304,7 +304,7 @@ Tensor topk_large_indices(
             valid_end_tensor,
             dram_read_noc);
     return ttnn::device_operation::launch<
-        operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation>(
+        ::ttnn::operations::bringup::topk_large_indices::TopkLargeIndicesDeviceOperation>(
         operation_attributes, tensor_args);
 }
 
