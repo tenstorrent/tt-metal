@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Build the multi-host 4x4 pipeline rank binding: two ranks per galaxy, top half then bottom half.
 
-gen_pipeline_binding.py --layout 4x4 probes ONE galaxy and writes its 2-rank file. The tray-half
-chip map differs by host, so an SC4 run (8 ranks) or the 2-galaxy step (4 ranks) needs every host's
-probe stitched into one file, in host-ring order. No devices or ttnn needed; runs anywhere.
+CI binds the SC4 4x4 leg by tt-run discovery (run_multirank_pcc.sh); this is the explicit-binding
+path, for a manual run and to check what discovery does. gen_pipeline_binding.py --layout 4x4 probes
+ONE galaxy and writes its 2-rank file. The tray-half chip map differs by host, so a multi-host run
+needs every host's probe stitched into one file, in host-ring order. No devices or ttnn needed; runs
+anywhere.
 
     assemble  per-host probe files -> one binding. Host k's rank 0 (top) becomes rank 2k and its
               rank 1 (bottom, rows already mirrored by the probe) becomes rank 2k+1.
@@ -87,7 +89,7 @@ def render(template, per_host, hosts, source, mgd=None):
     """Fill the template for len(per_host) hosts; a template with more ranks is cut to fit.
 
     `mgd` replaces the template's mesh_graph_desc_path. Either way the descriptor must declare one
-    mesh per rank: the 8-rank template's descriptor is wrong for the 2-galaxy step."""
+    mesh per rank: the 8-rank template's descriptor is wrong for fewer hosts."""
     text = Path(template).read_text()
     subs = flatten(per_host)
     if mgd:
@@ -280,7 +282,7 @@ def main(argv=None):
     a.add_argument("--host", action="append", help="host names, same order (default: each probe's banner)")
     p = sub.add_parser("predict", help="derive the binding from cabling descriptors")
     p.add_argument("--mapping", default=str(SC4_MAPPING), help="mock mapping yaml listing one descriptor per host")
-    p.add_argument("--hosts", type=int, help="use only the first N hosts of the mapping (2 for the 2-galaxy step)")
+    p.add_argument("--hosts", type=int, help="use only the first N hosts of the mapping")
     p.add_argument("--check-probe", action="append", help="probe files to compare against, in host order")
     p.add_argument("--mock-mapping-out", help="also write a 2-ranks-per-host mock mapping here")
     for s in (a, p):
