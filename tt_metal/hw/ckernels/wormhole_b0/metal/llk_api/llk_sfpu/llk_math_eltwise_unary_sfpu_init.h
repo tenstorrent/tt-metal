@@ -47,6 +47,11 @@ void hardshrink_init();
 void hardtanh_init();
 void heaviside_init();
 void i0_init();
+void isfinite_init();
+void isinf_init();
+void isnan_init();
+void isneginf_init();
+void isposinf_init();
 void left_shift_init();
 void less_than_equal_zero_init();
 void less_than_zero_init();
@@ -87,23 +92,6 @@ inline void frac_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 inline void round_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 inline void trunc_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
-// isinf/isnan/isfinite/isposinf/isneginf: the predicated SFPSTORE of each row advances Dest through ADDR_MOD_6
-// (named ADDR_MOD_2 in the kernel) instead of a separate TTINCRWC.
-inline void isinf_isnan_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
-
-inline void isfinite_init() { isinf_isnan_init(); }
-
-inline void isinf_init() { isinf_isnan_init(); }
-
-inline void isnan_init() { isinf_isnan_init(); }
-
-inline void isneginf_init() { isinf_isnan_init(); }
-
-inline void isposinf_init() { isinf_isnan_init(); }
 
 inline void negative_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
