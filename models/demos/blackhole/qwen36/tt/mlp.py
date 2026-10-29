@@ -10,6 +10,8 @@ import os
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.prefill_matmul import enabled as prefill_matmul_enabled
+from models.demos.blackhole.qwen36.tt.prefill_matmul import prefill_linear
 
 
 @dataclass(frozen=True)
@@ -215,8 +217,12 @@ class Qwen36MLP:
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
-        w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
-        w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
+        if T > 1:
+            w1_out = prefill_linear(x, w.w1, ckc, activation="silu", memory_config=mc)
+            w3_out = prefill_linear(x, w.w3, ckc, memory_config=mc)
+        else:
+            w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
         hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
@@ -227,7 +233,10 @@ class Qwen36MLP:
             and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
         ):
             down_pc = self.args.prefill_progcfg(T, hidden.shape[-1], w.w2.shape[-1])
-        output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
+        if T > 1 and (down_pc is None or prefill_matmul_enabled()):
+            output = prefill_linear(hidden, w.w2, ckc, memory_config=mc)
+        else:
+            output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
         ttnn.deallocate(hidden)
         return output
 

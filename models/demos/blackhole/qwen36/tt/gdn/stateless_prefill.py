@@ -11,6 +11,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import chunk_gated_delta_rule_fused_adapter
+from models.demos.blackhole.qwen36.tt.prefill_matmul import prefill_linear
 
 
 def stateless_prefill_supported(gdn, mode, stateless):
@@ -63,7 +64,7 @@ def stateless_prefill_forward(gdn, x):
     _dram = ttnn.DRAM_MEMORY_CONFIG
 
     # In-projection: qkv | a | b | z.
-    mega = ttnn.linear(x, w.mega_fused_weight, compute_kernel_config=gdn.compute_kernel_config)
+    mega = prefill_linear(x, w.mega_fused_weight, gdn.compute_kernel_config)
     a_off, b_off, g_off = w.mega_qkv_dim, w.mega_qkv_dim + w.mega_a_dim, w.mega_qkv_dim + w.mega_a_dim + w.mega_b_dim
     qkv = ttnn.to_layout(mega[:, :, :a_off], ttnn.TILE_LAYOUT)
     a = ttnn.to_layout(mega[:, :, a_off:b_off], ttnn.TILE_LAYOUT)
@@ -137,6 +138,6 @@ def stateless_prefill_forward(gdn, x):
     gated = _silu_mul(n, z, _dram, dtype=ttnn.bfloat16)
     ttnn.deallocate(n)
     ttnn.deallocate(z)
-    out = ttnn.linear(gated, w.o_proj_weight, compute_kernel_config=gdn.compute_kernel_config)
+    out = prefill_linear(gated, w.o_proj_weight, gdn.compute_kernel_config)
     ttnn.deallocate(gated)
     return out
