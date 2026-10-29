@@ -74,13 +74,16 @@ def prefill_single(dec: FunctionalDecoder, x_in: torch.Tensor, device, user: int
 
 def prefill_chunked(dec: FunctionalDecoder, x_in: torch.Tensor, chunks, device, user: int = 0):
     """Prefill ``x_in`` [1,S,4,4096] in consecutive chunks of the given logical lengths; returns the
-    concatenated host output [1,S,4,4096] and the per-chunk outputs."""
-    assert sum(chunks) == x_in.shape[1], (chunks, x_in.shape)
+    concatenated host output [1,S,4,4096] and the per-chunk outputs. A chunk given as ``(n, T_pad)`` is
+    uploaded padded to ``T_pad`` rows with ``seq_len = n`` (the served bucket padding of a ragged chunk)."""
+    plan = [c if isinstance(c, tuple) else (c, c) for c in chunks]
+    assert sum(n for n, _ in plan) == x_in.shape[1], (chunks, x_in.shape)
     outs, start = [], 0
-    for n in chunks:
-        y = dec.prefill_forward(
-            host_streams_to_device(x_in[:, start : start + n], device), user=user, seq_len=n, start=start
-        )
+    for n, t_pad in plan:
+        x = x_in[:, start : start + n]
+        if t_pad > n:
+            x = torch.cat([x, torch.zeros(1, t_pad - n, *x.shape[2:], dtype=x.dtype)], dim=1)
+        y = dec.prefill_forward(host_streams_to_device(x, device), user=user, seq_len=n, start=start)
         outs.append(device_streams_to_host(y, 4, n))
         ttnn.deallocate(y)
         start += n
@@ -401,15 +404,19 @@ def test_indexer_static_maintenance_matches_offset_path(mesh_device, monkeypatch
         (0, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522), False),
         (3, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522), True),
         (0, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522), True),
+        (3, (16384, 16384, 16384, 16362), (16384, 16384, (3968, 16384), 16256, 12522), False),
+        (0, (16384, 16384, 16384, 16362), (16384, 16384, (3968, 16384), 16256, 12522), False),
     ],
     ids=[
         "layer3-65514-continued-at-36736-and-52992",
         "layer0-kda-65514-continued-at-36736-and-52992",
         "layer3-sealed-continued-at-36736-and-52992",
         "layer0-kda-sealed-continued-at-36736-and-52992",
+        "layer3-served-padded-3968-in-16384-then-continued",
+        "layer0-kda-served-padded-3968-in-16384-then-continued",
     ],
 )
-def test_sparse_continuation_at_unaligned_chunk_ends(mesh_device, layer_idx, aligned, split, sealed):
+def test_sparse_continuation_at_unaligned_chunk_ends(mesh_device, monkeypatch, layer_idx, aligned, split, sealed):
     """A chunk plan whose chunks end at 32-aligned but not device-chunk-aligned positions deep in the sparse
     range must give the same layer output as the device-chunk-aligned plan of the same prompt. That is what
     vLLM's chunked-prefill budget produces under prefix caching when two prompts prefill in one step (the
@@ -418,8 +425,12 @@ def test_sparse_continuation_at_unaligned_chunk_ends(mesh_device, layer_idx, ali
     (DSA + MoE), random activations at the dump's scale (no HF dump at this length), both plans in the same
     decoder on their own user slot. Gate: PCC between the plans > 0.999 overall and on the rows after the
     first unaligned continuation (bf16 noise only; a wrong prefix read / split shows as a collapse there)."""
+    if sealed:
+        # the served adapter keys the whole-prefix latent copy on this bucket (generator_vllm sets it at init)
+        monkeypatch.setenv("GLM53_PREFIX_BUCKET", "16384")
     raw, cfg = _load(layer_idx)
-    assert sum(aligned) == sum(split), (aligned, split)
+    n_of = lambda c: c[0] if isinstance(c, tuple) else c
+    assert sum(aligned) == sum(n_of(c) for c in split), (aligned, split)
     S = sum(aligned)
     pre = torch.load(REF / "R4097" / f"layer{layer_idx}_prefill.pt")
     scale = pre["x_in"].float().std().item()
@@ -434,16 +445,18 @@ def test_sparse_continuation_at_unaligned_chunk_ends(mesh_device, layer_idx, ali
         # with the op's name: the fix list of doc/mesh/galaxy_throughput_plan.md A3 (index half).
         mesh_device.set_program_cache_misses_allowed(False)
     try:
-        out, _ = prefill_chunked(dec, x_in, split, mesh_device, user=1)
+        # the same slot as the aligned plan (a new prompt at start 0): the slot's own programs are warm, so a sealed
+        # run reports only what the split plan's shapes add
+        out, _ = prefill_chunked(dec, x_in, split, mesh_device, user=0)
     finally:
         if sealed:
             mesh_device.set_program_cache_misses_allowed(True)
-    first_unaligned_end = next(e for e in torch.tensor(split).cumsum(0).tolist() if e % 16384)
+    first_unaligned_end = next(e for e in torch.tensor([n_of(c) for c in split]).cumsum(0).tolist() if e % 16384)
     p_all = pcc(ref, out)
     p_tail = pcc(ref[:, first_unaligned_end:], out[:, first_unaligned_end:])
     p_head = pcc(ref[:, :first_unaligned_end], out[:, :first_unaligned_end])
     logger.info(
-        f"layer {layer_idx} S={S}: split plan {list(split)} vs aligned {list(aligned)}: pcc {p_all:.6f} "
+        f"layer {layer_idx} S={S}: split plan {list(split)} vs aligned {list(aligned)} (sealed {sealed}): pcc {p_all:.6f} "
         f"(rows < {first_unaligned_end}: {p_head:.6f}, rows from the first unaligned continuation: {p_tail:.6f})"
     )
     assert p_head > 0.999, f"the rows before the first unaligned chunk end differ: pcc {p_head}"

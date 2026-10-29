@@ -39,6 +39,7 @@ from models.demos.glm53_flash.tests.test_mesh_slab_prefill import (
     SENTINEL,
     _chunk_to_device,
     _rows_out,
+    _shards,
     _slabs_of,
     class_report,
 )
