@@ -370,9 +370,12 @@ void compute_sdpa_chunk(
     static_assert(
         chunk_size / exp_signal_granularity + 1 <= 15,
         "compute_sdpa_chunk: bcast-sub posts (chunk_size/exp_signal_granularity)+1 must fit the 4-bit semaphore");
+    // On the last chunk the OV matmul posts one output group per output_granularity tiles while the
+    // bcast-mul/dummy post of this chunk may still be outstanding (PACK consumes it only after reduce-sum),
+    // so the semaphore must hold both; SEMPOST saturates at 15 and a lost post hangs the pack loop.
     static_assert(
-        num_tiles_v / output_granularity <= 15,
-        "compute_sdpa_chunk: num_tiles_v / output_granularity must be with tensix semaphore range");
+        num_tiles_v / output_granularity + 1 <= 15,
+        "compute_sdpa_chunk: output posts (num_tiles_v/output_granularity)+1 must fit the 4-bit semaphore");
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
     sdpa_custom_mm_block_init_short<transpose_k, mm_pack_init>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
