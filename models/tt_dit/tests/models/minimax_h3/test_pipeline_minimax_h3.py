@@ -22,12 +22,15 @@ from loguru import logger
 
 import ttnn
 
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
+    _PRESETS_BH,
     MiniMaxH3Pipeline,
     _requested_audio_t_factor,
     _resolve_audio_t_shard,
+    validate_bucket_ladder,
 )
+from ....pipelines.minimax_h3.policy import align_num_frames, get_num_frames
 from ..wan2_2.common import check_output_sanity
 from .common import GALAXY_MESHES
 from .common_av import (
@@ -116,6 +119,19 @@ def test_requested_audio_t_factor_precedence(monkeypatch, expect_error):
         _requested_audio_t_factor(None)
 
 
+# Pure (no-device) coverage for the per-mesh bucket ladders.
+@pytest.mark.parametrize("task", ["t2va", "ref2va"])
+def test_preset_bucket_ladder_is_aligned(task):
+    preset = _PRESETS_BH[(4, 8)]
+    validate_bucket_ladder(preset["bucket_ladder"][task], 8 * ttnn.TILE_SIZE)
+    assert preset["bucket_denoise"] and not preset.get("trace_denoise")
+
+
+@pytest.mark.parametrize("task", ["t2va", "ref2va"])
+def test_quad_preset_bucket_ladder_is_aligned(task):
+    validate_bucket_ladder(_PRESETS_BH[(4, 32)]["bucket_ladder"][task], 32 * ttnn.TILE_SIZE)
+
+
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize(("aspect_ratio", "duration_s"), SWEEP)
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
@@ -125,7 +141,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     prompt = PROMPT
 
     HEIGHT, WIDTH = resolve_canvas_size(*aspect_ratio)
-    NUM_FRAMES = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+    NUM_FRAMES = get_num_frames(duration_s)
     # One artifact per working point, so a sweep does not overwrite itself.
     stem = f"t2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
     if is_host():

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -18,18 +18,24 @@
 #include "api/tt-metalium/device.hpp"
 #include "impl/host_api/temp_quasar_api.hpp"
 #include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
+#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_source.hpp"
+#include "binary_metadata.hpp"
+#include <tt_stl/small_vector.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
 
 class JitBuildOptions;
+namespace detail {
+class ProgramImpl;
+}  // namespace detail
 
 enum Eth : uint8_t {
     SENDER = 0,
@@ -96,15 +102,27 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
 
-// Metal 2.0: DFB accessor names -> device-slot binding. Normal DFBs may carry LLK metadata; relays do not.
-// prefetcher_pipe_id is 0xFF (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for
-// PrefetcherPipe relays, where it names the persistent slot baked into the token so
-// the TRISC constructor can O(1)-align the borrowed iface to the durable checkpoint.
+// Metal 2.0: DFB accessor names -> device-slot binding (optionally typed as relay).
+// Normal DFBs may carry LLK metadata; relays do not. prefetcher_pipe_id is 0xFF
+// (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for PrefetcherPipe relays, where it names
+// the persistent slot baked into the token so the TRISC constructor can O(1)-align the borrowed
+// iface to the durable checkpoint. pap / cap are both sides' access patterns (dfb::AccessPattern
+// numbering) so DFBBindingToken<Pap, Cap> can specialize the device DataflowBuffer at compile time.
 struct DataflowBufferBindingHandle {
     uint16_t logical_dfb_id = 0;
     bool is_relay = false;
     uint8_t prefetcher_pipe_id = 0xFF;
     std::optional<LLKMetadata> llk_metadata;
+    // Borrowed-memory DFB (DataflowBufferSpec::borrowed_from): the program-wide DFB id and the TensorParameter
+    // whose memory the DFB is, and which sides of it this kernel is on -- both, for a self-loop pair bound under one
+    // accessor name. Op-to-op R/W inference (Kernel::resolve_buf_rw) records producing as writing that tensor and
+    // consuming as reading it.
+    std::optional<uint32_t> borrowed_dfb_id;
+    std::string borrowed_tensor_parameter_name;
+    bool produces = false;
+    bool consumes = false;
+    uint8_t pap = 0;
+    uint8_t cap = 0;
 };
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
 
@@ -125,7 +143,7 @@ struct TensorBindingHandle {
     std::string accessor_name;          // user-facing identifier (kernel symbol in `tensor::`)
     std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
     uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
-    uint32_t addr_crta_offset;          // byte offset of this binding's base-address slot within the kernel's CRTA buffer
+    uint32_t addr_crta_offset = 0;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
     // Count of runtime accessor field words that immediately follow the address slot
     // in this binding's CRTA section.
     // Non-zero when the TensorParameter opts into a CRTA-resident dynamic field.
@@ -140,10 +158,15 @@ struct TensorBindingHandle {
     // (We'll need to extend this to something more flexible if additional possibilities are added.)
     bool runtime_field_is_page_size = false;
     LLKMetadata llk_metadata;
+    // A per-node allocated tensor has its own base address on every node, so the address lives in each node's
+    // RTA buffer at addr_rta_offset, and the binding takes no CRTA words (addr_crta_offset and
+    // num_runtime_field_crta_words are unused).
+    bool is_per_node = false;
+    uint32_t addr_rta_offset = 0;  // byte offset of this binding's base-address slot within each node's RTA buffer
 };
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
-// A scratchpad is a private, uninitialized, node-local L1 region bound to a kernel.
+// A scratchpad is an uninitialized, node-local L1 region, private to a kernel by default.
 //  - The base address is allocated at Program-compile time, and is passed to the kernel as an
 //    implicit CRTA.
 //  - Since the address is persistent across enqueues, we store it on the Kernel object rather
@@ -159,7 +182,18 @@ struct ScratchpadBindingHandle {
     uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
     uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
-    std::optional<LLKMetadata> llk_metadata;
+    std::optional<LLKMetadata> llk_metadata;  // LLK related metadata (dataformat/ tile format)
+    // Present only if the binding handle could share it's allocation with another scratchpad.
+    // Configured in advanced options: ScratchpadAdvancedOptions::allow_instance_multi_binding.
+    // For all the scratchpad binding handle sharing the same identifier,
+    // the size_bytes are all equivalent.
+    //
+    // Note this field does not affect kernel hash computation,
+    // as the build artifact of 2 kernels with/without shared allocation is the same.
+    //
+    // The ScratchpadSpecName serves as an identifier & does not carry specific meaning.
+    using AllocationIdentifier = experimental::ScratchpadSpecName;
+    std::optional<experimental::ScratchpadSpecName> shared_allocation_identifier;
 };
 
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).
@@ -175,6 +209,26 @@ struct PrefetcherPipeBindingHandle {
 struct TensorBindingSequenceHandle {
     std::string sequence_name;
     std::vector<std::string> members;
+};
+
+// Op-to-op R/W inference, resolved to bound objects (see Kernel::resolve_buf_rw). Each access is
+// identified by its program-level TensorParameter name and the bound buffer's base address. The address
+// is the cross-op RAW comparison key -- two ops touch the "same" buffer iff their addresses match (the
+// same matching the ttnn-graph RAW analysis used). Derived by mapping each .tt.BUF_RW slot (a binding's
+// base-address CRTA byte offset) back through the kernel's tensor bindings (slot -> param name) and its
+// CRTA (slot/sizeof(u32) -> the address the runtime bound at that word). Accesses through a borrowed-memory
+// DFB come from the program instead: the device sees only a DFB there, never the tensor.
+struct ResolvedBufRw {
+    struct Access {
+        // View into the kernel's TensorBindingHandle -- no allocation; valid while the kernel lives.
+        // Diagnostic only: the cross-op RAW comparison keys on `address`, not the name.
+        std::string_view param_name;
+        uint32_t address = 0;
+    };
+    // Stack-backed: no heap for the common case (a kernel touches only a few tensor-like objects).
+    ttsl::SmallVector<Access, 8> reads;
+    ttsl::SmallVector<Access, 8> writes;
+    bool opaque = false;  // an un-analyzable (raw) access was seen -> a detector must keep the barrier
 };
 
 class Kernel : public JitBuildSettings {
@@ -234,6 +288,8 @@ public:
 
     // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& runtime_args(const CoreCoord& logical_core);
+    // User-arg count. Ignores the watcher count word and dispatch-view padding.
+    std::size_t logical_runtime_arg_count(const CoreCoord& logical_core) const;
     RuntimeArgsData& runtime_args_data(const CoreCoord& logical_core);
     std::vector<std::vector<std::vector<uint32_t>>>& runtime_args();
     std::vector<std::vector<RuntimeArgsData>>& runtime_args_data();
@@ -241,6 +297,7 @@ public:
 
     // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& common_runtime_args();
+    std::size_t logical_common_runtime_arg_count() const;
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
@@ -263,7 +320,9 @@ public:
                                                      uint16_t logical_dfb_id,
                                                      bool is_relay,
                                                      uint8_t prefetcher_pipe_id,
-                                                     const std::optional<LLKMetadata>&)>&) const override;
+                                                     const std::optional<LLKMetadata>&,
+                                                     uint8_t pap,
+                                                     uint8_t cap)>&) const override;
     void process_semaphore_binding_handles(
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
@@ -271,7 +330,8 @@ public:
     void process_tensor_binding_handles(const std::function<void(
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,
-                                            uint32_t addr_crta_offset,
+                                            bool is_per_node,
+                                            uint32_t addr_offset,
                                             uint32_t num_runtime_field_crta_words,
                                             const LLKMetadata&)>&) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
@@ -311,13 +371,14 @@ public:
     const std::vector<std::string>& get_runtime_arg_names() const override { return runtime_arg_names_; }
     const std::vector<std::string>& get_common_runtime_arg_names() const override { return common_runtime_arg_names_; }
     KernelCrtaLayout get_crta_layout() const override { return crta_layout_; }
+    KernelRtaLayout get_rta_layout() const override { return rta_layout_; }
     bool is_metal2_kernel() const override { return is_metal2_kernel_; }
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     void validate_runtime_args_size(
         size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const;
-    void set_runtime_args(const CoreCoord& logical_core, stl::Span<const uint32_t> runtime_args);
-    void set_common_runtime_args(stl::Span<const uint32_t> runtime_args);
+    void set_runtime_args(const CoreCoord& logical_core, ttsl::Span<const uint32_t> runtime_args);
+    void set_common_runtime_args(ttsl::Span<const uint32_t> runtime_args);
 
     int get_watcher_kernel_id() const { return watcher_kernel_id_; }
 
@@ -359,6 +420,19 @@ public:
     // Returns the ELF file paths indexed by processor index. Processor indices not used by this kernel are left empty.
     std::vector<std::string> elf_paths_by_processor_index(const IDevice& device, const std::string& binary_root) const;
 
+    // Op-to-op R/W inference (POC): return the decoded per-binding read/write sets for this kernel (see
+    // ll_api::BufRwInfo), unioned across its binaries. The metadata is harvested by the loader when the
+    // binary is loaded (llrt::get_binary_metadata), so this does no ELF parsing itself; the kernel must
+    // already be compiled -- call after a warm-up enqueue. binary_root is derived internally from `device`.
+    ll_api::BufRwInfo query_buf_rw(const IDevice& device) const;
+
+    // Resolve query_buf_rw's raw slots to bound objects (TensorParameter name + bound buffer address).
+    // Non-const: reads the kernel's CRTA (where the runtime wrote the bound addresses), so the addresses are those
+    // of the last SetProgramRunArgs / UpdateTensorArgs -- call after the final run-args update for the enqueue being
+    // analyzed, and after the binary is compiled. A slot that can't be resolved marks the result opaque.
+    // `program` is the one this kernel belongs to: it holds the address each borrowed-memory DFB is bound to.
+    ResolvedBufRw resolve_buf_rw(const IDevice& device, const detail::ProgramImpl& program);
+
     void set_precompiled_config(experimental::PrecompiledKernelConfig config);
     const std::optional<experimental::PrecompiledKernelConfig>& precompiled_config() const {
         return precompiled_config_;
@@ -382,7 +456,8 @@ protected:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {});
+        const KernelCrtaLayout& crta_layout = {},
+        const KernelRtaLayout& rta_layout = {});
 
     ContextId context_id_{DEFAULT_CONTEXT_ID};
     HalProgrammableCoreType programmable_core_type_;
@@ -404,6 +479,7 @@ protected:
     const std::vector<std::string> common_runtime_arg_names_;
     const std::vector<TensorBindingHandle> tensor_binding_handles_;
     const KernelCrtaLayout crta_layout_;
+    const KernelRtaLayout rta_layout_;
     // Non-const (unlike tensor_binding_handles_): set post-construction via set_scratchpad_binding_handles,
     // and allocate_scratchpads fills each handle's allocated_address after L1 allocation.
     // NOTE: Scratchpad allocated addresses can change between enqueues if DFB size overrides are used.
@@ -463,7 +539,8 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {}) :
+        const KernelCrtaLayout& crta_layout = {},
+        const KernelRtaLayout& rta_layout = {}) :
         Kernel(
             context_id,
             HalProgrammableCoreType::TENSIX,
@@ -479,7 +556,8 @@ public:
             runtime_arg_names,
             common_runtime_arg_names,
             tensor_binding_handles,
-            crta_layout),
+            crta_layout,
+            rta_layout),
         config_(config) {
         TT_FATAL(
             MetalContext::instance(context_id_).get_cluster().arch() != ARCH::QUASAR,
@@ -669,7 +747,8 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {}) :
+        const KernelCrtaLayout& crta_layout = {},
+        const KernelRtaLayout& rta_layout = {}) :
         Kernel(
             context_id,
             HalProgrammableCoreType::TENSIX,
@@ -685,7 +764,8 @@ public:
             runtime_arg_names,
             common_runtime_arg_names,
             tensor_binding_handles,
-            crta_layout),
+            crta_layout,
+            rta_layout),
         config_(config) {
         TT_FATAL(
             MetalContext::instance(context_id_).get_cluster().arch() != ARCH::QUASAR,
@@ -711,7 +791,9 @@ public:
 
     std::string_view get_linker_opt_level() const override;
 
-    bool get_trisc2_rvv_enabled() const override { return this->config_.enable_trisc2_rvv; }
+    bool get_rvv_enabled() const override { return this->config_.enable_trisc2_rvv; }
+
+    bool get_sfpu_replay_optimization_disabled() const override;
 
 private:
     const ComputeConfig config_;
@@ -759,7 +841,8 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {}) :
+        const KernelCrtaLayout& crta_layout = {},
+        const KernelRtaLayout& rta_layout = {}) :
         Kernel(
             context_id,
             HalProgrammableCoreType::TENSIX,
@@ -775,7 +858,8 @@ public:
             runtime_arg_names,
             common_runtime_arg_names,
             tensor_binding_handles,
-            crta_layout),
+            crta_layout,
+            rta_layout),
         config_(config),
         dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
@@ -833,7 +917,8 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {}) :
+        const KernelCrtaLayout& crta_layout = {},
+        const KernelRtaLayout& rta_layout = {}) :
         Kernel(
             context_id,
             HalProgrammableCoreType::TENSIX,
@@ -849,7 +934,8 @@ public:
             runtime_arg_names,
             common_runtime_arg_names,
             tensor_binding_handles,
-            crta_layout),
+            crta_layout,
+            rta_layout),
         config_(config),
         compute_processors_(compute_processors.begin(), compute_processors.end()) {
         TT_FATAL(
@@ -883,6 +969,8 @@ public:
     std::string_view get_compiler_opt_level() const override;
 
     std::string_view get_linker_opt_level() const override;
+
+    bool get_rvv_enabled() const override { return this->config_.enable_trisc0_rvv; }
 
     void set_build_options(JitBuildOptions& build_options) const override;
 

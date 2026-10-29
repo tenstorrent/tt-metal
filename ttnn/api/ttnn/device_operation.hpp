@@ -226,6 +226,8 @@ void enqueue_mesh_workload(
 
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
+    ttnn::graph::track_mesh_workload_execution(workload, mesh_device, runtime_id);
+
     TracyOpMeshWorkload(
         mesh_device,
         workload,
@@ -624,7 +626,7 @@ typename device_operation_t::tensor_return_value_t launch(
     // TODO: #37267 - Remove this short-circuit once we have a better way to handle inactive MeshDevices.
     // Short-circuit for inactive MeshDevices (no-op). It is important this happens before any validation an op may
     // perform, as most of the MeshDevice calls will fail for inactive MeshDevices.
-    if (mesh_device->get_view().get_devices().empty()) {
+    if (mesh_device->is_remote_only()) {
         tracked_function.end(tensor_return_value);
         return tensor_return_value;
     }
@@ -657,7 +659,7 @@ void prepare(
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     auto* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
-    TT_FATAL(!mesh_device->get_view().get_devices().empty(), "Cannot prepare an operation for an inactive MeshDevice");
+    TT_FATAL(!mesh_device->get_device_ids().empty(), "Cannot prepare an operation for an inactive MeshDevice");
     detail::place_output_tensors<device_operation_t>(
         operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);
     detail::prepare_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(

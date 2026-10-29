@@ -388,6 +388,19 @@ def _device_params():
             False,
             True,
         ),
+        (  # long-context-2x256k — TWO users, each with a FULL 256k context
+            "models/tt_transformers/demo/sample_prompts/input_data_long_256k.json",
+            True,
+            256 * 1024,
+            2,
+            200,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 8192},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
         (  # ci-1 — single user, fixed iteration count for perf tracking
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
             True,
@@ -411,6 +424,7 @@ def _device_params():
         "long-context-64k",
         "long-context-128k",
         "long-context-256k",
+        "long-context-2x256k",
         "ci-1",
     ],
 )
@@ -705,7 +719,8 @@ def test_demo_text(
             reset_sampling_state=False,
         )
         if device_sampling_params is not None:
-            out_tok = decode_out.long().view(batch_size, 1)
+            # Lane-sharded meshes return the full lane-major frame; the demo's users occupy its first rows.
+            out_tok = decode_out.long().reshape(-1)[:batch_size].view(batch_size, 1)
         else:
             out_tok = _host_sample(decode_out, temperature, top_p)
         profiler.end(f"inference_decode_time_{iteration}")

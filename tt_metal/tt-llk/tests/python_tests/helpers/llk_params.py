@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import namedtuple
-from enum import Enum, auto
+from enum import Enum, IntFlag, auto
 
 import torch
 
@@ -22,6 +22,8 @@ format_dict = {
     DataFormat.UInt16: torch.int32,
     DataFormat.Int8: torch.int8,
     DataFormat.UInt8: torch.uint8,
+    DataFormat.Int4: torch.int8,
+    DataFormat.UInt4: torch.uint8,
     DataFormat.MxFp8R: torch.bfloat16,
     DataFormat.MxFp8P: torch.bfloat16,
     DataFormat.MxFp4: torch.bfloat16,
@@ -80,7 +82,10 @@ class MathOperation(Enum):
     # Whole-tile column-wise cumulative sum; not element-wise, so its golden works on the
     # tilized tensor rather than per datum.
     Cumsum = OpSpec("cumsum", MathOpType.SFPU_UNARY)
+    Dropout = OpSpec("dropout", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
+    # Whole-tile column-wise EMA; its golden works on the tilized tensor.
+    Ema = OpSpec("ema", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
     # b^x via the SCALE_EN path of calculate_exponential; dispatched with a bf16
@@ -100,6 +105,7 @@ class MathOperation(Enum):
     Neg = OpSpec("negative", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
     Relu = OpSpec("relu", MathOpType.SFPU_UNARY)
+    ReshuffleRows = OpSpec("reshuffle_rows", MathOpType.SFPU_UNARY)
     Rsqrt = OpSpec("rsqrt", MathOpType.SFPU_UNARY)
     Sigmoid = OpSpec("sigmoid", MathOpType.SFPU_UNARY)
     Sin = OpSpec("sine", MathOpType.SFPU_UNARY)
@@ -132,6 +138,8 @@ class MathOperation(Enum):
     Cosh = OpSpec("cosh", MathOpType.SFPU_UNARY)
     # round-half-to-even to integer (decimals = 0).
     Round = OpSpec("round", MathOpType.SFPU_UNARY)
+    # Uniform [from, from + scale] generator from the per-lane PRNG; ignores its input.
+    Rand = OpSpec("rand", MathOpType.SFPU_UNARY)
     # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
     # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
     EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)
@@ -177,8 +185,22 @@ class MathOperation(Enum):
     Prelu = OpSpec("prelu", MathOpType.SFPU_UNARY)
     Rpow = OpSpec("rpow", MathOpType.SFPU_UNARY)
     UnaryPower = OpSpec("power", MathOpType.SFPU_UNARY)
+    UnaryPowerIterative = OpSpec("power_iterative", MathOpType.SFPU_UNARY)
     Fmod = OpSpec("fmod", MathOpType.SFPU_UNARY)
     Remainder = OpSpec("remainder", MathOpType.SFPU_UNARY)
+    # calculate_remainder_uint32_scalar: unsigned x mod a fixed scalar. cpp_enum_value matches the
+    # SfpuType enumerator.
+    RemainderUint32 = OpSpec("remainder_uint32", MathOpType.SFPU_UNARY)
+    # Tile-structural unary kernels: their result mixes a tile's elements in the pattern the SFPU
+    # lane layout dictates (int_sum's partial column / row sums, tiled_prod's per-lane running
+    # product). cpp_enum_value matches the SfpuType enumerator.
+    SumIntCol = OpSpec("sum_int_col", MathOpType.SFPU_UNARY)
+    SumIntRow = OpSpec("sum_int_row", MathOpType.SFPU_UNARY)
+    TiledProd = OpSpec("tiled_prod", MathOpType.SFPU_UNARY)
+    # (re, im) -> (-im, re) over interleaved complex values (even / odd columns).
+    AltComplexRotate90 = OpSpec("alt_complex_rotate90", MathOpType.SFPU_UNARY)
+    # softcap(x) = beta * tanh(x / beta). cpp_enum_value matches the SfpuType enumerator.
+    Softcap = OpSpec("softcap", MathOpType.SFPU_UNARY)
     UnaryGt = OpSpec("unary_gt", MathOpType.SFPU_UNARY)
     UnaryLt = OpSpec("unary_lt", MathOpType.SFPU_UNARY)
     UnaryGe = OpSpec("unary_ge", MathOpType.SFPU_UNARY)
@@ -216,6 +238,12 @@ class MathOperation(Enum):
     UnaryMaxUint32 = OpSpec("unary_max_uint32", MathOpType.SFPU_UNARY)
     UnaryMinUint32 = OpSpec("unary_min_uint32", MathOpType.SFPU_UNARY)
     BitwiseNot = OpSpec("bitwise_not", MathOpType.SFPU_UNARY)
+    # Unary bitwise with a fixed scalar (calculate_sfpu_unary_bitwise) and scalar - x
+    # (calculate_rsub_scalar_int32), Int32. cpp_enum_value matches the SfpuType enumerator.
+    UnaryBitwiseAnd = OpSpec("bitwise_and", MathOpType.SFPU_UNARY)
+    UnaryBitwiseOr = OpSpec("bitwise_or", MathOpType.SFPU_UNARY)
+    UnaryBitwiseXor = OpSpec("bitwise_xor", MathOpType.SFPU_UNARY)
+    RsubScalarInt32 = OpSpec("rsub_scalar_int32", MathOpType.SFPU_UNARY)
     # logical_not(x) = (x == 0) ? 1 : 0, exercised on the float (DEFAULT-layout)
     # path. cpp_enum_value must match the SfpuType enumerator name.
     # NOTE: main added `LogicalNot` with the same cpp value; keep both so
@@ -242,6 +270,8 @@ class MathOperation(Enum):
     SfpuElwpow = OpSpec("POW", MathOpType.SFPU_BINARY)
     SfpuLogaddexp = OpSpec("LOGADDEXP", MathOpType.SFPU_BINARY)
     SfpuLogaddexp2 = OpSpec("LOGADDEXP2", MathOpType.SFPU_BINARY)
+    # Fuser-only binary form of reshuffle_rows with a fixed mask (in1 = in0 + 1, out = in1).
+    SfpuReshuffleRows = OpSpec("RESHUFFLE_ROWS", MathOpType.SFPU_BINARY)
     SfpuElwmulInt = OpSpec("MUL", MathOpType.SFPU_BINARY_INT)
     SfpuGtInt = OpSpec("GT_INT", MathOpType.SFPU_BINARY_INT)
     SfpuLtInt = OpSpec("LT_INT", MathOpType.SFPU_BINARY_INT)
@@ -264,15 +294,44 @@ class MathOperation(Enum):
     SfpuBitwiseXor = OpSpec("BITWISE_XOR", MathOpType.SFPU_BINARY)
     SfpuDivInt32 = OpSpec("DIV_INT32", MathOpType.SFPU_BINARY)
     SfpuDivInt32Floor = OpSpec("DIV_INT32_FLOOR", MathOpType.SFPU_BINARY)
+    # add_int of ckernel_sfpu_int_sum.h: Dest tile in0 += the tile after it, in place.
+    SfpuIntSumAdd = OpSpec("INT_SUM_ADD", MathOpType.SFPU_BINARY)
+    # Fused GLU activations over (gate, up): silu(min(gate, limit)) * clamp(up, -limit, limit) and
+    # SiTU-GLU (softcapped gate * sigmoid(gate) * softcapped up).
+    SfpuClampedSiluGlu = OpSpec("CLAMPED_SILU_GLU", MathOpType.SFPU_BINARY)
+    SfpuSituGlu = OpSpec("SITU_GLU", MathOpType.SFPU_BINARY)
     SfpuGcd = OpSpec("GCD", MathOpType.SFPU_BINARY)
     SfpuLcm = OpSpec("LCM", MathOpType.SFPU_BINARY)
     SfpuRsubInt32 = OpSpec("RSUB_INT32", MathOpType.SFPU_BINARY)
     SfpuMask = OpSpec("MASK", MathOpType.SFPU_BINARY)
+    # The other two entry points of ckernel_sfpu_mask.h: calculate_mask_posinf fills +inf
+    # where the float mask is zero, calculate_int_mask zeroes Int32 data where the mask is 0.
+    SfpuMaskPosinf = OpSpec("MASK_POSINF", MathOpType.SFPU_BINARY)
+    SfpuIntMask = OpSpec("INT_MASK", MathOpType.SFPU_BINARY)
     SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
+    SfpuIscloseEqualNan = OpSpec("ISCLOSE_EQNAN", MathOpType.SFPU_BINARY)
     SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
+    SfpuQuant = OpSpec("QUANT", MathOpType.SFPU_BINARY)
+    SfpuRequant = OpSpec("REQUANT", MathOpType.SFPU_BINARY)
+    SfpuDequant = OpSpec("DEQUANT", MathOpType.SFPU_BINARY)
+    # The 8-bit quant entry points of quantization.h: uint8 / int8 output and int8 input.
+    # Named after the compute-API *_tile_init wrapper each one mirrors.
+    SfpuQuantUint8 = OpSpec("QUANT_UINT8", MathOpType.SFPU_BINARY)
+    SfpuQuantInt8 = OpSpec("QUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuRequantUint8 = OpSpec("REQUANT_UINT8", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8 = OpSpec("REQUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8In = OpSpec("REQUANT_INT8_IN", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8InUint8Out = OpSpec(
+        "REQUANT_INT8_IN_UINT8_OUT", MathOpType.SFPU_BINARY
+    )
+    SfpuRequantInt8InInt8Out = OpSpec(
+        "REQUANT_INT8_IN_INT8_OUT", MathOpType.SFPU_BINARY
+    )
+    SfpuDequantInt8 = OpSpec("DEQUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuFloatToInt32Positive = OpSpec("FLOAT_TO_INT32_POSITIVE", MathOpType.SFPU_BINARY)
     # Integer / format-typed binary SFPU ops. cpp_enum_value matches the BinaryOp
     # enumerator (and, lowercased, the SfpuType) so both the dispatch and the coverage
     # guard resolve.
@@ -284,6 +343,7 @@ class MathOperation(Enum):
     SfpuMinUint32 = OpSpec("MIN_UINT32", MathOpType.SFPU_BINARY)
     SfpuRemainderInt32 = OpSpec("REMAINDER_INT32", MathOpType.SFPU_BINARY)
     SfpuRemainderUint32 = OpSpec("REMAINDER_UINT32", MathOpType.SFPU_BINARY)
+    SfpuLgammaStirlingFp32 = OpSpec("LGAMMA_STIRLING_FP32", MathOpType.SFPU_BINARY)
     SfpuFmodInt32 = OpSpec("FMOD_INT32", MathOpType.SFPU_BINARY)
 
     # =============================================================================
@@ -479,6 +539,13 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
+class SfpuImpl(Enum):
+    """Which implementation runs an SFPU op (ckernel::sfpu::SfpuImpl); never changes the math."""
+
+    Sfpi = "Sfpi"
+    LoadMacro = "LoadMacro"
+
+
 class DstRoundingMode(Enum):
     """Mirrors ckernel::DstRoundingMode — how a float32 SFPU result is narrowed
     on store into a bf16 DEST."""
@@ -518,6 +585,30 @@ class DestSync(Enum):
     @property
     def cpp_enum_value(self):
         return f"DstSync::{self.value}"
+
+
+class CustomMmDestLayout(Enum):
+    """Where custom_mm puts its output tiles in DEST; the values of ckernel::CustomMmDestLayout."""
+
+    Default = 0
+    DefaultSplitAcc = 1
+    Dense = 2
+    DenseSplitAcc = 3
+    Compact = 4
+
+    @property
+    def split_acc(self):
+        return self in (
+            CustomMmDestLayout.DefaultSplitAcc,
+            CustomMmDestLayout.DenseSplitAcc,
+        )
+
+    @property
+    def tile_rows(self):
+        """DEST rows from one output tile to the next, as custom_mm_tile_rows."""
+        if self in (CustomMmDestLayout.Dense, CustomMmDestLayout.DenseSplitAcc):
+            return 32
+        return 16 if self == CustomMmDestLayout.Compact else 64
 
 
 class NarrowTile(Enum):
@@ -673,6 +764,8 @@ format_tile_sizes = {
     DataFormat.UInt16: 2048,
     DataFormat.Int8: 1024,  # 1 byte * 1024 elements
     DataFormat.UInt8: 1024,  # 1 byte * 1024 elements
+    DataFormat.Int4: 512,  # 0.5 byte * 1024 elements
+    DataFormat.UInt4: 512,  # 0.5 byte * 1024 elements
     # MX formats: 1 byte per element + 1 scale (8 bits) per 32 elements
     # 1024 elements = 32 blocks × (1 scale + 32 elements) = 1056 bytes
     DataFormat.MxFp8R: 1056,
@@ -771,11 +864,6 @@ PERF_LOOP_FACTOR_QUASAR = 32
 
 
 # ******** QUASAR specific ********
-class ImpliedMathFormat(Enum):
-    No = "false"
-    Yes = "true"
-
-
 class UnpackerEngine(Enum):
     """
     Enum for unpacker engine selection.
@@ -790,6 +878,16 @@ class UnpackerEngine(Enum):
 class ReluConfig(Enum):
     NoRelu = 0
     ZeroRelu = 1
+
+
+class GatedReduceScale(IntFlag):
+    """Independent input/output scaling flags for gated-reduce tests."""
+
+    None_ = 0
+    Gate = 1
+    Up = 2
+    Out = 4
+    All = Gate | Up | Out
 
 
 class SdpaOp(Enum):
@@ -834,6 +932,7 @@ class TopKXLSortMode(Enum):
     Dispatch = 0
     Generic = 1
     EarlyExitK64 = 2
+    Columns = 3
 
 
 class VectorMode(Enum):

@@ -10,6 +10,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 
 #include "nlp_create_qkv_heads_boltz_device_operation.hpp"

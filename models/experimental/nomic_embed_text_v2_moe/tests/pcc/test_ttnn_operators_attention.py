@@ -30,7 +30,12 @@ from models.experimental.nomic_embed_text_v2_moe.reference.modeling_nomic_moe im
     build_extended_attention_mask,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.attention import attention_placement, sdpa_program_config
-from models.experimental.nomic_embed_text_v2_moe.tt.common import additive_attention_mask, rotary_tables, to_device
+from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    RotaryTables,
+    additive_attention_mask,
+    rotary_tables,
+    to_device,
+)
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -206,6 +211,54 @@ def test_interleaved_rotary_tables_are_decorrelated(device, config):
     assert compute_pcc(ttnn.to_torch(out).reshape(shape).float(), ref) < DECORRELATED_PCC
 
 
+def padding_rows(tensor: ttnn.Tensor, seqlen: int) -> torch.Tensor:
+    """The tile-padding rows of a device tensor's sequence axis, read back with the padded shape."""
+    return tensor.cpu().to_torch_with_padded_shape().float()[..., seqlen:, :]
+
+
+def test_rotary_zeroes_the_padding_of_q_only_with_zero_padded_tables(device, config):
+    """The rotary tables' tile padding is what keeps the padding rows of q and k finite.
+
+    The MoE layer's output padding is unwritten (tt.common.unflatten_tokens) and reaches q and k one
+    block later. An S-row table pads with zeros, and inf times those zeros comes out 0; a longer
+    table puts real cos/sin there and the inf stays. Non-finite padded keys move SDPA's output
+    (test_sdpa_is_moved_by_non_finite_padded_keys), which is why RotaryTables cuts its tables.
+    """
+    batch, seqlen = 2, 75
+    heads, head_dim = config.num_attention_heads, config.head_dim
+    # In place: the fill returns a tensor on the same buffer.
+    q = ttnn.fill_implicit_tile_padding(
+        to_device(torch.randn(1, batch * heads, seqlen, head_dim), device), float("inf")
+    )
+
+    exact = rotary_tables(device, config, seqlen)
+    longer = rotary_tables(device, config, 512)
+
+    rotated = padding_rows(ttnn.experimental.rotary_embedding_hf(q, *exact, is_decode_mode=False), seqlen)
+    assert torch.equal(rotated, torch.zeros_like(rotated))
+    rotated = padding_rows(ttnn.experimental.rotary_embedding_hf(q, *longer, is_decode_mode=False), seqlen)
+    passes_through = not torch.isfinite(rotated).all()
+    assert passes_through, "a longer table no longer passes the padding through; re-check RotaryTables"
+
+
+def test_rotary_tables_cut_from_a_longer_pair_match_a_fresh_build(device, config):
+    """RotaryTables keeps the longest pair and serves each call what a build for that S would give.
+
+    Off the tile grid the pair is cut to S with the padding zeroed, bit for bit a fresh build's,
+    padding included; on the grid there are no padding rows, and the kept pair is handed out as is.
+    """
+    cache = RotaryTables(device, config)
+    kept = cache(512)
+    assert cache(64) is kept
+
+    cut = cache(75)
+    for got, fresh in zip(cut, rotary_tables(device, config, 75)):
+        assert tuple(got.shape) == tuple(fresh.shape)
+        assert torch.equal(got.cpu().to_torch_with_padded_shape(), fresh.cpu().to_torch_with_padded_shape())
+    cache.release(cut)
+    assert cache(512) is kept
+
+
 # Attention proper.
 
 
@@ -260,6 +313,45 @@ def test_sdpa_with_ragged_padding(device, tt_config, config, batch, seqlen):
     got = ttnn.to_torch(out).float()
     assert torch.isfinite(got).all(), "dtype-min in the mask saturated somewhere"
     assert_with_pcc(ref[:, :, :keep], got[:, :, :keep], OPERATOR_PCC)
+
+
+@pytest.mark.parametrize("operand", ["query", "key", "value"])
+def test_sdpa_is_moved_by_non_finite_padded_keys(device, tt_config, config, operand):
+    """The mask does not neutralize a non-finite key in the tile padding of S; q and v padding are inert.
+
+    Measured at 2x75 with one row a third padded: inf, NaN or 3e38 in the padding rows of k move
+    every output row, by 8e-3 here and up to 1e37 in the model, while the same values in q or v
+    change nothing. The padding rows of k therefore have to stay finite, which the zero padding of
+    the rotary tables ensures (test_rotary_zeroes_the_padding_of_q_only_with_zero_padded_tables).
+    """
+    batch, seqlen = 2, 75
+    heads, head_dim = config.num_attention_heads, config.head_dim
+    mask = torch.ones(batch, seqlen, dtype=torch.long)
+    mask[0, 50:] = 0
+    attn_mask = additive_attention_mask(mask, device, mask_dtype=tt_config.attention_mask_dtype)
+    operands = {name: torch.randn(batch, heads, seqlen, head_dim) for name in ("query", "key", "value")}
+
+    def attend(poisoned):
+        tensors = {name: to_device(tensor, device) for name, tensor in operands.items()}
+        if poisoned:
+            # In place: the fill returns a tensor on the same buffer.
+            tensors[operand] = ttnn.fill_implicit_tile_padding(tensors[operand], float("inf"))
+        out = ttnn.transformer.scaled_dot_product_attention(
+            tensors["query"],
+            tensors["key"],
+            tensors["value"],
+            attn_mask=attn_mask,
+            is_causal=False,
+            scale=1.0,
+            **sdpa_kwargs(tt_config, config, batch, seqlen, masked=True),
+        )
+        return ttnn.to_torch(out).float()
+
+    clean, poisoned = attend(False), attend(True)
+    if operand == "key":
+        assert not torch.equal(clean, poisoned), "masked SDPA now ignores non-finite padded keys"
+    else:
+        assert torch.equal(clean, poisoned)
 
 
 def test_causal_attention_is_decorrelated(device, tt_config, config):

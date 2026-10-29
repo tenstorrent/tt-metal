@@ -73,7 +73,6 @@ def test_deltanet_pcc(device, setup, request):
 
     # TTNN
     deltanet = Qwen36GatedDeltaNet(device, GDNConfig.from_args(args), substate(sd, f"layers.{layer_num}.linear_attn"))
-    deltanet.reset_state(B)
     x_t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     out = ttnn.to_torch(deltanet.forward(x_t, mode="recurrent"))
 

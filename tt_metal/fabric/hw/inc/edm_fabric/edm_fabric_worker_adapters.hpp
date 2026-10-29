@@ -66,7 +66,8 @@ namespace fabric_detail{
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS, uint8_t VC_ID>
 struct WorkerToFabricEdmSenderBase {
     static_assert(VC_ID == 0 || VC_ID == 2, "Only VC_ID 0 and 2 are supported");
-    // VC0 uses stream 22 (sender_channel_0 free slots); VC2 uses stream 30.
+    // VC0 reads the pinned sender-channel-0 free-slots stream from connection_interface (its value
+    // is the single authority); VC2 reads the aliased VC2 stream.
     static constexpr uint32_t STREAM_ID =
         VC_ID == 2 ? tt::tt_fabric::connection_interface::vc2_sender_free_slots_stream_id
                    : tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
@@ -87,7 +88,11 @@ struct WorkerToFabricEdmSenderBase {
 
     WorkerToFabricEdmSenderBase() = default;
 
-    template <ProgrammableCoreType my_core_type>
+    // my_core_type identifies the programmable core executing this adapter and selects
+    // the core-specific address space used while resolving runtime arguments.
+    // sem_args_are_l1_addresses selects whether the teardown and producer-cursor arguments
+    // are program-semaphore IDs (default) or L1 addresses supplied directly.
+    template <ProgrammableCoreType my_core_type, bool sem_args_are_l1_addresses = false>
     static WorkerToFabricEdmSenderBase build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
         uint8_t direction;
@@ -152,9 +157,17 @@ struct WorkerToFabricEdmSenderBase {
         // codepaths are split
         const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
 
-        auto worker_teardown_sem_addr =
-            reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
-        const auto worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
+        const auto resolve_sem_arg = [](uint32_t arg) -> uintptr_t {
+            if constexpr (sem_args_are_l1_addresses) {
+                return static_cast<uintptr_t>(arg);
+            } else {
+                return get_semaphore<my_core_type>(arg);
+            }
+        };
+        const uintptr_t teardown_address = resolve_sem_arg(get_arg_val<uint32_t>(arg_idx++));
+        const uintptr_t buffer_index_address = resolve_sem_arg(get_arg_val<uint32_t>(arg_idx++));
+        auto worker_teardown_sem_addr = reinterpret_cast<volatile uint32_t* const>(teardown_address);
+        const auto worker_buffer_index_semaphore_addr = buffer_index_address;
         return WorkerToFabricEdmSenderBase(
             is_persistent_fabric,
             edm_worker_x,
@@ -224,8 +237,8 @@ struct WorkerToFabricEdmSenderBase {
         this->worker_teardown_addr = worker_teardown_addr;
         ASSERT(is_l1_address(reinterpret_cast<size_t>(worker_teardown_addr)));  // must be a L1 address
         // Local landing zone for the SenderChannelProducerCursor block read back in open_start().
-        // Semaphores are strided by L1_ALIGNMENT (16B), so this address both is 16B aligned and owns
-        // a full 16B slot -- a whole-block read here cannot disturb a neighbouring semaphore.
+        // Must be 16B aligned and own a full 16B slot, so that block read cannot disturb a
+        // neighbouring semaphore.
         this->local_producer_cursor_addr = local_buffer_index_addr;
         ASSERT(is_l1_address(local_producer_cursor_addr));  // must be a L1 address
         this->edm_buffer_base_addr = edm_buffer_base_addr;

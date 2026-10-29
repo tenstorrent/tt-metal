@@ -59,8 +59,8 @@ However, if a kernel needs to store intermediate results to a CB, then that CB m
 
 1. Set `UnpackToDestMode=UnpackToDestFp32` for the intermediate CB in the program setup. For example, to configure a CB with id `cb_id` to be copied from L1 into dest in full FP32 precision, the following must be in the program setup:
 ```cpp
-std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-unpack_to_dest_mode[cb_id] = UnpackToDestMode::UnpackToDestFp32;
+std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+unpack_to_dest_mode[cb_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
 
 auto compute_kernel = CreateKernel(
     program,

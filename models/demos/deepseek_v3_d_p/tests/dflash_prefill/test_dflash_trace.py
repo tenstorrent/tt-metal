@@ -172,3 +172,167 @@ def test_dflash_tap_trace_matches_eager(
             f"eager accumulation -- check that tap() neither allocates nor moves its accumulator."
         )
     logger.info("traced tap phase is bit-identical to eager across every chunk")
+
+
+def _meta_scalar(mesh_device, val):
+    """A 1-element uint32 replicated-DRAM tensor, the form the metadata overloads read on-device."""
+    return ttnn.from_torch(
+        torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("use_pretrained", [False], ids=["random"], indirect=True)
+@pytest.mark.parametrize(
+    "ctx_len, n_chunks",
+    [pytest.param(15360, 3, id="ctx15k-3chunk")],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                **torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+                "trace_region_size": TRACE_REGION_SIZE,
+            },
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_dflash_finalize_trace_matches_eager(
+    mesh_device,
+    device_params,
+    num_links,
+    ctx_len,
+    n_chunks,
+    use_pretrained,
+    drafter_cfg,
+    drafter_state_dict,
+):
+    """Taps + KV finalize captured with metadata tensors must match eager bit-exactly. Slot 1 and a short
+    last chunk make a frozen slot or valid end visible, not just a frozen offset."""
+    topology = per_axis_topology(device_params["fabric_config"])[1]
+    cfg = drafter_cfg
+    mesh_shape = tuple(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+    H = cfg.hidden_size
+    chunk_global = ctx_len // n_chunks
+    num_users, slot = 2, 1
+    # (actual_start, actual_end) per chunk; the last chunk carries a padded tail.
+    windows = [(c * chunk_global, (c + 1) * chunk_global) for c in range(n_chunks)]
+    windows[-1] = (windows[-1][0], windows[-1][1] - 100)
+
+    gen = torch.Generator().manual_seed(0)
+    ctx = torch.randn(1, ctx_len, cfg.target_feature_size, generator=gen, dtype=torch.float32)
+
+    drafter = TtDFlashDrafter(
+        mesh_device,
+        cfg,
+        state_dict=drafter_state_dict,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        max_seq_len=ctx_len,
+        chunk_size=chunk_global,
+        num_links=num_links,
+        topology=topology,
+    )
+
+    hidden_shard = [None, None]
+    hidden_shard[tp_axis] = 3
+    hidden_shard[sp_axis] = 2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=hidden_shard)
+
+    def host_hidden(chunk_idx, j):
+        lo = chunk_idx * chunk_global
+        return ctx[:, lo : lo + chunk_global, j * H : (j + 1) * H].to(torch.bfloat16).reshape(1, 1, chunk_global, H)
+
+    def to_device(t):
+        return ttnn.from_torch(
+            t,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+
+    def alloc_caches():
+        return allocate_dflash_kv_cache(
+            mesh_device, cfg, ctx_len, sp_axis=sp_axis, tp_axis=tp_axis, num_users=num_users
+        )
+
+    # ---------------- pass A: eager, host scalars ----------------
+    k_a, v_a = alloc_caches()
+    for c, (lo, hi) in enumerate(windows):
+        drafter.reset()
+        for j, tid in enumerate(cfg.target_layer_ids):
+            h = to_device(host_hidden(c, j))
+            drafter.tap(h, tid)
+            ttnn.deallocate(h)
+        drafter.forward(k_a, v_a, lo, slot_idx=slot, actual_end=hi)
+    ttnn.synchronize_device(mesh_device)
+    eager_k, eager_v = _host_caches(k_a, v_a, mesh_device, mesh_shape)
+
+    # ---------------- pass B: taps + finalize captured, metadata-driven ----------------
+    k_b, v_b = alloc_caches()
+    persistent = [to_device(host_hidden(0, j)) for j in range(len(cfg.target_layer_ids))]
+    # Seeded with values no real chunk uses, so a replay that ignores the refresh cannot match pass A.
+    metadata = tuple(_meta_scalar(mesh_device, v) for v in (0, 0, chunk_global))
+
+    def captured_region():
+        drafter.reset()
+        for j, tid in enumerate(cfg.target_layer_ids):
+            drafter.tap(persistent[j], tid)
+        drafter.forward(k_b, v_b, metadata=metadata)
+
+    # Warm on a scratch cache pair so the capture pass cannot pre-fill pass B's caches.
+    k_w, v_w = alloc_caches()
+    drafter.reset()
+    for j, tid in enumerate(cfg.target_layer_ids):
+        drafter.tap(persistent[j], tid)
+    drafter.forward(k_w, v_w, metadata=metadata)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(k_w)
+    ttnn.deallocate(v_w)
+
+    tid_trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    captured_region()
+    ttnn.end_trace_capture(mesh_device, tid_trace, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    logger.info(f"captured taps + {cfg.num_hidden_layers}-layer finalize")
+    # The capture pass itself enqueued nothing, so pass B's caches are still zero here.
+
+    for c, (lo, hi) in enumerate(windows):
+        for j in range(len(cfg.target_layer_ids)):
+            fresh = to_device(host_hidden(c, j))
+            ttnn.copy(fresh, persistent[j])
+            ttnn.deallocate(fresh)
+        for dst, val in zip(metadata, (slot, lo, hi)):
+            fresh = _meta_scalar(mesh_device, val)
+            ttnn.copy(fresh, dst)
+            ttnn.deallocate(fresh)
+        ttnn.execute_trace(mesh_device, tid_trace, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    traced_k, traced_v = _host_caches(k_b, v_b, mesh_device, mesh_shape)
+    ttnn.release_trace(mesh_device, tid_trace)
+
+    assert traced_k.abs().sum() > 0 and traced_v.abs().sum() > 0, "the traced pass wrote nothing at all"
+
+    for name, a, b in (("K", eager_k, traced_k), ("V", eager_v, traced_v)):
+        diff = (a != b).sum().item()
+        logger.info(f"{name}: {diff} differing elements of {a.numel()}")
+        assert diff == 0, (
+            f"traced finalize != eager finalize in the drafter {name} cache: {diff} of {a.numel()} elements "
+            f"differ (max |delta| {(a.float() - b.float()).abs().max().item()}). A per-chunk value did not "
+            f"reach the replay, or the finalize allocated/moved a buffer the trace reads."
+        )
+    logger.info("traced taps + finalize are bit-identical to eager across every chunk")

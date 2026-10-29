@@ -562,7 +562,7 @@ record_gtest_result() {
         while IFS=$'\t' read -r classname testname result test_time has_failures; do
             [[ -z "$testname" ]] && continue
             local status
-            if [[ "$result" == "SKIPPED" ]]; then
+            if [[ "$result" == "SKIPPED" || "$result" == "SUPPRESSED" ]]; then
                 status=SKIP
             elif [[ "$has_failures" == "true" ]]; then
                 status=FAIL

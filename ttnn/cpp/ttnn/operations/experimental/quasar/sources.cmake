@@ -134,7 +134,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     conv2d/device/conv2d_op_width_sharded_program_factory.cpp
     # binary_ng (device backend; no host op / no nanobind)
     binary_ng/device/binary_ng_device_operation.cpp
-    binary_ng/device/binary_ng_program_factory.cpp
     binary_ng/device/binary_ng_metal_v2_factory.cpp
     binary_ng/device/binary_ng_quasar_native_factory.cpp
     binary_ng/device/binary_ng_utils.cpp
@@ -159,6 +158,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     matmul/matmul.cpp
     matmul/device/matmul_device_operation.cpp
     matmul/device/config/matmul_program_config.cpp
+    matmul/device/config/matmul_unified_plan.cpp
     matmul/device/utilities/matmul_utilities.cpp
     matmul/device/sparse/sparse_matmul_device_operation.cpp
     matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp
@@ -193,9 +193,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     tilize_with_val_padding/tilize_with_val_padding.cpp
     tilize_with_val_padding/device/tilize_with_val_padding_device_operation.cpp
     tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_block_interleaved_program_factory.cpp
     tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_default_program_factory.cpp
-    tilize_with_val_padding/device/factories/tilize_with_val_padding_multi_core_sharded_program_factory.cpp
     tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.cpp
     # to_layout (composite host op; no device op / kernels)
     to_layout/to_layout_op.cpp

@@ -23,7 +23,7 @@ constexpr uint32_t kTimeoutRecorded = 0x5A5A0007;
 
 void kernel_main() {
     constexpr uint32_t l1_address = get_named_compile_time_arg_val("l1_address");
-    constexpr uint32_t worker_mask = get_named_compile_time_arg_val("worker_mask");
+    constexpr uint32_t worker_mask = overlay::fds_signalling::all_worker_lanes_mask;
     constexpr uint32_t burst_length = get_named_compile_time_arg_val("burst_length");
     constexpr uint32_t auto_dispatch_cycles = get_named_compile_time_arg_val("auto_dispatch_cycles");
     constexpr uint32_t poll_iterations = get_named_compile_time_arg_val("poll_iterations");

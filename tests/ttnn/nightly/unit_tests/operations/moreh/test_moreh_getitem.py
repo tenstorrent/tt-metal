@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 import pytest
-from models.common.utility_functions import comp_allclose_and_pcc, is_blackhole, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc, is_blackhole, skip_for_blackhole
 from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import to_ttnn
@@ -298,7 +298,6 @@ def test_getitem_RAW_MAJOR_callback(shape_index_dim, dtype, index_size, device):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shape_index_dim",
     [
@@ -362,6 +361,8 @@ def test_getitem_RAW_MAJOR_callback(shape_index_dim, dtype, index_size, device):
 )
 def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, row_major_index, device):
     shape, index_dim = shape_index_dim
+    if is_blackhole() and index_dim == len(shape) - 1:
+        pytest.skip("A last-dim (W) index uses the W reader, which still mismatches on Blackhole, see #58406 item 2")
     torch.manual_seed(2)
 
     if dtype == torch.int32:

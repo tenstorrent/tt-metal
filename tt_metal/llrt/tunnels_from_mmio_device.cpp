@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tunnels_from_mmio_device.hpp"
-#include <umd/device/cluster_descriptor.hpp>
-#include <umd/device/cluster.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
+#include <tt-umd/cluster.hpp>
 
 
 #include <tt_stl/assert.hpp>

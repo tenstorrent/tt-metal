@@ -29,6 +29,15 @@
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/kernel_lib/untilize_helpers.hpp"
 
+// Code size: the tree-reduction / finalize move_block calls run once per head, not per K chunk.
+// Without noclone, GCC IPA-CP emits a separate constprop clone of move_block<true> (~0.3-1.7 KB per
+// TRISC each) for every distinct constant CB/tile-count combination. Routing those cold sites
+// through one non-cloneable out-of-line copy saves ~4-6 KB of kernel-config buffer under LLK
+// asserts. The per-K-chunk moves in the flash-attention loop keep calling move_block<true> directly.
+__attribute__((noinline, noclone)) void move_block_ool(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+    move_block<true>(in_cb, out_cb, num_tiles);
+}
+
 void kernel_main() {
     // Compile time arguments
 
@@ -129,9 +138,14 @@ void kernel_main() {
     const bool has_parent = parent_core_in_group != UINT32_MAX;
 
     // Read children_per_round array
+    // get_tree_reduction_params() only ever assigns children in rounds [0, ceil(log2(N))), so the
+    // remaining slots are always UINT32_MAX; bound every round loop by the compile-time count.
+    constexpr uint32_t num_tree_rounds =
+        num_cores_per_head <= 1 ? 0 : 32 - __builtin_clz(num_cores_per_head - 1);  // ceil(log2(N))
+    static_assert(num_tree_rounds <= MAX_TREE_REDUCTION_ROUNDS);
     uint32_t children_per_round[MAX_TREE_REDUCTION_ROUNDS];
-    for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
-        children_per_round[r] = get_arg_val<uint32_t>(arg_idx++);
+    for (uint32_t r = 0; r < num_tree_rounds; ++r) {
+        children_per_round[r] = get_arg_val<uint32_t>(arg_idx + r);
     }
 
     // Idle core
@@ -151,7 +165,8 @@ void kernel_main() {
     uint32_t spec_pos_min = 0;
     if constexpr (is_causal) {
         // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
-        if (cur_pos_arg != UINT32_MAX) {
+        // Spec mode requires a cur_pos tensor, so the scalar arg is always UINT32_MAX there.
+        if (!spec_multi_pos && cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
             // Read cur_pos from CB using mailbox-based synchronization (issue #27979).
@@ -212,7 +227,7 @@ void kernel_main() {
     uint32_t active_children_per_round[MAX_TREE_REDUCTION_ROUNDS];
     uint32_t num_active_rounds = 0;
 
-    for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+    for (uint32_t r = 0; r < num_tree_rounds; ++r) {
         uint32_t child_id = children_per_round[r];
         if (child_id != UINT32_MAX && child_id < k_num_chunks) {
             // This child has data
@@ -380,7 +395,10 @@ void kernel_main() {
             // call the extra eltwise add is noise.
             bool add_causal_mask_fusion =
                 !spec_multi_pos && is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
-            bool add_sliding_window_mask_fusion = k_chunk == window_start_chunk && window_start_unaligned > 0;
+            // sliding_window_size is a compile-time arg; the guard lets GCC drop the window path
+            // (and, with it, the fused-mask matmul path in spec mode) when there is no window.
+            bool add_sliding_window_mask_fusion =
+                sliding_window_size > 0 && k_chunk == window_start_chunk && window_start_unaligned > 0;
             bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
 #else
                 bool add_mask_fusion = false;
@@ -442,7 +460,7 @@ void kernel_main() {
                     }
 
                     // Apply sliding window mask to the first chunk (only on the core that processes it)
-                    if (k_chunk == window_start_chunk && window_start_unaligned > 0) {
+                    if (sliding_window_size > 0 && k_chunk == window_start_chunk && window_start_unaligned > 0) {
                         reconfig_data_format(cb_qk_im, cb_sliding_window_mask_in);
                         add_block_inplace<false>(cb_qk_im, cb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
                     }
@@ -588,7 +606,7 @@ void kernel_main() {
 
                     // Combine child with existing local/accumulated data
                     // Move child's L to cb_prev_sum_2 for correction
-                    move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
+                    move_block_ool(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
                     // Fused Softmax Correction
                     // * Fused Correction is a fused operation that performs the following steps:
                     // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
@@ -609,7 +627,7 @@ void kernel_main() {
                         Sq_chunk_t);
 
                     // OUT_ACC_2 <- CHILD_OUT
-                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
+                    move_block_ool(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
 
                     // OUT_ACC *= EXP_MAX_DIFF (scale local accumulator)
                     // OUT_ACC_2 *= EXP_MAX_DIFF_2 (scale child's accumulator)
@@ -624,8 +642,8 @@ void kernel_main() {
                     // PREV_SUM <- CUR_SUM
                     CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);
                     CircularBuffer(cb_m_in).pop_front(Sq_chunk_t);
-                    move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
-                    move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                    move_block_ool(cb_cur_max, cb_prev_max, Sq_chunk_t);
+                    move_block_ool(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
             }
         }
@@ -693,7 +711,7 @@ void kernel_main() {
                     compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
             } else {
                 // Move output to buffer for the writer
-                move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
+                move_block_ool(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
             }
 
         } else if (has_parent) {
@@ -704,11 +722,11 @@ void kernel_main() {
             //   - cb_prev_sum: L
             //   - cb_prev_max: M
             // Move O to output CB
-            move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
+            move_block_ool(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
             // Move M to output CB
-            move_block<true>(cb_prev_max, cb_out_m, Sq_chunk_t);
+            move_block_ool(cb_prev_max, cb_out_m, Sq_chunk_t);
             // Move L to output CB
-            move_block<true>(cb_prev_sum, cb_out_l, Sq_chunk_t);
+            move_block_ool(cb_prev_sum, cb_out_l, Sq_chunk_t);
         }
     }
 

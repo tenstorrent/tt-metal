@@ -125,7 +125,9 @@ void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, ttnn::Tensor&
 
 void write_autograd_tensor(
     FlatBufferFile& file, std::string_view name, const ttml::autograd::TensorPtr& tensor, bool save_grads) {
-    write_ttnn_tensor(file, std::string(name) + "/value", tensor->get_value(ttml::autograd::PreferredPrecision::FULL));
+    // NATIVE writes the tensor as stored, without a cast, so a checkpoint keeps each tensor's dtype.
+    write_ttnn_tensor(
+        file, std::string(name) + "/value", tensor->get_value(ttml::autograd::PreferredPrecision::NATIVE));
     auto& grad = tensor->get_grad();
     bool has_grads = save_grads && core::is_tensor_initialized(grad);
     file.put(std::string(name) + "/requires_grads", tensor->get_requires_grad());
@@ -140,7 +142,8 @@ void read_autograd_tensor(FlatBufferFile& file, std::string_view name, ttml::aut
     bool has_grads = false;
     bool requires_grads = false;
     read_ttnn_tensor(file, std::string(name) + "/value", value);
-    tensor->set_value(value);
+    // Cast to the dtype the tensor is stored in: the model decides the precision, not the file.
+    tensor->assign(value);
     requires_grads = file.get_bool(std::string(name) + "/requires_grads");
     has_grads = file.get_bool(std::string(name) + "/has_grads");
     tensor->set_requires_grad(requires_grads);

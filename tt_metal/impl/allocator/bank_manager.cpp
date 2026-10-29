@@ -8,6 +8,7 @@
 #include <tt-metalium/allocator.hpp>
 #include "allocator_state.hpp"
 #include <limits>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <algorithm>
@@ -20,6 +21,23 @@
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
 namespace tt::tt_metal {
+
+namespace {
+
+// L1_SMALL is sized once at device open, so running out of it looks like fragmentation of a
+// near-empty card unless the message names the parameter that sizes it.
+std::string l1_small_hint(BufferType buffer_type, DeviceAddr bank_size) {
+    if (buffer_type != BufferType::L1_SMALL) {
+        return "";
+    }
+    if (bank_size == 0) {
+        return " The L1_SMALL region is 0 B because it is reserved at device open; set l1_small_size large enough for "
+               "this allocation when opening the device.";
+    }
+    return " The L1_SMALL region is sized at device open; increase l1_small_size when opening the device.";
+}
+
+}  // namespace
 
 BankManager::AllocatorDependencies::AllocatorDependencies() = default;
 
@@ -120,8 +138,8 @@ void validate_num_banks(uint32_t num_banks, const BufferType& buffer_type, bool 
     // Dataflow API does not have a working implementation of generic modulo to determine bank_id for interleaved
     // address gen For non pow2 num banks, special cases need to be added to avoid falling back to generic
     // implementation. See https://github.com/tenstorrent/tt-metal/issues/3321
-    std::unordered_set<uint32_t> acceptable_num_non_pow2_mem_banks = {
-        7, 12, 20, 28, 48, 56, 63, 70, 72, 80, 94, 108, 110, 117, 120, 124, 126, 130, 140};
+    std::unordered_set<uint32_t> acceptable_num_non_pow2_mem_banks = {7,  12, 20,  28,  48,  56,  63,  70,  72,  80, 84,
+                                                                      94, 96, 108, 110, 117, 120, 124, 126, 130, 140};
     bool custom_mod_bank_id_calculation_exists = acceptable_num_non_pow2_mem_banks.contains(num_banks);
     bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists or doesnt_support_interleaved);
     if (not valid_num_banks) {
@@ -484,7 +502,7 @@ uint64_t BankManager::allocate_buffer(
             TT_FATAL(
                 false,
                 "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
-                "store {} B, but bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B)",
+                "store {} B, but bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B).{}",
                 size,
                 enchantum::to_string(buffer_type_),
                 num_banks,
@@ -492,7 +510,8 @@ uint64_t BankManager::allocate_buffer(
                 bank_size(),
                 mem_stats.total_allocated_bytes,
                 mem_stats.total_free_bytes,
-                mem_stats.largest_free_block_bytes);
+                mem_stats.largest_free_block_bytes,
+                l1_small_hint(buffer_type_, bank_size()));
         }
         allocated_buffers_[allocator_id.get()].insert(address.value());
 
@@ -554,7 +573,7 @@ uint64_t BankManager::allocate_buffer(
             "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
             "per bank), bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B). After subtracting "
             "{} dependency range(s) and {} additional occupied range(s), {} B remained placeable across {} window(s), "
-            "largest {} B",
+            "largest {} B.{}",
             size,
             enchantum::to_string(buffer_type_),
             num_banks,
@@ -569,7 +588,8 @@ uint64_t BankManager::allocate_buffer(
             additional_occupied_ranges.size(),
             placeable_bytes,
             available_ranges.size(),
-            largest_placeable);
+            largest_placeable,
+            l1_small_hint(buffer_type_, bank_size()));
     }
     TT_FATAL(
         chosen.value() % alignment_bytes_ == 0,
@@ -703,6 +723,17 @@ MemoryBlockTable BankManager::get_memory_block_table(
 
     log_warning(tt::LogAlways, "allocator is not initialized, cannot get block table for memory");
     return {};
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::get_allocated_ranges(
+    BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
+    const auto* alloc = this->get_allocator_from_id(allocator_id);
+    if (alloc == nullptr) {
+        return {};
+    }
+    auto ranges = alloc->allocated_addresses();
+    std::sort(ranges.begin(), ranges.end());
+    return ranges;
 }
 
 void BankManager::shrink_size(

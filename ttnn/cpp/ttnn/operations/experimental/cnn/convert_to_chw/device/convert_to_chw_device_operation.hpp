@@ -29,6 +29,6 @@ struct ConvertToCHWDeviceOperation {
 
 namespace ttnn::prim {
 
-Tensor convert_to_chw(const Tensor& input, const std::optional<DataType>& dtype);
+Tensor convert_to_chw(const Tensor& input, const std::optional<tt::tt_metal::DataType>& dtype);
 
 }  // namespace ttnn::prim

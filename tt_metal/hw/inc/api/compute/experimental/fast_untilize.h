@@ -171,7 +171,7 @@ ALWI void fast_untilize_uninit(uint32_t ocb) {
     PACK((llk_init_packer_dest_offset_registers<PackMode::Default>(ocb)));
     PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_fast_untilize_uninit<FAST_UNTILIZE_MAX_UNIT_DIM, full_ct_dim>(ocb)));
+    PACK((llk_pack_fast_untilize_uninit(ocb)));
 #else
     pack_untilize_uninit<is_fp32_dest_acc_en>(ocb);
 #endif
