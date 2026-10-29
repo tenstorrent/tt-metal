@@ -114,8 +114,8 @@ inline void calculate_sfpu_binary(
         log_c = LogPoly::C;
         log_d = LogPoly::D;
     }
-    // The bf16 RNE constants are bound outside the loop for the same reason (three
-    // SFPLOADI per row otherwise); loaded only where the rounding runs.
+    // The bf16 RNE constants are bound outside the loop for the same reason (two SFPLOADI
+    // per row otherwise). Unassigned unless round_to_bf16_rne, which also gates their use.
     constexpr bool round_to_bf16_rne = (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) &&
                                        !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
     sfpi::vUInt rne_bias;
@@ -224,9 +224,11 @@ inline void calculate_sfpu_binary_mul(
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
     // RNE constants bound once per face, not re-materialised on every row.
+    // Unassigned unless round_to_bf16_rne, which also gates their use.
+    constexpr bool round_to_bf16_rne = !is_fp32_dest_acc_en;
     sfpi::vUInt rne_bias;
     sfpi::vUInt rne_mask;
-    if constexpr (!is_fp32_dest_acc_en) {
+    if constexpr (round_to_bf16_rne) {
         rne_bias = kBf16RneBias;
         rne_mask = kBf16RneMask;
     }
@@ -236,7 +238,7 @@ inline void calculate_sfpu_binary_mul(
 
         sfpi::vFloat result = in0 * in1;
 
-        if constexpr (!is_fp32_dest_acc_en) {
+        if constexpr (round_to_bf16_rne) {
             // Software RNE approach (kept for reference):
             result = float32_to_bf16_rne(result, rne_bias, rne_mask);
             // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
