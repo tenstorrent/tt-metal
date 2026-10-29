@@ -37,7 +37,9 @@ positions start + r W + c Sq + [0, Sq) (natural blocks, any 32-aligned start):
         natural_query_blocks (fork option: queries start + r W + c Sq + i at any tile-aligned start while the keys
         keep the cache's block-cyclic layout) -> [1, 1, Sq, T] bf16 ROW_MAJOR, columns >= kv_len unwritten
     top-k ttnn.experimental.topk_large_indices(k 512, valid_length = kv_len) -> [1, 1, Sq, 512] uint32 (descending
-        score, -inf -> 0xFFFFFFFF tail) -> all_gather over axis 1 -> [1, 1, W, 512], replicated over TP
+        score, -inf -> 0xFFFFFFFF tail) -> all_gather over axis 1 -> [1, 1, W, 512], replicated over TP;
+        INDEXER_TOPK_LOCAL=on (P.8, ``local``, set by the all-device model): no gather, the chip keeps its own
+        [1, 1, Sq, 512] rows (the sparse attention reads exactly those)
 
 The key buffer the ring gathers into ([1, 1, T, 128], T = the cache's compressed capacity) is allocated once per
 cache capacity (``setup``). No host work in ``__call__``: the per-chunk inputs are integers (start) and device
@@ -61,6 +63,11 @@ from .settings import settings
 Q_CHUNK, K_CHUNK = 64, 32  # score work unit: k 32 is the fork's fidelity-honouring head reduction (K-13 / K-14)
 
 
+def topk_local() -> bool:
+    """INDEXER_TOPK_LOCAL=on (P.8): the all-device model's indexers keep each chip's own top-k rows (no TP gather)."""
+    return settings.get("INDEXER_TOPK_LOCAL") == "on"
+
+
 def _upload(mesh, t, dtype, layout=ttnn.TILE_LAYOUT, dims=None):
     return ttnn.from_torch(
         t.contiguous(),
@@ -80,7 +87,9 @@ class TtIndexer:
     """indexer step of one index-source layer that owns its index keys (enc_source). ``setup(cache)`` once per
     served index-key cache capacity (load time), then ``__call__(x, qr, start, cache)`` per chunk: attn_norm
     [1, 1, W, H/TP] fp32 + q_resid [1, 1, W, q_lora] fp32 -> top-k [1, 1, W, topk] uint32 ROW_MAJOR (key
-    positions; 0xFFFFFFFF = none), row-split, replicated over TP. Does not consume its inputs."""
+    positions; 0xFFFFFFFF = none), row-split, replicated over TP; with ``local`` (INDEXER_TOPK_LOCAL=on, P.8: the
+    all-device model sets it; component harnesses keep the gathered layout) [1, 1, Sq, topk], the chip's own query
+    rows. Does not consume its inputs."""
 
     def __init__(self, mesh, w: dict[str, torch.Tensor], cfg, ratio: int, rope: RopeTable, chunk: int):
         from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
@@ -130,6 +139,7 @@ class TtIndexer:
         self._kbuf = {}  # compressed capacity T -> the ring's persistent gathered-key buffer [1, 1, T, hd]
         self.glue = indexer_glue()  # INDEXER_GLUE=on (P.16)
         self._memo = None  # (tt/sparse_attention.ChunkMemo, KV source layer): ``share``
+        self.local = False  # INDEXER_TOPK_LOCAL=on (P.8): the top-k not gathered over TP (tt/model.py sets it)
 
     def share(self, memo, kv_src: int | None) -> None:
         """INDEXER_GLUE=on (P.16): the chunk's ChunkMemo and this layer's KV source (the tiled index keys are made once
@@ -308,9 +318,10 @@ class TtIndexer:
         return logits, kv_len
 
     def topk_of(self, logits: ttnn.Tensor, kv_len: int) -> ttnn.Tensor:
-        """The 512 best keys per query of the chip's scores -> [1, 1, W, topk] uint32, gathered over TP."""
+        """The 512 best keys per query of the chip's scores -> [1, 1, W, topk] uint32, gathered over TP (``local``:
+        the chip's own [1, 1, Sq, topk])."""
         local = ttnn.experimental.topk_large_indices(logits, k=self.topk, valid_length=kv_len)
-        if self.tp == 1:
+        if self.tp == 1 or self.local:
             return local
         out = ccl.all_gather(local, 2, TP_AXIS)  # [1, 1, W, topk]
         dealloc(local)
