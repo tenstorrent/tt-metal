@@ -631,6 +631,37 @@ def test_ternary_zero_size_dim(device, shape_a, shape_b, shape_c, op):
     assert ttnn.to_torch(output).shape == expected
 
 
+@pytest.mark.parametrize(
+    "shape_a, shape_b, shape_c",
+    [
+        ((1, 1, 0, 64), (1, 1, 5, 64), (1, 1, 0, 64)),
+        ((1, 1, 64, 0), (1, 1, 64, 5), (1, 1, 64, 0)),
+        ((0, 1, 32, 64), (5, 1, 32, 64), (0, 1, 32, 64)),
+    ],
+)
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda a, b, c: ttnn.where(a, b, c),
+        lambda a, b, c: ttnn.addcmul(a, b, c, value=1.0),
+        lambda a, b, c: ttnn.lerp(a, b, c),
+        lambda a, b, c: ttnn.mac(a, b, c),
+        lambda a, b, c: ttnn.lerp(a, b, 0.25),
+        lambda a, b, c: ttnn.mac(a, 1.5, b),
+    ],
+    ids=["where", "addcmul", "lerp", "mac", "lerp_tts", "mac_tst"],
+)
+def test_ternary_zero_size_dim_rejects_incompatible(device, expect_error, shape_a, shape_b, shape_c, op):
+    def to_tt(shape):
+        return ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+    # where raises in the ternary op; addcmul, lerp and mac fall back to binary_ng, which raises there.
+    with expect_error(RuntimeError, "Broadcasting rule violation|do not broadcast|Invalid subtile broadcast type"):
+        op(to_tt(shape_a), to_tt(shape_b), to_tt(shape_c))
+
+
 def test_zero_size_dim_skips_launch(device):
     device.enable_program_cache()
     device.clear_program_cache()
