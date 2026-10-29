@@ -290,12 +290,16 @@ void RejectPrefetcherPipeRelayResize(
 }
 
 void ValidateDFBRunOverrides(const detail::ProgramImpl& program_impl, const ProgramRunArgs& params, bool require_all) {
-    // DFB run overrides: same checks as the full path (duplicates; non-zero size overrides), plus a
-    // partial-path-only correctness guard for borrowed-memory DFBs (below). A resized tensor-backed DFB
-    // must have its backing TensorParameter supplied in this same update, so AttachBorrowedDFBBuffers
-    // re-runs the per-bank fit check against the new size. The full Set path gets this for free
-    // (require_all=true); on this partial path the backing tensor may be omitted, which would
-    // otherwise let a grown DFB overflow its borrowed buffer's per-bank region unchecked at execution.
+    // Unlike kernels, DFBs don't require DFBRunOverrides.
+    // (Borrowed-memory DFBs don't need a DFBRunOverrides entry either — they identify their backing
+    // MeshTensor by name via DataflowBufferSpec::borrowed_from, and the tensor flows through
+    // tensor_args.)
+
+    // Validate supplied DFB overrides for both full and partial argument updates:
+    // reject duplicates, zero sizes, and pipe-relay resizing, and check arena capacity.
+    // A partial update that resizes a tensor-backed DFB must also supply its backing
+    // tensor so attachment can check the new size against the buffer's capacity.
+    // Full argument sets already require all backing tensors.
     std::unordered_set<DFBSpecName> dfbs_with_params;
     for (const auto& dfb_params : params.dfb_run_overrides) {
         const auto& dfb_spec_name = dfb_params.dfb;
@@ -1251,9 +1255,9 @@ void MergeKernelRunArgsInto(
 // names must be declared (no extras), target nodes must belong to the kernel, and a supplied
 // vararg section's count must match the schema.
 //
-// The one exception to "tensor args may be omitted": resizing a borrowed-memory DFB requires
-// supplying that DFB's backing TensorParameter in the same update, so the per-bank fit check can
-// re-run against the new size (see the borrowed-DFB guard in the dfb_run_overrides loop below).
+// Resizing a tensor-backed DFB requires its backing TensorParameter in the same
+// update so the per-bank capacity check can use the new size.
+// ValidateDFBRunOverrides enforces this requirement.
 void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& params) {
     const detail::ProgramImpl& program_impl = program.impl();
 
