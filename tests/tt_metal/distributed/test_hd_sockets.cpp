@@ -9,6 +9,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <internal/cluster_noc_helpers.hpp>
+#include "tests/tt_metal/tt_metal/common/host_transfer_stats_scope.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
@@ -36,6 +37,7 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-umd/io_window/io_window.hpp>
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -545,6 +547,45 @@ TEST_F(HDSocketFixture, H2DSocket) {
             // On most hosts, page size is 4K, so this should lead to 5 pages being allocated on the host.
             test_h2d_socket(
                 mesh_device_, 16512, 1088, 156672, h2d_mode, 50, MeshCoreCoord(recv_coord, CoreCoord(0, 1)));
+        }
+    }
+}
+
+TEST_F(HDSocketFixture, H2DSocketHostTransferStats) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+    const MeshCoordinate recv_coord(0, 0);
+    if (!is_device_coord_mmio_mapped(mesh_device_, recv_coord)) {
+        GTEST_SKIP() << "Device at (0, 0) is not MMIO mapped";
+    }
+    constexpr std::size_t page_size = 64;
+    constexpr std::size_t data_size = 1024;
+    constexpr uint32_t num_iterations = 4;
+
+    for (auto h2d_mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
+        tt::tt_metal::test::HostTransferStatsScope transfer_stats(mesh_device_->impl().get_context_id());
+        test_h2d_socket(
+            mesh_device_,
+            1024,
+            page_size,
+            data_size,
+            h2d_mode,
+            num_iterations,
+            MeshCoreCoord(recv_coord, CoreCoord(0, 0)));
+
+        const auto pushed = transfer_stats.totals(HostTransfer::SocketPush);
+        const auto staged = transfer_stats.totals(HostTransfer::SocketPull);
+        const auto& recorded = h2d_mode == H2DMode::HOST_PUSH ? pushed : staged;
+        const auto& unused = h2d_mode == H2DMode::HOST_PUSH ? staged : pushed;
+        EXPECT_EQ(recorded.bytes, data_size * num_iterations);
+        EXPECT_EQ(recorded.transfers, data_size / page_size * num_iterations);
+        EXPECT_EQ(unused.transfers, 0u);
+        if (h2d_mode == H2DMode::HOST_PUSH) {
+            EXPECT_GT(pushed.busy, HostTransferStats::Clock::duration::zero());
+        } else {
+            // The device pulls staged pages on its own schedule, so there is no host-side time to report.
+            EXPECT_EQ(staged.busy, HostTransferStats::Clock::duration::zero());
         }
     }
 }

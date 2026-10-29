@@ -174,6 +174,8 @@ dispatch_telemetry_types::SMCDispatchCoreCoords build_smc_dispatch_core_coords(D
 struct MeshReadEventDescriptor {
     ReadEventDescriptor single_device_descriptor;
     MeshCoordinateRange device_range;
+    // Called by the completion queue reader, with the time it read the event from every device in the range.
+    std::function<void(std::chrono::steady_clock::time_point)> on_complete;
 };
 
 struct MeshBufferReadDescriptor {
@@ -618,6 +620,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
 
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
+    ScopedTransferStats transfer_stats(*this, TransferOp::CoreWrite, size_bytes);
 
     Device* device = mesh_device_->impl().get_device(address.device_coord);
     address.address = device_dispatch::add_bank_offset_to_address(device, address.virtual_core_coord, address.address);
@@ -633,6 +636,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
         id_,
         expected_num_workers_completed_,
         sub_device_ids);
+    transfer_stats.close();
 
     if (blocking) {
         this->finish_nolock(sub_device_ids);
@@ -705,6 +709,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
 
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
+    ScopedTransferStats transfer_stats(*this, TransferOp::CoreRead, size_bytes);
 
     Device* device = mesh_device_->impl().get_device(address.device_coord);
     address.address = device_dispatch::add_bank_offset_to_address(device, address.virtual_core_coord, address.address);
@@ -728,7 +733,49 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     }
 
     this->submit_core_data_memcpy_request(
-        ReadCoreDataDescriptor(dst, size_bytes), address.device_coord, blocking, sub_device_ids);
+        ReadCoreDataDescriptor(dst, size_bytes), address.device_coord, /*blocking=*/false, sub_device_ids);
+    transfer_stats.close();
+    if (blocking) {
+        this->finish_nolock(sub_device_ids);
+    }
+}
+
+HostTransfer FDMeshCommandQueue::fast_dispatch_transfer(TransferOp op) {
+    switch (op) {
+        case TransferOp::BufferWrite: return HostTransfer::BufferWriteFastDispatch;
+        case TransferOp::BufferRead: return HostTransfer::BufferReadFastDispatch;
+        case TransferOp::CoreWrite: return HostTransfer::CoreWriteFastDispatch;
+        case TransferOp::CoreRead: return HostTransfer::CoreReadFastDispatch;
+    }
+    TT_THROW("Unknown transfer op {}", static_cast<int>(op));
+}
+
+void FDMeshCommandQueue::begin_transfer_stats(TransferOp op) {
+    const auto target = this->get_target_device_type();
+    transfer_stats_events_ =
+        target != tt::TargetDevice::Mock && target != tt::TargetDevice::Emule && !trace_id_.has_value();
+    if (!transfer_stats_events_) {
+        return;
+    }
+    // The interval opens when the device has finished the work queued before the transfer, not when the host
+    // enqueues it.
+    this->record_event_to_host_nolock(
+        {}, std::nullopt, [this, kind = fast_dispatch_transfer(op)](std::chrono::steady_clock::time_point time) {
+            transfer_stats_start_ = time;
+            host_transfer_stats_->begin(kind);
+        });
+}
+
+void FDMeshCommandQueue::end_transfer_stats(TransferOp op, uint64_t bytes) {
+    if (!std::exchange(transfer_stats_events_, false)) {
+        return;
+    }
+    // Completes once the device has consumed the transfer's commands, and for reads after the reader thread has
+    // copied the data out, since the completion queue is read in order.
+    this->record_event_to_host_nolock(
+        {}, std::nullopt, [this, kind = fast_dispatch_transfer(op), bytes](std::chrono::steady_clock::time_point time) {
+            host_transfer_stats_->end(kind, transfer_stats_start_, time, bytes);
+        });
 }
 
 void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_ids) {
@@ -810,6 +857,9 @@ bool FDMeshCommandQueue::write_shard_to_device(
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
     auto shard_view = device_buffer->impl().view(*device_buffer, region_value);
+    if (host_transfer_stats_->enabled()) {
+        this->count_transfer_bytes(host_bytes_written(*shard_view, region_value.size, logical_core_filter));
+    }
 
 #if defined(TT_UMD_BUILD_SIMULATION)
     const tt_sim::DirectWriteGuard tt_sim_direct_write_guard{
@@ -857,6 +907,7 @@ void FDMeshCommandQueue::read_shard_from_device(
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view =
         device_buffer->impl().view(*device_buffer, region.value_or(BufferRegion(0, device_buffer->size())));
+    this->count_transfer_bytes(shard_view->size());
 
     auto* device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
@@ -996,11 +1047,19 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event(
 
 MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host_nolock(
     ttsl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
+    return this->record_event_to_host_nolock(sub_device_ids, device_range, nullptr);
+}
+
+MeshEvent FDMeshCommandQueue::record_event_to_host_nolock(
+    ttsl::Span<const SubDeviceId> sub_device_ids,
+    const std::optional<MeshCoordinateRange>& device_range,
+    std::function<void(std::chrono::steady_clock::time_point)> on_complete) {
     auto event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/true, device_range);
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
         std::in_place_type<MeshReadEventDescriptor>,
         ReadEventDescriptor(event.impl().id()),
-        event.impl().device_range()));
+        event.impl().device_range(),
+        std::move(on_complete)));
     this->increment_num_entries_in_completion_queue();
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
@@ -1062,6 +1121,9 @@ void FDMeshCommandQueue::read_completion_queue() {
                             this->copy_buffer_data_to_user_space(mesh_read_descriptor);
                         } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
                             this->read_completion_queue_event(mesh_read_descriptor);
+                            if (mesh_read_descriptor.on_complete && !exit_condition_.load()) {
+                                mesh_read_descriptor.on_complete(std::chrono::steady_clock::now());
+                            }
                         } else {
                             this->read_l1_data_from_completion_queue(mesh_read_descriptor);
                         }

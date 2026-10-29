@@ -216,7 +216,21 @@ private:
     // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
 
+    // Records a host-notify event; the completion queue reader calls `on_complete` once it has read the event.
+    MeshEvent record_event_to_host_nolock(
+        ttsl::Span<const SubDeviceId> sub_device_ids,
+        const std::optional<MeshCoordinateRange>& device_range,
+        std::function<void(std::chrono::steady_clock::time_point)> on_complete);
+
+    static HostTransfer fast_dispatch_transfer(TransferOp op);
+    // Whether the open transfer records start and end events. Set and read under lock_api_function_().
+    bool transfer_stats_events_ = false;
+    // When the open transfer's start event completed. Set and read only by the completion queue reader.
+    std::chrono::steady_clock::time_point transfer_stats_start_;
+
 protected:
+    void begin_transfer_stats(TransferOp op) override;
+    void end_transfer_stats(TransferOp op, uint64_t bytes) override;
     bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
