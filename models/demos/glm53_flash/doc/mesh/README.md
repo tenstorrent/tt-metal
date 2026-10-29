@@ -1392,3 +1392,20 @@ bucket. Until then the served default restores at chunk-aligned snapshots only (
   image hang). The chip-0 layer tests were bit-identical because they ran without live traces. A3's index half (static
   maintenance at any 32-aligned start) is the fix; the rerun with the seal off (numerics under live traces) is queued.
 - Waves step A (KDA / dense layers + head) is on the block queue after a prompt-length fix.
+
+### 2026-10-29 01:45: waves step A validated on the block; the APC artifacts = allocations under live traces
+
+- `test_mesh_wave_prefill` (layers 0-2 = KDA + dense, (2,4) block, the override runtime): SP vs a wave on row 0 and on
+  row 1: first token equal, logits PCC 0.99998; the two rows' waves bit-identical; two prompts in one wave bit-identical
+  to each alone; the idle row's KDA slot untouched; a chunked continuation (row 0 at 64, row 1 at 96) bit-identical to
+  the unchunked wave (0.9992 vs the SP chunked prefill); a non-contiguous start refused. 20 s on the block.
+- With layer 3 (DSA + MoE, heads2users, 4 users per row): the same checks pass for prompt A (0.99992) and the two-prompt
+  wave is bit-identical to each alone, but prompt B's logits land at PCC 0.9973 vs its SP prefill (first token equal).
+  A layer-level wave-vs-slab attention test (dense, rows swapped, sparse with per-row starts) is queued to split the
+  attention from the MoE and the slot from the prompt.
+- APC: the budget-split reproduction with the seal OFF: the adapter's footprint check (`GLM53_VLLM_APC_ALLOC_CHECK`)
+  caught the continuation from 2112 allocating a device buffer under the live decode traces (+44.5 KB per bank) = the
+  post-capture allocation class. The sealed chip-0 continuation test (queued) lists the programs; the fix is the
+  shape-static index maintenance at any 32-aligned start (A3's index half).
+- Runtime rule: every wave / row-local test runs from `wt_kda_sp_base` (the ttnn override on the base commit) with the
+  model folder overlaid; a frozen tree on the stock runtime fails on `ttKDA(sequence_parallel_size=)`.
