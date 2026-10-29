@@ -17,14 +17,18 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention 
 
 
 def _sdpa_program_config(device, B, H, S):
-    """Shared SDPA config, but 128-wide q/k chunks for S < 8192 (S % 128 == 0) when B * H * S/128 fills the grid; approximate exp for S >= 2048."""
+    """Shared SDPA config, but 128-wide q/k chunks (256-wide q at 1-2 waves, S >= 2048) for S < 8192 (S % 128 == 0) when B * H * S/128 fills the grid; approximate exp for S >= 2048."""
     cfg = _get_sdpa_program_config(device, S, q_seq_len=S)
     approx = S >= 2048
     grid = device.compute_with_storage_grid_size()
-    if S < 8192 and S % 128 == 0 and B * H * (S // 128) >= grid.x * grid.y:
+    cores = grid.x * grid.y
+    # 256-wide q chunks when B * H * S/256 is just above the core count (1-2 waves): (1,4096) 1465 -> 1019 us, (2,2048)
+    # 799 -> 578 us; slower at 2-4 waves and for S < 2048 ((32,128) +25%, (16,256) +18%, (8,512) +3%, (4,1024) +2%).
+    q_wide = S >= 2048 and S % 256 == 0 and cores <= B * H * S // 256 < 2 * cores
+    if S < 8192 and S % 128 == 0 and B * H * (S // 128) >= cores:
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid,
-            q_chunk_size=128,
+            q_chunk_size=256 if q_wide else 128,
             k_chunk_size=128,
             exp_approx_mode=approx,
         )
