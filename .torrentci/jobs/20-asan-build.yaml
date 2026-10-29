@@ -2,9 +2,14 @@
 # The PR Gate "Build ASan ubuntu 24.04" compile (build-artifact.yaml with
 # build-type ASan, the clang-20 libstdc++ toolchain, tracy off, system SFPI,
 # skip-tt-train false => --build-all), in the image ci-build-image builds.
-# Not yet here: the package target and artifact uploads, the S3 ccache and
-# CPM caches (a TorrentCI cache of the local ccache directory instead), and
-# triggers (run it by hand).
+# Then the package target and the two uploads the PR Gate makes
+# (publish-package, build-ttnn-import-artifact). A TorrentCI artifact is one
+# regular file, so each GitHub artifact is published as one tar: the .deb and
+# .ddeb files flat and uncompressed (their compression-level 0), and the
+# stripped ttnn-import tree with zstd -1 (their compression-level 1). Names
+# drop the ref and run-id suffix: TorrentCI scopes artifacts to the producing
+# job execution. Not yet here: the S3 ccache and CPM caches (a TorrentCI cache
+# of the local ccache directory instead), and triggers (run it by hand).
 jobs:
   - id: asan-build
     description: Configure and compile tt-metal (ASan, --build-all) in the CI build image
@@ -32,6 +37,17 @@ jobs:
       - {name: CCACHE_MAXSIZE, value: 4G}
       - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
       - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
+    artifacts:
+      publish:
+        # Consumed as packages-artifact-name by smoke, sdk-examples and
+        # build-prebuilt-tests-image (download into /work/pkgs/).
+        - name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
+          path: packages.tar
+          content-type: application/x-tar
+        # Consumed by build-docs as TT_FROM_PRECOMPILED_DIR=/work.
+        - name: ttnn-import-ASan
+          path: ttnn-import.tar.zst
+          content-type: application/zstd
     cache:
       key: ccache-v1-asan-${ref_name}-${commit_sha}
       restore-keys:
@@ -74,3 +90,33 @@ jobs:
           run:
             - cmake --build build --target install
             - ccache -s
+      - id: package
+        kind: shell
+        shell:
+          run:
+            - cmake --build build --target package
+            - ls -1sh build/*.deb build/*.ddeb || true
+      - id: stage-packages
+        kind: shell
+        shell:
+          run:
+            - >-
+              find build -maxdepth 1 -type f \( -name '*.deb' -o -name '*.ddeb' \)
+              -printf '%f\n' | sort > packages.list
+            - test -s packages.list
+            - tar -cf packages.tar -C build -T packages.list
+            - ls -l packages.tar
+      - id: stage-ttnn-import
+        kind: shell
+        shell:
+          run:
+            # Lean TT_FROM_PRECOMPILED_DIR tree (build/lib + runtime), as the
+            # PR Gate stages it.
+            - rm -rf ttnn-import
+            - mkdir -p ttnn-import/build/lib
+            - cp -a build/lib/*.so* ttnn-import/build/lib/
+            - find ttnn-import/build/lib -type f -name '*.so*' -exec strip --strip-unneeded {} +
+            - cp -a runtime ttnn-import/runtime
+            - du -sh ttnn-import ttnn-import/build/lib
+            - tar -I 'zstd -1 -T0' -cf ttnn-import.tar.zst -C ttnn-import .
+            - ls -l ttnn-import.tar.zst
