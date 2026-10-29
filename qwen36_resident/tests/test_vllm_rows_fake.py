@@ -68,6 +68,11 @@ class FakeModel:
         self.out = torch.zeros(n_slots, 4, dtype=torch.int64)  # per slot its launch row's out word
         self.params = [(0.0, 1, 1.0, 0)] * n_slots
         self.steps = 0
+        self.head_groups = 2
+
+    def row_order(self):
+        """rows of different GDN head cores first (core g runs rows 4g..4g+3 one after another)"""
+        return [0, 4, 1, 5, 2, 6, 3, 7]
 
     def token_state_rows(self, rows, preserve=False):
         """one launch's token state: rows {u: (x0, position)} active, the others inactive (x0 0, position 0)"""
@@ -199,6 +204,8 @@ MODEL_API = (
     "logits",
     "out_tensor",
     "set_sampling",
+    "row_order",
+    "head_groups",
 )
 PP_API = ("pick_chunk", "reset", "run", "run_span", "handoff")
 
@@ -548,6 +555,39 @@ def test_eight_users_share_one_launch():
     sim.decode_step(list(sim.rows))
     assert record[-1] == [0]
     assert sorted(sim.adapter.slots.res_of.values()) == list(range(8))
+
+
+def _prefill_whole(adapter, vslot, n=5):
+    adapter.prefill_forward(
+        torch.ones(1, n, dtype=torch.int64),
+        torch.tensor([[1]]),
+        [],
+        torch.tensor([n]),
+        start_pos=torch.tensor([0]),
+        empty_slots=[vslot],
+    )
+    return adapter.slots.res_of[vslot]
+
+
+def test_rows_fill_in_the_model_row_order():
+    """contract section 2: the lowest launch with a free row, its rows in model.row_order() (rows of different head
+    cores run in parallel); a freed row is reused first; launch 1 only when launch 0 is full"""
+    adapter, _ = make_adapter(16, 128, False)
+    assert [_prefill_whole(adapter, v) for v in range(3)] == [0, 4, 1]
+    adapter.release_request(1)  # resident slot 4
+    assert _prefill_whole(adapter, 1) == 4
+    assert [_prefill_whole(adapter, v) for v in range(3, 9)] == [5, 2, 6, 3, 7, 8]
+
+
+def test_without_row_order_the_head_groups_give_the_order():
+    """builds before model.row_order(): the head-core interleave of model.head_groups"""
+    model = SimpleNamespace(head_groups=4)  # no row_order
+    engine = RowsEngine(model, None, None, V, V, 8, 128)
+    assert engine.row_order() == [0, 2, 4, 6, 1, 3, 5, 7]
+    model.head_groups = 2
+    assert engine.row_order() == [0, 4, 1, 5, 2, 6, 3, 7]
+    with raises(RuntimeError, match="permutation"):
+        SlotMap(8, [0, 0, 1, 2, 3, 4, 5, 6])
 
 
 def test_slot_map_remap_is_a_gather():

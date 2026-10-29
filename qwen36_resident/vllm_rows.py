@@ -9,7 +9,9 @@ holds the host bookkeeping the vLLM plugin's contract (docs/DECODE_RELOAD_CONTRA
 - Resident slots. A request lives in one resident slot (launch slot // ROWS, row slot % ROWS) from its prefill to
   its release; the device never moves state. The plugin addresses requests by its own state slots and permutes them
   (slot_remap); SlotMap keeps vLLM slot -> resident slot on the host and applies each remap there exactly once.
-  A new request takes the lowest free resident slot, so 8 users or fewer replay one launch.
+  A new request takes the lowest launch with a free row, and within it the first free row in the model's
+  row_order() (rows on different GDN head cores run in parallel: [0, 4, 1, 5, 2, 6, 3, 7] at two head groups), so
+  8 users or fewer replay one launch.
 - Prefill into a slot: the PP prefill of all prompt tokens but the last, the handoff into the slot (GDN state,
   conv history row, KV into the request's block-table pages), then one masked first-token launch (only the new row
   active; preserve set when the launch has live neighbours) whose logits are the prefill's output.
@@ -92,13 +94,22 @@ class SlotMap:
     The plugin's remap is a gather: remap[i] = j means vLLM slot i now holds what vLLM slot j held. Applied to this
     map only (resident state never moves): the new map sends i to the resident slot j was mapped to."""
 
-    def __init__(self, n_slots):
+    def __init__(self, n_slots, row_order=None):
         self.n = n_slots
         self.res_of = {}
         self.free = set(range(n_slots))
+        self.set_row_order(row_order or list(range(ROWS)))
+
+    def set_row_order(self, row_order):
+        """the order a launch's rows fill (contract section 2): every launch's rows in row_order, launch by launch"""
+        row_order = [int(u) for u in row_order]
+        if sorted(row_order) != list(range(ROWS)):
+            raise RuntimeError(f"row order {row_order} is not a permutation of the {ROWS} rows")
+        self.order = [k * ROWS + u for k in range(self.n // ROWS) for u in row_order]
 
     def assign(self, vslot):
-        """a fresh resident slot (the lowest free one) for a request prefilled into vLLM slot vslot"""
+        """a fresh resident slot for a request prefilled into vLLM slot vslot: the lowest launch with a free row,
+        its first free row in the row order"""
         old = self.res_of.pop(vslot, None)
         if old is not None:
             # the plugin hands a prefill only slots no live request holds: a mapping left here is a dead owner the
@@ -106,7 +117,7 @@ class SlotMap:
             self.free.add(old)
         if not self.free:
             raise RuntimeError(f"no free resident slot for vLLM slot {vslot}: map {self.res_of}")
-        r = min(self.free)
+        r = next(s for s in self.order if s in self.free)
         self.free.remove(r)
         self.res_of[vslot] = r
         return r
@@ -135,6 +146,7 @@ class ResidentRowsAdapter:
         self.engine, self.vocab, self.max_seq_len, self.mrope = engine, vocab, max_seq_len, mrope
         self.n_slots = -(-max_batch // ROWS) * ROWS
         self.slots = SlotMap(self.n_slots)
+        self._row_order = None  # the engine's, at the first prefill (the serving class builds the engine late)
         self.chunk = chunk_unit  # PP resume unit: a split prompt's calls start / end on its multiples
         # resident slots whose state is decode-ready (handed off + first token); a partial prefill's slot is not
         self.live = set()
@@ -224,6 +236,9 @@ class ResidentRowsAdapter:
                 raise RuntimeError(
                     f"a new prompt while the split prompt in resident slot {self.pp_partial[0]} is partial"
                 )
+            if self._row_order is None:
+                self._row_order = self.engine.row_order()
+                self.slots.set_row_order(self._row_order)
             r = self.slots.assign(vslot)
             self.live.discard(r)
             if final:
@@ -442,6 +457,15 @@ class RowsEngine:
 
     def set_page_table(self, tables):
         self.model.set_page_table([t if t else [0] for t in tables])
+
+    def row_order(self):
+        """the order a launch's rows fill (contract section 2): model.row_order(), or on builds before it the head-core
+        interleave of model.head_groups (core g of a GDN value head runs rows 4g..4g+3 one after another)"""
+        try:
+            return [int(u) for u in self.model.row_order()]
+        except AttributeError:
+            G = self.model.head_groups
+            return [(i % G) * (ROWS // G) + i // G for i in range(ROWS)]
 
     def pick_chunk(self, n_tokens):
         """the PP chunk for a prefill of n_tokens (its fastest; the adapter keeps it for every span of the sequence)"""
