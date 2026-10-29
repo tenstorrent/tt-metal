@@ -219,6 +219,16 @@ notes:
     of the new layout (no bug), stop and report the numbers per layer for the owner.'
   closed: '2026-10-29T15:09:09'
   why_closed: 'owner 2026-10-29: waived for now; the cause check is parked as FIX.13 (held, CPU only)'
+- id: OV-22
+  tasks:
+  - FIX.13
+  status: closed
+  t: '2026-10-29T16:48:53'
+  text: 'The overseer stopped attempt 1 (overseer): owner 16:55: FIX.14 is ready; FIX.13''s finding is recorded (DS41-141
+    rounding, accepted) and no code changed; the rest of its gate re-runs K.1''s contract units on unchanged code. Closed
+    by hand.'
+  closed: '2026-10-29T16:49:14'
+  why_closed: FIX.13 closed by hand (records)
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -527,7 +537,7 @@ fixes:
   gate:
   - K.1
   - P.10
-  status: queued
+  status: placed
   t: '2026-10-29T15:08:46'
   text: 'OWNER: check whether P.9 (DS41_ATTN_SP32_PROJ) raises layer 20''s window KV error by rounding or by a bug. Evidence
     (FIX.12): test_adapter_acks ack slot 0 [0, 2536) last-window 128 rows, 0_window_kv L20 nope 0.98855 < 0.98957 with P.9,
@@ -544,6 +554,7 @@ fixes:
   paths:
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
   released: '2026-10-29T15:36:21'
+  placed: '2026-10-29T16:02:40'
 classified:
   L.smoke:
     kind: framework

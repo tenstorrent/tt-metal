@@ -1053,6 +1053,60 @@ tasks:
       if something breaks at 8x4 sizes, fix it in the forks behind the same behaviour. Do not touch tt/engram*.py.'
     gate_tasks:
     - P.10
+- id: FIX.13
+  title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - K.1
+  - P.10
+  gate:
+    cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+      && BRINGUP_TASK=P.10 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=P.10 BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+      && BRINGUP_TASK=P.10 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  - ttnn/ttnn/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  brief:
+    details: 'OWNER: check whether P.9 (DS41_ATTN_SP32_PROJ) raises layer 20''s window KV error by rounding or by a bug. Evidence
+      (FIX.12): test_adapter_acks ack slot 0 [0, 2536) last-window 128 rows, 0_window_kv L20 nope 0.98855 < 0.98957 with P.9,
+      passes with ATTN_SP32_PROJ=off; ladder window_kv L20 0.090 -> 0.106. Suspicious: P.9 replaces bf16 TP partial sums of
+      wo_b by one fp32 sum, which should move closer to native, not further; the failing prompt is a padded partial chunk.
+      OWNER 15:40: the device may be used. Do: find the first layer / op where P.9 on vs off differs beyond its rounding for
+      that prompt (device dumps of the 2536-token prompt, layer by layer, on vs off; the CPU at the device''s formats, agents''
+      rule 14, to tell rounding from a bug). Check the padded partial chunk first: rows past the valid length, pad rows entering
+      the per-chip 160-row projections, the last chip''s share, any reduction or norm over padded rows. Bug -> fix it and
+      remove the waiver; honest rounding -> record the evidence and keep the waiver for the owner. Both failing checks are
+      the same one: test_adapter_acks and test_runner_contract (slot 0 turn 1), last-window 128 rows of 0_window_kv L20, waived
+      in tests.unit_waivers until this is settled.'
+    gate_tasks:
+    - K.1
+    - P.10
 - id: FIX.11
   title: 'Attention precision vs the reference: layer 0 attention 10x its noise floor; layer 2 over with 4-bit KV'
   step: overseer_fix
@@ -1067,6 +1121,7 @@ tasks:
   - L.smoke
   - K.1
   - FIX.12
+  - FIX.13
   gate:
     cmd: BRINGUP_TASK=W.1 BRINGUP_RUNG=seed scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && BRINGUP_TASK=M.1 BRINGUP_RUNG=s10240 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py

@@ -1,0 +1,62 @@
+{
+ "used": [
+  {
+   "id": "DS41-125",
+   "how": "the verdict: the contract's L20 window-KV limit is the s10240 ring drift applied to one 128-row window of a 2536-token prefix; measured that window-to-window spread (std 0.0032 PCC) instead of changing any limit",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-141",
+   "how": "started from FIX.12's bisection (P.9 tips it); reproduced 0.98855 / 0.99131 in a layer-by-layer device probe and updated the entry with the evidence",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-140",
+   "how": "rule-14 point for L0 attention (the first op where on and off differ): FIX.11's device-format CPU model explains the device error there; both paths equally far from the golden",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-57",
+   "how": "used tt-probe.sh --mesh (whole-box) rather than --device auto for the 8x4 probe",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a pad-neutrality check (same code, PAD tail vs real tail, valid rows bit-identical) is the fastest way to rule out padded-partial-chunk bugs; no entry says so",
+  "contract checks on a single 128-row window are a sample of a spread whose std (0.0032 PCC at L20, 8x4) is larger than the margin to the limit"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.13",
+   "answer": "done",
+   "evidence": "device dumps L0-L20 of the 2536-token prompt, P.9 on vs off: pad tail bit-neutral (end 2536 vs 5120 valid rows identical, every layer); on = off vs golden per chip group and per TP column block from L0 (L0 out 0.0409 / 0.0411); on-off divergence grows smoothly and evenly; 286 sliding windows on-off PCC mean -0.00005 std 0.0032, off itself fails 191/286. Honest rounding, no bug: no code change, waiver kept for the owner (DS41-141, known_issues_detail.md)"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no code change; nothing padded"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.13",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-29T16:48:55",
+  "head": "808fb1fabdc",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.13.overseer.1.json"
+  ]
+ }
+}
