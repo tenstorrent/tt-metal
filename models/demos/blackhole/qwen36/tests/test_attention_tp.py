@@ -45,6 +45,7 @@ from models.demos.blackhole.qwen36.tt.attention.tp import (
     load_attention_weights_tp,
 )
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
 
 def _rope_torch(x, rope_dim, theta):  # x: [S, H, HD]
@@ -295,10 +296,14 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     tw = load_attention_weights_tp(mesh_device, sd, args)
     comp = tp_composer(mesh_device)
 
+    # The model's paged cache dtype (Qwen36Model: bf8 unless QWEN36_KV_BF8=0); forward_prefill_paged casts the
+    # prefill K/V to bf8 under the same switch and paged_fill_cache rejects a dtype mismatch.
+    cache_dtype = ttnn.bfloat8_b if tpc.kv_cache_bf8_enabled() else ttnn.bfloat16
+
     def mk_cache(num_blocks):
         return ttnn.from_torch(
             torch.zeros(num_blocks, NKV, block_size, HD, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=cache_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -364,16 +369,68 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     cos_db, sin_db = rot_mats_decode(mesh_device, rd, max_seq, theta, torch.tensor(prompt_lens, dtype=torch.int32))
     page_table_b = rm_pt([list(range(u * bpu, (u + 1) * bpu)) for u in range(B)])  # [B, bpu]
     cur_b = cur_pt(prompt_lens)
-    if kv_split_supported(args) and "wq_partner" in tw:
-        # QWEN36_ATTN_KV_SPLIT=user: Qwen36Model._forward_decode normally sets these around its layer loop; set them
-        # here so this per-user comparison exercises the split path (forward_decode alone never takes it).
-        plan = KVSplitPlan(mesh_device, nd, args.n_local_heads, args.head_dim)
-        plan.prepare([B])
-        a_b.kv_split_plan = plan
-        a_b._kv_split_pos = plan.cur_pos_sdpa(cur_b)
+    split = kv_split_supported(args) and "wq_partner" in tw
+    x_dec_tt = replicate_to_device(mesh_device, x_dec)
+
+    def decode_b(split_on):
+        """One batched decode step (unsplit, or QWEN36_ATTN_KV_SPLIT=user). Each step rewrites the same K/V at cur_pos,
+        so repeated steps see the same cache. Qwen36Model._forward_decode normally sets the split state around its
+        layer loop; forward_decode alone never takes the split."""
+        if split_on:
+            plan = KVSplitPlan(mesh_device, nd, args.n_local_heads, args.head_dim)
+            plan.prepare([B])
+            a_b.kv_split_plan = plan
+            a_b._kv_split_pos = plan.cur_pos_sdpa(cur_b)
+        try:
+            return ttnn.to_torch(
+                a_b.forward_decode(x_dec_tt, cur_b, cos_db, sin_db, page_table=page_table_b), mesh_composer=comp
+            )
+        finally:
+            if split_on:
+                ttnn.deallocate(a_b._kv_split_pos)
+                a_b._kv_split_pos = None
+
+    if split:
         logger.info(f"QWEN36_ATTN_KV_SPLIT=user: batched decode runs the KV-pair user split (B={B})")
-    out_b = a_b.forward_decode(replicate_to_device(mesh_device, x_dec), cur_b, cos_db, sin_db, page_table=page_table_b)
-    out_t = ttnn.to_torch(out_b, mesh_composer=comp)  # [1, 1, B, dim]
+        out_unsplit = decode_b(False)
+    out_t = decode_b(split)  # [1, 1, B, dim]
+
+    if split:
+        # The split reads head group d of the partner's users from the PARTNER's copy of the replicated KV head. The
+        # two copies are not bit-identical: the fused all-gather+QKV prefill matmul accumulates the gathered K slices
+        # in a device-dependent order, so a few K/V entries differ by one bf8 step between the members of a pair
+        # (decode writes are pair-identical). The split is therefore close to, not bit-equal with, the unsplit decode.
+        diff = (out_t.float() - out_unsplit.float()).abs()
+        pcc_split = compute_pcc(out_unsplit.float(), out_t.float())
+        logger.info(f"KV split vs unsplit, real cache (B={B}): PCC {pcc_split:.6f}, max |diff| {diff.max().item():.3e}")
+        assert pcc_split > 0.9999, f"KV split vs unsplit PCC {pcc_split} (B={B})"
+
+        # With the pair copies made identical (device 2h's copy written to 2h+1) the split must be bit-exact: this
+        # isolates the merge (partner q, skip positions, head swap, masked reduce-scatter) from the replica rounding.
+        def pair_canonical(cache):
+            c0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+            h = ttnn.to_torch(cache, mesh_composer=c0).reshape(nd, -1, NKV, block_size, HD)
+            for i in range(nd // 2):
+                h[2 * i + 1] = h[2 * i]
+            return ttnn.from_torch(
+                h.reshape(-1, NKV, block_size, HD),
+                dtype=cache_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        old_k, old_v = a_b.paged_k, a_b.paged_v
+        a_b.set_paged_kv_cache(pair_canonical(old_k), pair_canonical(old_v))
+        ttnn.deallocate(old_k)
+        ttnn.deallocate(old_v)
+        eq_unsplit, eq_split = decode_b(False), decode_b(True)
+        logger.info(
+            f"KV split vs unsplit, pair-identical cache (B={B}): equal={torch.equal(eq_split, eq_unsplit)}, "
+            f"max |diff| {(eq_split.float() - eq_unsplit.float()).abs().max().item():.3e}"
+        )
+        assert torch.equal(eq_split, eq_unsplit), f"KV split is not bit-exact on a pair-identical cache (B={B})"
 
     # ---- per-row comparison (a flattened PCC would mask a single bad user) ----
     # The SDPA-decode reduction tree differs between the B=1 reference and the B-wide path,
