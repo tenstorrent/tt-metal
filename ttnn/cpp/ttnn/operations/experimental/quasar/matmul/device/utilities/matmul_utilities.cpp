@@ -76,6 +76,26 @@ uint32_t estimate_interm_tile_size(
     return result;
 }
 
+tt::DataFormat get_interm_data_format(bool packer_l1_acc_en, bool fp32_dest_acc_en, tt::DataFormat output_data_format) {
+    if (fp32_dest_acc_en) {
+        return tt::DataFormat::Float32;
+    }
+    if (packer_l1_acc_en) {
+        return tt::DataFormat::Float16_b;
+    }
+    switch (output_data_format) {
+        case tt::DataFormat::MxFp8R:
+        case tt::DataFormat::MxFp8P:
+        case tt::DataFormat::MxFp6R:
+        case tt::DataFormat::MxFp6P:
+        case tt::DataFormat::MxFp4:
+        case tt::DataFormat::MxInt8:
+        case tt::DataFormat::MxInt4:
+        case tt::DataFormat::MxInt2: return tt::DataFormat::Float16_b;
+        default: return output_data_format;
+    }
+}
+
 uint32_t get_max_l1_space(const ttnn::Tensor& input_tensor_a) {
     auto* device = input_tensor_a.device();
     auto lowest_address = device->lowest_occupied_compute_l1_address();

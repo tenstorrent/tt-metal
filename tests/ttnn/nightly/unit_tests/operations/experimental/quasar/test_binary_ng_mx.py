@@ -20,10 +20,19 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import _on_quasar
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-quasar_only = pytest.mark.skipif(not _on_quasar(), reason="MX formats are Quasar only")
+
+def _on_quasar(device):
+    return device.arch() == ttnn.device.Arch.QUASAR
+
+
+@pytest.fixture
+def quasar_device(device):
+    if not _on_quasar(device):
+        pytest.skip("MX formats are Quasar only")
+    return device
+
 
 # One interleaved shape small enough for the simulator, and one that spreads tiles over several cores.
 _SHAPES = [(32, 32), (4 * 32, 8 * 32)]
@@ -43,10 +52,10 @@ def _assert_matches(expected, actual, min_exact_fraction=0.99):
     assert_with_pcc(expected, actual, 0.999)
 
 
-@quasar_only
 @pytest.mark.parametrize("dtype", ttnn.MX_DTYPES)
 @pytest.mark.parametrize("shape", _SHAPES)
-def test_add_mx_in_mx_out(device, dtype, shape):
+def test_add_mx_in_mx_out(quasar_device, dtype, shape):
+    device = quasar_device
     torch.manual_seed(0)
     a = torch.randn(shape, dtype=torch.float32)
     b = torch.randn(shape, dtype=torch.float32)
@@ -60,10 +69,10 @@ def test_add_mx_in_mx_out(device, dtype, shape):
     _assert_matches(golden, ttnn.to_torch(tc))
 
 
-@quasar_only
 @pytest.mark.parametrize("dtype", ttnn.MX_DTYPES)
 @pytest.mark.parametrize("shape", _SHAPES)
-def test_add_bf16_in_mx_out(device, dtype, shape):
+def test_add_bf16_in_mx_out(quasar_device, dtype, shape):
+    device = quasar_device
     # MX produced on device by the packer must decode on the host like host-packed MX.
     torch.manual_seed(0)
     a = torch.randn(shape, dtype=torch.bfloat16)
@@ -78,10 +87,10 @@ def test_add_bf16_in_mx_out(device, dtype, shape):
     _assert_matches(golden, ttnn.to_torch(tc))
 
 
-@quasar_only
 @pytest.mark.parametrize("dtype", ttnn.MX_DTYPES)
 @pytest.mark.parametrize("shape", _SHAPES)
-def test_add_mx_in_bf16_out(device, dtype, shape):
+def test_add_mx_in_bf16_out(quasar_device, dtype, shape):
+    device = quasar_device
     torch.manual_seed(0)
     a = torch.randn(shape, dtype=torch.float32)
     b = torch.randn(shape, dtype=torch.float32)
@@ -95,9 +104,10 @@ def test_add_mx_in_bf16_out(device, dtype, shape):
     _assert_matches(golden, ttnn.to_torch(tc))
 
 
-@pytest.mark.skipif(_on_quasar(), reason="checks the non-Quasar guard")
 @pytest.mark.parametrize("dtype", [ttnn.mxfp8_e4m3, ttnn.mxint8])
 def test_mx_rejected_off_quasar(device, expect_error, dtype):
+    if _on_quasar(device):
+        pytest.skip("checks the non-Quasar guard")
     x = torch.randn((32, 32), dtype=torch.float32)
     with expect_error(RuntimeError, "is not supported on arch"):
         ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)

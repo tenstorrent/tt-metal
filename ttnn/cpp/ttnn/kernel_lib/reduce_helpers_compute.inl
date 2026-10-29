@@ -705,11 +705,12 @@ ALWI void reduce(
         }
     }
 
-    // Cleanup
+    // Cleanup. reduce_uninit takes the data operand: on Quasar it restores that operand's unpacker and ALU formats
+    // when a column reduce moved an MxFp4 input to the 2x-packed src format (a no-op for every other input).
     if constexpr (is_sfpu) {
         PACK((llk_pack_reduce_mask_clear()));
     } else {
-        reduce_uninit();
+        reduce_uninit(input_dfb_id);
     }
 }
 
