@@ -54,6 +54,7 @@ def _policy(raw: dict, suite: str) -> Policy:
             improvement_pct=float(raw["improvement_pct"]),
             enforce=bool(raw.get("enforce", True)),
             overrides=tuple((pattern, dict(values)) for pattern, values in (raw.get("overrides") or {}).items()),
+            environments=tuple((env, dict(values)) for env, values in (raw.get("environments") or {}).items()),
         )
     except KeyError as missing:
         raise RegistryError(f"suite {suite} policy is missing {missing}") from None

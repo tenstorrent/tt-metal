@@ -60,7 +60,8 @@ python -m pytest --noconftest -p tests.perf.plugin "tests/perf/test_suites.py::t
 `--perf-filter` replaces any `--benchmark_filter` in the suite's args, so it can select cases outside the suite.
 
 A case fails when it is more than `regression_pct` worse (REGRESSION) or more than `improvement_pct` better
-(STALE, the golden needs updating). Cases outside tolerance are re-run once and only fail if the re-run agrees.
+(STALE, the golden needs updating). `policy.environments` sets different tolerances for a noisier environment, and
+a matching case override still wins. Cases outside tolerance are re-run once and only fail if the re-run agrees.
 Nothing is re-run when more than one case and more than a quarter of the suite are outside tolerance, since that
 shift is systematic, or in `enforce: false` suites. A single case outside tolerance is always re-run. If the re-run itself fails, the first run's statuses stand and the report says so.
 NEW, MISSING and ERROR cases also fail. Suites with `enforce: false` report without failing on REGRESSION or
