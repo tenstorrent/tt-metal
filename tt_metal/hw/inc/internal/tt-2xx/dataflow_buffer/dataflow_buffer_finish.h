@@ -14,7 +14,7 @@
 //     Once every DM issuing on an implicit-sync DFB side is ready, credit the batches that never
 //     reached the ISR threshold. DM0 is the hart that takes the ISR, so with it masked nothing can
 //     race the flush, and no kernel DM waits for another.
-//   Compute TRISC (pack/unpack), dfb_trisc_kernel_exit, from trisck.cc: drain.
+//   Compute TRISC (unpack, pack, trisc3), dfb_trisc_kernel_exit, from trisck.cc: drain.
 
 #pragma once
 
@@ -306,25 +306,23 @@ inline bool __attribute__((noinline)) dfb_dm0_flush_ready_sides(uint32_t& pendin
 
 #endif  // !COMPILE_FOR_TRISC
 
-#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
-// Compute TRISC (pack/unpack), after the kernel returns: wait until every DFB this Neo is bound to has
-// drained. TRISC tile_counters[].posted is live occupancy, not a running total, so drained is
-// posted == 0. Unpack skips counters another TRISC of this Neo owns.
+#if defined(COMPILE_FOR_TRISC) && DFB_TRISC_HAS_INTERFACE
+// Compute TRISC (unpack, pack, trisc3), after the kernel returns: wait until every DFB this TRISC
+// produces or consumes has drained. TRISC tile_counters[].posted is live occupancy, not a running
+// total, so drained is posted == 0.
 FORCE_INLINE void dfb_trisc_kernel_exit() {
     WAYPOINT("AAW");
     const uint32_t dfb_mask =
         dfb_bound_mask(static_cast<uint8_t>(dfb::TENSIX_RISC_OFFSET + ckernel::csr_read<ckernel::CSR::NEO_ID>()));
     for (uint32_t m = dfb_mask; m != 0; m &= m - 1) {
         const LocalDFBInterface& intf = get_local_dfb_interface(__builtin_ctz(m));
+        if ((intf.tensix_trisc_mask & (DFB_TRISC_MY_PRODUCER_ROLE | DFB_TRISC_MY_CONSUMER_ROLE)) == 0) {
+            continue;  // another TRISC of this Neo owns both sides
+        }
         bool drained = false;
         while (!drained) {
             drained = true;
             for (uint8_t i = 0; i < intf.num_tcs_to_rr; i++) {
-#ifdef UCK_CHLKC_UNPACK
-                if ((intf.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
-                    continue;
-                }
-#endif
                 const uint8_t tc_id = dfb::get_counter_id(intf.tc_slots[i].packed_tile_counter);
                 if ((ckernel::trisc::tile_counters[tc_id].f.posted & 0xFFFFu) != 0) {
                     drained = false;

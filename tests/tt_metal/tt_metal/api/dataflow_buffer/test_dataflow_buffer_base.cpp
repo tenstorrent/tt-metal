@@ -481,4 +481,129 @@ DFB_DMTENSIX_BLOCKED_STRIDED_TEST(DMTensixTest1xDFB2Bx2S_blk4, 2, 2, 4, 16)
 DFB_DMTENSIX_BLOCKED_STRIDED_TEST(DMTensixTest1xDFB2Bx4S_blk4, 2, 4, 4, 16)
 DFB_DMTENSIX_BLOCKED_STRIDED_TEST(DMTensixTest1xDFB4Bx4S_blk4, 4, 4, 4, 32)
 
+// trisc3 (the isolate-SFPU thread) as the DFB's Tensix endpoint: the producer side is host-prefilled like
+// every Tensix producer here, and the consumer side digests entries with RISC loads.
+#define DFB_TRISC3_TEST(suffix, p_type, c_type, num_p, num_c, pap_kind, cap_kind, blk, entries) \
+    TEST_F(UnitMeshFixture, suffix) {                                                           \
+        M2SingleDFBParams params{                                                               \
+            .producer_type = M2PorCType::p_type,                                                \
+            .consumer_type = M2PorCType::c_type,                                                \
+            .num_producers = (num_p),                                                           \
+            .num_consumers = (num_c),                                                           \
+            .pap = m2::DFBAccessPattern::pap_kind,                                              \
+            .cap = m2::DFBAccessPattern::cap_kind,                                              \
+            .implicit_sync = false,                                                             \
+            .num_entries = (entries),                                                           \
+            .block_size = (blk),                                                                \
+            .producer_on_trisc3 = M2PorCType::p_type == M2PorCType::TENSIX,                     \
+            .consumer_on_trisc3 = M2PorCType::c_type == M2PorCType::TENSIX,                     \
+        };                                                                                      \
+        run_single_dfb_program_2_0(this->device(), params);                                     \
+    }
+// trisc3 packs -> DM
+DFB_TRISC3_TEST(Trisc3DMTest1xDFB1Sx1S, TENSIX, DM, 1, 1, STRIDED, STRIDED, 0, 16)
+DFB_TRISC3_TEST(Trisc3DMTest1xDFB2Sx2S, TENSIX, DM, 2, 2, STRIDED, STRIDED, 0, 16)
+DFB_TRISC3_TEST(Trisc3DMTest1xDFB1Sx4A, TENSIX, DM, 1, 4, STRIDED, ALL, 0, 16)
+DFB_TRISC3_TEST(Trisc3DMTest1xDFB1Bx1B_blk4, TENSIX, DM, 1, 1, BLOCKED, BLOCKED, 4, 16)
+DFB_TRISC3_TEST(Trisc3DMTest1xDFB1Bx2S_blk4, TENSIX, DM, 1, 2, BLOCKED, STRIDED, 4, 16)
+// DM -> trisc3 unpacks
+DFB_TRISC3_TEST(DMTrisc3Test1xDFB1Sx1S, DM, TENSIX, 1, 1, STRIDED, STRIDED, 0, 16)
+DFB_TRISC3_TEST(DMTrisc3Test1xDFB2Sx2S, DM, TENSIX, 2, 2, STRIDED, STRIDED, 0, 16)
+DFB_TRISC3_TEST(DMTrisc3Test1xDFB2Sx1S, DM, TENSIX, 2, 1, STRIDED, STRIDED, 0, 16)
+DFB_TRISC3_TEST(DMTrisc3Test1xDFB1Bx1B_blk4, DM, TENSIX, 1, 1, BLOCKED, BLOCKED, 4, 16)
+DFB_TRISC3_TEST(DMTrisc3Test1xDFB2Bx2S_blk4, DM, TENSIX, 2, 2, BLOCKED, STRIDED, 4, 16)
+DFB_TRISC3_TEST(DMTrisc3Test1xDFB2Sx2B_blk4, DM, TENSIX, 2, 2, STRIDED, BLOCKED, 4, 16)
+
+// DM -> dfb_in -> trisc3 -> dfb_out -> DM: one compute kernel in which trisc3 unpacks one DFB and
+// packs another with RISC copies. The output must equal the input.
+TEST_F(UnitMeshFixture, DMTrisc3DMTest2xDFB1Sx1S) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "trisc3 DFB endpoints require Quasar";
+    }
+    constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
+    constexpr uint32_t num_entries = 8;
+    const m2::NodeCoord node{0, 0};
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
+    auto in_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
+
+    const m2::DFBSpecName DFB_IN{"dfb_in"};
+    const m2::DFBSpecName DFB_OUT{"dfb_out"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
+
+    m2::DataflowBufferSpec dfb_in{
+        .unique_id = DFB_IN,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b};
+    m2::DataflowBufferSpec dfb_out{
+        .unique_id = DFB_OUT,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = tt::DataFormat::Float16_b};
+
+    auto producer = make_dm_dfb_producer(PRODUCER, DFB_IN, IN_TENSOR, num_entries, /*implicit_sync=*/false);
+    auto compute =
+        make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_trisc3_copy_2_0.cpp");
+    compute.dfb_bindings = {
+        {.dfb_spec_name = DFB_IN,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED,
+         .use_trisc3 = true},
+        {.dfb_spec_name = DFB_OUT,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
+         .access_pattern = m2::DFBAccessPattern::STRIDED,
+         .use_trisc3 = true},
+    };
+    compute.compile_time_args = {{"num_entries", num_entries}};
+    auto consumer = make_dm_dfb_consumer(
+        CONSUMER, DFB_OUT, OUT_TENSOR, num_entries, /*blocked_consumer=*/false, /*implicit_sync=*/false);
+    disable_implicit_sync_for(producer, DFB_IN);
+    disable_implicit_sync_for(consumer, DFB_OUT);
+
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
+    m2::ProgramSpec spec{
+        .name = "dm_trisc3_dm_2_0",
+        .kernels = {producer, consumer, compute},
+        .dataflow_buffers = {dfb_in, dfb_out},
+        .tensor_parameters =
+            {{.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+             {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
+        .work_units = {wu},
+    };
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = PRODUCER,
+            .runtime_arg_values =
+                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})},
+        m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = CONSUMER,
+            .runtime_arg_values =
+                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}, {OUT_TENSOR, std::cref(out_tensor)}};
+    m2::SetProgramRunArgs(program, params);
+
+    auto input = create_random_vector_of_bfloat16(entry_size * num_entries, 1.0f, 0x7353);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
+
+    LaunchProgram(this->device(), std::move(program));
+
+    std::vector<uint32_t> output;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+    EXPECT_EQ(output, input) << "trisc3 copy from dfb_in to dfb_out changed the data";
+}
+
 }  // namespace tt::tt_metal

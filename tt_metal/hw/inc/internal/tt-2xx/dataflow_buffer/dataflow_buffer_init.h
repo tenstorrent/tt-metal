@@ -263,6 +263,9 @@ FORCE_INLINE void dfb_init_timing_write_slot(
 
 #ifdef COMPILE_FOR_TRISC
 FORCE_INLINE uint8_t dfb_init_timing_trisc_slot_index() {
+#if defined(UCK_CHLKC_ISOLATE_SFPU)
+    return 0xFFu;  // trisc3 has no timing slot
+#endif
     const uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
 #if defined(UCK_CHLKC_PACK)
     return static_cast<uint8_t>(8u + neo_id * 2u + 1u);
@@ -292,11 +295,11 @@ inline uint32_t rdcycle() {
 // Producer i of DFB d writes byte 1 to slot [d * MAX_PRODUCERS_PER_DFB + i] (plain volatile, no AMO).
 // Consumer reads dfb_expected_signal[d] (bitmask), then polls each set bit's byte slot.
 //
-// Runs for DMs unconditionally, and for TRISCs only when compiling for unpack or pack.
-// Math (TRISC1) and TRISC3 compile this to an empty function so they never spin on
-// uninitialised config data and never block DM0's wait_subordinates().
+// Runs for DMs unconditionally, and for the TRISCs that run DFB ops (unpack, pack, trisc3).
+// Math (TRISC1) compiles this to an empty function so it never spins on uninitialised
+// config data and never blocks DM0's wait_subordinates().
 FORCE_INLINE void dfb_ensure_ready(uintptr_t config_cached, uint8_t dfb_id) {
-#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_UNPACK) && !defined(UCK_CHLKC_PACK)
+#if defined(COMPILE_FOR_TRISC) && !DFB_TRISC_HAS_INTERFACE
     return;
 #endif
     const uint32_t sig_off =
@@ -653,7 +656,7 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
 
 #endif  // !COMPILE_FOR_TRISC
 
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if DFB_TRISC_CAN_PRODUCE
 
 // Intra-tensix alias (HW workaround): route this Neo's ClientL tile counter to a sacrificial
 // ClientR shadow counter, so the T6 counter update copy lands there instead of aliasing into
@@ -676,7 +679,7 @@ FORCE_INLINE void dfb_program_intra_tensix_alias(
     WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx), clientL_val);
 }
 
-#endif  // COMPILE_FOR_TRISC && UCK_CHLKC_PACK
+#endif  // DFB_TRISC_CAN_PRODUCE
 
 // DM2-7 + TRISC: walk this hart's pre-computed sequential init blob; TC readiness is published
 // via store to dfb_publish_producer_ready and consumers poll in DataflowBuffer::DataflowBuffer().
@@ -814,11 +817,8 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         iface.split_tc = eh.split_tc;
         iface.jump = eh.entries_to_jump;
         ASSERT(iface.stride_size_tiles != 0 && iface.block_size != 0);
-#if defined(UCK_CHLKC_PACK)
         iface.wr_entry_ptr = 0;
-#else  // unpack TRISC
         iface.tensix_trisc_mask = static_cast<uint8_t>(eh.flags & DFB_HART_FLAG_TRISC_MASK);
-#endif
         iface.num_entries = eh.num_entries;
 #else  // DM
         iface.entry_size = eh.entry_size >> cb_addr_shift;
@@ -857,14 +857,15 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
             const uint8_t ptc = static_cast<uint8_t>((t < 4u ? ptc_w0 : ptc_w1) >> ((t & 3u) * 8u));
             iface.tc_slots[t].packed_tile_counter = ptc;
 
-#if defined(COMPILE_FOR_TRISC)  // pack and unpack
+#if defined(COMPILE_FOR_TRISC)
             iface.tc_slots[t].base_addr = base;
-            // ring_size is uint32 L1 units (full Quasar L1). Cursor byte-offset is derived
-            // from cursor_entry_idx (not stored).
+            // ring_size is uint32 L1 units (full Quasar L1). Cursor byte-offsets are derived
+            // from wr_entry_idx / rd_entry_idx (not stored).
             iface.tc_slots[t].ring_size = limit - base;
             iface.tc_slots[t].base_entry_idx =
                 static_cast<uint16_t>((base - iface.tc_slots[0].base_addr) / iface.entry_size);
-            iface.tc_slots[t].cursor_entry_idx = iface.tc_slots[t].base_entry_idx;
+            iface.tc_slots[t].wr_entry_idx = iface.tc_slots[t].base_entry_idx;
+            iface.tc_slots[t].rd_entry_idx = iface.tc_slots[t].base_entry_idx;
 #else  // DM
             iface.tc_slots[t].base_addr = base;
             iface.tc_slots[t].limit = limit;
@@ -876,10 +877,17 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         WAYPOINT("L4");
 
         // --- Producer-only: wait for remapper pair + TC HW init + publish ready ---
-#if !defined(COMPILE_FOR_TRISC) || defined(UCK_CHLKC_PACK)
-        if (eh.flags & DFB_HART_FLAG_IS_PRODUCER) {
+#if !defined(COMPILE_FOR_TRISC) || DFB_TRISC_CAN_PRODUCE
+#if defined(COMPILE_FOR_TRISC)
+        // Of the two TRISCs that can produce, only the one the host named for this DFB sets it up.
+        const bool inits_producer =
+            (eh.flags & DFB_HART_FLAG_IS_PRODUCER) != 0 && (eh.flags & DFB_TRISC_MY_PRODUCER_ROLE) != 0;
+#else
+        const bool inits_producer = (eh.flags & DFB_HART_FLAG_IS_PRODUCER) != 0;
+#endif
+        if (inits_producer) {
             // A producer's remapper pair is programmed one of two ways; host sets at most one flag.
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if DFB_TRISC_CAN_PRODUCE
             // Intra-tensix: this packer owns the pair, so it programs rather than waits. Must happen
             // before the TC reset/capacity writes below so the alias is live for the first update.
             if (eh.flags & DFB_HART_FLAG_REMAPPER_SELF_PROG) {
@@ -920,7 +928,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
                 overlay::fast_llk_intf_reset(tensix_id, tc_id);
                 total_tc_reset_hw += rdcycle() - t_reset;
                 total_hw_reg_writes++;
-#elif defined(UCK_CHLKC_PACK)
+#elif DFB_TRISC_CAN_PRODUCE
                 const uint32_t t_reset = rdcycle();
                 ckernel::trisc::tile_counters[tc_id].f.reset = 1;
                 total_tc_reset_hw += rdcycle() - t_reset;
@@ -939,7 +947,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
                 overlay::fast_llk_intf_set_capacity(tensix_id, tc_id, eh.capacity);
                 total_tc_capacity_hw += rdcycle() - t_cap;
                 total_hw_reg_writes++;
-#elif defined(UCK_CHLKC_PACK)
+#elif DFB_TRISC_CAN_PRODUCE
                 const uint32_t t_cap = rdcycle();
                 ckernel::trisc::tile_counters[tc_id].f.buf_capacity = eh.capacity;
                 total_tc_capacity_hw += rdcycle() - t_cap;
@@ -955,7 +963,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
             dfb_publish_producer_ready(dfb_signal_base, eh.logical_dfb_id, eh.producer_signal_bit);
             total_sig_write += rdcycle() - t_sig_start;
         }
-#endif  // !COMPILE_FOR_TRISC || UCK_CHLKC_PACK
+#endif  // !COMPILE_FOR_TRISC || DFB_TRISC_CAN_PRODUCE
 
         WAYPOINT("L5");
     }
@@ -972,6 +980,9 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
     const uint8_t timing_slot = hart_u8;
     const uint8_t timing_role = dfb::DFB_INIT_TIMING_ROLE_DM_LOCAL;
 #endif
+    if (timing_slot == 0xFFu) {  // trisc3 has no timing slot
+        return packer_rmp;
+    }
     dfb_init_timing_write_slot(
         timing_slot,
         timing_role,

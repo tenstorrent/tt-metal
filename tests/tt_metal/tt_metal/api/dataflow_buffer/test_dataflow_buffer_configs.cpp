@@ -1259,6 +1259,122 @@ TEST_F(UnitMeshFixture, TensixIntraTest1xDFB1Sx1SConfig) {
     validate_intra_tensix_dfb(program, logical_core, config);
 }
 
+// trisc3 as the unpacker, the packer or both of a DFB: the role bits the host derives into
+// tensix_trisc_mask and serializes into bits 3:0 of every hart's init entry flags, and the cases it
+// rejects.
+TEST_F(UnitMeshFixture, DfbTrisc3RoleMask) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "trisc3 DFB endpoints require Quasar";
+    }
+    struct Case {
+        const char* name;
+        uint16_t producer_risc_mask;
+        uint16_t consumer_risc_mask;
+        bool pack_on_trisc3 = false;
+        bool unpack_on_trisc3 = false;
+        bool intra = false;
+        bool rejected = false;  // a trisc3 side that has no compute endpoint
+        uint8_t expected_mask = 0;
+    };
+    // bit 2 = DM2, bit 8 = Neo0.
+    const Case cases[] = {
+        {.name = "DM->trisc0",
+         .producer_risc_mask = 0x4,
+         .consumer_risc_mask = 0x100,
+         .expected_mask = DFB_TRISC_ROLE_CONSUMER_T0},
+        {.name = "DM->trisc3",
+         .producer_risc_mask = 0x4,
+         .consumer_risc_mask = 0x100,
+         .unpack_on_trisc3 = true,
+         .expected_mask = DFB_TRISC_ROLE_CONSUMER_T3},
+        {.name = "trisc2->DM",
+         .producer_risc_mask = 0x100,
+         .consumer_risc_mask = 0x4,
+         .expected_mask = DFB_TRISC_ROLE_PRODUCER_T2},
+        {.name = "trisc3->DM",
+         .producer_risc_mask = 0x100,
+         .consumer_risc_mask = 0x4,
+         .pack_on_trisc3 = true,
+         .expected_mask = DFB_TRISC_ROLE_PRODUCER_T3},
+        {.name = "intra trisc3->trisc0",
+         .producer_risc_mask = 0x100,
+         .consumer_risc_mask = 0x100,
+         .pack_on_trisc3 = true,
+         .intra = true,
+         .expected_mask = static_cast<uint8_t>(DFB_TRISC_ROLE_PRODUCER_T3 | DFB_TRISC_ROLE_CONSUMER_T0)},
+        {.name = "intra trisc2->trisc3",
+         .producer_risc_mask = 0x100,
+         .consumer_risc_mask = 0x100,
+         .unpack_on_trisc3 = true,
+         .intra = true,
+         .expected_mask = static_cast<uint8_t>(DFB_TRISC_ROLE_PRODUCER_T2 | DFB_TRISC_ROLE_CONSUMER_T3)},
+        {.name = "intra trisc3->trisc3",
+         .producer_risc_mask = 0x100,
+         .consumer_risc_mask = 0x100,
+         .pack_on_trisc3 = true,
+         .unpack_on_trisc3 = true,
+         .intra = true,
+         .expected_mask = static_cast<uint8_t>(DFB_TRISC_ROLE_PRODUCER_T3 | DFB_TRISC_ROLE_CONSUMER_T3)},
+        {.name = "DM producer with pack_on_trisc3",
+         .producer_risc_mask = 0x4,
+         .consumer_risc_mask = 0x100,
+         .pack_on_trisc3 = true,
+         .rejected = true},
+        {.name = "DM consumer with unpack_on_trisc3",
+         .producer_risc_mask = 0x100,
+         .consumer_risc_mask = 0x4,
+         .unpack_on_trisc3 = true,
+         .rejected = true},
+    };
+    const CoreCoord logical_core = CoreCoord(0, 0);
+    for (const Case& c : cases) {
+        SCOPED_TRACE(c.name);
+        experimental::dfb::DataflowBufferConfig config{
+            .entry_size = 1024,
+            .num_entries = 4,
+            .producer_risc_mask = c.producer_risc_mask,
+            .num_producers = 1,
+            .pap = dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = c.consumer_risc_mask,
+            .num_consumers = 1,
+            .cap = dfb::AccessPattern::STRIDED,
+            .enable_producer_implicit_sync = false,
+            .enable_consumer_implicit_sync = false,
+            .tensix_scope = c.intra
+                                ? std::optional<experimental::dfb::TensixScope>(experimental::dfb::TensixScope::INTRA)
+                                : std::nullopt,
+            .unpack_on_trisc3 = c.unpack_on_trisc3,
+            .pack_on_trisc3 = c.pack_on_trisc3};
+
+        Program program = CreateProgram();
+        experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
+        if (c.rejected) {
+            EXPECT_THROW(program.impl().finalize_dataflow_buffer_configs(), std::runtime_error);
+            continue;
+        }
+        program.impl().finalize_dataflow_buffer_configs();
+        program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
+        program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
+
+        const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
+        ASSERT_EQ(dfbs.size(), 1u);
+        EXPECT_EQ(dfbs[0]->tensix_trisc_mask, c.expected_mask);
+
+        // Every participating hart's entry carries the same nibble; check the Neo0 hart (hartid 8).
+        std::vector<uint8_t> buf(8192, 0);
+        const size_t nbytes = experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, buf);
+        ASSERT_GT(nbytes, 0u);
+        const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
+        constexpr uint8_t neo0_hart = ::dfb::TENSIX_RISC_OFFSET;
+        ASSERT_EQ(ghdr->participation_mask[neo0_hart], 1u);
+        const auto* entry =
+            reinterpret_cast<const dfb_hart_init_entry_t*>(buf.data() + ghdr->hart_blob_offset[neo0_hart]);
+        EXPECT_EQ(entry->flags & DFB_HART_FLAG_TRISC_MASK, c.expected_mask);
+        const bool neo_produces = (c.producer_risc_mask & (1u << neo0_hart)) != 0;
+        EXPECT_EQ((entry->flags & DFB_HART_FLAG_IS_PRODUCER) != 0, neo_produces);
+    }
+}
+
 // Run args for the minimal spec's two kernels (both declare empty RTA schemas, so empty arg sets).
 inline experimental::ProgramRunArgs MakeMinimalRunArgs(const experimental::NodeCoord& node) {
     auto kernel_args = [&](const char* name) {
@@ -1452,6 +1568,7 @@ struct M2ConfigDFBParams {
     bool implicit_sync = false;
     uint32_t block_size = 0;                                   // BLOCKED sides only: tiles per block
     std::optional<m2::NodeRange> target_nodes = std::nullopt;  // override single-core default
+    bool producer_on_trisc3 = false;                           // use_trisc3 on the producer binding
 };
 
 static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, const M2ConfigDFBParams& p) {
@@ -1484,7 +1601,8 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
                  .accessor_name = "out",
                  .endpoint_type = m2::DFBEndpointType::PRODUCER,
                  .access_pattern = p.pap,
-                 .block_size = p.pap == m2::DFBAccessPattern::BLOCKED ? p.block_size : 0u}};
+                 .block_size = p.pap == m2::DFBAccessPattern::BLOCKED ? p.block_size : 0u,
+                 .use_trisc3 = p.producer_on_trisc3}};
             k.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
             k.compile_time_args = {
                 {"num_entries_per_producer", per_producer}, {"implicit_sync", p.implicit_sync ? 1u : 0u}};
@@ -1533,7 +1651,7 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
              .endpoint_type = m2::DFBEndpointType::CONSUMER,
              .access_pattern = p.cap,
              .block_size = p.cap == m2::DFBAccessPattern::BLOCKED ? p.block_size : 0u}};
-        k.compile_time_args = {{"num_entries_per_consumer", per_consumer}};
+        k.compile_time_args = {{"num_entries_per_consumer", per_consumer}, {"consumer_on_trisc3", 0u}};
         // Declared so the kernel source stays compilable; these probes never launch, and the
         // kernel's digest reporting is only consumed by run_single_dfb_program_2_0.
         k.runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}};
@@ -2122,6 +2240,27 @@ TEST_F(UnitMeshFixture, B6_AllProducer_Rejected_2_0) {
         .pap = m2::DFBAccessPattern::ALL,  // <-- the offense (producer ALL not supported)
         .cap = m2::DFBAccessPattern::STRIDED,
         .implicit_sync = false,
+    };
+    EXPECT_THROW(
+        {
+            Program program = build_single_dfb_program_2_0(this->device(), p);
+            program.impl().finalize_dataflow_buffer_configs();
+        },
+        std::exception);
+}
+
+// use_trisc3 on a DM kernel's binding is rejected.
+TEST_F(UnitMeshFixture, Trisc3OnDMBinding_Rejected_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB validation tested on Quasar";
+    }
+    using namespace m2_config_test_helpers;
+    M2ConfigDFBParams p{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::TENSIX,
+        .num_producers = 1,
+        .num_consumers = 1,
+        .producer_on_trisc3 = true,  // <-- the offense (only a compute kernel can run on trisc3)
     };
     EXPECT_THROW(
         {

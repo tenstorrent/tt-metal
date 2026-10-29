@@ -150,6 +150,10 @@ struct KernelSpec {
         uint32_t block_size = 0;  // number of DFB entries per block
                                   // only meaningful when access_pattern == BLOCKED;
                                   // set to 0 otherwise.
+        // Quasar compute kernels only: run this endpoint on trisc3 (the isolate-SFPU thread) instead
+        // of the default thread (trisc0 for a consumer, trisc2 for a producer). A kernel may bind
+        // both sides of one DFB to trisc3 (an intra-tensix self-loop).
+        bool use_trisc3 = false;
     };
     Group<DFBBinding> dfb_bindings;
 
