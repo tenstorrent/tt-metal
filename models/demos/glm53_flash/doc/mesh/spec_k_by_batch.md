@@ -14,8 +14,11 @@ User direction (2026-10-29): "you need to have different K value based on batch 
 * The sweep (`tests/test_mtp_spec.py -k spec_decode_lossless`, 45 layers, H1/H2 defaults): the acceptance plateaus at
   ~2.5 drafts per step whatever K, so the shortest K wins (K=3: 24 tok/s per user at 2 per row; K=7: 23.9); at the
   bound itself, K=15 with 2 users per row (B (K + 1) = 32) gives 15.4 tok/s per user AND breaks losslessness: one row's
-  two users diverge from plain greedy at token 4 with a 2.69 gap (2026-10-29 13:22, no near-tie). The default table
-  never selects it (2 per row -> K=3); the K-bound defect is an open spec issue, not a release path.
+  two users diverge from plain greedy at token 4 with a 2.69 gap (2026-10-29 13:22, no near-tie). B4_K7 and B8_K3
+  (both at the bound) fail the same way: every user of mesh row 5, token 4. So the full tile is an open verify defect
+  (`tt/spec_decode.py` candidate-major layout, row 5 specific) and the policy stays below it: `VERIFY_ROWS_CAP` = 31
+  (B (K + 1) <= 31) and the table (1, 3), (2, 3), (4, 3), (8, 2), (16, plain). B8_K3 would have given 19.9 tok/s per
+  user (1274 aggregate, 3.2 accepted) -- the prize for fixing the full tile.
 * The plugin contract already allows a per-row draft count below the width: `propose_draft_tokens` returns
   `draft_token_ids [rows, K_max]` + `num_valid [rows]` (`model_runner.py`), and a row offering 0 takes the plain step.
 
