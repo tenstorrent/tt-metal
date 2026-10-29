@@ -4821,13 +4821,17 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
         prior = cost_at(self._spec_plain_cost[bucket], position)
         return self._spec_policy.calibration.step_ms(("plain", bucket), prior), bucket
 
-    def _spec_record_ms(self, shape, width, position):
-        """One step of record ``shape`` at rung ``width``: the warmup line at ``position``, scaled by the mode's
-        measured ratio once calibrated; None when the table has no line for the rung."""
-        line = self._spec_costs.get(("step", tuple(shape), int(width)))
+    def _spec_record_ms(self, shape, width, position, partial=False):
+        """One step of record ``shape`` at rung ``width``: the warmup line at ``position`` (every row of the shape
+        live; ``partial``: the one-row line of a partial replay where the warmup found one cheaper, else the same
+        line), scaled by the mode's measured ratio once calibrated; None when the table has no line for the rung."""
+        key = ("step", tuple(shape), int(width))
+        line = self._spec_costs.get(("partial", tuple(shape), int(width))) if partial else None
+        if line is None:
+            line = self._spec_costs.get(key)
         if line is None:
             return None
-        return self._spec_policy.calibration.step_ms(("step", tuple(shape), int(width)), cost_at(line, position))
+        return self._spec_policy.calibration.step_ms(key, cost_at(line, position))
 
     def _spec_record_table_ms(self, shape, width, position):
         """The warmup table's ms for record ``shape`` at rung ``width`` and ``position`` (the ratio's base)."""
@@ -7516,9 +7520,10 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 if entry is not None:
                     candidates.append(RecordCandidate(shape, int(width), step, entry, tokens_per_row=measured))
             if joining and continuing:
+                partial = self._spec_record_ms(shape, width, top, partial=True)
                 candidates.append(
                     RecordCandidate(
-                        shape, int(width), step + plain_ms, 0.0, members=continuing, tokens_per_row=measured
+                        shape, int(width), partial + plain_ms, 0.0, members=continuing, tokens_per_row=measured
                     )
                 )
         if not candidates:

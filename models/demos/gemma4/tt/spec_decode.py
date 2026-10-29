@@ -2662,13 +2662,20 @@ class SpeculativeDecoder:
     def serving_measure_costs(self, top_position, repeats=2):
         """Time the serving sequence per record at the ends of its position range; the adaptive-K cost table.
 
-        Returns ``{("reseed", shape): (0, ms, top, ms), ("step", shape, width): (first, ms, last, ms)}``,
+        Returns ``{("reseed", shape): (0, ms, top, ms), ("step", shape, width): (first, ms, last, ms)}`` and,
+        where a one-row replay is cheaper, ``("partial", shape, width)``,
         each value a cost line in the position (``spec_policy.CostLine``):
-        per shape one ``serving_reseed`` of row 0 at position 0 and at
-        ``top_position`` (the eager target forward at ``B_v`` rows a row pays
-        when it enters speculation), and per record one ``serving_step`` of
-        row 0 at the first and the last position its rung serves
-        (``serving_measure_positions``), so each number is what the adapter
+        per shape one ``serving_reseed`` of EVERY row of the shape at
+        position 0 and at ``top_position`` (the eager target forward at
+        ``B_v`` rows the batch pays when it enters speculation), and per
+        record one ``serving_step`` of every row at the first and the last
+        position its rung serves (``serving_measure_positions``) -- the
+        ``step`` line is what the covering record costs the batch with all
+        its rows live (the one-row timing of the earlier table undershot the
+        served (8, 3) by 10 ms and let the policy enter below plain) -- plus
+        the same step with one live row, kept as the ``partial`` line only
+        when it is cheaper at every measured position (the cost of a partial
+        replay over the continuing rows). Each number is what the adapter
         pays for that call on the device: the uploads, the replay and the
         host readback of the drafts and argmax ids. The minimum of
         ``repeats`` timings is kept. Runs after ``serving_capture`` and
@@ -2701,18 +2708,19 @@ class SpeculativeDecoder:
         self._srv_measuring = True  # the zero-table measurement replays are not served verifies (no check)
         for shape in self._srv_shapes:
             B, K = shape
+            rows = list(range(B))  # every row of the shape live: the covering record's cost
             table = torch.zeros((B, self._srv_blocks), dtype=torch.int32)
-            at_zero, _ = timed(lambda: self.serving_reseed(shape, [0], [0], [0], table))
+            at_zero, _ = timed(lambda: self.serving_reseed(shape, rows, [0] * B, [0] * B, table))
             at_top = at_zero
             if top_position > 0:
-                at_top, _ = timed(lambda: self.serving_reseed(shape, [0], [0], [top_position], table))
+                at_top, _ = timed(lambda: self.serving_reseed(shape, rows, [0] * B, [top_position] * B, table))
                 timings += 1
             timings += 1
             costs[("reseed", shape)] = (0, at_zero, top_position, at_top)
             for width, first, last in self.serving_measure_positions(self._srv_widths[shape], K, top_position):
-                line = []
+                line, one = [], []
                 for pos in (first, last) if last > first else (first,):
-                    ms, result = timed(lambda: self.serving_step(shape, [0], [0], [pos], table, [None]))
+                    ms, result = timed(lambda: self.serving_step(shape, rows, [0] * B, [pos] * B, table, [None] * B))
                     timings += 1
                     if int(result.width) != int(width):
                         raise RuntimeError(
@@ -2720,15 +2728,23 @@ class SpeculativeDecoder:
                             f"S_k={result.width}, expected the S_k={width} rung"
                         )
                     line.append((pos, ms))
+                    if B > 1:  # one live row: a partial replay's cost, kept below only where it is cheaper
+                        ms1, _ = timed(lambda: self.serving_step(shape, [0], [0], [pos], table, [None]))
+                        timings += 1
+                        one.append((pos, ms1))
                 if len(line) == 1:
                     line.append(line[0])
+                    one = one * 2
                 costs[("step", shape, int(width))] = (line[0][0], line[0][1], line[1][0], line[1][1])
+                if one and all(m1 < m for (_p1, m1), (_p, m) in zip(one, line)):
+                    costs[("partial", shape, int(width))] = (one[0][0], one[0][1], one[1][0], one[1][1])
         self._srv_measuring = False
         self._srv_last = None
         self._srv_seeded = {}
         _lg.info(
             f"[spec-serving] measured {len(costs)} record cost lines ({timings} timings, min of {int(repeats)} "
-            f"each) in {time.perf_counter() - t_all:.1f}s (ms at position): "
+            f"each) in {time.perf_counter() - t_all:.1f}s (ms at position; step and reseed with every row of the "
+            f"shape live, partial = one live row where cheaper): "
             + ", ".join(
                 f"{k[0]} {k[1]}" + (f" S_k={k[2]}" if len(k) > 2 else "") + f"={v[1]:.1f}@{v[0]}..{v[3]:.1f}@{v[2]}"
                 for k, v in costs.items()

@@ -1078,7 +1078,8 @@ class SpecPolicy:
 
 def describe_costs(costs, plain):
     """One line for the warmup log: the plain step (per decode bucket when a table) and every record's step and
-    reseed cost lines (ms)."""
+    reseed cost lines (ms; the step and the reseed timed with every row of the shape live, a bracketed ``1 row``
+    line after a step where the warmup found a one-row replay cheaper: the partial replay's cost)."""
     if plain is None:
         parts = ["plain unmeasured"]
     elif isinstance(plain, dict):
@@ -1089,7 +1090,15 @@ def describe_costs(costs, plain):
     for shape in shapes:
         steps = sorted((key[2], value) for key, value in costs.items() if key[0] == "step" and key[1] == shape)
         reseed = costs.get(("reseed", shape))
-        text = ", ".join(f"S_k {w} {CostLine.of(value).describe()}" for w, value in steps)
+        text = ", ".join(
+            f"S_k {w} {CostLine.of(value).describe()}"
+            + (
+                f" [1 row {CostLine.of(costs[('partial', shape, w)]).describe()}]"
+                if ("partial", shape, w) in costs
+                else ""
+            )
+            for w, value in steps
+        )
         if reseed is not None:
             reseed_text = f"reseed {CostLine.of(reseed).describe()}"
             text = f"{text}; {reseed_text}" if text else reseed_text

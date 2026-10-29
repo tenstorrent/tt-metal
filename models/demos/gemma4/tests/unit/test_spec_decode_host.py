@@ -1787,6 +1787,19 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     spec._srv_measuring = False
     used.append(rec["id"])
     assert spec._srv_checked == {(shape, w): 1 for shape in shapes for w in ladder}
+    # the cost table itself: every row of the shape live for the reseed and the step lines (the covering record's
+    # cost), a one-row step beside it kept as the partial line only where cheaper; the flag is down afterwards and
+    # the measurement replays left the check counters alone
+    before = dict(spec._srv_checked)
+    costs = spec.serving_measure_costs(ladder[-1] - 8, repeats=1)
+    assert not spec._srv_measuring and spec._srv_checked == before
+    assert {key[:2] for key in costs if key[0] == "reseed"} == {("reseed", shape) for shape in shapes}
+    assert {key for key in costs if key[0] == "step"} == {("step", shape, w) for shape in shapes for w in ladder}
+    assert all(key[0] in ("reseed", "step", "partial") for key in costs)
+    partials = [key for key in costs if key[0] == "partial"]
+    assert all(costs[key][1] < costs[("step", key[1], key[2])][1] for key in partials)
+    assert all(key[1][0] > 1 for key in partials), "a one-row shape has no partial replay"
+    forwards.clear()
     assert {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()} == outputs
     assert all(
         buf.address in prepared and not buf.freed
@@ -2667,10 +2680,11 @@ def _policy_describe_costs_lists_the_plain_step_then_every_record(expect_error=N
         ("step", (1, 5), 8192): 52.5,
         ("reseed", (1, 5)): CostLine(0, 18.0, 1018, 30.0),
         ("step", (16, 1), 2048): 30.0,
+        ("partial", (16, 1), 2048): (0, 24.0, 2045, 24.5),  # a one-row replay the warmup found cheaper
     }
     assert describe_costs(costs, CostLine(0, 20.0, 1018, 60.0)) == (
         "plain 20.0@0..60.0@1018 | (1, 5): S_k 2048 50.0@0..52.0@2041, S_k 8192 52.5; reseed 18.0@0..30.0@1018 | "
-        "(16, 1): S_k 2048 30.0"
+        "(16, 1): S_k 2048 30.0 [1 row 24.0@0..24.5@2045]"
     )
     assert describe_costs({}, 20.0) == "plain 20.0" and describe_costs({}, None) == "plain unmeasured"
     # the plain step per decode bucket, and the stats line's pieces
