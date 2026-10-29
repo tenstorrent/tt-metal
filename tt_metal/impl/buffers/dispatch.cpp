@@ -1182,7 +1182,8 @@ std::optional<PinnedInterleavedWriteSource> resolve_pinned_interleaved_write_sou
         return std::nullopt;
     }
     const auto region_start = reinterpret_cast<uintptr_t>(src_region_start);
-    if (!pinned_write_source_aligned(buffer, src_region_start)) {
+    const uint32_t alignment = pinned_write_source_alignment(buffer);
+    if (region_start % alignment != 0) {
         // Once per process: buffer writes run inside per-step model loops.
         static std::once_flag unaligned_pinned_src_warned;
         std::call_once(unaligned_pinned_src_warned, [&] {
@@ -1191,7 +1192,7 @@ std::optional<PinnedInterleavedWriteSource> resolve_pinned_interleaved_write_sou
                 "Pinned source memory start address {:#x} must be aligned to {} B to be read directly by the "
                 "device; copying through the command queue instead. This message is emitted once per process.",
                 region_start,
-                pinned_write_source_alignment(buffer));
+                alignment);
         });
         return std::nullopt;
     }
@@ -1474,10 +1475,7 @@ BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
 // Issue dispatch commands for forwarding device buffer data to the Completion Queue
 template <typename T>
 void issue_read_buffer_dispatch_command_sequence(
-    Buffer& buffer,
-    T& dispatch_params,
-    ttsl::Span<const SubDeviceId> sub_device_ids,
-    CoreType /*dispatch_core_type*/) {
+    Buffer& buffer, T& dispatch_params, ttsl::Span<const SubDeviceId> sub_device_ids, CoreType /*dispatch_core_type*/) {
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
         return;
     }
@@ -1909,8 +1907,7 @@ void copy_completion_queue_data_into_user_space(
     }
 }
 
-ttsl::Span<const SubDeviceId> select_sub_device_ids(
-    IDevice* device, ttsl::Span<const SubDeviceId> sub_device_ids) {
+ttsl::Span<const SubDeviceId> select_sub_device_ids(IDevice* device, ttsl::Span<const SubDeviceId> sub_device_ids) {
     if (sub_device_ids.empty()) {
         return device->get_sub_device_stall_group();
     }

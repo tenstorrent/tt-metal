@@ -62,6 +62,18 @@ constexpr size_t k_host_alignment = 4096;
 
 using AlignedWords = std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, k_host_alignment>>;
 
+// `num_words` consecutive words counting up from `first`.
+std::shared_ptr<AlignedWords> iota_words(size_t num_words, uint32_t first) {
+    auto words = std::make_shared<AlignedWords>(num_words);
+    std::iota(words->begin(), words->end(), first);
+    return words;
+}
+
+// A HostBuffer over all of `words` that keeps them alive.
+HostBuffer host_buffer_over(const std::shared_ptr<AlignedWords>& words) {
+    return HostBuffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
+}
+
 TensorSpec row_major_spec(size_t rows, uint32_t row_words, const MemoryConfig& memory_config = MemoryConfig{}) {
     return TensorSpec(
         Shape{1, 1, static_cast<uint32_t>(rows), row_words},
@@ -147,9 +159,8 @@ protected:
     // Uploads `rows` rows of distinct words from a fresh mutable buffer and checks the device copy.
     UploadResult upload_and_verify(size_t rows) {
         SCOPED_TRACE(testing::Message() << "rows=" << rows);
-        auto words = std::make_shared<AlignedWords>(rows * k_row_words);
-        std::iota(words->begin(), words->end(), static_cast<uint32_t>(rows));
-        HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
+        auto words = iota_words(rows * k_row_words, static_cast<uint32_t>(rows));
+        HostBuffer buffer = host_buffer_over(words);
         return upload_and_verify(buffer, row_major_spec(rows, k_row_words), *words);
     }
 
@@ -167,7 +178,7 @@ protected:
             state = state * 1664525u + 1013904223u;
             word = state;
         }
-        HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
+        HostBuffer buffer = host_buffer_over(words);
         const auto result = upload_and_verify(buffer, spec, *words);
         EXPECT_FALSE(result.cached) << "Expected the chunked path, not a whole-shard cached pin";
         EXPECT_EQ(result.chunk_pins, chunks_in_shard(size_bytes, spec.compute_page_size_bytes()));
@@ -200,9 +211,8 @@ TEST_F(TensixPinnedUploadFixture, ChunkWhosePinFailsIsCopied) {
     ASSERT_EQ(chunk_bytes, k_rows_per_chunk * k_row_bytes);
     const size_t num_chunks = chunks_in_shard(size_bytes, k_row_bytes);
 
-    auto words = std::make_shared<AlignedWords>(rows * k_row_words);
-    std::iota(words->begin(), words->end(), 19u);
-    HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
+    auto words = iota_words(rows * k_row_words, 19u);
+    HostBuffer buffer = host_buffer_over(words);
     auto host_tensor = host_tensor_over(buffer, row_major_spec(rows, k_row_words), mesh_device_->shape());
 
     // Chunk 2, away from both ends of the upload.
@@ -229,10 +239,9 @@ TEST_F(TensixPinnedUploadFixture, ChunkWhosePinFailsIsCopied) {
 // Memory that is not device-immutable may be reused as soon as the upload returns.
 TEST_F(TensixPinnedUploadFixture, MutableHostMemoryIsReadBeforeReturn) {
     const size_t rows = 9 * k_rows_per_chunk + 3;
-    auto words = std::make_shared<AlignedWords>(rows * k_row_words);
-    std::iota(words->begin(), words->end(), 7u);
+    auto words = iota_words(rows * k_row_words, 7u);
     const AlignedWords expected = *words;
-    HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
+    HostBuffer buffer = host_buffer_over(words);
     auto host_tensor = host_tensor_over(buffer, row_major_spec(rows, k_row_words), mesh_device_->shape());
 
     auto& cq = mesh_device_->mesh_command_queue();
@@ -304,8 +313,7 @@ TEST_F(TensixPinnedUploadFixture, ImmutableUploadsCompleteAtDeviceClose) {
 
 TEST_F(TensixPinnedUploadFixture, FinishReleasesImmutableUploads) {
     const size_t rows = 5 * k_rows_per_chunk + 1;
-    auto words = std::make_shared<AlignedWords>(rows * k_row_words);
-    std::iota(words->begin(), words->end(), 11u);
+    auto words = iota_words(rows * k_row_words, 11u);
     MemoryPin pin(words);
     experimental::MemoryPinMarkDeviceImmutable(pin);
     HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), pin);
@@ -327,9 +335,8 @@ TEST_F(TensixPinnedUploadFixture, ShardedBufferFallsBack) {
     MemoryConfig sharded(
         BufferType::DRAM, NdShardSpec{Shape{1, 1, 32, k_row_words}, dram_cores, ShardOrientation::ROW_MAJOR});
 
-    auto words = std::make_shared<AlignedWords>(rows * k_row_words);
-    std::iota(words->begin(), words->end(), 5u);
-    HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
+    auto words = iota_words(rows * k_row_words, 5u);
+    HostBuffer buffer = host_buffer_over(words);
     upload_and_verify(buffer, row_major_spec(rows, k_row_words, sharded), *words);
 }
 
@@ -340,17 +347,15 @@ TEST_F(TensixPinnedUploadFixture, PaddedPagesFallBack) {
     auto spec = row_major_spec(rows, row_words);
     ASSERT_GT(rows * row_words * sizeof(uint32_t), pinned_upload::k_pin_write_threshold_bytes);
 
-    auto words = std::make_shared<AlignedWords>(rows * row_words);
-    std::iota(words->begin(), words->end(), 9u);
-    HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
+    auto words = iota_words(rows * row_words, 9u);
+    HostBuffer buffer = host_buffer_over(words);
     upload_and_verify(buffer, spec, *words);
 }
 
 // A host base off the L1 read alignment cannot be read directly by the device; the upload copies instead.
 TEST_F(TensixPinnedUploadFixture, UnalignedHostBaseFallsBack) {
     const size_t rows = 36 * k_rows_per_mib;
-    auto words = std::make_shared<AlignedWords>(rows * k_row_words + 1);
-    std::iota(words->begin(), words->end(), 13u);
+    auto words = iota_words(rows * k_row_words + 1, 13u);
     // One word past an aligned address.
     const ttsl::Span<uint32_t> unaligned(words->data() + 1, rows * k_row_words);
     HostBuffer buffer(unaligned, MemoryPin(words));
@@ -377,9 +382,8 @@ TEST_F(TensixPinnedUploadFixture, ChangedThreadCountStillUploads) {
 
 TEST_F(TensixPinnedUploadFixture, SecondUploadOfSameBufferUsesPinCache) {
     const size_t rows = 34 * k_rows_per_mib + 9;
-    auto words = std::make_shared<AlignedWords>(rows * k_row_words);
-    std::iota(words->begin(), words->end(), 17u);
-    HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
+    auto words = iota_words(rows * k_row_words, 17u);
+    HostBuffer buffer = host_buffer_over(words);
     auto host_tensor = host_tensor_over(buffer, row_major_spec(rows, k_row_words), mesh_device_->shape());
 
     auto& cache = experimental::PinnedMemoryCache::instance();
@@ -420,8 +424,7 @@ TEST_F(TensixPinnedUploadFixture, HostBaseOffPcieAlignment) {
     constexpr uint32_t row_words = 9216;
     const size_t rows = 1025;
     constexpr size_t offset_words = 4;  // 16 B
-    auto words = std::make_shared<AlignedWords>(rows * row_words + offset_words);
-    std::iota(words->begin(), words->end(), 0u);
+    auto words = iota_words(rows * row_words + offset_words, 0u);
     const ttsl::Span<uint32_t> offset(words->data() + offset_words, rows * row_words);
     HostBuffer buffer(offset, MemoryPin(words));
     const auto result = upload_and_verify(buffer, row_major_spec(rows, row_words), offset);
@@ -457,8 +460,7 @@ TEST_F(PinnedUploadMultiDeviceFixture, ShardsInSeparateBuffers) {
     std::vector<std::shared_ptr<AlignedWords>> shards;
     auto dhb = DistributedHostBuffer::create(mesh_shape);
     for (size_t i = 0; i < coords.size(); i++) {
-        auto words = std::make_shared<AlignedWords>(rows * k_row_words);
-        std::iota(words->begin(), words->end(), static_cast<uint32_t>(i * 1000003));
+        auto words = iota_words(rows * k_row_words, static_cast<uint32_t>(i * 1000003));
         shards.push_back(words);
         dhb.emplace_shard(coords[i], [&] {
             return HostBuffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
@@ -483,9 +485,8 @@ TEST_F(PinnedUploadMultiDeviceFixture, ShardsInSeparateBuffers) {
 
 TEST_F(PinnedUploadMultiDeviceFixture, OneHostShardReplicatedToEveryDevice) {
     const size_t rows = 5 * k_rows_per_chunk + 9;
-    auto words = std::make_shared<AlignedWords>(rows * k_row_words);
-    std::iota(words->begin(), words->end(), 23u);
-    HostBuffer buffer(ttsl::Span<uint32_t>(words->data(), words->size()), MemoryPin(words));
+    auto words = iota_words(rows * k_row_words, 23u);
+    HostBuffer buffer = host_buffer_over(words);
     auto host_tensor = host_tensor_over(buffer, row_major_spec(rows, k_row_words), distributed::MeshShape(1, 1));
 
     const size_t chunk_pins_before = pinned_upload::num_chunk_pins_created();

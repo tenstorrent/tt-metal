@@ -63,7 +63,8 @@ constexpr size_t k_in_flight_chunks = 2;
 // (k_in_flight_chunks + threads * k_pins_ahead_per_thread) chunks instead of the whole tensor.
 constexpr size_t k_pins_ahead_per_thread = 2;
 
-// Distinct (address, size) pairs remembered for promoting re-uploaded host buffers to the pin cache.
+// Distinct (address, size) pairs remembered for promoting re-uploaded host buffers to the pin cache. A range pushed
+// out before it is uploaded again takes chunk pins again instead of a cached whole pin.
 constexpr size_t k_seen_uploads_capacity = 64;
 
 // One contiguous host range and the device coordinates it is written to. Shards that share memory (replicated
@@ -75,6 +76,11 @@ struct Source {
     size_t chunk_bytes = 0;  // Size of this source's chunks in a chunked upload; see chunk_bytes_for.
     distributed::MeshCoordinateRangeSet coord_range;
     std::vector<distributed::MeshCoordinate> coords;
+
+    void add_coord(const distributed::MeshCoordinate& coord) {
+        coord_range.merge(distributed::MeshCoordinateRange(coord, coord));
+        coords.push_back(coord);
+    }
 
     size_t num_chunks() const { return tt::div_up(size, chunk_bytes); }
 
@@ -188,6 +194,15 @@ struct PinnedSpan {
 
     bool overlaps(const PinnedSpan& other) const { return begin < other.end && other.begin < end; }
 };
+
+std::vector<PinnedSpan> spans_of(const std::vector<Source>& sources) {
+    std::vector<PinnedSpan> spans;
+    spans.reserve(sources.size());
+    for (const auto& source : sources) {
+        spans.emplace_back(source.base, source.size);
+    }
+    return spans;
+}
 
 // Pins of device-immutable uploads that returned before their writes completed.
 struct PendingUpload {
@@ -327,11 +342,7 @@ public:
     // Waits for, then releases, the pending uploads (to any device, through any command queue) whose sources overlap
     // the host ranges of `sources`.
     void drain_overlapping(const std::vector<Source>& sources) {
-        std::vector<PinnedSpan> spans;
-        spans.reserve(sources.size());
-        for (const auto& source : sources) {
-            spans.emplace_back(source.base, source.size);
-        }
+        const auto spans = spans_of(sources);
         release(take([&](const PendingUpload& upload) {
             return std::any_of(upload.spans.begin(), upload.spans.end(), [&](const auto& held) {
                 return std::any_of(spans.begin(), spans.end(), [&](const auto& span) { return held.overlaps(span); });
@@ -371,9 +382,10 @@ private:
         std::vector<MemoryPin> storage;
         for (auto& upload : uploads) {
             upload.pins.clear();
-            for (auto& pin : upload.storage) {
-                storage.push_back(std::move(pin));
-            }
+            storage.insert(
+                storage.end(),
+                std::make_move_iterator(upload.storage.begin()),
+                std::make_move_iterator(upload.storage.end()));
         }
         uploads.clear();
         storage_releaser_.release(std::move(storage));
@@ -395,8 +407,7 @@ std::vector<Source> collect_sources(tensor_impl::LocalHostShards local_shards) {
             sources.push_back(Source{.host_buffer = std::move(shard), .base = bytes.data(), .size = bytes.size()});
             existing = std::prev(sources.end());
         }
-        existing->coord_range.merge(distributed::MeshCoordinateRange(coord, coord));
-        existing->coords.push_back(coord);
+        existing->add_coord(coord);
     }
     return sources;
 }
@@ -413,8 +424,7 @@ std::vector<Source> replicated_local_sources(
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
         // Only chips owned by this host can be pinned or written.
         if (view.impl().is_local(coord)) {
-            source.coord_range.merge(distributed::MeshCoordinateRange(coord, coord));
-            source.coords.push_back(coord);
+            source.add_coord(coord);
         }
     }
     std::vector<Source> sources;
@@ -543,8 +553,11 @@ void write_shards_chunked(
         pool.num_threads(),
         device_immutable);
 
-    // pin_futures[chunk * sources.size() + source]; an invalid future means the chunk is past the end of that source.
+    // An invalid future means the chunk is past the end of that source.
     std::vector<std::future<PinnedMemoryPtr>> pin_futures(num_chunks * sources.size());
+    auto pin_future = [&](size_t chunk, size_t s) -> std::future<PinnedMemoryPtr>& {
+        return pin_futures[chunk * sources.size() + s];
+    };
     size_t num_chunks_submitted = 0;
     const size_t chunks_ahead =
         std::max<size_t>(1, tt::div_up(pool.num_threads() * k_pins_ahead_per_thread, sources.size()));
@@ -557,21 +570,19 @@ void write_shards_chunked(
                 if (!region.has_value()) {
                     continue;
                 }
-                pin_futures[num_chunks_submitted * sources.size() + s] =
-                    pool.submit([&mesh_device, &source, bytes = *region]() {
-                        // The chunk HostBuffer only names the range for Create; Source::host_buffer keeps the storage
-                        // alive, so the chunk carries no MemoryPin (which would add a release callback per chunk).
-                        HostBuffer chunk(ttsl::Span<std::byte>(source.base + bytes.offset, bytes.size), MemoryPin());
-                        auto pinned = experimental::PinnedMemory::Create(
-                            mesh_device,
-                            source.coord_range,
-                            chunk,
-                            /*map_to_noc=*/true,
-                            experimental::PinnedMemoryDeviceAccess::ReadOnly);
-                        experimental::HostBufferSetPinnedMemory(chunk, nullptr);
-                        chunk_pins_created.fetch_add(1, std::memory_order_relaxed);
-                        return pinned;
-                    });
+                pin_future(num_chunks_submitted, s) = pool.submit([&mesh_device, &source, bytes = *region]() {
+                    // The chunk HostBuffer only names the range for Create; Source::host_buffer keeps the storage
+                    // alive, so the chunk carries no MemoryPin (which would add a release callback per chunk).
+                    HostBuffer chunk(ttsl::Span<std::byte>(source.base + bytes.offset, bytes.size), MemoryPin());
+                    auto pinned = experimental::PinnedMemory::Create(
+                        mesh_device,
+                        source.coord_range,
+                        chunk,
+                        /*map_to_noc=*/true,
+                        experimental::PinnedMemoryDeviceAccess::ReadOnly);
+                    chunk_pins_created.fetch_add(1, std::memory_order_relaxed);
+                    return pinned;
+                });
             }
         }
     };
@@ -602,7 +613,7 @@ void write_shards_chunked(
             }
             PinnedMemoryPtr pinned;
             try {
-                pinned = pin_futures[c * sources.size() + s].get();
+                pinned = pin_future(c, s).get();
             } catch (const std::exception& e) {
                 // Pinning can fail when the driver runs out of pin resources. Copy this chunk through the command
                 // queue instead; the pinned chunks around it are unaffected.
@@ -635,24 +646,22 @@ void write_shards_chunked(
         wait_for_writes(in_flight.back().written);
         return;
     }
-    PendingUpload pending{.completion = in_flight.back().written, .storage = std::move(storage)};
+    PendingUpload pending{
+        .completion = in_flight.back().written, .spans = spans_of(sources), .storage = std::move(storage)};
     for (auto& chunk : in_flight) {
-        for (auto& pin : chunk.pins) {
-            pending.pins.push_back(std::move(pin));
-        }
-    }
-    for (const auto& source : sources) {
-        pending.spans.emplace_back(source.base, source.size);
+        pending.pins.insert(
+            pending.pins.end(), std::make_move_iterator(chunk.pins.begin()), std::make_move_iterator(chunk.pins.end()));
     }
     PendingUploads::instance().add(std::move(pending));
 }
 
-bool should_use_pinned_write_path(distributed::MeshDevice& mesh_device, size_t size_bytes) {
-    if (size_bytes <= k_pin_write_threshold_bytes) {
-        return false;
-    }
-    const auto params = experimental::GetMemoryPinningParameters(mesh_device);
+bool pins_map_to_noc(const experimental::MemoryPinningParameters& params) {
     return params.max_pins > 0 && params.can_map_to_noc;
+}
+
+bool should_use_pinned_write_path(distributed::MeshDevice& mesh_device, size_t size_bytes) {
+    return size_bytes > k_pin_write_threshold_bytes &&
+           pins_map_to_noc(experimental::GetMemoryPinningParameters(mesh_device));
 }
 
 // Writes `sources`, which together pass should_use_pinned_write_path, from pinned host memory.
@@ -684,13 +693,12 @@ bool write_sources(
 
 size_t chunk_bytes_for(size_t shard_bytes, size_t page_bytes) {
     const size_t granule = std::lcm(page_bytes, os_page_size());
-    if (shard_bytes == 0 || granule > k_max_chunk_bytes) {
+    // The largest granule multiple within k_max_chunk_bytes; zero when the granule exceeds it.
+    const size_t max_chunk_bytes = tt::round_down(k_max_chunk_bytes, granule);
+    if (shard_bytes == 0 || max_chunk_bytes == 0) {
         return 0;
     }
-    size_t num_chunks = tt::div_up(shard_bytes, k_max_chunk_bytes);
-    while (tt::round_up(tt::div_up(shard_bytes, num_chunks), granule) > k_max_chunk_bytes) {
-        num_chunks++;
-    }
+    const size_t num_chunks = tt::div_up(shard_bytes, max_chunk_bytes);
     return tt::round_up(tt::div_up(shard_bytes, num_chunks), granule);
 }
 
@@ -706,7 +714,7 @@ bool chunked_uploads_supported(distributed::MeshDevice& mesh_device) {
         return false;
     }
     const auto params = experimental::GetMemoryPinningParameters(mesh_device);
-    return params.max_pins > 0 && params.can_map_to_noc && params.supports_read_only;
+    return pins_map_to_noc(params) && params.supports_read_only;
 }
 
 bool write_shards(
