@@ -72,8 +72,10 @@ inline void not_equal_zero_init() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp() {
-    // Kept as hand-tuned TTI: the equivalent pure-SFPI form (bitwise magnitude + v_if
-    // predication) measured ~1.5-2.1x slower in MATH_ISOLATE on Wormhole. The predicates
+    // Raw TTI because sfpi 7.90 cannot express this sequence: lz() hardwires SFPLZ to
+    // CC_NONE, so it cannot set the predicate; SFPCOMPC is only emitted as part of v_else;
+    // and the integer view of a DEFAULT-mode load needs an impl_ pun (.mode<I32>() turns
+    // the load into a 32-bit Dest read, which differs on a 16-bit Dest). The predicates
     // below are integer tests on the bits of the FP32 LREG image that SFPLOAD DEFAULT
     // produces (for a 16-bit Dest, the datum widened to FP32), so no SFPSETSGN is needed:
     //  - eqz/nez: SFPLZ NOSGN|CC_EQ0 sets the flag where (v & 0x7FFFFFFF) == 0, i.e. |v| == 0,
