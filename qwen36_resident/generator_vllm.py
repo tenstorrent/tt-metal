@@ -318,6 +318,9 @@ class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
 
 DFLASH_BLOCK = int(os.environ.get("QWEN36_DFLASH_BLOCK", "8"))
 DFLASH_VERIFY = 8  # the resident DFlash2 verify rows (R)
+# ResidentDFlash.max_prompt_tokens = max_pos - 2 * R - 64: built this much past max_model_len, every prompt vLLM
+# admits fits (a prompt over the ceiling would fail the engine core)
+DFLASH_POS_MARGIN = 2 * DFLASH_VERIFY + 64
 
 
 class Qwen36ResidentDFlashForCausalLM(Qwen36ResidentMTPForCausalLM):
@@ -342,8 +345,20 @@ class Qwen36ResidentDFlashForCausalLM(Qwen36ResidentMTPForCausalLM):
         self.vocab = cfg["vocab_size"]
         self.max_seq_len = max_seq_len
         self.eos = int(cfg["eos_token_id"])
-        self.spec = ResidentDFlash(mesh, ck, max_seq_len, prefill=True)
+        self.spec = ResidentDFlash(mesh, ck, max_seq_len + DFLASH_POS_MARGIN, prefill=True)
+        if self.spec.max_prompt_tokens < max_seq_len:
+            raise RuntimeError(
+                f"ResidentDFlash takes prompts of up to {self.spec.max_prompt_tokens} tokens, "
+                f"below max_model_len {max_seq_len}"
+            )
         self._first = None
 
     def _next_block(self):
+        # committed positions stay below max_model_len; the decoder's verify rows never reach its max_pos
         return self.spec.next_block(self.block, self.max_seq_len)
+
+    def release_request(self, row):
+        st = self.spec.stats()
+        if st.get("iterations"):
+            logger.info(f"DFlash2 request: {st}")
+        super().release_request(row)

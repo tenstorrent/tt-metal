@@ -30,8 +30,15 @@ class FakeDecoder:
     """start(prompt) -> [vocab] logits; next_block: up to n committed tokens, fewer only at the position limit;
     stop()"""
 
-    def __init__(self, *args, **kwargs):
-        self.stops, self.pos, self.first = 0, None, None
+    def __init__(self, mesh=None, ck=None, max_pos=None, prefill=True):
+        self.stops, self.pos, self.first, self.max_pos, self.iterations = 0, None, None, max_pos, 0
+
+    @property
+    def max_prompt_tokens(self):
+        return self.max_pos - 2 * 8 - 64
+
+    def stats(self):
+        return dict(iterations=self.iterations, committed=0, mean_accept=0.0)
 
     def start(self, prompt):
         lg = torch.randn(VOCAB, generator=torch.Generator().manual_seed(len(prompt)))
@@ -43,10 +50,12 @@ class FakeDecoder:
         while len(out) < n and self.pos < limit:
             out.append((self.pos * 3 + 1) % VOCAB if (self.pos * 3 + 1) % VOCAB != EOS else 0)
             self.pos += 1
+        self.iterations += 1
         return out
 
     def stop(self):
         self.stops += 1
+        self.iterations = 0
 
 
 def build(cls, max_seq_len=64):
@@ -121,3 +130,32 @@ def test_the_plugin_resolves_the_dflash_block_output():
     assert get_tt_output_tokens_per_step(cfg) == 8 and is_tt_adaptive_block_output_model(cfg)
     assert cls.model_capabilities["tt_block_kv_extent_tokens"] == 8 + 2 * G.DFLASH_VERIFY
     assert cfg.model_config.generation_config == "vllm", "a block-output model owns its generation defaults"
+
+
+def test_dflash_takes_every_prompt_vllm_admits():
+    """built DFLASH_POS_MARGIN past max_model_len, the decoder's prompt ceiling covers every admissible prompt"""
+    m = build(G.Qwen36ResidentDFlashForCausalLM, max_seq_len=4096)
+    assert m.spec.max_pos == 4096 + G.DFLASH_POS_MARGIN and m.spec.max_prompt_tokens >= 4096
+    short = types.ModuleType("qwen36_resident.dflash")
+    short.ResidentDFlash = lambda mesh, ck, max_pos, prefill=True: FakeDecoder(max_pos=max_pos - 1)
+    with patch.dict(sys.modules, {"qwen36_resident.dflash": short}), raises(RuntimeError, match="below max_model_len"):
+        G.Qwen36ResidentDFlashForCausalLM(None, SimpleNamespace(config=CONFIG), 4096, False)
+
+
+def test_dflash_logs_a_request_s_stats_once():
+    from loguru import logger
+
+    m = build(G.Qwen36ResidentDFlashForCausalLM)
+    m.prefill_forward(torch.arange(10)[None], None, None, torch.tensor([10]))
+    m.decode_forward(torch.tensor([[m.spec.first]]), torch.tensor([10]))
+    got = []
+    sink = logger.add(lambda r: got.append(r.record["message"]), level="INFO")
+    try:
+        m.release_request(0)
+        m.release_persistent_capture()
+        m.release_request(0)
+    finally:
+        logger.remove(sink)
+    assert [g for g in got if g.startswith("DFlash2 request")] == [
+        "DFlash2 request: " + str(dict(iterations=1, committed=0, mean_accept=0.0))
+    ]
