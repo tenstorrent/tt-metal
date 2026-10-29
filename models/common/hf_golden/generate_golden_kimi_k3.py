@@ -101,7 +101,9 @@ What is model-specific, and why it is handled here:
     host on a GPU under 120 GiB (H100), device otherwise (H200), host under --selftest so the path is tested.
   * A_log is stored zero-padded to 128 (num_heads 96): the padding is checked to be zero and dropped.
   * Tokenizer: remote code (TikTokenTokenizer); it adds no BOS ([BOS] = 163584). The prefix is [BOS], as for
-    Kimi-K2.7-Code (where it scored best); not yet measured on K3.
+    Kimi-K2.7-Code (where it scored best): wikitext ppl 1.103 at isl 10240 over 10100 tokens (top-1 97.5%), 1.327
+    at isl 56320; the model has largely memorized wikitext (the first, context-free tokens still score 5-8 nats).
+    Raw and chat framings were not measured: at that number [BOS] was kept.
 
     python generate_golden_kimi_k3.py --selftest --device cuda               # first: tiny model, every path above
     python generate_golden_kimi_k3.py --isl 1024 --num-layers 5 --root /tmp/smoke   # dense KDA, MoE, first MLA
@@ -468,7 +470,7 @@ class KimiK3Golden(LayerwiseGolden):
     remote_tokenizer = True
     checkpoint_prefix = "language_model.model."  # the VLM stores the text backbone under language_model.model
     lm_head_prefix = "language_model.lm_head."
-    prefix = "[BOS]"  # the tokenizer adds none; Kimi-K2.7-Code's measured best, not yet measured on K3
+    prefix = "[BOS]"  # the tokenizer adds none; wikitext ppl 1.103 at isl 10240 (header)
     recipe = Recipe(
         modules=("self_attn.kv_a_proj_with_mqa", "self_attn.kv_a_layernorm"),  # MLA only; + the gate (register_hooks)
         sublayers=(

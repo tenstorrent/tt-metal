@@ -118,6 +118,15 @@ uv run --no-project --python python_env/bin/python --with fla-core==0.6.0 --with
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run ... python generate_golden_kimi_k3.py --isl 56320 --attn-chunk 1024
 ```
 
+`uv run --with` resolves the overlay on its own and pulled the newest torch and transformers in place of the base
+env's (5.12, which the shims target): add `--with torch==<base> --with transformers==5.12.1`, or install the four
+packages with `--no-deps` into a venv layered on the base one. On one H100 from cached weights, experts on host:
+[BOS] prefix (wikitext ppl 1.103 at isl 10240, top-1 97.5%: largely memorized); isl 56320 unchunked with
+`--attn-chunk 1024`: 34 min (~22 s per MoE layer, reading ~16 GB of MXFP4 experts each), 47 GB GPU peak, 113 GB host
+RAM peak, 99 GB (53 GB trimmed to 36 layers: 0-11, 23-27, 47-50, 71-75, 83-92), ppl 1.327 (1.18 / 1.52 / 1.17 /
+1.48 by quarter). Stored layer outputs are the running sum within an AttnRes block of 12, so they reset at 12, 24,
+..., 84; layer 91 is the one large event (update 42x, max |x| 0.5k -> 8.8k).
+
 **MiniMax-M3.1-Flash:** M3's architecture with every layer sparse, stored MXFP8 (dense linears) + NVFP4 (routed
 experts); transformers 5.12 dequantizes neither combination, so convert() does (the script header has the formulas
 and the real-checkpoint check). `HF_GOLDEN_SERVING=hopper` instead emulates vLLM serving it on Hopper (PR #63232):
