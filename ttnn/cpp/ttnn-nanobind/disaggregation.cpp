@@ -71,6 +71,17 @@ void bind_disaggregation_api(nb::module_& mod) {
         .def_rw("size_bytes", &KvCacheLocation::size_bytes, "Size of the KV cache chunk in bytes.")
         .def_rw("device_group_index", &KvCacheLocation::device_group_index, "Index into the device group table.");
 
+    // KvChunkTensorType - Cached tensor kind (maps 1:1 onto a TemporalPolicy alternative)
+    nb::enum_<KvChunkTensorType>(mod, "KvChunkTensorType", R"(
+        What kind of cached tensor a config's chunks belong to.
+        Each value corresponds to one TemporalPolicy alternative.
+    )")
+        .value("Kv", KvChunkTensorType::Kv, "Dense: full KV / MLA latent over [0, prefix_len).")
+        .value(
+            "Snapshot",
+            KvChunkTensorType::Snapshot,
+            "None: fixed-size state keyed by the prefix_len it was snapshotted at (SSM / KDA state).");
+
     // KvChunkAddressTableConfig - Configuration struct
     nb::class_<KvChunkAddressTableConfig>(mod, "KvChunkAddressTableConfig", R"(
         Configuration for constructing a KvChunkAddressTable.
@@ -90,7 +101,11 @@ void bind_disaggregation_api(nb::module_& mod) {
         .def_rw(
             "chunk_size_bytes",
             &KvChunkAddressTableConfig::chunk_size_bytes,
-            "Physical size of one chunk in bytes. Default: 19584 (18 x 1088 bfp8 tiles)");
+            "Physical size of one chunk in bytes. Default: 19584 (18 x 1088 bfp8 tiles)")
+        .def_rw(
+            "tensor_type",
+            &KvChunkAddressTableConfig::tensor_type,
+            "Cached tensor kind for this config's chunks. Default: KvChunkTensorType.Kv");
 
     // ChunkCompression - per-config in-memory / on-wire representation
     nb::enum_<ChunkCompression>(mod, "ChunkCompression", R"(

@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
-from models.common.utility_functions import is_blackhole, run_for_blackhole, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole, run_for_blackhole, skip_for_blackhole
 
 import tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM as base
 
@@ -197,6 +197,21 @@ def test_group_norm_no_input_mask_DRAM(
 @pytest.mark.parametrize("statistics_mode", base.STATISTICS_MODES)
 @pytest.mark.parametrize("specify_grid", [False])
 def test_group_norm_DRAM_unit_shapes(
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
+):
+    base.test_group_norm_DRAM(
+        device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
+    )
+
+
+_GROUP_NORM_DRAM_NIGHTLY_ONLY = [s for s in base.GROUP_NORM_DRAM_SHAPES if s not in base.GROUP_NORM_DRAM_SANITY_SHAPES]
+
+
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", _GROUP_NORM_DRAM_NIGHTLY_ONLY)
+@pytest.mark.parametrize("statistics_mode", base.STATISTICS_MODES)
+@pytest.mark.parametrize("specify_grid", [True])
+def test_group_norm_DRAM_model_shapes(
     device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
 ):
     base.test_group_norm_DRAM(

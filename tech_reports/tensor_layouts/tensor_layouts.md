@@ -86,7 +86,7 @@ If transpose_tile==true, then the faces' order is transposed, i.e. they are plac
 ## 4. Memory Layout
 This describes how the pages of a tensor are distributed across the memory of a device. Device memory is physically partitioned into units called banks. For example, Grayskull chips have 8 DRAM banks, while Wormhole chips have 12 DRAM banks.
 
-Each core also has L1 memory, which is divided into banks. Most worker cores have a single bank, whereas some storage cores have 2 banks.
+Each core also has L1 memory, which is divided into banks. Each worker core has a single L1 bank.
 
 There are two storage mechanisms that describe how a tensor is mapped to its respective banks: `Interleaved` and `Sharding`.
 

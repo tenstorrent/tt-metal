@@ -8,6 +8,8 @@
 //      Need to make sure no other file includes these lists since it also include global parameter definitions
 // 2) instantiate global variables
 
+#include "defines_generated.h"
+
 #include "ckernel.h"
 #include "internal/firmware_common.h"
 #include "api/compile_time_args.h"

@@ -16,7 +16,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     BroadcastType,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -40,7 +39,6 @@ from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     INPUT_TILE_CNT,
     LOOP_FACTOR,
     MATH_FIDELITY,
@@ -128,14 +126,6 @@ def binary_broadcast_acc_to_dest_modes(input_dimensions, tile_dimensions):
     return valid_acc_to_dest(input_dimensions, tile_dimensions)
 
 
-def binary_broadcast_implied_math_formats(format, *, is_perf=False):
-    if is_perf:
-        return [ImpliedMathFormat.Yes]
-    if format.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-
-
 def binary_broadcast_math_fidelities(format, math_op):
     # Int8 is an exact integer op. Float16_b is full precision at LoFi.
     if format.input_format in (DataFormat.Int8, DataFormat.Float16_b):
@@ -156,7 +146,6 @@ def binary_broadcast_math_fidelities(format, math_op):
     math_fidelity=lambda formats, math_op: binary_broadcast_math_fidelities(
         formats, math_op
     ),
-    implied_math_format=lambda formats: binary_broadcast_implied_math_formats(formats),
     dest_sync=lambda: binary_broadcast_dest_sync_modes(is_perf=False),
     unpack_to_dest=[False],
     tile_dimensions=lambda formats, broadcast_type: binary_broadcast_tile_dimensions(
@@ -179,7 +168,6 @@ def test_eltwise_binary_broadcast_quasar(
     math_op,
     broadcast_type,
     math_fidelity,
-    implied_math_format,
     dest_sync,
     unpack_to_dest,
     tile_dimensions,
@@ -262,7 +250,6 @@ def test_eltwise_binary_broadcast_quasar(
         "templates": [
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=math_op),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(dest_sync),
             ACC_TO_DEST(acc_to_dest),
@@ -303,7 +290,6 @@ def test_eltwise_binary_broadcast_quasar(
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
-        "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
     configuration = create_test_or_perf_config(

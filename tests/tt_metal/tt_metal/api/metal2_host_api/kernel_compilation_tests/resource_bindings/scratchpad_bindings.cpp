@@ -20,6 +20,7 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
+using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
@@ -30,13 +31,13 @@ using test_helpers::ProgramSpecTestGen1;
 // ----------------------------------------------------------------------------
 //
 // Like the TensorAccessor smoke above, these JIT-compile a kernel that constructs a Scratchpad from
-// its binding token (scratch::<name>) and reads the CRTA-injected base address — exercising the
+// its binding token (scratch::<name>) and reads back the CRTA-injected base (via local_mem()) — exercising the
 // generated scratch:: namespace + ScratchpadBindingToken object and the device-side Scratchpad ctor. Compile-only on
 // the mock Wormhole device (Gen1: the Quasar TRISC firmware isn't built in this checkout, so a
 // Quasar JIT-compile would fail at link).
 
 TEST_F(ProgramSpecTestGen1, CPU_ScratchpadAccessorBindingJITSmokeDMKernel) {
-    // DM kernel constructs a Scratchpad from its binding token and reads the CRTA-injected base address.
+    // DM kernel constructs a Scratchpad from its binding token and reads the CRTA-injected base (via local_mem()).
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -46,8 +47,8 @@ TEST_F(ProgramSpecTestGen1, CPU_ScratchpadAccessorBindingJITSmokeDMKernel) {
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     Scratchpad<int32_t> pad(scratch::scratch);
-    volatile uint32_t base = pad.get_base_address();
-    (void)base;
+    volatile bool has_base = static_cast<bool>(pad.local_mem());
+    (void)has_base;
 }
 
 static_assert(scratch::get_token_if_present<"scratch">() == &scratch::scratch);
@@ -78,8 +79,8 @@ TEST_F(ProgramSpecTestGen1, CPU_ScratchpadAccessorBindingJITSmokeComputeKernel) 
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     Scratchpad<int32_t> pad(scratch::scratch);
-    volatile uint32_t base = pad.get_base_address();
-    (void)base;
+    volatile bool has_base = static_cast<bool>(pad.local_mem());
+    (void)has_base;
 }
 
 static_assert(scratch::get_token_if_present<"scratch">() == &scratch::scratch);
@@ -94,6 +95,34 @@ static_assert(scratch::get_token_if_present<"not_a_scratch">() == nullptr);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadBindingJITSmokeDMAndComputeKernels) {
+    ProgramSpec spec;
+    spec.name = "shared_scratchpad_dm_compute";
+    spec.kernels = {MakeMinimalGen1DMKernel("dm_kernel"), MakeMinimalGen1ComputeKernel("compute_kernel")};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"shared"},
+        .size_per_node = 64,
+        .advanced_options = {.allow_instance_multi_binding = true},
+    }};
+    spec.work_units = {MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_kernel", "compute_kernel"})};
+
+    // Both kernels compile the accessor for the same scratchpad on the same node.
+    for (auto& kernel : spec.kernels) {
+        kernel.scratchpad_bindings = {
+            {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "shared"}};
+        kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    Scratchpad<uint32_t> pad(scratch::shared);
+    volatile bool has_base = static_cast<bool>(pad.local_mem());
+    (void)has_base;
+}
+)"};
+    }
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
 TEST_F(ProgramSpecTestGen1, ScratchpadComputeBindWithoutFormatSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
@@ -101,8 +130,8 @@ TEST_F(ProgramSpecTestGen1, ScratchpadComputeBindWithoutFormatSucceeds) {
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     Scratchpad<int32_t> pad(scratch::pad);
-    volatile uint32_t base = pad.get_base_address();
-    (void)base;
+    volatile bool has_base = static_cast<bool>(pad.local_mem());
+    (void)has_base;
 }
 )"};
 

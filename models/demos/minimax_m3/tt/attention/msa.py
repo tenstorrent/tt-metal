@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiniMax-M3 MSA (sparse) attention — the real model forward for the sparse layers (3-59).
+"""MiniMax-M3 MSA (sparse) attention — the real model forward for the sparse_attention_freq==1 layers.
 
 Unlike the dense path (ring_joint, which reads the KV cache + gathers across SP *internally*),
 ``sparse_sdpa_msa`` is a pure dense-context kernel: it takes full-length K/V tensors and has no
@@ -29,6 +29,7 @@ from loguru import logger
 import ttnn
 from models.demos.minimax_m3.utils.profiler_utils import zone
 
+from ..compute_configs import matmul_compute_config
 from .operations import apply_qk_norm_per_head, apply_rope
 
 # sparse_sdpa_msa's per-core L1 block cache for the gathered K/V (as many slots as fit in free L1). On: at small SP
@@ -96,8 +97,9 @@ def index_branch_forward(
         128-wide index head), same as main attention. Our apply_rope(rope_mats=main 64-wide) matches.
       * norm: index_q_norm/index_k_norm gains ship in the checkpoint, applied per-head.
     """
+    mm_config = matmul_compute_config(hidden_states.device())
     iq = _split_index_heads(
-        ttnn.linear(hidden_states, weights.index_q_proj), index_dim
+        ttnn.linear(hidden_states, weights.index_q_proj, compute_kernel_config=mm_config), index_dim
     )  # [1, n_idx_local, S, index_dim]
     iq = apply_qk_norm_per_head(iq, weights.index_q_norm, rms_norm_eps)
     iq = apply_rope(
@@ -110,7 +112,7 @@ def index_branch_forward(
     )
 
     ik = _split_index_heads(
-        ttnn.linear(hidden_states, weights.index_k_proj), index_dim
+        ttnn.linear(hidden_states, weights.index_k_proj, compute_kernel_config=mm_config), index_dim
     )  # [1, 1, S, index_dim] (shared)
     ik = apply_qk_norm_per_head(ik, weights.index_k_norm, rms_norm_eps)
     ik = apply_rope(
@@ -351,9 +353,9 @@ def _log_index_k_route_once(is_2d, *, sp, tp, rows):
 
 
 def _gather_tp_sharded_index_k(
-    index_k_cache, *, slot, mesh_config, ccl_manager, tp_axis, cached_len, chunk_local, block_size
+    index_k_cache, *, cache_row, mesh_config, ccl_manager, tp_axis, cached_len, chunk_local, block_size
 ):
-    """Rebuild one (user, layer) slot of the TP-deduped index_k cache as the full context on every chip.
+    """Rebuild one cache row (slot_id, layer) of the TP-deduped index_k cache as the full context on every chip.
 
     Each chip holds ``rows = seq_local/tp`` rows (see MiniMaxKVCache). The result is the persistent worst-case
     buffer ``[1, 1, rows*sp*tp, hd]`` with chip (s, t) at ``(s*tp + t)*rows``: the stripe-major layout the
@@ -387,7 +389,7 @@ def _gather_tp_sharded_index_k(
             output_tensor=full,
             cluster_axis=None,
             num_links=ccl_manager.num_links,
-            input_batch_index=slot,
+            input_batch_index=cache_row,
             gathered_dim_size=n_rows * sp * tp,
         )
 
@@ -398,7 +400,7 @@ def _gather_tp_sharded_index_k(
         output_tensor=row,
         cluster_axis=tp_axis,
         num_links=ccl_manager.num_links,
-        input_batch_index=slot,
+        input_batch_index=cache_row,
         gathered_dim_size=n_rows * tp,
     )
     return high_bw_sp_gather(row, mesh_config, ccl_manager, full, gathered_dim_size=((tp - 1) * rows + n_rows) * sp)
@@ -409,7 +411,7 @@ def msa_sp_attention_cache_read(
     index_q,
     kv_cache,
     *,
-    slot,
+    cache_row,
     mesh_config,
     ccl_manager,
     cached_len,
@@ -420,8 +422,9 @@ def msa_sp_attention_cache_read(
     num_groups=1,
 ):
     """Cross-chunk MSA: the current chunk's queries attend the accumulated context, gathered across SP
-    straight out of (user, layer) ``slot`` of the packed ``[num_users*num_layers, 1, seq_local, hd]``
-    ND-sharded cache by ``high_bw_all_gather`` (``input_batch_index=slot``, ``gathered_dim_size`` = the
+    straight out of ``cache_row`` (= slot_id * num_layers + layer) of the packed
+    ``[num_users*num_layers, 1, seq_local, hd]`` ND-sharded cache by ``high_bw_all_gather``
+    (``input_batch_index=cache_row``, ``gathered_dim_size`` = the
     written prefix, incl. the current chunk that prefill.py wrote before calling us). The output is the
     persistent worst-case buffer ``[1, 1, seq_local*sp, hd]`` with rank r at the fixed slot r*seq_local,
     which is the block-cyclic layout the indexer / sparse_sdpa_msa decode in-kernel (stride T/sp ==
@@ -446,7 +449,7 @@ def msa_sp_attention_cache_read(
     def gather(key, cache_t):
         buf = ccl_manager.get_high_bw_gather_buffer(key, (1, 1, seq_local * sp, cache_t.shape[3]), cache_t.dtype)
         return high_bw_sp_gather(
-            cache_t, mesh_config, ccl_manager, buf, input_batch_index=slot, gathered_dim_size=n_rows * sp
+            cache_t, mesh_config, ccl_manager, buf, input_batch_index=cache_row, gathered_dim_size=n_rows * sp
         )
 
     # ag_kv feeds sparse_sdpa_msa; ag_index_k feeds the indexer — split so the two AG costs are
@@ -460,7 +463,7 @@ def msa_sp_attention_cache_read(
         else:
             index_k_full = _gather_tp_sharded_index_k(
                 kv_cache.index_k,
-                slot=slot,
+                cache_row=cache_row,
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 tp_axis=index_k_tp_axis,

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import math
 import os
 from collections import defaultdict
@@ -128,6 +129,62 @@ def gather_batched_prefill_samples(
             output_log_probs[local_idx] = plain_log_probs_host[slot]
 
 
+def prepare_prefill_page_tables_per_layer(
+    page_tables, request_indices, device_rows, batch_size, prompt_lens, block_sizes, prefill_seq_len
+):
+    """Map request-ordered host tables to prefill rows, exposing only owned pages.
+
+    A scheduler table can retain stale block IDs beyond the request's valid
+    length. Those columns and padding rows must never reach cache-fill kernels.
+    Columns cover the padded kernel input, with -1 beyond each real prompt.
+    For a resumed prompt, prefill_seq_len includes its cached-token offset so
+    per-layer tables retain absolute page positions; the model handles chunks.
+    Layers sharing a table and block size retain one shared prepared table.
+    """
+    if page_tables is None:
+        return None
+    if len(block_sizes) != len(page_tables):
+        raise ValueError("Per-layer page tables and KV block sizes must have equal length")
+    if len(request_indices) != len(device_rows):
+        raise ValueError("Each request must have one prefill device row")
+    prepared = {}
+    result = []
+    for table, block_size in zip(page_tables, block_sizes):
+        if table is None:
+            result.append(None)
+            continue
+        if not isinstance(table, torch.Tensor) or table.ndim != 2:
+            raise ValueError("Per-layer prefill page tables must be two-dimensional host tensors")
+        if block_size <= 0:
+            raise ValueError("KV block sizes must be positive")
+        key = (id(table), block_size)
+        if key not in prepared:
+            owned_blocks = [num_blocks_in_seq(int(prompt_lens[i]), block_size) for i in request_indices]
+            width = num_blocks_in_seq(prefill_seq_len, block_size)
+            mapped = table.new_full((batch_size, width), -1)
+            for request, row, blocks in zip(request_indices, device_rows, owned_blocks):
+                if not 0 <= request < table.shape[0] or not 0 <= row < batch_size:
+                    raise ValueError("Request or prefill device row is outside the page table")
+                copied = min(width, blocks, table.shape[1])
+                mapped[row, :copied] = table[request, :copied]
+            prepared[key] = mapped
+        result.append(prepared[key])
+    return result
+
+
+def validate_compact_prefill_model(model, model_args):
+    """Reject opt-ins whose cache or sampling layout cannot preserve slots."""
+    if not getattr(model_args, "batched_prefill_compact_rows", False):
+        return
+    if getattr(model, "users_row_sharded", False):
+        raise ValueError("Compact batched prefill does not support row-sharded users")
+    if getattr(model, "_supports_on_device_sampling", False):
+        extract = getattr(model, "extract_last_tokens_batched_prefill", None)
+        slot_map = inspect.signature(extract).parameters.get("slot_map") if callable(extract) else None
+        if slot_map is None or slot_map.kind == inspect.Parameter.POSITIONAL_ONLY:
+            raise ValueError("Compact batched prefill with device sampling requires an explicit slot_map parameter")
+
+
 # Position of the page table within the decode input tuple produced by
 # Transformer.prepare_decode_inputs_host: (tokens, current_pos, rope_idxs, page_table).
 # Used to refresh only the page-table trace input when KV blocks are reallocated.
@@ -181,6 +238,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         For bringup, make this class general to any backend implementation, as long as it takes torch tensors and returns torch tensors.
 
         """
+        for instance, args in zip(model, model_args):
+            validate_compact_prefill_model(instance, args)
         self.model = model
         self.model_args = model_args
         self.mesh_device = mesh_device
@@ -599,22 +658,28 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # core range". Leaving it in DECODE matches main.
             self.mode = previous_mode
 
-    def _will_row_shard_prefill(self, tokens, sampling_params):
+    def _will_row_shard_prefill(self, tokens, sampling_params, prompt_lens=None):
         """Whether this prefill will be dispatched to the model's row-sharded batched path.
 
         Single source of truth for that decision -- both the dispatch itself and the choice of where to
         hoist decode trace preparation depend on it, and they must not drift apart.
 
-        Only used when device sampling is active (sampling_params is not None) and the prompt uses the
-        harmony chat template (first token is <|start|>=200006). Host sampling needs the single-user
-        prefill path that returns full logits per user.
+        Only used when device sampling is active (sampling_params is not None) and every prompt is a
+        harmony chat prompt ending in the assistant header (<|start|>=200006, assistant=173781): that path
+        skips the LM head and returns <|channel|>, which only continues that header. Host sampling needs
+        the single-user prefill path that returns full logits per user.
         """
-        is_harmony = tokens.shape[1] > 0 and int(tokens[0, 0]) == 200006
+        if prompt_lens is None:
+            prompt_lens = [tokens.shape[1]] * tokens.shape[0]
+        ends_with_assistant_header = all(
+            int(n) >= 2 and int(tokens[i, 0]) == 200006 and tokens[i, int(n) - 2 : int(n)].tolist() == [200006, 173781]
+            for i, n in enumerate(prompt_lens)
+        )
         return bool(
             getattr(self.model[0], "users_row_sharded", False)
             and tokens.shape[0] > 1
             and sampling_params is not None
-            and is_harmony
+            and ends_with_assistant_header
         )
 
     def _overrides_prefill_capture(self):
@@ -949,6 +1014,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         num_cached_tokens=0,
         **kwargs,
     ):
+        if kwargs.get("page_tables_per_layer") is not None:
+            raise ValueError(
+                "Explicit per-layer page tables require untraced prefill; trace refresh is not implemented"
+            )
         global_user_id = kwargs.get("global_user_id", None)
         use_start_pos = "sp1" if num_cached_tokens > 0 else "sp0"
         trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}_{use_start_pos}"
@@ -1182,7 +1251,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 and not self._defer_trace_recording
                 and not self._defer_prefill_recording
                 and not self._any_trace_captured()
-                and not self._will_row_shard_prefill(tokens, sampling_params)
+                and not self._will_row_shard_prefill(tokens, sampling_params, prompt_lens)
                 and not self._overrides_prefill_capture()
                 and not self._uses_prefetcher()
             )
@@ -1209,7 +1278,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # Excluded: the row-sharded batched path deadlocks either way round -- once a decode program is
             # compiled its MoE dispatch can no longer be trace-captured, and compiling decode before any
             # prefill deadlocks in the MoE combine. It keeps main's late decode compile.
-            and not self._will_row_shard_prefill(tokens, sampling_params)
+            and not self._will_row_shard_prefill(tokens, sampling_params, prompt_lens)
             # Excluded: models that customise the capture step. Deferred recording prepares through the
             # base helper and records later, which skips whatever a _capture_trace_prefill override does
             # between its compile pass and its capture.
@@ -1286,7 +1355,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         ]
         # Row-sharded batched prefill: process 1 user per row per iteration.
         # See _will_row_shard_prefill for when this path is taken.
-        if self._will_row_shard_prefill(tokens, sampling_params):
+        if self._will_row_shard_prefill(tokens, sampling_params, prompt_lens):
             return self._row_sharded_batched_prefill(
                 tokens,
                 page_table,
@@ -1341,8 +1410,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # batched-prefill sampling contract is implemented.
                 use_batched_prefill = False
 
+        # Opt-in models can use request-order prefill rows, then scatter the
+        # final hidden states into physical sampler slots via ``slot_map``.
+        compact_rows = bool(getattr(self.model_args[0], "batched_prefill_compact_rows", False))
+        # This opt-in limit counts padded kernel tokens, not real prompt tokens.
+        max_batched_len = getattr(self.model_args[0], "batched_prefill_max_tokens_per_user", None)
+        if use_batched_prefill and max_batched_len is not None and prefill_seq_lens[0] > max_batched_len:
+            use_batched_prefill = False
         if use_batched_prefill:
-            padded_batch = batched_prefill_padded_batch(batch_size, empty_slots, self.model_args[0].max_batch_size)
+            padded_batch = batched_prefill_padded_batch(
+                batch_size, None if compact_rows else empty_slots, self.model_args[0].max_batch_size
+            )
             if padded_batch > self.model_args[0].max_batch_size:
                 logger.info(
                     f"Batched prefill disabled: padded_batch {padded_batch} exceeds "
@@ -1373,7 +1451,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             group_user_id = user_id % local_batch_size if page_table is None else 0
 
             if use_batched_prefill:
-                batch_user_ids = empty_slots
+                batch_user_ids = list(range(batch_size)) if compact_rows else empty_slots
                 last_token_idx = [(seq_len - 1) for seq_len in prompt_lens]
                 prefill_seq_len = prefill_seq_lens[0]
                 seq_len = prompt_lens
@@ -1385,6 +1463,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 prefill_seq_len = prefill_seq_lens[idx]
                 logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
             local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
+            if local_kwargs.get("page_tables_per_layer") is not None:
+                if kv_cache is None:
+                    raise ValueError("Per-layer prefill page tables require a KV cache")
+                local_kwargs["page_tables_per_layer"] = prepare_prefill_page_tables_per_layer(
+                    local_kwargs["page_tables_per_layer"],
+                    list(range(batch_size)) if use_batched_prefill else [idx],
+                    batch_user_ids if use_batched_prefill else [0],
+                    padded_batch if use_batched_prefill else 1,
+                    prompt_lens,
+                    [int(layer_cache[0].shape[2]) for layer_cache in kv_cache[model_id]],
+                    prefill_seq_len + (0 if use_batched_prefill else num_cached_tokens),
+                )
             if getattr(self.model[model_id], "users_row_sharded", False):
                 local_kwargs["global_user_id"] = batch_user_ids if use_batched_prefill else user_id
             sampling_enabled = (
@@ -1394,11 +1484,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
 
             if use_batched_prefill:
-                # Galaxy 70B approach: slot-based placement with shape [padded_batch, prefill_seq_len]
-                # Each request is placed at its corresponding slot index
+                # Tokens, last-token indices and page tables share the same
+                # device-row mapping, whether compact or physical-slot based.
                 prefill_ids = torch.zeros(padded_batch, prefill_seq_len, dtype=torch.long, device=tokens.device)
                 padded_last_token_idx = [0] * padded_batch  # dummy idx for padded slots
-                for local_idx, slot in enumerate(empty_slots):
+                for local_idx, slot in enumerate(batch_user_ids):
                     seq_len_local = int(seq_len[local_idx])
                     padded_tokens = torch.cat(
                         [
@@ -1551,7 +1641,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     combined_prompt_tokens = torch.zeros(sampling_batch, max_prompt_len, dtype=torch.long)
                     for local_idx, slot in enumerate(empty_slots):
                         plen = int(prompt_lens[local_idx])
-                        combined_prompt_tokens[slot, :plen] = prefill_ids[slot, :plen]
+                        combined_prompt_tokens[slot, :plen] = prefill_ids[batch_user_ids[local_idx], :plen]
 
                     # ``combined_prompt_tokens`` above and the extracted hidden states
                     # are both laid out by slot, so the params have to be as well.
@@ -1573,6 +1663,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         padded_batch,
                         prefill_seq_len,
                         target_batch=sampling_batch,
+                        **({"slot_map": list(empty_slots)} if compact_rows else {}),
                     )
 
                     sampling_input_key = f"sampling_{prefill_seq_len}_{model_id}_{sampling_batch}_{sampling_dp}"
@@ -1654,7 +1745,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     if return_hidden_states:
                         # Embedding models: trace returns hidden states; extract last-token hidden per slot
                         slot_hidden_list = []
-                        for local_idx, slot in enumerate(empty_slots):
+                        for local_idx, slot in enumerate(batch_user_ids):
                             user_hidden = logits[slot : slot + 1, :, :, :]
                             slot_hidden = self.model[model_id].process_hidden_states_after_prefill_trace(
                                 user_hidden, last_token_idx[slot]
@@ -1670,7 +1761,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                                 out = out.cpu()
                             output_tensor[local_idx] = out
                     else:
-                        for local_idx, slot in enumerate(empty_slots):
+                        for local_idx, slot in enumerate(batch_user_ids):
                             user_logits = logits[slot : slot + 1, :, :, :]
                             _logits = self.model[model_id].process_logits_after_prefill_trace(
                                 user_logits, last_token_idx[slot]
@@ -1946,6 +2037,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         use_prefix_caching = num_cached_tokens > 0
+        # kwargs are for prepare_inputs_prefill (global_user_id, multimodal inputs, serving plugin keywords);
+        # ttnn_prefill_forward takes only the per-layer page tables from them, on every path.
+        forward_kwargs = (
+            {"page_tables_per_layer": kwargs["page_tables_per_layer"]} if "page_tables_per_layer" in kwargs else {}
+        )
         if use_chunked_prefill or use_prefix_caching:
             """
             Chunked prefill requires paged attention. There are some strange constraints which we must meet:
@@ -2050,7 +2146,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     ),
                     kv_cache=kv_cache,
                     batch_size=batch_size,
-                    **kwargs,
+                    **forward_kwargs,
                 )
 
                 if is_last_chunk:
@@ -2076,6 +2172,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 get_last_token=-1 if batch_size > 1 else (last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
+                **forward_kwargs,
             )
             return tt_logits
 

@@ -11,6 +11,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/local_mem/address_access.h"
 #include "internal/scoped_lock_cache_ops.h"
 #include "experimental/kernel_args.h"
 
@@ -51,8 +52,7 @@ void kernel_main() {
     constexpr DataFormat src_dfb_addr_data_format = get_dataformat(dfb::src);
 
     // Scratchpad in SRAM for storing output
-    const uint32_t dst_addr = dst.get_base_address();
-    volatile tt_l1_ptr uint32_t* out_idxs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
+    volatile tt_l1_ptr uint32_t* out_idxs = &dst[0];
 
     uint32_t max_idx = 0;
     auto max_val = get_default_value<src_dfb_addr_data_format>();
@@ -83,7 +83,7 @@ void kernel_main() {
         if constexpr (not reduce_all) {
             // Quasar DM cores fill dst through the cached view, so flush it to SRAM before the NoC
             // reads it below. No-op on WH/BH, where CPU stores are already coherent with the NoC.
-            scoped_lock_release_cache_ops(static_cast<uintptr_t>(dst_addr), dst_page_size);
+            scoped_lock_release_cache_ops(local_mem::detail::AddressAccess::address(dst.local_mem()), dst_page_size);
             noc.async_write(dst, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = k});
             noc.async_write_barrier();
         }
@@ -93,7 +93,7 @@ void kernel_main() {
     if constexpr (reduce_all) {
         out_idxs[0] = max_idx;
         // Flush the CPU-written index to SRAM before the NoC reads it (Quasar DM only; no-op on WH/BH).
-        scoped_lock_release_cache_ops(static_cast<uintptr_t>(dst_addr), dst_page_size);
+        scoped_lock_release_cache_ops(local_mem::detail::AddressAccess::address(dst.local_mem()), dst_page_size);
         noc.async_write(dst, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = 0});
         noc.async_write_barrier();
     }

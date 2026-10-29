@@ -5,6 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "distributed/mesh_device_view_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "impl/context/metal_env_impl.hpp"
@@ -239,7 +240,7 @@ Tag generate_rank_scoped_exchange_tag(
 
 bool mesh_is_coowned(const MeshDevice& mesh_device) {
     const auto& view = mesh_device.get_view();
-    return view.num_devices() != view.get_devices().size();
+    return view.num_devices() != view.impl().get_devices().size();
 }
 
 std::unordered_set<MeshCoreCoord> socket_endpoint_cores(const SocketConfig& config, SocketEndpoint socket_endpoint) {

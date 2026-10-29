@@ -3676,7 +3676,8 @@ void expect_ranks_survive_placement(
 //                              '----M0---'  '----M1---'    '----M0---'     '----M1---'
 //
 //   seating the middle pair {101,102} would leave 100 and 103 unlinked, so the line answer
-//   is unique. Unlinked MGD on the pairs PSD is the control: no seam, both pairs used.
+//   is unique. On the pairs PSD the seam cannot be realized: STRICT fails, RELAXED seats both pairs
+//   zero-link (#56762). Unlinked MGD on the pairs PSD is the control: no seam, both pairs used.
 TEST(AdjacencyGuidedPlacement, LinkedMeshesRespectSeamConnectivity) {
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -3710,6 +3711,27 @@ graph_descriptors {
 }
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )")};
+    MeshGraphDescriptor linked_strict{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 policy: STRICT }
+  }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)")};
     MeshGraphDescriptor unlinked{std::string(R"(
 mesh_descriptors {
   name: "M0"
@@ -3739,10 +3761,17 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
         mapped_footprints(on_line, line),
         ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}));
 
+    // STRICT seam on the pairs PSD: no placement.
     PlacementSolveStats fail_stats;
-    EXPECT_TRUE(SatPlacementEnumerationSession(pgd, linked, pairs, &fail_stats, {}).next().empty());
+    EXPECT_TRUE(SatPlacementEnumerationSession(pgd, linked_strict, pairs, &fail_stats, {}).next().empty());
     EXPECT_TRUE(fail_stats.master_solve_attempted) << fail_stats.to_string();
     EXPECT_FALSE(fail_stats.master_solve_success) << fail_stats.to_string();
+
+    // RELAXED seam on the pairs PSD: both pairs seated, connection zero-link.
+    PlacementSolveStats relaxed_stats;
+    EXPECT_EQ(SatPlacementEnumerationSession(pgd, linked, pairs, &relaxed_stats, {}).next().size(), 2u)
+        << relaxed_stats.to_string();
+    EXPECT_TRUE(relaxed_stats.master_solve_success) << relaxed_stats.to_string();
 
     const auto on_pairs = utils::map_multi_mesh_to_physical(pairs, pgd, unlinked, no_rank_config());
     ASSERT_TRUE(on_pairs.success) << on_pairs.error_message;
