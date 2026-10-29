@@ -12,7 +12,6 @@
 #include "ckernel_sfpu_log1p.h"
 
 namespace ckernel::sfpu {
-
 // Shared by logaddexp and logaddexp2, which are both evaluated as
 //     max(a, b) + correction(|a - b|)
 //
@@ -121,9 +120,7 @@ inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_in
 template <bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_logaddexp_init() {
     // The store advances the destination by one SFPU row (dest.incr = 2, what dst_reg++
-    // does), so each iteration saves a TTINCRWC. The binary SFPU init only sets ADDR_MOD_6
-    // this way for binary max/min and the comparisons, not for this op, so it is set here.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    // does), so each iteration saves a TTINCRWC. That is ADDR_MOD_6's invariant value.
 
     if constexpr (is_fp32_dest_acc_en) {
         // Delegating to log1p_init rather than copying its values keeps one source for the
