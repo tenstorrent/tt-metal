@@ -14,7 +14,7 @@ output is garbage, timing only). Exposed transport (OVERLAP) = traced slowest(op
         tests/ttnn/unit_tests/operations/distributed_rms_norm/test_distributed_rms_norm_perf_traced.py -s
 
 Env: DRMS_PT_CASES ("640x1792,32x1792,2048x1280"), DRMS_PT_UNTRACED (5), DRMS_PT_TRACED (8),
-DRMS_PT_VARIANTS ("op,stub").
+DRMS_PT_VARIANTS ("op,stub"), DRMS_PT_EXTRA_ABLATE (payload ablations added to both variants: reads, writes, gamma).
 """
 
 import os
@@ -119,8 +119,12 @@ def test_perf_traced(mesh_device):
         assert torch.corrcoef(torch.stack([got.flatten(), ref.flatten()]))[0, 1] > 0.999
         res = {}
         for variant in VARIANTS:
+            # DRMS_PT_EXTRA_ABLATE (measurement only): payload ablations added to both variants, e.g. "reads,writes"
+            ablate = [a for a in os.environ.get("DRMS_PT_EXTRA_ABLATE", "").split(",") if a]
             if variant == "stub":
-                os.environ["DRMS_ABLATE"] = "exchange"
+                ablate.append("exchange")
+            if ablate:
+                os.environ["DRMS_ABLATE"] = ",".join(ablate)
             try:
                 res[variant] = _measure(mesh, run)
             finally:

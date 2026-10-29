@@ -57,7 +57,9 @@ WAVES_MAX_PASSES = 12  # wave cap of the pass regime (smaller waves shrink every
 NUM_SEMAPHORES = 16
 COMBINE_DEPTH = 2  # cb_partial_col depth in waves: compute collapses wave w+1 while the reader still sends wave w
 LANDING_MIN_WORDS = 1024  # landing scratch floor (4 KiB): most plans then share one allocation
-READ_LOOKAHEAD_WAVES = 1  # x-read waves in flight beyond the oldest unlanded one (wave-ordered DRAM traffic)
+READ_LOOKAHEAD_WAVES = 0  # x-read waves in flight beyond the oldest unlanded one (wave-ordered DRAM traffic)
+NOC_SWAP_COLUMNS = 3  # westmost logical worker columns whose DRAM reads go on NoC1 / writes on NoC0 (base Perf 2)
+COMBINE_LAG = 0  # waves between a wave's landing / square and its on-chip combine (1: Phase 0 order; 0: none)
 
 # ---- Exchange constants ----
 RECORD_BYTES = 32 * 4  # one fp32 per row of a tile-row
@@ -480,6 +482,18 @@ def _shard_cores(spec, n):
     return list(ttnn.corerange_to_cores(spec.grid, n, row_wise=spec.orientation == ttnn.ShardOrientation.ROW_MAJOR))
 
 
+def _measure_overrides() -> dict:
+    """Measurement-only plan overrides (unset in production): DRMS_WAVES (wave cap), DRMS_GAMMA_MODE (0/1/2)."""
+    import os
+
+    ov = {}
+    if os.environ.get("DRMS_WAVES"):
+        ov["waves"] = int(os.environ["DRMS_WAVES"])
+    if os.environ.get("DRMS_GAMMA_MODE"):
+        ov["gamma_mode"] = int(os.environ["DRMS_GAMMA_MODE"])
+    return ov
+
+
 def local_plan(input_tensor, workers, sz: Sizes, budget: int, out_resident=None) -> LocalPlan:
     shape = list(input_tensor.shape)
     W = shape[-1]
@@ -547,7 +561,14 @@ def local_plan(input_tensor, workers, sz: Sizes, budget: int, out_resident=None)
 
     G_h = max(m.group for m in members) + 1
     base_plan = _wave_plan(regime, sharded, S, G_w, G_h, rows_max, masked, bool(out_resident), members)
+    ov = _measure_overrides()
+    if "waves" in ov:
+        base_plan = rewave(base_plan, ov["waves"])
     fit = first_fit(base_plan, sz, budget)
+    if fit is not None and "gamma_mode" in ov and sz.has_gamma:
+        alt = replace(fit[1], gamma_mode=ov["gamma_mode"])
+        if footprint(sz, alt) <= budget:
+            fit = (fit[0], alt)
     if fit is None:
         smallest = replace(
             rewave(base_plan, WAVES_MAX_PASSES),
@@ -761,7 +782,84 @@ def discovered_links(mesh, cluster_axis, ring):
 # ---------------------------------------------------------------------------------------------------------------
 
 
-_ABLATE_DEFINES = {"exchange": "DRMS_ABLATE_EXCHANGE"}
+_ABLATE_DEFINES = {
+    "exchange": "DRMS_ABLATE_EXCHANGE",
+    "reads": "DRMS_ABLATE_READS",  # x NoC reads skipped (CB pushes kept)
+    "writes": "DRMS_ABLATE_WRITES",  # output NoC writes skipped (CB pops kept)
+    "gamma": "DRMS_ABLATE_GAMMA",  # γ NoC reads skipped (CB pushes kept)
+}
+
+
+def noc_swap_columns() -> int:
+    """NOC_SWAP_COLUMNS, overridable for measurement only (DRMS_NOC_SWAP; unset in production)."""
+    import os
+
+    v = os.environ.get("DRMS_NOC_SWAP", "")
+    return int(v) if v else NOC_SWAP_COLUMNS
+
+
+def noc_swap_cores(plan) -> list:
+    """Worker cores whose x reads / output writes swap NoCs (base op Perf 2): the noc_swap_columns() westmost logical
+    columns (next to DRAM column 0) of an interleaved input. Sharded inputs move no x DRAM traffic: nothing swaps."""
+    if plan.sharded:
+        return []
+    n = noc_swap_columns()
+    return [m.core for m in plan.members if m.core.x < n]
+
+
+def _split_noc_swapped(kernels, cores, swapped):
+    """kernels with the reader / writer (kernels[0] / kernels[1]) restricted to the unswapped cores, plus same-source
+    descriptors on the swapped cores with the reader on NoC1 and the writer on NoC0 (base _split_noc_swapped)."""
+    if not swapped:
+        return kernels
+    sw = {(c.x, c.y) for c in swapped}
+    normal = [c for c in cores if (c.x, c.y) not in sw]
+
+    def sub(kd, cs, cfg):
+        rt = ttnn.RuntimeArgs()
+        for c in cs:
+            rt[c.x][c.y] = list(kd.runtime_args[c.x][c.y])
+        return ttnn.KernelDescriptor(
+            kernel_source=kd.kernel_source,
+            core_ranges=_crs(cs),
+            compile_time_args=list(kd.compile_time_args),
+            defines=list(kd.defines),
+            runtime_args=rt,
+            config=cfg,
+        )
+
+    reader, writer = kernels[0], kernels[1]
+    out = [
+        sub(
+            reader,
+            swapped,
+            ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1),
+        ),
+        sub(
+            writer,
+            swapped,
+            ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
+        ),
+    ]
+    if normal:  # an empty-range descriptor carries no CB formats (base op: fails to compile)
+        out += [sub(reader, normal, ttnn.ReaderConfigDescriptor()), sub(writer, normal, ttnn.WriterConfigDescriptor())]
+    return out + kernels[2:]
+
+
+def combine_lag() -> int:
+    """COMBINE_LAG, overridable for measurement only (DRMS_COMBINE_LAG; unset in production)."""
+    import os
+
+    v = os.environ.get("DRMS_COMBINE_LAG", "")
+    return int(v) if v else COMBINE_LAG
+
+
+def read_lookahead_waves() -> int:
+    """READ_LOOKAHEAD_WAVES, overridable for measurement only (DRMS_LOOKAHEAD; unset in production)."""
+    import os
+
+    v = os.environ.get("DRMS_LOOKAHEAD", "")
+    return int(v) if v else READ_LOOKAHEAD_WAVES
 
 
 def _measurement_defines() -> list:
@@ -1070,7 +1168,7 @@ def create_mesh_program_descriptor(
         SEM_INV,  # 16
         SEM_LANDED_BASE,  # 17
         SEM_OWN_STATS_BASE,  # 18
-        READ_LOOKAHEAD_WAVES,  # 19
+        read_lookahead_waves(),  # 19
         seg_stride,  # 20
         Wt,  # 21
         gather_field_bits(plan.G_w),  # 22
@@ -1078,8 +1176,9 @@ def create_mesh_program_descriptor(
         plan.regions,  # 24 cb_gather regions (owned waves per pass)
         SEM_PASS,  # 25
         int(plan.reread),  # 26 x re-read (streamed Phase A)
+        combine_lag(),  # 27 service / chip-sum lag in waves
     ]
-    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())  # 27..
+    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())  # 28..
     compute_ct = [
         int(gamma is not None),  # 0
         int(plan.sharded),  # 1
@@ -1101,6 +1200,7 @@ def create_mesh_program_descriptor(
         int(plan.gamma_stream),  # 17
         plan.SQ,  # 18 tile-rows per square -> collapse round
         int(plan.reread),  # 19 x re-read
+        combine_lag(),  # 20 service / chip-sum lag in waves (= the reader's)
     ]
     gamma_is_tile = gamma is not None and gamma.layout == ttnn.TILE_LAYOUT
     writer_ct = [
@@ -1284,6 +1384,9 @@ def create_mesh_program_descriptor(
                     ),
                 ),
             ]
+            # Perf (base Perf 2 dram_noc_balance, re-measured on the fused grid): the westmost logical columns run
+            # their DRAM traffic on the other NoCs (reader NoC1, writer NoC0)
+            kernels = _split_noc_swapped(kernels, [m.core for m in plan.members], noc_swap_cores(plan))
             program.kernels = kernels
             program.cbs = cbs
             key = "|".join(
@@ -1332,6 +1435,9 @@ def create_mesh_program_descriptor(
                     plan.reread,
                     scratch_cbs,
                     res.landing_addr,
+                    read_lookahead_waves(),
+                    combine_lag(),
+                    noc_swap_columns(),
                 )
             )
             program.custom_program_hash = int.from_bytes(hashlib.sha1(key.encode()).digest()[:8], "little") >> 1

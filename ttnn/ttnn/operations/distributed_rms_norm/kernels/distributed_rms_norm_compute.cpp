@@ -125,6 +125,8 @@ void kernel_main() {
     // into cb_x_reread — x*γ per row into cb_x_gamma (C tiles), then * inv_rms -> cb_output
     constexpr bool REREAD = get_compile_time_arg_val(19) != 0;
     constexpr uint32_t WP = NCH * C;
+    // waves between a wave's square and its chip sum (the reader's service lag, the same CT value): 1 / 0
+    constexpr uint32_t COMBINE_LAG = get_compile_time_arg_val(20);
 
     const uint32_t rows = get_arg_val<uint32_t>(0);
     const uint32_t V = get_arg_val<uint32_t>(1);
@@ -435,12 +437,12 @@ void kernel_main() {
         x_row0 = row0;
 
         // ================= Phase A =================
-        for (uint32_t w = w_begin; w <= w_end; ++w) {
+        for (uint32_t w = w_begin; w < w_end + COMBINE_LAG; ++w) {
             if (w < w_end) {
                 square_collapse(w);
             }
-            if (w > w_begin) {
-                chip_sum(w - 1);
+            if (w >= w_begin + COMBINE_LAG) {
+                chip_sum(w - COMBINE_LAG);
             }
         }
 

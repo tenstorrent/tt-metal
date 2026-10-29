@@ -27,6 +27,15 @@
 #define DRMS_ZONE(name)
 #endif
 
+// Measurement-only payload ablations (host DRMS_ABLATE=writes / gamma; 0 in production): the NoC transfer is
+// skipped, every CB handshake kept.
+#ifndef DRMS_ABLATE_WRITES
+#define DRMS_ABLATE_WRITES 0
+#endif
+#ifndef DRMS_ABLATE_GAMMA
+#define DRMS_ABLATE_GAMMA 0
+#endif
+
 namespace {
 constexpr uint32_t cb_gamma_tiles = 6;
 constexpr uint32_t cb_x_reread = 8;
@@ -76,7 +85,7 @@ void kernel_main() {
             const uint32_t base = get_write_ptr(cb_gamma_tiles);
             if constexpr (GAMMA_IS_TILE) {
                 constexpr uint32_t prefix = FACE_DIM * FACE_DIM * GAMMA_ES + FACE_DIM * GAMMA_ES;
-                for (uint32_t t = 0; t < nt; ++t) {
+                for (uint32_t t = 0; t < nt && !DRMS_ABLATE_GAMMA; ++t) {
                     noc_async_read(gamma_accessor.get_noc_addr(w0 + t0 + t), base + t * T_G, prefix);
                 }
                 noc_async_read_barrier();
@@ -195,7 +204,7 @@ void kernel_main() {
                     DRMS_ZONE("wr_store");
                     const uint32_t l1 = get_read_ptr(cb_output);
                     const uint32_t page0 = (start_row + r0 + r) * WT + w0 + t0;
-                    for (uint32_t i = 0; i < nv; ++i) {
+                    for (uint32_t i = 0; i < nv && !DRMS_ABLATE_WRITES; ++i) {
                         noc_async_write_tile(page0 + i, output_accessor, l1 + i * T_OUT);
                     }
                     noc_async_writes_flushed();

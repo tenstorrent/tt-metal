@@ -45,6 +45,9 @@
 #ifndef DRMS_ABLATE_EXCHANGE
 #define DRMS_ABLATE_EXCHANGE 0
 #endif
+#ifndef DRMS_ABLATE_READS
+#define DRMS_ABLATE_READS 0
+#endif
 
 namespace {
 
@@ -179,7 +182,9 @@ void kernel_main() {
     // x re-read (L1 fallback, interleaved only): x is never resident — Phase A streams it one tile-row at a time
     // through cb_x_tiles (square + collapse), Phase B's writer re-reads it (cb_x_reread)
     constexpr bool REREAD = get_compile_time_arg_val(26) != 0;
-    constexpr auto input_args = TensorAccessorArgs<27>();
+    // waves between a wave's landing and its service (contribute / gather / publish): 1 = Phase 0, 0 = none
+    constexpr uint32_t COMBINE_LAG = get_compile_time_arg_val(27);
+    constexpr auto input_args = TensorAccessorArgs<28>();
 
     size_t a = 0;
     const uint32_t in_addr = get_arg_val<uint32_t>(a++);
@@ -274,7 +279,7 @@ void kernel_main() {
             for (uint32_t r = r0; r < r0 + n; ++r) {
                 const uint32_t page0 = (start_row + r) * WT + w0;
                 const uint32_t l1 = x_base + (r - x_row0) * WS * T_IN;
-                for (uint32_t t = 0; t < V; ++t) {
+                for (uint32_t t = 0; t < V && !DRMS_ABLATE_READS; ++t) {
                     noc_async_read_tile(page0 + t, input_accessor, l1 + t * T_IN);
                 }
             }
@@ -309,14 +314,9 @@ void kernel_main() {
             issue_ahead(w_begin + LOOKAHEAD);
         }
     };
-    if constexpr (!SHARDED) {
-        load_pass(0, PW < NW ? PW : NW);
-    } else {
-        cb_reserve_back(cb_x_tiles, rows * WS);
-        cb_push_back(cb_x_tiles, rows * WS);
-    }
-
-    // ---------------- prologue (behind the x reads) ----------------
+    // ---------------- prologue (ahead of the x reads) ----------------
+    // On Blackhole a NoC zero fill's barrier (write_zeros_l1_barrier) is a full noc_async_read_barrier: run behind
+    // the x reads it would wait for every read in flight (~3 us at the focus case) before the next wave's reads issue.
     {
         DRMS_ZONE("rd_prologue");
         if constexpr (MASKED) {
@@ -331,6 +331,13 @@ void kernel_main() {
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW>();
         }
+    }
+
+    if constexpr (!SHARDED) {
+        load_pass(0, PW < NW ? PW : NW);
+    } else {
+        cb_reserve_back(cb_x_tiles, rows * WS);
+        cb_push_back(cb_x_tiles, rows * WS);
     }
 
     // x re-read: the wave's tile-rows streamed one at a time (cb_x_tiles holds a few rows; compute pops each row
@@ -616,15 +623,17 @@ void kernel_main() {
         }
 
         // ================= Phase A =================
-        for (uint32_t w = w_begin; w <= w_end; ++w) {
+        // COMBINE_LAG 1: wave w-1 is serviced after wave w landed (Phase 0); 0: right after its own landing, so a
+        // wave's contribution / gather / publish never waits for a later wave's reads (compute mirrors the lag).
+        for (uint32_t w = w_begin; w < w_end + COMBINE_LAG; ++w) {
             if (w < w_end) {
                 land_wave(w);
                 if constexpr (!REREAD) {
                     issue_ahead(w + 1 + LOOKAHEAD);
                 }
             }
-            if (w > w_begin) {
-                service(w - 1);
+            if (w >= w_begin + COMBINE_LAG) {
+                service(w - COMBINE_LAG);
             }
         }
         if (p == 0) {
