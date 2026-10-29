@@ -7824,6 +7824,604 @@ allocation offline, but make the experiments run with the right slots so the win
   window-bound: compare VC1 rows only at the same slots (`TT_FABRIC_EXP_LOG_SLOTS=1` logs them). 2D stays at
   17 / 16 / 16 (the user's earlier call; the rule's 20 / 15 / 16 trades 3-hop for 1-hop rows), 1D at 26 / 25 / 32.
 
+**Merging main (2026-10-28): the compiler update, offline.** User: pull main (969 commits since the merge base
+453ee7b, 2026-10-09: test-infra ntype options, firmware, NoC API, main's router, sfpi 7.86.0 -> 7.91.0), but check
+the compiler first: router code generation has been sensitive. sfpi 7.91.0 fetched outside the tree
+(`~/.sfpi-dl/7.91.0`, sha256 as main's `tt_metal/sfpi-version`; GCC 15.1.0 in both); `offline_build.py` gained
+`OFFLINE_SFPI=<root>` (rewrites the logged `.../runtime/sfpi` prefix). v4gi rebuilt for every logged Blackhole config
+(2D, 1D, ring, torus, VC1; the ELFs carry the 7.91.0 compiler ID):
+- -O3 (our runs, and the builder's default for VC0-only routers): all 163 configs byte-identical in every loadable
+  section; a 7.86.0 control rebuild reproduces the existing builds exactly.
+- -Os (the builder's default on VC1 routers): all 119 identical.
+- -O2: 76 of 119 differ (2D 56, 1D 20; VC1 identical): E1's receiver loop 23-24 instructions shorter, E0's 2D loop 8
+  longer, stack loads and stores within 1, code 1.1 KB smaller (2D).
+- So the compiler update does not touch our router at the levels we run. What a device run still rebuilds with it
+  (firmware, main's router, the test's worker kernels, `runtime/hw/lib` objects) changes with the merge's sources
+  too; the device before / after (`merge_ab_runs.sh`, labels `mpre_*` / `mpost_*`) covers both, and a toolchain-only
+  A/B follows only if a row moves. "Before" runs: jobs 114-115 (all clean).
+
+**Merging main: before / after on the device** (2026-10-28, a09u32 jobs 114-118; `merge_ab_runs.sh`, `mab_runs.sh`,
+`toolchain_ab.py`).
+- The merge: checkpoint 8 (`22f35f8`), then `origin/main` (6d8a103). Conflicts in 7 files:
+  - test infra: kept main's ntype options (`NocSendTypeSpec`); our stream-aware filters compare against it, stream
+    segments parse their ntype as main's patterns do, our per-pattern / per-segment `flush` overrides main's new ntype
+    option `flush` (a segment `flush` on a scatter write is now an error pointing to the ntype option);
+  - main's router and speedy path: main's link-transport layer (`SenderLinkTransport` / `ReceiverLinkTransport`, a
+    thin wrapper over the same TX-queue calls) adopted; the study's flag-gated hooks moved onto it;
+  - flow control (our credit methods kept, on main's transport), packet transmission (our flushed scatter path).
+  - Submodules (UMD, tracy, cluster descriptors) updated; host rebuilt with sfpi 7.91.0.
+- `v4gi_m` = v4gi with main's changes three-way merged into the 7 tree files it overlays (no conflicts; main moved the
+  packet header to `hostdev/`, so the v4 kernel's include changed by hand). v4gi stays the measured pre-merge record.
+  VC1 mock: 200 router builds, no errors.
+- v4gi before (v4gi, sfpi 7.86.0) / after (v4gi_m, 7.91.0): validation clean on both sides (mesh 96, 1D 143, ring 19,
+  Y-torus 12); every suite within +-0.05 cycles/packet on the mean, no row over 0.4 (4352 10, mix 30, flushmix 16,
+  flushmix4 4, burst 44, 1D 12, ring 14, Y-torus 12 rows); latency medians -17 to +16 ns on 1,300-4,300.
+- Main's router as shipped (v1, flags 0, -O3): 2D 4352 mean +0.68 (+0.1 to +1.2), 1D +0.39 (NeighborExchange scatter
+  4352 B +6.0, the rest -0.9 to +1.2); mesh sanity 96/96.
+- The VC1 split changed placement: [0, 0]'s inter-mesh link lands on [1, 0] now, [1, 1] before ([0, 0] -> [1, 0]
+  320 -> 209, [0, 0] -> [1, 1] 206 -> 358; the 206-209 direct-link rate moved with it). Main has placement fixes in
+  the range (b67f852, 0985b0e, cdeaeee). Rows on the VC1 split are not comparable one to one: v4gi's one-VC1-hop rows
+  run 356-358 on the new path (320-326 before), two hops 385 (369); intra-mesh 1-hop and bursts unchanged (158),
+  2-hop -14. Main's router (-Os): 1-hop +9 to +18, 2-hop -17 to -27, multicast -3 / +14.
+- Compiler or sources: the merged tree does not build with sfpi 7.86.0 (main's LLK uses `__builtin_rvtt_ttinsn`), so
+  no device A/B (job 118 stopped there). Offline instead (`toolchain_ab.py`: replays a run's logged router compile and
+  link commands with both toolchains; the replays reproduce the runs' own ELFs, 146 of 146 checked): main's router is
+  byte-identical under 7.86.0 and 7.91.0 in every config of the after runs (2D 72, 1D 200 at -O3; VC1 74 at -Os, 6
+  lines cut by the other MPI rank). So main's router's moves are its sources and the placement, not the compiler.
+  v4gi_m (with the variant swapped in again): byte-identical in all 288 configs of the after runs (2D and 1D 144, ring
+  72, Y-torus 72; -O3), replays matching the runs' ELFs 288 of 288. So the merge does not touch our router's code
+  under the compiler change, and its rows did not move.
+
+**Single-ERISC baseline: main's router** (2026-10-28, after the merge; a09u32 jobs 119-120; `se_runs.sh`, table
+`se_table.py`). Main's router as shipped (kernel v1, flags 0, firmware keepalive; -O3 VC0, -Os VC1) in three modes:
+`two` (default), `fab1` (`TT_METAL_DISABLE_FABRIC_TWO_ERISC=1`: fabric single-ERISC, system two-ERISC) and `aer1`
+(`TT_METAL_DISABLE_MULTI_AERISC=1`: the whole system single-ERISC, CI's single-ERISC fabric leg).
+- Placement as the survey said: `two` builds both ERISCs, `fab1` only ERISC 1 (`subordinate_active_erisc`), `aer1`
+  only ERISC 0 (`active_erisc`, shared with the base firmware). Slot depths the same in every mode (2D 17 / 16 / 16,
+  1D 16 / 16 / 32, VC1 51,4,8,2,4).
+- All clean in all three: mesh sanity 96/96, 1D sanity (test_fabric_sanity_at_least_2x2_mesh.yaml) 185/185, VC1
+  split 34/34 finishes, CI's leg (`fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"`) 24 passed, 7 skipped (the
+  same 7 in every mode: route-setting / TG-gateway tests and the 5-8 chip mux variants). 2D and VC1 single-ERISC have
+  no CI coverage; they run here.
+- Cost of one ERISC (cycles/packet over `two`; `fab1` / `aer1`):
+
+| suite (rows) | `two` | `fab1` | `aer1` |
+| --- | --- | ---: | ---: |
+| 2D 4352 B (10): mean | 1-hop write 222.6 | +113.9 | +115.7 |
+| 1-hop write / scatter | 222.6 / 221.8 | +39.8 / +95.6 | +39.8 / +95.6 |
+| 1-hop bidirectional write / scatter | 222.8 / 220.7 | +147.4 / +204.4 | +147.1 / +204.2 |
+| 3-hop write; multicast write | 221.9; 182.0 | +77.4; +161.5 | +86.4; +165.8 |
+| 1D 4352 B (16): mean | 1-hop write 187.6 | +117.3 | +121.6 |
+| 1-hop write; bidirectional; 3-hop | 187.6; 168.6; 187.6 | +10.9; +133.4; +69.9 | +14.7; +138.1; +71.7 |
+| VC1 split (6): mean | 1-hop 318-322 | +151.2 | +155.6 |
+
+- So one ERISC costs main's router 11-40 on one-way 1-hop writes and 130-230 wherever both directions or forwarding
+  load the same ERISC (bidirectional, multicast, 3-hop); `aer1` (sharing ERISC 0 with the base firmware) is 0-22
+  slower than `fab1`. Main's two-ERISC 2D rows (~222) sit at the firmware keepalive's one-way cap (§95: the study's
+  router runs the same rows at ~126), so these deltas are against a capped reference, not main's CPU limit.
+
+**Single-ERISC v4: v4se** (2026-10-28; a09u32 jobs 121-122; design `consolidation/V4_SINGLE_ERISC.md`, variant
+`fabric_exp/variants/v4se`, runs `merge_ab_runs.sh` / `se4_runs.sh`, table `se4_table.py`). v4gi_m with each role's
+loop body as one pass (`sender::pass`, `receiver::pass`); `router_single.hpp` runs both on one ERISC, receiver first,
+each out of line over its role's state record. One ERISC keeps no NoC command buffer programmed between commands
+(`command_buffer_presets = NUM_ACTIVE_ERISCS > 1`: local writes, forwards and the worker credit issue whole; the credit
+is an inline L1 write from a scratch word), runs teardown itself, and uses counter credits on its one TX queue (host:
+`fabric_builder_context.cpp` gives the study router counters in every mode). Goal per the user: functional on
+Blackhole, performant in two-ERISC mode; tuning on Wormhole later.
+- Two-ERISC gate (job 121, same job, v4gi_m control `s1ctl_v4gi` vs v4se `s1two_v4gi`): every suite within +-0.4
+  (4352, mix, flushmix, flushmix4, burst, 1d_m1, ring, Y-torus), latency within -6 / +3 ns; validation clean.
+- Single-ERISC (job 122, labels `s1aer1_v4se_*`, `s1fab1_v4se_*`): placement as intended (`aer1`: 360 router builds
+  for `active_erisc`, `fab1`: 360 for `subordinate_active_erisc`); mesh sanity 96/96, val1d_m1 143/143, ring 19/19,
+  Y-torus 12/12 in both; `fabric_unit_tests --gtest_filter="Fabric1DFixture.*"` with the study router (36 v4 builds
+  per mode, on the mode's ERISC) 10 passed, 3 skipped (the route-setting / TG-gateway tests main skips too; the
+  standalone mux fixture ran in job 125, below). No hangs.
+- Throughput (cycles/packet; `aer1` and `fab1` agree within 1 on every row):
+
+| suite (rows) | v4 `two` | v4 one ERISC | v4 cost | main cost | v4 - main, one ERISC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 2D 4352 B (10): mean | 145 | 277 | +132 | +115 | -56 (-17 to -92) |
+| 1-hop write / scatter | 128 / 142 | 207 / 249 | +79 / +107 | +40 / +96 | -55 / -68 |
+| 1-hop bidirectional write / scatter | 135 / 144 | 291 / 333 | +156 / +189 | +147 / +204 | -79 / -92 |
+| 3-hop write; multicast write | 152; 146 | 262; 327 | +110; +181 | +77..+86; +162..+166 | -37..-46; -17..-21 |
+| 1D 4352 B (12, no ring): mean | 147 | 281 | +134 | +105..+109 | -22..-25 (-13 to -40) |
+| 1-hop write; bidirectional; 3-hop | 124; 125; 126 | 185; 273; 244 | +61; +148; +118 | +11..+15; +133..+138; +70..+71 | -14..-17; -29..-34; -14..-15 |
+
+- So v4 on one ERISC is faster than main on one ERISC on every row, and its cost over its own two-ERISC mode is
+  larger than main's because its two-ERISC reference is not capped by the keepalive (main's `two` rows ~222 are).
+- VC1 (job 123, `se4vc1_runs.sh two aer1 fab1`, labels `s1<mode>vc1[i]_v4se_default_p1_o3`, hang capture armed): the
+  VC1 split (vc1_split.yaml, main's baseline rows) 34/34 finishes and the inter-mesh rows (vc1_inter.yaml) 16/16 in
+  every mode, no hangs; placement as intended (`two` 240 + 240, `aer1` 240 `active_erisc`, `fab1` 240
+  `subordinate_active_erisc`); slots the study default in every mode (VC0 19,9,9,9 / 16, VC1 5,5,5 / 4).
+
+| VC1 rows (cycles/packet) | v4 `two` | v4 one ERISC | v4 cost | main cost | v4 - main, one ERISC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| VC1 split (6): mean | 156 | 327 | +170 | +151..+156 | -132..-137 (-116 to -146) |
+| 1-hop EW / NS | 158 / 158 | 278 / 283 | +120 / +125 | +72..+81 / +102..+107 | -116..-125 / -140..-142 |
+| multicast (two senders) | 156 / 148 | 419 | +263 / +271 | +269..+290 | -139..-146 |
+| inter-mesh (8, v4 only): mean | 209-419 | 362-518 | +106 (+66 to +153) | - | - |
+
+- So VC1 on one ERISC is functional in both modes and faster than main's on every row (main's two-ERISC VC1 rows
+  318-322 run at the keepalive's cap and its VC1 build is -Os). `aer1` and `fab1` agree within 1 on every row (VC0
+  and VC1): sharing ERISC 0 with the base firmware costs v4 nothing measurable. Single-ERISC on Blackhole: done as
+  scoped (functional; Wormhole tuning later).
+
+**Standalone mux on v4** (2026-10-28; a09u32 job 125, `mux4_runs.sh two aer1 fab1`; job 124 ran nothing: the script
+lacked the results directory). Two different muxes: the standalone mux (`tt_fabric_mux`, `FabricMuxConfig`) is a
+kernel ops launch on their own Tensix cores, a worker to the router, on a plain fabric (two-ERISC on Blackhole); the
+fabric's Tensix mux mode (`FabricTensixConfig::MUX`) is launched by the fabric itself, one mux core per router, changes
+the router (senders: only the worker channel, fed by the mux, `erisc_datamover_builder.cpp`; receivers forward into
+the downstream direction's mux, `downstream_is_tensix_builder` in `compute_mesh_router_builder.cpp`) and forces one
+ERISC (`is_fabric_two_erisc_enabled`: any Tensix extension, "out of stack size"); UDM (`FabricTensixConfig::UDM`)
+likewise. `Fabric1DMuxFixture` is `Fabric1DFixture` (`test_basic_fabric_mux.cpp:48`): the standalone mux.
+- `fabric_unit_tests --gtest_filter="Fabric1DMuxFixture.*"`, fresh caches: main's router (kernel v1, default mode,
+  same-job control) 10 passed, 4 skipped; v4se in `two`, `aer1` and `fab1` 10 passed, 4 skipped each (the same four
+  in every run: the 5-8 chip variants). Builds per run: 36 router configs on the mode's ERISCs (`two` both), 8
+  `tt_fabric_mux`, 21 + 21 mux client kernels. So v4 carries the standalone mux as is, in every mode; the fabric's
+  Tensix mux mode and UDM are the router features still to build.
+
+**Tensix mux mode on v4: v4tm** (2026-10-28; design `consolidation/V4_TENSIX_MUX.md`; variant `variants/v4tm` = v4se
+plus: the receiver credits the far worker channel without reading the header's stale `src_ch_id`
+(`source_channel`), the receiver waits for the downstream muxes' sync count before opening its downstreams
+(`wait_for_downstream_muxes`), the gate admits mux mode on one ERISC, VC1 with mux mode refused at build with its own
+message; user: VC1 with mux mode out of scope). Main does not reject VC1 with mux mode: VC1 is wired router to router
+around the muxes, but the MUX slot branch gives VC1's sender channels no slots.
+- Offline (`coverage.py`, merged-tree mocks): outside mux mode v4tm loads the same image as v4se in every config,
+  164 two-ERISC (1D, ring, 2D, torus, VC1) and 38 single-ERISC (`objcopy -O binary`; only debug sections differ). Mux
+  mode (new mock cases `bh_1d_mux`, `bh_2d_mux`, `bh_ring_mux`, run with v4tm swapped in, as the tree's v2 slot does not
+  build after the merge): every logged router config compiles (36 / 40 / 36), 48 distinct configs at -O3; router on
+  ERISC 1, only the worker channel serviced.
+- Device (a09u32 job 126, `tm_runs.sh`, main's router first in the same job): `fabric_exp/v4/val_mux.yaml` (the mux
+  cases of `test_fabric_sanity_at_least_2x2_mesh.yaml`: linear, full-ring and mesh multicast over three send types, the
+  ring deadlock check) 19/19 on both; `fabric_unit_tests` on `Fabric1DTensixFixture`, `NightlyFabric1DTensixFixture`,
+  `NightlyFabric2DTensixFixture` 6 passed on both (v4: 108 router builds, all ERISC 1; 26 mux kernels); the
+  standalone mux v2 smoke fixture (`*FabricMuxV2Smoke*Fixture.*`, merge gate) 16 passed on v4 (two-ERISC). No hangs.
+- The one benchmark row (ring deadlock check, 1 KB, one link): main 419.6 cycles/packet (419.6 / 422.0 / 419.6 in
+  jobs 119-120 and 126), v4tm 440.9 (+21, +5 %; one sample). The mux bounds this row (one packet and a flush at a time),
+  so the gap is in how the router serves it (credit return to the mux, forwards into the next mux), not the router's
+  own rate; not examined yet.
+
+**Mux-mode gap: it is single-ERISC rings, not the mux** (2026-10-28; a09u32 jobs 127-128). Same job, A/B/A/B, main's
+control repeating to 0.4 (127) / 0.2 on the steady rows (128):
+- Mux mode (`exp_mux.yaml`, `mxb_runs.sh`: 1D, ring and 2D 1-hop / bidirectional / 3-hop / multicast and the full
+  ring, 1024 and 4352 B): every unicast row equal to 0.5 (the mux sets them: 1D 313-332, ring 341-359, 2D 445-468);
+  linear multicast v4tm -18 / -19; ring multicast +6 / +8; full-ring multicast +21 / +22; identical in both passes,
+  independent of size.
+- One ERISC without the mux (`exp_ring_se.yaml`, `rse_runs.sh`, `TT_METAL_DISABLE_FABRIC_TWO_ERISC=1`, main vs v4se):
+  one-way rows v4 faster (1-hop -4, 3-hop -2, multicast -9 / -12, unidirectional multicast -7 / -8); 1-hop
+  bidirectional +19 (both passes); half-ring and full-ring multicast +9 to +34 (main itself moves up to 20 between
+  passes there). Single-ERISC ring rows cost the same at 1024 and 4352 B (one-way ~256-260): per-packet bound.
+- Against job 122 (one ERISC, no rings): v4 bidirectional rows were 29-34 (1D) and 79 (2D) faster than main. So v4
+  loses only where a router both sends data and returns first-level acks on its one TX queue: rings (first-level
+  acks), with traffic both ways or forwarded. Hypothesis (not yet confirmed): under first-level acks v4's receiver
+  sends a credit frame (an L1 block, completions and acks) most passes, one slot per completion group, on the TX queue
+  its sender's data uses; main's single-ERISC router credits with stream-register writes. Mux mode on rings is this
+  case on every router.
+
+**Stream-register credits on one ERISC: v4sc** (2026-10-28; a09u32 jobs 129-130). On one TX queue main's credit plan
+uses stream registers (the receiver adds each credit to the far sender channel's packets-completed / packets-acked
+register with one remote write; the sender reads the register and lowers it by what it takes); v4 had only counter
+credits, and a study switch (`fabric_builder_context.cpp`) gave it counters on one TX queue too (V4_SINGLE_ERISC.md
+§4.2). User: support main's mechanism there. `variants/v4sc` = v4tm plus the second path, chosen at compile time by
+the host's plan per VC: `StreamCredits` (owed counts per far sender channel, sent once per pass when the TX queue is
+free, a channel's acks before its completions; a further write waits for the next pass), the sender's credit reads
+through `read_*_report` / `*_reported` (absolute counts as before; with registers, taken plus the register, which it
+lowers). Host: `TT_FABRIC_EXP_STREAM_CREDITS=1` gives the study router main's plan; default unchanged (counters).
+- Offline: with counter credits v4sc loads the same images as v4tm in all 250 mock configs (164 two-ERISC, 38
+  single-ERISC, 48 mux); with stream credits all 130 logged single-ERISC configs build (1D, 2D, ring, torus, mux 1D /
+  2D / ring, VC1 split; new mock cases `*_sc`). The 1D single-ERISC mock with stream credits crashes in host dispatch
+  at launch (`add_prefetch_set_ringbuffer_offset`); main's router under its own plan crashes there too: a mock
+  artifact, after the compiles.
+- Functional (job 129, one ERISC, stream credits): mesh 96/96, val1d_m1 143/143, ring 19/19, Y-torus 12/12, val_mux
+  19/19, VC1 split 34/34, Fabric1DFixture + Tensix fixtures 16 passed, 3 skipped. No hangs.
+- Throughput (job 130, `scp_runs.sh`, one ERISC, order main, counters, stream; pass b repeats rings and mux to 0.4;
+  main's half/full-ring rows move up to 24 between passes):
+
+| suite (rows) | v4 counters - main | v4 stream - main | stream - counters |
+| --- | ---: | ---: | ---: |
+| 2D 4352 B (10) | -54.6 | -47.2 | +7.4 |
+| 1D (12) | -21.7 | -17.7 | +4.0 |
+| VC1 split (6) | -132.2 | -121.3 | +11.0 |
+| mux mode (22) | +0.9 | +4.7 | +3.8 |
+| rings (16) | +5.9 | +63.0 | +57.1 (1-hop +12, bidirectional +25, multicasts +13 to +61, full ring +258) |
+
+- So the hypothesis above is refuted: counter frames are not what costs v4 on rings; v4 with main's mechanism is slower
+  in every suite. Even without first-level acks (2D, 1D, VC1: completions only, one register write per group, never
+  deferred) registers cost 4 to 11: v4's sender reads its credits every visit, and a stream-register read and decrement
+  cost more than an L1 load. On rings the second write of a pass (the completion after the ack) waits a pass as well.
+  Counter credits stay v4's one-TX-queue default; the ring gap to main (bidirectional +19, half/full ring) has another
+  cause, not yet found.
+
+**Where the single-ERISC ring cycles go: PC sampling** (2026-10-28; a09u32 job 131, `pcse_runs.sh`; tools
+`pcs_report.py` (now maps main's router builds too), `pcs_lines.py` (one router's samples by source line and inline
+chain, through addr2line on the run cache's own -g ELF; `--dump` writes the chains)). The ring 1-hop bidirectional row
+(1024 B, 40M packets, ~11 s, `fabric_exp/pcse/bidir.yaml`), one ERISC, every chip's ERISC 1 sampled (78k samples/s,
+0 read errors; rates under sampling main 364.1, v4tm 383.1 cycles/packet, as without). The two routers carrying the
+row (chip 0 channel 6, chip 1 channel 5) differ from the 38 idle ones (v4: sender pass 38%, receiver pass 50%, loop
+3.5%, against 53 / 33 / 13% idle). Both routers are CPU-bound: no single stall; the time spreads over per-packet work.
+Per packet, by activity (sample share x rate; categories matched by function name, so approximate; main inlines more
+into its step functions, so its rows below are partly lumped into "header, route, retire"):
+
+| cycles/packet (two links averaged) | main | v4 | v4 - main |
+| --- | ---: | ---: | ---: |
+| sender: worker credit (the spoofed inline write) | 33.4 | 30.2 | -3.2 |
+| sender: data send | 53.9 | 74.4 | +20.4 |
+| sender: polling, credits in, connection check | 98.6 | 74.1 | -24.6 |
+| receiver: first-level acks | 10.1 | 41.3 | +31.2 |
+| receiver: credit frame out | - | 13.0 | +13.0 |
+| receiver: completions | 21.9 | 34.8 | +12.9 |
+| receiver: local delivery | 64.4 | 34.5 | -29.9 |
+| receiver: header, route, retire | 78.4 | 66.3 | -12.1 |
+| loop | 3.5 | 14.8 | +11.3 |
+
+- Correction (same job, by source line): main's first-level-ack credit code is inlined into its receiver step, so the
+  name-matched rows above undercount it. By line (main's ack block, `fabric_erisc_router.cpp` 2284-2318, and its
+  completion paths, 2535-2670): acks ~47, completions ~42 cycles/packet, ~89 in all, the same as v4's ~89 (acks 41,
+  frame 13, completions 35). Their composition differs:
+
+| credit bookkeeping, cycles/packet | main | v4 |
+| --- | ---: | ---: |
+| transport: TX-queue busy check and one remote register write per credit (main: 2292, 2313, 2652, 2663); one frame per pass (v4: 270) | ~51 | ~13 |
+| attribution and counting: the header's source channel and the counts (main: 2308, 2315, 2666; v4: the ack loop 158-165, the completion's source lookup and credit, 188) | ~20 | ~50 |
+| proof: the slot's writes have left (main 2645; v4 183) | ~11 | ~12 |
+
+- So v4's credits are not heavier than main's: v4 traded main's per-credit transport for per-packet counting and
+  attribution, at an equal total. The +19 on this row is outside the credits: v4's single-ERISC pass structure (loop
+  ~15 against main's ~4: two out-of-line passes over state in memory, V4_SINGLE_ERISC.md) and per-pass receiver reads,
+  partly offset by local delivery and sender polling (the categories there do not align cleanly between the two).
+- A candidate for the Wormhole tuning (not built): credits by ring position. The far sender already knows which of
+  its channels each far-ring slot came from (it sent them in ring order); acks and completions could go back as one
+  in-order count per VC, attributed to channels at the sender from its own per-slot record, removing the receiver's
+  per-packet header reads, per-channel counters and per-slot source lookups: the attribution half of v4's cost (~45-50
+  of its ~89, estimated from the lines above), where v4's frame already did the transport half. On main it would
+  remove only ~15-20 (its cost is mostly per-credit transport).
+
+**Credits by ring position, first build: v4rp** (2026-10-28; a09u32 job 132, `rp_runs.sh`; design
+`consolidation/V4_RING_CREDITS.md`; `variants/v4rp` = v4tm + ring-position credits on routers whose only VC is VC0 with
+first-level acks). Receiver: acks are `acked += arrived` (no header reads), completions `completed += n` (no source
+record or lookup), the frame is `[acked, completed]`, 16 bytes. Sender: a per-far-slot channel record written at the send
+(no `src_ch_id` stamp), the two counts taken once per pass at the pass's start (`take_ring_credits`: far slots freed by
+the completion difference, newly acked slots credited to their channels' producers in runs).
+- Offline: every non-ring config loads v4tm's image (two-ERISC 1D / 2D / VC1, one-ERISC 1D / 2D, mux 1D / 2D; the
+  single-ERISC state's record member is `[[no_unique_address]]`, so empty elsewhere); ring and torus configs build in
+  both ERISC modes and with the mux. Images on rings: receiver -144 B, sender +224 B; tori -96 / -490 B. Loops (ring
+  configs, instructions / stack loads / stack stores): receiver::run 517/19/33 -> 481/18/20, sender::run 401/36/46 ->
+  457/50/69.
+- Validation, data-checked: two ERISCs ring 19/19, Y-torus 12/12, mesh 96/96, val1d_m1 143/143, val_mux 19/19; one
+  ERISC ring 19/19, Y-torus 12/12. No hangs.
+- Throughput against v4tm, same job, two passes (each arm repeats within 0.2), cycles/packet:
+
+| row | v4tm | v4rp | |
+| --- | ---: | ---: | ---: |
+| two ERISCs, ring 1-hop write / scatter (4352 B) | 150.7 / 189.5 | 193.1 / 194.1 | +42.4 / +4.6 |
+| ring 3-hop write; ring multicast write | 173.5; 156.8 | 194.1; 177.5 | +20.6; +20.7 |
+| ring unidirectional multicast write / scatter | 224.4 / 274.4 | 205.0 / 235.7 | -19.4 / -38.7 |
+| ring half-ring multicast write / scatter | 181.9 / 234.5 | 182.3 / 195.3 | +0.4 / -39.2 |
+| Y-torus N/S 1-hop write / scatter (E/W rows unchanged) | 158.7 / 200.7 | 199.2 / 199.4 | +40.5 / -1.3 |
+| one ERISC, ring 1-hop (1 KB / 4352 B) | 255.6 / 255.9 | 269.1 / 272.4 | +13.5 / +16.5 |
+| one ERISC, ring 3-hop; half ring; full ring (1 KB) | 314.8; 467.4; 500.6 | 282.5; 448.4; 481.5 | -32.4; -19.0; -19.1 |
+| one ERISC, ring multicast / bidirectional 1-hop (1 KB) | 363.3 / 383.3 | 378.5 / 392.1 | +15.2 / +8.9 |
+| mux mode, full ring / ring multicast (1 KB); 1-hop | 440.9 / 332.5; 340.6 | 415.9 / 325.0; 340.8 | -25.0 / -7.5; +0.2 |
+
+- So the receiver side delivers where the receiver is the bound (forwarding and multicast rows -8 to -39; mux full ring
+  -25), but the sender side as built costs more than it saves: its loop grows and spills (the far-send record carried
+  per pass, and a credit read of its own at the pass's start), and rows where both ERISCs ran near ~150 (light one-way
+  writes) move to the sender's new bound, ~194 (write rows now equal the scatter rows). Next: the sender's part reworked
+  (the counts read in the worker visit's existing load group; the attribution, rare per pass, out of line; the record
+  kept out of the loop's state), then the same A/B.
+- Attribution (a09u32 job 133, `pcsr_runs.sh`: PC sampling of both ERISCs on the two-ERISC ring 1-hop write row, 60M
+  packets of 4352 B, v4tm 150.6 / v4rp 193.1 cycles/packet under sampling; the row runs from chip 1 ERISC 0 to chip 0
+  channel 6 ERISC 1). The sender is the bound in both builds (its samples are per-packet work, not polling; WRONG, see
+  the v4rs entry: polling samples look like work, and the receiver is the bound in v4tm); the
+  receiver's real work fell as designed (acks 34.9 -> 12.7) and its polling rose with the slower rate. Sender, cycles
+  per packet: the new credit step `take_ring_credits` +51.5 (the two credit words read in their own group and used at
+  once, a load-use stall, with the far-slot update ~14; the attribution walk ~12, run although only the worker sends,
+  because the router has a forwarding channel; the early-exit test of three record counters ~7; checks and the call
+  into the worker credit ~9; the forwarding credit's setup hoisted by the compiler onto the common path, with a stack
+  load and store, ~3: code motion, not credits taken); `send` +10 (the record write, and more stack traffic around the
+  TX queue writes); the worker visit -15 and the free-slots reads -4 (their credit reads moved). Tool: `pcs_lines.py
+  --dump` now records each sample's ELF address.
+
+**Ring-position credits, sender reworked: v4rq** (2026-10-29; a09u32 jobs 134-135, `rq_runs.sh`, `pcsq_runs.sh`;
+`variants/v4rq` = v4rp with the sender reworked per job 133: the two credit words read in the worker visit's load group
+with the connection semaphore, no early-exit test, sends recorded as runs of one channel (`SendRuns`: a send from the
+newest run's channel adds one, any other starts a run; acks taken from the oldest runs), the record in the forwarding
+table, empty elsewhere). Offline: non-ring configs load v4tm's images; sender::run 405/41/50 (v4tm 401/36/46, v4rp
+457/50/69). Validation as job 132, all passed. Same job against v4tm, two passes (each arm within 0.2):
+
+| row, cycles/packet | v4tm | v4rq | v4rq - v4tm | v4rp - v4tm (job 132) |
+| --- | ---: | ---: | ---: | ---: |
+| two ERISCs: ring 1-hop write / scatter | 150.7 / 189.5 | 181.9 / 182.7 | +31.2 / -6.8 | +42.4 / +4.6 |
+| ring 3-hop write; multicast write | 173.5; 156.7 | 182.5; 176.1 | +9.0; +19.4 | +20.6; +20.7 |
+| unidirectional multicast write / scatter | 224.4 / 274.4 | 197.7 / 236.2 | -26.8 / -38.2 | -19.4 / -38.7 |
+| half-ring multicast write / scatter | 181.9 / 234.7 | 172.6 / 196.3 | -9.3 / -38.4 | +0.4 / -39.2 |
+| Y-torus N/S 1-hop write / scatter | 158.7 / 200.8 | 195.4 / 196.9 | +36.7 / -3.9 | +40.5 / -1.3 |
+| one ERISC: ring 1-hop 1 KB / 4352 B; bidirectional | 255.6 / 255.9; 383.3 | 263.1 / 256.9; 384.1 | +7.5 / +1.0; +0.8 | +13.5 / +16.5; +8.9 |
+| ring 3-hop; multicast (1 KB) | 314.8; 363.2 | 291.7; 377.4 | -23.1; +14.2 | -32.4; +15.2 |
+| unidirectional / half / full ring (1 KB) | 490.2 / 467.3 / 500.6 | 482.1 / 444.2 / 474.5 | -8.1 / -23.1 / -26.1 | +1.1 / -19.0 / -19.1 |
+| mux mode: full ring / ring multicast (1 KB); 1-hop | 440.9 / 332.4; 340.6 | 401.8 / 320.0; 340.6 | -39.1 / -12.5; 0 | -25.0 / -7.5; +0.2 |
+
+- Attribution (job 135, the two-ERISC ring 1-hop write row, v4rq 181.9 under sampling): the sender, the bound in both
+  builds, +31: the credit step +33 (the credit word from L1 used on the next instruction, a load stall the group cannot
+  hide with nothing to overlap; the ring's taken counts on the stack, loaded and stored each visit; the runs' byte
+  arrays read in the attribution), the run update in `send` ~15 (two dependent byte loads from the stack, the newest
+  run's count and channel, and a branch on each, then the stores; the header stamp it replaces was one store), the
+  worker visit -11.5, the slot checks -5. The receiver's work as in job 133 (acks -23).
+- So the receiver half pays where the receiver is the bound (forwarding and multicast rows, mux mode, single-ERISC
+  multi-flow: -9 to -39), but on light two-ERISC rows the sender is the bound already (v4tm 150.6 is its own
+  per-packet work; WRONG, see the v4rs entry: v4rq's sender became slower than the receiver), so moving work to it can at best tie, and any of it shows (+31 to +37 on 1-hop writes).
+- Why the rework missed its estimates (credit handling expected ~11 cycles/packet, measured ~41; v4rp ~55): the
+  estimates removed the cost of the code a profile line pointed at, but on this in-order core a stalled load shows at
+  its first use, so changing the code moves the wait to the next dependent instruction rather than removing it. (1) The
+  credit words grouped with the semaphore load hide nothing when their first use is the next instruction (§17's rule:
+  grouping helps only where independent work follows). (2) Moving the record into memory to stop v4rp's spills turned
+  the per-send update into a dependent chain of loads and stores (index, then the run's count and channel) where the
+  header stamp was one store. (3) One-run attribution still loads the oldest run's index, count and channel. v4tm stays
+  at 150 by keeping its per-packet state (the worker's counts, the far ring's free slots) in registers and reading
+  credit words where the send's own work overlaps them; v4rp added register state (spills), v4rq moved it to memory
+  (load stalls). The next step's target is therefore no new per-packet memory access and no added loop-carried state.
+
+**Ring-position credits, sender state in registers: v4rr** (2026-10-29; a09u32 jobs 136-137, `rr_runs.sh`,
+`pcsrr_runs.sh`, `pcsf_runs.sh`; `variants/v4rr` = v4rq with the sender's per-packet state in registers, replacing
+state: the completion count taken is the worker's `completed`, the ack count taken and the newest run's channel sit with
+the worker's loop locals (`RingState`, empty elsewhere); a send compares its channel with the newest run's and touches
+memory only on a change (`start_run`, out of line, queueing the finished run's unacked packets); queued runs are taken
+out of line (`take_queued_runs`); the worker's send reads the two credit words in its post-send load group, the visit
+only on passes without a send). Offline: non-ring configs load v4tm's images; sender::run 438/49/53. Validation as
+job 132, all passed. Same job against v4tm, two passes (within 0.5, one one-ERISC half-ring row 14):
+
+| row, cycles/packet (v4rr - v4tm) | two ERISCs | one ERISC |
+| --- | ---: | ---: |
+| ring 1-hop write / scatter | -10.0 / -37.7 | -26.1 (1 KB) |
+| ring 1-hop bidirectional | -11.6 / -38.0 | -34.3 |
+| ring 3-hop write / scatter | -21.9 / -37.8 | -28.1 |
+| Y-torus N/S 1-hop write / scatter (E/W rows unchanged) | -4.7 / -33.6 | |
+| unidirectional ring multicast | -18.5 / -30.2 | +27.8 / +32.0 |
+| ring multicast (all-to-all) | +37.9 / +26.1 | +32.9 / +36.6 |
+| half-ring multicast | +24.0 / -13.9 | -0.1 / +12.6 |
+| full-ring multicast | | +73.6 / +77.1 |
+| mux mode: full ring / ring multicast; 1-hop | -38 / -12 to -15; 0 | |
+
+- Single-flow rows (job 136's PC sampling, two-ERISC ring 1-hop write, 140.6; the conclusion of this item is WRONG, see
+  the v4rs entry: the receiver is the bound, and the gain is the receiver's): the gain is the sender's, the bound:
+  the worker visit 37.9 -> 4.7 (v4tm's visit reads the worker's ack counter in its load group and uses it at once; v4rr
+  reads the credit words inside the send, whose own work hides their latency), less the new credit step and credit
+  dispatch (+24). The receiver's ack saving (34.9 -> 11.1) does not count on this row.
+- Mixed rows (job 137, one-ERISC full-ring multicast, router 0/6, v4tm 500.6 / v4rr 577.1): every router's sender
+  interleaves its worker's packets with forwarded ones, so a run is one packet: the run bookkeeping +35
+  (`take_queued_runs` 18.9, `record_send` 10.4, `start_run` 6.0) and the out-of-line calls each send and ack visit
+  makes +35 more (pass and loop overhead, the registers saved around the calls). And the receiver's ack saving there
+  (-23.8) reappears in `receive` (+23.7): v4tm's ack loop was the first touch of a newly arrived packet's header and
+  paid its wait; without it the same wait lands on `receive`'s header read.
+- So on these rows the protocol change is not what made single-flow rows faster: the placement of the credit read on
+  the sender is, and it does not need ring position. Mixed traffic makes attribution per packet whichever end does it,
+  and the receiver does it more cheaply (it reads the header anyway).
+
+**Credit reads placed in the send: v4rs; and which ERISC bounds the light ring rows** (2026-10-29; a09u32 job 138,
+`rs_runs.sh`; `variants/v4rs` = v4tm with, on first-level-ack VCs, each channel's ack counter read in the send's
+post-send load group with its completion counter; the visit uses it when it sent and reads it only on passes without a
+send; v4tm's protocol otherwise. Offline: only ring and torus sender images change; sender::run 410/38/47). Validation
+as job 132, all passed. Same job, v4tm / v4rs / v4rr, two passes (each arm within 0.5):
+
+| suite mean vs v4tm (range) | v4rs | v4rr |
+| --- | ---: | ---: |
+| two ERISCs, rings (14) | -0.37 (-6.0 to +0.4) | -12.80 (-38.0 to +38.0) |
+| two ERISCs, Y-torus (12) | +0.01 | -6.49 (-34.0 to +0.1) |
+| one ERISC, rings (16) | -3.58 (-7.2 to 0) | +4.18 (-34.4 to +76.3) |
+| mux mode (22) | -0.61 (-4.9 to +0.2) | -4.64 (-38.1 to +0.2) |
+
+- v4rs leaves every single-flow row unchanged (two-ERISC ring 1-hop write 150.7, scatter 189.5; torus N/S; one-ERISC
+  1-hop and 3-hop) and gains only where the sender is busy: one-ERISC multicast rows -4 to -7, mux full ring -5,
+  two-ERISC all-to-all ring multicast write -6.
+- Correction (to the v4rp, v4rq and v4rr entries above): a router's loop polls without stopping, so both ERISCs'
+  samples always add up to the row's rate, and a profile cannot say which ERISC bounds a row; idle passes are billed to
+  whatever the loop polls (the worker visit, the slot checks). The A/Bs say it: a sender-only change (v4rs) does
+  nothing on the light two-ERISC ring rows; a leaner receiver with a sender no slower (v4rr) gains -10 to -38; a leaner
+  receiver with a slower sender (v4rq) loses +31. So those rows are receiver-bound in v4tm (as the v4u study had it:
+  "rings are E1-bound"), v4rq's sender became slower than its receiver, and v4rr's single-flow gain is the receiver's
+  (acks by count, no per-packet header read before the frame), with the sender kept cheap enough. Ring-position
+  credits' receiver half is worth -10 to -38 where the receiver binds; the only problem is the sender's attribution
+  under mixed traffic (per-packet runs, out-of-line calls).
+
+**Where v4 stands; v4rs leads** (2026-10-29, from stored runs, no new job; per-suite means in cycles/packet, P150 400G;
+main as shipped (firmware keepalive) unless marked; v3q = the v3 lead; v4 = v4tm, which on two-ERISC non-mux rows equals
+v4gi_m / v4se within 0.4).
+- Two ERISCs: 2D 4352 B main 217.2 / v3q 144.4 / v4 144.4; 1D 197.9 / 152.9 (24 worker slots) / 147.1; mix 137.0 (main
+  on a08u24) / 127.0 / 128.7; bursts - / 522.5 (v3zy, a08u24) / 523.3; ring 239.6 / 230.5 / 188.9; Y-torus 181.9 (main
+  at keepalive 1000) / 164.7 / 157.4; VC1 split 1-hop ~320 / 180-198 / 158. Latency against main: 1-hop within 30 ns,
+  3-hop -124 to -203 ns.
+- One ERISC against main: 2D 331.3 / 276.5, 1D 303.3 / 281.4, VC1 ~471 / 327; rings 375 / 378.7 (1-hop -4, bidir +19,
+  half / full ring +10 to +34); mux mode 373.3 / 374.1 (full ring +21, ring multicast +7; 18 of 22 rows mux-bound,
+  equal).
+- Open gaps, by weight: (1) Galaxy full-ring multicast at 4352 B, the one production row below main: v4u 0.87x,
+  v4uf's single-slot rule (v4gi's and so the lead's) 0.75x; the lead has not run on Galaxy. (2) One-ERISC multi-flow
+  rings and mux-mode rings (above). (3) Two-ERISC ring and torus receiver headroom: v4rr showed -10 to -38 on
+  single-flow rows. (4) Rows behind v3q: 3-hop write +9, multicast write +5, small writes +2 to +3 (forwarded +5),
+  pure atomics +2 to +6, 16 B bursts +3 to +6, MixCmd +15 to +36 (deferred atomics off by decision).
+- Decision (user): **v4rs is the lead** (`variants/v4rs`, v4tm plus the ack-counter read in the send). Ring-position
+  credits (v4rp, v4rq, v4rr) are not adopted; a register bit-history version of them and a Galaxy run of the lead are
+  open for the user's call.
+- Method lesson from v4rp-v4rs (three device rounds spent on a wrong bound): which ERISC bounds a row, and which change
+  made a gain, are decided by an isolating A/B (a change to one side only), never by PC-sample shares or by subtracting
+  a profiled line's cost; until then they are hypotheses, and the next design waits for the A/B.
+**Feature inventory after the merge, offline** (2026-10-29; user: close out the remaining features first, then
+performance; gaps parked in `consolidation/V4_PERF_GAPS.md`). Post-merge coverage (`coverage.py`, `TT_COV_DIR=cov_m`,
+`OFFLINE_BASE=~/.tt-metal-p1-base-m`; the pre-merge cases fail on every config). The feature cases were captured again
+after the merge with main's router in the v2 slot (`variants/mainv2cap`, capture only; tree restored), plus a new case
+`bh_neighbor` (NeighborExchange: every router has one VC0 sender channel, so the host selects the speedy path); UDM is
+synthesized from the mux case as before. v4rs at -O3 builds 612 of 1,074 configs:
+- Builds: BH 1D / 2D / ring / torus (both ERISC modes), mux mode, VC1 split, code profiling (56), channel-trimming
+  capture (2D 56, 1D 20), Galaxy 1D / 2D / ring / torus and express (5 VC0 sender channels, Z routers; 56).
+- Not brought up (the bring-up gate): dynamic telemetry (`TT_METAL_FABRIC_TELEMETRY`, 2D 56 / 1D 20), the perf
+  telemetry recorder (`enable_fabric_bw_telemetry`, which test_tt_fabric turns on in its perf modes unless
+  `TT_FABRIC_NO_BW_TELEMETRY`; 56), VC2 (56), UDM (28), the speedy path (NeighborExchange, 8), Wormhole (every config;
+  the WH cases were not captured again). The `*_sc` cases fail by design (the parked stream-credit plan).
+- Out of the list: the data-cache and TX-queue spin-wait flags (constants off in the builder).
+- Built, never run on hardware with v4: code profiling, trimming capture and replay (replay configs come only from a
+  device run; on this host main's replay works only for 1-hop traffic), express / Z (Galaxy only).
+- `bh_vc1_allinstr` logged 24 configs (the two MPI ranks' lines cut each other; partial).
+
+**UDM mode on v4: v4udm** (2026-10-29; a09u32 jobs 139-140, `udm_runs.sh`; design `consolidation/V4_UDM.md`;
+`variants/v4udm` = v4rs + UDM). User order for the features: UDM, VC2, speedy path, telemetry. UDM
+(`FabricTensixConfig::UDM`) puts a mux and a relay on a Tensix core per router direction; the router's only change is
+local delivery: a packet for this chip goes whole into the relay's ring, which does its NoC work. In v4 the relay is one
+more VC0 downstream (`router_downstream.hpp`: cursor and link as members that exist only in UDM; admission needs a relay
+slot when the packet delivers here; the forward is the shared stateless forward; opened after the downstream routers).
+Its teardown word is the relay connection's buffer-index word on this router (main passes none, so its open writes 0
+to L1 address 0).
+- Real UDM configs captured for the first time (mock run of `Fabric2DUDMModeFixture`, case `bh_2d_udm_gtest`): one
+  ERISC, mux mode off, one local Tensix connection, 4 relay slots, relay credit on stream 30, no deadlock avoidance, 4
+  VC0 sender channels. The earlier synthesized case (`bh_2d_udm`, from the mux case) kept mux mode and was not one.
+- Offline: the 28 UDM configs build; the other 612 post-merge configs are byte-identical to v4rs's.
+- Device, fresh caches: main's router (kernel v1, flags 0, firmware keepalive) `Fabric2DUDMModeFixture.*` 8/8,
+  `NightlyFabric2DUDMModeFixture.*` (2x4) 68/68; v4udm 8/8 and 68/68 (36 router builds, every one with the relay
+  path). No hangs. The ttnn UDM gtests (`unit_tests_ttnn_udm`) are not configured in this build; not run.
+- Lead: **v4udm**.
+
+**VC2 on v4: v4vc2, first device runs** (2026-10-29; a09u32 jobs 141-142, `vc2_runs.sh`; design `consolidation/V4_VC2.md`;
+`variants/v4vc2` = v4udm + VC2: VC2's worker channel visited every pass like VC0's, its credits from its own source word
+(the channel's location-info read counter; main shares one scratch word between both workers' credits with no flush),
+its receiver channel delivers every packet locally). Offline: 84 VC2 configs build (56 two-ERISC, 28 one-ERISC from a
+new capture); 646 other images byte-identical to v4udm, 22 VC1 senders identical up to a permutation of three stack
+slots in `sender::run`.
+- The test needed a fix first: the streams port's benchmark loop called the VC0-only `update_credits_and_slots` for
+  every adapter, so any VC2 sender kernel failed to compile (`streams/port/streams_vc2_replay.patch`, also in the
+  streams worktree, uncommitted; VC0 benchmark sender binaries byte-identical). Every group then vetted on the mock.
+- Main's router (job 141): two ERISCs 10/10. One ERISC: does not build: main static_asserts that a VC2 sender and
+  receiver are on different ERISCs ("VC2 receiver channel not serviced"), so VC2 on one ERISC is not supported on main.
+- v4vc2 (job 142), two ERISCs: the first group (VC0 traffic, VC2 enabled) passed; the second (`VC2MeshNeighbourExchangeVC2`,
+  VC2 and VC0 neighbour exchange with flow control) hung (capture `results/vc2_v4vc2_two_hangcap`). Every VC2 sender
+  channel stopped at exactly 512 packets (sent = completed = credited to the worker; the test's flow-control window is
+  min(buffer, packets) = 512 at 2 KiB), all router channels empty, VC0 flows complete. The VC2 packets in both rings
+  are well formed (src_ch 4, 2048 B, to the receiver core). So the senders wait on flow-control credits, which the
+  receivers return on VC0 (`register_fabric_connection(..., vc_id 0)`) and which never came: cause not found. The
+  capture's worker part found no test program (post-merge launch-message layout; `newest_program: None`), so the
+  workers' state is unknown. One-ERISC VC2 not run (the job stopped at the hang).
+- Found (user: fix the capture, then isolate). The capture read Tensix go messages with the pre-merge layout: since main
+  6d8a103 they are rings, `go_messages[9].slot[8]` (one per launch slot), `go_message_index` at +1472, and every base
+  after the mailbox moved 0x100; it read slot 0 (DONE) for test cores running in slot 1. `hang_capture.py` and
+  `hang_workers.py` updated (HANG_CAPTURE.md). Isolation (job 148, `vc2iso_runs.sh`, groups one at a time): VC2 alone
+  and VC2 in both directions passed; a VC2 and a VC0 flow on one router hung, and the capture now showed it: the VC2
+  flow complete (40000/40000), the VC0 sender stuck at 43 with credit word 0 although its router had completed all 43.
+  Cause: Blackhole's `noc_inline_dw_write` to L1 is emulated and always issues on `write_cmd_buf`, ignoring its
+  cmd_buf argument, so every VC2 credit (and VC2's connection notify) overwrote the VC0 worker credit's preset on that
+  buffer; VC0's credits then went to VC2's worker. (The code comments said "atomics buffer": wrong, now corrected.)
+  Fix: the worker credit preset only on routers with one worker channel (`worker_credit_preset`); with VC2 both
+  workers' credits are whole commands, each from its own source word. Other configs unchanged (646 identical, the 22
+  VC1 senders as before).
+- v4vc2 (job 152): the whole yaml 10/10 on two ERISCs and 10/10 on one ERISC (main cannot build the one-ERISC case);
+  the sender images carry the VC2 worker code (36 of 36 E0 / single images). No hangs. Lead: **v4vc2**.
+
+**Speedy path on v4: v4spd** (2026-10-29; a09u32 jobs 155-156, `spd_runs.sh`, `spdv_runs.sh`; `variants/v4spd` = v4vc2
++ the host's speedy-path routers). The host selects the speedy path (`ENABLE_SPEEDY_VC0`) for VC0 worker-only routers
+whose receiver never forwards, e.g. every router of a NeighborExchange fabric (1D, one VC0 sender channel, receiver
+forwarding off). Main runs a separate loop for them (amortized credits, ping-pong transaction IDs). In v4 the generic
+loop already specializes to one worker channel; the only change: VC0's receiver channel delivers every packet without
+decode or admission on these routers (the delivery-only path written for VC2), as main's speedy receiver. Main's
+generic receiver ignores the forwarding-off flags (DISABLE_RX_CHx_FORWARDING, also set by channel-trimming replay),
+and v4 does too outside the speedy path. **WRONG (2026-10-29, found while reading for trimming):** main's generic
+receiver honors them (`run_receiver_channel_step_impl`, `if constexpr (!is_receiver_channel_forwarding_disabled[...])`
+at 6d8a103's line 1523: no forward or delivery; the packet is still consumed and credited). Only v4 ignores them
+outside the speedy path; the trimming port brings that in. The speedy credit-amortization args do not apply.
+- Offline: the 12 NeighborExchange configs build (8 two-ERISC; 4 one-ERISC from a new capture, `bh_neighbor_1erisc`);
+  the other 752 post-merge configs are byte-identical to v4vc2's.
+- Validation (new `v4/val_nbr.yaml`: write, scatter, fused at 4352 and 1024 B, atomics, over every NeighborExchange
+  link, data-checked, flow control on): main's router and v4spd 7/7 each, two ERISCs and one. A first version without
+  flow control failed on main's router too (DATA_MISMATCH, job 155: senders overrun the receivers' buffers).
+- Throughput, same job (job 155, `exp_1d_4352.yaml` in full; main as shipped, v4spd with the study's settings),
+  cycles/packet: NeighborExchange write 124.9 / 124.8, scatter 159.9 / 128.7 (-31); the other 14 rows (1D lines,
+  v4spd = v4vc2 there) -19 to -67, as before.
+- Lead: **v4spd**.
+
+**Telemetry on v4: v4tel** (2026-10-29; a09u32 job 157, `tel_runs.sh`; design `consolidation/V4_TELEMETRY.md`;
+`variants/v4tel` = v4spd + the host's two telemetry options). New `router/router_telemetry.hpp`: packets and words
+counted in the send and receive paths, per-round work out of line after each loop's `end_round` (perf recorder window
+into the L1 buffer on the sender side; dynamic bandwidth, router state and TX / RX heartbeats into the FabricTelemetry
+block), the counts in one global rather than in loop locals. Every call site is guarded by `if constexpr` on its option:
+with only the hooks' functions empty, dead inline calls and lambda arguments still shifted register allocation in the
+spill-heavy loops (VC1 senders, VC2 and speedy receivers; offline A/B), so a telemetry-off build now carries none.
+- Offline: the 240 telemetry configs build (2D / 1D dynamic stats, perf recorder, all instruments on 2D, 1D, ring, VC1);
+  every telemetry-off config's image byte-identical to v4spd's (764).
+- Device (telemetry-on runs are functional checks only, not scored): `test_bandwidth_telemetry_validation`
+  (dynamic bandwidth within 15% of measured, several sizes; built for this) 1/1 on main's router and on v4tel, two
+  ERISCs and one (telemetry 10.9-11.3 GB/s on both). test_tt_fabric with its bandwidth telemetry on: exp_2d_4352 10/10
+  and exp_1d_4352 16/16 on both; the perf recorder's bandwidth over the harness's own on unicast rows 1.03-1.04 (main)
+  and 1.04-1.05 (v4tel; the recorder counts busy rounds only); multicast rows compare the busiest link to the sender's
+  rate and read 1.1-1.5 (main) and 1.2-1.7 (v4tel). Heartbeats and router state not read separately.
+- Lead: **v4tel**. The four features the user ordered (UDM, VC2, speedy path, telemetry) are in; still open: Wormhole,
+  express / Z on Galaxy hardware, trimming replay on hardware (V4 feature inventory above), and the parked
+  performance gaps (`consolidation/V4_PERF_GAPS.md`).
+
+**Express / Z on v4** (2026-10-29; Galaxy Slurm job 162896 on bh-glx-110-a03u08, `frs_glx_torus.sbatch` suites
+xr / xl / xr1 / xl1; note `consolidation/V4_EXPRESS.md`). Express links are physical Y chords inside a mesh (one
+Galaxy: rows 2 <-> 5 of each column; the cluster descriptor has 68 chip pairs, the 8x4 torus's 64 plus these 4), which
+the host models as a fifth direction, Z: 5 VC0 sender channels on every router, `MY_DIRECTION` 4 on Z-facing ones.
+Main's router has no other express code, and v4's decode, downstream tables, live downstreams and credit-stream map
+already follow main's rules for Z (offline review), so no router change.
+- Test shapes (vetted on the mock Galaxy, `express/probe`): the sanity yaml's groups
+  (`test_fabric_express_routing_sanity_common.yaml`, 24 tests each, data-checked) split by what a descriptor admits:
+  `express_links_8x4_mesh_graph_descriptor` (RING x RING) takes Mesh and Torus XY (`express/glx_express_ring.yaml`, 5
+  groups; it refuses Torus X: dim 0 has express links but no end wrap); a new single-mesh copy of CI's quad-8x4 mesh
+  (`express/express_links_8x4_line_ring_mesh_graph_descriptor.textproto`: dim 0 LINE with the ex4 and row 0 <-> 7
+  chords) takes Torus X (`express/glx_express_line.yaml`: CI's quad-8x4 groups).
+- Offline: v4tel builds every express config (312: Mesh, Torus XY, Torus X; two ERISCs and one; new coverage cases
+  `glx_express_mesh`, `glx_express_1erisc`, `glx_express_line`, `glx_express_line_1erisc`).
+- Galaxy (post-merge trees; `/data/.../trees/base` rebuilt from the merged tree, the old one kept as `base_pre`):
+
+  | Suite | main two ERISCs | v4tel two ERISCs | main one ERISC | v4tel one ERISC |
+  | --- | --- | --- | --- | --- |
+  | xr (Mesh, Torus XY on the express 8x4) | 120/120 | 120/120 | 120/120 | 120/120 |
+  | xl (Torus X, mesh multicast on the line-ring 8x4) | 72/72 | 72/72 | 72/72 | 72/72 |
+
+  v4tel's first post-merge Galaxy run of the older suites: ring sanity 19/19, torus deadlock stability 87/87.
+- v4trm's express images are byte-identical to v4tel's, so these results hold for v4trm. Not run: VC1 with express
+  (needs several Galaxies, CI's quad 8x4), express benchmark rows.
+
+**Channel trimming on v4: v4trm** (2026-10-29; a09u32 jobs 159-163, `trim_runs.sh`; design `consolidation/V4_TRIM.md`;
+`variants/v4trm` = v4tel + trimming). v4tel already recorded sender channels used, packet sizes, receivers that took a
+packet and local NoC send types, but not the forwarded-to masks the host uses to turn forwarding off and to call a VC0
+terminal-only. v4trm:
+- records forwarded-to as main (2D: the forward's compact slots through the host's packed downstream ids; 1D: channel 1);
+- honors `DISABLE_RX_CHx_FORWARDING` on the generic receiver as main (packet consumed and credited, nothing forwarded
+  or written);
+- opens downstreams by the host's gates (`OPEN_DOWNSTREAM_VC0/VC1_CONNECTIONS`; v4tel keyed VC1 on receiver 1, which
+  trimming clears on crossover routers whose receiver 0 forwards on VC1);
+- runs trimmed role shapes: on two ERISCs an ERISC left with nothing to service runs rounds only (`run_idle`: router
+  commands on the master, context switch, termination); one ERISC runs the single-ERISC loop whatever roles are left;
+  receiver channels run only when serviced. The first device run (job 160) found these: the capture tests passed, but
+  the replay scenarios' routers were refused by the bring-up gate (75 builds, every one an ERISC with no serviced
+  channel).
+- Offline: 1,260/1,390 post-merge configs build (the 130 `_sc` ones fail by design, as on v4tel); 1,174 images
+  byte-identical to v4tel's, the 86 others the capture configs' receiver images.
+- Device: main's `ChannelTrimming*` gtests (capture bitfields, fixed-override traffic, 11 capture-then-replay scenarios
+  on Mesh and Torus X, multi-hop included): main 63/63 and v4trm 63/63, two ERISCs and one (3 T3K-only tests skip).
+  The runs built every trimmed shape (idle ERISC 0 / ERISC 1 on two ERISCs; one ERISC with no role, sender-only,
+  receiver-only). Main's replay now works multi-hop on this host (the pre-merge job 282 note is superseded).
+- Replay configs for offline builds: coverage cases `bh_trim_gtest` and `bh_trim_gtest_1erisc` (ingested from the
+  v4trm runs; v4trm 316/316, v4tel 224/316).
+- Not measured: trimmed throughput. Lead: **v4trm**.
+
+**Perf census after the features** (2026-10-29; a09u32 jobs 164-171, `census_runs.sh`, `census_vc1_runs.sh`,
+`census_report.py`; Galaxy Slurm job 163369; notes `consolidation/V4_PERF_GAPS.md` (census section) and
+`consolidation/V4_CODE_SHAPE.md`). User: tackle the perf gaps; first see where every config stands, and check whether the
+features degraded the code. Same jobs, two passes (no v4trm row moved more than 3% between them), routers back to back:
+main as shipped (kernel v1, flags 0: none of the study experiments; firmware keepalive), main at keepalive 1000, v3qm
+(`variants/v3qm` = v3q with the post-merge header path only; mesh sanity 96/96, ring 19/19), v4trm.
+- Code: every production image of v4trm equals v4rs's (two-ERISC 2D / 1D / ring / torus, one ERISC, mux, VC1
+  receivers); only the 22 VC1 senders differ (stack-slot permutation) and their rows equal v4gi's. The features cost
+  nothing on the measured configs. Readability findings (independent review, the key ones checked) in V4_CODE_SHAPE.md.
+- Suite means (main / main ka1000 / v3qm / v4trm): 2D 217.2 / 217.2 / 144.5 / 144.4; 1D 200.5 / 196.8 / 162.0 / 152.2;
+  mix 222.2 / 219.9 / 127.0 / 128.7; bursts 555.0 / 555.0 / 522.5 / 523.3; ring 239.9 / 238.6 / 227.6 / 188.6; Y-torus
+  233.7 / 233.8 / 164.7 / 157.4; one ERISC 2D 331.3 / 331.3 / 245.5 / 276.6, 1D 318.3 / 318.5 / 284.5 / 305.7, ring
+  375.7 / 374.2 / 360.6 / 375.1; mux 373.3 / 373.3 / 368.7 / 373.6; trimmed 2D 215.9 / 211.9 / - / 154.4; VC1 split
+  332.6 / - / 155.2 / 171.5 (1-hop 158 vs v3qm 137), inter-mesh 841.0 / - / 336.4 / 342.5. The keepalive is worth
+  0-4 on main here.
+- Galaxy (main / v4trm, both passes): mesh and line rows below 4352 B 1.18-1.85x main; ring 1-hop 1.27-1.29x; full-ring
+  multicast 1-3 KB 1.32-1.37x, 3584 B 1.07x, 4352 B 0.76x (263.7 vs 346-349); 4352 B unicast wire-bound on both.
+- New against the parked list: v4 trails v3q on one ERISC (2D +12.7%, 1D +7.5%, ring +4%) and on the VC1 split (+10.5%;
+  1-hop +15%, size-independent). The old standings had v3q's VC1 at 180-198, measured before the VC1 slot defaults
+  changed, so this gap was hidden, not new. 13 one-ERISC rows trail main (NeighborExchange write +7.4%, half-ring and
+  full-ring multicast, ring bidirectional, mux ring multicast: +1.7% to +4%).
+
 ## Reproducing
 
 Host build: `./build_metal.sh --configure-only --build-metal-tests --enable-ccache --without-python-bindings`, then

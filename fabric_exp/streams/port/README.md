@@ -40,6 +40,12 @@
   (host parse + merge + stream expansion + traffic args; the kernel decodes it from the top two bits of the
   increment word). Made in the worktree first (uncommitted there), applied here with `git apply`. Undo:
   `git apply -R streams_flush.patch`.
+- `streams_vc2_replay.patch` (2026-10-29, RESULTS §98 VC2): the benchmark loop's header replay
+  (`update_credits_and_slots`, VC0's adapter only) called for every adapter, so any VC2 test's sender kernel failed to
+  compile (`test_fabric_vc2_at_least_2x2_mesh.yaml`: "cannot convert WorkerToFabricEdmSenderBase<false, 0, 2>*").
+  The loop now replays through `replay_current_slot`, which copies the header for other adapters. VC0 benchmark
+  sender binaries byte-identical (3 replayed from job 138's logged commands). Made in the worktree first (uncommitted
+  there), the same edit here. Undo: `git apply -R streams_vc2_replay.patch`.
 
 The experiment tree currently carries `streams_p3f.patch` (applied 2026-10-16 after reversing `streams_p3d.patch`; the faster benchmark loops also run the existing single-pattern and round-robin benchmark sends).
 

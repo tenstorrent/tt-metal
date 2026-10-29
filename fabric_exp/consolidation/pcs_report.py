@@ -48,7 +48,8 @@ builds = {}
 for proc in ("active_erisc", "subordinate_active_erisc"):
     builds[proc] = []
     # The image a core runs is the relocated ".xip.elf" one (byte-equal to L1); its addresses are the ELF's.
-    for e in sorted(glob.glob(f"{cache}/**/fabric_erisc_router_v2/*/{proc}/{proc}.elf.xip.elf", recursive=True)):
+    # The study router (fabric_erisc_router_v2) or main's (fabric_erisc_router), whichever the run built.
+    for e in sorted(glob.glob(f"{cache}/**/fabric_erisc_router*/*/{proc}/{proc}.elf.xip.elf", recursive=True)):
         base, text = text_segment(e)
         builds[proc].append((e, base, text))
 print(f"{meta['samples']} samples, {meta['duration_s']} s, {meta['rate_per_s']}/s; "
@@ -76,7 +77,7 @@ for i, tgt in enumerate(meta["targets"]):
 
 print("\nper target: chip/chan/ERISC: samples in the kernel / all, matching builds, load address")
 for nk, tgt, n, match, load, kern in sorted(rows, key=lambda r: -r[0]):
-    b = match[0][0].split("fabric_erisc_router_v2/")[-1].split("/")[0] if match else "-"
+    b = match[0][0].split("/kernels/")[-1].split("/")[1] if match else "-"
     print(f"  {tgt['chip']}/{tgt['chan']:>2}/E{tgt['erisc']}: {nk:5d} / {n:5d} in kernel ({100 * nk / max(n, 1):5.1f}%), "
           f"{len(match)} matching build(s) {b}, load {load:#x}")
 for nk, tgt, n, match, load, kern in sorted(rows, key=lambda r: -r[0])[:top]:

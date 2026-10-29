@@ -6,12 +6,17 @@
                             run then fails in result validation (mock reads), which does not matter here.
   ingest LOG CASE           take a device run's log (cov_device_runs.sh) as case CASE; its kernel cache must still exist
   collect [CASE ...]        re-read the cases' logs into their cmds.json (mock does this after each run)
-  synth                     derive the config types no host path produces, from mock configs, by editing named CT args
-                            and defines exactly as the builder would emit them (see SYNTH)
+  synth [NAME ...]          derive the config types no host path produces, from mock configs, by editing named CT args
+                            and defines exactly as the builder would emit them (see SYNTH; all of them by default)
   build --variant DIR --opt O3|O2|Os --name N [--cases C,...]
                             rebuild one config per distinct (ERISC, CT args, defines) of each case from DIR (offline_build's
                             overlay; v3 runs in v2's place); results in COV/builds/N_<opt>/results.json
   report NAME ...           the coverage table (case x level), with the first error of each failure
+
+After the merge (2026-10-28) use TT_COV_DIR=/home/aagarwal/.tt-metal-v3r-builds/cov_m and
+OFFLINE_BASE=/home/aagarwal/.tt-metal-p1-base-m: the default COV's cases and base predate the merge and every build fails
+(missing named args, a redefined packet header). Post-merge mock captures need a router that builds every config in the
+v2 slot: swap.py apply variants/mainv2cap (main's router), run mock, restore.
 
 COV (outside the repo) holds a runtime root of symlinks into the tree with its own generated/ directory, so a mock run
 writes nothing into the tree; per case: the yaml, the log, the kernel cache and cmds.json. Each mock case runs with the
@@ -29,11 +34,14 @@ TREE = "/home/aagarwal/tt-metal"
 COV = os.environ.get("TT_COV_DIR", "/home/aagarwal/.tt-metal-v3r-builds/cov")
 ROOT = os.path.join(COV, "root")
 BIN = TREE + "/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric"
+GTEST_BIN = TREE + "/build/test/tt_metal/tt_fabric/fabric_unit_tests"
 BH = TREE + "/fabric_exp/a08u24_cluster_desc.yaml"
 WH_T3K = TREE + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/t3k_cluster_desc.yaml"
 GLX = TREE + "/tt_metal/third_party/tt-cluster-descriptors/blackhole/single_bh_galaxy_clus_desc/single_bh_galaxy_clus_desc.yaml"
 EXPRESS_8X4 = {"TT_MESH_GRAPH_DESC_PATH": TREE + "/tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
                                           "express_links_8x4_mesh_graph_descriptor.textproto"}
+# One mesh of CI's quad 8x4 express test (dim 0 LINE with two express patterns, dim 1 RING): its Torus-X routers
+EXPRESS_8X4_LINE = {"TT_MESH_GRAPH_DESC_PATH": TREE + "/fabric_exp/express/express_links_8x4_line_ring_mesh_graph_descriptor.textproto"}
 KDIR = "kernels/fabric_erisc_router_v2/"
 TREE_EDM = TREE + "/tt_metal/fabric/impl/kernels/edm_fabric"
 CPUS = os.environ.get("TT_COV_CPUS", "48-63")
@@ -70,7 +78,11 @@ PROF = {"TT_FABRIC_PROFILE_RX_CH_FWD": "1"}
 # from the yaml key, and runs each test twice: capture, then replay of the captured profile.
 TRIM = "      enable_channel_trimming: true\n"
 ONE = {"TT_METAL_DISABLE_FABRIC_TWO_ERISC": "1"}
+SC = {"TT_FABRIC_EXP_STREAM_CREDITS": "1"}
 ALL_INSTR = {**TEL, **BW, **PROF}
+# NeighborExchange: every router has one VC0 sender channel and no deadlock avoidance, so the host selects the speedy
+# path (ENABLE_SPEEDY_VC0).
+NBR = test_yaml("NeighborExchange").replace("type: full_device_random_pairing", "type: neighbor_exchange")
 
 # name: (cluster descriptor, yaml, extra env, VC1 split over two mock ranks)
 CASES = {
@@ -88,11 +100,29 @@ CASES = {
     "bh_1d_allinstr": (BH, test_yaml("Linear", TRIM), ALL_INSTR, False),
     "bh_ring_allinstr": (BH, test_yaml("Ring", TRIM), ALL_INSTR, False),
     "bh_2d_vc2": (BH, test_yaml("Mesh"), {"TT_METAL_ENABLE_FABRIC_VC2": "1"}, False),
+    "bh_2d_vc2_1erisc": (BH, test_yaml("Mesh"), {"TT_METAL_ENABLE_FABRIC_VC2": "1", **ONE}, False),
+    "bh_neighbor": (BH, NBR, {}, False),
+    "bh_neighbor_1erisc": (BH, NBR, ONE, False),
+    # UDM (FabricTensixConfig::UDM): test_tt_fabric cannot select it, so the case runs one of fabric_unit_tests's UDM
+    # fixtures ("gtest:" + filter); its fabric init builds every router.
+    "bh_2d_udm_gtest": (BH, "gtest:Fabric2DUDMModeFixture.TestUDMFabricUnicastWriteEast", {}, False),
     "bh_2d_mux": (BH, test_yaml("Mesh", MUX), {}, False),
     "bh_1d_mux": (BH, test_yaml("Linear", MUX), {}, False),
+    "bh_ring_mux": (BH, test_yaml("Ring", MUX), {}, False),
     "bh_2d_1erisc": (BH, test_yaml("Mesh"), ONE, False),
     "bh_1d_1erisc": (BH, test_yaml("Linear"), ONE, False),
+    "bh_ring_1erisc": (BH, test_yaml("Ring"), ONE, False),
+    "bh_torus_1erisc": (BH, test_yaml("Torus", "      torus_config: XY\n"), ONE, False),
     "bh_vc1": (BH, None, {}, "bh"),
+    # Stream-register credits on one TX queue (TT_FABRIC_EXP_STREAM_CREDITS=1, variants/v4sc)
+    "bh_1d_1erisc_sc": (BH, test_yaml("Linear"), {**ONE, **SC}, False),
+    "bh_2d_1erisc_sc": (BH, test_yaml("Mesh"), {**ONE, **SC}, False),
+    "bh_ring_1erisc_sc": (BH, test_yaml("Ring"), {**ONE, **SC}, False),
+    "bh_torus_1erisc_sc": (BH, test_yaml("Torus", "      torus_config: XY\n"), {**ONE, **SC}, False),
+    "bh_1d_mux_sc": (BH, test_yaml("Linear", MUX), SC, False),
+    "bh_2d_mux_sc": (BH, test_yaml("Mesh", MUX), SC, False),
+    "bh_ring_mux_sc": (BH, test_yaml("Ring", MUX), SC, False),
+    "bh_vc1_1erisc_sc": (BH, None, {**ONE, **SC}, "bh"),
     "bh_vc1_1erisc": (BH, None, ONE, "bh"),
     "bh_vc1_allinstr": (BH, None, ALL_INSTR, "bh"),
     "wh_vc1": (WH_T3K, None, {}, "wh"),
@@ -102,6 +132,10 @@ CASES = {
     "glx_ring": (GLX, test_yaml("Ring"), {}, False),
     "glx_torus": (GLX, test_yaml("Torus", "      torus_config: XY\n"), {}, False),
     "glx_express": (GLX, test_yaml("Torus", "      torus_config: XY\n"), EXPRESS_8X4, False),
+    "glx_express_mesh": (GLX, test_yaml("Mesh"), EXPRESS_8X4, False),
+    "glx_express_1erisc": (GLX, test_yaml("Torus", "      torus_config: XY\n"), {**EXPRESS_8X4, **ONE}, False),
+    "glx_express_line": (GLX, test_yaml("Torus", "      torus_config: X\n"), EXPRESS_8X4_LINE, False),
+    "glx_express_line_1erisc": (GLX, test_yaml("Torus", "      torus_config: X\n"), {**EXPRESS_8X4_LINE, **ONE}, False),
     "wh_1d": (WH_T3K, test_yaml("Linear"), {}, False),
     "wh_ring": (WH_T3K, test_yaml("Ring"), {}, False),
     "wh_2d": (WH_T3K, test_yaml("Mesh"), {}, False),
@@ -137,7 +171,10 @@ def run_mock(name):
     env.update({"TT_METAL_RUNTIME_ROOT": ROOT, "TT_METAL_HOME": ROOT, "TT_METAL_LOGS_PATH": d,
                 "TT_METAL_CACHE": os.path.join(d, "cache")})
     pre = ["timeout", "1200", "nice", "-n", "10", "taskset", "-c", CPUS]
-    if not vc1:
+    if not vc1 and yaml.startswith("gtest:"):
+        env["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = desc
+        cmd = pre + [GTEST_BIN, "--gtest_filter=" + yaml[len("gtest:"):]]
+    elif not vc1:
         open(os.path.join(d, "test.yaml"), "w").write(yaml)
         env["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = desc
         cmd = pre + [BIN, "--test_config", os.path.join(d, "test.yaml")]
@@ -219,7 +256,9 @@ def signature(cmd, h, proc):
 #   nofuse          fuse_receiver_flush_and_completion_ptr = true (member default, never assigned, .hpp:545)
 # and one the host produces only through FabricTensixConfig::UDM, which test_tt_fabric cannot select (its yaml mapper
 # has Default and Mux): udm = the 2D mux config with what connect_to_local_tensix_builder and the fabric defines change
-# (UDM_MODE named arg 1, LOCAL_RELAY_NUM_BUFFERS, NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS 1, -DUDM_MODE=1).
+# (UDM_MODE named arg 1, LOCAL_RELAY_NUM_BUFFERS, NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS 1, -DUDM_MODE=1). Superseded by
+# the real capture bh_2d_udm_gtest: a UDM router has mux mode off (the host sets it only for MUX), so bh_2d_udm, which
+# keeps the mux case's flag and channel layout, is not a config the host builds.
 SYNTH = {
     "bh_2d_datacache": ("bh_2d", {"ENABLE_RISC_CPU_DATA_CACHE": "1"}, []),
     "bh_1d_datacache": ("bh_1d", {"ENABLE_RISC_CPU_DATA_CACHE": "1"}, []),
@@ -237,8 +276,10 @@ SYNTH = {
 }
 
 
-def synth():
+def synth(names=()):
     for name, (base, edits, defines) in SYNTH.items():
+        if names and name not in names:
+            continue
         bdir = os.path.join(COV, "cases", base)
         bcmds = json.load(open(os.path.join(bdir, "cmds.json")))
         d = os.path.join(COV, "cases", name)
@@ -362,7 +403,8 @@ def main():
     i.add_argument("case")
     c = sp.add_parser("collect")
     c.add_argument("cases", nargs="*")
-    sp.add_parser("synth")
+    s = sp.add_parser("synth")
+    s.add_argument("names", nargs="*")
     b = sp.add_parser("build")
     b.add_argument("--variant", required=True)
     b.add_argument("--opt", required=True)
@@ -385,7 +427,7 @@ def main():
         for c in a.cases or [c for c in CASES if os.path.isdir(os.path.join(COV, "cases", c))]:
             print(c, len(collect_case(c)), "configs")
     elif a.cmd == "synth":
-        synth()
+        synth(a.names)
     elif a.cmd == "build":
         build(a)
     else:

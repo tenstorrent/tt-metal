@@ -7,7 +7,12 @@
 # STEPS are config:suite pairs run in order. Suites (yamls vetted on the mock Galaxy): ds = test_fabric_2d_torus_
 # deadlock_stability, st = the torus stability suite's _short tests, nt = test_fabric_2d_torus_nightly (long: v4 only by
 # default; about 27 min on v4, so its run gets NT_TIMEOUT, 3000 s), sa = the sanity suite's Ring tests, ring = glx_ring.yaml
-# (benchmark rows), mcs = glx_ring_mcast_sweep.yaml (full-ring multicast over sizes). Every other run gets 1500 s.
+# (benchmark rows), mcs = glx_ring_mcast_sweep.yaml (full-ring multicast over sizes), mesh / linear = frs_glx.sbatch's
+# 2D mesh and 1D line benchmark rows (fabric_exp/galaxy/glx_{mesh,linear}.yaml). Every other run gets 1500 s.
+# Express / Z (the sanity yaml test_fabric_express_routing_sanity_common's groups, fabric_exp/express): xr =
+# glx_express_ring.yaml on the 8x4 RING x RING express descriptor, xl = glx_express_line.yaml on
+# express_links_8x4_line_ring_mesh_graph_descriptor.textproto (in yamls/; one mesh of CI's quad 8x4); a suite ending in
+# 1 (xr1, xl1) runs the same on one ERISC (TT_METAL_DISABLE_FABRIC_TWO_ERISC=1).
 # CONFIGS lists the trees to copy:
 #   main    tree "base", router v1 at flags 0 (main's router)
 #   v4*     tree of that name (fabric_exp/variants/<name> in v2's place), flags 13129088, host keepalive
@@ -88,12 +93,12 @@ run() {  # label cache tree kernel_version flags yaml [ENV=VAL...]
     return $rc
 }
 
-config() {  # config label-suffix yaml
-    local c=$1 s=$2 yaml=$3
+config() {  # config label-suffix yaml [ENV=VAL...]
+    local c=$1 s=$2 yaml=$3; shift 3
     case $c in
-        main) run main_$s main base 1 0 $yaml ;;
-        v3q) run v3q_$s v3q v3q 2 13129088 $yaml ;;
-        v4*) run ${c}_$s $c $c 2 13129088 $yaml ;;
+        main) run main_$s main base 1 0 $yaml "$@" ;;
+        v3q) run v3q_$s v3q v3q 2 13129088 $yaml "$@" ;;
+        v4*) run ${c}_$s $c $c 2 13129088 $yaml "$@" ;;
         *) echo "!!! unknown config $c" ;;
     esac
 }
@@ -108,14 +113,25 @@ suite_yaml() {
         sa) echo $Y/glx_ring_sanity.yaml ;;
         ring) echo $Y/glx_ring.yaml ;;
         mcs) echo $Y/glx_ring_mcast_sweep.yaml ;;
+        mesh) echo $J/base/fabric_exp/galaxy/glx_mesh.yaml ;;
+        linear) echo $J/base/fabric_exp/galaxy/glx_linear.yaml ;;
+        xr|xr1) echo $Y/glx_express_ring.yaml ;;
+        xl|xl1) echo $Y/glx_express_line.yaml ;;
         *) echo "" ;;
     esac
+}
+suite_env() {  # the suite's extra environment: its mesh graph descriptor, the ERISC mode
+    case $1 in
+        xr|xr1) echo TT_MESH_GRAPH_DESC_PATH=$J/base/tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto ;;
+        xl|xl1) echo TT_MESH_GRAPH_DESC_PATH=$Y/express_links_8x4_line_ring_mesh_graph_descriptor.textproto ;;
+    esac
+    case $1 in x?1) echo TT_METAL_DISABLE_FABRIC_TWO_ERISC=1 ;; esac
 }
 # STEPS: config:suite pairs, run in order (validation suites are labelled val_<suite>).
 for step in ${STEPS:-main:ds v4r:ds main:st v4r:st main:sa v4r:sa main:ring v4r:ring v4r:nt}; do
     c=${step%%:*}; s=${step##*:}; yaml=$(suite_yaml $s)
     [ -z "$yaml" ] && { echo "!!! unknown suite $s"; continue; }
-    case $s in ring|mcs) label=$s ;; *) label=val_$s ;; esac
-    config $c $label $yaml
+    case $s in ring|mcs|mesh|linear) label=$s ;; *) label=val_$s ;; esac
+    config $c $label $yaml $(suite_env $s)
 done
 echo "done $(date -u +%T)"

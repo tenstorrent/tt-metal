@@ -6,7 +6,7 @@ LABEL_13129088_lat_latency.csv files exist. Rows moving by at least --rows cycle
 import argparse, collections, csv, os, statistics
 
 R = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results")
-SUITES = ("4352", "mix", "flushmix", "flushmix4", "burst", "1d_m1", "ring", "torusy")
+SUITES = ("4352", "mix", "flushmix", "flushmix4", "burst", "1d_m1", "ring", "torusy", "mux", "rse")
 
 
 def rows(label, suite):

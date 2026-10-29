@@ -1,0 +1,174 @@
+# Ring throughput without the mux (for the single-ERISC ring question, RESULTS §98 mux-mode analysis): v4/exp_ring.yaml's
+# rows and the full-ring multicast of exp_mux.yaml, unicast_write, 1024 and 4352 B, 1 link.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: Ring1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: Ring1HopNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 4
+- name: Ring1HopEWBidir
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 0
+- name: Ring3HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+- name: RingMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: all_to_all
+    iterations: 1
+- name: UnidirRingMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: unidirectional_linear
+    iterations: 1
+- name: HalfRingMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 50000
+  patterns:
+  - type: half_ring
+    iterations: 1
+- name: FullRingMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 200000
+  patterns:
+  - type: full_ring

@@ -1,0 +1,34 @@
+diff --git a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
+index 7b8affe4be9..8a157f0dfe2 100644
+--- a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
+@@ -78,12 +78,12 @@ FORCE_INLINE uint64_t stream_idle_wait(uint32_t cycles) {
+ }
+ 
+ // Sends the header already in the current slot again by returning the slot to the router, without
+-// copying it. Only the VC0 adapter exposes the credit-only update, so other adapters return false
+-// and the caller copies the header instead.
+-template <typename EdmSenderT>
++// copying it. Only the VC0 adapter exposes the credit-only update, so other adapters (VC2's) return
++// false and the caller copies the header instead.
++template <bool STATEFUL_NOC = true, typename EdmSenderT>
+ FORCE_INLINE bool replay_current_slot(EdmSenderT* conn) {
+     if constexpr (std::is_same_v<EdmSenderT, WorkerToFabricEdmSender>) {
+-        tt::tt_fabric::fabric_detail::update_credits_and_slots</*STATEFUL_NOC=*/true>(conn);
++        tt::tt_fabric::fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
+         return true;
+     } else {
+         return false;
+@@ -332,11 +332,9 @@ void kernel_main() {
+                     }
+                 }
+                 free_slots[c]--;
+-                if (sent[i] < conn.num_buffers_per_channel) {
++                if (sent[i] < conn.num_buffers_per_channel || !replay_current_slot</*STATEFUL_NOC=*/false>(&conn)) {
+                     conn.send_payload_flush_non_blocking_from_address(header_of[i], sizeof(PACKET_HEADER_TYPE));
+                     header_writes++;
+-                } else {
+-                    tt::tt_fabric::fabric_detail::update_credits_and_slots</*STATEFUL_NOC=*/false>(&conn);
+                 }
+                 sent[i]++;
+                 packets_left |= sent[i] < packets_of[i];

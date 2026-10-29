@@ -77,3 +77,5 @@ On RV32IM, E0's inner 32-iteration loop has **27 allocatable registers** (`32` m
 4. **Rule 4 — Keep `run_fabric_edm_main_loop` Inlined:**
    - Marking `run_fabric_edm_main_loop` `noinline` (`s78n`, `s78n0`, `s77si`, `s77si0`) consumes 4–6 registers in the loop frame just to hold base pointers to `kernel_main`'s stack objects and consistently regresses 1D neighbor exchange (`super_speedy_mode`) by `+6.6 to +10.2` cyc/pkt.
 
+| `v3qm` | Measurement only: `v3q` with the post-merge packet-header include path (`hostdev/`), nothing else; builds all 336 post-merge production configs; the census's v3 column | §98 census |
+| `mainv2cap` | Capture only: main's router (`fabric_erisc_router.cpp` as merged, 6d8a103) in the v2 slot, so post-merge mock runs (`coverage.py mock`, `TT_COV_DIR=cov_m`) log every config type; never measured | §98 |

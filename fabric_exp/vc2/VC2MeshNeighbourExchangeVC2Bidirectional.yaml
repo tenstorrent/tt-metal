@@ -1,0 +1,41 @@
+# One group of tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_vc2_at_least_2x2_mesh.yaml (2026-10-29, V4_VC2.md isolation runs).
+Tests:
+- name: VC2MeshNeighbourExchangeVC2Bidirectional
+  enable_flow_control: true
+  fabric_setup:
+    topology: Mesh
+    use_vc2: true
+  parametrization_params:
+    num_links:
+    - 1
+  senders:
+  - device:
+    - 0
+    - - 0
+      - 0
+    vc_id: 2
+    patterns:
+    - ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 40000
+      destination:
+        device:
+        - 0
+        - - 0
+          - 1
+  - device:
+    - 0
+    - - 0
+      - 1
+    vc_id: 2
+    patterns:
+    - ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 40000
+      destination:
+        device:
+        - 0
+        - - 0
+          - 0

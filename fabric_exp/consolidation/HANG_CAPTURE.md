@@ -13,7 +13,7 @@ Workers, after the routers (`--no-workers` turns them off). Reads only, tt-exale
 
 | Phase | Cores | Reads |
 | --- | --- | --- |
-| `wscan` | every Tensix core of every chip (`functional_workers`) | mailbox head (0x60, 1232 B: launch-message ring, go messages, read pointer, go index), the test's result status word (0x23480), soft-reset register |
+| `wscan` | every Tensix core of every chip (`functional_workers`) | mailbox head (0x60, 1488 B: launch-message ring, go messages, read pointer, go index), the test's result status word (0x23580), soft-reset register |
 | `wl1` | selected cores | L1 [0, 256 KiB) (`--worker-window`); the whole 1.5 MiB for cores still running a test kernel (at most `--worker-full-max`, 32) |
 | `wpass2` | selected cores | mailbox head, status word, soft reset and the routers' credit words (fabric connection table) again |
 | `wniu` | selected cores | NIU counters of both NoCs (NOC_STATUS 0..15 and 48..61: requests sent, acks and responses received; `--no-worker-niu` skips) |
@@ -31,7 +31,7 @@ kernel id of its 8) and carries the newest program's kernel config base (one rin
 newest program is the highest kernel id among such slots. Cores outside it are "left out": decoded from their own most
 recent slot, for reference, without checks. Dispatch kernels (launched by the host, mode host) are never part of it.
 
-The 256 KiB window holds: mailbox, the fabric connection table (0x9070; per Ethernet channel the router's
+The 256 KiB window holds: mailbox, the fabric connection table (0x9170; per Ethernet channel the router's
 coordinates, buffer, connection-info and producer-cursor addresses, and at 0x9200 + 16 x channel the credit word the
 router writes), the kernel-config ring (0xa080: runtime args, semaphores, kernel binaries), and the test's
 CommonMemoryMap from 0x1b480: local args, result buffer (0x23480), kernel config buffer (0x24480: the kernel's
@@ -42,7 +42,7 @@ Then, files only: the run's non-router kernel ELFs (`--kernel-cache`, default th
 passes) are copied to `OUT/cache/kernels/<name>/<hash>/<risc>/`: test kernels keep their DWARF types (0.5 MB each),
 dispatch kernels are stripped.
 
-Output: `chip<C>/tensix_heads.bin` (scan, 1232 B per core in `index.json` order), `chip<C>/tensix_<x>-<y>_l1.bin`
+Output: `chip<C>/tensix_heads.bin` (scan, 1488 B per core (1232 before 2026-10-29) in `index.json` order), `chip<C>/tensix_<x>-<y>_l1.bin`
 (noc0 x, y), `index.json` key `workers` (constants, per chip the scan list and selected cores with reasons, pass1 /
 pass2 words, NIU counters), `format` 2. Timings `wscan_s`, `wl1_s`, `wpass2_s`, `wniu_s`, `kernel_elfs_s`.
 
@@ -108,10 +108,15 @@ A capture without a `workers` part decodes byte-identically to before.
   debug interface, and tt-exalens marks Blackhole private memory unsafe. The wait point is inferred from L1 state.
 - Benchmark-mode senders work on local copies of their connections; L1 holds the start state until the loop ends.
 - Mux connections, latency kernels and 1D (low-latency header) destinations are not decoded.
-- Fixed Blackhole addresses (dev_mem_map.h / dev_msgs.h / HAL): mailbox at 0x60 with the ERISC layout the router
-  decoder already uses (launch at +16, 144 B each, go messages at +1168, go index at +1216), routing table 0x85e0,
-  fabric connection table 0x9070, kernel-config ring from 0xa080, DEFAULT_UNRESERVED 0x1b480 (the test's memory map
-  base; only the scan's status-word address depends on it, the decode takes addresses from the runtime args).
+- Fixed Blackhole addresses (dev_mem_map.h / dev_msgs.h / HAL), as of main 6d8a103 (merged 2026-10-28): mailbox at
+  0x60 (launch at +16, 144 B each; go messages at +1168 as rings, go_messages[9].slot[8], one per launch slot per
+  sub-device, so the current slot's go message is slot[rd_ptr]; go index at +1472), routing table 0x86e0, fabric
+  connection table 0x9170, kernel-config ring from 0xa180, DEFAULT_UNRESERVED 0x1b580 (the test's memory map base;
+  only the scan's status-word address depends on it, the decode takes addresses from the runtime args). Before the
+  merge the go messages were one word per sub-device (go index at +1216) and every base after the mailbox was 0x100
+  lower; captures from then decode with the older tools (git history). The ERISC mailbox kept one go message per
+  sub-device (unchanged). A capture made with the old constants after the merge (job 142's) found no running test
+  core: it read go_messages[0].slot[0] (DONE) for cores running in slot 1.
 - Router side: channel 0 is the worker channel; its producer cursor sits 112 B after the connection info
   (erisc_datamover_builder.cpp layout). Counters compare directly only when the worker is the router's last producer
   (worker_xy at +32); a sender and the sync core can share a router channel one after the other.

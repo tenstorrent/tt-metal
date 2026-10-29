@@ -1,0 +1,21 @@
+# Ring-position credits analysis (RESULTS §98): exp_ring_se.yaml's FullRingMulticast, unicast_write 1024 B, one ERISC, 15000000 packets per sender (the long row the PC sampler watches).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: PcsrFullring
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+  defaults:
+    ftype: mcast
+    num_packets: 15000000
+  patterns:
+  - type: full_ring

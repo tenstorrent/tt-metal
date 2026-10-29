@@ -1,0 +1,28 @@
+# Ring-position credits analysis (RESULTS §98): exp_ring.yaml's Ring1HopEW, unicast_write 4352 B, two ERISCs, 50000 packets (compiles the routers).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: PcsrRing2Compile
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

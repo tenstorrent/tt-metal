@@ -1,0 +1,15 @@
+# Router study (2026-10-29): one Galaxy as one mesh of CI's quad 8x4 express test
+# (tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/express_links_quad_8x4_mesh_graph_descriptor.textproto,
+# mesh M_8x4), without the other three meshes. Dim 0 is a LINE with two express patterns: the ex4 chords [2,5] and the
+# row 0 <-> row 7 chord (the Galaxy's Y wrap cable), which closes the protected cycle Torus-X routing needs on dim 0.
+# Dim 1 is the X ring. Used for the sanity yaml's TorusX groups, which the 8x4 RING x RING descriptor refuses.
+mesh_descriptors {
+  name: "M_8x4"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+  express_links { dim_idx: 0 pattern { start: 2 step: 4 } }
+  express_links { dim_idx: 0 pattern { start: 0 step: 8 } }
+}
+top_level_instance { mesh { mesh_descriptor: "M_8x4" mesh_id: 0 } }

@@ -1,0 +1,1157 @@
+capture fabric_exp/results/vc2_v4vc2_two_hangcap: 2026-10-29T04:37:14+0000 on bh-lb-120-a09u32, complete=True, 0 capture errors, meta {'cache': '/home/aagarwal/.tt-metal-cache-vc2-v4vc2-two', 'label': 'vc2_v4vc2_two'}
+cache /home/aagarwal/.tt-metal-cache-vc2-v4vc2-two: 72 router configs (36 E0, 36 E1); positional args for 72
+
+=== chip0/eth4 noc0 (3, 1) xlat (24, 25) <-> chip1/eth7 | facing W
+  E0: 15845055918064789493 (exact at launch-message address, 1.0000, text @0xf480) ties ['4885400972195556463', '13338640147346999610', '13399802771401138415']
+  E1: 17654417376010027574 (exact at launch-message address, 1.0000, text @0x12010) ties ['988522330103490772']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 1 (y,x)=(0,1) of 2x4
+  heartbeat 0xdcba6600 -> 0xdcbaf480 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 866369693 pkt_start 391586562->391644460 pkt_end 384966579->385024477 words 1697261534->1697319432 resend 19756264 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 39581283 pkt_start 1964316157->1964374046 pkt_end 1964316181->1964374068 words 1994684874->1994742762 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2728947791->2728955039 pkt_end 2728947792->2728955040 words 2728947793->2728955041 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x3c2002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 unsent 0 | completions rcvd 0 | conn open upstream chip0/eth5 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x660007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x2d80007) unsent 0 | completions rcvd 0 | conn open upstream chip0/eth10 copy stream 7
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x2a20002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x1fe0000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x2020000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x28e0007) | chip0/eth5 ch1 stream 1 = 7 (raw 0x15c0007) | N 7 | ds - copy = 0
+   vc0 slot2 S: copy stream 8 = 7 (raw 0x31e0007) | chip0/eth10 ch2 stream 2 = 7 (raw 0x1c20007) | N 7 | ds - copy = 0
+
+=== chip0/eth5 noc0 (4, 1) xlat (25, 25) <-> chip2/eth6 | facing E
+  E0: 1840600500323384937 (exact at launch-message address, 1.0000, text @0xf480) ties ['9461332547400840291', '120491124216898884', '5580742107595855974']
+  E1: 1612016734705949174 (exact at launch-message address, 1.0000, text @0x11fe0) ties ['17611580153687509422']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 1 (y,x)=(0,1) of 2x4
+  heartbeat 0xdcba8740 -> 0xdcbaf600 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 2942641751 pkt_start 2693339542->2693397413 pkt_end 2686980579->2687038449 words 4001578606->4001636477 resend 22548121 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 41557158 pkt_start 1936010732->1936068616 pkt_end 1936010751->1936068635 words 1967933269->1967991153 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2728947896->2728955144 pkt_end 2728947897->2728955146 words 2728947899->2728955147 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0xb4002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x15c0007) unsent 0 | completions rcvd 0 | conn open upstream chip0/eth4 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x560007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x25a0007) unsent 0 | completions rcvd 0 | conn open upstream chip0/eth10 copy stream 6
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x3d20002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x1980000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x3cc0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 W: copy stream 6 = 7 (raw 0x660007) | chip0/eth4 ch1 stream 1 = 7 | N 7 | ds - copy = 0
+   vc0 slot2 S: copy stream 8 = 7 (raw 0xc80007) | chip0/eth10 ch1 stream 1 = 7 (raw 0x1e40007) | N 7 | ds - copy = 0
+
+=== chip0/eth6 noc0 (13, 1) xlat (26, 25) <-> chip1/eth5 | facing W
+  E0: 13338640147346999610 (exact at launch-message address, 1.0000, text @0xf480) ties ['13399802771401138415', '15845055918064789493', '4885400972195556463']
+  E1: 10151399593445708906 (exact at launch-message address, 1.0000, text @0x12010) ties ['13485616102022037722']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 1 (y,x)=(0,1) of 2x4
+  heartbeat 0xdcba0100 -> 0xdcba7580 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 3494711231 pkt_start 2802690249->2802748134 pkt_end 2773521584->2773579469 words 3712571986->3712629871 resend 18897296 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 566559393 pkt_start 2343891417->2343949302 pkt_end 2343891450->2343949335 words 2412707755->2412765639 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2728948082->2728955331 pkt_end 2728948083->2728955332 words 2728948085->2728955333 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x35c002b) unsent 0 | completions rcvd 40356 | conn open worker (14,7) sem 0x9360 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x1de0007) unsent 0 | completions rcvd 0 | conn open upstream chip0/eth7 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x3e60007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x1a40007) unsent 0 | completions rcvd 0 | conn open upstream chip0/eth8 copy stream 7
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x2fa0002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe120 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x420000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x2920000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x220007) | chip0/eth7 ch1 stream 1 = 7 (raw 0x35e0007) | N 7 | ds - copy = 0
+   vc0 slot2 S: copy stream 8 = 7 (raw 0x27c0007) | chip0/eth8 ch2 stream 2 = 7 (raw 0x3fa0007) | N 7 | ds - copy = 0
+
+=== chip0/eth7 noc0 (12, 1) xlat (27, 25) <-> chip2/eth4 | facing E
+  E0: 120491124216898884 (exact at launch-message address, 1.0000, text @0xf480) ties ['5580742107595855974', '1840600500323384937', '9461332547400840291']
+  E1: 11033516113230323204 (exact at launch-message address, 1.0000, text @0x11fe0) ties ['5110796484906793735']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 1 (y,x)=(0,1) of 2x4
+  heartbeat 0xdcba6dc0 -> 0xdcba8380 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 792737415 pkt_start 469180259->469238138 pkt_end 440386010->440443888 words 1971823937->1971881816 resend 23084980 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 218938259 pkt_start 2049305509->2049363385 pkt_end 2049305546->2049363422 words 2114734270->2114792146 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2728948152->2728955399 pkt_end 2728948153->2728955400 words 2728948154->2728955402 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x35c002b) unsent 0 | completions rcvd 40356 | conn open worker (14,8) sem 0x9370 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x35e0007) unsent 0 | completions rcvd 0 | conn open upstream chip0/eth6 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1b20007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x2d20007) unsent 0 | completions rcvd 0 | conn open upstream chip0/eth8 copy stream 6
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x23e0002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0c0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x520000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x1f80000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 W: copy stream 6 = 7 (raw 0x5a0007) | chip0/eth6 ch1 stream 1 = 7 (raw 0x1de0007) | N 7 | ds - copy = 0
+   vc0 slot2 S: copy stream 8 = 7 (raw 0x60007) | chip0/eth8 ch1 stream 1 = 7 (raw 0x3040007) | N 7 | ds - copy = 0
+
+=== chip0/eth8 noc0 (6, 1) xlat (28, 25) <-> chip4/eth11 | facing S
+  E0: 9898013262940248398 (exact at launch-message address, 1.0000, text @0xf480)
+  E1: 6469677178277904293 (exact at launch-message address, 1.0000, text @0x11ff0)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 1 (y,x)=(0,1) of 2x4
+  heartbeat 0xdcba8b80 -> 0xdcbac380 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 3611760887 pkt_start 2913795329->2913853212 pkt_end 2910171269->2910229153 words 424979236->425037119 resend 19434334 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 48612747 pkt_start 1923798195->1923856087 pkt_end 1923798203->1923856096 words 1960595006->1960652898 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2728947409->2728954658 pkt_end 2728947410->2728954659 words 2728947411->2728954660 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x3c0002b) unsent 0 | completions rcvd 40356 | conn open worker (14,9) sem 0x9380 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x3040007) unsent 0 | completions rcvd 0 | conn open upstream chip0/eth7 copy stream 8
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x3fa0007) unsent 0 | completions rcvd 0 | conn open upstream chip0/eth6 copy stream 8
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x2e40007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x3260002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0f0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x1e00000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x3d40000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0xec0007) | chip0/eth7 ch3 stream 3 = 7 (raw 0x2d20007) | N 7 | ds - copy = 0
+   vc0 slot1 W: copy stream 7 = 7 (raw 0x760007) | chip0/eth6 ch3 stream 3 = 7 (raw 0x1a40007) | N 7 | ds - copy = 0
+
+=== chip0/eth10 noc0 (7, 1) xlat (30, 25) <-> chip4/eth9 | facing S
+  E0: 11384369864551902230 (exact at launch-message address, 1.0000, text @0xf480)
+  E1: 6212728081653640149 (exact at launch-message address, 1.0000, text @0x121b0)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 1 (y,x)=(0,1) of 2x4
+  heartbeat 0xdcba95c0 -> 0xdcba0640 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 3485350060 pkt_start 2946274938->2946332826 pkt_end 2944503943->2944561831 words 3471631254->3471689142 resend 20615434 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 22490345 pkt_start 1949927695->1949985581 pkt_end 1949927704->1949985591 words 1967960017->1968017904 resend 2 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2728948098->2728955347 pkt_end 2728948099->2728955348 words 2728948100->2728955349 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x3a4002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x1e40007) unsent 0 | completions rcvd 0 | conn open upstream chip0/eth5 copy stream 8
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1c20007) unsent 0 | completions rcvd 0 | conn open upstream chip0/eth4 copy stream 8
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x1fc0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x2800002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x30c0000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x30a0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x2880007) | chip0/eth5 ch3 stream 3 = 7 (raw 0x25a0007) | N 7 | ds - copy = 0
+   vc0 slot1 W: copy stream 7 = 7 (raw 0x40007) | chip0/eth4 ch3 stream 3 = 7 (raw 0x2d80007) | N 7 | ds - copy = 0
+
+=== chip1/eth4 noc0 (3, 1) xlat (24, 25) <-> chip3/eth7
+  E0: - (no match, text @0x0)
+  E1: - (no match, text @0x0)
+  (no router config identified; mailbox: {"kcb": 0, "rta": [0, 0, 0, 0, 0], "crta": [0, 0, 0, 0, 0], "text_off": [0, 0, 0, 0, 0], "text_size": [0, 0, 0, 0, 0], "host_id": 0, "enables": 0})
+
+=== chip1/eth5 noc0 (4, 1) xlat (25, 25) <-> chip0/eth6 | facing E
+  E0: 3079247288313514542 (exact at launch-message address, 1.0000, text @0xf460) ties ['4900626127763520934']
+  E1: 4455771146007122769 (exact at launch-message address, 1.0000, text @0x11f70)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 0 (y,x)=(0,0) of 2x4
+  heartbeat 0xdcba7cc0 -> 0xdcbaa4c0 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 3223740582 pkt_start 3884085250->3884143137 pkt_end 3859651656->3859709543 words 1834196405->1834254292 resend 10 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 274396395 pkt_start 2078262373->2078320259 pkt_end 2078262539->2078320425 words 2158209045->2158266931 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2729353932->2729361180 pkt_end 2729353933->2729361182 words 2729353934->2729361183 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x24c002b) unsent 0 | completions rcvd 40356 | conn open worker (14,8) sem 0x9350 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x3d40007) unsent 0 | completions rcvd 0 | conn unused 
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1280007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x1060007) unsent 0 | completions rcvd 0 | conn open upstream chip1/eth8 copy stream 6
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0xf00002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0c0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x1680000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0xce0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot2 S: copy stream 8 = 7 (raw 0x3180007) | chip1/eth8 ch1 stream 1 = 7 (raw 0x22a0007) | N 7 | ds - copy = 0
+
+=== chip1/eth6 noc0 (13, 1) xlat (26, 25) <-> chip3/eth5
+  E0: - (no match, text @0x0)
+  E1: - (no match, text @0x0)
+  (no router config identified; mailbox: {"kcb": 0, "rta": [0, 0, 0, 0, 0], "crta": [0, 0, 0, 0, 0], "text_off": [0, 0, 0, 0, 0], "text_size": [0, 0, 0, 0, 0], "host_id": 0, "enables": 0})
+
+=== chip1/eth7 noc0 (12, 1) xlat (27, 25) <-> chip0/eth4 | facing E
+  E0: 4900626127763520934 (exact at launch-message address, 1.0000, text @0xf460) ties ['3079247288313514542']
+  E1: 4523626465811795196 (exact at launch-message address, 1.0000, text @0x11f70)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 0 (y,x)=(0,0) of 2x4
+  heartbeat 0xdcba9640 -> 0xdcba0500 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 125213542 pkt_start 647502489->647560373 pkt_end 643315972->643373856 words 1663901309->1663959194 resend 9 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 46863958 pkt_start 1884904561->1884962449 pkt_end 1884904569->1884962458 words 1920923855->1920981743 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2729353987->2729361236 pkt_end 2729353988->2729361237 words 2729353989->2729361238 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x3d8002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x840007) unsent 0 | completions rcvd 0 | conn unused 
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x22e0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x2180007) unsent 0 | completions rcvd 0 | conn open upstream chip1/eth10 copy stream 6
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x18c0002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x3880000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x680000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot2 S: copy stream 8 = 7 (raw 0x840007) | chip1/eth10 ch1 stream 1 = 7 (raw 0x2180007) | N 7 | ds - copy = 0
+
+=== chip1/eth8 noc0 (6, 1) xlat (28, 25) <-> chip5/eth11 | facing S
+  E0: 6902497216602111343 (exact at launch-message address, 1.0000, text @0xf460)
+  E1: 4642269014730280548 (exact at launch-message address, 1.0000, text @0x11f80)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 0 (y,x)=(0,0) of 2x4
+  heartbeat 0xdcba0800 -> 0xdcba7940 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 952490061 pkt_start 292346866->292404756 pkt_end 281357177->281415067 words 2910399481->2910457371 resend 21259656 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 134704997 pkt_start 1940311892->1940369782 pkt_end 1940311902->1940369793 words 1978517170->1978575060 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2729354799->2729362046 pkt_end 2729354800->2729362047 words 2729354801->2729362048 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x1c4002b) unsent 0 | completions rcvd 40356 | conn open worker (14,9) sem 0x9380 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x22a0007) unsent 0 | completions rcvd 0 | conn open upstream chip1/eth5 copy stream 8
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x2e40007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x1da0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0xf40002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0f0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x2360000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0xd00000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x1760007) | chip1/eth5 ch3 stream 3 = 7 (raw 0x1060007) | N 7 | ds - copy = 0
+
+=== chip1/eth10 noc0 (7, 1) xlat (30, 25) <-> chip5/eth9 | facing S
+  E0: 15143461946441862324 (exact at launch-message address, 1.0000, text @0xf460)
+  E1: 12038107355852708603 (exact at launch-message address, 1.0000, text @0x12140)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 0 (y,x)=(0,0) of 2x4
+  heartbeat 0xdcba9d40 -> 0xdcba0b80 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 3357667416 pkt_start 2589277693->2589335580 pkt_end 2587653121->2587711008 words 3116485812->3116543699 resend 19219588 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 22569464 pkt_start 1892746302->1892804187 pkt_end 1892746313->1892804198 words 1910783361->1910841246 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2729354785->2729362033 pkt_end 2729354786->2729362034 words 2729354787->2729362036 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x358002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x2180007) unsent 0 | completions rcvd 0 | conn open upstream chip1/eth7 copy stream 8
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x2d60007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x1340007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x2a0002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x3400000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0xce0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x3360007) | chip1/eth7 ch3 stream 3 = 7 (raw 0x2180007) | N 7 | ds - copy = 0
+
+=== chip2/eth4 noc0 (3, 1) xlat (24, 25) <-> chip0/eth7 | facing W
+  E0: 15845055918064789493 (exact at launch-message address, 1.0000, text @0xf480) ties ['4885400972195556463', '13338640147346999610', '13399802771401138415']
+  E1: 13485616102022037722 (exact at launch-message address, 1.0000, text @0x12010) ties ['10151399593445708906']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 2 (y,x)=(0,2) of 2x4
+  heartbeat 0xdcba9540 -> 0xdcba0600 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 2205045047 pkt_start 2330008456->2330066346 pkt_end 2303551610->2303609500 words 2479235133->2479293022 resend 1 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 242857356 pkt_start 1973955390->1974013276 pkt_end 1973955430->1974013316 words 2056833332->2056891218 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2727409265->2727416513 pkt_end 2727409266->2727416515 words 2727409267->2727416516 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x13e002b) unsent 0 | completions rcvd 40356 | conn open worker (14,7) sem 0x9340 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x37a0007) unsent 0 | completions rcvd 0 | conn open upstream chip2/eth5 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x3340007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x15a0007) unsent 0 | completions rcvd 0 | conn open upstream chip2/eth8 copy stream 7
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x2c0002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe120 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0xe60000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x21e0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x2320007) | chip2/eth5 ch1 stream 1 = 7 (raw 0x2420007) | N 7 | ds - copy = 0
+   vc0 slot2 S: copy stream 8 = 7 (raw 0x2940007) | chip2/eth8 ch2 stream 2 = 7 (raw 0x3ac0007) | N 7 | ds - copy = 0
+
+=== chip2/eth5 noc0 (4, 1) xlat (25, 25) <-> chip3/eth6 | facing E
+  E0: 1840600500323384937 (exact at launch-message address, 1.0000, text @0xf480) ties ['9461332547400840291', '120491124216898884', '5580742107595855974']
+  E1: 5110796484906793735 (exact at launch-message address, 1.0000, text @0x11fe0) ties ['11033516113230323204']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 2 (y,x)=(0,2) of 2x4
+  heartbeat 0xdcba18c0 -> 0xdcba8940 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 2945430844 pkt_start 626976305->627034192 pkt_end 610740998->610798885 words 916343438->916401326 resend 21581583 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 129418940 pkt_start 801816041->801873932 pkt_end 801816067->801873959 words 834011223->834069114 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2727408765->2727416014 pkt_end 2727408767->2727416015 words 2727408768->2727416016 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x1cc002b) unsent 0 | completions rcvd 40356 | conn open worker (14,8) sem 0x9350 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x2420007) unsent 0 | completions rcvd 0 | conn open upstream chip2/eth4 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1080007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x32e0007) unsent 0 | completions rcvd 0 | conn open upstream chip2/eth8 copy stream 6
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x1bc0002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0c0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x1100000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x16a0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 W: copy stream 6 = 7 (raw 0x2900007) | chip2/eth4 ch1 stream 1 = 7 (raw 0x37a0007) | N 7 | ds - copy = 0
+   vc0 slot2 S: copy stream 8 = 7 (raw 0x3220007) | chip2/eth8 ch1 stream 1 = 7 (raw 0x2360007) | N 7 | ds - copy = 0
+
+=== chip2/eth6 noc0 (13, 1) xlat (26, 25) <-> chip0/eth5 | facing W
+  E0: 13338640147346999610 (exact at launch-message address, 1.0000, text @0xf480) ties ['13399802771401138415', '15845055918064789493', '4885400972195556463']
+  E1: 988522330103490772 (exact at launch-message address, 1.0000, text @0x12010) ties ['17654417376010027574']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 2 (y,x)=(0,2) of 2x4
+  heartbeat 0xdcba89c0 -> 0xdcbaf540 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 141450446 pkt_start 444640925->444698820 pkt_end 439342170->439400066 words 1613687937->1613745833 resend 0 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 46922884 pkt_start 1758999218->1759057113 pkt_end 1758999227->1759057121 words 1795028655->1795086550 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2727409354->2727416604 pkt_end 2727409356->2727416605 words 2727409357->2727416606 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x8002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x2b20007) unsent 0 | completions rcvd 0 | conn open upstream chip2/eth7 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x20e0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x2a00007) unsent 0 | completions rcvd 0 | conn open upstream chip2/eth10 copy stream 7
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0xce0002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x16e0000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x720000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x35e0007) | chip2/eth7 ch1 stream 1 = 7 (raw 0x33a0007) | N 7 | ds - copy = 0
+   vc0 slot2 S: copy stream 8 = 7 (raw 0x1160007) | chip2/eth10 ch2 stream 2 = 7 (raw 0x2220007) | N 7 | ds - copy = 0
+
+=== chip2/eth7 noc0 (12, 1) xlat (27, 25) <-> chip3/eth4 | facing E
+  E0: 120491124216898884 (exact at launch-message address, 1.0000, text @0xf480) ties ['5580742107595855974', '1840600500323384937', '9461332547400840291']
+  E1: 17611580153687509422 (exact at launch-message address, 1.0000, text @0x11fe0) ties ['1612016734705949174']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 2 (y,x)=(0,2) of 2x4
+  heartbeat 0xdcba8d40 -> 0xdcbafb00 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 927422842 pkt_start 2972879784->2972937677 pkt_end 2968563836->2968621729 words 3855997209->3856055103 resend 21152098 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 19210075 pkt_start 735996209->736054099 pkt_end 735996223->736054112 words 750743999->750801889 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2727408922->2727416171 pkt_end 2727408923->2727416172 words 2727408924->2727416174 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x33a0007) unsent 0 | completions rcvd 0 | conn open upstream chip2/eth6 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x2fc0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x2fa0007) unsent 0 | completions rcvd 0 | conn open upstream chip2/eth10 copy stream 6
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x3d00002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x3260000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x3fc0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 W: copy stream 6 = 7 (raw 0x100007) | chip2/eth6 ch1 stream 1 = 7 (raw 0x2b20007) | N 7 | ds - copy = 0
+   vc0 slot2 S: copy stream 8 = 7 (raw 0x2540007) | chip2/eth10 ch1 stream 1 = 7 (raw 0x3320007) | N 7 | ds - copy = 0
+
+=== chip2/eth8 noc0 (6, 1) xlat (28, 25) <-> chip6/eth11 | facing S
+  E0: 9898013262940248398 (exact at launch-message address, 1.0000, text @0xf480)
+  E1: 6469677178277904293 (exact at launch-message address, 1.0000, text @0x11ff0)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 2 (y,x)=(0,2) of 2x4
+  heartbeat 0xdcba7140 -> 0xdcbafec0 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 2694014729 pkt_start 1743662429->1743720316 pkt_end 1731827851->1731885738 words 3779933865->3779991752 resend 18360451 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 360500930 pkt_start 1962196514->1962254401 pkt_end 1962196524->1962254411 words 2265246272->2265304160 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2727409329->2727416578 pkt_end 2727409330->2727416579 words 2727409331->2727416580 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x176002b) unsent 0 | completions rcvd 40356 | conn open worker (14,9) sem 0x9380 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x2360007) unsent 0 | completions rcvd 0 | conn open upstream chip2/eth5 copy stream 8
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x3ac0007) unsent 0 | completions rcvd 0 | conn open upstream chip2/eth4 copy stream 8
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x8c0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x1d60002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0f0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x2fe0000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x340000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x32e0007) | chip2/eth5 ch3 stream 3 = 7 (raw 0x32e0007) | N 7 | ds - copy = 0
+   vc0 slot1 W: copy stream 7 = 7 (raw 0x1180007) | chip2/eth4 ch3 stream 3 = 7 (raw 0x15a0007) | N 7 | ds - copy = 0
+
+=== chip2/eth10 noc0 (7, 1) xlat (30, 25) <-> chip6/eth9 | facing S
+  E0: 11384369864551902230 (exact at launch-message address, 1.0000, text @0xf480)
+  E1: 6212728081653640149 (exact at launch-message address, 1.0000, text @0x121b0)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 2 (y,x)=(0,2) of 2x4
+  heartbeat 0xdcba9440 -> 0xdcba0180 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 2512038626 pkt_start 1710358537->1710416428 pkt_end 1708568003->1708625893 words 2235977268->2236035158 resend 19434154 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 22520556 pkt_start 1787913695->1787971594 pkt_end 1787913706->1787971604 words 1805919187->1805977086 resend 2 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2727409717->2727416966 pkt_end 2727409718->2727416968 words 2727409719->2727416969 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0xf6002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x3320007) unsent 0 | completions rcvd 0 | conn open upstream chip2/eth7 copy stream 8
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x2220007) unsent 0 | completions rcvd 0 | conn open upstream chip2/eth6 copy stream 8
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x720007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x3a40002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x1ae0000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x1860000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0xf60007) | chip2/eth7 ch3 stream 3 = 7 (raw 0x2fa0007) | N 7 | ds - copy = 0
+   vc0 slot1 W: copy stream 7 = 7 (raw 0x17e0007) | chip2/eth6 ch3 stream 3 = 7 (raw 0x2a00007) | N 7 | ds - copy = 0
+
+=== chip3/eth4 noc0 (3, 1) xlat (24, 25) <-> chip2/eth7 | facing W
+  E0: 6964457483936536437 (exact at launch-message address, 1.0000, text @0xf460) ties ['1077544856759421646']
+  E1: 9670843669893510323 (exact at launch-message address, 1.0000, text @0x11fa0)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 3 (y,x)=(0,3) of 2x4
+  heartbeat 0xdcba9d80 -> 0xdcba0ac0 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 79004108 pkt_start 2898946002->2899003901 pkt_end 2897043459->2897101359 words 3493211147->3493269047 resend 0 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 26508382 pkt_start 686930142->686988034 pkt_end 686930148->686988043 words 707283247->707341135 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2731495819->2731503069 pkt_end 2731495820->2731503070 words 2731495822->2731503071 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x382002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x31e0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x260007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x1140007) unsent 0 | completions rcvd 0 | conn open upstream chip3/eth10 copy stream 7
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x2560002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x24a0000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x1a40000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot2 S: copy stream 8 = 7 (raw 0x30e0007) | chip3/eth10 ch2 stream 2 = 7 (raw 0x1820007) | N 7 | ds - copy = 0
+
+=== chip3/eth5 noc0 (4, 1) xlat (25, 25) <-> chip1/eth6
+  E0: - (no match, text @0x0)
+  E1: - (no match, text @0x0)
+  (no router config identified; mailbox: {"kcb": 0, "rta": [0, 0, 0, 0, 0], "crta": [0, 0, 0, 0, 0], "text_off": [0, 0, 0, 0, 0], "text_size": [0, 0, 0, 0, 0], "host_id": 0, "enables": 0})
+
+=== chip3/eth6 noc0 (13, 1) xlat (26, 25) <-> chip2/eth5 | facing W
+  E0: 1077544856759421646 (exact at launch-message address, 1.0000, text @0xf460) ties ['6964457483936536437']
+  E1: 12898238756615400549 (exact at launch-message address, 1.0000, text @0x11fa0)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 3 (y,x)=(0,3) of 2x4
+  heartbeat 0xdcba1e40 -> 0xdcbaab40 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 1991375270 pkt_start 347181177->347239069 pkt_end 335764700->335822592 words 2827872514->2827930406 resend 0 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 159292331 pkt_start 759789292->759847187 pkt_end 759789274->759847168 words 811414555->811472450 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2731496010->2731503259 pkt_end 2731496011->2731503260 words 2731496012->2731503261 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x134002b) unsent 0 | completions rcvd 40356 | conn open worker (14,8) sem 0x9360 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x38e0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1a80007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x1aa0007) unsent 0 | completions rcvd 0 | conn open upstream chip3/eth8 copy stream 7
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x3cc0002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0f0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x3a00000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x460000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot2 S: copy stream 8 = 7 (raw 0x2da0007) | chip3/eth8 ch2 stream 2 = 7 (raw 0x1960007) | N 7 | ds - copy = 0
+
+=== chip3/eth7 noc0 (12, 1) xlat (27, 25) <-> chip1/eth4
+  E0: - (no match, text @0x0)
+  E1: - (no match, text @0x0)
+  (no router config identified; mailbox: {"kcb": 0, "rta": [0, 0, 0, 0, 0], "crta": [0, 0, 0, 0, 0], "text_off": [0, 0, 0, 0, 0], "text_size": [0, 0, 0, 0, 0], "host_id": 0, "enables": 0})
+
+=== chip3/eth8 noc0 (6, 1) xlat (28, 25) <-> chip7/eth11 | facing S
+  E0: 12115363882136332380 (exact at launch-message address, 1.0000, text @0xf460)
+  E1: 7968768333040761066 (exact at launch-message address, 1.0000, text @0x11f80)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 3 (y,x)=(0,3) of 2x4
+  heartbeat 0xdcba0080 -> 0xdcba6f80 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 4183808457 pkt_start 3400168819->3400226714 pkt_end 3380669519->3380727414 words 1645611732->1645669628 resend 21044912 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 177031902 pkt_start 1861129386->1861187273 pkt_end 1861129395->1861187284 words 1897889476->1897947365 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2731496791->2731504040 pkt_end 2731496792->2731504041 words 2731496794->2731504043 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x1ea002b) unsent 0 | completions rcvd 40356 | conn open worker (14,9) sem 0x9380 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x1440007) unsent 0 | completions rcvd 0 | conn unused 
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1960007) unsent 0 | completions rcvd 0 | conn open upstream chip3/eth6 copy stream 8
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x2ca0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0xec0002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0c0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0xae0000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0xfe0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot1 W: copy stream 7 = 7 (raw 0x60007) | chip3/eth6 ch3 stream 3 = 7 (raw 0x1aa0007) | N 7 | ds - copy = 0
+
+=== chip3/eth10 noc0 (7, 1) xlat (30, 25) <-> chip7/eth9 | facing S
+  E0: 7134421910925699852 (exact at launch-message address, 1.0000, text @0xf460)
+  E1: 6829629309854390162 (exact at launch-message address, 1.0000, text @0x12140)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 3 (y,x)=(0,3) of 2x4
+  heartbeat 0xdcba7a40 -> 0xdcba1ac0 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 2239918664 pkt_start 1321776897->1321834784 pkt_end 1320009873->1320067760 words 1848873015->1848930902 resend 18790104 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 22565662 pkt_start 1756310051->1756367939 pkt_end 1756310061->1756367948 words 1774288313->1774346200 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2731496778->2731504027 pkt_end 2731496779->2731504028 words 2731496781->2731504030 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x1da002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x2a80007) unsent 0 | completions rcvd 0 | conn unused 
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1820007) unsent 0 | completions rcvd 0 | conn open upstream chip3/eth4 copy stream 8
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x3a80007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x18e0002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x39a0000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x2420000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot1 W: copy stream 7 = 7 (raw 0xa20007) | chip3/eth4 ch3 stream 3 = 7 (raw 0x1140007) | N 7 | ds - copy = 0
+
+=== chip4/eth4 noc0 (3, 1) xlat (24, 25) <-> chip5/eth7 | facing W
+  E0: 12124849991489027549 (exact at launch-message address, 1.0000, text @0xf480) ties ['4511673758475412909', '16733084590081592337', '6774889692854750022']
+  E1: 7464784779916906192 (exact at launch-message address, 1.0000, text @0x12010) ties ['5426226112240484626']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 5 (y,x)=(1,1) of 2x4
+  heartbeat 0xdcba4f00 -> 0xdcba1700 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 3747197404 pkt_start 3358344487->3358402369 pkt_end 3329398010->3329455892 words 2237141187->2237199069 resend 19863820 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 216778738 pkt_start 1909950940->1910008826 pkt_end 1909950956->1910008842 words 1974022144->1974080030 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2736910001->2736917249 pkt_end 2736910002->2736917250 words 2736910003->2736917251 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x54002b) unsent 0 | completions rcvd 40356 | conn open worker (14,8) sem 0x9340 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x1da0007) unsent 0 | completions rcvd 0 | conn open upstream chip4/eth5 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x3c60007) unsent 0 | completions rcvd 0 | conn open upstream chip4/eth11 copy stream 7
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x3ae0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x1e00002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe120 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x3540000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x3360000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x440007) | chip4/eth5 ch1 stream 1 = 7 (raw 0x3780007) | N 7 | ds - copy = 0
+   vc0 slot1 N: copy stream 7 = 7 (raw 0x380007) | chip4/eth11 ch2 stream 2 = 7 (raw 0x240007) | N 7 | ds - copy = 0
+
+=== chip4/eth5 noc0 (4, 1) xlat (25, 25) <-> chip6/eth6 | facing E
+  E0: 1323502870159876142 (exact at launch-message address, 1.0000, text @0xf480) ties ['9626527452887741988', '18419455103341887675', '4667226031616625924']
+  E1: 14115722850011913488 (exact at launch-message address, 1.0000, text @0x11fe0) ties ['16411205258527317863']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 5 (y,x)=(1,1) of 2x4
+  heartbeat 0xdcbad7c0 -> 0xdcba4300 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 3012768461 pkt_start 1662770665->1662828550 pkt_end 1634435655->1634493541 words 2730027452->2730085341 resend 15783688 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 360825783 pkt_start 1990464634->1990522519 pkt_end 1990464641->1990522527 words 2195400020->2195457906 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2736909900->2736917149 pkt_end 2736909902->2736917150 words 2736909903->2736917151 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x3fe002b) unsent 0 | completions rcvd 40356 | conn open worker (14,9) sem 0x9350 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x3780007) unsent 0 | completions rcvd 0 | conn open upstream chip4/eth4 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1d20007) unsent 0 | completions rcvd 0 | conn open upstream chip4/eth11 copy stream 6
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x3e60007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x2940002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0f0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x420000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x1320000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 W: copy stream 6 = 7 (raw 0xa60007) | chip4/eth4 ch1 stream 1 = 7 (raw 0x1da0007) | N 7 | ds - copy = 0
+   vc0 slot1 N: copy stream 7 = 7 (raw 0x32a0007) | chip4/eth11 ch1 stream 1 = 7 (raw 0x480007) | N 7 | ds - copy = 0
+
+=== chip4/eth6 noc0 (13, 1) xlat (26, 25) <-> chip5/eth5 | facing W
+  E0: 16733084590081592337 (exact at launch-message address, 1.0000, text @0xf480) ties ['6774889692854750022', '12124849991489027549', '4511673758475412909']
+  E1: 17918285702828973455 (exact at launch-message address, 1.0000, text @0x12010) ties ['18079702679280609160']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 5 (y,x)=(1,1) of 2x4
+  heartbeat 0xdcbaac40 -> 0xdcba16c0 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 719206481 pkt_start 12366921->12424846 pkt_end 5986146->6044070 words 1317663171->1317721096 resend 19219588 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 39514520 pkt_start 1788095621->1788153545 pkt_end 1788095628->1788153552 words 1818377890->1818435814 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2736910186->2736917441 pkt_end 2736910188->2736917442 words 2736910189->2736917443 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x36e002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x2f80007) unsent 0 | completions rcvd 0 | conn open upstream chip4/eth7 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x2f00007) unsent 0 | completions rcvd 0 | conn open upstream chip4/eth9 copy stream 7
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x3340007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x3180002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x2740000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x3c20000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x8e0007) | chip4/eth7 ch1 stream 1 = 7 (raw 0x100007) | N 7 | ds - copy = 0
+   vc0 slot1 N: copy stream 7 = 7 (raw 0x19a0007) | chip4/eth9 ch2 stream 2 = 7 (raw 0x1420007) | N 7 | ds - copy = 0
+
+=== chip4/eth7 noc0 (12, 1) xlat (27, 25) <-> chip6/eth4 | facing E
+  E0: 18419455103341887675 (exact at launch-message address, 1.0000, text @0xf480) ties ['4667226031616625924', '1323502870159876142', '9626527452887741988']
+  E1: 7899422201142657874 (exact at launch-message address, 1.0000, text @0x11fe0) ties ['3596209347813417339']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 5 (y,x)=(1,1) of 2x4
+  heartbeat 0xdcbaaf80 -> 0xdcba1a00 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 895951176 pkt_start 4051900952->4051958881 pkt_end 4045659389->4045717317 words 1066069026->1066126955 resend 16320547 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 41547350 pkt_start 1819442159->1819500089 pkt_end 1819442167->1819500098 words 1851334600->1851392531 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2736910354->2736917607 pkt_end 2736910355->2736917608 words 2736910356->2736917609 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x6a002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x100007) unsent 0 | completions rcvd 0 | conn open upstream chip4/eth6 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x3740007) unsent 0 | completions rcvd 0 | conn open upstream chip4/eth9 copy stream 6
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x2560007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x1b60002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x1400000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x35c0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 W: copy stream 6 = 7 (raw 0x1180007) | chip4/eth6 ch1 stream 1 = 7 (raw 0x2f80007) | N 7 | ds - copy = 0
+   vc0 slot1 N: copy stream 7 = 7 (raw 0x35a0007) | chip4/eth9 ch1 stream 1 = 7 (raw 0x32a0007) | N 7 | ds - copy = 0
+
+=== chip4/eth9 noc0 (11, 1) xlat (29, 25) <-> chip0/eth10 | facing N
+  E0: 12288365138408542478 (exact at launch-message address, 1.0000, text @0xf480)
+  E1: 3200485371784387122 (exact at launch-message address, 1.0000, text @0x121e0)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 5 (y,x)=(1,1) of 2x4
+  heartbeat 0xdcba7bc0 -> 0xdcba1d00 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 64743098 pkt_start 407491239->407549169 pkt_end 405723108->405781037 words 933062946->933120876 resend 0 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 22490397 pkt_start 1778031668->1778089598 pkt_end 1778031678->1778089608 words 1796064019->1796121949 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2736911007->2736918255 pkt_end 2736911008->2736918256 words 2736911009->2736918257 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x3d2002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x32a0007) unsent 0 | completions rcvd 0 | conn open upstream chip4/eth7 copy stream 7
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1420007) unsent 0 | completions rcvd 0 | conn open upstream chip4/eth6 copy stream 7
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x1940007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x30a0002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x940000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x22a0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x1980007) | chip4/eth7 ch2 stream 2 = 7 (raw 0x3740007) | N 7 | ds - copy = 0
+   vc0 slot1 W: copy stream 7 = 7 (raw 0x18c0007) | chip4/eth6 ch2 stream 2 = 7 (raw 0x2f00007) | N 7 | ds - copy = 0
+
+=== chip4/eth11 noc0 (10, 1) xlat (31, 25) <-> chip0/eth8 | facing N
+  E0: 6320703370926481618 (exact at launch-message address, 1.0000, text @0xf480)
+  E1: 11055175804647471886 (exact at launch-message address, 1.0000, text @0x12010)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 5 (y,x)=(1,1) of 2x4
+  heartbeat 0xdcba5240 -> 0xdcbabf00 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 156869903 pkt_start 544349256->544407140 pkt_end 540823282->540881166 words 2014162349->2014220232 resend 0 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 56118066 pkt_start 1849919724->1849977597 pkt_end 1849919734->1849977607 words 1894248537->1894306410 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2736910531->2736917778 pkt_end 2736910532->2736917779 words 2736910533->2736917780 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x170002b) unsent 0 | completions rcvd 40356 | conn open worker (14,7) sem 0x93b0 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x480007) unsent 0 | completions rcvd 0 | conn open upstream chip4/eth5 copy stream 7
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x240007) unsent 0 | completions rcvd 0 | conn open upstream chip4/eth4 copy stream 7
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x840007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x200002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0c0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x2520000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x6e0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x1700007) | chip4/eth5 ch2 stream 2 = 7 (raw 0x1d20007) | N 7 | ds - copy = 0
+   vc0 slot1 W: copy stream 7 = 7 (raw 0xfa0007) | chip4/eth4 ch2 stream 2 = 7 (raw 0x3c60007) | N 7 | ds - copy = 0
+
+=== chip5/eth4 noc0 (3, 1) xlat (24, 25) <-> chip7/eth7
+  E0: - (no match, text @0x0)
+  E1: - (no match, text @0x0)
+  (no router config identified; mailbox: {"kcb": 0, "rta": [0, 0, 0, 0, 0], "crta": [0, 0, 0, 0, 0], "text_off": [0, 0, 0, 0, 0], "text_size": [0, 0, 0, 0, 0], "host_id": 0, "enables": 0})
+
+=== chip5/eth5 noc0 (4, 1) xlat (25, 25) <-> chip4/eth6 | facing E
+  E0: 6695864302116837815 (exact at launch-message address, 1.0000, text @0xf460) ties ['10672555921224897944']
+  E1: 9344308463185661045 (exact at launch-message address, 1.0000, text @0x11f70)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 4 (y,x)=(1,0) of 2x4
+  heartbeat 0xdcbac3c0 -> 0xdcba2d40 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 125166322 pkt_start 510058355->510116230 pkt_end 506018878->506076752 words 1527661365->1527719239 resend 13 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 46877970 pkt_start 1849178414->1849236293 pkt_end 1849178429->1849236307 words 1885137177->1885195055 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2740848713->2740855961 pkt_end 2740848715->2740855962 words 2740848716->2740855963 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x20e002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x2a00007) unsent 0 | completions rcvd 0 | conn unused 
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1960007) unsent 0 | completions rcvd 0 | conn open upstream chip5/eth9 copy stream 6
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x3b20007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x1d40002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x280000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x2000000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot1 N: copy stream 7 = 7 (raw 0xac0007) | chip5/eth9 ch1 stream 1 = 7 (raw 0x2460007) | N 7 | ds - copy = 0
+
+=== chip5/eth6 noc0 (13, 1) xlat (26, 25) <-> chip7/eth5
+  E0: - (no match, text @0x0)
+  E1: - (no match, text @0x0)
+  (no router config identified; mailbox: {"kcb": 0, "rta": [0, 0, 0, 0, 0], "crta": [0, 0, 0, 0, 0], "text_off": [0, 0, 0, 0, 0], "text_size": [0, 0, 0, 0, 0], "host_id": 0, "enables": 0})
+
+=== chip5/eth7 noc0 (12, 1) xlat (27, 25) <-> chip4/eth4 | facing E
+  E0: 10672555921224897944 (exact at launch-message address, 1.0000, text @0xf460) ties ['6695864302116837815']
+  E1: 6704805823399020548 (exact at launch-message address, 1.0000, text @0x11f70)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 4 (y,x)=(1,0) of 2x4
+  heartbeat 0xdcba6940 -> 0xdcbad540 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 2174461221 pkt_start 2376384011->2376441899 pkt_end 2352505232->2352563121 words 2144869462->2144927350 resend 13 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 361073863 pkt_start 1985783378->1985841261 pkt_end 1985783456->1985841339 words 2185220943->2185278825 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2740848867->2740856115 pkt_end 2740848868->2740856116 words 2740848869->2740856117 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x316002b) unsent 0 | completions rcvd 40356 | conn open worker (14,9) sem 0x9370 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x2ec0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0xea0007) unsent 0 | completions rcvd 0 | conn open upstream chip5/eth11 copy stream 6
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x2240007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x3560002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0f0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x30e0000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x300000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot1 N: copy stream 7 = 7 (raw 0x3da0007) | chip5/eth11 ch1 stream 1 = 7 (raw 0x1ee0007) | N 7 | ds - copy = 0
+
+=== chip5/eth9 noc0 (11, 1) xlat (29, 25) <-> chip1/eth10 | facing N
+  E0: 2208117436693071805 (exact at launch-message address, 1.0000, text @0xf460)
+  E1: 2280656931993641019 (exact at launch-message address, 1.0000, text @0x12170)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 4 (y,x)=(1,0) of 2x4
+  heartbeat 0xdcba8800 -> 0xdcba1240 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 65008262 pkt_start 419330026->419387913 pkt_end 417705508->417763396 words 945745137->945803025 resend 5 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 22539731 pkt_start 1728375913->1728433797 pkt_end 1728375924->1728433808 words 1746379119->1746437003 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2740850412->2740857660 pkt_end 2740850413->2740857662 words 2740850415->2740857663 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0xc0002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x2460007) unsent 0 | completions rcvd 0 | conn open upstream chip5/eth5 copy stream 7
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x160007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x1700007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x36c0002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x26e0000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x6a0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x1ec0007) | chip5/eth5 ch2 stream 2 = 7 (raw 0x1960007) | N 7 | ds - copy = 0
+
+=== chip5/eth11 noc0 (10, 1) xlat (31, 25) <-> chip1/eth8 | facing N
+  E0: 9035335914759712615 (exact at launch-message address, 1.0000, text @0xf460)
+  E1: 14090099862465467389 (exact at launch-message address, 1.0000, text @0x11fa0)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 4 (y,x)=(1,0) of 2x4
+  heartbeat 0xdcba4c00 -> 0xdcbab7c0 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 1927702590 pkt_start 2044699236->2044757117 pkt_end 2033840828->2033898708 words 4133182177->4133240057 resend 15 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 141892663 pkt_start 1862939679->1862997567 pkt_end 1862939691->1862997578 words 1904512517->1904570404 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2740850647->2740857895 pkt_end 2740850648->2740857897 words 2740850649->2740857898 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x126002b) unsent 0 | completions rcvd 40356 | conn open worker (14,8) sem 0x93b0 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x1ee0007) unsent 0 | completions rcvd 0 | conn open upstream chip5/eth7 copy stream 7
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1c0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x1d40007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x2c40002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0c0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x1500000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x18c0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x900007) | chip5/eth7 ch2 stream 2 = 7 (raw 0xea0007) | N 7 | ds - copy = 0
+
+=== chip6/eth4 noc0 (3, 1) xlat (24, 25) <-> chip4/eth7 | facing W
+  E0: 12124849991489027549 (exact at launch-message address, 1.0000, text @0xf480) ties ['4511673758475412909', '16733084590081592337', '6774889692854750022']
+  E1: 18079702679280609160 (exact at launch-message address, 1.0000, text @0x12010) ties ['17918285702828973455']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 6 (y,x)=(1,2) of 2x4
+  heartbeat 0xdcbad100 -> 0xdcba13c0 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 141410558 pkt_start 590210801->590268690 pkt_end 585237889->585295779 words 1759287765->1759345654 resend 0 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 46830798 pkt_start 1687948161->1688006057 pkt_end 1687948175->1688006071 words 1723889725->1723947621 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2744447007->2744454257 pkt_end 2744447008->2744454258 words 2744447010->2744454259 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x7c002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x3fc0007) unsent 0 | completions rcvd 0 | conn open upstream chip6/eth5 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1340007) unsent 0 | completions rcvd 0 | conn open upstream chip6/eth9 copy stream 7
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x1fe0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x19a0002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x3040000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0xbc0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x220007) | chip6/eth5 ch1 stream 1 = 7 (raw 0x19a0007) | N 7 | ds - copy = 0
+   vc0 slot1 N: copy stream 7 = 7 (raw 0x3660007) | chip6/eth9 ch2 stream 2 = 7 (raw 0x3f20007) | N 7 | ds - copy = 0
+
+=== chip6/eth5 noc0 (4, 1) xlat (25, 25) <-> chip7/eth6 | facing E
+  E0: 1323502870159876142 (exact at launch-message address, 1.0000, text @0xf480) ties ['9626527452887741988', '18419455103341887675', '4667226031616625924']
+  E1: 3596209347813417339 (exact at launch-message address, 1.0000, text @0x11fe0) ties ['7899422201142657874']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 6 (y,x)=(1,2) of 2x4
+  heartbeat 0xdcbad480 -> 0xdcba3d00 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 834150678 pkt_start 2899043383->2899101277 pkt_end 2894662569->2894720462 words 3782761068->3782818961 resend 21689144 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 19113475 pkt_start 699974241->700032132 pkt_end 699974248->700032142 words 714626715->714684610 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2744447810->2744455059 pkt_end 2744447811->2744455061 words 2744447812->2744455062 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x242002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x19a0007) unsent 0 | completions rcvd 0 | conn open upstream chip6/eth4 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1c80007) unsent 0 | completions rcvd 0 | conn open upstream chip6/eth9 copy stream 6
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x2a80007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x1440002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x180000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x900000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 W: copy stream 6 = 7 (raw 0x10a0007) | chip6/eth4 ch1 stream 1 = 7 (raw 0x3fc0007) | N 7 | ds - copy = 0
+   vc0 slot1 N: copy stream 7 = 7 (raw 0x10c0007) | chip6/eth9 ch1 stream 1 = 7 (raw 0x3260007) | N 7 | ds - copy = 0
+
+=== chip6/eth6 noc0 (13, 1) xlat (26, 25) <-> chip4/eth5 | facing W
+  E0: 16733084590081592337 (exact at launch-message address, 1.0000, text @0xf480) ties ['6774889692854750022', '12124849991489027549', '4511673758475412909']
+  E1: 5426226112240484626 (exact at launch-message address, 1.0000, text @0x12010) ties ['7464784779916906192']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 6 (y,x)=(1,2) of 2x4
+  heartbeat 0xdcba20c0 -> 0xdcba7600 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 3247925570 pkt_start 3950670544->3950728450 pkt_end 3924740771->3924798677 words 2606514457->2606572363 resend 0 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 242686031 pkt_start 1888371531->1888429435 pkt_end 1888371629->1888429534 words 1973214694->1973272599 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2744446893->2744454144 pkt_end 2744446894->2744454145 words 2744446896->2744454146 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x250002b) unsent 0 | completions rcvd 40356 | conn open worker (14,8) sem 0x9360 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x1240007) unsent 0 | completions rcvd 0 | conn open upstream chip6/eth7 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x1bc0007) unsent 0 | completions rcvd 0 | conn open upstream chip6/eth11 copy stream 7
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x3100007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x1400002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe120 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x2d00000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x2d00000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x2e0007) | chip6/eth7 ch1 stream 1 = 7 (raw 0x35c0007) | N 7 | ds - copy = 0
+   vc0 slot1 N: copy stream 7 = 7 (raw 0x4c0007) | chip6/eth11 ch2 stream 2 = 7 (raw 0x2500007) | N 7 | ds - copy = 0
+
+=== chip6/eth7 noc0 (12, 1) xlat (27, 25) <-> chip7/eth4 | facing E
+  E0: 18419455103341887675 (exact at launch-message address, 1.0000, text @0xf480) ties ['4667226031616625924', '1323502870159876142', '9626527452887741988']
+  E1: 16411205258527317863 (exact at launch-message address, 1.0000, text @0x11fe0) ties ['14115722850011913488']
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 6 (y,x)=(1,2) of 2x4
+  heartbeat 0xdcbaed00 -> 0xdcba57c0 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 2789368595 pkt_start 721447976->721505885 pkt_end 705005386->705063295 words 135615974->135673883 resend 24051328 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 128293467 pkt_start 752024951->752082864 pkt_end 752024959->752082869 words 783192143->783250053 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2744448564->2744455815 pkt_end 2744448566->2744455817 words 2744448567->2744455818 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x33a002b) unsent 0 | completions rcvd 40356 | conn open worker (14,9) sem 0x9370 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x35c0007) unsent 0 | completions rcvd 0 | conn open upstream chip6/eth6 copy stream 6
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x2c00007) unsent 0 | completions rcvd 0 | conn open upstream chip6/eth11 copy stream 6
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x1ba0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x1340002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0f0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x19a0000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x17c0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 W: copy stream 6 = 7 (raw 0x1400007) | chip6/eth6 ch1 stream 1 = 7 (raw 0x1240007) | N 7 | ds - copy = 0
+   vc0 slot1 N: copy stream 7 = 7 (raw 0x2340007) | chip6/eth11 ch1 stream 1 = 7 (raw 0x12a0007) | N 7 | ds - copy = 0
+
+=== chip6/eth9 noc0 (11, 1) xlat (29, 25) <-> chip2/eth10 | facing N
+  E0: 12288365138408542478 (exact at launch-message address, 1.0000, text @0xf480)
+  E1: 3200485371784387122 (exact at launch-message address, 1.0000, text @0x121e0)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 6 (y,x)=(1,2) of 2x4
+  heartbeat 0xdcba8fc0 -> 0xdcba1980 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 64820448 pkt_start 350832599->350890510 pkt_end 349038666->349096577 words 876854593->876912503 resend 0 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 22548523 pkt_start 1776921712->1776979619 pkt_end 1776921722->1776979630 words 1794957532->1795015440 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2744448206->2744455457 pkt_end 2744448207->2744455459 words 2744448208->2744455460 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x120002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x3260007) unsent 0 | completions rcvd 0 | conn open upstream chip6/eth5 copy stream 7
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x3f20007) unsent 0 | completions rcvd 0 | conn open upstream chip6/eth4 copy stream 7
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x1c60007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x5c0002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x3d00000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x3260000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0x2ea0007) | chip6/eth5 ch2 stream 2 = 7 (raw 0x1c80007) | N 7 | ds - copy = 0
+   vc0 slot1 W: copy stream 7 = 7 (raw 0x1c00007) | chip6/eth4 ch2 stream 2 = 7 (raw 0x1340007) | N 7 | ds - copy = 0
+
+=== chip6/eth11 noc0 (10, 1) xlat (31, 25) <-> chip2/eth8 | facing N
+  E0: 6320703370926481618 (exact at launch-message address, 1.0000, text @0xf480)
+  E1: 11055175804647471886 (exact at launch-message address, 1.0000, text @0x12010)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 6 (y,x)=(1,2) of 2x4
+  heartbeat 0xdcba5280 -> 0xdcbabd40 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 2097169514 pkt_start 2582901469->2582959378 pkt_end 2570293231->2570351140 words 1367984834->1368042739 resend 0 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 94125038 pkt_start 1900503331->1900561235 pkt_end 1900503341->1900561244 words 1938006935->1938064839 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2744447952->2744455203 pkt_end 2744447953->2744455204 words 2744447955->2744455206 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x208002b) unsent 0 | completions rcvd 40356 | conn open worker (14,7) sem 0x93b0 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x12a0007) unsent 0 | completions rcvd 0 | conn open upstream chip6/eth7 copy stream 7
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x2500007) unsent 0 | completions rcvd 0 | conn open upstream chip6/eth6 copy stream 7
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x3d00007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x2e0002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0c0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x1560000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x280000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot0 E: copy stream 6 = 7 (raw 0xdc0007) | chip6/eth7 ch2 stream 2 = 7 (raw 0x2c00007) | N 7 | ds - copy = 0
+   vc0 slot1 W: copy stream 7 = 7 (raw 0x2760007) | chip6/eth6 ch2 stream 2 = 7 (raw 0x1bc0007) | N 7 | ds - copy = 0
+
+=== chip7/eth4 noc0 (3, 1) xlat (24, 25) <-> chip6/eth7 | facing W
+  E0: 17776942355870012221 (exact at launch-message address, 1.0000, text @0xf460) ties ['2389383605978637919']
+  E1: 13595080934984414668 (exact at launch-message address, 1.0000, text @0x11fa0)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 7 (y,x)=(1,3) of 2x4
+  heartbeat 0xdcbad880 -> 0xdcba42c0 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 1979450245 pkt_start 178288187->178346088 pkt_end 166479744->166537645 words 2589861976->2589919877 resend 9 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 148277078 pkt_start 733902661->733960565 pkt_end 733902701->733960608 words 777303309->777361216 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2740397594->2740404845 pkt_end 2740397595->2740404846 words 2740397596->2740404847 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x33a002b) unsent 0 | completions rcvd 40356 | conn open worker (14,9) sem 0x9340 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x2300007) unsent 0 | completions rcvd 0 | conn unused 
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x3840007) unsent 0 | completions rcvd 0 | conn open upstream chip7/eth11 copy stream 7
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x100007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x100002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0f0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x3100000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x2f20000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot1 N: copy stream 7 = 7 (raw 0xba0007) | chip7/eth11 ch2 stream 2 = 7 (raw 0x3880007) | N 7 | ds - copy = 0
+
+=== chip7/eth5 noc0 (4, 1) xlat (25, 25) <-> chip5/eth6
+  E0: - (no match, text @0x0)
+  E1: - (no match, text @0x0)
+  (no router config identified; mailbox: {"kcb": 0, "rta": [0, 0, 0, 0, 0], "crta": [0, 0, 0, 0, 0], "text_off": [0, 0, 0, 0, 0], "text_size": [0, 0, 0, 0, 0], "host_id": 0, "enables": 0})
+
+=== chip7/eth6 noc0 (13, 1) xlat (26, 25) <-> chip6/eth5 | facing W
+  E0: 2389383605978637919 (exact at launch-message address, 1.0000, text @0xf460) ties ['17776942355870012221']
+  E1: 9246879017217044412 (exact at launch-message address, 1.0000, text @0x11fa0)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 7 (y,x)=(1,3) of 2x4
+  heartbeat 0xdcbae040 -> 0xdcba1a00 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 78987434 pkt_start 2819057965->2819115869 pkt_end 2816989279->2817047182 words 3414269843->3414327747 resend 8 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 26496580 pkt_start 664014174->664072082 pkt_end 664014184->664072092 words 684355283->684413191 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2740397175->2740404427 pkt_end 2740397176->2740404428 words 2740397178->2740404429 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x172002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x2e0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x7c0007) unsent 0 | completions rcvd 0 | conn open upstream chip7/eth9 copy stream 7
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x28c0007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x780002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x8e0000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x2aa0000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot1 N: copy stream 7 = 7 (raw 0x1420007) | chip7/eth9 ch2 stream 2 = 7 (raw 0x3000007) | N 7 | ds - copy = 0
+
+=== chip7/eth7 noc0 (12, 1) xlat (27, 25) <-> chip5/eth4
+  E0: - (no match, text @0x0)
+  E1: - (no match, text @0x0)
+  (no router config identified; mailbox: {"kcb": 0, "rta": [0, 0, 0, 0, 0], "crta": [0, 0, 0, 0, 0], "text_off": [0, 0, 0, 0, 0], "text_size": [0, 0, 0, 0, 0], "host_id": 0, "enables": 0})
+
+=== chip7/eth9 noc0 (11, 1) xlat (29, 25) <-> chip3/eth10 | facing N
+  E0: 10571714083383937402 (exact at launch-message address, 1.0000, text @0xf460)
+  E1: 9680865852079276362 (exact at launch-message address, 1.0000, text @0x12170)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 7 (y,x)=(1,3) of 2x4
+  heartbeat 0xdcbae6c0 -> 0xdcba4dc0 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 65053775 pkt_start 332051986->332109894 pkt_end 330284497->330342404 words 859300750->859358658 resend 0 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 22557723 pkt_start 1696053925->1696111830 pkt_end 1696053934->1696111839 words 1714023757->1714081662 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2740397291->2740404542 pkt_end 2740397292->2740404543 words 2740397293->2740404544 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x2c002b) unsent 0 | completions rcvd 0 | conn unused 
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x3840007) unsent 0 | completions rcvd 0 | conn unused 
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x3000007) unsent 0 | completions rcvd 0 | conn open upstream chip7/eth6 copy stream 7
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x20007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x15c0002) unsent 0 | completions rcvd 0 | conn unused 
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x1100000) | completions credited (far sender ch [0, 1, 2, 3]) [0, 0, 0, 0] total 0
+   rx1 stream 5 N 4 pending 0 (raw 0x1980000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot1 W: copy stream 7 = 7 (raw 0x6e0007) | chip7/eth6 ch2 stream 2 = 7 (raw 0x7c0007) | N 7 | ds - copy = 0
+
+=== chip7/eth11 noc0 (10, 1) xlat (31, 25) <-> chip3/eth8 | facing N
+  E0: 18409728010031312904 (exact at launch-message address, 1.0000, text @0xf460)
+  E1: 17744280448943512645 (exact at launch-message address, 1.0000, text @0x11fa0)
+  status READY_FOR_TRAFFIC, termination KEEP_RUNNING, go GO, postcode 0xbacadaea, mesh 0 dev 7 (y,x)=(1,3) of 2x4
+  heartbeat 0xdcba5a40 -> 0xdcba1980 (MOVING); soft reset 0x0 (ERISC0 running, ERISC1 running)
+  TXQ0: cmd 0x0 status 0x0 (ongoing 0) xfer 2007460607 pkt_start 2028034789->2028092701 pkt_end 2008626987->2008684899 words 273880675->273938587 resend 8 seq_to 1000 accept_ahead 32
+  TXQ1: cmd 0x0 status 0x0 (ongoing 0) xfer 176877446 pkt_start 1775256094->1775314008 pkt_end 1775256103->1775314017 words 1812003326->1812061240 resend 0 seq_to 1000 accept_ahead 32
+  TXQ2: cmd 0x0 status 0x0 (ongoing 0) xfer 0 pkt_start 2740397532->2740404784 pkt_end 2740397533->2740404785 words 2740397535->2740404786 resend 0 seq_to 8000 accept_ahead 8
+  sender channels (E0)  [free = slots without an unsent packet; unsent = N - free]
+   ch0 vc0 pos0 stream 0 N 43 free 43 (raw 0x24a002b) unsent 0 | completions rcvd 40356 | conn open worker (14,8) sem 0x93b0 edm_read_counter 40313
+   ch1 vc0 pos1 stream 1 N 7 free 7 (raw 0x1a60007) unsent 0 | completions rcvd 0 | conn unused 
+   ch2 vc0 pos2 stream 2 N 7 free 7 (raw 0x3880007) unsent 0 | completions rcvd 0 | conn open upstream chip7/eth4 copy stream 7
+   ch3 vc0 pos3 stream 3 N 7 free 7 (raw 0x3580007) unsent 0 | completions rcvd 0 | conn unused 
+   ch4 vc2 pos4 stream 30 N 2 free 2 (raw 0x260002) unsent 0 | completions rcvd 512 | conn open worker (14,11) sem 0xe0c0 edm_read_counter 512
+  receiver channels (E1)  [pending = packets arrived and not retired]
+   rx0 stream 4 N 11 pending 0 (raw 0x1a40000) | completions credited (far sender ch [0, 1, 2, 3]) [40356, 0, 0, 0] total 40356
+   rx1 stream 5 N 4 pending 0 (raw 0x3520000) | completions credited (far sender ch []) [] total 0
+  downstream connections (E1 local copy vs the downstream sender channel's own free-slots register)
+   vc0 slot1 W: copy stream 7 = 7 (raw 0x3840007) | chip7/eth4 ch2 stream 2 = 7 (raw 0x3840007) | N 7 | ds - copy = 0
+
+== Ethernet links: sender E0 view vs receiver E1 view ==
+   (completions: counter the sender has received / counter the receiver last sent; equal when quiet)
+  chip0/eth4 -> chip1/eth7: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip0/eth5 -> chip2/eth6: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip0/eth6 -> chip1/eth5: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip0/eth7 -> chip2/eth4: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip0/eth8 -> chip4/eth11: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip0/eth10 -> chip4/eth9: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip1/eth5 -> chip0/eth6: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip1/eth7 -> chip0/eth4: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip1/eth8 -> chip5/eth11: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip1/eth10 -> chip5/eth9: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip2/eth4 -> chip0/eth7: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip2/eth5 -> chip3/eth6: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip2/eth6 -> chip0/eth5: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip2/eth7 -> chip3/eth4: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip2/eth8 -> chip6/eth11: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip2/eth10 -> chip6/eth9: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip3/eth4 -> chip2/eth7: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip3/eth6 -> chip2/eth5: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip3/eth8 -> chip7/eth11: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip3/eth10 -> chip7/eth9: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip4/eth4 -> chip5/eth7: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip4/eth5 -> chip6/eth6: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip4/eth6 -> chip5/eth5: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip4/eth7 -> chip6/eth4: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip4/eth9 -> chip0/eth10: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip4/eth11 -> chip0/eth8: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip5/eth5 -> chip4/eth6: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip5/eth7 -> chip4/eth4: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip5/eth9 -> chip1/eth10: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip5/eth11 -> chip1/eth8: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip6/eth4 -> chip4/eth7: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip6/eth5 -> chip7/eth6: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip6/eth6 -> chip4/eth5: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip6/eth7 -> chip7/eth4: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip6/eth9 -> chip2/eth10: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip6/eth11 -> chip2/eth8: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip7/eth4 -> chip6/eth7: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+  chip7/eth6 -> chip6/eth5: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip7/eth9 -> chip3/eth10: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0
+  chip7/eth11 -> chip3/eth8: pending at receiver [rx0 0, rx1 0] | ch0:40356/40356 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:512/512 unsent 0
+
+== Router-to-router NoC connections: upstream E1 copy vs downstream E0 channel register ==
+   (ds - copy = packets the downstream sent over Ethernet and has not credited back; 0 when quiet)
+  chip0/eth4 vc0 E -> chip0/eth5 ch1: copy 7 ds 7 N 7 diff 0
+  chip0/eth4 vc0 S -> chip0/eth10 ch2: copy 7 ds 7 N 7 diff 0
+  chip0/eth5 vc0 W -> chip0/eth4 ch1: copy 7 ds 7 N 7 diff 0
+  chip0/eth5 vc0 S -> chip0/eth10 ch1: copy 7 ds 7 N 7 diff 0
+  chip0/eth6 vc0 E -> chip0/eth7 ch1: copy 7 ds 7 N 7 diff 0
+  chip0/eth6 vc0 S -> chip0/eth8 ch2: copy 7 ds 7 N 7 diff 0
+  chip0/eth7 vc0 W -> chip0/eth6 ch1: copy 7 ds 7 N 7 diff 0
+  chip0/eth7 vc0 S -> chip0/eth8 ch1: copy 7 ds 7 N 7 diff 0
+  chip0/eth8 vc0 E -> chip0/eth7 ch3: copy 7 ds 7 N 7 diff 0
+  chip0/eth8 vc0 W -> chip0/eth6 ch3: copy 7 ds 7 N 7 diff 0
+  chip0/eth10 vc0 E -> chip0/eth5 ch3: copy 7 ds 7 N 7 diff 0
+  chip0/eth10 vc0 W -> chip0/eth4 ch3: copy 7 ds 7 N 7 diff 0
+  chip1/eth5 vc0 S -> chip1/eth8 ch1: copy 7 ds 7 N 7 diff 0
+  chip1/eth7 vc0 S -> chip1/eth10 ch1: copy 7 ds 7 N 7 diff 0
+  chip1/eth8 vc0 E -> chip1/eth5 ch3: copy 7 ds 7 N 7 diff 0
+  chip1/eth10 vc0 E -> chip1/eth7 ch3: copy 7 ds 7 N 7 diff 0
+  chip2/eth4 vc0 E -> chip2/eth5 ch1: copy 7 ds 7 N 7 diff 0
+  chip2/eth4 vc0 S -> chip2/eth8 ch2: copy 7 ds 7 N 7 diff 0
+  chip2/eth5 vc0 W -> chip2/eth4 ch1: copy 7 ds 7 N 7 diff 0
+  chip2/eth5 vc0 S -> chip2/eth8 ch1: copy 7 ds 7 N 7 diff 0
+  chip2/eth6 vc0 E -> chip2/eth7 ch1: copy 7 ds 7 N 7 diff 0
+  chip2/eth6 vc0 S -> chip2/eth10 ch2: copy 7 ds 7 N 7 diff 0
+  chip2/eth7 vc0 W -> chip2/eth6 ch1: copy 7 ds 7 N 7 diff 0
+  chip2/eth7 vc0 S -> chip2/eth10 ch1: copy 7 ds 7 N 7 diff 0
+  chip2/eth8 vc0 E -> chip2/eth5 ch3: copy 7 ds 7 N 7 diff 0
+  chip2/eth8 vc0 W -> chip2/eth4 ch3: copy 7 ds 7 N 7 diff 0
+  chip2/eth10 vc0 E -> chip2/eth7 ch3: copy 7 ds 7 N 7 diff 0
+  chip2/eth10 vc0 W -> chip2/eth6 ch3: copy 7 ds 7 N 7 diff 0
+  chip3/eth4 vc0 S -> chip3/eth10 ch2: copy 7 ds 7 N 7 diff 0
+  chip3/eth6 vc0 S -> chip3/eth8 ch2: copy 7 ds 7 N 7 diff 0
+  chip3/eth8 vc0 W -> chip3/eth6 ch3: copy 7 ds 7 N 7 diff 0
+  chip3/eth10 vc0 W -> chip3/eth4 ch3: copy 7 ds 7 N 7 diff 0
+  chip4/eth4 vc0 E -> chip4/eth5 ch1: copy 7 ds 7 N 7 diff 0
+  chip4/eth4 vc0 N -> chip4/eth11 ch2: copy 7 ds 7 N 7 diff 0
+  chip4/eth5 vc0 W -> chip4/eth4 ch1: copy 7 ds 7 N 7 diff 0
+  chip4/eth5 vc0 N -> chip4/eth11 ch1: copy 7 ds 7 N 7 diff 0
+  chip4/eth6 vc0 E -> chip4/eth7 ch1: copy 7 ds 7 N 7 diff 0
+  chip4/eth6 vc0 N -> chip4/eth9 ch2: copy 7 ds 7 N 7 diff 0
+  chip4/eth7 vc0 W -> chip4/eth6 ch1: copy 7 ds 7 N 7 diff 0
+  chip4/eth7 vc0 N -> chip4/eth9 ch1: copy 7 ds 7 N 7 diff 0
+  chip4/eth9 vc0 E -> chip4/eth7 ch2: copy 7 ds 7 N 7 diff 0
+  chip4/eth9 vc0 W -> chip4/eth6 ch2: copy 7 ds 7 N 7 diff 0
+  chip4/eth11 vc0 E -> chip4/eth5 ch2: copy 7 ds 7 N 7 diff 0
+  chip4/eth11 vc0 W -> chip4/eth4 ch2: copy 7 ds 7 N 7 diff 0
+  chip5/eth5 vc0 N -> chip5/eth9 ch1: copy 7 ds 7 N 7 diff 0
+  chip5/eth7 vc0 N -> chip5/eth11 ch1: copy 7 ds 7 N 7 diff 0
+  chip5/eth9 vc0 E -> chip5/eth5 ch2: copy 7 ds 7 N 7 diff 0
+  chip5/eth11 vc0 E -> chip5/eth7 ch2: copy 7 ds 7 N 7 diff 0
+  chip6/eth4 vc0 E -> chip6/eth5 ch1: copy 7 ds 7 N 7 diff 0
+  chip6/eth4 vc0 N -> chip6/eth9 ch2: copy 7 ds 7 N 7 diff 0
+  chip6/eth5 vc0 W -> chip6/eth4 ch1: copy 7 ds 7 N 7 diff 0
+  chip6/eth5 vc0 N -> chip6/eth9 ch1: copy 7 ds 7 N 7 diff 0
+  chip6/eth6 vc0 E -> chip6/eth7 ch1: copy 7 ds 7 N 7 diff 0
+  chip6/eth6 vc0 N -> chip6/eth11 ch2: copy 7 ds 7 N 7 diff 0
+  chip6/eth7 vc0 W -> chip6/eth6 ch1: copy 7 ds 7 N 7 diff 0
+  chip6/eth7 vc0 N -> chip6/eth11 ch1: copy 7 ds 7 N 7 diff 0
+  chip6/eth9 vc0 E -> chip6/eth5 ch2: copy 7 ds 7 N 7 diff 0
+  chip6/eth9 vc0 W -> chip6/eth4 ch2: copy 7 ds 7 N 7 diff 0
+  chip6/eth11 vc0 E -> chip6/eth7 ch2: copy 7 ds 7 N 7 diff 0
+  chip6/eth11 vc0 W -> chip6/eth6 ch2: copy 7 ds 7 N 7 diff 0
+  chip7/eth4 vc0 N -> chip7/eth11 ch2: copy 7 ds 7 N 7 diff 0
+  chip7/eth6 vc0 N -> chip7/eth9 ch2: copy 7 ds 7 N 7 diff 0
+  chip7/eth9 vc0 W -> chip7/eth6 ch2: copy 7 ds 7 N 7 diff 0
+  chip7/eth11 vc0 W -> chip7/eth4 ch2: copy 7 ds 7 N 7 diff 0
+
+== Workers: Tensix cores of the last program (per core) ==
+   (scan of 1040 Tensix cores; 24 captured: window [0, 0x40000), whole L1 for cores still running a test kernel; kernel binaries from 18 cached ELFs)
+=== chip0/tensix(15,2) noc0 (16, 2) logical (12, 0) chip0=M0D1/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [81], kernel config 0xa180, mode host, enables 0x1; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (31424 B) = cq_prefetch/2722538609280023712 (exact)
+  NIU sent/acked: NoC0 wr 4483800/4483800 rd 2563647/2563647 at 4367133/4367133 posted 1119; NoC1 wr 0/0 rd 0/0 at 0/0 posted 0
+=== chip0/tensix(15,3) noc0 (16, 3) logical (12, 1) chip0=M0D1/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [82, 83, 84], kernel config 0xa180, mode host, enables 0x1f; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (13300 B) = cq_dispatch/8914784263787803324 (exact)
+  NCRISC: text @0xd5c0 (2772 B) = cq_dispatch_subordinate/6074177499839642305 (exact)
+  TRISC0: text @0xe0a0 (856 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC1: text @0xe400 (2712 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC2: text @0xeea0 (240 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  NIU sent/acked: NoC0 wr 3713475/3713487 rd 4/4 at 0/0 posted 1119; NoC1 wr 962946/2342751 rd 0/0 at 2081103/2081103 posted 0
+=== chip0/tensix(15,11) noc0 (16, 11) logical (12, 9) chip0=M0D1/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [115, 116], kernel config 0xa180, mode host, enables 0x3; soft reset 0x47800 (running: none)
+  BRISC: text @0xa180 (1524 B) = cq_realtime_profiler/18100761906243203371 (exact)
+  NCRISC: text @0xa780 (1656 B) = cq_realtime_profiler_push/7236630862011759076 (exact)
+  NIU sent/acked: NoC0 wr 951349/951349 rd 951350/951350 at 0/0 posted 0; NoC1 wr 102528/102528 rd 0/0 at 0/0 posted 0
+=== chip1/tensix(15,2) noc0 (16, 2) logical (12, 0) chip1=M0D0/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [85], kernel config 0xa180, mode host, enables 0x1; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (31424 B) = cq_prefetch/2722538609280023712 (exact)
+  NIU sent/acked: NoC0 wr 4479301/4479301 rd 2555130/2555130 at 4361674/4361674 posted 1027; NoC1 wr 0/0 rd 0/0 at 0/0 posted 0
+=== chip1/tensix(15,3) noc0 (16, 3) logical (12, 1) chip1=M0D0/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [86, 87, 88], kernel config 0xa180, mode host, enables 0x1f; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (13300 B) = cq_dispatch/8914784263787803324 (exact)
+  NCRISC: text @0xd5c0 (2772 B) = cq_dispatch_subordinate/6074177499839642305 (exact)
+  TRISC0: text @0xe0a0 (856 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC1: text @0xe400 (2712 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC2: text @0xeea0 (240 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  NIU sent/acked: NoC0 wr 3694505/3694517 rd 4/4 at 0/0 posted 1027; NoC1 wr 962826/2337871 rd 0/0 at 2081740/2081740 posted 0
+=== chip1/tensix(15,11) noc0 (16, 11) logical (12, 9) chip1=M0D0/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [113, 114], kernel config 0xa180, mode host, enables 0x3; soft reset 0x47800 (running: none)
+  BRISC: text @0xa180 (1524 B) = cq_realtime_profiler/18100761906243203371 (exact)
+  NCRISC: text @0xa780 (1656 B) = cq_realtime_profiler_push/7236630862011759076 (exact)
+  NIU sent/acked: NoC0 wr 951269/951269 rd 951270/951270 at 0/0 posted 0; NoC1 wr 102528/102528 rd 0/0 at 0/0 posted 0
+=== chip2/tensix(15,2) noc0 (16, 2) logical (12, 0) chip2=M0D2/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [89], kernel config 0xa180, mode host, enables 0x1; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (31424 B) = cq_prefetch/2722538609280023712 (exact)
+  NIU sent/acked: NoC0 wr 4474411/4474411 rd 2551645/2551645 at 4358818/4358818 posted 1070; NoC1 wr 0/0 rd 0/0 at 0/0 posted 0
+=== chip2/tensix(15,3) noc0 (16, 3) logical (12, 1) chip2=M0D2/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [90, 91, 92], kernel config 0xa180, mode host, enables 0x1f; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (13300 B) = cq_dispatch/8914784263787803324 (exact)
+  NCRISC: text @0xd5c0 (2772 B) = cq_dispatch_subordinate/6074177499839642305 (exact)
+  TRISC0: text @0xe0a0 (856 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC1: text @0xe400 (2712 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC2: text @0xeea0 (240 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  NIU sent/acked: NoC0 wr 3692033/3692045 rd 4/4 at 0/0 posted 1070; NoC1 wr 962751/2334821 rd 0/0 at 2080498/2080498 posted 0
+=== chip2/tensix(15,11) noc0 (16, 11) logical (12, 9) chip2=M0D2/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [117, 118], kernel config 0xa180, mode host, enables 0x3; soft reset 0x47800 (running: none)
+  BRISC: text @0xa180 (1524 B) = cq_realtime_profiler/18100761906243203371 (exact)
+  NCRISC: text @0xa780 (1656 B) = cq_realtime_profiler_push/7236630862011759076 (exact)
+  NIU sent/acked: NoC0 wr 951219/951219 rd 951220/951220 at 0/0 posted 0; NoC1 wr 102528/102528 rd 0/0 at 0/0 posted 0
+=== chip3/tensix(15,2) noc0 (16, 2) logical (12, 0) chip3=M0D3/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [93], kernel config 0xa180, mode host, enables 0x1; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (31424 B) = cq_prefetch/2722538609280023712 (exact)
+  NIU sent/acked: NoC0 wr 4457926/4457926 rd 2531686/2531686 at 4345081/4345081 posted 1025; NoC1 wr 0/0 rd 0/0 at 0/0 posted 0
+=== chip3/tensix(15,3) noc0 (16, 3) logical (12, 1) chip3=M0D3/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [94, 95, 96], kernel config 0xa180, mode host, enables 0x1f; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (13300 B) = cq_dispatch/8914784263787803324 (exact)
+  NCRISC: text @0xd5c0 (2772 B) = cq_dispatch_subordinate/6074177499839642305 (exact)
+  TRISC0: text @0xe0a0 (856 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC1: text @0xe400 (2712 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC2: text @0xeea0 (240 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  NIU sent/acked: NoC0 wr 3657451/3657463 rd 4/4 at 0/0 posted 1025; NoC1 wr 962658/2331039 rd 0/0 at 2079165/2079165 posted 0
+=== chip3/tensix(15,11) noc0 (16, 11) logical (12, 9) chip3=M0D3/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [119, 120], kernel config 0xa180, mode host, enables 0x3; soft reset 0x47800 (running: none)
+  BRISC: text @0xa180 (1524 B) = cq_realtime_profiler/18100761906243203371 (exact)
+  NCRISC: text @0xa780 (1656 B) = cq_realtime_profiler_push/7236630862011759076 (exact)
+  NIU sent/acked: NoC0 wr 951157/951157 rd 951158/951158 at 0/0 posted 0; NoC1 wr 102528/102528 rd 0/0 at 0/0 posted 0
+=== chip4/tensix(15,2) noc0 (16, 2) logical (12, 0) chip4=M0D5/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [97], kernel config 0xa180, mode host, enables 0x1; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (31424 B) = cq_prefetch/2722538609280023712 (exact)
+  NIU sent/acked: NoC0 wr 4461747/4461747 rd 2547498/2547498 at 4345884/4345884 posted 1027; NoC1 wr 0/0 rd 0/0 at 0/0 posted 0
+=== chip4/tensix(15,3) noc0 (16, 3) logical (12, 1) chip4=M0D5/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [98, 99, 100], kernel config 0xa180, mode host, enables 0x1f; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (13300 B) = cq_dispatch/8914784263787803324 (exact)
+  NCRISC: text @0xd5c0 (2772 B) = cq_dispatch_subordinate/6074177499839642305 (exact)
+  TRISC0: text @0xe0a0 (856 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC1: text @0xe400 (2712 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC2: text @0xeea0 (240 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  NIU sent/acked: NoC0 wr 3687786/3687798 rd 4/4 at 0/0 posted 1027; NoC1 wr 958998/2324047 rd 0/0 at 2072760/2072760 posted 0
+=== chip4/tensix(15,11) noc0 (16, 11) logical (12, 9) chip4=M0D5/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [123, 124], kernel config 0xa180, mode host, enables 0x3; soft reset 0x47800 (running: none)
+  BRISC: text @0xa180 (1524 B) = cq_realtime_profiler/18100761906243203371 (exact)
+  NCRISC: text @0xa780 (1656 B) = cq_realtime_profiler_push/7236630862011759076 (exact)
+  NIU sent/acked: NoC0 wr 947525/947525 rd 947526/947526 at 0/0 posted 0; NoC1 wr 102518/102518 rd 0/0 at 0/0 posted 0
+=== chip5/tensix(15,2) noc0 (16, 2) logical (12, 0) chip5=M0D4/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [101], kernel config 0xa180, mode host, enables 0x1; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (31424 B) = cq_prefetch/2722538609280023712 (exact)
+  NIU sent/acked: NoC0 wr 4453424/4453424 rd 2534273/2534273 at 4338345/4338345 posted 952; NoC1 wr 0/0 rd 0/0 at 0/0 posted 0
+=== chip5/tensix(15,3) noc0 (16, 3) logical (12, 1) chip5=M0D4/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [102, 103, 104], kernel config 0xa180, mode host, enables 0x1f; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (13300 B) = cq_dispatch/8914784263787803324 (exact)
+  NCRISC: text @0xd5c0 (2772 B) = cq_dispatch_subordinate/6074177499839642305 (exact)
+  TRISC0: text @0xe0a0 (856 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC1: text @0xe400 (2712 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC2: text @0xeea0 (240 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  NIU sent/acked: NoC0 wr 3661445/3661457 rd 4/4 at 0/0 posted 952; NoC1 wr 958992/2323803 rd 0/0 at 2073411/2073411 posted 0
+=== chip5/tensix(15,11) noc0 (16, 11) logical (12, 9) chip5=M0D4/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [121, 122], kernel config 0xa180, mode host, enables 0x3; soft reset 0x47800 (running: none)
+  BRISC: text @0xa180 (1524 B) = cq_realtime_profiler/18100761906243203371 (exact)
+  NCRISC: text @0xa780 (1656 B) = cq_realtime_profiler_push/7236630862011759076 (exact)
+  NIU sent/acked: NoC0 wr 947521/947521 rd 947522/947522 at 0/0 posted 0; NoC1 wr 102516/102516 rd 0/0 at 0/0 posted 0
+=== chip6/tensix(15,2) noc0 (16, 2) logical (12, 0) chip6=M0D6/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [105], kernel config 0xa180, mode host, enables 0x1; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (31424 B) = cq_prefetch/2722538609280023712 (exact)
+  NIU sent/acked: NoC0 wr 4477459/4477459 rd 2563668/2563668 at 4357499/4357499 posted 1010; NoC1 wr 0/0 rd 0/0 at 0/0 posted 0
+=== chip6/tensix(15,3) noc0 (16, 3) logical (12, 1) chip6=M0D6/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [106, 107, 108], kernel config 0xa180, mode host, enables 0x1f; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (13300 B) = cq_dispatch/8914784263787803324 (exact)
+  NCRISC: text @0xd5c0 (2772 B) = cq_dispatch_subordinate/6074177499839642305 (exact)
+  TRISC0: text @0xe0a0 (856 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC1: text @0xe400 (2712 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC2: text @0xeea0 (240 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  NIU sent/acked: NoC0 wr 3705193/3705205 rd 4/4 at 0/0 posted 1010; NoC1 wr 958974/2323071 rd 0/0 at 2076758/2076758 posted 0
+=== chip6/tensix(15,11) noc0 (16, 11) logical (12, 9) chip6=M0D6/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [125, 126], kernel config 0xa180, mode host, enables 0x3; soft reset 0x47800 (running: none)
+  BRISC: text @0xa180 (1524 B) = cq_realtime_profiler/18100761906243203371 (exact)
+  NCRISC: text @0xa780 (1656 B) = cq_realtime_profiler_push/7236630862011759076 (exact)
+  NIU sent/acked: NoC0 wr 947509/947509 rd 947510/947510 at 0/0 posted 0; NoC1 wr 102516/102516 rd 0/0 at 0/0 posted 0
+=== chip7/tensix(15,2) noc0 (16, 2) logical (12, 0) chip7=M0D7/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [109], kernel config 0xa180, mode host, enables 0x1; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (31424 B) = cq_prefetch/2722538609280023712 (exact)
+  NIU sent/acked: NoC0 wr 4443695/4443695 rd 2522987/2522987 at 4330141/4330141 posted 986; NoC1 wr 0/0 rd 0/0 at 0/0 posted 0
+=== chip7/tensix(15,3) noc0 (16, 3) logical (12, 1) chip7=M0D7/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [110, 111, 112], kernel config 0xa180, mode host, enables 0x1f; soft reset 0x47800 (running: none)
+  BRISC: text @0xa1c0 (13300 B) = cq_dispatch/8914784263787803324 (exact)
+  NCRISC: text @0xd5c0 (2772 B) = cq_dispatch_subordinate/6074177499839642305 (exact)
+  TRISC0: text @0xe0a0 (856 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC1: text @0xe400 (2712 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  TRISC2: text @0xeea0 (240 B) = cq_dispatch_subordinate_compute/306256056311903859 (exact)
+  NIU sent/acked: NoC0 wr 3642515/3642527 rd 4/4 at 0/0 posted 986; NoC1 wr 958974/2323071 rd 0/0 at 2072575/2072575 posted 0
+=== chip7/tensix(15,11) noc0 (16, 11) logical (12, 9) chip7=M0D7/rank0 [go]
+  go GO (go_msg[0]), launch slot 0 (current (running)), kernel ids [127, 128], kernel config 0xa180, mode host, enables 0x3; soft reset 0x47800 (running: none)
+  BRISC: text @0xa180 (1524 B) = cq_realtime_profiler/18100761906243203371 (exact)
+  NCRISC: text @0xa780 (1656 B) = cq_realtime_profiler_push/7236630862011759076 (exact)
+  NIU sent/acked: NoC0 wr 947509/947509 rd 947510/947510 at 0/0 posted 0; NoC1 wr 102516/102516 rd 0/0 at 0/0 posted 0
+
+== Traffic waiting (non-zero counts; in a hang this is where packets and credits stopped) ==
+  none: every channel empty, every copy equal to its downstream register
+
+== Workers not finished (who waits for what) ==
+  running non-test kernels [cq_prefetch] on 8 core(s) (dispatch: expected to run): chip0(15, 2) chip1(15, 2) chip2(15, 2) chip3(15, 2) chip4(15, 2) chip5(15, 2) chip6(15, 2) chip7(15, 2)
+  running non-test kernels [cq_dispatch cq_dispatch_subordinate cq_dispatch_subordinate_compute] on 8 core(s) (dispatch: expected to run): chip0(15, 3) chip1(15, 3) chip2(15, 3) chip3(15, 3) chip4(15, 3) chip5(15, 3) chip6(15, 3) chip7(15, 3)
+  running non-test kernels [cq_realtime_profiler cq_realtime_profiler_push] on 8 core(s) (dispatch: expected to run): chip0(15, 11) chip1(15, 11) chip2(15, 11) chip3(15, 11) chip4(15, 11) chip5(15, 11) chip6(15, 11) chip7(15, 11)
+  none: every captured test kernel wrote status PASS
+
+== Workers by rank (mesh) ==
+
+== Worker flows: sender vs receiver (packets) ==
+  no sender traffic configs decoded
+
+== Worker-router connections: worker adapter vs router channel 0 ==
+   (sent = worker's write counter; credit = router read counter as written into worker L1; quiet: equal)
+  open: chip0/eth6 worker channel open to (14,7): that core is not in the worker capture
+  open: chip0/eth7 worker channel open to (14,8): that core is not in the worker capture
+  open: chip0/eth8 worker channel open to (14,9): that core is not in the worker capture
+  open: chip1/eth5 worker channel open to (14,8): that core is not in the worker capture
+  open: chip1/eth8 worker channel open to (14,9): that core is not in the worker capture
+  open: chip2/eth4 worker channel open to (14,7): that core is not in the worker capture
+  open: chip2/eth5 worker channel open to (14,8): that core is not in the worker capture
+  open: chip2/eth8 worker channel open to (14,9): that core is not in the worker capture
+  open: chip3/eth6 worker channel open to (14,8): that core is not in the worker capture
+  open: chip3/eth8 worker channel open to (14,9): that core is not in the worker capture
+  open: chip4/eth4 worker channel open to (14,8): that core is not in the worker capture
+  open: chip4/eth5 worker channel open to (14,9): that core is not in the worker capture
+  open: chip4/eth11 worker channel open to (14,7): that core is not in the worker capture
+  open: chip5/eth7 worker channel open to (14,9): that core is not in the worker capture
+  open: chip5/eth11 worker channel open to (14,8): that core is not in the worker capture
+  open: chip6/eth6 worker channel open to (14,8): that core is not in the worker capture
+  open: chip6/eth7 worker channel open to (14,9): that core is not in the worker capture
+  open: chip6/eth11 worker channel open to (14,7): that core is not in the worker capture
+  open: chip7/eth4 worker channel open to (14,9): that core is not in the worker capture
+  open: chip7/eth11 worker channel open to (14,8): that core is not in the worker capture
+
+== Anomalies ==
+  no config matched: ['chip1/eth4:e0', 'chip1/eth4:e1', 'chip1/eth6:e0', 'chip1/eth6:e1', 'chip3/eth5:e0', 'chip3/eth5:e1', 'chip3/eth7:e0', 'chip3/eth7:e1', 'chip5/eth4:e0', 'chip5/eth4:e1', 'chip5/eth6:e0', 'chip5/eth6:e1', 'chip7/eth5:e0', 'chip7/eth5:e1', 'chip7/eth7:e0', 'chip7/eth7:e1']
+  stream registers changed between passes (traffic still moving) on: ['chip4/eth6']
+  liveness: fabric heartbeat (0x7CC70) changed between passes on 40 of 48 cores: ['chip0/eth4', 'chip0/eth5', 'chip0/eth6', 'chip0/eth7', 'chip0/eth8', 'chip0/eth10', 'chip1/eth5', 'chip1/eth7', 'chip1/eth8', 'chip1/eth10', 'chip2/eth4', 'chip2/eth5', 'chip2/eth6', 'chip2/eth7', 'chip2/eth8', 'chip2/eth10', 'chip3/eth4', 'chip3/eth6', 'chip3/eth8', 'chip3/eth10', 'chip4/eth4', 'chip4/eth5', 'chip4/eth6', 'chip4/eth7', 'chip4/eth9', 'chip4/eth11', 'chip5/eth5', 'chip5/eth7', 'chip5/eth9', 'chip5/eth11', 'chip6/eth4', 'chip6/eth5', 'chip6/eth6', 'chip6/eth7', 'chip6/eth9', 'chip6/eth11', 'chip7/eth4', 'chip7/eth6', 'chip7/eth9', 'chip7/eth11']

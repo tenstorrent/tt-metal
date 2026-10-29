@@ -1,0 +1,36 @@
+# Single-ERISC ring analysis (RESULTS §98): exp_ring_se.yaml's Ring1HopEWBidir at 1024 B, 40000000 packets (the long row the PC sampler watches).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: PcseRingBidir
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+  defaults:
+    ftype: unicast
+    num_packets: 40000000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 0

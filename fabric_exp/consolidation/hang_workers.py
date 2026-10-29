@@ -36,16 +36,18 @@ ROOT = "/home/aagarwal/tt-metal"
 DEFAULT_GDB = os.path.join(ROOT, "runtime/sfpi/compiler/bin/riscv-tt-elf-gdb")
 
 # ---------------------------------------------------------------- Blackhole Tensix L1 (dev_mem_map.h, dev_msgs.h)
+# Since the merge of main 6d8a103 (2026-10-28): go messages are rings, one per launch slot per sub-device
+# (go_messages[9].slot[8]), go_message_index at +1472, and every base after the mailbox moved 0x100.
 MAILBOX = 0x60  # MEM_MAILBOX_BASE
-HEAD_SIZE = 1232  # mailboxes_t from its start through go_message_index (+1216), rounded to 16
+HEAD_SIZE = 1488  # mailboxes_t from its start through go_message_index (+1472), rounded to 16
 RD_PTR_OFF, LAUNCH_OFF, LAUNCH_SIZE, NUM_LAUNCH = 12, 16, 144, 8
-GO_OFF, NUM_GO, GO_IDX_OFF = 1168, 9, 1216
+GO_OFF, NUM_GO, GO_RING, GO_IDX_OFF = 1168, 9, 8, 1472
 TENSIX = 0  # ProgrammableCoreType::TENSIX (kernel_config_base index)
-ROUTING_TABLE = 0x85E0  # MEM_TENSIX_ROUTING_TABLE_BASE (routing_l1_info_t; mesh id +32, device id +34)
-FABRIC_CONN = 0x9070  # MEM_TENSIX_FABRIC_CONNECTIONS_BASE (tensix_fabric_connections_l1_info_t)
+ROUTING_TABLE = 0x86E0  # MEM_TENSIX_ROUTING_TABLE_BASE (routing_l1_info_t; mesh id +32, device id +34)
+FABRIC_CONN = 0x9170  # MEM_TENSIX_FABRIC_CONNECTIONS_BASE (tensix_fabric_connections_l1_info_t)
 FABRIC_CONN_RW = FABRIC_CONN + 400  # read_write[16]: worker_flow_control_semaphore, 16 B apart
 MAX_EP = 16
-DEFAULT_UNRESERVED = 0x1B480  # HAL DEFAULT_UNRESERVED for Tensix (test CommonMemoryMap base)
+DEFAULT_UNRESERVED = 0x1B580  # HAL DEFAULT_UNRESERVED for Tensix (test CommonMemoryMap base)
 RISCS = ["BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"]  # TensixProcessorTypes DM0, DM1, MATH0..2
 RISC_DIRS = ["brisc", "ncrisc", "trisc0", "trisc1", "trisc2"]
 RESET_BIT = {"BRISC": 11, "TRISC0": 12, "TRISC1": 13, "TRISC2": 14, "NCRISC": 18}
@@ -504,10 +506,11 @@ def parse_head(b, base=0):
         )
     for sl in slots:  # the slot's newest kernel id; -1 when it loaded no kernel
         sl["wid"] = max((w for w, n in zip(sl["wids"], sl["text_size"]) if n), default=-1)
-    go = [u32(b, base + GO_OFF + 4 * i) for i in range(NUM_GO)]
     gi = u32(b, base + GO_IDX_OFF)
-    sig = go[gi if gi < NUM_GO else 0] >> 24
+    # This sub-device's go ring: one go message per launch slot.
+    go = [u32(b, base + GO_OFF + 4 * (GO_RING * (gi if gi < NUM_GO else 0) + i)) for i in range(GO_RING)]
     cur = rd & (NUM_LAUNCH - 1)
+    sig = go[cur] >> 24
     if sig == 0x80:
         slot, why = cur, "current (running)"
     else:
@@ -1661,7 +1664,7 @@ class WorkerSet:
         ln = hd["launch"]
         sr = (w.regs.get("pass1") or {}).get("soft_reset")
         P(
-            f"  go {GO_SIGNAL.get(hd['signal'], h(hd['signal']))} (go_msg[{hd['go_idx']}]), launch slot {hd['slot']} "
+            f"  go {GO_SIGNAL.get(hd['signal'], h(hd['signal']))} (go_msg[{hd['go_idx']}].slot[{hd['rd_ptr'] & (NUM_LAUNCH - 1)}]), launch slot {hd['slot']} "
             f"({hd['slot_why']}), kernel ids {sorted(set(x for x, n in zip(ln['wids'], ln['text_size']) if n))}"
             + (f" program id {ln['host_id']}" if ln["host_id"] else "")
             + f", kernel config {ln['kcb']:#x}, mode "

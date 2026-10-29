@@ -24,7 +24,8 @@ EDM = ROOT + "/tt_metal/fabric/impl/kernels/edm_fabric"
 V2_PATH = "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router_v2.cpp"
 # Overlay base: a snapshot of tt_metal/fabric taken with the tree at s79mc (2026-10-24), so offline builds do not see
 # files a hardware job has swapped into the live tree. Variants overlay it; everything else comes from the tree.
-BASE = "/home/aagarwal/.tt-metal-p1-base"
+# OFFLINE_BASE picks another snapshot (the merged tree: /home/aagarwal/.tt-metal-p1-base-m, 2026-10-28).
+BASE = os.environ.get("OFFLINE_BASE", "/home/aagarwal/.tt-metal-p1-base")
 
 
 def wellformed(kind, cmd):

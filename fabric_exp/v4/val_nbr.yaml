@@ -1,0 +1,35 @@
+# Speedy-path validation (2026-10-29, variants/v4spd): NeighborExchange routers (one VC0 sender channel, the worker; the
+# receiver only delivers), data-checked. Every router of the fabric runs the speedy path; each chip exchanges packets
+# with each neighbour. The send types the receiver delivers directly (write, scatter, atomic, fused write + atomic) at a
+# large and a small size. Flow control on, as the VC2 validation tests: without it the senders overrun the receivers'
+# buffers (job 155: DATA_MISMATCH on main's router too).
+Tests:
+- name: NeighborExchangeValidate
+  enable_flow_control: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    - fused_atomic_inc
+    size:
+    - 4352
+    - 1024
+  defaults:
+    ftype: unicast
+    num_packets: 2000
+  patterns:
+  - type: neighbor_exchange
+- name: NeighborExchangeValidateAtomic
+  enable_flow_control: true
+  fabric_setup:
+    topology: NeighborExchange
+  defaults:
+    ftype: unicast
+    ntype: atomic_inc
+    num_packets: 2000
+  patterns:
+  - type: neighbor_exchange

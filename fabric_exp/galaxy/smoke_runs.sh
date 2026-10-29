@@ -5,8 +5,9 @@ G=/data/aagarwal/frs-glx
 Y=/home/aagarwal/tt-metal/fabric_exp/pcs3/compile2d.yaml
 (while sleep 60; do echo "heartbeat $(date +%T)"; done) & HB=$!
 trap 'kill $HB 2>/dev/null' EXIT
-for cfg in "base 1 0" "v3q 2 13129088"; do
-    set -- $cfg
+# Trees: the arguments (default base v3q); base runs main's router (kernel v1, flags 0), the others v2 at 13129088.
+for t in ${@:-base v3q}; do
+    if [ $t = base ]; then set -- base 1 0; else set -- $t 2 13129088; fi
     tree=$G/trees/$1; lib=$tree/build_Release; c=/home/aagarwal/.tt-metal-cache-glxsmoke-$1
     rm -rf $c; mkdir -p $c
     echo "=== $1: kernel v$2"

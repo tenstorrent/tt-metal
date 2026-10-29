@@ -1,0 +1,263 @@
+# Tensix mux mode throughput (fabric_tensix_config: Mux; V4_TENSIX_MUX.md), 1 link, unicast_write, 1024 and 4352 B:
+# exp_1d_4352.yaml's, v4/exp_ring.yaml's and exp_2d_4352.yaml's 1-hop, bidirectional, 3-hop and multicast rows, and the
+# full-ring multicast of the sanity yaml's deadlock check (val_mux.yaml).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: MuxLinear1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+    fabric_tensix_config: Mux
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: MuxLinear1HopEWBidir
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+    fabric_tensix_config: Mux
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 0
+- name: MuxLinear3HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+    fabric_tensix_config: Mux
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+- name: MuxLinearMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+    fabric_tensix_config: Mux
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: all_to_all
+    iterations: 1
+- name: MuxRing1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+    fabric_tensix_config: Mux
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: MuxRingMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+    fabric_tensix_config: Mux
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: all_to_all
+    iterations: 1
+- name: MuxMesh1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    fabric_tensix_config: Mux
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: MuxMesh1HopEWBidir
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    fabric_tensix_config: Mux
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 0
+- name: MuxMesh3HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    fabric_tensix_config: Mux
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+- name: MuxMeshMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+    fabric_tensix_config: Mux
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: all_to_all
+    iterations: 1
+- name: MuxFullRingMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+    fabric_tensix_config: Mux
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 200000
+  patterns:
+  - type: full_ring

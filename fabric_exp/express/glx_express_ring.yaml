@@ -1,0 +1,126 @@
+# Router study (2026-10-29), express / Z on one Galaxy: groups of
+# tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_express_routing_sanity_common.yaml, unchanged,
+# for express_links_8x4_mesh_graph_descriptor.textproto (8x4 RING x RING, ex4 chords [2,5]): the groups that
+# descriptor admits (TorusX needs an end wrap or a second pattern on dim 0).
+# Each group vetted on the mock Galaxy (fabric_exp/express/probe).
+Tests:
+- name: MeshAllToAll
+  sync: true
+  enable_flow_control: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+    num_links:
+    - 1
+    - 2
+    size:
+    - 1024
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100
+  patterns:
+  - type: all_to_all
+- name: MeshAllToAllIntra
+  sync: true
+  enable_flow_control: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+    num_links:
+    - 1
+    - 2
+    size:
+    - 1024
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100
+  patterns:
+  - type: all_to_all
+    mesh_scope: intra_mesh
+- name: MeshMulticastAllToAllIntra
+  sync: true
+  enable_flow_control: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+    num_links:
+    - 1
+    - 2
+    size:
+    - 1024
+    - 2048
+    - 4096
+  defaults:
+    ftype: mcast
+    num_packets: 100
+  patterns:
+  - type: all_to_all
+    mesh_scope: intra_mesh
+- name: TorusXYAllToAll
+  sync: true
+  enable_flow_control: true
+  fabric_setup:
+    topology: Torus
+    torus_config: XY
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+    num_links:
+    - 1
+    - 2
+    size:
+    - 1024
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100
+  patterns:
+  - type: all_to_all
+- name: TorusXYAllToAllIntra
+  sync: true
+  enable_flow_control: true
+  fabric_setup:
+    topology: Torus
+    torus_config: XY
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+    num_links:
+    - 1
+    - 2
+    size:
+    - 1024
+    - 2048
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100
+  patterns:
+  - type: all_to_all
+    mesh_scope: intra_mesh

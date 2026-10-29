@@ -1,94 +1,83 @@
 #!/usr/bin/env python3
-"""pcs_lines.py CACHE GDIR PREFIX ROW [ROW ...] [--erisc 0|1] [--target CHIP/CHAN] [--top N]: line-level PC-sampling
-profile of the busiest router ERISC of one kind (default E1), or of the given router's, for finding where it waits. The
-busiest is chosen by v4's work sections (pcs_profile.WORK); for other variants name the router with --target.
+"""pcs_lines.py SAMPLES_PREFIX CACHE_DIR CHIP/CHAN/ERISC [--top N] [--depth D] [--dump F]: one router's PC samples
+by source.
 
-Same inputs as pcs_profile.py (PREFIX = pcsv_<tag>; GDIR holds the -g twins from `pcs_sections.py twins`). Each sampled
-address maps through its inline chain to its innermost source line; lines are ranked by their share of the ERISC's
-kernel samples times the row's cycles/packet. Each line shows its inline chain (innermost first, up to the loop
-function) and its hottest instruction. On this core a waiting instruction holds the PC, so a load's wait shows on the
-first instruction that uses its value (RESULTS §17): read a hot line together with the instruction shown."""
-import argparse, collections, csv, os, re, subprocess, sys
+For one target of a pc_sampler.py run: its build (the run cache's relocated image equal to the image head read at the
+launch message's load address, as pcs_report.py matches it), its kernel samples as ELF addresses, the first and last 5%
+by time dropped (outside the traffic window), then through addr2line -i on the cache's own <proc>.elf (the JIT builds
+with -g; its loadable code is the xip image's) to source. Prints the share of samples per innermost source line, and
+per inline chain cut to D frames from the innermost (the helper and its callers), the top N of each. --dump writes
+every window sample's address with its whole chain (JSON: [[count, [[function, file:line], ...], ELF address], ...]) to F."""
+import collections, glob, json, os, re, struct, subprocess, sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-import pcs_profile as pp  # noqa: E402
-import pcs_sections as ps  # noqa: E402
-
-OD = os.path.join(os.path.dirname(os.path.dirname(HERE)), "runtime/sfpi/compiler/bin/riscv-tt-elf-objdump")
-
-
-def instructions(elf, addrs):
-    """{addr: 'mnemonic operands'} for the given addresses."""
-    lo, hi = min(addrs), max(addrs) + 4
-    out = subprocess.run([OD, "-d", "--no-show-raw-insn", f"--start-address={lo:#x}", f"--stop-address={hi:#x}", elf],
-                         capture_output=True, text=True).stdout
-    res = {}
-    for line in out.splitlines():
-        m = re.match(r"\s+([0-9a-f]+):\s+(.*)", line)
-        if m:
-            res[int(m.group(1), 16)] = re.sub(r"\s+", " ", m.group(2).split("#")[0]).strip()
-    return res
+A2L = "/home/aagarwal/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-addr2line"
+prefix, cache, want = sys.argv[1], sys.argv[2], sys.argv[3]
+top = int(sys.argv[sys.argv.index("--top") + 1]) if "--top" in sys.argv else 25
+depth = int(sys.argv[sys.argv.index("--depth") + 1]) if "--depth" in sys.argv else 2
+chip, chan, erisc = (int(x) for x in want.replace("E", "").split("/"))
+meta = json.load(open(prefix + ".json"))
+idx = next(i for i, t in enumerate(meta["targets"]) if (t["chip"], t["chan"], t["erisc"]) == (chip, chan, erisc))
+samples = [(t, pc) for t, i, pc in struct.Struct("<dHI").iter_unpack(open(prefix + ".bin", "rb").read()) if i == idx]
+proc = "active_erisc" if erisc == 0 else "subordinate_active_erisc"
+lay = meta["layouts"][f"{chip}/{chan}"]["erisc"][str(erisc)]
+head, load, size = bytes.fromhex(lay["head"]), lay["load"], lay["text_size"]
 
 
-def short(fn):
-    fn = re.sub(r"\(.*", "", fn)
-    fn = re.sub(r"<.*>", "<>", fn)
-    return fn.split("::")[-1] if fn.count("::") > 1 else fn
+def text_segment(path):
+    d = open(path, "rb").read()
+    phoff, = struct.unpack_from("<I", d, 28)
+    phentsize, phnum = struct.unpack_from("<HH", d, 42)
+    for i in range(phnum):
+        p_type, p_off, p_vaddr, _, p_filesz, _, p_flags, _ = struct.unpack_from("<IIIIIIII", d, phoff + i * phentsize)
+        if p_type == 1 and p_flags & 1:
+            return p_vaddr, d[p_off:p_off + p_filesz]
+    raise ValueError(path)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("cache"); ap.add_argument("gdir"); ap.add_argument("prefix"); ap.add_argument("rows", nargs="+")
-    ap.add_argument("--erisc", type=int, default=1)
-    ap.add_argument("--top", type=int, default=30)
-    ap.add_argument("--target", default="")
-    a = ap.parse_args()
-    for row in a.rows:
-        vals = [float(r["avg_packets_per_s"]) for r in csv.DictReader(open(f"{ps.RES}/{a.prefix}_{row}_13129088_trial.csv"))]
-        cpp = 1.35e9 / (sum(vals) / len(vals))
-        best = None
-        a2l = {}
-        for i, (tgt, h, addrs) in pp.target_samples(a.cache, a.prefix, row).items():
-            if tgt["erisc"] != a.erisc or not addrs:
-                continue
-            if a.target and f"{tgt['chip']}/{tgt['chan']}" != a.target:
-                continue
-            proc = "active_erisc" if a.erisc == 0 else "subordinate_active_erisc"
-            twin = f"{a.gdir}/{h}/{proc}/{proc}.elf"
-            if not os.path.exists(twin):
-                continue
-            cache = a2l.setdefault(twin, {})
-            need = sorted(set(addrs) - set(cache))
-            if need:
-                cache.update(ps.a2l(twin, need))
-            secs = collections.Counter(pp.classify(cache.get(x, [])) for x in addrs)
-            work = sum(secs[s] for s in pp.WORK[a.erisc]) / len(addrs)
-            if best is None or work > best[0]:
-                best = (work, tgt, twin, addrs)
-        if best is None:
-            print(f"\n### {row}: no E{a.erisc} target with a -g twin")
-            continue
-        _, tgt, twin, addrs = best
-        frames = a2l[twin]
-        n = len(addrs)
-        by_addr = collections.Counter(addrs)
-        insn = instructions(twin, list(by_addr))
-        lines = collections.defaultdict(collections.Counter)
-        chains = {}
-        for addr, c in by_addr.items():
-            fr = frames.get(addr, [])
-            key = f"{fr[0][1]}:{fr[0][2]}" if fr else "?"
-            lines[key][addr] += c
-            chains.setdefault(key, " < ".join(short(f) for f, _, _ in fr[:4]))
-        print(f"\n### {row}: {cpp:.1f} cycles/packet; E{a.erisc} chip {tgt['chip']} chan {tgt['chan']} ({n} samples)")
-        ranked = sorted(lines.items(), key=lambda kv: -sum(kv[1].values()))
-        for key, cnt in ranked[:a.top]:
-            tot = sum(cnt.values())
-            hot, hc = cnt.most_common(1)[0]
-            print(f"  {tot / n * cpp:6.1f}  {tot / n * 100:5.1f}%  {key:32} {chains[key][:70]:70}  "
-                  f"[{hot:#x} {insn.get(hot, '?')}: {hc / n * cpp:.1f}]")
-
-
-if __name__ == "__main__":
-    main()
+build = None
+for e in sorted(glob.glob(f"{cache}/**/fabric_erisc_router*/*/{proc}/{proc}.elf.xip.elf", recursive=True)):
+    base, text = text_segment(e)
+    if text[:len(head)] == head:
+        build = (e[: -len(".xip.elf")], base)
+        break
+if build is None:
+    sys.exit("no build in the cache matches the target's image")
+elf, base = build
+kern = sorted((t, pc - load + base) for t, pc in samples if load <= pc < load + size)
+cut = len(kern) // 20
+kern = kern[cut: len(kern) - cut]
+addrs = sorted({a for _, a in kern})
+# One addr2line call: -a prints each address, then its (function, file:line) pairs, innermost first.
+out = subprocess.run([A2L, "-a", "-f", "-i", "-C", "-e", elf] + [hex(a) for a in addrs], capture_output=True,
+                     text=True).stdout.splitlines()
+chains, cur, k = {}, None, 0
+while k < len(out):
+    if re.fullmatch(r"0x[0-9a-f]+", out[k]):
+        cur = int(out[k], 16)
+        chains[cur] = []
+        k += 1
+        continue
+    fn = out[k]
+    while re.search(r"<[^<>]*>", fn):  # template arguments, innermost first
+        fn = re.sub(r"<[^<>]*>", "", fn)
+    fn = re.sub(r"\(.*", "", fn).replace("fabric_router::", "").split()[-1] if fn.strip() else "?"
+    loc = re.sub(r" \(discriminator \d+\)", "", out[k + 1]).split("/tt_metal/")[-1].split("/fabric_exp/")[-1]
+    chains[cur].append((fn, loc))
+    k += 2
+n = len(kern)
+by_line = collections.Counter()
+by_chain = collections.Counter()
+for _, a in kern:
+    f = chains[a]
+    by_line[f"{f[0][1]}  ({f[0][0]})" if f else "?"] += 1
+    by_chain[" < ".join(fn for fn, _ in f[:depth]) if f else "?"] += 1
+if "--dump" in sys.argv:
+    counts = collections.Counter(a for _, a in kern)
+    json.dump([[c, chains[a], a] for a, c in counts.items()], open(sys.argv[sys.argv.index("--dump") + 1], "w"))
+print(f"{want}: {len(samples)} samples, {n} kernel samples in the window; build {elf.split('/kernels/')[-1]}")
+print(f"\nby innermost line (top {top}):")
+for k, c in by_line.most_common(top):
+    print(f"  {100 * c / n:5.1f}%  {k}")
+print(f"\nby inline chain, {depth} frames (top {top}):")
+for k, c in by_chain.most_common(top):
+    print(f"  {100 * c / n:5.1f}%  {k}")

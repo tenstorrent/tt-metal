@@ -1,0 +1,7 @@
+xs_MeshAllToAll
+xs_MeshAllToAllIntra
+xs_MeshMulticastAllToAllIntra
+xs_TorusXAllToAll
+xs_TorusXAllToAllIntra
+xs_TorusXYAllToAll
+xs_TorusXYAllToAllIntra

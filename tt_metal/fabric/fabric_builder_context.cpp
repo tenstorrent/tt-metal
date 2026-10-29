@@ -15,6 +15,8 @@
 #include "tt_metal/llrt/rtoptions.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <cstdlib>
+#include <string_view>
 
 namespace tt::tt_fabric {
 
@@ -49,9 +51,17 @@ StreamAssignment FabricBuilderContext::compute_stream_assignment(MeshId mesh_id)
     // they actually vary at.
     const auto& base_config = get_fabric_router_config();
     const bool multi_txq_enabled = base_config.sender_txq_id != base_config.receiver_txq_id;
+    // Study switches (fabric_exp, single-ERISC v4): the study's router in the v2 slot (TT_FABRIC_KERNEL_VERSION=2) takes
+    // counter credits also on a single-ERISC router's one TX queue (fabric_exp/consolidation/V4_SINGLE_ERISC.md; it
+    // zeroes the counter blocks itself, so the host's clear stays as it is), unless TT_FABRIC_EXP_STREAM_CREDITS=1 asks
+    // for main's plan there: stream-register credits on one TX queue (variants/v4sc).
+    const char* kernel_version = std::getenv("TT_FABRIC_KERNEL_VERSION");
+    const char* stream_credits = std::getenv("TT_FABRIC_EXP_STREAM_CREDITS");
+    const bool study_router_counters = kernel_version != nullptr && std::string_view(kernel_version) == "2" &&
+                                       !(stream_credits != nullptr && std::string_view(stream_credits) == "1");
     const CreditTransportPlan plan{
-        .vc0_uses_counters = multi_txq_enabled,
-        .vc1_uses_counters = multi_txq_enabled || express_enabled,
+        .vc0_uses_counters = multi_txq_enabled || study_router_counters,
+        .vc1_uses_counters = multi_txq_enabled || express_enabled || study_router_counters,
         // VC2 has no completion register to fall back on -- the completed table stops at flat
         // position 8 and VC2's sender is position 9 -- so it rides counters wherever it exists.
         .vc2_uses_counters = intermesh_vc_config_.requires_vc2};

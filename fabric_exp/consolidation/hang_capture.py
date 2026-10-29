@@ -18,7 +18,7 @@ Output: OUT_DIR/index.json (topology, coordinates, register values, file list, t
 OUT_DIR/chip<C>/eth<NN>_l1.bin. hang_decode.py turns that into per-router channel/credit tables.
 
 Workers (Tensix cores; on by default, --no-workers skips them), after the routers, in this order:
-  wscan  every Tensix core of every chip: the mailbox head (0x60, 1232 B: launch-message ring, go messages, read
+  wscan  every Tensix core of every chip: the mailbox head (0x60, 1488 B: launch-message ring, go messages, read
          pointer), the test result-status word (--worker-status-addr, default 0x23480 = the test's result buffer at
          the HAL's DEFAULT_UNRESERVED base + 32 KiB of local args) and the soft-reset register. A core is captured if
          its go signal is GO with kernels enabled, or the launch slot it last executed holds the chip's newest program
@@ -89,11 +89,14 @@ L1_WORDS = {  # L1 words sampled in both register passes (liveness)
 # Tensix workers (Blackhole dev_mem_map.h / dev_msgs.h; the same mailboxes_t layout as the ERISC one above)
 W_L1_SIZE = 1536 * 1024
 W_MAILBOX = 0x60  # MEM_MAILBOX_BASE
-W_HEAD_SIZE = 1232  # mailboxes_t through go_message_index (+1216)
+# Since the merge of main 6d8a103 (2026-10-28) a Tensix core's go messages are rings, one go message per launch slot
+# per sub-device (go_messages[9].slot[8]), so go_message_index sits at +1472 and every base after the mailbox moved
+# 0x100 (MEM_MAILBOX_SIZE 0x3480 -> 0x3580). The ERISC mailbox keeps one go message per sub-device (unchanged).
+W_HEAD_SIZE = 1488  # mailboxes_t through go_message_index (+1472), rounded to 16
 W_LAUNCH_OFF, W_LAUNCH_SIZE, W_NUM_LAUNCH = 16, 144, 8
-W_GO_OFF, W_NUM_GO, W_GO_IDX_OFF = 1168, 9, 1216
-W_STATUS_ADDR = 0x1B480 + 0x8000  # test result buffer status word: DEFAULT_UNRESERVED + LOCAL_ARGS_BUFFER_SIZE
-W_FABRIC_RW = 0x9070 + 400  # tensix_fabric_connections_l1_info_t.read_write[16]: the routers' credit words
+W_GO_OFF, W_NUM_GO, W_GO_RING, W_GO_IDX_OFF = 1168, 9, 8, 1472
+W_STATUS_ADDR = 0x1B580 + 0x8000  # test result buffer status word: DEFAULT_UNRESERVED + LOCAL_ARGS_BUFFER_SIZE
+W_FABRIC_RW = 0x9170 + 400  # tensix_fabric_connections_l1_info_t.read_write[16]: the routers' credit words
 W_WINDOW = 0x40000
 W_NIU_BASES = (0xFFB20000, 0xFFB30000)  # NOC0 / NOC1 register blocks; status counters at +0x200
 W_NIU_STATUS = tuple(range(0x0, 0x40, 4)) + tuple(range(0xC0, 0xF8, 4))  # NIU_MST_* 0..15, NIU_SLV_* 48..61
@@ -403,7 +406,8 @@ class Capture:
         a process-wide counter, so they order programs; the host-assigned program id is 0 in these runs."""
         rd = struct.unpack_from("<I", head, 12)[0] & (W_NUM_LAUNCH - 1)
         gi = struct.unpack_from("<I", head, W_GO_IDX_OFF)[0]
-        sig = struct.unpack_from("<I", head, W_GO_OFF + 4 * (gi if gi < W_NUM_GO else 0))[0] >> 24
+        ring = W_GO_OFF + 4 * W_GO_RING * (gi if gi < W_NUM_GO else 0)  # this sub-device's go ring
+        sig = struct.unpack_from("<I", head, ring + 4 * rd)[0] >> 24  # the go message of the current launch slot
         prev = (rd - 1) & (W_NUM_LAUNCH - 1)
         slot = rd if sig == 0x80 else (prev if head[W_LAUNCH_OFF + W_LAUNCH_SIZE * prev + 48] == 0 else rd)
 
