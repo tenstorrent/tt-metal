@@ -107,7 +107,7 @@ inline void mish_init() {
     // so the SFPLOADMACRO fast-path init is not needed. But, we need sfpu_reciprocal_init's
     // vConstFloatPrgm0 = 2.0f for the inline NR step. So, call sfpu_reciprocal_init directly.
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
-    // Prgm1 = 1/ln2 for the exp; the exact fp32 arm's Juffa exp reads it too (same bit pattern).
+    // Prgm1 = 1/ln2 for the exp; both accurate arms' Juffa exp reads it too (same bit pattern).
     _init_exp_hoisted_prgm_consts_();
 }
 
