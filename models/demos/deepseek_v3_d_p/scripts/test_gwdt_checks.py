@@ -4,18 +4,20 @@
 
 import os
 from datetime import datetime
+from pathlib import Path
 
 from gwdt_checks import (
+    LogFollower,
+    Result,
     Status,
     check_smi,
     classify_loop,
     classify_pytest,
-    collected_node_ids,
     didt_bad_devices,
     fabric_results,
     log_root,
-    progress,
     run_name,
+    stress_result,
 )
 
 
@@ -110,6 +112,7 @@ def test_fabric_results():
 
 
 def test_log_root_falls_back_when_not_writable(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.is_dir", lambda self: True)
     monkeypatch.setattr(os, "access", lambda p, m: False)
     assert log_root("nobody", tmp_path) == tmp_path / "galaxy-workload-deployment-test"
 
@@ -121,53 +124,165 @@ def test_run_name():
     )
 
 
-def test_progress_forward():
-    log = (
-        "2026-10-29 03:00:00.000 | INFO | Building TtPrefillTransformer\n"
-        "2026-10-29 03:48:10.000 | INFO | forward_layer_0_start\n"
-        "iter 0 done (20 chunks) in 1.0 seconds\n"
-        "forward_layer_33_end\n"
-    )
-    assert progress(log, 600, now=1000.0, mtime=996.0) == "iter 1/600  forward_layer_33_end  load 48m10s  idle 4s"
-
-
-def test_progress_loading():
-    log = "2026-10-29 03:00:00.000 | INFO | Building TtPrefillTransformer\nBuilding layer 12/61\n"
-    assert progress(log, 600, now=10.0, mtime=10.0) == "iter 0/600  loading layer 12/61  idle 0s"
-
-
-def test_collected_node_ids_tree_format():
-    log = (
-        "collected 4 items / 3 deselected / 1 selected\n"
-        "<Dir tt-metal-3>\n"
-        "            <Function test_fabric_opens[FABRIC_2D_TORUS_XY]>\n"
-        "================= 1/4 tests collected (3 deselected) in 1.50s ==================\n"
-    )
-    assert collected_node_ids(log) == ["test_fabric_opens[FABRIC_2D_TORUS_XY]"]
-
-
-def test_collected_node_ids_flat_format():
-    assert collected_node_ids("a.py::test_x[p1]\na.py::test_x[p2]\n\n2 tests collected\n") == [
-        "a.py::test_x[p1]",
-        "a.py::test_x[p2]",
-    ]
-
-
-def test_collected_node_ids_ignores_not_found_error():
-    assert collected_node_ids("collecting ... ERROR: not found: /x/a.py::test_y\n") == []
+def test_log_follower_loading(tmp_path):
+    log = tmp_path / "log_01"
+    log.write_text("2026-10-29 03:00:00.000 | INFO | Building TtPrefillTransformer\nBuilding layer 12/61\n")
+    f = LogFollower(log)
+    f.update()
+    assert f.line(600, now=log.stat().st_mtime) == "iter 0/600  loading layer 12/61  idle 0s"
 
 
 def test_screen_has_no_ansi_when_not_tty(tmp_path, monkeypatch, capsys):
     from galaxy_workload_deployment_test import Screen
-    from gwdt_checks import Result
     from gwdt_steps import Step
 
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
     step = Step("didt", "didt", "gate", None, True, lambda ctx, state: Result(Status.PASS))
     step.state.result = Result(Status.FAIL, "device 17: 2 non-deterministic outputs")
-    screen = Screen([step], ["hdr"], tmp_path / "status.json")
+    screen = Screen([step], ["hdr"], tmp_path / "status.json", {})
     screen.update(step)
     screen.done = True
     text = capsys.readouterr().out + "\n".join(screen.lines())
     assert "\x1b[" not in text
     assert "FAIL" in text
+
+
+def test_loop_skip_reason(tmp_path):
+    (tmp_path / "log_01").write_text(
+        "SKIPPED [1] t.py:9: pretrained weights unavailable\n=== 1 skipped in 3s ===\nTEST_DONE_EXIT=0\n"
+    )
+    r = classify_loop(tmp_path / "log_01", tmp_path / "none.csv")
+    assert r.status == Status.FAIL
+    assert "pretrained weights unavailable" in r.reason
+
+
+def test_loop_reads_only_tail(tmp_path):
+    (tmp_path / "log_01").write_text("=== 1 passed in 9s ===\n" + "x" * (9 << 20) + "\nTEST_DONE_EXIT=1\n")
+    assert classify_loop(tmp_path / "log_01", tmp_path / "none.csv").status == Status.FAIL
+
+
+def test_stress_result_unstarted_loop_is_fail(tmp_path):
+    r = stress_result([Result(Status.PASS), Result(Status.PENDING)], tmp_path / "stress.log")
+    assert r.status == Status.FAIL
+    assert str(tmp_path / "stress.log") in r.reason
+
+
+def test_stress_result_all_pass(tmp_path):
+    assert stress_result([Result(Status.PASS)] * 3, tmp_path / "stress.log").status == Status.PASS
+
+
+def test_log_follower_counts_across_appends(tmp_path):
+    log = tmp_path / "log_01"
+    log.write_text("2026-10-29 03:00:00.000 | INFO | Building TtPrefillTransformer\niter 0 done (20 chunks) in 1 s\n")
+    f = LogFollower(log)
+    f.update()
+    with open(log, "a") as fh:
+        fh.write(
+            "2026-10-29 03:48:10.000 | INFO | forward_layer_0_start\niter 1 done (20 chunks) in 1 s\nforward_layer_7_end\n"
+        )
+    f.update()
+    assert f.line(600, now=log.stat().st_mtime) == "iter 2/600  forward_layer_7_end  load 48m10s  idle 0s"
+
+
+def _steps(*specs):
+    from gwdt_steps import Ctx, Step
+
+    steps = [Step(k, k, g, m, True, lambda ctx, state, r=r: Result(r)) for k, g, m, r in specs]
+    return steps, Ctx(Path("."), Path("."), False)
+
+
+def test_run_all_gate_fail_blocks_everything():
+    from gwdt_steps import run_all
+
+    steps, ctx = _steps(
+        ("a", "gate", None, Status.FAIL), ("b", "gate", None, Status.PASS), ("c", "smoke", "m", Status.PASS)
+    )
+    run_all(steps, ctx, set(), lambda s: None)
+    assert [s.state.result.status for s in steps] == [Status.FAIL, Status.PENDING, Status.PENDING]
+
+
+def test_run_all_model_fail_blocks_only_that_model():
+    from gwdt_steps import run_all
+
+    steps, ctx = _steps(
+        ("b1", "block", "m1", Status.FAIL),
+        ("b2", "block", "m2", Status.PASS),
+        ("s1", "smoke", "m1", Status.PASS),
+        ("s2", "smoke", "m2", Status.PASS),
+    )
+    run_all(steps, ctx, set(), lambda s: None)
+    assert [s.state.result.status for s in steps] == [Status.FAIL, Status.PASS, Status.PENDING, Status.PASS]
+
+
+def test_run_all_skip_by_user():
+    from gwdt_steps import run_all
+
+    steps, ctx = _steps(("a", "gate", None, Status.FAIL), ("b", "smoke", "m", Status.PASS))
+    run_all(steps, ctx, {"a"}, lambda s: None)
+    assert steps[0].state.result == Result(Status.SKIP, "by user")
+    assert steps[1].state.result.status == Status.PASS
+
+
+def _fake_sh(monkeypatch, rc, write=None):
+    import gwdt_steps
+
+    calls = []
+
+    def sh(ctx, cmd, log, env=None, timeout=None):
+        calls.append(cmd)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("")
+        if write:
+            write(cmd, log, env or {})
+        return rc
+
+    monkeypatch.setattr(gwdt_steps, "sh", sh)
+    return calls
+
+
+def test_fabric_hang_skips_config_sweep(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State, fabric_step
+
+    def write(cmd, log, env):
+        cmd_env = env.get("TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE", "")
+        if "--llm-output-path=" in cmd_env:
+            Path(cmd_env.split("--llm-output-path=")[1].split(";")[0]).write_text("dev,core\n")
+
+    calls = _fake_sh(monkeypatch, 137, write)
+    r = fabric_step().run(Ctx(tmp_path, tmp_path, False), State())
+    assert r.status == Status.HANG
+    assert len(calls) == 1
+
+
+def test_reset_failure_points_to_log(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State, reset_gate
+
+    _fake_sh(monkeypatch, 1)
+    state = State()
+    r = reset_gate().run(Ctx(tmp_path, tmp_path, False), state)
+    assert r.status == Status.FAIL
+    assert state.log == str(tmp_path / "reset" / "log_01")
+
+
+def test_status_json_has_run_fields(tmp_path):
+    import json
+
+    from galaxy_workload_deployment_test import Screen
+
+    meta = {"host": "h", "run": "LOG_x", "mode": "real", "commit": "abc"}
+    Screen([], ["hdr"], tmp_path / "status.json", meta).write_status()
+    assert json.loads((tmp_path / "status.json").read_text()).items() >= meta.items()
+
+
+def test_models_grid_aligned_with_color(tmp_path, monkeypatch):
+    import re
+
+    from galaxy_workload_deployment_test import Screen
+    from gwdt_steps import Step
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    steps = [Step(f"{g}:m", g, g, "kimi_k2_7", True, None) for g in ("block", "smoke", "soak")]
+    steps[0].state.result = Result(Status.PASS)
+    screen = Screen(steps, ["hdr"], tmp_path / "status.json", {})
+    rows = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in screen.lines() if l.startswith((" K2.7", "MODELS"))]
+    assert rows[0].index("smoke") == rows[1].index("·")
