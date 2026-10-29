@@ -22,6 +22,7 @@ from transformers import AutoTokenizer
 from qwen36_resident import weights as Q
 from qwen36_resident.mtp import SpecDecoder
 from qwen36_resident.serve.prompts import PROMPTS, chat_ids
+from qwen36_resident.spec_serving import MTP_BLOCK, MTP_DEPTH
 from qwen36_resident.tests.e0_bringup import close_mesh, open_mesh
 
 
@@ -35,8 +36,8 @@ def main():
     ap.add_argument("--plain")
     ap.add_argument("--max-tokens", type=int, default=128)
     ap.add_argument("--max-len", type=int, default=32768)
-    ap.add_argument("--block", type=int, default=4)
-    ap.add_argument("--depth", type=int, default=4)
+    ap.add_argument("--block", type=int, default=MTP_BLOCK)
+    ap.add_argument("--depth", type=int, default=MTP_DEPTH)
     a = ap.parse_args()
     faulthandler.dump_traceback_later(900, repeat=True, file=sys.stderr)
     path = Q.checkpoint_dir()

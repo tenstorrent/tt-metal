@@ -18,7 +18,7 @@ import time
 from transformers import AutoTokenizer
 
 from qwen36_resident import weights as Q
-from qwen36_resident.generator_vllm import DFLASH_BLOCK, DFLASH_POS_MARGIN
+from qwen36_resident.spec_serving import DFLASH_BLOCK, DFLASH_POS_MARGIN
 from qwen36_resident.serve.prompts import PROMPTS, chat_ids
 from qwen36_resident.tests.e0_bringup import close_mesh, open_mesh
 

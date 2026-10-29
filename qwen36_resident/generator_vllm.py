@@ -34,6 +34,7 @@ from qwen36_resident import weights as Q
 from qwen36_resident.model import TOP_K, Dims, ResidentModel, State
 from qwen36_resident.mtp import SpecDecoder
 from qwen36_resident.prefill.pp_prefill import PPPrefill
+from qwen36_resident.spec_serving import DFLASH_BLOCK, DFLASH_POS_MARGIN, DFLASH_VERIFY, MTP_BLOCK, MTP_DEPTH
 from qwen36_resident.vllm_rows import CHUNK_UNIT, ResidentRowsAdapter, RowsEngine, resident_capabilities
 
 PREFILL_CHUNKS = (128, 256, 512, 1024)
@@ -240,10 +241,6 @@ class Qwen36ResidentRowsForCausalLM(ResidentRowsAdapter):
         pass
 
 
-MTP_BLOCK = int(os.environ.get("QWEN36_MTP_BLOCK", "4"))
-MTP_DEPTH = int(os.environ.get("QWEN36_MTP_DEPTH", "4"))
-
-
 class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
     """Greedy only: the device decodes from its own greedy tokens, so the runner's first token (sampled from
     the prefill's logits) must be their argmax; anything else raises. One user (max_num_seqs=1), so every
@@ -314,13 +311,6 @@ class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
 
     def release_persistent_capture(self):
         self.spec.stop()
-
-
-DFLASH_BLOCK = int(os.environ.get("QWEN36_DFLASH_BLOCK", "8"))
-DFLASH_VERIFY = 8  # the resident DFlash2 verify rows (R)
-# ResidentDFlash.max_prompt_tokens = max_pos - 2 * R - 64: built this much past max_model_len, every prompt vLLM
-# admits fits (a prompt over the ceiling would fail the engine core)
-DFLASH_POS_MARGIN = 2 * DFLASH_VERIFY + 64
 
 
 class Qwen36ResidentDFlashForCausalLM(Qwen36ResidentMTPForCausalLM):
