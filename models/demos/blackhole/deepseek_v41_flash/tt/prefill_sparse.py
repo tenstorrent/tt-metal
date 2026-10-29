@@ -737,10 +737,14 @@ class DSV41PrefillIndexer:
         self.sh = dict(reg[r], cols=cols, Lc=Tl, mc=mc, ccl=ccl, single=True, Cc=Cc, Cc8=Cc8)
         self.KL_full = Cc + L
         self.KL = Tl
-        ctx.sg.ensure(r)
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_dyn import memitem
+
+        with memitem(md, "single_ctx(nvalid,kofs)"):
+            ctx.sg.ensure(r)
         if owner:
             self.keys_rm = None
-            self.keys = ttnn.zeros([U, 1, Tl + 32, IDIM], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=md)
+            with memitem(md, "index_key_FIFO(per slot)"):
+                self.keys = ttnn.zeros([U, 1, Tl + 32, IDIM], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=md)
 
     def add_keys_single(self, lat_pre, tab, Cc, ctx):
         """the chunk's index keys -> scratch (static slice_write) + history (``key_append`` at the tensor-driven offset)"""
@@ -1089,7 +1093,10 @@ class DSV41PrefillSparse:
             if not cols:
                 getattr(ctx, "pidx_pcol", {}).pop(r, None)
             if cols and single:
-                self.indexer.alloc_single(ctx, L, cols, pa.a.mesh_config, pa.a.ccl, self.indexer.key_owner is None)
+                from models.demos.blackhole.deepseek_v41_flash.tt.prefill_dyn import memitem
+
+                with memitem(self.md, "~idx_alloc_single_total"):
+                    self.indexer.alloc_single(ctx, L, cols, pa.a.mesh_config, pa.a.ccl, self.indexer.key_owner is None)
             elif cols:
                 self.indexer.alloc_shard(ctx, L, cols, pa.a.mesh_config, pa.a.ccl, self.indexer.key_owner is None)
             else:
@@ -1098,7 +1105,10 @@ class DSV41PrefillSparse:
             assert (
                 PG.BOUND["sink"].pool.dtype == ttnn.bfloat16 or os.environ.get("DSV41_PF_PAGED_FP8", "0") == "1"
             ), "DSV41_PF_PAGED=read needs a bf16 pool (P1); DSV41_PF_PAGED_FP8=1 reads an fp8 pool (P2a: window rows and latents rounded to fp8)"
-            ctx.pg = PG.PagedCtx(self.md, ctx, self.U)
+            from models.demos.blackhole.deepseek_v41_flash.tt.prefill_dyn import memitem
+
+            with memitem(self.md, "paged_ctx(page tables,win ids)"):
+                ctx.pg = PG.PagedCtx(self.md, ctx, self.U)
             ctx.upd_hooks.append(lambda c, s0: c.pg.update(s0))
         if not hasattr(ctx, "sp_win"):
             ctx.sp_win, ctx.sp_vis = {}, {}
@@ -1112,15 +1122,18 @@ class DSV41PrefillSparse:
         )  # (DSV41_PREFILL_UP_BATCH: one copy per prefill SLOT)
         if ns_ > nr_:
             assert paged, "DSV41_PREFILL_UP_BATCH needs DSV41_PF_PAGED=read"
-        if not hasattr(ctx, "sp_perm"):
-            ctx.sp_perm = mk_(self.md, perm_table(True).repeat(ns_, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-        if split_enabled() and not hasattr(ctx, "sp_perm_b"):
-            assert paged, "DSV41_PF_REPLAY needs DSV41_PF_PAGED=read"
-            ctx.sp_perm_b = mk_(self.md, perm_table(True).repeat(ns_, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-        if r not in ctx.sp_win:
-            ctx.sp_win[r] = mk_(
-                self.md, torch.zeros(nr_, 1, ctx.C, WINDOW, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
-            )
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_dyn import memitem
+
+        with memitem(self.md, "perm_win_tables"):
+            if not hasattr(ctx, "sp_perm"):
+                ctx.sp_perm = mk_(self.md, perm_table(True).repeat(ns_, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+            if split_enabled() and not hasattr(ctx, "sp_perm_b"):
+                assert paged, "DSV41_PF_REPLAY needs DSV41_PF_PAGED=read"
+                ctx.sp_perm_b = mk_(self.md, perm_table(True).repeat(ns_, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+            if r not in ctx.sp_win:
+                ctx.sp_win[r] = mk_(
+                    self.md, torch.zeros(nr_, 1, ctx.C, WINDOW, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+                )
 
     def _free_tables(self):
         """Free the kv table and (index-key owners) the key slab of this layer; readers only drop their reference to the owner's table."""

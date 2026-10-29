@@ -73,6 +73,10 @@ def _run(mesh_device):
     layer_ids = list(range(int(a), int(b or a) + 1))
     B = 4 * U
     S_pad = -(-ISL // CHUNK) * CHUNK
+    if os.environ.get(
+        "PP_SPAD"
+    ):  # memory studies: capture the chunk trace of a LONG context (FIFO / table sizes follow S_pad) while prefilling short prompts
+        S_pad = int(os.environ["PP_SPAD"])
     max_ctx = max(ISL + 64, S_pad)
     pp = default_page_params(max_ctx, U)
     if os.environ.get(
@@ -94,7 +98,13 @@ def _run(mesh_device):
     g = torch.Generator().manual_seed(4321)
     prompts = torch.randint(1000, 100000, (B, ISL), generator=g)
     users = [0, 5, 10, 15] if U >= 4 else [0, U]
+    if (
+        os.environ.get("PP_ALL_USERS") == "1"
+    ):  # every decode user prefilled (all slots of every mesh row busy: real tokens in all Up*C rows)
+        users = list(range(B))
     lens_pick = [ISL, ISL - 197, ISL - 1024 - 3, ISL - 512]  # aligned, unaligned, short unaligned, chunk-aligned
+    if os.environ.get("PP_SAME_LEN") == "1":
+        lens_pick = [ISL] * 4
     lens = {u: lens_pick[i % 4] for i, u in enumerate(users)}
     if NEEDLE:
         tk = args.tokenizer

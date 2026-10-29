@@ -24,6 +24,43 @@ import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
 
 NEG = -1e9
+
+# DSV41_MEMITEM=1: itemised DRAM (MiB per bank) of the per-slot prefill state allocated by ``setup_dyn`` (disjoint leaf items summed per name; ``memitem_report``)
+MEMITEM = {}
+
+
+def _alloc_mib(md):
+    mv = ttnn.get_memory_view(md, ttnn.BufferType.DRAM)
+    return mv.total_bytes_allocated_per_bank / 2**20
+
+
+class memitem:
+    """context manager: ``with memitem(md, "halo"): ...`` adds the DRAM allocated inside the block to MEMITEM["halo"] (no-op unless DSV41_MEMITEM=1)"""
+
+    def __init__(self, md, name):
+        self.md, self.name, self.on = md, name, os.environ.get("DSV41_MEMITEM") == "1"
+
+    def __enter__(self):
+        if self.on:
+            self.a0 = _alloc_mib(self.md)
+
+    def __exit__(self, *exc):
+        if self.on:
+            MEMITEM[self.name] = MEMITEM.get(self.name, 0.0) + _alloc_mib(self.md) - self.a0
+
+
+def memitem_report(tag=""):
+    if os.environ.get("DSV41_MEMITEM") == "1" and MEMITEM:
+        tot = sum(v for k, v in MEMITEM.items() if not k.startswith("~"))
+        print(
+            f"MEMITEM {tag} (MiB/bank, setup_dyn leaf items): "
+            + ", ".join(f"{k} {v:.2f}" for k, v in sorted(MEMITEM.items(), key=lambda kv: -kv[1]))
+            + f"; sum {tot:.2f}",
+            flush=True,
+        )
+    MEMITEM.clear()
+
+
 HEAD_DIM = 512
 WINDOW = 128
 
@@ -111,24 +148,26 @@ class DynCtx:
                 mesh_mapper=self._shard if self.per_row else rep,
             )
 
-        self.tabs = {k: tuple(mk([1, 1, C, HEAD_DIM]) for _ in range(3)) for k in rope_src}  # key: compressed?
-        self.lat_tabs = {
-            r: tuple(mk([1, 1, C // r, HEAD_DIM]) for _ in range(3)) for r in self.ratios if r > 1 and True
-        }
-        self.win_mask = mk([1, 1, C, WINDOW + C])
-        self.lim = {r: mk([1, 1, C, 1], ttnn.float32) for r in self.ratios}
-        self.off = {r: mk([1, 1, 1, 1], ttnn.float32) for r in self.ratios}
-        self.pcol = {
-            r: ttnn.from_torch(
-                torch.arange(self.L[r], dtype=torch.float32).reshape(1, 1, 1, -1),
-                device=md,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=rep,
-            )
-            for r in self.ratios
-        }
+        with memitem(md, "dyn_pos_tables(rope,mask,lim,off)"):
+            self.tabs = {k: tuple(mk([1, 1, C, HEAD_DIM]) for _ in range(3)) for k in rope_src}  # key: compressed?
+            self.lat_tabs = {
+                r: tuple(mk([1, 1, C // r, HEAD_DIM]) for _ in range(3)) for r in self.ratios if r > 1 and True
+            }
+            self.win_mask = mk([1, 1, C, WINDOW + C])
+            self.lim = {r: mk([1, 1, C, 1], ttnn.float32) for r in self.ratios}
+            self.off = {r: mk([1, 1, 1, 1], ttnn.float32) for r in self.ratios}
+        with memitem(md, "pcol(arange L, fp32 tile)"):
+            self.pcol = {
+                r: ttnn.from_torch(
+                    torch.arange(self.L[r], dtype=torch.float32).reshape(1, 1, 1, -1),
+                    device=md,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=rep,
+                )
+                for r in self.ratios
+            }
         self.upd_hooks, self.build_hooks = (
             [],
             [],

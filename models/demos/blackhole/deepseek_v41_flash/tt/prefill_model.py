@@ -795,8 +795,12 @@ class DSV41PrefillModel:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=self.shard,
             )
-        for _, pl in self.layers:
-            pl.pa.alloc_dyn(self.dyn)
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_dyn import memitem, memitem_report
+
+        with memitem(self.md, "~alloc_dyn_all_layers_total"):
+            for _, pl in self.layers:
+                pl.pa.alloc_dyn(self.dyn)
+        memitem_report(f"Up={self.U} C={C} S_pad={S_pad}")
         self.dyn_trace = None
         self.pre_replay_hooks = getattr(self, "pre_replay_hooks", [])
         self.post_replay_hooks = getattr(self, "post_replay_hooks", [])
