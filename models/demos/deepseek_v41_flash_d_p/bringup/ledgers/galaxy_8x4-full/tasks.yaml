@@ -1214,6 +1214,43 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 692.7
       device_ms_total: <= 230
+- id: P.11
+  title: 'CKV_PACK_BEFORE_GATHER: each chip packs its own compressed rows into 4-bit records before the gather'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.5
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-29 (supervision.md 13:35). Today every chip all-gathers the compressed KV rows as bf16 (1024
+      B a row; after P.10 over all 32 chips) and then every chip rounds and packs the same rows into the 320 B bfloat4_b
+      records (ttnn.bringup.ckv_bfp4). Instead: each chip rounds + packs ITS OWN rows right after the compressor''s RoPE
+      (fused into the compressor tail where it fits), writes its served bf16 rows locally from the rounded values (the
+      contract stays; the bf16 served copy is temporary, owner), and all-gathers the 320 B records (3.2x fewer bytes,
+      each row packed once); the attention table appends the gathered records directly. Table bytes identical to
+      today. The window KV the same way once it is bfloat8_b blocks (after the 2x2 low-bit integration). Behind the
+      setting CKV_PACK_BEFORE_GATHER (default on, ''off'' = today). Report gather bytes / time, op calls, device time
+      and warm wall per chunk (DS41_ENGRAM_TABLE=resident) before / after.'
+  ab:
+    env:
+      DS41_CKV_PACK_BEFORE_GATHER: 'off'
+      DS41_ENGRAM_TABLE: resident
+    change:
+      DS41_CKV_PACK_BEFORE_GATHER: 'on'
+      DS41_ENGRAM_TABLE: resident
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
