@@ -25,7 +25,9 @@ Knobs (single source of truth; every CB size / trip count derives from them):
     MIN_SLICE_TILES    smallest interleaved W-slice S (fused_split)
     MAX_GROUP_CORES    cap on G_w (on-chip combine fan-in)
     WAVES_MAX          cap on row waves per core (exchange pipelining depth)
-    READ_LOOKAHEAD_WAVES  x-read waves in flight per core beyond the oldest unlanded one
+    READ_LOOKAHEAD_WAVES  x-read waves in flight per core beyond the oldest unlanded one (0: wave-ordered DRAM reads)
+    COMBINE_LAG        waves between a wave's landing / square and its on-chip combine + publish (0 since Refinement 2)
+    NOC_SWAP_COLUMNS   westmost logical worker columns whose x reads run on NoC1 and output writes on NoC0
 """
 
 from __future__ import annotations
@@ -57,9 +59,17 @@ WAVES_MAX_PASSES = 12  # wave cap of the pass regime (smaller waves shrink every
 NUM_SEMAPHORES = 16
 COMBINE_DEPTH = 2  # cb_partial_col depth in waves: compute collapses wave w+1 while the reader still sends wave w
 LANDING_MIN_WORDS = 1024  # landing scratch floor (4 KiB): most plans then share one allocation
-READ_LOOKAHEAD_WAVES = 0  # x-read waves in flight beyond the oldest unlanded one (wave-ordered DRAM traffic)
-NOC_SWAP_COLUMNS = 3  # westmost logical worker columns whose DRAM reads go on NoC1 / writes on NoC0 (base Perf 2)
-COMBINE_LAG = 0  # waves between a wave's landing / square and its on-chip combine (1: Phase 0 order; 0: none)
+# Refinement 2 (LOCAL perf, 1x4 ring, traced slowest chip, same-session A/B against the Phase 0 values 1 / 0 / 1):
+# 640x1792 op 26.3 -> 21.6 us (exchange stubbed 19.7 -> 17.9), 2048x1280 44.8 -> 33.2 (31.9 -> 28.7); D1 / D1-HS /
+# D3-WS / decode within noise (decode stub +0.12 us from the swap, its op time no worse).
+READ_LOOKAHEAD_WAVES = 0  # x-read waves in flight beyond the oldest unlanded one: 0 = each wave's reads go out once the
+#                           previous wave landed, so DRAM serves the grid wave by wave and wave 0 publishes early
+#                           (1: op +2.5 us at 640x1792; 2: +2.0)
+NOC_SWAP_COLUMNS = 3  # westmost logical worker columns (next to DRAM column 0) whose x reads go on NoC1 and output
+#                       writes on NoC0 (base op Perf 2 dram_noc_balance). 640x1792 stub 19.96 -> 17.7 us; 1 / 2 / 4 / 5
+#                       columns: 19.1 / 18.3 / 17.8 / 18.7
+COMBINE_LAG = 0  # waves between a wave's landing / square and its on-chip combine + publish (1: Phase 0 order — the
+#                  contribution of wave w waited for wave w+1's reads)
 
 # ---- Exchange constants ----
 RECORD_BYTES = 32 * 4  # one fp32 per row of a tile-row
@@ -447,7 +457,10 @@ def fused_split(T: int, Wt: int, N: int, sz: Sizes, budget: int):
     (the whole block resident, per-wave γ allowed) first; when no slice fits it, the slice whose first-fit L1
     fallback ranks best (Refinement 1), ties broken by the Phase 0 key."""
     cands = []
+    forced = _measure_overrides().get("slice")
     for S in range(min(Wt, MIN_SLICE_TILES), Wt + 1):
+        if forced and S != forced:
+            continue
         G_w = math.ceil(Wt / S)
         if G_w > MAX_GROUP_CORES or G_w > N:
             continue
@@ -483,12 +496,15 @@ def _shard_cores(spec, n):
 
 
 def _measure_overrides() -> dict:
-    """Measurement-only plan overrides (unset in production): DRMS_WAVES (wave cap), DRMS_GAMMA_MODE (0/1/2)."""
+    """Measurement-only plan overrides (unset in production): DRMS_WAVES (wave cap), DRMS_GAMMA_MODE (0/1/2),
+    DRMS_SLICE (the interleaved slice width S)."""
     import os
 
     ov = {}
     if os.environ.get("DRMS_WAVES"):
         ov["waves"] = int(os.environ["DRMS_WAVES"])
+    if os.environ.get("DRMS_SLICE"):
+        ov["slice"] = int(os.environ["DRMS_SLICE"])
     if os.environ.get("DRMS_GAMMA_MODE"):
         ov["gamma_mode"] = int(os.environ["DRMS_GAMMA_MODE"])
     return ov
@@ -787,6 +803,7 @@ _ABLATE_DEFINES = {
     "reads": "DRMS_ABLATE_READS",  # x NoC reads skipped (CB pushes kept)
     "writes": "DRMS_ABLATE_WRITES",  # output NoC writes skipped (CB pops kept)
     "gamma": "DRMS_ABLATE_GAMMA",  # γ NoC reads skipped (CB pushes kept)
+    "chains": "CKL_ELTWISE_CHAIN_SKIP_COMPUTE",  # every eltwise_chain (square, γ, inv scaling) without its math
 }
 
 

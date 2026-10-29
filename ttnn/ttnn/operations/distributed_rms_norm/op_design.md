@@ -515,3 +515,47 @@ ahead of the matching store into `cb_x_reread` (`STREAM_DEPTH·C`), compute does
 unchanged. Deadlock note: with x streamed, the reader pushes wave w+1 before servicing wave w, so `cb_partial_col`
 (and `cb_chip_partial`) must stay two waves deep on this rung. Option (b) of the queue (a credit-managed landing ring)
 was not needed and was not built.
+
+## Refinement 2 — LOCAL perf on the fused grid (implementer)
+
+Measured breakdown first (640×1792, 1×4 ring, traced slowest chip, exchange stubbed; `DRMS_ABLATE` payload ablations
+keep every CB / semaphore handshake): stub 19.9 µs; reads + writes + γ stubbed together 11.6 µs (the on-chip chain:
+square → combine → publish → collect → fold → inv all-gather → scale — larger than the 9.0 µs DRAM roofline on its
+own); reads alone −2.5, writes alone −3.2, γ −0.25 µs. Zones: the x reads landed 3–8 µs (top grid rows last), the first
+output store came at 10.4 µs and the stores ran until ~20 µs; in the real op the stores ran 17→25.5 µs (≈ 286 GB/s,
+east columns last), after the exchange.
+
+What changed (all knobs single-source in the descriptor, each with a measurement-only env override):
+- **reader prologue ahead of the x reads** (unconditional): on Blackhole `write_zeros_l1_barrier()` is a full
+  `noc_async_read_barrier`, so the reduce-scaler fill behind the reads waited ~3 µs for every read in flight before the
+  next wave's reads could issue.
+- **`READ_LOOKAHEAD_WAVES` 1 → 0**: each wave's reads go out once the previous wave landed, so DRAM serves the grid wave
+  by wave and wave 0 can publish early (lamp L2-adjacent; 1: op +2.5 µs, 2: +2.0 µs at 640×1792).
+- **`COMBINE_LAG` (new knob) 1 → 0**: the reader contributes / gathers / publishes wave w right after wave w landed
+  (Phase 0 waited for wave w+1's reads), and compute's chip sum follows its square directly. No new deadlock edge: a
+  member's contribution depends only on its own read + square, the owner's gather only on members' contributions,
+  publish only on the owner's own chip sum.
+- **NoC swap, `NOC_SWAP_COLUMNS = 3`** (base Perf 2 `dram_noc_balance`, lamp L10, re-measured here): the 3 westmost
+  logical worker columns (next to DRAM column 0) run the reader on NoC1 and the writer on NoC0 (second reader / writer
+  descriptor pair, same sources, `_split_noc_swapped`); interleaved inputs only. 1 / 2 / 3 / 4 / 5 columns: stub 19.1 /
+  18.3 / 17.7 / 17.8 / 18.7 µs.
+
+Measured nulls (kept out of the tree, with the measurement that bounds them):
+- **γ multicast (G-MC)**: the γ ablation is flat at the new defaults (17.75 vs 17.80 µs): the γ prefixes (≤ 213 KB) land
+  in the first ~1.2 µs, before x saturates DRAM. A multicast cannot beat removing the reads entirely; the G-MC deferral
+  stands, now with a measured reason.
+- **srcB-hold passes (lamp L11)**: every eltwise chain stubbed (`DRMS_ABLATE=chains`) moves the stub 17.8 → 16.2 µs but
+  the op is flat (21.5 → 21.7; 2048×1280 33.5 → 33.1): the op waits on the exchange, not on compute. The base's own
+  carve-outs also select the chain here (3 tile-rows < `HOLD_GAMMA_MIN_ROWS` = 4 under fp32 DEST; inv hold measured no
+  win on the per-row-pushed interleaved path).
+- **idle cores / wider slice (lamps L1 / L12)**: the 8 idle workers cannot lower `rows_max = 3` at `G_w = 14`; the
+  nearest split that uses them, S = 6 (`G_w` 10 × `G_h` 10, 2 rows, 2 waves, 100 cores), improves the stub (17.2 µs)
+  but loses on the op (26.1 / 24.8 vs 23.2 / 23.9 µs, 16 traced calls): one wave fewer to hide the exchange. S = 4 kept.
+- **per-wave γ** (`GAMMA_WAVE` forced) and **1 / 2 waves**: flat on the stub before the other levers (the stub was then
+  "all reads → chain → all writes" whatever the schedule).
+
+What binds now (640×1792): op 21.4 µs, stub 17.8 µs, all payloads stubbed 12.6 µs. The op is bound by the exchange
+chain (Refinement 3): collect (1.35 µs per owned wave), fold (0.7), inv all-gather (1.0) after the records land; the
+local DRAM traffic now adds ~5 µs on top of the 12.6 µs chain floor instead of ~8.
+The x re-read rung's deadlock note (Refinement 1a) assumed the lagged order; with `COMBINE_LAG = 0` the reader no longer
+pushes wave w+1 before servicing wave w, and the rung keeps `COMBINE_DEPTH` anyway (harmless).

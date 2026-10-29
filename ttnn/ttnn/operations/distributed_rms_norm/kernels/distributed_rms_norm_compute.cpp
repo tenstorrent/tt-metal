@@ -13,8 +13,9 @@
 //                          cb_chip_partial (D1: the chip partial itself). Sharded W-pad: the base's partial-scaler
 //                          mask on the core holding tile Wt-1.
 //   chip_sum_wave (owner)  reduce<SUM, REDUCE_COL, AccumulateViaAdd, Skip> over the G_W gathered partials ->
-//                          cb_chip_partial — lagged one wave behind the square so the gather of wave w lands while
-//                          wave w+1 is squared.
+//                          cb_chip_partial — COMBINE_LAG waves behind the square (0 since Refinement 2: the reader
+//                          contributes / publishes wave w right after it landed; 1 = Phase 0, the gather of wave w
+//                          landing while wave w+1 is squared).
 // scale_by_gamma_block     x * γ (Row broadcast) for the whole block -> cb_x_gamma (the stall shadow of the exchange)
 // Phase B, per wave w:
 //   cross_device_finalize  (owner) fold the G devices' records of each owned row in group-position order — SFPU fp32

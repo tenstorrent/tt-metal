@@ -146,3 +146,44 @@ mix-up), `test_distributed_rms_norm_perf.py` (perf driver); both run with `--no-
   Measured landing ≈ 540 KB per bank at 131072 rows, independent of the wave count (it holds every row's records).
 - Tests added: 4 `reread-*` rungs in `test_distributed_rms_norm_l1_fallbacks.py`;
   `test_distributed_rms_norm_long_prefill.py` (opt-in host-memory-light 131072-row twin of the golden cell).
+
+## Refinement 2 — LOCAL: bring the per-chip local work toward the DRAM roofline on the perf-flagged case
+- Date: 2026-10-29
+- What was done (perf only; SUPPORTED unchanged). Classified first (640×1792, traced slowest chip, exchange stubbed,
+  payload ablations with every handshake kept): stub 19.9 µs; reads + writes + γ stubbed 11.6 µs (the on-chip chain
+  alone); reads −2.5, writes −3.2, γ −0.25 µs. Reads landed 3–8 µs, stores ran from 10.4 µs to ~20 µs (op: 17→25.5 µs,
+  ≈ 286 GB/s, east columns last). Levers:
+  - reader prologue moved ahead of the x reads — on Blackhole `write_zeros_l1_barrier()` is a full read barrier, so
+    the scaler fill behind the reads stalled the next wave's reads ~3 µs;
+  - `READ_LOOKAHEAD_WAVES` 1 → 0 (wave-ordered DRAM reads; wave 0 lands and publishes first);
+  - `COMBINE_LAG` (new knob) 1 → 0: a wave is contributed / gathered / published right after it landed instead of after
+    the next wave's reads; compute's chip sum follows its square;
+  - NoC swap of the 3 westmost logical worker columns (base Perf 2 `dram_noc_balance`, re-measured: 1–5 columns →
+    stub 19.1 / 18.3 / 17.7 / 17.8 / 18.7 µs), interleaved inputs only.
+  Measured nulls (not built, bounded by ablation): γ multicast (γ ablation flat, 17.75 vs 17.80 µs); srcB-hold (all
+  chains stubbed: op flat 21.5 → 21.7 µs — the op waits on the exchange); idle cores / S = 6 split (stub 17.2 but op
+  26.1 / 24.8 vs 23.2 / 23.9 µs); per-wave γ, 1 / 2 waves (flat).
+  Reused: the existing wave loop, CT/RT layout and kernel sources (one CT arg added to reader and compute; the swapped
+  columns reuse the same sources through a second descriptor pair). Added: `COMBINE_LAG`, `NOC_SWAP_COLUMNS`,
+  `noc_swap_cores` / `_split_noc_swapped`, measurement-only switches (`DRMS_ABLATE=reads,writes,gamma,chains`,
+  `DRMS_LOOKAHEAD`, `DRMS_COMBINE_LAG`, `DRMS_NOC_SWAP`, `DRMS_WAVES`, `DRMS_GAMMA_MODE`, `DRMS_SLICE`).
+- Perf (traced slowest chip, 1×4 ring, Ring, 2 links, bf16 / TILE bf16 γ, HiFi4 + fp32 acc; Phase 0 baseline →
+  now): 640×1792 op 25.86 → 21.3–21.5 µs, exchange stubbed 19.89 → 17.7–17.8 µs; 2048×1280 op 41.83 → 32.8 µs, stub
+  32.40 → 28.6 µs; 32×1792 op 13.07 → 12.5–13.0 µs, stub 9.64 → 9.9 µs (same-session A/B: +0.12 µs stub from the swap;
+  op no worse). Guard set (same-session A/B against the Phase 0 knobs, `test_distributed_rms_norm_perf_guard.py`, op
+  traced slowest): D3 TILE γ 26.3 → 21.6, D3 RM γ 25.5 → 21.6, D3 no γ 25.1 → 20.4, 2048×1280 44.8 → 33.2, streamed-γ
+  chunk rung 27.6 → 24.4, x re-read rung 29.6 → 25.7; D1, D1-HS, D3-WS (± γ), the pass rung and decode within noise
+  across repeats.
+- Accuracy achieved: unchanged arithmetic (only transfer order / NoC change); guard cases PCC ≥ 0.99999 (bf16, fp32
+  acc) on 640×1792, 2048×1280, 32×1792, 256×96, HEIGHT 1024×512, WIDTH 64×2048, forced pass / chunk / re-read rungs.
+- Golden test progress: `test_op_loose` + `test_regression` + `test_ring_mock` 39/39; `test_op` slices (bf16 RM-γ
+  cluster_axis 0 Linear 1 link, all shapes × placements: 78 passed / 78 invalid-skipped; bf8b no-γ non-aligned: 24
+  passed / 120 skipped). Unit: acceptance + L1-fallback rungs 218 passed, 1 skipped.
+- Issues encountered: the Blackhole NoC-zero barrier being a full read barrier (above). The op metric (traced slowest
+  chip) carries ±1–2 µs of launch-skew noise per run; decisions were taken on repeated / 16-call runs.
+- What binds now / next: op 21.4 µs vs stub 17.8 vs all-payloads-stubbed 12.6 µs. The op is bound by the exchange
+  chain after the records land (collect 1.35 µs per owned wave, fold 0.7, inv all-gather 1.0) — Refinement 3's compact
+  records / reader-side fold; the local DRAM traffic now adds ~5 µs over the chain floor (was ~8).
+- Tests added: `test_distributed_rms_norm_perf_guard.py` (config-spanning same-session A/B, correctness-checked),
+  `_zone_report.py` (zone table off `profile_log_device.csv`); `test_distributed_rms_norm_perf_traced.py` gained
+  `DRMS_PT_EXTRA_ABLATE`.

@@ -6,9 +6,10 @@
 // later pass writes into other members' cb_gather regions / cb_inv_rms slots, a row-group barrier (SEM_PASS) makes
 // sure every member's compute is done with the previous pass; SEM_GATHER fields are cleared at that barrier.
 //
-// Prologue: reduce scaler (1.0; [full, partial] on the sharded W-pad mask path), cb_stats pages zeroed once (only
-// column 0 is ever rewritten).
-// Phase A, per wave w (look-ahead 1: the reads of wave w+1 are issued before wave w is serviced):
+// Prologue (ahead of the x reads: on Blackhole the NoC zero fill's barrier waits for every read in flight): reduce
+// scaler (1.0; [full, partial] on the sharded W-pad mask path); cb_stats pages zeroed once after Phase A (only column 0
+// is ever rewritten).
+// Phase A, per wave w (COMBINE_LAG 0: wave w is serviced right after it landed; 1 (Phase 0): after wave w+1 landed):
 //   load                 interleaved: wave-ordered reads, 1 + LOOKAHEAD waves in flight (transaction id w + 1; x is
 //                        resident), each wave pushed once its own reads landed; pad tiles [V, WS) and the W-pad columns
 //                        of tile Wt-1 zeroed; sharded: the resident shard is pushed once (zero-copy)

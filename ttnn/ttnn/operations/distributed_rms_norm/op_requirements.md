@@ -139,7 +139,7 @@ itself was OOM-killed on the host in this session (its torch reference over 2 ×
 `reread-*` cases (D3 / W-pad RM γ streamed / passes / no γ / SQ 2 + x_depth 1). Regression net: acceptance +
 L1-fallback tests 218 passed, golden DeepSeek prefill 128…32768 + regression 17 passed. Lever (b) not needed.
 
-### [ ] Refinement 2 — LOCAL: bring the per-chip local work toward the DRAM roofline on the perf-flagged case
+### [x] Refinement 2 — LOCAL: bring the per-chip local work toward the DRAM roofline on the perf-flagged case
 
 **Type**: perf
 
@@ -164,6 +164,15 @@ variant (`test_distributed_rms_norm_perf_traced.py`) — moving it toward the 11
 case holds; the golden suite is green; and no regression across the config-spanning guard set (one representative
 per regime D1 / D3 / D1-HS / D3-WS × γ TILE / ROW_MAJOR / none × the Refinement 1 fallback paths, plus the decode
 and 2048×1280 perf cases).
+
+**Outcome** (implementer): 640×1792 traced slowest op 25.86 → 21.3–21.5 µs, exchange stubbed 19.89 → 17.7–17.8 µs
+(2048×1280 op 41.83 → 32.8, stub 32.40 → 28.6; decode op 13.07 → 12.5–13.0). Levers kept: reader prologue ahead of the
+x reads (the Blackhole NoC-zero barrier is a full read barrier), wave-ordered reads (`READ_LOOKAHEAD_WAVES = 0`), no
+combine lag (`COMBINE_LAG = 0`), NoC swap of the 3 west columns (`NOC_SWAP_COLUMNS = 3`). Measured nulls: γ multicast
+(γ ablation flat), srcB-hold (all chains stubbed: op flat), idle cores / S = 6 (op worse), per-wave γ / fewer waves
+(flat). Bottleneck now: the post-landing exchange chain (collect 1.35 + fold 0.7 + inv all-gather 1.0 µs per owned
+wave; all payloads stubbed = 12.6 µs floor, above the 9.0 µs roofline) — Refinement 3's compact-record / reader-fold
+levers are the next step; not attempted here because they are that refinement's scope.
 
 **Verifier notes**: filed ahead of the cross-device perf work by the measured breakdown (local 19.9 µs of 25.9 µs,
 2.2× its roofline, with the base op's own perf mechanisms unported); Refinement 3's overlap is then designed and

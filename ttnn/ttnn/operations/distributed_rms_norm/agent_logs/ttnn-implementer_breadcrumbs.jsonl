@@ -4,3 +4,4 @@
 {"event":"test_run","status":"pass","tests":"unit dir 214 passed; golden test_op 6 chunks 0 failures; loose+regression+ring_mock 39/39; translated 278/279","note":"Refinement 1 partial: 131072 prefill -> R1a","ts":"2026-10-29T02:09:38+00:00"}
 {"event":"test_run","status":"pass","test":"test_distributed_rms_norm_long_prefill.py (131072x3584 bf16 RM gamma dest16) + l1_fallbacks -k reread (4)","note":"golden translated 131072 cell OOM-killed on host (torch reference ~95GB, box had ~100GB free)","ts":"2026-10-29T02:49:42+00:00"}
 {"event":"test_run","status":"pass","test":"test_distributed_rms_norm.py + l1_fallbacks","result":"218 passed 1 skipped","note":"R2 levers: prologue ahead of reads, LOOKAHEAD 0, COMBINE_LAG 0, NOC_SWAP 3","ts":"2026-10-29T03:38:20+00:00"}
+{"event":"test_run","status":"pass","test":"perf_guard + golden slices","result":"guard 12 cfgs pcc>=0.99999; golden loose/regression/ring 39/39; test_op slices 102 passed","ts":"2026-10-29T03:49:13+00:00"}

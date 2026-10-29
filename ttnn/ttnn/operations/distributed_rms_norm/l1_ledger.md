@@ -156,3 +156,10 @@ crossing each in every rung (passes keep x resident per pass block; no re-read).
 Data-movement budget on this rung: **x crosses DRAM twice** (Phase A square, Phase B scale), out once, γ as before.
 Taken only when no other rung fits (target cell: 131072 × 3584 per device, bf16, RM γ, 16-bit DEST: the landing
 scratch of ~540 KB per bank leaves ~918 KB, and one wave of resident x needs ≥ 720 KB on top of the other CBs).
+
+## Refinement 2 — no CB change
+
+The LOCAL perf levers (reader prologue position, `READ_LOOKAHEAD_WAVES = 0`, `COMBINE_LAG = 0`, `NOC_SWAP_COLUMNS = 3`)
+change only the order and the NoC of existing transfers: no CB is added, resized or removed, `footprint()` is unchanged,
+and the data-movement budget above is unchanged (x and out cross DRAM once, γ once per row-group; the swapped columns
+move the same bytes on the other NoC).
