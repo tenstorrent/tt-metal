@@ -2464,12 +2464,15 @@ targets:
               decode_t/s/u: 23.3354
               decode_t/s: 23.3354
               prefill_t/s: 876.3
-              prefill_time_to_token: 0.1708
+              # Batch-1 128-token TTFT is noisy on every T3K perf host, not tied to one runner:
+              # 114.5-190.6 ms over 14 scheduled nights (10-15..10-28). Centred at the midpoint with +/-30%.
+              prefill_time_to_token: 0.152
               compile_decode: 0.0452
               # Widened to +/-30% (default is +/-15%): prefill_t/s swings across runs
               # (749.6 prior calibration vs 876.3 run 105412280076, ~15-17%). Observed
               # within +/-30% across runs (PR #59424, pt.9).
               prefill_t_s_tolerance: 0.30
+              prefill_time_to_token_tolerance: 0.30
             accuracy: {}
             owner_id: U08H31YMN4Q # Sanjay Sanjay
             team: models

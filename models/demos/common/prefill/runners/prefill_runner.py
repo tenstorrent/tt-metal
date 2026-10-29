@@ -298,6 +298,14 @@ def _socket_next(h2d_service, sockets, n_mtp: int = 0) -> tuple:
     return tokens, overhang, _decode_metadata(sockets.metadata)
 
 
+# Fabric lease groups (D2DStreamConfig::fabric_link_group). A rank's two inbound services (activations,
+# indexer indices) take turns on the fabric, and so do its two outbound ones (see _d2d_recv_indices and
+# _d2d_send_indices), so each pair may share routers. An inbound and an outbound service lease
+# independently and can be connected at once, so the two groups never share one.
+D2D_INBOUND_LINK_GROUP = "d2d-inbound"
+D2D_OUTBOUND_LINK_GROUP = "d2d-outbound"
+
+
 def build_d2d_pipeline_endpoints(
     mesh_device,
     rank: int,
@@ -328,13 +336,21 @@ def build_d2d_pipeline_endpoints(
     if rank > 0:
         logger.info(f"[pp rank {rank}] [d2d] creating inbound receiver from rank {rank - 1}")
         inbound = ttnn.D2DStreamService.create_receiver(
-            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common(inbound_planes)
+            receiver_mesh=mesh_device,
+            sender_rank=rank - 1,
+            receiver_rank=rank,
+            fabric_link_group=D2D_INBOUND_LINK_GROUP,
+            **_common(inbound_planes),
         )
     outbound = None
     if rank < num_ranks - 1:
         logger.info(f"[pp rank {rank}] [d2d] creating outbound sender to rank {rank + 1}")
         outbound = ttnn.D2DStreamService.create_sender(
-            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common(outbound_planes)
+            sender_mesh=mesh_device,
+            sender_rank=rank,
+            receiver_rank=rank + 1,
+            fabric_link_group=D2D_OUTBOUND_LINK_GROUP,
+            **_common(outbound_planes),
         )
     logger.info(
         f"[pp rank {rank}] [d2d] endpoints up (inbound={'yes' if inbound else 'no'}/{inbound_planes}p "
@@ -361,13 +377,21 @@ def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound
     if inbound:
         logger.info(f"[pp rank {rank}] [d2d-idx] creating inbound index receiver from rank {rank - 1}")
         idx_in = ttnn.D2DStreamService.create_receiver(
-            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common()
+            receiver_mesh=mesh_device,
+            sender_rank=rank - 1,
+            receiver_rank=rank,
+            fabric_link_group=D2D_INBOUND_LINK_GROUP,
+            **_common(),
         )
     idx_out = None
     if outbound:
         logger.info(f"[pp rank {rank}] [d2d-idx] creating outbound index sender to rank {rank + 1}")
         idx_out = ttnn.D2DStreamService.create_sender(
-            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common()
+            sender_mesh=mesh_device,
+            sender_rank=rank,
+            receiver_rank=rank + 1,
+            fabric_link_group=D2D_OUTBOUND_LINK_GROUP,
+            **_common(),
         )
     logger.info(
         f"[pp rank {rank}] [d2d-idx] endpoints up (inbound={'yes' if idx_in else 'no'} "

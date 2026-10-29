@@ -38,10 +38,10 @@ inline void calculate_sfpu_mul_u16_to_u32_body() {
     TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG6, 0);
     TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG7, 0);
     // cast back
-    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG4, p_sfpu::LREG4, 6);
-    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG5, p_sfpu::LREG5, 6);
-    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG6, p_sfpu::LREG6, 6);
-    TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG7, p_sfpu::LREG7, 6);
+    TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+    TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+    TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG6, p_sfpu::LREG6, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+    TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG7, p_sfpu::LREG7, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
     // shift back
     TTI_SFPSHFT(8, 0, p_sfpu::LREG5, 1);
     TTI_SFPSHFT(8, 0, p_sfpu::LREG6, 1);
@@ -99,9 +99,9 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
         TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
 	// Convert a/gcd(a, b) to int32
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, 6);
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
 
-	// Finally, compute lcm(a, b) = a/gcd(a, b) * b
+        // Finally, compute lcm(a, b) = a/gcd(a, b) * b
         calculate_sfpu_mul_u16_to_u32_body();
 
         TT_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, 3, dst_index_out * dst_tile_size);

@@ -33,6 +33,9 @@ class GLM53Config:
     # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced only). Every
     # config that does not name it runs the routed expert then combine as separate ops.
     ROUTED_EXPERT_COMBINE_OVERLAP = True
+    # Opts this model into TtMoe's fabric2d transport (dispatch_fabric2d / combine_fabric2d) wherever the mesh can
+    # run it (Blackhole, axis 0 wired into a ring). Every other config runs dispatch and combine.
+    MOE_FABRIC2D_TRANSPORT = True
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration
