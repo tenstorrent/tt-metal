@@ -17,6 +17,7 @@ at each context (positions T - 1; the KV pages hold the prefill's or zeros, the 
 usage: python -m qwen36_resident.tests.rows_real --corpus corpus_ids.pt [--prompt-len 2000] [--steps 32]
            [--contexts 128,4096,32000] [--out rows_real.json]
 """
+
 import argparse
 import faulthandler
 import gc
@@ -166,7 +167,7 @@ def main():
             ttnn.synchronize_device(mesh)
             return (time.time() - t0) / a.time_steps * 1e3
 
-        for T in contexts:
+        for T in contexts if a.time_steps else []:
             for act in (1, 8):
                 x0 = torch.zeros(B, 5120)
                 for s in range(act):
@@ -202,20 +203,26 @@ def main():
         pp.reset()
         pp.run(prompt_A[: P - 1])
         pp.handoff(m1, P - 1)
-        toks1, tok, p = [], int(prompt_A[-1]), P - 1
-        for _ in range(a.steps + 1):
-            m1.step(m1.token_state(emb[tok].float(), p))
+        # teacher-forced on the rows run's own tokens: per step, B=1's argmax against the rows token, and at a
+        # disagreement each side's margin between its own pick and the other's
+        inputs = [int(prompt_A[-1])] + tok_alone[:-1]
+        agree, gaps = 0, []
+        for k, tok in enumerate(inputs):
+            m1.step(m1.token_state(emb[tok].float(), P - 1 + k))
             ttnn.synchronize_device(mesh)
-            tok, p = int(m1.logits()[:, : d.vocab_chip].reshape(-1)[:vocab].argmax()), p + 1
-            toks1.append(tok)
-        agree = sum(x == y for x, y in zip(toks1, tok_alone))
-        first_diff = next((i for i, (x, y) in enumerate(zip(toks1, tok_alone)) if x != y), None)
+            l1 = m1.logits()[:, : d.vocab_chip].reshape(-1)[:vocab].float()
+            r, b = tok_alone[k], int(l1.argmax())
+            agree += r == b
+            if r != b:
+                lr = lg_alone[k]
+                gaps.append(dict(step=k, rows=r, b1=b, b1_gap=float(l1[b] - l1[r]), rows_gap=float(lr[r] - lr[b])))
         print(
-            f"rows (B=8) vs B=1 greedy tokens: {agree}/{len(toks1)} equal, first difference at step {first_diff}",
+            f"rows (B=8) vs B=1, teacher-forced on the rows tokens: top-1 equal at {agree}/{len(inputs)} steps; "
+            f"disagreements (margins on either side) {gaps}",
             flush=True,
         )
-        out["rows_vs_b1_tokens"] = dict(equal=agree, of=len(toks1), first_diff=first_diff)
-        for T in contexts:
+        out["rows_vs_b1_teacher_forced"] = dict(equal=agree, of=len(inputs), disagreements=gaps)
+        for T in contexts if a.time_steps else []:
             out["step_ms"][f"B1, T={T}"] = ms = time_replays(m1, m1.token_state(emb[int(ids[T - 1])].float(), T - 1))
             phase(f"B=1 build, T={T}: step {ms:.3f} ms")
         m1.release_trace()
