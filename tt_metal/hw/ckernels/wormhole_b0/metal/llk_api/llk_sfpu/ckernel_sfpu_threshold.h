@@ -11,7 +11,7 @@
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpu/ckernel_sfpu_row_pair.h"
+#include "ckernel_sfpu_row_pair.h"
 
 namespace ckernel::sfpu {
 

@@ -8,12 +8,12 @@
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpu/ckernel_sfpu_row_pair.h"
+#include "ckernel_sfpu_row_pair.h"
 
 namespace ckernel::sfpu {
 
 inline void hardshrink_init() {
-    // The two-row body advances Dest from its second store (see sfpu/ckernel_sfpu_row_pair.h).
+    // The two-row body advances Dest from its second store (see ckernel_sfpu_row_pair.h).
     _init_sfpu_row_pair_();
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
@@ -36,7 +36,7 @@ inline void calculate_hardshrink(std::uint32_t param0) {
     // lambda is passed as full FP32, so both input and lambda undergo the same
     // FP32→FP19b truncation, keeping comparisons consistent.
     sfpi::vFloat lambda = Converter::as_float(param0);
-    // Two rows per body: the second row's store also advances Dest (see sfpu/ckernel_sfpu_row_pair.h).
+    // Two rows per body: the second row's store also advances Dest (see ckernel_sfpu_row_pair.h).
     // The SFPMAD that forms each difference has a 2-cycle result shadow, and the compiler pads a
     // one-row body with an SFPNOP before the SFPSETCC; with two independent rows it interleaves the
     // second row's setsgn/MAD into that shadow instead. Each row runs the same operations as a
@@ -60,7 +60,7 @@ inline void calculate_hardshrink(std::uint32_t param0) {
         v_if(d0 >= 0.0f) { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
         // Row 1's store also advances Dest past both rows, through the ADDR_MOD_6 that hardshrink_init
-        // programs (see sfpu/ckernel_sfpu_row_pair.h).
+        // programs (see ckernel_sfpu_row_pair.h).
         v_if(d1 >= 0.0f) { _sfpu_row_pair_store_second_(0.0f); }
         v_endif;
         _sfpu_row_pair_end_();
