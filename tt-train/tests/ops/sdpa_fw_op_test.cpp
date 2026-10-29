@@ -1758,6 +1758,18 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
     EXPECT_EQ(picked_few.Sq_chunk_t, 1U);
     EXPECT_GE(num_work_units(few_seqs, picked_few, kCores), kCores);
     EXPECT_EQ(picked_few.Sk_chunk_t, picked.Sk_chunk_t) << "the K/V step does not depend on the core count";
+
+    // An odd chunk count cannot pair: S=384 (12 tiles) gives three four-row chunks, and main paired every
+    // even tile count. With 64 sequences the pick shrinks to two-row chunks (six per sequence, 192 pairs for
+    // 130 cores) instead of keeping four-row chunks on an unbalanced contiguous split.
+    SDPAForwardShape odd_chunks = tinyllama;
+    odd_chunks.batch = 2U;
+    odd_chunks.St = 12U;
+    const auto picked_odd = resolve_chunks({}, odd_chunks, kBudget, kCores);
+    EXPECT_EQ(picked_odd.Sq_chunk_t, 2U);
+    EXPECT_GE(num_causal_pairs(odd_chunks, picked_odd), kCores);
+    EXPECT_EQ(num_work_units(odd_chunks, picked_odd, kCores), num_causal_pairs(odd_chunks, picked_odd))
+        << "the split must hand out pairs";
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
