@@ -248,6 +248,15 @@ def pytest_addoption(parser):
         "is not written fails.",
     )
     parser.addoption(
+        "--ulp-variants",
+        default=None,
+        metavar="PATH",
+        help="With --compile-producer: write one JSON record per SFPU ULP sweep cell "
+        "built, naming its node, its op and key, and its build directory (created and "
+        "truncated at session start). Read by `python -m helpers.ulp_affected select`, "
+        "which picks the cells a change can move.",
+    )
+    parser.addoption(
         "--ulp-emit",
         action="store_true",
         help="Re-measure rather than gate: the exhaustive unary sweep writes what it "
@@ -538,6 +547,15 @@ def pytest_configure(config):
     if config.getoption("--ulp-measure"):
         # Set in the workers too; only the file preparation below is master-only.
         utils_module._ULP_MEASURE_PATH = config.getoption("--ulp-measure")
+    if config.getoption("--ulp-variants"):
+        from . import ulp_affected
+
+        if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+            # A build is only recorded where it is made; a run that also measures would
+            # pay the device time for a list it does not need.
+            raise pytest.UsageError("--ulp-variants needs --compile-producer")
+        # Set in the workers too; only the file preparation below is master-only.
+        ulp_affected.VARIANTS_PATH = Path(config.getoption("--ulp-variants"))
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
@@ -553,6 +571,13 @@ def pytest_configure(config):
             raise pytest.UsageError(
                 f"--ulp-measure: cannot prepare the file: {exc}"
             ) from exc
+        if config.getoption("--ulp-variants"):
+            try:
+                ulp_affected.prepare_variants_file()
+            except OSError as exc:
+                raise pytest.UsageError(
+                    f"--ulp-variants: cannot prepare the file: {exc}"
+                ) from exc
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):

@@ -74,6 +74,9 @@ env:
   #                                  leg holds a WH or BH card for ~10 minutes, too
   #                                  long for a PR. It runs nightly; dispatch it to
   #                                  run this file on a branch.
+  #   llk_sfpu_ulp_pr_gate_tests.yaml runs only through llk-sfpu-ulp-pr-check.yaml:
+  #                                  its cmd reads the cells and their builds that the
+  #                                  workflow's CPU job picks, and has none without it.
   UNSUPPORTED_YAMLS: >-
     vllm_model_tests.yaml
     ttnn_sweep_tests.yaml
@@ -83,6 +86,7 @@ env:
     llk_sfpu_report_tests.yaml
     llk_hardware_free_tests.yaml
     llk_sfpu_accuracy_tests.yaml
+    llk_sfpu_ulp_pr_gate_tests.yaml
 
   # TEMPORARY. Unlike UNSUPPORTED_YAMLS, the gate can dispatch these fine -- this is
   # not a compatibility exemption, and an edit to one of these yamls still scopes

@@ -181,11 +181,22 @@ fp16 subnormals the pack does not reproduce.
 - **Raising a budget is a PR of its own.** PR Gate's `llk-sfpu-ulp-budget-guard` fails
   a change that loosens a gate in either table (a raised figure, a widened floor, a gate
   demoted or deleted, a widened `atol`/`rtol`, or a tolerance row's `measured` or
-  `nonfinite` raised or dropped, since the nightly headroom check holds the cell to
+  `nonfinite` raised or dropped, since the headroom check holds the cell to
   them) unless the change touches nothing but the tables and carries the
   `ulp-budget-raise-approved` label; after adding the label, re-run the job. Lowering a
   budget is never blocked, and neither is a cell no row covered before: a new op's
   block, or a cell enrolled with its kernel, can land in the same PR as the kernel.
+- **A change that moves a Wormhole cell is swept on the PR.** PR Gate's
+  `llk-sfpu-ulp-pr-check` builds every sweep cell at the change and at its first parent,
+  without a card, and runs on a Wormhole card each cell whose kernel builds differently
+  (what the card loads: the ELFs' allocated sections), that the parent does not build,
+  or whose row changed. A gated cell over its figure, or over an entry of its `domains`
+  list, fails the PR; so does a tolerance cell past its recorded figures. Blackhole is
+  swept nightly only, until llk's PR Gate allowance on that card has room. A change to
+  the golden or the harness alone builds no kernel differently: the nightly sweep is
+  what judges it. To see what a change picks, build both revisions with
+  `--compile-producer` into their own `RUNNER_TEMP`, the change's with
+  `--ulp-variants=built.jsonl`, and run `python -m helpers.ulp_affected select`.
 - **Most specific key wins.** Key fields are `input`, `output`, `approx`, `dest` and
   `arch`, all optional; two rows matching one variant equally specifically are refused.
 - **A row holds for the configuration it was measured in**: `FAST_MODE(No)` and
@@ -249,8 +260,10 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
 - **The sweep is marked `accuracy`**, which every LLK workflow deselects; `llk-e2e`
   runs it by path every night on a Wormhole and a Blackhole card
   (`llk-sfpu-ulp-sweep.yaml`, matrix `tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml`)
-  and reports to the LLK CI status channel. Dispatch that workflow to sweep a branch
-  that changes an SFPU kernel or the SFPI pin. Run it locally by name or `-m accuracy`.
+  and reports to the LLK CI status channel. PR Gate runs the Wormhole cells a change can
+  move (`llk-sfpu-ulp-pr-check.yaml`, matrix
+  `tests/pipeline_reorg/llk_sfpu_ulp_pr_gate_tests.yaml`). Dispatch the nightly workflow
+  to sweep every cell of a branch on both cards. Run it locally by name or `-m accuracy`.
 - **Both runs take the same op set**: every unary op with a block in the table, whatever
   its rows say. `--ulp-emit` changes what is written, not what is collected.
 - **A plain gate run does not judge tolerance cells**: it skips them with the measured
@@ -286,6 +299,7 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
 | `python_tests/helpers/sfpu_accuracy_budget.py` | how a row is resolved |
 | `python_tests/helpers/ulp_domains.py` | the `domains` list and the rule that draws it; `Problem` and `TableError` |
 | `python_tests/helpers/ulp_budget_diff.py` | the PR guard and the headroom report |
+| `python_tests/helpers/ulp_affected.py` | the cells a change can move, for PR Gate's sweep |
 
 ## Notes on the table
 

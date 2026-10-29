@@ -95,6 +95,7 @@ tests/pipeline_reorg/llk_pr_gate_tests.yaml @amokanTT @fvranicTT @ldjurovicTT @n
 tests/pipeline_reorg/llk_hardware_free_tests.yaml @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT @atatuzunerTT
 .github/workflows/llk-sfpu-ulp-*.yaml @ldjurovicTT @ndivnicTT @fvranicTT @nvelickovicTT @tenstorrent/metalium-developers-infra
 tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml @ldjurovicTT @ndivnicTT @fvranicTT @nvelickovicTT @tenstorrent/metalium-developers-infra
+tests/pipeline_reorg/llk_sfpu_ulp_pr_gate_tests.yaml @ldjurovicTT @ndivnicTT @fvranicTT @nvelickovicTT @tenstorrent/metalium-developers-infra
 tests/scripts/ @tenstorrent/metalium-developers-infra
 tests/scripts/quasar @kstevensTT @fvranicTT @tenstorrent/metalium-developers-infra
 tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_tune.py @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance @tenstorrent/metalium-developers-infra

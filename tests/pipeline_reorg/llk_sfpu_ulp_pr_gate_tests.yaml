@@ -1,0 +1,50 @@
+# LLK SFPU accuracy in PR Gate: the exhaustive ULP sweep over the cells a change can
+# move, held against tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget_wh.yaml.
+#
+# Run only by .github/workflows/llk-sfpu-ulp-pr-check.yaml, which picks the cells (those
+# whose kernel builds differently from the change's first parent, or whose row in the
+# table changed), builds them, and hands this cmd the builds in $RUNNER_TEMP/tt-llk-build
+# and the pytest node ids in $ULP_SWEEP_NODES. The cmd runs them from those ELFs
+# (--compile-consumer) and fails if either check does:
+#   * pytest fails a gated cell whose worst lane, over the cell or any entry of its
+#     `domains` list, is over its figure;
+#   * `helpers.ulp_budget_diff headroom` fails a tolerance cell past the measurement or
+#     the non-finite lane count its row records. Its report is the job summary.
+#
+# Wormhole only, charged to llk's pr_gate bucket on wh_n150_civ2 beside
+# llk_smoke_wormhole's two 15-minute groups. Blackhole's pr_gate bucket is full; the
+# nightly sweep (llk_sfpu_accuracy_tests.yaml) covers that card. Every cell from
+# prebuilt ELFs took 1 min 53 s on a Wormhole n300 host (2026-10-29); one op's cells
+# take about 10 s.
+#
+# Not run by verify-changed-tests (UNSUPPORTED_YAMLS): the cmd needs the workflow's node
+# list and builds. The JUnit file is not named pytest-report-* for the reason given in
+# llk_sfpu_accuracy_tests.yaml.
+
+- name: llk_sfpu_ulp_pr_gate_wormhole
+  split_group: 1
+  team: llk
+  budget_type: pr_gate
+  coverage: false
+  cmd: |
+    set -uo pipefail
+    cd tests/python_tests
+    status=0
+    pytest -q --override-ini=log_cli=false -n auto --dist=worksteal \
+      --compile-consumer \
+      --ulp-measure=ulp_measurements.jsonl \
+      --timeout=120 \
+      --junitxml=ulp_sweep_junit.xml \
+      "@$ULP_SWEEP_NODES" || status=$?
+    python3 -m helpers.ulp_budget_diff headroom \
+      --table helpers/sfpu_accuracy_budget_wh.yaml \
+      --measured ulp_measurements.jsonl \
+      --out ulp_headroom_report.md || status=$?
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -s ulp_headroom_report.md ]]; then
+      cat ulp_headroom_report.md >> "$GITHUB_STEP_SUMMARY"
+    fi
+    exit "$status"
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  owner_id: U09UC143684 # Nemanja Divnic

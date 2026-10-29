@@ -11,7 +11,7 @@ name: "LLK SFPU ULP budget guard"
 # It fails a change that loosens a gate in a table -- a raised figure, a widened
 # `near_zero_atol`, a row demoted to `metric: tolerance`, a gated row deleted, a
 # tolerance row's declared `atol`/`rtol` widened, or a tolerance row's recorded
-# measurement or non-finite count raised or dropped (the nightly headroom check holds
+# measurement or non-finite count raised or dropped (the headroom check holds
 # the cell to those) -- unless the change is a budget raise PR: it touches nothing but
 # the tables, and carries the `ulp-budget-raise-approved` label. A raise therefore never
 # rides along with the kernel or golden change that needed it, and someone opts in to
@@ -21,7 +21,8 @@ name: "LLK SFPU ULP budget guard"
 # PR Gate does not run on `labeled`: after adding the label, re-run this job ("Re-run
 # failed jobs" on the PR Gate run). The label is read from the API when the job runs.
 #
-# The sweep that holds the hardware to the tables is llk-sfpu-ulp-sweep.yaml, nightly.
+# The sweep that holds the hardware to the tables is llk-sfpu-ulp-pr-check.yaml in PR
+# Gate (Wormhole, the cells a change can move), and llk-sfpu-ulp-sweep.yaml nightly.
 
 on:
   workflow_call:

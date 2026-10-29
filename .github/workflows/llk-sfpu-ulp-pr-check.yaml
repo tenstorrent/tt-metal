@@ -1,0 +1,276 @@
+name: "LLK SFPU ULP PR check"
+
+# Called from PR Gate (pr-gate.yaml) on every non-draft PR and merge-queue entry. It runs
+# the exhaustive SFPU ULP sweep (tt_metal/tt-llk/tests/python_tests/test_unary_sfpu_ulp.py)
+# on a Wormhole card over the cells the change can move, and fails when one of them
+# measures worse than sfpu_accuracy_budget_wh.yaml records: a gated cell, or an entry of
+# its `domains` list, over its figure, or a tolerance cell past its recorded measurement
+# or non-finite lane count.
+#
+#   1. `changes` lists what the change touches against HEAD^1. Only a change to what the
+#      sweep's kernels are built from (KERNEL_PATHS) goes further.
+#   2. `select` builds every sweep cell twice in the LLK image, at HEAD^1 and at HEAD,
+#      without a card (--compile-producer), and runs `python -m helpers.ulp_affected
+#      select`. A cell is picked when what the card loads for it differs (the ELFs'
+#      allocated sections: debug info names the build directory), when HEAD^1 has no
+#      such build, or when the row it resolves to in the table changed. The picked
+#      builds are an artifact.
+#   3. `sweep` runs the picked cells from those ELFs on wh_n150_civ2
+#      (tests/pipeline_reorg/llk_sfpu_ulp_pr_gate_tests.yaml), then the headroom
+#      comparison over what they measured. It is skipped when nothing was picked.
+#
+# Blackhole is not checked here: llk's pr_gate allowance on bh_p150b_civ2_viommu is
+# full. The nightly sweep (llk-sfpu-ulp-sweep.yaml) runs every cell on both cards, and
+# also catches what this cannot see: a change to the golden or the harness alone.
+# llk-sfpu-ulp-budget-guard.yaml keeps a change from raising the figures it is judged by.
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        description: "The LLK CI image, which has the test package's dependencies"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+  CHIP_ARCH: wormhole
+  TABLE: helpers/sfpu_accuracy_budget_wh.yaml
+  CELLS_ARTIFACT: llk-sfpu-ulp-pr-cells
+  # Every include root the harness compiles with (TestConfig.setup_compilation_options),
+  # the SFPI pin, and this check's own files. The harness's Python is under tt-llk too:
+  # it writes each variant's build.h.
+  KERNEL_PATHS: >-
+    tt_metal/tt-llk
+    tt_metal/hw/inc
+    tt_metal/hw/ckernels/wormhole_b0
+    tt_metal/hostdevcommon/api
+    ttnn/cpp/ttnn/operations/experimental
+    tt_metal/sfpi-version
+    .github/workflows/llk-sfpu-ulp-pr-check.yaml
+    tests/pipeline_reorg/llk_sfpu_ulp_pr_gate_tests.yaml
+
+jobs:
+  changes:
+    name: "SFPU ULP: kernel sources changed"
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    outputs:
+      changed: ${{ steps.find.outputs.changed }}
+    steps:
+      - name: Checkout the change
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 10
+        with:
+          # The commit and its first parent: the diff reads only their trees.
+          fetch-depth: 2
+          sparse-checkout: .github
+      - name: List the kernel sources the change touches
+        id: find
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The checkout is the merge the PR proposes (pull_request) or the queue's commit
+          # (merge_group); its first parent is what the change lands on.
+          if ! git rev-parse --verify --quiet 'HEAD^1^{commit}' > /dev/null; then
+            echo "::error title=SFPU ULP PR check::The checkout has no first parent to compare against."
+            exit 1
+          fi
+          # shellcheck disable=SC2086 # KERNEL_PATHS is a list of pathspecs
+          touched=$(git diff --name-only HEAD^1 HEAD -- $KERNEL_PATHS)
+          if [[ -z "$touched" ]]; then
+            echo "Nothing the sweep's kernels are built from changed."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$(wc -l <<< "$touched") file(s), e.g.:"
+            head -5 <<< "$touched"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  select:
+    name: "SFPU ULP: cells the change can move"
+    needs: changes
+    if: ${{ needs.changes.outputs.changed == 'true' }}
+    runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+    timeout-minutes: 45
+    container:
+      image: ${{ inputs.docker-image }}
+    outputs:
+      cells: ${{ steps.select.outputs.cells }}
+    steps:
+      - name: Checkout the change
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 2
+
+      # Both builds come from the same checkout directory, so the source paths compiled
+      # into them agree; each goes to its own artefacts directory (RUNNER_TEMP).
+      - name: Build every sweep cell at the first parent
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests
+        run: |
+          set -euo pipefail
+          # Before any other git command: in the container the checkout is owned by
+          # another uid as far as git can tell, and it refuses it otherwise.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          echo "HEAD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          # Strict up to here: building the change's tree as its parent would pick nothing.
+          git checkout --quiet --detach 'HEAD^1'
+          # The parent's own SFPI pin and harness, as main built it. A cell the parent
+          # does not build reads as new, and runs: a broken parent costs card time, never
+          # a missed cell.
+          status=0
+          ./setup_testing_env.sh || status=$?
+          if (( status == 0 )); then
+            cd python_tests
+            RUNNER_TEMP="$RUNNER_TEMP/base" pytest -q --override-ini=log_cli=false \
+              -n auto -p no:cacheprovider --compile-producer \
+              test_unary_sfpu_ulp.py || status=$?
+          fi
+          if (( status != 0 )); then
+            echo "::warning title=SFPU ULP PR check::The first parent did not build every sweep cell (exit $status); each one it did not build runs."
+          fi
+
+      - name: Build every sweep cell at the change
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests
+        run: |
+          set -euo pipefail
+          git checkout --quiet --detach "$HEAD_SHA"
+          ./setup_testing_env.sh
+          cd python_tests
+          # A cell that does not build here is never recorded, so it could not be picked:
+          # the job fails instead.
+          RUNNER_TEMP="$RUNNER_TEMP/head" pytest -q --override-ini=log_cli=false \
+            -n auto -p no:cacheprovider --compile-producer \
+            --ulp-variants="$RUNNER_TEMP/ulp_built.jsonl" \
+            test_unary_sfpu_ulp.py
+
+      - name: Pick the cells the change can move
+        id: select
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
+        run: |
+          set -euo pipefail
+          # In the workspace, not RUNNER_TEMP: upload-artifact reads the container's paths.
+          ship="$GITHUB_WORKSPACE/ulp-pr-cells"
+          mkdir -p "$ship"
+          base_table="$RUNNER_TEMP/base_$(basename "$TABLE")"
+          # A table the change introduces has no base version; an empty one makes every
+          # row read as changed.
+          if git cat-file -e "HEAD^1:$LLK_PATH/tests/python_tests/$TABLE" 2> /dev/null; then
+            git show "HEAD^1:$LLK_PATH/tests/python_tests/$TABLE" > "$base_table"
+          else
+            : > "$base_table"
+          fi
+          python3 -m helpers.ulp_affected select \
+            --variants "$RUNNER_TEMP/ulp_built.jsonl" \
+            --head-build "$RUNNER_TEMP/head/tt-llk-build" \
+            --base-build "$RUNNER_TEMP/base/tt-llk-build" \
+            --base-table "$base_table" \
+            --head-table "$TABLE" \
+            --nodes "$ship/ulp_sweep_nodes.txt" \
+            --ship "$ship/tt-llk-build" \
+            --out "$RUNNER_TEMP/ulp_selection.md"
+          cat "$RUNNER_TEMP/ulp_selection.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "cells=$(wc -l < "$ship/ulp_sweep_nodes.txt")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the picked builds
+        if: ${{ steps.select.outputs.cells != '0' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ env.CELLS_ARTIFACT }}
+          path: ulp-pr-cells
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 3
+
+  load-test-matrix:
+    needs: select
+    if: ${{ needs.select.outputs.cells != '0' }}
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Build test matrix
+        id: build-matrix
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ./tests/pipeline_reorg/llk_sfpu_ulp_pr_gate_tests.yaml
+          enabled-skus: "ALL_SKUS_IN_TESTS"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
+      - name: Fail on an empty matrix
+        # A SKU renamed or dropped from sku_config.yaml would otherwise skip the sweep,
+        # and PR Gate would read green over cells nothing ran.
+        if: ${{ steps.build-matrix.outputs.matrix == '[]' }}
+        run: |
+          echo "::error title=SFPU ULP PR check::tests/pipeline_reorg/llk_sfpu_ulp_pr_gate_tests.yaml gave no test group; check its skus against .github/sku_config.yaml."
+          exit 1
+
+  sweep:
+    needs: [select, load-test-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    container:
+      image: ${{ inputs.docker-image }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Download the picked builds
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.CELLS_ARTIFACT }}
+          path: ulp-pr-cells
+      - name: Put the builds where the harness reads them
+        shell: bash
+        run: |
+          set -euo pipefail
+          # TestConfig's artefacts directory is $RUNNER_TEMP/tt-llk-build.
+          mv ulp-pr-cells/tt-llk-build "$RUNNER_TEMP/tt-llk-build"
+          echo "ULP_SWEEP_NODES=$GITHUB_WORKSPACE/ulp-pr-cells/ulp_sweep_nodes.txt" >> "$GITHUB_ENV"
+          echo "$(wc -l < ulp-pr-cells/ulp_sweep_nodes.txt) cell(s) to run"
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests
+        run: ./setup_testing_env.sh
+
+      # The picked cells, then the headroom comparison over what they measured. The cmd
+      # runs both whatever the first returns, and exits with either one's failure.
+      - name: Run the picked cells and compare them with the table
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          ${{ matrix.test-group.cmd }}
+
+      - name: Upload the measurements and the report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: llk-sfpu-ulp-pr-check-${{ env.CHIP_ARCH }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/ulp_measurements.jsonl
+            ${{ env.LLK_PATH }}/tests/python_tests/ulp_headroom_report.md
+            ${{ env.LLK_PATH }}/tests/python_tests/ulp_sweep_junit.xml
+          if-no-files-found: warn
