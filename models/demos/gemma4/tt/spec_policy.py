@@ -91,9 +91,17 @@ that cadence, a new request gets one *trial* at its first proposal: the
 cheapest candidate (entry plus step) replays once when the prior's gain
 estimate is at least ``GEMMA4_SPEC_TRIAL_GAIN`` (the reseed is the only
 extra cost; a prior below that is the random-prompt regime learned on this
-engine, and the request stays plain). A trial is never held: the next
-decision continues only on the entry gain, which the trial's own verify
-feeds through the blend above. While speculating
+engine, and the request stays plain). A record serving has measured at the
+rung is trialed on its measured tokens per row, and only at break-even or
+better (``TRIAL_MEASURED_GAIN``, or ``trial_gain`` when that is higher):
+what its replays delivered is known, and a wave of new rows cannot argue
+with it (the 12B Galaxy at 32 users re-trialed the (8,3) at every arrival
+wave of random prompts, a 250 ms reseed each, and left it within seconds).
+A trial is never held: the next decision continues only on the entry gain,
+which the trial's own verify feeds through the blend above. A batch that
+just left a record waits ``retry_steps`` plain steps before any reseeding
+entry (an enter, a trial or a retry; the retry's cadence counts the same
+steps): those waves ran enter-exit-enter cycles a few steps apart. While speculating
 below the rows-based cap, after ``GEMMA4_SPEC_PROBE_STEPS`` consecutive such
 steps one step is replayed at the next larger draft length (no reseed), so
 deeper positions are re-observed (``0`` disables the probe).
@@ -213,6 +221,9 @@ ROW_MIN_OBSERVATIONS = 3
 EXIT_STEPS = 2
 #: A retry needs a gain estimate of at least this fraction of the entry gain.
 RETRY_MIN_GAIN_FRACTION = 0.25
+#: A new request's trial on a record serving has measured (``RecordCandidate.tokens_per_row``) needs its measured
+#: gain at least this high (``trial_gain`` when that is higher): a measured loss is not re-tried wave after wave.
+TRIAL_MEASURED_GAIN = 1.0
 
 
 def _env_float(env, name, default, *, low, high=None):
@@ -481,6 +492,7 @@ class RecordChoice:
     gain: float  # tokens per ms relative to the plain step (1.0 = the same throughput), entry excluded
     reason: str  # "gain", "enter", "hold", "retry" or "probe"
     members: tuple | None = None
+    measured: bool = False  # the expected tokens are serving's measured tokens per row, not the acceptance model
 
     @property
     def tokens_per_row(self):
@@ -535,7 +547,16 @@ def rank_records(candidates, rows, plain_ms, optimistic=()):
         gain = (tokens / n) / (cost / plain_ms)
         ranked.append(
             RecordChoice(
-                tuple(cand.shape), int(cand.width), n, tokens, cost, float(cand.entry_ms), gain, "gain", members
+                tuple(cand.shape),
+                int(cand.width),
+                n,
+                tokens,
+                cost,
+                float(cand.entry_ms),
+                gain,
+                "gain",
+                members,
+                cand.tokens_per_row is not None,
             )
         )
     ranked.sort(key=lambda c: (-c.gain, c.cost_ms, c.shape, c.members is not None))
@@ -894,6 +915,7 @@ class SpecPolicy:
         self.trial = False
         self.last_reason = None  # why the last decision was what it was ("gain", ..., "exit", "calibrate", "declined")
         self.request_steps = None  # EWMA of the steps a request lived (the entry horizon of a joining row)
+        self.since_exit = None  # plain steps since the batch left a record (the entry cooldown); None once back in
 
     def new_row(self):
         return self.prior.child()
@@ -906,10 +928,16 @@ class SpecPolicy:
     def note_plain_steps(self, n=1):
         """Count ``n`` plain steps the policy was not asked about (no session could speculate) toward the retry."""
         self.declined += int(n)
+        if self.since_exit is not None:
+            self.since_exit += int(n)
         self.below_cap = 0
         self.below_exit = 0
         self.last_k = 0
         self.trial = False
+
+    def cooling(self):
+        """Whether the batch left a record fewer than ``retry_steps`` plain steps ago: no reseeding entry yet."""
+        return self.since_exit is not None and self.since_exit < self.config.retry_steps
 
     @property
     def speculating(self):
@@ -965,14 +993,19 @@ class SpecPolicy:
 
     def trial_choice(self, ranked, plain_ms=None, hypothetical=None, remaining=None):
         """A new request's one trial, or None: the cheapest candidate (entry plus step) when its gain estimate is
-        at least ``trial_gain`` and, for a batch that is not all new, its hypothesis holds: ``hypothetical`` (the
+        at least ``trial_gain`` (``TRIAL_MEASURED_GAIN`` at least for a record serving has measured: a measured loss
+        is not re-tried wave after wave), never while the batch cools after an exit, and, for a batch that is not
+        all new, its hypothesis holds: ``hypothetical`` (the
         same candidates ranked with the new rows accepting every draft on a record serving has not measured at
         the rung; a measured record keeps its measured tokens per row) clears ``min_gain`` and its entry pays
         over the horizon. A batch of informed rows a new row cannot lift above the entry bar, or a record whose
         replays already measured below it, has nothing to learn from a trial that reseeds the whole batch;
         independent of the retry cadence, the reseed is its only extra cost."""
+        if self.cooling():
+            return None
         cheapest = min(ranked, key=lambda c: (c.entry_ms + c.cost_ms, c.shape))
-        if cheapest.gain < self.config.trial_gain:
+        bar = max(self.config.trial_gain, TRIAL_MEASURED_GAIN) if cheapest.measured else self.config.trial_gain
+        if cheapest.gain < bar:
             return None
         if hypothetical is not None:
             same = (cheapest.shape, cheapest.width, cheapest.members)
@@ -1018,10 +1051,15 @@ class SpecPolicy:
         hypothetical = self._hypothetical(candidates, rows, plain_ms, fresh)
         return self.trial_choice(ranked, plain_ms, hypothetical, remaining) is not None
 
-    def admissible(self, ranked, plain_ms, remaining=None):
-        """The best candidate that clears the entry gain and whose entry (if any) pays over the horizon."""
+    def admissible(self, ranked, plain_ms, remaining=None, cooling=None):
+        """The best candidate that clears the entry gain and whose entry (if any) pays over the horizon; one that
+        reseeds is passed over while the batch cools after an exit (``cooling``, None = as the policy stands)."""
+        if cooling is None:
+            cooling = self.cooling()
         for choice in ranked:
             if choice.gain >= self.config.min_gain and self.entry_pays(choice, plain_ms, remaining):
+                if cooling and choice.entry_ms > 0.0:
+                    continue
                 return choice
         return None
 
@@ -1043,7 +1081,8 @@ class SpecPolicy:
         (``True``: every row): declined otherwise, the step is their trial
         when the prior's gain clears ``trial_gain`` and, with other rows in the
         batch, the hypothesis that the new rows accept every draft clears the
-        entry bar (reason "trial", never held).
+        entry bar (reason "trial", never held). For ``retry_steps`` plain
+        steps after an exit no entry reseeds (reason "cooldown").
         """
         cfg = self.config
         candidates = list(candidates)
@@ -1054,6 +1093,8 @@ class SpecPolicy:
         held = self.holdable(ranked)
         choice = None
         reason = "declined"
+        if best is None and self.cooling() and self.admissible(ranked, plain_ms, remaining, cooling=False) is not None:
+            reason = "cooldown"
         if best is not None:
             choice = dataclasses.replace(best, reason="enter" if best.entry_ms > 0.0 else "gain")
             self.below_exit = 0
@@ -1078,6 +1119,10 @@ class SpecPolicy:
             choice, reason = None, "calibrate"
         if choice is None:
             self.declined += 1
+            if reason == "exit":
+                self.since_exit = 0
+            elif self.since_exit is not None:
+                self.since_exit += 1
             self.below_cap = 0
             self.below_exit = 0
             self.last_k = 0
@@ -1086,6 +1131,7 @@ class SpecPolicy:
             return None
         self.last_reason = choice.reason
         self.declined = 0
+        self.since_exit = None
         self.trial = choice.reason in ("retry", "trial")
         if int(choice.shape[1]) < int(k_cap) and choice.entry_ms <= 0.0:
             self.below_cap += 1

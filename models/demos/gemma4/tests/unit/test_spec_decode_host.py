@@ -2420,6 +2420,31 @@ def _policy_the_policy_picks_k5_at_high_acceptance_and_drops_to_k3_k1_and_plain_
     held = choice([0.4] * 5)
     assert held.shape == (16, 1) and held.reason == "hold" and policy.below_exit == 1
     assert choice([0.4] * 5) is None and policy.below_exit == 0 and policy.last_k == 0
+    # the entry cooldown: a batch that just left waits retry_steps plain steps before any reseeding entry (the
+    # 12B Galaxy at 32 users ran enter-exit-enter cycles at a 250 ms reseed each, the arrival waves re-trialing
+    # between); the retry's cadence counts the same steps, note_plain_steps too, an entry-free record waits for
+    # nothing
+    cooled = SpecPolicy(SpecPolicyConfig(probe_steps=0, retry_steps=3, retry_overhead=1.0), 5)
+    good, weak = [_row([0.7] * 5)], [_row([0.4] * 5)]
+    entering = [RecordCandidate((8, 3), 2048, 35.0, 230.0)]  # 2.53 tokens at 1.75x: 1.45x, the reseed pays
+    assert cooled.decide(entering, good, _PLAIN, 3).reason == "enter" and cooled.since_exit is None
+    assert cooled.decide(_cands(_COSTS), weak, _PLAIN, 3).reason == "hold"
+    assert cooled.decide(_cands(_COSTS), weak, _PLAIN, 3) is None and cooled.since_exit == 0 and cooled.cooling()
+    assert cooled.decide(entering, good, _PLAIN, 3) is None and cooled.last_reason == "cooldown"
+    assert not cooled.would_speculate(entering, good, _PLAIN) and cooled.since_exit == 1
+    assert cooled.decide(entering, good, _PLAIN, 3, fresh=True) is None and cooled.last_reason == "cooldown"
+    assert not cooled.would_speculate(entering, good, _PLAIN, fresh=True) and cooled.since_exit == 2
+    cooled.note_plain_steps()
+    assert cooled.since_exit == 3 and not cooled.cooling()
+    assert cooled.decide(entering, good, _PLAIN, 3).reason == "enter" and cooled.since_exit is None
+    free = SpecPolicy(SpecPolicyConfig(probe_steps=0, retry_steps=3), 5)
+    assert free.decide(_cands(_COSTS), good, _PLAIN, 3).reason == "gain"
+    assert (
+        free.decide(_cands(_COSTS), weak, _PLAIN, 3).reason == "hold"
+        and free.decide(_cands(_COSTS), weak, _PLAIN, 3) is None
+    )
+    assert free.decide(_cands(_COSTS), good, _PLAIN, 3).reason == "gain" and free.since_exit is None
+    assert SpecPolicy(SpecPolicyConfig(), 5).decide(_cands(_COSTS), weak, _PLAIN, 3) is None, "declined, not an exit"
 
 
 def _policy_the_margin_decides_between_a_marginal_record_and_the_plain_step(expect_error=None):
@@ -2634,7 +2659,16 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert eight.decide([RecordCandidate((8, 3), 2048, 35.0, 230.0)], batch, _PLAIN, 3, fresh=wave).reason == "trial"
     good = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=2.4)]  # measured above the bar: an entry
     assert eight.decide(good, batch, _PLAIN, 3, fresh=wave).reason == "enter"
-    assert eight.decide(measured8, batch, _PLAIN, 3, fresh=True).reason == "trial", "all new: the floor (0.83 >= 0.6)"
+    assert (
+        eight.decide(measured8, batch, _PLAIN, 3, fresh=True) is None and eight.last_reason == "declined"
+    ), "all new: a measured record below break-even (0.83x) gets no trial either"
+    even = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.75)]  # measured at break-even: 1.00x
+    assert eight.decide(even, batch, _PLAIN, 3, fresh=True).reason == "trial"
+    assert (
+        SpecPolicy(SpecPolicyConfig(trial_gain=1.2, retry_steps=0), 5).decide(even, batch, _PLAIN, 3, fresh=True)
+        is None
+    )
+    assert rank_records(even, batch, _PLAIN)[0].measured and not rank_records(reseeding8, batch, _PLAIN)[0].measured
     with pytest.raises(ValueError, match="fresh rows .* outside the 8 rows"):  # allow-pytest.raises (pure)
         eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(8,))
     # the calibration probe: a speculating batch serves one plain step once calib_probe_steps passed without
