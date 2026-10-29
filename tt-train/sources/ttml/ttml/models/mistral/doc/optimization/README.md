@@ -6,7 +6,7 @@ Phase 3 of the tt-train bring-up. Contract: `../plan.md` (target 1620 ms cycle-t
 
 - Single-chip Tracy at 1/2/4/8 layers (`analyze_tracy.py`, four-point fit, projection to 40) is the attribution and the cycle-time A/B (`diff_tracy.py`: targeted ops gone, nothing new). Tracy ms are cycles / 1.35 GHz; the delivered clock of each run is taken from the cycle counters (`clock_analysis.py`) so wall-clock comparisons are made at a stated clock.
 - Single-chip MFU at 8 of 40 layers (no profiler) with `tt-smi` sampled alongside; TP=4 full-model MFU (40 layers, 594 TFLOP/s denominator) with all four chips sampled, after a cool-down, and a 4-layer TP profile checked per chip (`tp_analysis.py`) for a stalled chip before any TP number is believed.
-- PCC harness (`tests/python/test_mistral.py`, 11 tests, every module and layer kind, forward and every gradient) must pass before a change lands.
+- PCC harness (`tests/python/test_mistral.py`, 11 tests at the composite baseline, 14 at the final path with the transposed and fused cases; every module and layer kind, forward and every gradient) must pass before a change lands.
 
 ## Iterations
 

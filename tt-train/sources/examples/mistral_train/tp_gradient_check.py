@@ -107,7 +107,11 @@ def main():
     p.add_argument("--compare", default=None)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--no-fuse", action="store_true")
-    p.add_argument("--no-transpose", action="store_true", help="composite-phase path: weights [out, in], LoraApply")
+    p.add_argument(
+        "--no-transpose",
+        action="store_true",
+        help="iteration-1 path: weights [out, in], LoraApply (no transposition, no fusion)",
+    )
     p.add_argument(
         "--sgd-lr",
         type=float,
@@ -169,7 +173,9 @@ def main():
             sharding = ttml.Sharding.from_tensor(tensor)
             grad = ttml.autograd.create_tensor(tensor.get_grad(), False)
             if use_tp:
-                # Control: the parameter gathered the same way must equal the seeded value on every mesh.
+                # Control for the mapper/gather round-trip only: it also passes when the two meshes hold the same
+                # values in different roles (the un-interleaved first attempt); model identity across the meshes is
+                # what the gradient match itself proves (a different model gives PCC ~0, the same one 0.9999).
                 rows = block_rows_of(name)
                 gathered_param = sharding.gather(tensor).astype(np.float32)
                 gathered_grad = sharding.gather(grad).astype(np.float32)
