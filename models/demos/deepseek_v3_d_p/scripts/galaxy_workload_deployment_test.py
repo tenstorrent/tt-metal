@@ -5,7 +5,7 @@
 
 """galaxy-workload-deployment-test: hardware gates, then per-model block -> smoke -> soak on a Blackhole Galaxy.
 
-Usage: galaxy_workload_deployment_test.py [--co] [--skip KEY[,KEY]] [--models kimi_k2_7,glm53]
+Usage: galaxy_workload_deployment_test.py [--co] [--skip KEY[,KEY] | --only KEY[,KEY]] [--models kimi_k2_7,glm53]
 """
 
 import argparse
@@ -147,10 +147,21 @@ class Screen:
         tmp.replace(self.status_json)
 
 
+def skipped_keys(keys: list[str], skip: str, only: str) -> set[str]:
+    """Step keys not to run: the --skip list, or everything outside the --only list."""
+    flag, listed = ("--only", only) if only else ("--skip", skip)
+    picked = set(filter(None, listed.split(",")))
+    if unknown := picked - set(keys):
+        raise ValueError(f"unknown {flag} keys: {', '.join(sorted(unknown))}; valid: {', '.join(keys)}")
+    return set(keys) - picked if only else picked
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=TOOL_NAME)
     ap.add_argument("--co", action="store_true", help="collect-only mockup: no device work")
-    ap.add_argument("--skip", default="", help="comma-separated step keys, e.g. soak:kimi_k2_7,didt")
+    pick = ap.add_mutually_exclusive_group()
+    pick.add_argument("--skip", default="", help="comma-separated step keys, e.g. soak:kimi_k2_7,didt")
+    pick.add_argument("--only", default="", help="run exactly these step keys, e.g. reset,block:kimi_k2_7")
     ap.add_argument("--models", default=",".join(MODEL_ENV), help="comma-separated: " + ",".join(MODEL_ENV))
     args = ap.parse_args()
 
@@ -160,20 +171,20 @@ def main() -> int:
     ).stdout.strip()
     host = socket.gethostname().split(".")[0]
     run = run_name(datetime.now(), host, commit or "nogit")
+    steps = build_steps(args.models.split(","))
+    try:
+        skip = skipped_keys([s.key for s in steps], args.skip, args.only)
+    except ValueError as e:
+        print(e)
+        return 2
     run_dir = log_root(os.environ.get("USER", ""), Path.home()) / run
     run_dir.mkdir(parents=True, exist_ok=True)
-
-    steps = build_steps(args.models.split(","))
-    unknown = set(filter(None, args.skip.split(","))) - {s.key for s in steps}
-    if unknown:
-        print(f"unknown --skip keys: {', '.join(sorted(unknown))}; valid: {', '.join(s.key for s in steps)}")
-        return 2
     header = [f"{TOOL_NAME}  {host}  run {run}  mode={'co' if args.co else 'real'}", f"logs  {run_dir}/"]
     print("\n".join(header), flush=True)
     meta = {"host": host, "run": run, "mode": "co" if args.co else "real", "commit": commit, "run_dir": str(run_dir)}
     screen = Screen(steps, header, run_dir / "status.json", meta)
     ctx = Ctx(repo, run_dir, args.co, tick=screen.update)
-    run_all(steps, ctx, set(filter(None, args.skip.split(","))), screen.update)
+    run_all(steps, ctx, skip, screen.update)
     screen.done = True
     if screen.tty:
         screen.update(steps[-1])
