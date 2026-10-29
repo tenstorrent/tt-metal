@@ -127,24 +127,53 @@ def as_dest_acc(dest_acc: Union[bool, DestAccumulation]) -> bool:
     return bool(dest_acc)
 
 
-def to_src_storage(values: torch.Tensor, src_format: DataFormat) -> torch.Tensor:
+#: Explicit mantissa bits a 16-bit Dest slot keeps. Mirrors the harness's
+#: ``sfpu_domains._FORMAT_MANTISSA_BITS``, which the lightweight golden uses
+#: for the same purpose. A 32-bit Dest keeps everything and is absent.
+DEST_MANTISSA_BITS = {
+    DataFormat.Float16: SRC_MANT_BITS,
+    DataFormat.Float16_b: BF16_MANT_BITS,
+    DataFormat.Tf32: SRC_MANT_BITS,
+}
+
+#: Explicit mantissa bits a src register keeps per format. The ISA documents a
+#: BF16 src datum as overlaid onto Tf32 with the low three mantissa bits
+#: zeroed, which is the 7 below. Quasar overrides it to 10 on the strength of
+#: its own gasket, which that document does not cover. See :mod:`.arch`.
+SRC_MANTISSA_BITS = {
+    DataFormat.Float16: SRC_MANT_BITS,
+    DataFormat.Float16_b: BF16_MANT_BITS,
+    DataFormat.Tf32: SRC_MANT_BITS,
+}
+
+
+def to_src_storage(
+    values: torch.Tensor,
+    src_format: DataFormat,
+    mantissa_bits: Optional[int] = None,
+) -> torch.Tensor:
     """Apply the precision a src-register datum can hold.
 
-    Two losses, both the unpacker's: the mantissa truncates to 10 explicit
-    bits, and the Float16 family's 5-bit exponent saturates or flushes what
-    falls outside it. Integers pass through unchanged.
+    Two losses, both the unpacker's: the mantissa truncates, and the Float16
+    family's 5-bit exponent saturates or flushes what falls outside it.
+    Integers pass through unchanged.
+
+    `mantissa_bits` is how many explicit bits this architecture keeps for
+    `src_format`, defaulting to :data:`SRC_MANTISSA_BITS`. It is per
+    architecture because Quasar aliases Float16_b onto Tf32.
     """
+    if mantissa_bits is None:
+        mantissa_bits = SRC_MANTISSA_BITS.get(src_format, SRC_MANT_BITS)
     if src_format is DataFormat.Float16:
         # 1+5+10 is IEEE fp16 exactly. Truncate first so the cast only has to
         # apply the range clamp. Casting straight to fp16 would round.
-        truncated = truncate_src_mantissa(values)
+        truncated = truncate_mantissa(values, mantissa_bits)
         # Flush before the cast, not after: the cast rounds to nearest, and the
         # top of the subnormal band would round up to the smallest normal and
         # sail through a later flush.
         return flush_subnormals(truncated, torch.float16).to(torch.float16)
     if src_format in (DataFormat.Float16_b, DataFormat.Tf32):
-        # Float16_b is an alias for Tf32 here (see SRC_STORAGE_FORMATS).
-        return truncate_src_mantissa(values)
+        return truncate_mantissa(values, mantissa_bits)
     if src_format is DataFormat.Float32:
         return values.to(torch.float32)
     return values.to(format_dict[src_format])

@@ -17,7 +17,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import PackerReluType, StochasticRounding
 
 from ..l1_support import L1Support
-from ..storage import to_dest_storage
+from ..storage import DEST_32_BIT_FORMATS, to_dest_storage
 from .pack_effects import (
     STOCH_RND_EFFECTS,
     PackEdgeMask,
@@ -46,6 +46,7 @@ class Pack:
         to_l1_formats: Optional[Mapping[DataFormat, FrozenSet[DataFormat]]] = None,
         edge_mask_masked_when_set: bool = False,
         promotes_outlier_to_32_bit_dest: bool = True,
+        gasket_converts_wide_dest: bool = True,
     ) -> None:
         #: Legal ``Dest -> L1`` pairs, the pack-side counterpart of the
         #: unpacker's table. Empty means unmodelled.
@@ -58,6 +59,12 @@ class Pack:
         #: Whether the harness promotes an exponent-B input with a Float16
         #: output to a 32-bit Dest. Every architecture except Quasar.
         self.promotes_outlier_to_32_bit_dest = promotes_outlier_to_32_bit_dest
+
+        #: Whether the gasket converts a 32-bit Dest before the packer sees it,
+        #: so the packer reads the *output* format rather than Dest's. True on
+        #: Wormhole and Blackhole, False on Quasar, whose packer converts
+        #: directly. It decides which format the ReLU threshold is encoded in.
+        self.gasket_converts_wide_dest = gasket_converts_wide_dest
 
         self.l1 = l1
 
@@ -78,6 +85,19 @@ class Pack:
                 f"{l1_format}. From {dest_format} the packer reaches "
                 f"{sorted(str(f) for f in allowed) or 'nothing'}."
             )
+
+    def pack_src_format(
+        self, dest_format: DataFormat, l1_format: DataFormat
+    ) -> DataFormat:
+        """The format the packer reads out of Dest.
+
+        Usually Dest's own. With a 32-bit Dest on an architecture whose gasket
+        converts first, the packer instead reads the output format, which is
+        what the ReLU threshold is then encoded in. Mirrors ``infer_pack_in``.
+        """
+        if self.gasket_converts_wide_dest and dest_format in DEST_32_BIT_FORMATS:
+            return l1_format
+        return dest_format
 
     def check_outlier_promotion(
         self, dest_format: DataFormat, l1_format: DataFormat
@@ -150,7 +170,7 @@ class Pack:
             values,
             relu_type=relu_type,
             relu_threshold=relu_threshold,
-            dest_format=dest_format,
+            dest_format=self.pack_src_format(dest_format, l1_format),
             edge_mask=edge_mask,
             edge_mask_masked_when_set=self.edge_mask_masked_when_set,
         )

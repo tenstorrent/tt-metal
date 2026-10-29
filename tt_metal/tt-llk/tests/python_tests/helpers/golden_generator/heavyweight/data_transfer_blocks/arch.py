@@ -17,7 +17,7 @@ from abc import ABC, abstractmethod
 from helpers.format_config import DataFormat
 
 from .l1_support import L1Support
-from .storage import SRC_STORAGE_FORMATS
+from .storage import SRC_MANT_BITS, SRC_STORAGE_FORMATS
 from .units import Fpu, Pack, Unpack
 
 BLOCK_FLOAT_FORMATS = frozenset(f for f in DataFormat if f.is_block_float())
@@ -125,6 +125,14 @@ class QuasarArch(ArchGolden):
             DataFormat.UInt8: frozenset({DataFormat.UInt8}),
         },
         has_srcs=True,
+        # Wormhole and Blackhole keep 7, which is the default and is what the
+        # ISA documents: a BF16 src datum is overlaid onto Tf32 with the low
+        # three mantissa bits zeroed. Quasar is read as keeping all 10, from
+        # its own gasket rather than that document, which covers neither
+        # Quasar nor this case. Unconfirmed, and currently unreachable: a
+        # Float16_b L1 datum carries 7 bits whatever the register keeps, so
+        # this only bites when a wider L1 format lands in a bf16 src register.
+        src_mantissa_bits={DataFormat.Float16_b: SRC_MANT_BITS},
     )
     #: 7x7 bits per fidelity phase, so a src datum's 10 explicit mantissa bits
     #: split 7 high / 3 low on **both** operands.
@@ -150,6 +158,9 @@ class QuasarArch(ArchGolden):
         },
         edge_mask_masked_when_set=True,
         promotes_outlier_to_32_bit_dest=False,
+        # Quasar's packer converts a 32-bit Dest itself, so it reads Dest's own
+        # format. Wormhole and Blackhole let the gasket convert first.
+        gasket_converts_wide_dest=False,
     )
 
 

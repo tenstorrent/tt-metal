@@ -20,9 +20,11 @@ from helpers.llk_params import DestAccumulation
 
 from ..l1_support import L1Buffer, L1Support
 from ..storage import (
-    BF16_MANT_BITS,
     DEST_32_BIT_FORMATS,
+    DEST_MANTISSA_BITS,
     INT32_DEST_COMPATIBLE,
+    SRC_MANT_BITS,
+    SRC_MANTISSA_BITS,
     SRC_STORAGE_FORMATS,
     SRCS_STORAGE_FORMATS,
     as_dest_acc,
@@ -42,6 +44,7 @@ class Unpack:
         to_src_formats: Optional[Mapping[DataFormat, FrozenSet[DataFormat]]] = None,
         to_dest_formats: Optional[Mapping[DataFormat, FrozenSet[DataFormat]]] = None,
         has_srcs: bool = False,
+        src_mantissa_bits: Optional[Mapping[DataFormat, int]] = None,
     ) -> None:
         #: Legal L1 -> src-register pairs. Empty means unmodelled at this
         #: level of detail, not that everything is legal.
@@ -54,11 +57,20 @@ class Unpack:
         #: Whether this architecture has a SrcS register. Quasar only.
         self.has_srcs = has_srcs
 
+        #: Explicit mantissa bits a src register keeps per format. Overrides
+        #: the defaults in :data:`..storage.SRC_MANTISSA_BITS`, which Quasar
+        #: needs because its unpacker aliases Float16_b onto Tf32.
+        self.src_mantissa_bits = {**SRC_MANTISSA_BITS, **(src_mantissa_bits or {})}
+
         self.l1 = l1
 
     # ------------------------------------------------------------------
     # Format mapping
     # ------------------------------------------------------------------
+
+    def src_mantissa(self, src_format: DataFormat) -> int:
+        """Explicit mantissa bits a src register keeps for `src_format` here."""
+        return self.src_mantissa_bits.get(src_format, SRC_MANT_BITS)
 
     def src_format(self, l1_format: DataFormat) -> DataFormat:
         """The src-register storage format the unpacker lands `l1_format` in.
@@ -231,7 +243,7 @@ class Unpack:
                 )
             )
         values = self.l1.read(l1_bytes, l1_format, **geometry)
-        return to_src_storage(values, src_format)
+        return to_src_storage(values, src_format, self.src_mantissa(src_format))
 
     def l1_to_srcs(
         self,
@@ -271,7 +283,7 @@ class Unpack:
         values = self.l1.read(
             l1_bytes, l1_format, dest_acc=src_format.is_32_bit(), **geometry
         )
-        return to_src_storage(values, src_format)
+        return to_src_storage(values, src_format, self.src_mantissa(src_format))
 
     def l1_to_dest(
         self,
@@ -301,9 +313,11 @@ class Unpack:
                 )
         values = self.l1.read(l1_bytes, l1_format, **geometry)
         # The unpacker truncates here, since there is no rounding stage on this
-        # path, unlike the FPU's write to Dest. A plain cast would round.
-        if dest_format in (DataFormat.Float16_b, DataFormat.Tf32):
-            values = truncate_mantissa(values, BF16_MANT_BITS)
+        # path, unlike the FPU's write to Dest. A plain cast would round, and
+        # a Float16 Dest drops its low bits the same way a Float16_b one does.
+        keep = DEST_MANTISSA_BITS.get(dest_format)
+        if keep is not None:
+            values = truncate_mantissa(values, keep)
         return to_dest_storage(values, dest_format)
 
     # ------------------------------------------------------------------
