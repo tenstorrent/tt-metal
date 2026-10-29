@@ -6,6 +6,7 @@
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
+#include "moe_expert_rows.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
@@ -36,6 +37,16 @@ MoEComputeDeviceOperation::program_factory_t MoEComputeDeviceOperation::select_p
     return MoEComputeMeshWorkloadFactory{};
 }
 
+void validate_activation_limit(detail::MoEActivationFunction activation_type, std::optional<float> activation_limit) {
+    TT_FATAL(
+        (activation_type == detail::MoEActivationFunction::CLAMPED_SILU) == activation_limit.has_value(),
+        "activation_limit is required for CLAMPED_SILU and must be omitted for other activations");
+    TT_FATAL(
+        !activation_limit.has_value() || (std::isfinite(*activation_limit) && *activation_limit > 0.0f),
+        "activation_limit must be finite and positive, got {}",
+        activation_limit.value_or(0.0f));
+}
+
 void MoEComputeDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
@@ -43,13 +54,7 @@ void MoEComputeDeviceOperation::validate_on_program_cache_hit(
 
 void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    TT_FATAL(
-        (args.activation_type == detail::MoEActivationFunction::CLAMPED_SILU) == args.activation_limit.has_value(),
-        "activation_limit is required for CLAMPED_SILU and must be omitted for other activations");
-    TT_FATAL(
-        !args.activation_limit.has_value() || (std::isfinite(*args.activation_limit) && *args.activation_limit > 0.0f),
-        "activation_limit must be finite and positive, got {}",
-        args.activation_limit.value_or(0.0f));
+    validate_activation_limit(args.activation_type, args.activation_limit);
 
     // Tilize
     TT_FATAL(
@@ -742,33 +747,57 @@ std::vector<ttnn::Tensor> moe_compute(
             .optional_cross_device_semaphore = optional_cross_device_semaphore};
     }
 
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .layer_id = layer_id,
-            .output_height_shard_dim = output_height_shard_dim,
-            .intermediate_size = intermediate_size,
-            .num_shared_experts_per_device = num_shared_experts_per_device,
-            .has_bias = has_bias,
-            .num_token_parallel_cores = num_token_parallel_cores,
-            .num_data_parallel_cores = num_data_parallel_cores,
-            .path = compute_only     ? experimental::prim::MoEComputePath::ComputeOnly
-                    : single_device  ? experimental::prim::MoEComputePath::SingleDevice
-                    : single_cluster ? experimental::prim::MoEComputePath::SingleCluster
-                                     : experimental::prim::MoEComputePath::FullCcl,
-            .bh_ring_size = ring_n,
-            .combine_params = combine_params,
-            .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU),
-            .activation_limit = activation_limit,
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en},
-        OperationType::tensor_args_t{
+    const OperationType::operation_attributes_t attributes{
+        .layer_id = layer_id,
+        .output_height_shard_dim = output_height_shard_dim,
+        .intermediate_size = intermediate_size,
+        .num_shared_experts_per_device = num_shared_experts_per_device,
+        .has_bias = has_bias,
+        .num_token_parallel_cores = num_token_parallel_cores,
+        .num_data_parallel_cores = num_data_parallel_cores,
+        .path = compute_only     ? experimental::prim::MoEComputePath::ComputeOnly
+                : single_device  ? experimental::prim::MoEComputePath::SingleDevice
+                : single_cluster ? experimental::prim::MoEComputePath::SingleCluster
+                                 : experimental::prim::MoEComputePath::FullCcl,
+        .bh_ring_size = ring_n,
+        .combine_params = combine_params,
+        .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU),
+        .activation_limit = activation_limit,
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en};
+    const OperationType::tensor_args_t tensor_args{
+        .tilize_input_tensor = tilize_input_tensor,
+        .tilize_expert_indices_tensor = tilize_expert_indices_tensor,
+        .tilize_expert_scores_tensor = tilize_expert_scores_tensor,
+        .tilize_expert_mapping_tensor = tilize_expert_mapping_tensor,
+        .matmul_w0_w1_tensor = matmul_w0_w1_tensor,
+        .matmul_w2_tensor = matmul_w2_tensor,
+        .optional_output_tensor = optional_output_tensor};
+    const auto params = experimental::prim::select_moe_compute_expert_rows(attributes, tensor_args);
+    if (!params.has_value()) {
+        return ttnn::device_operation::launch<OperationType>(attributes, tensor_args);
+    }
+    // the expert rows path: the rows and the routing table, then moe_compute's outputs from them
+    const auto rows_and_table = ttnn::prim::moe_expert_rows(
+        tilize_input_tensor,
+        tilize_expert_indices_tensor,
+        tilize_expert_scores_tensor,
+        tilize_expert_mapping_tensor,
+        matmul_w0_w1_tensor,
+        matmul_w2_tensor,
+        *params);
+    return ttnn::device_operation::launch<experimental::prim::MoEComputePlaceDeviceOperation>(
+        attributes,
+        experimental::prim::MoEComputePlaceInputs{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,
             .tilize_expert_scores_tensor = tilize_expert_scores_tensor,
             .tilize_expert_mapping_tensor = tilize_expert_mapping_tensor,
             .matmul_w0_w1_tensor = matmul_w0_w1_tensor,
             .matmul_w2_tensor = matmul_w2_tensor,
-            .optional_output_tensor = optional_output_tensor});
+            .optional_output_tensor = optional_output_tensor,
+            .row_buffer_tensor = rows_and_table[0],
+            .routing_table_tensor = rows_and_table[1]});
 }
 
 }  // namespace ttnn::prim

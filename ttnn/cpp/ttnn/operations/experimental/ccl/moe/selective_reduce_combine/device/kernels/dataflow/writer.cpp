@@ -11,45 +11,11 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 
 #ifndef LOCAL_COMBINE
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
-
-using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
-using tt::tt_fabric::NocUnicastCommandHeader;
-using namespace ttnn::operations::ccl::common;
-
-// Fabric Mux V2 client, opened blocking. Eager staging would only hide the mux setup time, and the first data send
-// waits on compute, which takes longer. The buffer count comes from the runtime args.
-using MuxSender = tt::tt_fabric::FabricMuxV2Sender<>;
+#include "combine_fabric.hpp"
 #endif
 
 // packet size bytes 4352
 namespace detail {
-
-#ifndef LOCAL_COMBINE
-template <
-    uint32_t LinearizedMeshCoord,
-    uint32_t TokensPerDevice,
-    uint32_t MeshRows,
-    uint32_t MeshCols,
-    ReplicateGroup Axis>
-inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
-    constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshRows * MeshCols
-                                         : (Axis == ReplicateGroup::COLS) ? MeshRows
-                                                                          : MeshCols;
-    const uint32_t device_in_group = t / TokensPerDevice;
-
-    if constexpr (Axis == ReplicateGroup::NONE) {
-        return device_in_group;
-    } else if (Axis == ReplicateGroup::ROWS) {
-        return (LinearizedMeshCoord / MeshCols) * MeshCols + device_in_group;
-    } else {
-        return device_in_group * MeshCols + LinearizedMeshCoord % MeshCols;
-    }
-}
-#endif
 
 // output is [select_experts_k ,tokens, hidden]
 template <uint32_t TokensPerDevice>
@@ -124,65 +90,6 @@ public:
     auto operator*() { return idx; }
 };
 
-#ifndef LOCAL_COMBINE
-// Build one V2 mux client per open direction from the trailing runtime args (11 args each, in `directions` index
-// order, which is the host's `neighbors` order). rt_arg_idx is advanced past the consumed args.
-template <uint8_t NumDirections>
-inline void build_mux_connections(
-    const std::array<bool, NumDirections>& directions,
-    std::array<MuxSender, NumDirections>& connections,
-    size_t& rt_arg_idx) {
-    for (uint8_t d = 0; d < NumDirections; ++d) {
-        if (directions[d]) {
-            connections[d] = MuxSender::build_from_args(rt_arg_idx);
-        }
-    }
-}
-
-// Blocking open of every direction's V2 connection (waits for the mux's READY status, publishes this worker's
-// location, requests the channel). Returns each channel's free-slot capacity, sampled right after the open (all
-// slots free): the reference value mux_channel_writes_flushed spins for, without a compile-time buffer count.
-template <uint8_t NumDirections>
-inline std::array<uint32_t, NumDirections> open_mux_connections(
-    const std::array<bool, NumDirections>& directions, std::array<MuxSender, NumDirections>& connections) {
-    std::array<uint32_t, NumDirections> capacity{};
-    for (uint8_t d = 0; d < NumDirections; ++d) {
-        if (directions[d]) {
-            connections[d].open();
-            capacity[d] = connections[d].get_num_free_write_slots();
-        }
-    }
-    return capacity;
-}
-
-// Close request + wait for the manager's teardown ack, per open direction. The V2 mux terminates on its own once
-// all of its clients have closed: no termination master, no terminate signal.
-template <uint8_t NumDirections>
-inline void close_mux_connections(
-    const std::array<bool, NumDirections>& directions, std::array<MuxSender, NumDirections>& connections) {
-    for (uint8_t d = 0; d < NumDirections; ++d) {
-        if (directions[d]) {
-            connections[d].close();
-        }
-    }
-}
-
-// Spin until every packet this worker handed to the mux has been forwarded downstream: the manager republishes
-// its read counter as the forwarder's writes are sent, so free slots return to the capacity sampled at open.
-template <uint8_t NumDirections>
-inline void mux_channel_writes_flushed(
-    const std::array<bool, NumDirections>& directions,
-    const std::array<MuxSender, NumDirections>& connections,
-    const std::array<uint32_t, NumDirections>& capacity) {
-    for (uint8_t d = 0; d < NumDirections; ++d) {
-        if (directions[d]) {
-            while (connections[d].get_num_free_write_slots() != capacity[d]) {
-            };
-        }
-    }
-}
-#endif
-
 }  // namespace detail
 
 void kernel_main() {
@@ -202,7 +109,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("source_token_segment_buffer_size_bytes");
     constexpr uint32_t source_block_size_bytes = get_named_compile_time_arg_val("source_expert_block_size_bytes");
     constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
-    constexpr uint32_t alignment = get_named_compile_time_arg_val("alignment");
     constexpr uint32_t compute_sync_semaphore_id = get_named_compile_time_arg_val("compute_sync_semaphore_id");
     constexpr bool double_buffer_source = get_named_compile_time_arg_val("double_buffer_source") == 1;
 
@@ -211,35 +117,8 @@ void kernel_main() {
     constexpr uint32_t tokens_per_device = global_num_tokens;
     constexpr auto output_ta_args = TensorAccessorArgs<0>();
 #else
-    constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
-    constexpr uint32_t num_workers_per_link = get_named_compile_time_arg_val("num_workers_per_link");
-    constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
-    constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
-    constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
-    constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
-    constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
-    constexpr uint32_t src_chip_id = get_named_compile_time_arg_val("src_chip_id");
-    constexpr uint32_t mesh_rows = get_named_compile_time_arg_val("mesh_rows");
-    constexpr uint32_t mesh_cols = get_named_compile_time_arg_val("mesh_cols");  // ew_dim
-    constexpr uint32_t fabric_max_packet_size_bytes = get_named_compile_time_arg_val("fabric_max_packet_size_bytes");
-    constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
-    constexpr auto topology = tt::tt_fabric::Topology(get_named_compile_time_arg_val("topology"));
-
-    // No worker-side mux compile-time args: the V2 mux client is built entirely from runtime args.
+    constexpr uint32_t tokens_per_device = global_num_tokens / combine_fabric::replicate_group_devices;
     constexpr auto output_ta_args = TensorAccessorArgs<0>();
-
-    constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
-    constexpr uint32_t replicate_factor = (replicate_axis == ReplicateGroup::COLS) ? mesh_cols : mesh_rows;
-    constexpr uint8_t replicate_group_devices = num_devices / replicate_factor;
-    constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
-    constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
-
-    constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
-
-    constexpr uint8_t Num_Directions = 4;
-    constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
-    constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
-    const std::array<bool, Num_Directions> directions = DIRECTIONS;
 #endif
 
     size_t rt_arg_count = 0;
@@ -271,40 +150,12 @@ void kernel_main() {
     const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr);
 
 #ifndef LOCAL_COMBINE
-    CircularBuffer cb_packet_header(packet_header_cb_id);
-
-    // Intra-link barrier args: worker 0 of each link is the link sync core (it sends the final barrier atomic inc
-    // once every worker of the link has drained its mux channel).
-    const bool is_link_sync_core = get_arg_val<uint32_t>(rt_arg_count++);
-    const uint32_t link_sync_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(rt_arg_count++));
-    const uint32_t link_sync_core_noc_x = get_arg_val<uint32_t>(rt_arg_count++);
-    const uint32_t link_sync_core_noc_y = get_arg_val<uint32_t>(rt_arg_count++);
-
-    // One V2 mux client per open direction; the trailing runtime args are consumed here.
-    std::array<MuxSender, Num_Directions> fabric_connections;
-    detail::build_mux_connections<Num_Directions>(directions, fabric_connections, rt_arg_count);
-
-    volatile PACKET_HEADER_TYPE* packet_headers[3];
-    for (uint8_t i = 0; i < 3; ++i) {
-        cb_packet_header.reserve_back(1);
-        const uint32_t packet_header_addr = cb_packet_header.get_write_ptr();
-        packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
-        cb_packet_header.push_back(1);
-    }
-
-    // Blocking open: waits for each mux to be READY, then requests the connection.
-    const auto mux_channel_capacity = detail::open_mux_connections<Num_Directions>(directions, fabric_connections);
-
-    const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
+    // Fabric Mux V2 clients, opened blocking: eager staging would only hide the mux setup, and the first send waits on
+    // compute, which takes longer.
+    combine_fabric::Connections fabric(rt_arg_count);
+    fabric.open();
     if (is_init_sync_core && use_init_semaphore) {
-        send_init_semaphore_to_configured_targets<
-            linearized_mesh_coord,
-            topology,
-            src_chip_id,
-            mesh_rows,
-            mesh_cols,
-            replicate_axis,
-            num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+        fabric.send_init(init_semaphore_addr);
     }
 #endif
 
@@ -332,31 +183,11 @@ void kernel_main() {
     const uint32_t token_activations_l1_addr = cb_token_activations.get_write_ptr();
     auto* token_activations_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_activations_l1_addr);
 
-#ifdef LOCAL_COMBINE
-    // Local combine: skip the init semaphore entirely. In single-device mode there is no
-    // cross-device coordination needed; the compute_sync_semaphore and CB waits handle
-    // all necessary synchronization between matmul, reader, and writer.
-#else
+#ifndef LOCAL_COMBINE
+    // Local combine needs no cross-device start: the compute sync semaphore and the CB waits order it.
     if constexpr (use_init_semaphore) {
-        auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
-        if (is_init_sync_core) {
-            // Device 2.0 migration: legacy primitive retained: init_semaphore_addr is a GlobalSemaphore address.
-            noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
-            // swap start/end coordinates because this kernel is using NOC1
-            const uint64_t semaphore_mc_addr =
-                get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, init_semaphore_addr, /*noc=*/1);
-            noc_semaphore_set_multicast(
-                init_semaphore_addr,
-                semaphore_mc_addr,
-                num_token_parallel_cores * num_data_parallel_cores - 1,
-                /*linked=*/false,
-                /*noc=*/1);
-            noc1_obj.async_writes_flushed();
-
-        } else {
-            noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
-        }
-        noc_semaphore_set(init_semaphore_ptr, 0);
+        fabric.wait_init(
+            noc1_obj, init_semaphore_addr, is_init_sync_core, num_token_parallel_cores * num_data_parallel_cores);
     }
 #endif
 
@@ -393,15 +224,8 @@ void kernel_main() {
                 {.page_id = output_page_idx, .offset_bytes = dest_token_segment_offset_bytes});
             noc1_obj.async_writes_flushed();
 #else
-            // figure out which device to send data to and routing
-            const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<
-                linearized_mesh_coord,
-                tokens_per_device,
-                mesh_rows,
-                mesh_cols,
-                replicate_axis>(st);
-
-            if (dest_device_idx == linearized_mesh_coord) {
+            const uint32_t dest_device_idx = combine_fabric::device_of_token<tokens_per_device>(st);
+            if (dest_device_idx == combine_fabric::linearized_mesh_coord) {
                 noc1_obj.async_write(
                     CoreLocalMem<uint8_t>(src_data_l1_addr),
                     output_addrgen,
@@ -410,20 +234,12 @@ void kernel_main() {
                     {.page_id = output_page_idx, .offset_bytes = dest_token_segment_offset_bytes});
                 noc1_obj.async_writes_flushed();
             } else {
-                fabric_send_chip_unicast_noc_unicast_1d<
-                    linearized_mesh_coord,
-                    topology,
-                    mesh_rows,
-                    mesh_cols,
-                    fabric_max_packet_size_bytes>(
+                fabric.send(
                     output_addrgen,
-                    fabric_connections,
-                    packet_headers[0],
                     dest_device_idx,
                     src_data_l1_addr,
                     output_page_idx,
                     source_token_segment_size_bytes,
-                    alignment,
                     dest_token_segment_offset_bytes);
             }
 #endif
@@ -439,64 +255,10 @@ void kernel_main() {
     cb_data.push_back(1);
 
     noc1_obj.async_write_barrier();
-
-#ifndef LOCAL_COMBINE
-    // In order to ensure that the barrier semaphores land after all of the data has arrived we must wait for the mux
-    // cores to send off all of their transactions to the EDM.
-    detail::mux_channel_writes_flushed<Num_Directions>(directions, fabric_connections, mux_channel_capacity);
-
-    if (is_link_sync_core) {
-        auto* link_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(link_sync_semaphore_addr);
-
-        // Every other worker of this link has drained its mux channel (and closed its connection).
-        noc_semaphore_wait(link_sync_semaphore_ptr, num_workers_per_link - 1);
-        noc_semaphore_set(link_sync_semaphore_ptr, 0);
-
-        const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr, /*noc=*/1);
-
-        // Topology is a CT arg from the host (already auto-downgraded via ttnn::ccl::get_usable_topology
-        // at the op API boundary in moe_compute_device_operation.cpp). For Linear topology, the helper
-        // derives per-device positive/negative ranges from linearized_mesh_coord so endpoints elide the
-        // absent-direction send via `if constexpr` — required to avoid UB on LINE endpoints.
-        fabric_multicast_bidirectional_atomic_inc_1d<
-            linearized_mesh_coord,
-            topology,
-            mesh_rows,
-            mesh_cols,
-            replicate_axis,
-            /*DoubleAntipodalAtomicInc=*/(topology == tt::tt_fabric::Topology::Ring)>(
-            fabric_connections, packet_headers[1], packet_headers[2], global_noc_semaphore_addr);
-
-        auto* semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
-
-        noc1_obj.async_write_barrier();
-        noc1_obj.async_atomic_barrier();
-
-        // The barrier packets sit in the mux channel; after the last client closes, the mux forwards every pending
-        // packet before it terminates.
-        detail::close_mux_connections<Num_Directions>(directions, fabric_connections);
-
-        // Ring + DoubleAntipodalAtomicInc=true: each device receives `replicate_group_devices` inc's
-        //   (the antipodal device is incremented from both directions, summing to N senders).
-        // Linear: each device receives `replicate_group_devices - 1` inc's (no antipodal doubling;
-        //   each sender on the line sends to exactly N-1 other devices).
-        constexpr uint32_t expected_dispatch_device_inc =
-            (topology == tt::tt_fabric::Topology::Linear) ? (replicate_group_devices - 1) : replicate_group_devices;
-        noc_semaphore_wait(semaphore_ptr, expected_dispatch_device_inc);
-        noc_semaphore_set(semaphore_ptr, 0);
-    } else {
-        // Close this worker's connections (close request + manager ack), then tell the link sync core that this
-        // worker's data has left the mux.
-        detail::close_mux_connections<Num_Directions>(directions, fabric_connections);
-
-        const uint64_t link_sync_noc_addr =
-            safe_get_noc_addr(link_sync_core_noc_x, link_sync_core_noc_y, link_sync_semaphore_addr, /*noc=*/1);
-        // Device 2.0 migration: legacy primitive retained: link_sync_semaphore_addr is a get_semaphore(id) address on
-        // a remote core.
-        noc_semaphore_inc(link_sync_noc_addr, 1, /*noc=*/1);
-
-        noc1_obj.async_write_barrier();
-        noc1_obj.async_atomic_barrier();
-    }
+#ifdef LOCAL_COMBINE
+    // Blackhole atomics are non-posted: without their acks the next kernel's atomic barrier on this NoC never completes
+    noc1_obj.async_atomic_barrier();
+#else
+    fabric.finish(noc1_obj, global_semaphore_addr);
 #endif
 }

@@ -199,12 +199,6 @@ std::pair<tt::tt_fabric::FabricMuxV2Config, uint8_t> get_fabric_mux_config(
         num_buffers_per_channel};
 }
 
-struct MuxCorePlacement {
-    CoreCoord logical_core;
-    tt::tt_fabric::FabricNodeId dst_node_id;
-    uint32_t link = 0;
-};
-
 // Plans Fabric Mux V2 cores without pushing kernels. Kernels are added later, after the writer, so the
 // writer index stays reader+1 (each mux core contributes a forwarder and a manager).
 auto plan_mux_workers(
@@ -343,12 +337,115 @@ void add_mux_worker_kernels(
 }
 
 }  // namespace detail
+
+uint32_t combine_max_packet_size_bytes(const MeshDevice& mesh_device, tt::tt_metal::DataType dtype) {
+    const auto fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(mesh_device);
+    return dtype == tt::tt_metal::DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes)
+                                                     : fabric_max_packet_size_bytes;
+}
+
+CombineFabric plan_combine_fabric(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const MeshDevice& mesh_device,
+    const MeshCoordinate& mesh_coordinate,
+    const std::vector<MeshCoordinate>& all_mesh_coordinates,
+    const tt::tt_fabric::Topology topology,
+    const uint32_t axis,
+    const uint32_t num_links,
+    const CoreRangeSet& mux_core_range_set,
+    const std::vector<CoreCoord>& workers,
+    const uint32_t packet_header_cb_id,
+    const uint32_t max_packet_size_bytes) {
+    using namespace tt::tt_metal;
+    const auto& mesh_view = mesh_device.get_view();
+    const auto src_node_id = mesh_device.get_fabric_node_id(mesh_coordinate);
+    std::vector<uint32_t> dest_mesh_ids, dest_chip_ids;
+    for (const auto& coord : all_mesh_coordinates) {
+        const auto dest_node_id = mesh_device.get_fabric_node_id(coord);
+        dest_mesh_ids.push_back(*dest_node_id.mesh_id);
+        dest_chip_ids.push_back(static_cast<uint32_t>(dest_node_id.chip_id));
+    }
+    const auto [neighbors, directions] =
+        operations::ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
+    auto [mux_config, mux_core_maps, mux_placements] =
+        detail::plan_mux_workers(mesh_device, mux_core_range_set, neighbors, num_links, workers.size());
+
+    const CoreRangeSet worker_set(workers);
+    constexpr uint32_t num_headers = 3;  // row unicasts, then the two directions of the barrier multicast
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_headers * tt::tt_fabric::CLIENT_INTERFACE_SIZE,
+        .core_ranges = worker_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(packet_header_cb_id),
+            .data_format = tt::DataFormat::UInt32,
+            .page_size = tt::tt_fabric::CLIENT_INTERFACE_SIZE,
+        }}},
+    });
+    // Worker 0 of each link is its link sync core. With Mux V2 there is no termination master: the mux terminates by
+    // itself after its last client closes.
+    const uint32_t link_sync_semaphore_id = add_semaphore_descriptor(desc, worker_set, 0);
+    std::vector<tt::tt_fabric::FabricMuxV2Config::ClientSemaphores> client_semaphores;
+    for (std::size_t d = 0; d < neighbors.size(); ++d) {
+        client_semaphores.push_back({
+            .flow_control_sem_id = add_semaphore_descriptor(desc, worker_set, 0),
+            .teardown_sem_id = add_semaphore_descriptor(desc, worker_set, 0),
+        });
+    }
+
+    const uint32_t num_workers_per_link = workers.size() / num_links;
+    const auto bounding_box = worker_set.bounding_box();
+    const auto box_start = mesh_device.worker_core_from_logical_core(bounding_box.start_coord);
+    const auto box_end = mesh_device.worker_core_from_logical_core(bounding_box.end_coord);
+    CombineFabric fabric{
+        .named_compile_time_args =
+            {{"packet_header_cb_id", packet_header_cb_id},
+             {"num_workers_per_link", num_workers_per_link},
+             {"noc_x_start", static_cast<uint32_t>(box_start.x)},
+             {"noc_y_start", static_cast<uint32_t>(box_start.y)},
+             {"noc_x_end", static_cast<uint32_t>(box_end.x)},
+             {"noc_y_end", static_cast<uint32_t>(box_end.y)},
+             {"num_devices", static_cast<uint32_t>(mesh_view.num_devices())},
+             {"src_chip_id", static_cast<uint32_t>(src_node_id.chip_id)},
+             {"mesh_rows", static_cast<uint32_t>(mesh_view.num_rows())},
+             {"mesh_cols", static_cast<uint32_t>(mesh_view.num_cols())},
+             {"fabric_max_packet_size_bytes", max_packet_size_bytes},
+             {"linearized_mesh_coord", operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view)},
+             {"topology", static_cast<uint32_t>(topology)},
+             {"alignment", static_cast<uint32_t>(hal::get_l1_alignment())}},
+        .defines =
+            {{"DEST_CHIP_ID", operations::ccl::common::stringify(dest_chip_ids)},
+             {"DEST_MESH_ID", operations::ccl::common::stringify(dest_mesh_ids)},
+             {"DIRECTIONS", operations::ccl::common::stringify(directions)},
+             {"REPLICATE_GROUP_AXIS", std::to_string(axis)}},
+        .worker_runtime_args = {},
+        .mux_config = mux_config,
+        .src_node_id = src_node_id,
+        .mux_placements = std::move(mux_placements),
+    };
+    for (uint32_t worker = 0; worker < workers.size(); ++worker) {
+        const uint32_t link = worker / num_workers_per_link, link_worker = worker % num_workers_per_link;
+        const auto link_sync_core = mesh_device.worker_core_from_logical_core(workers.at(link * num_workers_per_link));
+        std::vector<uint32_t> args = {
+            static_cast<uint32_t>(link_worker == 0), link_sync_semaphore_id, link_sync_core.x, link_sync_core.y};
+        // this worker is logical channel link_worker on each mux of its link
+        for (std::size_t d = 0; d < neighbors.size(); ++d) {
+            mux_config.append_client_connection_rt_args(
+                mux_core_maps.at(link).at(neighbors[d]), static_cast<uint8_t>(link_worker), client_semaphores[d], args);
+        }
+        fabric.worker_runtime_args.push_back(std::move(args));
+    }
+    return fabric;
+}
+
+void CombineFabric::append_mux_kernels(tt::tt_metal::ProgramDescriptor& desc) const {
+    detail::add_mux_worker_kernels(desc, mux_config, src_node_id, mux_placements);
+}
+
 namespace {
 
 // Standalone kernel order when append starts with no kernels: reader 0, writer 1, then Fabric Mux V2
 // kernels on the CCL path. The writer stays at index 1 so override_runtime_arguments can patch it.
 constexpr uint32_t kWriterKernelIdx = 1;
-constexpr uint32_t kWriterCrossDeviceSemaphoreArgIdx = 4;
 
 }  // namespace
 
@@ -361,20 +458,10 @@ tt::tt_metal::WorkloadDescriptor UnifiedSelectReduce::create_workload_descriptor
 
     auto* mesh_device = tensor_args.dense_input_tensor.device();
     const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
-    // Carried counters: keep them above the mux's ceiling where an L1_SMALL region exists. This op
-    // also TT_FATALs below if there is none, so the general-L1 fallback never reaches a mux.
-    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
-    auto init_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0, sem_buffer_type);
-
-    auto final_barrier_semaphore = operation_attributes.optional_cross_device_semaphore.value_or(
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0, sem_buffer_type));
-
-    workload.semaphores.push_back(init_barrier_semaphore);
-    workload.semaphores.push_back(final_barrier_semaphore);
-
-    tt::tt_metal::distributed::Synchronize(
-        *mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+    // This op also TT_FATALs below if the device has no L1_SMALL region, so the barrier semaphores' general-L1
+    // fallback never reaches a mux.
+    const auto [init_barrier_semaphore, final_barrier_semaphore] = add_selective_reduce_combine_barrier_semaphores(
+        workload, mesh_device, worker_core_range_set, operation_attributes.optional_cross_device_semaphore);
 
     for (const auto& coord : tensor_coords.coords()) {
         tt::tt_metal::ProgramDescriptor desc;
@@ -397,7 +484,7 @@ tt::tt_metal::WorkloadDescriptor UnifiedSelectReduce::create_workload_descriptor
     return workload;
 }
 
-void append_selective_reduce_combine_to_descriptor(
+uint32_t append_selective_reduce_combine_to_descriptor(
     tt::tt_metal::ProgramDescriptor& desc,
     const experimental::prim::SelectiveReduceCombineParams& operation_attributes,
     const MeshCoordinate& mesh_coordinate,
@@ -437,14 +524,9 @@ void append_selective_reduce_combine_to_descriptor(
     auto topology = operation_attributes.topology;
 
     auto* mesh_device = input_tensor.device();
-    const auto& mesh_view = mesh_device->get_view();
 
     const auto axis = operation_attributes.axis;
 
-    const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-    const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
-
-    const uint32_t num_devices_total = mesh_view.num_devices();
     const bool double_buffer_source = compute_cores_by_combine_column.has_value();
 
     // physical experts per device, replicated shared experts are counted per device
@@ -545,9 +627,8 @@ void append_selective_reduce_combine_to_descriptor(
     const auto aligned_token_activations_page_size_bytes = tt::align(token_activations_page_size_bytes, l1_alignment);
     constexpr auto token_activations_cb_id = tt::CBIndex::c_6;
 
-    // client interface
-    constexpr auto num_headers = 3;  // data unicast headers and atomic inc multicast headers
-    constexpr auto client_interface_cb_id = tt::CBIndex::c_7;
+    // the fabric's packet headers (CCL path)
+    constexpr auto packet_header_cb_id = tt::CBIndex::c_7;
 
     auto push_cb =
         [&](uint32_t cb_index, uint32_t total_size, uint32_t page_size, tt::DataFormat data_format, Buffer* buffer) {
@@ -579,12 +660,6 @@ void append_selective_reduce_combine_to_descriptor(
         token_activations_cb_id,
         static_cast<uint32_t>(aligned_token_activations_page_size_bytes),
         static_cast<uint32_t>(token_activations_page_size_bytes),
-        tt::DataFormat::UInt32,
-        nullptr);
-    push_cb(
-        client_interface_cb_id,
-        num_headers * CLIENT_INTERFACE_SIZE,
-        CLIENT_INTERFACE_SIZE,
         tt::DataFormat::UInt32,
         nullptr);
 
@@ -687,7 +762,6 @@ void append_selective_reduce_combine_to_descriptor(
             {"source_expert_block_size_bytes", expert_token_segment_buffer_block_size_bytes},
             {"token_size_bytes", token_size_bytes},
             {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
-            {"alignment", l1_alignment},
             {"compute_sync_semaphore_id", writer_compute_sync_semaphore_id},
             {"double_buffer_source", static_cast<uint32_t>(double_buffer_source)},
         };
@@ -750,31 +824,25 @@ void append_selective_reduce_combine_to_descriptor(
                 }
             }
         }
-        return;
+        return writer_kernel_idx;
     }
 
     // ------------------------------------------------------------------------
     // CCL combine path: multi-device fabric-based combine.
     // ------------------------------------------------------------------------
 
-    // fabric routing info
-    std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
-    for (const auto& coord : all_mesh_coordinates) {
-        const auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
-        dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
-        dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
-    }
-    const auto [neighbors, directions] =
-        operations::ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
-
-    // Plan mux cores now; their kernels are pushed after the writer so the writer index stays stable.
-    const auto [mux_config, mux_neigbor_core_maps, mux_placements] = detail::plan_mux_workers(
-        *mesh_device, mux_core_range_set, neighbors, num_links, num_worker_cores);
-
-    // launch writer kernel
-    const uint32_t flat_mesh_idx = operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
-
-    const uint32_t num_workers_per_link = num_worker_cores / num_links;
+    const auto fabric = plan_combine_fabric(
+        desc,
+        *mesh_device,
+        mesh_coordinate,
+        all_mesh_coordinates,
+        topology,
+        axis,
+        num_links,
+        mux_core_range_set,
+        sender_cores,
+        packet_header_cb_id,
+        max_packet_size_bytes);
 
     std::vector<std::pair<std::string, uint32_t>> writer_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
@@ -782,15 +850,9 @@ void append_selective_reduce_combine_to_descriptor(
         {"token_activations_cb_id", token_activations_cb_id},
         {"token_counts_cb_id", token_counts_cb_id},
         {"activations_stride_elm", activations_stride_elm},
-        {"packet_header_cb_id", client_interface_cb_id},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"num_data_parallel_cores", num_data_parallel_cores},
-        {"num_workers_per_link", num_workers_per_link},
         {"use_init_semaphore", static_cast<uint32_t>(use_init_semaphore)},
-        {"noc_x_start", static_cast<uint32_t>(start_coord.x)},
-        {"noc_y_start", static_cast<uint32_t>(start_coord.y)},
-        {"noc_x_end", static_cast<uint32_t>(end_coord.x)},
-        {"noc_y_end", static_cast<uint32_t>(end_coord.y)},
         {"num_local_experts", experts_per_device},
         {"global_num_tokens", total_tokens},
         {"token_activations_page_size_bytes", static_cast<uint32_t>(aligned_token_activations_page_size_bytes)},
@@ -798,30 +860,16 @@ void append_selective_reduce_combine_to_descriptor(
         {"source_expert_block_size_bytes", expert_token_segment_buffer_block_size_bytes},
         {"token_size_bytes", token_size_bytes},
         {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
-        {"alignment", l1_alignment},
-        {"num_devices", num_devices_total},
-        {"src_chip_id", src_chip_id},
-        {"mesh_rows", static_cast<uint32_t>(mesh_view.num_rows())},
-        {"mesh_cols", static_cast<uint32_t>(mesh_view.num_cols())},
-        {"fabric_max_packet_size_bytes", max_packet_size_bytes},
-        {"linearized_mesh_coord", flat_mesh_idx},
-        {"topology", static_cast<uint32_t>(topology)},
         {"compute_sync_semaphore_id", writer_compute_sync_semaphore_id},
         {"double_buffer_source", static_cast<uint32_t>(double_buffer_source)}};
+    writer_named_ct_args.insert(
+        writer_named_ct_args.end(), fabric.named_compile_time_args.begin(), fabric.named_compile_time_args.end());
 
     // Positional CT args: TensorAccessorArgs only. The V2 fabric mux client is built entirely from runtime args.
     std::vector<uint32_t> writer_compile_time_args;
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    using operations::ccl::common::stringify;
-    std::vector<std::pair<std::string, std::string>> writer_defines = {
-        {"DEST_CHIP_ID", stringify(dest_chip_id)},
-        {"DEST_MESH_ID", stringify(dest_mesh_id)},
-        {"DIRECTIONS", stringify(directions)}};
-
-    writer_defines.emplace_back("REPLICATE_GROUP_AXIS", std::to_string(axis));
-
-    // Writer follows the reader. Mux kernels are pushed after the runtime-arg loop.
+    // Writer follows the reader. Mux kernels follow the writer.
     const uint32_t writer_kernel_idx = desc.kernels.size();
     desc.kernels.push_back(KernelDescriptor{
         .kernel_source =
@@ -829,7 +877,7 @@ void append_selective_reduce_combine_to_descriptor(
         .core_ranges = needed_worker_core_range_set,
         .compile_time_args = std::move(writer_compile_time_args),
         .named_compile_time_args = std::move(writer_named_ct_args),
-        .defines = std::move(writer_defines),
+        .defines = fabric.defines,
         .config =
             DataMovementConfigDescriptor{
                 .processor = DataMovementProcessor::RISCV_0,
@@ -838,29 +886,14 @@ void append_selective_reduce_combine_to_descriptor(
             },
     });
 
-    // Intra-link barrier: worker 0 of each link is the link sync core. With Mux V2 there is no termination
-    // master: the mux terminates by itself after its last client closes.
-    const auto link_sync_semaphore_id = add_semaphore_descriptor(desc, needed_worker_core_range_set, 0);
-
-    // V2 client semaphores (flow control + teardown), one pair per direction, shared ids across worker cores.
-    std::vector<tt::tt_fabric::FabricMuxV2Config::ClientSemaphores> client_semaphores;
-    client_semaphores.reserve(neighbors.size());
-    for (std::size_t d = 0; d < neighbors.size(); ++d) {
-        client_semaphores.push_back(tt::tt_fabric::FabricMuxV2Config::ClientSemaphores{
-            .flow_control_sem_id = add_semaphore_descriptor(desc, needed_worker_core_range_set, 0),
-            .teardown_sem_id = add_semaphore_descriptor(desc, needed_worker_core_range_set, 0),
-        });
-    }
-
-    uint32_t link_idx = 0, link_worker_idx = 0, token_parallel_idx = 0, dest_token_segment_offset_bytes = 0;
-    auto core_map_iter = mux_neigbor_core_maps.cbegin();
+    uint32_t token_parallel_idx = 0, dest_token_segment_offset_bytes = 0;
     auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
     auto compute_cores_by_column_iter = (compute_cores_by_combine_column.has_value())
                                             ? std::make_optional(compute_cores_by_combine_column->cbegin())
                                             : std::nullopt;
-    for (const auto& sender_core : sender_cores) {
-        const bool is_init_sync_core = sender_core == sender_cores.at(0);
-        const uint32_t is_init_sync_core_arg = static_cast<uint32_t>(is_init_sync_core);
+    for (uint32_t worker = 0; worker < sender_cores.size(); ++worker) {
+        const auto& sender_core = sender_cores[worker];
+        const uint32_t is_init_sync_core_arg = static_cast<uint32_t>(worker == 0);
 
         const auto source_token_segment_size_bytes = *(data_parallel_size_iter++);
         auto writer_rt = make_writer_runtime_args(
@@ -871,25 +904,7 @@ void append_selective_reduce_combine_to_descriptor(
         if (compute_cores_by_column_iter.has_value()) {
             detail::append_compute_core_rt_args(*mesh_device, **compute_cores_by_column_iter, writer_rt);
         }
-
-        // Link sync args: is_link_sync_core, link_sync_semaphore_id, sync core virtual x, y.
-        const bool is_link_sync_core = (link_worker_idx == 0);
-        const auto link_sync_virtual_core =
-            mesh_device->worker_core_from_logical_core(sender_cores.at(link_idx * num_workers_per_link));
-        std::vector<uint32_t> mux_connection_args;
-        mux_connection_args.push_back(static_cast<uint32_t>(is_link_sync_core));
-        mux_connection_args.push_back(link_sync_semaphore_id);
-        mux_connection_args.push_back(link_sync_virtual_core.x);
-        mux_connection_args.push_back(link_sync_virtual_core.y);
-
-        // This worker is logical channel link_worker_idx on each mux of its link. append_client_connection_rt_args
-        // serializes the 11 args FabricMuxV2Sender::build_from_args consumes.
-        for (std::size_t d = 0; d < neighbors.size(); ++d) {
-            const auto& mux_virtual_core = core_map_iter->at(neighbors[d]);
-            mux_config.append_client_connection_rt_args(
-                mux_virtual_core, static_cast<uint8_t>(link_worker_idx), client_semaphores[d], mux_connection_args);
-        }
-        writer_rt.append(mux_connection_args);
+        writer_rt.append(fabric.worker_runtime_args[worker]);
 
         desc.kernels[reader_kernel_idx].emplace_runtime_args(
             sender_core, make_reader_runtime_args(token_parallel_idx, is_init_sync_core_arg));
@@ -908,15 +923,51 @@ void append_selective_reduce_combine_to_descriptor(
                 ++(*compute_cores_by_column_iter);
             }
         }
-
-        if (++link_worker_idx == num_workers_per_link) {
-            link_worker_idx = 0;
-            ++core_map_iter;
-            ++link_idx;
-        }
     }
 
-    detail::add_mux_worker_kernels(desc, mux_config, fabric_node_id, mux_placements);
+    fabric.append_mux_kernels(desc);
+    return writer_kernel_idx;
+}
+
+std::pair<GlobalSemaphore, GlobalSemaphore> add_selective_reduce_combine_barrier_semaphores(
+    tt::tt_metal::WorkloadDescriptor& workload,
+    ttnn::MeshDevice* mesh_device,
+    const CoreRangeSet& combine_cores,
+    const std::optional<GlobalSemaphore>& cross_device_semaphore) {
+    // The barrier semaphores live as long as the cached program. Keep them in L1_SMALL, above every L1 tensor, circular
+    // buffer and the mux's ceiling, where the device has one: created in general L1 while a call's outputs are alive,
+    // they would stay in the middle of L1 after those are freed and refuse later calls their outputs.
+    const auto semaphore_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
+    GlobalSemaphore init_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_cores, 0, semaphore_buffer_type);
+    GlobalSemaphore final_barrier_semaphore =
+        cross_device_semaphore.has_value()
+            ? *cross_device_semaphore
+            : ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_cores, 0, semaphore_buffer_type);
+
+    workload.semaphores.push_back(init_barrier_semaphore);
+    workload.semaphores.push_back(final_barrier_semaphore);
+
+    tt::tt_metal::distributed::Synchronize(
+        *mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+    return {std::move(init_barrier_semaphore), std::move(final_barrier_semaphore)};
+}
+
+void override_cross_device_semaphore_arg(
+    tt::tt_metal::Program& program,
+    const uint32_t kernel_idx,
+    const uint32_t arg_idx,
+    const GlobalSemaphore& cross_device_semaphore) {
+    const uint32_t cross_device_semaphore_addr = static_cast<uint32_t>(cross_device_semaphore.address());
+    auto& args_by_core = tt::tt_metal::GetRuntimeArgs(program, kernel_idx);
+    for (auto& args_column : args_by_core) {
+        for (auto& args : args_column) {
+            if (args.size() == 0) {
+                continue;
+            }
+            args[arg_idx] = cross_device_semaphore_addr;
+        }
+    }
 }
 
 void UnifiedSelectReduce::override_runtime_arguments(
@@ -928,18 +979,11 @@ void UnifiedSelectReduce::override_runtime_arguments(
     if (!operation_attributes.optional_cross_device_semaphore.has_value()) {
         return;
     }
-    const uint32_t writer_kernel_idx = kWriterKernelIdx;
-    const uint32_t cross_device_semaphore_addr =
-        static_cast<uint32_t>(operation_attributes.optional_cross_device_semaphore->address());
-    auto& writer_args_by_core = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_idx);
-    for (auto& writer_args_column : writer_args_by_core) {
-        for (auto& writer_args : writer_args_column) {
-            if (writer_args.size() == 0) {
-                continue;
-            }
-            writer_args[kWriterCrossDeviceSemaphoreArgIdx] = cross_device_semaphore_addr;
-        }
-    }
+    override_cross_device_semaphore_arg(
+        program,
+        kWriterKernelIdx,
+        kCombineWriterCrossDeviceSemaphoreArgIdx,
+        *operation_attributes.optional_cross_device_semaphore);
 }
 
 }  // namespace ttnn::experimental::prim
