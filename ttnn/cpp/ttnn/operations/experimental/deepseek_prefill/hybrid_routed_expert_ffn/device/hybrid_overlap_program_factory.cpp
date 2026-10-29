@@ -98,8 +98,17 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
     // follows gets that L1 back; its address is hashed, so a cached program is only reused over the same layout.
     // Without the fused pass there is none, and neither op needs one: each keeps static circular buffers on its own
     // rows.
+    //
+    // The circular buffers on it are backed by the arena's backing buffer, not by the tensor's own buffer: same
+    // address and per-core layout, but not a tensor buffer, so the cache-hit path pins them instead of re-pointing
+    // all of them on every call (which re-sends each one's config). A hit already means the same arena address.
     const bool run_fused_pass = op.hybrid_token_threshold > 0;
-    tt::tt_metal::Buffer* arena = run_fused_pass ? t.l1_arena->buffer() : nullptr;
+    tt::tt_metal::Buffer* arena = run_fused_pass ? t.l1_arena->mesh_buffer().get_backing_buffer() : nullptr;
+    TT_FATAL(
+        arena == nullptr || arena->address() == op.l1_arena_addr,
+        "hybrid routed expert: the arena's backing buffer is at {}, the hashed arena at {}",
+        arena == nullptr ? 0 : arena->address(),
+        op.l1_arena_addr);
     const auto go_addr = static_cast<uint32_t>(op.expert_go->address());
 
     ttnn::Tensor re_output = t.output;
