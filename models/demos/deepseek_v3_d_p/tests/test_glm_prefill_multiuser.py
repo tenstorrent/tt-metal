@@ -31,6 +31,7 @@ MoE and reuses layer 2's top-k). Random weights hold one MoE layer in host RAM, 
 """
 
 import copy
+import os
 
 import pytest
 import torch
@@ -580,6 +581,13 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
 
         kv_slots = _read_user_slots(caches.kvpe, mesh_device, NUM_LAYERS, cache_slots)
         idx_slots = _read_user_slots(caches.index, mesh_device, full_indexer_rank(config, NUM_LAYERS), cache_slots)
+        dump_dir = os.environ.get("GLM_DEBUG_DUMP")
+        if dump_dir:  # DEBUG: every slot's caches, device (linear chip, block-cyclic) order
+            os.makedirs(dump_dir, exist_ok=True)
+            torch.save({"kvpe": kv_slots, "indexer_k": idx_slots, "chunk": chunk, "sp": sp,
+                        "tp": mesh_device.shape[1], "num_users": num_users},
+                       os.path.join(dump_dir, "traced_vs_eager.pt"))
+            logger.info(f"[traced] dumped caches to {dump_dir}")
         failures = _compare_slots(
             "traced", kv_slots, idx_slots, [(u + num_users, u) for u in range(num_users)], TRACED_PCC
         )
