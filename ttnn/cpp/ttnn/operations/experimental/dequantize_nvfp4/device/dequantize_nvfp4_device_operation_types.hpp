@@ -16,6 +16,7 @@ struct Nvfp4Params {
     MemoryConfig memory_config;
     bool experimental_fast;
     bool fpu_tensor_scale;
+    bool transpose_output;
 };
 struct Nvfp4Inputs {
     Tensor packed;

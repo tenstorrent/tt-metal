@@ -7,7 +7,7 @@
 import csv
 import json
 
-from scripts.nvfp4_harness import EvaluationError, compare, profile_metrics, validate_junit
+from scripts.nvfp4_harness import KERNELS, EvaluationError, compare, math_overlay, profile_metrics, validate_junit
 
 
 def test_nvfp4_harness_rejects_masked_pytest_failure(tmp_path, expect_error):
@@ -83,3 +83,33 @@ def test_nvfp4_harness_requires_matching_evaluator(tmp_path, expect_error):
     result = compare(baseline_path, candidate_path)
     assert result["screening_improvement"], "A 10% improvement with zero observed MAD should pass screening"
     assert result["improvement_percent"] == 10, "Incorrect speedup normalization"
+
+
+def test_nvfp4_math_overlay_preserves_cross_face_state(tmp_path):
+    candidate = tmp_path / "candidate"
+    compute = candidate / KERNELS / "compute"
+    compute.mkdir(parents=True)
+    source = """void kernel_main() {
+        MATH((sfpu::nvfp4_expand_scale_vectors()));
+        MATH((sfpu::nvfp4_init_raw()));
+#pragma GCC unroll 4
+        for (uint32_t plane = 0; plane < planes; ++plane) {
+#pragma GCC unroll 4
+            for (uint32_t face = 0; face < 4; ++face) {
+                decode(plane, face);
+            }
+        }
+        MATH((sfpu::nvfp4_convert_end()));
+        transpose_dest_init();
+}
+"""
+    (compute / "dequantize_fast.cpp").write_text(source)
+    (compute / "nvfp4_tti.hpp").write_text("// shared candidate header\n")
+    overlay = math_overlay(candidate, tmp_path / "results", 128)
+    instrumented = (overlay / KERNELS / "compute/dequantize_fast.cpp").read_text()
+    assert instrumented.index("nvfp4_init_raw") < instrumented.index("repeat < 128")
+    assert instrumented.index("repeat < 128") < instrumented.index("plane < planes")
+    assert instrumented.index("plane < planes") < instrumented.index("face < 4")
+    assert "        }\n        }\n        MATH((sfpu::nvfp4_convert_end()))" in instrumented
+    assert (compute / "dequantize_fast.cpp").read_text() == source
+    assert (overlay / KERNELS / "compute/nvfp4_tti.hpp").is_symlink()

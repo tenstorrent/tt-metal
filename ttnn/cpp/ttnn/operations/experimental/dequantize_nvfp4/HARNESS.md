@@ -40,7 +40,9 @@ hashes did not change during evaluation.
    UINT16 packed input, tiled I/O, interleaved L1, tensor scale 0.8125, and
    2048x4096 decoded values. There are eight calls; discard the first two.
 3. **Optional isolated-math diagnostic.** In a private source overlay, repeat
-   each face decoder 128 times after one scale broadcast. Reuse candidate
+   the complete four-plane/four-face decode sweep 128 times after one scale
+   expansion. This preserves scale-register state carried between faces;
+   repeating an individual face is invalid for such candidates. Reuse candidate
    headers/readers/writers by symlink. The production candidate is not edited.
    Divide the math-thread duration by repetitions and output tiles per core.
    This is a `MATH_ISOLATE`-style amortized DEST-to-DEST diagnostic using Tracy,

@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <limits>
+#include <utility>
 #include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -50,6 +51,9 @@ void Nvfp4DeviceOperation::validate_on_program_cache_miss(const Nvfp4Params& arg
         args.scale_format == operations::experimental::Nvfp4ScaleFormat::E4M3 ||
             args.scale_format == operations::experimental::Nvfp4ScaleFormat::E2M1,
         "Unsupported NVFP4 scale format");
+    TT_FATAL(
+        !args.transpose_output || (args.experimental_fast && args.output_layout == Layout::TILE),
+        "transpose_output requires experimental_fast=True and TILE output");
     if (args.experimental_fast) {
         TT_FATAL(
             packed.dtype() == DataType::UINT16 && !args.fp32_dest_acc_en && args.dtype == DataType::BFLOAT16,
@@ -80,6 +84,9 @@ Nvfp4DeviceOperation::spec_return_value_t Nvfp4DeviceOperation::compute_output_s
     const auto& shape = inputs.packed.logical_shape();
     Shape::Container dims(shape.begin(), shape.end());
     dims.back() *= inputs.packed.element_size() * 2;
+    if (args.transpose_output) {
+        std::swap(dims[dims.size() - 2], dims.back());
+    }
     return {Shape(dims), {args.dtype, {args.output_layout}, args.memory_config}};
 }
 Nvfp4DeviceOperation::tensor_return_value_t Nvfp4DeviceOperation::create_output_tensors(

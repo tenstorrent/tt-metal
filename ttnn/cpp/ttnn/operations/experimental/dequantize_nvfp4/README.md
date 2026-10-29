@@ -369,3 +369,36 @@ The reconstruction gate statistics are unchanged: max 1.4375 ULP, worst
 case mean 0.81677, median 0.75, and minimum SNR 46.23565 dB. The default
 precise path and host packing contract are unchanged. The reader/writer
 kernels are retained; a sub-threshold writer-batching trial was discarded.
+
+
+The [TT-intrinsic/replay follow-up](OPTIMIZATION_2026_10_29_HOUR.md) measures
+explicit register scheduling and native transposed-weight consumption. The
+retained TT-intrinsic kernel uses five replay slots and prefetches the next
+vector/face scales to hide dependencies. Independent pairs measure about
+568 cycles/output tile versus 677 for the SFPI baseline, approximately 16%
+less complete L1-to-L1 time, with the same reconstruction gate. The complete
+DEST-sweep math diagnostic measures about 362 cycles/output tile. On 120
+ideally balanced cores this projects to about 292 GElem/s, or 584 GB/s of
+BF16 output; encoded input plus prepared scales accounts for about 183 GB/s.
+
+### Transposed output for a linear consumer
+
+`transpose_output=True` is an opt-in mode requiring `experimental_fast=True`
+and `output_layout=ttnn.TILE_LAYOUT`. It returns the full transpose of the last
+two decoded dimensions: packed data representing W[K,N] produces BF16 W.T[N,K].
+Leading batch dimensions are preserved. Input preparation is unchanged:
+`nvfp4.pack(codes_W, scales_W, experimental_fast=True)`.
+
+The decoder keeps the column-oriented tiles in DEST and the writer exchanges
+their tile-grid coordinates within each batch. Both the values inside each tile
+and the tile grid are transposed; no separate device transpose is launched.
+Use the result as `ttnn.linear(X, decoded_W_transposed, transpose_b=True, ...)`
+or the equivalent matmul, selecting a native RHS-transpose program config such
+as `MatmulMultiCoreReuseMultiCast1DProgramConfig`. Other backends may materialize
+a transpose. The logical RHS maps to hardware SrcA in the matmul kernels.
+
+Skipping the converter's DEST transpose can reduce conversion time, but RHS
+memory-read strides also change. Measure the complete conversion-plus-consumer
+workload: an L1 improvement does not imply a DRAM improvement. The default
+`transpose_output=False` returns the ordinary decoded tensor and retains the
+original output-layout contract.

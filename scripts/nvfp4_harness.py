@@ -255,18 +255,23 @@ def save_disassembly(candidate, output, stage, metrics):
 
 
 def math_overlay(candidate, output, repeats):
-    """Diagnostic only: replay a face in DEST; amortize other pipeline work."""
+    """Repeat a complete packed-tile sweep, preserving cross-face LReg state."""
     overlay = output / "math-overlay"
     compute = overlay / KERNELS / "compute"
     compute.mkdir(parents=True)
     source = (candidate / KERNELS / "compute/dequantize_fast.cpp").read_text()
-    anchor = "                MATH((sfpu::nvfp4_decode_column_face"
-    if source.count(anchor) != 1:
-        raise EvaluationError("Math diagnostic cannot instrument this candidate's compute structure")
-    start = source.index(anchor)
-    end = source.index("));", start) + 3
-    call = source[start:end]
-    replacement = f"#pragma GCC unroll 0\n                for (uint32_t repeat = 0; repeat < {repeats}; ++repeat) {{\n{call}\n                }}"
+    start_anchor = "#pragma GCC unroll 4\n        for (uint32_t plane = 0; plane < planes; ++plane) {"
+    end_anchor = "        MATH((sfpu::nvfp4_convert_end()));"
+    if source.count(start_anchor) != 1 or source.count(end_anchor) != 1:
+        raise EvaluationError("Math diagnostic cannot instrument this candidate's complete decode sweep")
+    start, end = source.index(start_anchor), source.index(end_anchor)
+    if end <= start:
+        raise EvaluationError("Math diagnostic found an invalid decode sweep boundary")
+    sweep = source[start:end]
+    replacement = (
+        f"#pragma GCC unroll 0\n        for (uint32_t repeat = 0; repeat < {repeats}; ++repeat) {{\n"
+        f"{sweep}        }}\n"
+    )
     (compute / "dequantize_fast.cpp").write_text(source[:start] + replacement + source[end:])
     for path in (candidate / KERNELS).rglob("*"):
         if path.is_file() and path.name != "dequantize_fast.cpp":
@@ -337,7 +342,7 @@ def evaluate(candidate, output, diagnostic, timeout, accuracy_only=False):
                 save_disassembly(overlay, output, stage, result["math_isolate"])
                 result["math_isolate"][
                     "scope"
-                ] = "Repeated DEST face decoder; amortized pipeline, not standalone LLK MATH_ISOLATE"
+                ] = "Repeated complete DEST decode sweep; amortized pipeline, not standalone LLK MATH_ISOLATE"
         if before != validate_candidate(candidate)[2] or evaluator != hashes(REPO, TRUSTED_FILES):
             raise EvaluationError("Candidate or trusted evaluator changed during evaluation")
         result["status"] = "passed"

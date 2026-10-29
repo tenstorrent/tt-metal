@@ -9,12 +9,14 @@
 #include "api/dataflow/circular_buffer.h"
 #ifdef TRISC_MATH
 #include "nvfp4_sfpu.hpp"
+#include "nvfp4_tti.hpp"
 #endif
 
 void kernel_main() {
     compute_kernel_hw_startup(0, 16);
     constexpr uint32_t planes = get_compile_time_arg_val(0);
     constexpr bool fpu_tensor_scale = get_compile_time_arg_val(5);
+    constexpr bool transpose_output = get_compile_time_arg_val(6);
     constexpr uint32_t global_bits = get_compile_time_arg_val(3);
     constexpr uint32_t global_bf16_bits = (global_bits + 0x7fff + ((global_bits >> 16) & 1)) & 0xffff0000;
     const uint32_t count = get_arg_val<uint32_t>(0);
@@ -36,19 +38,22 @@ void kernel_main() {
         copy_tile(1, 0, 1);
         MATH((sfpu::nvfp4_convert_begin()));
         MATH((sfpu::nvfp4_expand_scale_vectors()));
+        MATH((sfpu::nvfp4_init_raw()));
 #pragma GCC unroll 4
         for (uint32_t plane = 0; plane < planes; ++plane) {
 #pragma GCC unroll 4
             for (uint32_t face = 0; face < 4; ++face) {
-                MATH((sfpu::nvfp4_decode_column_face<fpu_tensor_scale>(
-                    plane, face, sfpu::Converter::as_float(global_bf16_bits))));
+                MATH((sfpu::nvfp4_decode_column_face_raw<fpu_tensor_scale, global_bf16_bits>(plane, face)));
             }
         }
         MATH((sfpu::nvfp4_convert_end()));
-        // Undo the offline 32x32 transposition entirely in DEST.
-        transpose_dest_init();
-        for (uint32_t plane = 0; plane < planes; ++plane) {
-            transpose_dest(plane + 2);
+        if constexpr (!transpose_output) {
+            // Restore ordinary tiles; transposed output keeps these orientations
+            // and lets the writer exchange the tile-grid coordinates instead.
+            transpose_dest_init();
+            for (uint32_t plane = 0; plane < planes; ++plane) {
+                transpose_dest(plane + 2);
+            }
         }
         // FPU multiplication uses a BF16 tensor scale, with decoded output
         // reused directly from DEST. No intermediate L1 pack/unpack is needed.

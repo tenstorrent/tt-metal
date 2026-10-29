@@ -22,6 +22,7 @@ Tensor dequantize_nvfp4(
     bool fp32_dest_acc_en = false,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     bool experimental_fast = false,
-    bool fpu_tensor_scale = true);
+    bool fpu_tensor_scale = true,
+    bool transpose_output = false);
 
 }  // namespace ttnn::operations::experimental

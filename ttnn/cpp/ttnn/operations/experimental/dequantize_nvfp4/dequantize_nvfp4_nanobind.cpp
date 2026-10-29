@@ -40,13 +40,24 @@ DEST. Use UINT16 for BF16 DEST. BF16 output rounds to nearest even once after bo
 either DEST mode. FLOAT32 output retains FP32 values. SFPU arithmetic flushes FP32 subnormals.
 experimental_fast=True requires UINT16 data, BFLOAT16 output, and BF16 DEST.
 Prepare both inputs with nvfp4.pack(..., experimental_fast=True). In this mode
-scales are compact BFLOAT16 rows of exactly decoded E4M3/E2M1 scales; packed
-data is transposed offline. Hardware ROW broadcast supplies column scales,
-SFPU uses native nearest rounding (ties away), and an in-DEST transpose
-restores ordinary output tiles. The tensor scale is rounded to BF16.
+scales are compact BFLOAT16 rows of exactly decoded E4M3/E2M1 scales. Each
+32x32 data tile is transposed offline. A compact scale tile is unpacked
+and expanded into column scale vectors in DEST. SFPU uses native nearest
+rounding (ties away), and an in-DEST transpose restores ordinary output tiles.
+The tensor scale is rounded to BF16.
 fpu_tensor_scale=True applies it using HiFi4 FPU DEST reuse; False applies it
 in the SFPU and avoids the FPU multiply/reconfiguration. Both are experimental
 relaxed-precision paths; the original behavior remains the default.
+
+transpose_output=True requires experimental_fast=True and TILE output. It returns
+the full last-two-dimension transpose of the decoded tensor, including swapping
+the tile grid independently within each batch. Prepare the original data/scales
+with the same nvfp4.pack call. This skips the in-DEST transpose and writes tiles
+to transposed grid coordinates, without a separate transpose operation. For a
+weight W with shape [K,N], the result has shape [N,K] and can be consumed by
+linear(X, decoded_W_transposed, transpose_b=True). Use a matmul program config
+with native RHS transposition; some program configs materialize a transpose.
+This option changes the returned tensor shape and defaults to False.
 See the operation README for packing examples, accuracy, and fusion considerations.
 )doc",
         &dequantize_nvfp4,
@@ -60,6 +71,7 @@ See the operation README for packing examples, accuracy, and fusion consideratio
         nb::arg("fp32_dest_acc_en") = false,
         nb::arg("memory_config") = nb::none(),
         nb::arg("experimental_fast") = false,
-        nb::arg("fpu_tensor_scale") = true);
+        nb::arg("fpu_tensor_scale") = true,
+        nb::arg("transpose_output") = false);
 }
 }  // namespace ttnn::operations::experimental

@@ -40,10 +40,10 @@ ProgramDescriptor Nvfp4ProgramFactory::create_descriptor(
                 {CBFormatDescriptor{.buffer_index = id, .data_format = format, .page_size = page_size}}}});
     };
     add_cb(0, tile_bytes, datatype_to_dataformat_converter(packed.dtype()), 2);
-    // Scales and staging buffers are consumed as raw L1 bytes, never unpacked.
+    // Precise-mode scales stay raw; fast mode unpacks a compact BF16 scale tile.
     if (args.experimental_fast) {
-        // A page is one 16-element row. ROW broadcast only reads that row;
-        // metadata describes the 16x16 face that the math engine broadcasts into.
+        // Each page holds 16 scales. Sixteen contiguous pages form one 16x16
+        // tile, copied to DEST once and expanded into per-face scale vectors.
         desc.cbs.push_back(CBDescriptor{
             .total_size = 2 * scale_bytes,
             .core_ranges = all_cores,
@@ -92,6 +92,10 @@ ProgramDescriptor Nvfp4ProgramFactory::create_descriptor(
         static_cast<uint32_t>(output.layout() == Layout::TILE),
         output.buffer()->page_size()};
     TensorAccessorArgs(*output.buffer()).append_to(writer_ctas);
+    // Keep the tensor accessor at offset 6; append transpose metadata after it.
+    writer_ctas.push_back(static_cast<uint32_t>(args.transpose_output));
+    writer_ctas.push_back(packed.logical_shape()[-2] / tile_height);
+    writer_ctas.push_back(width_tiles * planes);
     KernelDescriptor writer;
     writer.kernel_source = base + "dataflow/writer.cpp";
     writer.core_ranges = all_cores;
@@ -108,7 +112,8 @@ ProgramDescriptor Nvfp4ProgramFactory::create_descriptor(
         static_cast<uint32_t>(args.scale_format == operations::experimental::Nvfp4ScaleFormat::E2M1),
         std::bit_cast<uint32_t>(args.global_scale),
         static_cast<uint32_t>(args.dtype == DataType::BFLOAT16),
-        static_cast<uint32_t>(args.fpu_tensor_scale)};
+        static_cast<uint32_t>(args.fpu_tensor_scale),
+        static_cast<uint32_t>(args.transpose_output)};
     compute.config = ComputeConfigDescriptor{
         .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = args.fp32_dest_acc_en, .dst_full_sync_en = true};
 
