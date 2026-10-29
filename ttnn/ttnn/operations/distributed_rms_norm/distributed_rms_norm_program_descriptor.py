@@ -84,6 +84,10 @@ FOLD_AHEAD_SOLO = FOLD_AHEAD_ALL  # G_w == 1 (D1 / D1-HS): the core owns every w
 RECORD_BYTES = 32 * 4  # one fp32 per row of a tile-row
 SEG_ALIGN = 64  # landing slot alignment (Blackhole DRAM/L1 NoC alignment)
 MAX_HEADERS = 8  # packet headers per port (one per destination chip)
+STATS_LINKS_MAX = (
+    1 << 16
+)  # Refinement 4 (TRANSPORT, lamp L3): links that carry the stats records, min'ed with num_links;
+#                            only those links get (and reserve) port cores, the rest of the grid works
 FWD, BWD = 0, 1
 _OPP = {FWD: BWD, BWD: FWD}
 
@@ -889,6 +893,24 @@ def fold_ahead(plan) -> int:
     return min(int(v) if v else (FOLD_AHEAD if plan.G_w > 1 else FOLD_AHEAD_SOLO), FOLD_AHEAD_ALL)
 
 
+def stats_links(num_links: int) -> int:
+    """Links carrying the records (and reserving port cores): min(num_links, STATS_LINKS_MAX), overridable for
+    measurement only (DRMS_STATS_LINKS; unset in production)."""
+    import os
+
+    v = os.environ.get("DRMS_STATS_LINKS", "")
+    return max(1, min(num_links, int(v) if v else STATS_LINKS_MAX))
+
+
+def reserved_links(num_links: int) -> int:
+    """Links whose port cores are kept off the worker grid: stats_links(num_links). DRMS_RESERVE_LINKS (measurement
+    only) reserves that many regardless, to separate the transport effect from the worker-count effect."""
+    import os
+
+    v = os.environ.get("DRMS_RESERVE_LINKS", "")
+    return max(stats_links(num_links), int(v)) if v else stats_links(num_links)
+
+
 def read_lookahead_waves() -> int:
     """READ_LOOKAHEAD_WAVES, overridable for measurement only (DRMS_LOOKAHEAD; unset in production)."""
     import os
@@ -999,7 +1021,7 @@ def plan_summary(input_tensor, *, cluster_axis, num_links, gamma=None, fp32_dest
     mc = input_tensor.memory_config()
     if mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
         taken = {(c.x, c.y) for r in mc.shard_spec.grid.ranges() for c in _range_cores(r)}
-    ports = port_cores(grid, 2 * num_links, taken)
+    ports = port_cores(grid, 2 * reserved_links(num_links), taken)
     pset = {(c.x, c.y) for c in ports}
     workers = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in pset]
     sz = _sizes(input_tensor, gamma, fp32_dest_acc_en, mesh.shape[cluster_axis])
@@ -1085,7 +1107,7 @@ def create_mesh_program_descriptor(
     taken = set()
     if mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
         taken = {(c.x, c.y) for r in mc.shard_spec.grid.ranges() for c in _range_cores(r)}
-    port_list = port_cores(grid, 2 * num_links, taken)
+    port_list = port_cores(grid, 2 * reserved_links(num_links), taken)
     pset = {(c.x, c.y) for c in port_list}
     workers = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in pset]
     out_resident = _out_resident(input_tensor, output_tensor)
@@ -1116,7 +1138,7 @@ def create_mesh_program_descriptor(
 
         # ---- publishers -> links ----
         P = plan.G_h * plan.owners  # publishers per wave
-        L = min(num_links, P)
+        L = min(stats_links(num_links), P)
         n_pub = [len([k for k in range(P) if k % L == l]) for l in range(L)]
         seg_bytes = [n_pub[l] * plan.q * RECORD_BYTES for l in range(L)]
         seg_stride = _align_up(max(seg_bytes), SEG_ALIGN)
