@@ -20,7 +20,8 @@ namespace ckernel {
 // Kept for callers that size DEST slots against the rope's tile geometry.
 constexpr std::uint32_t ROPE_SFPU_TILE_ROWS = 64;
 
-ALWI void rope_sfpu_init() { MATH((sfpu::sfpu_rope_configure_addrmod())); }
+// Nothing to program: the rope only uses ADDR_MOD_7, which hw_configure leaves at zero advance.
+ALWI void rope_sfpu_init() {}
 
 /**
  * Rotate in place, x tiles laid out at an arbitrary DEST stride.

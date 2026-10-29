@@ -12,10 +12,10 @@
 
 namespace ckernel {
 
-// Kernel-invariant SFPU init (SFPU config register + invariant ADDR_MOD_7). Retained for the standalone tt-llk
-// SFPU test harness, which bypasses the metal "full init" entry points and runs this itself. The metal compute
-// path no longer hoists this: each per-op init below is self-contained (#50381), running the invariant per-op
-// rather than once-per-kernel.
+// Kernel-invariant SFPU init (SFPU config register; ADDR_MOD_7 is set by hw_configure). Retained for the
+// standalone tt-llk SFPU test harness, which bypasses the metal "full init" entry points and runs this itself.
+// The metal compute path no longer hoists this: each per-op init below is self-contained (#50381), running the
+// invariant per-op rather than once-per-kernel.
 inline void llk_math_sfpu_init_once() {
     SAN_HOOK(unsupported());
     _llk_math_eltwise_unary_sfpu_init_once_();
@@ -71,7 +71,7 @@ void unary_le_init();
 void unary_lt_init();
 void unary_ne_init();
 
-// Residual per-op inits for ops used via bare SFPU_UNARY_INIT(OP) (no callback). config_reg + ADDR_MOD_7 are
+// Residual per-op inits for ops used via bare SFPU_UNARY_INIT(OP) (no callback). config_reg is
 // run per-op by the bare delegate below (_llk_math_eltwise_unary_sfpu_init_once_()), so these program only the
 // op's residual state (op-specific ADDR_MOD_6 where needed + reset the RWC counters).
 // Rounding-family ops (ceil/floor/trunc/frac/round): pure-arithmetic SFPI kernels with no LUT/ADDR_MOD_6
@@ -119,7 +119,7 @@ inline void unused_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 template <SfpuType sfpu_op, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_init() {
     SAN_HOOK(unsupported());
-    // Per-op common SFPU init (config reg + invariant ADDR_MOD_7), formerly hoisted once-per-kernel via
+    // Per-op common SFPU init (config reg), formerly hoisted once-per-kernel via
     // llk_math_sfpu_init_once(). Consolidated back per-op (#50381) so each init is fully self-contained and
     // never depends on a separate once-init having run first. The co-located sfpu::<op>_init() below then
     // programs only the op's residual state (op-specific ADDR_MOD_6 where needed + counter reset).
@@ -242,12 +242,12 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         sfpu::typecast_init();
     } else if constexpr (sfpu_op == SfpuType::exponential) {
         // SDPA and other direct LLK callers use this no-arg overload to get the generic unary SFPU
-        // addrmod state (config reg + ADDR_MOD_7 + counter reset) without an op-specific init or a
+        // addrmod state (config reg + counter reset) without an op-specific init or a
         // preceding compute_kernel_hw_startup, so route it to the full generic init.
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::exponential>();
     } else {
         // Generic fallback (pre-restructuring behavior): ops without a self-contained sfpu::<op>_init()
-        // get the full generic unary SFPU init (config reg + ADDR_MOD_7 + op-specific ADDR_MOD_6 via
+        // get the full generic unary SFPU init (config reg + op-specific ADDR_MOD_6 via
         // eltwise_unary_sfpu_configure_addrmod<OP>, which has a default valid for any SfpuType + counter
         // reset). Keeps the bare no-arg delegate instantiable across the whole SfpuType set.
         _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
@@ -255,7 +255,7 @@ inline void llk_math_eltwise_unary_sfpu_init() {
 }
 
 // Callback init entry point (SFPU_UNARY_INIT_FN / _FN_ARGS / two-arg SFPU_UNARY_INIT). The per-op common init
-// (config reg + ADDR_MOD_7 + counter reset) runs first, then the op-specific init_func. Consolidated per-op
+// (config reg + counter reset) runs first, then the op-specific init_func. Consolidated per-op
 // (#50381) rather than hoisted: re-asserting the shared SFPU config/addrmod state on every init -- on both the
 // MATH and PACK threads -- keeps the exp(PACK)/fp32-reciprocal(MATH) shared macro/replay programming from
 // interleaving destructively, which was the #50381 fp32 SDPA accuracy regression.

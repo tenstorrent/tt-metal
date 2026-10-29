@@ -18,16 +18,6 @@
 #include "sfpu/ckernel_sfpu_welfords.h"
 
 // local function declarations
-inline void welfords_sfpu_configure_addrmod()
-{
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
-}
-
 inline void welfords_sfpu_configure_mop();
 
 template <DstSync Dst>
@@ -56,13 +46,12 @@ inline void _llk_math_welfords_sfpu_inc_dst_face_addr_()
 inline void _llk_math_welfords_sfpu_init_()
 {
     sfpu::_init_sfpu_config_reg();
-    welfords_sfpu_configure_addrmod();
     math::reset_counters(p_setrwc::SET_ABD_F);
     _program_welfords_replay_buffer_();
 }
 
 /**
- * @brief Configure SFPU constants, address modifiers, and counters for two-pass statistics.
+ * @brief Configure SFPU constants and counters for two-pass statistics.
  *
  * @note Call @ref _two_pass_clear_stats_ before accumulating a new population; initialisation does not clear the
  * running register state.
@@ -70,7 +59,6 @@ inline void _llk_math_welfords_sfpu_init_()
 inline void _llk_math_two_pass_sfpu_init_()
 {
     sfpu::_init_sfpu_config_reg();
-    welfords_sfpu_configure_addrmod();
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
