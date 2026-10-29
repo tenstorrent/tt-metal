@@ -6,8 +6,8 @@
 // Pass 0 packs (overwrites) the result; every later pass packs it again with l1_acc, adding into L1. Without
 // L1_ACC_RUNTIME those are two packs (l1_acc Off, then On); with it, one pack with l1_acc = Toggle::Runtime and the
 // run-time value pass > 0. With PASSES > 2
-// the sections wrap around, so the test also covers the Dest sync API's double buffering. Only Tensors, the Compute
-// API and the Dest sync API.
+// the sections wrap around, so the test also covers the Dest ring's two sections. Only Tensors, the Compute
+// API and a Dest ring.
 
 #include <cstdint>
 
@@ -47,23 +47,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto w   = llk2::Tensor<in1_spec>(params.buffer_B[0]);
     const auto out = llk2::Tensor<out_spec>(params.buffer_Res[0]);
 
+    using AccRing = llk2::DestRing<acc_spec>;
     for (std::uint32_t pass = 0; pass < PASSES; pass++)
     {
-        const auto acc = llk2::dest_acquire<acc_spec>();
-        llk2::matmul(x, w, acc);
-        llk2::dest_commit(acc);
+        const auto y = llk2::matmul(x, w, llk2::reserve_back<AccRing>());
         if constexpr (L1_ACC_RUNTIME)
         {
-            llk2::pack<runtime_pack>(acc, out, /* l1_acc */ pass > 0);
+            llk2::pack<runtime_pack>(y, out, /* l1_acc */ pass > 0);
         }
         else if (pass == 0)
         {
-            llk2::pack<first_pack>(acc, out);
+            llk2::pack<first_pack>(y, out);
         }
         else
         {
-            llk2::pack<accumulating_pack>(acc, out);
+            llk2::pack<accumulating_pack>(y, out);
         }
-        llk2::dest_release(acc);
+        llk2::release(y);
     }
 }

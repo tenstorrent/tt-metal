@@ -26,8 +26,8 @@
 // Straight to Dest (unpack.h, "Unpack to Dest"). Math tells the unpacker where to write and waits until it has:
 //   1. wait until math's own earlier Dest writes are done (semaphore MATH_DONE, math_done_sync: posted from the math
 //      pipe once it is idle, then taken back by the RISC-V)
-//   2. send acc's Dest row (absolute: the Dest sync API's tensors start at their section's row) through the mailbox.
-//      Math owns the section by now (dest_acquire waited on math); the unpack thread's dest_acquire does not wait,
+//   2. send acc's Dest row (absolute: a Dest ring's tensors start at their section's row) through the mailbox.
+//      Math owns the section by now (the ring's reserve waited on math); the unpack thread's reserve does not wait,
 //      so this mailbox is what keeps the unpacker out of a section the packer still reads
 //   3. stall math until the unpacker posts UNPACK_TO_DEST, then take it
 //   4. mark every written face's rows as written (ZEROACC clear-zero-flags): on Blackhole, an unpack to Dest in the

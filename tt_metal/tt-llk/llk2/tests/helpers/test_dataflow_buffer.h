@@ -22,7 +22,8 @@
 // What only the harness needs (tt-metal's firmware and data movement kernels do it there):
 //   - the constructor takes the buffer's base address, page size and page count, and sets up this thread's side
 //     (tt-metal: setup_local_cb_read_write_interfaces from the host's CB config, read side on unpack, write side
-//     on pack);
+//     on pack). DataflowBuffer(id), as a tt-metal kernel constructs one, reads them from buffer_configs[id], which
+//     the test fills first;
 //   - preload(pages): the consumer (unpack) writes the counters as if a producer had pushed `pages` pages already in
 //     L1 (tt-metal: a reader kernel pushes them);
 //   - zero_counters(): the producer (pack) writes both counters 0 (tt-metal: the firmware's init_sync_registers
@@ -77,10 +78,29 @@ inline void harness_barrier()
     llk_barrier::rendezvous(llk_barrier::is_action_thread());
 }
 
+/// TEST ONLY: one buffer's host config (tt-metal: the CB config the host writes and the firmware reads).
+struct BufferConfig
+{
+    std::uint32_t base_address; ///< bytes
+    std::uint32_t page_bytes;   ///< one page
+    std::uint32_t pages;        ///< capacity
+};
+
+inline constexpr std::uint32_t max_buffers = 32; ///< buffer ids 0..31, as tt-metal's NUM_CIRCULAR_BUFFERS
+
+/// TEST ONLY: every buffer's host config, by id; the test fills it before the kernel constructs its buffers.
+inline BufferConfig buffer_configs[max_buffers] {};
+
 /// TEST ONLY: tt-metal's DataflowBuffer on a Blackhole TRISC (see the top of the file).
 class DataflowBuffer
 {
 public:
+    /// This thread's side of buffer id, from buffer_configs[id] (tt-metal: the firmware, from the host's CB config).
+    explicit DataflowBuffer(std::uint16_t id) :
+        DataflowBuffer(id, buffer_configs[id].base_address, buffer_configs[id].page_bytes, buffer_configs[id].pages)
+    {
+    }
+
     /// This thread's side of buffer id at base_address (bytes): pages of page_bytes each (tt-metal: the firmware).
     DataflowBuffer(std::uint16_t id, std::uint32_t base_address, std::uint32_t page_bytes, std::uint32_t pages) :
         id_(id), fifo_page_size_(page_bytes / l1_word_bytes), fifo_num_pages_(pages)

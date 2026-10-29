@@ -22,22 +22,16 @@
 // How one tile is done. The SFPU has 32 lanes. An SFPI load reads 32 datums from Dest: the even or the odd columns
 // of four rows, at the Dest row counter plus the Dest offset. One SFPI iteration loads, computes and stores those
 // 32 datums, then moves the row counter on; 8 iterations cover one 16 x 16 face. So for each tile: point the Dest
-// offset at the tile, wait until the FPU has finished writing Dest, and for each of the 4 faces call the SFPI
+// offset at the tile, and for each of the 4 faces call the SFPI
 // function once (8 iterations) and move the row counter's CR to the next face. After each tile, the row counter goes
 // back to 0.
 //
 // Which thread drives the SFPU. Either the math or the pack thread can issue SFPU instructions; each has its own
-// Dest offset register, row counters and address modifiers, so configure and execute are the same on both. They
-// differ in the hand-over around the call, which belongs to the Dest sync API (compute_api/dest.h), not to the op:
-//   math   call between dest_acquire and dest_commit. The FPU wrote Dest on the same thread: execute stalls the SFPU
-//          until the FPU is idle. Math's dest_commit waits for the SFPU before it hands the section to the packer.
-//   pack   call between dest_commit and pack. The pack thread's dest_commit is a SEMWAIT on MATH_PACK whose block
-//          mask is every instruction class (dest.h), so no later pack-thread instruction, SFPU and Config ones
-//          included, passes the Wait Gate until math has posted MATH_PACK (tt-isa-documentation,
-//          BlackholeA0/TensixTile/TensixCoprocessor/STALLWAIT.md). Nothing of vec reaches the SFPU before math has
-//          handed Dest over; that is what _llk_packer_wait_for_math_done_ gave the old *_tile_pack calls. After the
-//          last tile, vec stalls the packer until the SFPU is idle, so the pack that follows reads the results (as
-//          today's apply_activation_from_pack does).
+// Dest offset register, row counters and address modifiers, so configure and execute are the same on both. The
+// hand-over around the call is the owners' (llk_lib/sync.h), not the op's: the Compute API takes the Dest tensor over
+// for the SFPU on the driving thread before vec runs (a STALLWAIT for the FPU on math; on pack, math drains the FPU and
+// posts math_pack_sync, and pack waits with every instruction class held, SFPU and Config included), and the op that
+// reads the result takes it over from the SFPU (pack: a STALLWAIT on the pack thread until the SFPU is idle).
 // Either way the Dest offset is the tensor's address (the absolute Dest row) plus the tile's rows: no section base.
 //
 // Not HAL yet:
@@ -269,8 +263,6 @@ inline __attribute__((always_inline)) void vec_execute(std::uint32_t dest_row, S
     for (std::uint32_t tile = 0; tile < P.tiles; tile++)
     {
         cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(dest_row + tile * dest_rows_per_tile(P));
-        // The SFPU waits until the FPU has finished writing Dest.
-        hal::sync::wait::stall<StallTarget::Sfpu, StallCondition::MathIdle>();
 #pragma GCC unroll 0
         for (std::uint32_t face = 0; face < P.num_faces; face++)
         {
@@ -292,11 +284,6 @@ inline __attribute__((always_inline)) void vec(std::uint32_t dest_row, Scalars..
     {
         vec_configure<p>();
         vec_execute<p>(dest_row, scalars...);
-        if constexpr (On == Thread::Pack)
-        {
-            // The pack that follows on this thread reads the SFPU's results.
-            hal::sync::wait::stall<StallTarget::Pack, StallCondition::SfpuIdle>();
-        }
     }
 }
 
