@@ -148,13 +148,14 @@ class FakePP:
         self.unit, self.ids, self.done, self.chunk = unit, None, False, None
         self.model, self.spans, self.interleaved, self.mark = model, 0, 0, None
         self.span_chunks = {}
+        self.prompt_spans, self.handoffs = 0, []  # handoffs: (tokens, chunk, spans of that prompt)
 
     def pick_chunk(self, n):
         """a chunk dividing the unit, smaller for shorter prompts (as PPPrefill.pick_chunk)"""
         return self.unit if n >= 2 * self.unit else self.unit // 2
 
     def reset(self):
-        self.ids, self.done, self.chunk = [], False, None
+        self.ids, self.done, self.chunk, self.prompt_spans = [], False, None, 0
 
     def run(self, ids, chunk=None):
         assert self.ids == [], "run() after a reset only"
@@ -167,6 +168,7 @@ class FakePP:
         assert first_chunk * chunk == len(self.ids), f"span from chunk {first_chunk}, the PP holds {len(self.ids)}"
         self.chunk = chunk
         self.spans += 1
+        self.prompt_spans += 1
         self.span_chunks[chunk] = self.span_chunks.get(chunk, 0) + 1
         self.interleaved += first_chunk > 0 and self.model.steps != self.mark
         self.mark = self.model.steps
@@ -178,6 +180,7 @@ class FakePP:
     def handoff(self, model, n_tokens, block_table=None, slot=None):
         assert self.done and len(self.ids) == n_tokens, (self.done, len(self.ids), n_tokens)
         assert self.chunk == self.pick_chunk(n_tokens), f"{n_tokens} tokens run at chunk {self.chunk}"
+        self.handoffs.append((n_tokens, self.chunk, self.prompt_spans))
         assert isinstance(model, Contract) and model._obj is self.model, "handoff into another model"
         model = self.model
         assert len(block_table) * BLOCK >= n_tokens

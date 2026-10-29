@@ -41,6 +41,8 @@ CASES = [
     (1000, 2, 3049, True, 1024, False),  # does not end at n_tokens
     (1024, 8, 9216, False, 1024, False),  # past max_len
     (1024, 0, 1024, False, 300, False),  # not a chunk size of the prefill
+    (1024, 4, 3072, False, 512, True),  # a unit-aligned span at a smaller chunk (first_chunk counts in it)
+    (0, 2, 1024, True, 512, True),  # an empty draining span (the final chunk is the prompt's last token)
 ]
 
 
@@ -48,7 +50,7 @@ CASES = [
 def test_span_checks(T, first, n, drain, chunk, ok):
     pp = stub()
     if first:  # the prompt's first span fixed the chunk size
-        pp._span_chunk = 1024
+        pp._span_chunk = chunk
     with pytest.raises(Reached if ok else ValueError):  # allow-pytest.raises: run with --noconftest
         span(pp, T, first, n, drain, chunk)
 

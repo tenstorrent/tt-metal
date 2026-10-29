@@ -30,6 +30,7 @@ with a fake model and prefill that check slots, block tables, conv-history prese
 import math
 
 import torch
+from loguru import logger
 
 ROWS = 8  # users per launch: the rows-mode build is compiled at width 8 for every launch
 BLOCK = 64  # KV block (positions) = vLLM block_size
@@ -239,12 +240,12 @@ class ResidentRowsAdapter:
             c = self._pp_chunk(total)
             self.engine.prefill_begin(r)
             self.engine.prefill_span(ids[:end], 0, end, c)
-            self.pp_partial = (r, end, total, c)
+            self.pp_partial = (r, end, total, c, 1)
             return None
         r = self.slots.res_of.get(vslot)
         if self.pp_partial is None or r is None or self.pp_partial[0] != r:
             raise RuntimeError(f"continuation for vLLM slot {vslot} (resident {r}) but the PP holds {self.pp_partial}")
-        _, fed, seq_total, c = self.pp_partial
+        _, fed, seq_total, c, calls = self.pp_partial
         if start != fed:
             raise RuntimeError(f"continuation starts at {start}, the PP has {fed} tokens")
         if total != seq_total:
@@ -253,7 +254,7 @@ class ResidentRowsAdapter:
             if end % C:
                 raise RuntimeError(f"chunk ends at {end}, not a multiple of the PP chunk unit {C}")
             self.engine.prefill_span(ids[start:end], start // c, end, c)
-            self.pp_partial = (r, end, total, c)
+            self.pp_partial = (r, end, total, c, calls + 1)
             return None
         T = end
         if T != total:
@@ -261,6 +262,8 @@ class ResidentRowsAdapter:
         # the PP takes all prompt tokens but the last; the tail may be empty (the final chunk is the last token)
         self.engine.prefill_end(ids[start : T - 1], start // c, T - 1, r, self._blocks_for(table_row, T), c)
         self.pp_partial = None
+        # the churn check counts these: split prompts are the ones whose numerics the per-sequence chunk keeps whole
+        logger.info(f"split prefill: resident slot {r}, {T} tokens in {calls + 1} calls at PP chunk {c}")
         return self._first_token(r, ids, T, table_row)
 
     def _first_token(self, r, ids, T, table_row):

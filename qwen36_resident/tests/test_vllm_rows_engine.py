@@ -132,6 +132,7 @@ class Engine:
         self.async_scheduling = self.config.scheduler_config.async_scheduling
         self.queue = deque()
         self.outputs = {}  # req_id -> generated token ids
+        self.prompts = {}  # req_id -> prompt token ids
         self.finished = {}  # req_id -> finish status
         self.replays = {}  # req_id -> output indices produced by a replay prefill after a preemption
         self.steps = 0
@@ -162,6 +163,7 @@ class Engine:
         )
         self.scheduler.add_request(req)
         self.outputs[rid] = []
+        self.prompts[rid] = list(prompt)
 
     def abort(self, rid):
         self.scheduler.finish_requests([rid], RequestStatus.FINISHED_ABORTED)
@@ -293,6 +295,36 @@ def test_a_split_prompt_runs_at_its_whole_prompt_chunk(async_scheduling):
     eng, done = drive(8, async_scheduling, False, 2, n_requests=16, lengths=[40, 300, 1100, 1500, 1900, 2500])
     assert done >= 14 and eng.pp.interleaved > 0
     assert set(eng.pp.span_chunks) == {CHUNK_UNIT // 2, CHUNK_UNIT}, eng.pp.span_chunks
+
+
+@pytest.mark.parametrize("seed,num_blocks", [(0, 100), (1, 120)])  # (1, 120): a replay's last chunk is one token
+@pytest.mark.parametrize("async_scheduling", [False, True], ids=["sync", "async"])
+def test_a_replay_picks_its_chunk_from_prompt_plus_outputs(async_scheduling, seed, num_blocks):
+    """a request preempted mid-decode replays prompt + outputs through prefill: its PP chunk follows that whole
+    sequence (prefill_total_lens), not the prompt, its split replay keeps one total across its spans, and its last
+    chunk (one token past the computed history) still reaches prefill_forward. Prompts of 1700-1900 tokens pick half
+    the unit alone, their replays past two units the unit"""
+    if not plugin_has_chunk_core():
+        pytest.skip("no TT chunk core: every prompt runs whole")
+    eng, done = drive(
+        8,
+        async_scheduling,
+        False,
+        seed,
+        num_blocks=num_blocks,
+        n_requests=12,
+        lengths=[1700, 1900],
+        max_tokens=(300, 500),
+        arrival=1.0,
+    )
+    assert done >= 10
+    pick = eng.pp.pick_chunk
+    replays = [(len(eng.prompts[rid]), k) for rid, ks in eng.replays.items() for k in ks if k > 0]
+    crossing = [(p, k) for p, k in replays if pick(p - 1) != pick(p + k - 1)]
+    assert crossing, f"no replay whose prompt alone picks another chunk: {replays}"
+    # FakePP checked every handoff ran at the chunk of the tokens it handed off; one such replay was split
+    split = {(n, c) for n, c, spans in eng.pp.handoffs if spans > 0}
+    assert any((p + k - 1, pick(p + k - 1)) in split for p, k in crossing), (crossing, eng.pp.handoffs)
 
 
 @pytest.mark.parametrize("seed", range(3))
