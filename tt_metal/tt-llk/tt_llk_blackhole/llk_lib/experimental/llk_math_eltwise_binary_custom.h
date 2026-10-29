@@ -32,13 +32,17 @@ inline void eltwise_binary_configure_addrmod_custom()
  * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4> (ELWMUL only)
  * @param num_faces: Number of faces to process (1, 2, or 4)
  * @note Establishes the operand-driven default Src zero-substitution state, which the bcast-col compute asserts
  *       under LLK asserts; an op that leaves it at keep must be followed by this init again.
  */
-template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type>
+template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces)
 {
+    static_assert(
+        math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
+        "Math fidelity larger than LoFi only works with Eltwise multiply");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
         (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
@@ -97,7 +101,13 @@ inline void _bcast_cols_op_()
  * 8x16 block). A full 32x32 tile has two face-rows (F0/F1 and F2/F3); a 16x32 tiny tile has a single
  * face-row (F0/F1).
  *
+ * The MUL path honours math_fidelity like the canonical ELWMUL MOP: each tile is walked once per fidelity
+ * phase, the last op of a non-final phase rewinds srcA/srcB/dest to the tile start and advances the
+ * fidelity phase (ADDR_MOD_4), and the tile-end SETRWC resets the phase along with the counters. ELWMUL
+ * accumulates into dest, so the phases sum in place exactly as in the canonical path.
+ *
  * @tparam eltwise_binary_type: FPU op, values = <ELWSUB/ELWMUL>
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4> (ELWMUL only)
  * @param ct_dim: Number of srcA column tiles processed in the block.
  * @param tensor_shape: Shape of the operand tile (2 faces for 16x32 tiny tiles, 4 faces for full 32x32 tiles).
  * @param dst_index: Absolute dest tile slot where this block-row's ct_dim tiles begin. Multi-tile-row
@@ -107,13 +117,16 @@ inline void _bcast_cols_op_()
  * @note Call @ref _llk_math_eltwise_binary_init_custom_ first; re-run it after any op that leaves the Src zero flag
  *       at keep.
  */
-template <EltwiseBinaryType eltwise_binary_type>
+template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_bcast_cols_reuse_custom_(
     const std::uint32_t ct_dim = 1, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
     static_assert(
         eltwise_binary_type == EltwiseBinaryType::ELWMUL || eltwise_binary_type == EltwiseBinaryType::ELWSUB,
         "blocked bcast-col reuse scaffold supports ELWMUL and ELWSUB only");
+    static_assert(
+        math_fidelity == MathFidelity::LoFi || eltwise_binary_type == EltwiseBinaryType::ELWMUL,
+        "Math fidelity larger than LoFi only works with Eltwise multiply");
     LLK_ASSERT(
         math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
         "bcast-col custom: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
@@ -145,6 +158,21 @@ inline void _llk_math_bcast_cols_reuse_custom_(
     }
         .set(ADDR_MOD_5);
 
+    // Fidelity phases (ELWMUL only): one walk of the tile per phase. The number of phases is the
+    // MathFidelity value (HiFi2 = 2 ... HiFi4 = 4); LoFi is a single walk.
+    constexpr std::uint32_t num_phases = is_high_fidelity(math_fidelity) ? to_underlying(math_fidelity) : 1;
+    if constexpr (num_phases > 1)
+    {
+        // Last op of a non-final phase: rewind srcA/srcB/dest to the tile start and step the fidelity phase.
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1},
+            .srcb     = {.incr = 0, .clr = 1},
+            .dest     = {.incr = 0, .clr = 1},
+            .fidelity = {.incr = 1},
+        }
+            .set(ADDR_MOD_4);
+    }
+
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AB); // reset both src counters to 0
 
     // Per tile: walk srcA/dest across 4 faces while srcB reuses one face per pair (F0/F1 -> srcB face
@@ -161,19 +189,32 @@ inline void _llk_math_bcast_cols_reuse_custom_(
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + i);
         math::clear_dst_reg_addr();
 
-        for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)
+        for (std::uint32_t phase = 0; phase < num_phases; phase++)
         {
-            // Even face (F0 / F2): op then rewind srcB by one face (ADDR_MOD_5) so the odd face reads it.
-            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
-            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_5>(); // srcB: 8 -> 0
+            for (std::uint32_t face_row = 0; face_row < num_face_rows; face_row++)
+            {
+                // Even face (F0 / F2): op then rewind srcB by one face (ADDR_MOD_5) so the odd face reads it.
+                _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
+                _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_5>(); // srcB: 8 -> 0
 
-            // Odd face (F1 / F3): op then advance srcB +24 (ADDR_MOD_6) to the next face-row / tile.
-            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
-            _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_6>(); // srcB: 8 -> 32 (next face-row)
+                // Odd face (F1 / F3): op then advance srcB +24 (ADDR_MOD_6) to the next face-row / tile,
+                // or, on the last face-row of a non-final fidelity phase, rewind to the tile start and
+                // step the phase (ADDR_MOD_4) so the next walk re-reads the same srcA/srcB block.
+                _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_7>(); // srcB: 0 -> 8
+                if (num_phases > 1 && phase + 1 < num_phases && face_row + 1 == num_face_rows)
+                {
+                    _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_4>(); // srcA/srcB/dest -> 0, phase + 1
+                }
+                else
+                {
+                    _bcast_cols_op_<eltwise_binary_type, ADDR_MOD_6>(); // srcB: 8 -> 32 (next face-row)
+                }
+            }
         }
 
         // Rewind srcB to 0 for the next srcA tile (CLR_A clears srcA's dvalid); srcA keeps advancing.
-        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_AB);
+        // SET_ABD_F also returns the fidelity phase to 0 after a HiFi walk (dest is re-based per tile).
+        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
     }
 
     // Clear srcB dvalid on the way out.

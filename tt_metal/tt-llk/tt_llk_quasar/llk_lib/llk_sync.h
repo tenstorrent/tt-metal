@@ -116,12 +116,16 @@ inline void _llk_stall_cfg_on_()
 /**
  * @brief Advance the calling thread's dest bank section in SyncHalf mode.
  *
- * Each thread (math, pack, unpack) keeps its own view of which dest bank it is
- * currently operating on. After a thread has finished with one bank and handed
+ * The math thread's bank flip: after it has finished with one bank and handed
  * off via a semaphore, it must (1) flip its local dest-register offset to the
  * other bank, (2) wait for any in-flight instructions that still address the
  * old base to drain, and (3) reprogram its per-TRISC dest section base before
  * the next op issues. This helper performs those three steps in order.
+ *
+ * Only math-issued instructions consult the per-TRISC section base registers
+ * (DEST_TARGET_REG_CFG_MATH_SEC0..3), while other threads carry their bank
+ * where their engine reads it: the packer in THCON SRC_ADDR_OFFSET
+ * The unpacker in UNP_DEST tile index.
  *
  * @tparam TRISC_ID       The calling thread's id (ckernel::TRISC_ID = COMPILE_FOR_TRISC:
  *                        0=unpack, 1=math, 2=pack, 3=isolate-SFPU).
@@ -147,4 +151,41 @@ inline void _llk_sync_advance_dest_section_()
     const std::uint32_t base_addr = _get_dest_buffer_base_();
     _llk_stall_cfg_on_<DrainRes0, DrainRes1, DrainRes2>();
     _set_dest_section_base_<TRISC_ID>(base_addr);
+}
+
+/**
+ * @brief Raise the startup barrier on semaphore `sem_index` (max 1, count 0 -> 1).
+ *
+ * Call it on the thread that seeds the shared semaphores, after the seeds: the SEMINIT / SEMPOST pair sits behind
+ * them in the same instruction stream, so a count of 1 proves the seeds have executed. The rest state is 0, so the
+ * first program after reset blocks the passing thread until this runs, and @ref _llk_sync_barrier_pass_ restores 0.
+ *
+ * @param sem_index Semaphore id in range [0, 7].
+ * @note Call once per program on the seeding thread, after the seeds, paired with exactly one
+ *       @ref _llk_sync_barrier_pass_ on the passing thread. Neither helper waits for the other's previous instruction
+ *       to retire, so a second pair with no DEST section between them races the first pass's SEMGET.
+ */
+inline void _llk_sync_barrier_raise_(std::uint8_t sem_index)
+{
+    _llk_sync_init_(sem_index, 1 /*max*/, 0 /*init*/);
+    _llk_sync_post_(sem_index);
+}
+
+/**
+ * @brief Pass the startup barrier on semaphore `sem_index`: spin until it reads 1, then consume it (back to 0).
+ *
+ * The spin is a RISC-side register read, not a SEMWAIT: no Tensix waiter is armed on this thread, so the raiser's
+ * SEMINIT can never land on a pending wait, and every wait or post this thread issues afterwards on the seeded
+ * semaphores is ordered behind their SEMINITs.
+ *
+ * @param sem_index Semaphore id in range [0, 7].
+ * @note Call once per program on the passing thread, before its first wait or post on the seeded semaphores, paired
+ *       with exactly one @ref _llk_sync_barrier_raise_ on the seeding thread.
+ */
+inline void _llk_sync_barrier_pass_(std::uint8_t sem_index)
+{
+    while (semaphore_read(sem_index) == 0)
+    {
+    }
+    _llk_sync_get_(sem_index);
 }

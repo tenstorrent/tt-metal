@@ -13,8 +13,8 @@
 //
 // Scope (v1, middle W devices, coalesced path): each (link,direction) is served by N workers + 1 mux
 // core; each worker owns a contiguous sub-range of this direction's W rows (split host-side). Bank-major
-// coalescing is identical to np_writer's W-coalesce send (base+r, base+r+8, ... contiguous on one bank).
-// Edge-device per-stick + corner handling is TODO before this replaces np_writer for all W cores.
+// coalescing is identical to np_writer's W-coalesce send (base+r, base+r+NP_NUM_DRAM_BANKS, ... contiguous on one
+// bank). Edge-device per-stick + corner handling is TODO before this replaces np_writer for all W cores.
 
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
@@ -34,7 +34,7 @@ constexpr uint32_t stick_size = get_compile_time_arg_val(1);
 constexpr auto dst_ct_args = TensorAccessorArgs<2>();
 constexpr uint32_t ct_after_dst = dst_ct_args.next_compile_time_args_offset();
 constexpr uint32_t W_COALESCE = get_compile_time_arg_val(ct_after_dst);
-constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
+constexpr uint32_t NP_NUM_DRAM_BANKS = NP_DRAM_BANKS;
 // Mux connection CT args (lockstep with FabricMuxConfig on the host).
 constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(ct_after_dst + 1);
 constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(ct_after_dst + 2);

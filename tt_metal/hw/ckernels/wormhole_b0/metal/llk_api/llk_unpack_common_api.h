@@ -101,9 +101,9 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
  *
  * @note Must be called together with llk_math_set_fp32_dest_acc and llk_pack_wait_fp32_dest_acc.
  */
-inline void llk_unpack_wait_fp32_dest_acc() {
+inline void llk_unpack_wait_fp32_dest_acc(bool enable) {
     SAN_HOOK(unsupported());
-    _llk_set_fp32_dest_acc_<ThreadId::UnpackThreadId>();
+    _llk_set_fp32_dest_acc_<ThreadId::UnpackThreadId>(enable);
 }
 
 /**

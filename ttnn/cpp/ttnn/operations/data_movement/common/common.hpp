@@ -88,6 +88,9 @@ uint32_t get_estimated_size_of_cbs(
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a);
 
+// L1 per worker core the allocator can ever hand out, independent of current occupancy.
+uint32_t get_static_l1_space(const Tensor& input_tensor_a);
+
 // One set of buffers, sized for a single block width.
 //
 // The `_multi_core_block[_interleaved]` tilize and untilize factories split work into blocks and
@@ -436,6 +439,16 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor);
 
 // B/W-sh → shard_W*E (feeds split branch); other sharded → buffer->aligned_page_size() (16-aligned L1 stride).
 uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_bytes);
+
+// True for a BLOCK/WIDTH-sharded memory config whose shard row (shard width * element_size) is not a
+// multiple of the buffer alignment. For an RM buffer with such a config, one page is one shard row,
+// and the device stores pages at the aligned page size. The kernel-side TensorAccessor uses a single
+// page size both as the distance between pages and, in `noc_async_*_sharded`, as the bytes moved per
+// page, so one value is correct for both uses only when the shard row is a multiple of the alignment.
+// Always false for HEIGHT sharding. TensorSpec requires a HEIGHT-sharded tensor's shard width to equal
+// the tensor width, so for RM one page is a whole tensor row, which `noc_async_*_sharded` moves in a
+// single transfer of the size the caller asks for, using the page size only as the distance between pages.
+bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, uint32_t element_size);
 
 bool codegen_supported_on_arch(const ttnn::Tensor& input);
 

@@ -17,6 +17,319 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-10-19, part 3 — the tests follow the hardware: the arch from the device, the FPU add's two roundings
+
+## 1. TL;DR
+
+- **Three test issues from the ttsim team, none in the factory** (#62286, #62287, #62289; each reproduces with
+  `TTNN_QSR_NATIVE=0`). ttsim v1.13.0 checks its FPU and SFPU math against the hardware design, so its numbers are
+  the hardware's, and craq-sim has to follow it. tt-metal's own Quasar merge gate runs ttsim too.
+- **The arch comes from the device** (#62286). The tests read `ARCH_NAME` and `CHIP_ARCH`. Without them, the native
+  tests skipped, the fallback control failed, and the two router tests that must skip on Quasar ran and failed
+  (9 cases). Production's `is_quasar()` reads `ttnn.get_arch_name()`, which says `quasar` under both simulators.
+- **The FPU rounds a bf16 add twice** (#62289). It aligns the operand with the smaller exponent with 7 bits below the
+  ULP, rounds it half away from zero, and rounds the sum to nearest even: about 1 element in 80,000 is 1 ULP from
+  torch. craq-sim rounds once. The oracle accepts either rounding, element by element; the rest stays exact.
+- **Two SFPU bounds follow ttsim** (#62287): bf16 SIGMOID after a multiply 5 ULP (was 4), fp32 divide 2 (was 1).
+- **TODO, blocked on craq-sim#516**: craq-sim rounds the bf16 FPU add once. When it rounds twice,
+  `_FPU_ADD_ROUNDINGS` keeps only `_fpu_add_bf16`, and the oracle is the hardware's rule alone.
+- **TODO, blocked on craq-sim#517**: craq-sim's bf16 SIGMOID and SILU differ from ttsim on about 6% of the elements
+  (tip `1bfae892`). The bounds are ttsim's, so no test waits on it. When it closes, run the activation tests on
+  craq-sim and confirm that its largest distances equal ttsim's.
+
+---
+
+## 2. Changes
+
+- **Arch** (`binary_ng_quasar_test_utils.py`): `_on_quasar()` is gone, and the four files that used it call
+  production's `is_quasar()`. `test_fallback_factory_is_engaged` no longer checks the environment against the
+  device. The run instructions in five file headers no longer set `ARCH_NAME` and `CHIP_ARCH`.
+- **Oracle**: `_fpu_add_bf16` models the FPU add, and `_FPU_ADD_ROUNDINGS` holds it beside the single rounding. The
+  native module's add and subtract goldens use both, in the parent and in both child scripts, and so does every
+  activation chained on them.
+- **Bounds** (`_ULP`, `_ACT_ULP`): SIGMOID 5 and divide 2, and the comments say where each bound was measured.
+- **Docs**: design §6.1 (the two roundings) and the fp32 paragraph after it.
+
+---
+
+## 3. Verification
+
+- **Before, on ttsim**: main's eight binary_ng files gave 28 failures without `ARCH_NAME` and 160 with it.
+- **ttsim v1.13.0, without `ARCH_NAME`, as its CI runs**: the native module 170 passed, 1 skipped, 2 strict expected
+  failures, and 1 failure, `IL1.IL1.B12`: there the device profiler's parser aborts on unpaired TRISC1 zone markers,
+  on ttsim only. The other files fail only the activation-format file's 10 BFP8 and BFP4 cases.
+- **craq-sim `b9d8e2f4`, without `ARCH_NAME`, one file per process**: the native module 171 passed, 1 skipped, 2
+  strict expected failures, as before; no-broadcast 104 passed and 2 strict expected failures; bcast 134 and scalar
+  27 passed, with the router tests skipped; resnet_add 10, descriptor_cache_hit 4; the activation formats 112 passed
+  and the 10 BFP failures. The composite file stops at SFPSHFT2, which this build lacks; craq-sim `1bfae892` runs it
+  (14 passed).
+- **`TTNN_QSR_NATIVE=0`**: the fallback control passes on both simulators, and 173 tests skip.
+- **Real Wormhole**: the eight files 701 passed, 183 skipped.
+- **The model**: `_fpu_add_bf16` equals ttsim on 21M elements (four operand families, add and subtract), and craq-sim
+  equals the single rounding on all of them; no element matches neither rounding on either target. The two
+  batching-defect tests still find exactly their predicted wrong tiles.
+
+---
+
+# ► Week of 2026-10-19, part 2 — the native factory is the default on Quasar
+
+## 1. TL;DR
+
+- **The native factory runs by default on Quasar.** `TTNN_QSR_NATIVE=0` runs the Metal 2.0 factory instead, as the
+  A/B reference arm; any value but `0` and `1` is refused. Wormhole and Blackhole do not change: the gate checks the
+  arch before it reads any `TTNN_QSR_*` variable.
+- **A default must give the right answer, so the rule batches the FPU kernel only at ring stride 1**
+  (R = C = W = 1). Above it, the FPU kernel's two-operand unpack steps one ring entry per tile, and only one tile
+  of each batch comes out right. At the old rule the whole no-broadcast file failed 22 FPU cases at 4,4,2. The
+  SFPU kernel keeps 4 tiles in a 16-bit DST and 2 in a 32-bit DST, exact at every stride.
+  `TTNN_QSR_TILES_PER_CYCLE` still sets any batch.
+- **TODO, blocked on #61774**: `llk_unpack_AB` steps one ring entry per tile of a batch. A two-line fix that
+  mirrors `llk_unpack_A` made every FPU op exact at a batch of 8 on craq-sim (4,4,2: 160 of 288 and 1792 of 2080
+  tiles wrong before; 1,4,1: 224 of 256), with the module and the suites otherwise unchanged. When it lands,
+  `native_compute_batch_exact` returns true for the FPU kernel, and the rule batches it at 8 at 4,4,2 and 1,4,1
+  (design §8, F19).
+- **Verified** on craq-sim `b9d8e2f4`, with nothing set: the native module 171 passed, 1 skipped, 2 strict
+  expected failures (the two batching-defect tests, which now set the batch of 8); every Quasar suite file in one
+  process each, all passing except the activation-format file's 10 BFP8 and BFP4 cases, which fail the DFB
+  validator with the native factory off too.
+
+---
+
+## 2. Changes
+
+- **Switch** (`native_tuning`): on unless `TTNN_QSR_NATIVE=0`; a value other than `0` or `1` throws.
+- **Gate** (`matches_quasar_native_slice`): the arch check comes before `native_tuning()`, so off Quasar no knob is
+  parsed and the settings line is not logged.
+- **Rule** (`resolve_native_config`): `native_compute_batch_exact(config, sfpu)` says where every tile of a batch
+  comes out right; the rule batches only there, and the factory's wrong-output warning uses the same helper.
+- **Tests**: the native tests run on Quasar unless `TTNN_QSR_NATIVE=0`, and skip off Quasar, so the Wormhole and
+  Blackhole nightly jobs that collect this directory run as before; the fallback control checks that the
+  environment's arch agrees with the device's. The Python model of the rule follows the change, the two
+  batching-defect tests set the batch of 8, the `rule-batch-depth` guard now trips on the DM batch, and a log case
+  pins the default settings line.
+- **Docs**: design §3.3, §3.6, the comparison table and §8 (the default; F13 is no longer a precondition).
+
+---
+
+## 3. Verification
+
+- **The old rule, known bad**: the whole no-broadcast file at the rule's former FPU batch of 8 failed 22 add and
+  subtract cases on L1 operands (PCC 0.12 to 0.5). The same file now passes: 104 passed, 2 strict expected
+  failures, at the default and with `TTNN_QSR_NATIVE=0`.
+- **The native module**: 171 passed, 1 skipped, 2 strict expected failures with nothing set; with
+  `TTNN_QSR_NATIVE=0`, the fallback control passes and 173 tests skip.
+- **The other suite files, default**: resnet_add 10, descriptor_cache_hit 4, bcast 134 and scalar 27 passed; the
+  activation formats 112 passed and the same 10 BFP8 and BFP4 failures as with the native factory off.
+- **`TTNN_QSR_NATIVE=false`** fails with "TTNN_QSR_NATIVE must be 0 or 1, got 'false'".
+- **Off Quasar**: the test-side switch keeps every native test skipped and runs the fallback control, for every
+  combination of arch and setting; not run on a Wormhole device.
+
+---
+
+# ► Week of 2026-10-19 — F5: fp32 runs native, on the SFPU kernel
+
+## 1. TL;DR
+
+- **The native gate admits fp32**: a, b and the output in one format, bf16 or fp32. In fp32, add, subtract,
+  multiply and divide all run the SFPU kernel; fast mode changes only the routing, which in fp32 is the SFPU kernel
+  either way.
+- **Every fp32 operand reaches the DST by `UnpackToDest`.** Main's LLK keeps the path's four rules since
+  2026-10-19 (design §3.6.1). The native kernels already kept their side: one acquire and one commit around each
+  batch's copies, and one hardware startup. No kernel change for fp32.
+- **The rule takes the compute batch from the kernel and the DST mode**: the slots of one DST section (8 in a
+  16-bit DST, 4 in a 32-bit DST) over the slots per tile (1 on the FPU kernel, 2 on the SFPU kernel). fp32 runs
+  at 2; a larger set batch is refused, and the settings line names both SFPU batches.
+- **Exact oracles, measured on craq-sim**: add, subtract and multiply match torch fp32 bit for bit; divide is
+  within one fp32 step of torch's quotient (on the Metal 2.0 factory, the largest relative error was 1.19e-7); a
+  zero product or quotient is +0.0; SQUARE on fp32 is the fp32 product bit for bit.
+- **The base moved** to main through 2026-10-19 (#60847's queued head). Main made `DataflowBuffer` a class
+  template on Quasar, so the native helpers that took a bare `DataflowBuffer&` stopped compiling (149 of 164
+  module tests failed); they now take each DFB as a template type, as main's Metal 2.0 kernels do.
+- **Verified** on craq-sim `b9d8e2f4`: the native module 165 passed, 1 skipped, 7 strict expected failures; native
+  off 1 passed, 172 skipped; the bf16 suites 84 of 84 and the bf16 activation formats 88 of 88 at both settings; the fp32
+  no-broadcast suite cases, now native, 8 of 8 at the rule and at `1,1,1`; clang-tidy 0 findings on the three
+  host files.
+
+---
+
+## 2. Changes
+
+- **Gate** (`matches_quasar_native_slice`): bf16 or fp32, one format for a, b and the output. Two checks, so that
+  a routing change falls back: fp32 runs only the SFPU kernel, and bf16 runs add and subtract only on the FPU kernel.
+- **Rule**: `native_max_tiles_per_cycle(sfpu, dst_32bit)` replaces `kNativeSfpuMaxTilesPerCycle` and reads the
+  section from `get_dest_reg_count`; `NativeMoves`
+  carries the DST mode; the factory derives `fp32_dest_acc_en` before the rule; the refusal of a larger set batch
+  covers both kernels and names the DST mode.
+- **Kernels**: the native preprocess helper and the SFPU kernel's batch function take template DFB types.
+- **Tests**: a `dtype` option in the arm child with the fp32 oracles, compared in fp32 steps; fp32 ops over the
+  nine op mixes at three configurations, on the tail-ring shards at the two configurations that have tail rings,
+  and with SQUARE on a, SQUARE on b and RELU on the result; a guard arm for a set batch of 4 in fp32; the settings
+  line's 32-bit batch.
+- **Docs**: design §3.6 and §3.6.1 (how the LLK keeps the rules), §6.1 (the fp32 oracles), §8 (F5 done; ND
+  shards added to milestone 3).
+
+---
+
+## 3. Verification
+
+- **RED, then GREEN.** On the build without F5, all 14 new tests fail for the expected reasons: every fp32 case
+  binds `kernels_dfb` (the Metal 2.0 factory), the fp32 guard runs instead of refusing, and the settings line
+  lacks the 32-bit batch. With F5, all 14 pass.
+- **Before the stack**, on the Metal 2.0 factory: fp32 add and divide stall on craq-sim (killed at 240 s). With
+  main's unpack-to-dest LLK they finish in about 10 s, exact.
+- **The fp32 activation-format cases**, which mostly ask for a bf16 output (a mixed format, so the Metal 2.0
+  factory runs them): 24 of 24. The 8 BFP8 cases of the same selection fail the DFB validator, on Quasar as at the
+  base.
+- **Not run**: fp32 with GELU or TANH (no exact model).
+
+---
+
+# ► Week of 2026-10-12, part 2 — F7: activations run native, on both kernels
+
+## 1. TL;DR
+
+- **The native gate admits activations on a, on b and on the result**, in every layout mix the native path takes,
+  on the FPU and the SFPU kernel. The Metal 2.0 factory already ran them.
+- **Three changes make them correct beside C compute threads.**
+  - The FPU preprocess helper takes the kernel's DataflowBuffer objects, as main's does since #60207. An object
+    that a call builds drains when the call returns.
+  - Each Neo fills and empties its own tile counter of an activation ring, so the ring holds one compute batch
+    per compute thread. A ring of one batch at C = 4 is a host `TT_FATAL`.
+  - The tail rings carry no activation. Beside one, an anchor that borrows all three operands must divide by the
+    compute count, as a slice must, else the op takes the NoC path. The factory reads the activation from the
+    compute defines, as the kernels' tail blocks do.
+- **Exact oracles, measured on craq-sim** (32 of 32 cases, 0 elements differ): SQUARE truncates its fp32 result to
+  bf16 on both kernels, the op keeps its own rounding, and a lone post RELU, which the packer applies, clips the
+  rounded result.
+- **RELU on the SFPU**, on a or b or on the result beside a chain, gives +0.0 for every negative
+  input: 13 of 13 cases exact, on add, multiply and divide. It executes SFPGT, so it runs from craq-sim
+  `b9d8e2f4` on; on `ad401613` the new RELU cases abort the process.
+- **GELU and TANH have no exact model.** Their native outputs equal the Metal 2.0 factory's bit for bit.
+- **Verified** on craq-sim `b9d8e2f4`: the native module 156 passed, 1 skipped, 7 strict expected failures with
+  exact tile counts; 1 / 164 native off; 84 of 84 suite cases at the rule with compute batch 1 and at `1,1,1`,
+  post RELU and lhs RELU now native; the bf16 activation-format cases 88 of 88 at both settings; the 16 GELU, TANH,
+  SQUARE and SIGMOID suite cases and the 2 SiLU SwiGLU cases, one process each at both settings: 36 of 36 runs, each
+  on `kernels_qsr` only; clang-tidy 0 findings on the two files.
+- **Found** (reported, not investigated):
+  - GELU shifts the SFPU results of the later programs on the same device, on both factories: each multiply,
+    SQUARE and divide gains about +2.76e-5. Measured 10-20 bit for bit before and after one GELU program: 8192 of
+    8192 fp32 products changed, and 3507 of 8192 bf16 products. TANH and SIGMOID change nothing, and later TANH,
+    SIGMOID or SQUARE programs do not clear it; closing and opening the device does. Cause, by code reading: GELU's
+    approximate init loads its lookup table into LREG9 to LREG14, the SFPU multiply adds LREG9 as its zero, and
+    `_init_sfpu_config_reg_` restores only SFPU_CTRL and LREG11. The suites open a new device for each test, so
+    they do not see it.
+  - This base's fallback hangs on a lone post RELU beside L1-interleaved operands, and beside `I.I.W32`, with
+    main's fixed `kernels_dfb` copied in. The native factory runs both.
+  - Killed simulator runs had filled `/dev/shm` with 671 segments since July.
+
+---
+
+## 2. Changes
+
+- **Gate** (`matches_quasar_native_slice`): the activation refusal is gone. Divide in fast and approximate mode,
+  a reciprocal pass on b before an FPU multiply, stays refused: it is not validated natively.
+- **Factory**: `TailRings` in `select_borrow_anchor`; the activation flag from the compute defines, which now come
+  before the anchor; the activation rings, and the subtile-broadcast rings that native does not run yet, hold one
+  compute batch per compute thread.
+- **Kernels**: `kernels_qsr/compute/eltwise_utils_dfb.hpp` is main's helper; the FPU kernel builds the pre objects
+  that a chain reads. The tail blocks' `#error` names the factory rule.
+- **Tests**: an `act` option in the arm child, with the measured models; 54 cases in three configurations, among
+  them SQUARE on both inputs (two activation rings on each Neo), RELU on a and RELU beside a chain, which run on
+  the SFPU, and a 6-tile shard that takes the NoC path.
+- **Docs**: design §3 (what native accepts), §6.1 (the oracles), §8 (F7 done; milestone 2 except F5).
+
+---
+
+## 3. Verification
+
+- **The differential**, at compute batch 1: 54 of 54 native outputs equal the Metal 2.0 factory's bit for bit:
+  SQUARE, RELU, GELU, TANH and a GELU→SQUARE chain; add and multiply; DRAM, L1 slices, block shards, and 6-tile
+  shards on the NoC path. Two more cases hang on the fallback (above).
+- **The batched output**, under the rule: the wrong tiles equal the batch model, with activations as without. The
+  strict expected failures check each count: 192 of the 256 tiles of a shard mix, on both kernels.
+- **Each part has a test that fails without it**, one build each:
+  - the gate's refusal restored: `expected every op on kernels_qsr, bound qsr=0 dfb=39`;
+  - one-batch activation rings: `TT_FATAL: Num entries in DFB 1 must be divisible by max of num producers and
+    consumers 4`;
+  - tail rings beside an activation: the kernel's `#error` stops the compute build.
+- **RELU on the SFPU** needs the newer simulator: the `relu_lhs` and `relu_chain` cases abort on `ad401613` (SFPGT
+  `0x97001021`) and pass on `b9d8e2f4`.
+- **The review** (code-review-tt): approved after two rounds. It moved the activation flag to the compute defines
+  and added the case with SQUARE on both inputs; with the rule's batch that case gives the predicted 192 wrong
+  tiles on both kernels.
+
+---
+
+# ► Week of 2026-10-12 — F2: subtract, multiply and divide run native, on a native SFPU kernel
+
+## 1. TL;DR
+
+- **The native gate admits bf16 `subtract`, `multiply` and `divide`** besides `add`, in every layout mix the
+  native path takes. The Metal 2.0 factory already ran them.
+- **`multiply` and `divide` needed a native SFPU kernel.** In this op bf16 `multiply` and `divide` run the SFPU
+  kernel unless fast and approximate mode is on. `kernels_qsr/` gains the SFPU compute kernel and its preprocess
+  helper: the Metal 2.0 ones, with a share per compute thread, the compute batch and the tail rings, as the
+  native FPU kernel has. `divide` in fast and approximate mode is a reciprocal pass on b before an FPU multiply,
+  an activation chain, and stays on the Metal 2.0 factory. F5 is now fp32 only (dchen).
+- **The SFPU rule batch is 4.** The SFPU kernel holds each tile in two DST slots, so 4 tiles fill the DST in
+  bf16. The legacy binary_ng runs it at 2, because 4 fails on Blackhole for a reason not yet known; on craq-sim
+  4 is exact at ring stride 1. A set `TTNN_QSR_TILES_PER_CYCLE` above 4 is refused for it.
+- **craq-sim moved to `b9d8e2f4`**, the tip of its `quasar` branch on 2026-10-14. `divide` executes SFPGT, which
+  the earlier build `ad401613` did not decode, so the whole process aborted there; craq-sim decodes it since its
+  #360. The new divide cases fail on `ad401613` and pass on `b9d8e2f4`.
+- **Exact oracles, measured on craq-sim**: the FPU kernel rounds to nearest even (`subtract`, fast `multiply`);
+  the SFPU multiply truncates the fp32 product to bf16, and a zero product is +0.0; `divide` rounds to nearest
+  even, and a zero quotient is +0.0.
+- **Verified** on craq-sim `b9d8e2f4`, at the SFPU batch of 4, with the activation change on top, which changes no
+  program without an activation: the native module 156 passed, 1 skipped, 7 strict expected failures with exact
+  tile counts; 1 / 164 native off; 84 of 84 suite cases at the rule with compute batch 1 and at `1,1,1`, bf16
+  divide among them; clang-tidy 0 findings.
+- **Found on `ad401613`: four planted +0.0 pairs in one tile hang the SFPU multiply**, on both factories. Single
+  zero operands, and -0.0 operands, run. `b9d8e2f4` runs the pairs too, and every such product is +0.0.
+
+---
+
+## 2. Changes
+
+- **Gate** (`matches_quasar_native_slice`): ADD, SUB, MUL and DIV; the SFPU kernel for MUL and DIV; DIV in fast
+  and approximate mode is refused.
+- **Rule** (`resolve_native_config`): `NativeMoves::sfpu`; the SFPU compute batch is `kNativeSfpuMaxTilesPerCycle`
+  (4). The settings line names it.
+- **Factory**: the host precondition admits the SFPU kernel; a set batch above 4 is refused for it.
+- **Kernels**: `kernels_qsr/compute/eltwise_binary_sfpu_no_bcast_dfb.cpp`, which shares the FPU kernel's
+  preprocess helper, `eltwise_utils_dfb.hpp`. The DataflowBuffer objects live in `kernel_main` and are passed
+  by reference, as on main since #60207.
+- **Tests**: an `op` option in the arm child (subtract, multiply, fast multiply, divide), with each kernel's
+  rounding as the oracle; the prediction model gives the SFPU its batch of 4.
+
+---
+
+## 3. Verification
+
+- **The oracles**, on the Metal 2.0 factory with the device's operands, 32 tiles, two seeds: `subtract` and
+  fast `multiply` match round to nearest even on 32768 of 32768 elements, and `multiply` matches truncation on
+  32768 of 32768; the other rule differs on 8811 to 15427 of them. Planted zeros of both signs: every zero
+  product is +0.0, on the native and on the Metal 2.0 factory.
+- **The divide oracle**, native at compute batch 1: round to nearest even on 32768 of 32768 elements, for randn
+  divisors and for divisors of 0.5 to 2; truncation misses half of them. A zero quotient is +0.0: 32768 of 32768
+  with RELU zeros in a and with planted ±0.0 in a.
+- **The new tests**: 8 mixes and `B.B.B_partial` for each op, exact in five configurations; under the rule a
+  strict expected failure with every count as predicted, `B.B.B_partial` included (192 wrong tiles for the
+  SFPU batch of 4 and for the FPU batch of 8; a batch of 2 leaves 128). The tail rings: exact in four
+  configurations; at `1,1,1` `height_5` runs a batch of 4 and a short one. The guard: a set batch of 8 for
+  `multiply` is refused with its own message.
+- **The native module**, on `b9d8e2f4`, at the SFPU batch of 4 and with the activation change on top: 156 passed,
+  1 skipped, 7 strict expected failures; native off 1 passed, 163 skipped. The tests of this change alone: 22
+  passed, 1 strict expected failure. On `ad401613` the divide cases abort the simulator on SFPGT.
+- **The suites** (`no_bcast`, `resnet_add`, `descriptor_cache_hit`, native on): 84 of 84 at the rule with compute
+  batch 1, 84 of 84 at `1,1,1`, the bf16 divide and lhs RELU cases included. fp32 stays deselected: on
+  `b9d8e2f4` it runs but gives a wrong output. The cases that the native gate refuses run on the Metal 2.0
+  factory, which hangs on this base when a core makes several calls, so the suites ran with main's fixed
+  `kernels_dfb` copied in.
+- **clang-tidy**: 0 findings on the factory, the utils and the device operation.
+
+---
+
 # ► Week of 2026-10-05, part 5 — F4 on the new main: rings drain at kernel exit, and a new batch pattern
 
 ## 1. TL;DR

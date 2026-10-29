@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
 //
 // KDA scan reader: the initial state S [K,V] once, then vector-decay prep
 // intermediates v_beta, kd, q_decay, intra, k_dec_t, dl[K,1], t_inv. FP32 by default; selected intermediates may be
@@ -10,7 +10,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"

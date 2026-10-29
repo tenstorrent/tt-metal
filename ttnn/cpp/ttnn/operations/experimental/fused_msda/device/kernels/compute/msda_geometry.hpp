@@ -8,8 +8,8 @@
 // ~140 cycles per operation in soft-float emulation. The SFPU evaluates it
 // across the tile.
 //
-// align_corners, locations_in_grid_space and from_offsets are folded into the
-// three per-level constants on the host, so this kernel does not branch on
+// align_corners, locations_in_grid_space and from_offsets are folded into
+// three constants per axis per level on the host, so this kernel does not branch on
 // them. See fused_msda_program_factory.cpp::axis_constants.
 //
 // x0/y0 leave as bf16. The reader decodes them with integer shifts and does the
@@ -80,7 +80,9 @@ struct GeometryPipes {
     uint32_t scalar;     // compute -> compute, consumed by the reduction
 };
 
-// Makes SrcA carry `new_cb` for a datacopy. `srca_cb` tracks what SrcA was last
+// Points the unpacker and datacopy at `new_cb`. For float32 geom_x/geom_y the
+// program factory sets UnpackToDestFp32, so that copy bypasses SrcA and lands in
+// DST with all 23 mantissa bits. `srca_cb` tracks what SrcA was last
 // configured for so the reconfiguration is skipped when nothing changed; it must
 // be seeded with whatever `compute_kernel_hw_startup` left SrcA on.
 inline void copy_from(uint32_t new_cb, uint32_t& srca_cb) {
@@ -206,11 +208,13 @@ inline void corner_weight(
 
 // Geometry for one sampling point: the two axes, then the four corner scalars.
 //
-// The corner order is NW, NE, SW, SE, and it is a contract with the reader: the
-// four scalar tiles pushed here are consumed against the four input-tile groups
-// the reader gathers with `dy_off = (c < 2) ? 0 : 1; dx_off = (c & 1) ? 1 : 0`
-// in fused_msda_reader_common.hpp. The two orders must agree element for
-// element or every sample is silently wrong.
+// The corner order is NW, NE, SW, SE, and it is a contract with both gathers.
+// The four scalar tiles pushed here are consumed against the four input-tile
+// groups filled by fused_msda_gather::gather_rows (msda_gather_rows.hpp, slot
+// 2 * dy + dx; run by the reader and, with the split gather, the writer) and,
+// for D % 32 != 0, by the scatter in fused_msda_reader_common.hpp
+// (`dy_off = (c < 2) ? 0 : 1; dx_off = (c & 1) ? 1 : 0`). All three must agree
+// element for element or every sample is silently wrong.
 //
 // The floors go to the reader, which turns them into page indices; the
 // fractions never leave the compute kernel.

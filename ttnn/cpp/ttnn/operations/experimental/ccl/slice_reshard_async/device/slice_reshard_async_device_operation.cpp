@@ -60,7 +60,6 @@ Tensor slice_reshard_async(
     const MemoryConfig& memory_config,
     ttnn::ccl::Topology topology) {
     using OperationType = ttnn::experimental::prim::SliceReshardAsyncDeviceOperation;
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     uint32_t num_devices;
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
@@ -69,7 +68,6 @@ Tensor slice_reshard_async(
     TT_FATAL(num_devices > 1, "slice_reshard_async op will only work for num_devices > 1, but has {}", num_devices);
 
     auto operation_attributes = OperationType::operation_attributes_t(
-        devices,
         dim,
         output_dim_offset,
         output_dim_shape,

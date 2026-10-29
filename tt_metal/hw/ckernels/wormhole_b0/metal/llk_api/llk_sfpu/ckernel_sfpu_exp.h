@@ -11,7 +11,7 @@
 // clang-format off: sfpi.h before polyval (polyval uses sfpi_inline); matches blackhole ordering
 #include "sfpi.h"
 #include "llk_math_eltwise_unary_sfpu.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 // clang-format on
 #include "ckernel_sfpu_recip.h"
 #include "lltt.h"
@@ -209,22 +209,34 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-template <bool unsafe = false>
+// base_two = true computes 2^a instead of e^a. The reduction is then exact: j = round(a) and
+// a - j are both representable, so the only rounding before the polynomial is one multiply by
+// ln 2 on |a - j| <= 1/2. Passing a * ln2 to the base-e form instead rounds the argument,
+// and that relative error grows into the result in proportion to |a| (tens of ULP near 2^-126).
+template <bool unsafe = false, bool base_two = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
     sfpi::vSMag16 sm;
 
-    // j = round(a / ln2)
-    // interleaved with first coefficient of polynomial
-    j = 1.442695f * a;
-    r = 1.37805939e-3f;
-    sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
-    j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
+    if constexpr (base_two) {
+        // j = round(a), f = (a - j) * ln2
+        r = 1.37805939e-3f;
+        sm = sfpi::convert<sfpi::vSMag16>(a, sfpi::RoundMode::Nearest);
+        j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
+        f = (a - j) * 6.93147182e-1f;
+    } else {
+        // j = round(a / ln2)
+        // interleaved with first coefficient of polynomial
+        j = 1.442695f * a;
+        r = 1.37805939e-3f;
+        sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
+        j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
 
-    // f = a - i*j (two-part cody-waite)
-    f = j * -6.93145752e-1f + a;
-    f = j * -1.42860677e-6f + f;
+        // f = a - i*j (two-part cody-waite)
+        f = j * -6.93145752e-1f + a;
+        f = j * -1.42860677e-6f + f;
+    }
 
     // approximate r = exp(f) on [-ln2/2, ln2/2]
     // interleaved with conversion of i from sign-mag to two's complement via abs and copysgn
@@ -273,6 +285,13 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
 }
 
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
+
+// 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN: unlike the
+// base-e form, no multiply precedes the rounding. The only caller, logaddexp2, zeroes NaN gaps
+// first. |x| >= 32768 saturates the rounding and gets the guards' +Inf / +0, the exact result.
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
+    return _sfpu_exp_fp32_accurate_</*unsafe=*/false, /*base_two=*/true>(x);
+}
 
 /*
  * Implementation of _sfpu_exp_21f_bf16_ (same algorithm) with TTI intrinsics
@@ -486,7 +505,9 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
+            TTI_SFPNOP;  // SFPMAD must not read LREG0 before the SFPSWAP result lands (SFPSWAP + SFPNOP costs no cycle)
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+            TTI_SFPNOP;  // no WH SFPU scoreboard: SFP_STOCH_RND must not read LREG0 the cycle after SFPMAD writes it
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
             TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
@@ -612,6 +633,7 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+            TTI_SFPNOP;  // no WH SFPU scoreboard: SFP_STOCH_RND must not read LREG0 the cycle after SFPMAD writes it
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
             TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG1, 5);  // lreg[1] = lreg[0] << 15
             TTI_SFPSETSGN(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // lreg[0] preserves sign, copies e/m from lreg[1]

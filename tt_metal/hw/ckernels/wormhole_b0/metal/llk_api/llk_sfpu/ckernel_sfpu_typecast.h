@@ -96,7 +96,7 @@ inline void calculate_typecast_fp32_to_uint16() {
         // mode, so this case uses the plain loop. The init still armed the macro Misc word, so
         // disarm the leftover state first (WH hangs otherwise running a plain loop with it, #46751).
         disarm_sfploadmacro_misc();
-#pragma GCC unroll 0
+#pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
             TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
@@ -260,7 +260,7 @@ inline void calculate_typecast_fp32_to_uint32() {
             0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_SET_CC_SGN_EXP | sfpi::SFPEXEXP_MOD1_SET_CC_COMP_EXP);
         // result = 0xffffffff
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_SHORT, 0xffff);
-        // exp -= 32 (LaneEnabled = exp < 31)
+        // exp -= 32 (LaneEnabled = exp < 32)
         TTI_SFPIADD(-32 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
         // exp += 9
         TTI_SFPIADD(9, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
@@ -280,7 +280,7 @@ inline void calculate_typecast_fp32_to_fp16b() {
     // low 16 bits (&0xFFFF0000), and store FP32 for 32-bit-Dest correctness. The historical
     // macro relied on a FP16B store to truncate and does not reproduce the masked-FP32 result,
     // so it is not equivalent and is not restored here. See #46751.
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
@@ -330,7 +330,7 @@ inline void calculate_typecast_uint16_to_fp32() {
         // this case uses the plain loop. The init still armed the macro Misc word, so disarm the
         // leftover state first (WH hangs otherwise running a plain loop with it, #46751).
         disarm_sfploadmacro_misc();
-#pragma GCC unroll 0
+#pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
             TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
@@ -1004,19 +1004,15 @@ inline void calculate_typecast_fp32_to_uint8() {
     }
 }
 
+// The uint8 wrap of any 32-bit input is its low byte: (x + 256) & 0xFF == x & 0xFF (adding 256
+// never touches bits 7:0, mod-2^32 wrap included) and (x & 0xFFFF) & 0xFF == x & 0xFF, so neither a
+// bias nor a UInt16 pre-mask is needed; `u16` is kept for the dispatchers but selects nothing.
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool u16 = false>
 inline void calculate_typecast_uint_to_uint8() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d) {
-        if constexpr (u16) {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-            TTI_SFPAND(0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
-        } else {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-        }
-        TTI_SFPIADD(256, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0);
+        sfpi::vInt x = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>(ADDR_MOD_3);
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>(ADDR_MOD_2) = x & sfpi::vConstIntPrgm0;
     }
 }
 
@@ -1119,7 +1115,6 @@ inline void init_typecast_uint_to_uint8() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 0xFF;
-    sfpi::vConstIntPrgm1 = UINT16_LOW_MASK;
 }
 
 template <bool APPROXIMATION_MODE>
