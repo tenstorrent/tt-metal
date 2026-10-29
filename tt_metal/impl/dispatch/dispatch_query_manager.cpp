@@ -160,6 +160,7 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
     fds_signalling_enabled_ = resolved_dispatch_core_type_ == CoreType::DISPATCH && hal.supports_fds() &&
                               rtoptions.get_fast_dispatch() && cq_dispatch_layout_.num_cqs_per_core == 1;
     // Reset the dispatch cores reported by the manager. Will be re-populated when the associated query is made
+    dispatch_cores_populated_ = false;
     dispatch_cores_ = {};
 }
 
@@ -172,6 +173,9 @@ const std::vector<tt::tt_metal::CoreCoord>& DispatchQueryManager::get_logical_di
 }
 
 tt_cxy_pair DispatchQueryManager::get_dispatch_core(uint8_t cq_id) const {
+    if (dispatch_cores_populated_.load(std::memory_order_acquire)) {
+        return dispatch_cores_[cq_id];  // Dispatch workers query this for every event record.
+    }
     std::scoped_lock<std::mutex> lock(modifier_mutex);
     if (dispatch_cores_.empty()) {
         for (auto cq = 0; cq < num_hw_cqs_; cq++) {
@@ -199,6 +203,7 @@ tt_cxy_pair DispatchQueryManager::get_dispatch_core(uint8_t cq_id) const {
             }
         }
     }
+    dispatch_cores_populated_.store(true, std::memory_order_release);
     return dispatch_cores_[cq_id];
 }
 
