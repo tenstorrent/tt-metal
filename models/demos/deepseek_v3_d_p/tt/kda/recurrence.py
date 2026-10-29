@@ -25,9 +25,17 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PREP_OUTPUT_BF16_MASK,
     KDA_PREPARATION_L1_BYTES_PER_CORE,
+    KDA_PREPARATION_WITH_ENTRY_CORRECTION_L1_BYTES_PER_CORE,
     KDARecurrenceProgramConfig,
     l1_when_it_fits,
     preparation_bytes,
+)
+from models.demos.deepseek_v3_d_p.tt.kda.entry_correction import EntryCorrection
+from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import (
+    RelayAffinePrefix,
+    RelayOutputGate,
+    fabric_wraps_axis,
+    persistent_semaphores,
 )
 
 
@@ -100,7 +108,29 @@ class _PreparedChunks:
 @dataclass(frozen=True)
 class RecurrenceResult:
     output: ttnn.Tensor
-    final_state: ttnn.Tensor
+    final_state: ttnn.Tensor | PendingFinalCarry
+    # The output of the relay's RelayOutputGate, when one ran.
+    output_gate: ttnn.Tensor | None = None
+
+
+@dataclass(frozen=True)
+class PendingFinalCarry:
+    """The relay's final carry, left for the caller to run later: run(projection) dispatches it, with the
+    CarryProjection in its dispatch when given, and returns the final state and the projection's output."""
+
+    run: object
+
+
+@dataclass(frozen=True)
+class CarryProjection:
+    """input @ weight, run in the final carry's dispatch on the worker cores the carry leaves
+    (ttnn.experimental.kda.select_final_carry_with_projection)."""
+
+    input: ttnn.Tensor
+    weight: ttnn.Tensor
+    program_config: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig  # ttnn.linear's, on the cores it names
+    compute_config: ttnn.DeviceComputeKernelConfig
+    memory_config: ttnn.MemoryConfig
 
 
 @dataclass(frozen=True)
@@ -449,31 +479,50 @@ def _scan_sp_grouped_chunks(
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
     gather_buffer: ttnn.Tensor | None = None,
+    affine_relay: RelayAffinePrefix | None = None,
+    final_carry: _RelayFinalCarry | None = None,
+    output_gate: RelayOutputGate | None = None,
+    defer_final_carry: bool = False,
+    correction: EntryCorrection | None = None,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
     )
+    correct = correction is not None and groups == 1 and affine_relay is not None
     if groups == 1:
         # One group per head: the summary writes the packed transform the prefix gathers (the identity for a rank
-        # without a head), and the group enters at the rank's own entry state.
-        packed = ttnn.experimental.kda.summarize_chunk_recurrence(
+        # without a head), and the group enters at the rank's own entry state. With the entry correction it also
+        # leaves each chunk's output terms, from which the correction forms the outputs.
+        summary = ttnn.experimental.kda.summarize_chunk_recurrence(
             *grouped.as_kernel_args(),
             groups_per_head=groups,
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=sequence_parallel_axis,
-            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+            memory_config=correction.memory_config if correct else KDA_OUTPUT_MEMORY_CONFIG,
             compute_kernel_config=compute_config.preparation,
+            emit_outputs=correct,
+            emit_memory_config=correction.terms_memory_config if correct else None,
         )
-        group_entry_states, prefix_final_state = distributed_prefix(
-            packed,
-            initial_state,
-            sequence_parallel_axis=sequence_parallel_axis,
-            compute_config=compute_config.affine_prefix,
-            actual_start=actual_start,
-            local_rows=geometry.local_rows,
-            gather_buffer=gather_buffer,
-        )
+        packed, *emitted = summary if correct else [summary]
+        if correct:
+            # The summary is the chunk terms' last reader: free their L1 before the relay and its companion.
+            for tensor in grouped.as_kernel_args():
+                ttnn.deallocate(tensor)
+        if affine_relay is not None:
+            group_entry_states, prefix_final_state, output_gate = affine_relay(
+                packed, initial_state, actual_start, output_gate=output_gate
+            )
+        else:
+            group_entry_states, prefix_final_state = distributed_prefix(
+                packed,
+                initial_state,
+                sequence_parallel_axis=sequence_parallel_axis,
+                compute_config=compute_config.affine_prefix,
+                actual_start=actual_start,
+                local_rows=geometry.local_rows,
+                gather_buffer=gather_buffer,
+            )
     else:
         # The reduction and the scan read only slots with a valid segment (the reduction writes its own identity for
         # a rank without a head), so the other slots need no identity.
@@ -511,23 +560,46 @@ def _scan_sp_grouped_chunks(
             memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
             compute_kernel_config=compute_config.affine_prefix,
         )
-    scan = _scan_chunks(
-        grouped,
-        group_entry_states,
-        prefix_final_state,
-        groups_per_head=groups,
-        actual_start=actual_start,
-        actual_end=actual_end,
-        sequence_parallel_axis=sequence_parallel_axis,
-        compute_config=compute_config.scan,
-    )
+    if correct:
+        output, rank_final = correction(*emitted, group_entry_states, prefix_final_state, actual_start, actual_end)
+        for tensor in (*emitted, group_entry_states):
+            ttnn.deallocate(tensor)
+        scan = RecurrenceResult(output=output, final_state=rank_final)
+    else:
+        scan = _scan_chunks(
+            grouped,
+            group_entry_states,
+            prefix_final_state,
+            groups_per_head=groups,
+            actual_start=actual_start,
+            actual_end=actual_end,
+            sequence_parallel_axis=sequence_parallel_axis,
+            compute_config=compute_config.scan,
+        )
     output = ttnn.reshape(
         scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
     )
+    rank_final = ttnn.reshape(scan.final_state, (geometry.batch_heads, groups, geometry.key_dim, geometry.value_dim))
+    if final_carry is not None and defer_final_carry:
+        # Nothing in the layer reads the final state: the caller runs the carry beside a later program.
+        return RecurrenceResult(
+            output,
+            PendingFinalCarry(
+                lambda projection=None: final_carry(
+                    rank_final, prefix_final_state, actual_start, actual_end, geometry.local_rows, projection
+                )
+            ),
+            output_gate,
+        )
+    if final_carry is not None:
+        # The relay leaves the prefix's final state on the first and last chronological ranks only: without a split
+        # tail the last rank multicasts it, with one the tail's owner multicasts its own.
+        final_state, _ = final_carry(rank_final, prefix_final_state, actual_start, actual_end, geometry.local_rows)
+        return RecurrenceResult(output, final_state, output_gate)
     # The device chooses the completed tail when split, or the prefix's final state when unsplit, at runtime: only
     # the owner of a separated tail sends its last group's state over the fabric.
     final_state = ttnn.experimental.kda.select_final_carry(
-        ttnn.reshape(scan.final_state, (geometry.batch_heads, groups, geometry.key_dim, geometry.value_dim)),
+        rank_final,
         prefix_final_state,
         actual_start=actual_start,
         actual_end=actual_end,
@@ -536,6 +608,57 @@ def _scan_sp_grouped_chunks(
         sequence_parallel_axis=sequence_parallel_axis,
     )
     return RecurrenceResult(output, final_state)
+
+
+class _RelayFinalCarry:
+    """select_final_carry with the prefix's final state on the last chronological rank, where the relay leaves it."""
+
+    _shared: dict = {}
+
+    @classmethod
+    def shared(cls, device: ttnn.MeshDevice, sequence_parallel_axis: int, num_links: int) -> _RelayFinalCarry:
+        """One carry per mesh and line (mesh ids are never reused): layers run one after another, so they share its
+        semaphores and program."""
+        key = (device.id(), sequence_parallel_axis, num_links)
+        if key not in cls._shared:
+            cls._shared[key] = cls(device, sequence_parallel_axis, num_links)
+        return cls._shared[key]
+
+    def __init__(self, device: ttnn.MeshDevice, sequence_parallel_axis: int, num_links: int):
+        grid = device.compute_with_storage_grid_size()
+        # The bottom of the last worker column: the fabric senders are the first num_links of these, the rest copy.
+        self._cores = [ttnn.CoreCoord(grid.x - 1, y) for y in range(grid.y - num_links - 1, grid.y)]
+        self._axis = sequence_parallel_axis
+        self._num_links = num_links
+        # The line barrier and arrival counters persist across calls.
+        self._semaphores = persistent_semaphores(device, 2)
+
+    def __call__(self, rank_final, prefix_final, actual_start, actual_end, local_rows, projection=None):
+        """Return the final carry and, with ``projection`` (on the worker cores above the carry's, run in its
+        dispatch), the projection's output."""
+        kwargs = dict(
+            actual_start=actual_start,
+            actual_end=actual_end,
+            local_rows=local_rows,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sequence_parallel_axis=self._axis,
+            num_links=self._num_links,
+            cores=self._cores,
+            prefix_on_last_rank=True,
+            semaphores=self._semaphores,
+        )
+        if projection is None:
+            return ttnn.experimental.kda.select_final_carry(rank_final, prefix_final, **kwargs), None
+        return ttnn.experimental.kda.select_final_carry_with_projection(
+            rank_final,
+            prefix_final,
+            projection.input,
+            projection.weight,
+            projection_program_config=projection.program_config,
+            projection_memory_config=projection.memory_config,
+            projection_compute_kernel_config=projection.compute_config,
+            **kwargs,
+        )
 
 
 class KDARecurrence:
@@ -553,7 +676,10 @@ class KDARecurrence:
         value_dim: int,
         batch: int = 1,
         gate_scale: float = 1.0,
+        affine_relay_cores: list[ttnn.CoreCoord] | None = None,
     ) -> None:
+        """``affine_relay_cores``: the worker cores the SP relay takes its head and sender cores from, in order
+        (default: the grid in row-major order)."""
         # Preparation multiplies the gate by gate_scale before its cumulative sum.
         self._gate_scale = gate_scale
         preparation = ttnn.init_device_compute_kernel_config(
@@ -587,17 +713,6 @@ class KDARecurrence:
         self._geometry = _RecurrenceGeometry(
             batch, local_rows, heads, key_dim, value_dim, KDA_CHUNK_SIZE, local_rows // KDA_CHUNK_SIZE
         )
-        # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
-        # and chunk preparation's DRAM writes.
-        preparation_size = preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim)
-        self._preparation_memory = l1_when_it_fits(device, preparation_size, KDA_PREPARATION_L1_BYTES_PER_CORE)
-        if self._preparation_memory.buffer_type != ttnn.BufferType.L1:
-            grid = device.compute_with_storage_grid_size()
-            logger.warning(
-                f"KDA chunk terms need {preparation_size // (grid.x * grid.y) // 1024} KiB per core, over the "
-                f"{KDA_PREPARATION_L1_BYTES_PER_CORE // 1024} KiB L1 budget; keeping them in DRAM, so chunk "
-                f"preparation and the scan run slower ({heads} heads, {local_rows} rows per device)."
-            )
         self._sequence_parallel_axis = sequence_parallel_axis
         self._sequence_parallel = (
             isinstance(device, ttnn.MeshDevice) and tuple(device.shape)[sequence_parallel_axis] > 1
@@ -635,6 +750,69 @@ class KDARecurrence:
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
+        # The SP relay carries the prefix rank to rank when the fabric wraps the SP axis (the last rank
+        # sends the final state on to the first); the final carry then runs as its own program.
+        self._affine_relay = None
+        self._relay_final_carry = None
+        self._entry_correction = None
+        if (
+            self._sequence_parallel
+            and program_config.relay_affine_prefix
+            and grouped
+            and self._groups == 1
+            and fabric_wraps_axis(sequence_parallel_axis)
+            and tuple(device.shape)[sequence_parallel_axis] > 2
+            and _sp_links(device, sequence_parallel_axis) > 0
+        ):
+            links = _sp_links(device, sequence_parallel_axis)
+            self._affine_relay = RelayAffinePrefix.shared(
+                device,
+                sequence_parallel_axis=sequence_parallel_axis,
+                batch_heads=batch * heads,
+                key_dim=key_dim,
+                value_dim=value_dim,
+                num_links=links,
+                local_rows=local_rows,
+                math_fidelity=program_config.affine_prefix_math_fidelity,
+                cores=affine_relay_cores,
+            )
+            self._relay_final_carry = _RelayFinalCarry.shared(device, sequence_parallel_axis, links)
+            # The relay needs no summary gather buffer.
+            if self._gather_buffer is not None:
+                ttnn.deallocate(self._gather_buffer)
+                self._gather_buffer = None
+            if program_config.entry_correction:
+                grid = device.compute_with_storage_grid_size()
+                # Its products count toward the Blackhole di/dt bound on cores in matmuls at once.
+                max_cores = program_config.entry_correction_max_cores
+                self._entry_correction = EntryCorrection(
+                    device,
+                    sequence_parallel_axis=sequence_parallel_axis,
+                    batch_heads=batch * heads,
+                    num_chunks=local_rows // KDA_CHUNK_SIZE,
+                    key_dim=key_dim,
+                    local_rows=local_rows,
+                    cores=[ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)][:max_cores],
+                    math_fidelity=program_config.scan_math_fidelity,
+                )
+                # Every correction core reads its head's entry state: L1 spares those DRAM reads.
+                self._affine_relay.entry_memory_config = ttnn.L1_MEMORY_CONFIG
+        # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
+        # and chunk preparation's DRAM writes.
+        preparation_size = preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim)
+        preparation_budget = (
+            KDA_PREPARATION_L1_BYTES_PER_CORE
+            if self._entry_correction is None
+            else KDA_PREPARATION_WITH_ENTRY_CORRECTION_L1_BYTES_PER_CORE
+        )
+        self._preparation_memory = l1_when_it_fits(device, preparation_size, preparation_budget)
+        if self._preparation_memory.buffer_type != ttnn.BufferType.L1:
+            grid = device.compute_with_storage_grid_size()
+            logger.warning(
+                f"KDA chunk terms need {preparation_size // (grid.x * grid.y) // 1024} KiB per core, over the "
+                f"{preparation_budget // 1024} KiB L1 budget; keeping them in DRAM, so chunk "
+                f"preparation and the scan run slower ({heads} heads, {local_rows} rows per device)."
             )
         if self._sequence_parallel:
             self._execute = self._run_sp
@@ -700,10 +878,16 @@ class KDARecurrence:
     @staticmethod
     def _finish(scan: RecurrenceResult, geometry: _RecurrenceGeometry) -> RecurrenceResult:
         output = ttnn.reshape(scan.output, (geometry.batch_heads, geometry.local_rows, geometry.value_dim))
-        final_state = ttnn.reshape(
-            scan.final_state, (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
-        )
-        return RecurrenceResult(output, final_state)
+        shape = (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
+        if isinstance(scan.final_state, PendingFinalCarry):
+            pending = scan.final_state
+
+            def run(projection=None):
+                final_state, projected = pending.run(projection)
+                return ttnn.reshape(final_state, shape), projected
+
+            return RecurrenceResult(output, PendingFinalCarry(run), scan.output_gate)
+        return RecurrenceResult(output, ttnn.reshape(scan.final_state, shape), scan.output_gate)
 
     def __call__(
         self,
@@ -718,14 +902,20 @@ class KDARecurrence:
         initial_state: ttnn.Tensor,
         beta_logits_column_offset: int,
         release_gate: bool = False,
+        output_gate: RelayOutputGate | None = None,
+        defer_final_carry: bool = False,
     ) -> RecurrenceResult:
         """Execute the constructed graph using caller-owned state and chronology.
 
         ``beta`` is a token-major BF16 tensor whose ``heads`` columns from ``beta_logits_column_offset`` hold beta's
         pre-sigmoid logits, such as the fused input projection; chunk preparation applies the sigmoid.
         With ``release_gate`` the recurrence takes ownership of ``gate`` and frees it once chunk preparation has
-        read it.
+        read it. ``output_gate`` is a projection run in the SP relay's dispatch on the worker cores the relay leaves
+        idle (``affine_relay_cores``); its output is the result's output_gate. With ``defer_final_carry`` (the relay
+        only) the result's final_state is a PendingFinalCarry the caller runs.
         """
+        if (output_gate is not None or defer_final_carry) and not self.uses_affine_relay:
+            raise ValueError("the output gate and a deferred final carry need the SP relay")
         prepared, state, geometry = self._prepare(
             q=q,
             k=k,
@@ -738,10 +928,15 @@ class KDARecurrence:
             beta_logits_column_offset=beta_logits_column_offset,
             release_gate=release_gate,
         )
-        result = self._execute(prepared, state, actual_start, actual_end)
-        # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory.
+        if self.uses_affine_relay:
+            result = self._run_sp(prepared, state, actual_start, actual_end, output_gate, defer_final_carry)
+        else:
+            result = self._execute(prepared, state, actual_start, actual_end)
+        # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory (the
+        # summary already released them when the entry correction runs).
         for tensor in prepared.as_kernel_args():
-            ttnn.deallocate(tensor)
+            if tensor.is_allocated():
+                ttnn.deallocate(tensor)
         return self._finish(result, geometry)
 
     def _run_direct(
@@ -782,12 +977,33 @@ class KDARecurrence:
             sequence_parallel_axis=self._sequence_parallel_axis,
         )
 
+    @property
+    def uses_affine_relay(self) -> bool:
+        return self._affine_relay is not None
+
+    @property
+    def final_carry_cores(self) -> list[ttnn.CoreCoord]:
+        """Worker cores the relay's final carry runs on."""
+        return list(self._relay_final_carry._cores)
+
+    @property
+    def affine_relay_head_cores(self) -> list[ttnn.CoreCoord]:
+        """The relay's head cores: one head's state update (a small matmul) each."""
+        return list(self._affine_relay.head_cores)
+
+    @property
+    def affine_relay_cores(self) -> list[ttnn.CoreCoord]:
+        """Worker cores the SP relay runs on (one per head, then one per link)."""
+        return list(self._affine_relay.cores)
+
     def _run_sp(
         self,
         prepared: _PreparedChunks,
         state: ttnn.Tensor,
         actual_start: ttnn.Tensor,
         actual_end: ttnn.Tensor | None,
+        output_gate: RelayOutputGate | None = None,
+        defer_final_carry: bool = False,
     ) -> RecurrenceResult:
         return _scan_sp_grouped_chunks(
             prepared,
@@ -802,4 +1018,9 @@ class KDARecurrence:
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
             gather_buffer=self._gather_buffer,
+            affine_relay=self._affine_relay,
+            final_carry=self._relay_final_carry,
+            output_gate=output_gate,
+            defer_final_carry=defer_final_carry,
+            correction=self._entry_correction,
         )

@@ -328,6 +328,11 @@ static ttnn::Tensor bound_matmul(
         trailing_activation = parameters.user_fused_activation;
         parameters.user_fused_activation = std::nullopt;
     }
+    // An output column window only holds the matmul's own columns: nothing may run over the whole output afterwards.
+    TT_FATAL(
+        !parameters.output_column_offset.has_value() || (!post_process_bias && !trailing_activation.has_value()),
+        "output_column_offset needs the bias and the activation fused into the matmul: a row bias, and the program "
+        "config's fused_activation instead of activation");
 
     std::optional<Tensor> matmul_output_tensor = optional_output_tensor;
     if (post_process_bias && optional_output_tensor.has_value() &&
@@ -374,7 +379,9 @@ static ttnn::Tensor bound_matmul(
                                                         matmul_shape, bias.value().logical_shape())
                                                   : matmul_shape;
 
-    if (optional_output_tensor.has_value()) {
+    // An output column window keeps the output's own shape: the matmul wrote only its window.
+    const bool output_window = parameters.output_column_offset.has_value();
+    if (optional_output_tensor.has_value() && !output_window) {
         const auto& desired_shape = optional_output_tensor->logical_shape();
         uint64_t desired_vol = optional_output_tensor->logical_shape().volume();
         uint64_t current_vol = std::accumulate(result_shape.begin(), result_shape.end(), 1ULL, std::multiplies<>());
@@ -383,7 +390,7 @@ static ttnn::Tensor bound_matmul(
 
         output_tensor = ttnn::reshape(output_tensor, desired_shape);
 
-    } else if (bias.has_value()) {
+    } else if (bias.has_value() && !output_window) {
         output_tensor = ttnn::reshape(output_tensor, result_shape);
     }
 
@@ -463,13 +470,20 @@ Tensor linear(
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const PrefetcherPipeList& prefetcher_pipes,
-    std::optional<uint32_t> in0_column_offset) {
-    // Checked before the program config is chosen: an auto-selected config would see mismatched K.
+    std::optional<uint32_t> in0_column_offset,
+    std::optional<uint32_t> output_column_offset) {
+    // Checked before the program config is chosen: an auto-selected config would see mismatched K (or N).
+    const bool mcast_2d = program_config.has_value() &&
+                          std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config.value());
     TT_FATAL(
-        !in0_column_offset.has_value() ||
-            (program_config.has_value() &&
-             std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config.value())),
+        !in0_column_offset.has_value() || mcast_2d,
         "in0_column_offset requires a MatmulMultiCoreReuseMultiCastProgramConfig");
+    TT_FATAL(
+        !output_column_offset.has_value() || mcast_2d,
+        "output_column_offset requires a MatmulMultiCoreReuseMultiCastProgramConfig");
+    TT_FATAL(
+        !output_column_offset.has_value() || optional_output_tensor.has_value(),
+        "output_column_offset requires an optional_output_tensor to write into");
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -492,7 +506,8 @@ Tensor linear(
         global_cb,
         sub_device_id,
         prefetcher_pipes,
-        in0_column_offset};
+        in0_column_offset,
+        output_column_offset};
     return bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
 }
 

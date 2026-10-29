@@ -53,7 +53,7 @@ _PERF_MARGIN = 0.03
 # through device synchronization.
 _PERF_REFERENCE_MS = {
     _LOUDBOX_PERF_SKU: {
-        "SP8xTP1": 1.432,
+        "SP8xTP1": 1.128,
         "TP4-linear": 0.188,
     },
     _QUIETBOX_PERF_SKU: {
@@ -68,7 +68,7 @@ _PERF_REFERENCE_MS = {
 _DEVICE_PERF_MARGIN = 0.05
 _DEVICE_PERF_REFERENCE_MS = {
     _QUIETBOX_PERF_SKU: {
-        "SP4xTP1": 1.437,
+        "SP4xTP1": 1.107,
     },
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
@@ -80,7 +80,7 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
 # prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
-_GALAXY_PERF_REFERENCE_MS = 1.456
+_GALAXY_PERF_REFERENCE_MS = 1.190
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
 _GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
