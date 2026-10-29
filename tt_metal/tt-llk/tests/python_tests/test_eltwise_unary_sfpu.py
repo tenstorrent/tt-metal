@@ -1199,7 +1199,37 @@ _QUIET_NAN_BITS = {
 }
 
 
-def _isinf_isnan_stimuli_spec():
+#: The words either side of each predicate's bound, as unsigned bit patterns: the largest finite
+#: magnitude and the smallest NaN, both signs, and for fp32 the all-ones NaN. An LSB slip in a bound
+#: (0x7F7FFFFE for isfinite, 0x7F800001 for isnan) flips one of them, where the ramp, the infinities
+#: and the quiet NaNs all sit far from the bound.
+_ISINF_ISNAN_EDGE_BITS_FP32 = (
+    0x7F7FFFFF,
+    0xFF7FFFFF,
+    0x7F800001,
+    0xFF800001,
+    0x7FFFFFFF,
+)
+_ISINF_ISNAN_EDGE_BITS_BF16 = (0x7F7F, 0xFF7F, 0x7F81, 0xFF81)
+
+
+def _isinf_isnan_edge_bits(dtype, fp32_dest_keeps_all_bits):
+    """The edge words for a stimulus of *dtype*, as that width's signed integers. Only a 32-bit
+    input unpacked straight into a 32-bit Dest reaches the SFPU with every fp32 bit; any other
+    path keeps the bf16 lattice, so a Float32 input there gets the bf16 words widened.
+    """
+    int_dtype = _QUIET_NAN_BITS[dtype][0]
+    width = torch.iinfo(int_dtype).bits
+    if width == 32 and fp32_dest_keeps_all_bits:
+        words = _ISINF_ISNAN_EDGE_BITS_FP32
+    else:
+        words = tuple(w << (width - 16) for w in _ISINF_ISNAN_EDGE_BITS_BF16)
+    return torch.tensor(
+        [w - (1 << width) if w >> (width - 1) else w for w in words], dtype=int_dtype
+    )
+
+
+def _isinf_isnan_stimuli_spec(fp32_dest_keeps_all_bits):
     def dist(size, dtype, generator):
         # Finite ramp in [-5, 5] with regular +inf / -inf / NaN injected so every
         # face carries all special classes plus finite values. The NaN lanes alternate
@@ -1214,6 +1244,10 @@ def _isinf_isnan_stimuli_spec():
         bits = x.view(int_dtype)
         bits[2::14] = positive_nan
         bits[9::14] = positive_nan - sign_bit  # the same pattern with the sign bit set
+        # Every face also carries each edge word, cycled through one lane in seven.
+        edge = _isinf_isnan_edge_bits(dtype, fp32_dest_keeps_all_bits)
+        slots = bits[3::7].numel()
+        bits[3::7] = edge.repeat(-(-slots // edge.numel()))[:slots]
         return x
 
     return StimuliSpec(distribution=dist, seed=0)
@@ -1250,7 +1284,9 @@ def test_eltwise_unary_sfpu_isinf_isnan(
         mathop,
         FastMode.No,
         input_dimensions,
-        spec_A=_isinf_isnan_stimuli_spec(),
+        spec_A=_isinf_isnan_stimuli_spec(
+            unpacks_to_dest(formats.input_format, dest_acc)
+        ),
         gate_on_step_budget=True,
     )
 
