@@ -19,7 +19,9 @@
 #   PLUGIN_SRC       a plugin checkout's src/ to use instead of the installed plugin
 #   MODEL            checkpoint path (default XiaomiMiMo/MiMo-V2.6-Flash-MOPD); VLLM: the vllm executable (vllm);
 #                    PYTHON: the interpreter for lb.py (default: the one next to VLLM; it needs aiohttp, as vLLM does)
-#   ROWS             rows to serve (default "0 1 2 3"); ROW_DEVICES: each row's chips, as discover_rows.py prints them
+#   ROWS             rows to serve (default "0 1 2 3")
+#   ROW_DEVICES      each row's chips, space-separated groups. By default discover_rows.py finds them before any engine
+#                    starts (chip ids depend on the machine); it opens the whole mesh, so nothing else may use it then
 #   BASE_PORT        default 8000; SEQS: --max-num-seqs per engine (default 4; 8 for MIMO_SPEC_SLOTS=8)
 #   SAMPLE_ON_DEVICE decode_only|all (plugin sample_on_device_mode; default host sampling); TRACE_REGION bytes
 #   OMP_NUM_THREADS  torch's intra-op threads per engine (default 8). Its default, one per core, oversubscribes the
@@ -36,9 +38,17 @@ MODEL=${MODEL:-XiaomiMiMo/MiMo-V2.6-Flash-MOPD}
 VLLM=${VLLM:-vllm}
 PYTHON=${PYTHON:-$(dirname "$(command -v "$VLLM")")/python}
 ROWS=${ROWS:-0 1 2 3}
-read -r -a DEVICES <<< "${ROW_DEVICES:-0,1,2,3,11,10,9,8 4,5,6,7,15,14,13,12 28,29,30,31,23,22,21,20 24,25,26,27,19,18,17,16}"
 BASE_PORT=${BASE_PORT:-8000}
 export PYTHONPATH=$TT_METAL_HOME/ttnn:$MODEL_SRC${PLUGIN_SRC:+:$PLUGIN_SRC}${PYTHONPATH:+:$PYTHONPATH}
+if [ -z "${ROW_DEVICES:-}" ]; then
+  "$PYTHON" "$HERE/discover_rows.py" > "$LOGS/discover_rows.log" 2>&1 \
+    || { echo "discover_rows.py failed; see $LOGS/discover_rows.log" >&2; exit 1; }
+  ROW_DEVICES=$(sed -n 's/^ROW_DEVICES=//p' "$LOGS/discover_rows.log" | tail -n 1)
+fi
+read -r -a DEVICES <<< "$ROW_DEVICES"
+for r in $ROWS; do
+  [ -n "${DEVICES[$r]:-}" ] || { echo "no chips for row $r in ROW_DEVICES=\"$ROW_DEVICES\"" >&2; exit 1; }
+done
 [ -n "${PLUGIN_SRC:-}" ] && export VLLM_TT_PLUGIN_ROOT=$(dirname "$PLUGIN_SRC")
 export MESH_DEVICE="(1,8)" VLLM_PLUGINS=tt,tt_model_registry OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
 TT_CONFIG="{\"trace_mode\": \"decode_only\", \"trace_region_size\": ${TRACE_REGION:-1000000000}, \"l1_small_size\": 65536, \"dispatch_core_axis\": \"col\"${SAMPLE_ON_DEVICE:+, \"sample_on_device_mode\": \"$SAMPLE_ON_DEVICE\"}}"
