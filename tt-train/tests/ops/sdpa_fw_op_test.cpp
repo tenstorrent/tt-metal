@@ -2243,6 +2243,14 @@ void check_schedule(
     uint32_t max_pieces) {
     using namespace ttml::metal::ops::sdpa_fw::device;
     const uint32_t total_items = num_work_items(shape, chunks);
+    // Every unit must fit the three runtime-arg words (append_unit_words throws otherwise).
+    for (const auto& units : schedule.per_core) {
+        for (const WorkUnit& unit : units) {
+            std::vector<uint32_t> words;
+            EXPECT_NO_THROW(append_unit_words(words, unit, /* merger_noc_x */ 0U, /* merger_noc_y */ 0U));
+            EXPECT_EQ(words.size(), kWordsPerUnit);
+        }
+    }
     std::vector<uint32_t> whole_count(total_items, 0U);
     struct Cut {
         std::vector<std::pair<uint32_t, uint32_t>> ranges;  // step ranges of every piece
@@ -2409,6 +2417,17 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
     EXPECT_GT(most_partials, 3U);
     EXPECT_LT(many.num_slots, kCores);
     check_schedule(one_head, sq4sk1, many, 16U);
+
+    // The most pieces an item can be cut into, 63: one 128-step item (a whole 1024-tile sequence, eight K
+    // tiles per step, so a step outweighs a merge) on 120 cores gets 62 senders and a merger with 62
+    // partials, the top of the six-bit num_partials field, which check_schedule encodes.
+    const SDPAForwardShape one_item = causal_shape(1U, 1U, 1U, 1024U, 1U);
+    const SDPAForwardChunks whole_seq{.Sq_chunk_t = 1024U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
+    const SDPAForwardSchedule most = make_schedule(one_item, whole_seq, kCores, kMaxPieces);
+    EXPECT_EQ(most.num_slots, kMaxPieces - 1U);
+    EXPECT_EQ(count_role(most, UnitRole::Sender), kMaxPieces - 1U);
+    EXPECT_EQ(count_role(most, UnitRole::Merger), 1U);
+    check_schedule(one_item, whole_seq, most, kMaxPieces);
 
     // Two mergers on one core, so the second waits on the core's next semaphore: one head, S=768, one-row
     // chunks of three K/V tiles, on 31 cores. Their senders carry the merger's semaphore index.
@@ -2591,6 +2610,17 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
             [&] { check_chunks({.q_chunk_size = S}, wide, budget, kGridCores); },
             ThrowsMessage<std::exception>(HasSubstr("SDPA forward circular buffers need")));
         EXPECT_NO_THROW(check_chunks({.k_chunk_size = 32U}, wide, budget, kGridCores));
+        // The work list numbers items in a 20-bit field: one tile-row of one head is the most items.
+        SDPAForwardShape too_many = wide;
+        too_many.batch = 1U;
+        too_many.q_heads = 32U;
+        too_many.kv_heads = 32U;
+        too_many.St = 32768U;  // 32 * 32768 = 2^20 items fit
+        EXPECT_NO_THROW(check_chunks({}, too_many, budget, kGridCores));
+        too_many.St = 32769U;
+        EXPECT_THAT(
+            [&] { check_chunks({}, too_many, budget, kGridCores); },
+            ThrowsMessage<std::exception>(HasSubstr("exceeds the work list's item range")));
         EXPECT_NO_THROW(check_chunks({}, wide, budget, kGridCores));
     }
 }
