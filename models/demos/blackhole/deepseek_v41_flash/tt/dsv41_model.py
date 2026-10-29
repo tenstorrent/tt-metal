@@ -127,6 +127,26 @@ def key_export_fill_max(slab_rows):
     return int(env) if env not in (None, "") else max(524288, int(slab_rows))
 
 
+def key_export_piece(NA):
+    """Rows per piece of the key hand-off of a slab of ``NA`` rows. ``DSV41_KEY_EXPORT_PIECE`` (default 65536) caps it. With ``DSV41_KEY_EXPORT_LEAN=1`` the piece is the largest
+    multiple of 32 rows <= that cap that DIVIDES ``NA`` (so the slab is a whole number of pieces and each is written in place at its own offset, see ``key_export_lean``); a slab with no
+    such divisor >= min(4096, cap) keeps the cap (and the old export unless the cap divides it)."""
+    P = min(int(NA), int(os.environ.get("DSV41_KEY_EXPORT_PIECE", "65536")))
+    if os.environ.get("DSV41_KEY_EXPORT_LEAN", "0") == "1":
+        for q in range(P // 32 * 32, min(4096, P) - 1, -32):
+            if NA % q == 0:
+                return q
+    return P
+
+
+def key_export_lean(NA):
+    """True when the in-place piece write without the prefix concat applies: ``DSV41_KEY_EXPORT_LEAN=1`` and the slab divides into whole pieces (``key_export_piece``)."""
+    if os.environ.get("DSV41_KEY_EXPORT_LEAN", "0") != "1":
+        return False
+    P = key_export_piece(NA)
+    return NA % P == 0
+
+
 class Model:
     def __init__(self, mesh_device, args, max_ctx, num_pages=None, kv_dtype=ttnn.bfloat16, log=print):
         """args: ``DSV41ModelArgs`` (layer ids, users per row). ``max_ctx``: longest context (prompt + generated) of any user. ``num_pages``: pages of
@@ -1114,7 +1134,8 @@ class Model:
         """
         sh = ix.sh
         IDIM, NA, UD = ix.keys.shape[3], k_cache.shape[2], k_cache.shape[0]
-        P = min(NA, int(os.environ.get("DSV41_KEY_EXPORT_PIECE", "65536")))
+        P = key_export_piece(NA)
+        LEAN = key_export_lean(NA)
         st = self._export_state(P, UD)
         rep = ttnn.ReplicateTensorToMesh(self.md)
         um = torch.zeros(self.rows, UD, 1, 1, 1)
@@ -1153,6 +1174,7 @@ class Model:
             NA
         )  # (rows of the prefix written in one fill_cache: beyond it the slice_write path, which RE-ALLOCATES the slab the decode traces read. Default max(524288, slab rows): the whole slab is written in place whatever the build (a ratio-1 slab of a 262,144-token build has 262,176 rows, of a 1M build 1,048,640: the old fixed 524,288 sent the pieces of prompts beyond ~524k tokens to slice_write); DSV41_KEY_EXPORT_FILL_MAX overrides)
         NP = -(-NA // P)
+        slab_view = None
         for base, SB, q0 in blocks:
             hi = min(base + SB, KL)
             pieces = []
@@ -1203,7 +1225,18 @@ class Model:
                 old_bf = old if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(old, ttnn.bfloat16)
                 new = ttnn.where(cond, emb_full, old_bf)
                 out = new if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(new, k_cache.dtype)
-                if KEY_FILL and j0 + P <= FILL_MAX:
+                if LEAN:
+                    # no prefix: the slab is viewed as [UD * NP, 1, P, IDIM] (a tile layout reshape shares the buffer) and piece pj of user u is block u * NP + pj, written in place by fill_cache
+                    # (the block starts at row 0 of the view): the only temporaries are the piece sized ones above, none grows with j0. Same bytes as the concat export (rows [0, j0) rewritten unchanged).
+                    if slab_view is None:
+                        slab_view = ttnn.reshape(k_cache, [UD * (NA // P), 1, P, IDIM])
+                    for u_ in range(UD):
+                        inp = out if UD == 1 else ttnn.slice(out, [u_, 0, 0, 0], [u_ + 1, 1, P, IDIM])
+                        ttnn.fill_cache(slab_view, inp, u_ * (NA // P) + j0 // P)
+                        if inp is not out:
+                            ttnn.deallocate(inp)
+                    self.log_dram(f"key export lean j0={j0} P={P} (temporaries live)")  # (DSV41_MEMLOG)
+                elif KEY_FILL and j0 + P <= FILL_MAX:
                     # in-place write of the prefix [0, j0 + P) of every user with fill_cache (tile native): slice_write converts the WHOLE slab to row-major first (a 256 MiB temporary at a
                     # 1M context: 32 MiB/bank contiguous, and the cost of the export). The rows [0, j0) are the slab's own (read back, written unchanged).
                     full = (
@@ -1303,7 +1336,7 @@ class Model:
             return
         for L, dec in self.dec_idx.items():
             if L in self.index_owner:
-                P = min(dec.k_cache.shape[2], int(os.environ.get("DSV41_KEY_EXPORT_PIECE", "65536")))
+                P = key_export_piece(dec.k_cache.shape[2])
                 self._export_state(P, dec.k_cache.shape[0])
 
     def warm_key_export(self, limit=None):
