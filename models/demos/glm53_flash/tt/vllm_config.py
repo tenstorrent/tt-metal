@@ -866,6 +866,10 @@ APC_SNAPSHOTS_ENV = "GLM53_VLLM_APC_SNAPSHOTS"  # KDA snapshot entries per user 
 APC_SNAPSHOT_STORE_ENV = "GLM53_VLLM_APC_SNAPSHOT_STORE"  # device (DRAM ring) | host (torch copies)
 APC_TAIL_SPLIT_ENV = "GLM53_VLLM_APC_TAIL_SPLIT"  # "1": eager prefills snapshot the prompt's last 32-boundary
 APC_MAX_SNAPSHOTS = 8
+# the DRAM the warm-ups allocate after the snapshot ring (traces, wave slots, packed inputs, resident shadows: ~540 MiB
+# per chip on the 1 M profile, 2026-10-29) that the live-DRAM ring fit must leave free beside the planner's reserve
+APC_WARMUP_ALLOWANCE_ENV = "GLM53_VLLM_APC_WARMUP_ALLOWANCE_MIB"
+APC_WARMUP_ALLOWANCE_MIB = 768
 # "1": the served adapter records the DRAM footprint after the decode capture and refuses the first APC call site
 # (snapshot save, hit restore, prefill row, release) after which it differs (doc/serving/prefix_caching.md s.6)
 APC_ALLOC_CHECK_ENV = "GLM53_VLLM_APC_ALLOC_CHECK"

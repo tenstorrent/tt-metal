@@ -125,6 +125,8 @@ from models.demos.glm53_flash.tt.vllm_config import (
     APC_SNAPSHOT_STORE_ENV,
     APC_SNAPSHOTS_ENV,
     APC_TAIL_SPLIT_ENV,
+    APC_WARMUP_ALLOWANCE_ENV,
+    APC_WARMUP_ALLOWANCE_MIB,
     DEFAULT_BLOCK_SIZE,
     DEFAULT_DEVICE_PREFILL_CHUNK,
     DEFAULT_VISION_BATCH_PATCHES,
@@ -990,11 +992,14 @@ class GLM53FlashForCausalLM:
         fit = plan.max_snapshot_entries(users_per_row, max_seq_len, cap=APC_MAX_SNAPSHOTS)
         if free_bytes is not None and plan.kda_state_bytes > 0:
             reserve = plan.dram_bytes - plan.weights_bytes - plan.vision_bytes - plan.headroom(max_seq_len)
-            live = int(max(0.0, float(free_bytes) - reserve) // (users_per_row * plan.kda_state_bytes))
+            allowance = int(os.environ.get(APC_WARMUP_ALLOWANCE_ENV, str(APC_WARMUP_ALLOWANCE_MIB))) * 2**20
+            spare = float(free_bytes) - reserve - allowance
+            live = int(max(0.0, spare) // (users_per_row * plan.kda_state_bytes))
             logger.info(
                 f"GLM53 vLLM APC: live DRAM free {free_bytes / 2**20:.0f} MiB per chip after the build, the planner's "
-                f"prefill reserve {reserve / 2**20:.0f} MiB: {live} snapshot entries per slot fit (the planner's "
-                f"envelope: {fit})"
+                f"prefill reserve {reserve / 2**20:.0f} MiB, the warm-ups' allowance {allowance / 2**20:.0f} MiB: "
+                f"{live} snapshot entries per slot fit (the planner's envelope: {fit}; a ring the 1 M tail chunks "
+                "cannot spare falls back to the host store)"
             )
             fit = max(fit, min(APC_MAX_SNAPSHOTS, live))
         if store == "host":

@@ -371,10 +371,33 @@ class HostKdaSnapshotStore(SnapshotScratch):
         super().__init__(model, dims, ring=False, ops=ops)
         self.entries = dims.entries
         self.users = dims.users
-        self.data: dict[tuple[int, int], list[tuple[torch.Tensor, torch.Tensor]]] = {}
+        self.data: dict[tuple[int, int], list[tuple]] = {}  # per layer: (rec, conv) torch tensors or pending reads
+        self.events: dict[tuple[int, int], object] = {}  # the save's recorded event while its reads are in flight
 
     def _read(self, name: str) -> torch.Tensor:
         return torch.stack([self.ops.to_torch(d) for d in self.mesh.device_tensors(self.t[name])])
+
+    def _read_async(self, name: str):
+        """The per-chip reads of scratch ``name`` enqueued without waiting (``Tensor.cpu(blocking=False)``: the next
+        layer's slot read into the same scratch is ordered behind them on the command queue); the host tensors are
+        materialized by ``_materialize`` after the save's event. Ops without the asynchronous read (the host tests'
+        fakes) read synchronously."""
+        out = []
+        for d in self.mesh.device_tensors(self.t[name]):
+            cpu = getattr(d, "cpu", None)
+            out.append(cpu(blocking=False) if callable(cpu) else self.ops.to_torch(d))
+        if all(isinstance(r, torch.Tensor) for r in out):  # the synchronous fallback: already host data
+            return torch.stack(out)
+        return out
+
+    @staticmethod
+    def _is_torch(reads) -> bool:
+        return isinstance(reads, torch.Tensor)
+
+    def _materialize(self, reads) -> torch.Tensor:
+        if self._is_torch(reads):
+            return reads
+        return torch.stack([r if isinstance(r, torch.Tensor) else self.ops.to_torch(r) for r in reads])
 
     def _write_back(self, name: str, host: torch.Tensor) -> None:
         """Per-chip rows (``[chips, *shape]``) -> the scratch tensor ``name`` (chip i gets chunk i; no allocation)."""
@@ -389,24 +412,36 @@ class HostKdaSnapshotStore(SnapshotScratch):
         self.ops.copy_host_to_device_tensor(h, self.t[name])
 
     def save(self, user: int, entry: int) -> None:
+        """The slot's carries -> host, one non-blocking read per chip per layer and one recorded event (the host
+        does not wait for the transfer: the synchronous reads cost 725-1194 ms per save at 32 chips x 34 layers,
+        served 2026-10-29); ``load`` waits for the event before it uses the data."""
         self.dims.entry(user, entry)
         self.select_user(user)
         out = []
         for k in range(len(self.layers)):
             self.read_live(k, user)
-            out.append((self._read("rec_row"), self._read("conv_row")))
+            out.append((self._read_async("rec_row"), self._read_async("conv_row")))
+        record = getattr(self.ops, "record_event", None)
+        pending = any(not self._is_torch(r) for pair in out for r in pair)
+        self.events[(user, entry)] = record(self.mesh.device, 0) if pending and callable(record) else None
         self.data[(user, entry)] = out
 
     def load(self, user: int, entry: int) -> None:
         self.dims.entry(user, entry)
         if (user, entry) not in self.data:
             raise KeyError(f"no host snapshot for (user {user}, entry {entry})")
+        event = self.events.pop((user, entry), None)
+        if event is not None:
+            self.ops.event_synchronize(event)
+        layers = [(self._materialize(rec), self._materialize(conv)) for rec, conv in self.data[(user, entry)]]
+        self.data[(user, entry)] = layers
         self.select_user(user)
-        for k, (rec_host, conv_host) in enumerate(self.data[(user, entry)]):
+        for k, (rec_host, conv_host) in enumerate(layers):
             self._write_back("rec_row", rec_host)
             self._write_back("conv_row", conv_host)
             self.write_live(k, user)
 
     def release(self) -> None:
         self.data = {}
+        self.events = {}
         super().release()
