@@ -794,6 +794,37 @@
   },
   "waiting": null
  },
+ "FIX.13": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "731c7463d21fbb2380efc8c26df4d399f66c50ec",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "dcb033c874cea5d21a17080d74e83e95d53bff57",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "ca22d948-d1e9-4435-b2b9-ddf36c797096"
+  },
+  "attempt": 1,
+  "history": [
+   {
+    "status": "ABORTED",
+    "t": "2026-10-29T16:48:55",
+    "why": "owner 16:55: FIX.14 is ready; FIX.13's finding is recorded (DS41-141 rounding, accepted) and no code changed; the rest of its gate re-runs K.1's contract units on unchanged code. Closed by hand."
+   }
+  ],
+  "role": "overseer",
+  "status": "RUNNING",
+  "waiting": null
+ },
  "FIX.2": {
   "agent": {
    "defs": {

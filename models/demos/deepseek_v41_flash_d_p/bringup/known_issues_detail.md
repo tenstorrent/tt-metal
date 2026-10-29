@@ -284,7 +284,8 @@ CPU only, layer 2, golden inputs (script /tmp/fix10diag/idx_ties.py; framework's
 - Other effect of the mismatch, not measured: chips 7 / 10 run dispatch over hugepage sysmem (identity), the other 30
   over IOMMU-mapped sysmem.
 
-## DS41-125: contract KV limit vs deep layers over every position (8x4, K.1 attempt 5)
+## The contract's per-layer KV limit (ring drift) fails deep layers over every position on 8x4
+(DS41-125, 8x4, K.1 attempt 5)
 test_adapter_acks on galaxy_8x4 (40 layers, chunk 5120, golden s10240) failed only on window_kv "nope" PCC of the
 dumped deep layers (all other configs and layers passed, all acks on time, pad rows zero, replicas equal):
 
@@ -344,7 +345,8 @@ the reference's own rounding costs 0.032 on the same input). Raising them would 
 over its nudge limit comes from the 4-bit compressed KV (CKV_FORMAT=bfp4_rows, owner F208): bf16 KV 0.018, bfp4 0.060.
 Even then the device stays below the reference's own 0.074.
 
-## Quick A/Bs skip the contract tests: P.9 tipped test_adapter_acks unseen
+## P.9 tips test_adapter_acks' L20 window-KV check by rounding, not a bug
+(DS41-141; first written by FIX.12 as "Quick A/Bs skip the contract tests: P.9 tipped test_adapter_acks unseen")
 FIX.12's gate (code e627e29e63e = P.10 + the lowbit phase 1 merge 7f55821f579) failed only test_adapter_acks:
 `chunk 0: ack slot 0 [0, 2536) (last-window 128 rows): 0_window_kv layer 20 nope pcc 0.98855 < 0.98957`.
 The last pass of that unit was FIX.9 (2026-10-29 06:22); P.7-P.10 were judged on quick A/Bs ("full gate pending"),
@@ -367,3 +369,38 @@ reshuffle, not an index or layout bug. Nothing raised above the reference; no te
 a waiver for this check, or a per-position drift for the contract's window-KV limit.
 test_runner_contract (the same window-KV check through the tt-d-gen engine) fails with the identical value
 (`slot 0 turn 1 (last-window 128 rows): 0_window_kv layer 20 nope pcc 0.98855 < 0.98957`).
+
+### FIX.13 (overseer, device allowed): rounding or bug? Rounding.
+Device probe (scripts/tt-probe.sh --mesh, layers 0-20 of the full model, chunk 0 of the golden's tokens, the
+contract's own call: note_tokens / begin_chunk / embed / layer(i, h, 0, state, end); script and analysis in
+/scratch/dnijemcevic/fix13/: probe_dump.py, ana1-5.py, dumps on/ and off/). It reproduces the failing value: L20 window
+KV nope PCC on the last 128 rows of [0, 2536) 0.98855 (defaults, P.9 + P.10), 0.99131 with ATTN_SP32=off
+ATTN_SP32_PROJ=off.
+
+1. The padded partial chunk is not involved. Same code (defaults), end=2536 with the PAD_ID tail vs end=5120 with real
+   tokens: every layer's output rows [0, 2536) and its window KV are bit-identical (rel 0, 0 differing rows, L0-L20).
+   So no pad row reaches a valid row: not through the 160-row projections, the last chip's share (rows 2400-2559 of
+   SP row 3, TP chip 3, holding the 24 pad rows), the all_to_all, any norm or reduction, or the MoE.
+2. There is no localized excess, as an index, layout or row-share bug would leave. Error vs the golden per 160-row
+   chip group (16 groups, rows < 2536), on / off:
+   - L0 out 0.0409 / 0.0411, every group equal to the third digit (chip 15: 0.024 / 0.024)
+   - L0 window KV 0.0048 / 0.0051 (P.10's single fp32-DEST q_a / wkv sum is closer)
+   - L0 layer update (out - in) per stream x TP column quarter (16 cells): equal to the third digit (0.0594 / 0.0597)
+   - L1-L3 the same picture; L14 out 0.0947 / 0.0952; L20 out 0.0282 / 0.0284
+   - L20 window KV over every position 0.1816 / 0.1819. Per group, on is better in 8 of 16 and worse in 8; the last
+     group is 0.130 / 0.113.
+3. The on vs off difference grows smoothly with depth and evenly over the chip groups: rel 0.011 (L0), 0.024 (L5),
+   0.045 (L14), 0.040 (L19). Per group at L20 it is 0.10-0.34 (chip 15: 0.160, not an outlier). That is how a
+   deep-layer system amplifies two equally valid roundings: each path is about as far from the golden as from the other.
+4. The check is a sample of that spread. L20 nope PCC on 286 sliding 128-row windows (ends 256..2536, step 8):
+   on - off has mean -0.00005 and std 0.0032 (min -0.0097, max +0.0095), and on is worse in 150 of 286. Below
+   0.98957: on 203, off 191 of 286. The failing window's -0.0028 is the 15th percentile. Off passes only because this
+   one window happens to fall on its good side. With the full chunk, on's windows ending at each chip boundary
+   2560-5120 give 0.9887-0.9960.
+5. CPU at device formats (rule 14): the first point where on and off differ is L0's attention, by 0.011. There the
+   device-format CPU model of FIX.11 (DS41-140, L00 attention) explains the device's error from its bfp8 GEMM inputs
+   and bf16 activations, and both paths sit at the same distance from the golden. Deeper layers have no per-step
+   golden on this prompt (DS41-125: no CPU diagnosis 20 layers deep). Nothing in P.9 is narrower than the reference.
+
+Verdict: honest rounding (DS41-125's limit-vs-position gap), no bug. No code change; the waiver stays for the owner
+(options as before: keep the waiver, or a per-position drift for the contract's window-KV limit).

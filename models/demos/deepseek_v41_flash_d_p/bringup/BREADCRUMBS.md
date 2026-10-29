@@ -4054,3 +4054,27 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   `DS41_ATTN_SP32=off DS41_ATTN_SP32_PROJ=off scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py`. sparse_sdpa per call:
   /scratch/dnijemcevic/fix12/sdpa_sum.py <stamp dir>/_ops.json.gz.
+
+## FIX.13 (overseer fix, attempt 1): DS41-141, is P.9's L20 window-KV rise rounding or a bug? Rounding. No code change
+
+- Request (OWNER, device allowed): find the first layer / op where ATTN_SP32_PROJ on vs off differs beyond rounding
+  on the 2536-token prompt, padded partial chunk first.
+- Probe: scripts/tt-probe.sh --mesh with layers 0-20 of the full model, the contract's call sequence (note_tokens,
+  begin_chunk, embed, layer(i, h, 0, state, end)), and golden s10240 chunk 0 tokens. It dumps every layer's output
+  rows [0, 2560) and its window KV. Runs: defaults with end=2536 (PAD_ID tail) and end=5120, and
+  DS41_ATTN_SP32=off DS41_ATTN_SP32_PROJ=off with end=2536. About 6-7 min each. Kept in /scratch/dnijemcevic/fix13/
+  (probe_dump.py, ana1-5.py); the tt-probe copy under tests/ttnn/ was removed (outside this step's paths).
+- Reproduced: L20 nope PCC on the last 128 rows of [0, 2536) is 0.98855 on, 0.99131 off.
+- Padding ruled out: defaults with a PAD tail (end 2536) vs real tokens (end 5120) give bit-identical valid rows and
+  window KV in every layer 0-20.
+- No localized excess. Per 160-row chip group and per stream x TP column quarter, on and off are equally far from the
+  golden from L0 on (L0 out 0.0409 / 0.0411, L0 window KV 0.0048 / 0.0051; chip 15 = rows 2400-2535 is no outlier).
+  The on-off divergence grows smoothly (0.011 at L0, 0.040 at L19) and evenly over the chips.
+- The check samples a spread. Over 286 sliding 128-row windows at L20: on-off PCC mean -0.00005, std 0.0032. The
+  failing window is the 15th percentile. Off itself is below 0.98957 in 191 of 286 windows.
+- Verdict: honest rounding, DS41-125's limit-vs-position gap (DS41-141 updated, detail in known_issues_detail.md). The
+  tests.unit_waivers entries stay for the owner. Nothing in tt/ or the forks changed. I also renamed DS41-125's detail
+  heading to its bullet title (the knowledge check flagged it).
+- Re-run: `FIX13_OUT=<dir> [FIX13_ENDS=2536] [DS41_ATTN_SP32=off DS41_ATTN_SP32_PROJ=off] scripts/tt-probe.sh --mesh
+  fix13_dump < /scratch/dnijemcevic/fix13/probe_dump.py`, then `python3 /scratch/dnijemcevic/fix13/ana3.py` and
+  `ana4.py`.
