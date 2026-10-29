@@ -13,6 +13,8 @@
 #   ./dev/run.sh profile    # one 5 s sparse call under the device profiler + perf counters, summarized to
 #                           # log_val_profile_summary.txt. Needs a build with SPARSE_STEP_PROFILE (DEBUG commit)
 #                           # for the per-zone tables; PROFILE_K overrides the -k filter.
+#   ./dev/run.sh profile10  # the same from dev/profile_case.py at 10 s (also profile5, profile15), summarized to
+#                           # log_val_profile10_summary.txt
 set -u
 cd "$(dirname "$0")/.."
 SD=tests/nightly/blackhole/sdpa
@@ -77,4 +79,15 @@ if [ "$ONLY" = profile ]; then
         pytest "$SPARSE" -s -k "${PROFILE_K:-test_production_5s and 256 and 0.15}"
     summarize_profile profile_summary
 fi
+# profile5 / profile10 / profile15: one untraced sparse call at 5 / 10 / 15 s from dev/profile_case.py (inputs made on
+# device, setup in seconds), 256-key pieces, density 0.2; PROFILE_K overrides the -k filter (see profile_case.py ids).
+case "$ONLY" in
+    profile5 | profile10 | profile15)
+        n=${ONLY#profile}
+        shape=s$(printf '%02d' "$n")
+        run "$ONLY" 1800 env TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=39 \
+            pytest dev/profile_case.py -s -k "${PROFILE_K:-$shape and k256 and d020 and sparse_only}"
+        summarize_profile "profile${n}_summary"
+        ;;
+esac
 exit 0

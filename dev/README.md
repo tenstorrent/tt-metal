@@ -12,3 +12,7 @@ Branch workflow:
 - Temporary instrumentation goes in commits titled `DEBUG: ...`, dropped before anything moves to the clean branch.
   Example: a `DEBUG:` commit that adds `defines["SPARSE_STEP_PROFILE"] = "1"` to the reader/writer/compute kernels in
   `sparse_ring_sdpa_program_factory.cpp`, which turns on the profile zones that `run.sh profile` summarizes.
+
+Env vars: allowed on this branch for in-progress experiments only. Before a change moves to the clean branch,
+each one becomes a default, a value the host derives, or an op argument (the clean branch has none; check with
+`git grep -n getenv sosborne/general-sparse-ring-attn -- ttnn/cpp/ttnn/operations/transformer/sdpa`).
