@@ -68,8 +68,8 @@ def main(argv=None) -> int:
     )
     print(f"mean FLOPs per sequence {np.mean(list(cache.values())) / 1e12:.1f} TFLOP over {len(cache)} distinct shapes")
     print("step   s/step   TFLOPS   MFU")
-    for step, spс, tf, mfu in windows:
-        print(f"{step:5d}  {spс:6.2f}  {tf:7.1f}  {100 * mfu:5.2f}%")
+    for step, sec_per_step, tf, mfu in windows:
+        print(f"{step:5d}  {sec_per_step:6.2f}  {tf:7.1f}  {100 * mfu:5.2f}%")
     steady = windows[args.skip_windows :] or windows
     tf = np.mean([w[2] for w in steady])
     print(
