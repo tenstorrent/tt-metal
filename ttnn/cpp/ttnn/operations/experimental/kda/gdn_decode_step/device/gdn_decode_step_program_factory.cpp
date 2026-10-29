@@ -67,7 +67,6 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
 
     const uint32_t Kt = a.key_dim / TILE_WIDTH;
     const uint32_t Vt = a.value_dim / TILE_WIDTH;
-    const uint32_t KV = Kt * Vt;
     const uint32_t Ct = 2 * Kt + Vt;
     const uint32_t Nv = a.num_value_heads;
     const uint32_t Nk = a.num_key_heads;
