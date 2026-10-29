@@ -332,7 +332,6 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     const MatmulReduceScatterPrefillParams& attrs,
     const MatmulReduceScatterPrefillInputs& tensor_args,
     Tensor& output,
-    const Tensor& staging,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     TT_FATAL(mesh_dispatch_coordinate.has_value(), "matmul_reduce_scatter_prefill: one program per mesh coordinate");
     TT_FATAL(
@@ -347,6 +346,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     const Tensor& w = tensor_args.weight;
     distributed::MeshDevice* mesh = a.device();
     MeshResources& res = mesh_resources(mesh);
+    const Tensor& staging = tensor_args.staging;
 
     const detail::Plan& plan = attrs.plan();
     const detail::GridChoice& gd = plan.grid;
@@ -913,22 +913,36 @@ MatmulReduceScatterPrefillMeshWorkloadFactory::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const MatmulReduceScatterPrefillInputs& tensor_args,
     Tensor& output) {
-    // Staging belongs to this cached program: allocated once, on the cache miss, and kept in the shared variables for
-    // as long as the program is cached. One mesh tensor, so its address is the same on every chip.
-    const Tensor staging = allocate_staging(tensor_args.input_tensor.device(), detail::staging_tiles(attrs.plan()));
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
+    const detail::Plan& plan = attrs.plan();
     for (const auto& coord : tensor_coords.coords()) {
-        Program program{
-            MatmulReduceScatterPrefillProgramFactory::create_descriptor(attrs, tensor_args, output, staging, coord)};
+        Program program{MatmulReduceScatterPrefillProgramFactory::create_descriptor(attrs, tensor_args, output, coord)};
         shared_variables_t sv{
             .reader = GetCommonRuntimeArgs(program, args::kernel_index::READER),
             .writer = GetCommonRuntimeArgs(program, args::kernel_index::WRITER),
-            .staging = staging,
+            .port_reader = GetCommonRuntimeArgs(program, args::kernel_index::PORT_READER),
+            .port_sender = GetCommonRuntimeArgs(program, args::kernel_index::PORT_SENDER),
         };
+        uint32_t found = 0;
+        for (const auto& circular_buffer : program.circular_buffers()) {
+            const auto& indices = circular_buffer->buffer_indices();
+            const uint32_t slot = indices.contains(args::cb::FINISHED)       ? 0
+                                  : indices.contains(args::cb::ARRIVALS_FWD) ? 1
+                                  : indices.contains(args::cb::ARRIVALS_BWD) ? 2
+                                                                             : 3;
+            if (slot == 3) {
+                continue;
+            }
+            sv.staging_cbs[slot] = circular_buffer->id();
+            sv.staging_offsets[slot] = slot == 0 ? 0 : mrs_zone_offset(plan, slot == 1 ? kFwd : kBwd);
+            ++found;
+        }
+        TT_FATAL(
+            found == 3, "matmul_reduce_scatter_prefill: expected 3 staging-backed circular buffers, found {}", found);
         const ttnn::MeshCoordinateRange range(coord);
         workload.add_program(range, std::move(program));
-        shared.emplace(range, std::move(sv));
+        shared.emplace(range, sv);
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared)};
 }
@@ -939,16 +953,32 @@ void MatmulReduceScatterPrefillMeshWorkloadFactory::override_runtime_arguments(
     const MatmulReduceScatterPrefillInputs& tensor_args,
     Tensor& output) {
     // The key (attributes, plan inputs included, and the tensor specs) pins every compile-time arg and every per-core
-    // slot, so a hit writes only the call's tensors: A, W and the output. The staging tensor is the cached program's
-    // own, and the global semaphores and the mailbox are created once per mesh (ensure_mesh_resources) and live as
-    // long as the mesh and its program cache, so create_descriptor's addresses stay right.
+    // slot, so a hit computes the call's values once and writes only what can move between calls into each program:
+    // - A, W and the output: every call;
+    // - the staging tensor and the three CBs it backs: only when it moved (every call allocates its own staging, which
+    //   usually lands at the same address). Re-pointing a CB marks its dispatch config changed, so an unchanged CB
+    //   keeps its cached config;
+    // - the global semaphores and the mailbox: never. They are created once per mesh (ensure_mesh_resources) and live
+    //   as long as the mesh and its program cache, so create_descriptor's values stay right.
+    //   port_sender_rt::ARRIVAL_ADDR (per core) is the same kind of address.
     const auto a_addr = static_cast<uint32_t>(tensor_args.input_tensor.buffer()->address());
     const auto w_addr = static_cast<uint32_t>(tensor_args.weight.buffer()->address());
     const auto out_addr = static_cast<uint32_t>(output.buffer()->address());
-    for (const auto& [range, sv] : cached.shared_variables) {
+    const Buffer& staging = *tensor_args.staging.buffer();
+    const auto staging_addr = static_cast<uint32_t>(staging.address());
+    for (auto& [range, program] : cached.workload.get_programs()) {
+        const shared_variables_t& sv = cached.shared_variables.at(range);
         sv.reader.get()[args::reader_common::A_ADDR] = a_addr;
         sv.reader.get()[args::reader_common::W_ADDR] = w_addr;
         sv.writer.get()[args::writer_common::OUT_ADDR] = out_addr;
+        if (sv.port_reader.get()[args::port_reader_common::FINISHED_BASE] == staging_addr) {
+            continue;
+        }
+        sv.port_reader.get()[args::port_reader_common::FINISHED_BASE] = staging_addr;
+        sv.port_sender.get()[args::port_sender_common::STAGING_ADDR] = staging_addr;
+        for (size_t i = 0; i < sv.staging_cbs.size(); ++i) {
+            UpdateDynamicCircularBufferAddress(program, sv.staging_cbs[i], staging, sv.staging_offsets[i]);
+        }
     }
 }
 

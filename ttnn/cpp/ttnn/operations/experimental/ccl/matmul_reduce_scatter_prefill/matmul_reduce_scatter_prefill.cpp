@@ -203,12 +203,12 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         .output_memory_config = out_mem,
         .plan_inputs = plan_inputs,
     };
-    // Solve here, so a plan that cannot fit fails at the entry; the device operation looks the same plan up.
-    params.plan();
     record_last_plan(params);
     ensure_mesh_resources(mesh);
-    // Staging belongs to the cached program (see allocate_staging): a call allocates nothing.
-    return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, params);
+    // freed when this call returns, like any op intermediate (see allocate_staging), so it holds no L1 between calls
+    const Tensor staging = allocate_staging(mesh, mrs_detail::staging_tiles(params.plan()));
+
+    return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, staging, params);
 }
 
 }  // namespace ttnn

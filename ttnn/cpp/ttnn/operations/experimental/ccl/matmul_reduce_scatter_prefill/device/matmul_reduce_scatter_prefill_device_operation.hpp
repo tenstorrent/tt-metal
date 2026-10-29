@@ -63,6 +63,7 @@ Tensor matmul_reduce_scatter_prefill(
     const Tensor& input_tensor,
     const Tensor& weight,
     const std::optional<Tensor>& output_tensor,
+    const Tensor& staging,
     const ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::MatmulReduceScatterPrefillParams& params);
 
 }  // namespace ttnn::prim
