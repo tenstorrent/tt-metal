@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Scan compute: the sequential-over-chunk recurrence for one (value head, V-block).
+// Scan compute: the sequential-over-chunk recurrence for each of this core's (value head, V-block) units,
+// back to back (runtime arg 0 = the unit count).
 // Consumes the prep program's per-chunk blocks (v_beta, kd, T_inv, q_decay, intra, k_dec_t, dl)
 // and carries the recurrent state S [K, Vt] on-core.
 //
@@ -141,66 +142,72 @@ void kernel_main() {
     constexpr uint32_t kv = Kt * Vt;
     constexpr uint32_t kc = Kt * Ct;
 
+    const uint32_t num_units = get_arg_val<uint32_t>(0);
+
     compute_kernel_hw_startup(cb_kd, cb_vbeta, cb_out);
 
-    for (uint32_t c = 0; c < NC; c++) {
-        // State uses THREE single-producer CBs so no CB is produced by both the reader and
-        // compute (that reader->compute producer switch desyncs CB page pointers and deadlocks):
-        //   cb_S      : reader-produced initial state, consumed only by chunk 0.
-        //   cb_s2/cb_s3: compute-only ping-pong for chunk outputs.
-        const uint32_t cur_S = (c == 0) ? cb_S : ((c & 1u) ? cb_s2 : cb_s3);
-        const uint32_t nxt_S = (c & 1u) ? cb_s3 : cb_s2;
-        const bool last = (c == NC - 1);
-        const uint32_t dst = last ? cb_final : nxt_S;
+    // Every CB holds one uniform block and a unit drains all of them, so the next unit starts from the
+    // same fifo state as the first.
+    for (uint32_t u = 0; u < num_units; u++) {
+        for (uint32_t c = 0; c < NC; c++) {
+            // State uses THREE single-producer CBs so no CB is produced by both the reader and
+            // compute (that reader->compute producer switch desyncs CB page pointers and deadlocks):
+            //   cb_S      : reader-produced initial state, consumed only by chunk 0.
+            //   cb_s2/cb_s3: compute-only ping-pong for chunk outputs.
+            const uint32_t cur_S = (c == 0) ? cb_S : ((c & 1u) ? cb_s2 : cb_s3);
+            const uint32_t nxt_S = (c & 1u) ? cb_s3 : cb_s2;
+            const bool last = (c == NC - 1);
+            const uint32_t dst = last ? cb_final : nxt_S;
 
-        // v_new = T_inv @ (v_beta - kd@S)  -- apply the inverse AFTER the subtraction so the WY
-        // inverse's fp error is not amplified by the cancellation (vs the u - w@S form).
-        WAIT(cb_kd, ck);
-        WAIT(cur_S, kv);
-        mm(cb_kd, cur_S, cb_scr1, Ct, Kt, Vt, false);  // kdS = kd @ S -> scr1
-        WAIT(cb_scr1, cv);
-        POP(cb_kd, ck);
-        WAIT(cb_vbeta, cv);
-        ew(cb_vbeta, cb_scr1, cb_ointer, cv, 1);  // diff = v_beta - kdS -> ointer
-        WAIT(cb_ointer, cv);
-        POP(cb_vbeta, cv);
-        POP(cb_scr1, cv);
-        WAIT(cb_Tinv, cc);
-        // v_new = T_inv @ diff -> vnew, teed to cb_vnout
-        mm(cb_Tinv, cb_ointer, cb_vnew, Ct, Ct, Vt, false, cb_vnout);
-        WAIT(cb_vnew, cv);
-        POP(cb_Tinv, cc);
-        POP(cb_ointer, cv);
+            // v_new = T_inv @ (v_beta - kd@S)  -- apply the inverse AFTER the subtraction so the WY
+            // inverse's fp error is not amplified by the cancellation (vs the u - w@S form).
+            WAIT(cb_kd, ck);
+            WAIT(cur_S, kv);
+            mm(cb_kd, cur_S, cb_scr1, Ct, Kt, Vt, false);  // kdS = kd @ S -> scr1
+            WAIT(cb_scr1, cv);
+            POP(cb_kd, ck);
+            WAIT(cb_vbeta, cv);
+            ew(cb_vbeta, cb_scr1, cb_ointer, cv, 1);  // diff = v_beta - kdS -> ointer
+            WAIT(cb_ointer, cv);
+            POP(cb_vbeta, cv);
+            POP(cb_scr1, cv);
+            WAIT(cb_Tinv, cc);
+            // v_new = T_inv @ diff -> vnew, teed to cb_vnout
+            mm(cb_Tinv, cb_ointer, cb_vnew, Ct, Ct, Vt, false, cb_vnout);
+            WAIT(cb_vnew, cv);
+            POP(cb_Tinv, cc);
+            POP(cb_ointer, cv);
 
-        // o = q_decay @ S + intra @ v_new
-        WAIT(cb_qdecay, ck);
-        mm(cb_qdecay, cur_S, cb_ointer, Ct, Kt, Vt, false);  // o_inter = q_decay @ S
-        WAIT(cb_ointer, cv);
-        POP(cb_qdecay, ck);
-        WAIT(cb_intra, cc);
-        mm(cb_intra, cb_vnew, cb_scr1, Ct, Ct, Vt, false);  // intra_v = intra @ v_new
-        WAIT(cb_scr1, cv);
-        POP(cb_intra, cc);
-        ew(cb_ointer, cb_scr1, cb_out, cv, 0);  // o -> cb_out (drained by writer)
-        POP(cb_ointer, cv);
-        POP(cb_scr1, cv);
+            // o = q_decay @ S + intra @ v_new
+            WAIT(cb_qdecay, ck);
+            mm(cb_qdecay, cur_S, cb_ointer, Ct, Kt, Vt, false);  // o_inter = q_decay @ S
+            WAIT(cb_ointer, cv);
+            POP(cb_qdecay, ck);
+            WAIT(cb_intra, cc);
+            mm(cb_intra, cb_vnew, cb_scr1, Ct, Ct, Vt, false);  // intra_v = intra @ v_new
+            WAIT(cb_scr1, cv);
+            POP(cb_intra, cc);
+            ew(cb_ointer, cb_scr1, cb_out, cv, 0);  // o -> cb_out (drained by writer)
+            POP(cb_ointer, cv);
+            POP(cb_scr1, cv);
 
-        // s_upd = k_dec_t @ v_new
-        WAIT(cb_kdec_t, kc);
-        mm(cb_kdec_t, cb_vnew, cb_supd, Kt, Ct, Vt, false);
-        WAIT(cb_supd, kv);
-        POP(cb_kdec_t, kc);
-        POP(cb_vnew, cv);
+            // s_upd = k_dec_t @ v_new
+            WAIT(cb_kdec_t, kc);
+            mm(cb_kdec_t, cb_vnew, cb_supd, Kt, Ct, Vt, false);
+            WAIT(cb_supd, kv);
+            POP(cb_kdec_t, kc);
+            POP(cb_vnew, cv);
 
-        // S_new = cur_S * dl + s_upd  (dl scalar in cb_dl tile [0,0])
-        WAIT(cb_dl, 1);
-        bcast_scalar_mul(cur_S, cb_dl, cb_stmp, kv);
-        WAIT(cb_stmp, kv);
-        POP(cb_dl, 1);
-        POP(cur_S, kv);
-        // S_{c+1} -> dst; unless last, teed to cb_hout as h_{c+1}
-        ew(cb_stmp, cb_supd, dst, kv, 0, last ? NO_CB : cb_hout);
-        POP(cb_stmp, kv);
-        POP(cb_supd, kv);
+            // S_new = cur_S * dl + s_upd  (dl scalar in cb_dl tile [0,0])
+            WAIT(cb_dl, 1);
+            bcast_scalar_mul(cur_S, cb_dl, cb_stmp, kv);
+            WAIT(cb_stmp, kv);
+            POP(cb_dl, 1);
+            POP(cur_S, kv);
+            // S_{c+1} -> dst; unless last, teed to cb_hout as h_{c+1}
+            ew(cb_stmp, cb_supd, dst, kv, 0, last ? NO_CB : cb_hout);
+            POP(cb_stmp, kv);
+            POP(cb_supd, kv);
+        }
     }
 }

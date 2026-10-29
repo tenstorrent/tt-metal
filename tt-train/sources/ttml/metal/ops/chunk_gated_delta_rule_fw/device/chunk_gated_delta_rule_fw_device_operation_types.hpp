@@ -17,6 +17,7 @@ namespace ttml::metal::ops::chunk_gated_delta_rule_fw::device {
 struct ChunkGatedDeltaRuleForwardPrepParams {
     uint32_t chunk_size = 64U;
     uint32_t key_head_dim = 0U;  // K; the flat q width is only HK * K, so it cannot be inferred
+    bool save_g_cumsum = true;   // write kGCumsum; false leaves it a one-tile placeholder and skips the writes
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     tt::tt_metal::MemoryConfig output_memory_config;
 };
@@ -41,6 +42,7 @@ enum PrepOutputIndex : size_t { kVBeta = 0, kKd, kQDecay, kIntra, kKDecT, kDl, k
 struct ChunkGatedDeltaRuleForwardScanParams {
     uint32_t num_value_heads = 0U;   // HV; the scan inputs only carry BH = B * HV
     bool output_head_major = false;  // o as [BH,1,T,V] instead of [B,1,T,HV*V]
+    bool save_state = true;          // write kH and kVNew; false leaves them one-tile placeholders, skips the writes
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
     tt::tt_metal::MemoryConfig output_memory_config;
 };

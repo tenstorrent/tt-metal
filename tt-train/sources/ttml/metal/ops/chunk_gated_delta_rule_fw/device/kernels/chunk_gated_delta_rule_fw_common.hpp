@@ -13,7 +13,7 @@ namespace chunk_gated_delta_rule_fw {
 
 namespace prep {
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
-constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_ones = 7, cb_S = 8;
+constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_sut = 7, cb_S = 8;  // cb_sut: strictly-upper ones
 constexpr uint32_t cb_decay = 9, cb_decay_exp = 10, cb_decayfac = 11;
 constexpr uint32_t cb_lmask = 12, cb_Tinv = 13, cb_vbeta = 14, cb_kbeta = 15;
 constexpr uint32_t cb_out = 16, cb_u = 17, cb_w = 18, cb_qdecay = 19;
@@ -35,10 +35,5 @@ constexpr uint32_t cb_vbeta = 17, cb_kd = 18, cb_qdecay = 19, cb_intra = 20;
 constexpr uint32_t cb_s2 = 21, cb_vnew = 22, cb_ointer = 23, cb_kdec_t = 24;
 constexpr uint32_t cb_supd = 25, cb_stmp = 26, cb_final = 27, cb_scr1 = 28, cb_s3 = 31;
 }  // namespace scan
-
-// Element offset of (r, c) inside a 32x32 tile stored as four 16x16 faces.
-constexpr uint32_t tile_elem_off(uint32_t r, uint32_t c) {
-    return (((r >> 4) << 1) + (c >> 4)) * 256U + ((r & 15U) << 4) + (c & 15U);
-}
 
 }  // namespace chunk_gated_delta_rule_fw

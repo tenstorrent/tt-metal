@@ -19,6 +19,20 @@ import math
 
 import torch
 
+# Scale of g = logsigmoid(randn) * scale (mean about -0.82 * scale per token), shared by the device tests.
+#   WEAK_GATE: the decay over a chunk is only a few e-folds, so h0 / d_final_state still matter after the
+#     first chunk.  With 0.5 the state carry S * exp(d_last) is e^-13 .. e^-26 and deleting it changes no
+#     output or gradient beyond 1e-11 (measured), so those inputs cannot test the scan.  With 0.02 deleting
+#     it moves the final state by 30-70% (measured, CPU float64).
+#   DECAY_GATE: the former default; one case keeps the within-chunk decay machinery honest.
+#   STRONG_GATE: |cumsum(g)| in the hundreds inside a chunk.
+WEAK_GATE = 0.02
+DECAY_GATE = 0.5
+STRONG_GATE = 4.0
+
+# (B, T, HK, HV, K, V), chunk_size: Qwen3.8 per-chip GatedDeltaNet dims.
+QWEN_SHAPE = ((1, 1024, 8, 24, 128, 128), 64)
+
 
 def chunked_forward(q, k, v, g, beta, *, initial_state=None, chunk_size=64, scale=None):
     """Chunked forward plus intermediates; differentiable.
@@ -114,19 +128,25 @@ def recurrent_vjp(q, k, v, g, beta, d_out, *, d_final_state=None, initial_state=
     return tuple(grads[:5]) + ((grads[5] if h0 is not None else None),)
 
 
-def assert_close(name, got, exp, *, pcc_min, rms_max=None):
-    """Finite, PCC >= pcc_min and (optionally) RMS error relative to the reference RMS <= rms_max."""
+def assert_close(name, got, exp, *, pcc_min, rms_max):
+    """Finite, PCC >= pcc_min and RMS error relative to the reference RMS <= rms_max.
+
+    PCC alone is blind to a constant scale error (o is linear in q, so a wrong `scale` keeps PCC = 1),
+    which is why `rms_max` is required: the relative RMS also bounds the scale and the mean error
+    (|rms(got)/rms(exp) - 1| and |mean(got - exp)| / rms(exp) are both <= rms_max).
+
+    A reference with zero spread must be matched to within 1e-6 absolute; a result with zero spread
+    against a reference that has some always fails, however small the reference is.
+    """
     got = torch.as_tensor(got).double().reshape(exp.shape)
     exp = exp.double()
     assert torch.isfinite(got).all(), f"{name}: non-finite values"
     a, e = got.flatten(), exp.flatten()
-    if e.std() == 0 or a.std() == 0:
-        assert torch.allclose(
-            a, e, atol=1e-6
-        ), f"{name}: constant tensor mismatch, max |diff| {(a - e).abs().max():.3e}"
+    if e.std() == 0:
+        assert torch.allclose(a, e, atol=1e-6), f"{name}: constant reference, max |diff| {(a - e).abs().max():.3e}"
         return
+    assert a.std() > 0, f"{name}: result is constant ({a[0]:.3e}) but the reference has std {e.std():.3e}"
     pcc = torch.corrcoef(torch.stack([a, e]))[0, 1].item()
     assert pcc >= pcc_min, f"{name}: PCC {pcc:.6f} < {pcc_min}"
-    if rms_max is not None:
-        rms = ((a - e).pow(2).mean().sqrt() / e.pow(2).mean().sqrt().clamp_min(1e-30)).item()
-        assert rms <= rms_max, f"{name}: relative RMS {rms:.4g} > {rms_max}"
+    rms = ((a - e).pow(2).mean().sqrt() / e.pow(2).mean().sqrt()).item()
+    assert rms <= rms_max, f"{name}: relative RMS {rms:.4g} > {rms_max}"

@@ -13,6 +13,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/chunk_gated_delta_rule_bw/device/kernels/chunk_gated_delta_rule_bw_common.hpp"
 
 // The three kernels share one kernel-config ring buffer and the compute binaries dominate it; these
@@ -39,8 +40,8 @@ static __attribute__((noipa)) void zero_l1(uint32_t dst, uint32_t nbytes) {
     noc_async_write_barrier();
 }
 
-// Six [C,C] mask blocks, a scale tile, a zero tile and Ct row-of-ones tiles, built with raw L1
-// stores once per core.  Zero-filled over the NoC first; only the non-zero lanes are then written.
+// Six [C,C] mask blocks, a scale tile and a zero tile (the last tile), built with raw L1 stores once
+// per core.  Zero-filled over the NoC first; only the non-zero lanes are then written.
 void build_constant_tiles(uint32_t scale_bits) {
     constexpr uint32_t f32_tile = 32 * 32 * 4;
     constexpr uint32_t nconst = NCONST;
@@ -55,8 +56,8 @@ void build_constant_tiles(uint32_t scale_bits) {
             z[i] = 0;
         }
     }
+    static_assert(CST_ZERO + 1 == nconst, "the zero tile is the last cb_const tile");
     zero_l1(cbase, CST_ZERO * f32_tile);
-    zero_l1(cbase + (CST_ZERO + 1) * f32_tile, (nconst - CST_ZERO - 1) * f32_tile);
 
     for (uint32_t ti = 0; ti < Ct; ++ti) {
         for (uint32_t si = 0; si < Ct; ++si) {
@@ -65,7 +66,7 @@ void build_constant_tiles(uint32_t scale_bits) {
             const uint32_t st = cbase + (CST_NSTRICT + t) * f32_tile;
             const uint32_t ut = cbase + (CST_UT + t) * f32_tile;
             const uint32_t ey = cbase + (CST_EYE + t) * f32_tile;
-            const uint32_t bi = cbase + (CST_BIAS + t) * f32_tile;
+            const uint32_t sl = cbase + (CST_SLT + t) * f32_tile;
             const uint32_t su = cbase + (CST_SUT + t) * f32_tile;
             for (uint32_t r = 0; r < 32; ++r) {
                 const uint32_t gr = ti * 32 + r;
@@ -74,13 +75,12 @@ void build_constant_tiles(uint32_t scale_bits) {
                     const uint32_t e = tile_elem_off(r, c);
                     if (gc <= gr) {
                         store_f32(lt, e, 1.0f);
-                    } else {
-                        store_f32(bi, e, -1.0e4f);
                     }
                     if (gc < gr) {
                         // NSTRICT carries -1 so both consumers of the strict mask (A and dA) come
                         // out already negated.
                         store_f32(st, e, -1.0f);
+                        store_f32(sl, e, 1.0f);
                     }
                     if (gc >= gr) {
                         store_f32(ut, e, 1.0f);
@@ -101,14 +101,6 @@ void build_constant_tiles(uint32_t scale_bits) {
         volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbase + CST_SCALE * f32_tile);
         for (uint32_t r = 0; r < 32; ++r) {
             p[tile_elem_off(r, 0)] = scale_bits;
-        }
-    }
-    // Row-of-ones tiles: the [1,C] operand of the outer product that builds the column-broadcast
-    // matrix for L.
-    for (uint32_t t = 0; t < Ct; ++t) {
-        const uint32_t base = cbase + (CST_ROWONES + t) * f32_tile;
-        for (uint32_t c = 0; c < 32; ++c) {
-            store_f32(base, tile_elem_off(0, c), 1.0f);
         }
     }
     cb_push_back(cb_const, nconst);
@@ -135,20 +127,14 @@ void gather_gate(
     const uint32_t stage64 = (get_write_ptr(cb_stage) + 63u) & ~63u;
     for (uint32_t ct = 0; ct < Ct; ++ct) {
         const uint32_t tbase = t0 + ct * 32;
-        if (tbase >= gT) {
-            break;
-        }
         const uint32_t tt = tbase >> 5;
         noc_async_read(acc.get_noc_addr(b * Tt + tt, 0), stage64, tile_bytes);
         noc_async_read_barrier();
         const uint32_t tile_addr = dst_base + (slot + ct) * tile_bytes;
         for (uint32_t r = 0; r < 32; ++r) {
-            if (tbase + r >= gT) {
-                break;
-            }
             const uint32_t se = tile_elem_off(r, h);
             const uint32_t de = tile_elem_off(r, 0);
-            if constexpr (ESZ == 4) {
+            if constexpr (GATE_ESZ == 4) {
                 volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage64);
                 volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
                 d[de] = s[se];
@@ -260,6 +246,7 @@ void kernel_main() {
     const uint32_t owned_base = arg;
 
     constexpr uint32_t in_tile = 32 * 32 * ESZ;
+    constexpr uint32_t gate_tile = 32 * 32 * GATE_ESZ;
     constexpr uint32_t f32_tile = 32 * 32 * 4;
 
     constexpr auto qa = TensorAccessorArgs<CT_ACC_BASE>();
@@ -278,8 +265,8 @@ void kernel_main() {
     const auto q_acc = TensorAccessor(qa, q_addr, in_tile);
     const auto k_acc = TensorAccessor(ka, k_addr, in_tile);
     const auto v_acc = TensorAccessor(va, v_addr, in_tile);
-    const auto g_acc = TensorAccessor(ga, g_addr, in_tile);
-    const auto b_acc = TensorAccessor(ba, beta_addr, in_tile);
+    const auto g_acc = TensorAccessor(ga, g_addr, gate_tile);
+    const auto b_acc = TensorAccessor(ba, beta_addr, gate_tile);
     const auto do_acc = TensorAccessor(doa, do_addr, in_tile);
     [[maybe_unused]] const auto h0_acc = TensorAccessor(h0a, h0_addr, in_tile);
     [[maybe_unused]] const auto dht_acc = TensorAccessor(dhta, dht_addr, in_tile);
@@ -313,9 +300,9 @@ void kernel_main() {
         cb_reserve_back(cb_gatein, 2 * Ct);
         {
             const uint32_t gbase = get_write_ptr(cb_gatein);
-            zero_l1(gbase, 2 * Ct * in_tile);
-            gather_gate(g_acc, in_tile, 0, gbase, b, t0, h);
-            gather_gate(b_acc, in_tile, Ct, gbase, b, t0, h);
+            zero_l1(gbase, 2 * Ct * gate_tile);
+            gather_gate(g_acc, gate_tile, 0, gbase, b, t0, h);
+            gather_gate(b_acc, gate_tile, Ct, gbase, b, t0, h);
         }
         cb_push_back(cb_gatein, 2 * Ct);
 
@@ -343,7 +330,7 @@ void kernel_main() {
     // is what makes the rendezvous deadlock-free.
     // ------------------------------------------------------------------
     if (num_owned > 0) {
-        volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_PREP));
+        volatile tt_l1_ptr uint32_t* sem = get_sem_ptr(SEM_PREP);
         noc_semaphore_wait_min(sem, NC * num_owned);
 
         // -------------------------------------------------------------
@@ -402,7 +389,7 @@ void kernel_main() {
     // Barrier 2: per-group release.  Cores with no stage-G work wait for 0.
     // ------------------------------------------------------------------
     {
-        volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_SCAN));
+        volatile tt_l1_ptr uint32_t* sem = get_sem_ptr(SEM_SCAN);
         noc_semaphore_wait_min(sem, num_release_groups);
     }
 

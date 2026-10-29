@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Prep reader.  Builds the constant tiles (eye, tril, ones [C,C] and the three WY-inverse quadrant
-// masks) in L1 once, then for each (value head, chunk) work-item of this core reads
+// Prep reader.  Builds the constant tiles (eye, tril, strictly-upper ones [C,C] and the three
+// WY-inverse quadrant masks) in L1 once, then for each (value head, chunk) work-item of this core reads
 //   q, k  [Ct, Kt] of key head hv / G   out of the token-major [B,1,T,HK*K] grids
 //   v     [Ct, Vt] of value head hv     out of the token-major [B,1,T,HV*V] grid
 //   g, beta: column hv of [B,1,T,HV], as Ct fp32 column tiles (value in column 0, rest zero).
@@ -14,8 +14,11 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/ops/chunk_gated_delta_rule_common/chunk_gated_delta_rule_common.hpp"
 #include "tt-train/sources/ttml/metal/ops/chunk_gated_delta_rule_fw/device/kernels/chunk_gated_delta_rule_fw_common.hpp"
 
+using chunk_gated_delta_rule_common::tile_elem_off;
 using namespace chunk_gated_delta_rule_fw;
 using namespace chunk_gated_delta_rule_fw::prep;
 
@@ -30,7 +33,6 @@ constexpr uint32_t GATE_ESZ = get_compile_time_arg_val(6);  // element bytes of 
 constexpr uint32_t G = HV / HK;
 constexpr uint32_t Tt = NC * Ct;
 constexpr uint32_t kTileElems = 32U * 32U;
-constexpr uint32_t kOne = 0x3F800000U;  // 1.0f
 
 namespace {
 
@@ -42,7 +44,7 @@ void zero_tile(uint32_t addr) {
 }
 
 void set_one(uint32_t tile_addr, uint32_t r, uint32_t c) {
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr)[tile_elem_off(r, c)] = kOne;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr)[tile_elem_off(r, c)] = FP32_ONE_BITS;
 }
 
 // [C, C] fp32 constant from a predicate on the global (row, col); tiles in row-major order.
@@ -115,7 +117,7 @@ void kernel_main() {
 
     build_cc(cb_eye, [](uint32_t r, uint32_t c) { return r == c; });
     build_cc(cb_tril, [](uint32_t r, uint32_t c) { return c <= r; });
-    build_cc(cb_ones, [](uint32_t, uint32_t) { return true; });
+    build_cc(cb_sut, [](uint32_t r, uint32_t c) { return c > r; });
     build_masks();
 
     Noc noc;

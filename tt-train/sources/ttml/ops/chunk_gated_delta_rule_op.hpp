@@ -16,7 +16,8 @@ namespace ttml::ops {
 //   v      [B, 1, T, HV*V]
 //   g, beta [B, 1, T, HV]   log-space decay gate and write strength
 //   initial_state [B, HV, K, V], optional (zeros)
-// All of q, k, v, g, beta are BFLOAT16.  HK must divide HV; value head h reads key head h / (HV / HK),
+// q, k, v are BFLOAT16; g and beta are BFLOAT16 or FLOAT32 (and share a dtype), and their gradients come
+// back in that dtype.  HK must divide HV; value head h reads key head h / (HV / HK),
 // so the key heads are never repeated.  T must be a multiple of chunk_size (32 or 64).
 //
 // Returns the output head-major as [B*HV, 1, T, V] BFLOAT16, row b*HV + h.  The forward keeps its

@@ -561,9 +561,10 @@ void py_module(nb::module_& m) {
             nb::arg("key_head_dim"),
             nb::arg("chunk_size") = 64U,
             nb::arg("scale") = nb::none(),
-            nb::arg("initial_state") = nullptr,
+            nb::arg("initial_state") = nb::none(),
             "Chunked gated delta rule with a fused backward.\n"
-            "q, k [B,1,T,HK*K] (L2-normalized); v [B,1,T,HV*V]; g, beta [B,1,T,HV]; all BFLOAT16;\n"
+            "q, k [B,1,T,HK*K] (L2-normalized); v [B,1,T,HV*V]; g, beta [B,1,T,HV];\n"
+            "q, k, v BFLOAT16; g, beta BFLOAT16 or FLOAT32;\n"
             "initial_state [B,HV,K,V] (optional).\n"
             "Returns the head-major output [B*HV,1,T,V].");
     }
@@ -740,9 +741,21 @@ void py_module(nb::module_& m) {
                const std::optional<ttnn::Tensor>& initial_state,
                uint32_t chunk_size,
                std::optional<float> scale,
-               bool output_head_major) {
+               bool output_head_major,
+               bool save_for_backward) {
                 auto r = ttml::metal::chunk_gated_delta_rule_fw(
-                    q, k, v, g, beta, key_head_dim, initial_state, chunk_size, scale, output_head_major);
+                    q,
+                    k,
+                    v,
+                    g,
+                    beta,
+                    key_head_dim,
+                    initial_state,
+                    chunk_size,
+                    scale,
+                    output_head_major,
+                    /*compute_kernel_config=*/std::nullopt,
+                    save_for_backward);
                 return std::make_tuple(r.output, r.final_state, r.h, r.v_new, r.g_cumsum, r.a);
             },
             nb::arg("q"),
@@ -755,12 +768,15 @@ void py_module(nb::module_& m) {
             nb::arg("chunk_size") = 64U,
             nb::arg("scale") = nb::none(),
             nb::arg("output_head_major") = false,
+            nb::arg("save_for_backward") = true,
             "Chunked gated delta rule forward on flat layouts, with the intermediates the backward needs.\n"
             "q, k [B,1,T,HK*K] bf16 (L2-normalized along K); v [B,1,T,HV*V] bf16; g, beta [B,1,T,HV];\n"
             "initial_state [B,HV,K,V] fp32 (optional).\n"
             "Returns (o [B,1,T,HV*V] or [B*HV,1,T,V] if output_head_major, final_state [B,HV,K,V], h [B*HV,NC,K,V], "
             "v_new [B*HV,1,T,V],\n"
-            "g_cumsum [B*HV,1,T,1], A [B*HV,1,T,C]), all fp32.");
+            "g_cumsum [B*HV,1,T,1], A [B*HV,1,T,C]), all fp32.\n"
+            "With save_for_backward=False the h, v_new, g_cumsum and A entries are None and the writes of h, v_new "
+            "and g_cumsum are skipped.");
         py_metal.def(
             "chunk_gated_delta_rule_bw",
             [](const ttnn::Tensor& q,

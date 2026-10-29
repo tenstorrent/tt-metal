@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Scan reader for one (value head bh, V-block vb).  Reads the initial state S [K, Vt] (zeros without
-// an initial state) twice: once for the compute and once as h_0 for the writer.  Then per chunk the
-// prep blocks: v_beta (its V-slice), and kd, q_decay, intra, k_dec_t, dl, T_inv in full.  All fp32.
+// Scan reader for a run of scan units; unit u is (value head bh = u / NV, V-block vb = u % NV) with
+// NV = Vt_full / Vt.  Per unit it reads the initial state S [K, Vt] (zeros without an initial state)
+// twice: once for the compute and once as h_0 for the writer.  Then per chunk the prep blocks:
+// v_beta (its V-slice), and kd, q_decay, intra, k_dec_t, dl, T_inv in full.  All fp32.
 
 #include <cstdint>
 
@@ -33,8 +34,8 @@ void kernel_main() {
     constexpr auto ti_args = TensorAccessorArgs<dl_args.next_compile_time_args_offset()>();
     constexpr auto s0_args = TensorAccessorArgs<ti_args.next_compile_time_args_offset()>();
 
-    const uint32_t bh = get_arg_val<uint32_t>(0);
-    const uint32_t vb = get_arg_val<uint32_t>(1);
+    const uint32_t unit_start = get_arg_val<uint32_t>(0);
+    const uint32_t num_units = get_arg_val<uint32_t>(1);
 
     const uint32_t tb = get_tile_size(cb_vbeta);
     const auto vb_acc = TensorAccessor(vb_args, get_arg_val<uint32_t>(2), tb);
@@ -50,8 +51,11 @@ void kernel_main() {
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t kc = Kt * Ct;
     constexpr uint32_t kv = Kt * Vt;
+    constexpr uint32_t NV = Vt_full / Vt;
 
     Noc noc;
+    uint32_t bh = 0;  // the current unit's value head and V-block, read by the lambdas below
+    uint32_t vb = 0;
 
     auto read_into = [&](const auto& acc, uint32_t cb_id, uint32_t first_page, uint32_t n) {
         CircularBuffer cb(cb_id);
@@ -88,23 +92,28 @@ void kernel_main() {
         cb.push_back(kv);
     };
 
-    // cb_hout carries h_1.. from the compute, so h_0 goes through its own reader-only CB.
-    if constexpr (HAS_H0) {
-        read_vslice(s0_acc, cb_S, bh * Kt * Vt_full, Kt);
-        read_vslice(s0_acc, cb_h0, bh * Kt * Vt_full, Kt);
-    } else {
-        push_zeros(cb_S);
-        push_zeros(cb_h0);
-    }
+    for (uint32_t u = 0; u < num_units; ++u) {
+        bh = (unit_start + u) / NV;
+        vb = (unit_start + u) % NV;
 
-    for (uint32_t c = 0; c < NC; ++c) {
-        const uint32_t wi = bh * NC + c;
-        read_vslice(vb_acc, cb_vbeta, wi * Ct * Vt_full, Ct);
-        read_into(kd_acc, cb_kd, wi * ck, ck);
-        read_into(qd_acc, cb_qdecay, wi * ck, ck);
-        read_into(it_acc, cb_intra, wi * cc, cc);
-        read_into(kc_acc, cb_kdec_t, wi * kc, kc);
-        read_into(dl_acc, cb_dl, wi, 1);
-        read_into(ti_acc, cb_Tinv, wi * cc, cc);
+        // cb_hout carries h_1.. from the compute, so h_0 goes through its own reader-only CB.
+        if constexpr (HAS_H0) {
+            read_vslice(s0_acc, cb_S, bh * Kt * Vt_full, Kt);
+            read_vslice(s0_acc, cb_h0, bh * Kt * Vt_full, Kt);
+        } else {
+            push_zeros(cb_S);
+            push_zeros(cb_h0);
+        }
+
+        for (uint32_t c = 0; c < NC; ++c) {
+            const uint32_t wi = bh * NC + c;
+            read_vslice(vb_acc, cb_vbeta, wi * Ct * Vt_full, Ct);
+            read_into(kd_acc, cb_kd, wi * ck, ck);
+            read_into(qd_acc, cb_qdecay, wi * ck, ck);
+            read_into(it_acc, cb_intra, wi * cc, cc);
+            read_into(kc_acc, cb_kdec_t, wi * kc, kc);
+            read_into(dl_acc, cb_dl, wi, 1);
+            read_into(ti_acc, cb_Tinv, wi * cc, cc);
+        }
     }
 }

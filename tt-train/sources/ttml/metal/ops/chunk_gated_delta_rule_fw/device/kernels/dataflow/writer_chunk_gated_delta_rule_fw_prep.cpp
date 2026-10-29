@@ -6,7 +6,8 @@
 // blocks to DRAM at tile offset wi * (tiles per chunk):
 //   v_beta [C,V], A = T_inv [C,C], kd [C,K], intra [C,C], q_decay [C,K], k_dec_t [K,C], dl [1 tile],
 //   g_cumsum [C,1].
-// A and g_cumsum are the saved intermediates; the rest feed the scan.
+// A and g_cumsum are the saved intermediates; the rest feed the scan.  Without SAVE_G_CUMSUM g_cumsum is
+// popped instead of written (no backward will read it).
 
 #include <cstdint>
 
@@ -73,6 +74,12 @@ void kernel_main() {
         drain(cb_qdecay, qd_acc, ck, wi * ck);
         drain(cb_kdec_t, kc_acc, kc, wi * kc);
         drain(cb_dl, dl_acc, 1, wi);
+#if SAVE_G_CUMSUM
         drain(cb_gcum, gc_acc, Ct, wi * Ct);
+#else
+        CircularBuffer gcum(cb_gcum);
+        gcum.wait_front(Ct);
+        gcum.pop_front(Ct);
+#endif
     }
 }

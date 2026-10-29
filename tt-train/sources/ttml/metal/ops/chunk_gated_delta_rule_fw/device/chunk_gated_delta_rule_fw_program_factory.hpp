@@ -26,13 +26,14 @@ uint32_t cb_plan_bytes(const std::vector<CbSpec>& plan);
 // L1 available to circular buffers on a worker core.
 uint32_t cb_l1_budget();
 
-// V-parallel split of the scan: each of BH * num_vblocks cores runs one (value head, V-block) scan.
-// The largest num_vblocks dividing Vt that fits the grid.
+// V-parallel split of the scan into BH * num_vblocks independent (value head, V-block) scans.  The
+// largest num_vblocks dividing Vt that gives every scan its own core, or more when the state block
+// does not fit L1 otherwise; with more scans than cores, a core runs several back to back.
 struct ScanSplit {
     uint32_t num_vblocks{};
     uint32_t vblock_tiles{};
 };
-ScanSplit make_scan_split(uint32_t BH, uint32_t Vt, uint32_t num_cores);
+ScanSplit make_scan_split(uint32_t BH, uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t num_cores);
 
 struct ChunkGatedDeltaRuleForwardPrepProgramFactory {
     struct shared_variables_t {

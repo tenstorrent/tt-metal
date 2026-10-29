@@ -87,16 +87,10 @@ static __attribute__((noipa)) void scatter_scalars(
     const ACC& acc, uint32_t src_base, uint32_t wstage, uint32_t b, uint32_t t0, uint32_t h) {
     for (uint32_t ct = 0; ct < Ct; ++ct) {
         const uint32_t tbase = t0 + ct * 32;
-        if (tbase >= gT) {
-            break;
-        }
         const uint32_t tt = tbase >> 5;
         const uint32_t tile_addr = src_base + ct * in_tile;
         uint32_t issued = 0;
         for (uint32_t r = 0; r < 32; ++r) {
-            if (tbase + r >= gT) {
-                break;
-            }
             const uint32_t doff = tile_elem_off(r, h) * ESZ;
             const uint32_t slot = wstage + r * 16u + (doff & 15u);
             if constexpr (ESZ == 4) {
@@ -124,14 +118,8 @@ template <typename ACC>
 static __attribute__((noipa)) void zero_pad_columns(const ACC& acc, uint32_t zbuf, uint32_t b, uint32_t t0) {
     for (uint32_t ct = 0; ct < Ct; ++ct) {
         const uint32_t tbase = t0 + ct * 32;
-        if (tbase >= gT) {
-            break;
-        }
         const uint32_t tt = tbase >> 5;
         for (uint32_t r = 0; r < 32; ++r) {
-            if (tbase + r >= gT) {
-                break;
-            }
             for (uint32_t c0 = gH; c0 < 32;) {
                 const uint32_t c1 = (c0 < 16) ? 16 : 32;
                 const uint32_t doff = tile_elem_off(r, c0) * ESZ;
@@ -271,8 +259,10 @@ void kernel_main() {
     // The scatter slots occupy wstage[0, 512); the zero source sits right after them.
     const uint32_t zbuf = wstage + 32u * 16u;
     if constexpr (gH < 32) {
+        // 80 zero bytes: a 16-element fp32 face row (64 B) at any 16-byte phase (up to 15 B of slack).
+        constexpr uint32_t kZeroBufWords = 20;
         volatile tt_l1_ptr uint32_t* z = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zbuf);
-        for (uint32_t i = 0; i < 20; ++i) {
+        for (uint32_t i = 0; i < kZeroBufWords; ++i) {
             z[i] = 0;
         }
     }

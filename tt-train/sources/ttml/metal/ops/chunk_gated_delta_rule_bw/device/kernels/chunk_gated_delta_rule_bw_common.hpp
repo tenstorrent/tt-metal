@@ -24,18 +24,19 @@
 
 #include <cstdint>
 
+#include "tt-train/sources/ttml/metal/ops/chunk_gated_delta_rule_common/chunk_gated_delta_rule_common.hpp"
+
 constexpr uint32_t gB = get_compile_time_arg_val(0);
-constexpr uint32_t gT = get_compile_time_arg_val(1);
+// Compile-time arg 1 (T) is host-only: the kernels use Tt (arg 17), and T is a multiple of the chunk size.
 constexpr uint32_t gH = get_compile_time_arg_val(2);  // value-head count HV
-constexpr uint32_t gK = get_compile_time_arg_val(3);
-constexpr uint32_t gV = get_compile_time_arg_val(4);
+// Compile-time args 3 (K) and 4 (V) are host-only: the kernels work in tiles (Kt, Vt).
 constexpr uint32_t Ct = get_compile_time_arg_val(5);  // tiles per chunk
 constexpr uint32_t Kt = get_compile_time_arg_val(6);
 constexpr uint32_t Vt = get_compile_time_arg_val(7);
 constexpr uint32_t Vb = get_compile_time_arg_val(8);   // V tiles per compute pass
 constexpr uint32_t NVB = get_compile_time_arg_val(9);  // Vt / Vb
 constexpr uint32_t NC = get_compile_time_arg_val(10);  // chunks per sequence
-constexpr uint32_t BH = get_compile_time_arg_val(11);
+// Compile-time arg 11 (B*HV) is host-only too.
 constexpr uint32_t NEUMANN_STEPS = get_compile_time_arg_val(12);
 constexpr uint32_t ESZ = get_compile_time_arg_val(13);  // input element bytes
 constexpr uint32_t DEST_LIMIT = get_compile_time_arg_val(14);
@@ -76,7 +77,11 @@ constexpr uint32_t gG = get_compile_time_arg_val(42);   // value heads per key h
 constexpr uint32_t HAS_SAVED = get_compile_time_arg_val(43);
 constexpr uint32_t DO_HEAD_MAJOR = get_compile_time_arg_val(44);  // d_out is [B*HV, 1, T, V]
 
-constexpr uint32_t CT_ACC_BASE = 45;
+// g / beta element bytes: the gate dtype is independent of q's (BF16 or FP32 gates with either input
+// dtype), and only the reader's column gather sees it.  dg / dbeta are written in the input dtype.
+constexpr uint32_t GATE_ESZ = get_compile_time_arg_val(45);
+
+constexpr uint32_t CT_ACC_BASE = 46;
 
 constexpr uint32_t CHUNK = Ct * 32;
 constexpr uint32_t CtCt = Ct * Ct;
@@ -90,7 +95,7 @@ constexpr uint32_t KtVt = Kt * Vt;
 constexpr uint32_t ST_ATTN = CtCt;
 constexpr uint32_t ST_KCD = CtKt;
 constexpr uint32_t ST_P = CtKt;
-constexpr uint32_t ST_VEC = 4 * Ct;  // decay, beta, dc1, w
+constexpr uint32_t ST_VEC = 4 * Ct;  // g, beta, dc1, w
 constexpr uint32_t ST_VCORR = CtVt;
 constexpr uint32_t ST_U = CtVt;
 constexpr uint32_t ST_C = KtVt;
@@ -133,18 +138,16 @@ constexpr uint32_t cb_vecc = 29;
 constexpr uint32_t cb_egr = 30;
 constexpr uint32_t cb_gegr = 31;
 
-// cb_const block offsets (tiles): NUM_CONST_MASKS [C,C] mask blocks, then the scale, zero and
-// row-of-ones tiles.
+// cb_const block offsets (tiles): NUM_CONST_MASKS [C,C] mask blocks, then the scale and zero tiles.
 constexpr uint32_t CST_LT = 0;          // lower-triangular ones, diagonal included
 constexpr uint32_t CST_NSTRICT = CtCt;  // -1 on the strictly-lower triangle
 constexpr uint32_t CST_UT = 2 * CtCt;   // upper-triangular ones, diagonal included
 constexpr uint32_t CST_EYE = 3 * CtCt;
-constexpr uint32_t CST_BIAS = 4 * CtCt;  // 0 on tril-inclusive, -1e4 on strict upper
-constexpr uint32_t CST_SUT = 5 * CtCt;   // strictly-upper ones (exclusive reverse cumsum)
+constexpr uint32_t CST_SLT = 4 * CtCt;  // strictly-lower ones (the decay-span operand of L)
+constexpr uint32_t CST_SUT = 5 * CtCt;  // strictly-upper ones (exclusive reverse cumsum)
 static_assert(NUM_CONST_MASKS == 6, "cb_const mask layout above assumes six [C,C] mask blocks");
-constexpr uint32_t CST_SCALE = NUM_CONST_MASKS * CtCt;        // column 0 == scale (stride-0 COL vector)
-constexpr uint32_t CST_ZERO = NUM_CONST_MASKS * CtCt + 1;     // all zeros
-constexpr uint32_t CST_ROWONES = NUM_CONST_MASKS * CtCt + 2;  // Ct tiles, row 0 == 1 (outer-product operand)
+constexpr uint32_t CST_SCALE = NUM_CONST_MASKS * CtCt;     // column 0 == scale (stride-0 COL vector)
+constexpr uint32_t CST_ZERO = NUM_CONST_MASKS * CtCt + 1;  // all zeros
 
 // cb_veca: the per-item decay column list.  Exactly VECA_BLOCKS single-block pushes per item, all
 // popped at the end, so the fifo cycles back to its base and no block straddles the wrap point.
@@ -167,11 +170,7 @@ constexpr uint32_t VB_DGGAM = 7 * Ct;  // LT_ones @ (dGamma * Gamma), as a colum
 constexpr uint32_t VB_UTE = 8 * Ct;    // UT_ones @ (rowsum(R - R^T) + dgg)
 static_assert(VECB_BLOCKS == 9, "cb_vecb slot layout above assumes nine column slots");
 
-// Element offset of (row r, col c) inside a 32x32 tile stored as four 16x16 faces in
-// (face_r, face_c) row-major order.
-FORCE_INLINE uint32_t tile_elem_off(uint32_t r, uint32_t c) {
-    return (((r >> 4) << 1) + (c >> 4)) * 256u + ((r & 15u) << 4) + (c & 15u);
-}
+using chunk_gated_delta_rule_common::tile_elem_off;
 
 // Page index of tile (token-tile tt, head h, d-tile j) of a token-major [N,1,T,Hx*D] grid whose
 // tile row holds hx_dt tiles (Hx * D/32).  `n` is the outermost index (batch, or plane*B + batch).

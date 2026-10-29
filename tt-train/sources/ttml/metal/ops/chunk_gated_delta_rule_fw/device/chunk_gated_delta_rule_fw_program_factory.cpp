@@ -5,13 +5,13 @@
 #include "chunk_gated_delta_rule_fw_program_factory.hpp"
 
 #include <algorithm>
-#include <set>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "kernels/chunk_gated_delta_rule_fw_common.hpp"
 #include "metal/common/program_utils.hpp"
+#include "metal/ops/chunk_gated_delta_rule_common/chunk_gated_delta_rule_common.hpp"
 
 namespace {
 
@@ -23,9 +23,7 @@ const std::string kScanReaderPath = std::string(kKernelDir) + "dataflow/reader_c
 const std::string kScanWriterPath = std::string(kKernelDir) + "dataflow/writer_chunk_gated_delta_rule_fw_scan.cpp";
 const std::string kScanComputePath = std::string(kKernelDir) + "compute/chunk_gated_delta_rule_fw_scan_kernel.cpp";
 
-// L1 below the circular-buffer region that get_max_worker_l1_unreserved_size() still counts: the
-// kernel-config ring buffer the kernel binaries live in, plus slack.
-constexpr uint32_t kL1KernelConfigReserve = 80U * 1024U;
+using chunk_gated_delta_rule_common::kL1KernelConfigReserve;
 
 // Double-buffered: the scan's o egress.
 constexpr uint32_t kDoubleBuffer = 2U;
@@ -78,7 +76,7 @@ std::vector<CbSpec> prep_cb_plan(uint32_t Ct, uint32_t Kt, uint32_t Vt) {
     return {
         {cb_q, ck, true},       {cb_k, ck, true},          {cb_v, cv, true},
         {cb_g, Ct, false},      {cb_beta, Ct, false},      {cb_eye, cc, false},
-        {cb_tril, cc, false},   {cb_ones, cc, false},      {cb_S, 1U, false},
+        {cb_tril, cc, false},   {cb_sut, cc, false},       {cb_S, 1U, false},
         {cb_decay, Ct, false},  {cb_decay_exp, Ct, false}, {cb_decayfac, Ct, false},
         {cb_lmask, cc, false},  {cb_Tinv, cc, false},      {cb_vbeta, cv, false},
         {cb_kbeta, ck, false},  {cb_gcum, Ct, false},      {cb_mask, kNumMasks, false},
@@ -110,7 +108,9 @@ std::vector<CbSpec> scan_cb_plan(uint32_t Ct, uint32_t Kt, uint32_t Vt_block) {
         {cb_ointer, cv, false},
         {cb_supd, kv, false},
         {cb_stmp, kv, false},
-        {cb_scr1, scratch_tiles(Ct, Kt, Vt_block), false},
+        // The scan only pushes [C, Vt] blocks (kd@S, intra@v_new) here.  A larger capacity that is not a
+        // multiple of the push size lets the second push straddle the fifo end (odd Kt, e.g. K = 96).
+        {cb_scr1, cv, false},
         {cb_hout, kv, false},
         {cb_vnout, cv, false},
         {cb_h0, kv, false},
@@ -129,13 +129,23 @@ uint32_t cb_l1_budget() {
     return static_cast<uint32_t>(tt::tt_metal::hal::get_max_worker_l1_unreserved_size()) - kL1KernelConfigReserve;
 }
 
-ScanSplit make_scan_split(uint32_t BH, uint32_t Vt, uint32_t num_cores) {
+ScanSplit make_scan_split(uint32_t BH, uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t num_cores) {
+    // Prefer the largest split that gives every (value head, V-block) its own core ...
+    uint32_t nv_min = 1U;
     for (uint32_t nv = Vt; nv > 1U; --nv) {
         if (Vt % nv == 0U && BH * nv <= num_cores) {
+            nv_min = nv;
+            break;
+        }
+    }
+    // ... and split further, past the core count, only when the state block does not fit L1.  A core
+    // then runs several scans back to back.
+    for (uint32_t nv = nv_min; nv <= Vt; ++nv) {
+        if (Vt % nv == 0U && cb_plan_bytes(scan_cb_plan(Ct, Kt, Vt / nv)) <= cb_l1_budget()) {
             return {nv, Vt / nv};
         }
     }
-    return {1U, Vt};
+    return {nv_min, Vt / nv_min};  // does not fit: the caller's L1 check reports it
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -185,7 +195,8 @@ ChunkGatedDeltaRuleForwardPrepProgramFactory::cached_program_t ChunkGatedDeltaRu
     const std::vector<uint32_t> compute_ct = {Ct, Kt, Vt};
 
     const auto reader_id = create_reader_kernel(program, all_cores, reader_ct, {}, kPrepReaderPath);
-    const auto writer_id = create_writer_kernel(program, all_cores, writer_ct, {}, kPrepWriterPath);
+    const auto writer_id = create_writer_kernel(
+        program, all_cores, writer_ct, {{"SAVE_G_CUMSUM", args.save_g_cumsum ? "1" : "0"}}, kPrepWriterPath);
     const auto compute_id =
         create_compute(program, all_cores, kPrepComputePath, compute_ct, args.compute_kernel_config, device->arch());
 
@@ -268,19 +279,14 @@ ChunkGatedDeltaRuleForwardScanProgramFactory::cached_program_t ChunkGatedDeltaRu
     const bool has_h0 = tensor_args.initial_state.has_value();
 
     // The recurrence is sequential in time but splits exactly over V: every scan step is column-wise
-    // in V and only needs the full-K per-chunk blocks plus that V-block of the state.
+    // in V and only needs the full-K per-chunk blocks plus that V-block of the state.  A scan unit is
+    // one (value head, V-block); the units are shared out over the grid, and a core with more than one
+    // runs them back to back (B*HV may exceed the core count).
     const auto grid = device->compute_with_storage_grid_size();
-    const ScanSplit split = make_scan_split(BH, Vt, grid.x * grid.y);
-    const uint32_t num_scans = BH * split.num_vblocks;
-    std::vector<tt::tt_metal::CoreCoord> cores;
-    cores.reserve(num_scans);
-    std::set<tt::tt_metal::CoreRange> ranges;
-    for (uint32_t i = 0; i < num_scans; ++i) {
-        const tt::tt_metal::CoreCoord core{i % grid.x, i / grid.x};
-        cores.push_back(core);
-        ranges.insert(tt::tt_metal::CoreRange{core, core});
-    }
-    const tt::tt_metal::CoreRangeSet all_cores{ranges};
+    const ScanSplit split = make_scan_split(BH, Ct, Kt, Vt, grid.x * grid.y);
+    const uint32_t num_units = BH * split.num_vblocks;
+    const auto [num_cores, all_cores, group1, group2, units1, units2] =
+        tt::tt_metal::split_work_to_cores(grid, num_units, /*row_wise=*/true);
 
     create_cbs(program, all_cores, scan_cb_plan(Ct, Kt, split.vblock_tiles));
 
@@ -314,33 +320,45 @@ ChunkGatedDeltaRuleForwardScanProgramFactory::cached_program_t ChunkGatedDeltaRu
     }
 
     const auto reader_id = create_reader_kernel(program, all_cores, reader_ct, {}, kScanReaderPath);
-    const auto writer_id = create_writer_kernel(program, all_cores, writer_ct, {}, kScanWriterPath);
-    create_compute(program, all_cores, kScanComputePath, common_ct, args.compute_kernel_config, device->arch());
+    const auto writer_id = create_writer_kernel(
+        program, all_cores, writer_ct, {{"SAVE_STATE", args.save_state ? "1" : "0"}}, kScanWriterPath);
+    const auto compute_id =
+        create_compute(program, all_cores, kScanComputePath, common_ct, args.compute_kernel_config, device->arch());
 
-    for (uint32_t i = 0; i < num_scans; ++i) {
-        const uint32_t bh = i / split.num_vblocks;
-        const uint32_t vb = i % split.num_vblocks;
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            reader_id,
-            cores[i],
-            {bh,
-             vb,
-             tensor_args.v_beta.buffer()->address(),
-             tensor_args.kd.buffer()->address(),
-             tensor_args.q_decay.buffer()->address(),
-             tensor_args.intra.buffer()->address(),
-             tensor_args.k_dec_t.buffer()->address(),
-             tensor_args.dl.buffer()->address(),
-             tensor_args.a.buffer()->address(),
-             has_h0 ? tensor_args.initial_state->buffer()->address() : 0U});
-        std::vector<uint32_t> writer_rt = {bh, vb};
-        writer_rt.reserve(2U + outputs.size());
-        for (const auto& out : outputs) {
-            writer_rt.push_back(out.buffer()->address());
+    std::vector<tt::tt_metal::CoreCoord> cores;
+    cores.reserve(num_cores);
+    uint32_t start = 0U;
+    for (const auto& [group, count] : {std::pair{group1, units1}, std::pair{group2, units2}}) {
+        if (count == 0U) {
+            continue;
         }
-        tt::tt_metal::SetRuntimeArgs(program, writer_id, cores[i], writer_rt);
+        for (const auto& core : tt::tt_metal::corerange_to_cores(group, std::nullopt, /*row_wise=*/true)) {
+            tt::tt_metal::SetRuntimeArgs(
+                program,
+                reader_id,
+                core,
+                {start,
+                 count,
+                 tensor_args.v_beta.buffer()->address(),
+                 tensor_args.kd.buffer()->address(),
+                 tensor_args.q_decay.buffer()->address(),
+                 tensor_args.intra.buffer()->address(),
+                 tensor_args.k_dec_t.buffer()->address(),
+                 tensor_args.dl.buffer()->address(),
+                 tensor_args.a.buffer()->address(),
+                 has_h0 ? tensor_args.initial_state->buffer()->address() : 0U});
+            std::vector<uint32_t> writer_rt = {start, count};
+            writer_rt.reserve(2U + outputs.size());
+            for (const auto& out : outputs) {
+                writer_rt.push_back(out.buffer()->address());
+            }
+            tt::tt_metal::SetRuntimeArgs(program, writer_id, core, writer_rt);
+            tt::tt_metal::SetRuntimeArgs(program, compute_id, core, {count});
+            cores.push_back(core);
+            start += count;
+        }
     }
+    TT_FATAL(start == num_units, "chunk_gated_delta_rule_fw: scan work split lost units: {} != {}", start, num_units);
 
     return cached_program_t{
         std::move(program),

@@ -50,6 +50,7 @@ ttml::metal::ops::chunk_gated_delta_rule_fw::device::tensor_return_value_t ttml_
     const ttnn::Tensor& beta,
     uint32_t chunk_size,
     uint32_t key_head_dim,
+    bool save_g_cumsum,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const tt::tt_metal::MemoryConfig& output_memory_config);
 
@@ -59,6 +60,7 @@ ttml::metal::ops::chunk_gated_delta_rule_fw::device::tensor_return_value_t ttml_
     const std::optional<ttnn::Tensor>& initial_state,
     uint32_t num_value_heads,
     bool output_head_major,
+    bool save_state,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const tt::tt_metal::MemoryConfig& output_memory_config);
 

@@ -48,7 +48,8 @@ std::vector<std::optional<ttnn::Tensor>> chunk_gated_delta_rule_bw(
     uint32_t chunk_size,
     std::optional<float> scale,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const ChunkGatedDeltaRuleBwNeeds& needs) {
     using namespace ops::chunk_gated_delta_rule_bw::device;
 
     const auto kernel_config = ttnn::init_device_compute_kernel_config(
@@ -79,21 +80,20 @@ std::vector<std::optional<ttnn::Tensor>> chunk_gated_delta_rule_bw(
         memory_config.value_or(q.memory_config()));
 
     const uint32_t G = outputs[kDq].logical_shape()[0] / q.logical_shape()[0];
-    std::optional<ttnn::Tensor> dh0;
-    if (initial_state.has_value()) {
-        dh0 = outputs[kDh0];
-    }
     const auto like_q = [&](const ttnn::Tensor& planes) {
         auto summed = sum_value_head_planes(planes, G);
         return q.logical_shape().rank() == 4U ? summed : ttnn::reshape(summed, q.logical_shape());
     };
+    const auto pick = [](bool needed, const ttnn::Tensor& t) -> std::optional<ttnn::Tensor> {
+        return needed ? std::optional<ttnn::Tensor>(t) : std::nullopt;
+    };
     return {
-        like_q(outputs[kDq]),
-        like_q(outputs[kDk]),
-        outputs[kDv],
-        outputs[kDg],
-        outputs[kDbeta],
-        dh0,
+        needs.dq ? std::optional<ttnn::Tensor>(like_q(outputs[kDq])) : std::nullopt,
+        needs.dk ? std::optional<ttnn::Tensor>(like_q(outputs[kDk])) : std::nullopt,
+        pick(needs.dv, outputs[kDv]),
+        pick(needs.dg, outputs[kDg]),
+        pick(needs.dbeta, outputs[kDbeta]),
+        initial_state.has_value() ? pick(needs.dh0, outputs[kDh0]) : std::nullopt,
     };
 }
 

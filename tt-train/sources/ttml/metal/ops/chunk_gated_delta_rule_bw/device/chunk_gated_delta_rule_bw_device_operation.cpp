@@ -8,6 +8,7 @@
 #include <tuple>
 
 #include "chunk_gated_delta_rule_bw_program_factory.hpp"
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::chunk_gated_delta_rule_bw::device {
@@ -17,49 +18,65 @@ namespace {
 // The g/beta gather reads head h as column h of a single tile column, so HV must fit one tile.
 constexpr uint32_t kMaxValueHeads = tt::constants::TILE_WIDTH;
 
-void check_tensor(const ttnn::Tensor& tensor, const char* name, tt::tt_metal::DataType dtype) {
-    TT_FATAL(
-        tensor.storage_type() == ttnn::StorageType::DEVICE && tensor.buffer() != nullptr,
-        "chunk_gated_delta_rule_bw: {} must be allocated on device",
-        name);
-    TT_FATAL(
-        tensor.layout() == tt::tt_metal::Layout::TILE,
-        "chunk_gated_delta_rule_bw: {} must be TILE, got {}",
-        name,
-        enchantum::to_string(tensor.layout()));
-    TT_FATAL(
-        tensor.dtype() == dtype,
-        "chunk_gated_delta_rule_bw: {} dtype {} must be {}",
-        name,
-        enchantum::to_string(tensor.dtype()),
-        enchantum::to_string(dtype));
-    TT_FATAL(
-        tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "chunk_gated_delta_rule_bw: {} must be DRAM interleaved",
-        name);
+constexpr const char* kOp = "chunk_gated_delta_rule_bw";
+
+// Every input is DRAM interleaved TILE (the kernels address DRAM through TensorAccessor); only the dtypes differ.
+DeviceTensorRequirements dram_tile(std::vector<tt::tt_metal::DataType> dtypes) {
+    return {.dtypes = std::move(dtypes), .buffer_type = tt::tt_metal::BufferType::DRAM};
+}
+
+// Shape, dtype and placement of an input.  TensorAccessorArgs bake the buffer placement into the
+// compile-time args, so the program key has to contain everything they depend on instead of leaning on
+// validation (which runs on cache hits too, today, and pins DRAM interleaved) to keep them equal.
+auto describe(const ttnn::Tensor& tensor) {
+    return std::make_tuple(tensor.logical_shape(), tensor.dtype(), tensor.memory_config());
+}
+
+auto describe(const std::optional<ttnn::Tensor>& tensor) {
+    using Description = decltype(describe(*tensor));
+    return tensor.has_value() ? std::optional<Description>(describe(*tensor)) : std::nullopt;
 }
 
 }  // namespace
 
 void ChunkGatedDeltaRuleBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const std::vector<tt::tt_metal::DataType> float_dtypes = {
+        tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32};
+    check_device_tensor(tensor_args.q, kOp, "q", dram_tile(float_dtypes));
+    // Every input but the gates (including the optional states) follows q's dtype.
     const auto dtype = tensor_args.q.dtype();
-    TT_FATAL(
-        dtype == tt::tt_metal::DataType::BFLOAT16 || dtype == tt::tt_metal::DataType::FLOAT32,
-        "chunk_gated_delta_rule_bw: dtype must be BFLOAT16 or FLOAT32, got {}",
-        enchantum::to_string(dtype));
-    check_tensor(tensor_args.q, "q", dtype);
-    check_tensor(tensor_args.k, "k", dtype);
-    check_tensor(tensor_args.v, "v", dtype);
-    check_tensor(tensor_args.g, "g", dtype);
-    check_tensor(tensor_args.beta, "beta", dtype);
-    check_tensor(tensor_args.d_out, "d_out", dtype);
+    const auto like_q = dram_tile({dtype});
+    check_device_tensor(tensor_args.k, kOp, "k", like_q);
+    check_device_tensor(tensor_args.v, kOp, "v", like_q);
+    // The gates may be BF16 or FP32 whatever q's dtype is, matching the forward; beta must match g.
+    const auto gate_dtype = tensor_args.g.dtype();
+    check_device_tensor(tensor_args.g, kOp, "g", dram_tile(float_dtypes));
+    check_device_tensor(tensor_args.beta, kOp, "beta", dram_tile({gate_dtype}));
+    check_device_tensor(tensor_args.d_out, kOp, "d_out", like_q);
     if (tensor_args.initial_state.has_value()) {
-        check_tensor(*tensor_args.initial_state, "initial_state", dtype);
+        check_device_tensor(*tensor_args.initial_state, kOp, "initial_state", like_q);
     }
     if (tensor_args.d_final_state.has_value()) {
-        check_tensor(*tensor_args.d_final_state, "d_final_state", dtype);
+        check_device_tensor(*tensor_args.d_final_state, kOp, "d_final_state", like_q);
+    }
+    for (const auto& [tensor, name] :
+         {std::pair{&tensor_args.k, "k"},
+          std::pair{&tensor_args.v, "v"},
+          std::pair{&tensor_args.g, "g"},
+          std::pair{&tensor_args.beta, "beta"},
+          std::pair{&tensor_args.d_out, "d_out"}}) {
+        check_same_device(*tensor, tensor_args.q, kOp, name, "q");
+    }
+    for (const auto& [optional_tensor, name] :
+         {std::pair{&tensor_args.initial_state, "initial_state"},
+          std::pair{&tensor_args.d_final_state, "d_final_state"},
+          std::pair{&tensor_args.h, "h"},
+          std::pair{&tensor_args.v_new, "v_new"},
+          std::pair{&tensor_args.a, "a"}}) {
+        if (optional_tensor->has_value()) {
+            check_same_device(**optional_tensor, tensor_args.q, kOp, name, "q");
+        }
     }
 
     const auto& q_shape = tensor_args.q.logical_shape();
@@ -96,6 +113,12 @@ void ChunkGatedDeltaRuleBackwardDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         T % C == 0U,
         "chunk_gated_delta_rule_bw: T={} must be a multiple of chunk_size={} (whole token tiles move as pages)",
+        T,
+        C);
+    TT_FATAL(
+        B >= 1U && T >= C,
+        "chunk_gated_delta_rule_bw: B={} must be at least 1 and T={} at least chunk_size={}",
+        B,
         T,
         C);
 
@@ -152,7 +175,7 @@ void ChunkGatedDeltaRuleBackwardDeviceOperation::validate_on_program_cache_miss(
              {std::tuple{&*tensor_args.h, "h", &h_shape},
               std::tuple{&*tensor_args.v_new, "v_new", &v_new_shape},
               std::tuple{&*tensor_args.a, "a", &a_shape}}) {
-            check_tensor(*tensor, name, tt::tt_metal::DataType::FLOAT32);
+            check_device_tensor(*tensor, kOp, name, dram_tile({tt::tt_metal::DataType::FLOAT32}));
             TT_FATAL(
                 tensor->logical_shape() == *shape,
                 "chunk_gated_delta_rule_bw: {} must be {}, got {}",
@@ -206,14 +229,17 @@ ttsl::hash::hash_t ChunkGatedDeltaRuleBackwardDeviceOperation::compute_program_h
         args.key_head_dim,
         args.compute_kernel_config,
         args.output_memory_config,
-        tensor_args.q.dtype(),
-        tensor_args.q.logical_shape(),
-        tensor_args.v.logical_shape(),
-        tensor_args.g.logical_shape(),
-        tensor_args.d_out.logical_shape(),
-        tensor_args.initial_state.has_value(),
-        tensor_args.d_final_state.has_value(),
-        tensor_args.has_saved_forward());
+        describe(tensor_args.q),
+        describe(tensor_args.k),
+        describe(tensor_args.v),
+        describe(tensor_args.g),
+        describe(tensor_args.beta),
+        describe(tensor_args.d_out),
+        describe(tensor_args.initial_state),
+        describe(tensor_args.d_final_state),
+        describe(tensor_args.h),
+        describe(tensor_args.v_new),
+        describe(tensor_args.a));
 }
 
 }  // namespace ttml::metal::ops::chunk_gated_delta_rule_bw::device

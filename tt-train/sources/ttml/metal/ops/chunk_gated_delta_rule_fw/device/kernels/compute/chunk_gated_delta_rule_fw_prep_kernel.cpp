@@ -11,10 +11,11 @@
 // q, k already L2-normalized along K by the caller:
 //   v_beta = v*beta ; k_beta = k*beta
 //   decay = cumsum(g) = tril @ g ; decay_exp = exp(decay)          (decay is teed out as g_cumsum)
-//   L_mask = tril( exp(decay_i - decay_j) )
+//   L_mask = tril( exp(decay_i - decay_j) ), span formed as tril @ (g * strictly_lower)
 //   N = strictly_lower(k_beta@k^T * L_mask) ; T_inv = (I+N)^-1     (T_inv is the saved A)
 //   kd = k_beta*decay_exp ; intra = (q@k^T) * L_mask
 //   q_decay = q*decay_exp ; k_dec_t = transpose(k * exp(decay_last - decay)) ; dl = exp(decay_last)
+//   (decay_last - decay is the exclusive reverse cumsum, formed as strictly_upper @ g)
 
 #include <cstdint>
 
@@ -163,25 +164,6 @@ void bcast_cols_mul(uint32_t a, uint32_t col, uint32_t o, uint32_t Mt, uint32_t 
     cb_push_back(o, qn(o, Mt * Nt));
 }
 
-// out[Mt,Nt] = A[Mt,Nt] - row[1,Nt]  (broadcast the single row of `row` across M)
-void bcast_rows_sub(uint32_t a, uint32_t row, uint32_t o, uint32_t Mt, uint32_t Nt) {
-    cb_reserve_back(o, qn(o, Mt * Nt));
-    pack_reconfig_data_format(o);
-    reconfig_data_format(a, row);  // bcast(a,row): a->srcA, row->srcB
-    sub_bcast_rows_init(a, row);
-    for (uint32_t mi = 0; mi < Mt; mi++) {
-        for (uint32_t ni = 0; ni < Nt; ni++) {
-            tile_regs_acquire();
-            sub_tiles_bcast_rows(a, row, mi * Nt + ni, ni, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, o, mi * Nt + ni);
-            tile_regs_release();
-        }
-    }
-    cb_push_back(o, qn(o, Mt * Nt));
-}
-
 // out[0] = copy of src[src_tile] (single 32x32 tile). src must be available.
 void cpy_t(uint32_t src, uint32_t src_tile, uint32_t o) {
     cb_reserve_back(o, qn(o, 1));
@@ -315,24 +297,6 @@ void invert_block(uint32_t src, uint32_t tile, uint32_t out, uint32_t tmpN, uint
     POP(C, 1);
     POP(A, 1);  // + off -> out
 }
-
-// out[1,Ct] row-form = transpose of col[Ct,1]; produces Ct tiles (each row0 = a 32-chunk of col).
-void transpose_col(uint32_t in, uint32_t o, uint32_t Ct) {
-    cb_reserve_back(o, qn(o, Ct));
-    pack_reconfig_data_format(o);
-    reconfig_data_format_srca(in);  // unary: in->srcA
-    transpose_init(in);
-    for (uint32_t i = 0; i < Ct; i++) {
-        tile_regs_acquire();
-        transpose_tile(in, i, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, o, i);
-        tile_regs_release();
-    }
-    cb_push_back(o, qn(o, Ct));
-}
-
 }  // namespace
 
 void kernel_main() {
@@ -352,7 +316,7 @@ void kernel_main() {
     // Constants, built once by the reader.
     WAIT(cb_eye, cc);
     WAIT(cb_tril, cc);
-    WAIT(cb_ones, cc);
+    WAIT(cb_sut, cc);
     WAIT(cb_mask, kNumMasks);  // Qtl, Qbr, Q10 (used by invert_block)
 
     // Per item: v_beta, T_inv, kd, intra, q_decay, k_dec_t, dl and g_cumsum stay pushed in their CBs
@@ -374,43 +338,41 @@ void kernel_main() {
         POP(cb_beta, Ct);
         POP(cb_v, cv);
 
-        // ---- P2: decay = tril@g, decay_exp, decay_row ----
+        // ---- P2: decay = tril@g, decay_exp ----
         // (decay is also packed straight into cb_gcum -> writer -> g_cumsum.)
         mm(cb_tril, cb_g, cb_decay, Ct, Ct, 1, false, cb_gcum);
         WAIT(cb_decay, Ct);
         expc(cb_decay, cb_decay_exp, Ct);
         WAIT(cb_decay_exp, Ct);
-        transpose_col(cb_decay, cb_scr1, Ct);  // decay_row in scr1
-        WAIT(cb_scr1, Ct);
+        POP(cb_decay, Ct);
 
-        // ---- L_mask = tril(exp(decay_i - decay_j)) ----
-        bcast_cols_mul(cb_ones, cb_decay, cb_scr2, Ct, Ct);  // decay_i everywhere
+        // ---- L_mask[i,j] = exp(sum_{j<s<=i} g_s) for j <= i, 0 above ----
+        // Every decay difference below is a matmul of g, never decay_i - decay_j or g_sum - decay:
+        // both cumsums grow to ~|sum(g)| over the chunk, and their difference cancels at the ~tf32
+        // width of the FPU source registers.  The span is exactly 0 above the diagonal, so exp()
+        // stays finite there and the tril multiply zeroes it.
+        ew(cb_tril, cb_eye, cb_scr1, cc, 1);  // strictly-lower ones
+        WAIT(cb_scr1, cc);
+        bcast_cols_mul(cb_scr1, cb_g, cb_scr2, Ct, Ct);  // M[s,j] = g_s for s > j
         WAIT(cb_scr2, cc);
-        bcast_rows_sub(cb_scr2, cb_scr1, cb_scr3, Ct, Ct);  // decay_i - decay_j
+        POP(cb_scr1, cc);
+        mm(cb_tril, cb_scr2, cb_scr3, Ct, Ct, Ct, false);  // span = tril @ M
         WAIT(cb_scr3, cc);
-        POP(cb_scr1, Ct);  // decay_row done
         POP(cb_scr2, cc);
-        ew(cb_scr3, cb_tril, cb_scr2, cc, 2);  // *tril (zero upper)
+        expc(cb_scr3, cb_scr2, cc);
         WAIT(cb_scr2, cc);
         POP(cb_scr3, cc);
-        expc(cb_scr2, cb_scr3, cc);  // exp
-        WAIT(cb_scr3, cc);
-        POP(cb_scr2, cc);
-        ew(cb_scr3, cb_tril, cb_lmask, cc, 2);  // *tril again -> L_mask
+        ew(cb_scr2, cb_tril, cb_lmask, cc, 2);  // *tril -> L_mask
         WAIT(cb_lmask, cc);
-        POP(cb_scr3, cc);
+        POP(cb_scr2, cc);
 
-        // ---- decayfac = exp(g_sum - decay) ----
-        mm(cb_ones, cb_g, cb_scr1, Ct, Ct, 1, false);  // g_sum in every row (col form)
+        // ---- decayfac = exp(decay_last - decay) = exp(sut @ g), the exclusive reverse cumsum ----
+        mm(cb_sut, cb_g, cb_scr1, Ct, Ct, 1, false);
         WAIT(cb_scr1, Ct);
         POP(cb_g, Ct);
-        ew(cb_scr1, cb_decay, cb_scr2, Ct, 1);  // g_sum - decay
-        WAIT(cb_scr2, Ct);
-        POP(cb_scr1, Ct);
-        POP(cb_decay, Ct);
-        expc(cb_scr2, cb_decayfac, Ct);
+        expc(cb_scr1, cb_decayfac, Ct);
         WAIT(cb_decayfac, Ct);
-        POP(cb_scr2, Ct);
+        POP(cb_scr1, Ct);
 
         // ---- N = strictly_lower(k_beta@k^T * L_mask); T_inv = (I + strictly_lower)^-1 ----
         // The WY inverse, mirroring FLA's solve_tril: block down to 16x16 (invert_block splits each

@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Scan writer for one (value head bh = b*HV + hv, V-block vb).  Each output receives this core's
-// V-slice, columns [vb*Vt, vb*Vt+Vt) of V.  Per chunk c, in the compute's push order:
+// Scan writer for a run of scan units; unit u is (value head bh = u / NV = b*HV + hv, V-block
+// vb = u % NV) with NV = Vt_full / Vt.  Each output receives the unit's V-slice, columns
+// [vb*Vt, vb*Vt+Vt) of V.  Per chunk c, in the compute's push order:
 //   h      [BH, NC, K, V]   state entering chunk c (h_0 from the reader, h_{c>=1} from the compute)
 //   v_new  [BH, 1, T, V]
 //   o      [B, 1, T, HV*V]  token-major, value head hv at column block hv (or head-major [BH, 1, T, V])
-// and once at the end final_state [B, HV, K, V].  All fp32.
+// and once at the end final_state [B, HV, K, V].  All fp32.  Without SAVE_STATE h and v_new are popped
+// instead of written (no backward will read them).
 
 #include <cstdint>
 
@@ -35,8 +37,8 @@ void kernel_main() {
     constexpr auto h_args = TensorAccessorArgs<fs_args.next_compile_time_args_offset()>();
     constexpr auto vn_args = TensorAccessorArgs<h_args.next_compile_time_args_offset()>();
 
-    const uint32_t bh = get_arg_val<uint32_t>(0);
-    const uint32_t vb = get_arg_val<uint32_t>(1);
+    const uint32_t unit_start = get_arg_val<uint32_t>(0);
+    const uint32_t num_units = get_arg_val<uint32_t>(1);
 
     const uint32_t tb = get_tile_size(cb_out);
     const auto o_acc = TensorAccessor(o_args, get_arg_val<uint32_t>(2), tb);
@@ -44,10 +46,10 @@ void kernel_main() {
     const auto h_acc = TensorAccessor(h_args, get_arg_val<uint32_t>(4), tb);
     const auto vn_acc = TensorAccessor(vn_args, get_arg_val<uint32_t>(5), tb);
 
-    const uint32_t b = bh / HV;
-    const uint32_t hv = bh % HV;
+    constexpr uint32_t NV = Vt_full / Vt;
 
     Noc noc;
+    uint32_t vb = 0;  // the current unit's V-block, read by the lambda below
 
     // R tile rows of `cb_id` ([R, Vt]) into this core's V-slice of rows starting at tile `row_base`,
     // `row_stride` tiles apart.
@@ -64,16 +66,33 @@ void kernel_main() {
         noc.async_write_barrier();
         cb.pop_front(R * Vt);
     };
+    auto discard = [&](uint32_t cb_id, uint32_t R) {
+        CircularBuffer cb(cb_id);
+        cb.wait_front(R * Vt);
+        cb.pop_front(R * Vt);
+    };
 
-    for (uint32_t c = 0; c < NC; ++c) {
-        const uint32_t wi = bh * NC + c;
-        scatter_vslice(c == 0 ? cb_h0 : cb_hout, h_acc, wi * Kt * Vt_full, Vt_full, Kt);
-        scatter_vslice(cb_vnout, vn_acc, wi * Ct * Vt_full, Vt_full, Ct);
-        if constexpr (O_HEAD_MAJOR) {
-            scatter_vslice(cb_out, o_acc, wi * Ct * Vt_full, Vt_full, Ct);
-        } else {
-            scatter_vslice(cb_out, o_acc, (b * Tt + c * Ct) * HV * Vt_full + hv * Vt_full, HV * Vt_full, Ct);
+    for (uint32_t u = 0; u < num_units; ++u) {
+        const uint32_t bh = (unit_start + u) / NV;
+        vb = (unit_start + u) % NV;
+        const uint32_t b = bh / HV;
+        const uint32_t hv = bh % HV;
+
+        for (uint32_t c = 0; c < NC; ++c) {
+            const uint32_t wi = bh * NC + c;
+#if SAVE_STATE
+            scatter_vslice(c == 0 ? cb_h0 : cb_hout, h_acc, wi * Kt * Vt_full, Vt_full, Kt);
+            scatter_vslice(cb_vnout, vn_acc, wi * Ct * Vt_full, Vt_full, Ct);
+#else
+            discard(c == 0 ? cb_h0 : cb_hout, Kt);
+            discard(cb_vnout, Ct);
+#endif
+            if constexpr (O_HEAD_MAJOR) {
+                scatter_vslice(cb_out, o_acc, wi * Ct * Vt_full, Vt_full, Ct);
+            } else {
+                scatter_vslice(cb_out, o_acc, (b * Tt + c * Ct) * HV * Vt_full + hv * Vt_full, HV * Vt_full, Ct);
+            }
         }
+        scatter_vslice(cb_final, fs_acc, bh * Kt * Vt_full, Vt_full, Kt);
     }
-    scatter_vslice(cb_final, fs_acc, bh * Kt * Vt_full, Vt_full, Kt);
 }

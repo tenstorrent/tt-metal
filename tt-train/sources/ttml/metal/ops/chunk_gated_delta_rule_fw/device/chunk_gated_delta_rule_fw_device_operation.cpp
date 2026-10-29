@@ -6,6 +6,7 @@
 
 #include <enchantum/enchantum.hpp>
 
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::chunk_gated_delta_rule_fw::device {
@@ -15,30 +16,23 @@ namespace {
 // The g/beta gather reads value head h as column h of a single tile column, so HV must fit one tile.
 constexpr uint32_t kMaxValueHeads = tt::constants::TILE_WIDTH;
 
-void check_tensor(const ttnn::Tensor& tensor, const char* name) {
-    TT_FATAL(
-        tensor.storage_type() == ttnn::StorageType::DEVICE && tensor.buffer() != nullptr,
-        "chunk_gated_delta_rule_fw: {} must be allocated on device",
-        name);
-    TT_FATAL(
-        tensor.layout() == tt::tt_metal::Layout::TILE,
-        "chunk_gated_delta_rule_fw: {} must be TILE, got {}",
-        name,
-        enchantum::to_string(tensor.layout()));
-    TT_FATAL(
-        tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "chunk_gated_delta_rule_fw: {} must be DRAM interleaved",
-        name);
+constexpr const char* kOp = "chunk_gated_delta_rule_fw";
+
+// Every input is DRAM interleaved TILE (the kernels address DRAM through TensorAccessor); only the dtypes differ.
+DeviceTensorRequirements dram_tile(std::vector<tt::tt_metal::DataType> dtypes) {
+    return {.dtypes = std::move(dtypes), .buffer_type = tt::tt_metal::BufferType::DRAM};
 }
 
-void check_dtype(const ttnn::Tensor& tensor, const char* name, tt::tt_metal::DataType dtype) {
-    TT_FATAL(
-        tensor.dtype() == dtype,
-        "chunk_gated_delta_rule_fw: {} must be {}, got {}",
-        name,
-        enchantum::to_string(dtype),
-        enchantum::to_string(tensor.dtype()));
+// Shape, dtype and placement of an input.  TensorAccessorArgs bake the buffer placement into the
+// compile-time args, so the program key has to contain everything they depend on instead of leaning on
+// validation (which runs on cache hits too, today, and pins DRAM interleaved) to keep them equal.
+auto describe(const ttnn::Tensor& tensor) {
+    return std::make_tuple(tensor.logical_shape(), tensor.dtype(), tensor.memory_config());
+}
+
+auto describe(const std::optional<ttnn::Tensor>& tensor) {
+    using Description = decltype(describe(*tensor));
+    return tensor.has_value() ? std::optional<Description>(describe(*tensor)) : std::nullopt;
 }
 
 uint32_t num_worker_cores(const ttnn::Tensor& tensor) {
@@ -62,14 +56,11 @@ void check_fits_l1(const std::vector<CbSpec>& plan, const char* program, uint32_
 
 // The scan holds one V-block of the state per core; the block shrinks as B*HV leaves more cores free.
 void check_scan_fits_l1(uint32_t BH, uint32_t C, uint32_t K, uint32_t V, uint32_t num_cores) {
+    const uint32_t Ct = C / tt::constants::TILE_HEIGHT;
+    const uint32_t Kt = K / tt::constants::TILE_WIDTH;
     const uint32_t Vt = V / tt::constants::TILE_WIDTH;
-    const ScanSplit split = make_scan_split(BH, Vt, num_cores);
-    check_fits_l1(
-        scan_cb_plan(C / tt::constants::TILE_HEIGHT, K / tt::constants::TILE_WIDTH, split.vblock_tiles),
-        "scan",
-        C,
-        K,
-        V);
+    const ScanSplit split = make_scan_split(BH, Ct, Kt, Vt, num_cores);
+    check_fits_l1(scan_cb_plan(Ct, Kt, split.vblock_tiles), "scan", C, K, V);
 }
 
 tt::tt_metal::TensorSpec f32_spec(const ttnn::Shape& shape, const tt::tt_metal::MemoryConfig& mem) {
@@ -83,19 +74,23 @@ tt::tt_metal::TensorSpec f32_spec(const ttnn::Shape& shape, const tt::tt_metal::
 // ---------------------------------------------------------------------------------------------
 void ChunkGatedDeltaRuleForwardPrepDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto bf16 = dram_tile({tt::tt_metal::DataType::BFLOAT16});
     for (const auto& [tensor, name] :
          {std::pair{&tensor_args.q, "q"}, std::pair{&tensor_args.k, "k"}, std::pair{&tensor_args.v, "v"}}) {
-        check_tensor(*tensor, name);
-        check_dtype(*tensor, name, tt::tt_metal::DataType::BFLOAT16);
+        check_device_tensor(*tensor, kOp, name, bf16);
     }
-    check_tensor(tensor_args.g, "g");
-    check_tensor(tensor_args.beta, "beta");
+    // The gates may be BF16 or FP32, but beta must match g.
     const auto gate_dtype = tensor_args.g.dtype();
-    TT_FATAL(
-        gate_dtype == tt::tt_metal::DataType::BFLOAT16 || gate_dtype == tt::tt_metal::DataType::FLOAT32,
-        "chunk_gated_delta_rule_fw: g must be BFLOAT16 or FLOAT32, got {}",
-        enchantum::to_string(gate_dtype));
-    check_dtype(tensor_args.beta, "beta", gate_dtype);
+    check_device_tensor(
+        tensor_args.g, kOp, "g", dram_tile({tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::FLOAT32}));
+    check_device_tensor(tensor_args.beta, kOp, "beta", dram_tile({gate_dtype}));
+    for (const auto& [tensor, name] :
+         {std::pair{&tensor_args.k, "k"},
+          std::pair{&tensor_args.v, "v"},
+          std::pair{&tensor_args.g, "g"},
+          std::pair{&tensor_args.beta, "beta"}}) {
+        check_same_device(*tensor, tensor_args.q, kOp, name, "q");
+    }
 
     const auto& qs = tensor_args.q.logical_shape();
     const auto& vs = tensor_args.v.logical_shape();
@@ -128,6 +123,12 @@ void ChunkGatedDeltaRuleForwardPrepDeviceOperation::validate_on_program_cache_mi
         "chunk_gated_delta_rule_fw: T={} must be a multiple of chunk_size={} (whole token tiles move as pages)",
         T,
         C);
+    TT_FATAL(
+        B >= 1U && T >= C,
+        "chunk_gated_delta_rule_fw: B={} must be at least 1 and T={} at least chunk_size={}",
+        B,
+        T,
+        C);
 
     // A page is [32 tokens x 32 dims] of one head; a head dim off the tile grid would address pages
     // straddling two heads.
@@ -146,13 +147,6 @@ void ChunkGatedDeltaRuleForwardPrepDeviceOperation::validate_on_program_cache_mi
         "chunk_gated_delta_rule_fw: value heads HV={} must be a multiple of key heads HK={}",
         HV,
         HK);
-
-    // The scan runs one core per value head (at least).
-    TT_FATAL(
-        B * HV <= num_worker_cores(tensor_args.q),
-        "chunk_gated_delta_rule_fw: B*HV={} exceeds the {} worker cores",
-        B * HV,
-        num_worker_cores(tensor_args.q));
 
     // Each program's CB set must fit one core's L1; the scan is checked here too so an oversized
     // forward fails before the prep is dispatched.
@@ -185,7 +179,9 @@ spec_return_value_t ChunkGatedDeltaRuleForwardPrepDeviceOperation::compute_outpu
     specs[kKDecT] = f32_spec(ttnn::Shape({BH, NC, K, C}), mem);
     specs[kDl] = f32_spec(ttnn::Shape({BH, NC, 1U, 1U}), mem);
     specs[kA] = f32_spec(ttnn::Shape({BH, 1U, T, C}), mem);
-    specs[kGCumsum] = f32_spec(ttnn::Shape({BH, 1U, T, 1U}), mem);
+    if (args.save_g_cumsum) {
+        specs[kGCumsum] = f32_spec(ttnn::Shape({BH, 1U, T, 1U}), mem);
+    }
     return specs;
 }
 
@@ -203,12 +199,14 @@ ttsl::hash::hash_t ChunkGatedDeltaRuleForwardPrepDeviceOperation::compute_progra
     return tt::tt_metal::operation::hash_operation<ChunkGatedDeltaRuleForwardPrepDeviceOperation>(
         args.chunk_size,
         args.key_head_dim,
+        args.save_g_cumsum,
         args.compute_kernel_config,
         args.output_memory_config,
-        tensor_args.q.logical_shape(),
-        tensor_args.v.logical_shape(),
-        tensor_args.g.logical_shape(),
-        tensor_args.g.dtype());
+        describe(tensor_args.q),
+        describe(tensor_args.k),
+        describe(tensor_args.v),
+        describe(tensor_args.g),
+        describe(tensor_args.beta));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -216,6 +214,7 @@ ttsl::hash::hash_t ChunkGatedDeltaRuleForwardPrepDeviceOperation::compute_progra
 // ---------------------------------------------------------------------------------------------
 void ChunkGatedDeltaRuleForwardScanDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto fp32 = dram_tile({tt::tt_metal::DataType::FLOAT32});
     for (const auto& [tensor, name] :
          {std::pair{&tensor_args.v_beta, "v_beta"},
           std::pair{&tensor_args.kd, "kd"},
@@ -224,8 +223,7 @@ void ChunkGatedDeltaRuleForwardScanDeviceOperation::validate_on_program_cache_mi
           std::pair{&tensor_args.k_dec_t, "k_dec_t"},
           std::pair{&tensor_args.dl, "dl"},
           std::pair{&tensor_args.a, "a"}}) {
-        check_tensor(*tensor, name);
-        check_dtype(*tensor, name, tt::tt_metal::DataType::FLOAT32);
+        check_device_tensor(*tensor, kOp, name, fp32);
     }
     const auto& vbs = tensor_args.v_beta.logical_shape();
     const auto& kds = tensor_args.kd.logical_shape();
@@ -245,16 +243,21 @@ void ChunkGatedDeltaRuleForwardScanDeviceOperation::validate_on_program_cache_mi
             tensor_args.a.logical_shape() == ttnn::Shape({BH, 1U, NC * C, C}),
         "chunk_gated_delta_rule_fw: scan inputs disagree with v_beta {}",
         vbs);
-    TT_FATAL(
-        BH <= num_worker_cores(tensor_args.v_beta),
-        "chunk_gated_delta_rule_fw: B*HV={} exceeds the {} worker cores",
-        BH,
-        num_worker_cores(tensor_args.v_beta));
+    TT_FATAL(BH >= 1U && NC >= 1U, "chunk_gated_delta_rule_fw: the scan needs at least one head and one chunk");
     check_scan_fits_l1(BH, C, K, V, num_worker_cores(tensor_args.v_beta));
+    for (const auto& [tensor, name] :
+         {std::pair{&tensor_args.kd, "kd"},
+          std::pair{&tensor_args.q_decay, "q_decay"},
+          std::pair{&tensor_args.intra, "intra"},
+          std::pair{&tensor_args.k_dec_t, "k_dec_t"},
+          std::pair{&tensor_args.dl, "dl"},
+          std::pair{&tensor_args.a, "a"}}) {
+        check_same_device(*tensor, tensor_args.v_beta, kOp, name, "v_beta");
+    }
     if (tensor_args.initial_state.has_value()) {
         const auto& h0 = *tensor_args.initial_state;
-        check_tensor(h0, "initial_state");
-        check_dtype(h0, "initial_state", tt::tt_metal::DataType::FLOAT32);
+        check_device_tensor(h0, kOp, "initial_state", fp32);
+        check_same_device(h0, tensor_args.v_beta, kOp, "initial_state", "v_beta");
         const ttnn::Shape state_shape({BH / HV, HV, K, V});
         TT_FATAL(
             h0.logical_shape() == state_shape,
@@ -280,8 +283,10 @@ spec_return_value_t ChunkGatedDeltaRuleForwardScanDeviceOperation::compute_outpu
     specs[kO] =
         f32_spec(args.output_head_major ? ttnn::Shape({BH, 1U, NC * C, V}) : ttnn::Shape({B, 1U, NC * C, HV * V}), mem);
     specs[kFinalState] = f32_spec(ttnn::Shape({B, HV, K, V}), mem);
-    specs[kH] = f32_spec(ttnn::Shape({BH, NC, K, V}), mem);
-    specs[kVNew] = f32_spec(ttnn::Shape({BH, 1U, NC * C, V}), mem);
+    if (args.save_state) {
+        specs[kH] = f32_spec(ttnn::Shape({BH, NC, K, V}), mem);
+        specs[kVNew] = f32_spec(ttnn::Shape({BH, 1U, NC * C, V}), mem);
+    }
     return specs;
 }
 
@@ -299,11 +304,17 @@ ttsl::hash::hash_t ChunkGatedDeltaRuleForwardScanDeviceOperation::compute_progra
     return tt::tt_metal::operation::hash_operation<ChunkGatedDeltaRuleForwardScanDeviceOperation>(
         args.num_value_heads,
         args.output_head_major,
+        args.save_state,
         args.compute_kernel_config,
         args.output_memory_config,
-        tensor_args.v_beta.logical_shape(),
-        tensor_args.kd.logical_shape(),
-        tensor_args.initial_state.has_value());
+        describe(tensor_args.v_beta),
+        describe(tensor_args.kd),
+        describe(tensor_args.q_decay),
+        describe(tensor_args.intra),
+        describe(tensor_args.k_dec_t),
+        describe(tensor_args.dl),
+        describe(tensor_args.a),
+        describe(tensor_args.initial_state));
 }
 
 }  // namespace ttml::metal::ops::chunk_gated_delta_rule_fw::device
@@ -318,6 +329,7 @@ ttml::metal::ops::chunk_gated_delta_rule_fw::device::tensor_return_value_t ttml_
     const ttnn::Tensor& beta,
     uint32_t chunk_size,
     uint32_t key_head_dim,
+    bool save_g_cumsum,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const tt::tt_metal::MemoryConfig& output_memory_config) {
     using OperationType =
@@ -325,6 +337,7 @@ ttml::metal::ops::chunk_gated_delta_rule_fw::device::tensor_return_value_t ttml_
     auto attributes = OperationType::operation_attributes_t{
         .chunk_size = chunk_size,
         .key_head_dim = key_head_dim,
+        .save_g_cumsum = save_g_cumsum,
         .compute_kernel_config = compute_kernel_config,
         .output_memory_config = output_memory_config};
     auto tensor_args = OperationType::tensor_args_t{.q = q, .k = k, .v = v, .g = g, .beta = beta};
@@ -336,6 +349,7 @@ ttml::metal::ops::chunk_gated_delta_rule_fw::device::tensor_return_value_t ttml_
     const std::optional<ttnn::Tensor>& initial_state,
     uint32_t num_value_heads,
     bool output_head_major,
+    bool save_state,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const tt::tt_metal::MemoryConfig& output_memory_config) {
     using namespace ttml::metal::ops::chunk_gated_delta_rule_fw::device;
@@ -343,6 +357,7 @@ ttml::metal::ops::chunk_gated_delta_rule_fw::device::tensor_return_value_t ttml_
     auto attributes = OperationType::operation_attributes_t{
         .num_value_heads = num_value_heads,
         .output_head_major = output_head_major,
+        .save_state = save_state,
         .compute_kernel_config = compute_kernel_config,
         .output_memory_config = output_memory_config};
     auto tensor_args = OperationType::tensor_args_t{

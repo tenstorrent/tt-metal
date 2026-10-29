@@ -13,6 +13,7 @@
 #include <tt-metalium/work_split.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "metal/ops/chunk_gated_delta_rule_common/chunk_gated_delta_rule_common.hpp"
 
 namespace {
 
@@ -26,13 +27,11 @@ constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/chunk_gated_delta_rule_bw/device/kernels/compute/"
     "chunk_gated_delta_rule_bw_kernel.cpp";
 
-// L1 below the circular-buffer region that get_max_worker_l1_unreserved_size() still counts: the
-// kernel-config ring buffer the five kernel binaries live in, plus slack.
-constexpr uint32_t kL1KernelConfigReserve = 80U * 1024U;
+using chunk_gated_delta_rule_common::kL1KernelConfigReserve;
 
 // Named-block counts inside the three multi-slot CBs; the kernels derive every slot offset from the
 // same values (chunk_gated_delta_rule_bw_common.hpp).
-constexpr uint32_t kNumConstMasks = 6U;  // LT, NSTRICT, UT, EYE, BIAS, SUT
+constexpr uint32_t kNumConstMasks = 6U;  // LT, NSTRICT, UT, EYE, SLT, SUT
 constexpr uint32_t kNumVecASlots = 5U;   // decay, gamma, w, beta, dc1
 constexpr uint32_t kNumVecBSlots = 9U;   // stage-G column accumulators
 
@@ -86,7 +85,7 @@ struct CbBlocks {
 
 CbBlocks cb_blocks(uint32_t Ct, uint32_t Kt, uint32_t Vb) {
     return {
-        .nconst = kNumConstMasks * Ct * Ct + 2U + Ct,  // masks + scale + zero + Ct row-of-ones
+        .nconst = kNumConstMasks * Ct * Ct + 2U,  // masks + scale + zero
         .ncol = std::max({Ct, Kt, Vb}),
         .maxv = std::max(Ct, Kt) * Vb,
         .lvb = std::max(
@@ -133,29 +132,40 @@ std::array<uint32_t, kNumCbs> cb_pages(uint32_t Ct, uint32_t Kt, uint32_t Vb) {
 }
 
 bool is_input_dtype_cb(uint32_t cb) {
-    return cb == kCbQIn || cb == kCbKIn || cb == kCbVIn || cb == kCbDoIn || cb == kCbGateIn || cb == kCbGradEgress;
+    return cb == kCbQIn || cb == kCbKIn || cb == kCbVIn || cb == kCbDoIn || cb == kCbGradEgress;
 }
 
-// The staging CB holds one input tile read for the g/beta gather, at a 64-byte-aligned offset.
-uint32_t stage_bytes(uint32_t in_tile) {
-    return in_tile + 64U;
+// Tile sizes of the three data formats a circular buffer can hold: the q/k/v/d_out dtype, the g/beta
+// dtype (BF16 or FP32, independent of q's), and the FP32 intermediates.
+struct TileSizes {
+    uint32_t in;
+    uint32_t gate;
+    uint32_t f32;
+};
+
+uint32_t cb_tile_bytes(uint32_t cb, const TileSizes& tiles) {
+    if (cb == kCbGateIn) {
+        return tiles.gate;
+    }
+    return is_input_dtype_cb(cb) ? tiles.in : tiles.f32;
 }
 
-uint64_t cb_bytes(uint32_t Ct, uint32_t Kt, uint32_t Vb, uint32_t in_tile, uint32_t f32_tile) {
+// The staging CB holds one input or gate tile read for the g/beta gather, at a 64-byte-aligned offset.
+uint32_t stage_bytes(const TileSizes& tiles) {
+    return std::max(tiles.in, tiles.gate) + 64U;
+}
+
+uint64_t cb_bytes(uint32_t Ct, uint32_t Kt, uint32_t Vb, const TileSizes& tiles) {
     const auto pages = cb_pages(Ct, Kt, Vb);
     uint64_t total = 0;
     for (uint32_t cb = 0; cb < kNumCbs; ++cb) {
         if (cb == kCbStage) {
-            total += stage_bytes(in_tile);
+            total += stage_bytes(tiles);
         } else {
-            total += static_cast<uint64_t>(pages[cb]) * (is_input_dtype_cb(cb) ? in_tile : f32_tile);
+            total += static_cast<uint64_t>(pages[cb]) * cb_tile_bytes(cb, tiles);
         }
     }
     return total;
-}
-
-uint32_t ceil_div(uint32_t a, uint32_t b) {
-    return (a + b - 1U) / b;
 }
 
 }  // namespace
@@ -176,19 +186,22 @@ Geometry make_geometry(const operation_attributes_t& args, const tensor_args_t& 
     geo.HK = qs[3] / geo.K;
     geo.G = geo.HV / geo.HK;
     geo.Ct = args.chunk_size / tt::constants::TILE_HEIGHT;
-    geo.Kt = ceil_div(geo.K, tt::constants::TILE_WIDTH);
-    geo.Vt = ceil_div(geo.V, tt::constants::TILE_WIDTH);
-    geo.Tt = ceil_div(geo.T, tt::constants::TILE_HEIGHT);
-    geo.NC = ceil_div(geo.T, args.chunk_size);
+    // The validator guarantees K and V are multiples of 32 and T a multiple of chunk_size (32 or 64).
+    geo.Kt = geo.K / tt::constants::TILE_WIDTH;
+    geo.Vt = geo.V / tt::constants::TILE_WIDTH;
+    geo.Tt = geo.T / tt::constants::TILE_HEIGHT;
+    geo.NC = geo.T / args.chunk_size;
     geo.BH = geo.B * geo.HV;
     geo.NI = geo.BH * geo.NC;
     geo.neumann_steps = std::max(1U, static_cast<uint32_t>(std::ceil(std::log2(static_cast<double>(args.chunk_size)))));
 
-    const uint32_t in_tile = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(tensor_args.q.dtype()));
-    const uint32_t f32_tile = tt::tile_size(tt::DataFormat::Float32);
+    const TileSizes tiles{
+        .in = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(tensor_args.q.dtype())),
+        .gate = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(tensor_args.g.dtype())),
+        .f32 = tt::tile_size(tt::DataFormat::Float32)};
     const uint64_t budget = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - kL1KernelConfigReserve;
     for (uint32_t vb = geo.Vt; vb > 0U; --vb) {
-        if (geo.Vt % vb == 0U && cb_bytes(geo.Ct, geo.Kt, vb, in_tile, f32_tile) <= budget) {
+        if (geo.Vt % vb == 0U && cb_bytes(geo.Ct, geo.Kt, vb, tiles) <= budget) {
             geo.Vb = vb;
             break;
         }
@@ -200,7 +213,7 @@ Geometry make_geometry(const operation_attributes_t& args, const tensor_args_t& 
         geo.Kt,
         geo.Vt,
         budget,
-        cb_bytes(geo.Ct, geo.Kt, 1U, in_tile, f32_tile));
+        cb_bytes(geo.Ct, geo.Kt, 1U, tiles));
     geo.NVB = geo.Vt / geo.Vb;
 
     const uint32_t CtCt = geo.Ct * geo.Ct;
@@ -242,8 +255,9 @@ ChunkGatedDeltaRuleBackwardProgramFactory::cached_program_t ChunkGatedDeltaRuleB
     const bool has_saved = tensor_args.has_saved_forward();
 
     const tt::DataFormat in_format = tt::tt_metal::datatype_to_dataformat_converter(q.dtype());
-    const uint32_t in_tile = tt::tile_size(in_format);
+    const tt::DataFormat gate_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.g.dtype());
     const uint32_t f32_tile = tt::tile_size(tt::DataFormat::Float32);
+    const TileSizes tiles{.in = tt::tile_size(in_format), .gate = tt::tile_size(gate_format), .f32 = f32_tile};
 
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), args.compute_kernel_config);
@@ -291,9 +305,11 @@ ChunkGatedDeltaRuleBackwardProgramFactory::cached_program_t ChunkGatedDeltaRuleB
     const auto pages = cb_pages(geo.Ct, geo.Kt, geo.Vb);
     for (uint32_t cb = 0; cb < kNumCbs; ++cb) {
         if (cb == kCbStage) {
-            create_circular_buffer_bytes(program, all_cores, cb, tt::DataFormat::Float32, stage_bytes(in_tile));
+            create_circular_buffer_bytes(program, all_cores, cb, tt::DataFormat::Float32, stage_bytes(tiles));
+        } else if (cb == kCbGateIn) {
+            create_circular_buffer(program, all_cores, cb, gate_format, tiles.gate, pages[cb]);
         } else if (is_input_dtype_cb(cb)) {
-            create_circular_buffer(program, all_cores, cb, in_format, in_tile, pages[cb]);
+            create_circular_buffer(program, all_cores, cb, in_format, tiles.in, pages[cb]);
         } else {
             create_circular_buffer(program, all_cores, cb, tt::DataFormat::Float32, f32_tile, pages[cb]);
         }
@@ -349,6 +365,7 @@ ChunkGatedDeltaRuleBackwardProgramFactory::cached_program_t ChunkGatedDeltaRuleB
         geo.G,
         static_cast<uint32_t>(has_saved),
         static_cast<uint32_t>(d_out_is_head_major(tensor_args)),
+        static_cast<uint32_t>(tensor_args.g.element_size()),
     };
 
     const auto& scratch = outputs[kScratch];

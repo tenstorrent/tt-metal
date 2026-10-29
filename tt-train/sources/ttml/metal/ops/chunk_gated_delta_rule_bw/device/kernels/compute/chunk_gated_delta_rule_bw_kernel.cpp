@@ -33,11 +33,6 @@
 //     `A = ((k_beta@k^T) . L) . NSTRICT` is the negated UT matrix in one op,
 //     and `dAn = (Tinv^T d_attn Tinv^T) . NSTRICT` is -dA, which makes both of
 //     dA's consumers (`W = -dA.L`, and the R term) plain positive products.
-//   * `L` is built with an additive -1e4 bias on the strict upper triangle, so
-//     exp() masks it to zero without a separate tril multiply AND without ever
-//     evaluating exp() of a large positive argument (exp(+span) is inf and
-//     inf*0 is NaN).  The bias must exceed the largest within-chunk decay span
-//     |cumsum(g)|, about 350 at the strongest gate in the tests.
 //   * `ndkcd = +dv_new @ S^T = -d_kcd`; its two consumers carry the sign.
 //   * `M = Mraw . L` is used directly (never `Mt = Mraw . tril`): L is already
 //     zero above the diagonal, and the decay-gradient term regroups as
@@ -419,12 +414,13 @@ static __attribute__((noipa)) void p_copy(
 #define PEXP1(cbi, cbo, i0, front, nblk) p_copy(cbi, cbo, i0, 1, 1, 1, front, nblk)
 #define PZERO(cbo, n, front) p_copy(cb_const, cbo, CST_ZERO, n, 0, 0, front, n)
 
-static __attribute__((noipa)) void p_tr(
-    uint32_t cbi, uint32_t cbo, uint32_t i0, uint32_t Rt, uint32_t Nt, uint32_t front) {
-    cb_reserve_back(cbo, Rt * Nt);
+static __attribute__((noipa)) void p_trb(
+    uint32_t cbi, uint32_t cbo, uint32_t i0, uint32_t Rt, uint32_t Nt, uint32_t front, uint32_t nblk) {
+    cb_reserve_back(cbo, nblk);
     tr_blk(cbi, cbo, i0, 0, Rt, Nt);
-    blk_end(cbo, Rt * Nt, front);
+    blk_end(cbo, nblk, front);
 }
+#define p_tr(cbi, cbo, i0, Rt, Nt, front) p_trb(cbi, cbo, i0, Rt, Nt, front, (Rt) * (Nt))
 
 // ---- egress -------------------------------------------------------------
 static __attribute__((noipa)) void egress_f32(uint32_t cbi, uint32_t i0, uint32_t n) {
@@ -432,14 +428,14 @@ static __attribute__((noipa)) void egress_f32(uint32_t cbi, uint32_t i0, uint32_
     COPY_BLK(cbi, cb_egr, i0, 0, n);
     cb_push_back(cb_egr, MAXBLK);
 }
-// The prep vector block is three separate column slots of cb_veca gathered into
-// one egress block.
-static __attribute__((noipa)) void egress_vec4(uint32_t cbi, uint32_t a0, uint32_t b0, uint32_t c0, uint32_t d0) {
+// The prep vector block: the g column at (cbg, g0), then three column slots of
+// cb_veca, gathered into one egress block in ST_VEC order.
+static __attribute__((noipa)) void egress_vec4(uint32_t cbg, uint32_t g0) {
     cb_reserve_back(cb_egr, MAXBLK);
-    for (uint32_t s = 0; s < 4; ++s) {
-        const uint32_t src = (s == 0) ? a0 : ((s == 1) ? b0 : ((s == 2) ? c0 : d0));
-        COPY_BLK(cbi, cb_egr, src, s * Ct, Ct);
-    }
+    COPY_BLK(cbg, cb_egr, g0, 0, Ct);
+    COPY_BLK(cb_veca, cb_egr, VA_BETA, Ct, Ct);
+    COPY_BLK(cb_veca, cb_egr, VA_DC1, 2 * Ct, Ct);
+    COPY_BLK(cb_veca, cb_egr, VA_W, 3 * Ct, Ct);
     cb_push_back(cb_egr, MAXBLK);
 }
 static __attribute__((noipa)) void egress_grad(uint32_t cbi, uint32_t i0, uint32_t n) {
@@ -450,23 +446,22 @@ static __attribute__((noipa)) void egress_grad(uint32_t cbi, uint32_t i0, uint32
     cb_push_back(cb_gegr, MAXBLK_G);
 }
 
-// L[t,s] = exp(decay[t] - decay[s]) for s <= t, 0 above.  cb_ca and cb_cc are
-// scratch; the result lands in cb_cbL and both scratch blocks are released.
-static __attribute__((noipa)) void build_L() {
-    // X[t,s] = decay[t]: the outer product decay (x) row-of-ones, so the whole
-    // construction stays inside matmul + transpose + eltwise and needs no
-    // ROW-broadcast or unary-broadcast LLK instantiation.
-    PMM(cb_veca, cb_const, cb_ca, VA_DECAY, CST_ROWONES, Ct, 1, Ct, CtCt);
-    // Y = X^T, i.e. Y[t,s] = decay[s].
-    p_tr(cb_ca, cb_cd, 0, Ct, Ct, CtCt);
-    // D = X - Y, then L = exp(D + BIAS).
-    PSUB(cb_ca, cb_cd, cb_cc, 0, 0, CtCt, CtCt);
-    PADD(cb_cc, cb_const, cb_cc, 0, CST_BIAS, CtCt, 0);
-    PEXP(cb_cc, cb_cbL, 0, CtCt, CtCt);
+// L[t,s] = exp(sum_{s<j<=t} g[j]) for s <= t, 0 above, from the f32 g column
+// at (cbg, g0).  The span is a matmul of g, not decay[t] - decay[s]: both
+// cumsums grow to ~|sum(g)| over the chunk, and their difference cancels at
+// the ~tf32 width of the FPU source registers.  cb_ca, cb_cc and cb_cd are
+// scratch; the result lands in cb_cbL and the scratch blocks are released.
+static __attribute__((noipa)) void build_L(uint32_t cbg, uint32_t g0) {
+    // M[j,s] = g[j] for j > s, so D = LT_ones @ M is the span for s <= t and
+    // exactly 0 above the diagonal, where exp() therefore stays finite.
+    p_mbc(cb_const, cbg, cb_ca, CST_SLT, g0, Ct, Ct, 1, CtCt);
+    PMM(cb_const, cb_ca, cb_cc, CST_LT, 0, Ct, Ct, Ct, CtCt);
+    PEXP(cb_cc, cb_cd, 0, CtCt, CtCt);
+    PMUL(cb_cd, cb_const, cb_cbL, 0, CST_LT, CtCt, CtCt);
 
     cb_pop_front(cb_ca, CtCt);
-    cb_pop_front(cb_cd, CtCt);
     cb_pop_front(cb_cc, CtCt);
+    cb_pop_front(cb_cd, CtCt);
 }
 
 }  // namespace
@@ -500,7 +495,7 @@ void kernel_main() {
         // The copies out of cb_gatein unpack through the ~tf32 SrcA register, but
         // every later read of g and beta goes through SrcA/SrcB at that same
         // width, so the intermediate f32 copy loses nothing.
-        PCOPY(cb_gatein, cb_vecc, 0, Ct, Ct);                       // g -> f32
+        PCOPY(cb_gatein, cb_vecc, 0, Ct, Ct);                       // vecc[0] = g (f32)
         PMM(cb_const, cb_vecc, cb_veca, CST_LT, 0, Ct, Ct, 1, Ct);  // decay = LT_ones @ g
         // rmg = decay[C-1] - decay = SUT_ones @ g, the EXCLUSIVE reverse cumsum.
         // w = exp(rmg) is carried to stage G in the scratch rather than
@@ -508,16 +503,15 @@ void kernel_main() {
         // ~|sum(g)| and nearly equal, so subtracting them cancels
         // catastrophically at the ~tf32 width of the FPU's source registers,
         // and exp() magnifies whatever survives.
-        mm_ip(cb_const, cb_vecc, cb_vecc, CST_SUT, 0, Ct, Ct, 1);  // g -> rmg
-        PEXP(cb_veca, cb_veca, VA_DECAY, Ct, 2 * Ct);              // gamma = exp(decay)
-        PEXP(cb_vecc, cb_veca, 0, Ct, 3 * Ct);
-        PCOPY(cb_gatein, cb_veca, Ct, Ct, 4 * Ct);                 // beta
-        PADD(cb_veca, cb_vecc, cb_veca, VA_DECAY, 0, Ct, 5 * Ct);  // dc1 = decay + rmg
-        cb_pop_front(cb_vecc, Ct);
+        PMM(cb_const, cb_vecc, cb_vecc, CST_SUT, 0, Ct, Ct, 1, 2 * Ct);  // vecc[Ct] = rmg
+        PEXP(cb_veca, cb_veca, VA_DECAY, Ct, 2 * Ct);                    // gamma = exp(decay)
+        PEXP(cb_vecc, cb_veca, Ct, Ct, 3 * Ct);
+        PCOPY(cb_gatein, cb_veca, Ct, Ct, 4 * Ct);                  // beta
+        PADD(cb_veca, cb_vecc, cb_veca, VA_DECAY, Ct, Ct, 5 * Ct);  // dc1 = decay + rmg
         cb_pop_front(cb_gatein, 2 * Ct);
 
         // ---- decay_mask_block ------------------------------------------
-        build_L();
+        build_L(cb_vecc, 0);
 
         // ---- ut_matrix_block -------------------------------------------
         p_mbc(cb_kb, cb_veca, cb_kc, 0, VA_BETA, Ct, Kt, 1, CtKt);
@@ -564,9 +558,10 @@ void kernel_main() {
         if constexpr (!HAS_SAVED) {
             egress_f32(cb_ca, 0, CtCt);  // Tinv
         }
-        egress_f32(cb_kd, 0, CtKt);                             // kcd
-        egress_f32(cb_kb, 0, CtKt);                             // P
-        egress_vec4(cb_veca, VA_DECAY, VA_BETA, VA_DC1, VA_W);  // decay, beta, dc1, w
+        egress_f32(cb_kd, 0, CtKt);  // kcd
+        egress_f32(cb_kb, 0, CtKt);  // P
+        egress_vec4(cb_vecc, 0);     // g, beta, dc1, w
+        cb_pop_front(cb_vecc, 2 * Ct);
 
         // ---- scan_seed_block, per V block ------------------------------
         for (uint32_t vb = 0; vb < NVB; ++vb) {
@@ -697,7 +692,7 @@ void kernel_main() {
     // =====================================================================
     for (uint32_t p = 0; p < num_items; ++p) {
         constexpr uint32_t I_TINV = 0;
-        constexpr uint32_t I_DECAY = CtCt;
+        constexpr uint32_t I_G = CtCt;
         constexpr uint32_t I_BETA = CtCt + Ct;
         constexpr uint32_t I_DC1 = CtCt + 2 * Ct;
         constexpr uint32_t I_W = CtCt + 3 * Ct;
@@ -706,13 +701,13 @@ void kernel_main() {
         cb_wait_front(cb_load_item, LITEM);
 
         // ---- rebuild the decay vector block ----------------------------
-        PCOPY(cb_load_item, cb_veca, I_DECAY, Ct, Ct);
+        PMM(cb_const, cb_load_item, cb_veca, CST_LT, I_G, Ct, Ct, 1, Ct);  // decay = LT_ones @ g
         PEXP(cb_veca, cb_veca, VA_DECAY, Ct, 2 * Ct);
         PCOPY(cb_load_item, cb_veca, I_W, Ct, 3 * Ct);  // w, carried in the scratch
         PCOPY(cb_load_item, cb_veca, I_BETA, Ct, 4 * Ct);
         PCOPY(cb_load_item, cb_veca, I_DC1, Ct, 5 * Ct);
 
-        build_L();
+        build_L(cb_load_item, I_G);
 
         p_tr(cb_load_item, cb_ce, I_TINV, Ct, Ct, CtCt);
 
@@ -872,10 +867,11 @@ void kernel_main() {
 
         // ---- dGamma = sum(dS . S) --------------------------------------
         // cb_sb holds the accumulated [Kt,1] column; transpose it into cb_sa
-        // (a second CB, so neither block can straddle a fifo wrap) and reduce.
-        p_tr(cb_sb, cb_sa, 0, Kt, 1, Kt);
+        // and reduce.  The [1,Kt] row rides in a full KtVb block: cb_sa's push
+        // size must stay uniform, or a later KtVb block straddles the fifo end.
+        p_trb(cb_sb, cb_sa, 0, Kt, 1, Kt, KtVb);
         PMMB(cb_sa, cb_colones, cb_vecc, 0, 0, 1, Kt, 1, Ct, Ct);  // dGamma (element [0,0] only)
-        cb_pop_front(cb_sa, Kt);
+        cb_pop_front(cb_sa, KtVb);
         cb_pop_front(cb_sb, Kt);
         PEXP1(cb_veca, cb_vecb, VA_DC1, 7 * Ct, Ct);  // vecb[7] = Gamma
         cb_reserve_back(cb_vecc, Ct);
