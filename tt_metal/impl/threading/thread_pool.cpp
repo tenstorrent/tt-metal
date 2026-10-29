@@ -726,8 +726,7 @@ private:
         }
     }
 
-    // A job nobody holds, starting from the one used last: it is the most likely to still be in cache. nullptr if
-    // all are held.
+    // A free job, trying the last-used one first (likely still in cache); nullptr if all are held.
     ParallelJob* acquire_job() {
         const auto size = static_cast<uint32_t>(jobs_.size());
         uint32_t slot = last_job_.load(std::memory_order_relaxed);
