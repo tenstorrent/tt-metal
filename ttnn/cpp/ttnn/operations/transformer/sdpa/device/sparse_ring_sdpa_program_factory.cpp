@@ -469,13 +469,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         tt::div_up(mask_nb, 32u) + 3 <= 16,
         "SparseRingSDPA: {} blocks per shard exceed the plan header (at most 416)",
         mask_nb);
-    // Group delivery: one producer per head group multicasts each piece (see group_mcast in the reader) over a
-    // 3-deep K/V CB, so the producer can send the next piece while every member computes on the previous ones.
-    // Without it (B > 1, or no head chain) the K/V CBs are double-buffered.
+    // Group delivery: one producer per head group multicasts each piece (see group_mcast in the reader). The K/V CB
+    // depth (pieces) is chosen with the pass split below: 3 with group delivery, so the producer can send the next
+    // piece while every member computes on the previous ones, unless 2 needs fewer Q passes; without it (B > 1, or
+    // no head chain) the K/V CBs are double-buffered. The kernels learn the depth only from the CB sizes (the
+    // reader's credits allow any depth >= 2).
     const bool group_mcast = build_kv_chains && use_head_chain;
-    const uint32_t kv_cb_pages = group_mcast ? 3u : 2u;
-    uint32_t k_tiles = Sk_chunk_t * DHt * kv_cb_pages;
-    uint32_t v_tiles = Sk_chunk_t * vDHt * kv_cb_pages;
+    const uint32_t k_piece_tiles = Sk_chunk_t * DHt;
+    const uint32_t v_piece_tiles = Sk_chunk_t * vDHt;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;
@@ -484,9 +485,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     log_debug(
         tt::LogOp,
-        "k_tiles: {}, v_tiles: {}, qk_tiles: {}, out0_t: {}, statistics_tiles: {}",
-        k_tiles,
-        v_tiles,
+        "k_piece_tiles: {}, v_piece_tiles: {}, qk_tiles: {}, out0_t: {}, statistics_tiles: {}",
+        k_piece_tiles,
+        v_piece_tiles,
         qk_tiles,
         out0_t,
         statistics_tiles);
@@ -895,8 +896,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     };
 
     // Every core keeps the Q blocks of its current pass and one accumulator set each in L1 ("slots"). The CBs whose
-    // size depends on the slot count are laid out by lay_out_cbs(slots, alloc), which the pass split below runs once
-    // per candidate count with a byte counter and then once with the real allocator, so the fit check and the
+    // size depends on the slot count are laid out by lay_out_cbs(slots, kv_pages, alloc), which the pass split below
+    // runs once per candidate count with a byte counter and then once with the real allocator, so the fit check and the
     // allocation cannot disagree.
     // One step covers one piece for a group of resident Q blocks, each with its own kept blocks; member g's scores are
     // stored compactly (row stride = its kept width), and members are grouped until the scores fill
@@ -917,14 +918,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
             recip_scratch, sum_in, sparse_plan, pooled_bias;
     };
-    const auto lay_out_cbs = [&](uint32_t slots, const auto& alloc) -> CbLayout {
+    const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages, const auto& alloc) -> CbLayout {
         const auto tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) {
             return alloc(tile_size, num_tiles, data_format);
         };
         CbLayout l{};
         l.q_in = tile_cb(Sq_chunk_t * DHt * slots, q_tile_size, q_df);
-        l.k_in = tile_cb(k_tiles, k_tile_size, k_df);
-        l.v_in = tile_cb(v_tiles, v_tile_size, v_df);
+        l.k_in = tile_cb(k_piece_tiles * kv_pages, k_tile_size, k_df);
+        l.v_in = tile_cb(v_piece_tiles * kv_pages, v_tile_size, v_df);
         l.identity_scale_in = tile_cb(scale_tiles, scalar_tile_size, scalar_df);
         l.col_identity = tile_cb(scale_tiles, scalar_tile_size, scalar_df);
         const uint32_t qk_im_cb_tiles = std::max(qk_tiles, std::min(slots, kResidentGroup) * Sq_chunk_t * Sk_chunk_t);
@@ -943,10 +944,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                                      : std::numeric_limits<uint32_t>::max();  // inactive
         return l;
     };
-    const auto cb_bytes_for_slots = [&](uint32_t slots) -> uint64_t {
+    const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages) -> uint64_t {
         uint64_t bytes = 0;
         uint32_t index = 0;
-        lay_out_cbs(slots, [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat) -> uint32_t {
+        lay_out_cbs(slots, kv_pages, [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat) -> uint32_t {
             bytes += static_cast<uint64_t>(page_size_bytes) * num_pages;
             return index++;
         });
@@ -958,6 +959,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // exactly this; in the pipeline, global semaphores and persistent buffers occupy the top of L1). P passes split
     // every core's blocks evenly, so each working core needs at least P blocks: then no core has an empty pass, and
     // every head-group member streams its group's pieces in every pass (pointer lockstep).
+    // K/V depth: with group delivery, 3 pages unless 2 pages fit enough more slots to need fewer passes (2 pages
+    // free 2 K/V pieces, e.g. 15 -> 17 slots at k_chunk 256). The choice, like S, depends on the live L1 top, which
+    // is not in the program hash: a cached program keeps the S and page count of the call that built it.
     const auto lowest_l1_buffer = mesh_device->lowest_occupied_compute_l1_address();
     const uint32_t cb_space_top = lowest_l1_buffer.has_value() ? static_cast<uint32_t>(lowest_l1_buffer.value())
                                                                : mesh_device->l1_size_per_core();
@@ -967,18 +971,33 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     if (args.q_blocks_per_pass.has_value()) {
         max_slots = std::min(max_slots, *args.q_blocks_per_pass);
     }
-    uint32_t fit_slots = max_slots;
-    while (fit_slots > 0 && cb_bytes_for_slots(fit_slots) > usable_l1) {
-        --fit_slots;
+    const auto fit_slots_for = [&](uint32_t kv_pages) {
+        uint32_t slots = max_slots;
+        while (slots > 0 && cb_bytes_for_slots(slots, kv_pages) > usable_l1) {
+            --slots;
+        }
+        return slots;
+    };
+    const auto passes_for = [&](uint32_t slots) {
+        return slots > 0 ? tt::div_up(max_q_per_core, slots) : std::numeric_limits<uint32_t>::max();
+    };
+    uint32_t kv_cb_pages = group_mcast ? 3u : 2u;
+    uint32_t fit_slots = fit_slots_for(kv_cb_pages);
+    if (kv_cb_pages > 2) {
+        const uint32_t fit_slots_2 = fit_slots_for(2);
+        if (passes_for(fit_slots_2) < passes_for(fit_slots)) {
+            kv_cb_pages = 2;
+            fit_slots = fit_slots_2;
+        }
     }
     TT_FATAL(
         fit_slots > 0,
         "SparseRingSDPA CBs need {} B with one Q block per core but only {} B of L1 are usable (k_chunk={}); reduce "
         "k_chunk_size.",
-        cb_bytes_for_slots(1),
+        cb_bytes_for_slots(1, kv_cb_pages),
         usable_l1,
         Sk_chunk_t * tt::constants::TILE_HEIGHT);
-    const uint32_t num_q_passes = tt::div_up(max_q_per_core, fit_slots);
+    const uint32_t num_q_passes = passes_for(fit_slots);
     // Every working core holds base or base + 1 blocks (all hold one when there are fewer blocks than cores).
     const uint32_t min_q_per_working_core = std::max(1u, all_heads_num_q_chunks / num_cores);
     TT_FATAL(
@@ -997,14 +1016,16 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t resident_slots = tt::div_up(max_q_per_core, num_q_passes);
     log_info(
         tt::LogOp,
-        "SparseRingSDPA: {} Q blocks per core at most, {} pass(es) of at most {} ({} of {} B of L1 for CBs)",
+        "SparseRingSDPA: {} Q blocks per core at most, {} pass(es) of at most {}, {} K/V pages ({} of {} B of L1 for "
+        "CBs)",
         max_q_per_core,
         num_q_passes,
         resident_slots,
-        cb_bytes_for_slots(resident_slots),
+        kv_cb_pages,
+        cb_bytes_for_slots(resident_slots, kv_cb_pages),
         usable_l1);
 
-    const CbLayout cbs = lay_out_cbs(resident_slots, allocate_cb);
+    const CbLayout cbs = lay_out_cbs(resident_slots, kv_cb_pages, allocate_cb);
     const uint32_t cb_q_in = cbs.q_in;
     const uint32_t cb_k_in = cbs.k_in;
     const uint32_t cb_v_in = cbs.v_in;
@@ -1062,8 +1083,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             desc.cbs.size(),
             cb_bytes,
             resident_slots,
-            k_tiles,
-            v_tiles,
+            k_piece_tiles * kv_cb_pages,
+            v_piece_tiles * kv_cb_pages,
             qk_tiles,
             out_im_tiles,
             statistics_tiles,

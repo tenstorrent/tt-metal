@@ -368,6 +368,9 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         input_tensors.push_back(*tensor_args.pooled_v);
     }
     // logical_n is baked into the kernels (compile-time args and the bias generator), so it is keyed.
+    // The slots per pass and the K/V CB depth are derived from these inputs plus the live L1 top
+    // (lowest_occupied_compute_l1_address), which is not keyed: a cached program keeps the choice of the call that
+    // built it.
     return tt::tt_metal::operation::hash_operation<SparseRingSDPADeviceOperation>(
         input_tensors,
         args.scale,
