@@ -5,6 +5,7 @@
 #
 #   ./dev/run.sh            # = all: the correctness steps (smoke, check, prod, dense)
 #   ./dev/run.sh a b c      # several steps in one call; presets: quick, night (see below)
+#   DEV_LOG_COPY=<dir> ./dev/run.sh night   # also copy each log to <dir> as soon as its step ends
 #   ./dev/run.sh smoke      # keep-all mask at r512k512 must match dense
 #   ./dev/run.sh check      # every non-production case of test_sparse_ring_sdpa.py
 #   ./dev/run.sh prod       # the production-size cases (5 s / 10 s)
@@ -54,12 +55,15 @@ run() {
     timeout -k 30 "$secs" "$@" > "log_val_$name.txt" 2>&1
     local rc=$?
     note $rc
+    keep "log_val_$name.txt"
     echo "    exit $rc  (124 = timeout)"
     return $rc
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
 STEPS=" all smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
 case "$STEPS" in *" $ONLY "*) ;; *) echo "unknown step '$ONLY'; one of:$STEPS" >&2; exit 2 ;; esac
+# DEV_LOG_COPY=<dir>: copy every log there as soon as its step ends (survives a job that dies later).
+keep() { [ -n "${DEV_LOG_COPY:-}" ] && mkdir -p "$DEV_LOG_COPY" && cp -f "$@" "$DEV_LOG_COPY"/; return 0; }
 WORST=0  # worst exit code of any step, returned at the end
 note() { local rc=$1; [ "$rc" -gt "$WORST" ] && WORST=$rc; return 0; }
 # pytest -k matches substrings of the whole node id: "5s" alone also matches "15s", and the module name
@@ -82,12 +86,13 @@ summarize_profile() {  # name, [per-core table file]
                "TT_METAL_HOME='${TT_METAL_HOME:-}'/generated/profiler or ./generated/profiler; found:"
           find "${TT_METAL_HOME:-.}" generated -name 'profile_log_device.csv' -printf '%TY-%Tm-%Td %TH:%TM %s %p\n' \
               2>/dev/null | sort | tail -10; } > "log_val_$name.txt"
-        echo "=== $name: no device CSV found (see log_val_$name.txt)"; note 1
+        echo "=== $name: no device CSV found (see log_val_$name.txt)"; note 1; keep "log_val_$name.txt"
         return 1
     fi
     echo "csv: $csv ($(du -h "$csv" | cut -f1), $(date -r "$csv"))" > "log_val_$name.txt"
     run "${name}_tmp" 1200 python3 dev/profile_summary.py "$csv" ${2:+"$2"}
     cat "log_val_${name}_tmp.txt" >> "log_val_$name.txt" && rm -f "log_val_${name}_tmp.txt"
+    keep "log_val_$name.txt"
 }
 
 want smoke && run smoke 900 pytest "$SPARSE" -s -k "test_keep_all_matches_dense and r512k512"
