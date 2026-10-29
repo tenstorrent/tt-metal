@@ -5,13 +5,17 @@
 """paged_fused_update_cache(rows_per_user=T): one call writes each user's T rows and must leave the caches EXACTLY as T
 sequential single-row calls do (the shipped spec-verify KV write), including 32-row tile straddles, page-block
 straddles, -1 rows, a duplicated position (later row wins) and bf8 caches. Also checks a bf16 cache against torch and
-that the multi-row program is cached by shape (positions are runtime)."""
+that the multi-row program is cached by shape (positions are runtime). Case "past_table": rows whose position is past
+the user's page table (virtual block >= its width, e.g. INT32_MAX) are skipped like -1, so the cache is the T
+single-row calls' result with those rows dropped (the single-row kernels have no such check, so the reference gets -1
+there); nothing outside those rows' tiles may change."""
 
 import pytest
 import torch
 import ttnn
 
 TILE = 32
+NB = 4  # page-table blocks per user
 
 
 def _row_cores(first, n, grid_x):
@@ -53,12 +57,23 @@ def _positions(n, T, block_size, case):
         idx[T + 1] = -1  # one row of a live user
     if case == "dup" and T > 2:
         idx[2] = idx[1]  # duplicate position inside user 0: the later row must win
+    if case == "past_table":
+        nb_rows = NB * block_size  # first position past a user's table
+        u = 1 if n > 1 else 0
+        idx[u * T + T - 1] = nb_rows  # one block past the table
+        idx[u * T + T - 2] = nb_rows + block_size * 1000 + 5  # far past it
+        idx[(n - 1) * T] = 2**31 - 1  # INT32_MAX, e.g. a saturated uint32 -1
     return idx
+
+
+def _ref_positions(idx, block_size):
+    """What the T single-row calls get: rows past the table become -1 (the multi-row kernels skip them)."""
+    return [p if p < NB * block_size else -1 for p in idx]
 
 
 def _run(device, n, T, num_heads, head_dim, block_size, cache_dtype, case):
     torch.manual_seed(0)
-    nb = 4  # blocks per user
+    nb = NB  # blocks per user
     num_blocks = n * nb + 1  # + a never-written spare
     perm = torch.randperm(num_blocks - 1) + 1
     page_table = perm[: n * nb].reshape(n, nb).to(torch.int32)
@@ -68,6 +83,7 @@ def _run(device, n, T, num_heads, head_dim, block_size, cache_dtype, case):
     xk = torch.randn(n, T, num_heads, head_dim).bfloat16().float()
     xv = torch.randn(n, T, num_heads, head_dim).bfloat16().float()
     idx = _positions(n, T, block_size, case)
+    idx_ref = _ref_positions(idx, block_size)
 
     def fresh():
         return (
@@ -80,7 +96,7 @@ def _run(device, n, T, num_heads, head_dim, block_size, cache_dtype, case):
     # Reference: T sequential single-row fused calls (what _write_kv_fused_groups issues today).
     k_ref, v_ref = fresh()
     for j in range(T):
-        pos_j = ttnn.from_torch(torch.tensor(idx[j::T], dtype=torch.int32), dtype=ttnn.int32, device=device)
+        pos_j = ttnn.from_torch(torch.tensor(idx_ref[j::T], dtype=torch.int32), dtype=ttnn.int32, device=device)
         ks = _sharded(_tiles(xk[:, j : j + 1], n, 1, num_heads, head_dim), n, n, TILE, device)
         vs = _sharded(_tiles(xv[:, j : j + 1], n, 1, num_heads, head_dim), 0, n, TILE, device)
         ttnn.experimental.paged_fused_update_cache(k_ref, ks, v_ref, vs, update_idxs_tensor=pos_j, page_table=pt_tt)
@@ -101,7 +117,7 @@ def _run(device, n, T, num_heads, head_dim, block_size, cache_dtype, case):
             exp = c0.clone()
             for u in range(n):
                 for j in range(T):
-                    p = idx[u * T + j]
+                    p = idx_ref[u * T + j]
                     if p < 0:
                         continue
                     blk = int(page_table[u, p // block_size])
@@ -113,7 +129,7 @@ def _run(device, n, T, num_heads, head_dim, block_size, cache_dtype, case):
 @pytest.mark.parametrize("block_size", [32, 64], ids=["block32", "block64"])
 @pytest.mark.parametrize("head_dim", [128, 256])
 @pytest.mark.parametrize("n,T", [(1, 4), (8, 4), (4, 8), (8, 2)])
-@pytest.mark.parametrize("case", ["straddle", "skips", "dup"])
+@pytest.mark.parametrize("case", ["straddle", "skips", "dup", "past_table"])
 def test_multi_row_matches_sequential(device, n, T, head_dim, block_size, cache_dtype, case):
     _run(device, n, T, 1, head_dim, block_size, cache_dtype, case)
 

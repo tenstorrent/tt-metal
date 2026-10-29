@@ -90,7 +90,8 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
                 rows_per_user (int): Rows each user writes in this call (default 1). With rows_per_user = T > 1, each
                     input is [1, users, T*32, head_dim] TILE, height sharded one user per core (shard [T*32, head_dim]);
                     tile j of user u carries that user's row j (head h on tile row h), written at
-                    update_idxs_tensor[u*T + j] (-1 skips the row). update_idxs_tensor is required and holds users*T
+                    update_idxs_tensor[u*T + j] (-1 skips the row, and so does a position past the user's page
+                    table). update_idxs_tensor is required and holds users*T
                     positions. All T rows of a user go out in one program: one read-modify-write per distinct cache
                     tile they land in (tile and page-block straddles included), and the cache bytes equal T
                     sequential single-row calls. Rows of DIFFERENT users must not share a cache tile.

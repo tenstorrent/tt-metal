@@ -13,6 +13,12 @@
 // no rows is pushed without reading DRAM, and the writer pops it without writing, exactly the
 // skip_update path of the single-row kernels. The grouping below is duplicated verbatim in the
 // writer; the two must agree.
+//
+// A row whose position is past the user's page table (virtual block >= max_blocks_per_seq), or past
+// the cache rows of a non-paged cache, is skipped like an index of -1. Looking its block up would read
+// beyond this user's page-table stick, and the garbage block id would address an arbitrary DRAM page.
+// The verify never stages such a position; the check turns a bad one into a dropped row, not a stray
+// write. Valid rows are unaffected.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -51,6 +57,7 @@ void kernel_main() {
     constexpr auto num_heads = get_arg(args::num_heads);
     constexpr auto block_size = get_arg(args::block_size);
     constexpr auto block_size_t = get_arg(args::block_size_t);
+    constexpr auto max_blocks_per_seq = get_arg(args::max_blocks_per_seq);
     constexpr auto page_table_stick_size = get_arg(args::page_table_stick_size);
 
     constexpr auto St = get_arg(args::St);
@@ -132,12 +139,18 @@ void kernel_main() {
             }
 #ifdef IS_PAGED_CACHE
             const uint32_t virtual_block_id = update_idx / block_size;
+            if (virtual_block_id >= max_blocks_per_seq) {
+                continue;  // past this user's page-table stick: skipped (see the header), never an unchecked write
+            }
             const uint32_t physical_block_id = (page_table_is_dram)
                                                    ? page_table_ptr_u32[virtual_block_id]
                                                    : static_cast<uint32_t>(page_table_ptr_u16[virtual_block_id]);
             const uint32_t cache_id = physical_block_id * num_heads * block_size_t * Wt +
                                       ((update_idx % block_size) / TILE_HEIGHT) * Wt;
 #else
+            if (update_idx >= St * TILE_HEIGHT) {
+                continue;  // past this user's cache rows: skipped, as above
+            }
             const uint32_t cache_id = my_batch_idx * cache_batch_num_tiles + (update_idx / TILE_HEIGHT) * Wt;
 #endif
             uint32_t p = 0;

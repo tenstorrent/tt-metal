@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Multi-row variant of writer_paged_fused_update_cache_interleaved_start_id.cpp (rows_per_user > 1).
-// See reader_paged_fused_update_cache_multi_row.cpp for the row -> pass grouping, which this kernel
-// recomputes identically from the same index / page-table buffers the reader pushed.
+// See reader_paged_fused_update_cache_multi_row.cpp for the row -> pass grouping (and the skip of
+// rows past the page table), which this kernel recomputes identically from the same index /
+// page-table buffers the reader pushed.
 //
 // Per (pass, head): wait for compute's untilized cache block, copy in every row of this user that
 // lands in the pass's tile (row j, head h comes from untilized input block j, row h, and goes to
@@ -45,6 +46,7 @@ void kernel_main() {
     constexpr auto num_heads = get_arg(args::num_heads);
     constexpr auto block_size = get_arg(args::block_size);
     constexpr auto block_size_t = get_arg(args::block_size_t);
+    constexpr auto max_blocks_per_seq = get_arg(args::max_blocks_per_seq);
 
     constexpr auto St = get_arg(args::St);
     constexpr uint32_t head_offset_t = Wt * St;
@@ -108,12 +110,18 @@ void kernel_main() {
             }
 #ifdef IS_PAGED_CACHE
             const uint32_t virtual_block_id = update_idx / block_size;
+            if (virtual_block_id >= max_blocks_per_seq) {
+                continue;  // past this user's page-table stick: skipped (see the header), never an unchecked write
+            }
             const uint32_t physical_block_id = (page_table_is_dram)
                                                    ? page_table_ptr_u32[virtual_block_id]
                                                    : static_cast<uint32_t>(page_table_ptr_u16[virtual_block_id]);
             const uint32_t cache_id = physical_block_id * num_heads * block_size_t * Wt +
                                       ((update_idx % block_size) / TILE_HEIGHT) * Wt;
 #else
+            if (update_idx >= St * TILE_HEIGHT) {
+                continue;  // past this user's cache rows: skipped, as above
+            }
             const uint32_t cache_id = my_batch_idx * cache_batch_num_tiles + (update_idx / TILE_HEIGHT) * Wt;
 #endif
             uint32_t p = 0;
