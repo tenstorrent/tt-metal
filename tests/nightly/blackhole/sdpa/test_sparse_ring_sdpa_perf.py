@@ -90,6 +90,11 @@ class Bench:
 
     def __init__(self, rt):
         self.rt, self.rows, self.case, self.tensors, self.baselines = rt, None, None, (), {}
+        # The MiniMax-H3 attention module's SDPA compute config (attention_minimax_h3.py), not the dense ring test's,
+        # which also turns packer L1 accumulation off: timings should match the model's.
+        self.ckc = ttnn.init_device_compute_kernel_config(
+            rt.mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
+        )
 
     def shape(self, rows):
         if rows != self.rows:
@@ -123,7 +128,7 @@ class Bench:
             case.buf_k,
             case.buf_v,
             case.dense_config,
-            rt.compute_kernel_config,
+            self.ckc,
             rt.ccl_semaphore_handles,
             rt.num_links,
             rt.sp_axis,
@@ -173,7 +178,7 @@ class Bench:
             persistent_output_buffer_v=case.buf_v,
             logical_n=case.geo.logical_n,
             program_config=config,
-            compute_kernel_config=rt.compute_kernel_config,
+            compute_kernel_config=self.ckc,
             dim=2,
             multi_device_global_semaphore=rt.ccl_semaphore_handles,
             num_links=rt.num_links,
