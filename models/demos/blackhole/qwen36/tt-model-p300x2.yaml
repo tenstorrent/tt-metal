@@ -202,12 +202,12 @@ card:
     ### Rows decode, users x context (`multi-user`)
     Decode speed from the device step time with every user at the given context (no host or HTTP overhead); each cell is t/s/u / aggregate t/s:
 
-    | users | context 128 | context 4K | context 32K | context 128K |
-    |---|---|---|---|---|
-    | 1 | 70 / 70 | 69 / 69 | 65 / 65 | 55 / 55 |
-    | 2 | 67 / 134 | 66 / 133 | 59 / 118 | 44 / 88 |
-    | 4 | 61 / 243 | 60 / 241 | 49 / 196 | 31 / 124 |
-    | 8 | 50 / 401 | 50 / 398 | 36 / 285 | 19 / 156 |
+    | users | context 128 | context 4K | context 32K | context 64K | context 128K |
+    |---|---|---|---|---|---|
+    | 1 | 70 / 70 | 69 / 69 | 65 / 65 | 62 / 62 | 55 / 55 |
+    | 2 | 67 / 134 | 66 / 133 | 59 / 118 | 53 / 107 | 44 / 88 |
+    | 4 | 61 / 243 | 60 / 241 | 49 / 196 | 41 / 165 | 31 / 124 |
+    | 8 | 50 / 401 | 50 / 398 | 36 / 285 | 28 / 222 | 19 / 156 |
 
     Which profile: for a single user, `single-user` is faster (about 86 t/s/u at short context against about 70 t/s/u for one user on `multi-user`, whose 8-row launch costs about 2.7 ms more per step). From 2 concurrent users on, `multi-user` gives more total throughput at every context: 1.3-1.6x at 2 users and 2.4-4.7x at 8 users (device step time, 128 to 128K context).
 
@@ -224,7 +224,7 @@ card:
     | prompt | single-user-dflash2 t/s/u | single-user t/s/u |
     |---|---|---|
     | 32K | ~120 | ~79 |
-    | 64K | ~207 | — |
+    | 64K | ~207 | ~74 |
     | 128K | ~106 | ~66 |
     | 250K | ~160 | ~49 |
 
