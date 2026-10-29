@@ -2516,6 +2516,16 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     assert calib.step_ms(mode, 35.0) == pytest.approx(35.0 * 2.25)
     assert calib.step_ms(mode, 136.0) == pytest.approx(136.0 * 2.25), "the position stays in the table"
     assert calib.tokens_per_row(mode) == 3.0 and calib.modes[mode].tokens == 9
+    # a plain step after a record step (the plain probe, or the first step after an exit) is a clean plain sample:
+    # it calibrates the plain cost and resets the probe cadence; a record step after a plain step stays a switch
+    probe = Calibration(2)
+    probe.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
+    probe.note_step(("step", (1, 5), 2048), 50.0, 3, False, 45.0, 1, cause="switch")
+    probe.note_step(("step", (1, 5), 2048), 50.0, 3, True, 45.0, 1)
+    assert probe.steps_without("plain") == 2 and probe.dirty == {"switch": [1, 50.0]}
+    probe.note_step(("plain", 1), 22.0, 1, False, 20.0, 1, cause="switch")
+    assert probe.steps_without("plain") == 0 and probe.modes[("plain", 1)].clean == 2, "the probe's sample is clean"
+    assert probe.dirty == {"switch": [1, 50.0]} and probe.calibrated(("plain", 1))
     assert calib.dirty == {"prefill": [1, 90.0]} and calib.total == [3, 270.0, 9]
     # the measured tokens per row are a recency-weighted throughput (an EWMA at 0.25 over the counted samples in
     # the order served; never the median: a row taking 1,1,1,5,6 tokens on five verifies commits tokens where the
@@ -2878,11 +2888,11 @@ def _policy_describe_costs_lists_the_plain_step_then_every_record(expect_error=N
     calib.note_phase("replay", 42.5)
     calib.note_prefill()
     assert calib.describe() == (
-        "plain[b=8]: 2 steps, 16 tokens, 1 clean, 31.0 ms/step, 8.00 tokens/step, 3.9 ms/token, "
+        "plain[b=8]: 2 steps, 16 tokens, 2 clean, 140.5 ms/step, 8.00 tokens/step, 17.6 ms/token, "
         "total 140.5 ms/step 17.6 ms/token, ratio 4.68x | "
-        "reseeds 1 at 248.0 ms | dirty 1 steps, 250 ms: switch 1/250 | total 2 steps, 281 ms, 16 tokens, "
+        "reseeds 1 at 248.0 ms | total 2 steps, 281 ms, 16 tokens, "
         "17.6 ms/token | phases ms/call: replay 42.0 | prefills 1 | calibrated: none"
     )
     calib.flush_window()
     assert calib.describe() == "reseeds 0 | prefills 0 | calibrated: none"
-    assert calib.describe(window=False).startswith("plain[b=8]: 2 steps, 16 tokens, 1 clean")
+    assert calib.describe(window=False).startswith("plain[b=8]: 2 steps, 16 tokens, 2 clean")

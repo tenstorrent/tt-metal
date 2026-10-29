@@ -760,6 +760,12 @@ class Calibration:
         self.intervals += 1
         if idle:
             clean, cause = False, "idle"
+        elif mode[0] == "plain" and cause == "switch":
+            # A plain step right after a record step is the plain probe a speculating batch serves to refresh its
+            # plain estimate (or the first step after an exit): the step's wall is a plain sample (the runner's input
+            # reload is its only extra), so it calibrates the plain cost and resets the probe cadence. Dirty, it never
+            # did either: the 26B QB2 served 16 probes in one 30 s window instead of one per 256 steps (2026-10-29).
+            clean, cause = True, None
         # the step right after a reseed carries the entry (charged as entry_ms): it is reported, never a cost
         # sample, else a run of one-step retries measures the mode at reseed + step and declines every next one
         uncounted = cause == "reseed"
