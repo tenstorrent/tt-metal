@@ -183,7 +183,9 @@ class DFlash2DrafterTP:
         self.fc = self._w(Wt[perm].contiguous(), "fc", dim=0)  # [ntaps*dim_tp, H] per device
         self.hnorm = self._rep(s["hidden_norm.weight"], "hidden_norm")
         self.fnorm = self._rep(s["norm.weight"], "norm")
-        self.E = self._rep(_expansion(), "E", cache=False)  # host-built constants: never disk-cached
+        # host-built constants: never disk-cached. E is 0/1 (exact in bfp4; one nonzero term per output): a quarter
+        # of the bf16 matrix's DRAM reads, the same results
+        self.E = self._rep(_expansion(), "E", dtype=ttnn.bfloat4_b, cache=False)
         self.layers = [self._load_layer(s, i) for i in range(self.cfg["num_layers"])]
         if self.has_selector:
             self.pred_cb = s["candidate_selector.predecessor_codebook"].float()
@@ -195,6 +197,16 @@ class DFlash2DrafterTP:
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
+        )
+        # (the V row of a fused K/V cache update: one core next to _sc1's)
+        self._sc1b = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
+                [ttnn.TILE_SIZE, HD],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
         )
         grid = mesh.compute_with_storage_grid_size()
         self._sdpa_cfg = ttnn.SDPAProgramConfig(
@@ -415,8 +427,36 @@ class DFlash2DrafterTP:
             )
         return cache[n]
 
-    def _write_rows(self, li, k, v, pos_t, pt_t, layout):
-        """Write the R = U*block draft/extend rows' K/V into the paged context cache.
+    @staticmethod
+    def _grouped(layout):
+        U, Bk = layout.U, layout.block
+        return (
+            U > 1
+            and Bk >= 2
+            and layout.R == U * Bk
+            and KV_GROUP_WRITE_OK
+            and os.environ.get("QWEN36_DFLASH_KV_GROUP_WRITE", "1") != "0"
+        )
+
+    def _write_index(self, pos_t, pt_t, layout):
+        """The position / page-table slices _write_rows takes per write call: one set per draft or extend body,
+        shared by its layers (free with _free_index). Per row, or per in-block index j when grouped."""
+        R, nb = layout.R, pt_t.shape[-1]
+        if self._grouped(layout):
+            Bk = layout.block
+            return [
+                (ttnn.slice(pos_t, (j,), (R,), (Bk,)), ttnn.slice(pt_t, (j, 0), (R, nb), (Bk, 1))) for j in range(Bk)
+            ]
+        return [(ttnn.slice(pos_t, (i,), (i + 1,)), ttnn.slice(pt_t, (i, 0), (i + 1, nb))) for i in range(R)]
+
+    @staticmethod
+    def _free_index(idx):
+        for pos, pt in idx:
+            ttnn.deallocate(pos)
+            ttnn.deallocate(pt)
+
+    def _write_rows(self, li, k, v, idx, layout):
+        """Write the R = U*block draft/extend rows' K/V into the paged context cache (idx: _write_index's).
 
         Rows of ONE user are consecutive positions of one sequence, so they share a cache tile and
         must never ride one paged_update_cache call (several cores would read-modify-write the same
@@ -425,11 +465,11 @@ class DFlash2DrafterTP:
         user, U rows -> 2*block calls per layer instead of 2*R (TPAttention._write_kv_aliased's
         idiom: tile-view reshape [1,R,32,HD] -> [1,U,block*32,HD], tile-aligned slice, strided
         slices of the per-row position / page-table tensors). Padding rows of different users all
-        name the scratch block and may collide there: that block is write-only junk.
+        name the scratch block and may collide there: that block is write-only junk. At U = 1 a row's
+        K and V go out in one fused call (their inputs on two cores).
         QWEN36_DFLASH_KV_GROUP_WRITE=0 keeps the per-row loop (A/B)."""
         kc, vc = self.kv[li]
         R = k.shape[1]
-        nb = pt_t.shape[-1]
         tile = ttnn.TILE_SIZE
         k_p = ttnn.pad(k, [1, R, tile, HD], [0, 0, 0, 0], 0.0)
         v_p = ttnn.pad(v, [1, R, tile, HD], [0, 0, 0, 0], 0.0)
@@ -439,25 +479,18 @@ class DFlash2DrafterTP:
             if not _aliases(t_p, t):
                 ttnn.deallocate(t)
         U, Bk = layout.U, layout.block
-        grouped = (
-            U > 1
-            and Bk >= 2
-            and R == U * Bk
-            and KV_GROUP_WRITE_OK
-            and os.environ.get("QWEN36_DFLASH_KV_GROUP_WRITE", "1") != "0"
-        )
-        if not grouped:
-            for i in range(R):
-                pos_i = ttnn.slice(pos_t, (i,), (i + 1,))
-                pt_i = ttnn.slice(pt_t, (i, 0), (i + 1, nb))
-                for cache, src in ((kc, k_p), (vc, v_p)):
+        if not self._grouped(layout):
+            for i, (pos_i, pt_i) in enumerate(idx):
+                rows = []
+                for src, cfg in ((k_p, self._sc1), (v_p, self._sc1b)):
                     row = ttnn.slice(src, (0, i, 0, 0), (1, i + 1, tile, HD))
-                    row_sh = ttnn.to_memory_config(row, self._sc1)
+                    rows.append(ttnn.to_memory_config(row, cfg))
                     ttnn.deallocate(row)
-                    ttnn.experimental.paged_update_cache(cache, row_sh, update_idxs_tensor=pos_i, page_table=pt_i)
-                    ttnn.deallocate(row_sh)
-                ttnn.deallocate(pos_i)
-                ttnn.deallocate(pt_i)
+                ttnn.experimental.paged_fused_update_cache(
+                    kc, rows[0], vc, rows[1], update_idxs_tensor=pos_i, page_table=pt_i
+                )
+                for t in rows:
+                    ttnn.deallocate(t)
             ttnn.deallocate(k_p)
             ttnn.deallocate(v_p)
             return
@@ -468,18 +501,14 @@ class DFlash2DrafterTP:
             vw = ttnn.reshape(t, view, view)  # tile-view alias (same buffer) -- see _write_kv_aliased
             srcs.append((vw, None if _aliases(vw, t) else t))
         (k_v, k_orig), (v_v, v_orig) = srcs
-        for j in range(Bk):
+        for j, (pos_j, pt_j) in enumerate(idx):
             r0 = j * tile
-            pos_j = ttnn.slice(pos_t, (j,), (R,), (Bk,))  # rows j, j+Bk, ... = user 0..U-1 at in-block index j
-            pt_j = ttnn.slice(pt_t, (j, 0), (R, nb), (Bk, 1))
             for cache, src in ((kc, k_v), (vc, v_v)):
                 grp = ttnn.slice(src, (0, 0, r0, 0), (1, U, r0 + tile, HD))
                 grp_sh = ttnn.to_memory_config(grp, cfg)
                 ttnn.deallocate(grp)
                 ttnn.experimental.paged_update_cache(cache, grp_sh, update_idxs_tensor=pos_j, page_table=pt_j)
                 ttnn.deallocate(grp_sh)
-            ttnn.deallocate(pos_j)
-            ttnn.deallocate(pt_j)
         for t in (k_v, v_v, k_orig, v_orig):
             if t is not None:
                 ttnn.deallocate(t)
@@ -784,11 +813,13 @@ class DFlash2DrafterTP:
         st = self._staging[lay.R]
         R = lay.R
         hctx = self._hctx(lay.tap_bufs, R)
+        idx = self._write_index(st["xpos"], lay.xpt, lay)
         for li, lw in enumerate(self.layers):
             k, v = self._ctx_kv(hctx, lw, R)
             kr = apply_partial_rope_decode(k, st["xcos"], st["xsin"], self.NKVl, R, HD)
             ttnn.deallocate(k)
-            self._write_rows(li, kr, v, st["xpos"], lay.xpt, lay)
+            self._write_rows(li, kr, v, idx, lay)
+        self._free_index(idx)
         ttnn.deallocate(hctx)
 
     @staticmethod
@@ -891,7 +922,7 @@ class DFlash2DrafterTP:
         self.extend_context(slots, [1] * U, layout_id=lay.id, traced=False)
 
     # ------------------------------------------------------------------ draft (traceable)
-    def _attn(self, hb, lw, li, cur_t, lay):
+    def _attn(self, hb, lw, li, cur_t, lay, idx):
         st = self._staging[lay.R]
         B = lay.R  # every draft row (U users x block) is a pseudo-user of the paged decode SDPA
         q = ttnn.reshape(self._lin(hb, lw["q"]), (1, B, self.NHl, HD))
@@ -905,7 +936,7 @@ class DFlash2DrafterTP:
         ttnn.deallocate(qn)
         kr = apply_partial_rope_decode(kn, st["cos"], st["sin"], self.NKVl, B, HD)
         ttnn.deallocate(kn)
-        self._write_rows(li, kr, v, st["wpos"], lay.ptB, lay)
+        self._write_rows(li, kr, v, idx, lay)
         kc, vc = self.kv[li]
         kw = {"sliding_window_size": self.windows[li]} if self.windows[li] else {}
         if self.ring:
@@ -928,7 +959,7 @@ class DFlash2DrafterTP:
         ttnn.deallocate(o4)
         return self._allreduce(part)
 
-    def _layer(self, hidden, lw, li, lay):
+    def _layer(self, hidden, lw, li, lay, idx):
         st = self._staging[lay.R]
         L = lay.R
         cur_t = st["pos"] if self.causal[li] else st["cur"]
@@ -936,13 +967,13 @@ class DFlash2DrafterTP:
         if "ac_kp" in lw:
             kp = self._lin(h, lw["ac_kp"])
             hb = self._gdc(h, kp, lw["ac_b00"], lw["ac_b01"], 0, L, lay.S)
-            a0 = self._attn(hb, lw, li, cur_t, lay)
+            a0 = self._attn(hb, lw, li, cur_t, lay, idx)
             ttnn.deallocate(hb)
             a = self._gdc(a0, kp, lw["ac_b10"], lw["ac_b11"], 1, L, lay.S)
             ttnn.deallocate(a0)
             ttnn.deallocate(kp)
         else:
-            a = self._attn(h, lw, li, cur_t, lay)
+            a = self._attn(h, lw, li, cur_t, lay, idx)
         ttnn.deallocate(h)
         h1 = ttnn.add(hidden, a)
         ttnn.deallocate(a)
@@ -967,11 +998,13 @@ class DFlash2DrafterTP:
         """Persistent inputs -> (vals [1,1,R,16] local, idx [1,1,R,16] local, hp [1,1,R,256] | None, h [1,1,R,H])."""
         st = self._staging[lay.R]
         h = st["emb"]
+        idx = self._write_index(st["wpos"], lay.ptB, lay)
         for li, lw in enumerate(self.layers):
-            h_new = self._layer(h, lw, li, lay)
+            h_new = self._layer(h, lw, li, lay, idx)
             if h is not st["emb"]:
                 ttnn.deallocate(h)
             h = h_new
+        self._free_index(idx)
         hn = self._rms(h, self.fnorm)
         ttnn.deallocate(h)
         logits = ttnn.linear(hn, self.lm_w)  # [1,1,B,V/nd] per device

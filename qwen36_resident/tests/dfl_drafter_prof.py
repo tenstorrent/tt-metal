@@ -121,8 +121,10 @@ try:
             f"(trace replay {med(r_x):.2f}); host part of draft() {med(t_d) - med(r_d):.2f} ms"
         )
 
-    # the profiled window
+    # the profiled window (the device profiler's buffers emptied first: a core's buffer holds a limited number of
+    # ops, and the KV writes all run on one core)
     ttnn.synchronize_device(mesh)
+    ttnn.ReadDeviceProfiler(mesh)
     signpost("start")
     for i in range(a.prof_iters):
         dr.draft(anchors[i], Cs[0])
