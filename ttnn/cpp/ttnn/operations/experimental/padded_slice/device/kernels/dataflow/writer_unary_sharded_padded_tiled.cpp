@@ -5,10 +5,12 @@
 #include <stdint.h>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "internal/dataflow/dataflow_api_addrgen.h"
 #include "api/debug/dprint.h"
 #include "ckernel_defs.h"
 #include "api/tile_constants.h"
+#include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 uint32_t round_down(uint32_t value, uint32_t multiple) {
@@ -18,42 +20,41 @@ uint32_t round_down(uint32_t value, uint32_t multiple) {
     return value;
 }
 void kernel_main() {
-    constexpr uint32_t cb_untilized_id = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_out_id = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_padding_id = get_compile_time_arg_val(2);
-    constexpr uint32_t is_non_aligned = get_compile_time_arg_val(3);
-    constexpr uint32_t num_dims = get_compile_time_arg_val(4);
-    constexpr uint32_t output_elem_size = get_compile_time_arg_val(5);
-    constexpr uint32_t output_row_size_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t is_non_aligned = get_arg(args::is_non_aligned);
+    constexpr uint32_t num_dims = get_arg(args::num_dims);
+    constexpr uint32_t output_elem_size = get_arg(args::output_elem_size);
+    constexpr uint32_t output_row_size_bytes = get_arg(args::output_row_size_bytes);
 
-    const uint32_t total_num_tiles = get_arg_val<uint32_t>(0);
-    const uint32_t num_tiles_per_read = get_arg_val<uint32_t>(1);
-    const uint32_t num_sticks_this_core = get_arg_val<uint32_t>(2);
-    const uint32_t padded_channels_elems = get_arg_val<uint32_t>(3);
-    const uint32_t misalignment = get_arg_val<uint32_t>(4);
-    const uint32_t output_coord_addr = get_arg_addr(5);
-    const uint32_t output_start_in_input_addr = get_arg_addr(5 + num_dims);
-    const uint32_t output_end_addr = get_arg_addr(5 + 2 * num_dims);
+    const uint32_t total_num_tiles = get_arg(args::total_num_tiles);
+    const uint32_t num_tiles_per_read = get_arg(args::num_tiles_per_read);
+    const uint32_t num_sticks_this_core = get_arg(args::num_sticks_this_core);
+    const uint32_t padded_channels_elems = get_arg(args::padded_channels_elems);
+    const uint32_t misalignment = get_arg(args::misalignment);
+    // Vararg blocks, num_dims each: the output_coord start, output_start_in_input, output_end.
+    constexpr uint32_t output_coord_seed_base = 0;
+    constexpr uint32_t output_start_in_input_base = num_dims;
+    constexpr uint32_t output_end_base = 2 * num_dims;
 
-    constexpr uint32_t tile_size = get_tile_size(cb_out_id);
+    constexpr uint32_t tile_size = get_tile_size(dfb::out);
     const uint32_t read_size = tile_size * num_tiles_per_read;
 
-    volatile tt_l1_ptr uint32_t* output_coord = (tt_l1_ptr uint32_t*)(output_coord_addr);
-
-    const volatile tt_l1_ptr uint32_t* const output_start_in_input = (tt_l1_ptr uint32_t*)(output_start_in_input_addr);
-
-    const volatile tt_l1_ptr uint32_t* const output_end = (tt_l1_ptr uint32_t*)(output_end_addr);
+    // Per-dimension output position. The host passes its starting values as varargs, which are read-only,
+    // so the kernel copies them into this scratchpad and advances them there.
+    Scratchpad<uint32_t> output_coord(scratch::output_coord);
+    for (uint32_t j = 0; j < num_dims; ++j) {
+        output_coord[j] = get_vararg(output_coord_seed_base + j);
+    }
 
     Noc noc;
-    experimental::CB cb_untilized(cb_untilized_id);
-    experimental::CB cb_out(cb_out_id);
-    experimental::CB cb_padding(cb_padding_id);
+    DataflowBuffer dfb_untilized(dfb::untilized);
+    DataflowBuffer dfb_out(dfb::out);
+    DataflowBuffer dfb_padding(dfb::padding);
 
     uint32_t write_offset = 0;
     uint32_t rows_remaining = num_sticks_this_core;
     uint32_t tiles_read = 0;
     uint32_t block_row_size = read_size / tt::constants::TILE_HEIGHT;
-    const uint32_t pad_addr = cb_padding.get_read_ptr();
+    const uint32_t pad_addr = dfb_padding.get_read_ptr();
     const uint32_t output_row_size_elems = output_row_size_bytes / output_elem_size;
 
     const uint32_t padded_channels_bytes = padded_channels_elems * output_elem_size;
@@ -87,7 +88,6 @@ void kernel_main() {
         tile_size,
         read_size,
         block_row_size);
-    DPRINT("untilized CB ID: {} Out CB ID: {}\n", cb_untilized_id, cb_out_id);
     DPRINT(
         "pad_addr : {} pad_src_l1_addr : {} padded_channels_elems: {}\n",
         pad_addr,
@@ -101,11 +101,12 @@ void kernel_main() {
         output_elem_size);
 #endif
 
-    const uint32_t output_end_width_in_input = output_end[1] + output_start_in_input[1];
+    const uint32_t output_end_width_in_input =
+        get_vararg(output_end_base + 1) + get_vararg(output_start_in_input_base + 1);
     uint32_t row_count = 0;
     UnicastEndpoint self_ep;
     while (tiles_read < total_num_tiles && rows_remaining > 0) {
-        uint32_t width_start_in_input = output_start_in_input[1] + output_coord[1];
+        uint32_t width_start_in_input = get_vararg(output_start_in_input_base + 1) + output_coord[1];
         uint32_t width_tile_start_in_input = round_down(width_start_in_input, ckernel::TILE_HEIGHT);
         uint32_t width_tile_end_in_input = width_tile_start_in_input + ckernel::TILE_HEIGHT;
 
@@ -138,8 +139,8 @@ void kernel_main() {
 
 #endif
 
-        cb_untilized.wait_front(num_tiles_per_read);
-        const uint32_t noc_read_src_base = cb_untilized.get_read_ptr() + read_start_offset * block_row_size;
+        dfb_untilized.wait_front(num_tiles_per_read);
+        const uint32_t noc_read_src_base = dfb_untilized.get_read_ptr() + read_start_offset * block_row_size;
 
         if constexpr (is_non_aligned) {
             uint32_t current_src_l1 = noc_read_src_base;
@@ -147,7 +148,7 @@ void kernel_main() {
             for (uint32_t row = 0; row < read_rows_size; row++) {
                 noc.async_read(
                     self_ep,
-                    cb_out,
+                    dfb_out,
                     output_row_size_bytes,
                     experimental::local_addr(current_src_l1 + misalignment, noc.get_noc_id()),
                     {.offset_bytes = current_write_offset});
@@ -157,7 +158,7 @@ void kernel_main() {
         } else {
             noc.async_read(
                 self_ep,
-                cb_out,
+                dfb_out,
                 read_rows_size * block_row_size,
                 experimental::local_addr(noc_read_src_base, noc.get_noc_id()),
                 {.offset_bytes = write_offset});
@@ -178,7 +179,7 @@ void kernel_main() {
             for (uint32_t row_index = 0; row_index < read_rows_size; row_index++) {
                 noc.async_read(
                     self_ep,
-                    cb_out,
+                    dfb_out,
                     padded_channels_elems * output_elem_size,
                     pad_src,
                     {.offset_bytes = pad_write_offset});
@@ -188,7 +189,7 @@ void kernel_main() {
         noc.async_read_barrier();
 
         write_offset += read_rows_size * output_row_size_bytes;
-        cb_untilized.pop_front(num_tiles_per_read);
+        dfb_untilized.pop_front(num_tiles_per_read);
         tiles_read += num_tiles_per_read;
 
         // output_coord keeps track of the current position in the output tensor
@@ -197,7 +198,7 @@ void kernel_main() {
 
         // If output_coord goes beyond output_end, reset it to 0 and increment the next dimension.
         for (uint32_t index = 1; index < num_dims - 1; index++) {
-            if (output_coord[index] >= output_end[index]) {
+            if (output_coord[index] >= get_vararg(output_end_base + index)) {
                 output_coord[index] = 0;
                 output_coord[index + 1] += 1;
             }

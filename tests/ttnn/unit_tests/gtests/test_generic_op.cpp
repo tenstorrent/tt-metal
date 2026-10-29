@@ -44,6 +44,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
@@ -106,8 +107,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
     // Create output CB based on the output shape's last dimension
     const tt::CBIndex src_cb_idx = tt::CBIndex::c_0;
     const tt::CBIndex dst_cb_idx = tt::CBIndex::c_1;
-    const uint32_t src_page_size = round_up_to_mul32(red_dim_units * unit_size);
-    const uint32_t dst_page_size = round_up_to_mul32(output_last_dim * unit_size);
+    const uint32_t src_page_size = tt::round_up(red_dim_units * unit_size, 32u);
+    const uint32_t dst_page_size = tt::round_up(output_last_dim * unit_size, 32u);
 
     CBFormatDescriptor input_format_descriptor = {
         .buffer_index = src_cb_idx,
@@ -232,7 +233,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
 
     uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
     uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(input_tile_size, 32u);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
 
