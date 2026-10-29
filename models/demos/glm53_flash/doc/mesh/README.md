@@ -1557,3 +1557,26 @@ users (964 tok/s aggregate, 33.2 ms per token, 3.37 tokens per user per iteratio
 against plain greedy on all 32 users for 64 tokens (the 10-27 row: 23.8). The harness's own "plain" step (216 ms) reads
 the full logits every step for the near-tie gaps; the comparable plain step is the e2e's 48.4 ms, so K = 3 at 4 users per
 row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` table (S1).
+
+### 2026-10-29 07:20: the 32-request served run (three attempts) and the ragged-wave root cause
+
+- `served_waves_8x4` r1/r2 died at the first wave capture: the four SP prefill traces (~480 MB at 45 layers) fill the
+  512 MB trace region, and a wave trace of T rows per row costs about the SP trace of 8 T tokens. Under per-row
+  ownership the adapter now captures NO SP prefill traces (`GLM53_VLLM_SP_TRACES=1` keeps them): the traced path of a
+  fresh prompt is the wave (`GLM53_VLLM_WAVE_TRACE_LENGTHS`, default 256,512), a short lone prompt takes the traced
+  wave, a long lone prompt the eager SP chunks (the rows share that work).
+- r3 booted (waves 256/512 captured in 21 s, the decode trace with 32 slots): stage a's natural prompt = HF, stage b's
+  concurrent greedy rounds identical; stage c retrieved 1 of 4 concurrent 64 K needles (three degenerate answers;
+  TTFT 231-511 s, one row per prompt: 32 chunks of 2048 at ~7 s vs the SP path's four 16 K chunks at ~12 s shared by
+  8 rows); stage d at ISL 128 x 32 users: TTFT 3.4 s, TPOT 2.0 s (the adapter's own line: 725-1194 ms host wall per
+  decode step over 32 live users vs 73 ms at 4), the 64 K x 4 point 1 of 4 within the bench's budget.
+- The needle corruption's root cause, caught by the sealed block case (d) (`served_waves_block_v7`:
+  `MatmulDeviceOperation: program cache miss` in `moe._mask_pad_rows`): the wave ladder ran FULL waves only, so the
+  MoE's pad-row mask program of a RAGGED eager wave (a member's chunk shorter than the width: every prompt's last
+  chunk, an idle row) was never built at 2048; in serving (seal off) the needles' last waves compiled it under live
+  traces and the replays degenerated. The traced 256/512 waves carry their mask, which is why the short cases passed.
+  Fix: every bucket once ragged in the ladder (the SP ladder's b-1 rule); the block case re-runs under the seal (v8),
+  then the served run without the APC's host-store snapshots (r5), the suspected per-step cost at 32 slots (35 MiB
+  per chip per save, ~1.1 GB device-to-host plus a sync, per slot at every chunk end and decode crossing).
+- The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
+  45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
