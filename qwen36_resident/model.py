@@ -129,16 +129,37 @@ def l1_low_water(mesh):
     return min(lows) if lows else None
 
 
-class TraceL1Guard:
-    """what a trace's replays rely on: the L1 below the buffers live at its capture (where its programs' CBs and
-    intermediates went) still holds no buffer. check() raises otherwise: a buffer allocated there since is overwritten
-    by every replay (a silent garbage decode). The allocator's view covers every L1 buffer but costs a memory-view
-    walk, so a decode trace checks the decode models' registry every replay and the allocator every `every` replays."""
+def cb_extent(cbs):
+    """the static CB region the CB descriptors take on their busiest core: bytes above the L1 allocator's base (CBs
+    without a backing tensor, each rounded up to 64 B, an upper bound of the allocator's alignment)"""
+    per_core = {}
+    for cb in cbs:
+        if cb.has_buffer():
+            continue
+        size = -(-cb.total_size // 64) * 64
+        for r in cb.core_ranges.ranges():
+            for x in range(r.start.x, r.end.x + 1):
+                for y in range(r.start.y, r.end.y + 1):
+                    per_core[(x, y)] = per_core.get((x, y), 0) + size
+    return max(per_core.values(), default=0)
 
-    def __init__(self, mesh, what, every=64):
+
+class TraceL1Guard:
+    """what a trace's replays rely on: the L1 its programs' CBs and intermediates got at capture still holds no buffer.
+    check() raises otherwise: a buffer allocated there since is overwritten by every replay (a silent garbage decode).
+    With cb_top (bytes above the allocator's base: the traced programs' static CB region, cb_extent) that region is
+    the bound; without it (programs we don't describe, e.g. ttnn ops) the lowest buffer live at capture is, which is
+    conservative. The allocator's view covers every L1 buffer but costs a memory-view walk, so a decode trace checks
+    the decode models' registry every replay and the allocator every `every` replays."""
+
+    def __init__(self, mesh, what, every=64, cb_top=None):
         self.mesh, self.what, self.every, self.n = mesh, what, every, 0
-        self.low = l1_low_water(mesh)
-        self.reg = min(l1_layout(), default=None)
+        if cb_top is not None:
+            self.low = cb_top
+            self.reg = ttnn.get_allocator_base_address(mesh, ttnn.BufferType.L1) + cb_top
+        else:
+            self.low = l1_low_water(mesh)
+            self.reg = min(l1_layout(), default=None)
 
     def check(self, full=False):
         reg = min(l1_layout(), default=None)
@@ -1518,6 +1539,7 @@ class ResidentModel:
                         kernel("attn_leader_compute.cpp", lead_grid, attn_ct, lc, attn_compute),
                     ]
                 program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
+                self._cb_top = max(getattr(self, "_cb_top", 0), cb_extent(cbs))  # (TraceL1Guard)
                 args = program.kernels[3].runtime_args[hub.x][hub.y]
                 for nb in (chip + 1, chip - 1):
                     if 0 <= nb < n:
@@ -2116,7 +2138,7 @@ class ResidentModel:
             self.trace_ids.append(tid)
         self.trace_id = self.trace_ids[0]
         ttnn.synchronize_device(self.mesh)
-        self._trace_guard = TraceL1Guard(self.mesh, "decode")
+        self._trace_guard = TraceL1Guard(self.mesh, "decode", cb_top=self._cb_top)
 
     def release_trace(self):
         for tid in getattr(self, "trace_ids", None) or []:
