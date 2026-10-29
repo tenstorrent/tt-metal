@@ -230,6 +230,15 @@ class V41PrefillRuntime:
             for L in range(self.num_layers):
                 self._ack(L)
         t4 = time.time()
+        # DS41F-0119: the first request at a NEW prompt length is 0.3-4.6 s slower (bench 10-29) -- log the program-cache growth
+        # per chunk, so a length-keyed program build shows up as "+N programs" on the request path
+        pc = self._program_cache_entries()
+        if pc is not None and pc != getattr(self, "_pc_last", None):
+            if getattr(self, "_pc_last", None) is not None and not warmup:
+                logger.info(
+                    f"[v41 runtime] program cache {pc} entries (+{pc - self._pc_last}) after chunk [{actual_start}, {actual_end})"
+                )
+            self._pc_last = pc
         islands = os.environ.get("V41_PREFILL_ISLANDS", "0") == "1"
         if warmup and (islands or os.environ.get("V41_PREFILL_WARM_ALL", "0") == "1"):
             # islands need every width's programs and cached constants built BEFORE the capture: warm-all first
@@ -241,6 +250,12 @@ class V41PrefillRuntime:
             + (" (warm-up)" if warmup else "")
         )
         return None
+
+    def _program_cache_entries(self):
+        try:
+            return int(self.mesh_device.num_program_cache_entries())
+        except Exception:  # not every build exposes it on a mesh
+            return None
 
     def _init_vit(self, ck, model_dir) -> None:
         import json as _json
