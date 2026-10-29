@@ -23,9 +23,8 @@
 // n % Sections on every thread. The unpack thread keeps the index too, so an op that unpacks to Dest gets the same
 // row; ring_reserve does not make the unpack thread wait, so such an op waits for math itself (copy.h).
 //
-// No init call. dest_ring_sync is set up inside math's first ring_reserve: value 0, maximum Sections. The pack thread
-// touches it only in ring_release, after math has posted it. The first call waits for the value to be 0 first: a
-// kernel that ended with a section reserved and not released would leave it above 0.
+// No init call. dest_ring_sync is set up inside math's first ring_reserve, value 0, maximum Sections
+// (semaphore_setup_once, semaphores.h). The pack thread touches it only in ring_release, after math has posted it.
 //
 // Dest contents. ring_release zeroes the section after the packer has read it, as today's
 // _llk_pack_dest_section_done_ does, so every reserve returns a zeroed section and ops that accumulate (matmul) start
@@ -89,9 +88,6 @@ constexpr ring_params ring_params_from(const TensorSpec<tensor_rank>& t, std::ui
 /// The section this thread is on. One copy per TRISC, in .bss (zero at kernel start); see the file comment.
 inline std::uint32_t ring_section = 0;
 
-/// Math thread: whether dest_ring_sync has been set up in this kernel launch. In .bss, so false at kernel start.
-inline bool ring_ready = false;
-
 /// Every thread: the first Dest row of the current section.
 template <ring_params P>
 inline __attribute__((always_inline)) std::uint32_t ring_section_row()
@@ -115,14 +111,7 @@ inline __attribute__((always_inline)) void ring_reserve()
     static_assert(P.rows <= ring_capacity_rows(P.section_rows, P.dest_fp32), "the Dest tensor does not fit one section of the ring: use fewer tiles");
     if constexpr (runs_on<On>)
     {
-        if (!ring_ready)
-        {
-            while (hal::sync::semaphore::read<dest_ring_sync>() > 0)
-            {
-            }
-            hal::sync::semaphore::init<0 /* value */, P.sections /* maximum */, dest_ring_sync>();
-            ring_ready = true;
-        }
+        semaphore_setup_once<dest_ring_sync, P.sections>();
         // Math, SFPU and sync instructions wait here; the next op's Dest writes come after.
         hal::sync::wait::semaphore<StallTarget::Math | StallTarget::Sfpu | StallTarget::Sync, SemaphoreCondition::WhileMaximum, dest_ring_sync>();
         hal::sync::semaphore::post<dest_ring_sync>();

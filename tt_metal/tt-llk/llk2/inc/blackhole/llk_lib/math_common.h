@@ -64,6 +64,20 @@ constexpr std::uint32_t dest_rows_per_tile(const P& p)
     return p.num_faces * p.face_r_dim;
 }
 
+/// Points this thread's math Dest offset at Dest row `row` (absolute): the FPU's and the SFPU's Dest addresses on this
+/// thread count from there.
+inline __attribute__((always_inline)) void set_math_dest_row(std::uint32_t row)
+{
+    hal::cfg::write<hal::cfg::Access::TensixCfgUnit, hal::cfg::DestTargetRegCfgMath::Offset, hal::cfg::Sec::S0>(row);
+}
+
+/// Points this thread's math Dest offset at tile `tile` of the tensor that starts at Dest row dest_row (P's tile size).
+template <auto P>
+inline __attribute__((always_inline)) void set_math_dest_tile(std::uint32_t dest_row, std::uint32_t tile)
+{
+    set_math_dest_row(dest_row + tile * dest_rows_per_tile(P));
+}
+
 /// Programs address modifier Slot. Fields this does not name are written 0, as addr_mod_t does.
 template <hal::cfg::Sec Slot, counter_step A, counter_step B, counter_step D, std::uint32_t FidelityIncr = 0>
 inline __attribute__((always_inline)) void set_addr_mod()

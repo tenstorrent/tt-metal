@@ -139,7 +139,7 @@ inline __attribute__((always_inline)) void copy_through_src(std::uint32_t dest_r
     constexpr MathCounter release_src_a {.src_a = Set(0), .dest = Set(0), .flip = Src::A};
     for (std::uint32_t tile = 0; tile < P.tiles; tile++)
     {
-        cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(dest_row + tile * dest_rows_per_tile(P));
+        set_math_dest_tile<P>(dest_row, tile);
         if constexpr (!P.transpose)
         {
             // The whole tile in one transfer: 64 rows, eight MOVA2Ds of eight rows.
@@ -181,7 +181,7 @@ inline __attribute__((always_inline)) void copy_to_dest_handoff(std::uint32_t de
     // 4. Zero-flag clear per face (budabackend#2730). ZEROACC's face index counts 16-row faces from the start of the
     //    Dest section the math offset selects, so the offset goes to the start of acc's section first.
     const std::uint32_t section_row = dest_row - dest_row % dest_section_rows;
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(section_row);
+    set_math_dest_row(section_row);
     const std::uint32_t first_face = (dest_row - section_row) / P.face_r_dim;
     for (std::uint32_t face = 0; face < P.tiles * P.num_faces; face++)
     {

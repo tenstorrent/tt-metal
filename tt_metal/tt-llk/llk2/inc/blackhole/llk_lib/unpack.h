@@ -25,9 +25,9 @@
 //                                   operand once and moves its address on
 //   unpack_execute<P>(a, b, step)   one step of the walk: for each run, point the unpackers at that run's tiles,
 //                                   unpack the held operand, and run the MOP tiles_per_run times
-//   unpack<On, Plan>(in0[, in1])    the per-thread call the Compute API makes: plans on every thread, configures
-//                                   and executes only when this build is for thread On (the unpack thread); one
-//                                   address for a one-input op
+//   unpack<On, Plan>(in0[, in1])    the per-thread call the Compute API makes, one L1 address per input: plans on
+//                                   every thread, configures and executes only when this build is for thread On
+//                                   (the unpack thread)
 //
 // Unpack to Dest. A stream whose Plan says Where::Dest goes through unpacker 0 to Dest instead of SrcA (32-bit
 // formats with a 32-bit Dest; see unpack_tile_to_dest and dest_write_begin below). Its tiles land one after another
@@ -545,17 +545,26 @@ inline __attribute__((always_inline)) void dest_write_end()
     hal::sync::semaphore::post<hal::sync::Access::Tensix, unpack_to_dest_sync>();
 }
 
-/// The unpack thread's part of a two-input Compute API call. in0_address and in1_address are the byte addresses of
-/// the call's input tensors.
-template <Thread On, Plan Pl>
-inline __attribute__((always_inline)) void unpack(std::uint32_t in0_address, std::uint32_t in1_address)
+/// Inputs a Plan unpacks: one per operand that goes to an unpacker.
+constexpr std::uint32_t unpacked_inputs(const Plan& p)
+{
+    return (p.in0.to != Where::None ? 1 : 0) + (p.in1.to != Where::None ? 1 : 0);
+}
+
+/// The unpack thread's part of a Compute API call: in0's and, for a two-input op, in1's byte address, one per input
+/// the Plan unpacks (copy: one; matmul, add, sub: two).
+template <Thread On, Plan Pl, class... Addresses>
+inline __attribute__((always_inline)) void unpack(Addresses... input_addresses)
 {
     static_assert(On == Thread::Unpack, "the unpackers are driven from the unpack thread");
+    static_assert(sizeof...(Addresses) == unpacked_inputs(Pl), "pass one L1 address per input the op unpacks");
     constexpr unpack_params p = unpack_params_from(Pl);
-    // Every TRISC compiles this call (the static_assert checks the call names the right thread); only the unpack
-    // thread's build keeps its body. On math and pack this branch is discarded, so their builds carry no unpack code.
+    // Every TRISC compiles this call; only the unpack thread's build keeps its body (llk_lib/thread.h, runs_on).
     if constexpr (runs_on<On>)
     {
+        const std::uint32_t in[]          = {static_cast<std::uint32_t>(input_addresses)...};
+        const std::uint32_t in0_address   = in[0];
+        const std::uint32_t in1_address   = in[sizeof...(Addresses) - 1]; // one input: unpacker 1 idles and never reads it
         const std::uint32_t src_a_address = on_unpacker0(Pl.in0.to) ? in0_address : in1_address;
         const std::uint32_t src_b_address = Pl.in0.to == Where::SrcB ? in0_address : in1_address;
         unpack_configure<p>();
@@ -572,14 +581,6 @@ inline __attribute__((always_inline)) void unpack(std::uint32_t in0_address, std
             dest_write_end();
         }
     }
-}
-
-/// The unpack thread's part of a one-input Compute API call (copy): unpacker 1 idles, so there is no second address.
-template <Thread On, Plan Pl>
-inline __attribute__((always_inline)) void unpack(std::uint32_t in0_address)
-{
-    static_assert(Pl.in1.to == Where::None, "this op's Plan has a second input: pass its address");
-    unpack<On, Pl>(in0_address, in0_address /* read by no unpacker: unpacker 1 idles */);
 }
 
 } // namespace llk2::llk_lib

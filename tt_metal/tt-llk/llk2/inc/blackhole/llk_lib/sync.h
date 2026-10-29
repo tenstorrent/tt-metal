@@ -22,8 +22,7 @@
 //   math -> pack   math_pack_sync    pack (or an SFPU call on the pack thread) takes what math wrote
 //   pack -> math   pack_math_sync    complete<Math>, or math writes a tensor the pack thread's SFPU wrote last
 // Others (unpack <-> math, unpack <-> pack) fail at compile time: no op reads a tensor that way yet. Each semaphore
-// counts hand-offs in flight; the poster sets it to value 0, maximum handoff_max_pending, before its first post
-// (no init call, as in dest.h): its .bss flag is false at every kernel launch.
+// counts hand-offs in flight; the poster sets it up before its first post (semaphore_setup_once, semaphores.h).
 //
 // migrate<E, From, To>() hands unit E (the SFPU) from one thread to the other: From waits for E to be idle and posts,
 // To waits. Step 3 of report 4's migrate, setting the unit up for its new thread, is not needed here: every vec_ call
@@ -97,23 +96,11 @@ constexpr Semaphore handoff_semaphore(Thread from, Thread to)
     return from == Thread::Math && to == Thread::Pack ? math_pack_sync : pack_math_sync;
 }
 
-/// This thread: whether it has set up the semaphore it posts on. In .bss, so false at kernel start. A thread posts on
-/// one pair only (math on math -> pack, pack on pack -> math), so one flag per thread.
-inline bool handoff_ready = false;
-
 /// The posting thread: wait until unit Owner is idle, then post semaphore Sem (setting it up on the first post).
 template <Exu Owner, Semaphore Sem>
 inline __attribute__((always_inline)) void handoff_post()
 {
-    if (!handoff_ready)
-    {
-        // Value 0 at kernel start: wait for it, as a section count left over by an earlier kernel would be read as a hand-off.
-        while (hal::sync::semaphore::read<Sem>() > 0)
-        {
-        }
-        hal::sync::semaphore::init<0 /* value */, handoff_max_pending /* maximum */, Sem>();
-        handoff_ready = true;
-    }
+    semaphore_setup_once<Sem, handoff_max_pending>();
     hal::sync::wait::stall<StallTarget::Sync, idle(Owner)>();
     hal::sync::semaphore::post<Sem>();
 }
