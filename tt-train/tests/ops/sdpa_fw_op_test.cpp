@@ -1947,8 +1947,21 @@ const SDPATestConfig kSplitUnitsBase{
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // The one blocking run of the split kernel: the cut rows against the same rows uncut.
+    // The blocking runs of the split kernel: the cut rows against the same rows uncut, on the full grid
+    // and on 32 cores, where a core runs a sender and then a merger (the merger waits on its own core's
+    // bump) and another a whole item and then a merger.
     run_split_vs_unsplit(kSplitUnitsBase, {64, 128, 1, 4, 0});
+    const ChunkKnobs crowded{64, 128, 1, 4, 32};
+    SDPATestConfig crowded_config = kSplitUnitsBase;
+    crowded_config.program_config = program_config_of(crowded);
+    using ttml::metal::ops::sdpa_fw::device::UnitRole;
+    bool sender_then_merger = false;
+    for (const auto& units : host_schedule(crowded_config).per_core) {
+        sender_then_merger |=
+            !units.empty() && units.front().role == UnitRole::Sender && units.back().role == UnitRole::Merger;
+    }
+    ASSERT_TRUE(sender_then_merger) << "the 32-core row must put a sender and a merger on one core";
+    run_split_vs_unsplit(kSplitUnitsBase, crowded);
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_Sweep) {
