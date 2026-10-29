@@ -1386,7 +1386,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_OPERATION_TIMEOUT_SECONDS=30.0
         case EnvVarID::TT_METAL_OPERATION_TIMEOUT_SECONDS: {
             float timeout_duration = std::stof(value);
-            this->timeout_duration_for_operations = std::chrono::duration<float>(timeout_duration);
+            this->set_timeout_duration_for_operations(std::chrono::duration<float>(timeout_duration));
             break;
         }
 

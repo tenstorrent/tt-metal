@@ -21,9 +21,9 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_hit(
     const auto& expert_dispatch_table = tensor_args.expert_dispatch_table;
 
     TT_FATAL(combine_output.storage_type() == StorageType::DEVICE, "combine_output must be on device");
-    TT_FATAL(combine_output.buffer() != nullptr, "combine_output must have a buffer");
+    TT_FATAL(combine_output.is_allocated(), "combine_output must have a buffer");
     TT_FATAL(weights.storage_type() == StorageType::DEVICE, "weights must be on device");
-    TT_FATAL(weights.buffer() != nullptr, "weights must have a buffer");
+    TT_FATAL(weights.is_allocated(), "weights must have a buffer");
 
     // indices and expert_dispatch_table must be supplied together or not at all:
     // both provided  -> DeepSeek dispatch-table-based expert skip
@@ -37,10 +37,10 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_hit(
 
     if (indices.has_value()) {
         TT_FATAL(indices->storage_type() == StorageType::DEVICE, "indices must be on device");
-        TT_FATAL(indices->buffer() != nullptr, "indices must have a buffer");
+        TT_FATAL(indices->is_allocated(), "indices must have a buffer");
         TT_FATAL(
             expert_dispatch_table->storage_type() == StorageType::DEVICE, "expert_dispatch_table must be on device");
-        TT_FATAL(expert_dispatch_table->buffer() != nullptr, "expert_dispatch_table must have a buffer");
+        TT_FATAL(expert_dispatch_table->is_allocated(), "expert_dispatch_table must have a buffer");
     }
 
     const ttnn::Shape combine_shape = logical_combine_shape(tensor_args);
