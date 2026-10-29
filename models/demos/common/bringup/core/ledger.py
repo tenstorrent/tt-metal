@@ -87,6 +87,21 @@ def fixed_accuracy(task: dict, conds: dict | None = None) -> list[str]:
     return out
 
 
+def wall_only_device_metrics(task: dict) -> list[str]:
+    """F212: a gate that needs device_ms_* but whose every test_profile.py segment is wall-only
+    (BRINGUP_PROFILE_WALL=1): the gate then adds no profiled run (F114 with_clean_wall) and the metric is MISSING, an
+    agent attempt can never pass it (DeepSeek-V4.1 P.6: device_ms_total missing after a passing change)."""
+    gate = task.get("gate") or {}
+    need = sorted(g for g in (gate.get("metrics") or {}) if str(g).startswith("device_ms"))
+    segs = [s for s in str(gate.get("cmd") or "").split("&&") if "test_profile.py" in s]
+    if need and segs and all("BRINGUP_PROFILE_WALL" in s for s in segs):
+        return [
+            f"{', '.join(need)} gated but every test_profile.py segment is wall-only (BRINGUP_PROFILE_WALL=1): drop the "
+            "flag, the gate adds the clean wall run before the profiled run itself (F114, F212)"
+        ]
+    return []
+
+
 class Ledger:
     def __init__(self, ledger_dir: Path):
         self.dir = Path(ledger_dir)
@@ -136,6 +151,7 @@ class Ledger:
             tasks = self.tasks()
         except LedgerError as e:
             return [str(e)]
+        done = self.state() if self.state_path.exists() else {}
         for tid, t in tasks.items():
             for k in ("title", "gate"):
                 if k not in t:
@@ -151,6 +167,8 @@ class Ledger:
                     errs.append(f"{tid}: bad threshold {glob}: {cond!r}")
                 else:
                     errs += [f"{tid}: {e}" for e in fixed_accuracy(t, {glob: cond})]
+            if (done.get(tid) or {}).get("status") not in ("PASS", "REJECTED"):  # a finished gate's cmd is history
+                errs += [f"{tid}: {e}" for e in wall_only_device_metrics(t)]
         try:
             self.topo_order()
         except LedgerError as e:

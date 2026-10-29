@@ -2305,6 +2305,14 @@ wrote state.json (and the dashboards, results) after hashing the task's files, s
 matches (state.json, results/, dashboards, overseer.yaml, approvals.yaml, records) - the same files that never void
 a stamp. Selftest test_commit_only_ignores_the_records_the_framework_writes_under_the_tasks_paths.
 
+## F212: a gate needing device_ms_* with only wall-only profile segments is refused up front (DeepSeek-V4.1 P.6, 2026-10-29)
+Problem: the overseer's perf gates (P.1-P.7) ran test_profile.py with BRINGUP_PROFILE_WALL=1 and gated device_ms_total.
+with_clean_wall (F114) adds the clean wall run and the profiled run only to a segment without that flag, so no run
+recorded device_ms_total: P.6's passing change (all accuracy in limits, wall 424.8 < 434) showed the gate FAIL on a
+MISSING metric, which would have started a second agent attempt for nothing. Fix: ledger.wall_only_device_metrics,
+in Ledger.validate (unfinished tasks) and in the gate's pre-check; P.4-P.7's commands lost the flag (the gate adds the
+wall run itself). Selftest test_a_gate_that_needs_device_time_but_only_profiles_the_wall_is_refused_up_front.
+
 ## F220: a model switch set in the environment is part of a unit's stamp (DeepSeek-V4.1 2x2 engram bfp8 A/B, 2026-10-28)
 
 `DS41_ENGRAM_ROWS=bfp8 verify --tasks L.s4096 L.last L.s55296` printed "reused: same code, kept PASS" for all three
