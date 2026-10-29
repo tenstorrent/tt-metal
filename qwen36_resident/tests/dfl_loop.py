@@ -55,8 +55,8 @@ def main():
     ap.add_argument(
         "--long",
         default="",
-        help="corpus prompt lengths: the prefill + handoff path (all but the drafter's window prefilled) against the "
-        "prompt through verify steps only (builds the pipeline-parallel prefill)",
+        help="corpus prompt lengths: the prefill + handoff path (the drafter's context from the prefill's taps) against "
+        "the prompt through verify steps only (builds the pipeline-parallel prefill)",
     )
     ap.add_argument("--corpus", default="/home/ttuser/experiments/qwen36_27b/profiles/resident/256k/corpus_ids.pt")
     a = ap.parse_args()
@@ -76,11 +76,12 @@ def main():
             ids = corpus[:T].tolist()
             time.sleep(2)
             gen_pp, st_pp = spec.generate(ids, a.new)
-            window = spec.window
-            spec.window = 1 << 30  # every prompt token through verify steps
+            spec.use_prefill = False  # every prompt token through verify steps
             gen_v, st_v = spec.generate(ids, a.new)
-            spec.window = window
+            spec.use_prefill = True
             first = next((k for k in range(a.new) if gen_pp[k] != gen_v[k]), None)
+            ref, gaps = spec.greedy(ids, a.new, other=gen_pp)
+            first_g = next((k for k in range(a.new) if gen_pp[k] != ref[k]), None)
             rows.append(
                 dict(
                     name=f"long{T}",
@@ -90,12 +91,18 @@ def main():
                     verify_prompt=gen_v,
                     identical=gen_pp == gen_v,
                     first_diff=first,
+                    greedy=ref,
+                    identical_greedy=gen_pp == ref,
+                    first_diff_greedy=first_g,
+                    first_gap_greedy=gaps[first_g] if first_g is not None else None,
                     stats=st_pp,
                     stats_verify_prompt=st_v,
                 )
             )
             log(
                 f"long T={T}: prefill+handoff vs verify-step prompt: identical {gen_pp == gen_v} (first diff {first}); "
+                f"vs greedy: identical {gen_pp == ref} (first diff {first_g}"
+                f"{'' if first_g is None else f', margin {gaps[first_g]:.3f}'}); "
                 f"first token {st_pp['first_token_s']:.2f} s vs {st_v['first_token_s']:.2f} s, tok/s {st_pp['tok_s']:.1f} "
                 f"vs {st_v['tok_s']:.1f}, accepted/iter {st_pp['mean_accept']:.2f} vs {st_v['mean_accept']:.2f}"
             )

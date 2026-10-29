@@ -19,7 +19,7 @@ from loguru import logger
 import ttnn
 from models.demos.blackhole.qwen36.tt.dflash2 import DEFAULT_WEIGHTS, H, resolve_weights_dir
 from models.demos.blackhole.qwen36.tt.dflash2_tp import DFlash2DrafterTP
-from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
 from qwen36_resident import weights as Q
 
 
@@ -105,9 +105,9 @@ class ResidentDFlash:
     rows [t, d_1 .. d_R-1] at p .. p + R - 1, accepts the longest prefix of drafts that equal the greedy tokens of
     the rows before them (a of them), extends the drafter's context with the taps of rows 0 .. a and continues
     from row a (the bonus token, the greedy token of row a, becomes the pending one at p + a + 1). The prompt goes
-    through the same verify steps, R tokens per step; with the pipeline-parallel prefill (prefill=True) a longer prompt
-    is prefilled up to its last `window` tokens and handed off, and only those go through verify steps: they give the
-    drafter its whole context (its sliding window), as the prefill writes no taps."""
+    through the same verify steps, R tokens per step; with the pipeline-parallel prefill (prefill=True) a prompt but its
+    last token is prefilled and handed off, the prefill's taps of the last `window` positions (the drafter's sliding
+    window) fill the drafter's context on device, and the last token goes through a verify step."""
 
     PREFILL_CHUNKS = (128, 256, 512, 1024)
 
@@ -126,13 +126,38 @@ class ResidentDFlash:
         weights_dir = weights_dir or os.environ.get("DFLASH_WEIGHTS", DEFAULT_WEIGHTS)
         tap_layers = list(load_config(weights_dir)["taps"])
         self.pp, self.window = None, window
+        self.use_prefill = prefill  # (False: every prompt token through verify steps, e.g. as a reference)
+        self.tap_log = self.draft_log = None  # (diagnostics: lists -> the taps / drafts of every step)
+        self.prompt_times = None  # (a list -> the prefill path's stage ends, synchronized: (name, perf_counter))
         if prefill:
             from qwen36_resident.prefill.pp_prefill import PPPrefill
 
             C = max(self.PREFILL_CHUNKS)
             max_len = -(-max_pos // C) * C
             max_pos = max_len + 64
-            self.pp = PPPrefill(mesh, ck, layers, interval, chunk=list(self.PREFILL_CHUNKS), max_len=max_len)
+            self.pp = PPPrefill(
+                mesh,
+                ck,
+                layers,
+                interval,
+                chunk=list(self.PREFILL_CHUNKS),
+                max_len=max_len,
+                taps=tap_layers,
+                tap_window=window,
+            )
+            self.fill_rows = window + 64  # the drafter's context fill: one bucket (one program)
+            # per tap: 1 on the chip whose prefill stage computes its layer, 0 on the others
+            n, Ls = mesh.get_num_devices(), layers // mesh.get_num_devices()
+            self.tap_masks = [
+                ttnn.from_torch(
+                    torch.eye(n)[L // Ls].reshape(n, 1, 1, 1),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh,
+                    mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+                )
+                for L in tap_layers
+            ]
         self.taps = tap_buffers(mesh, len(tap_layers), R)
         st = State(d, layers - n_attn, n_attn, 0, max_pos, zero=True, kv=False)
         self.m = ResidentModel(
@@ -160,6 +185,7 @@ class ResidentDFlash:
         self.drafter.draft(0, 1, traced=False)
         ttnn.synchronize_device(mesh)
         if self.pp is not None:
+            self._fill_context(1)  # compiles the context fill
             self.pp.capture()
             self.pp.handoff(self.m, 1)  # compiles the handoff kernels
         self.m.reset()
@@ -183,20 +209,73 @@ class ResidentDFlash:
         self.prev = None
         P, R = len(ids), self.R
         start = 0
-        if self.pp is not None and P > self.window:
-            # the prefill and its handoff (GDN states into the committed base, conv histories at ring 0, KV)
-            start = P - self.window
+        if self.pp is not None and self.use_prefill and P > 1 and draft_context:
+            # the prefill and its handoff (GDN states into the committed base, conv histories at ring 0, KV) of all but
+            # the last token, and the drafter's context from the prefill's taps
+            start = P - 1
+
+            def mark(name):
+                if self.prompt_times is not None:
+                    ttnn.synchronize_device(self.mesh)
+                    self.prompt_times.append((name, time.perf_counter()))
+
+            mark("start")
             self.pp.reset()
             self.pp.run(torch.tensor(ids[:start]))
+            mark("prefill")
             self.pp.handoff(self.m, start)
+            mark("handoff")
+            self._fill_context(start)
+            mark("fill")
         for p0 in range(start, P, R):
             k = min(R, P - p0)
             self._step(list(ids[p0 : p0 + k]) + [ids[p0 + k - 1]] * (R - k), p0)
+            if self.tap_log is not None:  # (diagnostics: the taps of every prompt step)
+                comp = ttnn.ConcatMeshToTensor(self.mesh, dim=-1)
+                self.tap_log.append(
+                    (p0, torch.stack([ttnn.to_torch(t, mesh_composer=comp).reshape(-1, H)[:k] for t in self.taps]))
+                )
             if draft_context:
                 self.drafter.extend_context(p0, k)
             g = self.m.argmax()
             self._commit(k - 1)
         return g[k - 1]
+
+    def _fill_context(self, n_tokens, host=False):
+        """the drafter's context (its window) from the last prefill's taps of positions < n_tokens, one fill of
+        fill_rows rows from s0 = the window's first block. On device: each tap's rows masked to the chip that holds
+        them, one reduce-scatter -> the taps dim-fractured as the drafter reads them. host: through the host
+        (read_taps; the reference)"""
+        s0 = max(0, n_tokens - self.window) // 64 * 64
+        rows, nt = self.fill_rows, len(self.tap_masks)
+        if host:
+            taps, _ = self.pp.read_taps(n_tokens, self.window)
+            full = torch.zeros(nt, rows, H)
+            full[:, : taps.shape[1]] = taps.float()
+            dev = tap_buffers(self.mesh, nt, rows, full)
+        else:
+            masked = []
+            for x, m in zip(self.pp.tap_rows(s0, rows), self.tap_masks):
+                masked.append(ttnn.mul(x, m))
+                ttnn.deallocate(x)
+            cat = ttnn.concat(masked, dim=2)  # [1, 1, taps x rows, H], each chip its taps' rows (others zero)
+            for x in masked:
+                ttnn.deallocate(x)
+            dr = self.drafter
+            fr = tt_all_reduce(  # (on a 1-D mesh: the reduce-scatter alone, [1, 1, taps x rows, H / n]; frees cat)
+                cat,
+                self.mesh,
+                dr.tt_ccl,
+                cluster_axis=0,
+                dim=3,
+                topology=dr.topo,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            dev = [ttnn.slice(fr, (0, 0, t * rows, 0), (1, 1, (t + 1) * rows, fr.shape[-1])) for t in range(nt)]
+            ttnn.deallocate(fr)
+        self.drafter.fill_context(dev, s0, valid_len=n_tokens - s0)
+        for t in dev:
+            ttnn.deallocate(t)
 
     def generate(self, ids, n_new, timing=False):
         """greedy spec decode: (n_new generated tokens, stats); timing: synchronize between the parts and time them"""
@@ -221,6 +300,12 @@ class ResidentDFlash:
                 a += 1
             gen += drafts[:a] + [g[a]]
             accepts.append(a)
+            if self.tap_log is not None:  # (diagnostics: the committed rows' taps, the drafts)
+                comp = ttnn.ConcatMeshToTensor(self.mesh, dim=-1)
+                self.tap_log.append(
+                    (p, torch.stack([ttnn.to_torch(t, mesh_composer=comp).reshape(-1, H)[: a + 1] for t in self.taps]))
+                )
+                self.draft_log.append((p, t, list(drafts), a))
             self.drafter.extend_context(p, a + 1)
             if timing:
                 ttnn.synchronize_device(self.mesh)
@@ -254,6 +339,11 @@ class ResidentDFlash:
         gen, p, gaps = [t], len(ids), [0.0]
         while len(gen) < n_new:
             self._step([t] * self.R, p)
+            if self.tap_log is not None:  # (diagnostics: row 0's taps)
+                comp = ttnn.ConcatMeshToTensor(self.mesh, dim=-1)
+                self.tap_log.append(
+                    (p, torch.stack([ttnn.to_torch(x, mesh_composer=comp).reshape(-1, H)[:1] for x in self.taps]))
+                )
             t = self.m.argmax()[0]
             if other is not None and len(gen) < len(other) and other[len(gen)] != t:
                 lg = self.m.logits()[0][:, : self.d.vocab_chip].reshape(-1)[: self.vocab]

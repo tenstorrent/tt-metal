@@ -141,10 +141,17 @@ def rotate_half_matrix():
 
 
 class PPPrefill:
-    def __init__(self, mesh, ck, layers, interval, chunk=1024, max_len=None, block=64, mm_cols=10):
+    def __init__(
+        self, mesh, ck, layers, interval, chunk=1024, max_len=None, block=64, mm_cols=10, taps=None, tap_window=2048
+    ):
         """chunk: one chunk size, or several; run() picks the fastest for each prompt (one trace per size,
-        sharing the weights and the state)"""
+        sharing the weights and the state).
+        taps: layers whose output (the residual after the layer) the prefill keeps for the last tap_window
+        positions (read_taps; the DFlash2 drafter's context): every chip writes its x after its stage-layers
+        j = layer % Ls into a ring of tap_window + C positions (a paged fill per tick), the tap's chip holds it
+        (tap_rows on device, read_taps on the host)"""
         self.mesh, self.n = mesh, mesh.get_num_devices()
+        self.taps = list(taps or [])  # (before the conv taps' helper below takes the name)
         n = self.n
         assert layers % n == 0 and (layers // n) % interval == 0, "every stage needs the same layer schedule"
         self.chunks = sorted(chunk) if isinstance(chunk, (list, tuple)) else [chunk]
@@ -236,6 +243,12 @@ class PPPrefill:
         self.scratch0 = self.blocks  # C // block scratch blocks after the real ones (largest chunk)
         kv_blocks = self.blocks + C // block
         self.S, self.carry, self.K, self.V = {}, {}, {}, {}
+        self.tap_js = sorted({L % self.Ls for L in self.taps})
+        self.tap_ring = -(-(tap_window + C) // block)  # blocks of the ring; C // block scratch blocks after it
+        self.tap_cache = {
+            j: device_zeros(mesh, [self.tap_ring + C // block, 1, block, HIDDEN], ttnn.bfloat16, DRAM)
+            for j in self.tap_js
+        }
         for j, attn in enumerate(self.kinds):
             if attn:
                 # zero-filled on device: at max_len 256K a host image would be 4.3 GB of fp32 per cache
@@ -275,7 +288,7 @@ class PPPrefill:
     GEOMETRY = (
         "C", "pc", "x_in", "x_last", "x_out", "h_buf", "ids", "q_t", "k_t", "v_t", "g_t", "beta_t", "gate_y",
         "cos", "sin", "fill_pt", "cstart", "_shift_pd", "_shift_sems", "_conv_cores", "_conv_groups",
-        "_conv_spec", "_conv_dims", "trace_id", "smm", "smm_out",
+        "_conv_spec", "_conv_dims", "trace_id", "smm", "smm_out", "tap_pt",
     )  # fmt: skip
 
     def _geometry(self, C):
@@ -300,6 +313,7 @@ class PPPrefill:
         self.sin = dev(torch.zeros(n, 1, C, ROT), ttnn.bfloat16)
         self.fill_pt = dev(torch.zeros(n, C // self.block, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self.cstart = dev(torch.zeros(n, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self.tap_pt = dev(torch.zeros(n, C // self.block, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self._conv_program()
         self.trace_id = None
         self.smm = self.smm_out = None
@@ -898,6 +912,8 @@ class PPPrefill:
         for j, attn in enumerate(self.kinds):
             h = self._addnorm(x, self._attn(h, j) if attn else self._gdn(h, j), self.h_buf)
             h = self._addnorm(x, self._mlp(h, j), self.h_buf)
+            if j in self.tap_cache:
+                ttnn.experimental.paged_fill_cache(self.tap_cache[j], x, self.tap_pt, batch_idx=0)
         ttnn.copy(x, self.x_last)
         return self.x_last
 
@@ -912,9 +928,11 @@ class PPPrefill:
         fill = torch.zeros(n, C // blk, dtype=torch.int32)
         read = torch.arange(self.blocks, dtype=torch.int32)[None].repeat(n, 1)
         cstart = torch.zeros(n, dtype=torch.int32)
+        taps = torch.arange(self.tap_ring, self.tap_ring + C // blk, dtype=torch.int32)[None].repeat(n, 1)
         for p in range(n):
             c = t - p
             if 0 <= c < chunks:
+                taps[p] = torch.arange(c * C // blk, (c + 1) * C // blk) % self.tap_ring
                 valid = min(C, n_tokens - c * C)
                 ctrl[p, 0, 0, :2] = torch.tensor([valid, 1])
                 cos[p, 0], sin[p, 0] = rope_cos_sin(torch.arange(c * C, (c + 1) * C))
@@ -933,6 +951,7 @@ class PPPrefill:
             (host(fill, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), self.fill_pt),
             (host(read, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), self.read_pt),
             (host(cstart, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), self.cstart),
+            (host(taps, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), self.tap_pt),
         ]
 
     def capture(self):
@@ -1004,6 +1023,43 @@ class PPPrefill:
                 timings.append((t1 - t0, time.perf_counter() - t1))
         ttnn.synchronize_device(self.mesh)
         return T
+
+    def tap_rows(self, s0, rows):
+        """per tap layer L: [1, 1, rows, HIDDEN] bf16 on every chip, its stage-layer j = L % Ls outputs of the last
+        prefill at positions s0 .. s0 + rows - 1 (block multiples, rows <= the ring): chip L // Ls holds tap L's
+        rows, the other chips their own layer j's. Rows past the prefilled positions are stale."""
+        blk = self.block
+        runs = []  # (first block, blocks) of the ring's contiguous runs
+        for i in range(rows // blk):
+            b = (s0 // blk + i) % self.tap_ring
+            if runs and runs[-1][0] + runs[-1][1] == b:
+                runs[-1][1] += 1
+            else:
+                runs.append([b, 1])
+        out = []
+        for L in self.taps:
+            cache = self.tap_cache[L % self.Ls]
+            parts = [
+                ttnn.reshape(ttnn.slice(cache, (b, 0, 0, 0), (b + k, 1, blk, HIDDEN)), (1, 1, k * blk, HIDDEN))
+                for b, k in runs
+            ]
+            out.append(parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2))
+            if len(parts) > 1:
+                for t in parts:
+                    ttnn.deallocate(t)
+        return out
+
+    def read_taps(self, n_tokens, window):
+        """[taps, rows, HIDDEN] bf16: the tap layers' outputs at positions start .. n_tokens - 1 of the last prefill,
+        start = max(0, n_tokens - window) rounded down to a block (window <= tap_window); and start"""
+        start = max(0, n_tokens - window) // self.block * self.block
+        pos = torch.arange(start, n_tokens)
+        rows = (pos // self.block) % self.tap_ring * self.block + pos % self.block
+        out = []
+        for L in self.taps:
+            dev = ttnn.get_device_tensors(self.tap_cache[L % self.Ls])[L // self.Ls]
+            out.append(ttnn.to_torch(dev).reshape(-1, HIDDEN)[rows])
+        return torch.stack(out), start
 
     # ------------------------------------------------------------------ handoff
     def handoff(self, model, n_tokens, timings=None):
