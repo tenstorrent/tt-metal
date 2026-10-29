@@ -1454,3 +1454,43 @@ def test_topk_large_indices_classic_body_multi_row_covers_every_row(device, num_
     tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
 
     _assert_topk_matches_torch(torch_input, tt_indices, k)
+
+
+@pytest.mark.parametrize("valid_end", [256, 896, 2048, 5120], ids=["end256", "end896", "end2048", "end5120"])
+def test_topk_large_indices_metadata_matches_scalar_split_rows(device, valid_end):
+    """GLM-5.3's indexer call, metadata (traced) form vs scalar (eager) form, on more rows than cores.
+
+    The metadata form reads its bound on device (valid_length_tensor + valid_length_offset, capped at
+    ceil32(valid_end_tensor)), so the host derives the row-to-core assignment from the full width n. Rows past
+    the core count are then halved across core pairs (num_chunks >= 2), while the scalar form, knowing a bound
+    of <= one K chunk, keeps them whole. Every row must still get the same indices. Distinct values per row, so
+    the order is unique.
+    """
+    k, n, num_rows = 2048, 5120, 160  # GLM-5.3: index top-k, chunk width, query rows per chip (8x4, TP-split)
+    g = torch.Generator().manual_seed(896)
+    hi16 = torch.stack([torch.randperm(n, generator=g) for _ in range(num_rows)]).numpy().astype(np.uint32) + 0x3F80
+    torch_input = torch.from_numpy((hi16 << 16).view(np.float32).copy()).to(torch.bfloat16)
+    valid = -(-valid_end // 32) * 32
+
+    scalar = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid)
+    metadata = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device),
+        k=k,
+        valid_length_tensor=_make_valid_length_metadata(device, 0),  # actual_start
+        valid_length_offset=n,  # the indexer's chunk_global
+        valid_end_tensor=_make_valid_length_metadata(device, valid_end),
+    )
+    s = ttnn.to_torch(scalar, dtype=torch.uint32).to(torch.int64).reshape(num_rows, k)
+    m = ttnn.to_torch(metadata, dtype=torch.uint32).to(torch.int64).reshape(num_rows, k)
+    differ = [r for r in range(num_rows) if not torch.equal(s[r], m[r])]
+    set_differ = [r for r in differ if not torch.equal(s[r].sort().values, m[r].sort().values)]
+    logger.info(
+        f"end={valid_end}: {len(differ)} of {num_rows} rows differ (rows {differ[:3]}..{differ[-3:]}), "
+        f"{len(set_differ)} as sets"
+        + (
+            f"; row {set_differ[0]}: scalar {s[set_differ[0], :8].tolist()} metadata {m[set_differ[0], :8].tolist()}"
+            if set_differ
+            else ""
+        )
+    )
+    assert not differ, f"metadata top-k differs from scalar on {len(differ)} rows ({len(set_differ)} as sets)"
