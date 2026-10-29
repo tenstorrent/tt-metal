@@ -907,7 +907,10 @@ class SpecRunner:
                 ).float()
                 t2 = v2.topk(2, dim=-1).values.reshape(B, n, 2)
                 gp = t2[..., 0] - t2[..., 1]
-            for b in range(B):
+            fast_post = hostopt.on("POST") and self.dec.top2 is None
+            if fast_post:
+                hostopt.post_round(self, a, mm, d, X, k, base, done, gen, emitted, ms, eos, max_new, top)
+            for b in (() if fast_post else range(B)):
                 if done[b]:
                     continue
                 mb = int(mm[b])
@@ -1022,11 +1025,12 @@ class AdaptiveSpec:
         return {k: 1.0 + float(S[:k].sum()) for k in self.ks}
 
     def choose(self, conf, active):
+        self._E = None  # (DSV41_HOSTOPT_POST: the expected-token table of this choice, reused by the round's statistics instead of being computed again)
         if self.policy.startswith("k"):
             return int(self.policy[1:])
         if not bool(active.any()):
             return self.ks[0]
-        E = self.expected_tokens(conf, active)
+        E = self._E = self.expected_tokens(conf, active)
         score = {k: E[k] / self.times[k] for k in self.ks}
         if self.plain_ok and 0 in self.times:
             score[0] = 1.0 / self.times[0]
@@ -1085,7 +1089,15 @@ class AdaptiveSpec:
             r = (self.probe0 if probing else self.runner0) if k == 0 else self.runners[k]
             n = k + 1
             cur_pol = self.policy
-            exp_tok.append(1.0 if (k == 0 or stale) else self.expected_tokens(conf, ~done)[k])
+            exp_tok.append(
+                1.0
+                if (k == 0 or stale)
+                else (
+                    self._E[k]
+                    if (hostopt.on("POST") and self._E is not None)
+                    else self.expected_tokens(conf, ~done)[k]
+                )
+            )
             if len(walls) < 3:
                 self.log(
                     f"spec adapt: round {len(walls)} -> k={k} (policy {self.policy}, times {({q: round(v, 1) for q, v in self.times.items()})})"
@@ -1114,7 +1126,13 @@ class AdaptiveSpec:
                 t2 = v2.topk(2, dim=-1).values.reshape(B, n, 2)
                 gp = t2[..., 0] - t2[..., 1]
             newconf = r.conf
-            for b in range(B):
+            fast_post = hostopt.on("POST") and r.dec.top2 is None
+            if fast_post:
+                hostopt.post_round(
+                    self, a, mm, d, X5, BLOCK, base, done, gen, emitted, ms, eos, max_new, top,
+                    conf=conf, newconf=newconf, k=k, cal=cal if (k > 0 and not stale) else None, draft=r.draft,
+                )
+            for b in (() if fast_post else range(B)):
                 if done[b]:
                     continue
                 mb = int(mm[b])

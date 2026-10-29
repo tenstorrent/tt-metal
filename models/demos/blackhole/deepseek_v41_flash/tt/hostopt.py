@@ -276,6 +276,69 @@ class FastRows:
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------------------------
+# post-process of a round (python lists instead of per-element tensor reads)
+# ---------------------------------------------------------------------------------------------------------------------------------------------------
+_NAN = float("nan")
+
+
+def post_round(
+    run,
+    a,
+    mm,
+    d,
+    X,
+    X_cols,
+    base,
+    done,
+    gen,
+    emitted,
+    ms,
+    eos,
+    max_new,
+    top,
+    conf=None,
+    newconf=None,
+    k=None,
+    cal=None,
+    draft=True,
+):
+    """Same state updates as the per-user loop of ``SpecRunner.run`` / ``AdaptiveSpec.run`` (near-tie gaps off: nan), on python lists; the tensors are written once at the end.
+    ``X`` [B, W] block tokens for the next round, columns 0 (accepted token) and 1..X_cols (drafts); ``conf``/``newconf``: AdaptiveSpec only (``cal`` collects the calibration records of a drafting round).
+    """
+    B = base.shape[0]
+    a_l, mm_l, d_l = a.tolist(), mm.tolist(), d.tolist()
+    done_l, base_l = done.tolist(), base.tolist()
+    conf_l = conf.tolist() if cal is not None else None
+    base_n, X_n, done_n = base.numpy(), X.numpy(), done.numpy()  # views of the torch tensors: element writes without torch dispatch
+    conf_n, nc_n = (conf.numpy(), newconf.numpy()) if newconf is not None else (None, None)
+    for b in range(B):
+        if done_l[b]:
+            continue
+        mb = mm_l[b]
+        if cal is not None:
+            cal.append((b, k, conf_l[b], mb))
+        toks = a_l[b][: mb + 1]
+        if eos is not None and eos in toks:
+            toks = toks[: toks.index(eos) + 1]
+            done_l[b] = True
+        gen[b] += toks
+        run.gaps[b] += [_NAN] * len(toks)
+        emitted.append(len(toks))
+        ms.append(mb)
+        run.m_hist[b].append(mb)
+        base_l[b] += mb + 1
+        base_n[b] = base_l[b]
+        X_n[b, 0] = a_l[b][mb]
+        if draft:
+            X_n[b, 1 : 1 + X_cols] = d_l[b][:X_cols]
+        if nc_n is not None:
+            conf_n[b] = nc_n[b]
+        if len(gen[b]) >= max_new or base_l[b] > top:
+            done_l[b] = True
+    done_n[:] = done_l
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------
 # bit-exactness / timing test hook
 # ---------------------------------------------------------------------------------------------------------------------------------------------------
 DUMP = os.environ.get("DSV41_HOSTOPT_DUMP")
