@@ -730,13 +730,7 @@ class MoEBlock(LightweightModule):
             if self.fused.head.xdram:  # (the DRAM fallback: x gathered over TP first, while L1 is clear)
                 self.fused.gather_x(xs, self._tp_topology())
                 self._mark("x_gather")
-            # (the DRAM fallback runs in its own arena: inside the exchange's, its first call gave wrong rows (GLM-5.3-
-            # Flash 2x4 2560, owners 0 / 1 of chunk 0) and its router-core rectangle hung - two arenas: clean)
-            arena = (
-                None
-                if self.fused.head.xdram
-                else self.exchange.take_arena(inside=(eng.base, eng.arena_bytes), floor=self.fused.head.static_top)
-            )
+            arena = self.exchange.take_arena(inside=(eng.base, eng.arena_bytes), floor=self.fused.head.static_top)
             se, out = self.fused(xs, arena)
             if xs is not x:
                 ttnn.deallocate(xs)

@@ -29,7 +29,7 @@ from models.demos.moe_block.tt.routing_stream import RA_SEND
 from models.demos.moe_block.tt.se_engine3 import _probes
 
 INC_EVERY = 8
-RSX = 10  # (the RS block's words past the entry order - the kernels' RSX)
+RSX = 12  # (the RS block's words past the entry order - the kernels' RSX)
 CB = 0
 DIRS_I = {"fwd": 0, "bwd": 1}
 
@@ -47,8 +47,9 @@ FORCE_INLINE uint32_t cnt_of(uint32_t cnts, uint32_t b) {
         return (cnts >> (8 * b)) & 0xFF;
     }
 }
-constexpr uint32_t RSX = 10;  // (the RS block's words past the entry order: FINB, mailbox, zone, counter, P, FINB-free,
-                              // zone credit, zone free, the zone-free signals a chunk, the credits a call expected)
+constexpr uint32_t RSX = 12;  // (the RS block's words past the entry order: FINB, mailbox, zone, counter, P, FINB-free,
+                              // zone credit, zone free, the zone-free signals a chunk, the credits a call expected,
+                              // the "router done" word, the engine cores it counts (0: no router-done credit))
 """
 
 _WALK = r"""
@@ -301,9 +302,12 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
     const uint32_t c0 = u0 + 2 * nu + 1, en0 = c0 + 2 * nc;
     const uint32_t zb = get_arg_val<uint32_t>(en0 + G + 2), actr = get_arg_val<uint32_t>(en0 + G + 3);
     const uint32_t P = get_arg_val<uint32_t>(en0 + G + 4);
-    if (m > 0) {  // (chunk m into the downstream's zones once its cores read chunk m - 1's: its port's credits)
+    // (chunk m into the downstream's zones once its cores read chunk m - 1's: its port's credits; with the router's
+    // buffers over the zones (a "router done" count, en0 + G + 11) chunk 0's too - its router phase over: credits m + 1)
+    const uint32_t z0 = (get_arg_val<uint32_t>(en0 + G + 11) >> 16) & 1;
+    if (m + z0 > 0) {
         volatile tt_l1_ptr uint32_t* zc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(en0 + G + 6));
-        while (*zc < m) {
+        while (*zc < m + z0) {
             invalidate_l1_cache();
             lpoll();
         }
@@ -496,6 +500,12 @@ void kernel_main() {
     const uint32_t zneed = get_arg_val<uint32_t>(rse + 8), zexp = get_arg_val<uint32_t>(rse + 9);
     const uint32_t zcred = get_arg_val<uint32_t>(rse + 6);
     const uint32_t NZF = zneed && NCH > 1 ? NCH - 1 : 0;
+    // (the router's buffers over this chip's arrival zones / LATZ: every engine core counts its router phase over on
+    // my "router done" word (rneed of them) - only then the peer's chunk 0 credit and the latent's "started" go)
+    volatile tt_l1_ptr uint32_t* rdone = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(rse + 10));
+    const uint32_t rw_ = get_arg_val<uint32_t>(rse + 11), rneed = rw_ & 0xFFFF;
+    const bool rzone = (rw_ >> 16) & 1, rlat = (rw_ >> 17) & 1;  // (what waits for it: chunk 0's credit, "started")
+    bool rtold = rneed == 0;
     uint32_t zfw = 0;
     LStream ls;
     ls.init(ls0);
@@ -511,7 +521,7 @@ void kernel_main() {
     RAFwd rf;
     rf.init(rf0);
     a = rf0 + RAFwd::len(rf0);
-    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0 || lns > 0 || !ra.done || rf.left || NZF) {
+    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0 || lns > 0 || !ra.done || rf.left || NZF || (rzone && zneed)) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[GROUP + 1 + 3];
         for (uint32_t h = 0; h <= GROUP; ++h) {
@@ -532,8 +542,8 @@ void kernel_main() {
             conn.wait_for_empty_write_slot();
             conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[GROUP]), sizeof(PACKET_HEADER_TYPE));
         }
-        if (lns > 0) {  // (I started this call: every chip sending me latent may - its latent port's fence word)
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* fh = PacketHeaderPool::allocate_header();
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* fh = lns > 0 ? PacketHeaderPool::allocate_header() : nullptr;
+        auto lstarted = [&]() {  // (every chip sending me latent may write my LATZ - its latent port's fence word)
             for (uint32_t i = 0; i < lns; ++i) {
                 const uint32_t w = get_arg_val<uint32_t>(lf0 + 3 + 2 * i), xy = get_arg_val<uint32_t>(lf0 + 4 + 2 * i);
                 (void)fabric_set_unicast_route(fh, static_cast<uint16_t>(w & 0xFFFF), static_cast<uint16_t>(w >> 16));
@@ -541,7 +551,8 @@ void kernel_main() {
                 conn.wait_for_empty_write_slot();
                 conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(fh), sizeof(PACKET_HEADER_TYPE));
             }
-        }
+        };
+        if (!rlat) lstarted();  // (I started this call: LATZ is free - no router buffers over it)
         if (wait_ready) {
             DeviceZoneScopedN("SE-RDYWAIT");  // (its end: the neighbour's port started - launch skew + a hop)
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready), 1);
@@ -560,9 +571,22 @@ void kernel_main() {
 #define RA_BBP_ 16
 #define RA_MAXP_ 64
 #endif
+        auto rpoll = [&]() {  // (every engine core's router phase is over: the zones, LATZ free - also between the x
+            // gather's packets: the upstream's chunk 0 reduce-scatter waits for it)
+            if (!rtold && *rdone >= rneed) {
+                if (rzone && zneed) {  // (chunk 0's credit)
+                    hdrs[GROUP]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(rx, ry, zcred), 1, true});
+                    conn.wait_for_empty_write_slot();
+                    conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[GROUP]), sizeof(PACKET_HEADER_TYPE));
+                }
+                if (rlat) lstarted();
+                rtold = true;
+            }
+        };
         auto zpoll = [&]() {  // (my chip's cores read a chunk's zones: credit the peer's sends, a blocking header -
             // the gather's fence / watcher header, never in flight across this)
-            if (zfw < NZF && *zfree >= (zfw + 1) * zneed) {
+            rpoll();
+            if (rtold && zfw < NZF && *zfree >= (zfw + 1) * zneed) {
                 hdrs[GROUP]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(rx, ry, zcred), 1, true});
                 conn.wait_for_empty_write_slot();
                 conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[GROUP]), sizeof(PACKET_HEADER_TYPE));
@@ -581,6 +605,12 @@ void kernel_main() {
                 const uint32_t npk = get_arg_val<uint32_t>(ent + 3 * k + 2);
                 uint32_t sent = 0;
                 walk(m, q, part, v, [&](uint32_t R, uint32_t j, uint32_t, uint32_t kk0, uint32_t np, uint32_t) {
+                    if (NCH > 1 && !rtold) {  // (chunks: the upstream's chunk 0 reduce-scatter comes before
+                        // my gather of the last chunk's x ends; one chunk: after it - no blocking header between
+                        // the x packets, it cost K3 640 ~3 us of gather)
+                        invalidate_l1_cache();
+                        rpoll();
+                    }
 #if LS_FIRST
                     lpoll();  // (GLM-type: the logits ahead of the x gather)
                     while (!cb_pages_available_at_front(0, RP * (unflushed + 1))) lpoll();
@@ -619,7 +649,7 @@ void kernel_main() {
             rs_send(rs0, conn, hdrs, lpoll, rpos, m);
             HWW(28, 0xE3);
         }
-        while (zfw < NZF) {  // (the chunks' credits still owed)
+        while (zfw < NZF || !rtold) {  // (the chunks' credits still owed; the router-done credit / "started")
             invalidate_l1_cache();
             lpoll();
         }
@@ -635,6 +665,11 @@ void kernel_main() {
         ls.rearm();
         if (lneed) noc_semaphore_inc(get_noc_addr(lfence), 0u - lneed);  // (re-arm: a next call's early "started" stays)
         conn.close();
+    }
+    if (rneed) {  // (re-arm: every engine core counted its router phase here - also on a port with nothing to send)
+        noc_semaphore_wait_min(rdone, rneed);
+        noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(rdone)), 0u - rneed);
+        noc_async_atomic_barrier();
     }
     if (expect_in > 0) {  // everything from upstream landed; re-arm for the next call
         volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival);
@@ -915,16 +950,23 @@ class XGather3:
         opp = "bwd" if d == "fwd" else "fwd"
         # (the cores something lands on - a core with only "nothing comes" slots does not signal)
         lands = lambda q_, cx, cy, d_: any(t for _, _, t in plan.arrivals(q_, cx, cy)[d_])  # noqa: E731
-        zneed = sum(1 for cx, cy in plan.port_cores(v) if lands(p, cx, cy, opp)) if e.NCH > 1 else 0
+        # (the router's buffers over the zones (rtr_overlay): one more credit a call, chunk 0's - sent once every
+        # engine core's router phase is over (the "router done" word here, GX GY))
+        rd = 1 if getattr(e, "rtr_zones", False) else 0
+        zneed = sum(1 for cx, cy in plan.port_cores(v) if lands(p, cx, cy, opp)) if e.NCH > 1 or rd else 0
         zexp = 0
         q = plan.down(p, d)
-        if e.NCH > 1 and q is not None:
-            zexp = e.NCH - 1 if any(lands(q, cx, cy, d) for cx, cy in plan.port_cores(v)) else 0
+        if (e.NCH > 1 or rd) and q is not None:
+            zexp = e.NCH - 1 + rd if any(lands(q, cx, cy, d) for cx, cy in plan.port_cores(v)) else 0
         return (
             out
             + plan.entries(p)
             + [rs["finb"], rs["mbox"], rs["zone"][i], rs["arr"][i], 0 if plan.compact else plan.P]
             + [rs["ffree"], rs["zcred"], rs["zfree"], zneed, zexp]
+            # (the router-done word, the engine cores it counts | chunk 0's credit waits << 16 | the latent's
+            # "started" waits << 17 - 0: no router buffers over a remote-written region)
+            + [rs.get("rdone", 0) if e.rtr_overlay else 0]
+            + [e.GX * e.GY | rd << 16 | int(e.rtr_latz) << 17 if e.rtr_overlay else 0]
         )
 
     def la_block(self, rs, la, d, v):

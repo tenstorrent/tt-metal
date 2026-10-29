@@ -369,7 +369,7 @@ void kernel_main() {
 #ifdef SE_LAT
         {  // (the latent's all-to-all: once it is packed, +1 on each destination's port word of mine)
             DeviceZoneScopedN("SE-LHAND");
-            const uint32_t np0 = ord0 + g, nports = se_ra(np0), r0 = np0 + 4 + 2 * nports;
+            const uint32_t np0 = ord0 + g, nports = se_ra(np0), r0 = np0 + 5 + 2 * nports;
             const uint32_t l0 = r0 + 2 + 2 * se_ra(r0), nl = se_ra(l0);
             const uint32_t lw = se_ra(l0 + 1);
             cb_wait_front(SE_LAT, (m + 1) * SE_LATP);  // (chunk m's block; the words count up over the chunks)
@@ -381,7 +381,7 @@ void kernel_main() {
         {  // (no down here: my h block [MT][po] to DRAM h [rows, HT] - the down + reduce-scatter reads it)
         DeviceZoneScopedN("SE-HOUT");
         const uint32_t np0 = ord0 + g, nports = se_ra(np0);
-        const auto hg = TensorAccessor(h_args, se_ra(np0 + 3 + 2 * nports), 2048);
+        const auto hg = TensorAccessor(h_args, se_ra(np0 + 4 + 2 * nports), 2048);
         cb_wait_front(CB_HOWN, MT * POMAX);
         for (uint32_t r = 0; r < MT; ++r)
             for (uint32_t t = 0; t < po; ++t)
@@ -415,7 +415,7 @@ void kernel_main() {
     {  // (down + reduce-scatter) each finished sub-block's hand-off: +1 on its port's mailbox word of mine (the words
        // count up over the chunks: the port's targets do)
         DeviceZoneScopedN("SE-HAND");
-        const uint32_t np0 = ord0 + g, nports = se_ra(np0), r0 = np0 + 4 + 2 * nports;
+        const uint32_t np0 = ord0 + g, nports = se_ra(np0), r0 = np0 + 5 + 2 * nports;
         const uint32_t nh = se_ra(r0), mbox = se_ra(r0 + 1);
         for (uint32_t j = 0; j < nh; ++j) {
             cb_wait_front(SE_FINC, j + 1);
@@ -658,6 +658,14 @@ void kernel_main() {
         }
 #endif
     }
+#ifdef SE_RDONE
+    {  // my router phase is over - x rows / W_r^T read, the partials out: +1 on every port's "router done" word (the
+       // ports credit this chip's arrival zones / tell the latent's senders "started" once every core's is: the router's
+       // buffers overlay them - rtr_overlay)
+        const uint32_t t0 = ord0 + se_ra(ys0 + GY + 1), np_ = se_ra(t0), rdw = se_ra(t0 + 3 + 2 * np_);
+        for (uint32_t i = 0; i < np_; ++i) noc_semaphore_inc(get_noc_addr(se_ra(t0 + 2 + 2 * i), se_ra(t0 + 3 + 2 * i), rdw), 1);
+    }
+#endif
 #ifdef SE_RTR_GATE
     {  // my W stream waits until every engine core's partials are written (RGATE, multicast by router core 0): the
        // streams' DRAM reads on NOC1 crowd the partials' writes into the mover column (GLM: in at ~47 us, not ~22)
@@ -793,7 +801,7 @@ void kernel_main() {
     // high half: P, or with compact zones my tiles of its block) once my arrival counter reached its threshold (the
     // low half; 0: nothing comes - a block I hold no tile of); the fin sub-block to y
     const uint32_t t0r = ord0 + se_ra(ys0 + GY + 1);
-    const uint32_t q0 = t0r + 3 + 2 * se_ra(t0r);  // (past the tail)
+    const uint32_t q0 = t0r + 4 + 2 * se_ra(t0r);  // (past the tail)
     const uint32_t naf = se_ra(q0), af0 = q0 + 1, nab = se_ra(af0 + naf), ab0 = af0 + naf + 1;
     const uint32_t f0 = ab0 + nab;
     const uint32_t fcount = se_ra(f0), fy0 = se_ra(f0 + 1);
@@ -2055,6 +2063,22 @@ class SeEngine3:
         # (each region's bytes, in arena order - overlays share their host's)
         ends = sorted(set(off.values()) | {o})
         self.sizes = {k: next(e for e in ends if e > v) - v if v < o else 0 for k, v in off.items()}
+        # (the router's buffers over a region another chip writes - the reduce-scatter's arrival zones, the latent's:
+        # those writes wait for this chip's "router done" (SE_RDONE: every engine core's router phase over, counted on
+        # the ports; they credit the zones / tell "started" only then) - the chips do not run in step: a chip that
+        # does not wait for this one's x (the DRAM fallback), or starts a call earlier, reaches its reduce-scatter
+        # while this one still reads x rows / W_r^T there; on the first call of the fallback the logits came out wrong)
+        # (rtr_zones: over ARRF / ARRB - the reduce-scatter's chunk 0 waits; rtr_latz: over LATZ - the latent's
+        # "started" waits; else as before)
+        self.rtr_zones = self.rtr_latz = False
+        if router is not None:
+            lo, hi = off["rx"], off["ro"] + self.ETC * MT * self.NCH * 4096
+            over = lambda k, v: v > 0 and off[k] < hi and lo < off[k] + v  # noqa: E731
+            if rs is not None:
+                self.rtr_zones = any(over(k, self.rs_sizes[k]) for k in ("arrf", "arrb"))
+            if latent:
+                self.rtr_latz = over("latz", (shards - 1) * MT * self.LWMAX * 2048 + (self.NCH - 1) * self.LATP * 2048)
+        self.rtr_overlay = self.rtr_zones or self.rtr_latz
         if os.environ.get("SE_LOG") == "1":  # (the resolved layout: KB, W ring, router K chunk, regions)
             from loguru import logger
 
@@ -2289,7 +2313,10 @@ class SeEngine3:
         assert self.NSG % len(so) == 0
         sor = [self.NSG // len(so), len(so)] + so  # (steps a shard, shards, the order)
         # then: the gather's ports to tell once my own-shard x is loaded (NoC x, y; their counter) and my XLD id
-        tail = [len(ports), int(xloaded)] + [v for p_ in ports for v in p_] + [XLD]
+        # and the ports' "router done" word (SE_RDONE: my router phase is over - see rtr_overlay)
+        rdone = int((rs_chunk or {}).get("rdone", 0)) if self.rtr_overlay else 0
+        assert rdone or not self.rtr_overlay, "the router's buffers overlay remote-written zones: a router-done word"
+        tail = [len(ports), int(xloaded)] + [v for p_ in ports for v in p_] + [XLD, rdone]
         mesh, GX, GY, cx0, MT = self.mesh, self.GX, self.GY, self.cx0, self.MT
         b, off = self.base, self.off
         virt = lambda cx, cy: mesh.worker_core_from_logical_core(ttnn.CoreCoord(cx0 + cx, cy))  # noqa: E731
@@ -2513,6 +2540,7 @@ class SeEngine3:
             nd += f"#define SE_GX {GX}\n#define RXR_ID {RXR}\n#define RWR_ID {RWR}\n"
             if rtr.get("gate"):
                 nd += f"#define SE_RTR_GATE\n#define RGATE_ID {RGATE}\n"
+            nd += "#define SE_RDONE\n" if self.rtr_overlay else ""
 
             nd += f"#define RXS_ID {RXS}\n#define SE_KC {self.KC}\n"
             nd += f"#define SE_RTR_BCT0 {len(bct + xa_ct + ([] if self.down else y_ct))}\n"

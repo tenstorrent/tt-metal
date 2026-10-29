@@ -228,12 +228,15 @@ def test_logits_protocol(ring, seed):
 
 
 # ---- row chunks (NCH > 1): the chunk loop around the same protocol (se_engine3 / x_gather3) ----
-def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True):
+def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True, router=False, router_credit=True):
     """The chunked RS: every chunk the same programs; counters count up (thresholds m x a chunk's count + the chunk's);
     a core's arrival zones reused behind zone credits (its NCRISC, at chunk m + 1's first slot, once the compute read
     chunk m - +1 on the port facing that upstream; the port forwards one credit a chunk to the upstream's port, which
     sends chunk m once it has m), its FINB behind the ports' read credits (a port +1s each core it read, after a chunk;
-    the compute starts chunk m's RS at m x its readers). Values carry their chunk: a stale or overwritten one fails."""
+    the compute starts chunk m's RS at m x its readers). Values carry their chunk: a stale or overwritten one fails.
+    router: the router's logits on the matmul cores, their buffers over the zones (se_engine3 rtr_overlay) - a core's
+    router phase comes before its compute and no zone write may land during it: every core counts its phase over on
+    its chip's ports, which then send the upstream chunk 0's credit (the sender waits credits m + 1)."""
     rnd = random.Random(seed)
     G, GX, GY = plan.G, plan.GX, plan.GY
     cores = [(cx, cy) for cy in range(GY) for cx in range(GX)]
@@ -257,6 +260,10 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True):
     zfree = {(p, d, l): 0 for p in range(G) for d in DIRS for l in range(plan.nv)}
     zcred = {(p, d, l): 0 for p in range(G) for d in DIRS for l in range(plan.nv)}
     zfw = {(p, d, l): 0 for p in range(G) for d in DIRS for l in range(plan.nv)}
+    rtr = {(p, c): not router for p in range(G) for c in cores}  # (a core's router phase over)
+    rdone = {p: 0 for p in range(G)}  # (a chip's "router done" count - every port's word, one model counter)
+    rsent = {(p, d, l): False for p in range(G) for d in DIRS for l in range(plan.nv)}
+    z0 = 1 if router and router_credit else 0
     zneed = {
         (p, d, l): sum(1 for c in plan.port_cores(l) if amax[(p, c, opp[d])])
         for p in range(G)
@@ -273,7 +280,7 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True):
     def compute_step(p, c):
         k_ = (p, c)
         m = ch[k_]
-        if m >= nch:
+        if m >= nch or not rtr[k_]:  # (the router phase first: gate / up after it)
             return False
         ops = prog[k_]
         if pc[k_] == 0 and m > 0 and finb_credit and ffree[k_] < m * readers[k_]:
@@ -355,7 +362,13 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True):
         st = ports[(p, d, l)]
         moved = False
         q = plan.down(p, d)
-        if q is not None and zfw[(p, d, l)] < nch - 1 and zneed[(p, d, l)]:  # (forward my cores' zone-free signals)
+        if z0 and not rsent[(p, d, l)] and rdone[p] == len(cores):  # (every core's router phase over: chunk 0's credit)
+            if q is not None and zneed[(p, d, l)]:
+                zcred[(q, opp[d], l)] += 1
+            rsent[(p, d, l)] = True
+            moved = True
+        # (forward my cores' zone-free signals - behind chunk 0's credit)
+        if (rsent[(p, d, l)] or not z0) and q is not None and zfw[(p, d, l)] < nch - 1 and zneed[(p, d, l)]:
             if zfree[(p, d, l)] >= (zfw[(p, d, l)] + 1) * zneed[(p, d, l)]:
                 zcred[(q, opp[d], l)] += 1
                 zfw[(p, d, l)] += 1
@@ -369,7 +382,7 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True):
                     ffree[(p, c)] += 1 if m + 1 < nch else 0
                 st.update(m=m + 1, u=0, i=0, read=set())
                 return True
-            if m > 0 and zone_credit and zcred[(p, d, l)] < m:
+            if m + z0 > 0 and zone_credit and zcred[(p, d, l)] < m + z0:
                 return moved
             e, b, mask, s0, s1 = units[st["u"]]
             while st["i"] < len(pcs):
@@ -385,6 +398,7 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True):
                 v = finb[(p, c, e)]
                 assert v[0] == m, ("FINB of another chunk read", p, c, e, v[0], m)
                 key = (q, c, d, s1 if h else s0)
+                assert rtr[(q, c)], ("a zone write into a core's router buffers (its router phase not over)", q, c, d)
                 _zone_write(plan, q, c, d, h, s1 if h else s0, b, zlive.setdefault((q, c, d, m), []))
                 old = zone.get(key)
                 assert old is None or (old[2] and old[0] < m), ("a zone slot overwritten before it was read", key)
@@ -396,13 +410,22 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True):
             st["i"] = 0
         return moved
 
+    def router_step(p, c):
+        if rtr[(p, c)]:
+            return False
+        rtr[(p, c)] = True
+        rdone[p] += 1
+        return True
+
     actors = (
-        [("c", p, c) for p in range(G) for c in cores]
+        [("r", p, c) for p in range(G) for c in cores]
+        + [("c", p, c) for p in range(G) for c in cores]
         + [("b", p, c) for p in range(G) for c in cores]
         + [("n", p, c) for p in range(G) for c in cores]
         + [("port",) + k for k in ports]
     )
     step = {
+        "r": lambda a: router_step(a[1], a[2]),
         "c": lambda a: compute_step(a[1], a[2]),
         "b": lambda a: brisc_step(a[1], a[2]),
         "n": lambda a: ncrisc_step(a[1], a[2]),
@@ -442,14 +465,16 @@ CHUNK_CASES = [
 ]
 
 
-@pytest.mark.parametrize("nch", [2, 3])
+@pytest.mark.parametrize("router", [False, True], ids=["", "rtr"])
+@pytest.mark.parametrize("nch", [1, 2, 3])
 @pytest.mark.parametrize(
     "case", CHUNK_CASES, ids=[f"G{c[0]}-{'ring' if c[1] else 'line'}-s{c[6]}" for c in CHUNK_CASES]
 )
 @pytest.mark.parametrize("seed", range(3))
-def test_rs_protocol_chunks(case, nch, seed):
+def test_rs_protocol_chunks(case, nch, seed, router):
     G, ring, GX, GY, MT, NTH, sc, nv = case
-    _run_chunks(RsPlan(G=G, ring=ring, GX=GX, GY=GY, MT=MT, NTH=NTH, scatter=sc, nv=nv, pwmax=8 // MT), seed, nch)
+    plan = RsPlan(G=G, ring=ring, GX=GX, GY=GY, MT=MT, NTH=NTH, scatter=sc, nv=nv, pwmax=8 // MT)
+    _run_chunks(plan, seed, nch, router=router)
 
 
 @pytest.mark.parametrize("what", ["zone", "finb"])
@@ -464,6 +489,20 @@ def test_rs_chunks_model_catches_missing_credit(what):
         except AssertionError:
             return
     raise AssertionError(f"the model accepted the chunks without the {what} credit")
+
+
+@pytest.mark.parametrize("nch", [1, 2])
+def test_rs_chunks_model_catches_router_overlay(nch):
+    """The router's buffers over the zones without the router-done credit (only the "started" fence): an upstream's
+    chunk 0 lands in a core still in its router phase - the model must catch it (the device's first-call wrong rows)."""
+    plan = RsPlan(G=4, ring=True, GX=6, GY=4, MT=2, NTH=64, scatter=-2, nv=2, pwmax=4)
+    for seed in range(40):
+        try:
+            _run_chunks(plan, seed, nch, router=True, router_credit=False)
+        except AssertionError as e:
+            assert "router buffers" in str(e), e
+            return
+    raise AssertionError("the model accepted a zone write during the router phase")
 
 
 @pytest.mark.parametrize("compact", [True, False], ids=["compact", "slots"])

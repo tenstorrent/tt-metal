@@ -424,7 +424,8 @@ class HeadSE3:
             # (then, with chunks, the RS zone credits: a port's zone-free word (its chip's cores) and zone-credit word
             # (its peer's port))
             self.zw_off = self.lw_off + 4 * self.port_words
-            words = self.zw_off + (8 if self.eng.NCH > 1 else 0)
+            # (and the ports' "router done" word: the engine cores' router phase over - se_engine3 rtr_overlay)
+            words = self.zw_off + 12
             self.mbox = ttnn.from_torch(
                 torch.zeros(len(cores), words, dtype=torch.int32),
                 dtype=ttnn.uint32,
@@ -838,6 +839,7 @@ class HeadSE3:
                         ffree=arr[3] if len(arr) > 3 else 0,
                         zfree=zfree,
                         zcred=zfree + 16,
+                        rdone=zfree + 32,
                     )
                     rsx["coord"] = coord
                     la = None
@@ -851,7 +853,7 @@ class HeadSE3:
                         rs_port=lambda d, l, pc=pc: (pc[(d, l)].x, pc[(d, l)].y),
                         rs_mbox=mbox,
                         rs_arr=arr[:2],
-                        rs_chunk=dict(zfree=zfree, ffree=arr[3] if len(arr) > 3 else 0),
+                        rs_chunk=dict(zfree=zfree, ffree=arr[3] if len(arr) > 3 else 0, rdone=zfree + 32),
                         la=la,
                     )
                 if self.router is not None:  # (first: the routing's serve plan is made by the router's planner args)
