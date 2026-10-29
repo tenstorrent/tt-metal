@@ -28,7 +28,8 @@ User direction (2026-10-29): "you need to have different K value based on batch 
   the 32-row verify is lossless with bit-identical margins on every row (`spec_fulltile_glue_B8_K3`), so the compact
   glue now covers T = 32 by default and the policy cap is the full tile again; the compact path costs 69 ms per
   iteration at 32 rows (14.4 tok/s per user at 8 per row K=3) against the wrong path's 50 ms, so the table keeps
-  (8 -> 1). Below the bound every row
+  (8 -> 1); 16 per row K=1 through the compact path is 9.1 tok/s per user (110 ms per iteration), below the plain
+  decode, so 16 per row stays plain. Below the bound every row
   is lossless: B8_K1 (16 rows per mesh row) 19.8 tok/s per user, 1267 aggregate, 1.94 accepted -- so the defect is
   the 32-row tile, not row 5's chips; B8_K2 (the table's entry) is being measured.
 * The plugin contract already allows a per-row draft count below the width: `propose_draft_tokens` returns
@@ -48,7 +49,7 @@ User direction (2026-10-29): "you need to have different K value based on batch 
 | 8 | 1 | 16 | 19.8 | 1267 | 1.94 | yes |
 | 8 | 2 | 24 | 13.3 | 849 | 2.78 | yes (the padded 24-row tile costs 75 ms per step) |
 | 8 | 3 | 32 | 19.9 | 1274 | 3.20 | NO through the rs glue (row 5, token 4); 14.4 / 923 lossless through the compact glue |
-| 16 | 1 | 32 | 16.6 | 2124 | 1.88 | NO (row 5, token 4) |
+| 16 | 1 | 32 | 16.6 | 2124 | 1.88 | NO through the rs glue (row 5, token 4); 9.1 / 1164 through the compact glue (110 ms per iteration: below plain) |
 
 The harness's "plain" rate is a readback artifact; the comparable plain step is the e2e 48.4 ms (20.7 tok/s per user at
 32 users). The acceptance plateaus near 2.5-3.4 drafts per step whatever K, so the shortest K that keeps the plateau wins,

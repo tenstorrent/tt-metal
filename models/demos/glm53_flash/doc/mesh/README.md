@@ -1591,7 +1591,8 @@ all-reduce (H1/H2): through the compact path (`spec_fulltile_glue_B8_K3`) the fu
 margins on every row. The compact path now covers T = 32 by default (`GLM53_HYBRID_GLUE_FULL_TILE=0` restores the old
 rule) and the policy cap is the full tile again (3f595f1ae47). The compact path costs 69 ms per iteration at 32 rows
 against the wrong path's 50 ms (14.4 vs 19.9 tok/s per user at 8 per row, K=3), so the table keeps K=1 at 8 per row
-(19.8, 16 rows); 16 per row K=1 through the compact path is being measured. The reduce-scatter glue's per-row drift is
+(19.8, 16 rows); 16 per row K=1 through the compact path gives 9.1 (110 ms per iteration), below plain, so 16 per row
+stays plain. The reduce-scatter glue's per-row drift is
 also the magnitude behind "rows not bit-identical": the 256-user dispatch decode still runs it.
 
 ### 2026-10-29 17:15: the end-to-end gate green on the day's tree; the K sweep closed
