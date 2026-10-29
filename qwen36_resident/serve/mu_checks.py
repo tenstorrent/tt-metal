@@ -11,7 +11,8 @@ churn: N requests of mixed prompt lengths (an instruction plus the start of a te
     concurrent run's. A request that does not finish within the timeout fails the check (hang). The mix always holds
     LONG prompts over the PP chunk unit: arriving while others decode they are split (the server logs each "split
     prefill"), alone they run whole, so equal tokens are the end-to-end check that a split prompt computes what it
-    would whole (one PP chunk per sequence); the run script counts the split prompts.
+    would whole (one PP chunk per sequence); the run script counts the split prompts. --long-tokens N adds one request
+    of about N prompt tokens (the text file repeated): the memory check at the card's pool size and max_model_len.
 
 usage: python -m qwen36_resident.serve.mu_checks identity --port 8000 --out identity.json
        python -m qwen36_resident.serve.mu_checks churn --port 8000 --out churn.json --doc FILE [--n 16] [--aborts 2]
@@ -137,7 +138,11 @@ def run_churn(a):
         start = rng.randrange(0, max(1, len(text) - n))
         body = "Summarize the following text in a few sentences.\n\n" + tok.decode(text[start : start + n])
         reqs.append(dict(key=f"r{i}", msgs=[{"role": "user", "content": body}], max_tokens=rng.randint(32, 160), isl=n))
-    aborted = set(rng.sample([r["key"] for r in reqs], a.aborts))
+    if a.long_tokens:
+        reps = -(-a.long_tokens // len(text))
+        body = "Summarize the following text in a few sentences.\n\n" + tok.decode((text * reps)[: a.long_tokens])
+        reqs.append(dict(key="long", msgs=[{"role": "user", "content": body}], max_tokens=64, isl=a.long_tokens))
+    aborted = set(rng.sample([r["key"] for r in reqs if r["key"] != "long"], a.aborts))
     jobs = []
     for r in reqs:
         abort_after = 8 if r["key"] in aborted else None
@@ -184,6 +189,7 @@ def main():
     ap.add_argument("--stagger", type=float, default=20.0)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--timeout", type=float, default=1800)
+    ap.add_argument("--long-tokens", type=int, default=0, help="churn: one more request of about this many tokens")
     a = ap.parse_args()
     run_identity(a) if a.mode == "identity" else run_churn(a)
 
