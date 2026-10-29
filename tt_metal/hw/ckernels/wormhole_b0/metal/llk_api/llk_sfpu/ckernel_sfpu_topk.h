@@ -947,6 +947,9 @@ template <
     TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
 inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
+    // The alternate stores advance dest through ADDR_MOD_6 by 32 rows.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
+
     // NOTE (stable sort): TIE_ORDER is the GLOBAL sort order, not this call's idir. Callers may run
     // this network with a flipped idir to build bitonic sequences; the tie polarity must not follow it.
     // If more than 1 phase is requested, do all the steps from all phases
@@ -1162,6 +1165,9 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
         set_dst_write_addr(dst_addr_offset);
     }
     topk_replay_init = -1;
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 template <
@@ -1322,6 +1328,9 @@ template <
     TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
 inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k, const int logk, const int skip_second)
 {
+    // The alternate stores advance dest through ADDR_MOD_6 by 32 rows.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
+
     // NOTE (stable sort): tie-break polarity comes from TIE_ORDER, NOT from idir. The multi-core topk deliberately
     // rebuilds with an alternating per-core idir so adjacent cores emit opposite-sorted sequences;
     // deriving the tie polarity from idir here would make those flipped cores emit ties in
@@ -1595,6 +1604,9 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
         set_dst_write_addr(dst_addr_offset);
     }
     topk_replay_init = m_iter + 1;
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 inline void _init_topk()
@@ -1727,7 +1739,6 @@ template <bool APPROXIMATION_MODE, bool FUSED = false, bool RANK_STAMPED = false
 inline void topk_init() {
     static_assert(!(FUSED && RANK_STAMPED), "fused and rank-stamped modes are mutually exclusive");
     static_assert(RANK_STAMPED || TAG_BITS == 16, "TAG_BITS applies to the rank-stamped mode only");
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (FUSED) {
         _init_topk_fused_();
