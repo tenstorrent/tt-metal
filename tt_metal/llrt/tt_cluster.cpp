@@ -40,6 +40,7 @@
 #include <tt-umd/cluster_descriptor.hpp>
 #include <tt-umd/firmware/firmware_utils.hpp>
 #include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
 #include <tt-umd/pcie/pci_device.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
@@ -463,7 +464,12 @@ void Cluster::get_metal_desc_from_tt_desc() {
         if (emulator_model != nullptr) {
             dram_view_size_limit = emulator_model->dram_size_per_channel;
         }
-        metal_SocDescriptor sdesc(umd_soc, this->get_cluster_desc()->get_board_type(id), dram_view_size_limit);
+        metal_SocDescriptor sdesc(
+            umd_soc,
+            this->get_cluster_desc()->get_board_type(id),
+            this->target_type_ == TargetDevice::Silicon ? read_mrisc_noc2axi_ports(this->driver_->get_tt_device(id))
+                                                        : std::nullopt,
+            dram_view_size_limit);
         if (dram_view_size_limit.has_value()) {
             log_info(
                 tt::LogDevice,

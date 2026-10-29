@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -13,6 +14,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
 
@@ -57,6 +59,7 @@ D2DStreamConfig make_config(
     const tt::tt_metal::CoreRange& receiver_worker_cores,
     uint32_t metadata_size_bytes,
     bool share_fabric_links,
+    std::string fabric_link_group,
     std::optional<D2DStageGateConfig> stage_gate = std::nullopt,
     std::vector<ttnn::D2DStreamTensorConfig> extra_tensors = {}) {
     return D2DStreamConfig{
@@ -68,6 +71,7 @@ D2DStreamConfig make_config(
         .receiver_worker_cores = receiver_worker_cores,
         .metadata_size_bytes = metadata_size_bytes,
         .share_fabric_links = share_fabric_links,
+        .fabric_link_group = std::move(fabric_link_group),
         .stage_gate = stage_gate,
     };
 }
@@ -288,6 +292,7 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::BufferType socket_buffer_type,
                uint32_t metadata_size_bytes,
                bool share_fabric_links,
+               const std::string& fabric_link_group,
                const std::optional<D2DStageGateConfig>& stage_gate,
                const nb::list& extra_tensors) {
                 auto cfg = make_config(
@@ -299,6 +304,7 @@ void py_module_types(nb::module_& mod) {
                     receiver_worker_cores,
                     metadata_size_bytes,
                     share_fabric_links,
+                    fabric_link_group,
                     stage_gate,
                     make_extra_tensors(*sender_mesh, extra_tensors));
                 return D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
@@ -313,6 +319,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("socket_buffer_type") = tt::tt_metal::BufferType::L1,
             nb::arg("metadata_size_bytes") = 0u,
             nb::arg("share_fabric_links") = true,
+            nb::arg("fabric_link_group") = "",
             nb::arg("stage_gate") = nb::none(),
             nb::arg("extra_tensors") = nb::list(),
             R"doc(
@@ -341,6 +348,7 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::BufferType socket_buffer_type,
                uint32_t metadata_size_bytes,
                bool share_fabric_links,
+               const std::string& fabric_link_group,
                const nb::list& extra_tensors) {
                 auto cfg = make_config(
                     global_spec,
@@ -351,6 +359,7 @@ void py_module_types(nb::module_& mod) {
                     receiver_worker_cores,
                     metadata_size_bytes,
                     share_fabric_links,
+                    fabric_link_group,
                     std::nullopt,
                     make_extra_tensors(*sender_mesh, extra_tensors));
                 // distributed_context left null -> the service uses get_current_world().
@@ -371,6 +380,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("socket_buffer_type") = tt::tt_metal::BufferType::L1,
             nb::arg("metadata_size_bytes") = 0u,
             nb::arg("share_fabric_links") = true,
+            nb::arg("fabric_link_group") = "",
             nb::arg("extra_tensors") = nb::list(),
             R"doc(
                 Build the SENDER endpoint in this (sender-rank) process. Must be called on
@@ -399,6 +409,7 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::BufferType socket_buffer_type,
                uint32_t metadata_size_bytes,
                bool share_fabric_links,
+               const std::string& fabric_link_group,
                const std::optional<D2DStageGateConfig>& stage_gate,
                const nb::list& extra_tensors) {
                 auto cfg = make_config(
@@ -410,6 +421,7 @@ void py_module_types(nb::module_& mod) {
                     receiver_worker_cores,
                     metadata_size_bytes,
                     share_fabric_links,
+                    fabric_link_group,
                     stage_gate,
                     make_extra_tensors(*receiver_mesh, extra_tensors));
                 D2DEndpointConfig endpoints{
@@ -429,6 +441,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("socket_buffer_type") = tt::tt_metal::BufferType::L1,
             nb::arg("metadata_size_bytes") = 0u,
             nb::arg("share_fabric_links") = true,
+            nb::arg("fabric_link_group") = "",
             nb::arg("stage_gate") = nb::none(),
             nb::arg("extra_tensors") = nb::list(),
             R"doc(

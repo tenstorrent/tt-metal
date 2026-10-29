@@ -8,10 +8,14 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/indestructible.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -411,13 +415,12 @@ CommonPlan derive_common_plan(const D2DStreamConfig& cfg, const std::vector<Tens
             i == 0 || (buf->is_dram() && buf->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED),
             "D2DStreamService: extra tensor {} must be DRAM interleaved",
             i - 1);
-        segments.push_back(
-            SegmentPlan{
-                .page_size = static_cast<uint32_t>(buf->aligned_page_size()),
-                .num_pages = static_cast<uint32_t>(buf->num_pages()),
-                .payload_size = static_cast<uint32_t>(buf->page_size()),
-                .dtype = static_cast<uint32_t>(backings[i].dtype()),
-                .layout = static_cast<uint32_t>(backings[i].layout())});
+        segments.push_back(SegmentPlan{
+            .page_size = static_cast<uint32_t>(buf->aligned_page_size()),
+            .num_pages = static_cast<uint32_t>(buf->num_pages()),
+            .payload_size = static_cast<uint32_t>(buf->page_size()),
+            .dtype = static_cast<uint32_t>(backings[i].dtype()),
+            .layout = static_cast<uint32_t>(backings[i].layout())});
     }
     const uint32_t tensor_page_size = segments.front().page_size;
     const uint32_t tensor_num_pages = segments.front().num_pages;
@@ -485,6 +488,251 @@ struct ServiceCoreReleaseGuard {
     }
 };
 
+// Fabric routers held by persistent D2D services, process-wide. A Tensix worker
+// connects to an ethernet router through the router's one local worker channel,
+// which serves exactly one worker: a second connection overwrites the first's
+// worker record, the router returns credits to the second only, and the first
+// waits forever for a free slot. A chip that hosts both a D2D receiver and a D2D
+// sender has two such workers, and when both of its routes leave in the same
+// direction they would otherwise pick the same router (the first forwarding link).
+// Each service claims its routers here, keyed by fabric node and ethernet core,
+// before its kernels are built; a claim is held until the service is destroyed.
+// Claims apply in LEASE mode too: the sender and receiver leases are independent,
+// so their connection windows can overlap. Services in one lease group
+// (Config::fabric_link_group) may share a router: their caller serializes their
+// connections, so the router's worker channel only ever has one of them.
+class FabricLinkRegistry {
+public:
+    // Claims (node, eth_core) for `holder`, in lease group `group` (empty: none).
+    // A router already held in the same non-empty group is shared; otherwise this
+    // returns the current holder instead.
+    std::optional<std::string> try_claim(
+        const tt::tt_fabric::FabricNodeId& node,
+        CoreCoord eth_core,
+        const std::string& holder,
+        const std::string& group) {
+        std::lock_guard lock(mutex_);
+        auto [it, inserted] = claims_.try_emplace({node, eth_core}, Claim{.holder = holder, .group = group});
+        if (inserted) {
+            return std::nullopt;
+        }
+        if (!group.empty() && it->second.group == group) {
+            ++it->second.services;
+            return std::nullopt;
+        }
+        return it->second.holder;
+    }
+
+    void release(const tt::tt_fabric::FabricNodeId& node, CoreCoord eth_core) {
+        std::lock_guard lock(mutex_);
+        auto it = claims_.find({node, eth_core});
+        if (it != claims_.end() && --it->second.services == 0) {
+            claims_.erase(it);
+        }
+    }
+
+private:
+    struct Claim {
+        std::string holder;  // the first service to claim it, for messages
+        std::string group;
+        uint32_t services = 1;
+    };
+    std::mutex mutex_;
+    std::map<std::pair<tt::tt_fabric::FabricNodeId, CoreCoord>, Claim> claims_;
+};
+
+// Never destroyed: a service handle owned by another static may release its claims
+// during static teardown, after a destructible registry would be gone.
+FabricLinkRegistry& fabric_link_registry() {
+    static ttsl::Indestructible<FabricLinkRegistry> registry;
+    return registry.get();
+}
+
+// One service's router claims; released on destruction (handle teardown, or a
+// factory that throws part way). Move-only.
+class FabricLinkClaims {
+public:
+    FabricLinkClaims() = default;
+    FabricLinkClaims(const FabricLinkClaims&) = delete;
+    FabricLinkClaims& operator=(const FabricLinkClaims&) = delete;
+    FabricLinkClaims(FabricLinkClaims&& other) noexcept : held_(std::exchange(other.held_, {})) {}
+    FabricLinkClaims& operator=(FabricLinkClaims&& other) noexcept {
+        if (this != &other) {
+            release_all();
+            held_ = std::exchange(other.held_, {});
+        }
+        return *this;
+    }
+    ~FabricLinkClaims() { release_all(); }
+
+    std::optional<std::string> try_claim(
+        const tt::tt_fabric::FabricNodeId& node,
+        CoreCoord eth_core,
+        const std::string& holder,
+        const std::string& group) {
+        auto other = fabric_link_registry().try_claim(node, eth_core, holder, group);
+        if (!other) {
+            held_.emplace_back(node, eth_core);
+        }
+        return other;
+    }
+
+private:
+    void release_all() {
+        for (const auto& [node, eth_core] : held_) {
+            fabric_link_registry().release(node, eth_core);
+        }
+        held_.clear();
+    }
+
+    std::vector<std::pair<tt::tt_fabric::FabricNodeId, CoreCoord>> held_;
+};
+
+// A lease group lets services share routers because their caller takes turns between
+// them; in OWN mode a service holds its connection for life, so no turn ever ends.
+void validate_fabric_link_group(const D2DStreamConfig& cfg) {
+    TT_FATAL(
+        cfg.fabric_link_group.empty() || cfg.share_fabric_links,
+        "D2DStreamService: fabric_link_group '{}' needs LEASE mode (share_fabric_links == true); an OWN-mode "
+        "service holds its fabric connections for its whole life, so it cannot share a router",
+        cfg.fabric_link_group);
+}
+
+// Which end of a D2D stream a service is, for its router claims and their messages.
+enum class D2DServiceRole { Sender, Receiver };
+
+constexpr const char* role_name(D2DServiceRole role) {
+    switch (role) {
+        case D2DServiceRole::Sender: return "sender";
+        case D2DServiceRole::Receiver: return "receiver";
+    }
+    return "unknown";
+}
+
+// Claim up to `max_links` free routers on src toward dst and return their link
+// indices (from get_forwarding_link_indices), in order: the sender's lanes, or the
+// receiver's single credit-return link. Fails when none is free, and warns when
+// fewer than min(max_links, forwarding links) are.
+std::vector<uint32_t> claim_forwarding_links(
+    const distributed::MeshDevice& mesh,
+    const distributed::MeshCoordinate& coord,
+    const tt::tt_fabric::FabricNodeId& src,
+    const tt::tt_fabric::FabricNodeId& dst,
+    uint32_t max_links,
+    D2DServiceRole service_role,
+    const std::string& group,
+    FabricLinkClaims& claims) {
+    const char* role = role_name(service_role);
+    const auto links = tt::tt_fabric::get_forwarding_link_indices(mesh, src, dst);
+    TT_FATAL(!links.empty(), "D2DStreamService: no fabric link from the {} at coord {} toward its peer", role, coord);
+    const std::string holder = fmt::format(
+        "D2D {} at coord {} ({} -> {}){}",
+        role,
+        coord,
+        src,
+        dst,
+        group.empty() ? std::string{} : fmt::format(", lease group '{}'", group));
+    std::vector<uint32_t> claimed;
+    std::string taken;  // "; "-separated, for the messages below
+    for (const uint32_t link : links) {
+        if (claimed.size() == max_links) {
+            break;
+        }
+        const CoreCoord eth = tt::tt_fabric::get_forwarding_eth_core(mesh, src, dst, link);
+        if (auto other = claims.try_claim(src, eth, holder, group)) {
+            taken += fmt::format("{}link {} (eth {}) held by the {}", taken.empty() ? "" : "; ", link, eth, *other);
+            continue;
+        }
+        claimed.push_back(link);
+    }
+    TT_FATAL(
+        !claimed.empty(),
+        "D2DStreamService: the {} at coord {} has no free fabric router toward its peer: every forwarding "
+        "link from {} toward {} is held by another D2D service on {} ({}). A router's worker channel "
+        "serves one worker, so the two services cannot share one. Create a chip's D2D receivers before its "
+        "senders, so a sender's lanes are chosen around the receiver's link.",
+        role,
+        coord,
+        src,
+        dst,
+        src,
+        taken);
+    const size_t wanted = std::min<size_t>(links.size(), max_links);
+    if (claimed.size() < wanted) {
+        log_warning(
+            tt::LogMetal,
+            "D2DStreamService: the {} at coord {} ({}) uses {} of {} forwarding links toward its peer; skipped {}",
+            role,
+            coord,
+            src,
+            claimed.size(),
+            wanted,
+            taken);
+    }
+    return claimed;
+}
+
+// DistributedContext tag for the sender -> receiver lane-count message, sent once
+// both MeshSocket endpoints exist (the sender's routers, and so its lane count, are
+// chosen only then).
+constexpr int kLaneCountExchangeTag = 0x4432444C;  // 'D2DL'
+
+// Per-coord sender lane links (the links each lane holds, see claim_forwarding_links).
+using LaneLinks = std::map<distributed::MeshCoordinate, std::vector<uint32_t>>;
+
+// Lanes per coord: one per lane link.
+std::map<distributed::MeshCoordinate, uint32_t> lane_counts(const LaneLinks& lane_links) {
+    std::map<distributed::MeshCoordinate, uint32_t> counts;
+    for (const auto& [coord, links] : lane_links) {
+        counts.emplace(coord, static_cast<uint32_t>(links.size()));
+    }
+    return counts;
+}
+
+// Multi-rank: the sender tells the receiver how many lanes it runs per coord, in
+// `coords` order. The receiver awaits one data-landed increment per sender lane,
+// and a sender may run fewer lanes than its direction has links (some held by
+// another service on its chip), so the receiver cannot derive the count itself.
+// A sender that fails to build sends zeros (`lane_links` null), so its receiver
+// fails too instead of waiting here forever.
+void send_sender_lanes(
+    const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
+    distributed::multihost::Rank receiver_rank,
+    const std::vector<distributed::MeshCoordinate>& coords,
+    const LaneLinks* lane_links) {
+    std::vector<uint32_t> words(coords.size(), 0u);
+    if (lane_links != nullptr) {
+        for (size_t i = 0; i < coords.size(); ++i) {
+            words[i] = static_cast<uint32_t>(lane_links->at(coords[i]).size());
+        }
+    }
+    ctx->send(
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(words.data()), words.size() * sizeof(uint32_t)),
+        receiver_rank,
+        distributed::multihost::Tag{kLaneCountExchangeTag});
+}
+
+std::map<distributed::MeshCoordinate, uint32_t> recv_sender_lanes(
+    const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
+    distributed::multihost::Rank sender_rank,
+    const std::vector<distributed::MeshCoordinate>& coords) {
+    std::vector<uint32_t> words(coords.size(), 0u);
+    ctx->recv(
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(words.data()), words.size() * sizeof(uint32_t)),
+        sender_rank,
+        distributed::multihost::Tag{kLaneCountExchangeTag});
+    std::map<distributed::MeshCoordinate, uint32_t> lanes;
+    for (size_t i = 0; i < coords.size(); ++i) {
+        TT_FATAL(
+            words[i] >= 1,
+            "D2DStreamService: the sender (rank {}) failed to build its service at coord {}; see its log",
+            *sender_rank,
+            coords[i]);
+        lanes.emplace(coords[i], words[i]);
+    }
+    return lanes;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 // ===========================================================================
@@ -550,6 +798,15 @@ struct D2DStreamServiceSender::Impl {
     // grant==0) AFTER. Both CQ-ordered — no host PCIe poke. Null in OWN mode.
     std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> lease_wait_workload;
     std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> lease_release_workload;
+
+    // The forwarding links this coord's lanes hold, one per lane: min(max_sender_lanes,
+    // free forwarding links), so fewer than the direction has when another D2D service
+    // on the chip holds one (see FabricLinkRegistry). The receiver learns the counts
+    // from the sender.
+    CMAKE_UNIQUE_NAMESPACE::LaneLinks lane_links;
+    // The routers this service holds. Last member, so the claims are released only
+    // after the handle destructor has stopped the kernels that use them.
+    CMAKE_UNIQUE_NAMESPACE::FabricLinkClaims link_claims;
 };
 
 struct D2DStreamServiceReceiver::Impl {
@@ -611,6 +868,10 @@ struct D2DStreamServiceReceiver::Impl {
     // Cached lease workloads (LEASE mode only), mirror of the sender's. Null in OWN mode.
     std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> lease_wait_workload;
     std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> lease_release_workload;
+
+    // The router this service's credit-return connection holds. Last member, as on
+    // the sender.
+    CMAKE_UNIQUE_NAMESPACE::FabricLinkClaims link_claims;
 };
 
 // ===========================================================================
@@ -709,6 +970,12 @@ CoreCoord D2DStreamServiceSender::get_service_core(const tt::tt_metal::distribut
         "D2DStreamServiceSender::get_service_core: no service core claimed at coord {}",
         coord);
     return it->second;
+}
+
+uint32_t D2DStreamServiceSender::get_num_lanes(const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+    auto it = impl_->lane_links.find(coord);
+    TT_FATAL(it != impl_->lane_links.end(), "D2DStreamServiceSender::get_num_lanes: no sender at coord {}", coord);
+    return static_cast<uint32_t>(it->second.size());
 }
 
 DeviceAddr D2DStreamServiceSender::get_data_ready_counter_addr(
@@ -1300,6 +1567,7 @@ struct SenderSideResources {
     // grant==0) after. Null in OWN mode.
     std::unique_ptr<distributed::MeshWorkload> lease_wait_workload;
     std::unique_ptr<distributed::MeshWorkload> lease_release_workload;
+    LaneLinks lane_links;
 };
 
 SenderSideResources build_sender_side(
@@ -1310,10 +1578,32 @@ SenderSideResources build_sender_side(
     const std::vector<Tensor>& backings,
     const std::vector<distributed::MeshCoordinate>& coords,
     const CommonPlan& common,
-    const D2DStreamConfig& cfg) {
+    const D2DStreamConfig& cfg,
+    FabricLinkClaims& link_claims) {
     const Tensor& backing = backings.front();
     auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
     const uint32_t num_workers = core_range_size(cfg.sender_worker_cores);
+
+    // Choose each coord's lanes first, before any allocation, so a chip with no free
+    // router fails cleanly. One RISC + one link per lane, capped by config and by the
+    // forwarding links no other D2D service on the chip holds.
+    TT_FATAL(cfg.max_sender_lanes >= 1, "D2DStreamService: max_sender_lanes must be >= 1");
+    validate_fabric_link_group(cfg);
+    LaneLinks lane_links_per_coord;
+    for (const auto& coord : coords) {
+        const auto sender_node = mesh->get_fabric_node_id(coord);
+        const auto receiver_node = sender_socket.get_fabric_node_id(distributed::SocketEndpoint::RECEIVER, coord);
+        auto lanes = claim_forwarding_links(
+            *mesh,
+            coord,
+            sender_node,
+            receiver_node,
+            cfg.max_sender_lanes,
+            D2DServiceRole::Sender,
+            cfg.fabric_link_group,
+            link_claims);
+        lane_links_per_coord.emplace(coord, std::move(lanes));
+    }
 
     // Reserve the socket config buffer's L1 footprint in each service core's
     // per-core allocator BEFORE allocating any words (both grow top-down from
@@ -1366,16 +1656,8 @@ SenderSideResources build_sender_side(
 
         const auto sender_node = mesh->get_fabric_node_id(coord);
         const auto receiver_node = sender_socket.get_fabric_node_id(distributed::SocketEndpoint::RECEIVER, coord);
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, sender_node, receiver_node);
-        TT_FATAL(!links.empty(), "D2DStreamService: no fabric link sender->receiver at coord {}", coord);
-
-        // Lane count: one RISC + one link per lane, capped by config and by the
-        // available forwarding links. The receiver derives the same count from its
-        // (symmetric) receiver->sender link set, so it awaits the matching number of
-        // data-landed increments.
-        const uint32_t num_lanes = std::min<uint32_t>(cfg.max_sender_lanes, static_cast<uint32_t>(links.size()));
-        TT_FATAL(num_lanes >= 1, "D2DStreamService: num_lanes must be >= 1 at coord {}", coord);
-        const std::vector<uint32_t> lane_links(links.begin(), links.begin() + num_lanes);
+        const std::vector<uint32_t>& lane_links = lane_links_per_coord.at(coord);
+        const uint32_t num_lanes = static_cast<uint32_t>(lane_links.size());
 
         const auto& seg_receiver_addrs = receiver_tensor_addrs.at(coord);
         std::vector<SenderExtraSegment> extra_segments;
@@ -1383,12 +1665,11 @@ SenderSideResources build_sender_side(
         for (size_t i = 1; i < backings.size(); ++i) {
             const Buffer* seg_buf = backings[i].mesh_buffer().get_device_buffer(coord);
             TT_FATAL(seg_buf != nullptr, "D2DStreamService: sender device buffer missing for coord {}", coord);
-            extra_segments.push_back(
-                SenderExtraSegment{
-                    .input_buffer = seg_buf,
-                    .page_size = common.segments[i].page_size,
-                    .num_pages = common.segments[i].num_pages,
-                    .receiver_addr = static_cast<uint32_t>(seg_receiver_addrs.at(i))});
+            extra_segments.push_back(SenderExtraSegment{
+                .input_buffer = seg_buf,
+                .page_size = common.segments[i].page_size,
+                .num_pages = common.segments[i].num_pages,
+                .receiver_addr = static_cast<uint32_t>(seg_receiver_addrs.at(i))});
         }
 
         const auto ws = make_worker_sync_args(
@@ -1449,6 +1730,7 @@ SenderSideResources build_sender_side(
         .workload = std::move(workload),
         .lease_wait_workload = std::move(lease_wait_workload),
         .lease_release_workload = std::move(lease_release_workload),
+        .lane_links = std::move(lane_links_per_coord),
     };
 }
 
@@ -1473,9 +1755,30 @@ ReceiverSideResources build_receiver_side(
     const Tensor& backing,
     const std::vector<distributed::MeshCoordinate>& coords,
     const CommonPlan& common,
-    const D2DStreamConfig& cfg) {
+    const D2DStreamConfig& cfg,
+    const std::map<distributed::MeshCoordinate, uint32_t>& sender_lanes,
+    FabricLinkClaims& link_claims) {
     auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
     const uint32_t num_workers = core_range_size(cfg.receiver_worker_cores);
+
+    // Choose each coord's credit-return router first, before any allocation: one
+    // forwarding link toward the sender that no other D2D service on the chip holds.
+    validate_fabric_link_group(cfg);
+    std::map<distributed::MeshCoordinate, uint32_t> ack_link_per_coord;
+    for (const auto& coord : coords) {
+        const auto receiver_node = mesh->get_fabric_node_id(coord);
+        const auto sender_node = receiver_socket.get_fabric_node_id(distributed::SocketEndpoint::SENDER, coord);
+        const auto ack = claim_forwarding_links(
+            *mesh,
+            coord,
+            receiver_node,
+            sender_node,
+            /*max_links=*/1,
+            D2DServiceRole::Receiver,
+            cfg.fabric_link_group,
+            link_claims);
+        ack_link_per_coord.emplace(coord, ack.front());
+    }
 
     // Reserve the socket config buffer + data FIFO L1 footprint. They sit at the
     // top of L1, so the lower of the two addresses covers both in one reservation.
@@ -1541,13 +1844,10 @@ ReceiverSideResources build_receiver_side(
 
         const auto receiver_node = mesh->get_fabric_node_id(coord);
         const auto sender_node = receiver_socket.get_fabric_node_id(distributed::SocketEndpoint::SENDER, coord);
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, receiver_node, sender_node);
-        TT_FATAL(!links.empty(), "D2DStreamService: no fabric link receiver->sender at coord {}", coord);
 
-        // Sender lane count, derived identically to the sender (min(max_sender_lanes,
-        // forwarding links)) — symmetric link topology ⇒ same value. This is how many
-        // data-landed increments the receiver awaits per transfer (one per sender lane).
-        const uint32_t num_lanes = std::min<uint32_t>(cfg.max_sender_lanes, static_cast<uint32_t>(links.size()));
+        // The sender's lane count, as the sender chose it: how many data-landed
+        // increments the receiver awaits per transfer (one per sender lane).
+        const uint32_t num_lanes = sender_lanes.at(coord);
 
         const auto ws = make_worker_sync_args(
             device,
@@ -1577,7 +1877,7 @@ ReceiverSideResources build_receiver_side(
                 gate ? static_cast<uint32_t>(stage_gate_addrs.at(coord)) : 0u,
                 receiver_node,
                 sender_node,
-                links.front()));
+                ack_link_per_coord.at(coord)));
     }
 
     // LEASE mode: cache the per-coord RELEASE / WAIT lease workloads (mirror of the
@@ -1625,8 +1925,9 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::finalize_sender(
 
     const auto common = CMAKE_UNIQUE_NAMESPACE::derive_common_plan(cfg, backings);
     const auto& coords = backings.front().tensor_topology().mesh_coords();
+    CMAKE_UNIQUE_NAMESPACE::FabricLinkClaims link_claims;
     auto res = CMAKE_UNIQUE_NAMESPACE::build_sender_side(
-        mesh, socket, service_cores, receiver_tensor_addrs, backings, coords, common, cfg);
+        mesh, socket, service_cores, receiver_tensor_addrs, backings, coords, common, cfg, link_claims);
 
     auto impl = std::make_unique<D2DStreamServiceSender::Impl>(D2DStreamServiceSender::Impl{
         .mesh_device = mesh,
@@ -1652,6 +1953,8 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::finalize_sender(
         .launched = false,
         .lease_wait_workload = std::move(res.lease_wait_workload),
         .lease_release_workload = std::move(res.lease_release_workload),
+        .lane_links = std::move(res.lane_links),
+        .link_claims = std::move(link_claims),
     });
     auto handle = std::unique_ptr<D2DStreamServiceSender>(new D2DStreamServiceSender(std::move(impl)));
     ok = true;
@@ -1663,7 +1966,8 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
     tt::tt_metal::distributed::MeshSocket socket,
     std::map<tt::tt_metal::distributed::MeshCoordinate, CoreCoord> service_cores,
     const std::vector<Tensor>& backings,
-    const D2DStreamConfig& cfg) {
+    const D2DStreamConfig& cfg,
+    const std::map<tt::tt_metal::distributed::MeshCoordinate, uint32_t>& sender_lanes) {
     bool ok = false;
     CMAKE_UNIQUE_NAMESPACE::ServiceCoreReleaseGuard guard{mesh, service_cores, ok};
 
@@ -1671,8 +1975,9 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
     // segment straight into these backings), so it is built from segment 0 alone.
     const auto common = CMAKE_UNIQUE_NAMESPACE::derive_common_plan(cfg, backings);
     const auto& coords = backings.front().tensor_topology().mesh_coords();
+    CMAKE_UNIQUE_NAMESPACE::FabricLinkClaims link_claims;
     auto res = CMAKE_UNIQUE_NAMESPACE::build_receiver_side(
-        mesh, socket, service_cores, backings.front(), coords, common, cfg);
+        mesh, socket, service_cores, backings.front(), coords, common, cfg, sender_lanes, link_claims);
 
     auto impl = std::make_unique<D2DStreamServiceReceiver::Impl>(D2DStreamServiceReceiver::Impl{
         .mesh_device = mesh,
@@ -1699,6 +2004,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
         .launched = false,
         .lease_wait_workload = std::move(res.lease_wait_workload),
         .lease_release_workload = std::move(res.lease_release_workload),
+        .link_claims = std::move(link_claims),
     });
     auto handle = std::unique_ptr<D2DStreamServiceReceiver>(new D2DStreamServiceReceiver(std::move(impl)));
     ok = true;
@@ -1769,8 +2075,14 @@ D2DStreamService::create_pair(
         receiver_tensor_addrs,
         sender_backings,
         cfg);
+    // The receiver awaits one data-landed increment per sender lane, as the sender chose them.
     auto receiver_handle = finalize_receiver(
-        receiver_mesh, std::move(receiver_socket), std::move(receiver_service_cores), receiver_backings, cfg);
+        receiver_mesh,
+        std::move(receiver_socket),
+        std::move(receiver_service_cores),
+        receiver_backings,
+        cfg,
+        CMAKE_UNIQUE_NAMESPACE::lane_counts(sender_handle->impl_->lane_links));
 
     // Launch the persistent kernels (non-blocking). Receiver first so it's parked
     // on its socket wait before the sender starts pushing pages.
@@ -1846,13 +2158,24 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
 
     // Build + assemble (shared with create_pair). The service cores move into the
     // handle Impl here, emptying the map sender_guard references.
-    auto sender_handle = finalize_sender(
-        sender_mesh,
-        std::move(sender_socket),
-        std::move(sender_service_cores),
-        receiver_tensor_addrs,
-        sender_backings,
-        cfg);
+    // The sender's routers (and so its lane count) are chosen in finalize_sender; the
+    // receiver process waits for the counts before building its kernels, so it hears
+    // about a failure here too.
+    std::unique_ptr<D2DStreamServiceSender> sender_handle;
+    try {
+        sender_handle = finalize_sender(
+            sender_mesh,
+            std::move(sender_socket),
+            std::move(sender_service_cores),
+            receiver_tensor_addrs,
+            sender_backings,
+            cfg);
+    } catch (...) {
+        CMAKE_UNIQUE_NAMESPACE::send_sender_lanes(ctx, endpoints.receiver_rank, mo.coords, /*lane_links=*/nullptr);
+        throw;
+    }
+    CMAKE_UNIQUE_NAMESPACE::send_sender_lanes(
+        ctx, endpoints.receiver_rank, mo.coords, &sender_handle->impl_->lane_links);
     EnqueueMeshWorkload(
         sender_handle->impl_->mesh_device->mesh_command_queue(), *sender_handle->impl_->workload, /*blocking=*/false);
     sender_handle->impl_->launched = true;
@@ -1909,11 +2232,18 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
     tt::tt_metal::distributed::SocketConfig socket_config(
         connections, cfg.socket_mem_config, endpoints.sender_rank, endpoints.receiver_rank, ctx);
     tt::tt_metal::distributed::MeshSocket receiver_socket(receiver_mesh, socket_config);
+    // The sender's lane count per coord, sent once its routers are chosen.
+    const auto sender_lanes = CMAKE_UNIQUE_NAMESPACE::recv_sender_lanes(ctx, endpoints.sender_rank, mo.coords);
 
     // Build + assemble (shared with create_pair). The service cores move into the
     // handle Impl here, emptying the map receiver_guard references.
     auto receiver_handle = finalize_receiver(
-        receiver_mesh, std::move(receiver_socket), std::move(receiver_service_cores), receiver_backings, cfg);
+        receiver_mesh,
+        std::move(receiver_socket),
+        std::move(receiver_service_cores),
+        receiver_backings,
+        cfg,
+        sender_lanes);
     EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), *receiver_handle->impl_->workload, /*blocking=*/false);
     receiver_handle->impl_->launched = true;
 

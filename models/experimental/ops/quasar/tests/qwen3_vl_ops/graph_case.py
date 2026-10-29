@@ -592,7 +592,9 @@ def _ref_identity(inputs, kwargs, case):
 
 
 def _ref_matmul(inputs, kwargs, case):
-    return inputs["0"].float() @ inputs["1"].float()
+    ref = inputs["0"].float() @ inputs["1"].float()
+    bias = inputs.get("bias")  # ttnn.linear(..., bias=[N]) broadcasts over the rows
+    return ref if bias is None else ref + bias.float()
 
 
 def _second_operand(inputs, case):
@@ -775,14 +777,15 @@ def _ref_concat_heads_decode(inputs, kwargs, case):
 
     The captured output is padded up to a tile row, so the reference covers only the
     real batch; ``assert_pcc`` compares it against the leading elements, which is
-    where row-major puts those users.
+    where row-major puts those users. The input's heads dim is padded to a tile row and
+    the op concatenates only the first ``num_heads`` of them, so slice those.
     """
     x = inputs["0"].float()
     n_heads = case["kwargs"].get("num_heads", {}).get("v")
-    if x.dim() != 4 or n_heads is None or x.shape[2] != n_heads:
+    if x.dim() != 4 or n_heads is None or x.shape[2] < n_heads:
         return None
     batch, head_dim = x.shape[1], x.shape[3]
-    return x.reshape(1, 1, batch, n_heads * head_dim)
+    return x[:, :, :n_heads, :].reshape(1, 1, batch, n_heads * head_dim)
 
 
 def _ref_layer_norm(inputs, kwargs, case):
@@ -1100,6 +1103,17 @@ def _input_elements(case):
     return total
 
 
+# Ops whose inputs include padding the op never reads, so _input_elements overstates the leading
+# region it writes. nlp_concat_heads_decode's input pads the heads dim to a tile row and the op
+# writes only num_heads heads per user; with fewer than 32 heads, the rest of the output's first
+# rows stays unwritten.
+_WRITTEN_ELEMENTS = {
+    "ttnn.experimental.nlp_concat_heads_decode": lambda case: (
+        case["args"][0]["shape"][1] * case["kwargs"]["num_heads"]["v"] * case["args"][0]["shape"][3]
+    ),
+}
+
+
 def _check_finite(host, case, op_name, index):
     """Assert the region the op can actually define is finite.
 
@@ -1120,7 +1134,7 @@ def _check_finite(host, case, op_name, index):
     if n_finite == n_total:
         return
 
-    budget = _input_elements(case)
+    budget = _WRITTEN_ELEMENTS.get(op_name, _input_elements)(case)
     if n_total > budget:
         head = finite.reshape(-1)[:budget]
         bad = int(head.numel() - head.sum())
@@ -1335,6 +1349,26 @@ def _bfp_specs(case):
     return found
 
 
+# Ops that put one unit of work on each of a fixed number of cores, derived from the call rather than
+# from a memory config the harness could shrink. nlp_concat_heads_decode width-shards its output one
+# head per core, so it needs num_heads cores (from sub_core_grids when given, else the device grid);
+# a smaller grid FATALs in the op's num_cores_to_corerangeset.
+_REQUIRED_CORES = {
+    "ttnn.experimental.nlp_concat_heads_decode": lambda case: case["kwargs"]["num_heads"]["v"],
+}
+
+
+def _available_cores(case, mesh_device):
+    sub = case["kwargs"].get("sub_core_grids", {}).get("v")
+    if sub:
+        try:
+            return sum((x1 - x0 + 1) * (y1 - y0 + 1) for x0, y0, x1, y1 in sub)
+        except (TypeError, ValueError):
+            pass  # not a [[x0, y0, x1, y1], ...] list; fall back to the device grid
+    grid = mesh_device.compute_with_storage_grid_size()
+    return grid.x * grid.y
+
+
 def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
     """Materialize one captured call, run it, and check the result.
 
@@ -1353,6 +1387,12 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
                 f"Quasar has no Bfp formats; this capture uses {', '.join(bfp)} "
                 "(TTNN_GRAPH_OPS_BF8_AS_BF16=1 runs it as bfloat16)"
             )
+
+    required = _REQUIRED_CORES.get(op_name)
+    if required is not None:
+        needed, available = required(case), _available_cores(case, mesh_device)
+        if needed > available:
+            pytest.skip(f"{op_name} needs {needed} cores, one per unit of work; this device has {available}")
 
     torch_inputs: dict[str, torch.Tensor] = {}
 
