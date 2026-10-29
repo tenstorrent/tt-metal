@@ -181,6 +181,9 @@ TT_METAL_HOME=<tt-metal build> PLUGIN_SRC=<vllm-tt-plugin at mimo-v2.6-flash/sin
     engine. Spreading them with a per-engine `LD_PRELOAD` offset made no difference.
 - **Startup** takes about 1.5 minutes, because each engine warms up 4 users of one replica. The 4-lane engine takes
   about 4.5 minutes.
+- **Stop.** Each engine runs in its own process group (`setsid`). Stopping sends SIGINT to every group, so an
+  EngineCore still loading is stopped with its API server, and SIGKILL to what is left after `STOP_TIMEOUT` seconds
+  (default 120). When an engine or the proxy exits, the script stops the rest and exits with that process's status.
 - **Cold TTNN cache.** The four engines share one `MIMO_TT_CACHE`, and `ttnn.as_tensor` writes a cache file in place.
   Each cache tag (`top`, every layer, each MTP layer, DFlash) is therefore filled under a file lock
   (`tt.common.cache_fill`): one engine converts and writes it, and the others wait, then load it. A complete tag takes
@@ -191,6 +194,9 @@ TT_METAL_HOME=<tt-metal build> PLUGIN_SRC=<vllm-tt-plugin at mimo-v2.6-flash/sin
 Measured 2026-10-28 with ttnn and model code at ae0a9130ab7 (the packed grouped verify, #63006), GPTQ BFP4 experts and
 `sample_on_device_mode` `decode_only`. The plugin was `mimo-v2.6-flash/single-lane` for the row engines and its base
 ee2b54f for the 4-lane engine.
+- Both engines ran `--max-num-batched-tokens 2048` (the script's default then) and the default KV budget (6.7 GB per
+  chip with the pair split). tt-inference-server's spec ships 4096-token chunks and sets 6.7. `serve_rows.sh` now
+  defaults to 4096 (`MNBT`); the numbers below are not re-measured at 4096.
 
 SPEED-Bench coding, 64 requests, 512 output tokens, c=16, 32K server:
 

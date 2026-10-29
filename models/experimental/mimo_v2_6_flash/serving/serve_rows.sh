@@ -13,7 +13,10 @@
 # the host (about a tenth of the speed with MTP).
 #
 # Usage: serve_rows.sh <log dir> [max_model_len] [extra vllm serve args, the same for every engine]
-# Stop it with Ctrl-C or SIGTERM (started in the background by a script, it ignores SIGINT, as bash does).
+# Stop it with Ctrl-C or SIGTERM (started in the background by a script, it ignores SIGINT, as bash does). Each engine
+# runs in its own process group; stopping sends SIGINT to every group (the API server and its EngineCore) and SIGKILL
+# to what is left after STOP_TIMEOUT seconds. When an engine or the proxy exits, the others are stopped and the script
+# exits with that process's status.
 # env:
 #   TT_METAL_HOME    the tt-metal build (required); MODEL_SRC the model checkout (default: this file's repository)
 #   PLUGIN_SRC       a plugin checkout's src/ to use instead of the installed plugin
@@ -23,6 +26,10 @@
 #   ROW_DEVICES      each row's chips, space-separated groups. By default discover_rows.py finds them before any engine
 #                    starts (chip ids depend on the machine); it opens the whole mesh, so nothing else may use it then
 #   BASE_PORT        default 8000; SEQS: --max-num-seqs per engine (default 4; 8 for MIMO_SPEC_SLOTS=8)
+#   MNBT             --max-num-batched-tokens, the prefill chunk (default 4096, as tt-inference-server's MiMo spec)
+#   MIMO_KV_GB_PER_CHIP  the model's KV pool per chip; unset, the model's default (6.7 with the global KV pair split,
+#                    vLLM's default: 4 x 1M per row), which is what tt-inference-server's MiMo spec sets
+#   STOP_TIMEOUT     seconds the engines get to stop on SIGINT before SIGKILL (default 120)
 #   SAMPLE_ON_DEVICE decode_only|all (plugin sample_on_device_mode; default host sampling); TRACE_REGION bytes
 #   OMP_NUM_THREADS  torch's intra-op threads per engine (default 8). Its default, one per core, oversubscribes the
 #                    host with four engines: every small torch op of a step then waits on spinning pools, which made
@@ -53,23 +60,43 @@ done
 export MESH_DEVICE="(1,8)" VLLM_PLUGINS=tt,tt_model_registry OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
 TT_CONFIG="{\"trace_mode\": \"decode_only\", \"trace_region_size\": ${TRACE_REGION:-1000000000}, \"l1_small_size\": 65536, \"dispatch_core_axis\": \"col\"${SAMPLE_ON_DEVICE:+, \"sample_on_device_mode\": \"$SAMPLE_ON_DEVICE\"}}"
 cd "$MODEL_SRC"  # kernel sources resolve against the CWD first
-PIDS=()
+ENGINES=()  # each engine's PID, which leads its process group (setsid)
 BACKENDS=()
-stop() { kill -INT "${PIDS[@]}" 2>/dev/null; wait "${PIDS[@]}" 2>/dev/null; }
-trap stop INT TERM EXIT
+LB=
+stop() {
+  # Whole process groups: an EngineCore can outlive its API server (one stopped while it loads, for instance).
+  trap - INT TERM EXIT
+  local p t alive
+  for p in "${ENGINES[@]}"; do kill -INT -- "-$p" 2>/dev/null; done
+  [ -n "$LB" ] && kill -INT "$LB" 2>/dev/null
+  for ((t = 0; t < ${STOP_TIMEOUT:-120}; t++)); do
+    alive=0
+    for p in "${ENGINES[@]}"; do kill -0 -- "-$p" 2>/dev/null && alive=1; done
+    [ "$alive" = 0 ] && break
+    sleep 1
+  done
+  for p in "${ENGINES[@]}"; do kill -KILL -- "-$p" 2>/dev/null; done
+  [ -n "$LB" ] && kill -KILL "$LB" 2>/dev/null
+  wait 2>/dev/null
+}
+trap 'stop; exit 130' INT
+trap 'stop; exit 143' TERM
+trap stop EXIT
 for r in $ROWS; do
-  TT_VISIBLE_DEVICES=${DEVICES[$r]} "$VLLM" serve "$MODEL" \
+  TT_VISIBLE_DEVICES=${DEVICES[$r]} setsid "$VLLM" serve "$MODEL" \
     --served-model-name XiaomiMiMo/MiMo-V2.6-Flash-MOPD --trust-remote-code \
     --data-parallel-size 1 --max-num-seqs "${SEQS:-4}" --max-model-len "$MAX_LEN" --block-size 64 \
-    --enable-chunked-prefill --max-num-batched-tokens 2048 --enable-prefix-caching \
+    --enable-chunked-prefill --max-num-batched-tokens "${MNBT:-4096}" --enable-prefix-caching \
     --reasoning-parser mimo --tool-call-parser mimo --enable-auto-tool-choice \
     --port $((BASE_PORT + 1 + r)) --additional-config "{\"tt\": $TT_CONFIG}" "$@" > "$LOGS/row$r.log" 2>&1 &
-  PIDS+=($!)
+  ENGINES+=($!)
   BACKENDS+=("127.0.0.1:$((BASE_PORT + 1 + r))")
 done
 LB_BACKENDS=$(IFS=,; echo "${BACKENDS[*]}")
 "$PYTHON" "$HERE/lb.py" --port "$BASE_PORT" --backends "$LB_BACKENDS" > "$LOGS/lb.log" 2>&1 &
-PIDS+=($!)
+LB=$!
 echo "rows [$ROWS] on ports $LB_BACKENDS, proxy on 127.0.0.1:$BASE_PORT; logs in $LOGS"
-wait -n "${PIDS[@]}"
-echo "a process exited; stopping the others"
+wait -n "${ENGINES[@]}" "$LB"
+status=$?
+echo "a process exited with status $status; stopping the others"
+exit "$status"
