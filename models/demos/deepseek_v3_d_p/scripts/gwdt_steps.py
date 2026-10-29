@@ -19,8 +19,10 @@ from gwdt_checks import (
     classify_pytest,
     collected_node_ids,
     didt_bad_devices,
+    dram_health,
     fabric_results,
     missing_node_ids,
+    mla_determinism_reps,
     read_tail,
     stress_result,
 )
@@ -359,6 +361,35 @@ def memory_step() -> Step:
     return Step("memory", "memory", "gate", None, False, lambda ctx, state: Result(Status.SKIP, "not implemented"))
 
 
+def mla_step(key: str, reps: int) -> Step:
+    ids = [
+        f"{TESTS}/test_mla.py::test_mla_chunked_prefill"
+        "[blackhole-sp_only-with_determinism-scalar-k2_7-deep-200k+5k-func-torus-xy-8x4]"
+    ]
+    inner = pytest_step(key, key, "gate", None, ids, [f"--mla-determinism-reps={reps}"])
+
+    def run(ctx: Ctx, state: State) -> Result:
+        r = inner.run(ctx, state)
+        if ctx.mode_co or r.status == Status.HANG:
+            return r
+        if r.status == Status.PASS and mla_determinism_reps(Path(state.log).read_text(errors="replace")) != reps:
+            r = Result(Status.FAIL, f"passed without the {reps} reps determinism line")
+        d = step_dir(ctx, key)
+        sh(
+            ctx,
+            "python tools/tt-triage.py --run=check_dram_health --disable-progress "
+            f"--triage-summary-path={d / 'dram.txt'} --sqlite-output-path={d / 'dram.sqlite'}",
+            d / "dram.log",
+            timeout=600,
+        )
+        dram = dram_health(d / "dram.sqlite")
+        return Result(
+            r.status if r.status != Status.PASS else dram.status, f"{r.reason}; {dram.reason}", r.details + dram.details
+        )
+
+    return Step(key, key, "gate", None, True, run, inner.collect)
+
+
 def didt_step() -> Step:
     ids = ["tests/didt/test_minimal_matmul.py::test_minimal_matmul[blackhole-bf16_HiFi2-galaxy]"]
     opts = ["--didt-workload-iterations=1000", "--determinism-check-interval=50", "--timeout", "1200"]
@@ -412,7 +443,15 @@ def build_steps(models: list[str]) -> list[Step]:
     model_steps = [s for m in models for s in blocks[m]]
     model_steps += [stress_step("smoke", m, SMOKE_LOOPS, SMOKE_ENV, 2) for m in models]
     model_steps += [stress_step("soak", m, SOAK_LOOPS, SOAK_ENV, SOAK_ITERS) for m in models]
-    hardware = [reset_gate(), smi_step(), fabric_step(), memory_step(), didt_step()]
+    hardware = [
+        reset_gate(),
+        smi_step(),
+        fabric_step(),
+        memory_step(),
+        mla_step("mla-smoke", 50),
+        mla_step("mla-soak", 5000),
+        didt_step(),
+    ]
     return [paths_step(models), collect_step(hardware + model_steps)] + hardware + model_steps
 
 
