@@ -481,6 +481,9 @@ inline void _llk_pack_hw_configure_(
 
     LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
+
+    // ADDR_MOD_7 is invariant state: zero advance, so it behaves like a NOOP. SFPU ops also run from this thread.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
 }
 
 /**
