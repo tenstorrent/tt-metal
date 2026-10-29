@@ -76,6 +76,8 @@ sfpi_inline void finalize_col0_body(const uint32_t inv_w_bits, const uint32_t ep
 }
 
 // The same pass over row 0 (VectorMode::R: faces 0 and 1): vectors 0 / 1 of a face are rows 0-3, even / odd columns.
+// A zero inv (Σx² overflowed to +inf) is written as -0: the all-gathered record slot uses +0 as "not arrived yet", and
+// -0 · x scales exactly like +0.
 sfpi_inline void finalize_row0_body(const uint32_t inv_w_bits, const uint32_t eps_bits) {
 #pragma GCC unroll 0
     for (int v = 0; v < 2; v++) {
@@ -85,6 +87,8 @@ sfpi_inline void finalize_row0_body(const uint32_t inv_w_bits, const uint32_t ep
         if constexpr (!DST_ACCUM_MODE) {
             t = sfpi::convert<sfpi::vFloat16b>(t, sfpi::RoundMode::Nearest);
         }
+        v_if(t == 0.0f) { t = sfpi::setsgn(t, 1); }
+        v_endif;
         sfpi::dst_reg[0] = t;
         sfpi::dst_reg++;
     }

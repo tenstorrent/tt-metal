@@ -22,9 +22,10 @@
 //   collect_wave (owner) once the link ports' landed notifies cover the wave: read the G records of each owned row
 //                        from the ports straight into row 0 of cb_stats pages (group-position order; no CPU scatter)
 //   allgather_inv_wave   (owner) the finalized inv rows (compact: row 0, 2 x 64 B fp32) -> face 1 of every member's
-//                        cb_inv_rms rows; SEM_INV increment each
-//   (every member)       once SEM_INV covers the wave's owners, move each record into column 0 and push the wave's
-//                        Q_W cb_inv_rms pages
+//                        cb_inv_rms rows. No semaphore: inv = rsqrt(ss/W + eps) is never +0, so a zeroed record slot
+//                        is its own arrival flag (one word per 16 B L1 write granule is polled)
+//   (every member)       once every record of the wave arrived, move each into column 0, clear the slot, push the
+//                        wave's Q_W cb_inv_rms pages
 //
 // All NoC atomics are issued from this RISC-V (NCRISC); the kernel ends with noc_async_atomic_barrier().
 
@@ -169,7 +170,7 @@ void kernel_main() {
     constexpr uint32_t W_VALID_LAST = get_compile_time_arg_val(13);
     constexpr uint32_t DTYPE_KIND = get_compile_time_arg_val(14);  // 0 fp32, 1 bf16, 2 bfp8_b
     constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(15);
-    constexpr uint32_t SEM_INV = get_compile_time_arg_val(16);
+    [[maybe_unused]] constexpr uint32_t SEM_INV = get_compile_time_arg_val(16);  // unused since Refinement 3
     // SEM_GATHER holds one GB-bit field per owned wave (ordinal o): a contributor running a wave ahead can never
     // complete an earlier owned wave's count.
     constexpr uint32_t GB = get_compile_time_arg_val(22);
@@ -339,6 +340,12 @@ void kernel_main() {
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW>();
         }
+        // inv record slots start zeroed (arrival flags); every member clears a slot when it consumes it, so the
+        // slots are zero again whenever a later pass reuses them. No owner writes here before this core contributed
+        // to its first owned wave, which is after this point.
+        CircularBuffer inv_cb(cb_inv_rms);
+        noc.async_write_zeros(inv_cb, PW * Q_W * T_I, {.offset_bytes = 0});
+        noc.write_zeros_l1_barrier();
     }
 
     if constexpr (!SHARDED) {
@@ -506,8 +513,7 @@ void kernel_main() {
     // A non-blocking poll over three in-order queues, so no wave waits behind another wave's exchange:
     //   collect  (owned waves with rows)  landed notifies satisfied and cb_stats free -> records -> cb_stats
     //   allgather (owned waves)           the finalized rows in cb_rms_root -> every member's cb_inv_rms
-    //   inv      (every wave)             SEM_INV reached the wave's owners -> push the wave's Q_W pages
-    const uint32_t inv_sem = get_semaphore(SEM_INV);
+    //   inv      (every wave)             every inv record of the wave arrived -> column 0, push the wave's Q_W pages
     uint32_t w_lim = NW;  // end of the current pass block (the Phase B queues stop there)
     auto next_owned = [&](uint32_t from) -> uint32_t {
         uint32_t w = from;
@@ -590,7 +596,22 @@ void kernel_main() {
             cb_pop_front(cb_rms_root, no);
         }
     };
-    // member side: the n inv records of wave w (face 1 of each page) -> column 0 of the same pages
+    // member side: the n inv records of wave w (face 1 of each page) -> column 0 of the same pages; the record slot is
+    // cleared again (the arrival flag of the slot's next use)
+    constexpr uint32_t REC_CHUNKS = 2 * INV_HALF / 16;  // 16 B L1 write granules per record
+    auto inv_ready = [&](uint32_t w) -> bool {
+        const uint32_t n = n_wave(w);
+        for (uint32_t r = 0; r < n; ++r) {
+            volatile tt_l1_ptr uint32_t* rec =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inv_base + ((w % PW) * Q_W + r) * T_I + INV_FACE);
+            for (uint32_t c = 0; c < REC_CHUNKS; ++c) {
+                if (rec[4 * c] == 0) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
     auto unpack_inv = [&](uint32_t w) {
         DRMS_ZONE("rd_inv_col0");
         const uint32_t n = n_wave(w);
@@ -609,19 +630,12 @@ void kernel_main() {
                     p[col0_index(i)] = p[INV_FACE / 2 + i];
                 }
             }
+            volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + INV_FACE);
+            for (uint32_t i = 0; i < 2 * INV_HALF / 4; ++i) {
+                rec[i] = 0;
+            }
         }
     };
-    // SEM_INV counts owner increments cumulatively over waves, so they must reach every member in wave order: the
-    // owner of wave w increments only once its own SEM_INV shows every earlier wave complete (>= w * OWNERS). Owners
-    // write their rows, barrier, then increment — so any increment observed from wave v implies every wave < v landed
-    // on every member.
-    auto announce = [&](uint32_t /*w*/) {
-        for (uint32_t i = 0; i < G_W; ++i) {
-            const uint32_t m = rotated(i, my_j, G_W);
-            noc_semaphore_inc(get_noc_addr(member_x(m), member_y(m), inv_sem), 1);
-        }
-    };
-    volatile tt_l1_ptr uint32_t* my_inv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inv_sem);
     // Row-group pass barrier (passes > 1 only): before pass p writes into other members' cb_gather / cb_inv_rms
     // slots (the same slots pass p-1 used), every member's compute must be done with pass p-1. Each reader learns
     // that of its own compute from cb_inv_rms (every page it pushed was popped), clears its SEM_GATHER fields (all of
@@ -673,11 +687,10 @@ void kernel_main() {
         // ================= Phase B (the pass's waves) =================
         uint32_t wc = next_owned_rows(w_begin);  // next owned wave (with rows) to collect
         uint32_t wa = next_owned(w_begin);       // next owned wave whose rows to all-gather
-        uint32_t wn = next_owned(w_begin);       // next owned wave to announce (SEM_INV increments, wave-ordered)
         uint32_t wi = w_begin;                   // next wave whose inv rows to push
         cb_reserve_back(cb_inv_rms, (w_end - w_begin) * Q_W);
         inv_base = get_write_ptr(cb_inv_rms);
-        while (wi < w_end || wn < w_end) {
+        while (wi < w_end || wa < w_end) {
             if (wc < w_end) {
                 const uint32_t kp = group * OWNERS + my_k(wc);
                 if (landed_ok(wc, kp % L) && cb_pages_reservable_at_back(cb_stats, G * Q)) {
@@ -696,12 +709,7 @@ void kernel_main() {
                 }
             }
             invalidate_l1_cache();
-            if (wn < wa && *my_inv >= wn * OWNERS) {
-                announce(wn);
-                wn = next_owned(wn + 1);
-                continue;
-            }
-            if (wi < w_end && *my_inv >= (wi + 1) * OWNERS) {
+            if (wi < w_end && inv_ready(wi)) {
                 unpack_inv(wi);
                 cb_push_back(cb_inv_rms, Q_W);
                 ++wi;
