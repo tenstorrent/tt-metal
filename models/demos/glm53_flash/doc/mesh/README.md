@@ -1581,6 +1581,19 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 18:55: multimodal under per-row ownership takes the SP path
+
+The 1 M profile (32 requests, rows independent) refused image and video prompts with the adapter's NotImplementedError,
+which killed the engine (the multimodal smoke's stage e, r1). The wave path has no vision scatter (the traced wave
+embeds the ids inside the capture and a member's row holds other requests' pools), so a multimodal request is
+`sp_required`: SP-first placement takes a slot index live on no row and the planner emits an SP step for it; the
+planner refuses, naming the cause, only when every index of its row is shared. The r2 run then survived but answered
+without the image (TTFT 2 s against 13.6 s on the 4-slot profile): the rows-independent branch's SP step ran the text
+prefill (`_prefill_one`) and never the multimodal one. Fixed (1cb68898184): the SP step runs `_prefill_one_mm` when
+the request carries media, and its plan is never traced (the eager chunk's streams take the scattered features).
+Pinned in the generator host suite (an `sp_required` SP step plans eager; the same slot as text plans traced); r3 is the
+served check (stage e on the catalogued 1 M profile).
+
 ### 2026-10-29 18:30: served parity, measured
 
 The same 48 ms device step at 32 users shows as 61 ms per step in the adapter (host wall: the packed token / position

@@ -289,7 +289,11 @@ def test_wave_planner_groups_walks_and_traces():
     t.release(6)
     mm = t.allocate(7, prefer_sp=True)
     mm.sp_required = True
-    assert t.sp_eligible(7) and type(wp.plan([(7, 0, 200)])[0]).__name__ == "SPStep"
+    (mm_step,) = wp.plan([(7, 0, 200)])
+    assert t.sp_eligible(7) and type(mm_step).__name__ == "SPStep"
+    assert mm_step.plan.kind == "eager"  # the vision features are scattered into an eager chunk; a text SP step traces
+    mm.sp_required = False
+    assert wp.plan([(7, 0, 200)])[0].plan.kind == "traced"
     t.release(7)
     t.allocate(5)  # the wave-affine order: index 0 is full, so (0, 1) ...
     t.allocate(7)  # ... and (1, 1): index 1 now lives on another row, no SP for a multimodal prompt here
