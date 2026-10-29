@@ -27,11 +27,12 @@ def comp_pcc_lowmem(golden, calculated, pcc=0.99, chunk=1 << 23):
     """
     Memory-frugal drop-in for comp_pcc on very large tensors.
 
-    Computes the same Pearson correlation coefficient as comp_pcc, but in a
-    chunked two-pass scan instead of full-size float64 copies of both tensors
-    (comp_pcc needs ~20-26 bytes per element, 10-13 GiB on the largest
-    prefill outputs). Non-finite elements
-    are excluded pairwise, matching np.ma.masked_invalid. Returns
+    Scans the tensors in chunks, in two passes, instead of making full-size
+    float64 copies of both (comp_pcc needs ~20-26 bytes per element, 10-13 GiB
+    on the largest prefill outputs). On finite, non-constant data the PCC agrees
+    with comp_pcc up to float32 rounding. It skips pairs where either value is
+    non-finite, while comp_pcc sets those values to 0, and it scores constant
+    tensors 1.0 or 0.0 where comp_pcc falls back to allclose. Returns
     (passing, output_str) so it can substitute for comp_pcc directly.
     """
     if golden.dtype != calculated.dtype:
@@ -628,8 +629,8 @@ def run_flash_mla_prefill_impl(
 
     # The full prefill output is [B, nh, S, d] — up to ~0.5G elements. The
     # shared comp_pcc makes full-size float64 copies of both tensors (10-13 GiB
-    # at that size). comp_pcc_lowmem computes the same Pearson PCC
-    # in a chunked two-pass scan, keeping peak memory at the input size.
+    # at that size). comp_pcc_lowmem computes the Pearson PCC in a chunked
+    # two-pass scan, keeping peak memory at the input size.
     out_pass, out_pcc = comp_pcc_lowmem(tt_out_torch, out_t, pcc_threshold)
     logger.debug(f"Output PCC: {out_pcc}")
 
