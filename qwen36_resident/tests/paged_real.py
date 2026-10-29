@@ -69,13 +69,17 @@ def main():
         blocks, tables = shuffled_tables(1, max_pos, seed=7)
         logits = {}
         captured = False
+        runs = []  # (run name, KV mode): a mode named again runs again as "mode#2", ...
         for mode in a.modes.split(","):
+            k = sum(m == mode for _, m in runs)
+            runs.append((mode if k == 0 else f"{mode}#{k + 1}", mode))
+        for run, mode in runs:
             st = State(d, layers - n_attn, n_attn, 0, max_pos=max_pos, zero=True, kv=False)
             w = Q.load(ck, d, layers, interval)
             kw = dict(kv_pool_blocks=blocks, block_tables=tables) if mode == "paged" else {}
             model = ResidentModel(mesh, d, w, st, layers, interval, lm_head=True, embed=pp.embed, **kw)
             del w, st
-            phase(f"{mode} decode model" + (f" (pool {blocks} blocks, table {tables[0][:6]}...)" if kw else ""))
+            phase(f"{run} decode model" + (f" (pool {blocks} blocks, table {tables[0][:6]}...)" if kw else ""))
             model.step(model.token_state(emb[0].float(), 0))
             ttnn.synchronize_device(mesh)
             model.reset()
@@ -83,7 +87,7 @@ def main():
             if not captured:
                 pp.capture()
                 captured = True
-            phase(f"{mode} traces")
+            phase(f"{run} traces")
 
             def prefill(prompt):
                 model.reset()
@@ -101,7 +105,7 @@ def main():
             for T in contexts:
                 prefill(ids[:T])
                 lg = [logits_at(ids[T - 1 + k], T - 1 + k) for k in range(a.steps)]
-                logits[(mode, T)] = torch.stack(lg)
+                logits[(run, T)] = torch.stack(lg)
                 res["steps"][T] = [
                     dict(
                         pos=T - 1 + k,
@@ -112,7 +116,7 @@ def main():
                     for k, x in enumerate(lg)
                 ]
                 hits = sum(s["hit"] for s in res["steps"][T])
-                phase(f"{mode} T={T}: {a.steps} teacher-forced steps, top-1 vs text {hits}/{a.steps}")
+                phase(f"{run} T={T}: {a.steps} teacher-forced steps, top-1 vs text {hits}/{a.steps}")
             for T in tpot_ctx:
                 prefill(ids[:T])
                 model.set_sampling(0.0, 1, 1.0, 0)
@@ -128,31 +132,38 @@ def main():
                     ttnn.synchronize_device(mesh)
                     reps.append((time.time() - t0) / a.tpot_steps * 1e3)
                 res["tpot"][T] = reps
-                phase(f"{mode} T={T}: TPOT {' / '.join(f'{r:.3f}' for r in reps)} ms")
-            out["modes"][mode] = res
+                phase(f"{run} T={T}: TPOT {' / '.join(f'{r:.3f}' for r in reps)} ms")
+            out["modes"][run] = res
             model.release_trace()
             pp._ho.pop("model", None)  # the handoff's job cache holds the model
             del model
             gc.collect()
             ttnn.synchronize_device(mesh)
-        if {"contiguous", "paged"} <= set(a.modes.split(",")):
-            for T in contexts:
-                c, p = logits[("contiguous", T)], logits[("paged", T)]
-                same = [bool(torch.equal(c[k], p[k])) for k in range(a.steps)]
-                diff = float((c - p).abs().max())
-                out["identical"][T] = dict(steps=sum(same), of=a.steps, max_abs_diff=diff)
-                print(
-                    f"T={T}: paged vs contiguous logits bit-identical at {sum(same)}/{a.steps} steps "
-                    f"(max |diff| {diff})",
-                    flush=True,
-                )
+        if "contiguous" in out["modes"]:
+            # every other run's logits against the first contiguous run's
+            for run, _ in runs[1:] if runs[0][0] == "contiguous" else runs:
+                if run == "contiguous":
+                    continue
+                for T in contexts:
+                    c, p = logits[("contiguous", T)], logits[(run, T)]
+                    same = [bool(torch.equal(c[k], p[k])) for k in range(a.steps)]
+                    diff = float((c - p).abs().max())
+                    out["identical"][f"{run} T={T}"] = dict(steps=sum(same), of=a.steps, max_abs_diff=diff)
+                    print(
+                        f"T={T}: {run} vs contiguous logits bit-identical at {sum(same)}/{a.steps} steps "
+                        f"(max |diff| {diff})",
+                        flush=True,
+                    )
+            med = lambda r, T: sorted(out["modes"][r]["tpot"][T])[a.tpot_reps // 2]
             for T in tpot_ctx:
-                tc = sorted(out["modes"]["contiguous"]["tpot"][T])[a.tpot_reps // 2]
-                tp = sorted(out["modes"]["paged"]["tpot"][T])[a.tpot_reps // 2]
-                print(
-                    f"T={T}: TPOT median contiguous {tc:.3f} ms, paged {tp:.3f} ms ({100 * (tp / tc - 1):+.2f}%)",
-                    flush=True,
-                )
+                by = {m: [med(r, T) for r, rm in runs if rm == m] for m in ("contiguous", "paged")}
+                if by["contiguous"] and by["paged"]:
+                    tc, tp = sum(by["contiguous"]) / len(by["contiguous"]), sum(by["paged"]) / len(by["paged"])
+                    print(
+                        f"T={T}: TPOT (median per run) contiguous {by['contiguous']} ms, paged {by['paged']} ms: "
+                        f"paged {100 * (tp / tc - 1):+.2f}% vs the contiguous mean",
+                        flush=True,
+                    )
     finally:
         close_mesh(mesh)
     if a.out:

@@ -376,7 +376,7 @@ def main():
                 time_steps=a.time_steps,
             )
             if a.verify:
-                res += run_paged_verify(mesh, a.layers, a.steps, max_pos=a.max_pos)
+                res += run_paged_verify(mesh, a.layers, a.steps, max_pos=a.max_pos, start=a.start)
         else:
             res = run_real(mesh, a.ref, a.max_len, [int(t) for t in a.ttft.split(",")], a.tpot_steps)
     finally:
