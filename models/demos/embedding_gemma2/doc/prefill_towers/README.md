@@ -32,11 +32,12 @@ change after it). Sustained headline; AICLK and board power are the medians of t
 | audio | 13x10 | 1x768 | 11.952 | 11.901 | -0.43 % | - | - | - | 0.99767 / 0.99992 (identical) |
 
 - Gates: soft-token PCC >= 0.99 and embedding cosine (cosine of the mean soft token) >= 0.99 vs HF fp32
-  on the traced replay pass for every row. 13 x 10 runs only the topology rewrites (bit-identical there:
-  same PCC, cosine and minimum token cosine as the control).
+  on the traced replay pass for every row. 13 x 10 runs only the topology rewrites (vision: max abs 0 vs
+  the switch off; audio: same PCC, cosine and minimum token cosine as the control, see "13 x 10 calls unchanged").
 - Vision throttles under sustained load (AICLK 1225-1256 MHz at the 150 W limit); the after run holds a
-  31 MHz higher clock at the same power, so the sustained gain (-9.2 %) exceeds the burst gain (-7.0 %)
-  **[M]** (telemetry). Audio stays at 1350 MHz; the after run draws 9 W (256) / 3 W (768) less.
+  31 MHz higher clock at the same power (1256 vs 1225 MHz), so the sustained gain (-9.2 %) exceeds the
+  burst gain (-7.0 %) **[M]** (telemetry). The -9.2 % includes that clock difference (about 2.5 % of
+  clock **[I]**); the code effect is closer to the burst -7.0 % (review E10.1 M1). Audio stays at 1350 MHz; the after run draws 9 W (256) / 3 W (768) less.
 - Window spread under 0.1 % (audio) and under 1.6 % (vision sustained) in every row.
 - The stage-1 baseline (`run/baseline.jsonl`, harness commit `36736a6ca8`) matches the controls: vision
   16.277 burst, audio 7.585 / 12.192. Vision sustained differs between sessions (17.513 vs 17.807 ms,
@@ -141,10 +142,12 @@ current tree and for the same files at `7febde8744`:
     grid 13x10: 0 of 89 entries differ
     --tuned-off: 0 of 89 differ at both grids
 
-The topology rewrites run on every grid. They are bit-identical: max abs 0 against the switch off in
-`vision_v3off_g12`, `vision_v3off_g13` (13 x 10 session) and `audio_a0` (12 x 10); at 13 x 10 the audio
-bench check gives the control's soft-token PCC, embedding cosine and minimum token cosine to every
-printed digit (table above).
+The topology rewrites run on every grid and every shape (batched shapes included). Bit identity (max abs 0
+against the switch off) was proven only at batch 1: vision 1 x 2560 on both grids (`vision_v3off_g12`,
+`vision_v3off_g13`) and audio 1 x 256 / 1 x 768 at 12 x 10 (`audio_a0`). At 13 x 10 the audio bench check
+gives the control's soft-token PCC, embedding cosine and minimum token cosine to every printed digit
+(table above), which is consistent with bit identity but not a max-abs proof. The batched shapes were not
+compared against the switch off; their existing PCC tests pass (review E10.1 M3).
 
 ## Accuracy and gates
 
