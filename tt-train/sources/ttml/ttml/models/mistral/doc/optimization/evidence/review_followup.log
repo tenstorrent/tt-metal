@@ -1,0 +1,23 @@
+=== TP gradient check: single chip reference 2026-10-29T14:51:58Z
+rc=0
+tp 1: transposed 4, fused 3
+saved 8 gradients, loss 12.8125
+=== 16-layer Tracy, final path (plan rule: 16 fits now) 2026-10-29T14:52:35Z
+rc=0
+step 2: DRAM allocated after forward 24.80 GiB
+16 of 40 layers, tp 1: 694.4 ms/step over 2 steps (best 693.3), 57.9 TFLOP/s, MFU 38.98%
+=== TP gradient check: TP=4 2026-10-29T14:55:09Z
+rc=0
+tp 4: transposed 3, fused 2
+saved 8 gradients, loss 12.8125
+  LoraModel/model/blocks/0/attention/out_linear/lora_A    (1, 1, 16, 4096)   0.033922 1.47e+00 FAIL
+  LoraModel/model/blocks/0/attention/out_linear/lora_B    (1, 1, 5120, 16)   0.002916 1.36e+00 FAIL
+  LoraModel/model/blocks/0/attention/qkv_linear/lora_A    (1, 1, 16, 5120)   0.016803 1.41e+00 FAIL
+  LoraModel/model/blocks/0/attention/qkv_linear/lora_B    (1, 1, 6144, 16)   0.001652 1.41e+00 FAIL
+  LoraModel/model/blocks/0/mlp/w2/lora_A                  (1, 1, 16, 32768)  0.004835 1.42e+00 FAIL
+  LoraModel/model/blocks/0/mlp/w2/lora_B                  (1, 1, 5120, 16)   -0.026859 1.45e+00 FAIL
+  LoraModel/model/blocks/0/mlp/w_gate_up/lora_A           (1, 1, 16, 5120)   0.002500 1.37e+00 FAIL
+  LoraModel/model/blocks/0/mlp/w_gate_up/lora_B           (1, 1, 65536, 16)  0.000804 1.39e+00 FAIL
+  loss                                                    (1,)               1.000000 0.00e+00 ok
+FAIL: ['LoraModel/model/blocks/0/attention/out_linear/lora_A', 'LoraModel/model/blocks/0/attention/out_linear/lora_B', 'LoraModel/model/blocks/0/attention/qkv_linear/lora_A', 'LoraModel/model/blocks/0/attention/qkv_linear/lora_B', 'LoraModel/model/blocks/0/mlp/w2/lora_A', 'LoraModel/model/blocks/0/mlp/w2/lora_B', 'LoraModel/model/blocks/0/mlp/w_gate_up/lora_A', 'LoraModel/model/blocks/0/mlp/w_gate_up/lora_B']
+=== done 2026-10-29T14:55:50Z

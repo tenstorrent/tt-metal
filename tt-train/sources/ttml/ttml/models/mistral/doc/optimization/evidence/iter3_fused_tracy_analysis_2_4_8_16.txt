@@ -1,0 +1,26 @@
+depth | steps used | ops/step | device ms/step | per-step ms
+    2 |    2 |      218 |    107.28 | 107.32, 107.24
+    4 |    2 |      422 |    172.09 | 172.10, 172.09
+    8 |    2 |      830 |    301.72 | 301.66, 301.78
+   16 |    2 |     1646 |    563.62 | 563.84, 563.40
+
+fit: device ms = 41.66 + L x 32.602
+  L= 2: measured 107.28, fit 106.86, residual +0.41 ms (+0.4 %)
+  L= 4: measured 172.09, fit 172.07, residual +0.02 ms (+0.0 %)
+  L= 8: measured 301.72, fit 302.48, residual -0.76 ms (-0.3 %)
+  L=16: measured 563.62, fit 563.30, residual +0.32 ms (+0.1 %)
+projection to 40 layers: 1345.8 ms device per step
+ops per step: 14 + L x 102.0 -> 4094 at full depth
+
+class | fixed ms | per-layer ms | projected ms at full depth | share
+glue    |     1.24 |        0.914 |       37.8 |   2.8 %
+layout  |    -0.04 |        0.792 |       31.6 |   2.4 %
+math    |    40.49 |       29.963 |     1239.0 |  92.1 %
+other   |    -0.03 |        0.934 |       37.3 |   2.8 %
+
+ranked cost table, projected to 40 layers (ms/step | ops/step | class | op | in0 | in1 | cores)
+  296.32 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x5184 | 1x1x5184x65536 | 88
+  215.47 |    40.0 | math   | MatmulDeviceOperation | 1x1x5184x65536 | 1x1x1024x65536 | 110
+  137.75 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x32768 | 1x1x5120x32768 | 88
+  121.59 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32768 | 110
+   54.29 |    40.0 | math   | SDPABackwardKVDeviceOperation | 1x32x1024x128 | 1x32x1024x128 | 110
