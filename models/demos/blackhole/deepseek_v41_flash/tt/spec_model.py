@@ -426,7 +426,9 @@ class SpecRunner:
 
         n, B = self.n, self.B
         c = self.sample_cfg
-        if hostopt.on("PACK"):
+        if hostopt.on("PACK") and hasattr(
+            self.samp, "set_params_tmpl"
+        ):  # (the vLLM server samples with SharedSamplerAdapter, which has its own cached host side: shipped path)
             # DSV41_HOSTOPT_PACK=1: the per-row columns are rebuilt only when the sampling config changes; per round only the uniforms are drawn (same generator calls, same order) and uploaded
             key = (repr(c["temperature"]), repr(c["top_k"]), repr(c["top_p"]))
             if getattr(self, "_sp_key", None) != key:
