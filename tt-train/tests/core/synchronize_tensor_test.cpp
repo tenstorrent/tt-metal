@@ -4,12 +4,17 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <core/xtensor_utils.hpp>
 #include <cstdint>
+#include <functional>
 #include <random>
+#include <string>
 #include <tt-metalium/bfloat16.hpp>
+#include <utility>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
@@ -17,6 +22,8 @@
 #include "core/tt_tensor_utils.hpp"
 #include "test_utils/mesh_utils.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/graph/graph_processor.hpp"
+#include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 using namespace ttml;
@@ -63,6 +70,40 @@ xt::xarray<float> exact_mean(const xt::xarray<float>& values) {
 double share_equal(const xt::xarray<float>& result, const xt::xarray<float>& expected) {
     const auto equal = xt::sum(xt::cast<std::int64_t>(xt::equal(result, expected)))();
     return static_cast<double>(equal) / static_cast<double>(expected.size());
+}
+
+// The device operations `call` runs, in order, recorded with ttnn's graph capture.
+std::vector<std::string> device_operations(const std::function<ttnn::Tensor()>& call) {
+    ttnn::graph::ScopedGraphCapture capture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
+    {
+        [[maybe_unused]] const auto result = call();
+    }
+    std::vector<std::string> operations;
+    for (const auto& name : ttnn::graph::extract_calltrace(capture.end_graph_capture())) {
+        if (name.ends_with("DeviceOperation")) {
+            operations.push_back(name);
+        }
+    }
+    return operations;
+}
+
+const std::vector<std::string> kReduceScatterRoute = {
+    "TypecastDeviceOperation",
+    "ReduceScatterMinimalAsyncDeviceOperation",
+    "BinaryNgDeviceOperation",
+    "AllGatherAsyncDeviceOperation"};
+
+// Whether a sum's device operations divide by the device count before an all-gather, as the reduce-scatter route
+// does so that its all-gather carries the narrower dtype. ttnn's all_reduce divides after its sum is complete, whether
+// it runs a reduce-scatter and an all-gather or, for a shape that doesn't split, a gather and a local reduce.
+bool divides_before_gathering(const std::vector<std::string>& operations) {
+    const auto mean = std::ranges::find(operations, "BinaryNgDeviceOperation");
+    const auto gather = std::ranges::find(operations, "AllGatherAsyncDeviceOperation");
+    return mean != operations.end() && gather != operations.end() && mean < gather;
+}
+
+bool casts(const std::vector<std::string>& operations) {
+    return std::ranges::find(operations, "TypecastDeviceOperation") != operations.end();
 }
 
 class SynchronizeTensorTest : public test_utils::Mesh1x2Fixture {
@@ -202,4 +243,41 @@ TEST_F(SynchronizeTensorTest, SynchronizeGradientsTakesTheConfiguredReduceDtypeU
     autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::BFLOAT16);
     expect_same_on_every_device(synchronize(std::nullopt), bf16);
     expect_same_on_every_device(synchronize(ttnn::DataType::FLOAT32), fp32);
+}
+
+// Which route each sum takes, from the device operations it runs: only an fp32 sum of a large bf16 tensor that splits
+// into whole-tile slices takes the reduce-scatter route; an fp32 tensor needs no cast and gains nothing from it.
+TEST_F(SynchronizeTensorTest, OnlyALargeNarrowerTensorTakesTheReduceScatterRoute) {
+    const auto large = upload(make_gradients(512, 1024, 3));
+    const auto small = upload(make_gradients(64, 128, 1));
+    const auto no_whole_tile_slices = upload(make_gradients(544, 992, 4));
+    const auto large_fp32 = ttnn::typecast(large, ttnn::DataType::FLOAT32);
+    const auto operations = [](const ttnn::Tensor& tensor, std::optional<ttnn::DataType> reduce_dtype) {
+        return device_operations(
+            [&] { return core::distributed::synchronize_tensor(tensor, {kDdpAxis}, reduce_dtype); });
+    };
+
+    EXPECT_EQ(operations(large, ttnn::DataType::FLOAT32), kReduceScatterRoute);
+    for (const auto& tensor : {small, no_whole_tile_slices}) {
+        const auto all_reduce = operations(tensor, ttnn::DataType::FLOAT32);
+        EXPECT_TRUE(casts(all_reduce));
+        EXPECT_FALSE(divides_before_gathering(all_reduce));
+    }
+    for (const auto& [tensor, reduce_dtype] : std::vector<std::pair<ttnn::Tensor, std::optional<ttnn::DataType>>>{
+             {large_fp32, ttnn::DataType::FLOAT32}, {large, std::nullopt}, {large, ttnn::DataType::BFLOAT16}}) {
+        const auto all_reduce = operations(tensor, reduce_dtype);
+        EXPECT_FALSE(casts(all_reduce));
+        EXPECT_FALSE(divides_before_gathering(all_reduce));
+    }
+}
+
+// The parallelism context describes the mesh it was made for, so closing the device drops it and the next mesh
+// initializes its own.
+TEST_F(SynchronizeTensorTest, CloseDeviceDropsTheParallelismContext) {
+    autograd::ctx().initialize_parallelism_context({.enable_ddp = true});
+    autograd::ctx().close_device();
+    EXPECT_FALSE(autograd::ctx().is_parallelism_context_initialized());
+
+    SetUp();  // reopens the mesh as the fixture does; TearDown closes it again
+    EXPECT_NO_THROW(autograd::ctx().initialize_parallelism_context({.enable_ddp = true}));
 }
