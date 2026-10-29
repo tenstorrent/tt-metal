@@ -30,7 +30,7 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam unpack_to_dest: Unpack writes directly to dest (vs. via source registers).
- * @tparam acc_to_dest: Accumulate the broadcast into dest instead of overwriting it.
+ * @tparam acc_to_dest: Accumulate a B2D broadcast into dest instead of overwriting it; must match the init.
  * @param dst_index: Tile index into the destination register.
  * @param src_format: Source data format (DataFormat enum underlying value).
  * @param dst_format: Destination data format (DataFormat enum underlying value).
@@ -48,6 +48,7 @@ template <
     bool acc_to_dest               = false>
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format)
 {
+    static_assert(!acc_to_dest || (type == DataCopyType::B2D && src_b_bcast_type != BroadcastType::NONE), "acc_to_dest is supported only for B2D broadcasts");
     static_assert(!(acc_to_dest && unpack_to_dest), "acc_to_dest is not supported when unpacking to dest");
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
@@ -450,7 +451,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
             }
             else
             {
-                ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, dest_accum, broadcast_type, addr_mod, 0));
+                ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(p_elwise::CLR_NONE, dest_accum, broadcast_type, addr_mod, 0 /*dst*/));
                 tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
                 tmp.program();
             }
@@ -466,7 +467,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
             }
             else // ELWADD is used for non UInt16 case, since it moves 8 rows per cycle
             {
-                ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, dest_accum, broadcast_type, addr_mod, 0));
+                ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(p_elwise::CLR_NONE, dest_accum, broadcast_type, addr_mod, 0 /*dst*/));
                 tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
                 tmp.program();
             }
@@ -474,8 +475,8 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
         else if constexpr (bcast_type == BroadcastType::ROW && acc_to_dest)
         {
             // _llk_unpack_A_ publishes one zeroed SrcA bank per tile: the tile's last ELWADD releases it.
-            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(p_elwise::CLR_NONE, dest_accum, p_elwise::SRCB_BCAST_ROW, addr_mod, 0));
-            tmp.set_last_outer_loop_instr(TT_OP_ELWADD(p_elwise::CLR_A, dest_accum, p_elwise::SRCB_BCAST_ROW, addr_mod, 0));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(p_elwise::CLR_NONE, dest_accum, p_elwise::SRCB_BCAST_ROW, addr_mod, 0 /*dst*/));
+            tmp.set_last_outer_loop_instr(TT_OP_ELWADD(p_elwise::CLR_A, dest_accum, p_elwise::SRCB_BCAST_ROW, addr_mod, 0 /*dst*/));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_B, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
             tmp.program();
         }

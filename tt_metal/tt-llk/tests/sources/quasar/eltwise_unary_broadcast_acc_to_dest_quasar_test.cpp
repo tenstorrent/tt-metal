@@ -2,14 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unary broadcast with acc_to_dest: every tile is broadcast into Dest with a plain pass, then broadcast
-// again with acc_to_dest = ACC_TO_DEST. The result is 2 * bcast(B) when accumulating, bcast(B) otherwise.
+// Unary broadcast with acc_to_dest: a plain broadcast pass of A seeds Dest, then a broadcast pass of B runs with
+// acc_to_dest = ACC_TO_DEST. The result is bcast(A) + bcast(B) when accumulating, bcast(B) otherwise.
 
 #include <cstdint>
 
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
+#include "perf.h"
+
+// perf.h declares PerfRunType, which the generated params.h uses.
 #include "params.h"
 #include "quasar_test_common.h"
 #include "sfpu_stub.h"
@@ -45,7 +48,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
-    const auto bfd_unpack =
+    const auto bfd_unpack_A =
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+    const auto bfd_unpack_B =
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(params.buffer_B[0]), formats.unpack_A_src);
     // The accumulating pass zeroes SrcA for ELWADD, so both unpackers carry the operand format.
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
@@ -53,8 +58,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
-        unpack_block<false>(bfd_unpack, block * tiles_in_block, tiles_in_block);
-        unpack_block<ACC_TO_DEST>(bfd_unpack, block * tiles_in_block, tiles_in_block);
+        unpack_block<false>(bfd_unpack_A, block * tiles_in_block, tiles_in_block);
+        unpack_block<ACC_TO_DEST>(bfd_unpack_B, block * tiles_in_block, tiles_in_block);
     }
 }
 

@@ -24,6 +24,8 @@
  * @tparam EN_32BIT_DEST set if math destination register is set to Float32/Int32 mode
  * @tparam src_b_bcast_type Broadcast mode; non-NONE uses unary-broadcast math init when type is B2D
  * @tparam unpack_to_dest Set true to enable the UNP_DEST routing decision (unary, non-broadcast path)
+ * @tparam acc_to_dest Accumulate the broadcast into dest instead of overwriting it; broadcast path only, and must match
+ * llk_unpack_A_init
  * @param operand Logical dataflow buffer id for the input operand
  */
 template <
@@ -32,7 +34,8 @@ template <
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false,
     bool is_int_fpu_en /*maybe_unused*/ = false,
-    bool tilize /*maybe_unused*/ = false>
+    bool tilize /*maybe_unused*/ = false,
+    bool acc_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
@@ -44,6 +47,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
 
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
+        static_assert(!acc_to_dest, "acc_to_dest is supported only for unary broadcast");
         // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
         if constexpr (!unpack_to_dest) {
             _llk_math_eltwise_unary_datacopy_init_<type, EN_32BIT_DEST>(
@@ -59,7 +63,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
                 tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
             "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
 
-        _llk_math_eltwise_unary_broadcast_init_<src_b_bcast_type, EN_32BIT_DEST, false /*unpack_to_dest*/>(
+        _llk_math_eltwise_unary_broadcast_init_<src_b_bcast_type, EN_32BIT_DEST, false /*unpack_to_dest*/, acc_to_dest>(
             tensor_shape);
     }
 }

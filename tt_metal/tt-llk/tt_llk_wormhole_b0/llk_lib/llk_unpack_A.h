@@ -266,6 +266,8 @@ inline void _llk_unpack_A_mop_config_(
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
+ * @note For BType != NONE, pass the same acc_to_dest as @ref _llk_math_eltwise_unary_datacopy_init_ and
+ *       @ref _llk_math_eltwise_unary_datacopy_ on the math thread; a mismatch drops the accumulation or hangs on SrcA.
  * @ref _llk_unpack_A_ is the matching execute call.
  * @ref _llk_math_eltwise_unary_datacopy_init_ is the matching init on the math thread (datacopy/transpose consumer).
  */
@@ -344,6 +346,8 @@ inline void _llk_unpack_A_init_(
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function, and
  *       @ref _llk_unpack_A_uninit_ after it as the matching teardown (currently a no-op).
+ * @note For BType != NONE, pass the same acc_to_dest as @ref _llk_math_eltwise_unary_datacopy_init_ and
+ *       @ref _llk_math_eltwise_unary_datacopy_ on the math thread; a mismatch drops the accumulation or hangs on SrcA.
  * @ref _llk_math_eltwise_unary_datacopy_ on the math thread consumes the tile unpacked here.
  */
 template <

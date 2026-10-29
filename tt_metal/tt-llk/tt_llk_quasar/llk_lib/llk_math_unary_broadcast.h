@@ -208,7 +208,7 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
             constexpr std::uint32_t last_inner_addr_mod = (BROADCAST_TYPE == BroadcastType::COL) ? ADDR_MOD_1 : ADDR_MOD_0;
             constexpr std::uint32_t dest_accum          = acc_to_dest ? p_elwise::ENABLE_ACCUM : p_elwise::DISABLE_ACCUM;
             const auto elwadd_bcast_instr               = [srcb_bcast](std::uint32_t clr, std::uint32_t addr_mod)
-            { return TT_OP_ELWADD(clr, dest_accum, srcb_bcast, addr_mod, 0); };
+            { return TT_OP_ELWADD(clr, dest_accum, srcb_bcast, addr_mod, 0 /*dst*/); };
 
             ckernel_template temp(outer, inner, elwadd_bcast_instr(p_elwise::CLR_NONE, ADDR_MOD_0));
             if constexpr (BROADCAST_TYPE != BroadcastType::SCALAR)

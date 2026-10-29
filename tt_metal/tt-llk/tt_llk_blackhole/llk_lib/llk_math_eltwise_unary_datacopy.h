@@ -30,7 +30,7 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam unpack_to_dest: Unpack writes directly to dest (vs. via source registers).
- * @tparam acc_to_dest: Accumulate the broadcast into dest instead of overwriting it.
+ * @tparam acc_to_dest: Accumulate a B2D broadcast into dest instead of overwriting it; must match the init.
  * @param dst_index: Tile index into the destination register.
  * @param src_format: Source data format (DataFormat enum underlying value).
  * @param dst_format: Destination data format (DataFormat enum underlying value).
@@ -50,6 +50,7 @@ template <
 inline void _llk_math_eltwise_unary_datacopy_(
     const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
 {
+    static_assert(!acc_to_dest || (type == DataCopyType::B2D && src_b_bcast_type != BroadcastType::NONE), "acc_to_dest is supported only for B2D broadcasts");
     static_assert(!(acc_to_dest && unpack_to_dest), "acc_to_dest is not supported when unpacking to dest");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
@@ -528,16 +529,18 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
 
         if constexpr (bcast_type == BroadcastType::SCALAR)
         {
-            const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16)) ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
-                                                                                            : TT_OP_ELWADD(0, dest_accum, broadcast_type, addr_mod, 0);
+            const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16))
+                                              ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
+                                              : TT_OP_ELWADD(p_elwise::CLR_NONE, dest_accum, broadcast_type, addr_mod, 0 /*dst*/);
             ckernel_template tmp(outerloop, innerloop, copy_op);
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
             tmp.program();
         }
         else if constexpr (bcast_type == BroadcastType::COL)
         {
-            const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16)) ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
-                                                                                            : TT_OP_ELWADD(0, dest_accum, broadcast_type, addr_mod, 0);
+            const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16))
+                                              ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
+                                              : TT_OP_ELWADD(p_elwise::CLR_NONE, dest_accum, broadcast_type, addr_mod, 0 /*dst*/);
             // With acc_to_dest, _llk_unpack_A_ publishes one zeroed SrcA bank per face.
             constexpr std::uint32_t clr_srca = acc_to_dest ? p_setrwc::CLR_A : 0;
             ckernel_template tmp(outerloop, innerloop, copy_op);
@@ -547,7 +550,7 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
         else if constexpr (bcast_type == BroadcastType::ROW && acc_to_dest)
         {
             // _llk_unpack_A_ publishes one SrcB face and one zeroed SrcA bank per face.
-            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, dest_accum, p_elwise::SRCB_BCAST_ROW, addr_mod, 0));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(p_elwise::CLR_NONE, dest_accum, p_elwise::SRCB_BCAST_ROW, addr_mod, 0 /*dst*/));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
             tmp.program();
         }

@@ -28,7 +28,7 @@ from helpers.param_config import (
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
@@ -123,7 +123,11 @@ def test_unary_broadcast_quasar(
     *,
     is_perf=False,
     perf_report=None,
+    acc_to_dest=None,
 ):
+    """Unary broadcast of B, or with acc_to_dest set, a plain broadcast pass of A followed by an acc_to_dest
+    broadcast pass of B (sources/quasar/eltwise_unary_broadcast_acc_to_dest_quasar_test.cpp).
+    """
     unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     tile_rows, tile_cols = TILE_DIMENSIONS
@@ -158,30 +162,48 @@ def test_unary_broadcast_quasar(
 
     if not is_perf:
         generate_broadcast_golden = get_golden_generator(BroadcastGolden)
-        golden_tensor = generate_broadcast_golden(
-            broadcast_type,
-            src_B,
-            formats.output_format,
-            num_faces=num_faces,
-            tile_cnt=tile_cnt,
-            face_r_dim=face_r_dim,
-        )
 
-    src_A = src_B
+        def broadcast_golden(src):
+            return generate_broadcast_golden(
+                broadcast_type,
+                src,
+                formats.output_format,
+                num_faces=num_faces,
+                tile_cnt=tile_cnt,
+                face_r_dim=face_r_dim,
+            )
+
+        golden_tensor = broadcast_golden(src_B)
+        if acc_to_dest:
+            golden_tensor = (
+                broadcast_golden(src_A).float() + golden_tensor.float()
+            ).to(format_dict[formats.output_format])
+
+    if acc_to_dest is None:
+        src_A = src_B
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
 
     unpacker_sel = UnpackerEngine.UnpA if unpack_to_dest else UnpackerEngine.UnpB
 
+    templates = [
+        BROADCAST_TYPE(broadcast_type),
+        DEST_SYNC(dest_sync_mode),
+    ]
+    if acc_to_dest is None:
+        templates.insert(0, UNPACKER_ENGINE_SEL(unpacker_sel))
+    else:
+        templates.append(ACC_TO_DEST(acc_to_dest))
+
     test_config_kwargs = {
-        "test_name": "sources/quasar/eltwise_unary_broadcast_quasar_test.cpp",
+        "test_name": (
+            "sources/quasar/eltwise_unary_broadcast_quasar_test.cpp"
+            if acc_to_dest is None
+            else "sources/quasar/eltwise_unary_broadcast_acc_to_dest_quasar_test.cpp"
+        ),
         "formats": formats,
-        "templates": [
-            UNPACKER_ENGINE_SEL(unpacker_sel),
-            BROADCAST_TYPE(broadcast_type),
-            DEST_SYNC(dest_sync_mode),
-        ],
+        "templates": templates,
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
@@ -241,6 +263,10 @@ def test_unary_broadcast_quasar(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Result tensor and golden tensor do not match"
+    if acc_to_dest is False:
+        assert torch.equal(
+            golden_tensor, res_tensor
+        ), "Non-accumulating control must match the broadcast of B bit-exactly"
 
 
 # acc_to_dest broadcasts through ELWADD with dest accumulation; 32-bit inputs unpack straight to Dest instead.
@@ -265,103 +291,17 @@ def test_unary_broadcast_acc_to_dest_quasar(
     dest_sync_mode,
     input_dimensions,
 ):
-    """Broadcast each tile into Dest, then broadcast it again with acc_to_dest.
+    """Seed Dest with a plain broadcast of A, then broadcast B with acc_to_dest.
 
-    Accumulating doubles the plain result; acc_to_dest=False is the matched overwrite control.
+    Accumulating gives bcast(A) + bcast(B); acc_to_dest=False is the matched overwrite control, bcast(B).
     """
-    tile_rows, tile_cols = TILE_DIMENSIONS
-    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
-        [tile_rows, tile_cols]
-    )
-    num_faces = num_faces_r_dim * num_faces_c_dim
-
-    rows, cols = input_dimensions
-    tile_cnt = (rows // tile_rows) * (cols // tile_cols)
-
-    num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+    test_unary_broadcast_quasar(
+        formats,
         dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    src_A, _, src_B, _ = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        tile_dimensions=TILE_DIMENSIONS,
-    )
-
-    generate_broadcast_golden = get_golden_generator(BroadcastGolden)
-    golden_tensor = generate_broadcast_golden(
         broadcast_type,
-        src_B,
-        formats.output_format,
-        num_faces=num_faces,
-        tile_cnt=tile_cnt,
-        face_r_dim=face_r_dim,
+        dest_sync_mode,
+        input_dimensions,
+        run_types=[PerfRunType.L1_TO_L1],
+        loop_factor=1,
+        acc_to_dest=acc_to_dest,
     )
-    if acc_to_dest:
-        golden_tensor = golden_tensor * 2
-
-    configuration = TestConfig(
-        "sources/quasar/eltwise_unary_broadcast_acc_to_dest_quasar_test.cpp",
-        formats,
-        templates=[
-            BROADCAST_TYPE(broadcast_type),
-            ACC_TO_DEST(acc_to_dest),
-            DEST_SYNC(dest_sync_mode),
-        ],
-        runtimes=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            TILE_COUNT(tile_cnt),
-            NUM_FACES(num_faces),
-            NUM_TILES_IN_BLOCK(
-                tiles_in_block,
-                input_num_tiles_in_block=tiles_in_block,
-                output_num_tiles_in_block=tiles_in_block,
-            ),
-            NUM_BLOCKS(
-                num_blocks,
-                input_num_blocks=num_blocks,
-                output_num_blocks=num_blocks,
-            ),
-            TEST_FACE_DIMS(face_r_dim=face_r_dim, face_c_dim=FACE_C_DIM),
-            NUM_FACES_R_DIM(num_faces_r_dim),
-            NUM_FACES_C_DIM(num_faces_c_dim),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
-            tile_dimensions=TILE_DIMENSIONS,
-            use_dense_tile_dimensions=True,
-        ),
-        unpack_to_dest=False,
-        dest_acc=dest_acc,
-    )
-
-    res_from_L1 = configuration.run().result
-
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Result tensor and golden tensor do not match"
-    # Doubling only bumps the exponent, so Float16_b stays bit-exact.
-    assert torch.equal(
-        golden_tensor, res_tensor
-    ), "Broadcast accumulation should be exact for Float16_b"
