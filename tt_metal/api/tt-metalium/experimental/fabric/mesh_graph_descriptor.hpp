@@ -160,13 +160,13 @@ inline DeclaredTopology with_effective_ring_dims(DeclaredTopology topology) {
 // has no incoming edge besides loopbacks; it owns host I/O.
 struct PipelineDescriptorData {
     struct Stage {
-        std::string id;
+        PipelineStageId id = 0;
         std::string label;
         std::vector<std::int32_t> dims;  // rank 2, both > 0, logical (rows, cols)
     };
     struct Edge {
-        std::string src;
-        std::string dst;
+        PipelineStageId src = 0;
+        PipelineStageId dst = 0;
         bool loopback = false;  // closes a cycle; the other edges have none
     };
 

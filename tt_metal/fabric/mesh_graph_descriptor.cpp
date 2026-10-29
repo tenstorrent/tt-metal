@@ -1099,14 +1099,14 @@ void MeshGraphDescriptor::check_pipeline_feasibility() const {
     // Step 1. Binding. need[mesh] is the stage's slice count on that mesh, or -1 when it does not fit there.
     struct StageInfo {
         std::string pipeline;
-        std::string id;
+        PipelineStageId id = 0;
         std::vector<int> need;
         int min_need = 0;
         int bindings = 0;                             // meshes the stage fits
         std::vector<std::pair<int, int>> neighbours;  // (stage, edge copies in both directions)
     };
     std::vector<StageInfo> stages;
-    std::vector<std::unordered_map<std::string, int>> stage_index(pipeline_descriptors_.size());
+    std::vector<std::unordered_map<PipelineStageId, int>> stage_index(pipeline_descriptors_.size());
     for (std::size_t p = 0; p < pipeline_descriptors_.size(); ++p) {
         const PipelineDescriptorData& pipeline = pipeline_descriptors_[p];
         for (const PipelineDescriptorData::Stage& stage : pipeline.stages) {
@@ -1130,7 +1130,7 @@ void MeshGraphDescriptor::check_pipeline_feasibility() const {
                 }
                 ++info.bindings;
             }
-            TT_FATAL(info.bindings > 0, "pipeline '{}': stage '{}' fits no declared mesh", info.pipeline, info.id);
+            TT_FATAL(info.bindings > 0, "pipeline '{}': stage {} fits no declared mesh", info.pipeline, info.id);
             stage_index[p].emplace(info.id, static_cast<int>(stages.size()));
             stages.push_back(std::move(info));
         }
@@ -1271,12 +1271,12 @@ void MeshGraphDescriptor::check_pipeline_feasibility() const {
                     failure_depth = depth;
                     failure = cap[mesh][other] == 0
                                   ? fmt::format(
-                                        "pipeline '{}': edge between '{}' and '{}' has no declared connection",
+                                        "pipeline '{}': edge between stages {} and {} has no declared connection",
                                         stage.pipeline,
                                         stage.id,
                                         stages[neighbour].id)
                                   : fmt::format(
-                                        "pipeline '{}': edge between '{}' and '{}' needs {} channels and {} are "
+                                        "pipeline '{}': edge between stages {} and {} needs {} channels and {} are "
                                         "declared",
                                         stage.pipeline,
                                         stage.id,
@@ -2955,18 +2955,18 @@ void MeshGraphDescriptor::validate_pipeline_descriptors(
             error_messages.push_back(fmt::format("pipeline '{}': must declare at least one stage", pipeline.name()));
         }
 
-        std::unordered_set<std::string> ids;
+        std::unordered_set<PipelineStageId> ids;
         for (const auto& stage : pipeline.stages()) {
-            // A stage id must be non-empty and unique inside its pipeline.
-            if (stage.id().empty() || !ids.insert(stage.id()).second) {
+            // A stage id must be unique inside its pipeline.
+            if (!ids.insert(stage.id()).second) {
                 error_messages.push_back(
-                    fmt::format("pipeline '{}': stage id '{}' is empty or repeated", pipeline.name(), stage.id()));
+                    fmt::format("pipeline '{}': stage id {} is repeated", pipeline.name(), stage.id()));
             }
             // A stage shape must be rank 2, and both dims must be greater than 0.
             const auto& dims = stage.shape().dims();
             if (dims.size() != 2 || dims[0] <= 0 || dims[1] <= 0) {
-                error_messages.push_back(fmt::format(
-                    "pipeline '{}': stage '{}' shape must be rank 2, dims > 0", pipeline.name(), stage.id()));
+                error_messages.push_back(
+                    fmt::format("pipeline '{}': stage {} shape must be rank 2, dims > 0", pipeline.name(), stage.id()));
             }
         }
 
@@ -2980,7 +2980,8 @@ void MeshGraphDescriptor::validate_pipeline_descriptors(
             }
             // A stage may not have an edge to itself.
             if (edge.src() == edge.dst()) {
-                error_messages.push_back(fmt::format("pipeline '{}': self-edge on '{}'", pipeline.name(), edge.src()));
+                error_messages.push_back(
+                    fmt::format("pipeline '{}': self-edge on stage {}", pipeline.name(), edge.src()));
             }
             // An omitted policy means STRICT. An explicit policy other than STRICT is rejected.
             // TODO: Accept RELAXED once a pipeline edge may go over host MPI (plan P14).
@@ -2997,20 +2998,20 @@ void MeshGraphDescriptor::validate_pipeline_descriptors(
 
         // The resolver orders stages along the edges not marked loopback, so those edges must have no cycle.
         // Edges already reported above are left out.
-        std::unordered_map<std::string, std::vector<std::string>> forward;
+        std::unordered_map<PipelineStageId, std::vector<PipelineStageId>> forward;
         for (const auto& edge : pipeline.edges()) {
             if (!edge.loopback() && ids.contains(edge.src()) && ids.contains(edge.dst()) && edge.src() != edge.dst()) {
                 forward[edge.src()].push_back(edge.dst());
             }
         }
         enum class Visit { kNew, kOnPath, kDone };
-        std::unordered_map<std::string, Visit> visit;
-        std::vector<std::string> path;
+        std::unordered_map<PipelineStageId, Visit> visit;
+        std::vector<PipelineStageId> path;
         std::optional<std::string> cycle;
-        const auto find_cycle = [&](auto&& self, const std::string& stage) -> void {
+        const auto find_cycle = [&](auto&& self, const PipelineStageId stage) -> void {
             visit[stage] = Visit::kOnPath;
             path.push_back(stage);
-            for (const std::string& next : forward[stage]) {
+            for (const PipelineStageId next : forward[stage]) {
                 if (cycle.has_value()) {
                     return;
                 }
@@ -3018,9 +3019,9 @@ void MeshGraphDescriptor::validate_pipeline_descriptors(
                     const auto start = std::find(path.begin(), path.end(), next);
                     std::string text;
                     for (auto it = start; it != path.end(); ++it) {
-                        text += *it + " -> ";
+                        text += fmt::format("{} -> ", *it);
                     }
-                    cycle = text + next;
+                    cycle = text + std::to_string(next);
                     return;
                 }
                 if (visit[next] == Visit::kNew) {
@@ -3043,16 +3044,16 @@ void MeshGraphDescriptor::validate_pipeline_descriptors(
         } else {
             // Exactly one stage has no incoming edge besides loopbacks. The resolver starts its stage order there
             // and gives that stage host I/O, so a second such stage would leave the choice to its id.
-            std::unordered_set<std::string> fed;
+            std::unordered_set<PipelineStageId> fed;
             for (const auto& [src, dsts] : forward) {
                 fed.insert(dsts.begin(), dsts.end());
             }
-            std::unordered_set<std::string> seen;
+            std::unordered_set<PipelineStageId> seen;
             std::string roots;
             std::size_t root_count = 0;
             for (const auto& stage : pipeline.stages()) {
                 if (!fed.contains(stage.id()) && seen.insert(stage.id()).second) {
-                    roots += (root_count++ == 0 ? "'" : ", '") + stage.id() + "'";
+                    roots += fmt::format("{}{}", root_count++ == 0 ? "" : ", ", stage.id());
                 }
             }
             if (root_count > 1) {
@@ -3070,12 +3071,12 @@ void MeshGraphDescriptor::validate_pipeline_descriptors(
                 edge.src() == edge.dst()) {
                 continue;
             }
-            std::unordered_set<std::string> reached = {edge.dst()};
-            std::vector<std::string> frontier = {edge.dst()};
+            std::unordered_set<PipelineStageId> reached = {edge.dst()};
+            std::vector<PipelineStageId> frontier = {edge.dst()};
             while (!frontier.empty() && !reached.contains(edge.src())) {
-                const std::string stage = frontier.back();
+                const PipelineStageId stage = frontier.back();
                 frontier.pop_back();
-                for (const std::string& next : forward[stage]) {
+                for (const PipelineStageId next : forward[stage]) {
                     if (reached.insert(next).second) {
                         frontier.push_back(next);
                     }

@@ -511,7 +511,7 @@ message TorusTopology {
 //
 // A stage's shape is (rows, cols) in logical mesh orientation. It is not
 // transposed, and it does not name a mesh. Repeating an edge declares another
-// channel on that hop. A cycle needs one edge marked loopback, as in s3 -> s0
+// channel on that hop. A cycle needs one edge marked loopback, as in 3 -> 0
 // of a four-stage ring. The edges not marked loopback must have no cycle, and
 // exactly one stage has no incoming edge besides loopbacks: it owns host I/O.
 // Otherwise stage topology (in-degree, out-degree, whether a branch is a
@@ -523,14 +523,14 @@ message TorusTopology {
 // Example:
 //   pipeline_descriptors {
 //     name: "gpt_oss_120b_single_galaxy"
-//     stages { id: "s0" label: "Embedding" shape { dims: [ 4, 2 ] } }
-//     stages { id: "s1" label: "Windowed"  shape { dims: [ 4, 2 ] } }
-//     edges { src: "s0" dst: "s1" }
-//     edges { src: "s1" dst: "s0" loopback: true }
+//     stages { id: 0 label: "Embedding" shape { dims: [ 4, 2 ] } }
+//     stages { id: 1 label: "Windowed"  shape { dims: [ 4, 2 ] } }
+//     edges { src: 0 dst: 1 }
+//     edges { src: 1 dst: 0 loopback: true }
 //   }
 message PipelineStage {
-    // Non-empty, unique within this pipeline, and referenced by edges.
-    string id = 1;
+    // Unique within this pipeline, and referenced by edges.
+    uint32 id = 1;
 
     // Human-facing. Unconstrained: it may be empty and it may repeat.
     string label = 2;
@@ -541,10 +541,10 @@ message PipelineStage {
 
 message PipelineEdge {
     // Stage id of the producer. Must name a stage in this pipeline.
-    string src = 1;
+    uint32 src = 1;
 
     // Stage id of the consumer. Must name a stage in this pipeline, other than src.
-    string dst = 2;
+    uint32 dst = 2;
 
     // Omitted means STRICT. RELAXED is rejected during descriptor validation.
     optional Policy policy = 3;
