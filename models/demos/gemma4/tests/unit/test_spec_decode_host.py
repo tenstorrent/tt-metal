@@ -1687,7 +1687,7 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     spec._srv_flat_type = "full_attention"
     spec._srv_per_layer, spec._srv_uploaded, spec._srv_last, spec._srv_seeded = None, {}, None, {}
     spec._srv_phase_ms, spec._srv_replay_blocking = {}, False  # the replay's sub-phases, the attribution knob off
-    spec._srv_seed_traces, spec._srv_traced_seed = {}, True  # no seed trace captured: the reseed stays eager
+    spec._srv_seed_traces, spec._srv_traced_seed = {}, True  # serving_capture adds one seed trace per shape
     spec._srv_sharded_draft_argmax, spec._srv_draft_consts = (
         False,
         {},
@@ -1747,7 +1747,9 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     spec.serving_capture()
     assert spec._srv_captured and allocated == [] and all(gone(ref) for ref in ops)
     assert {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()} == outputs
-    assert [rec["id"] for rec in spec._srv_records.values()] == traces and len(traces) == 20
+    # the records take the first 20 trace ids, then one seed trace per shape (577308f7637)
+    assert [rec["id"] for rec in spec._srv_records.values()] == traces[:20] and len(traces) == 20 + len(shapes)
+    assert list(spec._srv_seed_traces) == list(shapes) and list(spec._srv_seed_traces.values()) == traces[20:]
     spec._srv_frozen = True
     ops.clear(), h2d.clear(), copies.clear(), forwards.clear()
     # every record and rung: a first-time refresh, row set and position, a reseed, a seeded replay, then a
