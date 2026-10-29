@@ -48,7 +48,7 @@ class TTModulatedDeformConv2dDevice:
         ``(K*K*C_in, C_out)`` matmul weight, rows in the columns' (kk, c_in) order, and the
         ``(1, C_out)`` bias or None. ``kernel_size`` is the square kernel's K. ``input_shape`` is
         the (batch, height, width) of the NHWC input every call will see. ``relu`` applies a ReLU
-        to the output, in the op that ends the conv."""
+        to the op's output."""
         self.stride = tuple(stride)
         self.padding = tuple(padding)
         self.dilation = tuple(dilation)
@@ -70,8 +70,8 @@ class TTModulatedDeformConv2dDevice:
         offset conv's output: the offsets in pixels, (y, x) per kernel position, then the mask
         logits. Both inputs bfloat16, ROW_MAJOR; ``x_nhwc`` interleaved, or height-sharded in L1 in
         whole 32-row shards when the output has the input's height and width, ``offset_mask_nhwc``
-        interleaved. Returns the
-        (1, 1, B*H_out*W_out, C_out) bfloat16 TILE output, conv2d's layout."""
+        interleaved. Returns the (1, 1, B*H_out*W_out, C_out) bfloat16 TILE output, conv2d's
+        layout."""
         B, H_in, W_in, _ = x_nhwc.shape
         _, H_out, W_out, _ = offset_mask_nhwc.shape
         assert (B, H_in, W_in, H_out, W_out) == self.io_shape, (

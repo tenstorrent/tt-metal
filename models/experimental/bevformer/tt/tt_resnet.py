@@ -105,7 +105,7 @@ class TTModulatedDeformConv2dPack:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             x_dcn = x
         else:
-            # One ROW_MAJOR copy feeds both conv_offset and the DCN: conv2d reshapes its input
+            # One untilize feeds both conv_offset and the DCN: conv2d reshapes its input
             # between flat and NHWC, which in TILE copies whenever the width is not a tile multiple.
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             # The DCN's reads are many small scattered sticks, which L1 serves far faster than
@@ -113,7 +113,8 @@ class TTModulatedDeformConv2dPack:
             # L1 copy.
             x_dcn = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         offset_mask, out_h, out_w = self.conv_offset(x)
-        # The DCN op reads one interleaved stick per row; L1 serves those small reads faster.
+        # conv2d's L1 path returns its output sharded, and the DCN op takes offset_mask only
+        # interleaved; in L1, which serves the op's small per-row reads faster than DRAM.
         offset_mask = ttnn.sharded_to_interleaved(offset_mask, ttnn.L1_MEMORY_CONFIG)
         offset_mask = ttnn.reshape(offset_mask, (self.batch_size, out_h, out_w, offset_mask.shape[-1]))
 
@@ -322,16 +323,17 @@ class TTResNet:
     strides, the max pool, each layer's block count and which blocks are DCNv2. ``params.tt_kwargs``
     holds the memory and precision arguments below, the ones the weights were prepared for.
 
-    ``out_indices``, ``dram_activation_stages`` and ``block_sharded_stages``
-    index the four ResNet layers (0 is layer1). ``dram_activation_stages`` lists the layers
+    ``out_indices`` and every ``*_stages`` argument index the four ResNet layers (0 is layer1).
+    ``dram_activation_stages`` lists the layers
     whose activations are kept in DRAM, for layers whose convs do not fit in L1: their
     spatial convs run in ``dram_conv_slices`` width slices and their 1x1 convs as a DRAM
     matmul. A layer that follows one of them and is not listed itself reads its input from
     DRAM the same way. ``block_sharded_stages`` lists the layers whose downsample and non-DCN
     conv2s are block sharded, ``fp32_acc_stages`` the layers whose convs accumulate in an
     fp32 destination register (see TTBottleneck), and ``dcn_sharded_input_stages`` the layers
-    whose DCNs take a height-sharded L1 input (TTModulatedDeformConv2dPack). ``stem_act_block_h`` and ``conv2_act_block_h``
-    are the stem conv's and the non-DCN conv2s' act_block_h overrides, None for conv2d's own, and
+    whose DCNs take a height-sharded L1 input (TTModulatedDeformConv2dPack). ``stem_act_block_h``
+    and ``conv2_act_block_h`` are the stem conv's and the non-DCN conv2s' act_block_h overrides,
+    None for conv2d's own, and
     ``weights_dtype`` the convs' weight dtype. ``model_config.tt_resnet_kwargs`` gives the
     configured variant's values, and ``model_config.RESNET_KWARGS["out_indices"]`` its
     ``out_indices``.
