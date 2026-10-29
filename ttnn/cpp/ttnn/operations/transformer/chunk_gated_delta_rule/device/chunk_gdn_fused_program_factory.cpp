@@ -20,8 +20,9 @@
 //              receiver rows first), the first BH*NP of them; producer p serves head p / NP as its
 //              j = p % NP -th producer and owns that head's chunks c = j, j+NP, ...
 // Placement 1 (row-local, the default whenever it fits): each head's NV receivers and NP producers
-// share one row segment, producers east of receivers, so NOC_1's -x-then-y routes of different heads
-// never share a link; heads that do not fit the rows go to the leftover columns as vertical blocks.
+// share one row segment, fused_west_producers of them west of the receivers (handing off on NOC_0, +x) and the
+// rest east (NOC_1, -x), so the hand-off enters the receivers over two links and no two heads share one; heads
+// that do not fit the rows go to the leftover columns as vertical blocks.
 // Placement 2 (producer pool, attrs.np = the pool size P): the row-local map of NPH home producers per
 // head for the largest NPH with BH*NPH <= P, plus P - BH*NPH EXTRA producers on the remaining cores.
 // Which producer computes chunk c of head h, and each producer's item list, is the one formula of
@@ -167,9 +168,10 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
 
     auto* device = in.q.device();
     const CoreCoord grid = device->compute_with_storage_grid_size();
-    // Placement is a pure function of (grid, BH, NV, np, placement), shared with the
-    // nanobind geometry oracle so the host-side tests assert the core map this factory uses.
-    const FusedPlacement layout = fused_placement(grid.x, grid.y, BH, NV, attrs.np, attrs.placement);
+    // Placement is a pure function of (grid, BH, NV, np, placement, the device's NOC_0 DRAM-port rows), shared with
+    // the nanobind geometry oracle so the host-side tests assert the core map this factory uses.
+    const FusedPlacement layout =
+        fused_placement(grid.x, grid.y, BH, NV, attrs.np, attrs.placement, fused_noc0_port_rows(device, grid.y));
     const std::vector<CoreCoord>& rcv_cores = layout.receivers;
     const std::vector<CoreCoord>& prod_cores = layout.producers;
     const uint32_t R = BH * NV;                                   // receiver cores
@@ -184,13 +186,15 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const CoreRangeSet union_set = rcv_set.merge(prod_set);
 
     // Hand-off NoC per producer. The writer's NoC (NOC_1 on Blackhole) moves only -x / -y, and the row-local
-    // layout keeps every HOME producer's writes on its own head's row segment. A pool EXTRA that sits in a row
-    // holding receivers (the leftover column east of the row segments) serves every head: on NOC_1 its writes run
-    // west over that row's home links, and to a receiver in a lower row they wrap the torus column. Those extras
-    // hand off on the other NoC instead (their writer and reader swap NoCs, a static per-core choice, no dynamic
-    // mode): its +x / +y routes leave the row on the links the home producers' writes never use. Extras in rows
-    // without receivers keep the writer's NoC (their -x legs stay in the extras' own rows). The predicate is
-    // fused_flip_noc (chunk_gdn_device_operation.cpp): get_dynamic_runtime_args addresses the flipped reader by it.
+    // layout keeps every HOME producer's writes on its own head's row segment: the producers east of the receivers
+    // write -x on it, the producers placement 1 puts WEST of the receivers hand off on the other NoC (+x, the
+    // second link into the receivers). A pool EXTRA that sits in a row holding receivers (the leftover column east
+    // of the row segments) serves every head: on NOC_1 its writes run west over that row's home links, and to a
+    // receiver in a lower row they wrap the torus column, so it hands off on the other NoC too (its +x / +y routes
+    // leave the row on the links the home producers' writes never use). Flipping is a static per-core choice (the
+    // writer and reader swap NoCs), no dynamic mode. Extras in rows without receivers keep the writer's NoC (their
+    // -x legs stay in the extras' own rows). The predicate is fused_flip_noc (chunk_gdn_device_operation.cpp):
+    // get_dynamic_runtime_args addresses the flipped reader by it.
     const std::vector<bool> flip_noc = fused_flip_noc(layout, grid.y, BH);
     std::vector<CoreCoord> prod_main_cores, prod_flip_cores;
     for (uint32_t p = 0; p < P; p++) {

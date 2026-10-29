@@ -334,12 +334,20 @@ def _placement_row_major(gx, gy, bh, nv, np_):
     return rcv, free[: bh * np_]
 
 
-def _placement_row_local(gx, gy, bh, nv, np_):
-    """Placement 1: k = grid_x // (NV+NP) heads per row, each in its own column segment (receivers
-    first, producers east of them); heads beyond k*grid_y as vertical blocks in the leftover columns
-    (an rw x rh receiver rectangle on top, the producers row-major below it). A block whose receiver row is
-    wider than one column uses the column form when it fits the same height: the receivers stacked in the
-    block's first column, producers east of the bottom receiver, then row-major below (no +x hand-off route)."""
+def _west_producers(np_, port_row):
+    """Producers of a placement-1 row head placed west of its receivers (they hand off on NOC_0, +x): 4 of 7,
+    2 of 7 in a row whose NOC_0 +x links carry a DRAM port's read responses."""
+    return (np_ * (2 if port_row else 4)) // 7
+
+
+def _placement_row_local(gx, gy, bh, nv, np_, split=False, port_rows=()):
+    """Placement 1: k = grid_x // (NV+NP) heads per row, each in its own column segment; with `split` (the
+    per-head placement) _west_producers of them west of the receivers and the rest east, without it (the pool's
+    home producers) the receivers first and every producer east. Heads beyond k*grid_y as vertical blocks in
+    the leftover columns (an rw x rh receiver rectangle on top, the producers row-major below it). A block whose
+    receiver row is wider than one column uses the column form when it fits the same height: the receivers
+    stacked in the block's first column, producers east of the bottom receiver, then row-major below (no +x
+    hand-off route)."""
     L = nv + np_
     k = gx // L
     rcv = [None] * (bh * nv)
@@ -347,10 +355,11 @@ def _placement_row_local(gx, gy, bh, nv, np_):
     n_row_heads = min(bh, k * gy)
     for h in range(n_row_heads):
         row, xs = h // k, (h % k) * L
+        w = _west_producers(np_, row in port_rows) if split else 0
         for v in range(nv):
-            rcv[h * nv + v] = (xs + v, row)
+            rcv[h * nv + v] = (xs + w + v, row)
         for j in range(np_):
-            prod[h * np_ + j] = (xs + nv + j, row)
+            prod[h * np_ + j] = (xs + j if j < w else xs + nv + j, row)
     rem, xl = bh - n_row_heads, k * L
     if rem:
         wl = gx - xl
@@ -391,13 +400,21 @@ def _rect(cores):
 
 
 def _shared_links(rcv, prod, nv, np_):
-    """NOC_1 routes -x then -y. Every producer must lie east of (or in) its head's receiver columns and
-    in a row >= its receivers' rows; its horizontal leg in its own row and its vertical leg in the
-    receiver column must not overlap another head's legs. Returns the violations (empty == pass)."""
-    bad, hlegs, vlegs = [], {}, {}
+    """NOC_1 routes -x then -y, NOC_0 +x then +y. A producer in its receivers' row and west of them hands off on
+    NOC_0: its +x leg to the receivers must not overlap another head's +x leg. Every other producer must lie east
+    of (or in) its head's receiver columns and in a row >= its receivers' rows; its horizontal leg in its own row
+    and its vertical leg in the receiver column must not overlap another head's legs. Returns the violations
+    (empty == pass)."""
+    bad, hlegs, vlegs, hlegs0 = [], {}, {}, {}
     for p, (px, py) in enumerate(prod):
         h = p // np_
         x0, y0, x1, y1 = _rect(rcv[h * nv : (h + 1) * nv])
+        if px < x0 and y0 == py == y1:
+            for x in range(px + 1, x0 + 1):
+                prev = hlegs0.setdefault((x, py), h)
+                if prev != h:
+                    bad.append(f"heads {prev} and {h} share NOC_0 link cell {(x, py)}")
+            continue
         if px < x0 or py < y0:
             bad.append(f"head {h} producer {p} at {(px, py)} is west of / above its receivers {(x0, y0, x1, y1)}")
             continue
@@ -566,11 +583,19 @@ def test_factory_placement(grid, bh):
     layouts = _feasible_layouts(gx, gy, bh)
     if not layouts:
         pytest.skip(f"no fused layout fits BH={bh} on {gx}x{gy}")
-    for nv, np_, pl in layouts:
-        tag = f"NV={nv} NP={np_} placement={pl}"
-        rcv, prod = _t.chunk_gdn_fused_placement(gx, gy, bh, nv, np_, pl)
+    # Placement 1 also with the p150's NOC_0 DRAM-port rows (logical 0, 3, 7, 9 on an 11 x 10 grid): fewer
+    # producers west of the receivers there.
+    cases = [(nv, np_, pl, ()) for nv, np_, pl in layouts]
+    cases += [(nv, np_, pl, (0, 3, 7, 9)) for nv, np_, pl in layouts if pl == 1 and gy > 9]
+    for nv, np_, pl, port_rows in cases:
+        tag = f"NV={nv} NP={np_} placement={pl} port_rows={port_rows}"
+        rcv, prod = _t.chunk_gdn_fused_placement(gx, gy, bh, nv, np_, pl, list(port_rows))
         rcv, prod = [tuple(c) for c in rcv], [tuple(c) for c in prod]
-        oracle = (_placement_row_major if pl == 0 else _placement_row_local)(gx, gy, bh, nv, np_)
+        oracle = (
+            _placement_row_major(gx, gy, bh, nv, np_)
+            if pl == 0
+            else _placement_row_local(gx, gy, bh, nv, np_, split=True, port_rows=port_rows)
+        )
         assert (rcv, prod) == oracle, f"{tag}: the factory's core map differs from the oracle's"
 
         assert len(rcv) == bh * nv and len(prod) == bh * np_, tag
@@ -707,11 +732,12 @@ def test_chosen_layout_shares_no_links(grid, bh):
     nv, np_, pl = _t.chunk_gdn_fused_geometry(grid[0], grid[1], bh, 64, VT)[:3]
     if nv == 0 or pl == 0:
         pytest.skip("no row-local geometry for this (grid, BH)")
-    rcv, prod = _t.chunk_gdn_fused_placement(grid[0], grid[1], bh, nv, np_, pl)
     # A pool's home producers are the row-local map; its extras serve every head from wherever they sit.
     nph = _t.chunk_gdn_fused_pool_home_producers(grid[0], grid[1], bh, nv, np_) if pl == 2 else np_
-    bad = _shared_links([tuple(c) for c in rcv], [tuple(c) for c in prod[: bh * nph]], nv, nph)
-    assert not bad, f"NV={nv} NP={np_} placement={pl}: {bad[:5]}"
+    for port_rows in ((), (0, 3, 7, 9)) if grid[1] > 9 else ((),):
+        rcv, prod = _t.chunk_gdn_fused_placement(grid[0], grid[1], bh, nv, np_, pl, list(port_rows))
+        bad = _shared_links([tuple(c) for c in rcv], [tuple(c) for c in prod[: bh * nph]], nv, nph)
+        assert not bad, f"NV={nv} NP={np_} placement={pl} port_rows={port_rows}: {bad[:5]}"
 
 
 @pytest.mark.parametrize("bh", BHS)

@@ -309,7 +309,8 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> ChunkGdnDeviceOperation::get_dynami
         return args;  // the mono program runs every head (head_offset 0, validated)
     }
     const auto grid = in.q.device()->compute_with_storage_grid_size();
-    const FusedPlacement layout = fused_placement(grid.x, grid.y, attrs.BH, attrs.nv, attrs.np, attrs.placement);
+    const FusedPlacement layout = fused_placement(
+        grid.x, grid.y, attrs.BH, attrs.nv, attrs.np, attrs.placement, fused_noc0_port_rows(in.q.device(), grid.y));
     const uint32_t h0 = attrs.head_offset;
     const uint32_t NV = attrs.nv;
     args.reserve(layout.producers.size() + 3 * attrs.BH * NV);
@@ -511,7 +512,13 @@ bool fused_pool_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t
 }
 
 FusedPlacement fused_placement(
-    uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP, uint32_t placement) {
+    uint32_t grid_x,
+    uint32_t grid_y,
+    uint32_t BH,
+    uint32_t NV,
+    uint32_t NP,
+    uint32_t placement,
+    const std::vector<bool>& noc0_port_rows) {
     const uint32_t n_cores = grid_x * grid_y;
     TT_FATAL(NV >= 1 && NV <= grid_x, "chunk_gdn_fused: nv={} must be in [1, grid width {}]", NV, grid_x);
     const uint32_t HPR = grid_x / NV;  // heads per receiver row (placement 0)
@@ -525,12 +532,14 @@ FusedPlacement fused_placement(
     std::vector<CoreCoord> rcv_cores(R);  // index h*NV + v
     std::vector<CoreCoord> prod_cores;    // index p = h*NPH + j, then the extras
     prod_cores.reserve(P);
-    // Row-local: head h < grid_y owns row h — receivers at columns 0..NV-1, producers at NV..L-1.
-    // NOC_1 routes -x then -y, so every producer's writes travel west inside the head's own row and
-    // never share a link with another head. Heads h >= grid_y live in the leftover columns [L, W)
-    // as vertical blocks: an rw x rh receiver rectangle on top, the producers row-major below it —
-    // their traffic is confined to the block's columns (short -x legs, then -y within the block).
-    auto place_row_local = [&](uint32_t np) {
+    // Row-local: head h < grid_y owns row h, a segment of L = NV + np columns. With `split` (placement 1) the
+    // first fused_west_producers(np, port row) producers sit west of the receivers and hand off on NOC_0 (+x),
+    // the rest east on NOC_1 (-x): two links into the receivers, each leg inside the head's own segment, so no
+    // head shares a link with another. Without it (the pool's home producers) the receivers lead the segment.
+    // Heads h >= grid_y live in the leftover columns [L, W) as vertical blocks: an rw x rh receiver rectangle on
+    // top, the producers row-major below it — their traffic is confined to the block's columns (short -x legs,
+    // then -y within the block).
+    auto place_row_local = [&](uint32_t np, bool split) {
         const uint32_t L = NV + np;
         TT_FATAL(L <= grid_x, "chunk_gdn_fused: row-local placement needs NV+NP={} <= grid_x={}", L, grid_x);
         // k heads per row, each in its own column segment [i*L, (i+1)*L): the segments' -x legs are
@@ -540,11 +549,13 @@ FusedPlacement fused_placement(
         for (uint32_t h = 0; h < n_row_heads; h++) {
             const uint32_t row = h / k_per_row;
             const uint32_t xs = (h % k_per_row) * L;
+            const bool port_row = row < noc0_port_rows.size() && noc0_port_rows[row];
+            const uint32_t np_w = split ? fused_west_producers(np, port_row) : 0;
             for (uint32_t v = 0; v < NV; v++) {
-                rcv_cores[h * NV + v] = CoreCoord{xs + v, row};
+                rcv_cores[h * NV + v] = CoreCoord{xs + np_w + v, row};
             }
             for (uint32_t j = 0; j < np; j++) {
-                prod_cores.push_back(CoreCoord{xs + NV + j, row});
+                prod_cores.push_back(CoreCoord{j < np_w ? xs + j : xs + NV + j, row});
             }
         }
         if (BH > n_row_heads) {
@@ -622,7 +633,7 @@ FusedPlacement fused_placement(
             }
         }
     } else if (placement == 1) {
-        place_row_local(NP);
+        place_row_local(NP, /*split=*/true);
     } else {
         TT_FATAL(
             NPH >= 1,
@@ -633,7 +644,7 @@ FusedPlacement fused_placement(
             NV,
             grid_x,
             grid_y);
-        place_row_local(NPH);
+        place_row_local(NPH, /*split=*/false);
         // The extras: the remaining cores, row-major.
         std::vector<bool> used(n_cores, false);
         for (const CoreCoord& c : rcv_cores) {
@@ -654,13 +665,31 @@ FusedPlacement fused_placement(
     return {std::move(rcv_cores), std::move(prod_cores), NPH};
 }
 
+std::vector<bool> fused_noc0_port_rows(const tt::tt_metal::IDevice* device, uint32_t grid_y) {
+    std::vector<bool> rows(grid_y, false);
+    if (device == nullptr) {
+        return rows;
+    }
+    for (const CoreCoord& c : device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0)) {
+        if (c.x == 0 && c.y < grid_y) {
+            rows[c.y] = true;
+        }
+    }
+    return rows;
+}
+
 std::vector<bool> fused_flip_noc(const FusedPlacement& layout, uint32_t grid_y, uint32_t BH) {
     std::vector<bool> rcv_row(grid_y, false);
     for (const CoreCoord& c : layout.receivers) {
         rcv_row[c.y] = true;
     }
     const uint32_t first_extra = BH * layout.home_per_head;
+    const uint32_t NV = BH != 0 ? static_cast<uint32_t>(layout.receivers.size()) / BH : 0;
     std::vector<bool> flip(layout.producers.size(), false);
+    for (uint32_t p = 0; p < first_extra; p++) {
+        const CoreCoord& r0 = layout.receivers[(p / layout.home_per_head) * NV];  // the head's first receiver
+        flip[p] = layout.producers[p].y == r0.y && layout.producers[p].x < r0.x;
+    }
     for (uint32_t p = first_extra; p < layout.producers.size(); p++) {
         flip[p] = rcv_row[layout.producers[p].y];
     }
