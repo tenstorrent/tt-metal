@@ -4,10 +4,12 @@
 #
 # vllm serve the resident Qwen3.6/3.8-27B on one 1 x 4 Blackhole mesh (QuietBox 2: 2x P300c).
 #
-# usage: HF_MODEL=<checkpoint snapshot dir> qwen36_resident/serve/serve_local.sh plain|mtp|multi [extra vllm serve args...]
+# usage: HF_MODEL=<checkpoint snapshot dir> qwen36_resident/serve/serve_local.sh plain|mtp|dflash2|multi [vllm serve args]
 #   plain: one user, any sampling; greedy and top_k <= 32 are drawn on device (full speed), others on the host.
 #   mtp:   one user, greedy only (a request with temperature > 0 is served greedily; the server warns once), MTP
 #          speculative decode (4 tokens per step) through the plugin's adaptive block output.
+#   dflash2: one user, greedy only (as mtp), DFlash2 speculative decode (8 tokens per step; lane dfl's
+#          qwen36_resident.dflash.ResidentDFlash) through the plugin's adaptive block output.
 #   multi: MAX_NUM_SEQS users (default 8) on the rows-mode build (launches of 8, paged KV pool), chunked prefill of
 #          PREFILL_CHUNK_TOKENS (default 1024) between decode steps. Needs vllm-tt-plugin branch resident-mu (TT chunk
 #          core). Host sampling unless SAMPLE_ON_DEVICE=1 (needs the rows-mode hub feed, WP7).
@@ -18,7 +20,7 @@
 #   multi: MAX_NUM_SEQS, PREFILL_CHUNK_TOKENS, SAMPLE_ON_DEVICE, RESIDENT_MAX_TOKENS_ALL_USERS (KV pool tokens, default
 #   MAX_MODEL_LEN per user).
 set -euo pipefail
-PROFILE=${1:?usage: serve_local.sh plain|mtp|multi [vllm serve args...]}
+PROFILE=${1:?usage: serve_local.sh plain|mtp|dflash2|multi [vllm serve args...]}
 shift
 WT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 : "${HF_MODEL:?set HF_MODEL to the checkpoint snapshot dir}"
@@ -43,13 +45,14 @@ TT_CONFIG='{"tt": {"trace_region_size": 134217728, "sample_on_device_mode": "dec
 case $PROFILE in
   plain) ;;
   mtp) export TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentMTPForCausalLM ;;
+  dflash2) export TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentDFlashForCausalLM ;;
   multi)
     SEQS=${MAX_NUM_SEQS:-8}
     SAMPLING=''
     [ "${SAMPLE_ON_DEVICE:-0}" = 1 ] && SAMPLING=', "sample_on_device_mode": "decode_only"'
     TT_CONFIG="{\"tt\": {\"trace_region_size\": 134217728, \"prefill_chunk_tokens\": ${PREFILL_CHUNK_TOKENS:-1024}$SAMPLING}}"
     ;;
-  *) echo "unknown profile $PROFILE (plain|mtp|multi)" >&2; exit 2 ;;
+  *) echo "unknown profile $PROFILE (plain|mtp|dflash2|multi)" >&2; exit 2 ;;
 esac
 
 VLLM=${VLLM_VENV:+$VLLM_VENV/bin/}vllm

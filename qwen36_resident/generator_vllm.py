@@ -262,6 +262,8 @@ class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
         "tt_block_kv_extent_tokens": MTP_BLOCK + 2 * MTP_DEPTH + 2,
     }
 
+    block, name = MTP_BLOCK, "MTP"
+
     def __init__(self, mesh, ck, max_seq_len, mrope):
         self.mesh, self.mrope = mesh, mrope
         cfg = ck.config
@@ -270,6 +272,9 @@ class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
         self.eos = int(cfg["eos_token_id"])
         self.spec = SpecDecoder(mesh, ck, cfg["num_hidden_layers"], max_seq_len, prefill=True)
         self._first = None
+
+    def _next_block(self):
+        return self.spec.next_block(MTP_BLOCK, MTP_DEPTH, self.max_seq_len)
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         assert tokens.shape[0] == 1, "one user per prefill"
@@ -288,13 +293,15 @@ class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
             token = int(tokens.reshape(-1)[0])
             if token != self._first:
                 raise RuntimeError(
-                    f"MTP serving is greedy only: the runner's first token {token} is not the argmax "
+                    f"{self.name} serving is greedy only: the runner's first token {token} is not the argmax "
                     f"{self._first} the device decodes from"
                 )
             self._first = None
-        block = self.spec.next_block(MTP_BLOCK, MTP_DEPTH, self.max_seq_len)
+        block = self._next_block()
+        if len(block) > self.block:
+            raise RuntimeError(f"{self.name} committed {len(block)} tokens for a block of {self.block}")
         # short only at the position limit: the scheduler trims at the first stop token
-        out = torch.full((1, MTP_BLOCK), self.eos, dtype=torch.int32)
+        out = torch.full((1, self.block), self.eos, dtype=torch.int32)
         out[0, : len(block)] = torch.tensor(block, dtype=torch.int32)
         return out
 
@@ -307,3 +314,36 @@ class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
 
     def release_persistent_capture(self):
         self.spec.stop()
+
+
+DFLASH_BLOCK = int(os.environ.get("QWEN36_DFLASH_BLOCK", "8"))
+DFLASH_VERIFY = 8  # the resident DFlash2 verify rows (R)
+
+
+class Qwen36ResidentDFlashForCausalLM(Qwen36ResidentMTPForCausalLM):
+    """Greedy DFlash2 speculative decode (lane dfl's qwen36_resident.dflash.ResidentDFlash: PP prefill, R=8 verify
+    model, drafter) through the plugin's adaptive block output, as the MTP class: one user, every decode step commits
+    DFLASH_BLOCK tokens (the decoder carries the extra accepted tokens of an iteration to the next block)."""
+
+    block, name = DFLASH_BLOCK, "DFlash2"
+    model_capabilities = dict(
+        Qwen36ResidentMTPForCausalLM.model_capabilities,
+        output_tokens_per_step=DFLASH_BLOCK,
+        # positions one block step may write from its start: holding block - 1 tokens, one more iteration verifies
+        # DFLASH_VERIFY rows past them; doubled verify for slack (the drafter's ring is its own memory)
+        tt_block_kv_extent_tokens=DFLASH_BLOCK + 2 * DFLASH_VERIFY,
+    )
+
+    def __init__(self, mesh, ck, max_seq_len, mrope):
+        from qwen36_resident.dflash import ResidentDFlash
+
+        self.mesh, self.mrope = mesh, mrope
+        cfg = ck.config
+        self.vocab = cfg["vocab_size"]
+        self.max_seq_len = max_seq_len
+        self.eos = int(cfg["eos_token_id"])
+        self.spec = ResidentDFlash(mesh, ck, max_seq_len, prefill=True)
+        self._first = None
+
+    def _next_block(self):
+        return self.spec.next_block(self.block, self.max_seq_len)
