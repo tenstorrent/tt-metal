@@ -104,6 +104,12 @@ TEST(ExecutorTest, ForkSafety) {
     std::atomic<int> pre{0};
     detail::async([&pre] { pre.store(1); }).get();
     ASSERT_EQ(pre.load(), 1);
+    // fork() while a worker holds a lock is unsafe: the child inherits the lock with no thread to release it. Wait for
+    // earlier tests' tasks (run_all leaves queued wrappers for workers to drain after it returns), then for their
+    // workers to return each task's node to taskflow's global node pool, which they do after the task count drops.
+    constexpr auto kNodeRecycleTime = std::chrono::milliseconds(50);
+    detail::GetExecutor().wait_for_all();
+    std::this_thread::sleep_for(kNodeRecycleTime);
 
     pid_t pid = fork();
     ASSERT_NE(pid, -1) << "fork() failed";
