@@ -226,6 +226,13 @@ void kernel_main() {
     const uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
 
     // Read Q
+#ifdef SPEC_PACK_HEADS
+    // Packed spec mode (PNHt == 1): gather the group's spec_multi_pos_T candidate row-tiles x
+    // SPEC_PACK_HEADS valid rows into the DHt tiles of one packed q row-tile.
+    static_assert(spec_multi_pos && PNHt == 1, "SPEC_PACK_HEADS needs spec_multi_pos_tiles and PNHt == 1");
+    read_q_spec_packed<cb_q_in, q_tile_bytes, DHt, spec_multi_pos_T, SPEC_PACK_HEADS, SPEC_PACK_STRIDE>(
+        q_args, q_addr, q_page_size_bytes, cur_batch * spec_multi_pos_T * DHt);
+#else
     read_q<cb_q_in, cb_q_rm, q_tile_bytes, q_chunk_tiles, is_q_sharded, tilize_q, use_half_tile, barrier_threshold>(
         q_locally_available,
         is_output_core,
@@ -236,6 +243,7 @@ void kernel_main() {
         q_args,
         q_page_size_bytes,
         q_batch_offset);
+#endif
 
     const auto k_reader = TensorAccessor(k_args, k_addr);
 

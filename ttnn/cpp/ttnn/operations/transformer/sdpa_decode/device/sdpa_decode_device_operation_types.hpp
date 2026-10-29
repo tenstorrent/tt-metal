@@ -51,6 +51,18 @@ struct SdpaDecodeParams {
     // Requires num_kv_heads==1, causal, paged, no sliding window, no MLA, unsharded bf16
     // TILE Q with Tg*32 padded rows per batch.
     uint32_t spec_multi_pos_tiles = 0;
+    // Packed speculative mode, on top of spec_multi_pos_tiles = Tg. 0 = off (the Tg-row-tile
+    // layout above, byte for byte). When set to NH, the number of valid q rows (heads) at the
+    // top of each candidate row-tile, the op packs a group's Tg candidates x NH heads into ONE
+    // 32-row q tile: candidate j's heads land on rows [j*S, j*S + NH), S = NH rounded up to an
+    // even row count (keeps every row block 64 B aligned for the BH DRAM reads). The compute
+    // then runs one row-tile per KV chunk instead of Tg, and the causal mask is built per row
+    // (candidate j's rows stop at cur_pos[b*Tg + j]). The KV chunking, the core split and the
+    // reduction order are those of the unpacked call, so the valid output rows are
+    // bit-identical to it. Q and the output keep the unpacked [1, B, Tg*32, DH] layout; only
+    // rows [0, NH) of each output row-tile are written (the padding rows NH..31 are left as
+    // allocated). Requires Tg * S <= 32 and an interleaved output.
+    uint32_t spec_pack_heads = 0;
 };
 
 struct SdpaDecodeInputs {

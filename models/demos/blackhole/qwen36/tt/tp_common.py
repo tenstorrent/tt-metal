@@ -89,6 +89,16 @@ def kv_write_multirow_enabled():
     return os.environ.get("QWEN36_KV_WRITE_MULTIROW", "0") == "1"
 
 
+def spec_sdpa_packed_enabled():
+    """QWEN36_SPEC_SDPA_PACKED (default "0" = today's fused spec-verify SDPA, byte for byte): the fused spec-verify SDPA
+    (spec_multi_pos_tiles = Tg) packs each user group's Tg candidates x NH local q heads into ONE 32-row q tile
+    (spec_pack_heads = NH; 4 x 3 = 12 rows at TP8) instead of Tg padded row-tiles that use NH of their 32 rows, so every
+    KV chunk costs one q row-tile of QK, softmax and PV work instead of Tg, with the causal mask built per row. The KV
+    chunking, core split and reduction order are unchanged, so the attention output rows are bit-identical. Needs a
+    ttnn build whose paged SDPA decode takes spec_pack_heads (probed in attention/tp.py; otherwise ignored)."""
+    return os.environ.get("QWEN36_SPEC_SDPA_PACKED", "0") == "1"
+
+
 def verify_layout_cuts_enabled():
     """QWEN36_VERIFY_LAYOUT_CUTS (default "1"; "0" = today's verify, byte for byte): drop layout copies that the plain
     decode does not have (GDN verify projection: no sharded-to-interleaved + copy of the norm output). Note 42."""

@@ -976,3 +976,180 @@ void read_kv_mask_chunks(
         }
     }
 }
+
+/******************************************************************************
+ *                   Packed speculative mode (spec_pack_heads)                 *
+ ******************************************************************************/
+/*
+ * Packed spec mode keeps a group's Tg candidates x NH valid q rows in ONE 32-row tile:
+ * candidate j's heads sit on packed rows [j*S, j*S + NH), S = NH rounded up to even (see
+ * SdpaDecodeParams::spec_pack_heads). The unpacked layout has candidate j's heads on rows
+ * [0, NH) of its own row-tile. A bf16 32x32 tile stores rows 0..15 in faces 0 (columns 0..15)
+ * and 1 (columns 16..31) and rows 16..31 in faces 2 and 3, 16 rows of 32 B per face, so a run
+ * of consecutive rows inside one face half is one contiguous 32 B * rows block per face.
+ *
+ * Alignment: every block starts on an even row of its face half (j*S is even, and a run that
+ * crosses row 16 restarts there), so each block offset is a multiple of 64 B: the BH DRAM read
+ * alignment (src and dst must agree mod 64), and more than the 16 B L1 / DRAM-write alignment.
+ */
+namespace spec_pack {
+constexpr uint32_t kFaceRowBytes = 16 * 2;            // one bf16 face row
+constexpr uint32_t kFaceBytes = 16 * kFaceRowBytes;   // 512
+constexpr uint32_t kTileBytes = 4 * kFaceBytes;       // 2048
+
+// Byte offset of (row, face column half) inside a bf16 32x32 tile.
+FORCE_INLINE uint32_t face_row_offset(uint32_t row, uint32_t right_half) {
+    return (row >= 16 ? 2 * kFaceBytes : 0) + right_half * kFaceBytes + (row % 16) * kFaceRowBytes;
+}
+
+// Calls fn(unpacked_row, packed_row, n_rows) for the runs that move candidate j's NH rows between
+// unpacked rows [0, NH) and packed rows [j*S, j*S + NH): one run, or two when the packed block
+// crosses row 16 (NH <= 16 keeps the unpacked side inside faces 0/1).
+template <uint32_t NH, uint32_t S, typename Fn>
+FORCE_INLINE void for_each_row_run(uint32_t j, Fn&& fn) {
+    static_assert(NH >= 1 && NH <= 16 && S % 2 == 0 && S >= NH, "packed spec rows: 1 <= NH <= 16, S even >= NH");
+    const uint32_t p0 = j * S;
+    if (p0 < 16 && p0 + NH > 16) {
+        const uint32_t n_top = 16 - p0;
+        fn(0u, p0, n_top);
+        fn(n_top, 16u, NH - n_top);
+    } else {
+        fn(0u, p0, NH);
+    }
+}
+}  // namespace spec_pack
+
+/*
+ * Reader: gather the group's Q into DHt packed tiles of cb_q_in. Source tile (j, d) of the group is
+ * q_group_tile0 + j*DHt + d (Q is [1, B, Tg*32, DH] tile-major). Every byte outside the packed row
+ * blocks is zero, so the padding rows of the packed tile are finite.
+ */
+template <uint32_t cb_q_in, uint32_t q_tile_bytes, uint32_t DHt, uint32_t Tg, uint32_t NH, uint32_t S, typename QArgsType>
+void read_q_spec_packed(const QArgsType& q_args, uint32_t q_addr, uint32_t q_page_size_bytes, uint32_t q_group_tile0) {
+    static_assert(q_tile_bytes == spec_pack::kTileBytes, "packed spec Q is bf16 32x32 tiles");
+    static_assert(Tg * S <= 32, "packed spec Q: Tg candidates x S rows must fit one tile");
+    Noc noc;
+    CircularBuffer cb_q(cb_q_in);
+    const auto q_reader = TensorAccessor(q_args, q_addr, q_page_size_bytes);
+    cb_q.reserve_back(DHt);
+    noc.async_write_zeros(cb_q, DHt * q_tile_bytes);
+    noc.write_zeros_l1_barrier();
+    const uint32_t q_base = cb_q.get_write_ptr();
+    for (uint32_t j = 0; j < Tg; ++j) {
+        for (uint32_t d = 0; d < DHt; ++d) {
+            const uint32_t src_page = q_group_tile0 + j * DHt + d;
+            const uint32_t dst_tile = q_base + d * q_tile_bytes;
+            spec_pack::for_each_row_run<NH, S>(j, [&](uint32_t src_row, uint32_t dst_row, uint32_t n_rows) {
+                for (uint32_t half = 0; half < 2; ++half) {
+                    noc.async_read(
+                        q_reader,
+                        CoreLocalMem<uint32_t>(dst_tile + spec_pack::face_row_offset(dst_row, half)),
+                        n_rows * spec_pack::kFaceRowBytes,
+                        {.page_id = src_page, .offset_bytes = spec_pack::face_row_offset(src_row, half)},
+                        {});
+                }
+            });
+        }
+    }
+    noc.async_read_barrier();
+    cb_q.push_back(DHt);
+}
+
+/*
+ * Writer: causal mask for ONE k-chunk in packed mode (PNHt == 1, so the block is Sk_chunk_t tiles).
+ * Row r of the packed tile belongs to candidate min(r / S, Tg - 1) and takes that candidate's bound
+ * pos_vec[j] (the padding rows of a block take their candidate's bound, the rows past the last block
+ * the group's largest one, so no padding row is masked out of a chunk the group scans). Element
+ * values are those generate_mask_spec_multi_pos writes for the same (candidate, position): 0 where
+ * position <= bound, -inf past it. Whole tiles take the fast fills when every row agrees.
+ */
+template <uint32_t tile_bytes, uint32_t Tg, uint32_t S>
+void fill_tile_rows_spec_packed(uint32_t cb_id, uint32_t tile_id, uint32_t tile_first_pos, const uint32_t* pos_vec) {
+    static_assert(tile_bytes == spec_pack::kTileBytes, "packed spec mask is a bf16 32x32 tile");
+    CircularBuffer cb(cb_id);
+    volatile tt_l1_ptr uint32_t* tile =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
+    constexpr uint32_t NEG_INF_16 = 0xFF80;
+    uint32_t words[16];  // one row: words 0..7 = columns 0..15 (face 0/2), 8..15 = columns 16..31 (face 1/3)
+    uint32_t cur_j = UINT32_MAX;
+    for (uint32_t r = 0; r < 32; ++r) {
+        const uint32_t j = (r / S < Tg) ? r / S : Tg - 1;
+        if (j != cur_j) {
+            cur_j = j;
+            const uint32_t bound = pos_vec[j];
+            // columns c with tile_first_pos + c <= bound are visible
+            uint32_t vis = bound < tile_first_pos ? 0 : bound - tile_first_pos + 1;
+            vis = vis > 32 ? 32 : vis;
+            for (uint32_t k = 0; k < 16; ++k) {
+                const uint32_t c = 2 * k;
+                const uint32_t lo = c < vis ? 0u : NEG_INF_16;
+                const uint32_t hi = c + 1 < vis ? 0u : NEG_INF_16;
+                words[k] = lo | (hi << 16);
+            }
+        }
+        volatile tt_l1_ptr uint32_t* left = tile + (spec_pack::face_row_offset(r, 0) >> 2);
+        volatile tt_l1_ptr uint32_t* right = tile + (spec_pack::face_row_offset(r, 1) >> 2);
+        for (uint32_t k = 0; k < 8; ++k) {
+            left[k] = words[k];
+            right[k] = words[8 + k];
+        }
+    }
+}
+
+template <uint32_t cb_mask_in, uint32_t Tg, uint32_t S>
+void generate_mask_spec_packed(uint32_t Sk_chunk_t, uint32_t chunk_start_pos, const uint32_t* pos_vec) {
+    constexpr uint32_t NEG_INF = 0xFF80FF80;
+    constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
+    CircularBuffer cb_mask(cb_mask_in);
+    cb_mask.reserve_back(Sk_chunk_t);
+    // Bounds are ascending within the group: entry 0 is the smallest, entry Tg-1 the largest.
+    const uint32_t bound_lo = pos_vec[0];
+    const uint32_t bound_hi = pos_vec[Tg - 1];
+    for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
+        const uint32_t tile_first_pos = chunk_start_pos + i * 32;
+        if (bound_lo >= tile_first_pos + 31) {
+            fill_tile<tile_bytes>(cb_mask_in, i, 0);
+        } else if (bound_hi < tile_first_pos) {
+            fill_tile<tile_bytes>(cb_mask_in, i, NEG_INF);
+        } else {
+            fill_tile_rows_spec_packed<tile_bytes, Tg, S>(cb_mask_in, i, tile_first_pos, pos_vec);
+        }
+    }
+    cb_mask.push_back(Sk_chunk_t);
+}
+
+/*
+ * Writer (root core): scatter the packed output tiles of cb_out back to the unpacked output layout,
+ * candidate j's rows [0, NH) of output tile (j, d) = out_group_tile0 + j*vDHt + d. Only those rows
+ * are written. The writes are <= 512 B each, so they are flushed every flush_every writes (the
+ * full-tile barrier threshold would flush every other write). The caller barriers before popping.
+ */
+template <uint32_t cb_out, uint32_t vDHt, uint32_t Tg, uint32_t NH, uint32_t S, uint32_t flush_every, typename WriterType>
+uint32_t write_out_spec_packed(const WriterType& out_writer, uint32_t out_group_tile0, uint32_t barrier_count) {
+    constexpr uint32_t tile_bytes = get_tile_size(cb_out);
+    static_assert(tile_bytes == spec_pack::kTileBytes, "packed spec output is bf16 32x32 tiles");
+    Noc noc;
+    CircularBuffer cb(cb_out);
+    const uint32_t out_base = cb.get_read_ptr();
+    for (uint32_t j = 0; j < Tg; ++j) {
+        for (uint32_t d = 0; d < vDHt; ++d) {
+            const uint32_t dst_page = out_group_tile0 + j * vDHt + d;
+            const uint32_t src_tile = out_base + d * tile_bytes;
+            spec_pack::for_each_row_run<NH, S>(j, [&](uint32_t out_row, uint32_t packed_row, uint32_t n_rows) {
+                for (uint32_t half = 0; half < 2; ++half) {
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(src_tile + spec_pack::face_row_offset(packed_row, half)),
+                        out_writer,
+                        n_rows * spec_pack::kFaceRowBytes,
+                        {},
+                        {.page_id = dst_page, .offset_bytes = spec_pack::face_row_offset(out_row, half)});
+                    if (++barrier_count >= flush_every) {
+                        noc.async_writes_flushed();
+                        barrier_count = 0;
+                    }
+                }
+            });
+        }
+    }
+    return barrier_count;
+}

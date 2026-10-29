@@ -2988,6 +2988,9 @@ class Qwen36Model:
             if _fused
             else f"legacy {rows} pseudo-users"
         )
+        _pack = _att0.spec_sdpa_pack_heads(rows // _spec_groups) if _fused else 0
+        if _pack:  # QWEN36_SPEC_SDPA_PACKED
+            _how += f", PACKED q ({rows // _spec_groups} x {_pack} rows per tile)"
         _kvw = (
             f"GROUPED ({T} calls x {B} rows per K/V per layer)"
             if self._vfy_kv_grouped

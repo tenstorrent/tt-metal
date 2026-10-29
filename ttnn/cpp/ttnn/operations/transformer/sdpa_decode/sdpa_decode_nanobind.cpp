@@ -54,6 +54,11 @@ void bind_sdpa_decode(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             sliding_window_size (int, optional): The size of sliding window for sliding window attention. Defaults to `None`.
             share_cache (bool, optional): KV cache sharing across batch for decode. `True` enables, `False` disables. Defaults to `None` (distinct program-cache key from explicit `False`).
+            spec_multi_pos_tiles (int, optional): paged decode only. `Tg` > 0 folds `Tg` speculative candidates onto each
+                batch row (Q [1 x b x Tg*32 x dh], cur_pos_tensor [b*Tg], ascending within each group). Defaults to `0`.
+            spec_pack_heads (int, optional): paged decode only, with `spec_multi_pos_tiles`. `nh` > 0 packs a group's `Tg`
+                candidates x `nh` valid q rows into one q tile (per-row causal mask); the valid output rows are
+                bit-identical to the unpacked call and the padding rows are not written. Defaults to `0`.
 
 
         Returns:
@@ -121,7 +126,14 @@ void bind_sdpa_decode(nb::module_& mod) {
         // b*Tg+j attends to [0, cur_pos[b*Tg+j]] inclusive. Output is [1, B, Tg*32, DH] —
         // byte-identical to the legacy B*Tg-row output [1, B*Tg, 32, DH]. Requires causal +
         // paged + num_kv_heads==1, unsharded bf16 TILE Q, no sliding window, no MLA.
-        nb::arg("spec_multi_pos_tiles") = 0u);
+        nb::arg("spec_multi_pos_tiles") = 0u,
+        // spec_pack_heads = NH (0 = off; needs spec_multi_pos_tiles = Tg): pack each group's
+        // Tg candidates x NH valid q rows into ONE q tile (candidate j on rows [j*S, j*S+NH),
+        // S = NH rounded up to even), so each KV chunk runs one q row-tile instead of Tg, with a
+        // per-row causal mask. Same KV chunking, core split and reduction order as the unpacked
+        // call, so rows [0, NH) of every output row-tile are bit-identical to it; the padding
+        // rows NH..31 are not written. Needs Tg * S <= 32 and an interleaved output.
+        nb::arg("spec_pack_heads") = 0u);
 
     ttnn::bind_function<"flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,

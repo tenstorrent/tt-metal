@@ -57,6 +57,18 @@ def kv_multirow_write_ok():
     return KV_MULTIROW_WRITE_SUPPORTED and tpc.kv_write_multirow_enabled()
 
 
+def _probe_spec_sdpa_pack():
+    """Whether this ttnn build's paged SDPA decode takes ``spec_pack_heads`` (the packed spec-verify SDPA,
+    QWEN36_SPEC_SDPA_PACKED). Probed at import from the docstring, with no device, like _probe_kv_multirow_write."""
+    try:
+        return "spec_pack_heads" in (ttnn.transformer.paged_scaled_dot_product_attention_decode.__doc__ or "")
+    except Exception:  # pragma: no cover
+        return False
+
+
+SPEC_SDPA_PACK_SUPPORTED = _probe_spec_sdpa_pack()
+
+
 def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     """Shard one full-attention layer's weights across the mesh."""
     if cache_dir is not None:
@@ -868,6 +880,17 @@ class TPAttention:
             return False
         return self._spec_sdpa_plan(T) is not None
 
+    def spec_sdpa_pack_heads(self, Tg):
+        """QWEN36_SPEC_SDPA_PACKED: the q rows per candidate (spec_pack_heads = NH, the local q heads) that the fused
+        spec-verify SDPA packs into one q tile per group, or 0 for today's unpacked call. Packing needs the group's Tg
+        candidates x NH rows (rounded up to an even row count) to fit one 32-row tile: Tg=4 x NH=3 -> 16 rows at TP8."""
+        if not (SPEC_SDPA_PACK_SUPPORTED and tpc.spec_sdpa_packed_enabled()):
+            return 0
+        NH = self.NH
+        if NH > 16 or Tg * (NH + NH % 2) > ttnn.TILE_SIZE:
+            return 0
+        return NH
+
     def spec_sdpa_groups(self, T, n_users=1):
         """Batch rows (= page-table rows) the fused spec-verify SDPA wants at ``n_users`` users x T
         candidates; 1 when the fused path is off (the legacy call ignores the spec page table
@@ -1097,6 +1120,8 @@ class TPAttention:
                 _spec_rows = _spec_tiles * ttnn.TILE_SIZE
                 _spec_shape = ttnn.Shape([1, _spec_groups, _spec_rows, HD])
                 q = ttnn.reshape(q, _spec_shape, _spec_shape)
+                # QWEN36_SPEC_SDPA_PACKED: one packed q tile per group (spec_pack_heads); unset = today's call.
+                _pack = self.spec_sdpa_pack_heads(_spec_tiles)
                 attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                     q,
                     keys,
@@ -1107,6 +1132,7 @@ class TPAttention:
                     program_config=_spec_cfg,
                     memory_config=_L1,
                     spec_multi_pos_tiles=_spec_tiles,
+                    **({"spec_pack_heads": _pack} if _pack else {}),
                 )
                 ttnn.deallocate(q)
                 # Output is byte-identical to the legacy [1,B,32,HD]; view it back (same alias trick).
@@ -1381,6 +1407,8 @@ class TPAttention:
         _rows = _spec_tiles * ttnn.TILE_SIZE
         _spec_shape = ttnn.Shape([1, _spec_groups, _rows, HD])
         q = ttnn.reshape(q, _spec_shape, _spec_shape)
+        # QWEN36_SPEC_SDPA_PACKED: one packed q tile per group (spec_pack_heads); unset = today's call.
+        _pack = self.spec_sdpa_pack_heads(_spec_tiles)
         attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
             self.paged_k,
@@ -1391,6 +1419,7 @@ class TPAttention:
             program_config=_spec_cfg,
             memory_config=_L1,
             spec_multi_pos_tiles=_spec_tiles,
+            **({"spec_pack_heads": _pack} if _pack else {}),
         )
         ttnn.deallocate(q)
         attn_out = ttnn.reshape(attn_out, ttnn.Shape([1, B, NH, HD]), ttnn.Shape([1, B, ttnn.TILE_SIZE, HD]))
