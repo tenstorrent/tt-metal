@@ -153,6 +153,11 @@ def test_quasar_slice_rm_width_sharded_subaligned_shard_row_out(device):
     _run_quasar_slice((1, 1, 64, 96), (0, 0, 0, 0), (1, 1, 32, 96), (1, 1, 1, 1), L1_INTERLEAVED, omc, device)
 
 
+def test_quasar_slice_rm_block_sharded_subaligned_shard_row_out(device):
+    omc = _explicit_block_shard_config(device, 2, 8, 16, 12)
+    _run_quasar_slice((1, 1, 64, 96), (0, 0, 0, 0), (1, 1, 32, 96), (1, 1, 1, 1), L1_INTERLEAVED, omc, device)
+
+
 def test_quasar_slice_tile_tensor_args(device):
     shape = (1, 1, 64, 64)
     starts, ends = [0, 0, 32, 0], [1, 1, 64, 64]

@@ -301,6 +301,8 @@ ttnn::Tensor slice(
     }
 
     // Composite hop: unshard to L1 interleaved if needed, slice, then convert to the requested mc.
+    // Must stay below the rescale: needs_rm_composite_output and resolve_mc need the rescaled spec,
+    // which can be sub-aligned even when the inherited one isn't.
     const bool width_begin_nonzero = !begins.empty() && begins.back() != 0;
     const bool rm_in_bad =
         detail::needs_rm_composite_input(input_tensor, output_memory_config, no_step, width_begin_nonzero);
