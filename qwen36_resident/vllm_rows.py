@@ -31,6 +31,41 @@ import torch
 
 ROWS = 8  # users per launch: the rows-mode build is compiled at width 8 for every launch
 BLOCK = 64  # KV block (positions) = vLLM block_size
+CHUNK_UNIT = 1024  # the PP prefill's largest chunk: a split prompt resumes only at its multiples
+
+
+def plugin_has_chunk_core():
+    """whether the vllm-tt-plugin this process runs has the TT chunk core (branch resident-mu): it keeps one user's
+    prompts whole and splits only at the model's unit. A plugin without it acts on supports_chunked_prefill with plain
+    token-budget chunking (8192 / 2048-token chunks even at max_num_seqs 1), which the PP prefill cannot resume."""
+    try:
+        from vllm_tt_plugin import config
+    except Exception:
+        return False
+    return hasattr(config, "get_tt_prefill_chunk_unit")
+
+
+def resident_capabilities(top_k=32, chunk_core=None):
+    """the resident vLLM class's model_capabilities, resolved once against the running plugin: the chunk keys only
+    where the plugin has the chunk core, so max_num_seqs 1 resolves as before on any plugin (chunking off, the whole
+    prompt in one step) and several users get aligned, exclusive chunks where the plugin can give them"""
+    caps = {
+        "supports_prefix_caching": False,
+        "supports_async_decode": True,
+        # the hub samples from the top top_k logits; anything else samples on the host from the logits
+        "supports_sample_on_device": True,
+        "max_device_top_k": top_k,
+        "supports_device_penalties": False,
+    }
+    if plugin_has_chunk_core() if chunk_core is None else chunk_core:
+        caps.update(
+            {
+                "supports_chunked_prefill": True,
+                "tt_prefill_chunk_tokens": CHUNK_UNIT,
+                "tt_prefill_exclusive_chunks": True,
+            }
+        )
+    return caps
 
 
 class DecodeHandle:

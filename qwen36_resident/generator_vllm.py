@@ -31,25 +31,15 @@ from qwen36_resident import weights as Q
 from qwen36_resident.model import TOP_K, Dims, ResidentModel, State
 from qwen36_resident.mtp import SpecDecoder
 from qwen36_resident.prefill.pp_prefill import PPPrefill
-from qwen36_resident.vllm_rows import ResidentRowsAdapter, RowsEngine
+from qwen36_resident.vllm_rows import CHUNK_UNIT, ResidentRowsAdapter, RowsEngine, resident_capabilities
 
 PREFILL_CHUNKS = (128, 256, 512, 1024)
+assert max(PREFILL_CHUNKS) == CHUNK_UNIT
 
 
 class Qwen36ResidentForCausalLM:
-    model_capabilities = {
-        "supports_prefix_caching": False,
-        "supports_async_decode": True,
-        # the hub samples from the top TOP_K logits; anything else samples on the host from the logits
-        "supports_sample_on_device": True,
-        "max_device_top_k": TOP_K,
-        "supports_device_penalties": False,
-        # several users (Qwen36ResidentRowsForCausalLM): the PP prefill resumes a split prompt only at multiples of
-        # its largest chunk and holds one prompt at a time (the plugin's TT chunk core; off at max_num_seqs 1)
-        "supports_chunked_prefill": True,
-        "tt_prefill_chunk_tokens": max(PREFILL_CHUNKS),
-        "tt_prefill_exclusive_chunks": True,
-    }
+    # the chunk keys (several users) only where the running plugin has the TT chunk core: see resident_capabilities
+    model_capabilities = resident_capabilities(top_k=TOP_K)
     decode_input_update_contract = 1
 
     def __init__(self, mesh, ck, max_seq_len, mrope):
