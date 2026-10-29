@@ -1581,6 +1581,21 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 23:50: the first served hits; the confirmer's process; async scheduling back on the plan
+
+`apc_r4`: stage b identical across rounds (the slot affinity), the first served hits (round-2 needle TTFT 10 s for the
+two prompts whose answers had not crossed 65536; the other two lost their chunk-end snapshot when the aligned decode
+crossing at 65536 rolled the single host entry: r5 runs two host entries), the bench back at 14.0 tok/s per user at 32
+users (the per-step cost of APC is gone), 64 K x 4 TTFT 343 s and an empty answer to the repeated image: both from
+vLLM's unconfirmed hits, because the plugin's confirmer still was not installed in the engine-core process. Root
+cause: `EngineCore.__init__` builds its scheduler after the executor loaded the model, and both the platform's config
+check and the general-plugin load run inside that same constructor, so no wrapper installed from the plugin's hooks
+reaches this process's engine. Plugin ccc57a5: the in-process worker publishes the model's confirmer at `load_model`
+and the scheduler takes it from there. Async scheduling is back on the plan (user, 23:35): plugin #259 (a host-answered
+decode is a reload transition; a refused read drops the chain) folded into arg/glm53_registration, and the adapter's
+chain step accepts the plugin's position one step behind the device (vLLM's async scheduling builds step N + 1 before
+step N's token lands; 278e854295a). `async_r2` (async + APC + resident, a-e) follows `apc_r5`.
+
 ### 2026-10-29 23:05: the 1 M prompt through the API, and two more APC defects
 
 `needle1m_r4` (the catalogued 1 M profile, APC on the HOST store, resident on): a 1 039 157-token prompt prefilled end
