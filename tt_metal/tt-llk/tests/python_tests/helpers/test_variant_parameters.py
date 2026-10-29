@@ -1618,6 +1618,19 @@ class LOOP_FACTOR(RuntimeParameter):
 
 
 @dataclass
+class GROUP_KT_DIM(RuntimeParameter):
+    """K tiles per quantization group (group-wise dequant matmul)."""
+
+    group_kt_dim: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t GROUP_KT_DIM = {self.group_kt_dim};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return f"std::uint32_t GROUP_KT_DIM;", "I"
+
+
+@dataclass
 class UNPACK_TRANS_FACES(RuntimeParameter):
     unpack_transpose_faces: Transpose = Transpose.No
 
