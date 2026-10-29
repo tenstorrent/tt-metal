@@ -93,11 +93,11 @@ double floater_compute_to_transfer(
 // with 2 gather links, or nullopt. The schedule is SDPAProgramConfig::floater_schedule if set; otherwise the layout's
 // (ring_joint::kFloaterLayoutSchedules), where the call's compute per arriving token is large enough against its
 // transfer for the floaters to pay off (floater_compute_to_transfer >= ring_joint::kFloaterMinComputeToTransfer). On
-// those shapes the K split's 24 home blocks of 2x2 cores fill a 10x10 sub-grid, leaving the 25th block, the last grid
-// column and the gather column below its workers idle: 20 cores, five floater groups of 4 that take over pieces of the
-// homes' bands. The gather's workers are the top 2 x num_links cores of column grid.x (column-major from (grid.x, 0)).
-// The floaters cut their pieces from the plain gathered slices (plain_gathered_slices), checked last, so other shapes
-// never query the gather's buffers or the fabric.
+// those shapes the K split's dense layout leaves 14 SDPA cores idle, which with the gather column below its workers
+// make 20 cores: five floater groups of 4 that take over pieces of the homes' bands (ring_joint_floater_layout.hpp).
+// The gather's workers are the top 2 x num_links cores of column grid.x (column-major from (grid.x, 0)). The floaters
+// cut their pieces from the plain gathered slices (plain_gathered_slices), checked last, so other shapes never query
+// the gather's buffers or the fabric.
 //
 // refuse_unusable_schedule: TT_FATAL on a floater_schedule the call cannot use, or a malformed one. Set only after the
 // op's validation (the program factory); output-spec inference runs before it and leaves errors to the validator.
@@ -106,8 +106,5 @@ std::optional<ring_joint::FloaterSchedule> floater_eligibility(
     const RingJointSDPAInputs& tensor_args,
     const KSplitShape& ksplit,
     bool refuse_unusable_schedule);
-
-// Whether a validated call's program runs the floaters (floater_eligibility on its K split).
-bool runs_floaters(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args);
 
 }  // namespace ttnn::prim::ring_joint_plan

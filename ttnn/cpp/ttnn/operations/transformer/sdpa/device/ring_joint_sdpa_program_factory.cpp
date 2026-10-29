@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <optional>
 #include <cmath>
 #include <string>
@@ -164,9 +165,6 @@ constexpr uint32_t kAllGatherReaderBackwardKernelIndex =
     kFirstAllGatherKernelIndex + ag_rt::kReaderBackwardKernelOffset;
 constexpr uint32_t kAllGatherWriterBackwardKernelIndex =
     kFirstAllGatherKernelIndex + ag_rt::kWriterBackwardKernelOffset;
-// Expanded-K floaters (kernels/ring_joint_floaters.hpp): the floaters' reader, writer and compute follow the dense
-// gather's.
-constexpr uint32_t kFloaterReaderKernelIndex = kAllGatherWriterBackwardKernelIndex + 1;
 // Sliding halos append one reader/writer pair per exchange, in plan_halo_exchanges order.
 constexpr uint32_t kNeighborHaloReaderKernelIndex = 3;
 constexpr uint32_t kNeighborHaloWriterKernelIndex = 4;
@@ -628,13 +626,11 @@ RingJointScalarBlocks ring_joint_scalar_blocks(
     };
 }
 
-// floaters: the program runs the floaters' kernel group (ring_joint_plan::runs_floaters).
 void apply_ring_joint_scalar_runtime_args(
     Program& program,
     const ttnn::prim::RingJointSDPAParams& args,
     const ttnn::prim::RingJointSDPAInputs& tensor_args,
-    const ttnn::MeshCoordinate& mesh_dispatch_coordinate,
-    bool floaters) {
+    const ttnn::MeshCoordinate& mesh_dispatch_coordinate) {
     const bool patch_indexed_kv_cache = args.has_indexed_kv_cache();
     const bool patch_kv_pad_rotation = args.has_kv_pad_rotation();
     if (!patch_indexed_kv_cache && !patch_kv_pad_rotation) {
@@ -855,13 +851,9 @@ void apply_ring_joint_scalar_runtime_args(
 
     // Written as whole blocks on every core, including inactive receivers.
     const RingJointScalarBlocks scalars = ring_joint_scalar_blocks(args, tensor_args, runtime_plan);
-    // The SDPA kernels, and with floaters (ring_joint_floaters.hpp) their kernel group after the dense gather's four
-    // kernels.
-    std::vector<std::array<uint32_t, 3>> kernel_sets = {{kReaderKernelIndex, kWriterKernelIndex, kComputeKernelIndex}};
-    if (floaters) {
-        kernel_sets.push_back(
-            {kFloaterReaderKernelIndex, kFloaterReaderKernelIndex + 1, kFloaterReaderKernelIndex + 2});
-    }
+    // The SDPA kernels (on a floater program's homes and floaters alike).
+    const std::vector<std::array<uint32_t, 3>> kernel_sets = {
+        {kReaderKernelIndex, kWriterKernelIndex, kComputeKernelIndex}};
     for (const auto& kernels : kernel_sets) {
         // Resolve each kernel's argument grid once per dispatch. Keep these references local:
         // descriptor application may change the backing storage before the next cache hit.
@@ -1084,6 +1076,7 @@ struct RowWideChainMcastSelection {
     uint32_t injector_idx = 0;
     uint32_t max_q = 0;
     uint32_t num_receivers = 0;
+    uint32_t last_col = 0;  // the multicast covers the row's columns 0..last_col
     CoreCoord injector_physical = CoreCoord{0, 0};
     CoreCoord phys_start = CoreCoord{0, 0};
     CoreCoord phys_end = CoreCoord{0, 0};
@@ -2564,14 +2557,30 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         const CoreCoord injector_physical = core_work[injector_idx].physical_core;
         recent_cols.push_back(injector_physical.x);
 
+        // With floaters, the row's floaters (the dense layout's idle cores, at the row's end) run their own K: the
+        // multicast stops at the row's last home.
+        uint32_t last_col = grid_size.x - 1;
+        if (floaters) {
+            while (last_col > 0 && home_unit[row * grid_size.x + last_col] >= total_q_chunks) {
+                --last_col;
+            }
+            for (uint32_t col = 0; col <= last_col; ++col) {
+                TT_FATAL(
+                    home_unit[row * grid_size.x + col] < total_q_chunks,
+                    "ring_joint floaters: row {}'s homes are not contiguous from column 0 (column {})",
+                    row,
+                    col);
+            }
+        }
         return RowWideChainMcastSelection{
             .row = row,
             .injector_idx = injector_idx,
             .max_q = row_max_q,
-            .num_receivers = grid_size.x - 1,
+            .num_receivers = last_col,
+            .last_col = last_col,
             .injector_physical = injector_physical,
             .phys_start = device->worker_core_from_logical_core(CoreCoord{0, row}),
-            .phys_end = device->worker_core_from_logical_core(CoreCoord{grid_size.x - 1, row}),
+            .phys_end = device->worker_core_from_logical_core(CoreCoord{last_col, row}),
         };
     };
 
@@ -2599,7 +2608,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
             chain_max_q[ci] = selection.max_q;
         };
-        for (uint32_t col = 0; col < grid_size.x; ++col) {
+        for (uint32_t col = 0; col <= selection.last_col; ++col) {
             configure_core(selection.row * grid_size.x + col);
         }
     };
@@ -2748,48 +2757,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<RowWideChainMcastSelection> row_mcast_selections;
         row_mcast_selections.reserve(grid_size.y);
         std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
-        // Floaters: one K multicast per strip of same-band home blocks (FloaterLayout::home_strips) and per floater
-        // group instead of per row; a floater group's injector forwards on every visit (several Q slots per step). The
-        // multicast writes its whole rectangle, so a group must fill it.
-        auto configure_group_mcast = [&](const std::vector<uint32_t>& group, uint32_t forwarded_q_slots) {
-            CoreCoord lo = logical_core(group[0]);
-            CoreCoord hi = lo;
-            for (uint32_t ci : group) {
-                const CoreCoord c = logical_core(ci);
-                lo = CoreCoord{std::min(lo.x, c.x), std::min(lo.y, c.y)};
-                hi = CoreCoord{std::max(hi.x, c.x), std::max(hi.y, c.y)};
-            }
-            TT_FATAL(
-                (hi.x - lo.x + 1) * (hi.y - lo.y + 1) == group.size(),
-                "ring_joint floaters: a K multicast group of {} cores does not fill its {}..{} rectangle",
-                group.size(),
-                lo,
-                hi);
-            for (uint32_t ci : group) {
-                auto& cfg = batch_chain_configs[ci];
-                cfg = ChainConfig{};
-                cfg.participates = true;
-                cfg.mcast_start = device->worker_core_from_logical_core(lo);
-                cfg.mcast_end = device->worker_core_from_logical_core(hi);
-                cfg.injector_physical = core_work[group[0]].physical_core;
-                cfg.is_injector = ci == group[0];
-                cfg.is_sink = !cfg.is_injector;
-                cfg.mcast_num_dests = cfg.is_injector ? group.size() - 1 : 0;
-                cfg.next_core_q_chunks = cfg.is_injector ? forwarded_q_slots : 0;
-                k_chain_max_q[ci] = 1;
-            }
-        };
-        if (floaters) {
-            for (const auto& strip : floater_layout.home_strips) {
-                configure_group_mcast(strip, 1);
-            }
-            for (const auto& group : floater_groups) {
-                configure_group_mcast(
-                    std::vector<uint32_t>(group.begin(), group.end()), std::numeric_limits<uint32_t>::max());
-            }
-            k_mcast_enabled = true;
-        }
-        for (uint32_t row = 0; !floaters && row < grid_size.y; ++row) {
+        for (uint32_t row = 0; row < grid_size.y; ++row) {
             const std::optional<RowWideChainMcastSelection> selection = select_row_wide_chain_mcast(row, recent_cols);
             if (!selection.has_value()) {
                 // Idle row: drop any linear-chain role so its cores neither read nor forward K.
@@ -2800,9 +2768,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
             row_mcast_selections.push_back(*selection);
         }
-        if (floaters) {
-            // Configured per group above.
-        } else if (row_mcast_selections.empty()) {
+        if (row_mcast_selections.empty()) {
             k_mcast_fallback_reason = "no row has work";
         } else {
             k_mcast_enabled = true;
@@ -2822,6 +2788,60 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                     selection.phys_start.y,
                     selection.phys_end.x,
                     selection.phys_end.y);
+            }
+        }
+        if (floaters && k_mcast_enabled) {
+            // Floater groups, after the rows: a group that fills a rectangle gets its own multicast, its injector
+            // forwarding on every visit (several Q slots per step) and placed, where it can be, in a column no other
+            // injector reads K through (each injector's DRAM reads arrive through its column); a group that does
+            // not reads K on every core (the reader's non-participant path). The multicast writes its whole
+            // rectangle, so a group must fill it.
+            std::set<uint32_t> injector_cols;
+            for (const auto& selection : row_mcast_selections) {
+                injector_cols.insert(selection.injector_physical.x);
+            }
+            for (uint32_t f = 0; f < floater_groups.size(); ++f) {
+                std::vector<uint32_t> group(floater_groups[f].begin(), floater_groups[f].end());
+                if (!floater_layout.group_multicast[f]) {
+                    for (const uint32_t ci : group) {
+                        batch_chain_configs[ci] = ChainConfig{};
+                        k_chain_max_q[ci] = 1;
+                    }
+                    continue;
+                }
+                const auto injector = std::find_if(group.begin(), group.end(), [&](uint32_t ci) {
+                    return !injector_cols.contains(core_work[ci].physical_core.x);
+                });
+                if (injector != group.end()) {
+                    std::rotate(group.begin(), injector, injector + 1);
+                }
+                injector_cols.insert(core_work[group[0]].physical_core.x);
+                CoreCoord lo = logical_core(group[0]);
+                CoreCoord hi = lo;
+                for (const uint32_t ci : group) {
+                    const CoreCoord c = logical_core(ci);
+                    lo = CoreCoord{std::min(lo.x, c.x), std::min(lo.y, c.y)};
+                    hi = CoreCoord{std::max(hi.x, c.x), std::max(hi.y, c.y)};
+                }
+                TT_FATAL(
+                    (hi.x - lo.x + 1) * (hi.y - lo.y + 1) == group.size(),
+                    "ring_joint floaters: a K multicast group of {} cores does not fill its {}..{} rectangle",
+                    group.size(),
+                    lo,
+                    hi);
+                for (const uint32_t ci : group) {
+                    auto& cfg = batch_chain_configs[ci];
+                    cfg = ChainConfig{};
+                    cfg.participates = true;
+                    cfg.mcast_start = device->worker_core_from_logical_core(lo);
+                    cfg.mcast_end = device->worker_core_from_logical_core(hi);
+                    cfg.injector_physical = core_work[group[0]].physical_core;
+                    cfg.is_injector = ci == group[0];
+                    cfg.is_sink = !cfg.is_injector;
+                    cfg.mcast_num_dests = cfg.is_injector ? group.size() - 1 : 0;
+                    cfg.next_core_q_chunks = cfg.is_injector ? std::numeric_limits<uint32_t>::max() : 0;
+                    k_chain_max_q[ci] = 1;
+                }
             }
         }
     }
@@ -3339,7 +3359,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"slice_readiness", slice_readiness ? 1u : 0u},
         {"ring_interleave", ring_interleave ? 1u : 0u},
         // Expanded-K floaters (kernels/ring_joint_floaters.hpp): the program runs them, and whether its homes donate
-        // their bands' tails. floater_core, set per kernel group below, marks the floaters' own group.
+        // their bands' tails. A core's role (home or floater) is in its runtime args.
         {"floaters", floaters ? 1u : 0u},
         {"donate_tail", floaters && floater_schedule.donate_tail ? 1u : 0u},
         {"donate_iter0", floaters ? floater_schedule.iters[0] : 0u},
@@ -3377,33 +3397,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
 
-    // The floaters run their own kernel group (floater_core) and the homes the main one, so each binary carries only
-    // its role's code (kernel config buffer). The floater kernels follow the
-    // gather's, so the indices the cache-hit patching relies on stay put.
-    KernelDescriptor floater_reader_kernel{};
-    KernelDescriptor floater_writer_kernel{};
-    KernelDescriptor floater_compute_kernel{};
-    if (floaters) {
-        std::vector<CoreRange> floater_ranges;
-        std::vector<CoreRange> home_ranges;
-        for (uint32_t c = 0; c < num_cores_all; ++c) {
-            (floater_group_of[c] != kNoGroup ? floater_ranges : home_ranges).emplace_back(logical_core(c));
-        }
-        floater_reader_kernel = reader_kernel;
-        floater_writer_kernel = writer_kernel;
-        floater_compute_kernel = compute_kernel;
-        for (auto* kernel : {&floater_reader_kernel, &floater_writer_kernel, &floater_compute_kernel}) {
-            kernel->core_ranges = CoreRangeSet(floater_ranges);
-            kernel->named_compile_time_args.emplace_back("floater_core", 1u);
-        }
-        for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
-            kernel->core_ranges = CoreRangeSet(home_ranges);
-        }
-    }
-    for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
-        kernel->named_compile_time_args.emplace_back("floater_core", 0u);
-    }
-
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores_all; ++i) {
         const CoreCoord core = logical_core(i);
@@ -3419,6 +3412,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 return;
             }
             const auto& visits = floater_visits[floater_group_of[i]];
+            TT_FATAL(!visits.empty(), "ring_joint floaters: group {} has no visits", floater_group_of[i]);
             floater_args.push_back(static_cast<uint32_t>(visits.size()));
             for (const auto& visit : visits) {
                 const uint32_t h = block_core(visit.block, floater_k_of[i]);
@@ -3533,7 +3527,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         if (floaters) {
             append_floater_args(reader_args);
         }
-        (floater ? floater_reader_kernel : reader_kernel).emplace_runtime_args(core, reader_args.args);
+        reader_kernel.emplace_runtime_args(core, reader_args.args);
 
         // Writer args
         CheckedRuntimeArgList writer_args;
@@ -3584,8 +3578,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
         if (floaters) {
-            // Floaters: a floater's [visit count][visits: iteration, home x, home y], or a home's donated pieces
-            // [floater x, floater y, floater semaphore ordinal].
+            // Floaters: a floater's [visit count][visits: iteration, home x, home y], or a home's [0][donated pieces:
+            // floater x, floater y, floater semaphore ordinal]; the kernels tell the roles apart by the first.
             if (floater) {
                 const uint32_t f = floater_group_of[i];
                 const auto& visits = floater_visits[f];
@@ -3597,6 +3591,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                     writer_args.push_back(core_work[h].physical_core.y);
                 }
             } else {
+                writer_args.push_back(0u);
                 for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
                     const HomePiece& home_piece = home_pieces[i][piece];
                     writer_args.push_back(core_work[home_piece.floater].physical_core.x);
@@ -3605,7 +3600,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 }
             }
         }
-        (floater ? floater_writer_kernel : writer_kernel).emplace_runtime_args(core, writer_args.args);
+        writer_kernel.emplace_runtime_args(core, writer_args.args);
 
         // Compute args
         CheckedRuntimeArgList compute_args;
@@ -3645,7 +3640,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         if (floaters) {
             append_floater_args(compute_args);
         }
-        (floater ? floater_compute_kernel : compute_kernel).emplace_runtime_args(core, compute_args.args);
+        compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
 
     // Push the SDPA kernels into desc before invoking the all-gather helper so
@@ -3959,16 +3954,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 : RingAttentionSliceReadiness{});
     }
 
-    if (floaters) {
-        TT_FATAL(
-            desc.kernels.size() == kFloaterReaderKernelIndex,
-            "ring_joint floaters: their kernels must follow the dense gather's (index {}, not {})",
-            kFloaterReaderKernelIndex,
-            desc.kernels.size());
-        desc.kernels.push_back(std::move(floater_reader_kernel));
-        desc.kernels.push_back(std::move(floater_writer_kernel));
-        desc.kernels.push_back(std::move(floater_compute_kernel));
-    }
     return desc;
 }
 
@@ -4010,7 +3995,6 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     RingJointSDPAResult& output_tensors) {
     descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensors);
 
-    const bool floaters = ring_joint_plan::runs_floaters(args, tensor_args);
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
         TT_FATAL(
@@ -4018,7 +4002,7 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
             "Expected RingJointSDPA cached programs to cover a single coordinate, got range {} to {}",
             coord,
             coordinate_range.end_coord());
-        apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord, floaters);
+        apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
     }
 }
 

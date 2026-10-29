@@ -304,9 +304,4 @@ std::optional<ring_joint::FloaterSchedule> floater_eligibility(
     return schedule;
 }
 
-bool runs_floaters(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    return floater_eligibility(args, tensor_args, derive_ksplit(args, tensor_args), /*refuse_unusable_schedule=*/false)
-        .has_value();
-}
-
 }  // namespace ttnn::prim::ring_joint_plan

@@ -545,10 +545,9 @@ void kernel_main() {
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
     constexpr bool ksplit_enabled = ksplit_count > 1;
-    // Expanded-K floaters (ring_joint_floaters.hpp): the program runs them; this kernel is a floater's (it runs visits
-    // instead of a unit of its own); the homes donate their bands' tails, else their heads.
+    // Expanded-K floaters (ring_joint_floaters.hpp): the program runs them (a core's role, home or floater, is in its
+    // runtime args); the homes donate their bands' tails, else their heads.
     constexpr bool floaters = get_named_compile_time_arg_val("floaters") == 1;
-    constexpr bool floater_core = get_named_compile_time_arg_val("floater_core") == 1;
     constexpr bool donate_tail = get_named_compile_time_arg_val("donate_tail") == 1;
     // The program's donation schedule (ring_joint_floaters.hpp); all zero without floaters.
     [[maybe_unused]] constexpr ring_joint::DonationSchedule donation{
@@ -866,6 +865,9 @@ void kernel_main() {
     // Floaters, after the expanded-K args: [visit count][visits: iteration, unit, band]. A home cuts its donated
     // pieces off its bands; a floater runs its visits instead of a unit of its own.
     [[maybe_unused]] const uint32_t floater_args = wuk_arg_idx + 4;
+    // A floater program runs one binary on homes and floaters: a floater's args start with its visit count, a home's
+    // with 0.
+    const bool floater_core = floaters && get_arg_val<uint32_t>(floater_args) > 0;
     [[maybe_unused]] const uint32_t visit_count = floater_core ? get_arg_val<uint32_t>(floater_args) : 0;
 
     /**
@@ -1018,7 +1020,7 @@ void kernel_main() {
 
         uint32_t KV_chunks_processed_in_iter = 0;
         // A floater's visits of this step: it runs each whole in its iteration's first step.
-        [[maybe_unused]] ring_joint::FloaterStepVisits<floater_core ? ring_joint::kFloaterMaxVisitsPerIter : 1> visits;
+        [[maybe_unused]] ring_joint::FloaterStepVisits<floaters ? ring_joint::kFloaterMaxVisitsPerIter : 1> visits;
         uint32_t iter_num_kv_chunks = packed_sources ? packed_kv.chunk_count() : num_kv_chunks;
 
         // K split: this core's slice of the iteration's local K chunks, as compute derives it. Idle cores in a split
@@ -1033,7 +1035,7 @@ void kernel_main() {
                 q_local_padded_Nt,
                 Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
             ring_joint::KSplitRange band_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count, ring_id);
-            if constexpr (floater_core) {
+            if (floater_core) {
                 if (istep.piece == 0) {
                     visits.template collect<donate_tail>(
                         [](uint32_t i) { return get_arg_val<uint32_t>(i); },
@@ -1111,7 +1113,7 @@ void kernel_main() {
             }
         }
         uint32_t gqa_group_q_iter = 0;
-        if constexpr (floater_core) {
+        if (floater_core) {
             loop_q_count = visits.count;
         }
 
@@ -1137,7 +1139,7 @@ void kernel_main() {
             }
 
             [[maybe_unused]] const uint32_t visit_chunks_before = KV_chunks_processed_in_iter;
-            if constexpr (floater_core) {
+            if (floater_core) {
                 // A visit is a fresh Q chunk of its own: its unit, its piece, its own Q and W_UK push.
                 is_padded_iter = false;
                 flat_q_index = visits.units[q_iter];
@@ -1675,7 +1677,7 @@ void kernel_main() {
                     }
                 }
             }
-            if constexpr (floater_core) {
+            if (floater_core) {
                 // Compute runs one call per visit, which drains its own phase padding (none for an empty visit, which
                 // it skips), so a floater pads per visit instead of per step.
                 const uint32_t visit_chunks = KV_chunks_processed_in_iter - visit_chunks_before;
@@ -1690,7 +1692,7 @@ void kernel_main() {
             // so the next group and subsequent dispatches start at the right source.
             packed_readiness.drain(source_group_size, wait_packed_source);
         }
-        if constexpr (!has_sliding_window && !floater_core) {
+        if (!has_sliding_window && !floater_core) {
             push_kv_dummies(
                 dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(KV_chunks_processed_in_iter));
         }

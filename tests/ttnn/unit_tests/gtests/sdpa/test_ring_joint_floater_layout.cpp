@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host-side checks of the expanded-K floater layout (ring_joint_floater_layout.hpp): exact tables for the two tuned
-// shapes, so a change to the layout is a deliberate one, and the invariants the kernels' protocol relies on.
+// Host-side checks of the expanded-K floater layout (ring_joint_floater_layout.hpp): the two tuned shapes' floater
+// groups exactly, their homes and visits against the layout's documented rules, and the invariants the kernels'
+// protocol and the program's K delivery rely on.
 
 #include <algorithm>
 #include <array>
@@ -25,106 +26,25 @@ constexpr uint32_t kGridY = 10;
 constexpr uint32_t kGatherWorkers = 4;
 constexpr uint32_t kRingSize = 8;
 
-// Kimi K3: 24 heads, 2 bands.
-constexpr std::array<std::array<uint32_t, 4>, 5> kK3Groups = {
-    {{96, 97, 107, 108}, {10, 21, 32, 43}, {54, 65, 76, 87}, {110, 111, 112, 113}, {98, 114, 109, 115}}};
-constexpr std::array<uint32_t, 96> kK3Homes = {
-    0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  11, 12, 13, 14, 15, 16, 17, 18,  19,  20,  22,  23,  24,  25,
-    26, 27, 28, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 44, 45,  46,  47,  48,  49,  50,  51,
-    52, 53, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 66, 67, 68, 69, 70, 71,  72,  73,  74,  75,  77,  78,
-    79, 80, 81, 82, 83, 84, 85, 86, 88, 89, 90, 91, 92, 93, 94, 95, 99, 100, 101, 102, 103, 104, 105, 106};
-// per home: band, unit, merge iteration, then per piece: floater core, ordinal
-constexpr std::array<std::array<uint32_t, 7>, 96> kK3HomeTable = {
-    {{0, 0, 2, 96, 1, 98, 5},    {0, 1, 2, 97, 1, 114, 5},   {0, 4, 2, 10, 1, 96, 6},    {0, 5, 2, 21, 1, 97, 6},
-     {0, 8, 2, 54, 1, 10, 6},    {0, 9, 2, 65, 1, 21, 6},    {0, 12, 2, 110, 1, 54, 6},  {0, 13, 2, 111, 1, 65, 6},
-     {0, 16, 2, 98, 1, 110, 6},  {0, 17, 2, 114, 1, 111, 6}, {0, 2, 2, 107, 1, 109, 5},  {0, 3, 2, 108, 1, 115, 5},
-     {0, 6, 2, 32, 1, 107, 6},   {0, 7, 2, 43, 1, 108, 6},   {0, 10, 2, 76, 1, 32, 6},   {0, 11, 2, 87, 1, 43, 6},
-     {0, 14, 2, 112, 1, 76, 6},  {0, 15, 2, 113, 1, 87, 6},  {0, 18, 2, 109, 1, 112, 6}, {0, 19, 2, 115, 1, 113, 6},
-     {0, 20, 2, 96, 2, 98, 6},   {0, 21, 2, 97, 2, 114, 6},  {0, 24, 2, 10, 2, 96, 7},   {0, 25, 2, 21, 2, 97, 7},
-     {0, 28, 2, 54, 2, 10, 7},   {0, 29, 2, 65, 2, 21, 7},   {0, 32, 2, 110, 2, 54, 7},  {0, 33, 2, 111, 2, 65, 7},
-     {0, 36, 2, 98, 2, 110, 7},  {0, 37, 2, 114, 2, 111, 7}, {0, 22, 2, 107, 2, 109, 6}, {0, 23, 2, 108, 2, 115, 6},
-     {0, 26, 2, 32, 2, 107, 7},  {0, 27, 2, 43, 2, 108, 7},  {0, 30, 2, 76, 2, 32, 7},   {0, 31, 2, 87, 2, 43, 7},
-     {0, 34, 2, 112, 2, 76, 7},  {0, 35, 2, 113, 2, 87, 7},  {0, 38, 2, 109, 2, 112, 7}, {0, 39, 2, 115, 2, 113, 7},
-     {0, 40, 2, 96, 3, 98, 7},   {0, 41, 2, 97, 3, 114, 7},  {0, 44, 2, 10, 3, 96, 8},   {0, 45, 2, 21, 3, 97, 8},
-     {1, 0, 2, 54, 3, 10, 8},    {1, 1, 2, 65, 3, 21, 8},    {1, 4, 2, 110, 3, 54, 8},   {1, 5, 2, 111, 3, 65, 8},
-     {1, 8, 2, 98, 3, 110, 8},   {1, 9, 2, 114, 3, 111, 8},  {0, 42, 2, 107, 3, 109, 7}, {0, 43, 2, 108, 3, 115, 7},
-     {0, 46, 2, 32, 3, 107, 8},  {0, 47, 2, 43, 3, 108, 8},  {1, 2, 2, 76, 3, 32, 8},    {1, 3, 2, 87, 3, 43, 8},
-     {1, 6, 2, 112, 3, 76, 8},   {1, 7, 2, 113, 3, 87, 8},   {1, 10, 2, 109, 3, 112, 8}, {1, 11, 2, 115, 3, 113, 8},
-     {1, 12, 2, 96, 4, 98, 8},   {1, 13, 2, 97, 4, 114, 8},  {1, 16, 2, 10, 4, 96, 9},   {1, 17, 2, 21, 4, 97, 9},
-     {1, 20, 2, 54, 4, 10, 9},   {1, 21, 2, 65, 4, 21, 9},   {1, 24, 2, 110, 4, 54, 9},  {1, 25, 2, 111, 4, 65, 9},
-     {1, 28, 2, 98, 4, 110, 9},  {1, 29, 2, 114, 4, 111, 9}, {1, 14, 2, 107, 4, 109, 8}, {1, 15, 2, 108, 4, 115, 8},
-     {1, 18, 2, 32, 4, 107, 9},  {1, 19, 2, 43, 4, 108, 9},  {1, 22, 2, 76, 4, 32, 9},   {1, 23, 2, 87, 4, 43, 9},
-     {1, 26, 2, 112, 4, 76, 9},  {1, 27, 2, 113, 4, 87, 9},  {1, 30, 2, 109, 4, 112, 9}, {1, 31, 2, 115, 4, 113, 9},
-     {1, 32, 2, 96, 5, 98, 9},   {1, 33, 2, 97, 5, 114, 9},  {1, 36, 2, 10, 5, 96, 10},  {1, 37, 2, 21, 5, 97, 10},
-     {1, 40, 2, 54, 5, 10, 10},  {1, 41, 2, 65, 5, 21, 10},  {1, 44, 2, 110, 5, 54, 10}, {1, 45, 2, 111, 5, 65, 10},
-     {1, 34, 2, 107, 5, 109, 9}, {1, 35, 2, 108, 5, 115, 9}, {1, 38, 2, 32, 5, 107, 10}, {1, 39, 2, 43, 5, 108, 10},
-     {1, 42, 2, 76, 5, 32, 10},  {1, 43, 2, 87, 5, 43, 10},  {1, 46, 2, 112, 5, 76, 10}, {1, 47, 2, 113, 5, 87, 10}}};
-// per group: visited blocks in run order (piece 0 then piece 1)
-constexpr std::array<std::array<uint32_t, 10>, 5> kK3VisitBlocks = {
-    {{0, 5, 10, 15, 20, 1, 6, 11, 16, 21},
-     {1, 6, 11, 16, 21, 2, 7, 12, 17, 22},
-     {2, 7, 12, 17, 22, 3, 8, 13, 18, 23},
-     {3, 8, 13, 18, 23, 4, 9, 14, 19},
-     {4, 9, 14, 19, 0, 5, 10, 15, 20}}};
-constexpr std::array<uint32_t, 5> kK3VisitCounts = {10, 10, 10, 9, 9};
-constexpr std::array<uint32_t, 5> kK3FirstPieceVisits = {5, 5, 5, 5, 4};
-// Kimi K2.7: 16 heads, 3 bands.
-constexpr std::array<std::array<uint32_t, 4>, 5> kK27Groups = {
-    {{96, 97, 107, 108}, {10, 21, 32, 43}, {54, 65, 76, 87}, {110, 111, 112, 113}, {98, 114, 109, 115}}};
-constexpr std::array<uint32_t, 96> kK27Homes = {
-    0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  11, 12, 13, 14, 15, 16, 17, 18,  19,  20,  22,  23,  24,  25,
-    26, 27, 28, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 44, 45,  46,  47,  48,  49,  50,  51,
-    52, 53, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 66, 67, 68, 69, 70, 71,  72,  73,  74,  75,  77,  78,
-    79, 80, 81, 82, 83, 84, 85, 86, 88, 89, 90, 91, 92, 93, 94, 95, 99, 100, 101, 102, 103, 104, 105, 106};
-// per home: band, unit, merge iteration, then per piece: floater core, ordinal
-constexpr std::array<std::array<uint32_t, 7>, 96> kK27HomeTable = {
-    {{0, 0, 2, 96, 1, 98, 5},    {0, 1, 2, 97, 1, 114, 5},   {0, 4, 2, 10, 1, 96, 6},    {0, 5, 2, 21, 1, 97, 6},
-     {0, 8, 2, 54, 1, 10, 6},    {0, 9, 2, 65, 1, 21, 6},    {0, 12, 2, 110, 1, 54, 6},  {0, 13, 2, 111, 1, 65, 6},
-     {0, 16, 2, 98, 1, 110, 6},  {0, 17, 2, 114, 1, 111, 6}, {0, 2, 2, 107, 1, 109, 5},  {0, 3, 2, 108, 1, 115, 5},
-     {0, 6, 2, 32, 1, 107, 6},   {0, 7, 2, 43, 1, 108, 6},   {0, 10, 2, 76, 1, 32, 6},   {0, 11, 2, 87, 1, 43, 6},
-     {0, 14, 2, 112, 1, 76, 6},  {0, 15, 2, 113, 1, 87, 6},  {0, 18, 2, 109, 1, 112, 6}, {0, 19, 2, 115, 1, 113, 6},
-     {0, 20, 3, 96, 2, 98, 6},   {0, 21, 3, 97, 2, 114, 6},  {0, 24, 3, 10, 2, 96, 7},   {0, 25, 3, 21, 2, 97, 7},
-     {0, 28, 3, 54, 2, 10, 7},   {0, 29, 3, 65, 2, 21, 7},   {1, 0, 3, 110, 2, 54, 7},   {1, 1, 3, 111, 2, 65, 7},
-     {1, 4, 3, 98, 2, 110, 7},   {1, 5, 3, 114, 2, 111, 7},  {0, 22, 3, 107, 2, 109, 6}, {0, 23, 3, 108, 2, 115, 6},
-     {0, 26, 3, 32, 2, 107, 7},  {0, 27, 3, 43, 2, 108, 7},  {0, 30, 3, 76, 2, 32, 7},   {0, 31, 3, 87, 2, 43, 7},
-     {1, 2, 3, 112, 2, 76, 7},   {1, 3, 3, 113, 2, 87, 7},   {1, 6, 3, 109, 2, 112, 7},  {1, 7, 3, 115, 2, 113, 7},
-     {1, 8, 4, 96, 3, 98, 7},    {1, 9, 4, 97, 3, 114, 7},   {1, 12, 4, 10, 3, 96, 8},   {1, 13, 4, 21, 3, 97, 8},
-     {1, 16, 4, 54, 3, 10, 8},   {1, 17, 4, 65, 3, 21, 8},   {1, 20, 4, 110, 3, 54, 8},  {1, 21, 4, 111, 3, 65, 8},
-     {1, 24, 4, 98, 3, 110, 8},  {1, 25, 4, 114, 3, 111, 8}, {1, 10, 4, 107, 3, 109, 7}, {1, 11, 4, 108, 3, 115, 7},
-     {1, 14, 4, 32, 3, 107, 8},  {1, 15, 4, 43, 3, 108, 8},  {1, 18, 4, 76, 3, 32, 8},   {1, 19, 4, 87, 3, 43, 8},
-     {1, 22, 4, 112, 3, 76, 8},  {1, 23, 4, 113, 3, 87, 8},  {1, 26, 4, 109, 3, 112, 8}, {1, 27, 4, 115, 3, 113, 8},
-     {1, 28, 5, 96, 4, 98, 8},   {1, 29, 5, 97, 4, 114, 8},  {2, 0, 5, 10, 4, 96, 9},    {2, 1, 5, 21, 4, 97, 9},
-     {2, 4, 5, 54, 4, 10, 9},    {2, 5, 5, 65, 4, 21, 9},    {2, 8, 5, 110, 4, 54, 9},   {2, 9, 5, 111, 4, 65, 9},
-     {2, 12, 5, 98, 4, 110, 9},  {2, 13, 5, 114, 4, 111, 9}, {1, 30, 5, 107, 4, 109, 8}, {1, 31, 5, 108, 4, 115, 8},
-     {2, 2, 5, 32, 4, 107, 9},   {2, 3, 5, 43, 4, 108, 9},   {2, 6, 5, 76, 4, 32, 9},    {2, 7, 5, 87, 4, 43, 9},
-     {2, 10, 5, 112, 4, 76, 9},  {2, 11, 5, 113, 4, 87, 9},  {2, 14, 5, 109, 4, 112, 9}, {2, 15, 5, 115, 4, 113, 9},
-     {2, 16, 5, 96, 5, 98, 9},   {2, 17, 5, 97, 5, 114, 9},  {2, 20, 5, 10, 5, 96, 10},  {2, 21, 5, 21, 5, 97, 10},
-     {2, 24, 5, 54, 5, 10, 10},  {2, 25, 5, 65, 5, 21, 10},  {2, 28, 5, 110, 5, 54, 10}, {2, 29, 5, 111, 5, 65, 10},
-     {2, 18, 5, 107, 5, 109, 9}, {2, 19, 5, 108, 5, 115, 9}, {2, 22, 5, 32, 5, 107, 10}, {2, 23, 5, 43, 5, 108, 10},
-     {2, 26, 5, 76, 5, 32, 10},  {2, 27, 5, 87, 5, 43, 10},  {2, 30, 5, 112, 5, 76, 10}, {2, 31, 5, 113, 5, 87, 10}}};
-// per group: visited blocks in run order (piece 0 then piece 1)
-constexpr std::array<std::array<uint32_t, 10>, 5> kK27VisitBlocks = {
-    {{0, 5, 10, 15, 20, 1, 6, 11, 16, 21},
-     {1, 6, 11, 16, 21, 2, 7, 12, 17, 22},
-     {2, 7, 12, 17, 22, 3, 8, 13, 18, 23},
-     {3, 8, 13, 18, 23, 4, 9, 14, 19},
-     {4, 9, 14, 19, 0, 5, 10, 15, 20}}};
-constexpr std::array<uint32_t, 5> kK27VisitCounts = {10, 10, 10, 9, 9};
-constexpr std::array<uint32_t, 5> kK27FirstPieceVisits = {5, 5, 5, 5, 4};
-
+// The floater groups, exactly: the dense layout's idle cores (core y * 11 + x) and the gather column's cores below its
+// workers (110 + y - 4), multicast flag per group.
 struct Golden {
     uint32_t heads, bands;
-    const std::array<std::array<uint32_t, 4>, 5>& groups;
-    const std::array<uint32_t, 96>& homes;
-    const std::array<std::array<uint32_t, 7>, 96>& home_table;
-    const std::array<std::array<uint32_t, 10>, 5>& visit_blocks;  // the first visit_counts[f] of each row
-    const std::array<uint32_t, 5>& visit_counts;
-    const std::array<uint32_t, 5>& first_piece_visits;
+    std::array<std::array<uint32_t, 4>, 5> groups;
+    std::array<bool, 5> multicast;
 };
 
 const std::array<Golden, 2> kGoldens = {{
-    {24, 2, kK3Groups, kK3Homes, kK3HomeTable, kK3VisitBlocks, kK3VisitCounts, kK3FirstPieceVisits},
-    {16, 3, kK27Groups, kK27Homes, kK27HomeTable, kK27VisitBlocks, kK27VisitCounts, kK27FirstPieceVisits},
+    // Kimi K3: 24 heads, 2 bands of 5 rows; idle (4..10, 4) and (4..10, 9).
+    {24,
+     2,
+     {{{48, 49, 50, 51}, {52, 53, 54, 110}, {103, 104, 105, 106}, {107, 108, 109, 115}, {111, 112, 113, 114}}},
+     {true, true, true, true, true}},
+    // Kimi K2.7: 16 heads, 3 bands of 3 rows; idle (10, 2), (10, 5), (10, 8) and row 9.
+    {16,
+     3,
+     {{{99, 100, 101, 102}, {103, 104, 105, 106}, {107, 108, 109, 115}, {110, 111, 112, 113}, {32, 65, 98, 114}}},
+     {true, true, true, true, false}},
 }};
 
 FloaterSchedule schedule_of(const Golden& golden) {
@@ -143,30 +63,42 @@ TEST(RingJointFloaterLayout, MatchesTheTunedTables) {
         SCOPED_TRACE(::testing::Message() << "heads=" << golden.heads << " bands=" << golden.bands);
         const FloaterLayout layout = layout_of(golden);
         const FloaterSchedule schedule = schedule_of(golden);
+        const uint32_t total_q_chunks = golden.heads * 2;
+        const uint32_t rows_per_band = (total_q_chunks + kGridX - 1) / kGridX;
         ASSERT_EQ(layout.num_cores_all, kGridX * kGridY + kGridY - kGatherWorkers);
         ASSERT_EQ(layout.groups.size(), golden.groups.size());
         for (uint32_t f = 0; f < golden.groups.size(); ++f) {
             EXPECT_EQ(layout.groups[f], golden.groups[f]) << "group " << f;
-            ASSERT_EQ(layout.visits[f].size(), golden.visit_counts[f]) << "group " << f;
-            for (uint32_t v = 0; v < layout.visits[f].size(); ++v) {
-                const FloaterVisit& visit = layout.visits[f][v];
-                const uint32_t piece = v < golden.first_piece_visits[f] ? 0 : 1;
-                EXPECT_EQ(visit.block, golden.visit_blocks[f][v]) << "group " << f << " visit " << v;
-                EXPECT_EQ(visit.piece, piece) << "group " << f << " visit " << v;
-                EXPECT_EQ(visit.iter, schedule.iters[piece]) << "group " << f << " visit " << v;
+            EXPECT_EQ(layout.group_multicast[f], golden.multicast[f]) << "group " << f;
+        }
+        // Homes: where the program without floaters puts them.
+        for (uint32_t core = 0; core < kGridX * kGridY; ++core) {
+            const uint32_t band = core / kGridX / rows_per_band;
+            const uint32_t unit = core / kGridX % rows_per_band * kGridX + core % kGridX;
+            const bool home = band < golden.bands && unit < total_q_chunks;
+            EXPECT_EQ(layout.home_unit[core], home ? unit : total_q_chunks) << "core " << core;
+            if (home) {
+                EXPECT_EQ(layout.home_band[core], band) << "core " << core;
             }
         }
-        for (uint32_t i = 0; i < golden.homes.size(); ++i) {
-            const uint32_t home = golden.homes[i];
-            const auto& row = golden.home_table[i];
-            SCOPED_TRACE(::testing::Message() << "home core " << home);
-            EXPECT_EQ(layout.home_band[home], row[0]);
-            EXPECT_EQ(layout.home_unit[home], row[1]);
-            EXPECT_EQ(layout.home_merge_iter[home], row[2]);
-            for (uint32_t piece = 0; piece < kDonatedPieces; ++piece) {
-                const HomePiece& p = layout.home_pieces[home][piece];
-                EXPECT_EQ(p.floater, row[3 + 2 * piece]) << "piece " << piece;
-                EXPECT_EQ(p.ordinal, row[4 + 2 * piece]) << "piece " << piece;
+        // Visits round-robin over the groups: piece p of block g is visit n = p * blocks + g, run by group n % groups
+        // as its visit n / groups (ordinal n / groups + 1); a first piece merges at merge_after of that visit index.
+        for (uint32_t g = 0; g < kFloaterHomeBlocks; ++g) {
+            for (uint32_t k = 0; k < kFloaterGroupCores; ++k) {
+                const uint32_t home = layout.block_core(g, k);
+                EXPECT_EQ(layout.home_band[home], g / (golden.heads / 2));
+                EXPECT_EQ(layout.home_unit[home], kFloaterGroupCores * (g % (golden.heads / 2)) + k);
+                EXPECT_EQ(layout.home_merge_iter[home], schedule.merge_after[g / kFloaterGroups]) << "block " << g;
+                for (uint32_t piece = 0; piece < kDonatedPieces; ++piece) {
+                    const uint32_t n = piece * kFloaterHomeBlocks + g;
+                    const HomePiece& p = layout.home_pieces[home][piece];
+                    EXPECT_EQ(p.floater, golden.groups[n % kFloaterGroups][k]) << "block " << g << " piece " << piece;
+                    EXPECT_EQ(p.ordinal, n / kFloaterGroups + 1) << "block " << g << " piece " << piece;
+                    const FloaterVisit& visit = layout.visits[n % kFloaterGroups][n / kFloaterGroups];
+                    EXPECT_EQ(visit.block, g);
+                    EXPECT_EQ(visit.piece, piece);
+                    EXPECT_EQ(visit.iter, schedule.iters[piece]);
+                }
             }
         }
     }
@@ -199,8 +131,8 @@ TEST(RingJointFloaterLayout, HoldsTheProtocolsInvariants) {
             }
         }
         EXPECT_EQ(floater_cores.size(), kFloaterCores);
-        // Every (home block, piece) is visited once; homes and floaters are disjoint; no home sits in the last column
-        // or the gather column.
+        // Every (home block, piece) is visited once; homes and floaters are disjoint; no home sits in the gather
+        // column.
         std::set<std::pair<uint32_t, uint32_t>> visited;
         for (const auto& visits : layout.visits) {
             for (const FloaterVisit& visit : visits) {
@@ -216,7 +148,7 @@ TEST(RingJointFloaterLayout, HoldsTheProtocolsInvariants) {
             }
             ++homes;
             EXPECT_FALSE(layout.is_floater(core));
-            EXPECT_LT(layout.logical_xy(core).first + 1, kGridX) << "home core " << core;
+            EXPECT_LT(layout.logical_xy(core).first, kGridX) << "home core " << core;
             EXPECT_EQ(layout.unit_home[layout.home_band[core] * total_q_chunks + layout.home_unit[core]], core);
             for (uint32_t piece = 0; piece < kDonatedPieces; ++piece) {
                 const HomePiece& p = layout.home_pieces[core][piece];
@@ -229,32 +161,42 @@ TEST(RingJointFloaterLayout, HoldsTheProtocolsInvariants) {
     }
 }
 
-// The homes' K multicast strips: every home in exactly one, one band and one first-merge iteration per strip, each
-// a full rectangle (the multicast writes all of it), and their injectors (first cores) in distinct columns.
-TEST(RingJointFloaterLayout, StripsShareTheirHomesKStream) {
+// What the program's K delivery relies on: every row of homes is one band (its homes cut the same chunks) and starts
+// at column 0 with no floater among its homes (the row multicast stops at its last home); a multicast group fills its
+// rectangle; groups without multicast come last.
+TEST(RingJointFloaterLayout, KeepsTheKDeliveryShapes) {
     for (const Golden& golden : kGoldens) {
         SCOPED_TRACE(::testing::Message() << "heads=" << golden.heads << " bands=" << golden.bands);
         const FloaterLayout layout = layout_of(golden);
         const uint32_t total_q_chunks = golden.heads * 2;
-        std::set<uint32_t> covered, injector_columns;
-        for (const auto& strip : layout.home_strips) {
-            ASSERT_FALSE(strip.empty());
-            EXPECT_TRUE(std::is_sorted(strip.begin() + 1, strip.end()));
-            EXPECT_TRUE(injector_columns.insert(layout.logical_xy(strip.front()).first).second)
-                << "two injectors in column " << layout.logical_xy(strip.front()).first;
-            uint32_t x0 = kGridX, y0 = kGridY, x1 = 0, y1 = 0;
-            for (const uint32_t core : strip) {
-                EXPECT_TRUE(covered.insert(core).second) << "core " << core << " in two strips";
-                EXPECT_LT(layout.home_unit[core], total_q_chunks) << "core " << core << " is not a home";
-                EXPECT_EQ(layout.home_band[core], layout.home_band[strip.front()]);
-                EXPECT_EQ(layout.home_merge_iter[core], layout.home_merge_iter[strip.front()]);
+        for (uint32_t y = 0; y < kGridY; ++y) {
+            bool past_homes = false;
+            for (uint32_t x = 0; x < kGridX; ++x) {
+                const uint32_t core = y * kGridX + x;
+                const bool home = layout.home_unit[core] < total_q_chunks;
+                EXPECT_FALSE(home && past_homes) << "row " << y << " column " << x;
+                past_homes = past_homes || !home;
+                if (home) {
+                    EXPECT_EQ(layout.home_band[core], layout.home_band[y * kGridX]) << "row " << y;
+                } else {
+                    EXPECT_TRUE(layout.is_floater(core)) << "idle core " << core;
+                }
+            }
+        }
+        bool seen_unicast = false;
+        for (uint32_t f = 0; f < layout.groups.size(); ++f) {
+            EXPECT_FALSE(layout.group_multicast[f] && seen_unicast) << "group " << f << " after one without multicast";
+            seen_unicast = seen_unicast || !layout.group_multicast[f];
+            if (!layout.group_multicast[f]) {
+                continue;
+            }
+            uint32_t x0 = kGridX + 1, y0 = kGridY, x1 = 0, y1 = 0;
+            for (const uint32_t core : layout.groups[f]) {
                 const auto [x, y] = layout.logical_xy(core);
                 x0 = std::min(x0, x), y0 = std::min(y0, y), x1 = std::max(x1, x), y1 = std::max(y1, y);
             }
-            EXPECT_EQ((x1 - x0 + 1) * (y1 - y0 + 1), strip.size());
+            EXPECT_EQ((x1 - x0 + 1) * (y1 - y0 + 1), kFloaterGroupCores) << "group " << f;
         }
-        EXPECT_EQ(covered.size(), kFloaterHomeBlocks * kFloaterGroupCores);
-        EXPECT_EQ(layout.home_strips.size(), golden.bands == 2 ? 6u : 7u);
     }
 }
 

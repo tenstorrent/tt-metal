@@ -4171,7 +4171,7 @@ def test_ring_joint_attention_chunked_expanded_k_short_prompt_accuracy(model_nam
 @pytest.mark.timeout(1800)
 def test_ring_joint_attention_chunked_expanded_k_linear_without_floaters_accuracy():
     """Kimi K3 expanded K on a linear fabric: no slice readiness, so no floaters; the second chunk's cache hit patches
-    the SDPA kernels alone (ring_joint_plan::runs_floaters)."""
+    the SDPA kernels' scalar runtime args."""
     q_chunk, k_chunk, k_splits = expanded_k_production_chunks("kimi_k3_expanded_k")
     runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, topology=Topology.Linear)
     try:

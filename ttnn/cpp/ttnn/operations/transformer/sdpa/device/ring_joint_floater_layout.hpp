@@ -13,7 +13,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <numeric>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -24,12 +23,12 @@
 
 namespace ttnn::operations::transformer::sdpa::ring_joint {
 
-// Floater groups of four cores (a 2x2 block's worth): group core k mirrors home core k of the block it visits.
+// Floater groups of four cores (a home block's worth): group core k mirrors home core k of the block it visits.
 constexpr uint32_t kFloaterGroupCores = 4;
 constexpr uint32_t kFloaterGroups = 5;
 // Floater cores.
 constexpr uint32_t kFloaterCores = kFloaterGroupCores * kFloaterGroups;
-// Home blocks of the layout: 2x2 blocks of (2 heads x 2 Q chunks) per K-split band on a 10x10 sub-grid.
+// Home blocks of the layout: per K-split band, its head pairs (2 heads x 2 Q chunks, four consecutive units).
 constexpr uint32_t kFloaterHomeBlocks = 24;
 // First-piece visits a floater group runs, at most (the home blocks go round-robin over the groups).
 constexpr uint32_t kFloaterFirstPieceVisits = (kFloaterHomeBlocks + kFloaterGroups - 1) / kFloaterGroups;
@@ -172,20 +171,16 @@ struct FloaterLayout {
     std::vector<std::array<uint32_t, kFloaterGroupCores>> groups;
     // Per group, in run order: first pieces, then second pieces.
     std::vector<std::vector<FloaterVisit>> visits;
-    // The homes' K multicast groups: per block row and band, that band's blocks in the row. Every home of a band reads
-    // the same K chunks, so one injector (the first core; the rest ascending) reads each chunk once for the strip. The
-    // injectors sit in distinct columns, on a strip's top or bottom row by strip index, as the dense layout's row-wide
-    // multicast spreads its own: each injector's DRAM reads arrive through its column, and injectors sharing one
-    // slow every home's K and the gather's prefetch (the floater groups' injectors, their first cores, are not part of
-    // this spread). Each strip fills a 2-row rectangle (the multicast writes all of
-    // it), and its homes merge their first floater piece at the same iteration, so the strip stalls at one merge
-    // iteration rather than at each home's.
-    std::vector<std::vector<uint32_t>> home_strips;
+    // Per group: whether its cores fill a rectangle, so one of them reads each K chunk and multicasts it to the others
+    // (the program's K multicast writes the whole rectangle); a group that does not reads K on every core.
+    std::vector<bool> group_multicast;
+    // Units per band and head pairs per band: home block g is band g / pairs' units 4 (g % pairs) .. + 3.
+    uint32_t total_q_chunks = 0;
+    uint32_t pairs = 0;
 
-    // Home block g is the 2x2 block at (2 (g % cols), 2 (g / cols)) of the sub-grid left of the last grid column.
+    // Home block g's core k: unit 4 (g % pairs) + k of band g / pairs (head 2 (g % pairs) + k / 2, Q chunk k % 2).
     uint32_t block_core(uint32_t g, uint32_t k) const {
-        const uint32_t cols = (grid_x - 1) / 2;
-        return (2 * (g / cols) + k / 2) * grid_x + 2 * (g % cols) + k % 2;
+        return unit_home[(g / pairs) * total_q_chunks + kFloaterGroupCores * (g % pairs) + k];
     }
     bool is_floater(uint32_t core) const { return group_of[core] != kNoFloaterGroup; }
     // Logical (x, y) of a core: past the SDPA grid, the gather column below its workers.
@@ -213,11 +208,13 @@ inline FloaterLayout no_floater_layout(uint32_t grid_x, uint32_t num_cores, uint
 // The floater layout of an eligible shape (ring_joint_plan::floater_eligibility): grid_x x grid_y SDPA cores with the
 // gather's gather_workers in the column right of them, `heads` heads of two Q chunks in `bands` K-split bands.
 //
-// Home block g holds head pair g % (heads / 2) of band g / (heads / 2); its core k = (r, c) owns unit
-// (2 pair + r) * 2 + c (head 2 pair + r, Q chunk c), so a head's two Q chunks (an expansion pair, one V chain) share a
-// row. Floater groups: the 25th block, the last column's rows 0-3 and 4-7, the gather column's rows 4-7, and the 2x2
-// of both columns' rows 8-9; their expansion pairs are (0, 1) and (2, 3). The visits go round-robin over the groups
-// in ring order, each home block's two pieces.
+// The homes are where the program without floaters puts them (the K split's dense layout: band y / rows_per_band, unit
+// (y % rows_per_band) * grid_x + x), so a floater program moves their data as that program does. The floaters are the
+// cores that layout leaves idle, with the gather column's cores below its workers: row runs of them (the gather
+// column's core extends its row's run) cut into 1x4 groups from the left, then gather-column runs into 4x1 groups,
+// then whatever is left in groups of four that read K on every core. Group core k mirrors the visited block's unit k,
+// so expansion pairs are (0, 1) and (2, 3) on both sides. The visits go round-robin over the groups in ring order,
+// each home block's two pieces; a group without multicast comes last, among the groups with the fewest visits.
 inline FloaterLayout build_floater_layout(
     const FloaterSchedule& schedule,
     uint32_t grid_x,
@@ -239,8 +236,8 @@ inline FloaterLayout build_floater_layout(
     }
     // Home blocks hold head pairs, so every head is covered only with an even count that fills them exactly.
     TT_FATAL(
-        heads % 2 == 0 && (heads / 2) * bands == kFloaterHomeBlocks && gather_workers == 4 && grid_y == 10 &&
-            grid_x == 11,
+        heads % 2 == 0 && (heads / 2) * bands == kFloaterHomeBlocks && total_q_chunks == 2 * heads &&
+            gather_workers == 4 && grid_y == 10 && grid_x == 11,
         "ring_joint floaters: the layout covers {} home blocks of head pairs on an 11x10 grid beside 4 gather workers "
         "(got {} heads x {} bands, {}x{}, {} workers)",
         kFloaterHomeBlocks,
@@ -261,33 +258,88 @@ inline FloaterLayout build_floater_layout(
     layout.home_pieces.resize(layout.num_cores_all);
     layout.unit_home.assign(bands * total_q_chunks, 0);
 
-    const uint32_t pairs = heads / 2;
-    for (uint32_t g = 0; g < kFloaterHomeBlocks; ++g) {
-        for (uint32_t k = 0; k < kFloaterGroupCores; ++k) {
-            const uint32_t core = layout.block_core(g, k);
-            layout.home_band[core] = g / pairs;
-            layout.home_unit[core] = (2 * (g % pairs) + k / 2) * 2 + k % 2;
-            layout.unit_home[layout.home_band[core] * total_q_chunks + layout.home_unit[core]] = core;
+    layout.total_q_chunks = total_q_chunks;
+    layout.pairs = heads / 2;
+    // Homes: the dense K-split layout.
+    const uint32_t rows_per_band = (total_q_chunks + grid_x - 1) / grid_x;
+    TT_FATAL(
+        rows_per_band * bands <= grid_y,
+        "ring_joint floaters: {} bands of {} rows do not fit {} rows",
+        bands,
+        rows_per_band,
+        grid_y);
+    std::vector<bool> idle(layout.num_cores_all, true);
+    for (uint32_t core = 0; core < num_cores; ++core) {
+        const uint32_t band = core / grid_x / rows_per_band;
+        const uint32_t unit = core / grid_x % rows_per_band * grid_x + core % grid_x;
+        if (band < bands && unit < total_q_chunks) {
+            layout.home_band[core] = band;
+            layout.home_unit[core] = unit;
+            layout.unit_home[band * total_q_chunks + unit] = core;
+            idle[core] = false;
         }
     }
 
-    const uint32_t x = grid_x - 1;
-    auto at = [&](uint32_t cy) { return cy * grid_x + x; };
-    const uint32_t spare = kFloaterHomeBlocks;  // the block after the homes'
-    layout.groups = {
-        {layout.block_core(spare, 0),
-         layout.block_core(spare, 1),
-         layout.block_core(spare, 2),
-         layout.block_core(spare, 3)},
-        {at(0), at(1), at(2), at(3)},
-        {at(4), at(5), at(6), at(7)},
-        {num_cores, num_cores + 1, num_cores + 2, num_cores + 3},
-        {at(8), num_cores + 4, at(9), num_cores + 5}};
+    // Floater groups: the idle cores. The gather column's core of row y is num_cores + y - gather_workers, from row
+    // gather_workers down.
+    auto core_at = [&](uint32_t cx, uint32_t cy) -> std::optional<uint32_t> {
+        if (cx < grid_x) {
+            return cy * grid_x + cx;
+        }
+        return cy >= gather_workers ? std::optional<uint32_t>(num_cores + cy - gather_workers) : std::nullopt;
+    };
+    auto take = [&](const std::array<uint32_t, kFloaterGroupCores>& group, bool multicast) {
+        for (const uint32_t core : group) {
+            idle[core] = false;
+        }
+        layout.groups.push_back(group);
+        layout.group_multicast.push_back(multicast);
+    };
+    for (uint32_t cy = 0; cy < grid_y; ++cy) {
+        std::vector<uint32_t> run;
+        for (uint32_t cx = 0; cx <= grid_x; ++cx) {
+            const std::optional<uint32_t> core = core_at(cx, cy);
+            if (core.has_value() && idle[*core]) {
+                run.push_back(*core);
+            }
+            if (!core.has_value() || !idle[*core] || cx == grid_x) {
+                for (uint32_t i = 0; i + kFloaterGroupCores <= run.size(); i += kFloaterGroupCores) {
+                    take({run[i], run[i + 1], run[i + 2], run[i + 3]}, true);
+                }
+                run.clear();
+            }
+        }
+    }
+    {
+        std::vector<uint32_t> run;
+        for (uint32_t cy = gather_workers; cy <= grid_y; ++cy) {
+            const bool free = cy < grid_y && idle[*core_at(grid_x, cy)];
+            if (free) {
+                run.push_back(*core_at(grid_x, cy));
+            }
+            if (!free) {
+                for (uint32_t i = 0; i + kFloaterGroupCores <= run.size(); i += kFloaterGroupCores) {
+                    take({run[i], run[i + 1], run[i + 2], run[i + 3]}, true);
+                }
+                run.clear();
+            }
+        }
+    }
+    std::vector<uint32_t> rest;
+    for (uint32_t core = 0; core < layout.num_cores_all; ++core) {
+        if (idle[core]) {
+            rest.push_back(core);
+        }
+    }
     TT_FATAL(
-        layout.groups.size() == kFloaterGroups,
-        "ring_joint floaters: {} groups, the schedules assume {}",
-        layout.groups.size(),
-        kFloaterGroups);
+        rest.size() % kFloaterGroupCores == 0 &&
+            layout.groups.size() + rest.size() / kFloaterGroupCores == kFloaterGroups,
+        "ring_joint floaters: {} idle cores beside the homes, the schedules assume {}",
+        layout.groups.size() * kFloaterGroupCores + rest.size(),
+        kFloaterCores);
+    for (uint32_t i = 0; i < rest.size(); i += kFloaterGroupCores) {
+        take({rest[i], rest[i + 1], rest[i + 2], rest[i + 3]}, false);
+    }
     layout.visits.resize(layout.groups.size());
     uint32_t next = 0;
     for (uint32_t piece = 0; piece < kDonatedPieces; ++piece) {
@@ -333,68 +385,6 @@ inline FloaterLayout build_floater_layout(
                 }
             }
         }
-    }
-    const uint32_t cols = (grid_x - 1) / 2;
-    for (uint32_t g = 0; g < kFloaterHomeBlocks; ++g) {
-        const uint32_t row = g / cols;
-        const uint32_t band = layout.home_band[layout.block_core(g, 0)];
-        if (g == 0 || row != (g - 1) / cols || band != layout.home_band[layout.block_core(g - 1, 0)]) {
-            layout.home_strips.emplace_back();
-        }
-        for (uint32_t k = 0; k < kFloaterGroupCores; ++k) {
-            layout.home_strips.back().push_back(layout.block_core(g, k));
-        }
-    }
-    for (auto& strip : layout.home_strips) {
-        std::sort(strip.begin(), strip.end());
-        uint32_t x0 = grid_x, y0 = grid_y, x1 = 0, y1 = 0;
-        for (const uint32_t core : strip) {
-            const auto [x, y] = layout.logical_xy(core);
-            x0 = std::min(x0, x), y0 = std::min(y0, y), x1 = std::max(x1, x), y1 = std::max(y1, y);
-        }
-        TT_FATAL(
-            (x1 - x0 + 1) * (y1 - y0 + 1) == strip.size(),
-            "ring_joint floaters: a K multicast strip of {} cores does not fill ({}, {})..({}, {})",
-            strip.size(),
-            x0,
-            y0,
-            x1,
-            y1);
-        for (const uint32_t core : strip) {
-            TT_FATAL(
-                layout.home_merge_iter[core] == layout.home_merge_iter[strip.front()],
-                "ring_joint floaters: the homes of a K multicast strip merge their first piece at different iterations "
-                "({} and {})",
-                layout.home_merge_iter[core],
-                layout.home_merge_iter[strip.front()]);
-        }
-    }
-    // Narrowest strips first: they have the fewest columns to choose from.
-    std::vector<uint32_t> by_width(layout.home_strips.size());
-    std::iota(by_width.begin(), by_width.end(), 0);
-    std::stable_sort(by_width.begin(), by_width.end(), [&](uint32_t a, uint32_t b) {
-        return layout.home_strips[a].size() < layout.home_strips[b].size();
-    });
-    std::vector<bool> injector_column(grid_x, false);
-    for (const uint32_t s : by_width) {
-        auto& strip = layout.home_strips[s];
-        const uint32_t row = layout.logical_xy(strip.front()).second + s % 2;
-        // A free column in this strip's turn of row, else any free column, else the top-left core.
-        auto free_in = [&](bool own_row) {
-            return std::find_if(strip.begin(), strip.end(), [&](uint32_t core) {
-                const auto [x, y] = layout.logical_xy(core);
-                return !injector_column[x] && (!own_row || y == row);
-            });
-        };
-        auto injector = free_in(true);
-        if (injector == strip.end()) {
-            injector = free_in(false);
-        }
-        if (injector == strip.end()) {
-            injector = strip.begin();
-        }
-        injector_column[layout.logical_xy(*injector).first] = true;
-        std::rotate(strip.begin(), injector, injector + 1);
     }
     return layout;
 }

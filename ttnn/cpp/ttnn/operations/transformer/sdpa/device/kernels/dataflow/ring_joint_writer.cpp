@@ -615,11 +615,9 @@ void kernel_main() {
     // the physical (x, y) of its reducer (a sender) or of its senders in band order (the reducer).
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool ksplit_enabled = ksplit_count > 1;
-    // Expanded-K floaters (ring_joint_floaters.hpp): the program runs them; this kernel is a floater's (it hands each
-    // staged visit to its home and has no K-split role).
+    // Expanded-K floaters (ring_joint_floaters.hpp): the program runs them (a core's role, home or floater, is in its
+    // runtime args).
     constexpr bool floaters = get_named_compile_time_arg_val("floaters") == 1;
-    constexpr bool floater_core = get_named_compile_time_arg_val("floater_core") == 1;
-    constexpr bool floater_home = floaters && !floater_core;
     // The program's donation schedule (ring_joint_floaters.hpp); all zero without floaters.
     [[maybe_unused]] constexpr ring_joint::DonationSchedule donation{
         {get_named_compile_time_arg_val("donate_iter0"), get_named_compile_time_arg_val("donate_iter1")},
@@ -659,9 +657,12 @@ void kernel_main() {
     constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 20);
     constexpr uint32_t ksplit_cb_sum_in = ksplit_enabled ? cb_sum_in : cb_out;
     // Floaters, after the K-split args: a floater's [visit count][visits: iteration, home x, home y], or a home's
-    // donated pieces [floater x, floater y, floater semaphore ordinal].
+    // [0][donated pieces: floater x, floater y, floater semaphore ordinal]. A floater program runs one binary on homes
+    // and floaters, which tell their role by the first.
     [[maybe_unused]] const uint32_t floater_args =
         ksplit_peer_args + 2 * (ksplit_active ? (ksplit_band + 1 < ksplit_count ? 1 : ksplit_count - 1) : 0);
+    const bool floater_core = floaters && get_arg_val<uint32_t>(floater_args) > 0;
+    const bool floater_home = floaters && !floater_core;
     // The K split's ready bits: a sender's, then the floaters' (kernels/ring_joint_floaters.hpp).
     [[maybe_unused]] RotatedQHandoff ksplit_bits(get_named_compile_time_arg_val("ksplit_sem_id"));
     Noc noc;
@@ -884,7 +885,7 @@ void kernel_main() {
         constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
         UnicastEndpoint floater_l1;
         for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
-            const uint32_t a = floater_args + piece * ring_joint::kFloaterHomePieceArgs;
+            const uint32_t a = floater_args + 1 + piece * ring_joint::kFloaterHomePieceArgs;
             // An inactive ring iteration runs on no core: no floater visits it, and compute expects no partial.
             if (((active_ring_iter_mask >> donation.iters[piece]) & 1u) == 0) {
                 continue;
@@ -944,7 +945,7 @@ void kernel_main() {
         }
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
-        if constexpr (floater_core) {
+        if (floater_core) {
             // Once compute stages a visit of this iteration in half A, set the home's bit and wait for the home to read
             // it (the home sets this visit's ordinal, v + 1); freeing cb_signal tells compute half A is free again.
             const uint32_t visits = get_arg_val<uint32_t>(floater_args);
@@ -1441,11 +1442,11 @@ void kernel_main() {
             noc, out_generator, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
         noc.async_write_barrier();
     };
-    if constexpr (floater_core) {
+    if (floater_core) {
         // The ring loop waited for every active visit's bit: no home sets one after the reset.
         ksplit_bits.reset_after_run();
     }
-    if constexpr (ksplit_enabled && !floater_core) {
+    if (ksplit_enabled && !floater_core) {
         if (floaters && ksplit_active && ksplit_band + 1 < ksplit_count) {
             // A sender's semaphore carries only the floaters' bits, all landed before the ring.
             ksplit_bits.reset_after_run();
