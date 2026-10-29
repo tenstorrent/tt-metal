@@ -10,8 +10,8 @@
 // addition. What keeps the ring and exp ring builds inside it:
 //   - recipe_cold_step (recipe_step.inc): with fused chunks, the reduce path (a Q chunk's first K chunk, redone
 //     groups), normalization and sdpa_inner_loop_step are out of line and -Os.
-//   - fused_os (recipe_step.inc): the ring kernels' unpack copy of this chunk is -Os (unpack only issues and waits
-//     here, and its image is the one nearest the limit).
+//   - fused_os (recipe_step.inc): the ring, key-range and Wormhole kernels' unpack copy of this chunk is -Os (unpack
+//     only issues and waits here, and its image is the one nearest the limit).
 //   - The ring and exp ring recipe factories build fused kernels at -O2 (ring_joint_sdpa_recipe.cpp /
 //     exp_ring_joint_sdpa_recipe.cpp build math at -O2 everywhere).
 //   - The ring and exp ring reader/writer dataflow kernels are -Os.
@@ -36,6 +36,17 @@
  * Same CB protocol as sdpa_inner_loop_step: scores, chunk sums, O and l banks, the max ping-pong.
  * Built only with recipe::fused_active.
  */
+// Wormhole unpack/pack: the chunk's steps are inlined. Called out of line, each step's closure (one pointer per
+// captured variable, ~160 B in all) and the captured variables themselves sit on the 2 KiB TRISC stack. (Lambda
+// attributes for one architecture's TRISCs: only the preprocessor selects them.)
+#if defined(ARCH_WORMHOLE) && (defined(TRISC_UNPACK) || defined(TRISC_PACK))
+#define SDPA_FUSED_STEP __attribute__((always_inline))
+// The rare redo step too: it has one call site, and out of line its closure captures almost every local.
+#define SDPA_FUSED_REDO __attribute__((always_inline))
+#else
+#define SDPA_FUSED_STEP
+#define SDPA_FUSED_REDO SDPA_RECIPE_COLD
+#endif
 static bool fused_neg_unit_ready = false;
 // Streamed ring checkpoints (recipe_ring.hpp, StateTransfer): a restored Q block's O rows land row by row while
 // its first fused chunk runs, and the last fused chunk of a saved block hands its O rows to the writer group by

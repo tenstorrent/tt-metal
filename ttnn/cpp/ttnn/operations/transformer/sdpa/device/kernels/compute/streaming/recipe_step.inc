@@ -56,11 +56,20 @@ SDPA_RECIPE_COLD void reduce_c_row_group(
         sdpa_stream_reconfig(in0_cb, scale_cb);
     }
     reduce_block_max_row_init_runtime(out_cb, reduce_cols, in0_cb, scale_cb, respect_trigger);
+    if constexpr (recipe::wormhole && recipe::fp32) {
+        // Wormhole truncates a SrcB datum to the SrcB format on the move path, so the reduce's MOVB2D transpose
+        // would keep only BF16 of the TF32 maxima (the scaler is BF16). A TF32 SrcB format keeps them TF32-exact.
+        MATH((cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcB_val_RMW>((uint32_t)DataFormat::Tf32)));
+        MATH((cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcB_override_RMW>(1)));
+    }
     for (uint32_t i = 0; i < group_size; i++) {
         const uint32_t input_tile_start = (row_start + i) * row_stride;
         reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half);
     }
     reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger, overlap_first_half);
+    if constexpr (recipe::wormhole && recipe::fp32) {
+        MATH((cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcB_override_RMW>(0)));
+    }
     if constexpr (!recipe::fp32) {
         // The reference (m_ref) for row i in slot i + 2 (a row pair, or a single-row tail group), for the
         // conditional rescale below.
@@ -175,12 +184,15 @@ SDPA_RECIPE_COLD void sub_exp_block_bcast_cols(
                 sdpa::streaming::state_unpack_mop(4 * score_batch);
                 unary_bcast<BroadcastType::NONE>(7, index, 0);
                 // The generic one-tile helper cleared tile 0's zero flags. Preserve
-                // the Blackhole unpack-to-DST workaround for tile 1 as well.
+                // the Blackhole unpack-to-DST workaround for tile 1 as well (TT_ZEROACC takes Blackhole's five
+                // operands; Wormhole's has three).
+#ifdef ARCH_BLACKHOLE
                 MATH(for (uint32_t tile = 1; tile < score_batch; ++tile) {
                     for (uint32_t face = 0; face < 4; ++face) {
                         TT_ZEROACC(p_zeroacc::CLR_16, 1, 1, ADDR_MOD_3, get_dest_index_in_faces(tile, face));
                     }
                 })
+#endif
                 sdpa::streaming::state_unpack_mop(4);
                 unary_bcast_uninit<BroadcastType::NONE>(7);
                 tile_regs_commit();
@@ -542,16 +554,20 @@ void salad_correct_fused(
  * Per-row streaming normalization: matmul_reduce + recip-in-DST + mul_bcast_cols.
  * Consumes (pops) sum and output tiles, writes normalized output.
  * scratch_cb is a 1-tile CB reused for the reciprocal intermediate.
+ * Attention sink (recipe::sink): recipe_sink_max_cb holds the Q chunk's maxima the rows' P were taken against.
  */
 template <
     uint32_t head_dim_t_,
     uint32_t dst_size,
     uint32_t col_identity_cb,
     uint32_t scratch_cb,
-    uint32_t normalized_out_cb>
-static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_streaming(
-    uint32_t cur_sum_cb, uint32_t cur_out_cb, uint32_t sbh) {
-    if constexpr (recipe::fp32) {
+    uint32_t normalized_out_cb,
+    uint32_t scale_fp32>
+ALWI void normalize_row_streaming_body(uint32_t cur_sum_cb, uint32_t cur_out_cb, uint32_t sbh) {
+    if constexpr (recipe::fp32 && recipe::sink) {
+        sdpa::streaming::normalize_rows<head_dim_t_, col_identity_cb>(
+            cur_sum_cb, cur_out_cb, scratch_cb, normalized_out_cb, sbh, sdpa_pack, RecipeSinkHook<scale_fp32>{});
+    } else if constexpr (recipe::fp32) {
         sdpa::streaming::normalize_rows<head_dim_t_, col_identity_cb>(
             cur_sum_cb, cur_out_cb, scratch_cb, normalized_out_cb, sbh, sdpa_pack);
     } else {
@@ -600,9 +616,26 @@ static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_st
                 } else {
                     matmul_block(norm_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
                 }
+                if constexpr (recipe::sink) {
+                    recipe_sink_load_max(recipe_sink_max_cb, 1);
+                    MATH((SFPU_UNARY_CALL(
+                        DST_SYNC_MODE,
+                        DST_ACCUM_MODE,
+                        calculate_sdpa_sink_denominator,
+                        (scale_fp32, kRecipeSinkExpFactorBits),
+                        0,
+                        VectorMode::C,
+                        recipe_sink_bits)));
+                    recipe_sink_row++;
+                    sdpa_stream_reconfig_srca(norm_sum_cb);
+                }
 
                 recip_tile_init();
-                MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
+                if constexpr (recipe::wormhole) {
+                    MATH((recipe_recip_first_column_wh()));
+                } else {
+                    MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
+                }
                 tile_regs_commit();
 
                 tile_regs_wait();
@@ -656,6 +689,56 @@ static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_st
     }
 }
 
+// Out of line (cold with fused chunks). Wormhole ring kernels' UNPACK copy is flattened: the normalization's callees
+// inlined, so their frames do not stack on the fused chunk's.
+template <
+    uint32_t head_dim_t_,
+    uint32_t dst_size,
+    uint32_t col_identity_cb,
+    uint32_t scratch_cb,
+    uint32_t normalized_out_cb,
+    uint32_t scale_fp32>
+static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_streaming_outlined(
+    uint32_t cur_sum_cb, uint32_t cur_out_cb, uint32_t sbh) {
+    normalize_row_streaming_body<head_dim_t_, dst_size, col_identity_cb, scratch_cb, normalized_out_cb, scale_fp32>(
+        cur_sum_cb, cur_out_cb, sbh);
+}
+
+template <
+    uint32_t head_dim_t_,
+    uint32_t dst_size,
+    uint32_t col_identity_cb,
+    uint32_t scratch_cb,
+    uint32_t normalized_out_cb,
+    uint32_t scale_fp32>
+static __attribute__((flatten, noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_streaming_flat(
+    uint32_t cur_sum_cb, uint32_t cur_out_cb, uint32_t sbh) {
+    normalize_row_streaming_body<head_dim_t_, dst_size, col_identity_cb, scratch_cb, normalized_out_cb, scale_fp32>(
+        cur_sum_cb, cur_out_cb, sbh);
+}
+
+template <
+    uint32_t head_dim_t_,
+    uint32_t dst_size,
+    uint32_t col_identity_cb,
+    uint32_t scratch_cb,
+    uint32_t normalized_out_cb,
+    uint32_t scale_fp32 = 0>
+ALWI void normalize_row_streaming(uint32_t cur_sum_cb, uint32_t cur_out_cb, uint32_t sbh) {
+    if constexpr (recipe::wormhole && recipe::unpack_thread && recipe::ring) {
+        normalize_row_streaming_flat<head_dim_t_, dst_size, col_identity_cb, scratch_cb, normalized_out_cb, scale_fp32>(
+            cur_sum_cb, cur_out_cb, sbh);
+    } else {
+        normalize_row_streaming_outlined<
+            head_dim_t_,
+            dst_size,
+            col_identity_cb,
+            scratch_cb,
+            normalized_out_cb,
+            scale_fp32>(cur_sum_cb, cur_out_cb, sbh);
+    }
+}
+
 // Dense additive attn_mask (legacy SDPA contract): L1-accumulate one QK row group's mask tiles onto
 // the packed scores in cb_qkt_im, before the row max. The reader streams one Q chunk x K chunk of
 // mask per K chunk into CB 15, one Q tile row at a time. The add runs in the packer's L1
@@ -693,8 +776,9 @@ static __attribute__((noinline, noclone)) void recipe_add_attn_mask(uint32_t row
     sdpa_stream_reconfig_srca(cb_qkt_im);
 }
 
-// The fused chunk: size-optimized UNPACK copy for the ring kernels (unpack only issues and waits there, and its image
-// is the one nearest the kernel config buffer limit), every other copy out of line at the kernel's level.
+// The fused chunk: size-optimized UNPACK copy for the ring kernels, key-range dense kernels and Wormhole (unpack only
+// issues and waits there, and their unpack image is the one nearest the kernel config buffer limit), every other copy
+// out of line at the kernel's level.
 namespace fused_os {
 #define SDPA_FUSED_CHUNK_ATTR __attribute__((noinline, optimize("Os")))
 #include "recipe_fused_chunk.inc"
@@ -831,9 +915,11 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
             TTI_SFPCONFIG(0, 13, 0);
         })
     }
-    if constexpr (recipe::fused_active) {
-        if (!is_first_iter) {
-            if constexpr (recipe::unpack_thread && recipe::ring) {
+    // Wormhole runs its fused chunks from the segment loop (recipe_fused_chunk_step); key-range calls run their edge
+    // chunks on the reduce path.
+    if constexpr (recipe::fused_active && !recipe::wormhole) {
+        if (!is_first_iter && !recipe_chunk_masked()) {
+            if constexpr (recipe::unpack_thread && (recipe::ring || recipe::krange)) {
                 fused_os::sdpa_fused_chunk<
                     Sq_chunk_t,
                     Sk_chunk_t,
@@ -912,8 +998,8 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         // When q_subblock == 0, no sub_exp → global stays set → skip there too.
         configure_row_pack_width(cb_qkt_im, actual_sbw);
 
-        // With an attn_mask, the first-half max reduce must not read scores before the mask lands on them.
-        constexpr bool overlap_first_half = !recipe::mask && reduce_trigger;
+        // The first-half max reduce must not read scores before the mask lands on them.
+        const bool overlap_first_half = reduce_trigger && !recipe_chunk_masked();
         // PACK posts the first-half token after the subblock covering the last first-half column
         // [active_Sk/2 - 1]; committing a superset of [0, active_Sk/2) is safe (run()#1's cols are a subset).
         const uint32_t first_half_last_sb = (active_Sk / 2 - 1) / actual_sbw;
@@ -993,7 +1079,9 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         }
 
         if constexpr (recipe::mask) {
-            recipe_add_attn_mask<cb_qkt_im, KT_stride, qkt_subblock_h>(q_subblock * qkt_subblock_h, cur_qk_h);
+            if (recipe_chunk_masked()) {
+                recipe_add_attn_mask<cb_qkt_im, KT_stride, qkt_subblock_h>(q_subblock * qkt_subblock_h, cur_qk_h);
+            }
         }
 
         // Push row (visible for UNPACK reads) but keep wr_ptr stable
@@ -1325,19 +1413,36 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             const uint32_t pv_inner_offset = kt_sub * matmul_inner;
                             const uint32_t qktv_in1_index = pv_inner_offset * vDHt + v_index_offset;
-                            blocked_matmul_and_pack<false, vDHt, vDHt>(
-                                cb_qkt_im,
-                                cb_v_in,
-                                out_cb,
-                                qktv_in0_index_offset + pv_inner_offset,
-                                qktv_in1_index,
-                                0,
-                                v_subblock * qktv_subblock_w + (recipe::fp32 ? 0 : pv_plane_offset(0)),
-                                qktv_subblock_w,
-                                first_h,
-                                matmul_inner,
-                                KT_stride,
-                                /*skip_pack_configure=*/true);
+                            if constexpr (recipe::accurate && recipe::wormhole) {
+                                blocked_matmul_and_pack<false, vDHt, vDHt>(
+                                    cb_qkt_im,
+                                    cb_v_in,
+                                    out_cb,
+                                    qktv_in0_index_offset + pv_inner_offset,
+                                    qktv_in1_index,
+                                    0,
+                                    v_subblock * qktv_subblock_w + (recipe::fp32 ? 0 : pv_plane_offset(0)),
+                                    qktv_subblock_w,
+                                    first_h,
+                                    matmul_inner,
+                                    KT_stride,
+                                    /*skip_pack_configure=*/true,
+                                    /*pv_l1_acc=*/kt_sub > 0 || inplace_numerator);
+                            } else {
+                                blocked_matmul_and_pack<false, vDHt, vDHt>(
+                                    cb_qkt_im,
+                                    cb_v_in,
+                                    out_cb,
+                                    qktv_in0_index_offset + pv_inner_offset,
+                                    qktv_in1_index,
+                                    0,
+                                    v_subblock * qktv_subblock_w + (recipe::fp32 ? 0 : pv_plane_offset(0)),
+                                    qktv_subblock_w,
+                                    first_h,
+                                    matmul_inner,
+                                    KT_stride,
+                                    /*skip_pack_configure=*/true);
+                            }
                             if constexpr (!recipe::fp32) {
                                 UNPACK({
                                     if (!is_first_iter && kt_sub == 0 && v_subblock == 0) {
@@ -1404,6 +1509,8 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                             .srcb = {.incr = 0, .clr = 1, .cr = 1},
                             .dest = {.incr = 0, .clr = 1, .cr = 1},
                             .fidelity = {.incr = 2, .clr = 0},
+                            // Wormhole's MOP reaches ADDR_MOD_5 through the bias bit; it must toggle back.
+                            .bias = {.incr = recipe::wormhole ? 1 : 0},
                         }
                                   .set(ADDR_MOD_5)));
                     }
@@ -1439,7 +1546,10 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
             fold_first(sbh);
             CircularBuffer(cur.sum).push_back(sbh);
             CircularBuffer(out_cb).push_back(sbh * vDHt * sdpa_out_stride);
-            normalize_row_streaming<vDHt, dst_size, cb_col_identity, cb_recip_scratch, cb_normalized_out>(
+            if constexpr (recipe::sink) {
+                recipe_sink_max_cb = cur.max;
+            }
+            normalize_row_streaming<vDHt, dst_size, cb_col_identity, cb_recip_scratch, cb_normalized_out, scale_fp32>(
                 cur.sum, out_cb, sbh);
 
             pushed++;
@@ -1539,19 +1649,36 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     const uint32_t qktv_in1_index = v_index_offset;
-                    blocked_matmul_and_pack<false, vDHt, vDHt>(
-                        cb_qkt_im,
-                        cb_v_in,
-                        out_cb,
-                        qktv_in0_index_offset,
-                        qktv_in1_index,
-                        cur_h == qktv_h ? w_q : w_q * qktv_h,
-                        v_subblock * qktv_subblock_w + (recipe::fp32 ? 0 : pv_plane_offset(q_subblock)),
-                        qktv_subblock_w,
-                        cur_h,
-                        active_Sk,
-                        KT_stride,
-                        /*skip_pack_configure=*/true);
+                    if constexpr (recipe::accurate && recipe::wormhole) {
+                        blocked_matmul_and_pack<false, vDHt, vDHt>(
+                            cb_qkt_im,
+                            cb_v_in,
+                            out_cb,
+                            qktv_in0_index_offset,
+                            qktv_in1_index,
+                            cur_h == qktv_h ? w_q : w_q * qktv_h,
+                            v_subblock * qktv_subblock_w + (recipe::fp32 ? 0 : pv_plane_offset(q_subblock)),
+                            qktv_subblock_w,
+                            cur_h,
+                            active_Sk,
+                            KT_stride,
+                            /*skip_pack_configure=*/true,
+                            /*pv_l1_acc=*/inplace_numerator);
+                    } else {
+                        blocked_matmul_and_pack<false, vDHt, vDHt>(
+                            cb_qkt_im,
+                            cb_v_in,
+                            out_cb,
+                            qktv_in0_index_offset,
+                            qktv_in1_index,
+                            cur_h == qktv_h ? w_q : w_q * qktv_h,
+                            v_subblock * qktv_subblock_w + (recipe::fp32 ? 0 : pv_plane_offset(q_subblock)),
+                            qktv_subblock_w,
+                            cur_h,
+                            active_Sk,
+                            KT_stride,
+                            /*skip_pack_configure=*/true);
+                    }
                     v_index_offset += qktv_subblock_w;
                 }
                 sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
@@ -1677,6 +1804,84 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     return false;
 }
 
+// Fused chunks on Wormhole: its TRISCs have 2 KiB of local memory, of which the firmware's CB state takes about 1 KiB.
+// The segment loop runs the fused chunks itself rather than under sdpa_inner_loop_step's frame, or UNPACK's stack
+// overflows into the kernel's statics during the last chunk's normalization. Returns whether it ran this chunk.
+template <
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t DHt,
+    uint32_t vDHt,
+    uint32_t scale_fp32,
+    uint32_t qkt_subblock_w,
+    uint32_t qktv_subblock_w,
+    uint32_t cb_q_in,
+    uint32_t cb_kt_in,
+    uint32_t cb_v_in,
+    uint32_t cb_qkt_im,
+    uint32_t cb_identity_scale_in,
+    uint32_t cb_exp_max_diff,
+    uint32_t cb_col_identity,
+    uint32_t cb_recip_scratch,
+    uint32_t cb_normalized_out,
+    bool independent_q_release>
+ALWI bool recipe_fused_chunk_step(
+    AccumulatorHalf& prev, AccumulatorHalf& cur, bool is_last_iter, bool is_first_iter, bool release_q) {
+    if (is_first_iter || recipe_chunk_masked()) {
+        return false;
+    }
+    // As sdpa_inner_loop_step's entry: the fast exp and its headroom constant.
+    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    PACK({
+        constexpr float exp_c = 32500.818359375f - 256.0f * kRefMaxExpOctaves;
+        constexpr uint32_t exp_c_bits = __builtin_bit_cast(uint32_t, exp_c);
+        TTI_SFPLOADI(0, 0xA, exp_c_bits & 0xFFFF);
+        TTI_SFPLOADI(0, 0x8, exp_c_bits >> 16);
+        TTI_SFPCONFIG(0, 13, 0);
+    })
+    // Wormhole's UNPACK copy is size-optimized (fused_os).
+    if constexpr (recipe::unpack_thread) {
+        fused_os::sdpa_fused_chunk<
+            Sq_chunk_t,
+            Sk_chunk_t,
+            DHt,
+            vDHt,
+            scale_fp32,
+            qkt_subblock_w,
+            qktv_subblock_w,
+            cb_q_in,
+            cb_kt_in,
+            cb_v_in,
+            cb_qkt_im,
+            cb_identity_scale_in,
+            cb_exp_max_diff,
+            cb_col_identity,
+            cb_recip_scratch,
+            cb_normalized_out,
+            independent_q_release>(prev, cur, is_last_iter, release_q);
+    } else {
+        fused_plain::sdpa_fused_chunk<
+            Sq_chunk_t,
+            Sk_chunk_t,
+            DHt,
+            vDHt,
+            scale_fp32,
+            qkt_subblock_w,
+            qktv_subblock_w,
+            cb_q_in,
+            cb_kt_in,
+            cb_v_in,
+            cb_qkt_im,
+            cb_identity_scale_in,
+            cb_exp_max_diff,
+            cb_col_identity,
+            cb_recip_scratch,
+            cb_normalized_out,
+            independent_q_release>(prev, cur, is_last_iter, release_q);
+    }
+    return true;
+}
+
 // One Q chunk over k_num_chunks K chunks: the online-softmax loop for recipes B-E. Called once per Q chunk
 // by sdpa_standard_v2 (dense and joint). A caller may split one Q chunk's K range into several segments,
 // setting final_segment on the last.
@@ -1701,7 +1906,7 @@ template <
     uint32_t cb_normalized_out,
     bool independent_q_release = false>
 ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
-    static_assert(Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && DHt == vDHt && DHt >= 1);
+    static_assert(Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && vDHt <= DHt && vDHt >= 1);
     ASSERT(k_num_chunks > 0);
     auto& prev = state.prev;
     auto& cur = state.cur;
@@ -1709,32 +1914,80 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
     const uint32_t cb_out_im_A = prev.out;
     const uint32_t cb_out_im_B = cur.out;
     for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
-        if constexpr (recipe::k_tail) {
+        if constexpr (recipe::krange) {
+            recipe_edge_chunk = state.processed_chunks + k_chunk < recipe_k_edges;
+            if constexpr (recipe::k_tail) {
+                recipe_k_tile_offset = recipe_k_chunk_at(state.processed_chunks + k_chunk) * Sk_chunk_t;
+            }
+        } else if constexpr (recipe::k_tail) {
             recipe_k_tile_offset = (state.processed_chunks + k_chunk) * Sk_chunk_t;
         }
         const bool is_first = state.processed_chunks == 0 && k_chunk == 0;
         const bool last_local = k_chunk == k_num_chunks - 1;
         const bool is_last = final_segment && last_local;
-        [[maybe_unused]] const bool fused = sdpa_inner_loop_step<
-            Sq_chunk_t,
-            Sk_chunk_t,
-            DHt,
-            vDHt,
-            scale_fp32,
-            qkt_subblock_h,
-            qkt_subblock_w,
-            qktv_subblock_h,
-            qktv_subblock_w,
-            cb_q_in,
-            cb_kt_in,
-            cb_v_in,
-            cb_qkt_im,
-            cb_identity_scale_in,
-            cb_exp_max_diff,
-            cb_col_identity,
-            cb_recip_scratch,
-            cb_normalized_out,
-            independent_q_release>(prev, cur, is_last, is_first, release_q && last_local);
+        // Wormhole: the segment loop runs the fused chunks itself (recipe_fused_chunk_step).
+        [[maybe_unused]] bool fused;
+        if constexpr (recipe::fused_active && recipe::wormhole) {
+            fused = recipe_fused_chunk_step<
+                        Sq_chunk_t,
+                        Sk_chunk_t,
+                        DHt,
+                        vDHt,
+                        scale_fp32,
+                        qkt_subblock_w,
+                        qktv_subblock_w,
+                        cb_q_in,
+                        cb_kt_in,
+                        cb_v_in,
+                        cb_qkt_im,
+                        cb_identity_scale_in,
+                        cb_exp_max_diff,
+                        cb_col_identity,
+                        cb_recip_scratch,
+                        cb_normalized_out,
+                        independent_q_release>(prev, cur, is_last, is_first, release_q && last_local) ||
+                    sdpa_inner_loop_step<
+                        Sq_chunk_t,
+                        Sk_chunk_t,
+                        DHt,
+                        vDHt,
+                        scale_fp32,
+                        qkt_subblock_h,
+                        qkt_subblock_w,
+                        qktv_subblock_h,
+                        qktv_subblock_w,
+                        cb_q_in,
+                        cb_kt_in,
+                        cb_v_in,
+                        cb_qkt_im,
+                        cb_identity_scale_in,
+                        cb_exp_max_diff,
+                        cb_col_identity,
+                        cb_recip_scratch,
+                        cb_normalized_out,
+                        independent_q_release>(prev, cur, is_last, is_first, release_q && last_local);
+        } else {
+            fused = sdpa_inner_loop_step<
+                Sq_chunk_t,
+                Sk_chunk_t,
+                DHt,
+                vDHt,
+                scale_fp32,
+                qkt_subblock_h,
+                qkt_subblock_w,
+                qktv_subblock_h,
+                qktv_subblock_w,
+                cb_q_in,
+                cb_kt_in,
+                cb_v_in,
+                cb_qkt_im,
+                cb_identity_scale_in,
+                cb_exp_max_diff,
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_normalized_out,
+                independent_q_release>(prev, cur, is_last, is_first, release_q && last_local);
+        }
         if constexpr (recipe::fp32) {
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
             if (!is_first) {

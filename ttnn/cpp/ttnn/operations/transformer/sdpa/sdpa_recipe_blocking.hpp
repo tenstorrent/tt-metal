@@ -26,13 +26,17 @@
 
 namespace ttnn::operations::transformer::sdpa::detail {
 
+struct RecipeKeyRange;      // sdpa_recipe.hpp
+struct RecipeDenseOptions;  // sdpa_recipe.hpp
+
 enum class RecipeOp : uint8_t { Dense, Joint, Ring, ExpRing };
 
 // Q/K chunk tile counts the chooser enumerates. Candidates outside the supported geometry are
 // filtered by `recipe_geometry_rejection`; this range only bounds the search to where the cost
 // model is fitted: Q from 128 rows and K from 256 to 512 rows (shorter only when the whole
 // sequence is shorter). Smaller blocks are overhead-dominated and K > 512 is not yet measured;
-// a caller may still pass any supported chunk explicitly (any tile-aligned geometry for B-E).
+// a caller may still pass any supported chunk explicitly (any tile-aligned geometry for B-E). When nothing in
+// this range fits L1 (large head dims), the search extends down to one-tile chunks.
 inline constexpr uint32_t kRecipeSearchMinQTiles = 4;
 inline constexpr uint32_t kRecipeSearchMaxQTiles = 32;
 inline constexpr uint32_t kRecipeSearchMinKTiles = 8;
@@ -51,7 +55,11 @@ inline bool recipe_geometry_supported(uint32_t q_tiles, uint32_t k_tiles, uint32
 
 // Schedule facts that change the circular-buffer layout.
 struct RecipeL1Context {
-    uint32_t mask_page_bytes = 0;      // dense: attn_mask tile bytes (0 = no mask)
+    uint32_t mask_page_bytes = 0;        // dense: attn_mask tile bytes (0 = no mask)
+    uint32_t extra_bytes = 0;            // dense key ranges: control pages, template tile, scratch; the sink page
+    bool keyed = false;                  // dense key range (sdpa_recipe.hpp: RecipeKeyRange::active)
+    uint32_t vd_tiles = 0;               // dense MLA: V / output head dim in tiles (0: d_tiles)
+    std::optional<KVStorage> v_storage;  // V's storage when it differs from K's (nullopt: K's)
 };
 
 // Dense attn_mask circular buffer: one QK row group of mask tiles per buffer slot (the factory
@@ -89,17 +97,31 @@ struct RecipeBlockingProblem {
     uint32_t joint_k_rows = 0;
     uint32_t ring_size = 1;
     uint32_t d_tiles = 4;
+    uint32_t vd_tiles = 0;               // dense MLA: V / output head dim in tiles (0: d_tiles)
+    std::optional<KVStorage> v_storage;  // dense/joint: V's storage when it differs from K's (nullopt: K's)
     // Dense/joint: the grid the op may use. Ring: the SDPA worker grid. Exp ring: the program
     // config grid including the fabric MUX column (the chooser may narrow its width).
     tt::tt_metal::CoreCoord grid{1, 1};
-    uint32_t max_cores_per_head_batch = 16;
     uint64_t l1_bytes = 0;  // unreserved L1 per core available to circular buffers
-    // Dense: attn_mask tile bytes (0 = no mask); the mask CB counts against l1_bytes.
+    // Dense: attn_mask tile bytes (0 = no mask); the mask CB counts against l1_bytes. Key ranges (causal,
+    // sliding window, chunked, windowed) use a BF16 mask CB plus extra_l1_bytes (recipe_key_range_extra_bytes).
     uint32_t mask_page_bytes = 0;
+    uint32_t extra_l1_bytes = 0;
     // Nonzero pins that dimension (a caller-provided chunk); zero lets the chooser pick.
     uint32_t fixed_q_tiles = 0;
     uint32_t fixed_k_tiles = 0;
     bool exp_mux_on_bottom_row = false;
+    // Dense key ranges (sdpa_recipe.hpp: RecipeKeyRange): a Q chunk processes only the K chunks its rows see, and
+    // all heads' Q chunks are dealt over the whole grid. Windowed segments (unknown on the host) cost every K chunk.
+    bool key_range = false;
+    bool causal = false;
+    bool paged = false;  // a paged K/V cache (chunked prefill)
+    uint32_t sliding_window = 0;
+    uint32_t q_offset = 0;
+    // Dense/joint program features that grow the kernel images (recipe_program_fits): an attention sink, and K or
+    // joint K rows that are not tile multiples (a K tail at every K chunk size).
+    bool attention_sink = false;
+    bool k_rows_unaligned = false;
     // Orders problems for the chooser's memo.
     std::strong_ordering operator<=>(const RecipeBlockingProblem&) const = default;
 };
@@ -112,6 +134,11 @@ struct RecipeBlocking {
     uint32_t jobs_per_core = 0;  // Q chunks on the busiest core (exp ring: passes)
     RecipeL1Estimate l1{};
 };
+
+// False when a dense/joint/ring geometry's program (every RISC image plus runtime args and CB configs) is known to
+// exceed the 70656 B kernel config buffer; the chooser never emits one. Measured exclusion, not a size model: see the
+// definition. Exp ring programs are not covered.
+bool recipe_program_fits(const RecipeBlockingProblem& problem, uint32_t q_tiles, uint32_t k_tiles);
 
 // Every feasible blocking with its modeled cost, cheapest first (the chooser's candidate list).
 std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProblem& problem);
@@ -127,7 +154,10 @@ void reject_auto_blocking_without_recipe(const std::optional<SDPAProgramConfig>&
 
 // Tensor-level hooks: return the caller's config when both chunk sizes are explicit, otherwise a
 // copy with the chosen chunk sizes (and, for exp ring, grid). If no candidate fits, unset chunks
-// fall back to Q256/K512 so the op's own validation reports why.
+// fall back to Q256/K512 so the op's own validation reports why. Dense: `reserved_l1_bytes` per core
+// are kept free for buffers allocated after the choice (an L1 output). `chunks_are_hints` (calls routed
+// to a recipe without `precision`, whose chunk sizes and grid were chosen for the legacy kernels): the chunks are
+// chosen on the whole compute grid.
 std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const PrecisionPolicy& policy,
     const Tensor& q,
@@ -135,7 +165,12 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const Tensor* joint_q,
     const Tensor* joint_k,
     const std::optional<SDPAProgramConfig>& program_config,
-    const Tensor* attn_mask = nullptr);
+    const Tensor* attn_mask = nullptr,
+    uint64_t reserved_l1_bytes = 0,
+    const RecipeKeyRange* key_range = nullptr,
+    const RecipeDenseOptions* options = nullptr,
+    bool chunks_are_hints = false,
+    std::optional<KVStorage> v_storage = std::nullopt);
 
 SDPAProgramConfig resolve_ring_recipe_blocking(
     const PrecisionPolicy& policy,
@@ -144,7 +179,8 @@ SDPAProgramConfig resolve_ring_recipe_blocking(
     const std::optional<Tensor>& joint_q,
     const std::optional<Tensor>& joint_k,
     uint32_t ring_size,
-    const SDPAProgramConfig& program_config);
+    const SDPAProgramConfig& program_config,
+    uint32_t v_head_dim = 0);  // 0: Q's
 
 SDPAProgramConfig resolve_exp_ring_recipe_blocking(
     const PrecisionPolicy& policy,

@@ -15,9 +15,18 @@ from tests.nightly.blackhole.sdpa.test_ring_joint_sdpa_recipes import (
     check_device_length_trace,
     close_ring_mesh,
     open_ring_mesh,
+    per_chip,
     precision_inputs,
 )
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import VARIANTS, blackhole_only, randn, reference
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
+    L2_PCT_BOUND,
+    VARIANTS,
+    blackhole_only,
+    fp32_dest_config,
+    l2_pct,
+    randn,
+    reference,
+)
 
 pytestmark = blackhole_only
 
@@ -62,7 +71,7 @@ EXP_RING_CASES = {
 }
 
 
-def run_exp_ring(mesh, semaphores, inputs, joints, backing, *, grid, q_chunk, logical_n, **options):
+def run_exp_ring(mesh, semaphores, inputs, joints, backing, *, grid, q_chunk, logical_n, k_chunk=512, **options):
     return ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
         *inputs,
         *joints,
@@ -71,7 +80,7 @@ def run_exp_ring(mesh, semaphores, inputs, joints, backing, *, grid, q_chunk, lo
         joint_strategy="rear",
         logical_n=logical_n,
         program_config=ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=512
+            compute_with_storage_grid_size=grid, q_chunk_size=q_chunk, k_chunk_size=k_chunk
         ),
         dim=2,
         multi_device_global_semaphore=semaphores,
@@ -143,3 +152,21 @@ def test_exp_ring_joint_sdpa_recipe_op_selected_blocking(exp_ring_mesh, variant)
         mesh, semaphores, inputs, joints, backing, logical_n=logical_n, precision=VARIANTS[variant][0], **kwargs
     )
     assert_per_chip(out, expected, variant, EXP_RING, has_joint=False)
+
+
+def test_exp_ring_joint_sdpa_precision_routing(exp_ring_mesh):
+    """Without precision, calls the legacy exp ring kernel cannot build run a recipe at op-chosen chunks: FP32 dest
+    runs ACCURATE (bitwise the explicit call with op-chosen chunks), and a BF16-dest Q chunk of one tile row (a single
+    Q subblock, outside the streaming kernel's rule; 8 serial passes on this grid, the op allows 3) runs STANDARD.
+    Both used to fail to compile."""
+    mesh, semaphores = exp_ring_mesh
+    inputs, joints, backing, logical_n, kwargs, expected, _ = exp_ring_case(mesh, "accurate", "q256_aligned")
+    call = lambda **extra: run_exp_ring(mesh, semaphores, inputs, joints, backing, logical_n=logical_n, **extra)
+    routed = call(compute_kernel_config=fp32_dest_config(mesh), **kwargs)
+    explicit = call(precision=ttnn.SDPAPrecision.ACCURATE, grid=kwargs["grid"], q_chunk=0, k_chunk=0)
+    for chip in range(EXP_RING):
+        assert torch.equal(per_chip(routed[0])[chip], per_chip(explicit[0])[chip]), f"chip {chip}"
+        assert l2_pct(per_chip(routed[0])[chip], expected(chip)) < L2_PCT_BOUND["accurate"], f"chip {chip}"
+    out = call(grid=kwargs["grid"], q_chunk=32)
+    for chip in range(EXP_RING):
+        assert l2_pct(per_chip(out[0])[chip], expected(chip)) < L2_PCT_BOUND["standard"], f"chip {chip}"
