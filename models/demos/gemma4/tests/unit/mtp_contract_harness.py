@@ -33,6 +33,7 @@ VOCAB = 600
 SPEC_ENV = (
     "GEMMA4_SPEC_K_BY_ROWS",
     "GEMMA4_SPEC_MAX_ROWS",
+    "GEMMA4_SPEC_EXTRA_SHAPES",
     "GEMMA4_SPEC_MAX_ISL",
     "GEMMA4_SPEC_WIDTH_RUNGS",
     "GEMMA4_ASSISTANT_MODEL",
@@ -290,6 +291,7 @@ def install_decoder(model, shapes=DEFAULT_SHAPES, max_rows=None, widths=None, st
     decoder.serving_capture()
     model._mtp_decoder = decoder
     model._mtp_shapes = shapes
+    model._mtp_table_shapes = shapes  # the harness's records are all table records (no extra shapes)
     model._mtp_widths = {s: list(w) for s, w in widths.items()}
     model._mtp_max_rows = decoder.max_rows
     model._mtp_captured = True

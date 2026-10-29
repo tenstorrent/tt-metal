@@ -239,6 +239,23 @@ def test_verify_count_pins_the_inherited_width_arithmetic(adapter, expect_error)
     assert adapter.spec_capture_shapes(table, 5, 6) == ((1, 5), (5, 5), (6, 3))
     assert adapter.spec_capture_shapes(table, 5, 1) == ((1, 5),)
     assert adapter.spec_capture_shapes(((4, 3),), 3, 16) == ((1, 3), (4, 3))
+    # -- the MTP rail: extra records join the table's as a band's second draft length, never its default
+    assert adapter.spec_extra_shapes("5:3, 1:2", 5) == ((5, 3), (1, 2)) and adapter.spec_extra_shapes("", 5) == ()
+    assert adapter.spec_capture_shapes(table, 5, 16, extra=((5, 3), (1, 2))) == (
+        (1, 2),
+        (1, 5),
+        (5, 3),
+        (5, 5),
+        (8, 3),
+        (16, 1),
+    )
+    assert adapter.spec_capture_shapes(table, 5, 4, extra=((5, 3), (4, 5))) == ((1, 5), (4, 3), (4, 5))
+    with expect_error(ValueError, "drafts above"):
+        adapter.spec_extra_shapes("5:6", 5)
+    with expect_error(ValueError, "above the device argmax tile"):
+        adapter.spec_extra_shapes("8:5", 5)
+    with expect_error(ValueError, "is not rows:k"):
+        adapter.spec_extra_shapes("x", 5)
 
 
 def test_contract_rail_shares_the_dflash_base_and_the_contract_base(adapter, monkeypatch):
@@ -3044,11 +3061,15 @@ def test_eager_warmup_prepares_and_traced_warmup_captures_on_the_same_decoder(
             "GEMMA4_SPEC_K_BY_ROWS": "5:5,8:3,16:1",  # a table past the engine batch: capped at (6, 3)
             "GEMMA4_SPEC_MAX_ROWS": "8",
             "GEMMA4_SPEC_MAX_ISL": "512",
+            "GEMMA4_SPEC_EXTRA_SHAPES": "5:3",  # the 1-5 row band's second draft length: a candidate, not the default
         },
     )
     mh.stub_drafter_modules(monkeypatch, mtp.events)
     mh._warmup(mtp, False)
-    assert mtp._mtp_shapes == ((1, 5), (5, 5), (6, 3)) and mtp._mtp_max_rows == 6
+    assert mtp._mtp_shapes == ((1, 5), (5, 3), (5, 5), (6, 3)) and mtp._mtp_max_rows == 6
+    assert mtp._mtp_table_shapes == ((1, 5), (5, 5), (6, 3))
+    assert mtp._mtp_shape_for(3) == (5, 5) and mtp._mtp_shape_for(6) == (6, 3) and mtp._mtp_shape_for(7) is None
+    assert (5, 3) in mtp._mtp_widths
     assert mtp._mtp_widths[(1, 5)] == adapter.mtp_pv_width_ladder(512, 5)
     # -- the MTP rail: a traced only warmup prepares before it captures
     mtp = mh.build_mtp_model(adapter, monkeypatch, warm=False, env={"GEMMA4_ASSISTANT_MODEL": assistant_dir})

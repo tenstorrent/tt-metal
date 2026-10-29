@@ -6591,6 +6591,9 @@ SPEC_DRAFT_LEN_ENV = "GEMMA4_SPEC_DRAFT_LEN"
 SPEC_K_BY_ROWS_ENV = "GEMMA4_SPEC_K_BY_ROWS"
 SPEC_K_BY_ROWS_DEFAULT = "5:5"  # K=5 up to 5 live rows; above the table the step is the plain decode (K=0)
 SPEC_MAX_ROWS_ENV = "GEMMA4_SPEC_MAX_ROWS"
+SPEC_EXTRA_SHAPES_ENV = (
+    "GEMMA4_SPEC_EXTRA_SHAPES"  # extra rows:k records beside the table's (a band's second draft length)
+)
 SPEC_MAX_ISL_ENV = "GEMMA4_SPEC_MAX_ISL"
 SPEC_WIDTH_RUNGS_ENV = "GEMMA4_SPEC_WIDTH_RUNGS"
 # The policy's INFO line on a record switch is rate-limited to one per this many seconds (0 = every switch).
@@ -6662,13 +6665,44 @@ def spec_plan_k_by_rows(table, max_num_seqs):
     return k_by_rows
 
 
-def spec_capture_shapes(table, k_max, max_rows):
-    """The ``(rows, drafts)`` records to capture, ascending rows.
+def spec_extra_shapes(text, k_max):
+    """Parse ``GEMMA4_SPEC_EXTRA_SHAPES`` (``"5:3,1:2"``) into ``((5, 3), (1, 2))``: records captured beside the
+    table's so a row band can compare a second draft length (the adaptive policy ranks every captured record
+    covering the rows with a draft length up to the band's cap). They never raise a band's cap and change
+    nothing in the plugin's plan. Each entry packs into the device argmax tile and drafts at most ``k_max``."""
+    shapes = []
+    for item in str(text or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        rows_text, sep, k_text = item.partition(":")
+        try:
+            rows, k = int(rows_text), int(k_text)
+        except ValueError as exc:
+            raise ValueError(f"{SPEC_EXTRA_SHAPES_ENV} entry {item!r} is not rows:k (table {text!r})") from exc
+        if not sep or rows < 1 or k < 1:
+            raise ValueError(f"{SPEC_EXTRA_SHAPES_ENV} entry {item!r} needs rows >= 1 and k >= 1 (table {text!r})")
+        if k > int(k_max):
+            raise ValueError(f"{SPEC_EXTRA_SHAPES_ENV} entry {item!r} drafts above {SPEC_DRAFT_LEN_ENV}={k_max}")
+        if rows * (k + 1) > SPEC_PACKED_ROWS_LIMIT:
+            raise ValueError(
+                f"{SPEC_EXTRA_SHAPES_ENV} entry {item!r} packs {rows} x {k + 1} = {rows * (k + 1)} verify rows, "
+                f"above the device argmax tile of {SPEC_PACKED_ROWS_LIMIT} (table {text!r})"
+            )
+        shapes.append((rows, k))
+    return tuple(shapes)
+
+
+def spec_capture_shapes(table, k_max, max_rows, extra=()):
+    """The ``(rows, drafts)`` records to capture, ascending rows then drafts.
 
     ``(1, k_max)`` for a solo request plus one record per table entry, its
     rows clamped to ``max_rows`` (the smaller of ``GEMMA4_SPEC_MAX_ROWS`` and
     the engine's batch). Entries that clamp onto the same row count keep the
-    larger draft length, since one record per row count is enough.
+    larger draft length, since one record per row count is enough for the
+    table (its record is a band's default and cap). ``extra`` records
+    (``spec_extra_shapes``) join as they are, rows clamped the same way: a
+    band's second draft length the policy can rank against the table's.
     """
     shapes = {1: int(k_max)}
     for rows, k in table:
@@ -6676,7 +6710,12 @@ def spec_capture_shapes(table, k_max, max_rows):
         if rows < 1:
             continue
         shapes[rows] = max(shapes.get(rows, 0), int(k))
-    return tuple(sorted(shapes.items()))
+    out = set(shapes.items())
+    for rows, k in extra:
+        rows = min(int(rows), int(max_rows))
+        if rows >= 1:
+            out.add((rows, int(k)))
+    return tuple(sorted(out))
 
 
 @dataclasses.dataclass
@@ -6956,7 +6995,8 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         self._mtp_assistant = None
         self._mtp_decoder = None
         self._mtp_captured = False
-        self._mtp_shapes = ()  # (rows, drafts) records, ascending rows
+        self._mtp_shapes = ()  # (rows, drafts) records captured, ascending rows then drafts
+        self._mtp_table_shapes = ()  # the table's records among them: a band's default and cap
         self._mtp_widths = {}  # record -> verify-width ladder
         self._mtp_max_rows = 0
         self._mtp_sessions = {}  # state slot -> MTPSession
@@ -6984,7 +7024,10 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         if max_rows < 1:
             raise ValueError(f"{SPEC_MAX_ROWS_ENV} must be at least 1, got {max_rows}")
         max_rows = min(max_rows, int(max_batch_size))
-        return spec_capture_shapes(table, k_max, max_rows), max_rows
+        extra = spec_extra_shapes(os.environ.get(SPEC_EXTRA_SHAPES_ENV, ""), k_max)
+        # the table's own records are a band's default and cap (``_mtp_shape_for``); the extra ones are candidates
+        self._mtp_table_shapes = spec_capture_shapes(table, k_max, max_rows)
+        return spec_capture_shapes(table, k_max, max_rows, extra), max_rows
 
     # -- warmup: prepare every record eagerly, then capture ----------------------------
     def warmup_model_decode(self, *args, **kwargs):
@@ -7547,8 +7590,9 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
 
     # -- propose: one fused replay over every drafting row -------------------------------
     def _mtp_shape_for(self, live_rows):
-        """The smallest captured record whose rows cover ``live_rows``, or None."""
-        for shape in self._mtp_shapes:
+        """The smallest TABLE record whose rows cover ``live_rows`` (the band's default, whose draft length caps
+        the choice), or None; an extra record (``GEMMA4_SPEC_EXTRA_SHAPES``) is a candidate, never the default."""
+        for shape in self._mtp_table_shapes:
             if shape[0] >= int(live_rows):
                 return shape
         return None
