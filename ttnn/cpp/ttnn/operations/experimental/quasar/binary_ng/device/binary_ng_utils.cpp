@@ -941,8 +941,7 @@ NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves
     // thread per compute thread, within the 6 user DM cores that the readers leave. A borrowed operand moves
     // nothing, so its reader or writer runs one thread. The DM batch is 8 tiles per barrier, and the compute
     // batch is as many tiles as a DST section holds: 4 on the SFPU kernel in a 16-bit DST and 2 in a 32-bit DST, and
-    // 8 on the FPU kernel at R = C = W = 1 only. Beside a DRAM operand both are 1,
-    // except where every operand is interleaved: there both follow the compute thread's share (below).
+    // 8 on the FPU kernel at R = C = W = 1 only. Beside a DRAM operand both follow the compute thread's share (below).
     constexpr uint32_t kRuleDmBatch = 8;
     NativeConfig config;
     config.compute_threads = native_compute_threads(tuning);
@@ -958,21 +957,20 @@ NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves
     // each compute thread owns one counter of each ring.
     const bool one_counter_per_compute_thread =
         config.reader_threads <= config.compute_threads && config.writer_threads <= config.compute_threads;
-    // Beside DRAM, batch by the compute thread's share once it draws 4 tiles (smaller shares measured slower), capped
-    // by a DST section.
+    const uint32_t max_tiles_per_cycle = native_max_tiles_per_cycle(moves.sfpu, moves.dst_32bit);
+    // Beside DRAM, both batches follow the compute thread's share once it draws 4 tiles (smaller shares measured
+    // slower), capped by a DST section. The share is 0 where an operand is sharded or borrowed, so those stay at 1.
     constexpr uint32_t kMinBatchedShare = 4;
     const bool share_batches = tuning.dram_batch && moves.batch_pays &&
                                moves.tiles_per_compute_thread >= kMinBatchedShare && one_counter_per_compute_thread;
-    const uint32_t share_batch =
-        share_batches ? std::bit_floor(std::min(
-                            native_max_tiles_per_cycle(moves.sfpu, moves.dst_32bit), moves.tiles_per_compute_thread))
-                      : 1u;
-    config.dm_batch = tuning.dm_batch.env.value_or(moves.dram ? share_batch : kRuleDmBatch);
+    const uint32_t dram_batch =
+        share_batches ? std::bit_floor(std::min(max_tiles_per_cycle, moves.tiles_per_compute_thread)) : 1u;
     // Off DRAM the rule batches the FPU kernel only at 1,1,1 until the other thread splits are measured.
     const bool fpu_batches = config.reader_threads == 1 && config.compute_threads == 1 && config.writer_threads == 1;
-    const bool rule_batches = !moves.dram && one_counter_per_compute_thread && (moves.sfpu || fpu_batches);
-    config.tiles_per_cycle = tuning.tiles_per_cycle.env.value_or(
-        rule_batches ? native_max_tiles_per_cycle(moves.sfpu, moves.dst_32bit) : share_batch);
+    const uint32_t l1_compute_batch =
+        one_counter_per_compute_thread && (moves.sfpu || fpu_batches) ? max_tiles_per_cycle : 1u;
+    config.dm_batch = tuning.dm_batch.env.value_or(moves.dram ? dram_batch : kRuleDmBatch);
+    config.tiles_per_cycle = tuning.tiles_per_cycle.env.value_or(moves.dram ? dram_batch : l1_compute_batch);
     // Two batches of either kind per thread, so a batch is double-buffered, and a multiple of each, so no batch
     // straddles the ring end: 16 at the rule's DM batch of 8, 2 at batch 1.
     const uint32_t batch_lcm = std::lcm(config.dm_batch, config.tiles_per_cycle);
@@ -1091,9 +1089,9 @@ const NativeTuning& native_tuning() {
             "binary_ng Quasar-native ENABLED. Where the operands move over the NoC, all in L1: R={} C={} W={} "
             "entries_per_thread={} dm_batch={} tiles_per_cycle={}. Where an operand is in DRAM: "
             "entries_per_thread={} dm_batch={} tiles_per_cycle={}, or, where every operand is interleaved, the "
-            "batches of the compute thread's share that each program logs. Where the output is borrowed and an input "
-            "moves: "
-            "R={} W=1 tiles_per_cycle={}. Where the inputs are borrowed and the output moves: R=1 W={} "
+            "batches of the compute thread's share that each program logs. "
+            "Where the output is borrowed and an input moves: R={} W=1 tiles_per_cycle={}. "
+            "Where the inputs are borrowed and the output moves: R=1 W={} "
             "tiles_per_cycle={}. Where all of them are borrowed: R=1 W=1 tiles_per_cycle={}. Where the SFPU kernel "
             "runs, "
             "all in L1 over the NoC: tiles_per_cycle={} in a 16-bit DST, tiles_per_cycle={} in a 32-bit DST. Sync "

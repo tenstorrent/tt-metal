@@ -519,8 +519,8 @@ Env vars, one per knob: `TTNN_QSR_NATIVE` (master: on unless set to `0`), `TTNN_
 inert, and re-enabling it needs the non-empty-thread guarantee that F1 removed, since a zero-work thread
 would skip `handle_final_credits`' barrier), `TTNN_QSR_READER_THREADS`, `TTNN_QSR_COMPUTE_THREADS`,
 `TTNN_QSR_WRITER_THREADS`, `TTNN_QSR_ENTRIES_PER_THREAD`, `TTNN_QSR_DM_BATCH`, `TTNN_QSR_TILES_PER_CYCLE`;
-unset or empty means the rule. `TTNN_QSR_DRAM_BATCH` is a switch, on unless set to `0`. `select_program_factory` runs on **every** dispatch, so check arch and
-attributes before `std::getenv` and cache the parse in a trivially-destructible `static const`.
+unset or empty means the rule. `TTNN_QSR_DRAM_BATCH` is a switch, on unless set to `0`.
+`select_program_factory` runs on **every** dispatch, so check arch and attributes before `std::getenv` and cache the parse in a trivially-destructible `static const`.
 
 **One process per configuration is a HARD rule, not a convenience.** On a cache hit the framework calls
 `select_program_factory` and then resolves the factory from the **cached index**, discarding the answer

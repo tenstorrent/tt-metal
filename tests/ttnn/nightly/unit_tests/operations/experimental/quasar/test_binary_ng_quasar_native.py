@@ -97,9 +97,8 @@ def _resolve(knobs, path, sfpu=False):
 
     `path` is _NOC_L1, _NOC_DRAM, _BORROWED or one from _path. A borrowed pair of inputs or a borrowed output
     runs one reader or writer thread whatever is set. Beside a DRAM operand it models batch 1, not the compute
-    thread's share, as nothing that reads the batch predicts a wrong tile. `sfpu` is
-    True for an op on the SFPU kernel, whose rule batch is smaller. An empty value counts as unset, as in
-    native_tuning().
+    thread's share: nothing that reads the batch predicts a wrong tile. `sfpu` is True for an op on the SFPU
+    kernel, whose rule batch is smaller. An empty value counts as unset, as in native_tuning().
     """
     inputs_move, output_moves, dram = path
 
@@ -541,9 +540,9 @@ def test_native_dm_batch_above_one_counter_is_bit_exact(rcw):
 # --- Compute batching --------------------------------------------------------------------------------
 #
 # An FPU-kernel compute batch of 8 runs eight tiles per tile_regs_acquire. The output is exact at any ring stride:
-# the binary unpack and the pack both step a batch by the stride. Per-cluster tile counts on the 32-cluster grid: 1 runs a single
-# short batch and no full one; 9 runs one full batch of 8 then a tail of 1; 64 runs eight full batches,
-# wrapping the 16-deep ring three times, and no tail; 65 adds a tail of 1 that starts exactly on a wrap
+# the binary unpack and the pack both step a batch by the stride. Per-cluster tile counts on the 32-cluster grid:
+# 1 runs a single short batch and no full one; 9 runs one full batch of 8 then a tail of 1; 64 runs eight full
+# batches, wrapping the 16-deep ring three times, and no tail; 65 adds a tail of 1 that starts exactly on a wrap
 # boundary.
 _TILES_PER_CYCLE_TILE_COUNTS = [32, 288, 2048, 2080]
 

@@ -781,7 +781,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     const auto in_dram = [](const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; };
     const bool any_dram = in_dram(a) || (!is_scalar && in_dram(*b_opt)) || in_dram(c);
     // Batching beside DRAM needs interleaved a, b, c and nothing borrowed. A sharded operand that moves over the NoC
-    // stays at batch 1 until batching it is measured: it aborted on ttsim, and no issue tracks that yet.
+    // stays at batch 1: batched, it aborts on ttsim (H.I.I and W.I.I).
     const auto interleaved = [](const Tensor& tensor) { return !tensor.memory_config().is_sharded(); };
     uint32_t tiles_per_compute_thread = 0;
     if (anchor.kind == AnchorKind::kNone && interleaved(a) && interleaved(*b_opt) && interleaved(c) &&
