@@ -11,6 +11,7 @@ semantic meaning.
 import argparse
 import json
 import statistics
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -175,6 +176,33 @@ def _latency_summary(device_latencies, end_to_end_latencies):
     }
 
 
+def _hardware_metadata(architecture, device_card):
+    architecture_label = {
+        "blackhole": "BH",
+        "wormhole_b0": "WH",
+    }.get(architecture, architecture.upper())
+    return {
+        "architecture": architecture,
+        "device_card": device_card,
+        "hardware": f"{architecture_label} {device_card}",
+    }
+
+
+def _resolve_tt_metal_commit():
+    repo_root = Path(__file__).resolve().parents[4]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        commit = result.stdout.strip()
+    except Exception:
+        commit = ""
+    return commit or "unknown"
+
+
 def run_demo(args):
     if args.num_frames < 1:
         raise ValueError("--num-frames must be positive")
@@ -190,6 +218,7 @@ def run_demo(args):
     import torch
     import ttnn
 
+    from models.common.device_utils import get_device_name
     from models.experimental.bevformer.model_config import BEV_H, BEV_W, CAN_BUS_DIMS, NUM_CAMS
     from models.experimental.bevformer.reference.bevformer import build_bevformer, relative_can_bus
     from models.experimental.bevformer.tests.common import (
@@ -258,6 +287,12 @@ def run_demo(args):
     device = ttnn.open_device(device_id=args.device_id, l1_small_size=32 * 1024)
     results, device_latencies, end_to_end_latencies = [], [], []
     try:
+        hardware_metadata = _hardware_metadata(
+            ttnn.get_arch_name(),
+            get_device_name(device, num_devices=1),
+        )
+        logger.info(f"Hardware: {hardware_metadata['hardware']}")
+
         # The PyTorch module is a checkpoint-compatible parameter and shape source. It is not run
         # as a per-frame golden model by this demo.
         tt_model = TTBEVFormer(create_bevformer_parameters(parameter_model, first_batch, device), device)
@@ -319,6 +354,8 @@ def run_demo(args):
 
     summary = {
         "variant": config.variant,
+        **hardware_metadata,
+        "tt_metal_commit": _resolve_tt_metal_commit(),
         "checkpoint": args.checkpoint,
         "dataset_format": args.dataset_format,
         "score_threshold": parameter_model.bbox_coder.score_threshold,

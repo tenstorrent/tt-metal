@@ -11,7 +11,12 @@ from models.experimental.bevformer.config.convert_upstream import convert_upstre
 from models.experimental.bevformer.config.loader import _github_raw_url
 from models.experimental.bevformer.demo.checkpoint import _mmdet3d_key
 from models.experimental.bevformer.demo.dataset import SequenceManifest
-from models.experimental.bevformer.demo.demo import _latency_summary, _parse_args
+from models.experimental.bevformer.demo.demo import (
+    _hardware_metadata,
+    _latency_summary,
+    _parse_args,
+    _resolve_tt_metal_commit,
+)
 
 
 def test_checkpoint_cli_argument():
@@ -34,6 +39,26 @@ def test_latency_summary_reports_means_p50_and_mean_based_fps():
             "device_fps": 1.0 / 5.35,
         }
     )
+
+
+def test_hardware_metadata_reports_canonical_and_display_names():
+    assert _hardware_metadata("blackhole", "P100") == {
+        "architecture": "blackhole",
+        "device_card": "P100",
+        "hardware": "BH P100",
+    }
+
+
+def test_tt_metal_commit_resolution(monkeypatch):
+    result = type("Result", (), {"stdout": "0123456789abcdef\n"})()
+    monkeypatch.setattr("models.experimental.bevformer.demo.demo.subprocess.run", lambda *args, **kwargs: result)
+    assert _resolve_tt_metal_commit() == "0123456789abcdef"
+
+    def fail(*args, **kwargs):
+        raise OSError("git unavailable")
+
+    monkeypatch.setattr("models.experimental.bevformer.demo.demo.subprocess.run", fail)
+    assert _resolve_tt_metal_commit() == "unknown"
 
 
 def test_normalized_config(tmp_path, expect_error):

@@ -1,49 +1,60 @@
 # BEVFormer sequence demo
 
 This demo runs one unmeasured preparation frame followed by a configurable number of output
-frames. The first output frame is also executed once as an unmeasured temporal-path warmup without
-advancing the retained BEV state. Model architecture, checkpoint, and input sequence are independent
-command-line arguments.
+frames. The first output position is also executed once as an unmeasured temporal-path warmup
+without advancing the retained BEV state. Model architecture, checkpoint, and input sequence are
+independent command-line arguments.
 
 ## Synthetic smoke run
 
 The synthetic mode uses dummy weights and newly generated random camera images for every frame.
 Its boxes have no semantic meaning.
 
+Run the synthetic demos from the tt-metal repository root:
+
 ```sh
 python -m models.experimental.bevformer.demo.demo \
   --config models/experimental/bevformer/config/bevformer_tiny.json \
   --checkpoint random \
   --dataset-format synthetic \
-  --num-frames 10
+  --num-frames 10 \
+  --output-dir generated/demo/bevformer/synthetic_tiny
+
+python -m models.experimental.bevformer.demo.demo \
+  --config models/experimental/bevformer/config/bevformer_small.json \
+  --checkpoint random \
+  --dataset-format synthetic \
+  --num-frames 10 \
+  --output-dir generated/demo/bevformer/synthetic_small
+
+python -m models.experimental.bevformer.demo.demo \
+  --config models/experimental/bevformer/config/bevformer_base.json \
+  --checkpoint random \
+  --dataset-format synthetic \
+  --num-frames 10 \
+  --output-dir generated/demo/bevformer/synthetic_base
 ```
 
 `--variant tiny|small|base` is a shorthand for the corresponding bundled config.
 
-## Why a PyTorch model is constructed
+These runs were performed on a BH P100 with tt-metal commit
+`326b4e8aa4b28500e875d2503f3bb88cc6ecf904`. The generated `detections.json` artifacts contain
+these recorded results for ten measured frames:
 
-The PyTorch BEVFormer object is a checkpoint-compatible parameter and shape container. The demo
-loads the checkpoint into it, converts its weights to TTNN parameters, and performs one CPU
-backbone/FPN shape-inference pass while preparing convolution configurations. It is not executed
-for every frame and its detections are not compared with the TTNN detections. This parameter-source
-pattern is also used by other TT-Metal demos; numerical comparison belongs in PCC tests.
+| Variant | BEV size | Encoder layers | Device-path mean (ms) | Device-path p50 (ms) | E2E mean (ms) | E2E p50 (ms) | Device FPS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| tiny | 50 | 3 | 138.6 | 138.2 | 306.9 | 305.9 | 7.21 |
+| small | 150 | 3 | 563.0 | 514.4 | 1145.8 | 1103.1 | 1.78 |
+| base | 200 | 6 | 1227.4 | 1222.5 | 2148.0 | 2124.6 | 0.81 |
 
-## Checkpoint and real sequence
+These values come from one ten-frame smoke run per variant and validate end-to-end execution only.
+No repeated-run statistics were collected, so they are not statistically characterized benchmark
+results. The device-path columns report host wall-clock `device_latency_ms`, not profiler device
+duration. The artifacts record random weights, synthetic inputs, `synthetic-0` as the unmeasured
+preparation frame, ten measured frames, the TT architecture and card, and the full tt-metal commit
+SHA. They do not record the firmware version or original command line.
 
-```sh
-python -m models.experimental.bevformer.demo.demo \
-  --config /path/to/model.json \
-  --checkpoint /path/to/checkpoint.pth \
-  --checkpoint-format mmdet3d \
-  --dataset-format manifest \
-  --dataset /path/to/sequence.json \
-  --dataset-root /path/to/dataset \
-  --scene-index 0 \
-  --start-frame 0 \
-  --num-frames 10 \
-  --score-threshold 0.25 \
-  --output-dir bevformer_demo_output
-```
+## Model configuration
 
 The normalized model config contains the architecture differences, preprocessing and ordered
 camera contract required for inference. Bundled examples live in `config/bevformer_*.json`:
@@ -101,20 +112,17 @@ bus MLP input. The selected config supplies those contracts to the model, manife
 converter, avoiding duplicated constants; incompatible checkpoint shapes fail strict loading.
 
 `--config` accepts a local path or an HTTPS URL. GitHub `blob` links are converted to raw links;
-directory links are rejected. Remote files are cached under `~/.cache/tt-metal/bevformer` by
+GitHub `tree` links are rejected. Remote files are cached under `~/.cache/tt-metal/bevformer` by
 default. Use `--config-sha256` to pin their contents and `--refresh-config` to refetch them.
 Normalized JSON is validated directly. A `.py` path or URL is treated as an official-style config
 and interpreted by a restricted AST adapter; it is never imported or executed. Use
 `--config-format json|upstream` only when the filename does not identify the syntax.
 
-An upstream URL can therefore be passed directly:
+The real-sequence command below can use an upstream URL directly by replacing its `--config`
+argument with:
 
-```sh
-python -m models.experimental.bevformer.demo.demo \
-  --config https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevformer/bevformer_tiny.py \
-  --checkpoint /path/to/bevformer_tiny.pth \
-  --dataset-format manifest \
-  --dataset /path/to/sequence.json
+```text
+--config https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevformer/bevformer_tiny.py
 ```
 
 To save and inspect its normalized form, use the same non-executing adapter as a converter:
@@ -122,18 +130,14 @@ To save and inspect its normalized form, use the same non-executing adapter as a
 ```sh
 python -m models.experimental.bevformer.config.convert_upstream \
   --input https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevformer/bevformer_tiny.py \
-  --output /tmp/bevformer_tiny.json
+  --output /path/to/bevformer_tiny.json
 ```
 
-For a normalized remote config pinned by content:
+For a normalized remote config pinned by content, replace the same argument with:
 
-```sh
-python -m models.experimental.bevformer.demo.demo \
-  --config https://raw.githubusercontent.com/ORG/REPO/COMMIT/bevformer_tiny.json \
-  --config-sha256 EXPECTED_HEX_DIGEST \
-  --checkpoint /path/to/checkpoint.pth \
-  --dataset-format manifest \
-  --dataset /path/to/sequence.json
+```text
+--config https://raw.githubusercontent.com/ORG/REPO/COMMIT/bevformer_tiny.json
+--config-sha256 EXPECTED_HEX_DIGEST
 ```
 
 ## Sequence manifest
@@ -145,9 +149,12 @@ relative to the preceding frame.
 
 Camera calibration is fixed for the lifetime of an initialized model. The encoder creates the
 3D-to-2D projection setup from camera intrinsics and extrinsics during initialization, and the
-first sequence frame is an unmeasured warmup. Every later frame must use the same calibration.
-If any camera intrinsic or extrinsic changes, reinitialize the model before processing that frame
-so the 3D-to-2D projections are created again from the new calibration.
+first sequence frame is an unmeasured preparation frame. Every selected frame must use the same
+calibration. Split data with changing camera intrinsics or extrinsics into separate demo runs so
+each run initializes its projection setup from the correct calibration.
+
+The following schema fragment shows one representative frame. Identity `lidar2img` matrices are
+used only to keep the structure readable; real inference requires calibrated projection matrices.
 
 ```json
 {
@@ -203,7 +210,7 @@ python -m models.experimental.bevformer.demo.convert_info \
   --config models/experimental/bevformer/config/bevformer_base.json \
   --input /path/to/infos_val.pkl \
   --output /path/to/sequence.json \
-  --strip-prefix data/dataset
+  --strip-prefix /path/to/dataset
 ```
 
 The converter looks cameras up by name and writes them in the config's `camera_order`, which must
@@ -211,12 +218,36 @@ match the order used while training the camera embeddings. Use `--dataset-root` 
 to resolve the converted relative paths. Because pickle loading can execute code, only convert
 metadata from a trusted source.
 
+## Checkpoint-backed real sequence
+
+Replace every `/path/to/...` placeholder before running this command from the tt-metal repository
+root:
+
+```sh
+python -m models.experimental.bevformer.demo.demo \
+  --config /path/to/model.json \
+  --checkpoint /path/to/checkpoint.pth \
+  --checkpoint-format mmdet3d \
+  --dataset-format manifest \
+  --dataset /path/to/sequence.json \
+  --dataset-root /path/to/dataset \
+  --scene-index 0 \
+  --start-frame 0 \
+  --num-frames 10 \
+  --score-threshold 0.25 \
+  --output-dir /path/to/demo-output
+```
+
+Use `--scene-token` instead of `--scene-index` when the manifest scene token is known.
+
 ## Output
 
-The demo writes `detections.json`, containing per-frame boxes, scores, numeric labels, optional
-class names, device latency, end-to-end latency, and a run summary. The preparation invocation and
-the initial temporal cold-start/warmup invocation are excluded from all reported metrics. The
-warmup input is rerun as measured frame 0, so all reported latencies describe warmed executions.
+The demo writes `detections.json` inside `--output-dir`, containing per-frame boxes, scores, numeric
+labels, optional class names, device latency, end-to-end latency, and a run summary. The preparation
+invocation and the initial temporal cold-start/warmup invocation are excluded from all reported
+metrics. The first output frame position is loaded again as measured frame 0. Manifest mode reloads
+the same stored images, while synthetic mode generates fresh deterministic random images. In both
+modes, all reported latencies describe the already-compiled temporal execution path.
 
 `device_latency_ms` measures host wall-clock time around the TT model forward, device-side
 detection, synchronization, and input deallocation. `end_to_end_latency_ms` additionally includes
@@ -227,6 +258,10 @@ The `summary` object contains:
 | Field | Meaning |
 | --- | --- |
 | `variant` | Selected model variant. |
+| `architecture` | TT architecture reported by the runtime, for example `blackhole`. |
+| `device_card` | TT card reported by device discovery, for example `P100`. |
+| `hardware` | Compact architecture and card label, for example `BH P100`. |
+| `tt_metal_commit` | Full tt-metal Git commit SHA, or `unknown` when it cannot be resolved. |
 | `checkpoint` | Checkpoint path, or `random`. |
 | `dataset_format` | `synthetic` or `manifest`. |
 | `score_threshold` | Device-side minimum detection score. |
@@ -241,3 +276,51 @@ The `summary` object contains:
 The p50 fields use the standard median. `device_fps` remains mean-based, so its value accounts for
 every measured frame. It excludes image loading, preprocessing, host box readback, preparation,
 and cold-start warmup.
+
+## Visualize detections
+
+The visualization CLI renders manifest-backed demo results without using a Tenstorrent device.
+Synthetic results cannot be visualized because they do not reference real camera images or camera
+calibration. Run the following command from the tt-metal repository root:
+
+```sh
+python -m models.experimental.bevformer.demo.visualize_detections \
+  /path/to/demo-output \
+  --manifest /path/to/sequence.json \
+  --dataset-root /path/to/dataset \
+  --score-threshold 0.25
+```
+
+The positional input may be either the demo output directory or its `detections.json` file. The
+manifest must contain every frame token present in the results. Relative camera paths from the
+manifest are resolved below `--dataset-root`. Pass both paths explicitly for portable use. The
+visualizer currently expects the standard six BEVFormer camera names shown in the manifest schema.
+
+The command writes two images per result frame beside `detections.json`:
+
+- `frame_<index>_<token>.png`: six-camera mosaic.
+- `frame_<index>_<token>_bev.png`: top-down boxes, headings, velocities, and ego position.
+
+Existing images with the same names are overwritten. `--score-threshold` applies only to the
+rendered images and does not modify `detections.json`.
+
+| Option | Portable usage | Meaning |
+| --- | ---: | --- |
+| `--manifest` | Pass explicitly | Manifest used for the demo run. |
+| `--dataset-root` | Pass explicitly | Root for relative manifest image paths. |
+| `--camera-width` | Default: `800` | Width of each camera tile in pixels. |
+| `--score-threshold` | Default: `0.0` | Minimum displayed detection score. |
+| `--bev-size` | Default: `1000` | Width and height of the BEV image in pixels. |
+| `--bev-range` | Default: `51.2` | Displayed distance in meters around ego. |
+
+## PyTorch usage during setup
+
+Frame inference and detections are produced by TTNN. The demo creates a PyTorch BEVFormer model
+only during setup to:
+
+- Load the checkpoint and validate parameter shapes.
+- Supply weights for conversion into TTNN parameters.
+- Infer backbone and FPN output shapes once.
+
+The PyTorch model is not run for every frame and does not produce the demo detections. Numerical
+comparison between PyTorch and TTNN belongs in the PCC tests, not this demo.
