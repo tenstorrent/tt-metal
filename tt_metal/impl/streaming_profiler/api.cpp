@@ -26,7 +26,7 @@ namespace api = tt::tt_metal::experimental::streaming_profiler;
 namespace tt::tt_metal::experimental::streaming_profiler::detail {
 static_assert(OBSERVABILITY_EVENT_ID_BITS == TT_OBSERVABILITY_EVENT_ID_BITS);
 static_assert(OBSERVABILITY_EVENT_ID_COUNT == TT_OBSERVABILITY_EVENT_ID_COUNT);
-std::atomic<const ObservabilityEventInfo*> ObservabilityEventRegistry::sites[OBSERVABILITY_EVENT_ID_COUNT];
+std::atomic<const ObservabilityEventInfo*> ObservabilityEventRegistry::events[OBSERVABILITY_EVENT_ID_COUNT];
 }  // namespace tt::tt_metal::experimental::streaming_profiler::detail
 
 namespace tt::tt_metal::streaming_profiler {
@@ -38,7 +38,7 @@ static_assert(TT_ZONE_STALL_ID < api::detail::OBSERVABILITY_EVENT_ID_COUNT);
 constexpr api::ObservabilityEventInfo kStallObservabilityEvent{.name = api::STALL_ZONE_NAME};
 
 // Fills the table behind api::detail::observability_event_of from the zone-name registry as ELFs load. Nothing is ever
-// freed: a record may hold a site's address for the life of the process. Ids are unique per process by construction
+// freed: a record may hold an event's address for the life of the process. Ids are unique per process by construction
 // (each image owns a block), so a slot is written once; a repeat is a registry fault and the first writer wins.
 class ObservabilityEventTables {
 public:
@@ -48,10 +48,10 @@ public:
             if (e->event_id >= api::detail::OBSERVABILITY_EVENT_ID_COUNT) {
                 continue;
             }
-            auto& slot = api::detail::ObservabilityEventRegistry::sites[e->event_id];
+            auto& slot = api::detail::ObservabilityEventRegistry::events[e->event_id];
             if (slot.load(std::memory_order_relaxed) == nullptr) {
                 slot.store(
-                    &sites_.emplace_back(api::ObservabilityEventInfo{
+                    &events_.emplace_back(api::ObservabilityEventInfo{
                         .name = e->name, .location = {.file = e->file, .line = e->line}, .meta = &e->meta}),
                     std::memory_order_release);
             }
@@ -60,7 +60,7 @@ public:
 
 private:
     std::mutex mu_;
-    std::deque<api::ObservabilityEventInfo> sites_;
+    std::deque<api::ObservabilityEventInfo> events_;
 };
 
 }  // namespace
@@ -68,7 +68,7 @@ private:
 void init_observability_event_registry() {
     static std::once_flag once;
     std::call_once(once, [] {
-        api::detail::ObservabilityEventRegistry::sites[TT_ZONE_STALL_ID].store(
+        api::detail::ObservabilityEventRegistry::events[TT_ZONE_STALL_ID].store(
             &kStallObservabilityEvent, std::memory_order_release);
         static ttsl::Indestructible<ObservabilityEventTables> tables;
         tt::llrt::ObservabilityEventMetaRegistry::instance().set_listener(

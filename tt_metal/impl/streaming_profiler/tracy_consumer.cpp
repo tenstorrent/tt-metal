@@ -40,13 +40,13 @@ constexpr uint32_t kProcessorColors[kProcessorCount] = {
     tracy::Color::Yellow3,
     tracy::Color::Yellow2};
 
-// A DeviceZoneScopedNC or DeviceZoneScopedNCU site's own colour (0xRRGGBB), or 0 for its processor's.
-uint32_t site_color(const experimental::streaming_profiler::ObservabilityEventInfo& site) {
-    if (site.meta != nullptr) {
-        if (auto m = site.meta->as<tt::debug_event::ZoneColorMeta>()) {
+// A DeviceZoneScopedNC or DeviceZoneScopedNCU event's own colour (0xRRGGBB), or 0 for its processor's.
+uint32_t event_color(const experimental::streaming_profiler::ObservabilityEventInfo& event) {
+    if (event.meta != nullptr) {
+        if (auto m = event.meta->as<tt::observability_event::ZoneColorMeta>()) {
             return m->color & 0xFFFFFFu;
         }
-        if (auto m = site.meta->as<tt::debug_event::ZoneUnitMeta>()) {
+        if (auto m = event.meta->as<tt::observability_event::ZoneUnitMeta>()) {
             return m->color & 0xFFFFFFu;
         }
     }
@@ -73,7 +73,7 @@ void TracyConsumer::operator()(const Batch& batch) {
         push_zone(
             zone.core(),
             zone.observability_event().name,
-            site_color(zone.observability_event()),
+            event_color(zone.observability_event()),
             zone.start_host_cycles(),
             zone.end_host_cycles());
     }

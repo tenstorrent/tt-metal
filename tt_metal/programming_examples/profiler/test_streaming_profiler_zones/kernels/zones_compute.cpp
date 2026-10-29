@@ -58,7 +58,7 @@ static constexpr int kWallClockLowIdx = 0;
 
 // ZONE_MODE == 0 keeps the wall-clock spin: it needs durations calibrated in microseconds, which a
 // nop-iteration count cannot express.
-// ZONE_C is a ZONE with a colour, carried to the host as the site's ZoneColorMeta; ZONE_U adds the unit a consumer
+// ZONE_C is a ZONE with a colour, carried to the host as the event's ZoneColorMeta; ZONE_U adds the unit a consumer
 // should present the duration in (ZoneUnitMeta).
 #if ZONE_MODE
 #define ZONE(NAME, GRADUATED) ZONE_NOPS(NAME, ZONE_CYC)

@@ -2,14 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Debug event metadata, layer 3: the round trip on silicon. test_kernels/misc/observability_event_meta_silicon.cpp runs
-// one zone per metadata shape on every RISC of one core; the device compiler marshals each site's value into its ELF,
-// the host loader reads it back, and this test checks every zone's site through the public streaming profiler API
-// (Zone::site().meta) against the constants the kernel was built from (observability_event_meta_silicon.h).
+// Observability event metadata, layer 3: the round trip on silicon.
+// test_kernels/misc/observability_event_meta_silicon.cpp runs one zone per metadata shape on every RISC of one core;
+// the device compiler marshals each event's value into its ELF, the host loader reads it back, and this test checks
+// every zone's event through the public streaming profiler API (Zone::event().meta) against the constants the kernel
+// was built from (observability_event_meta_silicon.h).
 //
 // Needs a Blackhole device and TT_METAL_STREAMING_PROFILER=1 in the environment before the process starts; skips
-// otherwise. Run it on its own (--gtest_filter=DebugEventMetaSilicon.*), since the profiler is armed for the whole
-// process.
+// otherwise. Run it on its own (--gtest_filter=ObservabilityEventMetaSilicon.*), since the profiler is armed for the
+// whole process.
 
 #include <gtest/gtest.h>
 
@@ -37,10 +38,10 @@ namespace observability_event_meta_silicon_test {
 using namespace tt::tt_metal;
 namespace sp = tt::tt_metal::experimental::streaming_profiler;
 namespace m = observability_event_meta_silicon;
-using tt::debug_event::SiteMeta;
-using tt::debug_event::ZoneColorMeta;
-using tt::debug_event::ZoneMeta;
-using tt::debug_event::ZoneUnitMeta;
+using tt::observability_event::EventMeta;
+using tt::observability_event::Metadata;
+using tt::observability_event::ZoneColorMeta;
+using tt::observability_event::ZoneUnitMeta;
 
 constexpr const char* kKernel = "tests/tt_metal/tt_metal/test_kernels/misc/observability_event_meta_silicon.cpp";
 constexpr int kRiscs = 5;
@@ -56,25 +57,25 @@ struct LeafValue {
 template <class T>
 std::vector<LeafValue> leaves(const T& value) {
     std::vector<LeafValue> out;
-    tt::debug_event::detail::for_each_leaf(value, [&](const auto& field) {
-        using F = tt::debug_event::detail::field_t<decltype(field)>;
+    tt::observability_event::detail::for_each_leaf(value, [&](const auto& field) {
+        using F = tt::observability_event::detail::field_t<decltype(field)>;
         if constexpr (std::is_same_v<F, const char*>) {
             out.push_back({'s', 0, field != nullptr ? field : ""});
         } else {
-            out.push_back({'i', tt::debug_event::detail::field_bits(field), {}});
+            out.push_back({'i', tt::observability_event::detail::field_bits(field), {}});
         }
     });
     return out;
 }
 
-// SITE's metadata decoded as T and compared, leaf by leaf, with EXPECTED.
+// EVENT's metadata decoded as T and compared, leaf by leaf, with EXPECTED.
 template <class T>
-void expect_meta(const sp::ObservabilityEventInfo& site, const T& expected) {
-    ASSERT_NE(site.meta, nullptr) << site.name;
-    const std::optional<T> got = site.meta->as<T>();
-    ASSERT_TRUE(got.has_value()) << site.name << " carries " << site.meta->signature << ", not "
-                                 << tt::debug_event::signature_of<T>();
-    EXPECT_EQ(leaves(*got), leaves(expected)) << site.name;
+void expect_meta(const sp::ObservabilityEventInfo& event, const T& expected) {
+    ASSERT_NE(event.meta, nullptr) << event.name;
+    const std::optional<T> got = event.meta->as<T>();
+    ASSERT_TRUE(got.has_value()) << event.name << " carries " << event.meta->signature << ", not "
+                                 << tt::observability_event::signature_of<T>();
+    EXPECT_EQ(leaves(*got), leaves(expected)) << event.name;
 }
 
 bool streaming_profiler_enabled() {
@@ -86,11 +87,11 @@ bool streaming_profiler_enabled() {
 }
 
 struct SeenZone {
-    const sp::ObservabilityEventInfo* site;
+    const sp::ObservabilityEventInfo* event;
     sp::Processor processor;
 };
 
-TEST(DebugEventMetaSilicon, EveryShapeRoundTripsOnEveryRisc) {
+TEST(ObservabilityEventMetaSilicon, EveryShapeRoundTripsOnEveryRisc) {
     if (!streaming_profiler_enabled()) {
         GTEST_SKIP() << "needs TT_METAL_STREAMING_PROFILER=1 in the environment";
     }
@@ -105,7 +106,7 @@ TEST(DebugEventMetaSilicon, EveryShapeRoundTripsOnEveryRisc) {
                 }
             }
         },
-        "debug-event-meta-test");
+        "observability-event-meta-test");
 
     {
         auto mesh_device = distributed::MeshDevice::create_unit_mesh(0);
@@ -134,46 +135,46 @@ TEST(DebugEventMetaSilicon, EveryShapeRoundTripsOnEveryRisc) {
     }
     callback.reset();
 
-    // Zones per (RISC, name), and the distinct sites behind each name.
+    // Zones per (RISC, name), and the distinct events behind each name.
     std::map<std::pair<int, std::string_view>, int> zones;
-    std::map<std::pair<int, std::string_view>, std::set<const sp::ObservabilityEventInfo*>> sites;
+    std::map<std::pair<int, std::string_view>, std::set<const sp::ObservabilityEventInfo*>> events;
     for (const SeenZone& z : seen) {
-        const auto key = std::make_pair(static_cast<int>(z.processor), z.site->name);
+        const auto key = std::make_pair(static_cast<int>(z.processor), z.event->name);
         zones[key]++;
-        sites[key].insert(z.site);
+        events[key].insert(z.event);
 
-        EXPECT_TRUE(z.site->location.file.ends_with("observability_event_meta_silicon.cpp")) << z.site->location.file;
-        EXPECT_GT(z.site->location.line, 0u);
+        EXPECT_TRUE(z.event->location.file.ends_with("observability_event_meta_silicon.cpp")) << z.event->location.file;
+        EXPECT_GT(z.event->location.line, 0u);
 
-        const std::string_view name = z.site->name;
+        const std::string_view name = z.event->name;
         if (name == "meta_plain") {
-            expect_meta(*z.site, ZoneMeta{"meta_plain"});
+            expect_meta(*z.event, EventMeta{"meta_plain"});
         } else if (name == "meta_colored") {
-            expect_meta(*z.site, ZoneColorMeta{"meta_colored", m::kColor});
+            expect_meta(*z.event, ZoneColorMeta{"meta_colored", m::kColor});
         } else if (name == "meta_unit") {
-            expect_meta(*z.site, ZoneUnitMeta{"meta_unit", m::kColor, m::kUnit});
+            expect_meta(*z.event, ZoneUnitMeta{"meta_unit", m::kColor, m::kUnit});
         } else if (name == "meta_nested") {
-            expect_meta(*z.site, m::kNested);
+            expect_meta(*z.event, m::kNested);
         } else if (name == "meta_deep") {
-            expect_meta(*z.site, m::kDeep);
+            expect_meta(*z.event, m::kDeep);
             // The device compiler (GCC) and this one must spell the signature alike, nesting included.
-            EXPECT_EQ(z.site->meta->signature, "observability_event_meta_silicon::DeepMeta:s{{bh}w}q");
+            EXPECT_EQ(z.event->meta->signature, "observability_event_meta_silicon::DeepMeta:s{{bh}w}q");
         } else if (name == "meta_all_widths") {
-            expect_meta(*z.site, m::kAllWidths);
+            expect_meta(*z.event, m::kAllWidths);
         } else if (name == "meta_defaulted") {
-            expect_meta(*z.site, m::kDefaulted);
-            const auto d = z.site->meta->as<m::DefaultedMeta>();
+            expect_meta(*z.event, m::kDefaulted);
+            const auto d = z.event->meta->as<m::DefaultedMeta>();
             ASSERT_TRUE(d.has_value());
             EXPECT_EQ(d->color, 0x123456u);
             EXPECT_EQ(d->verbosity, 4u);
         } else if (name == "meta_two_strings") {
-            expect_meta(*z.site, m::kTwoStrings);
+            expect_meta(*z.event, m::kTwoStrings);
         } else if (name == m::kTemplatedName) {
-            const auto t = z.site->meta->as<m::TemplatedMeta>();
+            const auto t = z.event->meta->as<m::TemplatedMeta>();
             ASSERT_TRUE(t.has_value());
             EXPECT_TRUE(t->value == m::kTemplatedA || t->value == m::kTemplatedB) << t->value;
         } else {
-            ADD_FAILURE() << "unexpected site " << name;
+            ADD_FAILURE() << "unexpected event " << name;
         }
     }
 
@@ -191,14 +192,14 @@ TEST(DebugEventMetaSilicon, EveryShapeRoundTripsOnEveryRisc) {
         for (std::string_view name : once) {
             EXPECT_EQ((zones[{risc, name}]), 1) << name << " on RISC " << risc;
         }
-        // Three calls, two distinct values: the two calls with equal values share one site.
+        // Three calls, two distinct values: the two calls with equal values share one event.
         const auto key = std::make_pair(risc, std::string_view(m::kTemplatedName));
         EXPECT_EQ(zones[key], 3) << "templated zones on RISC " << risc;
-        ASSERT_EQ(sites[key].size(), 2u) << "templated sites on RISC " << risc;
+        ASSERT_EQ(events[key].size(), 2u) << "templated events on RISC " << risc;
         std::multiset<uint32_t> values;
         for (const SeenZone& z : seen) {
-            if (static_cast<int>(z.processor) == risc && z.site->name == m::kTemplatedName) {
-                values.insert(z.site->meta->as<m::TemplatedMeta>()->value);
+            if (static_cast<int>(z.processor) == risc && z.event->name == m::kTemplatedName) {
+                values.insert(z.event->meta->as<m::TemplatedMeta>()->value);
             }
         }
         EXPECT_EQ(values.count(m::kTemplatedA), 2u) << "RISC " << risc;

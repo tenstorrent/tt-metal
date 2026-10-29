@@ -2,34 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Per-site metadata for debug events. A metadata type is a plain C++ struct; a site carries one constant value
-// of it, which the compiler marshals into the site's ELF record and the host unmarshals at load. The device
-// never sees it: it only has the site's id (hostdev/observability_event_id.h).
+// Per-event metadata for observability events. A metadata type is a plain C++ struct; an event carries one constant
+// value of it, which the compiler marshals into the event's ELF record and the host unmarshals at load. The device
+// never sees it: it only has the event's id (hostdev/observability_event_id.h).
 //
 // A metadata type must be a simple aggregate: a struct with public data members only -- no base classes,
 // constructors, C arrays, const or reference members -- and 1..kMaxFields of them, each one of
 //   const char*        set from a string literal
 //   integer or enum    of 1, 2, 4 or 8 bytes (bool included)
 //   a nested struct    itself a simple aggregate
-// and every value must be a compile-time constant; a site's strings, quoted, must fit its kMaxSiteAsmBytes of
-// assembler text. Its FIRST field is the site's name, a const char* that every
-// site sets to a non-empty string. The type must be named at namespace scope (not in an anonymous namespace, not
-// local to a function, not unnamed), because the host matches it by the name the compiler spells. check_site_type<T>()
+// and every value must be a compile-time constant; an event's strings, quoted, must fit its kMaxEventAsmBytes of
+// assembler text. Its FIRST field is the event's name, a const char* that every
+// event sets to a non-empty string. The type must be named at namespace scope (not in an anonymous namespace, not
+// local to a function, not unnamed), because the host matches it by the name the compiler spells. check_event_type<T>()
 // enforces all of this with readable errors.
 //
-// One site, one record per distinct metadata value: the site's label carries a hash of the value, so copies of a site
-// with the same value (inlined, or template instantiations) share a handle and an id, and instantiations whose values
-// differ (e.g. a colour taken from a template parameter) each get their own.
+// One event, one record per distinct metadata value: the event's label carries a hash of the value, so copies of an
+// event with the same value (inlined, or template instantiations) share a handle and an id, and instantiations whose
+// values differ (e.g. a colour taken from a template parameter) each get their own.
 //
-// Marshalling: emit_site() walks the struct's fields (C++17 aggregate decomposition) inside a constant expression
-// and returns assembler text, which the site's asm((...)) statement emits. Unmarshalling: the host walks the same
-// fields of the same struct (SiteMeta::as<T>()).
+// Marshalling: emit_event() walks the struct's fields (C++17 aggregate decomposition) inside a constant expression
+// and returns assembler text, which the event's asm((...)) statement emits. Unmarshalling: the host walks the same
+// fields of the same struct (Metadata::as<T>()).
 //
-// Record in .tt_observability_event_meta (little-endian; one per site; records are 4-byte aligned and contiguous):
+// Record in .tt_observability_event_meta (little-endian; one per event; records are 4-byte aligned and contiguous):
 //   [0]  u32 id          the handle's VMA in .tt_observability_event_ids (rebased by the host at load)
 //   [4]  u32 signature   VMA in .tt_observability_event_str of "<type name>:<field codes>", e.g.
-//   "tt::debug_event::ZoneColorMeta:sw" [8]  u32 file        VMA in .tt_observability_event_str [12] u32 line [16] the
-//   leaf fields in declaration order, nested structs flattened in place, each aligned to min(its size,
+//   "tt::observability_event::ZoneColorMeta:sw" [8]  u32 file        VMA in .tt_observability_event_str [12] u32 line
+//   [16] the leaf fields in declaration order, nested structs flattened in place, each aligned to min(its size,
 //        4); then padding to 4
 // Field codes: 's' const char* (u32 VMA in .tt_observability_event_str), 'b' 1 byte, 'h' 2, 'w' 4, 'q' 8; a nested
 // struct is its own codes in braces, so {const char* name; Style{u32, u8} style; u16 flags;} is "s{wb}h". Braces carry
@@ -42,12 +42,12 @@
 #include <type_traits>
 #include <utility>
 
-namespace tt::debug_event {
+namespace tt::observability_event {
 
 // ---- Metadata types ----------------------------------------------------------------------------------------------
-// The first field of every metadata type is the site's name.
+// The first field of every metadata type is the event's name.
 
-struct ZoneMeta {
+struct EventMeta {
     const char* name;
 };
 
@@ -69,8 +69,8 @@ struct ZoneUnitMeta {
 // ---- Field walk, shared by the device marshaller and the host unmarshaller -----------------------------------------
 
 inline constexpr size_t kMaxFields = 8;
-// The assembler text one site may generate (its strings, quoted, plus a few hundred bytes of directives).
-inline constexpr size_t kMaxSiteAsmBytes = 2048;
+// The assembler text one event may generate (its strings, quoted, plus a few hundred bytes of directives).
+inline constexpr size_t kMaxEventAsmBytes = 2048;
 inline constexpr size_t kRecordHeaderBytes = 16;
 
 namespace detail {
@@ -175,7 +175,7 @@ template <class V>
 using field_t = std::remove_cv_t<std::remove_reference_t<V>>;
 
 // ---- Rules for a metadata type, as plain predicates ---------------------------------------------------------------
-// Each answers one rule and is true when it holds; check_type / check_site_type turn them into readable compile
+// Each answers one rule and is true when it holds; check_type / check_event_type turn them into readable compile
 // errors, and tests call them directly. Rules that need the fields (all but is_simple_aggregate) assume the type is a
 // simple aggregate and descend into nested structs; when an earlier rule already fails they answer true, so a bad
 // type reports only the rule it breaks.
@@ -290,11 +290,13 @@ template <class T>
 constexpr bool check_type() {
     static_assert(
         is_simple_aggregate_v<T>,
-        "a debug event metadata type must be a simple aggregate: a struct with public data members only");
-    static_assert(has_no_bases<T>(), "a debug event metadata type and each struct in it cannot have a base class");
-    static_assert(has_no_arrays<T>(), "a debug event metadata type cannot have C array members");
-    static_assert(field_count_ok<T>(), "a debug event metadata type and each struct in it need 1..kMaxFields fields");
-    static_assert(has_no_const_members<T>(), "a debug event metadata type cannot have const members");
+        "an observability event metadata type must be a simple aggregate: a struct with public data members only");
+    static_assert(
+        has_no_bases<T>(), "an observability event metadata type and each struct in it cannot have a base class");
+    static_assert(has_no_arrays<T>(), "an observability event metadata type cannot have C array members");
+    static_assert(
+        field_count_ok<T>(), "an observability event metadata type and each struct in it need 1..kMaxFields fields");
+    static_assert(has_no_const_members<T>(), "an observability event metadata type cannot have const members");
     static_assert(
         fields_supported<T>(),
         "a metadata field must be a string literal (const char*), an integer, an enum, a bool or a nested struct "
@@ -392,23 +394,24 @@ constexpr bool first_field_is_name() {
     return is_name;
 }
 
-// A site's metadata type: a valid metadata type, matched by name on the host, whose first field is the name.
+// An event's metadata type: a valid metadata type, matched by name on the host, whose first field is the name.
 template <class T>
-constexpr bool is_valid_site_type() {
+constexpr bool is_valid_event_type() {
     return is_valid_meta_type<T>() && has_portable_name<T>() && first_field_is_name<T>();
 }
 
-// Everything a site's metadata type must satisfy, beyond check_type's per-struct rules.
+// Everything an event's metadata type must satisfy, beyond check_type's per-struct rules.
 template <class T>
-constexpr bool check_site_type() {
+constexpr bool check_event_type() {
     static_assert(check_type<T>());
     static_assert(
         has_portable_name<T>(),
-        "a debug event metadata type must be named at namespace scope: not in an anonymous namespace, not local to a "
+        "an observability event metadata type must be named at namespace scope: not in an anonymous namespace, not "
+        "local to a "
         "function, not an unnamed struct (the host matches it by name, and compilers spell those differently)");
     static_assert(
         !shape_ok<T>() || first_field_is_name<T>(),
-        "the first field of a debug event metadata type must be the site's name, a const char*");
+        "the first field of an observability event metadata type must be the event's name, a const char*");
     return true;
 }
 
@@ -430,7 +433,7 @@ constexpr void write_codes(Sink& out) {
 // Writes "<type name>:<field codes>" into any sink with put(char).
 template <class T, class Sink>
 constexpr void write_signature(Sink& out) {
-    static_assert(check_site_type<T>());
+    static_assert(check_event_type<T>());
     for (const char* p = type_name_begin<T>(); !type_name_end(*p); p++) {
         out.put(*p);
     }
@@ -438,17 +441,17 @@ constexpr void write_signature(Sink& out) {
     write_codes<T>(out);
 }
 
-// Never defined: a site whose assembler text would pass kMaxSiteAsmBytes calls it during constant evaluation, and
+// Never defined: an event whose assembler text would pass kMaxEventAsmBytes calls it during constant evaluation, and
 // the compiler's error ("call to non-constexpr function") quotes this name.
-void debug_event_site_metadata_too_long_shorten_its_strings();
+void observability_event_metadata_too_long_shorten_its_strings();
 
 // Assembler text, built in a constant expression and handed to asm((...)). Always NUL-terminated.
 struct AsmText {
-    char buf[kMaxSiteAsmBytes] = {};
+    char buf[kMaxEventAsmBytes] = {};
     size_t n = 0;
     constexpr void put(char c) {
-        if (n + 1 >= kMaxSiteAsmBytes) {
-            debug_event_site_metadata_too_long_shorten_its_strings();
+        if (n + 1 >= kMaxEventAsmBytes) {
+            observability_event_metadata_too_long_shorten_its_strings();
             return;
         }
         buf[n++] = c;
@@ -498,7 +501,7 @@ struct AsmText {
     constexpr size_t size() const { return n; }
 };
 
-// FNV-1a over a site's metadata value: its signature, then every leaf field.
+// FNV-1a over an event's metadata value: its signature, then every leaf field.
 struct Fnv1a {
     uint64_t h = 0xcbf29ce484222325ull;
     constexpr void put(char c) {
@@ -528,12 +531,12 @@ constexpr uint64_t meta_hash(const T& meta) {
     return f.h;
 }
 
-// Never defined: a site whose name is null or empty calls it during constant evaluation, and the compiler's error
+// Never defined: an event whose name is null or empty calls it during constant evaluation, and the compiler's error
 // ("call to non-constexpr function") quotes this name.
-void debug_event_site_name_must_be_a_non_empty_string_literal();
+void observability_event_name_must_be_a_non_empty_string_literal();
 
 template <class T>
-constexpr const char* site_name(const T& meta) {
+constexpr const char* event_name(const T& meta) {
     const char* name = nullptr;
     bool first = true;
     for_each_field(meta, [&](const auto& v) {
@@ -547,10 +550,10 @@ constexpr const char* site_name(const T& meta) {
     return name;
 }
 
-// The site's name -- its metadata's first field -- is set and non-empty.
+// The event's name -- its metadata's first field -- is set and non-empty.
 template <class T>
-constexpr bool site_name_ok(const T& meta) {
-    const char* name = site_name(meta);
+constexpr bool event_name_ok(const T& meta) {
+    const char* name = event_name(meta);
     return name != nullptr && *name != 0;
 }
 
@@ -567,18 +570,18 @@ struct SignatureText {
     constexpr void put(char c) { a->put(c == '"' || c == '\\' ? '_' : c); }
 };
 
-// The whole site: handle, record and the lui/addi that loads the id into %0. The handle's label is the site's
-// label plus a hash of the metadata value, and guarded by .ifndef: copies of the site with the same value share
+// The whole event: handle, record and the lui/addi that loads the id into %0. The handle's label is the event's
+// label plus a hash of the metadata value, and guarded by .ifndef: copies of the event with the same value share
 // one handle and one record, copies with different values (template instantiations) each get their own.
 template <class T>
-constexpr AsmText emit_site(const T& meta, const char* site_label, const char* file, uint32_t line) {
-    if (!site_name_ok(meta)) {
-        debug_event_site_name_must_be_a_non_empty_string_literal();
+constexpr AsmText emit_event(const T& meta, const char* event_label, const char* file, uint32_t line) {
+    if (!event_name_ok(meta)) {
+        observability_event_name_must_be_a_non_empty_string_literal();
     }
     const uint64_t hash = meta_hash(meta);
     AsmText a;
     auto label = [&] {
-        a.put(site_label);
+        a.put(event_label);
         a.put('_');
         a.put_hex(hash);
     };
@@ -623,7 +626,7 @@ constexpr AsmText emit_site(const T& meta, const char* site_label, const char* f
 
 }  // namespace detail
 
-}  // namespace tt::debug_event
+}  // namespace tt::observability_event
 
 #if !defined(__riscv)
 // ---- Host side --------------------------------------------------------------------------------------------------
@@ -632,7 +635,7 @@ constexpr AsmText emit_site(const T& meta, const char* site_label, const char* f
 #include <string_view>
 #include <vector>
 
-namespace tt::debug_event {
+namespace tt::observability_event {
 
 // One unmarshalled field: s for 's', bits for the integer codes.
 struct FieldValue {
@@ -641,14 +644,14 @@ struct FieldValue {
     const char* s = nullptr;  // valid for the life of the process
 };
 
-// A site's metadata as the host holds it before anyone asks for a type.
-struct SiteMeta {
+// An event's metadata as the host holds it before anyone asks for a type.
+struct Metadata {
     std::string_view signature;      // "<type name>:<field codes>"
     std::vector<FieldValue> fields;  // one per leaf field, nested structs flattened
 
     std::string_view type_name() const { return signature.substr(0, signature.rfind(':')); }
 
-    // The value as T, or nullopt when the site carries another type.
+    // The value as T, or nullopt when the event carries another type.
     template <class T>
     std::optional<T> as() const;
 };
@@ -667,7 +670,7 @@ const std::string& signature_of() {
 }
 
 template <class T>
-std::optional<T> SiteMeta::as() const {
+std::optional<T> Metadata::as() const {
     if (signature != signature_of<T>()) {
         return std::nullopt;
     }
@@ -689,5 +692,5 @@ std::optional<T> SiteMeta::as() const {
     return t;
 }
 
-}  // namespace tt::debug_event
+}  // namespace tt::observability_event
 #endif

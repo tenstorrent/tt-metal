@@ -222,7 +222,7 @@ Receiver::~Receiver() {
     const uint64_t malformed = llrt::ObservabilityEventMetaRegistry::instance().malformed_records();
     log_info(
         tt::LogMetal,
-        "[streaming profiler] zone ids: {} of {} assigned to the images this process loaded",
+        "[streaming profiler] event ids: {} of {} assigned to the images this process loaded",
         llrt::ObservabilityEventMetaRegistry::instance().ids_assigned(),
         TT_ZONE_STALL_ID);
     if (malformed != 0 || foreign != 0) {

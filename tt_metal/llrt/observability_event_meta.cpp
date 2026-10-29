@@ -23,15 +23,16 @@ namespace tt::llrt {
 
 namespace {
 
-// The fixed part of a .tt_observability_event_meta record; the site's metadata fields follow
+// The fixed part of a .tt_observability_event_meta record; the event's metadata fields follow
 // (hostdev/observability_event_meta.h).
 struct RecordHeader {
-    uint32_t event_id;       // the handle's VMA in .tt_observability_event_ids, which RebaseZoneIds has already moved
+    uint32_t event_id;       // the handle's VMA in .tt_observability_event_ids, which RebaseObservabilityEventIds has
+                             // already moved
     uint32_t signature_ptr;  // VMA into .tt_observability_event_str: "<type name>:<field codes>"
     uint32_t file_ptr;       // VMA into .tt_observability_event_str
     uint32_t line;
 };
-static_assert(sizeof(RecordHeader) == tt::debug_event::kRecordHeaderBytes);
+static_assert(sizeof(RecordHeader) == tt::observability_event::kRecordHeaderBytes);
 
 constexpr size_t align_up(size_t v, size_t a) { return (v + a - 1) / a * a; }
 
@@ -111,7 +112,7 @@ ParsedMetaRecords parse_meta_records(
             if (*c == '{' || *c == '}') {
                 continue;  // a nested struct's bounds; its fields are laid out in place
             }
-            const size_t bytes = tt::debug_event::detail::code_bytes(*c);
+            const size_t bytes = tt::observability_event::detail::code_bytes(*c);
             if (bytes == 0) {
                 out.stopped_early = true;  // a field code this reader does not know
                 return out;
@@ -121,7 +122,7 @@ ParsedMetaRecords parse_meta_records(
                 out.stopped_early = true;
                 return out;
             }
-            tt::debug_event::FieldValue v{.code = *c};
+            tt::observability_event::FieldValue v{.code = *c};
             std::memcpy(&v.bits, meta.data() + pos, bytes);  // little-endian host and device
             if (*c == 's') {
                 v.s = resolve(str, str_vma, static_cast<uint32_t>(v.bits));
@@ -151,7 +152,7 @@ void ObservabilityEventMetaRegistry::ingest_elf(const std::string& elf_path, ll_
     uint64_t ids_vma = 0;
     const size_t count = elf.GetSectionContents(".tt_observability_event_ids", ids_vma).size();
     if (count == 0) {
-        return;  // no zone sites: dispatch kernels, the relay, anything built without the producer
+        return;  // no events: dispatch kernels, the relay, anything built without the producer
     }
 
     State& s = state();
@@ -164,8 +165,8 @@ void ObservabilityEventMetaRegistry::ingest_elf(const std::string& elf_path, ll_
             // The block must stay below the stall id, the one value the device emits without a record.
             TT_FATAL(
                 static_cast<uint64_t>(s.next_id) + count <= TT_ZONE_STALL_ID,
-                "streaming profiler: loading '{}' ({} zone sites) would exceed the {}-id zone space ({} assigned); "
-                "this process has loaded more distinct device zone sites than the 16-bit id supports",
+                "streaming profiler: loading '{}' ({} events) would exceed the {}-id zone space ({} assigned); "
+                "this process has loaded more distinct device events than the 16-bit id supports",
                 elf_path,
                 count,
                 TT_ZONE_STALL_ID,
@@ -177,7 +178,7 @@ void ObservabilityEventMetaRegistry::ingest_elf(const std::string& elf_path, ll_
     }
     // The image is this caller's; its text is packed for the device after we return, so the rebase must
     // land here whether or not this path's names were already registered.
-    elf.RebaseZoneIds(base);
+    elf.RebaseObservabilityEventIds(base);
     if (!first) {
         return;
     }
@@ -196,7 +197,7 @@ void ObservabilityEventMetaRegistry::ingest_elf(const std::string& elf_path, ll_
         if (meta.empty() || strs.empty()) {
             log_debug(
                 tt::LogLLRuntime,
-                "zone-meta: '{}' has zone ids but no .tt_observability_event_meta/.tt_observability_event_str -- "
+                "zone-meta: '{}' has event ids but no .tt_observability_event_meta/.tt_observability_event_str -- "
                 "foreign/stale record layout, "
                 "ignoring the section (its zones will render as Zone_<id>)",
                 elf_path);
@@ -230,9 +231,9 @@ void ObservabilityEventMetaRegistry::ingest_elf(const std::string& elf_path, ll_
             malformed++;  // two records on one handle: not something the emitter can produce
             continue;
         }
-        // The ELF is gone once its image is packed; the registry owns every string a site's metadata names.
+        // The ELF is gone once its image is packed; the registry owns every string an event's metadata names.
         e.meta.signature = *s.strings.emplace(e.meta.signature).first;
-        for (tt::debug_event::FieldValue& v : e.meta.fields) {
+        for (tt::observability_event::FieldValue& v : e.meta.fields) {
             if (v.s != nullptr) {
                 v.s = s.strings.emplace(v.s).first->c_str();
             }
@@ -255,9 +256,14 @@ void ObservabilityEventMetaRegistry::ingest_elf(const std::string& elf_path, ll_
         }
     }
     log_debug(
-        tt::LogLLRuntime, "zone-meta: '{}' -> zone ids [{}, {}), {} named", elf_path, base, base + count, added.size());
+        tt::LogLLRuntime,
+        "zone-meta: '{}' -> event ids [{}, {}), {} named",
+        elf_path,
+        base,
+        base + count,
+        added.size());
     for (const ObservabilityEventMetaEntry* e : added) {
-        if (auto c = e->meta.as<tt::debug_event::ZoneColorMeta>()) {
+        if (auto c = e->meta.as<tt::observability_event::ZoneColorMeta>()) {
             log_debug(
                 tt::LogLLRuntime,
                 "zone-meta: id {} '{}' ({}:{}) carries {} {{color={:#08x}}}",

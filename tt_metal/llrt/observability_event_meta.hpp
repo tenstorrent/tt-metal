@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Host-side zone id -> source location table for the streaming profiler, built as each ELF loads
-// (llrt::get_cached_binary, llrt/llrt.cpp). An image links its zone ids densely from one fixed VMA
+// Host-side event id -> source location table for the streaming profiler, built as each ELF loads
+// (llrt::get_cached_binary, llrt/llrt.cpp). An image links its event ids densely from one fixed VMA
 // (hostdev/observability_event_id.h); here it is given the next block of the process-wide 16-bit id space, its ids
-// are rebased there inside the loaded image (ElfFile::RebaseZoneIds), and its .tt_observability_event_meta /
-// .tt_observability_event_str records are harvested with the rebased ids. An id is therefore unique across every image
-// of this process by construction, and named strictly before the kernel that emits it can run. Handed to its listener
-// as it grows, since kernels stream zones while later ones are still compiling. Never persisted: ids are assigned in
-// load order.
+// are rebased there inside the loaded image (ElfFile::RebaseObservabilityEventIds), and its
+// .tt_observability_event_meta / .tt_observability_event_str records are harvested with the rebased ids. An id is
+// therefore unique across every image of this process by construction, and named strictly before the kernel that emits
+// it can run. Handed to its listener as it grows, since kernels stream zones while later ones are still compiling.
+// Never persisted: ids are assigned in load order.
 #pragma once
 
 #include <cstddef>
@@ -32,7 +32,7 @@ struct ObservabilityEventMetaEntry {
     std::string name;  // the metadata's first string field, by convention its display name
     std::string file;
     uint32_t line = 0;
-    tt::debug_event::SiteMeta meta;  // the site's metadata struct, unmarshalled; see SiteMeta::as<T>()
+    tt::observability_event::Metadata meta;  // the event's metadata struct, unmarshalled; see Metadata::as<T>()
 };
 
 // One image's .tt_observability_event_meta records, read against its .tt_observability_event_str (which the device sees

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Debug event metadata, layer 1b: the host loader's record walk (tt::llrt::parse_meta_records) on
+// Observability event metadata, layer 1b: the host loader's record walk (tt::llrt::parse_meta_records) on
 // .tt_observability_event_meta / .tt_observability_event_str bytes built here, with no ELF, no device and no device
-// compiler. Valid sections are written field by field the way emit_site() (hostdev/observability_event_meta.h) writes
+// compiler. Valid sections are written field by field the way emit_event() (hostdev/observability_event_meta.h) writes
 // them; damaged and stale ones are cut or hand-built from those. The walk must return exactly the records it can read,
 // never read outside the two sections, and stop at the first record it cannot size. The damage tests place every input
 // against an unreadable guard page, so a read past the end of either section crashes the test rather than passing
@@ -28,10 +28,10 @@
 #include "hostdev/observability_event_meta.h"
 #include "llrt/observability_event_meta.hpp"
 
-namespace debug_event_loader_test {
+namespace observability_event_loader_test {
 
-using namespace tt::debug_event;
-using namespace tt::debug_event::detail;
+using namespace tt::observability_event;
+using namespace tt::observability_event::detail;
 using tt::llrt::parse_meta_records;
 using tt::llrt::ParsedMetaRecords;
 
@@ -175,7 +175,7 @@ void expect_strings_inside(const ParsedMetaRecords& p, std::span<const std::byte
 
 // ---- Valid sections ----------------------------------------------------------------------------------------------
 
-TEST(DebugEventMetaLoader, CPU_ReadsEveryRecordTheEmitterWrites) {
+TEST(ObservabilityEventMetaLoader, CPU_ReadsEveryRecordTheEmitterWrites) {
     Sections s;
     s.record(3, ZoneColorMeta{"red", 0xFF0000}, "a.cpp", 10);
     s.record(4, Nested{"nested", {0xA9A9A9, 2}, 0xBEEF}, "b.cpp", 20);
@@ -193,7 +193,7 @@ TEST(DebugEventMetaLoader, CPU_ReadsEveryRecordTheEmitterWrites) {
         "c.cpp",
         30);
     s.record(6, TwoStrings{"first", "second"});
-    s.record(7, ZoneMeta{"plain"});
+    s.record(7, EventMeta{"plain"});
     s.record(8, Defaulted{"defaulted"});
 
     const ParsedMetaRecords p = s.parse();
@@ -201,7 +201,7 @@ TEST(DebugEventMetaLoader, CPU_ReadsEveryRecordTheEmitterWrites) {
     ASSERT_EQ(p.entries.size(), 6u);
     expect_strings_inside(p, s.strs());
 
-    EXPECT_EQ(p.entries[0].zone_id, 3u);
+    EXPECT_EQ(p.entries[0].event_id, 3u);
     EXPECT_EQ(p.entries[0].name, "red");
     EXPECT_EQ(p.entries[0].file, "a.cpp");
     EXPECT_EQ(p.entries[0].line, 10u);
@@ -234,24 +234,24 @@ TEST(DebugEventMetaLoader, CPU_ReadsEveryRecordTheEmitterWrites) {
     EXPECT_STREQ(two->detail, "second");
 
     EXPECT_EQ(p.entries[4].name, "plain");
-    EXPECT_TRUE(p.entries[4].meta.as<ZoneMeta>().has_value());
+    EXPECT_TRUE(p.entries[4].meta.as<EventMeta>().has_value());
 
-    // Members the site left to their defaults travel like any other value.
+    // Members the event left to their defaults travel like any other value.
     const auto defaulted = p.entries[5].meta.as<Defaulted>();
     ASSERT_TRUE(defaulted.has_value());
     EXPECT_EQ(defaulted->color, 0x123456u);
     EXPECT_EQ(defaulted->verbosity, 4u);
 }
 
-TEST(DebugEventMetaLoader, CPU_EmptyOrShortSectionHasNoRecords) {
+TEST(ObservabilityEventMetaLoader, CPU_EmptyOrShortSectionHasNoRecords) {
     Sections s;
     ParsedMetaRecords p = s.parse();
     EXPECT_TRUE(p.entries.empty());
     EXPECT_FALSE(p.stopped_early);
 
     // Fewer bytes than a header after the last record are not a record.
-    s.record(1, ZoneMeta{"x"});
-    s.meta().resize(s.meta().size() + tt::debug_event::kRecordHeaderBytes - 1);
+    s.record(1, EventMeta{"x"});
+    s.meta().resize(s.meta().size() + tt::observability_event::kRecordHeaderBytes - 1);
     p = s.parse();
     EXPECT_EQ(p.entries.size(), 1u);
     EXPECT_FALSE(p.stopped_early);
@@ -259,15 +259,15 @@ TEST(DebugEventMetaLoader, CPU_EmptyOrShortSectionHasNoRecords) {
 
 // ---- Damaged sections --------------------------------------------------------------------------------------------
 
-TEST(DebugEventMetaLoader, CPU_StopsAtARecordThatRunsPastTheSection) {
+TEST(ObservabilityEventMetaLoader, CPU_StopsAtARecordThatRunsPastTheSection) {
     Sections s;
-    s.record(1, ZoneMeta{"kept"});
+    s.record(1, EventMeta{"kept"});
     const size_t first_end = s.meta().size();
     s.record(2, AllWidths{"cut", true, 1, 2, 3, 4, Level::High});
     const size_t full = s.meta().size();
 
     // Cut inside the second record's fields: the first survives and the walk stops.
-    s.meta().resize(first_end + tt::debug_event::kRecordHeaderBytes + 6);
+    s.meta().resize(first_end + tt::observability_event::kRecordHeaderBytes + 6);
     ParsedMetaRecords p = s.parse();
     ASSERT_EQ(p.entries.size(), 1u);
     EXPECT_EQ(p.entries[0].name, "kept");
@@ -276,7 +276,7 @@ TEST(DebugEventMetaLoader, CPU_StopsAtARecordThatRunsPastTheSection) {
     // Every cut point: never a record that does not fit, never a read past the cut, never a string outside the
     // section. The second record's last field (a uint64) ends the section, so only the full length holds both.
     Sections whole;
-    whole.record(1, ZoneMeta{"kept"});
+    whole.record(1, EventMeta{"kept"});
     whole.record(2, AllWidths{"cut", true, 1, 2, 3, 4, Level::High});
     const Guarded str(whole.strs());
     for (size_t len = 0; len <= full; len++) {
@@ -287,9 +287,9 @@ TEST(DebugEventMetaLoader, CPU_StopsAtARecordThatRunsPastTheSection) {
     }
 }
 
-TEST(DebugEventMetaLoader, CPU_StopsAtAnUnknownFieldCode) {
+TEST(ObservabilityEventMetaLoader, CPU_StopsAtAnUnknownFieldCode) {
     Sections s;
-    s.record(1, ZoneMeta{"kept"});
+    s.record(1, EventMeta{"kept"});
     s.header(2, "Bad:sz");
     s.put(s.str("bad"), 4);
     s.put(0, 4);
@@ -299,7 +299,7 @@ TEST(DebugEventMetaLoader, CPU_StopsAtAnUnknownFieldCode) {
     EXPECT_TRUE(p.stopped_early);
 }
 
-TEST(DebugEventMetaLoader, CPU_StopsAtUnbalancedBraces) {
+TEST(ObservabilityEventMetaLoader, CPU_StopsAtUnbalancedBraces) {
     for (std::string_view sig : {"Bad:s{w", "Bad:s}w{", "Bad:s{w}}", "Bad:s}"}) {
         Sections s;
         s.header(1, sig);
@@ -311,7 +311,7 @@ TEST(DebugEventMetaLoader, CPU_StopsAtUnbalancedBraces) {
     }
 }
 
-TEST(DebugEventMetaLoader, CPU_StopsAtAPointerOutsideTheStrings) {
+TEST(ObservabilityEventMetaLoader, CPU_StopsAtAPointerOutsideTheStrings) {
     // The signature pointer below the section, past its end, and at a string with no NUL before the end.
     for (uint32_t bad_sig : {0u, static_cast<uint32_t>(Sections::kStrVma - 1), 0xFFFFFFFFu}) {
         Sections s;
@@ -326,7 +326,7 @@ TEST(DebugEventMetaLoader, CPU_StopsAtAPointerOutsideTheStrings) {
     }
     {
         Sections s;
-        s.record(1, ZoneMeta{"x"});
+        s.record(1, EventMeta{"x"});
         s.strs().pop_back();  // the last string, the name, loses its NUL
         const ParsedMetaRecords p = s.parse();
         EXPECT_TRUE(p.entries.empty());
@@ -335,7 +335,7 @@ TEST(DebugEventMetaLoader, CPU_StopsAtAPointerOutsideTheStrings) {
     {
         // A string field that points nowhere.
         Sections s;
-        s.header(1, signature_of<ZoneMeta>());
+        s.header(1, signature_of<EventMeta>());
         s.put(0x10, 4);
         const ParsedMetaRecords p = s.parse();
         EXPECT_TRUE(p.entries.empty());
@@ -343,10 +343,10 @@ TEST(DebugEventMetaLoader, CPU_StopsAtAPointerOutsideTheStrings) {
     }
 }
 
-TEST(DebugEventMetaLoader, CPU_UnresolvableFileIsEmptyNotFatal) {
+TEST(ObservabilityEventMetaLoader, CPU_UnresolvableFileIsEmptyNotFatal) {
     Sections s;
     s.put(1, 4);
-    s.put(s.str(signature_of<ZoneMeta>()), 4);
+    s.put(s.str(signature_of<EventMeta>()), 4);
     s.put(0, 4);  // file
     s.put(9, 4);
     s.put(s.str("named"), 4);
@@ -359,7 +359,7 @@ TEST(DebugEventMetaLoader, CPU_UnresolvableFileIsEmptyNotFatal) {
 
 // ---- Stale sections: the 16-byte {id, name, file, line} layout from before metadata -------------------------------
 
-TEST(DebugEventMetaLoader, CPU_StopsAtTheOldRecordLayout) {
+TEST(ObservabilityEventMetaLoader, CPU_StopsAtTheOldRecordLayout) {
     Sections s;
     s.old_record(1, "T1_Zone5");
     s.old_record(2, "T1_Zone6");
@@ -372,7 +372,7 @@ TEST(DebugEventMetaLoader, CPU_StopsAtTheOldRecordLayout) {
 // it returns only unnamed records, which ingest_elf counts as malformed, so no zone gets a wrong name. That holds
 // because the word after an old record is a small rebased id, never a string pointer; a version marker in the
 // section would make it certain.
-TEST(DebugEventMetaLoader, CPU_OldNameWithAColonNamesNothing) {
+TEST(ObservabilityEventMetaLoader, CPU_OldNameWithAColonNamesNothing) {
     for (std::string_view name : {"a:w", "a:b", "a:h", "a:q", "a:s", "a:sw", "a:", "ns::x", "a:{w}"}) {
         Sections s;
         s.old_record(41, name);
@@ -388,7 +388,7 @@ TEST(DebugEventMetaLoader, CPU_OldNameWithAColonNamesNothing) {
 
 // ---- Random damage -----------------------------------------------------------------------------------------------
 
-TEST(DebugEventMetaLoader, CPU_SurvivesRandomDamage) {
+TEST(ObservabilityEventMetaLoader, CPU_SurvivesRandomDamage) {
     Sections valid;
     valid.record(1, ZoneColorMeta{"red", 0xFF0000});
     valid.record(2, Nested{"nested", {1, 2}, 3});
@@ -413,7 +413,7 @@ TEST(DebugEventMetaLoader, CPU_SurvivesRandomDamage) {
         const Guarded guarded_meta(meta);
         const Guarded guarded_str(str);
         const ParsedMetaRecords p = parse_meta_records(guarded_meta.span(), guarded_str.span(), Sections::kStrVma);
-        EXPECT_LE(p.entries.size(), meta.size() / tt::debug_event::kRecordHeaderBytes);
+        EXPECT_LE(p.entries.size(), meta.size() / tt::observability_event::kRecordHeaderBytes);
         expect_strings_inside(p, guarded_str.span());
         if (HasFailure()) {
             FAIL() << "iteration " << iter;
@@ -421,4 +421,4 @@ TEST(DebugEventMetaLoader, CPU_SurvivesRandomDamage) {
     }
 }
 
-}  // namespace debug_event_loader_test
+}  // namespace observability_event_loader_test

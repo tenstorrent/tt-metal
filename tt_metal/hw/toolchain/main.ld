@@ -176,8 +176,8 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  /* Site records: {id, signature_ptr, file_ptr, line} followed by the site's metadata struct,
-     emitted by TT_DEBUG_SITE (hostdev/observability_event_id.h, layout in hostdev/observability_event_meta.h);
+  /* Event records: {id, signature_ptr, file_ptr, line} followed by the event's metadata struct,
+     emitted by TT_OBSERVABILITY_EVENT (hostdev/observability_event_id.h, layout in hostdev/observability_event_meta.h);
      the host sizes each record from its signature. (INFO) for the same reason as above. */
   .tt_observability_event_meta TT_OBSERVABILITY_EVENT_META_VMA (INFO) :
   {
@@ -187,10 +187,10 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  /* Zone ids: one byte per zone site, so a site's id is its address and one image's ids are dense
+  /* Event ids: one byte per event, so an event's id is its address and one image's ids are dense
      from TT_OBSERVABILITY_EVENT_IDS_VMA in link order. The host moves the section to the image's block of the
      16-bit id space when it loads the image, re-resolving every relocation against it (which is
-     why the link keeps its relocations, -Wl,--emit-relocs); a site materializes its id as lui/addi
+     why the link keeps its relocations, -Wl,--emit-relocs); an event materializes its id as lui/addi
      of the handle, and this VMA's nonzero upper bits keep relaxation from folding that into a single
      addi the host could not rebase. (INFO) for the same reason as above. */
   .tt_observability_event_ids TT_OBSERVABILITY_EVENT_IDS_VMA (INFO) :
@@ -200,7 +200,7 @@ SECTIONS
     __tt_observability_event_ids_end = .;
   }
   ASSERT(__tt_observability_event_ids_end - __tt_observability_event_ids_start < 0xFFFF,
-         "more KERNEL_PROFILER zone sites in one image than the 16-bit zone id space holds")
+         "more KERNEL_PROFILER events in one image than the 16-bit event id space holds")
 
 #if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
   .text TEXT_START :

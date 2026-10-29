@@ -15,7 +15,7 @@ wire format (§4), the offline Tracy tools (§5), and — in the companion
 [`STREAMING_PROFILER_FINDINGS.md`](STREAMING_PROFILER_FINDINGS.md), §6 — the complete dated record of the findings
 and benchmarks that produced all of it. The findings record is a separate file only because of the 500 KB
 per-file pre-commit limit. One mechanism has its own short document:
-[`OBSERVABILITY_EVENT_IDS.md`](OBSERVABILITY_EVENT_IDS.md), how a zone site's id is made at link time
+[`OBSERVABILITY_EVENT_IDS.md`](OBSERVABILITY_EVENT_IDS.md), how an event's id is made at link time
 and rebased at load so ids are dense, 16-bit and collision-free.
 
 It consolidates, unchanged in substance, the former standalone zone-format, architecture, hang-runbook,
@@ -251,7 +251,7 @@ close, carrying its end and duration.
 
 Every record is a self-contained value holding its device timestamps, their host times, its core and the runtime id of
 the program running on that core. An event takes 32 bytes and a zone or a timestamped data record takes 48. A
-timestamped data record's payload sits in a separate array. The site name resolves through the process-wide zone-name
+timestamped data record's payload sits in a separate array. The event name resolves through the process-wide zone-name
 registry, which lives as long as the process:
 
 ```cpp
@@ -260,7 +260,7 @@ class Record {  // what every kind carries
     Core core() const;          // chip, logical and physical (NoC 0) coordinates, processor
     uint32_t runtime_id() const;  // host runtime ID of the program on the core, 0 = none yet
 };
-class Zone : public Record {  // a closed DeviceZoneScopedN scope, or a stall (site().name == STALL_ZONE_NAME)
+class Zone : public Record {  // a closed DeviceZoneScopedN scope, or a stall (event().name == STALL_ZONE_NAME)
     uint64_t start_device_cycles() const;
     uint64_t end_device_cycles() const;
     int64_t start_host_cycles() const;  // host reference cycles (x86 time-stamp counter)
@@ -433,11 +433,11 @@ Host files live in `tt_metal/impl/streaming_profiler/`.
   constants shared with the device's `ppfmt`), `hw/inc/hostdev/streaming_profiler_common.h` (span/frame
   geometry, pack-pad rule, `SPSC_SPAN_RAW_FLAG`).
 - Consumers: `service.{hpp,cpp}` (callbacks, one thread each, reading every attached receiver's FIFOs),
-  `receiver.{hpp,cpp}` (the sync thread), `api.cpp` (the public `RegisterCallback`, the process-wide site table),
+  `receiver.{hpp,cpp}` (the sync thread), `api.cpp` (the public `RegisterCallback`, the process-wide event table),
   `capture_context.hpp` (a capture's devices, their cores and clock offsets, and its links), `decode.{hpp,cpp}` (the
   frame decoder), `ops_csv`, `zone_csv`, `tracy_consumer.{hpp,cpp}` (the Tracy sink: one context per core, every record
   already on the host timeline and placed against one process-wide anchor).
-- Device producer: `kernel_profiler_streaming.hpp`, selected by `-DPROFILE_STREAMING`. Zone ids are 16-bit,
+- Device producer: `kernel_profiler_streaming.hpp`, selected by `-DPROFILE_STREAMING`. Event ids are 16-bit,
   assigned per image as it loads (`hostdev/observability_event_id.h`, `llrt/observability_event_meta.cpp`) and resolved to names
   from the image's ELF on the host; every RISC emits its own `STICKY_PROG` at launch so
   `rec.prog` is exact on every lane (§N+60).
@@ -1131,7 +1131,7 @@ see [§4.1](#41-zones-and-point-markers-in-the-tracy-gui).
 Every zone ships whole, in one packet, emitted at scope **close** — the RAII scope object carries the
 start timestamp (`start_hi`/`start_lo`, 8 B of member state), so the open touches nothing but the wall
 clock. Packets are sized by need. `word0 = type(5) | id27` in all of them; the id field carries the 16-bit
-zone id (`hostdev/observability_event_id.h`: a zone site's id is the address of a one-byte handle in the
+event id (`hostdev/observability_event_id.h`: an event's id is the address of a one-byte handle in the
 non-ALLOC `.tt_observability_event_ids` section, and the host gives each image the next block of the id space when it
 loads it, rebasing the `lui`/`addi` immediates through the image's relocations), ELF-name-resolved on the
 host. How the id is made, linked, rebased and resolved is its own document:
