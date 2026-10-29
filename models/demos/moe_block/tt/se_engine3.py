@@ -1020,7 +1020,8 @@ void kernel_main() {
 #endif
             cb_wait_front(SE_OUTF, 1);
             noc_async_write(get_read_ptr(SE_OUTF), yg.get_noc_addr(ya), 2048);
-            noc_async_write_barrier();
+            noc_async_writes_flushed();  // (the page read out: free for the next fin tiles - its ack is the kernel end's
+                                         // barrier; a barrier a tile serialized ~35 DRAM round trips behind the last fin)
             cb_pop_front(SE_OUTF, 1);
             ++fo;
         }

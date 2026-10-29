@@ -2616,3 +2616,17 @@ passes of a start entry) | RS ~63 us (floor) | fins + y writes ~10-15 (the cores
   199.7 vs 200.3): the own shard went ~2 us slower (the four ports read one owner column at a time) and gate / up is
   bound by the matmul cores' own rate (above), not the far shard's tail. Patch kept in the scratchpad - it pays only
   once gate / up runs faster than ~2.5 us a step.
+
+### The fin's y writes without a barrier a tile (kept: GLM-5.3 ring 640 197.8 -> 190.8 us)
+- Why: the last core of every chip (the last column - the last core of its port's walk, so the last arrival) ended
+  its DOWNRS ~11 us after its upstream's ports sent the last packet, and its NCRISC ~4 us after that: the NCRISC wrote
+  each fin tile to y with a write barrier (an acked DRAM round trip a tile, ~35 a core) - the fin's OUTF pages waited
+  on them.
+- Now noc_async_writes_flushed a tile (the page read out, free for the next fin tiles); the kernel's final write
+  barrier collects the acks. Same write class as before (acked NOC1 DRAM writes - a suspect site of the NOC1 wedge
+  audit, a barrier a unit did not avoid it there), only more of them in flight; for GLM's rows scatter no NOC1 DRAM
+  read is in flight by the fins (every down pass done), in K3's width scatter and with row chunks there is - the soak
+  at the end covers it.
+- Measured: GLM-5.3 ring 640 197.8 -> 190.8 (the tail after the last RS packet ~11 -> 5-8 us), GLM-5.3 2x4 1280
+  323.4 -> 317.1, DSv4.1 ring 640 190.8 -> 190.1, K3 ring 640 388.3 -> 388.5 (its fins are hidden); PCC unchanged, 0
+  of 20 replays differ.
