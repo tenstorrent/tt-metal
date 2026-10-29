@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <experimental/type_traits>
 #include <map>
 #include <memory>
@@ -1321,6 +1322,15 @@ struct is_std_hashable<T, std::void_t<decltype(std::declval<std::hash<T>>()(std:
 template <typename T>
 constexpr bool is_std_hashable_v = is_std_hashable<T>::value;
 
+template <typename T>
+struct is_small_vector : std::false_type {};
+
+template <typename T, std::size_t N>
+struct is_small_vector<ttsl::SmallVector<T, N>> : std::true_type {};
+
+template <typename T>
+constexpr bool is_small_vector_v = is_small_vector<T>::value;
+
 template <typename Range>
 inline hash_t hash_sized_range(const Range& range) noexcept {
     hash_t hash = hash_objects(hash_t{0}, range.size());
@@ -1380,6 +1390,22 @@ inline hash_t hash_object(const T& object) noexcept {
             return 0;
         }
         return hash_object(*object);
+    } else if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+        // By bit pattern, not std::hash: std::hash gives -0.0 and 0.0 one value, and an op parameter of
+        // either sign must key its own program. Distinct NaN payloads get distinct keys too. long double
+        // stays on std::hash: its x87 layout has padding bytes, which a bit pattern would include.
+        using bits_t = std::conditional_t<std::is_same_v<T, float>, std::uint32_t, std::uint64_t>;
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing floating point {} by bit pattern: {}\n", get_type_name<T>(), object);
+        }
+        return std::hash<bits_t>{}(std::bit_cast<bits_t>(object));
+    } else if constexpr (is_small_vector_v<T>) {
+        // Ahead of the std::hash branch: std::hash<SmallVector> hashes by value to agree with
+        // operator==, and a key needs the elements' bit patterns.
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing SmallVector of type {}: {}\n", get_type_name<T>(), object);
+        }
+        return hash_sized_range(object);
     } else if constexpr (detail::is_std_hashable_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing {} using std::hash: {}\n", get_type_name<T>(), object);
@@ -1592,7 +1618,9 @@ inline void append_canonical(std::string& out, const T& object) {
         for (bool element : object) {
             append_canonical(out, element);
         }
-    } else if constexpr (is_specialization_v<T, std::vector> || is_specialization_v<T, std::set> || is_span_v<T>) {
+    } else if constexpr (
+        is_specialization_v<T, std::vector> || is_specialization_v<T, std::set> || is_span_v<T> ||
+        is_small_vector_v<T>) {
         const std::uint64_t n = object.size();
         append_bytes(out, &n, sizeof(n));
         for (const auto& element : object) {
@@ -1666,10 +1694,21 @@ void hash_combine(std::size_t& seed, const T& value) {
 
 }  // namespace ttsl::hash
 
+// Hashes by value so that equal vectors hash equal: operator== compares floats by value, so
+// {0.0f} == {-0.0f}. Program-cache keys go through hash_object, which hashes bit patterns.
 template <typename T, size_t PREALLOCATED_SIZE>
 struct std::hash<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
     size_t operator()(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vec) const noexcept {
-        return static_cast<size_t>(ttsl::hash::detail::hash_sized_range(vec));
+        using ttsl::hash::detail::mix_into;
+        ttsl::hash::hash_t hash = mix_into(0, vec.size());
+        for (const auto& element : vec) {
+            if constexpr (ttsl::hash::detail::is_std_hashable_v<T>) {
+                hash = mix_into(hash, std::hash<T>{}(element));
+            } else {
+                hash = ttsl::hash::hash_objects(hash, element);
+            }
+        }
+        return static_cast<size_t>(hash);
     }
 };
 
