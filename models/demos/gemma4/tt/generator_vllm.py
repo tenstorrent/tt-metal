@@ -5054,22 +5054,41 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
             parts.append(model.process_output_decode(tensor, per, S=1, is_tokens=is_tokens))
         return parts[0] if len(parts) == 1 else torch.cat(parts, dim=0)
 
+    def _spec_resident_decode_declared(self):
+        """Whether the runner keeps this adapter's plain-decode inputs device-resident.
+
+        ``TTAsyncDecodeController.plan_decode_reload`` reads the instance's
+        ``supports_async_decode`` and, when it is true, sends a steady
+        device-sampled traced decode ``reload_inputs=False`` whatever the
+        scheduling mode: the declaration selects the resident mode, and async
+        scheduling only adds overlap on top. The instance dict is read because
+        the base narrows it (PLI models) after the platform's class snapshot.
+        """
+        return bool(self.model_capabilities.get("supports_async_decode", False))
+
     def _spec_plain_decode(self, args, kwargs, page_tables_per_layer, leaves_inputs_stale=False):
         """Run the plain decode; refuse resident inputs a drafter-served step left stale.
 
         The traced decode keeps each row's token and position on the device and
         reads them from the host only under ``reload_inputs``. A row answered
         from the drafter session, or run at position -1 beside a peer
-        (``leaves_inputs_stale``), left them behind. The contract classes
-        declare no async decode, so the runner reloads on every decode; a
-        caller that does not gets an error here instead of a decode from the
-        wrong token.
+        (``leaves_inputs_stale``), left them behind. The runner reloads the
+        first ordinary decode after a verify (``plan_decode_reload``: a
+        verification followed by an ordinary decode is a transition) and
+        every decode of an adapter without ``supports_async_decode``; a
+        caller that sends ``reload_inputs=False`` over stale inputs gets an
+        error here instead of a decode from the wrong token.
         """
         if self._spec_resident_inputs_stale and not kwargs["reload_inputs"]:
             raise RuntimeError(
                 f"{type(self).__name__}: a drafter-served step left the plain decode's "
                 "device-resident tokens and positions stale, and this decode was sent "
-                "reload_inputs=False. supports_async_decode is False, so every decode must reload its inputs."
+                "reload_inputs=False. The runner reloads the inputs of the first ordinary decode after a "
+                "verify and of every decode of an adapter without supports_async_decode; an ordinary "
+                "step the drafter answered is not a transition the runner sees (contract s.4d leaves "
+                "that reload to the model, whose resident buffers can only be refilled from host inputs "
+                "the same contract declares stale under reload_inputs=False), which is why a resident "
+                "adapter answers no ordinary step from the drafter."
             )
         tt_out = Gemma4ForCausalLM.decode_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         self._spec_resident_inputs_stale = leaves_inputs_stale
@@ -6080,7 +6099,8 @@ class MTPRetainedRow:
 
 @dataclasses.dataclass
 class MTPSession:
-    """The drafter state of one state slot: its owner and its retained proposal."""
+    """The drafter state of one state slot: its owner, its retained proposal and its counters (``dropped``:
+    proposals the runner committed past without verifying, contract s.4d)."""
 
     owner: tuple
     anchor: int = None
@@ -6088,6 +6108,7 @@ class MTPSession:
     retained: MTPRetainedRow = None
     steps: int = 0
     committed: int = 0
+    dropped: int = 0
 
 
 class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
@@ -6133,11 +6154,21 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         "max_device_top_k": 32,
         # Keep penalty processing on vLLM's per-request host sampling path.
         "supports_device_penalties": False,
-        # TTAsyncDecodeController.plan_decode_reload sends reload_inputs=True
-        # when supports_async_decode is False, including after a drafter-served
-        # step, and _spec_plain_decode refuses such a decode without it.
-        "supports_async_decode": False,
-        "supports_async_spec_decode": False,
+        # Asynchronous scheduling (contract s.4c). ``supports_async_decode`` is
+        # the base's env-gated declaration (GEMMA4_SUPPORTS_ASYNC_DECODE): the
+        # ordinary steps of this class are the base's resident traced decode,
+        # and under that declaration no ordinary step is answered from the
+        # drafter (``_mtp_ordinary_step``), so the only drafter-served steps
+        # are verifies, after which the runner reloads the resident inputs.
+        # ``supports_async_spec_decode`` promises what the deferred verify
+        # needs: ``read_decode_output`` is handed the verify's own host tensor
+        # ([B, 1+K] ids or [B, 1+K, V] logits, assembled from the retained
+        # replay inside decode_forward) and passes it through unread, and the
+        # drafter's hidden state never leaves the decoder's device pools,
+        # which only the next propose_draft_tokens rewrites (``hidden`` is
+        # None). GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE=0 pins it off; the platform
+        # then refuses async scheduling with speculation (--no-async-scheduling).
+        "supports_async_spec_decode": _dflash_env_flag("GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE", "1"),
         "supports_spec_decode": True,
         # Drafts come from the device and the target hidden state never leaves
         # it, so the runner holds no handle and ``hidden`` is unused.
@@ -6265,6 +6296,9 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         self._mtp_step_tables = None  # (page_table, page_tables_per_layer, kv_cache) of the latest decode step
         self._mtp_installed_tables = None  # the per-layer record tables last handed to the decoder
         self._mtp_decline_logged = None
+        # Proposals the runner committed past before verifying them (contract s.4d: an ordinary decode
+        # submitted before the proposal was published drops it rather than verifying it).
+        self._mtp_dropped_proposals = 0
 
     def _mtp_resolve_shapes(self, max_batch_size):
         """The records to capture and the row cap, from the env table and the engine's batch."""
@@ -6403,9 +6437,10 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         if session is None:
             return
         if session.steps:
+            dropped = f", {session.dropped} proposals dropped unverified" if session.dropped else ""
             logger.info(
                 f"Gemma4MTP contract summary: slot {slot} ({why}) {session.steps} steps, "
-                f"{session.committed} tokens, {session.committed / session.steps:.2f} tokens/step"
+                f"{session.committed} tokens, {session.committed / session.steps:.2f} tokens/step{dropped}"
             )
 
     def _spec_follow_slot_moves(self, moved):
@@ -6428,6 +6463,15 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
     def release_persistent_capture(self) -> None:
         for slot in list(self._mtp_sessions):
             self._mtp_drop_session(slot, "shutdown")
+        if self._mtp_dropped_proposals:
+            # Each one cost a drafter replay that answered nothing (an ordinary decode the runner had
+            # submitted before the proposal was published, contract s.4d); a steady rate here means the
+            # scheduler overlaps more steps than the drafter can serve.
+            logger.info(
+                f"Gemma4MTP speculative contract: {self._mtp_dropped_proposals} proposals dropped unverified "
+                "over the engine's life"
+            )
+            self._mtp_dropped_proposals = 0
         self._mtp_last_replay = None
         self._mtp_step_tables = None
         self._mtp_installed_tables = None
@@ -6511,13 +6555,20 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
     def _mtp_ordinary_step(self, args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live):
         """An ordinary decode step: the runner asked for no verification.
 
-        A greedy-eligible row whose retained proposal continues its token
-        (the scheduler sent no drafts for it) is answered from that
-        proposal's column 0; every other live row runs the plain decode,
-        restricted to those rows, and its retained proposal, if any, is
-        dropped because the plain decode moved the row past it.
+        Under the resident decode (``supports_async_decode``) every live row
+        runs the plain decode and a retained proposal is dropped: the runner
+        keeps the plain decode's device-resident token and position across
+        ordinary steps and reloads them only after a verify, so a row this
+        step answered from the drafter would leave the next steady decode on
+        stale inputs (``_spec_plain_decode``). Otherwise a greedy-eligible row
+        whose retained proposal continues its token (the scheduler sent no
+        drafts for it) is answered from that proposal's column 0; every other
+        live row runs the plain decode, restricted to those rows, and its
+        retained proposal, if any, is dropped because the plain decode moved
+        the row past it.
         """
         sampling = kwargs.get("sampling_params")
+        resident = self._spec_resident_decode_declared()
         answered = {}
         for r in live:
             session = self._mtp_session_at(self._spec_slot_of(r, kwargs))
@@ -6527,7 +6578,8 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             position = self._spec_row(start_pos, rows, r)[0] if start_pos is not None else None
             retained = self._mtp_retained_for(session, anchor, position)
             if (
-                retained is not None
+                not resident
+                and retained is not None
                 and sampling is not None
                 and self._spec_row_can_use_argmax(sampling, r, kwargs.get("grammar_bitmask"))
             ):
@@ -6922,12 +6974,17 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         for r, session, anchor, position, n in drafting:
             retained = session.retained
             seed = None
+            if retained is not None and not retained.consumed:
+                # Nothing answered from this proposal: the runner committed the
+                # row through a step it had submitted before the proposal was
+                # published (an ordinary decode overlapped under asynchronous
+                # scheduling) and never sends its drafts, so it is dropped
+                # rather than verified (contract s.4d) and the row reseeds at
+                # the anchor the runner committed.
+                self._mtp_dropped_proposals += 1
+                session.dropped += 1
+                session.retained = retained = None
             if retained is not None:
-                if not retained.consumed:
-                    raise RuntimeError(
-                        f"Gemma4MTP speculative contract: row {r} proposes again while its proposal at "
-                        f"position {retained.anchor_position} was never verified"
-                    )
                 expected = retained.anchor_position + n
                 if position != expected:
                     raise RuntimeError(

@@ -97,11 +97,34 @@ def test_declares_the_contract_rail(adapter):
     assert caps["supports_sample_on_device"] is True
     assert caps["max_device_top_k"] == 32
     assert caps["supports_device_penalties"] is False
-    assert caps["supports_async_decode"] is False
-    assert caps["supports_async_spec_decode"] is False
+    # The resident decode is the base's env-driven value; the deferred verify is this class's own (below).
+    assert caps["supports_async_decode"] is adapter.Gemma4ForCausalLM.model_capabilities["supports_async_decode"]
+    assert caps["supports_async_decode"] is True and caps["supports_async_spec_decode"] is True
     # Prefix caching is the base's env-driven value: sessions key on slot + generation, not block ids.
     assert caps["supports_prefix_caching"] == adapter.Gemma4ForCausalLM.model_capabilities["supports_prefix_caching"]
     assert adapter.Gemma4MTPContractForCausalLM._SPEC_N == adapter.Gemma4MTPContractForCausalLM._SPEC_DRAFT_LEN + 1
+    # -- the MTP rail: the deferred-verify declaration is inherited by the composed classes and not by dflash
+    for name in (
+        "Gemma4MTPContractVisionForConditionalGeneration",
+        "Gemma4MTPContractUnifiedVisionForConditionalGeneration",
+    ):
+        caps = getattr(adapter, name).model_capabilities
+        assert caps["supports_async_decode"] is True and caps["supports_async_spec_decode"] is True
+    dflash = adapter.Gemma4DFlashContractForCausalLM.model_capabilities
+    assert dflash["supports_async_decode"] is False and dflash["supports_async_spec_decode"] is False
+    # -- the MTP rail: the async declarations follow their environment gates
+    for env, async_decode, async_spec in [
+        ({"GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE": "0"}, True, False),
+        ({"GEMMA4_SUPPORTS_ASYNC_DECODE": "0"}, False, True),
+        ({"GEMMA4_SUPPORTS_ASYNC_DECODE": "false", "GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE": "no"}, False, False),
+    ]:
+        with pytest.MonkeyPatch.context() as patch:
+            module = import_adapter(patch, env)
+            caps = module.Gemma4MTPContractForCausalLM.model_capabilities
+            assert caps["supports_async_decode"] is async_decode and caps["supports_async_spec_decode"] is async_spec
+            assert module.Gemma4MTPContractVisionForConditionalGeneration.model_capabilities is caps
+            dflash = module.Gemma4DFlashContractForCausalLM.model_capabilities
+            assert dflash["supports_async_decode"] is False and dflash["supports_async_spec_decode"] is False
 
 
 def _plugin_sampling_router():
@@ -395,7 +418,7 @@ def test_padded_solo_ordinary_step_answers_at_the_live_row(model):
     assert out.tolist() == [150, 0, 0, 0]
 
 
-def test_host_sampled_ordinary_step_runs_the_plain_decode_and_drops_the_taps(model, mtp):
+def test_host_sampled_ordinary_step_runs_the_plain_decode_and_drops_the_taps(model, mtp, adapter, monkeypatch):
     _prefill(model, prompt_len=2, key=10)
     taps = list(model._spec_pending[0])
     out = _ordinary(model, [3], [2], [10], result="device", sampling=False)
@@ -411,6 +434,18 @@ def test_host_sampled_ordinary_step_runs_the_plain_decode_and_drops_the_taps(mod
     proposal = mh._propose(mtp, [[160, -1, -1, -1, -1, -1]], [[4, -1, -1, -1, -1, -1]])
     assert proposal.num_valid.tolist() == [5]
     assert _names(mtp, "reseed")[-1] == ("reseed", (1, 5), [0], [160], [4])
+    # -- the MTP rail: read_decode_output passes a host tensor through and routes device output to the base reader
+    # The runner's async read (``submit_decode`` with ``async_read=True``): a verify's host tensor comes back
+    # as ``(tensor, [])``, the plain decode's device output goes to the base reader with the async flag.
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    ids = torch.tensor([[150, 151]], dtype=torch.int32)
+    host, events = mtp.read_decode_output(ids, async_read=True)
+    assert host is ids and events == []
+    assert mtp.read_decode_output(ids) is ids
+    mh._prefill(mtp)
+    out = mh._ordinary(mtp, [3], [2], [10], result="device")
+    assert mtp.read_decode_output(out, async_read=True) == ["device"]
+    assert _names(mtp, "read")[-1] == ("read", True)
 
 
 def test_two_live_rows_on_the_first_step_run_the_plain_decode_and_release(model, mtp):
@@ -797,7 +832,10 @@ def test_a_batched_proposal_declines_every_row_and_ends_the_session(model, mtp):
 # -- 3.3 verify -------------------------------------------------------------------
 
 
-def test_verify_answers_from_the_retained_posterior_without_the_device(model):
+@pytest.mark.parametrize("mode", ["argmax_ids", "logits"])
+def test_verify_answers_from_the_retained_posterior_without_the_device(model, mode, adapter, monkeypatch):
+    """dFlash answers in argmax_ids mode only; the MTP rail answers either mode, read with the submission or
+    through the deferred read of asynchronous scheduling."""
     _start_solo(model)
     replays = model._spec_decoder.replays
     out = _verify(model, [[150, 201, 202, 203, 204, 205]], [list(range(3, 9))], [5], keys=[10])
@@ -808,6 +846,36 @@ def test_verify_answers_from_the_retained_posterior_without_the_device(model):
     assert model._spec_decoder.replays == replays
     assert _names(model, "decode") == []
     assert model._dflash_retained.consumed is True
+
+    # -- the MTP rail: a deferred verify readback commits what the synchronous order commits
+    # Two rounds of verify / read / walk / propose: reading the verify's tensor later through
+    # ``read_decode_output(async_read=True)`` commits the same tokens, seeds the same columns and drives the
+    # decoder with the same calls as reading it with the submission.
+    runs = {}
+    for deferred in (False, True):
+        mtp = mh.build_mtp_model(adapter, monkeypatch)
+        mh._script_two_replays(mtp)
+        drafts = mh._start_solo(mtp).draft_token_ids[0].tolist()
+        committed1, count1, drafts2 = mh._verify_walk_propose(mtp, 150, 3, drafts, mode, deferred)
+        committed2, count2, drafts3 = mh._verify_walk_propose(mtp, committed1[-1], 3 + count1, drafts2, mode, deferred)
+        runs[deferred] = (
+            committed1,
+            count1,
+            drafts2,
+            committed2,
+            count2,
+            drafts3,
+            mh._steps(mtp),
+            _names(mtp, "reseed"),
+            _names(mtp, "decode"),
+            mtp._mtp_decoder.readbacks,
+        )
+    assert runs[True] == runs[False]
+    committed1, count1, drafts2, committed2, count2, drafts3, steps, reseeds, decodes, _ = runs[True]
+    assert (committed1, count1) == ([101, 102, 103, 477], 4) and (committed2, count2) == ([201, 202, 488], 3)
+    assert drafts2 == [201, 202, 203, 204, 205] and drafts3 == [301, 302, 303, 304, 305]
+    assert [step[5] for step in steps] == [[None], [3], [2]], "each proposal seeds from the committed column"
+    assert len(reseeds) == 1 and len(decodes) == 1, "the first plain step only; every verify was answered"
 
 
 def test_verify_tolerates_a_block_truncated_to_num_valid_drafts(model, mtp):
@@ -876,7 +944,7 @@ def test_verify_for_a_padded_solo_block_answers_at_the_live_row(model):
     assert bool(out.argmax_ids[1:].eq(-1).all())
 
 
-def test_straddle_verify_answers_the_drafted_row_and_decodes_the_peer(model, mtp):
+def test_straddle_verify_answers_the_drafted_row_and_decodes_the_peer(model, mtp, adapter, monkeypatch):
     """A peer joined after the proposal. The drafted row is answered from the
     device's own evaluation of its drafts; the peer takes the plain decode,
     which runs with the drafted row at position -1; speculation ends."""
@@ -917,6 +985,37 @@ def test_straddle_verify_answers_the_drafted_row_and_decodes_the_peer(model, mtp
     assert proposal.num_valid.tolist() == [5, 5]
     assert _names(mtp, "reseed")[-1] == ("reseed", (5, 5), [1], [42], [3])
     assert mh._steps(mtp)[-1][1:6] == ((5, 5), [0, 1], [155, 42], [9, 3], [5, None])
+    # -- the MTP rail: the retained replay survives a straddle plain decode until the deferred read
+    # A logits verify whose peer row takes the plain decode (a synchronous device read inside the step)
+    # answers the drafted row from the retained replay; the deferred read after that straddle returns that
+    # same block, and the proposal that follows still seeds the drafted row from the replay's verify hidden.
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    mh._start_solo(mtp)
+    mh._prefill(mtp, slot=1, key=20)
+    decoder = mtp._mtp_decoder
+    replay = mtp._mtp_sessions[0].retained.replay
+    blocks = [mh._block(150, [101, 102, 103, 104, 105]), mh._block(9, [])]
+    out = mh._verify(
+        mtp,
+        blocks,
+        [mh._positions(3, 6), mh._positions(2, 1)],
+        [5, 0],
+        [10, 20],
+        mode="logits",
+        result=mh.logits_result(2, 40),
+    )
+    assert _names(mtp, "decode")[-1] == ("decode", [150, 9], [-1, 2]) and _names(mtp, "read")[-1] == ("read", False)
+    assert decoder.readbacks == 1, "the greedy-only replay was read back at the step, before the straddle"
+    host = mh._read(mtp, out)
+    assert host is out.logits
+    assert host[0].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
+    assert host[1, 0].float().argmax().item() == 41 and host[1, 1:].eq(0).all()
+    assert mtp._mtp_sessions[0].retained.replay is replay and mtp._mtp_last_replay is replay
+    committed = [[150, 151, 152, 153, 154, 155], [41] + [-1] * 5]
+    proposal = mh._propose(mtp, committed, [mh._positions(4, 6), [3] + [-1] * 5], counts=[6, 1])
+    assert proposal.num_valid.tolist() == [5, 5]
+    assert _names(mtp, "reseed")[-1] == ("reseed", (5, 5), [1], [41], [3])
+    assert mh._steps(mtp)[-1][1:6] == ((5, 5), [0, 1], [155, 41], [9, 3], [5, None])
 
 
 def test_straddle_verify_finds_the_owner_through_slot_remap(model, mtp):
@@ -1259,7 +1358,9 @@ def test_padded_rows_keep_the_sentinel_in_the_plain_decode(model, mtp):
             assert out.logits[r].eq(0).all()
 
 
-def test_an_ordinary_step_without_drafts_for_an_outstanding_proposal_answers_its_first_id(model, mtp):
+def test_an_ordinary_step_without_drafts_for_an_outstanding_proposal_answers_its_first_id(
+    model, mtp, adapter, monkeypatch, expect_error
+):
     """The scheduler dropped the drafts (it does near max_model_len). The
     retained posterior's first id is still the target's choice after the
     anchor, and the next propose commits one token."""
@@ -1272,12 +1373,65 @@ def test_an_ordinary_step_without_drafts_for_an_outstanding_proposal_answers_its
     assert _names(model, "commit")[-1] == ("commit", 1, 250)
 
     # -- the MTP rail: an ordinary step answers from the retained proposal when no drafts were sent
-    mh._start_solo(mtp)
-    out = mh._ordinary(mtp, [150], [3], [10])
-    assert out.tolist() == [150] and len(_names(mtp, "decode")) == 1
-    proposal = mh._propose(mtp, [[150, -1, -1, -1, -1, -1]], [[4, -1, -1, -1, -1, -1]])
+    # Without the resident decode (the runner reloads every decode's inputs) a greedy row whose retained
+    # proposal continues its token is answered from that proposal's column 0.
+    plain = mh.build_mtp_model(adapter, monkeypatch, resident=False)
+    mh._start_solo(plain)
+    out = mh._ordinary(plain, [150], [3], [10])
+    assert out.tolist() == [150] and len(_names(plain, "decode")) == 1
+    proposal = mh._propose(plain, [[150, -1, -1, -1, -1, -1]], [[4, -1, -1, -1, -1, -1]])
     assert proposal.num_valid.tolist() == [5]
-    assert mh._steps(mtp)[-1][5] == [0], "the seed column is the verified anchor column"
+    assert mh._steps(plain)[-1][5] == [0], "the seed column is the verified anchor column"
+    # -- the MTP rail: under the resident decode an ordinary step runs the plain decode and drops the proposal
+    # ``supports_async_decode`` (the class default) keeps the plain decode's device-resident token and
+    # position across ordinary steps, and the runner reloads them only after a verify, so no ordinary step is
+    # answered from the drafter: every live row runs the plain decode, the retained proposal is dropped, and
+    # the steady decode that follows (reload_inputs=False, host inputs stale) is accepted with its commands
+    # untouched.
+    assert mtp._spec_resident_decode_declared()
+    mh._start_solo(mtp)
+    out = mh._ordinary(mtp, [150], [3], [10], result=_tensor([150]))
+    assert out.tolist() == [150] and mtp._mtp_sessions[0].retained is None
+    assert _names(mtp, "decode")[-1] == ("decode", [150], [3])
+    steady = dict(
+        reload_inputs=False, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False
+    )
+    out = mh._ordinary(mtp, [150], [4], [10], result="device", **steady)
+    assert out == "device" and mtp.decode_commands[-1] == steady
+    proposal = mh._propose(mtp, [[160] + [-1] * 5], [[5] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5]
+    assert _names(mtp, "reseed")[-1] == ("reseed", (1, 5), [0], [160], [5])
+    # -- the MTP rail: an ordinary step submitted before the proposal drops it and the next proposal reseeds
+    # Overlap under asynchronous scheduling: the runner submits ordinary step N+1 before step N's proposal is
+    # published, then publishes N's and N+1's proposals at their drains. The adapter sees propose, propose with
+    # no verify between: the first proposal is dropped rather than verified (contract s.4d), the row reseeds
+    # at the token the overlapped step committed, and the dropped drafts are never accepted by a verify.
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    mh._prefill(mtp)
+    mh._ordinary(mtp, [3], [2], [10], result=_tensor([150]))
+    mh._ordinary(mtp, [150], [3], [10], result=_tensor([151]), **steady)
+    first = mh._propose(mtp, [[150] + [-1] * 5], [[3] + [-1] * 5])
+    assert first.draft_token_ids[0].tolist() == [101, 102, 103, 104, 105]
+    assert mtp._mtp_sessions[0].retained is not None and not mtp._mtp_sessions[0].retained.consumed
+    second = mh._propose(mtp, [[151] + [-1] * 5], [[4] + [-1] * 5])
+    assert second.draft_token_ids[0].tolist() == [201, 202, 203, 204, 205] and mtp._mtp_dropped_proposals == 1
+    assert mtp._mtp_sessions[0].dropped == 1
+    assert _names(mtp, "reseed")[-1] == ("reseed", (1, 5), [0], [151], [4])
+    assert mh._steps(mtp)[-1][1:6] == ((1, 5), [0], [151], [4], [None])
+    with expect_error(ValueError, "did not propose"):
+        mh._verify(mtp, [mh._block(151, [101, 102, 103, 104, 105])], [mh._positions(4, 6)], [5], [10])
+    out = mh._verify(mtp, [mh._block(151, [201, 202, 203, 204, 205])], [mh._positions(4, 6)], [5], [10])
+    assert out.argmax_ids[0].tolist() == [250, 251, 252, 253, 254, 255]
+    # The session's summary line at release carries the dropped count; the engine-life total is logged and
+    # reset by release_persistent_capture.
+    mtp.release_request(0)
+    summary = [m for m in messages if m.startswith("Gemma4MTP contract summary: slot 0 (release)")]
+    assert len(summary) == 1 and summary[0].endswith(", 1 proposals dropped unverified"), summary
+    mtp.release_persistent_capture()
+    assert "Gemma4MTP speculative contract: 1 proposals dropped unverified over the engine's life" in messages
+    assert mtp._mtp_dropped_proposals == 0
 
 
 def test_a_peer_joining_on_an_ordinary_step_ends_speculation_for_good(model, mtp):
@@ -2151,6 +2305,10 @@ def test_live_row_detection_uses_the_padding_sentinel(adapter):
     assert cls._dflash_live_rows(positions, 4) == [1]
     assert cls._dflash_live_rows(torch.tensor([5, -1, 7]), 3) == [0, 2]
     assert cls._dflash_live_rows(None, 2) == [0, 1]
+    # the retained proposal is a plain record
+    proposal = adapter.RetainedProposal(anchor_token=1, anchor_position=2, drafts=[3], posterior=[4, 5])
+    assert proposal.consumed is False
+    assert (proposal.anchor_token, proposal.anchor_position, proposal.drafts, proposal.posterior) == (1, 2, [3], [4, 5])
 
 
 def test_column_zero_narrowing_shapes_match_the_plain_decode(adapter):
@@ -2190,12 +2348,6 @@ def test_ring_advice_names_the_setting_and_the_resolved_numbers(adapter, monkeyp
     mtp = mh.build_mtp_model(adapter, monkeypatch, ring=2048)
     mtp._spec_ring_advice(mtp._SPEC_N, "Gemma4MTP speculative contract")
     assert len(messages) == 1
-
-
-def test_retained_proposal_is_a_plain_record(adapter):
-    proposal = adapter.RetainedProposal(anchor_token=1, anchor_position=2, drafts=[3], posterior=[4, 5])
-    assert proposal.consumed is False
-    assert (proposal.anchor_token, proposal.anchor_position, proposal.drafts, proposal.posterior) == (1, 2, [3], [4, 5])
 
 
 # ===== merged from tests/unit/test_dflash_capture_release.py: Tests for the ``release_persistent_capture`` chain.
@@ -2276,7 +2428,7 @@ def test_fused_bootstrap_resets_sampling_before_the_first_proposal_declines(mode
 
 
 @pytest.mark.parametrize("step", ["ordinary", "draftless-verify", "retained-verify"])
-def test_fused_outputs_apply_sampling_commands_and_remap_once_without_drawing(model, step, mtp):
+def test_fused_outputs_apply_sampling_commands_and_remap_once_without_drawing(model, step, adapter, monkeypatch):
     sampler = model.model[0].sampling
     if step == "retained-verify":
         _start_solo(model)
@@ -2314,6 +2466,8 @@ def test_fused_outputs_apply_sampling_commands_and_remap_once_without_drawing(mo
     assert sampler.seed_manager.positions[row] == position
 
     # -- the MTP rail: retained answers apply sampling commands and remap once without drawing
+    # Without the resident decode, so that the ordinary step too is answered from the retained proposal.
+    mtp = mh.build_mtp_model(adapter, monkeypatch, resident=False)
     sampler = mtp.model[0].sampling
     mh._start_solo(mtp)
     sampler.seed_manager.events.clear()
