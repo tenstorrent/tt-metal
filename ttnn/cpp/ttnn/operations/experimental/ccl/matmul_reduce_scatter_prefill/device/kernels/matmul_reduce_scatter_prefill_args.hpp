@@ -55,6 +55,13 @@ constexpr uint32_t BWD = 1;
 constexpr uint32_t FIN = 2;
 }  // namespace kind
 
+// DRAM-read NoC of an operand (reader_ct A_READ_NOC / W_READ_NOC): one NoC, or both alternately tile by tile.
+namespace read_noc {
+constexpr uint32_t NOC0 = 0;
+constexpr uint32_t NOC1 = 1;
+constexpr uint32_t ALTERNATE = 2;  // W only
+}  // namespace read_noc
+
 // ---------------------------------------------------------------------------------------------------------------
 // Matmul reader (NCRISC, NoC0)
 // ---------------------------------------------------------------------------------------------------------------

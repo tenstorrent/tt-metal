@@ -110,7 +110,8 @@ void kernel_main() {
     // so the second NoC adds DRAM-response links for the fill
     constexpr uint8_t a_read_noc = get_compile_time_arg_val(ct::A_READ_NOC);
     constexpr uint8_t w_read_noc = get_compile_time_arg_val(ct::W_READ_NOC);
-    constexpr bool two_read_nocs = a_read_noc != w_read_noc || a_read_noc != noc_index;
+    constexpr bool w_alternate = w_read_noc == mrs::read_noc::ALTERNATE;  // W tiles alternate NoC0 / NoC1
+    constexpr bool two_read_nocs = w_alternate || a_read_noc != w_read_noc || a_read_noc != noc_index;
     constexpr uint32_t num_waves = get_compile_time_arg_val(ct::NUM_WAVES);  // entries per block (e is wave e mod W)
     constexpr uint32_t num_chunks = get_compile_time_arg_val(ct::NUM_CHUNKS);
     constexpr uint32_t n_inner = get_compile_time_arg_val(ct::N_INNER);   // chunks along the inner axis
@@ -320,11 +321,12 @@ void kernel_main() {
             const uint32_t k1 = part == 0 ? w_split : kb;
             for (uint32_t kk = k0; kk < k1; ++kk) {
                 for (uint32_t j = 0; j < n_valid_w; ++j) {
+                    const uint8_t wn = w_alternate ? static_cast<uint8_t>((kk + j) & 1) : w_read_noc;
                     noc_async_read(
-                        w_acc.get_noc_addr(page0 + kk * Nt + j, 0, w_read_noc),
+                        w_acc.get_noc_addr(page0 + kk * Nt + j, 0, wn),
                         dst + (kk * core_n + j) * w_tile_bytes,
                         w_tile_bytes,
-                        w_read_noc);
+                        wn);
                 }
             }
         }

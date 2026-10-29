@@ -4,11 +4,11 @@
 """Device-time perf gates for ttnn.experimental.matmul_reduce_scatter_prefill on a Blackhole QuietBox 2.
 
 A representative set of per-device prefill shapes (TP=4 row-parallel linears of DeepSeek-V3, Kimi K2.7 / K3, GLM 5.x,
-MiniMax-M3 and MiMo-V2, plus two output-chunked shapes) runs traced on the whole box as a 1x4 ring, and one shape as a
-1x4 line. Each case: an eager call (compile), one traced call, one discarded replay, then REPLAYS back-to-back replays
-in one real-time profiler window; the gate is the median device time of the op's program (the slowest chip per replay)
-within +/- MARGIN of the case's expected time. A case faster than the band fails too: update its number, so the gate
-stays tight.
+MiniMax-M3 and MiMo-V2, plus two output-chunked shapes and two Kimi decode rows on the folded 1D grid) runs traced on
+the whole box as a 1x4 ring, and one shape as a 1x4 line. Each case: an eager call (compile), one traced call, one
+discarded replay, then REPLAYS back-to-back replays in one real-time profiler window; the gate is the median device time
+of the op's program (the slowest chip per replay) within +/- MARGIN of the case's expected time. A case faster than the
+band fails too: update its number, so the gate stays tight.
 
 A and W are replicated on every device, so the group sum is G * (A @ W) and every device's output is checked against it
 (PCC), at the cost of one host matmul per case.
@@ -48,6 +48,9 @@ PERF_CASES = {
     # output chunks (the block misses L1): 1 x 6 and 3 x 2 chunks on a 1x4 ring
     "chunked_n": ((1, 1, 2048, 1024), (1024, 16384), -1, ttnn.bfloat16, ttnn.bfloat16),
     "chunked_mn": ((1, 1, 4096, 1024), (1024, 8192), -1, ttnn.bfloat16, ttnn.bfloat16),
+    # decode rows (M = 32): the folded 1D grid (56 cores)
+    "kimi_k27_o_proj_decode": ((1, 1, 32, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
+    "kimi_k3_dense_ffn_decode": ((1, 1, 32, 8448), (8448, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
 }
 
 # Expected device time [ns] per (topology, case): QuietBox 2 (1x4, 2 links), medians of back-to-back traced replays.
@@ -60,6 +63,8 @@ EXPECTED_NS = {
     ("ring", "glm5_q_a_proj"): 53_500,
     ("ring", "chunked_n"): 549_500,
     ("ring", "chunked_mn"): 594_000,
+    ("ring", "kimi_k27_o_proj_decode"): 46_800,
+    ("ring", "kimi_k3_dense_ffn_decode"): 178_500,
     ("line", "kimi_k27_o_proj"): 157_000,
 }
 

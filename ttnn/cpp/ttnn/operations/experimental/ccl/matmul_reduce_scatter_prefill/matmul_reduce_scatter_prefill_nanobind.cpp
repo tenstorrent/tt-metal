@@ -48,6 +48,8 @@ nb::dict last_plan_dict() {
     out["hold_depth"] = plan.depth_hold;
     out["grid"] = nb::make_tuple(plan.grid.grid_m, plan.grid.grid_n);
     out["strip"] = plan.grid.strip == detail::Strip::Row ? "row" : "col";
+    out["flow"] = plan.grid.flow == detail::Flow::Folded1D ? "folded_1d" : "grid_2d";
+    out["fold"] = nb::make_tuple(plan.grid.fold_rows, plan.grid.fold_cols);
     out["half_split"] = half_split_name(plan.half_split);
     out["waves"] = plan.waves.n;
     out["chunks"] = nb::make_tuple(plan.n_m, plan.n_n);
