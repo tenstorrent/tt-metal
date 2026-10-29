@@ -15,6 +15,8 @@
 #                           # log_val_profile10_summary.txt
 #   ./dev/run.sh sum10      # whole-op per-core step totals at 10 s from sum zones (also sum5, sum15)
 #   ./dev/run.sh perf_pairs # the 5 s perf subset with D4 pair steps forced off, then at the factory default
+#   ./dev/run.sh perf_rescale  # the 5 s perf subset with TT_SPARSE_FAST_RESCALE=0, then 1 (fewer rescale drains)
+#   ./dev/run.sh check_rescale # the check step with TT_SPARSE_FAST_RESCALE=1
 #
 # Knobs (dev branch only, read by the DEBUG factory code; set once per process, they are not in the op's program
 # hash): TT_SPARSE_PROF_PASS / _ITER / _SKIP / _STEPS pick the profile window (defaults 0 / 1 / 0 / 100; ITER=-1 =
@@ -38,7 +40,7 @@ run() {
     return $rc
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
-STEPS=" all smoke check prod dense perf perf_all profile profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs "
+STEPS=" all smoke check check_rescale prod dense perf perf_all profile profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
 case "$STEPS" in *" $ONLY "*) ;; *) echo "unknown step '$ONLY'; one of:$STEPS" >&2; exit 2 ;; esac
 WORST=0  # worst exit code of any step, returned at the end
 note() { local rc=$1; [ "$rc" -gt "$WORST" ] && WORST=$rc; return 0; }
@@ -72,6 +74,7 @@ summarize_profile() {  # name, [per-core table file]
 
 want smoke && run smoke 900 pytest "$SPARSE" -s -k "test_keep_all_matches_dense and r512k512"
 want check && run check 3600 pytest "$SPARSE" -s -k "not production"
+[ "$ONLY" = check_rescale ] && run check_rescale 3600 env TT_SPARSE_FAST_RESCALE=1 pytest "$SPARSE" -s -k "not production"
 want prod && run prod 2400 pytest "$SPARSE" -s -k production
 # Dense: test_ring_joint_attention_logical_tensor_accuracy is 3 cases (causal / balanced / noncausal) at 256
 # rows per device, 8 heads, with the CPU reference check: it exercises the shared ring/all-gather path and the
@@ -106,6 +109,12 @@ case "$ONLY" in
         summarize_profile "sum${n}_summary"
         ;;
     # perf_pairs: A/B of D4 pair steps at 5 s, separate processes (the op program cache is per process).
+    # perf_rescale: A/B of the fast_rescale step (fewer PACK_DONE drains) at 5 s, separate processes.
+    perf_rescale)
+        for p in 0 1; do
+            run "perf_rescale$p" 2400 env TT_SPARSE_FAST_RESCALE=$p pytest "$PERF" -s -k "$PERF5_K"
+        done
+        ;;
     perf_pairs)
         for p in 0 1; do
             run "perf_pairs$p" 2400 env TT_SPARSE_PAIR_STEPS=$p \

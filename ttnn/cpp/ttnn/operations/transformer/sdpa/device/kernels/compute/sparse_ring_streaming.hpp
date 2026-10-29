@@ -499,6 +499,9 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     const uint32_t n_entries) {
     constexpr uint32_t kDst = compute_kernel_lib::DEST_AUTO_LIMIT;
     constexpr uint32_t kBlockTiles = get_named_compile_time_arg_val("block_tiles");
+    // fast_rescale: first-visit members pack their row max straight into their cb_max_in slot in S2, and a step that
+    // rescales nothing skips S3 and its PACK_DONE drain (see the lazy-rescale comment below). 0 = the original stages.
+    constexpr bool kFastRescale = get_named_compile_time_arg_val("fast_rescale") == 1;
     // A step covers n_entries (1, or 2 with kStepPieces == 2: pair steps) consecutive K/V entries of the CB. Run
     // columns are step columns: column c is tile c % Sk_chunk_t of entry c / Sk_chunk_t (runs never cross an entry),
     // so K^T tiles are addressed per entry and V rows, whose entries are contiguous rows of vDHt tiles, linearly.
@@ -628,7 +631,8 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     // kLazyThrRaw raw logit units; otherwise the stored max stays and S5 subtracts it, so the exp's input
     // (score - stored max) * scale is <= 0.5: inside the approximate exp's safe range (see the function comment)
     // and with bf16 resolution <= 1/256 of the argument. A slot's first step (uninitialized) only copies its new
-    // max into the slot. Either way S5 subtracts cb_max_in, after the S3 packs are drained.
+    // max into the slot. Either way S5 subtracts cb_max_in, after the S3 packs are drained (with fast_rescale a step that
+    // rescales nothing has no S3 packs, and S2's packs were drained by S2b).
     constexpr float kScale = __builtin_bit_cast(float, scale_fp32);
     constexpr float kLazyThrRaw = 0.5f / kScale;
     constexpr uint16_t kLazyThrBits = static_cast<uint16_t>(__builtin_bit_cast(uint32_t, kLazyThrRaw) >> 16);
@@ -684,6 +688,27 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             for (uint32_t gg = 0; gg < n_g; ++gg) {
                 for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
                     sdpa_pack_tile_ooo(gg * Sq_chunk_t + r, cb_max_scratch, slots[g0 + gg] * Sq_chunk_t + r);
+                }
+            }
+            if constexpr (kFastRescale) {
+                // A first-visit member's new max is its slot's max: pack it into the slot now instead of copying it
+                // from the scratch in S3. Its S5 reads it after the next PACK_DONE drain (S2b's first one, or the S3
+                // drain when no member is initialized), which orders these packs.
+                bool any_first = false;
+                for (uint32_t gg = 0; gg < n_g; ++gg) {
+                    any_first |= !slot_init(g0 + gg);
+                }
+                if (any_first) {
+                    configure_single_tile_pack(cb_max_in);
+                    for (uint32_t gg = 0; gg < n_g; ++gg) {
+                        if (slot_init(g0 + gg)) {
+                            continue;
+                        }
+                        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                            sdpa_pack_tile_ooo(gg * Sq_chunk_t + r, cb_max_in, slots[g0 + gg] * Sq_chunk_t + r);
+                        }
+                    }
+                    configure_single_tile_pack(cb_max_scratch);
                 }
             }
             tile_regs_release();
@@ -756,17 +781,26 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
 
         // ---- S3: rescale: alpha = exp((old max - new max) * scale) into cb_exp_max_diff and the new max into every
         //      member's slot; otherwise only the first-step (uninitialized) members get their max copied. ----
+        // A member's new max is copied from the scratch into its slot when the step rescales (initialized members)
+        // or, without fast_rescale, on its first visit (with fast_rescale S2 already packed it into the slot).
+        const auto needs_copy = [&](uint32_t g) -> bool { return slot_init(g) ? rescale : !kFastRescale; };
+        // fast_rescale: with initialized members and no rescale there is nothing to write, and S2b's drains already
+        // ordered S2's packs before S5, so S3 and its drain are skipped. PACK_DONE posts / takes per step before S5:
+        //   no member initialized: S3 drain only, 1 / 1 (both modes);
+        //   some initialized, no rescale: S2b 2 / 2 + S3 1 / 1 = 3 / 3; fast_rescale: 2 / 2;
+        //   rescale: 3 / 3 (both modes).
+        const bool skip_s3 = kFastRescale && n_init > 0 && !rescale;
         if (rescale) {
             exp_packthread_tile_init<EXP_APPROX_MODE>();
         }
-        for (uint32_t g0 = 0; g0 < n_slots; g0 += alpha_slots_per_acq) {
+        for (uint32_t g0 = 0; g0 < n_slots && !skip_s3; g0 += alpha_slots_per_acq) {
             const uint32_t n_g = n_slots - g0 < alpha_slots_per_acq ? n_slots - g0 : alpha_slots_per_acq;
             uint32_t n_alpha = 0;
             uint32_t n_copy = 0;
             for (uint32_t gg = 0; gg < n_g; ++gg) {
                 const bool init = slot_init(g0 + gg);
                 n_alpha += (rescale && init) ? 1u : 0u;
-                n_copy += (rescale || !init) ? 1u : 0u;
+                n_copy += needs_copy(g0 + gg) ? 1u : 0u;
             }
             if (n_copy == 0) {
                 continue;
@@ -791,7 +825,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             {
                 uint32_t c = 0;
                 for (uint32_t gg = 0; gg < n_g; ++gg) {
-                    if (!rescale && slot_init(g0 + gg)) {
+                    if (!needs_copy(g0 + gg)) {
                         continue;
                     }
                     for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
@@ -823,7 +857,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             {
                 uint32_t c = 0;
                 for (uint32_t gg = 0; gg < n_g; ++gg) {
-                    if (!rescale && slot_init(g0 + gg)) {
+                    if (!needs_copy(g0 + gg)) {
                         continue;
                     }
                     for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
@@ -834,9 +868,11 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             }
             tile_regs_release();
         }
-        PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+        if (!skip_s3) {
+            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+        }
 
         // ---- S4 (rescale only). ----
         if (rescale) {

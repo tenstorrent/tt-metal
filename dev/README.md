@@ -21,3 +21,4 @@ Profiling knobs (DEBUG commit; see `kernels/sparse_prof_window.hpp`): zones open
 `TT_SPARSE_PROF_PASS/_ITER/_SKIP/_STEPS` (defaults 0/1/0/100, ITER=-1 = all iterations), since the per-RISC buffer
 holds ~125 zones. `run.sh sum10` gives whole-op per-core totals (`TT_METAL_PROFILER_SUM=1`, no window needed).
 `TT_SPARSE_PAIR_STEPS=0` forces D4 pair steps off (`run.sh perf_pairs` runs both). Set knobs once per process.
+- `TT_SPARSE_FAST_RESCALE=1` (DEBUG knob): the step skips the rescale drain when no max grew; `run.sh perf_rescale` / `check_rescale`.

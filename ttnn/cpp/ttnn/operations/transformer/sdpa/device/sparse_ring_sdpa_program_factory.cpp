@@ -485,6 +485,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const char* pair_steps_env = std::getenv("TT_SPARSE_PAIR_STEPS");
     const bool pair_steps_env_off = pair_steps_env != nullptr && std::string(pair_steps_env) == "0";
     const bool pair_steps_eligible = Sk_chunk_t <= 8 && !pair_steps_env_off;
+    // Fewer rescale drains in the resident step (named arg fast_rescale, see sdpa_resident_piece_step_compact): off by
+    // default. DEBUG (dev branch): TT_SPARSE_FAST_RESCALE=1 turns it on for A/B timing; not in the op's program hash,
+    // so set it once per process.
+    const char* fast_rescale_env = std::getenv("TT_SPARSE_FAST_RESCALE");
+    const bool fast_rescale = fast_rescale_env != nullptr && std::string(fast_rescale_env) == "1";
     bool pair_steps = false;                       // decided with the pass split
     uint32_t kv_cb_pages = group_mcast ? 3u : 2u;  // decided with the pass split
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -1671,6 +1676,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // the CB end.
         {"pair_steps", pair_steps ? 1u : 0u},
         {"kv_cb_pages", kv_cb_pages},
+        {"fast_rescale", fast_rescale ? 1u : 0u},
         {"plan_block_words", tt::div_up(mask_nb, 32u)},
         // Group delivery by multicast (see group_mcast above).
         {"group_mcast", group_mcast ? 1u : 0u},
