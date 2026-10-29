@@ -596,24 +596,26 @@ def test_indexer_score_runtime_kv_len(device, q_chunk, k_chunk, head_group):
 def test_indexer_score_runtime_kv_len_multi_band_cells(device, q_chunk, k_chunk, head_group):
     """A large K capacity (T=4096, up to 128 bands) over few q groups: row blocks replicate the groups and every
     (block, column) cell walks several round-robin bands. A short kv_len spreads over the cells; each kv_len must
-    match the reference on [0, kv_len) without recompiling."""
+    match the reference on [0, kv_len) without recompiling. The chunk ends at kv_len, so every band of the prefix
+    is checked, and fresh weights per kv_len keep a stale output from passing."""
     c = dict(KV_LEN, t=4096)
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, head_group_size=head_group)
-    g = torch.Generator().manual_seed(29)
+    g = torch.Generator().manual_seed(29 + 100 * q_chunk + k_chunk + head_group)
     q = torch.randn(1, c["heads"], c["sq"], c["dim"], generator=g, dtype=torch.bfloat16)
-    w = torch.randn(1, 1, c["sq"], c["heads"], generator=g, dtype=torch.bfloat16)
     k = torch.randn(1, 1, c["t"], c["dim"], generator=g, dtype=torch.bfloat16)
-    q_dev, w_dev, k_dev = to_device(q, device), to_device(w, device), to_device(k, device)
+    q_dev, k_dev = to_device(q, device), to_device(k, device)
 
     entries = None
     for kv_len in (64, 1024, 1056, 4096):
+        chunk_start = kv_len - c["sq"]
+        w = torch.randn(1, 1, c["sq"], c["heads"], generator=g, dtype=torch.bfloat16)
         out = ttnn.to_torch(
             ttnn.experimental.indexer_score_dsa(
-                q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=kv_len
+                q_dev, k_dev, to_device(w, device), chunk_start_idx=chunk_start, program_config=cfg, kv_len=kv_len
             )
         )
         assert out.shape == (1, 1, c["sq"], c["t"])
-        ref = indexer_score_dsa_ref(q, k[:, :, :kv_len, :], w, c["chunk_start"])
+        ref = indexer_score_dsa_ref(q, k[:, :, :kv_len, :], w, chunk_start)
         assert_indexer_match(out[:, :, :, :kv_len], ref, c["sq"], kv_len, check_neg=True)
         if entries is None:
             entries = device.num_program_cache_entries()

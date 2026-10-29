@@ -13,10 +13,9 @@
 
 namespace {
 
-using indexer_ring_schedule::Geometry;
 using indexer_schedule::for_core;
 
-constexpr Geometry unfused_geometry(uint32_t units, uint32_t num_blocks, uint32_t cols) {
+constexpr indexer_ring_schedule::Geometry unfused_geometry(uint32_t units, uint32_t num_blocks, uint32_t cols) {
     return {1, units, units, 1, num_blocks, cols, false};
 }
 
@@ -35,7 +34,7 @@ TEST(IndexerSchedule, UnfusedDealsBandsRoundRobinOverLanes) {
                     SCOPED_TRACE(
                         ::testing::Message() << "blocks=" << num_blocks << " cols=" << cols
                                              << " group_rows=" << group_rows << " units=" << units);
-                    const Geometry g = unfused_geometry(units, num_blocks, cols);
+                    const indexer_ring_schedule::Geometry g = unfused_geometry(units, num_blocks, cols);
                     const uint32_t lanes = num_blocks * cols;
                     const uint32_t rows = num_blocks * group_rows;
                     std::vector<uint32_t> owner_count(units, 0);
@@ -97,7 +96,7 @@ TEST(IndexerSchedule, RingKeepsLaneAndRingBandCount) {
                         SCOPED_TRACE(
                             ::testing::Message() << "ring=" << ring_size << " blocks=" << num_blocks << " cols=" << cols
                                                  << " units=" << units << " rotate=" << rotate);
-                        const Geometry g{ring_size, units, units, 1, num_blocks, cols, rotate};
+                        const indexer_ring_schedule::Geometry g{ring_size, units, units, 1, num_blocks, cols, rotate};
                         for (uint32_t core_id = 0; core_id < num_blocks * cols; ++core_id) {
                             const auto s = for_core<true>(core_id, 1, g);
                             const uint32_t lane = s.block + s.col * num_blocks;
