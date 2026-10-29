@@ -71,22 +71,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces),
         ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces));
 
-    const std::uint32_t tilize_num_faces = num_faces;
-    const std::uint32_t block_ct_dim     = _llk_unpack_tilize_block_ct_dim_wrapper_(params.BLOCK_CT_DIM);
+    // num_faces 4 is 32x32, 2 is 16x32.
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces);
+    const std::uint32_t block_ct_dim        = _llk_unpack_tilize_block_ct_dim_wrapper_(params.BLOCK_CT_DIM);
 
-    _llk_unpack_tilize_init_wrapper_(
-        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, params.BLOCK_CT_DIM, face_r_dim, false /* narrow_tile */, tilize_num_faces);
+    _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, params.BLOCK_CT_DIM, tensor_shape);
     for (std::uint32_t col = 0; col < params.BLOCK_CT_DIM; ++col)
     {
         _llk_unpack_tilize_wrapper_(
-            L1_ADDRESS(params.buffer_A[0]),
-            col,
-            formats_array[run].unpack_A_src,
-            formats_array[run].unpack_A_dst,
-            block_ct_dim,
-            face_r_dim,
-            tilize_num_faces,
-            false /* narrow_tile */);
+            L1_ADDRESS(params.buffer_A[0]), col, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, block_ct_dim, tensor_shape);
     }
 
     // Wait until the packer has written all BLOCK_CT_DIM tilized tiles to scratch.
@@ -94,7 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     t6_semaphore_get<>(semaphore::PACK_DONE);
 
     // ---- Restore under test (NO reconfig — uninit is the sole reset) ----
-    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, num_faces, face_r_dim);
+    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, tensor_shape);
 
     // ---- Run 1: plain datacopy of each tilized tile (same format, no reconfig) ----
     run = 1;
