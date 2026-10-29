@@ -45,11 +45,12 @@ class EltwiseBinaryGolden(Golden):
         a multiply at all is this op's: add and subtract are exact, because the
         FPU splits only multiplies into phases. Whether a multiply on *these*
         datums decomposes is the FPU's, and it needs the input format to say
-        so -- the decomposition slices a mantissa, which an integer datum does
+        so, since the decomposition slices a mantissa, which an integer datum does
         not have.
         """
-        return self.operation is MathOperation.Elwmul and self.fpu.models_fidelity(
-            cfg.in_formats[0]
+        return (
+            self.operation is MathOperation.Elwmul
+            and self.blocks.fpu_models_fidelity(cfg.in_formats[0])
         )
 
     def build_chain(self, cfg: OpConfig) -> Chain:
@@ -69,7 +70,7 @@ class EltwiseBinaryGolden(Golden):
         when a fidelity phase has already written Dest.
         """
         if self.models_fidelity(cfg):
-            for phase in self.fpu.phases(self.math_fidelity):
+            for phase in self.blocks.fpu_phases(self.math_fidelity):
                 chain.then(
                     self.src_to_dest(
                         cfg,
@@ -84,7 +85,7 @@ class EltwiseBinaryGolden(Golden):
                 )
         else:
             if self.operation is MathOperation.Elwmul:
-                self.fpu.warn_split_unmodelled(self.op_name)
+                self.blocks.fpu_warn_split_unmodelled(self.op_name)
             chain.then(
                 self.src_to_dest(
                     cfg, self.apply, reads=("srcA", "srcB"), accumulate=accumulate
@@ -97,23 +98,25 @@ class EltwiseBinaryGolden(Golden):
     def partial_product(
         self, regs: Registers, *, phase: int, dest_format: Optional[DataFormat] = None
     ) -> torch.Tensor:
-        """One fidelity phase: the partial product of the chosen operand halves.
+        """One fidelity phase, which the FPU computes whole.
 
-        The window each operand contributes and the flush that follows are the
-        FPU's; what this adds is that each product here *is* a lane result
-        written to Dest, which is why the flush applies at all -- a matmul,
-        whose products never become lane results, passes ``None`` instead.
+        All this op contributes is `dest_format`: each product here *is* a lane
+        result written to Dest, which is why the pre-carry flush applies at
+        all. A matmul, whose products never become lane results, passes
+        ``None``, and in fact needs the halves unmultiplied, so it arranges
+        them itself rather than calling this.
         """
-        a, b = self.fpu.operand_halves(regs["srcA"], regs["srcB"], phase)
-        return self.fpu.flush_pre_carry(a * b, regs["srcA"], regs["srcB"], dest_format)
+        return self.blocks.fpu_partial_product(
+            regs["srcA"], regs["srcB"], phase, dest_format
+        )
 
     def apply(self, regs: Registers) -> torch.Tensor:
         """The whole operation in one FPU step, where it does not split.
 
-        Add and subtract always come here; a multiply only where the
+        Add and subtract always come here, and a multiply only where the
         architecture's split is not modelled, in which case the FPU returns the
-        exact product at every fidelity -- LoFi included, since LoFi is one
+        exact product at every fidelity, LoFi included, since LoFi is one
         phase and not zero. Where the split *is* modelled, as on Quasar, a
         multiply goes through :meth:`partial_product` and never arrives here.
         """
-        return self.fpu.elementwise(self.operation, regs["srcA"], regs["srcB"])
+        return self.blocks.fpu_elementwise(self.operation, regs["srcA"], regs["srcB"])

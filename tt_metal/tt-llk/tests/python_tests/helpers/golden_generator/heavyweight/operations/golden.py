@@ -27,14 +27,13 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, PackerReluType, StochasticRounding
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES, MAX_TILE_ELEMENTS
 
+from ..data_transfer_blocks import PackEdgeMask
 from ..data_transfer_blocks.data_transfer_blocks import (
     DEST_32_BIT_FORMATS,
     DataTransferBlocks,
     as_dest_acc,
 )
 from ..data_transfer_blocks.l1_codec import datums_per_tile
-from ..data_transfer_blocks.units import Fpu
-from ..data_transfer_blocks.units.pack_effects import PackEdgeMask
 from .chain import Chain, Registers, StageRecord, Step
 
 
@@ -70,7 +69,7 @@ def check_source_layout(
     harness has two writers and only one of them matches that:
 
     * ``write_matrix_w_tile_dimensions`` (``use_dense_tile_dimensions=True``)
-      strides the source by the tile's own datum count -- same as here.
+      strides the source by the tile's own datum count, same as here.
     * ``write_matrix``, the default, always strides the source by
       ``MAX_TILE_ELEMENTS`` regardless of tile size, writing only
       ``num_faces * face_r_dim * 16`` of each stride.
@@ -79,7 +78,7 @@ def check_source_layout(
     there is a single tile and the stride never applies. For a smaller tile over
     several tiles the two read different source elements from tile 1 on, so the
     golden would quietly compute on data the device never saw. Which writer a
-    test used is not visible from here, so raise rather than pick one --
+    test used is not visible from here, so raise rather than pick one,
     unless the caller settles it with `dense_layout`, which asserts the dense
     writer was used and that back-to-back is therefore the right reading.
     """
@@ -100,7 +99,7 @@ def check_source_layout(
 #: The only keywords ``run`` funnels into :class:`OpConfig` as surplus. Not
 #: "every OpConfig field": ``tiles_per_output`` and ``geometry`` are fields too,
 #: and letting them through here just moves the failure to the "multiple values"
-#: TypeError inside ``_make_config`` -- which is the error this check exists to
+#: TypeError inside ``_make_config``, which is the error this check exists to
 #: replace. ``tiles_per_output=2``, an easy slip for ``num_tiles_per_output``,
 #: is exactly that case.
 PACK_EFFECT_KEYWORDS = frozenset(
@@ -134,7 +133,7 @@ class Golden:
     def __init__(self, arch=None, blocks: Optional[DataTransferBlocks] = None):
         """Bind the architecture this golden runs on.
 
-        `arch` is an :class:`.arch.ArchProfile` -- which blocks to use. Use one
+        `arch` is an :class:`.arch.ArchProfile`, which says which blocks to use. Use one
         of the factories in :mod:`.arch` rather than passing it by hand.
         `blocks` overrides the profile's blocks, which a test uses to drive one
         architecture's op through another's blocks.
@@ -148,21 +147,9 @@ class Golden:
         self.arch = arch
         self.blocks = blocks if blocks is not None else arch.blocks()
         # Set here so reading them before a run gives None rather than
-        # AttributeError -- mismatch.py reaches for both when a test fails.
+        # AttributeError, since mismatch.py reaches for both when a test fails.
         self.last_chain: Optional[Chain] = None
         self.last_dest_format: Optional[DataFormat] = None
-
-    @property
-    def fpu(self) -> Fpu:
-        """The FPU this operation's maths runs on.
-
-        An operation selects *which* instruction runs and in what order; the
-        FPU decides what that instruction does -- how many fidelity phases, how
-        wide the multiplier, when a product is flushed. So an op asks it rather
-        than carrying those facts itself: three ops used to hold identical
-        copies of the mantissa split.
-        """
-        return self.blocks.fpu
 
     # ------------------------------------------------------------------
     # What an operation declares
@@ -190,7 +177,7 @@ class Golden:
 
         The architecture's mapping decides it, except for Float32 and Tf32 under a
         16-bit Dest. There a 19-bit src datum cannot hold the input, and the
-        harness picks the src family from the output (``infer_unpack_out``);
+        harness picks the src family from the output (``infer_unpack_out``).
         Dest then takes the src's format, so the configured Dest format names
         it. Float16 Dest means a Float16 src, whose 5-bit range flushes and
         saturates values the architecture's Tf32 default would keep.
@@ -217,7 +204,7 @@ class Golden:
         The register name is the whole difference between :meth:`l1_to_srcA`
         and :meth:`l1_to_srcB`, so they share this builder. :meth:`l1_to_srcS`
         does not: SrcS has its own format rules. The Dest-feedback pair shares
-        :meth:`_dest_to_register` for the same reason -- the format-slot
+        :meth:`_dest_to_register` for the same reason: the format-slot
         argument order had to be corrected in two separate copies of it once.
         """
         l1_format = cfg.in_formats[index]
@@ -242,7 +229,7 @@ class Golden:
         convert = getattr(self.blocks, f"dest_to_{register}")
 
         def run(regs: Registers) -> None:
-            # The conversion branches on the **Dest** format; the src format
+            # The conversion branches on the **Dest** format, and the src format
             # only decides whether a wide Dest gets its exponent rebiased. Both
             # are needed, and they differ whenever dest_acc widens Dest or the
             # input is Float32/Tf32.
@@ -266,7 +253,7 @@ class Golden:
         ``None`` goes through :meth:`_default_src_format`, which is the
         architecture's mapping *except* for a Float32/Tf32 input under a
         Float16/Float16_b Dest, where the Dest format names the src family
-        instead -- the architecture's Tf32 default would keep values the
+        instead, since the architecture's Tf32 default would keep values the
         device's narrower src register clips.
         """
         return self._l1_to_register(cfg, "srcA", source, into, index, src_format)
@@ -296,12 +283,12 @@ class Golden:
     ) -> Step:
         """Unpack the L1 buffer in `source` into srcS.
 
-        `src_format` overrides the storage format the unpacker lands it in;
+        `src_format` overrides the storage format the unpacker lands it in.
         ``None`` lets the architecture choose.
 
         Not shared with :meth:`_l1_to_register`: SrcS's format and slice layout
         depend on `dest_acc`, which the config carries as the width of
-        ``cfg.dest_format`` -- Dest is 32-bit exactly when accumulation is on.
+        ``cfg.dest_format``: Dest is 32-bit exactly when accumulation is on.
         """
         l1_format = cfg.in_formats[index]
         dest_acc = cfg.dest_format in DEST_32_BIT_FORMATS
@@ -382,11 +369,11 @@ class Golden:
     ) -> Step:
         """The maths between the src registers and Dest.
 
-        `fn` supplies the arithmetic, which is the operation's business; the
+        `fn` supplies the arithmetic, which is the operation's business, and the
         block decides how the result lands in a Dest slot.
 
         `name` labels the step in a trace. It defaults to the operation's name,
-        which is right for the step that *is* the operation; pass it when a
+        which is right for the step that *is* the operation. Pass it when a
         chain has a second src-to-Dest step that is something else, such as the
         datacopy that seeds Dest in a reuse-dest chain.
 
@@ -402,7 +389,7 @@ class Golden:
             declared_reads += (into,)
 
         def run(regs: Registers) -> None:
-            # Subscript, not .get -- a missing Dest here means the chain put an
+            # Subscript, not .get, since a missing Dest here means the chain put an
             # accumulating step before anything wrote the slot, and silently
             # accumulating onto nothing turns that into a plain replace with a
             # plausible-looking result.
@@ -438,8 +425,8 @@ class Golden:
         ``data_format_inference.is_format_combination_outlier`` plus the
         ``CHIP_ARCH != QUASAR`` guard beside it. Without mirroring it here the
         golden models a Float16_b Dest against a device running fp32, which is
-        a real precision gap -- ``(1 + 2**-7) + 1.0`` packs to 2.0 here and
-        2.0078125 there -- presented as an arithmetic disagreement.
+        a real precision gap: ``(1 + 2**-7) + 1.0`` packs to 2.0 here and
+        2.0078125 there, presented as an arithmetic disagreement.
         """
         dest_acc = as_dest_acc(dest_acc)
         if (
@@ -467,8 +454,8 @@ class Golden:
         """Normalise one run's arguments into an :class:`OpConfig`.
 
         Shared so the Dest-format default is decided in exactly one place. It
-        is the argument most easily got wrong -- it depends on the *input*
-        format and on `dest_acc`, not on the output -- and an op with its own
+        is the argument most easily got wrong, because it depends on the *input*
+        format and on `dest_acc`, not on the output, and an op with its own
         copy of this would drift the moment that rule changes.
 
         Returns the expanded `in_formats` alongside the config, since a single
@@ -476,7 +463,7 @@ class Golden:
 
         Also applies the architecture's `dest_acc` promotion, so a caller may
         pass the `dest_acc` its test asked for rather than the one
-        ``TestConfig`` quietly substituted -- see :meth:`_promote_dest_acc`.
+        ``TestConfig`` quietly substituted. See :meth:`_promote_dest_acc`.
         """
         if isinstance(in_formats, DataFormat):
             in_formats = [in_formats] * operands
@@ -558,7 +545,7 @@ class Golden:
             return self._run_blocked(stimuli, in_formats, cfg, trace, dense_layout)
         # Lay the stimuli out in L1 the way the harness does, so the chain
         # reads the bytes the hardware read. Tiles go back to back here, which
-        # matches the dense writer but not the default one -- see
+        # matches the dense writer but not the default one. See
         # check_source_layout for the cases that cannot agree.
         check_source_layout(
             stimuli[0].numel() // datums_per_tile(**geometry), geometry, dense_layout
@@ -573,7 +560,7 @@ class Golden:
         # An operand the chain never reads is silent otherwise: every register
         # it does read still holds a tile, so the run completes and answers
         # from fewer operands than it was handed. run_l1 and _run_blocked both
-        # check this; without it here, run([a, b], ...) on a datacopy quietly
+        # check this, and without it here, run([a, b], ...) on a datacopy quietly
         # ignores b while the same inputs through run_l1 raise.
         ignored = self.last_chain.unread([self.source(i) for i in range(len(stimuli))])
         if ignored:
@@ -653,7 +640,7 @@ class Golden:
     ) -> Sequence[int]:
         """Run on L1 buffers and return an L1 buffer, for chaining ops together.
 
-        A sequence fills ``in0``, ``in1``, ... -- enough for a chain that reads
+        A sequence fills ``in0``, ``in1``, ..., enough for a chain that reads
         one tile per operand. A chain that folds tiles also reads ``in0_t1`` and
         up, and reuse-dest reads its seed, which only names can supply: pass a
         mapping or :class:`Registers` keyed by register name for those.
@@ -665,8 +652,8 @@ class Golden:
         """
         if isinstance(l1_buffers, Registers):
             # Copied, not used in place: chain.run writes srcA/srcB/dest/out
-            # into it, so handing the same object to a second run_l1 -- a
-            # fidelity sweep over one set of inputs, say -- would fail unread
+            # into it, so handing the same object to a second run_l1, say a
+            # fidelity sweep over one set of inputs, would fail unread
             # with a spurious "never reads [out]".
             regs = Registers(**{n: l1_buffers[n] for n in l1_buffers.names()})
         elif isinstance(l1_buffers, Mapping):

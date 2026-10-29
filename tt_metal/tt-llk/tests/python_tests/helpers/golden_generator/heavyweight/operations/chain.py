@@ -102,7 +102,7 @@ def summarise(value: Any) -> str:
 class Chain:
     """An ordered list of steps run over shared registers.
 
-    Build one by construction or with :meth:`then` / :meth:`repeat`; chains also
+    Build one by construction or with :meth:`then` / :meth:`repeat`. Chains also
     concatenate with ``+``.
     """
 
