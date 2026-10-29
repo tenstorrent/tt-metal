@@ -57,7 +57,8 @@ def pack_src_of(formats, dest_acc) -> DataFormat:
 
 
 # Bfp8 (A exponent) is an output only: the stimuli generator has no Bfp8 input
-LLKX_INPUTS = [F.Float32, F.Float16_b, F.Float16, F.Int32, F.UInt16, F.Int8, F.UInt8, F.UInt32, F.Tf32, F.Bfp8_b]
+# Tf32 is not an input either: the unpacker configuration rejects srcA Tf32 (helpers/test_config.py)
+LLKX_INPUTS = [F.Float32, F.Float16_b, F.Float16, F.Int32, F.UInt16, F.Int8, F.UInt8, F.UInt32, F.Bfp8_b]
 LLKX_OUTPUTS = [F.Float32, F.Tf32, F.Float16_b, F.Float16, F.Bfp8_b, F.Bfp8, F.Bfp4_b, F.Bfp2_b, F.Int32, F.Int8, F.UInt8, F.UInt16, F.UInt32, F.Fp8_e4m3]
 
 # pairs the cov2, cov3 and grid modules already run (all the pairs of the six cov3 formats, the grid pairs)
@@ -73,7 +74,21 @@ def llkx_formats():
     return [IO(i, o) for i in LLKX_INPUTS for o in LLKX_OUTPUTS if (i, o) not in COVERED]
 
 
+def dest_format_of(input_format, dest_acc) -> DataFormat:
+    """The format the unpacker leaves in DEST: integers stay as they are, floats are Float32 with a 32-bit DEST and else a 16-bit float of the input exponent family."""
+    if input_format.is_integer():
+        return input_format
+    if dest_acc == DestAccumulation.Yes:
+        return F.Float32
+    return F.Float16 if input_format.is_exponent_A() else F.Float16_b
+
+
 def llkx_accs(formats):
-    """DEST accumulation modes of the pair for which the LLK accepts the packer conversion (the harness unpack constraint applies too)."""
-    base = get_valid_dest_accumulation_modes(formats)
-    return [a for a in base if llk_accepts(pack_src_of(formats, a), formats.output_format)]
+    """DEST accumulation modes of the pair for which the LLK accepts the packer conversion from the format DEST holds, and the harness configures the packer for that format
+    (the format inference takes pack_src from the output for integers, which would misread a float DEST)."""
+    out = []
+    for a in get_valid_dest_accumulation_modes(formats):
+        src = pack_src_of(formats, a)
+        if llk_accepts(src, formats.output_format) and src == dest_format_of(formats.input_format, a):
+            out.append(a)
+    return out
