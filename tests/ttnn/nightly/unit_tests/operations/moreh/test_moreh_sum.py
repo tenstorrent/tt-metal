@@ -597,3 +597,81 @@ def test_moreh_sum_large_integer_magnitude(input_shape, dim, device):
     logger.debug(f"{torch.equal(torch_output, tt_output_cpu)}")
 
     assert torch.equal(torch_output, tt_output_cpu)
+
+
+INT32_MIN = -(2**31)
+
+
+def _int32_min_patterns(length, partial_group):
+    """Per-line patterns along the reduced axis: (zero the rest of the line, {position: value}).
+
+    Position 0 lands in the first tile (or batch) along the reduced axis, which becomes the
+    running accumulator; position `length // 2` lands in a later tile, the incoming operand.
+    `partial_group` lists the positions the SFPU within-tile reduction adds into one partial
+    sum (the writer kernel then combines the partials).
+    """
+    later = length // 2
+    patterns = [
+        (False, {0: INT32_MIN}),  # INT32_MIN on the accumulator side, random rest
+        (False, {later: INT32_MIN}),  # INT32_MIN on the incoming side, random rest
+        (True, {0: INT32_MIN}),  # INT32_MIN passes through unchanged
+        (True, {0: -(2**30), later: -(2**30)}),  # accumulation lands exactly on INT32_MIN
+        (True, {0: 2**30, later: 2**30}),  # accumulation wraps to INT32_MIN
+        (True, {0: -1, later: INT32_MIN}),  # INT32_MIN + -1 wraps to INT32_MAX
+    ]
+    if partial_group:
+        term = 2**31 // len(partial_group)
+        patterns += [
+            (True, {i: -term for i in partial_group}),  # within-tile partial lands on INT32_MIN
+            (True, {i: term for i in partial_group}),  # within-tile partial wraps to INT32_MIN
+        ]
+    return patterns
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, partial_group",
+    [
+        # moreh_int_sum_h: sfpu_sum_int_col adds rows r, r + 4, ..., r + 28 of a tile.
+        ([1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2], 2, list(range(0, TILE_HEIGHT, 4))),
+        # moreh_int_sum_w: sfpu_sum_int_row adds columns c, c + 1, c + 16 and c + 17 of a tile.
+        ([1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2], 3, [0, 1, TILE_WIDTH // 2, TILE_WIDTH // 2 + 1]),
+        # moreh_int_sum_nc: tile accumulation only.
+        ([2, 1, TILE_HEIGHT, TILE_WIDTH], 0, []),
+    ],
+    ids=["dim-h", "dim-w", "dim-nc"],
+)
+def test_moreh_sum_integer_int32_min(input_shape, dim, partial_group, device):
+    # INT32_MIN (0x80000000) as either addition operand, and sums that are exactly INT32_MIN,
+    # through the within-tile reductions and the tile accumulation (sfpu_add_int) of
+    # moreh_int_sum_h/w/nc. The golden is the int64 sum wrapped to int32, so the comparison is
+    # exact.
+    generator = torch.Generator().manual_seed(3072)
+    length = input_shape[dim]
+    line_shape = [size for axis, size in enumerate(input_shape) if axis != dim]
+    num_lines = 1
+    for size in line_shape:
+        num_lines *= size
+
+    lines = torch.randint(-(2**24), 2**24, (num_lines, length), dtype=torch.int64, generator=generator)
+    for index, (zero_rest, values) in enumerate(_int32_min_patterns(length, partial_group)):
+        # Each pattern goes on a line near the start and one near the end, so it lands in
+        # different faces of the tile.
+        for line in (index, num_lines - 1 - index):
+            if zero_rest:
+                lines[line].zero_()
+            for position, value in values.items():
+                lines[line, position] = value
+
+    torch_input = lines.reshape(*line_shape, length).movedim(-1, dim).contiguous()
+    torch_output = torch.sum(torch_input, dim, keepdim=True).to(torch.int32)
+
+    tt_input = ttnn.from_torch(torch_input.to(torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output_cpu = ttnn.to_torch(
+        ttnn.operations.moreh.sum(
+            tt_input, dim=dim, keepdim=True, compute_kernel_config=get_compute_kernel_options(True)
+        )
+    ).to(torch.int32)
+
+    logger.debug(f"mismatching lanes: {int(torch.ne(torch_output, tt_output_cpu).sum())}")
+
+    assert torch.equal(torch_output, tt_output_cpu)
