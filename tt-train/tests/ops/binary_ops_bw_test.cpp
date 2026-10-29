@@ -4,8 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include <stdexcept>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -190,6 +188,7 @@ static std::string BroadcastCaseName(const ::testing::TestParamInfo<BroadcastCas
 class AddBroadcastBackwardTest : public BinaryOpsBackwardTest, public ::testing::WithParamInterface<BroadcastCase> {};
 class SubBroadcastBackwardTest : public BinaryOpsBackwardTest, public ::testing::WithParamInterface<BroadcastCase> {};
 class MulBroadcastBackwardTest : public BinaryOpsBackwardTest, public ::testing::WithParamInterface<BroadcastCase> {};
+class DivBroadcastBackwardTest : public BinaryOpsBackwardTest, public ::testing::WithParamInterface<BroadcastCase> {};
 
 TEST_P(AddBroadcastBackwardTest, GradShapeMatchesInput) {
     auto* device = &autograd::ctx().get_device();
@@ -273,6 +272,31 @@ TEST_P(MulBroadcastBackwardTest, GradShapeMatchesInput) {
     EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad));
 }
 
+TEST_P(DivBroadcastBackwardTest, GradShapeMatchesInput) {
+    auto* device = &autograd::ctx().get_device();
+    const auto& p = GetParam();
+
+    // a = 6, b = 2 everywhere -> d(a/b)/da = 0.5, d(a/b)/db = -6/4 = -1.5 per broadcast element.
+    xt::xarray<float> data_a = xt::ones<float>(p.a_shape) * 6.0F;
+    xt::xarray<float> data_b = xt::ones<float>(p.b_shape) * 2.0F;
+
+    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), true);
+    auto b = autograd::create_tensor(core::from_xtensor(data_b, device), true);
+
+    auto out = a / b;
+    out->backward();
+
+    auto a_grad = core::to_xtensor(a->get_grad());
+    auto b_grad = core::to_xtensor(b->get_grad());
+
+    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a) * 0.5F, /* rtol */ 1e-2F, /* atol */ 1e-2F));
+
+    auto a_volume = static_cast<float>(data_a.size());
+    auto b_volume = static_cast<float>(data_b.size());
+    xt::xarray<float> expected_b_grad = -xt::ones_like(data_b) * 1.5F * (a_volume / b_volume);
+    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad, /* rtol */ 1e-2F, /* atol */ 1e-2F));
+}
+
 // Same-rank broadcast: b has a 1 in exactly one dimension
 static const BroadcastCase kSameRankCases[] = {
     {{2, 1, 1, 4}, {1, 1, 1, 4}, "Dim0"},
@@ -299,17 +323,60 @@ INSTANTIATE_TEST_SUITE_P(CrossRank, SubBroadcastBackwardTest, ::testing::ValuesI
 INSTANTIATE_TEST_SUITE_P(SameRank, MulBroadcastBackwardTest, ::testing::ValuesIn(kSameRankCases), BroadcastCaseName);
 INSTANTIATE_TEST_SUITE_P(CrossRank, MulBroadcastBackwardTest, ::testing::ValuesIn(kCrossRankCases), BroadcastCaseName);
 
-TEST_F(BinaryOpsBackwardTest, DivBroadcastThrows) {
+INSTANTIATE_TEST_SUITE_P(SameRank, DivBroadcastBackwardTest, ::testing::ValuesIn(kSameRankCases), BroadcastCaseName);
+INSTANTIATE_TEST_SUITE_P(CrossRank, DivBroadcastBackwardTest, ::testing::ValuesIn(kCrossRankCases), BroadcastCaseName);
+
+TEST_F(BinaryOpsBackwardTest, DivBroadcastLhsBackward) {
     auto* device = &autograd::ctx().get_device();
-    xt::xarray<float> data_a = {4.F, 6.F, 8.F, 10.F, 12.F, 14.F, 16.F, 18.F};
-    data_a.reshape({2, 1, 1, 4});
-    xt::xarray<float> data_b = {{{{2.F, 2.F, 2.F, 2.F}}}};
+    xt::xarray<float> data_a = {{{{6.F, 6.F, 6.F, 6.F}}}};
+    xt::xarray<float> data_b = xt::ones<float>({2, 1, 1, 4}) * 2.0F;
 
     auto a = autograd::create_tensor(core::from_xtensor(data_a, device), true);
     auto b = autograd::create_tensor(core::from_xtensor(data_b, device), true);
 
     auto out = a / b;
-    EXPECT_THROW(out->backward(), std::runtime_error);
+    out->backward();
+
+    auto a_grad = core::to_xtensor(a->get_grad());
+    auto b_grad = core::to_xtensor(b->get_grad());
+
+    // Each element of a is broadcast across 2 batch entries with 1/b = 0.5 -> a_grad = 1.0
+    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a) * 1.0F, /* rtol */ 1e-2F, /* atol */ 1e-2F));
+    EXPECT_TRUE(xt::allclose(b_grad, -xt::ones_like(data_b) * 1.5F, /* rtol */ 1e-2F, /* atol */ 1e-2F));
+}
+
+TEST_F(BinaryOpsBackwardTest, PartialRequiresGradBroadcast) {
+    auto* device = &autograd::ctx().get_device();
+    xt::xarray<float> data_a = xt::ones<float>({2, 1, 1, 4}) * 6.0F;
+    xt::xarray<float> data_b = {{{{2.F, 2.F, 2.F, 2.F}}}};
+
+    // Only lhs requires grad
+    {
+        auto a = autograd::create_tensor(core::from_xtensor(data_a, device), /* requires_grad */ true);
+        auto b = autograd::create_tensor(core::from_xtensor(data_b, device), /* requires_grad */ false);
+        auto out = (a + b) - b + (a * b) + (a / b);
+        out->backward();
+
+        EXPECT_TRUE(a->is_grad_initialized());
+        EXPECT_FALSE(b->is_grad_initialized());
+        // d/da [a + a*b + a/b] = 1 + 2 + 0.5 = 3.5
+        auto a_grad = core::to_xtensor(a->get_grad());
+        EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a) * 3.5F, /* rtol */ 1e-2F, /* atol */ 1e-2F));
+    }
+
+    // Only rhs (broadcasted) requires grad
+    {
+        auto a = autograd::create_tensor(core::from_xtensor(data_a, device), /* requires_grad */ false);
+        auto b = autograd::create_tensor(core::from_xtensor(data_b, device), /* requires_grad */ true);
+        auto out = (a - b) + (a * b) + (a / b);
+        out->backward();
+
+        EXPECT_FALSE(a->is_grad_initialized());
+        EXPECT_TRUE(b->is_grad_initialized());
+        // Per element before reduction: d/db [-b + a*b + a/b] = -1 + 6 - 1.5 = 3.5; summed over dim 0 (size 2) -> 7.0
+        auto b_grad = core::to_xtensor(b->get_grad());
+        EXPECT_TRUE(xt::allclose(b_grad, xt::ones_like(data_b) * 7.0F, /* rtol */ 1e-2F, /* atol */ 1e-2F));
+    }
 }
 
 }  // namespace ttml::ops::tests
