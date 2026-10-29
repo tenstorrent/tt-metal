@@ -105,7 +105,8 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
             first_layer_idx=params.first_layer_idx,
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
-            kv_only_last_layer=params.kv_only_last_layer,
+            # The runner asks the last rank for a KV-only last layer; V4 has none, so it runs that layer whole.
+            kv_only_last_layer=False,
             dflash_enabled=params.dflash_enabled,
             mtp_levels=params.mtp_levels,
             routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,

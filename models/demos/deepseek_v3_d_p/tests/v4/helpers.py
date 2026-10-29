@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stream packing, mesh rows, device<->host transfers and PCC grading shared by the V4 tests."""
+"""Stream packing, mesh rows, device<->host transfers, PCC grading and the multi-user prefill schedule
+shared by the V4 tests."""
 
 import pytest
 from loguru import logger
@@ -16,6 +17,22 @@ from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_i
 # near-tied candidates at the selection boundary, which no other attention kind is exposed to, and
 # the swaps compound with the error the layer inherits.
 CSA_LAYER_MARGIN = 0.01
+
+# Device-to-device agreement for a rerun chunk: same weights, tokens and programs over the same state. Reruns
+# measure 1.000000; a chunk that attends another request's state entirely measures 0.9996-0.9999 on
+# Flash's sliding layers and lower everywhere else.
+REPLAY_FLOOR = 0.99999
+
+# The multi-user prefill schedule, keyed by user-slot count.
+# (slot, chunks, replays) per request: ``replays`` names an earlier request whose opening tokens this one
+# repeats, or None for fresh tokens. The third request reuses slot 0 and is shorter than the one before
+# it there, so the rows that request left past the new one's end are still in slot 0's index key cache
+# and have to go unread.
+USER_REQUESTS = {1: [(0, 2, None)], 2: [(0, 2, None), (1, 2, None), (0, 1, 0)]}
+# (request, chunk) in the order the chunks reach the device.
+USER_SCHEDULE = {1: [(0, 0), (0, 1)], 2: [(0, 0), (1, 0), (0, 1), (2, 0), (1, 1)]}
+# Requests run again on their own slot once the schedule is done, every other slot empty.
+USER_ISOLATED = {1: [], 2: [1]}
 
 
 def pack_streams(x, tp_factor):
@@ -97,3 +114,14 @@ def assert_layers_and_output(config, per_layer, ref_layers, out, ref_out, floor,
     if pcc < floor:
         failures.append(f"output {pcc:.6f} < {floor}")
     assert not failures, f"[{label}] {', '.join(failures)}"
+
+
+def assert_same_on_device(label, first, again):
+    """Two device runs of the same chunks, each ``(per_layer, outs)``, agree to ``REPLAY_FLOOR``."""
+    (first_layers, first_outs), (again_layers, again_outs) = first, again
+    for c in range(len(again_outs)):
+        taps = [(f"layer {i}", first_layers[i][c], again_layers[i][c]) for i in range(len(again_layers))]
+        for name, a, b in [*taps, ("output", first_outs[c], again_outs[c])]:
+            _, pcc = comp_pcc(a.float(), b.float())
+            logger.info(f"[{label}] chunk {c} {name}: PCC {pcc:.6f}")
+            assert pcc >= REPLAY_FLOOR, f"[{label}] chunk {c} {name} {pcc:.6f} < {REPLAY_FLOOR}"

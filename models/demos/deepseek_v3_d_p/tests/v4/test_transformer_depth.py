@@ -16,6 +16,9 @@ it runs in three processes, each writing its last layer's streams to disk for th
 end-to-end rows continue from its layer-9 file through 10..35 and 36..60 and grade only the last layer.
 The files are exact (fp32) pipeline boundaries, so 60 sees only what the device computed from the
 embedding on. The three rows depend on each other and run in that order.
+
+The model holds as many user slots as the runner manifests deploy and runs the prompt in the last one,
+so every slot's attention state is resident while it runs.
 """
 
 import os
@@ -57,6 +60,7 @@ _HEAD = "head.weight"
 _PRO_HEAD = 10  # layers 0..9, the ones the trace keeps before the last
 _PRO_TAIL = ((_PRO_HEAD, 26), (36, 25))  # (first, count) of each process after the head
 _HANDOFF = Path(os.getenv("V4_DEPTH_HANDOFF_DIR", "generated/v4_depth_handoff")) / "pro"
+_SLOTS = 2  # PREFILL_NUM_USERS in tt/runners/manifests/dsv4_{pro,flash}.json
 # The last layer is graded at its own floor: its PCC is carried by a few tokens whose norm is
 # hundreds of times the median. It measures Flash L42 0.5919 to 0.6348 across hosts and bases. A model
 # without an entry logs its last-layer PCC ungraded.
@@ -80,6 +84,16 @@ def _upload_streams(mesh_device, streams):
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=ms, dims=(2, 3)),
+    )
+
+
+def _log_dram(mesh_device, label):
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    gib = view.num_banks / 2**30
+    logger.info(
+        f"[{label}] DRAM per chip: {view.total_bytes_allocated_per_bank * gib:.2f} GiB allocated, "
+        f"{view.total_bytes_free_per_bank * gib:.2f} GiB free, "
+        f"{view.largest_contiguous_bytes_free_per_bank * gib:.2f} GiB largest contiguous"
     )
 
 
@@ -156,9 +170,11 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
         max_seq_len=SEQ_CACHE,
         num_links=num_links,
         topology=per_axis_topology(device_params["fabric_config"]),
+        slot_num=_SLOTS,
     )
     del state_dict
-    logger.info(f"built layers [{first}, {last}) in {(time.monotonic() - t0) / 60:.1f} min")
+    logger.info(f"built layers [{first}, {last}) with {_SLOTS} user slots in {(time.monotonic() - t0) / 60:.1f} min")
+    _log_dram(mesh_device, label)
 
     if write_handoff:
         _HANDOFF.mkdir(parents=True, exist_ok=True)
@@ -177,7 +193,7 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
         else:
             tt_in = _upload_streams(mesh_device, torch.load(_handoff_file(first - 1, chunk)))
 
-        out = model(tt_in, actual_isl=CHUNK, actual_start=start, layer_tap=tap)
+        out = model(tt_in, actual_isl=CHUNK, actual_start=start, cache_user_id=_SLOTS - 1, layer_tap=tap)
         ttnn.deallocate(tt_in)
         if is_last:
             final[chunk] = hidden_to_host(mesh_device, out)[0, CHUNK - 1]
@@ -185,6 +201,7 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
             torch.save(streams_to_host(mesh_device, out, n), _handoff_file(last - 1, chunk))
         ttnn.deallocate(out)
         logger.info(f"  chunk {chunk} done (start={start}) in {time.monotonic() - t0:.0f} s")
+    _log_dram(mesh_device, label)
 
     failures = []
     for i in graded:

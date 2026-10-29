@@ -771,18 +771,20 @@
       printf '%s' "$summary"
     }
 
+    # Measured 2.1 min x 1.25 + 1.
     section_start 1
     (
-      timeout -k 2m 6m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 4m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_hca.py::test_hca_chunked_prefill_mesh -k "flash and chunk5120-varying and torus-xy-8x4" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 2.1 min x 1.25 + 1.
     section_start 2
     (
-      timeout -k 2m 8m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 4m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_swa.py::test_swa_long_prefill_mesh -k "flash and mixed5120 and torus-xy-8x4" -vvv --tb=short
       '
@@ -799,19 +801,20 @@
     section_end 0
 
     # Production-width chunked CSA with the real sparse top-k: 5120+5120+3000 actual tokens, fixed
-    # 5120 device width, and the variant's stock index_topk.
+    # 5120 device width, and the variant's stock index_topk. Measured 1.7 min x 1.25 + 1.
     section_start 4
     (
-      timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 4m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_csa.py::test_csa_chunked_prefill_mesh -k "flash and 3chunk-production and torus-xy-8x4" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 1.9 min x 1.25 + 1.
     section_start 5
     (
-      timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 4m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_csa.py::test_csa_chunked_prefill_mesh -k "pro and 3chunk-production and torus-xy-8x4" -vvv --tb=short
       '
@@ -827,9 +830,10 @@
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 0.7 min x 1.25 + 1.
     section_start 7
     (
-      timeout -k 2m 3m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 2m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_hc_head_tp_sharded -k "torus-xy-8x4" -vvv --tb=short
       '
@@ -843,8 +847,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the section timeouts (6+8+12+15+25+2+3 = 71).
-      timeout: 71
+      # Sum of the section timeouts (4+4+12+4+4+2+2 = 32).
+      timeout: 32
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
@@ -853,14 +857,15 @@
   sp_config: sc1
 
 
-- name: "(DeepSeek-V4) transformer accuracy 5k + transformer chunked accuracy 10k@5k + transformer pipeline-split accuracy 5k + transformer chunked accuracy 55k@5k vs vLLM golden"
+- name: "(DeepSeek-V4) transformer accuracy 5k + transformer chunked accuracy 10k@5k, two users interleaved + transformer pipeline-split accuracy 5k + transformer chunked accuracy 55k@5k vs vLLM golden + prefill runtime two users interleaved with slot reuse 10k@5k"
   fabric_profile: torus_xy
   cmd: |
     titles=(
       "(DeepSeek-V4) transformer accuracy 5k"
-      "(DeepSeek-V4) transformer chunked accuracy 10k@5k"
+      "(DeepSeek-V4) transformer chunked accuracy 10k@5k, two users interleaved"
       "(DeepSeek-V4) transformer pipeline-split accuracy 5k"
       "(DeepSeek-V4) transformer chunked accuracy 55k@5k vs vLLM golden"
+      "(DeepSeek-V4) prefill runtime two users interleaved with slot reuse 10k@5k"
     )
     summary=""
     section_start() {
@@ -897,11 +902,12 @@
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 31.1 min x 1.25 + 1.
     section_start 2
     (
-      timeout -k 2m 34m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_chunked.py -k "torus-xy-8x4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_chunked.py -k "torus-xy-8x4 and users2" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
@@ -924,6 +930,16 @@
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 23.4 min (Flash 9.7 + Pro 13.7) x 1.25 + 1.
+    section_start 5
+    (
+      timeout -k 2m 31m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_runtime_two_users.py -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
     finish
   test_type: dsv4_prefill_suite
   # Per-section tokens: `-f test-type=<token>` selects this job.
@@ -931,8 +947,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the section timeouts (37+34+27+30 = 128).
-      timeout: 128
+      # Sum of the section timeouts (37+40+27+30+31 = 165).
+      timeout: 165
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic

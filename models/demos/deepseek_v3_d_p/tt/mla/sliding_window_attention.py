@@ -31,6 +31,10 @@ class TtSWAState:
         self.max_seq_len = int(max_seq_len)
         self.kv_actual = 0
 
+    def release(self) -> None:
+        """Free this state's tensor."""
+        ttnn.deallocate(self.carry)
+
 
 class TtSWA(LightweightModule):
     def __init__(
@@ -113,13 +117,14 @@ class TtSWA(LightweightModule):
 
         self.trans_mat = self.ops.from_torch(get_rot_transformation_mat())
 
-        # Built by alloc_state, which every caller runs before forward.
+        # Built by build_tables, which every caller runs (directly or through alloc_state) before forward.
         self._masks = None
         self._halo_bounds = None
         self._halo_num_devices = None
         self._slab_rope = None
         self._slab_index = None
         self._carry_index = None
+        self._max_seq_len = None
 
     @classmethod
     def from_reference(cls, device, reference, config, **kwargs) -> "TtSWA":
@@ -150,7 +155,12 @@ class TtSWA(LightweightModule):
 
     def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None) -> TtSWAState:
         """Build every host tensor forward will need, so forward builds none."""
-        assert batch == 1, f"SWA state is single-user for now, got batch={batch}"
+        self.build_tables(max_seq_len, chunk_tokens=chunk_tokens)
+        return self.new_state(batch)
+
+    def build_tables(self, max_seq_len: int, chunk_tokens: int | None = None) -> None:
+        """The half of ``alloc_state`` every user shares: masks, halo bounds and rope tables. Run once;
+        ``new_state`` then allocates each user's carry."""
         chunk = int(chunk_tokens or max_seq_len)
         sw, sp = self.sliding_window, self.sp_factor
         assert chunk % (TILE_HEIGHT * sp) == 0, (
@@ -168,9 +178,15 @@ class TtSWA(LightweightModule):
         self._build_carry_index(chunk)
         self._slab_rope = self.ops.build_rope_table(int(max_seq_len) + chunk, 1, layer_type="main")
         self._slab_index = self.ops.rope_index_base(seq_local)
+        self._max_seq_len = int(max_seq_len)
+
+    def new_state(self, batch: int = 1) -> TtSWAState:
+        """A fresh state at position 0, over the tables ``build_tables`` made."""
+        assert batch == 1, f"a TtSWAState holds one user (batch 1); hold one state per user slot, got batch={batch}"
+        assert self._max_seq_len is not None, "call build_tables before new_state"
         return TtSWAState(
-            carry=self._alloc_carry(batch, sw),
-            max_seq_len=max_seq_len,
+            carry=self._alloc_carry(batch, self.sliding_window),
+            max_seq_len=self._max_seq_len,
         )
 
     def _alloc_carry(self, batch: int, rows: int):
@@ -422,7 +438,7 @@ class TtSWA(LightweightModule):
     def forward(self, hidden_states, seq_len_actual: int | None = None, state: TtSWAState = None):
         """[B, 1, S/sp, hidden/tp] -> the same, one chunk. ``seq_len_actual`` is the real token count;
         the rest of the slab is padding no real query reads."""
-        assert state is not None, "TtSWA.forward needs the state alloc_state returned"
+        assert state is not None, "TtSWA.forward needs the state new_state (or alloc_state) returned"
         seq_len = hidden_states.shape[2] * self.sp_factor
         real_len = int(seq_len if seq_len_actual is None else seq_len_actual)
         assert (
