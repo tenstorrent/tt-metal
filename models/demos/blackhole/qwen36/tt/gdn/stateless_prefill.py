@@ -68,6 +68,33 @@ def _zero_pad(gdn, B, C):
     return z
 
 
+_HEADS_PER_PROGRAM = 32  # heads one chunk-op program runs at once (B * Nv above this runs in sequential waves)
+_RESET_GATE = 128.0  # added (negated) to g at a row start: exp() underflows to exactly 0 in fp32, so the reset is exact
+
+
+def _fold_rows(B, nv):
+    """Largest divisor of B with B' * nv <= _HEADS_PER_PROGRAM (at least 1): the rows folded into one sequence."""
+    return max(d for d in range(1, B + 1) if B % d == 0 and (d * nv <= _HEADS_PER_PROGRAM or d == 1))
+
+
+def _reset_mask(gdn, S, nv):
+    """fp32 TILE DRAM [1, S, nv]: -_RESET_GATE at s = 0, 0 elsewhere; added to g so a folded row starts from a zero
+    state. Cached per (S, nv) on the layer."""
+    cache = gdn.__dict__.setdefault("_stateless_reset_masks", {})
+    m = cache.get((S, nv))
+    if m is None:
+        t = torch.zeros(1, S, nv, dtype=torch.float32)
+        t[:, 0, :] = -_RESET_GATE
+        m = cache[(S, nv)] = ttnn.from_torch(
+            t,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=gdn.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    return m
+
+
 def stateless_prefill_forward(gdn, x):
     """x [B, S, dim] bf16 TILE DRAM, S a multiple of 32 -> [B, S, dim]. Weights and compute config as the
     mega-fused branch of gated_deltanet_forward_ttnn."""
@@ -134,6 +161,20 @@ def stateless_prefill_forward(gdn, x):
     beta = ttnn.reshape(beta, (B, S, Nv))
     g = ttnn.reshape(g, (B, S, Nv))
 
+    # Fold F rows into one sequence so the op fills one program of B' * Nv heads; the reset gate at each original
+    # row start zeroes the carried state, so the rows stay independent.
+    Bp = _fold_rows(B, Nv)
+    F = B // Bp
+    if F > 1:
+        g_old = g
+        g = ttnn.add(g_old, _reset_mask(gdn, S, Nv))
+        ttnn.deallocate(g_old)
+        q = ttnn.reshape(q, (Bp, F * S, q_dim))
+        k = ttnn.reshape(k, (Bp, F * S, k_dim))
+        v = ttnn.reshape(v, (Bp, F * S, v_dim))
+        beta = ttnn.reshape(beta, (Bp, F * S, Nv))
+        g = ttnn.reshape(g, (Bp, F * S, Nv))
+
     # Chunk op: flat q/k/v in, head-major o out; the final state is dropped.
     o, final_state = chunk_gated_delta_rule_fused_adapter(
         q,
@@ -155,7 +196,7 @@ def stateless_prefill_forward(gdn, x):
     # Per-head norm, head -> token relayout, gate (bf16 out), out-projection.
     n = ttnn.rms_norm(o, weight=w.o_norm_weight, epsilon=gdn.norm_eps)
     ttnn.deallocate(o)
-    n = ttnn.reshape(n, (B, Nv, S, Dv))
+    n = ttnn.reshape(n, (Bp, Nv, F * S, Dv))
     n = ttnn.experimental.nlp_concat_heads(n)
     n = ttnn.reshape(n, (B, S, Nv * Dv))
     gated = _silu_mul(n, z, _dram, dtype=ttnn.bfloat16)
