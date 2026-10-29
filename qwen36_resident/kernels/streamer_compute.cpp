@@ -275,14 +275,15 @@ FORCE_INLINE void add_residual(uint32_t nd, uint32_t pout_off) {
 // q|k|v columns: cb_qkvz_out = silu(w0 * y[t-3] + w1 * y[t-2] + w2 * y[t-1] + w3 * y[t]) over the
 // streamed-in history (cb_conv_hist, oldest first) and taps; y[t] goes to cb_hist_out; the first n_conv
 // of this core's columns are q|k|v, the rest (z, a, b) are copied through (attention: all of them).
-// The conv runs once on the 32x32 views of the column block.
+// The conv runs once on the 32x32 views of the column block. Verify of R > 2 rows: the windows of the older taps
+// are picked from y and the two history blocks by 0/1 matmuls (see streamer_common.hpp).
 FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
     cb_wait_front(cb_qkvz, kBlk);
     cb_reserve_back(cb_qkvz_out, kBlk);
     if (gdn) {
         cb_wait_front(cb_conv_w, 4 * kBlk);
         cb_wait_front(cb_conv_hist, 3 * kBlk);
-        cb_reserve_back(cb_hist_out, (verify ? 3 : 1) * kBlkViews);
+        cb_reserve_back(cb_hist_out, (verify_pair ? 3 : 1) * kBlkViews);
     }
     if (n_conv > 0) {
         reconfig_full_operand(cb_qkvz_full, cb_qkvz_full);
@@ -292,7 +293,23 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
         // operands of a view go to DST first (slot 0 keeps y for the history), one init per op
         for (uint32_t v = 0; v < views_of(n_conv); v++) {
             tile_regs_acquire();
-            if constexpr (verify) {
+            if constexpr (verify_rows) {
+                // the windows of taps 0..2: S_j y + H_j,0 block 0 + H_j,1 block 1 (exact 0/1 products, fp32)
+                reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_qkvz_full);
+                matmul_init(cb_shift, cb_qkvz_full);
+                for (uint32_t j = 0; j < 3; j++) {
+                    matmul_tiles(cb_shift, cb_qkvz_full, j, v, 2 + 2 * j);
+                }
+                reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_conv_hist_full);
+                matmul_init(cb_shift, cb_conv_hist_full);
+                for (uint32_t j = 0; j < 3; j++) {
+                    for (uint32_t b = 0; b < 2; b++) {
+                        matmul_tiles(cb_shift, cb_conv_hist_full, 3 + 2 * j + b, b * kBlkViews + v, 2 + 2 * j);
+                    }
+                }
+                reconfig_full_operand(cb_qkvz_full, cb_qkvz_full);
+            }
+            if constexpr (verify_pair) {
                 // newest history slot: its row 0, and row 0 of y as row 1 (exact 0/1 products)
                 reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_conv_hist_full);
                 matmul_init(cb_shift, cb_conv_hist_full);
@@ -304,7 +321,7 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
             copy_tile(cb_qkvz_full, v, 0);
             copy_tile(cb_conv_w_full, 3 * kBlkViews + v, 1);
             for (uint32_t j = 0; j < 3; j++) {
-                if (!verify || j < 2) {
+                if (!verify_rows && (!verify_pair || j < 2)) {
                     copy_tile(cb_conv_hist_full, j * kBlkViews + v, 2 + 2 * j);
                 }
                 copy_tile(cb_conv_w_full, j * kBlkViews + v, 3 + 2 * j);
@@ -323,14 +340,14 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
             tile_regs_commit();
             tile_regs_wait();
             pack_tile<true>(1, cb_qkvz_out_full, v);
-            if constexpr (verify) {
+            if constexpr (verify_pair) {
                 pack_tile<true>(6, cb_hist_out, v);
                 pack_tile<true>(0, cb_hist_out, kBlkViews + v);
             } else {
                 pack_tile<true>(0, cb_hist_out, v);
             }
             tile_regs_release();
-            if constexpr (verify) {
+            if constexpr (verify_pair) {
                 // (y1, -) for the slot after y
                 tile_regs_acquire();
                 reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_qkvz_full);
@@ -363,7 +380,7 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
     cb_push_back(cb_qkvz_out, kBlk);
     cb_pop_front(cb_qkvz, kBlk);
     if (gdn) {
-        cb_push_back(cb_hist_out, (verify ? 3 : 1) * kBlkViews);  // with no q|k|v columns the writer skips it
+        cb_push_back(cb_hist_out, (verify_pair ? 3 : 1) * kBlkViews);  // with no q|k|v columns the writer skips it
         cb_pop_front(cb_conv_w, 4 * kBlk);
         cb_pop_front(cb_conv_hist, 3 * kBlk);
     }
@@ -418,7 +435,7 @@ void kernel_main() {
         cb_wait_front(cb_eye, 1);
     }
     if constexpr (verify) {
-        cb_wait_front(cb_shift, 3);
+        cb_wait_front(cb_shift, verify_rows ? 9 : 3);
     }
 
     if constexpr (fc_in) {

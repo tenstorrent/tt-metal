@@ -11,7 +11,7 @@
 //
 // Compile-time args: 0 Kt, 1 Vt, 2 GDN layers, 3 copies, 4 num_streamers, 5 sem_heads, 6 heads (per chip),
 //   7 sem_state (local: state write-backs done), 8 batch, 9 sem_group (collector: other cores' rows in),
-//   10 verify (0 / 1: row u writes state slot cur ^ u, see the reader), 11 sem_slot (local: cur + 1)
+//   10 verify (0 / 1: row u writes state slot (cur + u) % batch, see the reader), 11 sem_slot (local: cur + 1)
 // Runtime args: 0 state address (DRAM, see the reader), 1 o_in_addr (streamers' buffer), 2 head index,
 // then num_streamers x (x, y), then an optional timeline buffer (0 = off; per layer [2] state out,
 // [3] output sent), then u0, nu, the head's cores (1: this core is the collector), the collector's x, y
@@ -106,7 +106,7 @@ void kernel_main() {
         if (ts_addr && u == u0) {
             ts[l * 4 + 2] = *clk;
         }
-        const uint32_t first = ((set * num_heads + head) * batch + (verify ? cur ^ u : u)) * st;
+        const uint32_t first = ((set * num_heads + head) * batch + (verify ? (cur + u) % batch : u)) * st;
         for (uint32_t t = 0; t < st; t++) {
             noc_async_write_page(first + t, state_dram, get_read_ptr(cb_s_new_out) + t * kF32Tile);
         }

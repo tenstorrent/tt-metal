@@ -55,7 +55,7 @@ FORCE_INLINE void block_probs(uint32_t m_cb, uint32_t nb) {
     for (uint32_t j = 0; j < nb; j++) {
         tile_regs_acquire();
         sub_tiles_bcast_cols(cb_s, m_cb, j, 0, 0);
-        exp_tile(0, VectorMode::R);  // head rows live in the top faces
+        exp_tile(0, kExpMode);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile<true>(0, cb_p, j);
@@ -91,7 +91,7 @@ FORCE_INLINE void online_block(uint32_t nb, bool first) {
         sub_binary_tile_init();
         sub_binary_tile(1, 2, 3);
         exp_tile_init();
-        exp_tile(3, VectorMode::R);
+        exp_tile(3, kExpMode);
     }
     tile_regs_commit();
     tile_regs_wait();
@@ -180,7 +180,7 @@ FORCE_INLINE void online_finish() {
     sub_binary_tile_init();
     sub_binary_tile(0, 1, 0);
     exp_tile_init();
-    exp_tile(0, VectorMode::R);
+    exp_tile(0, kExpMode);
     tile_regs_commit();
     tile_regs_wait();
     pack_reconfig_data_format(cb_alpha);
@@ -213,14 +213,14 @@ void kernel_main() {
     const uint32_t children = get_arg_val<uint32_t>(1);
     cb_wait_front(cb_one, 1);
     cb_wait_front(cb_ntiles, 1);
-    uint32_t n_of[batch];
-    for (uint32_t u = 0; u < batch; u++) {
+    uint32_t n_of[users];
+    for (uint32_t u = 0; u < users; u++) {
         n_of[u] = read_tile_value(cb_ntiles, 0, u);
     }
     if (role == 1) {
         compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_s);
         for (uint32_t i = 0; i < iters; i++) {
-            const uint32_t n_tiles = n_of[i % batch];
+            const uint32_t n_tiles = n_of[i % users];
             cb_wait_front(cb_q, Dt);
             if (n_tiles > 0) {
                 for (uint32_t b0 = 0; b0 < n_tiles; b0 += chunk_max) {
@@ -247,7 +247,36 @@ void kernel_main() {
     }
     compute_kernel_hw_startup(cb_kraw, cb_kraw, cb_sq);
     cb_wait_front(cb_mean, 1);
-    cb_wait_front(cb_rope, 3 * batch);
+    cb_wait_front(cb_rope, kRopePages);
+    if constexpr (packed) {
+        // every row's new k / v into the tail tiles once per layer, then per pass the masked tail tiles
+        const uint32_t n_tail = n_of[0];
+        cb_wait_front(cb_mask, 2 * users);
+        cb_wait_front(cb_rowsel, 4);
+        for (uint32_t i = 0; i < iters; i++) {
+            const uint32_t u = i % users;
+            if (u == 0) {
+                cb_wait_front(cb_kw, Dt);
+                norm_rope(cb_kraw, cb_kw, 0, cb_knew, cb_knew, kRopeK);
+                cb_pop_front(cb_kw, Dt);
+                update_tail_rows(n_tail);
+                cb_wait_front(cb_tailk, n_tail * Dt);
+                cb_wait_front(cb_tailv, n_tail * Dt);
+            }
+            cb_wait_front(cb_q, Dt);
+            scores(cb_q, cb_tailk, 0, n_tail, true, 2 * u);
+            row_max(n_tail);
+            probs_and_partial(cb_tailv, 0, n_tail);
+            if (children > 0) {
+                sum_partials<true>(children);
+            }
+            cb_pop_front(cb_q, Dt);
+            if (u + 1 == users) {
+                pack_tail_bf8(n_tail);
+            }
+        }
+        return;
+    }
     cb_wait_front(cb_mask, batch);
     cb_wait_front(cb_rowsel, 2 * batch);
     for (uint32_t i = 0; i < iters; i++) {
