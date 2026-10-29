@@ -63,9 +63,14 @@ def arena_cap(mesh_device, kb):
     movers' static circular buffers (the x gather's port CB at K step kb: the arena's range is carved on the port cores
     too), ARENA_MAX at most. (GLM-5.3's larger fabric payload - 6 pages a packet - grows the port CB past ARENA_MAX's
     allowance: its arena then clashed with it.)"""
+    return arena_cap_of(l1_free_bytes(mesh_device), kb)
+
+
+def arena_cap_of(l1_free, kb, payload=None):
+    """arena_cap from a free-L1 figure (host planning: no device; payload the fabric's packet payload bytes)."""
     from models.demos.moe_block.tt.x_gather3 import port_cb_bytes
 
-    return min(ARENA_MAX, (l1_free_bytes(mesh_device) - port_cb_bytes(kb) - 1024) // 64 * 64)
+    return min(ARENA_MAX, (l1_free - port_cb_bytes(kb, payload=payload) - 1024) // 64 * 64)
 
 
 def l1_free_bytes(mesh_device):
@@ -654,12 +659,12 @@ void kernel_main() {
 #else
     constexpr uint32_t WPF = 3;
 #endif
-    uint8_t trid_of[64];
+    uint8_t trid_of[NB / GY + 1];  // (a core's blocks: every GY-th of the chunk's NB)
     uint32_t wi = 0, ni = 0, pending = 0;  // (prefetch cursor over the first chunk's rounds; issued; issued unsent)
 #ifdef SE_WRING
     // (one chunk: my W-own a ring of SE_WRING block slots - a block read into slot (its issue index % SE_WRING) once
     // the block SE_WRING before it was sent (multicast flushed); the DRAM region keeps every block)
-    uint8_t slot_of[64];
+    uint8_t slot_of[NB / GY + 1];
     uint32_t nsent = 0;
 #endif
 #ifdef SE_WRING
@@ -1107,7 +1112,17 @@ _COMPUTE = r"""
 #include "ckernel_sfpu_situ_glu.h"
 #elif SE_GLU == 3
 #include "ckernel_sfpu_clamped_silu_glu.h"
+#elif SE_GLU == 4
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
 #endif
+namespace ckernel::sfpu {
+// (the model's activation constants, compile-time: SiTU's betas, the clamp limit, SwiGLU-OAI's alpha / limit; their
+// defines come with the kernel source - se_engine3.glu_defines)
+struct SeGluCfg {
+    static constexpr float beta_gate = SE_GLU_BETA, beta_up = SE_GLU_LBETA;
+    static constexpr float limit = SE_GLU_LIMIT, clamp_limit = SE_GLU_LIMIT, alpha = SE_GLU_ALPHA;
+};
+}  // namespace ckernel::sfpu
 #endif
 constexpr uint32_t MT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1), NSG = get_compile_time_arg_val(2);
 constexpr uint32_t NPG = get_compile_time_arg_val(3), NCH = get_compile_time_arg_val(4), HT = get_compile_time_arg_val(5);
@@ -1178,6 +1193,8 @@ void kernel_main() {
     PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));
 #elif SE_GLU == 3
     PACK((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::clamped_silu_glu_init)));
+#elif SE_GLU == 4
+    PACK((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::swiglu_init)));
 #else
     silu_tile_init_pack();
     PACK((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
@@ -1281,10 +1298,13 @@ void kernel_main() {
                         PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 #if SE_GLU == 2
                         for (uint32_t t = 0; t < sbn; t += 2)
-                            PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_situ_glu, (DST_ACCUM_MODE, 8, sfpu::SituGluConfigKimi), t, t + 1, t, VectorMode::RC)));
+                            PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_situ_glu, (DST_ACCUM_MODE, 8, sfpu::SeGluCfg), t, t + 1, t, VectorMode::RC)));
 #elif SE_GLU == 3  // (silu(min(gate, 10)) x clamp(up, +-10): GLM-5.3's swiglu_limit, DeepSeek V4's)
                         for (uint32_t t = 0; t < sbn; t += 2)
-                            PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamped_silu_glu, (DST_ACCUM_MODE, 8, sfpu::ClampedSiluGluConfigDsV4), t, t + 1, t, VectorMode::RC)));
+                            PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamped_silu_glu, (DST_ACCUM_MODE, 8, sfpu::SeGluCfg), t, t + 1, t, VectorMode::RC)));
+#elif SE_GLU == 4  // (SwiGLU-OAI: (clamp(up, +-limit) + 1) x g sigmoid(alpha g), g = min(gate, limit) - MiniMax M3)
+                        for (uint32_t t = 0; t < sbn; t += 2)
+                            PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_swiglu, (DST_ACCUM_MODE, 8, sfpu::SeGluCfg, true), t, t + 1, t, VectorMode::RC)));
 #else
                         for (uint32_t t = 0; t < sbn; t += 2) silu_tile_pack(t);
                         for (uint32_t t = 0; t < sbn; t += 2)
@@ -1390,10 +1410,13 @@ void kernel_main() {
                 PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 #if SE_GLU == 2
                 for (uint32_t t = 0; t < MT * pw; t += 2)
-                    PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_situ_glu, (DST_ACCUM_MODE, 8, sfpu::SituGluConfigKimi), t, t + 1, t, VectorMode::RC)));
+                    PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_situ_glu, (DST_ACCUM_MODE, 8, sfpu::SeGluCfg), t, t + 1, t, VectorMode::RC)));
 #elif SE_GLU == 3  // (silu(min(gate, 10)) x clamp(up, +-10): GLM-5.3's swiglu_limit, DeepSeek V4's)
                 for (uint32_t t = 0; t < MT * pw; t += 2)
-                    PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamped_silu_glu, (DST_ACCUM_MODE, 8, sfpu::ClampedSiluGluConfigDsV4), t, t + 1, t, VectorMode::RC)));
+                    PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamped_silu_glu, (DST_ACCUM_MODE, 8, sfpu::SeGluCfg), t, t + 1, t, VectorMode::RC)));
+#elif SE_GLU == 4  // (SwiGLU-OAI: (clamp(up, +-limit) + 1) x g sigmoid(alpha g), g = min(gate, limit) - MiniMax M3)
+                for (uint32_t t = 0; t < MT * pw; t += 2)
+                    PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_swiglu, (DST_ACCUM_MODE, 8, sfpu::SeGluCfg, true), t, t + 1, t, VectorMode::RC)));
 #else
                 for (uint32_t t = 0; t < MT * pw; t += 2) silu_tile_pack(t);
                 for (uint32_t t = 0; t < MT * pw; t += 2)
@@ -1664,6 +1687,34 @@ def _probes():
 HW_ADDR = 0  # (the hang words' L1 address - SE_PROBE=HW, set by fused_head)
 
 
+GLU_CODES = {"silu": 1, "situ": 2, "clamped_silu": 3, "swiglu_oai": 4}
+
+
+def _f(v):
+    return f"{float(v)!r}f"
+
+
+def glu_defines(act):
+    """(SE_GLU code, its constants' defines) of the shared expert's activation: a kind name (the models' defaults - SiTU
+    beta 4 / 25, clamped SiLU limit 10, SwiGLU-OAI limit 7 / alpha 1.702) or an ExpertActivation (its own)."""
+    kind = act if isinstance(act, str) else act.kind
+    if kind not in GLU_CODES:
+        raise ValueError(f"se_engine3: shared activation {kind}: one of {', '.join(GLU_CODES)}")
+    g = lambda k, d: d if isinstance(act, str) or getattr(act, k, None) is None else getattr(act, k)  # noqa: E731
+    lim = g("limit", 7.0 if kind == "swiglu_oai" else 10.0)
+    vals = dict(
+        SE_GLU_BETA=g("beta", 4.0),
+        SE_GLU_LBETA=g("linear_beta", 25.0),
+        SE_GLU_LIMIT=lim,
+        SE_GLU_ALPHA=g("alpha", 1.702),
+    )
+    return GLU_CODES[kind], "".join(f"#define {k} {_f(v)}\n" for k, v in vals.items())
+
+
+class ArenaTooLarge(ValueError):
+    """The engine's arena does not fit the L1 cap at any W ring / h slot count: .need (bytes, the last try's), .cap."""
+
+
 def _ring_pages(pages, pushes):
     """A FIFO CB's region (pages): pack_tile / copy_tile address a block from the CB's pointer without wrapping (the
     push / pop wrap after), so where a block may straddle the CB's end - blocks of differing sizes, or one size not
@@ -1754,12 +1805,16 @@ class SeEngine3:
         self.rows, self.H, self.I, self.glu = rows, H, I, glu
         self.cx0, self.GX, self.GY, self.MT = cx0, GX, GY, MT
         self.CR = GY * MT
-        assert rows % (32 * self.CR) == 0
+        assert (
+            rows % (32 * self.CR) == 0
+        ), f"se_engine3: {rows} rows are not whole chunks of CR = GY {GY} x MT {MT} = {self.CR} row tiles"
         self.NCH = rows // 32 // self.CR
         self.KT, self.HT, self.NTH = H // 32, I // 32, H // 32
         self.KB = KB or 16  # (fewer, larger rounds: K3 403 -> 341 us at 640 rows; GLM-Flash neutral)
         self.NSG = self.KT // self.KB
-        assert self.KT % self.KB == 0 and self.NSG % 2 == 0
+        assert (
+            self.KT % self.KB == 0 and self.NSG % 2 == 0
+        ), f"se_engine3: K step {self.KB} must divide H's {self.KT} tiles into an even count of steps"
         self.arena_max = arena_max if arena_max is not None else arena_cap(mesh_device, self.KB)
         assert self.NSG % shards == 0 and (self.NSG // shards) % 2 == 0, "even K steps a shard"
         self.SPS = self.NSG // shards
@@ -1771,7 +1826,7 @@ class SeEngine3:
         self.fam1 = cols[GX - self.S1 :]  # (overlaps family 0 only when S0 + S1 > GX)
         # gate / up: the column's tile pairs, NPG passes of even widths <= 8 / MT
         pairs = column_split(self.HT, GX, 1)
-        assert min(pairs) >= 1
+        assert min(pairs) >= 1, f"se_engine3: I's {self.HT} tiles leave a column of the {GX} without a gate / up pair"
         self.po, self.h0 = pairs, [sum(pairs[:c]) for c in range(GX)]
         self.POMAX = max(pairs)
         # (DEST tiles a pass: 8 fp32 with full sync; SE_HALFSYNC=1 (A/B, engine alone): 4 a half - the GLU and pack of
@@ -1789,7 +1844,7 @@ class SeEngine3:
         self.NGU, self.LT = self.NPG, latent  # (gate / up passes; then the latent's)
         if latent:
             lw = column_split(latent, GX, 1)
-            assert min(lw) >= 1
+            assert min(lw) >= 1, f"se_engine3: the latent's {latent} tiles leave a column of the {GX} without one"
             self.lw, self.l0 = lw, [sum(lw[:c]) for c in range(GX)]
             self.LWMAX = max(lw)
             npl = -(-self.LWMAX // self.PGW)
@@ -1807,26 +1862,33 @@ class SeEngine3:
         self.wd = [_split(p, self.NPD, 1) if down else [] for p in pnd]
         self.rs = rs
         if rs is not None:  # (the column's down passes: the plan's, widths the same on every chip)
-            assert down and rs.pwmax == self.PWDMAX and rs.MT == MT and rs.GX == GX and rs.GY == GY
+            assert down and rs.pwmax == self.PWDMAX and rs.MT == MT and rs.GX == GX and rs.GY == GY, (
+                f"se_engine3: the RS plan's tiling (GX {rs.GX} GY {rs.GY} MT {rs.MT} pwmax {rs.pwmax}) is not the "
+                f"engine's (GX {GX} GY {GY} MT {MT} pwmax {self.PWDMAX})"
+            )
             self.wd = [[pw for _, pw, _ in rs.column_passes(0, c)] for c in range(GX)]
             self.NPD = len(self.wd[0])
-            assert all(len(wd) == self.NPD for wd in self.wd)
+            assert all(len(wd) == self.NPD for wd in self.wd), f"se_engine3: uneven down passes {self.wd}"
         # (the down's K step: 8, or the largest divisor of I's tiles under it - DeepSeek-V4.1's 36 a chip: 6)
         KBD = KBD or max(d for d in range(1, 9) if self.HT % d == 0)
         KBD = int(os.environ.get("SE_KBD", KBD))  # (SE_KBD: A/B the down K step)
         self.KBD = KBD
-        assert self.HT % KBD == 0
+        assert self.HT % KBD == 0, f"se_engine3: the down's K step {KBD} does not divide I's {self.HT} tiles"
         self.NSD = self.HT // KBD if down else 0
         self.NB = self.NPG * self.NSG + self.NPD * self.NSD
-        # (the NCRISC's per-block arrays - trid_of / slot_of [64] - index a core's blocks b / GY: ceil(NB / GY) of them)
-        if -(-self.NB // GY) > 64:
+        # (the NCRISC's per-block tables - the stream order, a core's offsets / transaction ids / ring slots - are sized
+        # by NB at compile time: at most 1024 rounds a chunk, the kernel's static_assert)
+        if self.NB > 1024:
             raise ValueError(
-                f"se_engine3: {self.NB} W blocks a chunk over {GY} rows = {-(-self.NB // GY)} a core > 64 (the "
-                f"NCRISC's trid_of / slot_of): a larger KB ({self.KB}) / KBD ({KBD})"
+                f"se_engine3: {self.NB} W rounds a chunk > 1024 (NPG {self.NPG} x NSG {self.NSG} + NPD {self.NPD} x NSD "
+                f"{self.NSD}): a larger K step than {self.KB}"
             )
         self.WSLOT = max(self.KB * max(sum(self.wg, [])), KBD * max(sum(self.wd, []), default=0))  # (tiles)
         self.fid, self.w_dtype = fidelity, w_dtype
-        self.wtb = {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, ttnn.bfloat16: 2048}[w_dtype]
+        wtbs = {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, ttnn.bfloat16: 2048}
+        if w_dtype not in wtbs:
+            raise ValueError(f"se_engine3: shared expert weights {w_dtype}: bf4 / bf8 / bf16 only")
+        self.wtb = wtbs[w_dtype]
 
         # per-core W-own (tiles): the blocks of its column on its row
         def bsize(c, b):
@@ -1852,11 +1914,12 @@ class SeEngine3:
         self.PFULL = self.LWMAX if latent else self.KB
         self.PBCT = max(d for d in range(1, self.DT + 1) if self.PFULL % d == 0)
         tries = [(0, 1), (5, 1), (4, 1), (3, 1)] if self.NCH == 1 else [(0, 2), (5, 2), (5, 1), (4, 1), (3, 1)]
+        rsr0 = self._rs_regions() if rs is not None else []  # (the same at every W ring / h slot count)
         for self.WRING, self.HSL in tries:  # (see wown_t)
             al = lambda v: (v + 63) // 64 * 64  # noqa: E731
             self.acc_pages = MT * max(sum(c) for c in self.wg)  # (a fixed slot a pass: the busiest column's)
             off, o = {}, 0
-            rsr = self._rs_regions() if rs is not None else []
+            rsr = list(rsr0)
             # (the reduce-scatter's local buffers - HOLD, FINB: this core's compute and, after its hand-off, its port read
             # them - overlay XIN + ACC, which are dead once this core's gate / up is done: no row peer multicasts into XIN
             # after the last round it consumed; only its own compute touches ACC)
@@ -1969,10 +2032,13 @@ class SeEngine3:
                 k: (off[k2] if i + 1 < len(off) else o) - off[k]
                 for i, (k, k2) in enumerate(zip(off, list(off)[1:] + [None]))
             }
-            raise ValueError(
-                f"se_engine3: arena {o // 1024} KB > {self.arena_max // 1024} KB of L1 (KB {self.KB}): "
+            err = ArenaTooLarge(
+                f"se_engine3: arena {o // 1024} KB > {self.arena_max // 1024} KB of L1 (KB {self.KB}, W ring "
+                f"{self.WRING or 'off'}, h slots {self.HSL}): "
                 + ", ".join(f"{k} {v // 1024}" for k, v in sizes.items())
             )
+            err.need, err.cap = o, self.arena_max
+            raise err
         self.groups = {}
         for c in range(GX):
             self.groups.setdefault((tuple(self.wg[c]), tuple(self.wd[c])), []).append(c)
@@ -2452,7 +2518,7 @@ class SeEngine3:
                 config=dm("RISCV_1", ttnn.NOC.NOC_1),
             ),
         ]
-        glu_code = {"silu": 1, "situ": 2, "clamped_silu": 3}[self.glu]
+        glu_code, glu_def = glu_defines(self.glu)
         for (wg, wd), cols in self.groups.items():
             crs = ttnn.CoreRangeSet(
                 [ttnn.CoreRange(ttnn.CoreCoord(cx0 + c, 0), ttnn.CoreCoord(cx0 + c, GY - 1)) for c in cols]
@@ -2486,7 +2552,7 @@ class SeEngine3:
                 c_rt[cx0 + c][cy] = ra[shared:] if len(ra) > shared else [0]
             kernels.append(
                 ttnn.KernelDescriptor(
-                    kernel_source=f"#define SE_GLU {glu_code}\n" + nd + _probes() + _COMPUTE,  # noqa
+                    kernel_source=f"#define SE_GLU {glu_code}\n" + glu_def + nd + _probes() + _COMPUTE,  # noqa
                     source_type=st,
                     core_ranges=crs,
                     compile_time_args=[

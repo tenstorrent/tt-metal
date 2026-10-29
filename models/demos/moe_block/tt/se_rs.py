@@ -133,6 +133,12 @@ class RsPlan:
     def hold_offs(self, p, cx, cy):
         """{entry: HOLD tile offset} (fp32 own partials of the entries that add an arrival here), first fit over
         their live ranges (first pass .. its fin op); and the HOLD tiles used."""
+        memo = self.__dict__.setdefault("_hold_memo", {})
+        if (p, cx, cy) not in memo:
+            memo[(p, cx, cy)] = self._hold_offs(p, cx, cy)
+        return memo[(p, cx, cy)]
+
+    def _hold_offs(self, p, cx, cy):
         ops = self.ops(p, cx, cy)
         h = self.half(self.k(cx, cy))
         ents = self.entries(p, h)

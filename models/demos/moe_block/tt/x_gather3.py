@@ -748,9 +748,11 @@ def shard_order(chips, coord, *, CR, nv, sps, kb, rp):
     return [own] + rest, carry
 
 
-def port_cb_bytes(kb, group=4):
-    """A port core's static circular buffer (the sender's packets: two groups of rp pages) at K step kb."""
-    rp = max(1, min(kb, ttnn.get_tt_fabric_max_payload_size_bytes() // 2048))
+def port_cb_bytes(kb, group=4, payload=None):
+    """A port core's static circular buffer (the sender's packets: two groups of rp pages) at K step kb. payload: the
+    fabric's packet payload bytes (None: the open fabric's - host planning passes its own)."""
+    payload = int(ttnn.get_tt_fabric_max_payload_size_bytes()) if payload is None else payload
+    rp = max(1, min(kb, payload // 2048))
     return 2 * group * rp * 2048
 
 

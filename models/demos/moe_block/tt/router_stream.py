@@ -97,10 +97,12 @@ void kernel_main() {
 #else
     // W_r^T is read from DRAM once: K block kb by the column's rotating sender kb % RB, multicast down the router
     // column into every core's WR slot (the kernel_lib family's handshake: a core is ready once its slot is reserved)
+#ifndef RT_RW_SOLO  // (one router core: it reads every K block itself - no family)
     constexpr auto mw = McastArgs<get_named_compile_time_arg_val("rw_ct_offset"), get_named_compile_time_arg_val("rw_rt_offset")>();
     Noc noc;
     auto sw = mw.optional_sender(noc);
     auto rw = mw.optional_receiver(noc);
+#endif
     for (uint32_t kb = 0; kb < KT / KBR; ++kb) {  // K block kb: x [KBR][G] (k-major: the matmul's in1) and W_r^T [ET][KBR]
         cb_reserve_back(XR, G * KBR);
         cb_reserve_back(WR, KBR * ET);
@@ -109,6 +111,10 @@ void kernel_main() {
             const uint32_t R = get_arg_val<uint32_t>(r0 + e);
             for (uint32_t k = 0; k < KBR; ++k) noc_async_read(xg.get_noc_addr(R * KT + kb * KBR + k), xl + (k * G + e) * 2048, 2048);
         }
+#ifdef RT_RW_SOLO
+        for (uint32_t e = 0; e < ET; ++e)
+            for (uint32_t k = 0; k < KBR; ++k) noc_async_read(wg.get_noc_addr(e * KT + kb * KBR + k), l1 + (e * KBR + k) * 2048, 2048);
+#else
         if (mw.should_send(kb)) {
             for (uint32_t e = 0; e < ET; ++e)
                 for (uint32_t k = 0; k < KBR; ++k) noc_async_read(wg.get_noc_addr(e * KT + kb * KBR + k), l1 + (e * KBR + k) * 2048, 2048);
@@ -117,6 +123,7 @@ void kernel_main() {
         } else {
             rw->receive(kb);
         }
+#endif
         noc_async_read_barrier();
         cb_push_back(XR, G * KBR);
         cb_push_back(WR, KBR * ET);
@@ -1130,7 +1137,7 @@ class RouterStream:
 
     def attach_mcast(self, prog):
         """The W_r column family (rotating sender, handshake) on the router NCRISC: after prog.semaphores is set."""
-        if self.on_engine:
+        if self.on_engine or len(self.cores) == 1:  # (one router core: no family - RT_RW_SOLO)
             return
         lo, hi = self.cores[0], self.cores[-1]
         col = lo.x == hi.x and hi.y - lo.y + 1 == len(self.cores)
@@ -1166,7 +1173,11 @@ class RouterStream:
 
         def cb(i, key, size, dt, page):
             dd = ttnn.cb_descriptor_from_sharded_tensor(
-                i, self.arena, address_offset=off[key] + getattr(self, "arena_delta", 0), total_size=size, core_ranges=self.crs
+                i,
+                self.arena,
+                address_offset=off[key] + getattr(self, "arena_delta", 0),
+                total_size=size,
+                core_ranges=self.crs,
             )
             dd.format_descriptors = [ttnn.CBFormatDescriptor(i, dt, page)]
             cbs.append(dd)
@@ -1276,6 +1287,7 @@ class RouterStream:
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         eng = f"#define RT_ENG {self.arr[1]}u\n" if self.on_engine else ""
         eng += f"#define RT_MSYNC {self.base + self.off['msync']}u\n#define RT_FOLD {self.fold}u\n"
+        eng += "#define RT_RW_SOLO\n" if not self.on_engine and len(self.cores) == 1 else ""
         eng += "#define RT_ARR_ORDERED\n" if self.ordered else ""
         if self.on_engine and self.gate is not None:  # (the engine's W-stream gate: se_engine3 gate_target)
             g = self.gate
