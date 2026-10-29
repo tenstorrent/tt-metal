@@ -18,7 +18,8 @@
 
 namespace tt::tt_fabric {
 
-// Why a VC carries its credits in L1 counters rather than stream registers.
+// Why a VC carries its credits in L1 counters rather than stream registers. Each reason is one bit of a VC's
+// reasons in CreditTransportPlan, so there can be at most eight.
 enum class L1CreditCounterReason : uint8_t {
     // The router's sender and receiver TX queues differ.
     MULTI_TXQ,
@@ -37,20 +38,31 @@ enum class L1CreditCounterReason : uint8_t {
 // One of the two axes this file separates. The plan says which transport each VC uses; the assignment
 // below says which register serves which role once that is decided. Keeping them apart means changing
 // a VC's transport is a single decision rather than an edit threaded through the map.
+//
+// A VC is on L1 counters exactly when it has a reason to be, so which transport a VC uses and why can't
+// disagree.
 class CreditTransportPlan {
 public:
-    // Each accessor fatals on a VC outside the fabric's VCs.
-    const std::vector<L1CreditCounterReason>& get_l1_counters_reasons(uint32_t vc) const;
-    void add_counter_reason(uint32_t vc, L1CreditCounterReason reason);
+    void add_counter_reason(uint32_t vc, L1CreditCounterReason reason) {
+        vc_uses_l1_counters_.at(vc) |= get_reason_bit(reason);
+    }
+    bool has_counter_reason(uint32_t vc, L1CreditCounterReason reason) const {
+        return (vc_uses_l1_counters_.at(vc) & get_reason_bit(reason)) != 0;
+    }
 
-    bool vc_uses_counters(uint32_t vc) const { return !get_l1_counters_reasons(vc).empty(); }
+    bool vc_uses_counters(uint32_t vc) const { return vc_uses_l1_counters_.at(vc) != 0; }
     bool any_vc_uses_counters() const {
-        return std::ranges::any_of(per_vc_l1_counters_reasons_, [](const auto& reasons) { return !reasons.empty(); });
+        return std::ranges::any_of(vc_uses_l1_counters_, [](uint8_t reasons) { return reasons != 0; });
     }
 
 private:
-    // Why each VC is on L1 counters. A VC with no reasons stays on stream registers.
-    std::array<std::vector<L1CreditCounterReason>, builder_config::MAX_NUM_VCS> per_vc_l1_counters_reasons_{};
+    static uint8_t get_reason_bit(L1CreditCounterReason reason) {
+        return static_cast<uint8_t>(1u << static_cast<uint8_t>(reason));
+    }
+
+    // Why each VC is on L1 counters, one bit per L1CreditCounterReason. A VC with no bits set stays on
+    // stream registers.
+    std::array<uint8_t, builder_config::MAX_NUM_VCS> vc_uses_l1_counters_{};
 };
 
 struct StreamRegAssignments {
