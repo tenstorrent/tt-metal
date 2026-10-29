@@ -9,10 +9,16 @@
 #include <climits>
 #include <cstdint>
 #include <cstddef>
+#include <fstream>
 #include <future>
+#include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <sstream>
+#include <string>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -101,6 +107,39 @@ void bind_memory_to_numa_node(void* base, size_t bytes, int numa_node) {
         return;
     }
     numa_tonode_memory(base, bytes, numa_node);
+}
+
+// Parses a sysfs CPU list such as "0,16" or "0-1".
+std::vector<uint32_t> parse_cpu_list(const std::string& list) {
+    std::vector<uint32_t> cpus;
+    std::stringstream stream(list);
+    std::string range;
+    while (std::getline(stream, range, ',')) {
+        const auto dash = range.find('-');
+        const uint32_t first = std::stoul(range.substr(0, dash));
+        const uint32_t last = dash == std::string::npos ? first : std::stoul(range.substr(dash + 1));
+        for (uint32_t cpu = first; cpu <= last; cpu++) {
+            cpus.push_back(cpu);
+        }
+    }
+    return cpus;
+}
+
+// For a worker pinned to a CPU off the caller's node: the SMT sibling of a CPU the pool already uses on the
+// caller's node, so the move takes no core from the other pools or the caller. Keeps cpu when there is none.
+uint32_t sibling_on_node(uint32_t cpu, const std::vector<uint32_t>& pool_cpus_on_node, size_t& next) {
+    for (size_t tried = 0; tried < pool_cpus_on_node.size(); tried++) {
+        const uint32_t local = pool_cpus_on_node[next++ % pool_cpus_on_node.size()];
+        std::ifstream file("/sys/devices/system/cpu/cpu" + std::to_string(local) + "/topology/thread_siblings_list");
+        if (std::string list; std::getline(file, list) && !list.empty()) {
+            for (uint32_t sibling : parse_cpu_list(list)) {
+                if (sibling != local) {
+                    return sibling;
+                }
+            }
+        }
+    }
+    return cpu;
 }
 
 void set_worker_affinity(std::thread& worker, uint32_t cpu_core) {
@@ -269,14 +308,12 @@ class ParallelJob;
 // across threads.
 class NumaAwareExecutor {
 public:
-    NumaAwareExecutor(ContextId context_id, uint32_t physical_device_id, Completion& completion) :
-        completion_(completion) {
+    NumaAwareExecutor(uint32_t cpu_core, Completion& completion) : completion_(completion) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() { worker_loop(); });
 
-        auto cpu_core_for_worker = thread_binding::get_cpu_core_for_physical_device(context_id, physical_device_id);
-        thread_binding::set_worker_affinity(worker, cpu_core_for_worker);
+        thread_binding::set_worker_affinity(worker, cpu_core);
     }
 
     // Delete copy and move operations as this class manages a thread and should not be copied or moved
@@ -527,12 +564,30 @@ public:
     // Constructor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
     // guaranteed to be bound to a CPU core on a NUMA Node "closest" to that device.
     // All physical devices must belong to the same context ID.
-    DeviceBoundThreadPool(ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices) :
+    DeviceBoundThreadPool(
+        ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices, bool near_caller = false) :
         num_workers_(physical_devices.size()) {
         workers_.reserve(num_workers_);
+        std::vector<uint32_t> cpus;
+        for (const auto* device : physical_devices) {
+            cpus.push_back(thread_binding::get_cpu_core_for_physical_device(context_id, device->id()));
+        }
+        // Near the caller: workers whose devices are on another NUMA node move to the node the pool is created from.
+        if (const int caller_cpu = sched_getcpu(); near_caller && numa_available() != -1 && caller_cpu >= 0) {
+            const int caller_node = numa_node_of_cpu(caller_cpu);
+            std::vector<uint32_t> cpus_on_node;
+            std::copy_if(cpus.begin(), cpus.end(), std::back_inserter(cpus_on_node), [&](uint32_t cpu) {
+                return numa_node_of_cpu(static_cast<int>(cpu)) == caller_node;
+            });
+            size_t next = 0;
+            for (auto& cpu : cpus) {
+                if (numa_node_of_cpu(static_cast<int>(cpu)) != caller_node) {
+                    cpu = thread_binding::sibling_on_node(cpu, cpus_on_node, next);
+                }
+            }
+        }
         for (uint32_t i = 0; i < num_workers_; i++) {
-            workers_.emplace_back(
-                std::make_unique<NumaAwareExecutor>(context_id, physical_devices[i]->id(), completion_));
+            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(cpus[i], completion_));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
         }
     }
@@ -542,7 +597,8 @@ public:
         workers_.reserve(thread_count);
 
         for (uint32_t i = 0; i < thread_count; i++) {
-            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(context_id, i, completion_));
+            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
+                thread_binding::get_cpu_core_for_physical_device(context_id, i), completion_));
             phys_device_to_thread_id_[i] = i;
         }
     }
@@ -664,8 +720,8 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 }
 
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
-    ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices) {
-    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices);
+    ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices, bool near_caller) {
+    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices, near_caller);
 }
 
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId /*context_id*/) {
