@@ -351,6 +351,22 @@ def test_a_refused_commit_is_pending_and_commits_without_a_rerun(sandbox):
     assert sandbox.git("status", "--porcelain", "bringup", "src") == ""
 
 
+def test_a_gate_commit_leaves_the_generated_dashboard_pages_out(sandbox):
+    """F210: the dashboard pages are re-exported after every gate and published as artifacts; a gate commit never
+    takes them (DeepSeek-V4.1 FIX.8: the repo's 500 KB hook refused a passed gate over two 0.9 MB pages)."""
+    (sandbox.repo / "src").mkdir()
+    (sandbox.repo / "src/impl.py").write_text("x = 1\n")
+    dash = sandbox.repo / "bringup/dashboard"
+    dash.mkdir(parents=True, exist_ok=True)
+    (dash / "index.html").write_text("<p>dashboard</p>\n")
+    led = sandbox.tasks(task("A.1", record_cmd(pcc_out=0.995), metrics={"pcc_*": ">= 0.99"}, paths=["src", "bringup"]))
+    res = run_gate(sandbox.spec, led, "A.1", commit=True)
+    assert res.verdict == "PASS", res.summary()
+    committed = set(sandbox.git("show", "--name-only", "--format=", "HEAD").split())
+    assert "src/impl.py" in committed and "bringup/dashboard/index.html" not in committed
+    assert "bringup/dashboard/" in sandbox.git("status", "--porcelain", "--untracked-files=all")
+
+
 def test_commit_only_names_a_file_too_large_and_stays_pending(sandbox):
     """F149: a refusal by the repo's large-file hook names the file; the task stays pending for the overseer's fix."""
     from models.demos.common.bringup.core.gate import commit_only
