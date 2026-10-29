@@ -2,18 +2,29 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The restore of a parked prefix from its decode slot into a prefill state (``TT_V41_DEFER_FINAL``): ``V41DecodePool.restore_ops`` through ``TtV41BatchDecoder.restore``.
+"""The restore of a parked prefix from its decode slot into a prefill state (``TT_V41_DEFER_FINAL``):
+``V41DecodePool.restore_ops`` through ``TtV41BatchDecoder.restore``.
 
-For each prompt length of ``V41_RS_PROMPTS`` (8196, 12292, 131076 tokens: 2, 3 and 26 chunks) the prompt's bulk
-chunks (every chunk but the last) are prefilled eagerly through one generic state at the production pool width, the
-state's prefix tensors are snapshotted on one chip of every SP rank (the compressed KV rows and both index-K forms of
-every source, the 40 window carries), the state is joined into a decode slot and parked, the state is overwritten with
-random bytes (and its carries zeroed), one decode step of another slot runs (``V41_RS_STEP=1``: the step writes every
-slot's ring, which is why the carries are parked), the prefix is restored and timed, every restored tensor is compared
-bit for bit with the snapshot, then the prompt's final chunk runs on the restored state and its logits are compared bit
-for bit with the serial path's (the same prompt prefilled in one go on the reset state). Then the synthetic 1M fill
-(``V41_RS_FILL=1``): the state's prefix tensors filled with random bytes to ``V41_RS_FILL_TOKENS`` (1,044,480: 204
-chunks), joined, parked, overwritten, restored and compared, the restore timed and the allocator's peak sampled after
+For each prompt length of ``V41_RS_PROMPTS`` (8196, 12292, 131076 tokens: 2, 3 and 26 chunks) the prompt's
+bulk
+chunks (every chunk but the last) are prefilled eagerly through one generic state at the production pool
+width, the
+state's prefix tensors are snapshotted on one chip of every SP rank (the compressed KV rows and both index-K
+forms of
+every source, the 40 window carries), the state is joined into a decode slot and parked, the state is
+overwritten with
+random bytes (and its carries zeroed), one decode step of another slot runs (``V41_RS_STEP=1``: the step
+writes every
+slot's ring, which is why the carries are parked), the prefix is restored and timed, every restored tensor is
+compared
+bit for bit with the snapshot, then the prompt's final chunk runs on the restored state and its logits are
+compared bit
+for bit with the serial path's (the same prompt prefilled in one go on the reset state). Then the synthetic 1M
+fill
+(``V41_RS_FILL=1``): the state's prefix tensors filled with random bytes to ``V41_RS_FILL_TOKENS`` (1,044,480:
+204
+chunks), joined, parked, overwritten, restored and compared, the restore timed and the allocator's peak
+sampled after
 every gather. ``V41_RS_LAYERS`` (``0,1,2,3,20,21,24``: both KV sources and the index sources)
 suffice for the bytes; the timing is layout-bound. ``V41_RS_MAX_SEQ`` (1,054,720) is the pool and the state,
 ``V41_RS_PIECE`` (65,536) the restore's piece. Results: ``V41_RS_OUT``."""
@@ -49,20 +60,24 @@ def _rows(mesh_device, t, a: int, b: int, chips: list[int]) -> torch.Tensor:
     """Rows ``[a, b)`` of ``t`` (``[1, 1, H, W]``, row-major uint8 / bf16 or tiled bf16) on ``chips`` -> host
     ``[len(chips), b - a, W]`` (logical values; FP8 bytes come through the mesh composer)."""
     w = t.shape[3]
-    piece = ttnn.slice(t, [0, 0, a, 0], [1, 1, b, w])
+    # a slice over the whole extent is the tensor itself at the C++ level, whatever the Python wrapper says:
+    # never slice, never deallocate, in that case
+    whole = a == 0 and b == t.shape[2]
+    piece = t if whole else ttnn.slice(t, [0, 0, a, 0], [1, 1, b, w])
     if t.dtype == FP8:
         host = ttnn.to_torch(piece, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))  # [chips, 1, n, W]
         host = host[chips].reshape(len(chips), b - a, w)
     else:
         every = ttnn.get_device_tensors(piece)
         host = torch.stack([ttnn.to_torch(every[c])[0, 0] for c in chips])
-    if piece is not t:  # a slice over the whole extent returns the tensor itself 
+    if not whole:
         ttnn.deallocate(piece)
     return host.contiguous()
 
 
 def _snapshot(mesh_device, state: V41PrefillState, length: int, chips: list[int]) -> dict:
-    """The prefix tensors of ``state`` for ``length`` tokens: per source the compressed KV rows and both index-K
+    """The prefix tensors of ``state`` for ``length`` tokens: per source the compressed KV rows and both
+    index-K
     forms in pieces, and every layer's carry."""
     out = {}
     g = state.geometry
@@ -96,17 +111,18 @@ def _compare(want: dict, got: dict) -> tuple[list[str], int]:
     return bad, equal
 
 
-def _random_like(mesh_device, t, rows: int, g) -> None:
+def _random_like(mesh_device, t, rows: int, g, host=None) -> torch.Tensor:
     """Overwrite rows ``[0, rows)`` of ``t`` with random bytes of its dtype and layout (the dirtying before a
-    restore), in blocks of 4,096 rows."""
+    restore), in blocks of 4,096 rows; ``host`` reuses a block (the index-K twin takes the row-major cache's
+    values, as the prefill writes them). Returns the host block."""
     w = t.shape[3]
     block_rows = 4096
-    if t.dtype == FP8:  # random floats packed as the format's bytes: enough to differ from the real rows
-        host = torch.randn(1, 1, block_rows, w, generator=g) * 0.5
-        dtype = FP8
-    else:
-        host = (torch.randn(1, 1, block_rows, w, generator=g) * 0.5).to(torch.bfloat16)
-        dtype = ttnn.bfloat16
+    if host is None:
+        if t.dtype == FP8:  # random floats packed as the format's bytes: enough to differ from the real rows
+            host = torch.randn(1, 1, block_rows, w, generator=g) * 0.5
+        else:
+            host = (torch.randn(1, 1, block_rows, w, generator=g) * 0.5).to(torch.bfloat16)
+    dtype = FP8 if t.dtype == FP8 else ttnn.bfloat16
     block = ttnn.from_torch(
         host, device=mesh_device, dtype=dtype, layout=t.layout, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
     )
@@ -115,15 +131,16 @@ def _random_like(mesh_device, t, rows: int, g) -> None:
         piece = block if n == block_rows else ttnn.slice(block, [0, 0, 0, 0], [1, 1, n, w])
         ttnn.experimental.slice_write(piece, t, [0, 0, first, 0], [1, 1, first + n, w], [1, 1, 1, 1])
     ttnn.deallocate(block)
+    return host
 
 
 def _dirty(mesh_device, model, state: V41PrefillState, length: int, g, carries: bool) -> None:
     for src in state.kv:
         n = length // state.config.compress_ratio(src)
         _random_like(mesh_device, state.kv[src], state.geometry.kv_row_of_compressed(0) + n, g)
-        _random_like(mesh_device, state.index_k[src], n, g)
+        host = _random_like(mesh_device, state.index_k[src], n, g)
         if src in state.index_k_tiled:
-            _random_like(mesh_device, state.index_k_tiled[src], n, g)
+            _random_like(mesh_device, state.index_k_tiled[src], n, g, host=host)
     if carries:
         for t in state.window_carry.values():
             _random_like(mesh_device, t, WINDOW_SLOT, g)
@@ -143,6 +160,7 @@ def test_v41_restore(mesh_device, device_params):
     fill = os.environ.get("V41_RS_FILL", "1") == "1"
     fill_tokens = int(os.environ.get("V41_RS_FILL_TOKENS", 1044480))
     step = os.environ.get("V41_RS_STEP", "1") == "1"
+    repeat = int(os.environ.get("V41_RS_REPEAT", 2))
     out_path = os.environ.get("V41_RS_OUT")
     ckpt = resolve_checkpoint()
     if ckpt is None:
@@ -249,14 +267,19 @@ def test_v41_restore(mesh_device, device_params):
         def probe(tag: str) -> None:
             peak.append(_dram_bytes(mesh_device))
 
-        sync()
-        t0 = time.time()
-        decoder.restore(slot, state, length, piece=piece, probe=probe)
-        t1 = time.time()
-        sync()
-        t2 = time.time()
-        case["restore_issue_s"] = round(t1 - t0, 4)
-        case["restore_wall_s"] = round(t2 - t0, 4)
+        # the restore twice: the first pays the programs' creation and the kernels' JIT at these shapes, the
+        # second is the warm cost (idempotent: the same bytes again)
+        case["restore_runs"] = []
+        for rep in range(repeat):
+            sync()
+            t0 = time.time()
+            decoder.restore(slot, state, length, piece=piece, probe=probe if rep == 0 else None)
+            t1 = time.time()
+            sync()
+            t2 = time.time()
+            case["restore_runs"].append({"issue_s": round(t1 - t0, 4), "wall_s": round(t2 - t0, 4)})
+        case["restore_issue_s"] = case["restore_runs"][-1]["issue_s"]
+        case["restore_wall_s"] = case["restore_runs"][-1]["wall_s"]
         case["restore"] = decoder.last_restore
         case["dram_before_restore"] = dram0
         case["dram_peak_restore"] = max(peak)
@@ -273,8 +296,8 @@ def test_v41_restore(mesh_device, device_params):
             failures.append(f"{name}: {len(bad)} of {len(before)} keys differ: {bad[:5]}")
         logger.info(
             f"restore {name}: slot {slot} ({length} tokens): restore {case['restore_wall_s'] * 1e3:.1f} ms wall "
-            f"(issue {case['restore_issue_s'] * 1e3:.1f}), {decoder.last_restore}; {equal}/{len(before)} keys equal; "
-            f"DRAM peak +{(max(peak) - dram0) / 2**20:.0f} MB"
+            f"(issue {case['restore_issue_s'] * 1e3:.1f}; runs {case['restore_runs']}), {decoder.last_restore}; "
+            f"{equal}/{len(before)} keys equal; DRAM peak +{(max(peak) - dram0) / 2**20:.0f} MB"
         )
         return case
 

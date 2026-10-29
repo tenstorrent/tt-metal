@@ -45,6 +45,7 @@ _KERNEL = "models/demos/deepseek_v3_d_p/tt/v41/kernels/scatter_rows.cpp"
 
 
 BLOCK_ROWS = 8  # logical rows per block page (CANDIDATE_BLOCK_SIZE: the candidate scorer reads a block as one page)
+RESTORE_PIECE = 65536  # the restore's piece (tokens; at most this many rows a source per gather)
 
 
 def _dst_mode(dst, src_width: int, row_bytes: int) -> int:
@@ -239,7 +240,15 @@ class V41DecodePool:
                     self.parked[slot][l] = replicated_zeros(
                         mesh_device, WINDOW_SLOT, fmt.storage_width(self.kv_geometry), fmt.storage_dtype
                     )
-        self._iota: dict[int, ttnn.Tensor] = {}  # the restore's identity index pages, by length
+        # the restore's identity index page, allocated here, before any capture: a persistent tensor allocated
+        # after a capture may be overwritten by that capture's replay (the second
+        # restore of a cohort hung on an index page the first restore had allocated lazily and the final chunk's
+        # and the join's replays had since clobbered)
+        self.restore_piece = RESTORE_PIECE
+        self._iota = None
+        if parking:
+            host = torch.arange(RESTORE_PIECE, dtype=torch.int32).view(1, 1, 1, RESTORE_PIECE)
+            self._iota = self._replicated(host, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
 
     def _replicated(self, host, dtype, layout=ttnn.TILE_LAYOUT):
         return ttnn.from_torch(
@@ -401,15 +410,14 @@ class V41DecodePool:
             ttnn.copy(src, state.window_carry[layer])
 
     def iota(self, n: int):
-        """``[1, 1, 1, n]`` uint32 row-major ``0 .. n - 1`` on every chip (the restore's destination index)."""
-        t = self._iota.get(n)
-        if t is None:
-            host = torch.arange(n, dtype=torch.int32).view(1, 1, 1, n)
-            t = self._replicated(host, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-            self._iota[n] = t
-        return t
+        """The ``[1, 1, 1, RESTORE_PIECE]`` uint32 row-major ``0 .. RESTORE_PIECE - 1`` page on every chip (the
+        restore's destination index; ``scatter_rows(..., rows=n)`` reads its first ``n`` entries)."""
+        assert self._iota is not None and 0 < n <= self.restore_piece, (n, self.restore_piece)
+        return self._iota
 
-    def restore_ops(self, slot: int, state: V41PrefillState, length: int, piece: int = 65536, probe=None) -> dict:
+    def restore_ops(
+        self, slot: int, state: V41PrefillState, length: int, piece: int = RESTORE_PIECE, probe=None
+    ) -> dict:
         """The device ops of a restore: ``slot``'s first ``length`` tokens of compressed KV and index keys (the
         bulk chunks of a parked request, a multiple of the chunk) back into ``state``'s caches on every chip, in
         pieces of at most ``piece`` tokens. Per source and piece: the slot's rows sliced on every rank (each rank
@@ -423,6 +431,7 @@ class V41DecodePool:
         assert length % state.geometry.chunk == 0 and 0 < length <= state.geometry.max_seq_len, length
         cfg, g = self.config, state.geometry
         rank, u = divmod(slot, self.users)
+        assert 0 < piece <= self.restore_piece, (piece, self.restore_piece)
         counts = {"gathers": 0, "scatters": 0, "layouts": 0, "pieces": 0}
         for src in state.kv:
             ratio = cfg.compress_ratio(src)

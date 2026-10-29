@@ -483,6 +483,11 @@ class DeepseekV41ForCausalLM:
             free = [st for st in self.prefill_states if id(st) not in owned]
         state = free[0]
         t0 = time.time()
+        if os.environ.get("TT_V41_RESTORE_SYNC", "1") == "1":
+            # a join's replay issued just before (non-blocking) reads the state the restore overwrites, and the
+            # restore's transients may land on a replay's freed intermediates (the second
+            # restore of a cohort hung in its gather without this wait)
+            ttnn.synchronize_device(self.mesh_device)
         self.decoder.restore(slot, state, start)
         logger.info(
             f"DeepSeek-V4.1-Flash: request restored from slot {slot} ({start} tokens) in {time.time() - t0:.3f} s "
