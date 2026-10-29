@@ -447,8 +447,8 @@ def test_rebase_mode_says_what_it_compared():
 
 
 def test_requested_ops_take_any_case_and_skip_unknown_names():
-    ops, unknown = cli._requested_ops("tanh,SFPULOGSIGMOID,typecast,tanhh,Tanh")
-    assert ops == ["Tanh", "SfpuLogsigmoid", "Typecast"]
+    ops, unknown = cli._requested_ops("tanh,SFPUELWADD,typecast,tanhh,Tanh")
+    assert ops == ["Tanh", "SfpuElwadd", "Typecast"]
     assert unknown == ["tanhh"]
 
 
@@ -650,7 +650,8 @@ def test_ops_built_on_one_side_only_are_measured():
 
 def test_binary_enum_names_map_to_math_operations():
     names = cli._binary_enum_to_op()
-    assert names["LOGSIGMOID"] == "SfpuLogsigmoid"
+    assert names["ADD"] == "SfpuElwadd"
+    assert "LOGSIGMOID" not in names  # unary Logsigmoid since #54080
     assert names["ATAN2"] == "SfpuAtan2"
     assert names["DIV_INT32"] == "SfpuDivInt32"
 
