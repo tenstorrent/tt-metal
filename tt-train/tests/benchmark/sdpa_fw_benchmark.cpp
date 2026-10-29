@@ -5,13 +5,13 @@
 // SDPA forward on the consumer shapes: the program factory's default chunking and schedule against this
 // same kernel pinned to the chunking main used (one query tile-row, four K/V tiles per step, no cuts), plus
 // any config given on the command line. Prints host microseconds per launch (the timed loop sits between
-// two device syncs), the speedup, the DRAM peak of the first launch (the split units' scratch is allocated
-// then and lives with the cached program) and how many sender / merger units the schedule has, so a row
-// that is meant to split can be seen to split. main's own kernel is not timed here: build this file on the
-// merge-base with run() calling sdpa_fw(query, key, value, sc.mask_type, mask, 0.0F, true, gate) to
-// compare. Measured that way on Blackhole p150b (merge-base 0fff850f3c6 vs the chunk-knob branch, us per
-// launch), this kernel at main's chunking matches main's kernel, so the speedups are the chunking and
-// the schedule, not a kernel change:
+// two device syncs), the speedup, the DRAM the first launch allocates (the outputs, the logsumexp and, for a
+// schedule that cuts, the split units' scratch, which lives on with the cached program) and how many sender
+// / merger units the schedule has, so a row that is meant to split can be seen to split. main's own kernel
+// is not timed here: build this file on the merge-base with run() calling
+// sdpa_fw(query, key, value, sc.mask_type, mask, 0.0F, true, gate) to compare. Measured that way on
+// Blackhole p150b (merge-base 0fff850f3c6 vs the chunk-knob branch, us per launch), this kernel at main's
+// chunking matches main's kernel, so the speedups are the chunking and the schedule, not a kernel change:
 //
 //   scenario                    main's kernel   this kernel, main's chunking   default pick (no cuts)
 //   tinyllama_s2048_causal             1656.4                         1656.6          882.7
@@ -136,8 +136,8 @@ const ttml::metal::SDPAForwardProgramConfig kMainConfig{
 struct Row {
     std::string label;
     double device_us = 0.0;
-    double speedup = 0.0;  // main_us / device_us, both this kernel
-    double dram_peak_mib = 0.0;
+    double speedup = 0.0;         // main_us / device_us, both this kernel
+    double dram_alloc_mib = 0.0;  // allocated by the first launch: outputs, logsumexp, scratch
     float max_abs_diff = 0.0F;
     std::string units;  // "<senders>S/<mergers>M" of the schedule
     std::string skipped;
@@ -220,7 +220,7 @@ void run_scenario(
     auto measure = [&](const std::string& label, const metal::SDPAForwardProgramConfig& cfg) {
         Row row{.label = label};
         row.units = schedule_units(sc, cfg);
-        row.dram_peak_mib =
+        row.dram_alloc_mib =
             static_cast<double>(benchmark_utils::capture_dram_peak(sc.name + "_" + label, [&]() { (void)run(cfg); })) /
             (1024.0 * 1024.0);
         row.device_us = time_cfg(cfg);
@@ -278,7 +278,7 @@ void run_scenario(
         "config",
         "device_us",
         "speedup",
-        "dram_peak_MiB",
+        "dram_alloc_MiB",
         "max_abs_diff",
         "units");
     for (const Row& row : rows) {
@@ -288,7 +288,7 @@ void run_scenario(
                 row.label,
                 row.device_us,
                 row.speedup,
-                row.dram_peak_mib,
+                row.dram_alloc_mib,
                 row.max_abs_diff,
                 row.units);
         } else {
