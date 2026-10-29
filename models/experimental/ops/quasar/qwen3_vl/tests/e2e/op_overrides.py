@@ -34,7 +34,7 @@ def resolve(target):
 
 
 def _fp32_to_bf16_on_ttsim(args, kwargs):
-    """An fp32 -> bf16 upload to a non-Quasar device on a simulator: its on-device tilize aborts ttsim WH (S2)."""
+    """An fp32 -> bf16 upload to a non-Quasar device on a simulator: its on-device tilize aborts ttsim WH."""
     import ttnn
 
     src = args[0] if args else kwargs.get("tensor")
@@ -159,8 +159,8 @@ WORKAROUNDS = [
         name="ttsim_wh_host_cast_fp32_upload",
         target="ttnn.from_torch",
         reason="fp32->bf16 uploads tilize fp32 into DEST on device; the WH LLK's dummy SrcA unpack after each tile "
-        "(TEN-3868) aborts ttsim WH, real WH runs it (QUASAR_GAPS S2). Quasar needs no cast since #61421",
-        remove_when="ttsim accepts the TEN-3868 dummy unpack, or tt-llk issues it with a SrcA-legal format (S1)",
+        "(TEN-3868) aborts ttsim WH, real WH runs it. Quasar needs no cast since #61421",
+        remove_when="ttsim accepts the TEN-3868 dummy unpack, or tt-llk issues it with a SrcA-legal format",
         applies=_fp32_to_bf16_on_ttsim,
         rewrite=_cast_source_to_bf16,
     ),

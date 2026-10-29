@@ -60,7 +60,7 @@ parse_args() {
         continue
         ;;
       --fp32-dest-acc)
-        # A/B on hardware: keep fp32 dest accumulation (undefined on ttsim WH, QUASAR_GAPS S1).
+        # A/B on hardware: keep fp32 dest accumulation (undefined on ttsim WH).
         export QWEN_QSR_FP32_DEST_ACC=1
         shift
         continue

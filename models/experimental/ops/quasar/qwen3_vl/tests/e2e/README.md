@@ -19,7 +19,7 @@ $E2E/run_craq.sh --grid 8x4            # craq-sim, full grid
 $E2E/run_emu.sh                        # emulator (needs NNG_SOCKET_ADDR from your IRD reservation)
 ```
 
-The emulator backs only 64 MiB of DRAM per channel although its descriptor says 1 GiB; larger allocations silently overwrite earlier ones, and the e2e (~1.3 GiB of weights) does not fit (QUASAR_GAPS S7, #55417). Since #60444 tt-metal clamps each emulator channel to those 64 MiB, so the e2e fails at weight upload with an OOM. To run every stage anyway, pass a copy of the emulator build dir under a name tt-metal does not recognise as `QWEN_EMU_DIR` (`/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-2x3-uncapped/`, identical except `EMULATOR_TIMEOUT=14400`): tt-metal then uses the descriptor's 1 GiB, DRAM wraps, and PCC is wrong from `vision.block0.attn` on. Whether to keep this workaround or drop the emulator e2e is an open decision.
+The emulator backs only 64 MiB of DRAM per channel although its descriptor says 1 GiB; larger allocations silently overwrite earlier ones, and the e2e (~1.3 GiB of weights) does not fit (QUASAR_GAPS S1, #55417). Since #60444 tt-metal clamps each emulator channel to those 64 MiB, so the e2e fails at weight upload with an OOM. To run every stage anyway, pass a copy of the emulator build dir under a name tt-metal does not recognise as `QWEN_EMU_DIR` (`/proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-quasar-2x3-uncapped/`, identical except `EMULATOR_TIMEOUT=14400`): tt-metal then uses the descriptor's 1 GiB, DRAM wraps, and PCC is wrong from `vision.block0.attn` on. Whether to keep this workaround or drop the emulator e2e is an open decision.
 
 Script defaults: `--size tiny --vision-layers 2 --text-layers 2 --decode-steps 1 --deepstack-at 0 --debug default` (`--debug fast` on craq-sim, where the watcher slows each op 150-300x).
 
@@ -82,7 +82,7 @@ done
 
 Override locations with `QWEN_TTSIM_DIR`, `QWEN_CRAQ_SIM`, `QWEN_EMU_DIR`. `run_craq.sh` defaults to `/localdev/$USER/sim/libttsim.so`, an old craq-sim copy (2026-10-01); every craq-sim run recorded here used `QWEN_CRAQ_SIM=/localdev/$USER/quasar-sim/libttsim.so`, except the 2026-10-28 2x1 runs, which used a build of craq-sim#538 before it was merged and staged.
 
-On WH/BH the vision-token merge copies rows on the host: `QuasarModelArgs.device_scatter` is on only on Quasar. No simulator can check the device path there yet: ttsim WH aborts on scatter's int32 index (QUASAR_GAPS S3, a ttsim gap, not a WH bug) and ttsim BH aborts at the first op (tt-blaze#5898). The upstream demo (`models/demos/qwen3_vl`) scatters on device on WH.
+On WH/BH the vision-token merge copies rows on the host: `QuasarModelArgs.device_scatter` is on only on Quasar. No simulator can check the device path there yet: ttsim WH aborts on scatter's int32 index (a ttsim gap, not a WH bug) and ttsim BH aborts at the first op (tt-blaze#5898). The upstream demo (`models/demos/qwen3_vl`) scatters on device on WH.
 
 ## Hangs
 
@@ -107,7 +107,7 @@ Latest result per target. Tiny size, 2 vision / 2 text layers, 1 decode step. Wa
 |---|---|---|---|
 | craq-sim, main c4725ba800a | 8x4 | PASS (prefill 0.99681, decode0 0.99841; lowest `text.layer1.mlp` 0.99433) | 15 min |
 | craq-sim, main 9c941a0cc3a | 2x1 | PASS (prefill 0.99698, decode0 0.99861; lowest `text.layer1.mlp` 0.99427) | 42 min |
-| emu-quasar-2x3, DRAM clamp bypassed (`emu-quasar-2x3-uncapped`, see Run), main 1e85fb6a52e with #62744 | 2x1 | runs every stage (1211 device ops; no hang or crash); FAIL on PCC from `vision.block0.attn` on, the accepted DRAM-wrap effect (S7) | 217 min ops (3 h 38 min pytest) |
+| emu-quasar-2x3, DRAM clamp bypassed (`emu-quasar-2x3-uncapped`, see Run), main 1e85fb6a52e with #62744 | 2x1 | runs every stage (1211 device ops; no hang or crash); FAIL on PCC from `vision.block0.attn` on, the accepted DRAM-wrap effect (S1) | 217 min ops (3 h 38 min pytest) |
 | ttsim WH (md5 e9c03997); `ttsim_wh_host_cast_fp32_upload` | 2x1 | PASS (prefill 0.99943, decode0 0.99950) | 10 min |
 | WH N150 silicon | 8x9 | PASS (all stages >= 0.9993), with the #59510 fix | — |
 

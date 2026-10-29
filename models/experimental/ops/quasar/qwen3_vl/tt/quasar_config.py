@@ -48,7 +48,7 @@ QUASAR_DEVICE_NAME = "N150"
 
 
 def fp32_dest_acc_requested():
-    # A/B switch for hardware runs; fp32 dest accumulation is undefined on ttsim WH (QUASAR_GAPS S1).
+    # A/B switch for hardware runs; fp32 dest accumulation is undefined on ttsim WH.
     return os.environ.get("QWEN_QSR_FP32_DEST_ACC") == "1"
 
 

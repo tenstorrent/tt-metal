@@ -41,7 +41,7 @@ def _bf16(case):
 
 
 # Captures drop compute_kernel_config, so these ops would use their defaults (often fp32 dest acc, which ttsim WH
-# rejects, S1/S2); run them with the Quasar config's HiFi4 + bf16 dest acc instead.
+# rejects); run them with the Quasar config's HiFi4 + bf16 dest acc instead.
 _TAKES_COMPUTE_CONFIG = {
     "ttnn.linear",
     "ttnn.rms_norm",
