@@ -620,10 +620,14 @@ class Worker:
                 os.unlink(DIRTY_FLAG)
             except FileNotFoundError:
                 pass
-        keep = code == 0 and self.open_devices == 0 and self._rss_gb() < MAX_RSS_GB
+        # Below zero: the session closed devices it opened some uncounted way (submeshes from
+        # create_submeshes are closed with close_mesh_device); nothing is left open by that.
+        left_open = max(self.open_devices, 0)
+        self.open_devices = 0
+        keep = code == 0 and not left_open and self._rss_gb() < MAX_RSS_GB
         _send(conn, {"status": "done", "exit": code, "exiting": not keep})
-        if self.open_devices:
-            print(f"warm worker: session left {self.open_devices} device(s) open, exiting", flush=True)
+        if left_open:
+            print(f"warm worker: session left {left_open} device(s) open, exiting", flush=True)
         elif not keep:
             print(f"warm worker: session exit {code}, exiting", flush=True)
         return keep
@@ -644,17 +648,23 @@ class Worker:
             pass
         # Bound that teardown: past the limit, mark the device dirty and kill this process, which
         # releases the lock. Its own session, so the caller's process-group kill does not end it.
+        # The process start time (field 22 of /proc/PID/stat) tells this process from a later one
+        # that got the same pid.
+        with open("/proc/self/stat") as f:
+            start_ticks = f.read().rsplit(")", 1)[1].split()[19]
         subprocess.Popen(
             [
                 "bash",
                 "-c",
-                'sleep "$3"; grep -qa safe_pytest_warm.py "/proc/$1/cmdline" 2>/dev/null || exit 0; '
+                'sleep "$3"; s=$(cat "/proc/$1/stat" 2>/dev/null) || exit 0; read -r -a f <<< "${s##*)}"; '
+                '[[ "${f[19]}" == "$4" ]] || exit 0; '
                 'echo "warm worker: chip teardown did not finish in $3 s, killing it"; '
                 ': >> "$2"; kill -KILL "$1"',
                 "_",
                 str(os.getpid()),
                 DIRTY_FLAG,
                 str(TEARDOWN_LIMIT_S),
+                start_ticks,
             ],
             stdin=subprocess.DEVNULL,
             start_new_session=True,
