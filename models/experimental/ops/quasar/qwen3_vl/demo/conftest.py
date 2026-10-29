@@ -32,6 +32,12 @@ def pytest_addoption(parser):
     parser.addoption("--max_seq_len", action="store", type=int, help="Maximum context length supported by the model")
     parser.addoption("--num_layers", action="store", type=int, help="Text decoder layers to run (default: all)")
     parser.addoption("--vision_depth", action="store", type=int, help="Vision blocks to run (default: all)")
+    parser.addoption(
+        "--deepstack_at",
+        action="store",
+        type=int,
+        help="Move the deepstack tap to this vision block (default: 5/11/17)",
+    )
     parser.addoption("--batch_size", action="store", type=int, help="Number of users in a batch ")
     parser.addoption(
         "--max_generated_tokens", action="store", type=int, help="Maximum number of tokens to generate for each user"

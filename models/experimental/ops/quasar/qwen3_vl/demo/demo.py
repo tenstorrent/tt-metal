@@ -328,12 +328,15 @@ def test_demo(
     on_quasar = is_quasar()
     num_layers = request.config.getoption("--num_layers")
     vision_depth = request.config.getoption("--vision_depth")
+    deepstack_at = request.config.getoption("--deepstack_at")
     weight_dtype = ttnn.bfloat8_b
     if on_quasar:
         # Quasar: bf16 only (no block floats), no trace, host sampling (on-device argmax is unchecked on Quasar),
         # and the op workarounds the e2e uses (tests/e2e/op_overrides.py). Its 2 GiB of DRAM holds a few layers
-        # only, so unless given on the command line: 2 vision blocks, 2 text layers, the small prompt
-        # (256x256 image, 78 tokens) in one batch, and 4 generated tokens.
+        # only, so unless given on the command line: 2 vision blocks, 2 text layers, the deepstack tap at vision
+        # block 0, the small prompt (256x256 image, 78 tokens) in one batch, and 2 generated tokens. That runs
+        # every per-layer code path once: the block-to-block handoff, a deepstack merger, a text layer with and
+        # one without the deepstack add, and a decode step that reuses the compiled programs.
         from models.experimental.ops.quasar.qwen3_vl.tests.e2e.op_overrides import OverrideSession
 
         def cli_or(name, default):
@@ -342,10 +345,11 @@ def test_demo(
 
         num_layers = cli_or("--num_layers", 2)
         vision_depth = cli_or("--vision_depth", 2)
+        deepstack_at = cli_or("--deepstack_at", 0)
         input_prompts = cli_or(
             "--input_prompts", "models/experimental/ops/quasar/qwen3_vl/demo/sample_prompts/demo_tiny.json"
         )
-        max_generated_tokens = cli_or("--max_generated_tokens", 4)
+        max_generated_tokens = cli_or("--max_generated_tokens", 2)
         max_seq_len = cli_or("--max_seq_len", 256)
         repeat_batches = cli_or("--repeat_batches", 1)
         enable_trace = False
@@ -428,6 +432,7 @@ def test_demo(
         config,
         vision_depth or config.vision_config.depth,
         model_args.n_layers,
+        deepstack_at,
     )
     reference_model = Qwen3VLForConditionalGeneration.from_pretrained(
         ref_model_name, config=config, torch_dtype="auto", device_map="auto"
@@ -441,6 +446,9 @@ def test_demo(
             optimizations=None if on_quasar else DecodersPrecision.accuracy(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
+        vision_model_args.hf_config.vision_config.deepstack_visual_indexes = list(
+            config.vision_config.deepstack_visual_indexes
+        )
         visual_model = DropInVisionTransformer(
             get_hf_visual(reference_model), vision_model_args, debug=False
         )  # show PCC
