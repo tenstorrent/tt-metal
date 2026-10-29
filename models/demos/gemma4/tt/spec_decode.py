@@ -51,6 +51,10 @@ SPEC_ROW_TILE = 32
 # rows 32..63 the last reseed's target hidden (serving_seed_index).
 SPEC_POOL_ROWS = 2 * SPEC_ROW_TILE
 SPEC_K_BY_ROWS_ENV = "GEMMA4_SPEC_K_BY_ROWS"
+#: The warmup cost table's anchor token of row r (``MEASURE_TOKEN_BASE + MEASURE_TOKEN_STRIDE * r``): ordinary
+#: vocabulary ids, distinct per row, so a MoE target routes the rows as serving does.
+MEASURE_TOKEN_BASE = 1000
+MEASURE_TOKEN_STRIDE = 37
 SPEC_K_BY_ROWS_DEFAULT = "5:5"  # K=5 up to 5 live rows; above the table the step is the plain decode (K=0)
 # Additive mask value: -1e9, not -inf (flash kernels NaN on -inf).
 SPEC_MASK_NEG = -1e9
@@ -2748,18 +2752,22 @@ class SpeculativeDecoder:
         for shape in self._srv_shapes:
             B, K = shape
             rows = list(range(B))  # every row of the shape live: the covering record's cost
+            # A distinct token per row: with the same token on every row a MoE target routes every row to the same
+            # experts and the batched record times far under what diverse rows cost in serving (the 26B QB2 (8,3)
+            # measured 40 ms here and 53 ms served, 2026-10-29); a dense target is indifferent.
+            anchors = [int(MEASURE_TOKEN_BASE + MEASURE_TOKEN_STRIDE * r) for r in rows]
             table = torch.zeros((B, self._srv_blocks), dtype=torch.int32)
-            at_zero, _ = timed(lambda: self.serving_reseed(shape, rows, [0] * B, [0] * B, table))
+            at_zero, _ = timed(lambda: self.serving_reseed(shape, rows, anchors, [0] * B, table))
             at_top = at_zero
             if top_position > 0:
-                at_top, _ = timed(lambda: self.serving_reseed(shape, rows, [0] * B, [top_position] * B, table))
+                at_top, _ = timed(lambda: self.serving_reseed(shape, rows, anchors, [top_position] * B, table))
                 timings += 1
             timings += 1
             costs[("reseed", shape)] = (0, at_zero, top_position, at_top)
             for width, first, last in self.serving_measure_positions(self._srv_widths[shape], K, top_position):
                 line, one = [], []
                 for pos in (first, last) if last > first else (first,):
-                    ms, result = timed(lambda: self.serving_step(shape, rows, [0] * B, [pos] * B, table, [None] * B))
+                    ms, result = timed(lambda: self.serving_step(shape, rows, anchors, [pos] * B, table, [None] * B))
                     timings += 1
                     if int(result.width) != int(width):
                         raise RuntimeError(
@@ -2768,7 +2776,7 @@ class SpeculativeDecoder:
                         )
                     line.append((pos, ms))
                     if B > 1:  # one live row: a partial replay's cost, kept below only where it is cheaper
-                        ms1, _ = timed(lambda: self.serving_step(shape, [0], [0], [pos], table, [None]))
+                        ms1, _ = timed(lambda: self.serving_step(shape, [0], anchors[:1], [pos], table, [None]))
                         timings += 1
                         one.append((pos, ms1))
                 if len(line) == 1:
