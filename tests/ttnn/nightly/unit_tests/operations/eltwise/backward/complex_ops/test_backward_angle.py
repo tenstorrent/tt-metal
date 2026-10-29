@@ -88,7 +88,16 @@ def test_angle_bw_extreme_exponent_range(dtype, z_pair, device):
     grad_tensor = ttnn.Tensor(grad_data, dtype).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_dev = convert_to_torch_tensor(ttnn.angle_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-    golden_tensor = ttnn.get_golden_function(ttnn.angle_bw)(grad_data, in_data)
+
+    # PyTorch's native angle_backward evaluates self.abs().pow(2) in single precision,
+    # which underflows to 0.0f and produces NaN for |z| < 2^-63 when FTZ (flush-to-zero)
+    # is enabled on host CPUs. Evaluating golden autograd in float64 avoids this host underflow artifact.
+    xr_64 = xr.to(torch.float64)
+    xi_64 = xi.to(torch.float64)
+    in_data_64 = torch.complex(xr_64, xi_64).requires_grad_(True)
+    grad_data_64 = grad_data.to(torch.float64)
+    golden_tensor = ttnn.get_golden_function(ttnn.angle_bw)(grad_data_64, in_data_64)
+    golden_tensor = [golden_tensor[0].to(torch.float32)]
 
     assert not torch.isnan(tt_dev[0]).any()
     assert not torch.isinf(tt_dev[0]).any()
