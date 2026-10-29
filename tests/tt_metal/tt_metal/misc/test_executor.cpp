@@ -29,13 +29,14 @@ TEST(ExecutorTest, RunAllLetsWorkersThatFreeUpTakeQueuedJobs) {
     if (workers < kJobs) {
         GTEST_SKIP() << "needs " << kJobs << " executor workers, has " << workers;
     }
-    // Hold every worker but one, so run_all starts on a worker while the pool counts as full.
+    // Hold every worker but one, so run_all starts on a worker while the pool counts as full. Executor::async always
+    // queues: detail::async could run a holder on this thread, which would then wait for the gate forever.
     std::promise<void> gate;
     std::shared_future<void> released = gate.get_future().share();
     std::atomic<size_t> held{0};
-    std::vector<std::shared_future<void>> holders;
+    std::vector<std::future<void>> holders;
     for (size_t i = 0; i + 1 < workers; ++i) {
-        holders.push_back(detail::async([&] {
+        holders.push_back(detail::GetExecutor().async([&] {
             held.fetch_add(1);
             released.wait();
         }));
@@ -59,7 +60,7 @@ TEST(ExecutorTest, RunAllLetsWorkersThatFreeUpTakeQueuedJobs) {
             std::this_thread::yield();
         }
     };
-    detail::async([&] { detail::run_all({job, job, job}); }).get();
+    detail::GetExecutor().async([&] { detail::run_all({job, job, job}); }).get();
     for (auto& holder : holders) {
         holder.get();
     }
@@ -70,9 +71,10 @@ TEST(ExecutorTest, RunAllFinishesOnEveryWorkerWhenWorkersBusy) {
     const size_t workers = detail::GetExecutor().num_workers();
     std::atomic<size_t> started{0};
     std::atomic<size_t> inner_done{0};
-    std::vector<std::shared_future<void>> outer;
+    // Executor::async always queues: detail::async could run one on this thread, which would then wait forever.
+    std::vector<std::future<void>> outer;
     for (size_t i = 0; i < workers; ++i) {
-        outer.push_back(detail::async([&] {
+        outer.push_back(detail::GetExecutor().async([&] {
             started.fetch_add(1);
             while (started.load() < workers) {
                 std::this_thread::yield();
