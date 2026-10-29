@@ -5644,6 +5644,10 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         # The live session's acceptance statistics (``spec_policy.AcceptanceStats``): opened from the batch
         # prior at bootstrap, fed by the accepted counts, dropped with the session.
         self._dflash_stats = None
+        # The slots the last decode step served and the slots prefilled since it (released ones removed):
+        # what a solo prefill checks before capturing taps (``_dflash_taps_cannot_pay``).
+        self._dflash_live_slots = set()
+        self._dflash_prefilled_slots = set()
 
     # -- warmup: the policy's cost table -------------------------------------------
     def warmup_model_decode(self, *args, **kwargs):
@@ -5767,6 +5771,8 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         self._dflash_pending_owner = follow(self._dflash_pending_owner)
         self._dflash_live_owner = follow(self._dflash_live_owner)
         self._spec_owner_slot = self._dflash_live_owner[0] if self._dflash_live_owner else None
+        self._dflash_live_slots = {moved.get(s, s) for s in self._dflash_live_slots}
+        self._dflash_prefilled_slots = {moved.get(s, s) for s in self._dflash_prefilled_slots}
 
     def _spec_release_slot(self, row):
         pending_mine = self._spec_owns(self._dflash_pending_owner, row)
@@ -5775,10 +5781,14 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
             self._dflash_drop_pending()
         if live_mine:
             self._dflash_end_session()
+        self._dflash_live_slots.discard(int(row))
+        self._dflash_prefilled_slots.discard(int(row))
 
     def _spec_release_all(self):
         self._dflash_drop_pending()
         self._dflash_end_session()
+        self._dflash_live_slots = set()
+        self._dflash_prefilled_slots = set()
 
     def release_persistent_capture(self) -> None:
         if self._spec_last_propose is not None:
@@ -5900,12 +5910,17 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         # Every prefill on this rail is eager: the residual taps come from a
         # python hook that a traced replay skips, and a plain prefill must not
         # run traced next to an eager one against the same persistent buffers.
+        # GEMMA4_DFLASH_TRACE_PLAIN_PREFILL=1 (experimental) lets a prefill that
+        # takes no taps keep the trace setting the caller passed.
+        requested_trace = kwargs.get("enable_trace", True)
         kwargs["enable_trace"] = False
         is_warmup = bool(kwargs.get("warmup_prefill")) or (tokens is not None and int(tokens.abs().sum()) == 0)
         if is_warmup:
             self._dflash_disarm_taps()
             return Gemma4ForCausalLM.prefill_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         slot = _spec_first_slot(kwargs.get("empty_slots"))
+        prefilled_others = self._dflash_prefilled_slots - {int(slot)} if slot is not None else set()
+        self._dflash_prefilled_slots |= {int(s) for s in (kwargs.get("empty_slots") or [])}
         continues = (
             cached > 0
             and self._spec_pending is not None
@@ -5928,9 +5943,16 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
             # Same duplication through the multimodal restart: the base moves a
             # continuation's restart to the start of a vision item it cuts.
             speculable = False
+        if speculable and not continues:
+            why = self._dflash_taps_cannot_pay(slot, end, prefilled_others)
+            if why is not None:
+                logger.debug(f"Gemma4DFlash speculative contract: no taps for slot {slot} at {end}: {why}")
+                speculable = False
         if not speculable:
             self._dflash_drop_pending()
             self._dflash_disarm_taps()
+            if requested_trace and _dflash_env_flag("GEMMA4_DFLASH_TRACE_PLAIN_PREFILL", "0"):
+                kwargs["enable_trace"] = requested_trace
             return Gemma4ForCausalLM.prefill_forward(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         if not continues:
             self._dflash_pending_owner = self._spec_open_owner(slot)
@@ -5966,6 +5988,27 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         lengths = _per_slot_items(kwargs, "mm_placeholder_lengths", 1)
         moved = gemma4_mm_restart_outside_vision_items([int(cached)], tokens, offsets, lengths, vision_ids)
         return int(moved[0]) != int(cached)
+
+    def _dflash_taps_cannot_pay(self, slot, position, prefilled_others):
+        """Why a solo prefill's taps could not bootstrap a session, or None when they may. One session serves an
+        engine and it ends when a peer shares a step, so taps pay only for a row that decodes alone from its
+        first step: not while a session is live on another row, not when other rows were prefilled since the
+        last decode step (``prefilled_others``: they share this row's first step), not while rows the last
+        decode step served are still live (``_dflash_live_slots`` less the released ones), and not when the
+        batch prior declines a bootstrap at ``position`` (``_dflash_policy_admits``: the entry band or the
+        trial floor). Before this gate every solo prefill captured and trimmed its taps and most were dropped
+        at the row's first step (the c8 and c32 points: one bootstrap per wave, 7-31 captures)."""
+        owner = self._dflash_live_owner
+        if self._spec_active and owner is not None and not self._spec_owns(owner, slot):
+            return "a session is live on another row"
+        if prefilled_others:
+            return f"slots {sorted(prefilled_others)} prefilled since the last step share its first step"
+        live_others = self._dflash_live_slots - ({int(slot)} if slot is not None else set())
+        if live_others:
+            return f"slots {sorted(live_others)} the last step served are still live"
+        if not self._dflash_policy_admits(position):
+            return "the batch prior declines a bootstrap"
+        return None
 
     def _dflash_prompt_speculable(self, prompt_len):
         limit = int(os.environ.get("GEMMA4_DFLASH_MAX_SPEC_ISL", "0"))
@@ -6069,6 +6112,8 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         tokens, start_pos = self._spec_inputs(args, kwargs)
         rows = self._spec_rows(tokens)
         live = self._spec_live_rows(start_pos, rows)
+        self._dflash_live_slots = {int(self._spec_slot_of(r, kwargs)) for r in live}
+        self._dflash_prefilled_slots = set()
         if spec_mode is None:
             return self._dflash_ordinary_step(args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live)
         sampling = kwargs.get("sampling_params")

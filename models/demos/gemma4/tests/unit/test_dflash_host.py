@@ -2184,12 +2184,46 @@ def test_chunk_groups_below_the_context_window_are_freed(model):
     assert [tap.tag for tap in taps] == [(2, 0), (2, 1), (3, 0), (3, 1)]
 
 
-def test_a_solo_prefill_of_another_request_replaces_the_pending_taps(model):
+def test_a_solo_prefill_of_another_request_drops_the_pending_taps_and_takes_none(model, monkeypatch):
+    """Two rows prefilled before a proposal share their first step, so neither can bootstrap: the first's taps
+    are dropped and the second captures none (the hook stays disarmed); the base prefill still runs, eager."""
     _prefill(model, prompt_len=1024, key=10, slot=0)
     first = list(model._spec_pending[0])
     _prefill(model, prompt_len=64, key=20, slot=1)
     assert all(tap.releases == 1 for tap in first)
-    assert model._spec_pending[1] == 64 and model._dflash_pending_owner[0] == 1
+    assert model._spec_pending is None and model._dflash_pending_owner is None
+    assert model.model[0].tap_layers is None and _names(model, "prefill")[-1] == ("prefill", 1, [64], False)
+    # released before any step, the two rows are gone: the next solo prefill takes taps and bootstraps
+    model.release_request(0)
+    model.release_request(1)
+    _start_solo(model, prompt_len=2, key=30)
+    assert model._spec_active
+    # a session live on another row: a peer's solo prefill takes no taps, and the session stays
+    _prefill(model, prompt_len=2, key=40, slot=1)
+    assert model._spec_pending is None and model._spec_active and model.model[0].tap_layers is None
+    # rows the last step served and still live: the same (two live rows ended the session; both still
+    # decode when slot 2 prefills)
+    _ordinary(model, [3, 5], [3, 2], [30, 40], result="device")
+    assert not model._spec_active and model._dflash_live_slots == {0, 1}
+    _prefill(model, prompt_len=2, key=50, slot=2)
+    assert model._spec_pending is None and model.model[0].tap_layers is None
+    # the batch drained (every served and prefilled row released): the taps are taken again
+    for slot in (0, 1, 2):
+        model.release_request(slot)
+    assert model._dflash_live_slots == set() and model._dflash_prefilled_slots == set()
+    _prefill(model, prompt_len=2, key=60, slot=0)
+    assert model._spec_pending is not None and model._spec_pending[1] == 2 and model._dflash_pending_owner[0] == 0
+    # GEMMA4_DFLASH_TRACE_PLAIN_PREFILL=1: a prefill that takes no taps keeps the caller's trace setting; one
+    # that takes them stays eager
+    monkeypatch.setenv("GEMMA4_DFLASH_TRACE_PLAIN_PREFILL", "1")
+    _prefill(model, prompt_len=2, key=70, slot=1)  # slot 0 prefilled since the last step: this one takes none
+    assert _names(model, "prefill")[-1] == ("prefill", 1, [2], True) and model._spec_pending is None
+    model.release_request(1)
+    _prefill(model, prompt_len=2, key=80, slot=0)  # a new request in slot 0, alone again: taps, eager
+    assert _names(model, "prefill")[-1][3] is False and model._spec_pending is not None
+    # slot moves follow the sets
+    model.note_state_slots_moved({0: 3, 3: 0})
+    assert model._dflash_prefilled_slots == {3}
 
 
 def test_a_chunk_whose_earlier_taps_were_replaced_stores_nothing(model):
@@ -3407,10 +3441,10 @@ def _dflash_a_new_request_skips_the_bootstrap_when_the_prior_says_the_replay_wou
     costed = _with_costs(_costed(adapter, monkeypatch), step_ms=70.0)
     _inform_prior(costed, [0.1] * 5)
     _prefill(costed, prompt_len=2, key=10)
-    taps = list(costed._spec_pending[0])
+    assert costed._spec_pending is None and costed.model[0].tap_layers is None, "no taps: the prior declines"
     assert _ordinary(costed, [3], [2], [10], result="device") == "device"
     assert _names(costed, "bootstrap") == [] and _names(costed, "replay") == []
-    assert costed._spec_pending is None and all(tap.releases == 1 for tap in taps), "the taps are dropped"
+    assert costed._spec_pending is None
     proposal = _propose(costed, [[9] + [-1] * 5], [[3] + [-1] * 5])
     assert proposal.num_valid.tolist() == [0] and costed._spec_policy.declined == 1
 
