@@ -35,6 +35,7 @@ from __future__ import annotations
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
