@@ -849,7 +849,8 @@ class WanTransformer3DModel(Module):
     #   cache_tail: last Bn blocks + output norm/projection (+ optional SP gather).
     #
     # Each piece only takes/returns ttnn tensors and Python scalars so it can be wrapped in a
-    # `Tracer` independently.
+    # `Tracer` independently. With CFG batching, `cache_head_cfg` / `cache_tail_cfg` run the head
+    # and the tail on the stacked rows of both passes, and `cache_body` takes the uncond prompt as well.
     # ------------------------------------------------------------------------------------------
     def _run_blocks(
         self,
@@ -861,11 +862,13 @@ class WanTransformer3DModel(Module):
         rope_cos_1HND: ttnn.Tensor,
         rope_sin_1HND: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
+        negative_prompt_1BLP: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         for block in blocks:
             spatial_1BND = block(
                 spatial_1BND=spatial_1BND,
                 prompt_1BLP=prompt_1BLP,
+                negative_prompt_1BLP=negative_prompt_1BLP,
                 temb_1BTD=timestep_proj_1BTD,
                 N=N,
                 rope_cos=rope_cos_1HND,
@@ -927,15 +930,72 @@ class WanTransformer3DModel(Module):
         if valid_11N1 is not None:
             fn_residual_1BND = ttnn.multiply(fn_residual_1BND, valid_11N1)
 
+        sums_1B12 = self._fn_residual_sums(fn_residual_1BND, prev_fn_residual_1BND)
+
+        return spatial_1BND, fn_residual_1BND, sums_1B12, temb_11BD, timestep_proj_1BTD
+
+    @staticmethod
+    def _fn_residual_sums(fn_residual_1BND: ttnn.Tensor, prev_fn_residual_1BND: ttnn.Tensor) -> ttnn.Tensor:
+        """The packed partial sums of `cache_head`: [sum(|fn_residual - prev_fn_residual|), sum(|fn_residual|)]."""
         diff_1BND = ttnn.abs(ttnn.subtract(fn_residual_1BND, prev_fn_residual_1BND))
         diff_sum_1B11 = ttnn.sum(diff_1BND, dim=[2, 3], keepdim=True)
         ttnn.deallocate(diff_1BND)
         abs_1BND = ttnn.abs(fn_residual_1BND)
         cur_sum_1B11 = ttnn.sum(abs_1BND, dim=[2, 3], keepdim=True)
         ttnn.deallocate(abs_1BND)
-        sums_1B12 = ttnn.concat([diff_sum_1B11, cur_sum_1B11], dim=3)
+        return ttnn.concat([diff_sum_1B11, cur_sum_1B11], dim=3)
 
-        return spatial_1BND, fn_residual_1BND, sums_1B12, temb_11BD, timestep_proj_1BTD
+    def cache_head_cfg(
+        self,
+        spatial_1BNI: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        negative_prompt_1BLP: ttnn.Tensor,
+        rope_cos_1HND: ttnn.Tensor,
+        rope_sin_1HND: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+        N: int | ttnn.Tensor,
+        timestep: ttnn.Tensor,
+        prev_fn_residuals_1BND: list[ttnn.Tensor],
+        valid_11N1: ttnn.Tensor | None = None,
+        *,
+        num_fn_blocks: int,
+    ) -> tuple[ttnn.Tensor, list[ttnn.Tensor], list[ttnn.Tensor], ttnn.Tensor, ttnn.Tensor]:
+        """`cache_head` for the cond and uncond passes at once, with the rows of both stacked as in `inner_step_cfg`.
+
+        Returns ``(spatial_1BND, fn_residuals_1BND, sums_1B12, temb_11BD, timestep_proj_1BTD)``: ``spatial_1BND``
+        holds the stacked rows ([1, 1, 2n, D]); the Fn residuals and the partial sums are per pass, each as
+        `cache_head` returns them, against ``prev_fn_residuals_1BND`` (one per pass), with ``valid_11N1`` masking
+        the padding of each as in `cache_head`.
+        """
+        temb_11BD, timestep_proj_1BTD = self.prepare_timestep_conditioning(timestep)
+
+        spatial_0_1BND = self.patch_embedding(spatial_1BNI)
+        spatial_1BND = self._run_blocks(
+            self.blocks[:num_fn_blocks],
+            ttnn.concat([spatial_0_1BND, spatial_0_1BND], dim=2),
+            prompt_1BLP,
+            timestep_proj_1BTD,
+            N,
+            rope_cos_1HND,
+            rope_sin_1HND,
+            trans_mat,
+            negative_prompt_1BLP=negative_prompt_1BLP,
+        )
+        spatial_1BND = ttnn.clone(spatial_1BND)
+
+        n, d = spatial_0_1BND.shape[2], spatial_0_1BND.shape[3]
+        fn_residuals_1BND, sums_1B12 = [], []
+        for start, prev_fn_residual_1BND in zip((0, n), prev_fn_residuals_1BND):
+            pass_1BND = ttnn.slice(spatial_1BND, [0, 0, start, 0], [1, 1, start + n, d])
+            fn_residual_1BND = ttnn.subtract(pass_1BND, spatial_0_1BND)
+            ttnn.deallocate(pass_1BND)
+            if valid_11N1 is not None:
+                fn_residual_1BND = ttnn.multiply(fn_residual_1BND, valid_11N1)
+            fn_residuals_1BND.append(fn_residual_1BND)
+            sums_1B12.append(self._fn_residual_sums(fn_residual_1BND, prev_fn_residual_1BND))
+        ttnn.deallocate(spatial_0_1BND)
+
+        return spatial_1BND, fn_residuals_1BND, sums_1B12, temb_11BD, timestep_proj_1BTD
 
     def cache_body(
         self,
@@ -949,10 +1009,12 @@ class WanTransformer3DModel(Module):
         *,
         num_fn_blocks: int,
         num_bn_blocks: int,
+        negative_prompt_1BLP: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Middle blocks ``[num_fn_blocks, num_layers - num_bn_blocks)``.
 
-        Returns ``(spatial_1BND, bn_residual_1BND)`` with ``bn_residual = output - input``.
+        Returns ``(spatial_1BND, bn_residual_1BND)`` with ``bn_residual = output - input``. With
+        ``negative_prompt_1BLP``, ``spatial_1BND`` holds the stacked rows of both passes, as in `inner_step_cfg`.
         """
         end = len(self.blocks) - num_bn_blocks
         out_1BND = self._run_blocks(
@@ -964,6 +1026,7 @@ class WanTransformer3DModel(Module):
             rope_cos_1HND,
             rope_sin_1HND,
             trans_mat,
+            negative_prompt_1BLP=negative_prompt_1BLP,
         )
         bn_residual_1BND = ttnn.subtract(out_1BND, spatial_1BND)
         return out_1BND, bn_residual_1BND
@@ -981,6 +1044,7 @@ class WanTransformer3DModel(Module):
         *,
         num_bn_blocks: int,
         gather_output: bool = True,
+        negative_prompt_1BLP: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Last ``num_bn_blocks`` blocks followed by the output norm / projection of `inner_step`."""
         if num_bn_blocks > 0:
@@ -993,6 +1057,7 @@ class WanTransformer3DModel(Module):
                 rope_cos_1HND,
                 rope_sin_1HND,
                 trans_mat,
+                negative_prompt_1BLP=negative_prompt_1BLP,
             )
 
         scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
@@ -1017,6 +1082,48 @@ class WanTransformer3DModel(Module):
             )
 
         return spatial_1BNI
+
+    def cache_tail_cfg(
+        self,
+        spatial_1BND: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        negative_prompt_1BLP: ttnn.Tensor,
+        temb_11BD: ttnn.Tensor,
+        timestep_proj_1BTD: ttnn.Tensor,
+        N: int | ttnn.Tensor,
+        rope_cos_1HND: ttnn.Tensor,
+        rope_sin_1HND: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+        *,
+        num_bn_blocks: int,
+        gather_output: bool = True,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """`cache_tail` on the stacked rows of both passes; returns (cond, uncond) like `inner_step_cfg`."""
+        spatial_1BNI = self.cache_tail(
+            spatial_1BND,
+            prompt_1BLP,
+            temb_11BD,
+            timestep_proj_1BTD,
+            N,
+            rope_cos_1HND,
+            rope_sin_1HND,
+            trans_mat,
+            num_bn_blocks=num_bn_blocks,
+            gather_output=False,
+            negative_prompt_1BLP=negative_prompt_1BLP,
+        )
+
+        n, c = spatial_1BNI.shape[2] // 2, spatial_1BNI.shape[3]
+        outputs = []
+        for start in (0, n):
+            output = ttnn.slice(spatial_1BNI, [0, 0, start, 0], [1, 1, start + n, c])
+            if gather_output:
+                output = self.ccl_manager.all_gather_persistent_buffer(
+                    output, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
+                )
+            outputs.append(output)
+
+        return outputs[0], outputs[1]
 
 
 class WanCheckpoint:
