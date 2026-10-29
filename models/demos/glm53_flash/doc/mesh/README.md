@@ -1462,3 +1462,10 @@ untouched. Also: the served-padded ragged chunk + continuation is bit-exact on t
   decode steps; B (the cached-prefix miss recompute to 2176, then continued) matches at the first token (0.998) but its
   first decode step is at 0.83 against a clear reference winner (top-2 gap 1.06): a real state difference, not a
   near-tie. B2 (the same chunk plan through plain continuations) is queued to split the miss path from the plan.
+
+### 2026-10-29 03:18: bfp4 gate/up experts rejected on the accuracy gate
+
+`logits_8x4_w13bfp4` (45 layers, 8x4, the S=128 dump): gate/up experts in bfp4 (down bfp8) give a logits PCC of 0.9838
+(the 0.98 bar passes) but a top-1 agreement of 83.6 % (bar 85 %) and a top-5 overlap of 88.1 %, against 93.0 % / 95.5 %
+with bfp8 experts on the same gate. The PCC bar alone would have let it through; the top-1 gate catches the loss. C12
+stays bfp8 (the user rule: 4-bit only when accuracy and PCC are retained); its e2e perf point was dropped as moot.
