@@ -71,6 +71,8 @@ _SHAPE_BLOCKS = {
 _NO_ACC_BLOCKS = {
     (2048, 8256): (((4, 4, 24), None), ((4, 4, 24), None), ((4, 4, 32), (1, 4))),  # (1, 8) at N block 32: 2% slower
     (2048, 5120): (((8, 4, 16), None), None, None),
+    # attention q|k|v; K blocks match the old fused q|k|v|gate entry
+    (2048, 3072): (((8, 4, 16), (1, 4)), ((16, 4, 8), (1, 8)), ((8, 16, 8), (1, 8))),
 }
 
 

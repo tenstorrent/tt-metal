@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Single-chip stateless gated-attention prefill: plain causal SDPA over [B, H, S, D], no KV cache, no state kept.
 
-One projection produces q | k | v | gate; ``nlp_create_qkv_heads`` splits the heads straight into [B, H, S, D], so the
+Two projections produce q | k | v and the gate; ``nlp_create_qkv_heads`` splits the heads straight into [B, H, S, D], so the
 reshape, chunk and transpose ops of the generic path (gated_attention_forward_ttnn) are gone. Norms, RoPE, SDPA,
 gate and out-projection are the generic path's own helpers and configs.
 """
@@ -38,35 +38,29 @@ def _sdpa_program_config(device, B, H, S):
     return cfg
 
 
-def _fused_weight(attn):
-    """[dim, (Hq + 2 Hkv + Hq) * D] = q heads | k heads | v heads | gate heads, bf8, built once per layer.
+def _split_weights(attn):
+    """(qkv [dim, (Hq + 2 Hkv) * D] = q heads | k heads | v heads, gate [dim, Hq * D]), bf8, built once per layer.
 
     q_proj is [dim, Hq * 2D] with (q, gate) interleaved per head; whole D-column head blocks are tile aligned, so the
     bfp8 round trip through host is exact."""
-    fw = getattr(attn, "_stateless_qkvg_weight", None)
-    if fw is None:
+    qkv_w = getattr(attn, "_stateless_qkv_weight", None)
+    gate_w = getattr(attn, "_stateless_gate_weight", None)
+    if qkv_w is None or gate_w is None:
         w, cfg = attn.weights, attn.config
         Hq, D = cfg.num_heads, cfg.head_dim
         q_t = ttnn.to_torch(w.q_proj)
         dim = q_t.shape[0]
         qg = q_t.reshape(dim, Hq, 2, D)
-        fused = torch.cat(
-            [
-                qg[:, :, 0].reshape(dim, Hq * D),
-                ttnn.to_torch(w.k_proj),
-                ttnn.to_torch(w.v_proj),
-                qg[:, :, 1].reshape(dim, Hq * D),
-            ],
-            dim=-1,
+        qkv = torch.cat(
+            [qg[:, :, 0].reshape(dim, Hq * D), ttnn.to_torch(w.k_proj), ttnn.to_torch(w.v_proj)], dim=-1
         ).contiguous()
-        fw = attn._stateless_qkvg_weight = ttnn.from_torch(
-            fused,
-            dtype=w.q_proj.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=attn.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        gate = qg[:, :, 1].reshape(dim, Hq * D).contiguous()
+        kw = dict(
+            dtype=w.q_proj.dtype, layout=ttnn.TILE_LAYOUT, device=attn.device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-    return fw
+        qkv_w = attn._stateless_qkv_weight = ttnn.from_torch(qkv, **kw)
+        gate_w = attn._stateless_gate_weight = ttnn.from_torch(gate, **kw)
+    return qkv_w, gate_w
 
 
 def _partial_rope(x, cos, sin):
@@ -99,10 +93,10 @@ def stateless_attention_prefill(attn, x, cos, sin):
     ckc = attn.compute_kernel_config
     qkv_w = (Hq + 2 * Hkv) * D
 
-    # Projection: q | k | v | gate.
-    out = prefill_linear(x, _fused_weight(attn), ckc)
-    qkv = ttnn.reshape(out[:, :, :qkv_w], [B, 1, S, qkv_w])
-    gate = out[:, :, qkv_w:]
+    # Projection: two matmuls (q | k | v, gate), so no output slices.
+    qkv_weight, gate_weight = _split_weights(attn)
+    qkv = ttnn.reshape(prefill_linear(x, qkv_weight, ckc), [B, 1, S, qkv_w])
+    gate = prefill_linear(x, gate_weight, ckc)
 
     # Heads straight to [B, H, S, D].
     q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -137,7 +131,6 @@ def stateless_attention_prefill(attn, x, cos, sin):
     gated = ttnn.multiply(attn_out, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID])
     ttnn.deallocate(gate)
     ttnn.deallocate(attn_out)
-    ttnn.deallocate(out)
     res = prefill_linear(gated, w.o_proj, ckc)
     ttnn.deallocate(gated)
     return res
