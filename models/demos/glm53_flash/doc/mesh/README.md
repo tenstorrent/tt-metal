@@ -1441,3 +1441,24 @@ wave, a mixed-start wave (row 0 at 128, row 1 at 0), a non-contiguous start refu
 and 2048 rows per row in 0.1-0.2 s each) bit-identical to the eager waves, the traced idle-row case leaving the slot
 untouched. Also: the served-padded ragged chunk + continuation is bit-exact on the block through the slab path (all
 16385 rows), the KDA padded-chunk carry test is queued, and the 4-layer sealed APC reproduction is on its last knob.
+
+### 2026-10-29 02:50: the wave accuracy gate on the 8x4; the served branch re-integrated
+
+- `test_wave_first_token_vs_hf` (45 layers, 8x4, heads2users, 4 users per row, the override runtime): the dump's
+  128-token prompt gives the HF first token 102647 through SP, through one wave with the prompt on all 8 rows, on row 0
+  with 7 idle rows, and through the captured wave (bit-identical to the eager wave; capture 6.4 s, replay 1.0 s incl.
+  the host reads). The 8 rows' logits are not bit-identical (0.93 across rows: the per-row reduce-scatter order) and
+  the wave-vs-SP logits sit at 0.95 on this random-token prompt (the SP chain itself is at 0.947 vs HF): the gate is
+  the first token per row. Throughput point (cold SP): one wave of 8 x 2048-token prompts 7.1 s vs one 16 K SP chunk
+  12.2 s; at 2 K per row the MoE's gathered tokens dominate, so the launch-bound gain is for the short prompts (the
+  warm numbers follow).
+- The served branch is re-integrated onto today's base: `arg/glm53_served_v2` (worktree `wt_served_rebase`) = the base
+  (waves A2-A5, the A0 test tree, A3's dense half) + the served stack (APC, image, spec, the 2026-10-28 integration
+  commits) with the nine ports the base already carried dropped. Conflicts: the planner (the wave width next to the
+  APC and vision fields: a positional-constructor trap, fixed), the indexer imports, the host ladder test (the base's
+  version), the docs (the served lineage). All 378 host tests pass; pre-commit green over the 34 changed files. The
+  served 4-layer block tests (APC hit, image, spec) and the budget-split reproduction run from it next.
+- The APC budget-split reproduction at 4 layers: A (a normal continuation) is bit-identical to from scratch over 5
+  decode steps; B (the cached-prefix miss recompute to 2176, then continued) matches at the first token (0.998) but its
+  first decode step is at 0.83 against a clear reference winner (top-2 gap 1.06): a real state difference, not a
+  near-tie. B2 (the same chunk plan through plain continuations) is queued to split the miss path from the plan.
