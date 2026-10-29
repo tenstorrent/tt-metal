@@ -54,7 +54,6 @@ REDUCE_FORMATS = [
     for fmt in (
         DataFormat.Float32,
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Int32,
     )
 ]
