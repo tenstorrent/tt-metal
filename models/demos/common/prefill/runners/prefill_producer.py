@@ -10,6 +10,7 @@ import os
 import random
 import struct
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import NamedTuple
@@ -569,6 +570,37 @@ class RunStats:
     completed: int
     wall_s: float
     total_chunks: int = 0
+
+
+class _ChunkRetireClock:
+    """Producer-clock lifecycle of each pushed chunk: push start to the drain seeing its last layer.
+
+    Every stamp is time.perf_counter() on this process, so chunk latency, retire cadence and in-flight depth
+    need no cross-host clock and no per-chunk device sync. One CHUNK_RETIRE line per chunk feeds the summarizer.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._pushed = {}
+        self.warmup = False
+
+    def on_push(self, key: tuple, push_ts: float) -> None:
+        with self._lock:
+            self._pushed[key] = (push_ts, self.warmup)
+
+    def on_retire(self, key: tuple, retire_ts: float) -> None:
+        with self._lock:
+            entry = self._pushed.pop(key, None)
+            depth = len(self._pushed)
+        if entry is None:
+            logger.warning(f"[producer] CHUNK_RETIRE for unpushed chunk {key}")
+            return
+        push_ts, warmup = entry
+        slot_id, pos_start, pos_end = key
+        logger.info(
+            f"[producer] CHUNK_RETIRE slot={slot_id} start={pos_start} end={pos_end} push={push_ts:.6f} "
+            f"retire={retire_ts:.6f} depth={depth} warmup={int(warmup)}"
+        )
 
 
 def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, sleep_fn=time.sleep, rng=None):
@@ -1743,22 +1775,32 @@ def main() -> None:
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
+    retire_clock = _ChunkRetireClock()
+
     def push_forward(pushes: list) -> float:
         for p in pushes:
             logger.info(
                 f"[producer] push slot={p.slot_id} cidx={p.chunk_idx} start={p.actual_start} end={p.actual_end}"
             )
         push_start = time.perf_counter()
+        for p in pushes:
+            retire_clock.on_push((p.slot_id, p.actual_start, p.actual_end), push_start)
         _push(service, payload_bytes, *_forward_payload(pushes, lambda slot_id: pools_by_trace[slot_traces[slot_id]]))
         return (time.perf_counter() - push_start) * 1000.0
 
     # Drains from the first push to the last barrier: the completion rings are bounded, so a drain that waited
     # for the barrier would leave the runner blocked on a full ring and the barrier waiting on the runner.
-    drain = start_layer_completion_drain(completion_channel, num_layers=layer_bound, chunk_layers=chunk_layers)
+    drain = start_layer_completion_drain(
+        completion_channel,
+        num_layers=layer_bound,
+        chunk_layers=chunk_layers,
+        on_chunk_complete=lambda key, cov: retire_clock.on_retire(key, time.perf_counter()),
+    )
     try:
         warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
         if warmup_chunks > 0:
             logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
+            retire_clock.warmup = True
             warmup = [
                 ChunkPush(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
                 for cidx in range(warmup_chunks)
@@ -1767,6 +1809,7 @@ def main() -> None:
                 push_forward(warmup[i : i + FORWARD_CHUNKS])
             service.barrier()
             wait_for_layer_completions(drain, chunk_layers * warmup_chunks)
+            retire_clock.warmup = False
             logger.info("[producer] warmup complete; starting the measured request")
 
         stats = run_schedule(cfg, push_fn=push_forward)
