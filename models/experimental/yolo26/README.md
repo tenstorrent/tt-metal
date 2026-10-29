@@ -116,10 +116,14 @@ predate the current model outputs and are not maintained.
 | 1 chip, batch 4 | 659.7 – 660.1 | 1,092.6 – 1,094.4 |
 | 4 chips, batch 1 per chip | 1,582.5 | 1,772.6 |
 | 4 chips, batch 2 per chip | 1,795.4 – 1,812.8 | 1,866.2 – 1,870.2 |
-| 4 chips, batch 4 per chip | 2,347.4 – 2,403.6 | 2,560.7 – 2,570.5 |
+| 4 chips, batch 4 per chip | 2,347.4 – 2,438.0 (mean of the latest 5 runs: 2,406) | 2,560.7 – 2,570.5 |
 
 Model only (traced forward, input already on the chip), yolo26s on one chip: batch 1 2.31 ms (433 FPS), batch 2
 3.18 ms (629 FPS), batch 3 4.66 ms (644 FPS), batch 4 5.86 ms (683 FPS); yolo26n batch 4 3.43 ms (1,166 FPS).
+
+Scaling of yolo26s batch 4 to 4 chips (2026-10-29, chips reset before every run): each chip alone gives 659.6,
+653.8, 659.1 and 665.4 FPS (chips 0–3, sum 2,638); dp=4 gives 2,363.1, 2,402.6, 2,404.0, 2,420.6 and 2,438.0 FPS
+(mean 2,406, about 91 % of the sum). Per iteration, one chip takes 6.06 ms and the 4-chip mesh 6.56 – 6.77 ms.
 
 Ranges are separate runs. How each number was measured, and every optimization step from 85 FPS, are in
 [`post_mortem.md`](post_mortem.md) (entries YOLO26-0015 to 0025).
