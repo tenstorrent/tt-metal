@@ -476,6 +476,12 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const bool group_mcast = build_kv_chains && use_head_chain;
     const uint32_t k_piece_tiles = Sk_chunk_t * DHt;
     const uint32_t v_piece_tiles = Sk_chunk_t * vDHt;
+    // Pair steps (one step over two consecutive pieces of a head, halving the per-step fixed cost) apply to small
+    // pieces (<= 256 keys). They need a 4-deep K/V CB, so a pair and the next piece's delivery fit together, and twice
+    // the score scratch; the pass split below turns them on only when that costs no extra pass.
+    const bool pair_steps_eligible = Sk_chunk_t <= 8;
+    bool pair_steps = false;                       // decided with the pass split
+    uint32_t kv_cb_pages = group_mcast ? 3u : 2u;  // decided with the pass split
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;
@@ -895,12 +901,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     };
 
     // Every core keeps the Q blocks of its current pass and one accumulator set each in L1 ("slots"). The CBs whose
-    // size depends on the slot count are laid out by lay_out_cbs(slots, kv_pages, alloc), which the pass split below
-    // runs once per candidate count with a byte counter and then once with the real allocator, so the fit check and the
-    // allocation cannot disagree.
+    // size depends on the slot count are laid out by lay_out_cbs(slots, kv_pages, pairs, alloc), which the pass split
+    // below runs once per candidate with a byte counter and then once with the real allocator, so the fit check and
+    // the allocation cannot disagree.
     // One step covers one piece for a group of resident Q blocks, each with its own kept blocks; member g's scores are
     // stored compactly (row stride = its kept width), and members are grouped until the scores fill
-    // kResidentGroup x Sq_chunk_t rows of Sk_chunk_t tiles (at least qk_tiles). The new-max / alpha scratches
+    // kResidentGroup x Sq_chunk_t rows of Sk_chunk_t tiles, twice that with pair steps (at least qk_tiles). The
+    // K/V CBs hold kv_cb_pages pieces. The new-max / alpha scratches
     // hold one tile row per slot. The compute kernel derives the same capacity (sdpa_ring_resident, kGroupCap) and
     // ASSERTs the page count.
     // The staging CBs (max, out, sum) hold one accumulator set per slot, addressed by slot and updated in place:
@@ -917,7 +924,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
             recip_scratch, sum_in, sparse_plan, pooled_bias;
     };
-    const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages, const auto& alloc) -> CbLayout {
+    const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages, bool pairs, const auto& alloc) -> CbLayout {
         const auto tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) {
             return alloc(tile_size, num_tiles, data_format);
         };
@@ -927,7 +934,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         l.v_in = tile_cb(v_piece_tiles * kv_pages, v_tile_size, v_df);
         l.identity_scale_in = tile_cb(scale_tiles, scalar_tile_size, scalar_df);
         l.col_identity = tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-        const uint32_t qk_im_cb_tiles = std::max(qk_tiles, std::min(slots, kResidentGroup) * Sq_chunk_t * Sk_chunk_t);
+        const uint32_t qk_im_cb_tiles =
+            std::max(qk_tiles, std::min(slots, kResidentGroup) * Sq_chunk_t * Sk_chunk_t * (pairs ? 2u : 1u));
         const uint32_t res_stats_tiles = statistics_tiles * slots;
         l.qk_im = tile_cb(qk_im_cb_tiles, qk_im_tile_size, qk_im_df);
         l.max_A = tile_cb(res_stats_tiles, stats_tile_size, stats_df);
@@ -943,13 +951,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                                      : std::numeric_limits<uint32_t>::max();  // inactive
         return l;
     };
-    const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages) -> uint64_t {
+    const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages, bool pairs) -> uint64_t {
         uint64_t bytes = 0;
         uint32_t index = 0;
-        lay_out_cbs(slots, kv_pages, [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat) -> uint32_t {
-            bytes += static_cast<uint64_t>(page_size_bytes) * num_pages;
-            return index++;
-        });
+        lay_out_cbs(
+            slots, kv_pages, pairs, [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat) -> uint32_t {
+                bytes += static_cast<uint64_t>(page_size_bytes) * num_pages;
+                return index++;
+            });
         return bytes;
     };
 
@@ -969,9 +978,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     if (args.q_blocks_per_pass.has_value()) {
         max_slots = std::min(max_slots, *args.q_blocks_per_pass);
     }
-    const auto fit_slots_for = [&](uint32_t kv_pages) {
+    const auto fit_slots_for = [&](uint32_t kv_pages, bool pairs) -> uint32_t {
         uint32_t slots = max_slots;
-        while (slots > 0 && cb_bytes_for_slots(slots, kv_pages) > usable_l1) {
+        while (slots > 0 && cb_bytes_for_slots(slots, kv_pages, pairs) > usable_l1) {
             --slots;
         }
         return slots;
@@ -979,17 +988,25 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const auto passes_for = [&](uint32_t slots) {
         return slots > 0 ? tt::div_up(max_q_per_core, slots) : std::numeric_limits<uint32_t>::max();
     };
-    // Group delivery uses 3 K/V pages: 2 pages with group delivery hung on device (MiniMax-H3 10 s, 19 slots in one
-    // pass, 2026-10-30), so it is not offered even when it would save a Q pass.
-    const uint32_t kv_cb_pages = group_mcast ? 3u : 2u;
-    const uint32_t fit_slots = fit_slots_for(kv_cb_pages);
+    // Single steps with group delivery: 3 K/V pages. 2 pages can save a Q pass (MiniMax-H3 10 s: 1 pass of 19 slots
+    // instead of 2 of 10) but measured no faster (traced 12.27 vs 12.32 ms, 2026-10-30) and rule out pair steps there.
+    uint32_t fit_slots = fit_slots_for(kv_cb_pages, false);
     TT_FATAL(
         fit_slots > 0,
         "SparseRingSDPA CBs need {} B with one Q block per core but only {} B of L1 are usable (k_chunk={}); reduce "
         "k_chunk_size.",
-        cb_bytes_for_slots(1, kv_cb_pages),
+        cb_bytes_for_slots(1, kv_cb_pages, false),
         usable_l1,
         Sk_chunk_t * tt::constants::TILE_HEIGHT);
+    // Pair steps (4 K/V pages) only when they fit without an extra pass (a pass re-streams every piece).
+    if (pair_steps_eligible) {
+        const uint32_t pair_slots = fit_slots_for(4, true);
+        if (pair_slots > 0 && passes_for(pair_slots) <= passes_for(fit_slots)) {
+            pair_steps = true;
+            kv_cb_pages = 4;
+            fit_slots = pair_slots;
+        }
+    }
     const uint32_t num_q_passes = passes_for(fit_slots);
     // Every working core holds base or base + 1 blocks (all hold one when there are fewer blocks than cores).
     const uint32_t min_q_per_working_core = std::max(1u, all_heads_num_q_chunks / num_cores);
@@ -1009,16 +1026,19 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t resident_slots = tt::div_up(max_q_per_core, num_q_passes);
     log_info(
         tt::LogOp,
-        "SparseRingSDPA: {} Q blocks per core at most, {} pass(es) of at most {}, {} K/V pages ({} of {} B of L1 for "
+        "SparseRingSDPA: {} Q blocks per core at most, {} pass(es) of at most {}, {} K/V pages, pair steps {} ({} of "
+        "{} "
+        "B of L1 for "
         "CBs)",
         max_q_per_core,
         num_q_passes,
         resident_slots,
         kv_cb_pages,
-        cb_bytes_for_slots(resident_slots, kv_cb_pages),
+        pair_steps ? "on" : "off",
+        cb_bytes_for_slots(resident_slots, kv_cb_pages, pair_steps),
         usable_l1);
 
-    const CbLayout cbs = lay_out_cbs(resident_slots, kv_cb_pages, allocate_cb);
+    const CbLayout cbs = lay_out_cbs(resident_slots, kv_cb_pages, pair_steps, allocate_cb);
     const uint32_t cb_q_in = cbs.q_in;
     const uint32_t cb_k_in = cbs.k_in;
     const uint32_t cb_v_in = cbs.v_in;
@@ -1637,6 +1657,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // per-shard kept-block bits the reader puts in every plan page (block b: word b/32, bit b%32).
         {"resident_slots", resident_slots},
         {"num_q_passes", num_q_passes},
+        // Pair steps (see pair_steps_eligible above) and the K/V CB depth in pieces, which keeps a pair from wrapping
+        // the CB end.
+        {"pair_steps", pair_steps ? 1u : 0u},
+        {"kv_cb_pages", kv_cb_pages},
         {"plan_block_words", tt::div_up(mask_nb, 32u)},
         // Group delivery by multicast (see group_mcast above).
         {"group_mcast", group_mcast ? 1u : 0u},
