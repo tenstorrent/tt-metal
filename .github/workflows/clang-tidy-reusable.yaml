@@ -135,19 +135,10 @@ jobs:
             echo "::warning::S3 connectivity probe failed; ccache will degrade remote misses to local. Continuing."
           fi
 
-      - name: Install clang-tidy ${{ inputs.clang-tidy-version }}
-        # CI image only bakes in clang-tidy-20; others come from apt.llvm.org.
-        if: ${{ inputs.clang-tidy-version != '20' }}
+      - name: Print clang-tidy version
         env:
           LLVM_VERSION: ${{ inputs.clang-tidy-version }}
         run: |
-          . /etc/os-release
-          keyring=/usr/share/keyrings/llvm-snapshot.asc
-          curl -fsSL -o "$keyring" https://apt.llvm.org/llvm-snapshot.gpg.key
-          echo "deb [signed-by=$keyring] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-${LLVM_VERSION} main" \
-            > "/etc/apt/sources.list.d/llvm-${LLVM_VERSION}.list"
-          apt-get update
-          apt-get install -y --no-install-recommends "clang-tidy-${LLVM_VERSION}"
           "clang-tidy-${LLVM_VERSION}" --version
           echo "CLANG_TIDY_BIN=clang-tidy-${LLVM_VERSION}" >> "$GITHUB_ENV"
 
