@@ -1261,6 +1261,9 @@ class TtPrefillRuntime:
         kv_caches: MlaKvCaches,
         chunks: list,
         request_id: int = 0,
+        d2h_service=None,
+        *,
+        metadata_msg: Optional[ttnn.Tensor] = None,
     ) -> None:
         """Prefill ONE packed forward of ``forward_chunks`` ``chunks`` (PrefillChunk) into the engine-owned
         ``kv_caches``. Each layer runs attention once per non-empty chunk against its slot_id at its
@@ -1275,11 +1278,17 @@ class TtPrefillRuntime:
             kv_caches: the engine-owned MlaKvCaches.
             chunks: the forward's PrefillChunk list, in pack order.
             request_id: the runner's forward index, part of the call contract; unused here.
+            d2h_service: must be None. Per-layer D2H acks name one chunk, so a packed forward acks through the
+                host completion sink; the runner refuses PREFILL_LAYER_ACK_D2H with packed forwards.
+            metadata_msg: the forward's raw socket metadata (PrefillBatchMetadata), part of the runner's call
+                contract. Unused: the chunks arrive decoded, and only a D2H ack would send the record on.
 
-        Returns None: single-rank only, the populated cache is the output.
+        Returns None: single-rank only, the populated cache is the output. A pipeline would have to carry each
+        chunk's GLM-5.3 indexer indices between ranks; the runner refuses that for packed forwards.
         """
         cfg = self.config
         assert self.model_built, "build the model before prefill_forward()"
+        assert d2h_service is None, "a packed forward acks through the host completion sink, not D2H"
         validate_chunks(
             chunks,
             chunk_size=cfg.chunk_size,
