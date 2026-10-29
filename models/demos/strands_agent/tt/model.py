@@ -12,6 +12,7 @@ from models.demos.blackhole.qwen36.tt.attention.stateless_prefill import statele
 from models.demos.blackhole.qwen36.tt.gdn.decode import recurrent_forward
 from models.demos.blackhole.qwen36.tt.gdn.stateless_prefill import stateless_prefill_supported
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.blackhole.qwen36.tt.prefill_matmul import swiglu_enabled
 from models.demos.strands_agent.tt.answers import build_answer
 from models.demos.strands_agent.tt.head import load_config, load_head
 from models.demos.strands_agent.tt.model_config import StrandsDeciderModelArgs
@@ -153,6 +154,9 @@ class StrandsDecider:
         decider = cls(mesh_device, args, model, trace=trace)
         # One small forward builds the first-call caches (stateless GDN constants, fused attention weights), so
         # nothing persistent is allocated once a trace exists.
+        if swiglu_enabled():
+            for layer in model.layers:
+                layer.feed_forward._gate_up_fused()  # fused SwiGLU gate/up weight, allocated before any trace
         decider.hidden_rows_batch([[1] * 128], [[127]])
         return decider
 

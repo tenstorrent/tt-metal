@@ -10,8 +10,9 @@ import os
 from dataclasses import dataclass
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.prefill_matmul import SWIGLU_ROWS_MIN
 from models.demos.blackhole.qwen36.tt.prefill_matmul import enabled as prefill_matmul_enabled
-from models.demos.blackhole.qwen36.tt.prefill_matmul import fuses_silu, prefill_linear
+from models.demos.blackhole.qwen36.tt.prefill_matmul import fuses_silu, prefill_linear, prefill_swiglu, swiglu_enabled
 
 
 @dataclass(frozen=True)
@@ -172,6 +173,13 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
     )
 
 
+def _rows(x):
+    m = 1
+    for d in list(x.shape)[:-1]:
+        m *= d
+    return m
+
+
 class Qwen36MLP:
     """SwiGLU feed-forward network for Qwen3.5."""
 
@@ -208,6 +216,27 @@ class Qwen36MLP:
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
 
+    def _gate_up_fused(self):
+        """Tile-pair-interleaved [gate|up] weight for the fused SwiGLU prefill matmul (single chip); built once.
+        Call it before a trace capture: the first call allocates the weight."""
+        if getattr(self, "_gate_up_fused_w", None) is None:
+            import torch
+
+            from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
+
+            w = self.weights
+            gate = ttnn.to_torch(w.w1)
+            up = ttnn.to_torch(w.w3)
+            packed = prepare_for_fused_swiglu(torch.cat([gate, up], dim=-1), 1, gate_is_first=True)
+            self._gate_up_fused_w = ttnn.from_torch(
+                packed,
+                dtype=w.w1.dtype,
+                layout=w.w1.layout,
+                device=self.device,
+                memory_config=w.w1.memory_config(),
+            )
+        return self._gate_up_fused_w
+
     def forward(self, x, mode=None):
         # mode is unused (accepted only for a uniform signature with Qwen36MoE, which needs an
         # explicit decode/prefill mode); the dense MLP still infers its path from the input shape.
@@ -218,6 +247,9 @@ class Qwen36MLP:
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
         silu_in_mul = False
+        if T > 1 and swiglu_enabled() and _rows(x) > SWIGLU_ROWS_MIN:
+            hidden = prefill_swiglu(x, self._gate_up_fused(), ckc, memory_config=mc)
+            return self._down(hidden, T, ckc, mc)
         if T > 1:
             silu_in_mul = not fuses_silu(x, w.w1)
             w1_out = prefill_linear(x, w.w1, ckc, activation=None if silu_in_mul else "silu", memory_config=mc)
@@ -231,6 +263,10 @@ class Qwen36MLP:
             hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
+        return self._down(hidden, T, ckc, mc)
+
+    def _down(self, hidden, T, ckc, mc):
+        w = self.weights
         down_pc = None
         if (
             T > 1

@@ -31,6 +31,7 @@ class StrandsDeciderModelArgs(Qwen36ModelArgs):
         os.environ.setdefault("QWEN36_GDN_FUSED_PREFILL", "1")
         os.environ.setdefault("QWEN36_MLP_GATEUP_DTYPE", "bfp8")
         os.environ.setdefault("QWEN36_PREFILL_MINIMAL_MATMUL", "1")
+        os.environ.setdefault("QWEN36_PREFILL_FUSED_SWIGLU", "1")
         super().__init__(
             mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, enable_mtp=False, **kwargs
         )

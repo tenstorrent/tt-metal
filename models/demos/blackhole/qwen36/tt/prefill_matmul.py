@@ -45,6 +45,14 @@ def _blocks(m_tiles, k_tiles, n_tiles):
     return entry[1] if m >= 8192 else entry[0]
 
 
+SWIGLU_ROWS_MIN = 512  # fused SwiGLU only above this many rows (the cases where SiLU is not fused into w1)
+SWIGLU_BLOCKS = (4, 32, 8)  # (M, K, N) blocks for the fused SwiGLU matmul; K block 64 overflows L1
+
+
+def swiglu_enabled():
+    return enabled() and os.environ.get("QWEN36_PREFILL_FUSED_SWIGLU", "0") == "1"
+
+
 def _config(device, m_tiles, k_tiles, n_tiles):
     grid = device.compute_with_storage_grid_size()
     bm, bk, bn = _blocks(m_tiles, k_tiles, n_tiles)
@@ -132,3 +140,27 @@ def prefill_linear(x, w, compute_kernel_config, activation=None, memory_config=N
     if memory_config is not None:
         kw["memory_config"] = memory_config
     return ttnn.experimental.minimal_matmul(x, w, config=cfg, compute_kernel_config=compute_kernel_config, **kw)
+
+
+def prefill_swiglu(x, w_gu, compute_kernel_config, memory_config=None):
+    """silu(x @ gate) * (x @ up) in one minimal_matmul; w_gu is the tile-pair-interleaved [gate|up] weight
+    [K, 2N] (prepare_for_fused_swiglu); output width N. Single-chip prefill only."""
+    m_tiles = _rows_tiles(x)
+    k_tiles, n_tiles = (x.shape[-1] + 31) // 32, (w_gu.shape[-1] + 31) // 32
+    grid = x.device().compute_with_storage_grid_size()
+    bm, bk, bn = SWIGLU_BLOCKS
+    key = ("swiglu", grid.x, grid.y, m_tiles, k_tiles, n_tiles, bm, bk, bn)
+    cfg = _configs.get(key)
+    if cfg is None:
+        cfg = _configs[key] = ttnn.MinimalMatmulConfig(
+            M_block_size=max(1, min(bm, m_tiles)),
+            K_block_size=max(1, min(bk, k_tiles)),
+            N_block_size=max(1, min(bn, n_tiles)),
+            subblock_h=SUBBLOCK[0],
+            subblock_w=SUBBLOCK[1],
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+        )
+    kw = {} if memory_config is None else {"memory_config": memory_config}
+    return ttnn.experimental.minimal_matmul(
+        x, w_gu, config=cfg, compute_kernel_config=compute_kernel_config, fuse_swiglu=True, **kw
+    )
