@@ -39,7 +39,7 @@ Optional fields, used when the entry's substance requires them:
 ### Anti-patterns
 
 - [Demoting per-group CTA to RTA](#anti-pattern-demoting-per-group-cta-to-rta)
-- [`.id` extraction or temp DFB wrappers at LLK call sites](#anti-pattern-id-extraction-or-temp-dfb-wrappers-at-llk-call-sites)
+- [Temp DFB wrappers or typed shims at LLK call sites](#anti-pattern-temp-dfb-wrappers-or-typed-shims-at-llk-call-sites)
 
 ### Cautions
 
@@ -300,7 +300,7 @@ DataflowBuffer dfb_in(dfb::cb_in);    // a SINGLE object for the FIFO
 
 **Don't**:
 - **Don't add a second `DFBBinding`** to the same DFB under a different `accessor_name` to manufacture a `dfb::cb_x` token. A kernel binds a given DFB under exactly one accessor name (the [self-loop pair](#pattern-self-loop-dfb-binding) — one name, PRODUCER+CONSUMER — is the only "twice" form), and the spec validator rejects a second name for the same DFB.
-- **Don't construct two `DataflowBuffer` objects from the same `DFBAccessor`** (`DataflowBuffer a(dfb::cb_in); DataflowBuffer b(dfb::cb_in);`). It compiles and runs, but two objects aliasing one FIFO break the object↔DFB identity that device-side debug tooling depends on. Alias the *handle*, keep *one* object.
+- **Don't construct two `DataflowBuffer` objects from the same token** (`DataflowBuffer a(dfb::cb_in); DataflowBuffer b(dfb::cb_in);`). It compiles and runs, but two objects aliasing one FIFO break the object↔DFB identity that device-side debug tooling depends on. Alias the *handle*, keep *one* object.
 
 **Path-dependent variant.** When the aliased name resolves to *different* DFBs on different compile-time paths (`cb_x` is `dfb::cb_fusion` when fused, `dfb::cb_out` otherwise), gate the handle alias under the matching `#ifdef` so each path names only DFBs bound on it — the [Conditional / optional resource bindings](#pattern-conditional--optional-resource-bindings) pattern applied to the *name→DFB mapping*:
 
@@ -322,7 +322,7 @@ constexpr auto cb_x = dfb::cb_out;
 
 **Recognition signal**: A kernel uses LLK compute APIs (`reduce_init`, `pack_tile`, `matmul_init`, `cb_wait_front`, etc.) or kernel-library helpers (`compute_kernel_lib::reduce<>`, `dataflow_kernel_lib::prepare_reduce_scaler<>`, etc.) that take `uint32_t` CB ids as parameters.
 
-**Decision**: Pass `dfb::name` directly. The implicit conversion `DFBAccessor::operator uint32_t()` lets named DFB handles flow into any function expecting a `uint32_t` CB id, without manual extraction or wrapping.
+**Decision**: Pass `dfb::name` directly. The implicit conversion `DFBBindingToken::operator uint32_t()` lets named DFB handles flow into any function expecting a `uint32_t` CB id, without manual extraction or wrapping.
 
 **Correct port**:
 
@@ -337,13 +337,13 @@ compute_kernel_lib::reduce<...>(dfb::in0, dfb::scaler, dfb::out, /* block shape 
 dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
 ```
 
-No `.id` extraction, no temporary `DataflowBuffer` constructed just to retrieve its underlying id, no wrapper structs.
+No temporary `DataflowBuffer` constructed just to retrieve its underlying id, no wrapper structs.
 
-**Template-parameter position works too.** The example `dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f)` above uses `dfb::scaler` as a non-type template parameter. The `DFBAccessor::operator uint32_t()` conversion is `constexpr`, so `dfb::name` is a valid integral constant expression wherever the legacy signature took a `uint32_t` non-type template parameter — call-argument and template-argument positions are both fine.
+**Template-parameter position works too.** The example `dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f)` above uses `dfb::scaler` as a non-type template parameter. The `DFBBindingToken::operator uint32_t()` conversion is `constexpr`, so `dfb::name` is a valid integral constant expression wherever the legacy signature took a `uint32_t` non-type template parameter — call-argument and template-argument positions are both fine.
 
 **Today vs. tomorrow**: Today's LLKs and kernel-lib helpers on WH/BH accept `uint32_t` — the implicit conversion is the right bridge for porting-scope work. Kernel-lib and LLK Quasar correctness is upstream of any WH/BH port; do not preemptively wrap or refactor.
 
-**See also**: [Anti-pattern: `.id` extraction or temp DFB wrappers](#anti-pattern-id-extraction-or-temp-dfb-wrappers-at-llk-call-sites).
+**See also**: [Anti-pattern: temp DFB wrappers or typed shims](#anti-pattern-temp-dfb-wrappers-or-typed-shims-at-llk-call-sites).
 
 ---
 
@@ -465,17 +465,16 @@ The framework validates that the two compute `KernelSpec`s have non-overlapping 
 
 ---
 
-## Anti-pattern: `.id` extraction or temp DFB wrappers at LLK call sites
+## Anti-pattern: temp DFB wrappers or typed shims at LLK call sites
 
 **Category**: Anti-pattern
 
 **Recognition signal**: At a kernel call site for an LLK (`reduce_init`, `pack_tile`, etc.) or kernel-lib helper, the code does any of:
 
-- `.id`-extraction: `reduce_init(dfb::input.id, ...)`.
 - Temporary wrapper: `DataflowBuffer in_dfb(dfb::input); reduce_init(in_dfb.get_id(), ...)`.
 - Typed-shim struct: a wrapper template (`BufferRef<T>` or similar) that holds a CB id and exposes `operator uint32_t`.
 
-**Why wrong**: Each of these reinvents an implicit conversion that `DFBAccessor` already provides. The `.id` form encodes the LLK's CB-id vocabulary into kernel code that should be DFB-centric; temporary wrappers add construction cost for no benefit; typed shims reproduce the implicit conversion locally and clutter the call site.
+**Why wrong**: Each of these reinvents an implicit conversion that `DFBBindingToken` already provides. Temporary wrappers add construction cost for no benefit; typed shims reproduce the implicit conversion locally and clutter the call site.
 
 **Correct port**: See [Pattern: Pass DFB handles directly to LLKs and kernel-lib helpers](#pattern-pass-dfb-handles-directly-to-llks-and-kernel-lib-helpers).
 

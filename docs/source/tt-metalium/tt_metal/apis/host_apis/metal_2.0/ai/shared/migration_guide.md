@@ -576,7 +576,7 @@ Metal 2.0 replaces Circular Buffers (CBs) with Dataflow Buffers (DFBs). Notes:
 
 1. **Construction from local accessor name**. You construct your DFB from its local accessor, not a magic-number `cb_id`. The accessor is auto-generated from the host-side DFB binding and lives in the `dfb::` namespace inside `kernel_bindings_generated.h`.
 2. **`CircularBuffer` compatible APIs**. The kernel-side DFB APIs are drop-in-compatible with the Device 2.0 `CircularBuffer` wrapper methods and semantics on Gen1. Gen2 permits more advanced capabilities.
-3. **Direct use in LLK compute APIs (WH/BH)**. The `dfb::my_dfb` accessor constants implicitly convert to `uint32_t`, so on WH/BH you can pass them directly to LLK compute APIs (`reduce_init`, `pack_tile`, `cb_wait_front`, etc.) that take a raw CB id — no `.id` extraction or temporary `DataflowBuffer` needed. The Quasar LLK signatures are intended to take DFB handles natively; that refresh is in progress.
+3. **Direct use in LLK compute APIs (WH/BH)**. The `dfb::my_dfb` accessor constants implicitly convert to `uint32_t`, so on WH/BH you can pass them directly to LLK compute APIs (`reduce_init`, `pack_tile`, `cb_wait_front`, etc.) that take a raw CB id — no temporary `DataflowBuffer` needed. The Quasar LLK signatures are intended to take DFB handles natively; that refresh is in progress.
 
 **Legacy (Device 2.0 `CircularBuffer`):**
 
@@ -594,7 +594,7 @@ cb.push_back(num_pages);
 
 ```cpp
 // Host-side DFB binding declared accessor_name = "my_dfb".
-// Auto-generated from that: constexpr DFBAccessor dfb::my_dfb;
+// Auto-generated from that: constexpr DFBBindingToken<…> dfb::my_dfb{…};
 DataflowBuffer dfb(dfb::my_dfb);
 
 dfb.reserve_back(num_entries);
