@@ -64,18 +64,27 @@ FORCE_INLINE uint32_t map_address(uint32_t map_offset) {
     }
 }
 
-inline ForwarderContext make_forwarder_context() {
+// constexpr, so the compiler folds the context's initialization; a mux in program-local L1 then adds its base with
+// add_l1_base_to_forwarder_context.
+constexpr ForwarderContext make_forwarder_context() {
     ForwarderContext context{};
     const uint32_t channel_stride_bytes = ct_args::num_buffers_per_channel * ct_args::channel_buffer_size_bytes;
 
     for (uint32_t channel_idx = 0; channel_idx < ct_args::num_channels; ++channel_idx) {
         auto& channel = context.channels[channel_idx];
         channel.pending_packets_stream_id = channel_idx;
-        channel.channel_base_address =
-            map_address(ct_args::channel_region_base_address) + (channel_idx * channel_stride_bytes);
+        channel.channel_base_address = ct_args::channel_region_base_address + (channel_idx * channel_stride_bytes);
     }
 
     return context;
+}
+
+FORCE_INLINE void add_l1_base_to_forwarder_context(ForwarderContext& context) {
+    if constexpr (ct_args::in_program_local_l1) {
+        for (uint32_t channel_idx = 0; channel_idx < ct_args::num_channels; ++channel_idx) {
+            context.channels[channel_idx].channel_base_address += l1_base_address;
+        }
+    }
 }
 
 inline volatile tt_l1_ptr uint32_t* get_status_ptr() {
