@@ -209,8 +209,9 @@ inline void _llk_math_bcast_cols_reuse_custom_(
     // Restore the dest base offset so the next op starts from tile slot 0.
     math::clear_dst_reg_addr();
 
-    // Restore the ADDR_MOD_7 invariant (zero advance) for the next op.
+    // Restore the ADDR_MOD_7 and ADDR_MOD_6 invariants (zero advance, dest += 2) for the next op.
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 /**
