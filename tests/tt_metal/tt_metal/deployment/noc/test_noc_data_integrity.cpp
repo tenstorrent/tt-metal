@@ -8,9 +8,15 @@
 
 #include <gtest/gtest.h>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-umd/arch/blackhole_implementation.hpp>
+#include <tt-umd/arch/wormhole_implementation.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
 #include <tt_stl/assert.hpp>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -229,6 +235,14 @@ private:
     atomic<bool> armed_{false};
 };
 
+// Disarms on every exit path, so an exception can't leave the watchdog firing during teardown.
+struct watchdog_scope {
+    explicit watchdog_scope(uint32_t limit_s) { watchdog::get().arm(limit_s); }
+    ~watchdog_scope() { watchdog::get().disarm(); }
+    watchdog_scope(const watchdog_scope&) = delete;
+    watchdog_scope& operator=(const watchdog_scope&) = delete;
+};
+
 static vector<CoreCoord> all_eth_cores(IDevice* device) {
     vector<CoreCoord> cores;
     for (const auto& c : device->get_active_ethernet_cores(true)) {
@@ -303,6 +317,15 @@ static vector<source> get_tensix_sources(const shared_ptr<distributed::MeshDevic
         });
     }
     return sources;
+}
+
+// Blackhole Galaxy leaves Ethernet channels 10 and 11 unused by design.
+static bool is_unused_eth_chan(IDevice* device, bool is_eth, int chan) {
+    if (!is_eth || (chan != 10 && chan != 11)) {
+        return false;
+    }
+    const auto board = MetalContext::instance().get_cluster().get_board_type(device->id());
+    return board == BoardType::UBB_BLACKHOLE || board == BoardType::UBB_BLACKHOLE_CF;
 }
 
 // Tensix cores (all worker rows unless NOC_TEST_TENSIX_ROWS is set), plus Ethernet L1 and
@@ -394,6 +417,11 @@ static vector<dest> get_dests(
             .dram_noc_mask = soc_d.get_dram_endpoint_noc_mask({translated.x, translated.y}),
         });
     }
+
+    // A kernel stops at its first timeout, so unused channels go last to not cost coverage of the rest.
+    stable_partition(dests.begin(), dests.end(), [&](const dest& d) {
+        return !is_unused_eth_chan(device, !d.is_tensix && !d.is_dram, d.chan);
+    });
     return dests;
 }
 
@@ -744,6 +772,7 @@ static vector<failure> run_phase(
             fixture->RunProgram(mesh, *workload, true);
         }
         log_info(tt::LogTest, "  noc {} batch {}/{}: running", noc, batch + 1, num_batches);
+        watchdog::get().step(fmt::format("noc {} batch {}/{}: polling kernel progress", noc, batch + 1, num_batches));
 
         poll_result poll = wait_for_sources(runs, p);
 
@@ -916,15 +945,6 @@ struct test_result {
     map<ChipId, wedged_chip> wedged;
 };
 
-// Blackhole Galaxy leaves Ethernet channels 10 and 11 unused by design.
-static bool is_unused_eth_chan(IDevice* device, bool is_eth, int chan) {
-    if (!is_eth || (chan != 10 && chan != 11)) {
-        return false;
-    }
-    const auto board = MetalContext::instance().get_cluster().get_board_type(device->id());
-    return board == BoardType::UBB_BLACKHOLE || board == BoardType::UBB_BLACKHOLE_CF;
-}
-
 static bool is_warning(const failure& f) {
     return is_unused_eth_chan(f.src.device, f.src.is_eth, f.src.chan) ||
            is_unused_eth_chan(f.src.device, !f.dst.is_tensix && !f.dst.is_dram, f.dst.chan);
@@ -1008,7 +1028,7 @@ static test_result run_test(
     FIXTURE* fixture, const vector<shared_ptr<distributed::MeshDevice>>& devices, bool tensix_sources) {
     /* ==================== */
     const params p = get_params();
-    watchdog::get().arm(p.watchdog_s);
+    const watchdog_scope wd(p.watchdog_s);
 
     vector<vector<source>> sources_per_chip;
     uint32_t num_slots = 0;
@@ -1069,7 +1089,6 @@ static test_result run_test(
             (is_warning(fail) ? result.warnings : result.failures).push_back(std::move(fail));
         }
     }
-    watchdog::get().disarm();
     return result;
 }
 
@@ -1087,12 +1106,11 @@ static uint32_t get_ubb_arg() {
             continue;
         }
         uint32_t ubb = 0;
-        try {
-            ubb = stoul(val);
-        } catch (const std::exception&) {
-            TT_THROW("--ubb value '{}' is not a number", val);
-        }
-        TT_FATAL(ubb >= 1 && ubb <= 4, "--ubb must be between 1 and 4, got {}", ubb);
+        const auto [end, ec] = from_chars(val.data(), val.data() + val.size(), ubb);
+        TT_FATAL(
+            ec == std::errc() && end == val.data() + val.size() && ubb >= 1 && ubb <= 4,
+            "--ubb must be a number between 1 and 4, got '{}'",
+            val);
         return ubb;
     }
     return 0;
@@ -1116,11 +1134,20 @@ static vector<shared_ptr<distributed::MeshDevice>> filter_by_ubb(
     return out;
 }
 
-// PCIe bus-number high nibble per tray (index = tray - 1); must match tt_fabric::get_ubb_id.
-static const map<string, vector<uint32_t>> ubb_tray_buses = {
-    {"0xb140", {0x00, 0x40, 0xC0, 0x80}},  // Blackhole
-    {"0x401e", {0xC0, 0x80, 0x00, 0x40}},  // Wormhole
-};
+// PCIe bus-number high nibble per tray (index = tray - 1), or null if the arch has no UBB layout.
+static const array<uint16_t, 4>* ubb_tray_buses(const string& pci_device_id) {
+    uint16_t id = 0;
+    const char* const first = pci_device_id.data() + (pci_device_id.starts_with("0x") ? 2 : 0);
+    const char* const last = pci_device_id.data() + pci_device_id.size();
+    if (from_chars(first, last, id, 16).ec != std::errc()) {
+        return nullptr;
+    }
+    switch (umd::arch_from_pci_device_id(id)) {
+        case tt::ARCH::BLACKHOLE: return &umd::blackhole::UBB_TRAY_BUS_IDS;
+        case tt::ARCH::WORMHOLE_B0: return &umd::wormhole::UBB_TRAY_BUS_IDS;
+        default: return nullptr;
+    }
+}
 
 // Limits UMD to the tray's PCIe devices so chips on other trays are never opened.
 class ubb_visible_devices_env : public ::testing::Environment {
@@ -1141,13 +1168,13 @@ public:
                 continue;
             }
             const string bdf = pci.filename().string();
-            const auto it = ubb_tray_buses.find(read_text_file_trimmed((pci / "device").string()));
+            const auto* const tray_buses = ubb_tray_buses(read_text_file_trimmed((pci / "device").string()));
             const auto colon = bdf.find(':');
-            if (it == ubb_tray_buses.end() || colon == string::npos) {
+            if (!tray_buses || colon == string::npos) {
                 continue;
             }
             const uint32_t bus = stoul(bdf.substr(colon + 1, 2), nullptr, 16);
-            if ((bus & 0xF0) == it->second[ubb - 1]) {
+            if ((bus & 0xF0) == (*tray_buses)[ubb - 1]) {
                 bdfs.push_back(bdf);
             }
         }
