@@ -4,6 +4,8 @@
 """ttnn.experimental.modulated_deform_conv2d against a float64 host reference: bilinear columns
 times the weight, with torchvision's deform_conv2d pinning the reference's (kk, c) column order."""
 
+import math
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -109,9 +111,7 @@ def assert_close(expected, actual):
         (2, 5, 7, 64, 96, True, False, 1.0, (3, 3), (1, 1), (1, 1), (1, 1)),  # a partial last block
         (1, 24, 24, 32, 64, True, True, 20.0, (3, 3), (1, 1), (1, 1), (1, 1)),  # many corners far outside
         (1, 20, 40, 256, 256, True, True, 4.0, (3, 3), (1, 1), (1, 1), (1, 1)),
-        # 22 blocks: two full rows of cores, a rectangle, so the weight multicast runs on a small grid.
-        (1, 16, 44, 64, 64, True, True, 1.0, (3, 3), (1, 1), (1, 1), (1, 1)),
-        # C_out over one 8-tile dest pass: several, and a partial last one.
+        # C_out over several 4-tile dest halves: 320 is two full ones and a partial last, 512 four full.
         (1, 16, 20, 64, 320, True, True, 2.0, (3, 3), (1, 1), (1, 1), (1, 1)),
         (1, 16, 20, 64, 512, True, False, 2.0, (3, 3), (1, 1), (1, 1), (1, 1)),
         (1, 19, 21, 64, 64, True, False, 1.0, (3, 3), (2, 2), (1, 1), (1, 1)),
@@ -144,15 +144,19 @@ def test_modulated_deform_conv2d(
 @pytest.mark.parametrize(
     "batch, in_h, in_w, channels, c_out, shard_rows",
     [
-        # 10 shards on a 110-core grid: most cores have no rows and only join the weight multicast.
+        # 10 shards: most cores have no rows and only join the weight multicast.
         (1, 16, 20, 64, 64, 32),
-        (6, 58, 100, 256, 256, 320),  # BEVFormer-base layer3, as the model shards it
-        (6, 29, 50, 512, 512, 96),  # two channel passes per kernel position
+        (6, 58, 100, 256, 256, None),  # BEVFormer-base layer3, as the model shards it
+        (6, 29, 50, 512, 512, None),  # two channel passes per kernel position
     ],
 )
 def test_modulated_deform_conv2d_sharded_input(device, batch, in_h, in_w, channels, c_out, shard_rows):
     """A height-sharded input gives the interleaved input's output exactly: only where the corners
-    are read from changes."""
+    are read from changes. ``shard_rows`` None shards the rows as the model does, evenly over the
+    whole grid in whole 32-row blocks."""
+    if shard_rows is None:
+        grid = device.compute_with_storage_grid_size()
+        shard_rows = math.ceil(batch * in_h * in_w / (grid.x * grid.y) / 32) * 32
     conv = ((3, 3), (1, 1), (1, 1), (1, 1))
     x, offset, logits, weight, bias = random_inputs(batch, in_h, in_w, channels, c_out, *conv, 4.0)
     interleaved = run_conv(device, x, offset, logits, weight, bias, *conv, True)
@@ -160,6 +164,18 @@ def test_modulated_deform_conv2d_sharded_input(device, batch, in_h, in_w, channe
     assert torch.equal(sharded, interleaved)
     expected = (reference_columns(x, offset, logits.sigmoid(), *conv) @ weight + bias).clamp(min=0)
     assert_close(expected, sharded)
+
+
+def test_modulated_deform_conv2d_weight_multicast(device):
+    """Two full rows of the grid's blocks form a rectangle short of the grid, so one core multicasts
+    each weight slice to a few rows of cores."""
+    grid = device.compute_with_storage_grid_size()
+    conv = ((3, 3), (1, 1), (1, 1), (1, 1))
+    # 16 rows of 4 * grid.x pixels: 2 * grid.x blocks of 32 output rows, one per core of two rows.
+    x, offset, logits, weight, bias = random_inputs(1, 16, 4 * grid.x, 64, 64, *conv, 1.0)
+    actual = run_conv(device, x, offset, logits, weight, bias, *conv, True)
+    expected = (reference_columns(x, offset, logits.sigmoid(), *conv) @ weight + bias).clamp(min=0)
+    assert_close(expected, actual)
 
 
 def test_modulated_deform_conv2d_matches_torchvision(device):
