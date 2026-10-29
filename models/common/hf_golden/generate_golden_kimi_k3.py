@@ -187,6 +187,10 @@ GROUP = 32  # quantization_config: mxfp4-pack-quantized, group_size 32
 E2M1 = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0)  # magnitudes by the low 3 bits; bit 3 is the sign
 TOKEN_CHUNK = 4096  # tokens per _apply_attn_res call and per moe_infer weighted sum (header: memory); 16 in --selftest
 HOST_EXPERTS_BELOW = 120 * 2**30  # HF_GOLDEN_EXPERTS=auto: experts in host RAM on a GPU with less memory than this
+# --selftest's tiny model: routing top-k, and the seed of its biases / norms / experts. Seed 2 left one bf16 GPU
+# near-tie (layer 3, token 33: a margin of 1e-4 against 1e-3 of gate noise) that flipped a pick; see compare().
+TINY_TOP_K = 4
+TINY_SEED = 3
 EXPERT = re.compile(r"block_sparse_moe\.experts\.(\d+)\.(w[123]\.weight)")
 
 
@@ -757,10 +761,12 @@ class KimiK3Golden(LayerwiseGolden):
 
     def tiny_init(self, model):
         super().tiny_init(model)
-        g = torch.Generator().manual_seed(2)
+        g = torch.Generator().manual_seed(TINY_SEED)
+        self.tiny_bias = {}  # layer -> its router bias, for the routing margin compare() prints
         for name, t in model.named_parameters():
             if name.endswith("e_score_correction_bias"):
                 t.copy_(torch.randn(t.shape, generator=g) * 0.1)
+                self.tiny_bias[int(re.search(r"layers\.(\d+)\.", name)[1])] = t.detach().float().clone()
             elif name.endswith("norm.weight"):  # O(1) norms, like real ones
                 t.copy_(1 + torch.randn(t.shape, generator=g) * 0.1)
             elif name.endswith("_res_proj.weight"):  # AttnRes scores large enough that the softmax is not uniform
@@ -777,6 +783,22 @@ class KimiK3Golden(LayerwiseGolden):
                 signs = torch.randint(0, 2, values.shape, generator=g) * 2 - 1
                 scale = 2.0 ** torch.randint(-9, -5, (*values.shape[:-1], 1), generator=g)
                 t.copy_((values * signs * scale).flatten(-2))
+
+    def compare(self, name, got, ref, exact):
+        """Also prints each MoE layer's routing margin: the smallest gap, over tokens, between the top_k-th and the next
+        selection score (sigmoid(logits) + e_score_correction_bias) of the reference, against the gate noise between
+        the two runs. A gap under the noise is a near-tie whose pick can flip on GPU, cascading through every later
+        layer; TINY_SEED is chosen so that none occurs (the tolerance is unchanged)."""
+        m = re.fullmatch(r"model\.layers\.(\d+)\.block_sparse_moe\.gate\.output", name)
+        if m and int(m[1]) in getattr(self, "tiny_bias", {}):
+            k = TINY_TOP_K
+            scores = ref.float().sigmoid() + self.tiny_bias[int(m[1])].to(ref.device)
+            top = scores.sort(dim=-1, descending=True).values
+            gap = (top[:, k - 1] - top[:, k]).min().item()
+            noise = (got.float().sigmoid() - ref.float().sigmoid()).abs().max().item()
+            tie = "  NEAR-TIE: a pick can flip" if gap < 2 * noise else ""
+            print(f"[routing] layer {m[1]}: smallest top-{k} margin {gap:.2e}, gate noise {noise:.2e}{tie}", flush=True)
+        return super().compare(name, got, ref, exact)
 
     def tiny_config(self):
         """The real config cut down: every layer kind (KDA dense, KDA MoE, MLA MoE), AttnRes seals every 2 layers, no
@@ -805,7 +827,7 @@ class KimiK3Golden(LayerwiseGolden):
                 moe_intermediate_size=32,
                 routed_expert_hidden_size=32,
                 num_experts=8,
-                num_experts_per_token=4,
+                num_experts_per_token=TINY_TOP_K,
                 num_shared_experts=2,
                 routed_scaling_factor=2.5,  # 1.0 in the checkpoint: != 1 so applying it is tested
                 first_k_dense_replace=1,
