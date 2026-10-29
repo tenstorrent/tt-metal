@@ -35,6 +35,28 @@ from models.demos.glm53_flash.tt.mhc import build_mhc
 _DUMPED: set = set()
 
 
+@dataclass(frozen=True)
+class WaveInfo:
+    """A wave's per-row chunk geometry for one layer call (``doc/mesh/row_ownership.md`` mechanism (a)): every mesh
+    row runs its own chunk of ``T`` padded rows; ``starts[r]`` / ``valids[r]`` are row r's absolute chunk start and
+    valid row count (0 on an idle row: pad tokens, results discarded); ``start_t`` / ``end_t`` the row-sharded KDA
+    chronology scalars of ``(start, start + valid)`` (``TtKDA.scalar_rows``)."""
+
+    T: int
+    starts: tuple[int, ...]
+    valids: tuple[int, ...]
+    start_t: ttnn.Tensor
+    end_t: ttnn.Tensor
+
+    @property
+    def rows(self) -> int:
+        return len(self.starts)
+
+    @property
+    def member_rows(self) -> tuple[int, ...]:
+        return tuple(r for r, v in enumerate(self.valids) if v > 0)
+
+
 def sp_attention_mode() -> str:
     """How a DSA layer attends in the sequence-parallel (multi-row) prefill: ``slab`` (default: every row
     attends its own slab's queries only, ``TtDSA._prefill_slab``) or ``v1`` (every row gathers the chunk's
@@ -58,7 +80,7 @@ def _dump(dump_dir: str, name: str, t) -> None:
 
 
 from models.demos.glm53_flash.tt.mlp import TtClampedSwiGLU
-from models.demos.glm53_flash.tt.moe import TtMoE, pad_mask_enabled, pad_row_mask_host
+from models.demos.glm53_flash.tt.moe import TtMoE, pad_mask_enabled, pad_row_mask_host, wave_row_mask_host
 
 
 def _strip(sd: dict[str, torch.Tensor], prefix: str) -> dict[str, torch.Tensor]:
@@ -230,6 +252,7 @@ class TtDecoderLayer(LightweightModule):
         slot=None,
         ring_sel: ttnn.Tensor | None = None,
         row_mask: ttnn.Tensor | None = None,
+        wave: WaveInfo | None = None,
     ) -> tuple[ttnn.Tensor, LayerState]:
         """``_prefill_forward_impl`` inside ``mesh.prefill_scope()`` (the composite TP all-reduce for every prefill
         shape, see ``GLMMesh.prefill_scope``). ``row_mask``: the MoE router's pad-row mask of this row's slab
@@ -247,6 +270,7 @@ class TtDecoderLayer(LightweightModule):
                 slot=slot,
                 ring_sel=ring_sel,
                 row_mask=row_mask,
+                wave=wave,
             )
 
     def _prefill_forward_impl(
@@ -262,6 +286,7 @@ class TtDecoderLayer(LightweightModule):
         slot=None,
         ring_sel: ttnn.Tensor | None = None,
         row_mask: ttnn.Tensor | None = None,
+        wave: WaveInfo | None = None,
     ) -> tuple[ttnn.Tensor, LayerState]:
         """streams [1,1,T_pad,4*hidden] fp32 for one user: row i is the token at absolute position
         ``start + i`` (``start % 32 == 0``), T_pad % 32 == 0 and rows past ``seq_len`` are padding.
@@ -269,14 +294,21 @@ class TtDecoderLayer(LightweightModule):
         user's cache holds [0, start). Returns the new streams and the layer state after the chunk.
         ``actual_start`` / ``actual_end`` override the KDA device scalars derived from ``start`` and
         ``seq_len`` (global positions, as ttKDA defines them). ``slot`` / ``ring_sel``: the DSA path's
-        device-side user slot and ring-row selector (the traced prefill, ``TtDSA.prefill_forward``)."""
-        T = streams.shape[-2] * self.mesh.rows  # the chunk's rows (this chip holds T / rows of them)
+        device-side user slot and ring-row selector (the traced prefill, ``TtDSA.prefill_forward``).
+        ``wave`` (``WaveInfo``): every mesh row runs ITS OWN chunk of ``T = streams.shape[-2]`` rows (no slabs):
+        KDA scans row-locally from the row's carry with the row-sharded chronology scalars, the MoE router sees the
+        row's own pad mask; ``user`` / ``seq_len`` / ``start`` are then the uniform slot index, ``T`` and 0."""
+        wave_mode = wave is not None
+        T = streams.shape[-2] * (1 if wave_mode else self.mesh.rows)  # the chunk's rows (a slab per chip under SP)
         new_state = LayerState(kda=state.kda, cache=state.cache)
 
         def attention(h):  # h: [1,1,T/rows,hidden] bf16, input_layernorm applied
             if self.is_kda:
-                start_t = actual_start if actual_start is not None else self.attn.chrono_scalar(start, "start")
-                end = actual_end
+                if wave_mode:
+                    start_t, end = wave.start_t, wave.end_t
+                else:
+                    start_t = actual_start if actual_start is not None else self.attn.chrono_scalar(start, "start")
+                    end = actual_end
                 # the exclusive global valid end, ALWAYS carried (a full first chunk included: end == T clips
                 # nothing): the conv kernel is a different program with and without the bound (has_actual_end
                 # is a compile-time define), and a chunk shape first seen without it after the captures compiled
@@ -285,9 +317,14 @@ class TtDecoderLayer(LightweightModule):
                     end = self.attn.chrono_scalar(start + seq_len, "end")
                 T_loc = h.shape[-2]
                 y, new_state.kda = self.attn.prefill_forward(
-                    ttnn.reshape(h, [1, T_loc, self.hidden]), state.kda, start_t, end
+                    ttnn.reshape(h, [1, T_loc, self.hidden]), state.kda, start_t, end, local=wave_mode
                 )
                 return ttnn.reshape(y, [1, 1, T_loc, self.hidden])
+            if wave_mode:
+                raise NotImplementedError(
+                    "the DSA wave path (doc/mesh/row_ownership.md step 3: per-row cache views and index maintenance) "
+                    "is not implemented yet"
+                )
             dsa_kw = dict(start=start, slot=slot, ring_sel=ring_sel)
             if self.mesh.rows == 1:
                 return self.attn.prefill_forward(h, state.cache, user, seq_len, **dsa_kw)
@@ -314,7 +351,10 @@ class TtDecoderLayer(LightweightModule):
         streams = self._hc_call(self.attn_hc, streams, attention, self.input_norm_w)
         mask, own = row_mask, False
         if self.is_moe:
-            if mask is None and seq_len < T and pad_mask_enabled():
+            if mask is None and wave_mode and pad_mask_enabled() and any(v < T for v in wave.valids):
+                # a wave: every row its own valid count (an idle row all pad)
+                mask, own = self.mesh.upload(wave_row_mask_host(T, wave.valids), ttnn.bfloat16, rows=2), True
+            elif mask is None and not wave_mode and seq_len < T and pad_mask_enabled():
                 # an eager chunk with rows past seq_len (the ragged last chunk): the attention leaves them
                 # unspecified and the MoE router must not see them (GLM53_ROUTER_PAD_MASK; 2026-10-27 block hang)
                 mask, own = self.mesh.upload(pad_row_mask_host(T, seq_len), ttnn.bfloat16, rows=2), True

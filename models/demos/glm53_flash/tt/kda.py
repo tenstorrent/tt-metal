@@ -427,6 +427,39 @@ class TtKDA(LightweightModule):
             ch["values"][role] = int(value)
         return ch["tensors"][role]
 
+    def scalar_rows(self, values: tuple[int, ...], role: str) -> ttnn.Tensor:
+        """A wave's per-row ``actual_start`` / ``actual_end`` (``doc/mesh/row_ownership.md``): one value per mesh row,
+        ``[1, 1, 1, 1]`` uint32 on every chip of that row. ONE persistent row-sharded tensor per role on the mesh
+        (``GLMMesh.chrono``, next to ``chrono_scalar``'s replicated pair), allocated on first use (before the first
+        trace capture: the wave warm-up) and rewritten in place only when the values change."""
+        if role not in ("wave_start", "wave_end"):
+            raise ValueError(f"scalar_rows role {role!r} is not 'wave_start' / 'wave_end'")
+        rows = self.mesh.rows
+        vals = tuple(int(v) for v in values)
+        if len(vals) != rows:
+            raise ValueError(f"{len(vals)} per-row values for a {rows}-row mesh")
+        ch = self.mesh.chrono
+        if "row_tensors" not in ch:
+            if self.mesh.allocations_frozen[0]:
+                raise RuntimeError("KDA wave chronology scalars must be allocated before the first trace capture")
+            ch["row_tensors"] = {
+                r: self.mesh.upload(
+                    torch.zeros((rows, 1, 1, 1), dtype=torch.int32), ttnn.uint32, rows=0, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+                for r in ("wave_start", "wave_end")
+            }
+            ch["row_values"] = {"wave_start": None, "wave_end": None}
+        if ch["row_values"][role] != vals:
+            host = ttnn.from_torch(
+                torch.tensor(vals, dtype=torch.int32).reshape(rows, 1, 1, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self.mesh.shard_rows(0),
+            )
+            ttnn.copy_host_to_device_tensor(host, ch["row_tensors"][role])
+            ch["row_values"][role] = vals
+        return ch["row_tensors"][role]
+
     # ------------------------------------------------------------------ state
     def allocate_state(self, batch_size: int = 1) -> KdaState:
         """Zero state for ``batch_size`` users (ttKDA layout)."""
@@ -494,6 +527,20 @@ class TtKDA(LightweightModule):
         # (every product x * 1.0 or x * 0.0, fp32 accumulation): ONE program whatever ``user`` is. The earlier
         # untilize + slice at the user's index was a program per user, which the first continued chunk of a slot the
         # warm-up's continuation prompts had not used compiled under the sealed cache (2026-10-28 served APC, 8x4).
+        row = self.user_conv_tiles(state, user)
+        rm = ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT)  # [taps, 1, W]
+        ttnn.deallocate(row)
+        out = ttnn.permute(rm, [1, 0, 2])  # [1, taps, W]
+        ttnn.deallocate(rm)
+        return out
+
+    def user_conv_tiles(self, state: KdaState, user: int) -> ttnn.Tensor:
+        """One user's conv history as tap-major tiles ``[taps, 1, W]`` bf16 (a fresh tensor; the block path's
+        batched layout): the one-hot matmul of ``user_conv_state``, which ``prefill_forward`` also accepts as the
+        input history (B == 1) and returns as the carry (``conv_tiled``)."""
+        taps = self.kcfg.conv_kernel_size - 1
+        if state.convolution.layout != ttnn.TILE_LAYOUT:
+            raise NotImplementedError("user_conv_tiles needs the block KDA decode (tiled conv history)")
         B = int(state.convolution.shape[1])
         sel = torch.zeros(taps, 1, B)
         sel[:, 0, user] = 1.0
@@ -502,11 +549,7 @@ class TtKDA(LightweightModule):
             sel_dev, state.convolution, dtype=ttnn.bfloat16, compute_kernel_config=_exact_compute(self.device)
         )
         ttnn.deallocate(sel_dev)
-        rm = ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT)  # [taps, 1, W]
-        ttnn.deallocate(row)
-        out = ttnn.permute(rm, [1, 0, 2])  # [1, taps, W]
-        ttnn.deallocate(rm)
-        return out
+        return row
 
     def write_user_conv_state(self, state: KdaState, user: int, conv: ttnn.Tensor):
         """Write one user's history (``[taps, 1, W]`` tiles, as ``prefill_forward`` returns it in block mode) into

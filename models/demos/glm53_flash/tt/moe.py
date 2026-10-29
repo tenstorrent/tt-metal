@@ -345,6 +345,18 @@ def pad_row_mask_host(T: int, seq_len: int) -> torch.Tensor:
     return m
 
 
+def wave_row_mask_host(T: int, valids: tuple[int, ...]) -> torch.Tensor:
+    """[1, 1, rows * T, 32] bf16: row r's slab (``GLMMesh.upload(..., rows=2)``) has column 0 = 1.0 on its first
+    ``valids[r]`` rows and 0 past them: the router's pad-row mask of a wave (every mesh row its own chunk of ``T``
+    padded rows; an idle row is all pad)."""
+    m = torch.zeros(1, 1, len(valids) * T, TILE, dtype=torch.bfloat16)
+    for r, n in enumerate(valids):
+        if not 0 <= n <= T:
+            raise ValueError(f"row {r}: valid rows {n} outside [0, {T}]")
+        m[0, 0, r * T : r * T + n, 0] = 1.0
+    return m
+
+
 def pad_mask_ones_host(E: int) -> torch.Tensor:
     """[1, 1, 32, E] bf16 with row 0 all ones (the rest 0): ``mask[:, 0:1] x ones[0:1, :]`` as one tile matmul."""
     o = torch.zeros(1, 1, TILE, E, dtype=torch.bfloat16)

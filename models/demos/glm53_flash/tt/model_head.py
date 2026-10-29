@@ -233,6 +233,37 @@ class TtModelHead(LightweightModule):
             ttnn.deallocate(t)
         return out
 
+    def last_token_logits_rows(self, streams: ttnn.Tensor, seq_lens: tuple[int, ...]) -> ttnn.Tensor:
+        """``last_token_logits`` with a last token PER MESH ROW (a wave: every row holds its own chunk of ``T``
+        rows, ``seq_lens[r]`` is row r's valid length; 0 on an idle row picks its row 0): the tile bounds
+        (``[4]`` int32 per chip) and the one-hot (``[1, 1, 32, 32]``) are row-sharded uploads, the programs the
+        single-prompt form's. Returns ``[1, 1, 1, vocab]`` per chip: row r's logits on row r's chips."""
+        T = int(streams.shape[-2])
+        rows = self.mesh.rows
+        if len(seq_lens) != rows:
+            raise ValueError(f"{len(seq_lens)} row lengths for a {rows}-row mesh")
+        last = [max(1, min(int(n), T)) - 1 for n in seq_lens]
+        h = self.collapse(streams)
+        hn = self.norm(h)
+        if h is not streams:
+            ttnn.deallocate(h)
+        W = int(hn.shape[-1])
+        bounds = lambda t: self.mesh.upload(t.reshape(-1), ttnn.int32, rows=0, layout=ttnn.ROW_MAJOR_LAYOUT)
+        start = bounds(torch.tensor([[0, 0, (r // TILE) * TILE, 0] for r in last], dtype=torch.int32))
+        end = bounds(torch.tensor([[1, 1, (r // TILE) * TILE + TILE, W] for r in last], dtype=torch.int32))
+        tile = ttnn.slice(input_tensor=hn, starts=start, ends=end, slice_dim=2, num_devices=T // TILE)
+        ttnn.deallocate(hn)
+        onehot = torch.zeros(rows, 1, TILE, TILE)
+        for r, n in enumerate(last):
+            onehot[r, 0, 0, n % TILE] = 1.0
+        sel = self.mesh.upload(onehot, tile.dtype, rows=0)  # [1, 1, 32, 32] per chip: row 0 picks its row's token
+        picked = ttnn.matmul(sel, tile, dtype=tile.dtype, compute_kernel_config=self.hifi4)
+        logits = self.logits(picked)  # [1, 1, 32, vocab]
+        out = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, 1, int(logits.shape[-1])])
+        for t in (start, end, tile, sel, picked, logits):
+            ttnn.deallocate(t)
+        return out
+
     def tile_logits(self, streams: ttnn.Tensor, tile_start: ttnn.Tensor, tile_end: ttnn.Tensor) -> ttnn.Tensor:
         """Traced prefill: logits ``[1, 1, 32, vocab]`` of one 32-row tile of the ``T`` packed rows, the tile
         chosen by the persistent device bounds ``tile_start`` / ``tile_end`` (``[4]`` int32:

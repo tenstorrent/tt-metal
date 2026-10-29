@@ -74,7 +74,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
-from models.demos.glm53_flash.tt.decoder_layer import LayerState, TtDecoderLayer
+from models.demos.glm53_flash.tt.decoder_layer import LayerState, TtDecoderLayer, WaveInfo
 from models.demos.glm53_flash.tt.dsa import (
     SparseDecodeMeta,
     TtLatentCache,
@@ -225,8 +225,11 @@ class FunctionalDecoder(LightweightModule):
         self.kda_batched: KdaState | None = None
         if layer.is_kda:
             self.kda_batched = layer.attn.allocate_state(max_batch)
-        # chunked prefill bookkeeping: the position the next chunk of each user must start at
+        # chunked prefill bookkeeping: the position the next chunk of each user must start at. Under the sequence-
+        # parallel prefill slot ``user`` of every row holds the prompt (one cursor); a wave (``prefill_wave_forward``)
+        # advances row r's slot ``user`` alone, so the per-row cursors are the truth after one.
         self.next_start: list[int] = [0] * max_batch
+        self.next_start_rows: list[list[int]] = [[0] * max_batch for _ in range(self.mesh.rows)]
 
     def allocate_cache(self) -> None:
         """Allocate this DSA layer's latent cache (``TtLatentCache``); a no-op for KDA layers or when it exists."""
@@ -514,7 +517,7 @@ class FunctionalDecoder(LightweightModule):
             ttnn.deallocate(t)
         if self.is_kda:
             self._write_user_kda_state(user, new_state.kda)
-        self.next_start[user] = start + seq_len
+        self.set_next_start(user, start + seq_len)
         if os.environ.get(MEM_LOG_LAYERS_ENV, "0") == "1":  # which layer grows the resident DRAM per chunk (2026-10-27)
             mv = ttnn.device.get_memory_view(self.mesh.device, ttnn.BufferType.DRAM)
             logger.info(
@@ -556,7 +559,108 @@ class FunctionalDecoder(LightweightModule):
                 ring_sel=trace.ring_sel,
                 row_mask=trace.row_mask,
             )
-        self.next_start[user] = T  # the caller (GLM53MeshModel.prefill_traced) sets the prompt's real length
+        self.set_next_start(user, T)  # the caller (GLM53MeshModel.prefill_traced) sets the prompt's real length
+        return out
+
+    def set_next_start(self, user: int, position: int) -> None:
+        """Slot ``user`` holds (the same prompt) up to ``position`` on EVERY row: the sequence-parallel prefill's and
+        the traced prefill's bookkeeping (and ``GLM53MeshModel.rewind_user``)."""
+        self.next_start[user] = int(position)
+        for r in range(self.mesh.rows):
+            self.next_start_rows[r][user] = int(position)
+
+    # ----------------------------------------------------------------- waves
+    def _row_flags(self, values: tuple[float, ...], dtype, rank: int = 4) -> ttnn.Tensor:
+        """A ``rank``-D all-ones-shaped tensor of ``dtype`` on every chip of row r holding ``values[r]`` (a per-row
+        0.0 / 1.0 select factor broadcast over a tensor of that rank: every product is x * 1.0 or x * 0.0, exact)."""
+        t = torch.tensor(values, dtype=torch.float32).reshape(self.mesh.rows, *([1] * (rank - 1)))
+        return self.mesh.upload(t, dtype, rows=0)
+
+    def _wave_state(self, user: int, wave: WaveInfo):
+        """The KDA state a wave's chunk of slot ``user`` starts from on every row: the row's own carry (slot ``user``
+        of ITS batched state) when the row continues a prompt (``start > 0``), zeros when it starts one (and on idle
+        rows, whose scan is discarded). Returns ``(state, temporaries, (current recurrent, current conv tiles))``;
+        the current tensors are what an idle / new-prompt row writes back (``_write_wave_kda_state``)."""
+        attn = self._require_weights().attn
+        if not attn.conv_tiled:
+            raise NotImplementedError("waves need the block KDA decode (tiled conv history)")
+        src = self.kda_batched
+        if self.max_batch == 1:
+            cur_rec, cur_conv = src.recurrent, src.convolution  # [1,H,K,V] fp32, [taps,1,W] bf16 tiles
+            fresh = []
+        else:
+            cur_rec = self._user_recurrent(src.recurrent, user)
+            cur_conv = attn.user_conv_tiles(src, user)
+            fresh = [cur_rec, cur_conv]
+        cont = tuple(1.0 if (v > 0 and s > 0) else 0.0 for s, v in zip(wave.starts, wave.valids))
+        c32, c16 = self._row_flags(cont, ttnn.float32), self._row_flags(cont, ttnn.bfloat16, rank=3)
+        in_rec = ttnn.multiply(cur_rec, c32)  # a continuing row keeps its carry, the others start from zeros
+        in_conv = ttnn.multiply(cur_conv, c16)
+        state = LayerState(kda=KdaState(recurrent=in_rec, convolution=in_conv))
+        return state, [in_rec, in_conv, c32, c16], (cur_rec, cur_conv, fresh)
+
+    def _write_wave_kda_state(self, user: int, new: KdaState, current, wave: WaveInfo) -> None:
+        """Write every member row's fresh carry into slot ``user`` of that row's batched state and an idle row's
+        current carry back unchanged: ``sel = new * m + current * (1 - m)`` with the per-row member flag ``m``
+        (exact 0 / 1 products), then the batched-slot blend of ``_write_user_kda_state``."""
+        cur_rec, cur_conv, fresh = current
+        member = tuple(1.0 if v > 0 else 0.0 for v in wave.valids)
+        keep = tuple(1.0 - m for m in member)
+        m32, m16 = self._row_flags(member, ttnn.float32), self._row_flags(member, ttnn.bfloat16, rank=3)
+        k32, k16 = self._row_flags(keep, ttnn.float32), self._row_flags(keep, ttnn.bfloat16, rank=3)
+        sel_rec = ttnn.multiply(new.recurrent, m32)
+        old_rec = ttnn.multiply(cur_rec, k32)
+        ttnn.add(sel_rec, old_rec, output_tensor=sel_rec)
+        sel_conv = ttnn.multiply(new.convolution, m16)
+        old_conv = ttnn.multiply(cur_conv, k16)
+        ttnn.add(sel_conv, old_conv, output_tensor=sel_conv)
+        for t in (old_rec, old_conv, m32, m16, k32, k16, new.recurrent, new.convolution, *fresh):
+            ttnn.deallocate(t)
+        self._write_user_kda_state(user, KdaState(recurrent=sel_rec, convolution=sel_conv))
+
+    def prefill_wave_forward(self, streams: ttnn.Tensor, *, user: int, wave: WaveInfo) -> ttnn.Tensor:
+        """One wave (``doc/mesh/row_ownership.md`` mechanism (a), phase 1: the same slot ``user`` on every row): row
+        r of the mesh runs its own chunk ``[starts[r], starts[r] + valids[r])`` of the ``T = streams.shape[-2]``
+        padded rows it holds (an idle row runs pad tokens; nothing of it is kept). KDA: every row scans its own
+        chronology from its own carry and writes its own carry back into slot ``user`` of ITS batched state (an idle
+        row's slot stays as it was). DSA: not yet (step 3). Row r's cursor ``next_start_rows[r][user]`` advances."""
+        T = int(streams.shape[-2])
+        if T % TILE or wave.T != T or wave.rows != self.mesh.rows:
+            raise ValueError(
+                f"wave T {wave.T} x {wave.rows} rows does not match streams {tuple(streams.shape)} on {self.mesh.rows} rows"
+            )
+        if user >= self.max_batch:
+            raise ValueError(f"user {user} >= max_batch {self.max_batch}")
+        if not wave.member_rows:
+            raise ValueError("a wave needs at least one member row")
+        for r, (s0, n) in enumerate(zip(wave.starts, wave.valids)):
+            if n == 0:
+                continue
+            if s0 < 0 or s0 % TILE or n > T:
+                raise ValueError(
+                    f"row {r}: chunk start {s0} must be a non-negative multiple of {TILE} and valid rows {n} <= T {T}"
+                )
+            if s0 + n > self.max_seq_len:
+                raise ValueError(f"row {r}: start {s0} + {n} > max_seq_len {self.max_seq_len}")
+            if s0 and s0 != self.next_start_rows[r][user]:
+                raise ValueError(
+                    f"row {r} user {user}: chunk start {s0} is not contiguous with the previous chunk "
+                    f"(expected {self.next_start_rows[r][user]})"
+                )
+        layer = self._require_weights()
+        current = None
+        if self.is_kda:
+            state, temporaries, current = self._wave_state(user, wave)
+        else:
+            state, temporaries = LayerState(cache=self.cache), []
+        out, new_state = layer.prefill_forward(streams, state, user=user, seq_len=T, start=0, wave=wave)
+        for t in temporaries:
+            ttnn.deallocate(t)
+        if self.is_kda:
+            self._write_wave_kda_state(user, new_state.kda, current, wave)
+        for r, (s0, n) in enumerate(zip(wave.starts, wave.valids)):
+            if n:
+                self.next_start_rows[r][user] = s0 + n
         return out
 
     def decode_forward(

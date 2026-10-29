@@ -22,9 +22,10 @@ from loguru import logger
 import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+from models.demos.glm53_flash.tt.decoder_layer import WaveInfo
 from models.demos.glm53_flash.tt.dsa import dense_exact_max_pos
 from models.demos.glm53_flash.tt.embedding import TtEmbedding
-from models.demos.glm53_flash.tt.functional_decoder import DecodePositions, FunctionalDecoder, PrefillTraceCall
+from models.demos.glm53_flash.tt.functional_decoder import TILE, DecodePositions, FunctionalDecoder, PrefillTraceCall
 from models.demos.glm53_flash.tt.mesh import GLMMesh
 from models.demos.glm53_flash.tt.model_head import TtModelHead
 from models.demos.glm53_flash.tt.moe import pad_mask_enabled
@@ -455,12 +456,70 @@ class GLM53MeshModel:
         logits = self.head.last_token_logits(streams, local_last + 1) if self.head is not None else None
         return streams, logits, owner_row
 
+    # ------------------------------------------------------------------- waves
+    wave_per_row_users = False  # phase 1 (doc/mesh/row_ownership.md section 3): one slot index per wave
+
+    def prefill_wave(self, call) -> dict[int, tuple[int, torch.Tensor]]:
+        """One wave of per-row prompt chunks (``doc/mesh/row_ownership.md`` mechanism (a); ``call``: a
+        ``tt/vllm_config.py`` ``WaveCall``): row r embeds and runs its member's chunk ``call.ids[r]`` (the tokens of
+        ``[start, end)`` of that prompt; at most one member per row, idle rows run pad tokens into nothing), every
+        layer row-locally (KDA: the row's own chronology and carry; MoE: the row's own pad mask; DSA: step 3, not yet),
+        then the head on each member row's last token. Returns ``{row: (first greedy token, last-token logits [vocab]
+        fp32)}`` for the member rows. Phase 1: ``call.user`` is the slot index on every row."""
+        rows = self.mesh.rows
+        if int(call.rows) != rows:
+            raise ValueError(f"a wave of {call.rows} rows on a {rows}-row mesh")
+        if call.user is None:
+            raise NotImplementedError("phase 2 (a per-row slot index) is not implemented: a wave needs call.user")
+        members = {int(m.row): m for m in call.members}
+        T = eager_pad_length(int(call.t_pad), TILE)  # the per-row bucket: one ttKDA layer / head program per bucket
+        starts = tuple(int(members[r].start) if r in members else 0 for r in range(rows))
+        valids = tuple(int(members[r].n_tokens) if r in members else 0 for r in range(rows))
+        host = torch.full((rows, T), int(self.embedding.pad_token_id), dtype=torch.int32)
+        for r, m in members.items():
+            ids = torch.as_tensor(call.ids[r]).reshape(-1)
+            if int(ids.numel()) != valids[r]:
+                raise ValueError(f"row {r}: {int(ids.numel())} ids for a chunk of {valids[r]} tokens")
+            host[r, : valids[r]] = ids.to(torch.int32)
+        host = self.embedding.tokens_to_host(host.reshape(-1))  # [1,1,1,rows*T]: row r's chunk is slab r
+        if rows > 1:
+            ids_dev = self.mesh.upload(host, ttnn.uint32, rows=3, layout=ttnn.ROW_MAJOR_LAYOUT)
+        else:
+            ids_dev = ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        streams = self.embedding(ids_dev)  # [1,1,T,16384] per row: its own chunk
+        ttnn.deallocate(ids_dev)
+        kda = next((dec for dec in self.layers if dec.is_kda), None)
+        if kda is None:
+            raise NotImplementedError("a wave takes its chronology scalars from a KDA layer; none in this model")
+        attn = kda._require_weights().attn
+        ends = tuple(s0 + n for s0, n in zip(starts, valids))
+        info = WaveInfo(
+            T=T,
+            starts=starts,
+            valids=valids,
+            start_t=attn.scalar_rows(starts, "wave_start"),
+            end_t=attn.scalar_rows(ends, "wave_end"),
+        )
+        for dec in self.layers:
+            out = dec.prefill_wave_forward(streams, user=int(call.user), wave=info)
+            ttnn.deallocate(streams)
+            streams = out
+        res: dict[int, tuple[int, torch.Tensor]] = {}
+        if self.head is not None:
+            logits = self.head.last_token_logits_rows(streams, valids)  # [1,1,1,V] per chip: row r's on row r
+            host_logits = self.mesh.to_host(logits, rows=0).float().reshape(rows, -1)
+            ttnn.deallocate(logits)
+            for r in members:
+                res[r] = (int(torch.argmax(host_logits[r])), host_logits[r])
+        ttnn.deallocate(streams)
+        return res
+
     def rewind_user(self, user: int, position: int) -> None:
         """Set every layer's chunked-prefill cursor of slot ``user`` to ``position`` (a 32-multiple)."""
         if position < 0 or position % 32:
             raise ValueError(f"rewind position {position} must be a non-negative multiple of 32")
         for dec in self.layers:
-            dec.next_start[user] = int(position)
+            dec.set_next_start(user, int(position))
 
     def prefill_chunked(self, prompt_ids: torch.Tensor, user: int = 0, chunk: int = 32768, on_chunk=None):
         """A long prompt through ``prefill`` in consecutive chunks (every chunk but the last is a multiple
@@ -583,7 +642,7 @@ class GLM53MeshModel:
         inp.set_prompt(self.mesh, self.embedding.tokens_to_host(prompt_ids, pad_to=T), S)
         ttnn.execute_trace(self.device, inp.trace_id, cq_id=cq_id, blocking=True)
         for dec in self.layers:
-            dec.next_start[user] = S
+            dec.set_next_start(user, S)
         return PrefillTraceResult(inp.streams, inp.out_logits, inp.out_ids, inp.owner_row(S), inp.last_row(S), S, T)
 
     def release_prefill_traces(self):
