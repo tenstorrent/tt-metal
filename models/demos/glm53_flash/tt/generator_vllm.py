@@ -1367,7 +1367,7 @@ class GLM53FlashForCausalLM:
         slices and state writes), so no wave shape compiles after the captures. Every row is a member (the idle-row
         form runs the same programs under masks); starts 0 (the dense first chunk), the wave width (a second chunk)
         and every prefix bucket (``GLM53_VLLM_WARMUP_PREFIX_STARTS=0`` drops these); slot 0 walks every bucket, the
-        other warm-up slots the shortest. The chunk cursors are rewound around every call; the caches and states hold
+        other warm-up slots the shortest; every bucket once ragged (the pad-row mask). The chunk cursors are rewound around every call; the caches and states hold
         placeholders afterwards (the next prompt overwrites them; the KDA states are zeroed after the captures)."""
         g = self.geometry
         W = g.wave_rows
@@ -1394,12 +1394,31 @@ class GLM53FlashForCausalLM:
                     self.model.rewind_user(u, start)
                     self.model.prefill_wave(call)
                     n_calls += 1
+        # every bucket once RAGGED (row 0 one token short, the other rows full): a member whose chunk is shorter
+        # than the wave's width (every prompt's last chunk, an idle row) takes the MoE's pad-row mask, a program the
+        # full waves never build (the 2026-10-29 served needles: the last 2048-row waves compiled it under live
+        # traces and the answers degenerated; the traced waves carry their mask); start 0, slot 0: the mask does not
+        # depend on either
+        u0 = slots[0]
+        for n in tails:
+            if n < 2 or n > g.max_seq_len:
+                continue
+            dummy = torch.arange(n, dtype=torch.long) % 1000 + 1000
+            members = tuple(
+                WaveMember(logical=r, row=r, user=u0, start=0, end=n - (1 if r == 0 else 0)) for r in range(g.rows)
+            )
+            call = WaveCall(rows=g.rows, t_pad=n, members=members, user=u0)
+            for m in members:
+                call.ids[m.row] = dummy[: m.n_tokens].clone()
+            self.model.rewind_user(u0, 0)
+            self.model.prefill_wave(call)
+            n_calls += 1
         for u in slots:
             self.model.rewind_user(u, 0)
         self._sync()
         logger.info(
             f"GLM53 vLLM: eager wave warm-up ({n_calls} waves x {g.rows} rows: per-row buckets {tails} at starts "
-            f"{starts} into {len(slots)} slot(s)) in {time.perf_counter() - t0:.1f} s"
+            f"{starts} into {len(slots)} slot(s), each bucket once ragged) in {time.perf_counter() - t0:.1f} s"
         )
 
     def _warmup_slots(self, B: int) -> list[int]:

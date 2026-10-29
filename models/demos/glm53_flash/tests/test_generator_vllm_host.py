@@ -938,7 +938,12 @@ def test_rows_independent_needs_the_wave_prefill():
     assert shapes == {(0, b, s) for s in starts for b in buckets} | {
         (u, buckets[0], s) for s in starts for u in (1, 2, 3)
     }
-    assert all(c[4][0][3] - c[4][0][2] == c[2] for c in waves)  # full chunks (the kernels clip to the valid rows)
+    full = [c for c in waves if c[4][0][3] - c[4][0][2] == c[2]]
+    ragged = [c for c in waves if c not in full]
+    assert len(full) + len(ragged) == len(waves) and len(full) >= len(ragged) == len(buckets)
+    # every bucket once ragged: row 0 one token short (the pad-row mask program), the other rows full, start 0, slot 0
+    assert sorted(c[2] for c in ragged) == buckets
+    assert all(c[1] == 0 and c[4][0][2:] == (0, c[2] - 1) and c[4][1][2:] == (0, c[2]) for c in ragged)
     # the traced phase: the wave inputs + compiles before ANY capture, the waves captured after the prefill traces
     order = [c[0] for c in m.calls if c[0] in ("prepare_waves", "capture_prefill", "capture_waves", "capture")]
     assert order == ["prepare_waves", "capture_waves", "capture"]  # no SP prefill traces under per-row ownership
