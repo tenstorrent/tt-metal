@@ -33,5 +33,12 @@
     "owner": "@tenstorrent/metalium-api-owners",
     "reason": "Deprecated forwarding header retained during the disaggregation move into internal APIs.",
     "remove_when": "tt-llm-engine and tt-blaze have migrated and the deprecated experimental forwarding header is removed."
+  },
+  {
+    "source": "tt-metalium/discovery/metal_env.hpp",
+    "include": "tt-metalium/experimental/fabric/fabric_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "MetalEnv's FabricConfigDescriptor exposes experimental fabric configuration types (FabricConfig, FabricTensixConfig, etc.).",
+    "remove_when": "The fabric configuration types graduate to the stable API tier."
   }
 ]
