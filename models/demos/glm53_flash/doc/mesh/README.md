@@ -1581,6 +1581,20 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 10:40: the rows-2/3 NaN reproduced in the harness; the KDA carry blends keep NaN
+
+The 45-layer harness replay of r5's schedule (long profile, 65514 x 4, 1 M profile, the wave placement pinned) reproduces
+the served corruption exactly: rows 2 and 3 end with NaN logits (first token 0), rows 0 and 1 drift (pcc 0.985 / 0.983,
+the right top-1). Rows 2 and 3 are the rows that ran idle (pad rows) through three wave-steps before their own prompts;
+rows 0 and 1 never idled inside a wave. The carry blends of `tt/functional_decoder.py` (`_wave_state`: in = cur x c;
+`_write_wave_kda_state`: sel = new x m + cur x (1 - m); the traced wave and SP slot blends dst x keep + new x mask)
+multiply the discarded operand by 0.0, exact for finite values only: an idle row's scan over pad rows can be non-finite
+at 45 layers, NaN x 0.0 = NaN poisons the slot's carry for good, and every prompt that later starts on that slot "from
+zeros" is NaN. Fix: `FunctionalDecoder._finite` (where(isfinite)) on every blend operand (25d7f77df4a); regression:
+served-waves case (h) writes NaN into every batched carry and expects a fresh wave of two to match SP. Validation
+(block case h, then the 45-layer replay) is queued behind the SP-first needle smoke. The 7.5 s per 16 K SP chunk at the
+1 M profile (45 layers) measured on the way confirms the placement policy numbers.
+
 ### 2026-10-29 08:50: 16 K needles pass, a wave costs an SP chunk, SP-first placement, the 128 grid
 
 The served 16 K needle stage (4 x 16365 tokens, 4 concurrent, 2 rounds, APC off) retrieved 8/8 with identical texts
