@@ -21,6 +21,7 @@
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -69,7 +70,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
-        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, tiles_in_block);
+        if constexpr (unpack_to_dest)
+        {
+            // The to-dest placers carry no synchronization: the dest-dvalid handshake brackets them, and the DEST
+            // bank offset reset to 0 keeps every section at DEST tile 0.
+            _llk_unpack_dest_init_();
+            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+        }
+        else
+        {
+            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, tiles_in_block);
+        }
         PROFILER_SYNC();
     }
     {
@@ -100,7 +111,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block * tiles_in_block /*l1_tile_idx*/, tensor_shape_A);
+                    if constexpr (unpack_to_dest)
+                    {
+                        _llk_unpack_unary_operand_to_dest_block_(block * tiles_in_block /*l1_tile_idx*/, 0 /*dst_tile_idx*/, tiles_in_block);
+                    }
+                    else
+                    {
+                        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block * tiles_in_block /*l1_tile_idx*/, tensor_shape_A);
+                    }
                     if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
                         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
