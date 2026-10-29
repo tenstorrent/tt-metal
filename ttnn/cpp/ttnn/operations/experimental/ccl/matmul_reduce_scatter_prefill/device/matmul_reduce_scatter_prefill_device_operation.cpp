@@ -9,6 +9,7 @@
 
 #include <tt-metalium/constants.hpp>
 
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill {
@@ -35,6 +36,34 @@ void check_interleaved_tile(const Tensor& t, std::string_view what) {
         "matmul_reduce_scatter_prefill: {} must be DRAM or L1 interleaved",
         what);
     TT_FATAL(t.layout() == Layout::TILE, "matmul_reduce_scatter_prefill: {} must be TILE layout", what);
+    // the planner and the kernels assume 32 x 32 tiles of 16 x 16 faces in the default order
+    const Tile& tile = t.tensor_spec().tile();
+    TT_FATAL(
+        tile == Tile() && !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
+        "matmul_reduce_scatter_prefill: {} must use the default 32x32 tile (no transpose), got {}",
+        what,
+        tile);
+}
+
+// On `mesh` and stored on every device of it: the programs launch on the coordinates the tensors occupy, and the
+// schedule waits on every peer of the group.
+void check_on_full_mesh(const Tensor& t, const distributed::MeshDevice* mesh, std::string_view what) {
+    TT_FATAL(t.device() == mesh, "matmul_reduce_scatter_prefill: {} must be on the input_tensor's mesh", what);
+    TT_FATAL(
+        t.device_storage().get_coords().size() == mesh->num_devices(),
+        "matmul_reduce_scatter_prefill: {} must be stored on every device of the mesh ({} of {})",
+        what,
+        t.device_storage().get_coords().size(),
+        mesh->num_devices());
+}
+
+// The same per-bank range of the same bank kind: an allocation, or a view of one (a view wraps the address in a buffer
+// of its own, so comparing Buffer pointers misses it).
+bool shares_memory(const Tensor& a, const Tensor& b) {
+    const Buffer* x = a.buffer();
+    const Buffer* y = b.buffer();
+    return x->buffer_type() == y->buffer_type() && x->address() < y->address() + y->aligned_size_per_bank() &&
+           y->address() < x->address() + x->aligned_size_per_bank();
 }
 
 // The output must not share a buffer with an operand: fin entries write output tiles while other cores still read
@@ -44,6 +73,7 @@ void validate_output(const MatmulReduceScatterPrefillParams& attrs, const Matmul
         return;
     }
     const Tensor& output = *t.output_tensor;
+    check_on_full_mesh(output, t.input_tensor.device(), "output_tensor");
     const TensorSpec expected = MatmulReduceScatterPrefillDeviceOperation::compute_output_specs(attrs, t);
     TT_FATAL(
         output.logical_shape() == expected.logical_shape(),
@@ -71,7 +101,7 @@ void validate_output(const MatmulReduceScatterPrefillParams& attrs, const Matmul
         output.tensor_spec(),
         expected);
     TT_FATAL(
-        output.buffer() != t.input_tensor.buffer() && output.buffer() != t.weight.buffer(),
+        !shares_memory(output, t.input_tensor) && !shares_memory(output, t.weight),
         "matmul_reduce_scatter_prefill: output_tensor must not share a buffer with input_tensor or weight (in place is "
         "refused)");
 }
@@ -140,6 +170,8 @@ void check_operands(
 uint32_t check_group(const Tensor& input_tensor, const Tensor& weight, int32_t cluster_axis, int32_t scatter_dim) {
     auto* mesh = input_tensor.device();
     TT_FATAL(mesh != nullptr, "matmul_reduce_scatter_prefill: input_tensor must be on a mesh device");
+    check_on_full_mesh(input_tensor, mesh, "input_tensor");
+    check_on_full_mesh(weight, mesh, "weight");
     const auto& mesh_shape = mesh->shape();
     TT_FATAL(mesh_shape.dims() == 2, "matmul_reduce_scatter_prefill: the mesh must be 2D, got {}", mesh_shape);
     const uint32_t G = mesh_shape[cluster_axis];
@@ -203,6 +235,24 @@ MatmulReduceScatterPrefillDeviceOperation::compute_output_specs(
     }
     return TensorSpec(
         out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_memory_config));
+}
+
+std::vector<TensorTopology> MatmulReduceScatterPrefillDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& attrs, const tensor_args_t& t) {
+    namespace common = ttnn::operations::ccl::common;
+    // The matmul partial takes the union label of A and W, as a plain matmul would; the reduce-scatter consumes
+    // cluster_axis, which becomes Shard{scatter_dim}. The ring rank is the coordinate along cluster_axis, so the
+    // label's coordinates stand. Without an expressible label (nullopt, already reported) the partial's label stays.
+    const TensorTopology& input_topology = t.input_tensor.tensor_topology();
+    TensorTopology mm_topology = common::union_topology(
+        {std::cref(input_topology), std::cref(t.weight.tensor_topology())}, input_topology.mesh_coords());
+    std::optional<TensorTopology> output_topology = common::reduce_scatter_output_topology(
+        mm_topology,
+        attrs.cluster_axis,
+        t.input_tensor.device()->shape(),
+        static_cast<uint32_t>(t.input_tensor.logical_shape().rank()),
+        attrs.scatter_dim);
+    return {std::move(output_topology).value_or(std::move(mm_topology))};
 }
 
 MatmulReduceScatterPrefillDeviceOperation::tensor_return_value_t
