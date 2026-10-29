@@ -37,8 +37,11 @@ from qwen36_resident.prefill.pp_prefill import PPPrefill
 from qwen36_resident.spec_serving import DFLASH_BLOCK, DFLASH_POS_MARGIN, DFLASH_VERIFY, MTP_BLOCK, MTP_DEPTH
 from qwen36_resident.vllm_rows import CHUNK_UNIT, ResidentRowsAdapter, RowsEngine, resident_capabilities
 
-PREFILL_CHUNKS = (128, 256, 512, 1024)
-assert max(PREFILL_CHUNKS) == CHUNK_UNIT
+# the PP prefill's chunk sizes (RESIDENT_PREFILL_CHUNKS: the multi profile may drop 128, whose small-matmul weight copies
+# cost 3.21 GB/chip); the largest is the chunk unit a split prompt resumes at, and every one divides it
+PREFILL_CHUNKS = tuple(int(c) for c in os.environ.get("RESIDENT_PREFILL_CHUNKS", "128,256,512,1024").split(","))
+if max(PREFILL_CHUNKS) != CHUNK_UNIT or any(CHUNK_UNIT % c for c in PREFILL_CHUNKS):
+    raise ValueError(f"RESIDENT_PREFILL_CHUNKS {PREFILL_CHUNKS}: the largest must be {CHUNK_UNIT}, every one divide it")
 greedy_only.install()
 
 

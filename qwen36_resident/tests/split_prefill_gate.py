@@ -39,7 +39,7 @@ from transformers import AutoTokenizer
 
 import ttnn
 from qwen36_resident import weights as Q
-from qwen36_resident.generator_vllm import Qwen36ResidentRowsForCausalLM
+from qwen36_resident.generator_vllm import PREFILL_CHUNKS, Qwen36ResidentRowsForCausalLM
 from qwen36_resident.model import CONV_K, TILE
 from qwen36_resident.tests.e0_bringup import close_mesh, open_mesh, pcc
 from qwen36_resident.vllm_rows import BLOCK, CHUNK_UNIT
@@ -48,7 +48,7 @@ TARGET = 9  # resident slot of the split prompt: launch 1, beside live slot 8
 LIVE = 9  # live users in vLLM slots 0..8 -> resident slots 0..8
 LENGTHS = "1000,1025,1100,2100,3333,5000"
 # the other-chunk comparison counts as rounding when every launch's logits PCC and the KV PCC reach these
-CHUNKS = (128, 256, 512, 1024)  # the PP prefill's chunk sizes, triangulated per length
+CHUNKS = PREFILL_CHUNKS  # the served PP chunk sizes (RESIDENT_PREFILL_CHUNKS), triangulated per length
 
 
 def kv_rows(slot_state, n_pos):

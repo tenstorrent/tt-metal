@@ -159,3 +159,26 @@ def test_dflash_logs_a_request_s_stats_once():
     assert [g for g in got if g.startswith("DFlash2 request")] == [
         "DFlash2 request: " + str(dict(iterations=1, committed=0, mean_accept=0.0))
     ]
+
+
+@pytest.mark.parametrize(
+    "env,want",
+    [(None, (128, 256, 512, 1024)), ("256,512,1024", (256, 512, 1024)), ("128,300,1024", None), ("256,512", None)],
+    ids=["default", "no-128", "not-dividing", "no-unit"],
+)
+def test_the_served_pp_chunks(env, want):
+    """RESIDENT_PREFILL_CHUNKS: the PP chunk sizes the serving classes build (the multi profile may drop 128); the
+    largest must be the chunk unit and every size divide it, or the import refuses"""
+    import os
+    import subprocess
+
+    wt = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    e = {k: v for k, v in os.environ.items() if k != "RESIDENT_PREFILL_CHUNKS"}
+    if env is not None:
+        e["RESIDENT_PREFILL_CHUNKS"] = env
+    code = "from qwen36_resident.generator_vllm import PREFILL_CHUNKS; print('CHUNKS', PREFILL_CHUNKS)"
+    p = subprocess.run([sys.executable, "-c", code], env=e, capture_output=True, text=True, timeout=600, cwd=wt)
+    if want is None:
+        assert "ValueError" in p.stderr and "RESIDENT_PREFILL_CHUNKS" in p.stderr, p.stdout + p.stderr[-2000:]
+    else:
+        assert f"CHUNKS {want}" in p.stdout, p.stdout + p.stderr[-2000:]
