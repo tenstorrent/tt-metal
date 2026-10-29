@@ -3983,9 +3983,35 @@ def _target_weights_dir():
     return None
 
 
-def _dflash_default_snapshot():
-    """Locate the z-lab drafter snapshot, cached or fetched (target parity)."""
-    return _hf_resolve_repo("z-lab/gemma-4-31B-it-DFlash", "models--z-lab--gemma-4-31B-it-DFlash")
+#: The z-lab dFlash drafter checkpoint of each target checkpoint, keyed by the lower-cased marker its
+#: name carries (the 26B-A4B marker first: no other target's marker is a substring of it). The 12B
+#: drafter repo is spelled without the hyphen in the family name.
+DFLASH_REPO_BY_TARGET = (
+    ("26b-a4b", "z-lab/gemma-4-26B-A4B-it-DFlash"),
+    ("31b", "z-lab/gemma-4-31B-it-DFlash"),
+    ("12b", "z-lab/gemma4-12B-it-DFlash"),
+)
+
+
+def dflash_repo_for(hf_model):
+    """The dFlash drafter repo of the target checkpoint ``hf_model`` names (a repo id or a weights path),
+    matched case-insensitively on the whole string like ``assistant_repo_for``; None when the name carries
+    no single known marker (the caller falls back to the 31B drafter, the one this rail was brought up on).
+    Pure."""
+    name = str(hf_model or "").lower()
+    repos = [repo for marker, repo in DFLASH_REPO_BY_TARGET if marker in name]
+    return repos[0] if len(repos) == 1 else None
+
+
+def _dflash_default_snapshot(hf_model=None):
+    """Locate the z-lab drafter snapshot of the target, cached or fetched (target parity).
+
+    ``hf_model`` names the target (default: ``HF_MODEL``); a name without a
+    known marker resolves the 31B drafter, as before the 26B and 12B drafters.
+    """
+    target = hf_model if hf_model is not None else os.environ.get("HF_MODEL", "")
+    repo = dflash_repo_for(target) or DFLASH_REPO_BY_TARGET[1][1]
+    return _hf_resolve_repo(repo, "models--" + repo.replace("/", "--"))
 
 
 #: The it-assistant (MTP drafter) checkpoint of each target checkpoint, keyed by the
@@ -4212,7 +4238,8 @@ class Gemma4DFlashBase(Gemma4ForCausalLM):
             return SpecReject(
                 reason=(
                     "Gemma4 dFlash drafter checkpoint not found: set GEMMA4_DFLASH_DRAFTER or "
-                    "fetch it (hf download z-lab/gemma-4-31B-it-DFlash)."
+                    "fetch it (hf download z-lab/gemma-4-31B-it-DFlash, z-lab/gemma-4-26B-A4B-it-DFlash or "
+                    "z-lab/gemma4-12B-it-DFlash)."
                 ),
                 supported_k=(verify,),
             )

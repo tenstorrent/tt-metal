@@ -433,8 +433,21 @@ def test_dflash_drafter_is_found_in_the_configured_cache(monkeypatch, tmp_path):
     root = str(tmp_path / "mlperf" / "hub")
     snap = _mk(root, "models--z-lab--gemma-4-31B-it-DFlash")
     monkeypatch.setenv("HF_HUB_CACHE", root)
+    monkeypatch.delenv("HF_MODEL", raising=False)
     got = gv._dflash_default_snapshot()
     assert got is not None and got.rstrip("/") == snap
+    # the drafter follows the target: the z-lab checkpoint of the 26B-A4B and the 12B (spelled gemma4-12B),
+    # by repo id or weights path, the 31B when the name carries no known marker
+    assert gv.dflash_repo_for("google/gemma-4-26B-A4B-it") == "z-lab/gemma-4-26B-A4B-it-DFlash"
+    assert gv.dflash_repo_for("/weights/gemma-4-12B-it") == "z-lab/gemma4-12B-it-DFlash"
+    assert gv.dflash_repo_for("google/gemma-4-31B-it") == "z-lab/gemma-4-31B-it-DFlash"
+    assert gv.dflash_repo_for("google/gemma-3-27b-it") is None and gv.dflash_repo_for(None) is None
+    snap26 = _mk(root, "models--z-lab--gemma-4-26B-A4B-it-DFlash")
+    assert gv._dflash_default_snapshot("google/gemma-4-26B-A4B-it").rstrip("/") == snap26
+    monkeypatch.setenv("HF_MODEL", "/weights/gemma-4-26B-A4B-it")
+    assert gv._dflash_default_snapshot().rstrip("/") == snap26, "HF_MODEL names the target by default"
+    monkeypatch.setenv("HF_MODEL", "google/gemma-3-27b-it")
+    assert gv._dflash_default_snapshot().rstrip("/") == snap, "no marker: the 31B drafter"
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
