@@ -2296,6 +2296,10 @@ and FIX.8's passed gate (4-bit KV, 11 units) went COMMIT_PENDING; the same pages
 before (the overseer's `git add -u`). Fix: core/gate.py GENERATED = `:(exclude,glob)**/dashboard/*.html` on the add,
 diff and commit pathspecs (and unstaged), so no gate commit takes them. Selftest
 test_a_gate_commit_leaves_the_generated_dashboard_pages_out.
+Second try (P.6, same night): an exclude pathspec makes `git add -A` skip an untracked file named outright (P.6's
+results/P.6.json: the commit failed with "pathspec did not match"; the sandbox test used a directory and passed).
+git_commit now lists the changed files under the paths (ls-files -m -o -d --exclude-standard + staged), drops
+GENERATED matches, and adds / commits exactly that list.
 
 ## F211: commit-only ignores the records the framework writes under a task's paths (DeepSeek-V4.1 FIX.8, 2026-10-29)
 Problem: after F210's fix, `gate FIX.8 --commit-only` still refused: "the task's files changed since its gate passed:
