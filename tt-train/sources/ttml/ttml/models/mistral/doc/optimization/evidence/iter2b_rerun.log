@@ -1,0 +1,29 @@
+=== quick tests 2026-10-29T12:26:48Z
+================= 1 failed, 1 passed, 11 deselected in 31.44s ==================
+=== TP smoke, 2 layers 2026-10-29T12:27:22Z
+rc=0
+Mistral: 2 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+frozen weights stored transposed: 0 linears
+2 of 40 layers, tp 4: 42.2 ms/step over 2 steps (best 40.5), 175.9 TFLOP/s, MFU 29.62%
+=== iter2b_transposed harness 2026-10-29T12:27:46Z
+harness rc=1
+============= 1 failed, 12 passed, 2 warnings in 151.00s (0:02:31) =============
+=== iter2b_transposed tracy 1/2/4/8 2026-10-29T12:30:21Z
+tracy 1 rc=0
+tracy 2 rc=0
+tracy 4 rc=0
+tracy 8 rc=0
+=== iter2b_transposed single-chip MFU, 8 layers (cool-down 600s first) 2026-10-29T12:33:17Z
+rc=0
+8 of 40 layers, tp 1: 380.0 ms/step over 8 steps (best 376.8), 56.5 TFLOP/s, MFU 38.06%
+=== iter2b_transposed TP=4 full model MFU (cool-down 600s first) 2026-10-29T12:44:09Z
+rc=0
+40 of 40 layers, tp 4: 572.5 ms/step over 6 steps (best 570.7), 168.3 TFLOP/s, MFU 28.34%
+=== done 2026-10-29T12:57:28Z
+=== iter2b_transposed_tp TP=4 MFU after 300s cool-down 2026-10-29T12:57:28Z
+rc=0
+40 of 40 layers, tp 4: 576.2 ms/step over 6 steps (best 572.8), 167.2 TFLOP/s, MFU 28.16%
+=== iter2b_transposed_tp TP=4 Tracy 4 layers 2026-10-29T13:05:50Z
+rc=0
+4 of 40 layers, tp 4: 70.1 ms/step over 2 steps (best 69.1), 172.6 TFLOP/s, MFU 29.07%
+=== done 2026-10-29T13:07:09Z

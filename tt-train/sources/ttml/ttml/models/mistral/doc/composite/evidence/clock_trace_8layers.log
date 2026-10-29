@@ -1,0 +1,91 @@
+2026-10-29 10:04:02.206 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+Fetching 18 files:   0%|          | 0/18 [00:00<?, ?it/s]Fetching 18 files: 100%|██████████| 18/18 [00:00<00:00, 12690.78it/s]
+2026-10-29 10:04:03.904 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-29 10:04:03.905 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-29 10:04:03.905 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-29 10:04:03.905 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-29 10:04:03.918 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-29 10:04:03.920 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-29 10:04:04.139 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-29 10:04:04.140 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-29 10:04:04.140 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-29 10:04:04.140 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-29 10:04:04.145 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-29 10:04:04.468 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-29 10:04:04.523 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-29 10:04:04.523 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-29 10:04:04.523 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-29 10:04:04.584 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Mistral: 8 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+LoRA rank 16 alpha 32.0: 16.5M trainable parameters
+useful FLOPs/step 21.473 T (8 layers), peak 148.5 TFLOP/s
+step    1/60  loss 11.9375     540.9 ms
+step    2/60  loss 11.9375     440.2 ms
+step    3/60  loss 11.9375     438.6 ms
+step    4/60  loss 11.9375     438.8 ms
+step    5/60  loss 11.9375     439.8 ms
+step    6/60  loss 12.0000     443.1 ms
+step    7/60  loss 11.9375     443.3 ms
+step    8/60  loss 11.9375     441.0 ms
+step    9/60  loss 12.0000     440.9 ms
+step   10/60  loss 11.9375     443.0 ms
+step   11/60  loss 12.0000     444.3 ms
+step   12/60  loss 12.0000     443.2 ms
+step   13/60  loss 11.9375     441.9 ms
+step   14/60  loss 11.9375     442.6 ms
+step   15/60  loss 11.9375     444.9 ms
+step   16/60  loss 11.9375     443.2 ms
+step   17/60  loss 11.9375     439.4 ms
+step   18/60  loss 11.9375     444.1 ms
+step   19/60  loss 11.9375     445.4 ms
+step   20/60  loss 11.9375     446.7 ms
+step   21/60  loss 11.9375     441.8 ms
+step   22/60  loss 11.9375     443.1 ms
+step   23/60  loss 11.9375     443.4 ms
+step   24/60  loss 11.9375     444.6 ms
+step   25/60  loss 11.9375     444.0 ms
+step   26/60  loss 11.9375     444.1 ms
+step   27/60  loss 11.9375     441.2 ms
+step   28/60  loss 11.9375     443.2 ms
+step   29/60  loss 11.9375     445.6 ms
+step   30/60  loss 11.9375     444.8 ms
+step   31/60  loss 11.9375     447.2 ms
+step   32/60  loss 11.9375     444.0 ms
+step   33/60  loss 11.9375     449.0 ms
+step   34/60  loss 11.9375     440.7 ms
+step   35/60  loss 11.9375     440.3 ms
+step   36/60  loss 12.0000     442.6 ms
+step   37/60  loss 11.9375     446.4 ms
+step   38/60  loss 11.9375     445.4 ms
+step   39/60  loss 11.9375     445.5 ms
+step   40/60  loss 11.9375     450.6 ms
+step   41/60  loss 11.9375     446.9 ms
+step   42/60  loss 11.9375     446.3 ms
+step   43/60  loss 11.9375     444.6 ms
+step   44/60  loss 11.9375     447.3 ms
+step   45/60  loss 11.9375     441.7 ms
+step   46/60  loss 11.9375     444.3 ms
+step   47/60  loss 11.9375     444.4 ms
+step   48/60  loss 11.9375     444.8 ms
+step   49/60  loss 11.9375     441.1 ms
+step   50/60  loss 11.9375     440.1 ms
+step   51/60  loss 11.9375     441.6 ms
+step   52/60  loss 12.0000     446.9 ms
+step   53/60  loss 12.0000     445.9 ms
+step   54/60  loss 11.9375     444.8 ms
+step   55/60  loss 11.9375     444.9 ms
+step   56/60  loss 11.9375     445.4 ms
+step   57/60  loss 11.9375     444.9 ms
+step   58/60  loss 11.9375     441.8 ms
+step   59/60  loss 11.9375     445.3 ms
+step   60/60  loss 11.9375     442.7 ms
+8 of 40 layers: 443.8 ms/step over 58 steps (best 438.6), 48.4 TFLOP/s, MFU 32.59%
+2026-10-29 10:05:50.278 | info     |    BuildKernels | JIT cache stats: 421/421 hits (100.0%) [421 cached, 110 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-29 10:05:50.278 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-29 10:05:50.319 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-29 10:05:50.319 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-29 10:05:50.486 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-29 10:05:50.487 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-29 10:05:50.487 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+trace rc=0

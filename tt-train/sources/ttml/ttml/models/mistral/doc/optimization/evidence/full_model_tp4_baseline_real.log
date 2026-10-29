@@ -1,0 +1,16 @@
+=== TP=4, 40 layers, real weights, 10 steps 2026-10-29T10:35:56Z
+rc=0
+Mistral: 40 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+Loaded 243 parameters.
+step    1/10  loss 0.4453     787.2 ms
+step    2/10  loss 0.3281     627.7 ms
+step    3/10  loss 0.2520     639.6 ms
+step    4/10  loss 0.2070     642.7 ms
+step    5/10  loss 0.1436     639.9 ms
+step    6/10  loss 0.2734     645.9 ms
+step    7/10  loss 0.3477     641.9 ms
+step    8/10  loss 0.2676     642.0 ms
+step    9/10  loss 0.3066     640.9 ms
+step   10/10  loss 0.4551     642.4 ms
+40 of 40 layers, tp 4: 641.9 ms/step over 8 steps (best 639.6), 150.1 TFLOP/s, MFU 25.27%
+=== done 2026-10-29T10:40:26Z

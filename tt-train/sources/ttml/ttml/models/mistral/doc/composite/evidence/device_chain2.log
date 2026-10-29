@@ -1,0 +1,22 @@
+=== harness at HEAD c077a127726 2026-10-29T09:58:23Z
+test_mistral rc=0
+================== 11 passed, 2 warnings in 212.14s (0:03:32) ==================
+test_llama rc=0
+============================= 131 passed in 8.37s ==============================
+=== 8-layer real weights with host fp32 loss 2026-10-29T10:02:18Z
+rc=0
+step    1/10  loss 12.1250  host fp32 loss 12.1094    1395.1 ms
+step    2/10  loss 11.9375  host fp32 loss 11.9118    1236.5 ms
+step    3/10  loss 11.3125  host fp32 loss 11.3439    1385.2 ms
+step    4/10  loss 10.4375  host fp32 loss 10.4290    1198.6 ms
+step    5/10  loss 9.7500  host fp32 loss 9.7261    1429.9 ms
+step    6/10  loss 9.8750  host fp32 loss 9.8665    1180.2 ms
+step    7/10  loss 9.2500  host fp32 loss 9.2296    1176.6 ms
+step    8/10  loss 8.6875  host fp32 loss 8.6797    1349.8 ms
+step    9/10  loss 8.9375  host fp32 loss 8.9637    1350.9 ms
+step   10/10  loss 8.5625  host fp32 loss 8.5903    1061.8 ms
+8 of 40 layers: 1266.6 ms/step over 8 steps (best 1061.8), 17.0 TFLOP/s, MFU 11.42%
+=== clock trace: 8 layers, 60 steps, tt-smi every 1 s 2026-10-29T10:04:01Z
+8 of 40 layers: 443.8 ms/step over 58 steps (best 438.6), 48.4 TFLOP/s, MFU 32.59%
+trace rc=0
+=== done 2026-10-29T10:06:11Z

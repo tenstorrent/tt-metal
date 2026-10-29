@@ -1,0 +1,110 @@
+2026-10-29 09:13:31.953 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/agobeljic/tt-metal/tt-train/../python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/agobeljic/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, dash-2.15.0, anyio-4.15.1, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 11 items / 9 deselected / 2 selected
+
+tests/python/test_mistral.py::test_rmsnorm_forward_and_gradients 2026-10-29 09:13:32.238 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-29 09:13:32.238 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-29 09:13:32.238 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-29 09:13:32.238 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-29 09:13:32.249 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-29 09:13:32.250 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-29 09:13:32.329 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-29 09:13:32.329 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-29 09:13:32.329 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-29 09:13:32.329 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-29 09:13:32.331 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-29 09:13:32.605 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-29 09:13:32.639 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-29 09:13:32.639 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-29 09:13:32.639 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-29 09:13:32.679 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+rmsnorm: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999998 2.44e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999996 4.41e-03  (>= 0.99, <= 0.05) ok
+  dgamma                       (1, 1, 1, 5120)          0.999994 4.73e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_logits_match_huggingface[2] FAILED
+
+=================================== FAILURES ===================================
+_______________________ test_logits_match_huggingface[2] _______________________
+
+layers = 2
+
+    @pytest.mark.parametrize("layers", [2])
+    def test_logits_match_huggingface(layers):
+        """The real checkpoint through the loader (RoPE row permutation, fused qkv / gate_up) against
+        ``MistralForCausalLM`` truncated to the same layers, fp64 on CPU, on real text tokens."""
+        from transformers import AutoTokenizer, MistralConfig as HFMistralConfig, MistralForCausalLM
+
+        ckpt = _checkpoint_dir()
+        cfg = MistralConfig.from_hf(ckpt, max_position_embeddings=SEQ, num_hidden_layers=layers)
+        model = Mistral(cfg)
+>       print(load_from_safetensors(model, ckpt))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/python/test_mistral.py:509:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+sources/ttml/ttml/models/mistral/__init__.py:44: in load_from_safetensors
+    return _load_llama(model, safetensors_path)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sources/ttml/ttml/models/llama/safetensors_loader.py:391: in load_from_safetensors
+    with _Checkpoint(safetensors_path) as checkpoint:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <ttml.models.llama.safetensors_loader._Checkpoint object at 0x755264b5dbb0>
+directory = PosixPath('/home/ttuser/.cache/huggingface/hub/models--mistralai--Mistral-Small-24B-Base-2501/snapshots/b0a2e4ed093c26997495ae625528f81ea04b749f')
+
+    def __init__(self, directory: str | os.PathLike) -> None:
+        files = sorted(Path(directory).glob("*.safetensors"))
+        if not files:
+            raise FileNotFoundError(f"No .safetensors files found in {Path(directory)}")
+
+        self._files = ExitStack()
+        self._where: dict[str, tuple[safe_open, str]] = {}
+        try:
+            for path in files:
+                file = self._files.enter_context(safe_open(str(path), framework="np"))
+                for name in file.keys():
+                    canonical = _canonical(name)
+                    if canonical in self._where:
+>                       raise RuntimeError(f"{name}: collides with another tensor already read as {canonical}")
+E                       RuntimeError: model.norm.weight: collides with another tensor already read as norm.weight
+
+sources/ttml/ttml/models/llama/safetensors_loader.py:78: RuntimeError
+=============================== warnings summary ===============================
+tt-train/tests/python/test_mistral.py::test_logits_match_huggingface[2]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+tt-train/tests/python/test_mistral.py::test_logits_match_huggingface[2]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/agobeljic/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+21.76s call     tt-train/tests/python/test_mistral.py::test_logits_match_huggingface[2]
+3.07s call     tt-train/tests/python/test_mistral.py::test_rmsnorm_forward_and_gradients
+
+(4 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED tests/python/test_mistral.py::test_rmsnorm_forward_and_gradients
+FAILED tests/python/test_mistral.py::test_logits_match_huggingface[2] - Runti...
+============ 1 failed, 1 passed, 9 deselected, 2 warnings in 24.87s ============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-10-29 09:13:58.704 | info     |    BuildKernels | JIT cache stats: 93/121 hits (76.9%) [93 cached, 9 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-29 09:13:58.704 | info     |    BuildKernels | JIT telemetry: 40 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-29 09:13:58.718 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-29 09:13:58.718 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-29 09:13:58.909 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-29 09:13:58.909 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-29 09:13:58.909 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

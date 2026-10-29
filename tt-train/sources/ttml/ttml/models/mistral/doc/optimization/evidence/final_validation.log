@@ -1,0 +1,29 @@
+=== 8 layers real weights, host loss, final path 2026-10-29T14:21:33Z
+rc=0
+step    9/10  loss 9.0000  host fp32 loss 8.9677     781.0 ms
+step   10/10  loss 8.6250  host fp32 loss 8.5927     782.1 ms
+8 of 40 layers, tp 1: 796.4 ms/step over 8 steps (best 781.0), 27.0 TFLOP/s, MFU 18.16%
+compare rc=0
+  10 | 8.6250 | 8.5927 | 8.6285 | 8.5896 | +0.0031
+max |diff| 0.0262 (tol 0.1), mean +0.0062, signs +9/-1
+bf16-params replay vs unrounded torch: max |diff| 0.2150, mean -0.0155
+PASS
+=== memory probe 8 layers final path 2026-10-29T14:22:36Z
+step 2: DRAM allocated after forward 13.79 GiB
+step 2: DRAM allocated after backward 11.61 GiB
+step 2: DRAM allocated after the optimizer step 11.61 GiB (weights + state)
+=== TP=4 40 layers real weights, final path 2026-10-29T14:23:25Z
+rc=0
+Mistral: 40 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+step    1/10  loss 0.4453     811.0 ms
+step    2/10  loss 0.3262     569.2 ms
+step    3/10  loss 0.2520     574.0 ms
+step    4/10  loss 0.2061     578.6 ms
+step    5/10  loss 0.1406     572.1 ms
+step    6/10  loss 0.2754     571.4 ms
+step    7/10  loss 0.3457     571.3 ms
+step    8/10  loss 0.2656     572.0 ms
+step    9/10  loss 0.3047     576.0 ms
+step   10/10  loss 0.4531     583.2 ms
+40 of 40 layers, tp 4: 574.8 ms/step over 8 steps (best 571.3), 167.7 TFLOP/s, MFU 28.22%
+=== done 2026-10-29T14:32:32Z

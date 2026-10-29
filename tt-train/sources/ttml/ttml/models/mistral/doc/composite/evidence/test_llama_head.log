@@ -1,0 +1,454 @@
+2026-10-29 10:02:05.011 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/agobeljic/tt-metal/tt-train/../python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/agobeljic/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, dash-2.15.0, anyio-4.15.1, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 131 items
+
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_reads_the_architecture PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_sequence_length_is_the_callers_not_the_trained_context PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_overrides_win PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_reads_config_json_from_a_checkpoint_directory PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_reads_an_explicit_head_dim PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_head_dim_defaults_to_hidden_over_heads PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_key_value_heads_default_to_the_attention_heads PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_no_rope_scaling_means_none PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_reads_the_rope_parameters_transformers_v5_writes PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_default_rope_type_means_no_scaling PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_norm_epsilon_defaults_to_hugging_faces PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_rejects_what_the_model_cannot_express[model_type] 2026-10-29 10:02:05.398 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="not a Llama checkpoint"
+2026-10-29 10:02:05.399 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="not a Llama checkpoint"
+PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_rejects_what_the_model_cannot_express[mlp_bias] 2026-10-29 10:02:05.400 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="mlp_bias"
+2026-10-29 10:02:05.400 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="mlp_bias"
+PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_rejects_what_the_model_cannot_express[attention_bias] 2026-10-29 10:02:05.401 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="attention_bias"
+2026-10-29 10:02:05.401 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="attention_bias"
+PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_rejects_what_the_model_cannot_express[hidden_act] 2026-10-29 10:02:05.402 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="hidden_act 'gelu'"
+2026-10-29 10:02:05.402 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="hidden_act 'gelu'"
+PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_rejects_what_the_model_cannot_express[rope_type] 2026-10-29 10:02:05.402 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="rope type 'yarn'"
+2026-10-29 10:02:05.403 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="rope type 'yarn'"
+PASSED
+tests/python/test_llama.py::TestLlamaConfigFromHf::test_rejects_what_the_model_cannot_express[quantized] 2026-10-29 10:02:05.404 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="quantized checkpoints"
+2026-10-29 10:02:05.404 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="quantized checkpoints"
+PASSED
+tests/python/test_llama.py::TestLlama::test_model_creation 2026-10-29 10:02:05.405 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-29 10:02:05.405 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-29 10:02:05.406 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-29 10:02:05.406 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-29 10:02:05.422 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-29 10:02:05.423 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-29 10:02:05.522 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-29 10:02:05.522 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-29 10:02:05.522 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-29 10:02:05.522 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-29 10:02:05.525 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-29 10:02:05.854 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-29 10:02:05.899 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-29 10:02:05.899 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-29 10:02:05.899 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-29 10:02:05.954 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+PASSED
+tests/python/test_llama.py::TestLlama::test_explicit_head_dim_sizes_the_attention_projections PASSED
+tests/python/test_llama.py::TestLlama::test_norm_epsilon_reaches_every_norm PASSED
+tests/python/test_llama.py::TestLlama::test_model_forward_shape PASSED
+tests/python/test_llama.py::TestLlama::test_model_backward PASSED
+tests/python/test_llama.py::TestLlama::test_model_callable PASSED
+tests/python/test_llama.py::TestLlama::test_weight_tying PASSED
+tests/python/test_llama.py::TestLlama::test_rope_scaling_config PASSED
+tests/python/test_llama.py::TestLlama::test_explicit_intermediate_size PASSED
+tests/python/test_llama.py::TestLlama::test_residual_projection_init_std[None-1] PASSED
+tests/python/test_llama.py::TestLlama::test_residual_projection_init_std[None-3] PASSED
+tests/python/test_llama.py::TestLlama::test_residual_projection_init_std[128-1] PASSED
+tests/python/test_llama.py::TestLlama::test_residual_projection_init_std[128-3] PASSED
+tests/python/test_llama.py::TestLlamaIntegration::test_training_step[RunnerType.Default] PASSED
+tests/python/test_llama.py::TestLlamaIntegration::test_training_step[RunnerType.MemoryEfficient] PASSED
+tests/python/test_llama.py::TestLlamaIntegration::test_output_values_finite PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_every_shard_holds_matched_q_k_v[8-4-1] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_every_shard_holds_matched_q_k_v[8-4-2] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_every_shard_holds_matched_q_k_v[8-4-4] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_every_shard_holds_matched_q_k_v[16-8-8] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_every_shard_holds_matched_q_k_v[8-8-2] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_every_shard_holds_matched_q_k_v[8-1-1] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_each_rank_holds_the_groups_its_heads_need[8-4-1] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_each_rank_holds_the_groups_its_heads_need[8-4-2] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_each_rank_holds_the_groups_its_heads_need[8-4-4] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_each_rank_holds_the_groups_its_heads_need[16-8-8] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_each_rank_holds_the_groups_its_heads_need[8-8-2] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_each_rank_holds_the_groups_its_heads_need[8-1-1] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseGateUp::test_every_shard_holds_matched_gate_up[1] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseGateUp::test_every_shard_holds_matched_gate_up[2] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseGateUp::test_every_shard_holds_matched_gate_up[4] PASSED
+tests/python/test_llama_safetensors_loader.py::TestFuseGateUp::test_every_shard_holds_matched_gate_up[8] PASSED
+tests/python/test_llama_safetensors_loader.py::TestAssemble::test_only_row_sharding_interleaves[replicated] PASSED
+tests/python/test_llama_safetensors_loader.py::TestAssemble::test_only_row_sharding_interleaves[cols-sharded] PASSED
+tests/python/test_llama_safetensors_loader.py::TestAssemble::test_the_shape_check_predicts_the_assembly[replicated] PASSED
+tests/python/test_llama_safetensors_loader.py::TestAssemble::test_the_shape_check_predicts_the_assembly[rows] PASSED
+tests/python/test_llama_safetensors_loader.py::TestAssemble::test_the_shape_check_predicts_the_assembly[cols] PASSED
+tests/python/test_llama_safetensors_loader.py::TestAssemble::test_rejects_rows_not_divisible_over_the_mesh 2026-10-29 10:02:06.988 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="not divisible over 4 devices"
+2026-10-29 10:02:06.989 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="not divisible over 4 devices"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestAssemble::test_replicated_blocks_need_not_divide_the_mesh PASSED
+tests/python/test_llama_safetensors_loader.py::TestAssemble::test_rejects_mismatched_widths 2026-10-29 10:02:06.990 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="columns, expected"
+2026-10-29 10:02:06.991 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="columns, expected"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestPlacementWithoutTensorParallelism::test_has_no_tp_axis[no mesh] PASSED
+tests/python/test_llama_safetensors_loader.py::TestPlacementWithoutTensorParallelism::test_has_no_tp_axis[no tp axis] PASSED
+tests/python/test_llama_safetensors_loader.py::TestPlacementWithoutTensorParallelism::test_rejects_a_shard_over_another_axis 2026-10-29 10:02:06.993 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="Llama/fc/weight: sharded over mesh axis 0"
+2026-10-29 10:02:06.993 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="Llama/fc/weight: sharded over mesh axis 0"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestPlacementWithoutTensorParallelism::test_rejects_a_tp_shard_on_neither_rows_nor_columns 2026-10-29 10:02:06.993 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="Llama/fc/weight: sharded on dim 1 over 'tp'"
+2026-10-29 10:02:06.995 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="Llama/fc/weight: sharded on dim 1 over 'tp'"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_without_a_source_shape_requires_the_parameter_shape 2026-10-29 10:02:07.007 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="does not match the config-implied shape"
+2026-10-29 10:02:07.010 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="does not match the config-implied shape"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_grows_the_config_vocab_to_the_tile_padded_parameter PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_rejects_a_vocab_that_disagrees_with_the_config 2026-10-29 10:02:07.014 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="does not match the config-implied shape"
+2026-10-29 10:02:07.014 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="does not match the config-implied shape"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_a_row_shard_expects_the_global_shape PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_rejects_a_fused_block_of_the_wrong_size[q short, k long] 2026-10-29 10:02:07.016 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="the config implies"
+2026-10-29 10:02:07.016 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="the config implies"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_rejects_a_fused_block_of_the_wrong_size[gate short, up long] 2026-10-29 10:02:07.017 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="the config implies"
+2026-10-29 10:02:07.017 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="the config implies"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_a_fused_rule_needs_the_rows_of_every_block[none] 2026-10-29 10:02:07.017 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="needs block_rows for each of its 2 sources"
+2026-10-29 10:02:07.017 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="needs block_rows for each of its 2 sources"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_a_fused_rule_needs_the_rows_of_every_block[too few] 2026-10-29 10:02:07.018 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="needs block_rows for each of its 2 sources"
+2026-10-29 10:02:07.018 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="needs block_rows for each of its 2 sources"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[model.embed_tokens.weight-embed_tokens.weight] PASSED
+tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[model.wte.weight-embed_tokens.weight] PASSED
+tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[transformer.wte.weight-embed_tokens.weight] PASSED
+tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[lm_head.weight-lm_head.weight] PASSED
+tests/python/test_llama_safetensors_loader.py::TestHelpers::test_pad_grows_the_rows_with_deterministic_noise PASSED
+tests/python/test_llama_safetensors_loader.py::TestHelpers::test_pad_never_grows_the_columns 2026-10-29 10:02:07.022 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="only rows are padded"
+2026-10-29 10:02:07.022 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="only rows are padded"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestHelpers::test_unpermute_matches_the_explicit_definition PASSED
+tests/python/test_llama_safetensors_loader.py::TestHelpers::test_unpermute_moves_a_bias_like_a_weight_row PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_directory_without_safetensors_files 2026-10-29 10:02:07.024 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] FileNotFoundError message="No .safetensors files found"
+2026-10-29 10:02:07.024 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] FileNotFoundError message="No .safetensors files found"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_quantized_tensor_before_reading_it 2026-10-29 10:02:07.026 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="stored as I8"
+2026-10-29 10:02:07.026 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="stored as I8"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_reads_a_tensor_in_its_stored_dtype[f32] PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_reads_a_tensor_in_its_stored_dtype[bf16] PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_reshapes_a_1d_gamma_to_one_row PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_tensor_that_is_neither_1d_nor_2d 2026-10-29 10:02:07.031 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="expected a 1-D or 2-D tensor"
+2026-10-29 10:02:07.031 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="expected a 1-D or 2-D tensor"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_two_spellings_of_one_tensor 2026-10-29 10:02:07.032 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="collides with another tensor"
+2026-10-29 10:02:07.032 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="collides with another tensor"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_tensor_present_in_two_shards 2026-10-29 10:02:07.033 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="collides with another tensor"
+2026-10-29 10:02:07.034 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="collides with another tensor"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestCoverage::test_accepts_the_current_model PASSED
+tests/python/test_llama_safetensors_loader.py::TestCoverage::test_rules_name_the_sources_each_parameter_holds PASSED
+tests/python/test_llama_safetensors_loader.py::TestCoverage::test_rejects_the_pre_fusion_model_naming_both_directions 2026-10-29 10:02:07.036 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="disagree about its parameters"
+2026-10-29 10:02:07.036 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="disagree about its parameters"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestCoverage::test_attention_biases_are_declared_init_only PASSED
+tests/python/test_llama_safetensors_loader.py::TestCoverage::test_rejects_a_checkpoint_that_ships_a_bias_the_model_has 2026-10-29 10:02:07.038 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="bias shipped for    Llama/blocks/0/attention/qkv_linear/bias"
+2026-10-29 10:02:07.038 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="bias shipped for    Llama/blocks/0/attention/qkv_linear/bias"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestCoverage::test_a_bias_for_another_linear_keeps_the_exemption PASSED
+tests/python/test_llama_safetensors_loader.py::TestCoverage::test_rejects_two_rules_for_one_parameter 2026-10-29 10:02:07.040 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="fed by 2 rules\s+Llama/ln_fc/gamma"
+2026-10-29 10:02:07.040 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="fed by 2 rules\s+Llama/ln_fc/gamma"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestCoverage::test_tying_feeds_whichever_name_survived[Llama/fc/weight] PASSED
+tests/python/test_llama_safetensors_loader.py::TestCoverage::test_tying_feeds_whichever_name_survived[Llama/tok_emb/weight] PASSED
+tests/python/test_llama_safetensors_loader.py::TestCoverage::test_tying_rejects_two_separate_parameters 2026-10-29 10:02:07.042 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="no rule feeds       Llama/tok_emb/weight"
+2026-10-29 10:02:07.042 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="no rule feeds       Llama/tok_emb/weight"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestSources::test_a_missing_source_names_its_parameter 2026-10-29 10:02:07.043 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="blocks/0/mlp/w_gate_up/weight: the checkpoint has no .*up_proj.weight"
+2026-10-29 10:02:07.043 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="blocks/0/mlp/w_gate_up/weight: the checkpoint has no .*up_proj.weight"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestSources::test_tied_checkpoint_on_an_untied_model_says_to_tie 2026-10-29 10:02:07.044 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="load it with weight_tying=Enabled"
+2026-10-29 10:02:07.044 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="load it with weight_tying=Enabled"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestSources::test_untied_checkpoint_on_a_tied_model_says_to_untie 2026-10-29 10:02:07.046 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="load it with weight_tying=Disabled"
+2026-10-29 10:02:07.047 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="load it with weight_tying=Disabled"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestSources::test_a_tied_checkpoint_may_keep_a_copy_of_its_embedding_as_lm_head PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_reports_a_clean_load[f32] PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_reports_a_clean_load[bf16] PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_leaves_biases_at_init_and_ignores_rotary_buffers PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_checkpoint_missing_a_fused_source 2026-10-29 10:02:07.079 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="the checkpoint has no"
+2026-10-29 10:02:07.086 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="the checkpoint has no"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_a_failed_check_leaves_the_model_untouched 2026-10-29 10:02:07.098 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="does not match the config-implied shape"
+2026-10-29 10:02:07.100 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="does not match the config-implied shape"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_fused_block_of_the_wrong_size[q short, k long] 2026-10-29 10:02:07.108 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="the config implies"
+2026-10-29 10:02:07.114 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="the config implies"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_fused_block_of_the_wrong_size[gate short, up long] 2026-10-29 10:02:07.121 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="the config implies"
+2026-10-29 10:02:07.124 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="the config implies"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_every_parameter_holds_its_sources[Disabled] PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_every_parameter_holds_its_sources[Enabled] PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[f32 model-f32 file] PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[f32 model-bf16 file] PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[f32 model-f16 file] PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[bf16 model-f32 file] PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[bf16 model-bf16 file] PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[bf16 model-f16 file] PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_a_tied_checkpoint_may_keep_a_copy_of_its_embedding_as_lm_head PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_pads_the_vocab_the_model_rounds_up_to_a_tile PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_checkpoint_whose_vocab_disagrees_with_the_config[shorter] 2026-10-29 10:02:07.311 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="does not match the config-implied shape"
+2026-10-29 10:02:07.315 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="does not match the config-implied shape"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_checkpoint_whose_vocab_disagrees_with_the_config[longer] 2026-10-29 10:02:07.322 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="does not match the config-implied shape"
+2026-10-29 10:02:07.331 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="does not match the config-implied shape"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[untied-default rope] Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 923.86it/s]
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[untied-llama3 rope] Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 1265.25it/s]
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[tied-default rope] Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 1301.77it/s]
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[tied-llama3 rope] Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 1615.68it/s]
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_sees_llama3_scaling_ignored 2026-10-29 10:02:10.859 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="logits vs HF: ulp="
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 1442.83it/s]
+2026-10-29 10:02:10.876 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="logits vs HF: ulp="
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_sees_q_and_k_left_in_hf_row_order 2026-10-29 10:02:10.878 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="logits vs HF: ulp="
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 1824.40it/s]
+2026-10-29 10:02:10.892 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="logits vs HF: ulp="
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_tensor_parallel_layout[Replicated-Disabled] 2026-10-29 10:02:11.403 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-29 10:02:11.403 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-29 10:02:11.560 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-29 10:02:11.560 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-29 10:02:11.560 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+[tt-train] Inferred fabric config 4 from MGD dim_types
+2026-10-29 10:02:11.568 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-29 10:02:11.569 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-29 10:02:11.569 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-29 10:02:11.569 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-29 10:02:11.584 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-29 10:02:11.585 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-29 10:02:11.809 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-29 10:02:11.810 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-29 10:02:11.810 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-29 10:02:11.810 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-29 10:02:11.815 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-29 10:02:12.055 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-29 10:02:12.057 | info     |     Distributed | Using custom mesh graph descriptor: /home/ttuser/agobeljic/tt-metal/tt-train/configs/mgd/bh_1_2_line_line.textproto (metal_env.cpp:533)
+2026-10-29 10:02:12.144 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-29 10:02:12.152 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-29 10:02:12.152 | info     |          Fabric | mesh 0 shape 1x2: axis topologies derived as Y=LINE X=LINE (control_plane.cpp:2606)
+2026-10-29 10:02:12.173 | info     |           Metal | Fabric initialized on 2 devices (fabric_firmware_initializer.cpp:466)
+2026-10-29 10:02:12.173 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_2D (fabric_firmware_initializer.cpp:336)
+MGD validated: dims=[1, 2], file=/home/ttuser/agobeljic/tt-metal/tt-train/configs/mgd/bh_1_2_line_line.textproto
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_tensor_parallel_layout[VocabParallel-Disabled] PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_tensor_parallel_layout[VocabParallel-Enabled] PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_tensor_parallel_layout[FeatureParallel-Disabled] PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_pads_the_vocab_the_model_rounds_up_to_a_tile PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_keeps_an_fp32_models_values PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_logits_match_hugging_face Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 816.97it/s]
+PASSED2026-10-29 10:02:13.483 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-29 10:02:13.483 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-29 10:02:13.659 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-29 10:02:13.659 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-29 10:02:13.659 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+
+
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/agobeljic/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+3.46s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[untied-default rope]
+1.95s setup    tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_tensor_parallel_layout[Replicated-Disabled]
+1.24s call     tt-train/tests/python/test_llama.py::TestLlama::test_model_creation
+0.55s teardown tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_logits_match_hugging_face
+0.11s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_logits_match_hugging_face
+0.09s call     tt-train/tests/python/test_llama.py::TestLlama::test_explicit_head_dim_sizes_the_attention_projections
+0.07s call     tt-train/tests/python/test_llama.py::TestLlama::test_model_backward
+0.06s call     tt-train/tests/python/test_llama.py::TestLlamaIntegration::test_training_step[RunnerType.Default]
+0.04s call     tt-train/tests/python/test_llama.py::TestLlama::test_model_forward_shape
+0.03s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_tensor_parallel_layout[Replicated-Disabled]
+0.03s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_keeps_an_fp32_models_values
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[f32 model-f32 file]
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_tensor_parallel_layout[FeatureParallel-Disabled]
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_pads_the_vocab_the_model_rounds_up_to_a_tile
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[bf16 model-f16 file]
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[bf16 model-bf16 file]
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[untied-llama3 rope]
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[tied-default rope]
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_tensor_parallel_layout[VocabParallel-Disabled]
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_tensor_parallel_layout[VocabParallel-Enabled]
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_a_tied_checkpoint_may_keep_a_copy_of_its_embedding_as_lm_head
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_sees_llama3_scaling_ignored
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[tied-llama3 rope]
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[bf16 model-f32 file]
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_pads_the_vocab_the_model_rounds_up_to_a_tile
+=========================== short test summary info ============================
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_reads_the_architecture
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_sequence_length_is_the_callers_not_the_trained_context
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_overrides_win
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_reads_config_json_from_a_checkpoint_directory
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_reads_an_explicit_head_dim
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_head_dim_defaults_to_hidden_over_heads
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_key_value_heads_default_to_the_attention_heads
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_no_rope_scaling_means_none
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_reads_the_rope_parameters_transformers_v5_writes
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_default_rope_type_means_no_scaling
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_norm_epsilon_defaults_to_hugging_faces
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_rejects_what_the_model_cannot_express[model_type]
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_rejects_what_the_model_cannot_express[mlp_bias]
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_rejects_what_the_model_cannot_express[attention_bias]
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_rejects_what_the_model_cannot_express[hidden_act]
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_rejects_what_the_model_cannot_express[rope_type]
+PASSED tests/python/test_llama.py::TestLlamaConfigFromHf::test_rejects_what_the_model_cannot_express[quantized]
+PASSED tests/python/test_llama.py::TestLlama::test_model_creation
+PASSED tests/python/test_llama.py::TestLlama::test_explicit_head_dim_sizes_the_attention_projections
+PASSED tests/python/test_llama.py::TestLlama::test_norm_epsilon_reaches_every_norm
+PASSED tests/python/test_llama.py::TestLlama::test_model_forward_shape
+PASSED tests/python/test_llama.py::TestLlama::test_model_backward
+PASSED tests/python/test_llama.py::TestLlama::test_model_callable
+PASSED tests/python/test_llama.py::TestLlama::test_weight_tying
+PASSED tests/python/test_llama.py::TestLlama::test_rope_scaling_config
+PASSED tests/python/test_llama.py::TestLlama::test_explicit_intermediate_size
+PASSED tests/python/test_llama.py::TestLlama::test_residual_projection_init_std[None-1]
+PASSED tests/python/test_llama.py::TestLlama::test_residual_projection_init_std[None-3]
+PASSED tests/python/test_llama.py::TestLlama::test_residual_projection_init_std[128-1]
+PASSED tests/python/test_llama.py::TestLlama::test_residual_projection_init_std[128-3]
+PASSED tests/python/test_llama.py::TestLlamaIntegration::test_training_step[RunnerType.Default]
+PASSED tests/python/test_llama.py::TestLlamaIntegration::test_training_step[RunnerType.MemoryEfficient]
+PASSED tests/python/test_llama.py::TestLlamaIntegration::test_output_values_finite
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_every_shard_holds_matched_q_k_v[8-4-1]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_every_shard_holds_matched_q_k_v[8-4-2]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_every_shard_holds_matched_q_k_v[8-4-4]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_every_shard_holds_matched_q_k_v[16-8-8]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_every_shard_holds_matched_q_k_v[8-8-2]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_every_shard_holds_matched_q_k_v[8-1-1]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_each_rank_holds_the_groups_its_heads_need[8-4-1]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_each_rank_holds_the_groups_its_heads_need[8-4-2]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_each_rank_holds_the_groups_its_heads_need[8-4-4]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_each_rank_holds_the_groups_its_heads_need[16-8-8]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_each_rank_holds_the_groups_its_heads_need[8-8-2]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseQkv::test_each_rank_holds_the_groups_its_heads_need[8-1-1]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseGateUp::test_every_shard_holds_matched_gate_up[1]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseGateUp::test_every_shard_holds_matched_gate_up[2]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseGateUp::test_every_shard_holds_matched_gate_up[4]
+PASSED tests/python/test_llama_safetensors_loader.py::TestFuseGateUp::test_every_shard_holds_matched_gate_up[8]
+PASSED tests/python/test_llama_safetensors_loader.py::TestAssemble::test_only_row_sharding_interleaves[replicated]
+PASSED tests/python/test_llama_safetensors_loader.py::TestAssemble::test_only_row_sharding_interleaves[cols-sharded]
+PASSED tests/python/test_llama_safetensors_loader.py::TestAssemble::test_the_shape_check_predicts_the_assembly[replicated]
+PASSED tests/python/test_llama_safetensors_loader.py::TestAssemble::test_the_shape_check_predicts_the_assembly[rows]
+PASSED tests/python/test_llama_safetensors_loader.py::TestAssemble::test_the_shape_check_predicts_the_assembly[cols]
+PASSED tests/python/test_llama_safetensors_loader.py::TestAssemble::test_rejects_rows_not_divisible_over_the_mesh
+PASSED tests/python/test_llama_safetensors_loader.py::TestAssemble::test_replicated_blocks_need_not_divide_the_mesh
+PASSED tests/python/test_llama_safetensors_loader.py::TestAssemble::test_rejects_mismatched_widths
+PASSED tests/python/test_llama_safetensors_loader.py::TestPlacementWithoutTensorParallelism::test_has_no_tp_axis[no mesh]
+PASSED tests/python/test_llama_safetensors_loader.py::TestPlacementWithoutTensorParallelism::test_has_no_tp_axis[no tp axis]
+PASSED tests/python/test_llama_safetensors_loader.py::TestPlacementWithoutTensorParallelism::test_rejects_a_shard_over_another_axis
+PASSED tests/python/test_llama_safetensors_loader.py::TestPlacementWithoutTensorParallelism::test_rejects_a_tp_shard_on_neither_rows_nor_columns
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_without_a_source_shape_requires_the_parameter_shape
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_grows_the_config_vocab_to_the_tile_padded_parameter
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_rejects_a_vocab_that_disagrees_with_the_config
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_a_row_shard_expects_the_global_shape
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_rejects_a_fused_block_of_the_wrong_size[q short, k long]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_rejects_a_fused_block_of_the_wrong_size[gate short, up long]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_a_fused_rule_needs_the_rows_of_every_block[none]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadPlan::test_a_fused_rule_needs_the_rows_of_every_block[too few]
+PASSED tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[model.embed_tokens.weight-embed_tokens.weight]
+PASSED tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[model.wte.weight-embed_tokens.weight]
+PASSED tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[transformer.wte.weight-embed_tokens.weight]
+PASSED tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[lm_head.weight-lm_head.weight]
+PASSED tests/python/test_llama_safetensors_loader.py::TestHelpers::test_pad_grows_the_rows_with_deterministic_noise
+PASSED tests/python/test_llama_safetensors_loader.py::TestHelpers::test_pad_never_grows_the_columns
+PASSED tests/python/test_llama_safetensors_loader.py::TestHelpers::test_unpermute_matches_the_explicit_definition
+PASSED tests/python/test_llama_safetensors_loader.py::TestHelpers::test_unpermute_moves_a_bias_like_a_weight_row
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_directory_without_safetensors_files
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_quantized_tensor_before_reading_it
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_reads_a_tensor_in_its_stored_dtype[f32]
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_reads_a_tensor_in_its_stored_dtype[bf16]
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_reshapes_a_1d_gamma_to_one_row
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_tensor_that_is_neither_1d_nor_2d
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_two_spellings_of_one_tensor
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_tensor_present_in_two_shards
+PASSED tests/python/test_llama_safetensors_loader.py::TestCoverage::test_accepts_the_current_model
+PASSED tests/python/test_llama_safetensors_loader.py::TestCoverage::test_rules_name_the_sources_each_parameter_holds
+PASSED tests/python/test_llama_safetensors_loader.py::TestCoverage::test_rejects_the_pre_fusion_model_naming_both_directions
+PASSED tests/python/test_llama_safetensors_loader.py::TestCoverage::test_attention_biases_are_declared_init_only
+PASSED tests/python/test_llama_safetensors_loader.py::TestCoverage::test_rejects_a_checkpoint_that_ships_a_bias_the_model_has
+PASSED tests/python/test_llama_safetensors_loader.py::TestCoverage::test_a_bias_for_another_linear_keeps_the_exemption
+PASSED tests/python/test_llama_safetensors_loader.py::TestCoverage::test_rejects_two_rules_for_one_parameter
+PASSED tests/python/test_llama_safetensors_loader.py::TestCoverage::test_tying_feeds_whichever_name_survived[Llama/fc/weight]
+PASSED tests/python/test_llama_safetensors_loader.py::TestCoverage::test_tying_feeds_whichever_name_survived[Llama/tok_emb/weight]
+PASSED tests/python/test_llama_safetensors_loader.py::TestCoverage::test_tying_rejects_two_separate_parameters
+PASSED tests/python/test_llama_safetensors_loader.py::TestSources::test_a_missing_source_names_its_parameter
+PASSED tests/python/test_llama_safetensors_loader.py::TestSources::test_tied_checkpoint_on_an_untied_model_says_to_tie
+PASSED tests/python/test_llama_safetensors_loader.py::TestSources::test_untied_checkpoint_on_a_tied_model_says_to_untie
+PASSED tests/python/test_llama_safetensors_loader.py::TestSources::test_a_tied_checkpoint_may_keep_a_copy_of_its_embedding_as_lm_head
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_reports_a_clean_load[f32]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_reports_a_clean_load[bf16]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_leaves_biases_at_init_and_ignores_rotary_buffers
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_checkpoint_missing_a_fused_source
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_a_failed_check_leaves_the_model_untouched
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_fused_block_of_the_wrong_size[q short, k long]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_fused_block_of_the_wrong_size[gate short, up long]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_every_parameter_holds_its_sources[Disabled]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_every_parameter_holds_its_sources[Enabled]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[f32 model-f32 file]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[f32 model-bf16 file]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[f32 model-f16 file]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[bf16 model-f32 file]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[bf16 model-bf16 file]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_keeps_the_models_dtype[bf16 model-f16 file]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_a_tied_checkpoint_may_keep_a_copy_of_its_embedding_as_lm_head
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_pads_the_vocab_the_model_rounds_up_to_a_tile
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_checkpoint_whose_vocab_disagrees_with_the_config[shorter]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_checkpoint_whose_vocab_disagrees_with_the_config[longer]
+PASSED tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[untied-default rope]
+PASSED tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[untied-llama3 rope]
+PASSED tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[tied-default rope]
+PASSED tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[tied-llama3 rope]
+PASSED tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_sees_llama3_scaling_ignored
+PASSED tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_sees_q_and_k_left_in_hf_row_order
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_tensor_parallel_layout[Replicated-Disabled]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_tensor_parallel_layout[VocabParallel-Disabled]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_tensor_parallel_layout[VocabParallel-Enabled]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_tensor_parallel_layout[FeatureParallel-Disabled]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_pads_the_vocab_the_model_rounds_up_to_a_tile
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_keeps_an_fp32_models_values
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoTensorParallelModel::test_logits_match_hugging_face
+============================= 131 passed in 8.37s ==============================
+2026-10-29 10:02:15.763 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-29 10:02:15.763 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-29 10:02:15.764 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-29 10:02:15.764 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-29 10:02:15.780 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-29 10:02:15.780 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-29 10:02:16.008 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-29 10:02:16.008 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-29 10:02:16.008 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-29 10:02:16.009 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-29 10:02:16.014 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-29 10:02:16.255 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-29 10:02:16.257 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-29 10:02:16.257 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-29 10:02:17.866 | info     |    BuildKernels | JIT cache stats: 426/426 hits (100.0%) [426 cached, 193 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-29 10:02:17.866 | info     |    BuildKernels | JIT telemetry: 32 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-29 10:02:17.868 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-29 10:02:17.868 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-29 10:02:17.959 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-29 10:02:17.960 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-29 10:02:17.960 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

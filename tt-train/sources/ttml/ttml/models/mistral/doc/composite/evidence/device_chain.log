@@ -1,0 +1,53 @@
+=== memory probe 2026-10-29T09:20:05Z
+layers 2 rc=0
+step 1: DRAM allocated after forward 6.43 GiB
+step 1: DRAM allocated after backward 5.14 GiB
+step 1: DRAM allocated after the optimizer step 5.14 GiB (weights + state)
+step 2: DRAM allocated after forward 6.43 GiB
+step 2: DRAM allocated after backward 5.14 GiB
+step 2: DRAM allocated after the optimizer step 5.14 GiB (weights + state)
+layers 4 rc=0
+step 1: DRAM allocated after forward 10.08 GiB
+step 1: DRAM allocated after backward 7.27 GiB
+step 1: DRAM allocated after the optimizer step 7.27 GiB (weights + state)
+step 2: DRAM allocated after forward 10.08 GiB
+step 2: DRAM allocated after backward 7.27 GiB
+step 2: DRAM allocated after the optimizer step 7.27 GiB (weights + state)
+layers 8 rc=0
+step 1: DRAM allocated after forward 17.39 GiB
+step 1: DRAM allocated after backward 11.54 GiB
+step 1: DRAM allocated after the optimizer step 11.54 GiB (weights + state)
+step 2: DRAM allocated after forward 17.39 GiB
+step 2: DRAM allocated after backward 11.54 GiB
+step 2: DRAM allocated after the optimizer step 11.54 GiB (weights + state)
+=== tracy 2026-10-29T09:23:00Z
+tracy layers 1 rc=0
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/composite/evidence/tracy_1layers/reports/2026_10_29_09_24_51/ops_perf_results_2026_10_29_09_24_51.csv
+"ASIC_TEMPERATURE":"0x40a20a", "AICLK":"0x320",
+tracy layers 2 rc=0
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/composite/evidence/tracy_2layers/reports/2026_10_29_09_25_44/ops_perf_results_2026_10_29_09_25_44.csv
+"ASIC_TEMPERATURE":"0x401eca", "AICLK":"0x320",
+tracy layers 4 rc=0
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/composite/evidence/tracy_4layers/reports/2026_10_29_09_27_02/ops_perf_results_2026_10_29_09_27_02.csv
+"ASIC_TEMPERATURE":"0x4166ea", "AICLK":"0x320",
+tracy layers 8 rc=0
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/composite/evidence/tracy_8layers/reports/2026_10_29_09_29_08/ops_perf_results_2026_10_29_09_29_08.csv
+"ASIC_TEMPERATURE":"0x41c95a", "AICLK":"0x320",
+=== watcher 2026-10-29T09:29:12Z
+watcher rc=0
+grep: /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/composite/evidence/watcher_1layer_watcher.log: No such file or directory
+grep: /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/composite/evidence/watcher_1layer_watcher.log: No such file or directory
+=== determinism + MFU rerun, 8 layers real weights 2026-10-29T09:31:06Z
+rerun rc=0
+step    1/10  loss 12.1250     561.3 ms
+step    2/10  loss 11.9375     452.3 ms
+step    3/10  loss 11.3125     453.1 ms
+step    4/10  loss 10.4375     452.2 ms
+step    5/10  loss 9.7500     455.4 ms
+step    6/10  loss 9.8750     455.5 ms
+step    7/10  loss 9.2500     455.9 ms
+step    8/10  loss 8.6875     450.8 ms
+step    9/10  loss 8.9375     451.2 ms
+step   10/10  loss 8.5625     453.2 ms
+8 of 40 layers: 453.4 ms/step over 8 steps (best 450.8), 47.4 TFLOP/s, MFU 31.89%
+=== done 2026-10-29T09:32:49Z

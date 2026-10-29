@@ -1,0 +1,15 @@
+=== iter1_loraapply harness 2026-10-29T10:41:16Z
+harness rc=0
+================== 11 passed, 2 warnings in 138.16s (0:02:18) ==================
+=== iter1_loraapply tracy 1/2/4/8 2026-10-29T10:43:38Z
+tracy 1 rc=0
+tracy 2 rc=0
+tracy 4 rc=0
+tracy 8 rc=0
+=== iter1_loraapply single-chip MFU, 8 layers 2026-10-29T10:46:51Z
+rc=0
+8 of 40 layers, tp 1: 438.7 ms/step over 8 steps (best 435.8), 48.9 TFLOP/s, MFU 32.96%
+=== iter1_loraapply TP=4 full model MFU 2026-10-29T10:47:50Z
+rc=0
+40 of 40 layers, tp 4: 816.9 ms/step over 6 steps (best 815.9), 118.0 TFLOP/s, MFU 19.86%
+=== done 2026-10-29T11:01:25Z

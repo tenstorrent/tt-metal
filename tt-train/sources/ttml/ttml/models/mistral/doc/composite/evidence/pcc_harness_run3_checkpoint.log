@@ -1,0 +1,513 @@
+2026-10-29 09:14:20.741 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/agobeljic/tt-metal/tt-train/../python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/agobeljic/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, dash-2.15.0, anyio-4.15.1, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 109 items / 82 deselected / 27 selected
+
+tests/python/test_mistral.py::test_logits_match_huggingface[2] 2026-10-29 09:14:25.171 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-29 09:14:25.171 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-29 09:14:25.171 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-29 09:14:25.171 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-29 09:14:25.185 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-29 09:14:25.185 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-29 09:14:25.268 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-29 09:14:25.268 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-29 09:14:25.268 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-29 09:14:25.268 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-29 09:14:25.270 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-29 09:14:25.276 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-10-29 09:14:25.412 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-29 09:14:25.447 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-29 09:14:25.447 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-29 09:14:25.447 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-29 09:14:25.488 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Loaded 15 parameters.
+Note: 342 checkpoint tensors were not used:
+  - layers.10.input_layernorm.weight
+  - layers.10.mlp.down_proj.weight
+  - layers.10.mlp.gate_proj.weight
+  - layers.10.mlp.up_proj.weight
+  - layers.10.post_attention_layernorm.weight
+  - layers.10.self_attn.k_proj.weight
+  - layers.10.self_attn.o_proj.weight
+  - layers.10.self_attn.q_proj.weight
+  - layers.10.self_attn.v_proj.weight
+  - layers.11.input_layernorm.weight
+  - layers.11.mlp.down_proj.weight
+  - layers.11.mlp.gate_proj.weight
+  - layers.11.mlp.up_proj.weight
+  - layers.11.post_attention_layernorm.weight
+  - layers.11.self_attn.k_proj.weight
+  - layers.11.self_attn.o_proj.weight
+  - layers.11.self_attn.q_proj.weight
+  - layers.11.self_attn.v_proj.weight
+  - layers.12.input_layernorm.weight
+  - layers.12.mlp.down_proj.weight
+  - layers.12.mlp.gate_proj.weight
+  - layers.12.mlp.up_proj.weight
+  - layers.12.post_attention_layernorm.weight
+  - layers.12.self_attn.k_proj.weight
+  - layers.12.self_attn.o_proj.weight
+  - layers.12.self_attn.q_proj.weight
+  - layers.12.self_attn.v_proj.weight
+  - layers.13.input_layernorm.weight
+  - layers.13.mlp.down_proj.weight
+  - layers.13.mlp.gate_proj.weight
+  - layers.13.mlp.up_proj.weight
+  - layers.13.post_attention_layernorm.weight
+  - layers.13.self_attn.k_proj.weight
+  - layers.13.self_attn.o_proj.weight
+  - layers.13.self_attn.q_proj.weight
+  - layers.13.self_attn.v_proj.weight
+  - layers.14.input_layernorm.weight
+  - layers.14.mlp.down_proj.weight
+  - layers.14.mlp.gate_proj.weight
+  - layers.14.mlp.up_proj.weight
+  - layers.14.post_attention_layernorm.weight
+  - layers.14.self_attn.k_proj.weight
+  - layers.14.self_attn.o_proj.weight
+  - layers.14.self_attn.q_proj.weight
+  - layers.14.self_attn.v_proj.weight
+  - layers.15.input_layernorm.weight
+  - layers.15.mlp.down_proj.weight
+  - layers.15.mlp.gate_proj.weight
+  - layers.15.mlp.up_proj.weight
+  - layers.15.post_attention_layernorm.weight
+  - layers.15.self_attn.k_proj.weight
+  - layers.15.self_attn.o_proj.weight
+  - layers.15.self_attn.q_proj.weight
+  - layers.15.self_attn.v_proj.weight
+  - layers.16.input_layernorm.weight
+  - layers.16.mlp.down_proj.weight
+  - layers.16.mlp.gate_proj.weight
+  - layers.16.mlp.up_proj.weight
+  - layers.16.post_attention_layernorm.weight
+  - layers.16.self_attn.k_proj.weight
+  - layers.16.self_attn.o_proj.weight
+  - layers.16.self_attn.q_proj.weight
+  - layers.16.self_attn.v_proj.weight
+  - layers.17.input_layernorm.weight
+  - layers.17.mlp.down_proj.weight
+  - layers.17.mlp.gate_proj.weight
+  - layers.17.mlp.up_proj.weight
+  - layers.17.post_attention_layernorm.weight
+  - layers.17.self_attn.k_proj.weight
+  - layers.17.self_attn.o_proj.weight
+  - layers.17.self_attn.q_proj.weight
+  - layers.17.self_attn.v_proj.weight
+  - layers.18.input_layernorm.weight
+  - layers.18.mlp.down_proj.weight
+  - layers.18.mlp.gate_proj.weight
+  - layers.18.mlp.up_proj.weight
+  - layers.18.post_attention_layernorm.weight
+  - layers.18.self_attn.k_proj.weight
+  - layers.18.self_attn.o_proj.weight
+  - layers.18.self_attn.q_proj.weight
+  - layers.18.self_attn.v_proj.weight
+  - layers.19.input_layernorm.weight
+  - layers.19.mlp.down_proj.weight
+  - layers.19.mlp.gate_proj.weight
+  - layers.19.mlp.up_proj.weight
+  - layers.19.post_attention_layernorm.weight
+  - layers.19.self_attn.k_proj.weight
+  - layers.19.self_attn.o_proj.weight
+  - layers.19.self_attn.q_proj.weight
+  - layers.19.self_attn.v_proj.weight
+  - layers.2.input_layernorm.weight
+  - layers.2.mlp.down_proj.weight
+  - layers.2.mlp.gate_proj.weight
+  - layers.2.mlp.up_proj.weight
+  - layers.2.post_attention_layernorm.weight
+  - layers.2.self_attn.k_proj.weight
+  - layers.2.self_attn.o_proj.weight
+  - layers.2.self_attn.q_proj.weight
+  - layers.2.self_attn.v_proj.weight
+  - layers.20.input_layernorm.weight
+  - layers.20.mlp.down_proj.weight
+  - layers.20.mlp.gate_proj.weight
+  - layers.20.mlp.up_proj.weight
+  - layers.20.post_attention_layernorm.weight
+  - layers.20.self_attn.k_proj.weight
+  - layers.20.self_attn.o_proj.weight
+  - layers.20.self_attn.q_proj.weight
+  - layers.20.self_attn.v_proj.weight
+  - layers.21.input_layernorm.weight
+  - layers.21.mlp.down_proj.weight
+  - layers.21.mlp.gate_proj.weight
+  - layers.21.mlp.up_proj.weight
+  - layers.21.post_attention_layernorm.weight
+  - layers.21.self_attn.k_proj.weight
+  - layers.21.self_attn.o_proj.weight
+  - layers.21.self_attn.q_proj.weight
+  - layers.21.self_attn.v_proj.weight
+  - layers.22.input_layernorm.weight
+  - layers.22.mlp.down_proj.weight
+  - layers.22.mlp.gate_proj.weight
+  - layers.22.mlp.up_proj.weight
+  - layers.22.post_attention_layernorm.weight
+  - layers.22.self_attn.k_proj.weight
+  - layers.22.self_attn.o_proj.weight
+  - layers.22.self_attn.q_proj.weight
+  - layers.22.self_attn.v_proj.weight
+  - layers.23.input_layernorm.weight
+  - layers.23.mlp.down_proj.weight
+  - layers.23.mlp.gate_proj.weight
+  - layers.23.mlp.up_proj.weight
+  - layers.23.post_attention_layernorm.weight
+  - layers.23.self_attn.k_proj.weight
+  - layers.23.self_attn.o_proj.weight
+  - layers.23.self_attn.q_proj.weight
+  - layers.23.self_attn.v_proj.weight
+  - layers.24.input_layernorm.weight
+  - layers.24.mlp.down_proj.weight
+  - layers.24.mlp.gate_proj.weight
+  - layers.24.mlp.up_proj.weight
+  - layers.24.post_attention_layernorm.weight
+  - layers.24.self_attn.k_proj.weight
+  - layers.24.self_attn.o_proj.weight
+  - layers.24.self_attn.q_proj.weight
+  - layers.24.self_attn.v_proj.weight
+  - layers.25.input_layernorm.weight
+  - layers.25.mlp.down_proj.weight
+  - layers.25.mlp.gate_proj.weight
+  - layers.25.mlp.up_proj.weight
+  - layers.25.post_attention_layernorm.weight
+  - layers.25.self_attn.k_proj.weight
+  - layers.25.self_attn.o_proj.weight
+  - layers.25.self_attn.q_proj.weight
+  - layers.25.self_attn.v_proj.weight
+  - layers.26.input_layernorm.weight
+  - layers.26.mlp.down_proj.weight
+  - layers.26.mlp.gate_proj.weight
+  - layers.26.mlp.up_proj.weight
+  - layers.26.post_attention_layernorm.weight
+  - layers.26.self_attn.k_proj.weight
+  - layers.26.self_attn.o_proj.weight
+  - layers.26.self_attn.q_proj.weight
+  - layers.26.self_attn.v_proj.weight
+  - layers.27.input_layernorm.weight
+  - layers.27.mlp.down_proj.weight
+  - layers.27.mlp.gate_proj.weight
+  - layers.27.mlp.up_proj.weight
+  - layers.27.post_attention_layernorm.weight
+  - layers.27.self_attn.k_proj.weight
+  - layers.27.self_attn.o_proj.weight
+  - layers.27.self_attn.q_proj.weight
+  - layers.27.self_attn.v_proj.weight
+  - layers.28.input_layernorm.weight
+  - layers.28.mlp.down_proj.weight
+  - layers.28.mlp.gate_proj.weight
+  - layers.28.mlp.up_proj.weight
+  - layers.28.post_attention_layernorm.weight
+  - layers.28.self_attn.k_proj.weight
+  - layers.28.self_attn.o_proj.weight
+  - layers.28.self_attn.q_proj.weight
+  - layers.28.self_attn.v_proj.weight
+  - layers.29.input_layernorm.weight
+  - layers.29.mlp.down_proj.weight
+  - layers.29.mlp.gate_proj.weight
+  - layers.29.mlp.up_proj.weight
+  - layers.29.post_attention_layernorm.weight
+  - layers.29.self_attn.k_proj.weight
+  - layers.29.self_attn.o_proj.weight
+  - layers.29.self_attn.q_proj.weight
+  - layers.29.self_attn.v_proj.weight
+  - layers.3.input_layernorm.weight
+  - layers.3.mlp.down_proj.weight
+  - layers.3.mlp.gate_proj.weight
+  - layers.3.mlp.up_proj.weight
+  - layers.3.post_attention_layernorm.weight
+  - layers.3.self_attn.k_proj.weight
+  - layers.3.self_attn.o_proj.weight
+  - layers.3.self_attn.q_proj.weight
+  - layers.3.self_attn.v_proj.weight
+  - layers.30.input_layernorm.weight
+  - layers.30.mlp.down_proj.weight
+  - layers.30.mlp.gate_proj.weight
+  - layers.30.mlp.up_proj.weight
+  - layers.30.post_attention_layernorm.weight
+  - layers.30.self_attn.k_proj.weight
+  - layers.30.self_attn.o_proj.weight
+  - layers.30.self_attn.q_proj.weight
+  - layers.30.self_attn.v_proj.weight
+  - layers.31.input_layernorm.weight
+  - layers.31.mlp.down_proj.weight
+  - layers.31.mlp.gate_proj.weight
+  - layers.31.mlp.up_proj.weight
+  - layers.31.post_attention_layernorm.weight
+  - layers.31.self_attn.k_proj.weight
+  - layers.31.self_attn.o_proj.weight
+  - layers.31.self_attn.q_proj.weight
+  - layers.31.self_attn.v_proj.weight
+  - layers.32.input_layernorm.weight
+  - layers.32.mlp.down_proj.weight
+  - layers.32.mlp.gate_proj.weight
+  - layers.32.mlp.up_proj.weight
+  - layers.32.post_attention_layernorm.weight
+  - layers.32.self_attn.k_proj.weight
+  - layers.32.self_attn.o_proj.weight
+  - layers.32.self_attn.q_proj.weight
+  - layers.32.self_attn.v_proj.weight
+  - layers.33.input_layernorm.weight
+  - layers.33.mlp.down_proj.weight
+  - layers.33.mlp.gate_proj.weight
+  - layers.33.mlp.up_proj.weight
+  - layers.33.post_attention_layernorm.weight
+  - layers.33.self_attn.k_proj.weight
+  - layers.33.self_attn.o_proj.weight
+  - layers.33.self_attn.q_proj.weight
+  - layers.33.self_attn.v_proj.weight
+  - layers.34.input_layernorm.weight
+  - layers.34.mlp.down_proj.weight
+  - layers.34.mlp.gate_proj.weight
+  - layers.34.mlp.up_proj.weight
+  - layers.34.post_attention_layernorm.weight
+  - layers.34.self_attn.k_proj.weight
+  - layers.34.self_attn.o_proj.weight
+  - layers.34.self_attn.q_proj.weight
+  - layers.34.self_attn.v_proj.weight
+  - layers.35.input_layernorm.weight
+  - layers.35.mlp.down_proj.weight
+  - layers.35.mlp.gate_proj.weight
+  - layers.35.mlp.up_proj.weight
+  - layers.35.post_attention_layernorm.weight
+  - layers.35.self_attn.k_proj.weight
+  - layers.35.self_attn.o_proj.weight
+  - layers.35.self_attn.q_proj.weight
+  - layers.35.self_attn.v_proj.weight
+  - layers.36.input_layernorm.weight
+  - layers.36.mlp.down_proj.weight
+  - layers.36.mlp.gate_proj.weight
+  - layers.36.mlp.up_proj.weight
+  - layers.36.post_attention_layernorm.weight
+  - layers.36.self_attn.k_proj.weight
+  - layers.36.self_attn.o_proj.weight
+  - layers.36.self_attn.q_proj.weight
+  - layers.36.self_attn.v_proj.weight
+  - layers.37.input_layernorm.weight
+  - layers.37.mlp.down_proj.weight
+  - layers.37.mlp.gate_proj.weight
+  - layers.37.mlp.up_proj.weight
+  - layers.37.post_attention_layernorm.weight
+  - layers.37.self_attn.k_proj.weight
+  - layers.37.self_attn.o_proj.weight
+  - layers.37.self_attn.q_proj.weight
+  - layers.37.self_attn.v_proj.weight
+  - layers.38.input_layernorm.weight
+  - layers.38.mlp.down_proj.weight
+  - layers.38.mlp.gate_proj.weight
+  - layers.38.mlp.up_proj.weight
+  - layers.38.post_attention_layernorm.weight
+  - layers.38.self_attn.k_proj.weight
+  - layers.38.self_attn.o_proj.weight
+  - layers.38.self_attn.q_proj.weight
+  - layers.38.self_attn.v_proj.weight
+  - layers.39.input_layernorm.weight
+  - layers.39.mlp.down_proj.weight
+  - layers.39.mlp.gate_proj.weight
+  - layers.39.mlp.up_proj.weight
+  - layers.39.post_attention_layernorm.weight
+  - layers.39.self_attn.k_proj.weight
+  - layers.39.self_attn.o_proj.weight
+  - layers.39.self_attn.q_proj.weight
+  - layers.39.self_attn.v_proj.weight
+  - layers.4.input_layernorm.weight
+  - layers.4.mlp.down_proj.weight
+  - layers.4.mlp.gate_proj.weight
+  - layers.4.mlp.up_proj.weight
+  - layers.4.post_attention_layernorm.weight
+  - layers.4.self_attn.k_proj.weight
+  - layers.4.self_attn.o_proj.weight
+  - layers.4.self_attn.q_proj.weight
+  - layers.4.self_attn.v_proj.weight
+  - layers.5.input_layernorm.weight
+  - layers.5.mlp.down_proj.weight
+  - layers.5.mlp.gate_proj.weight
+  - layers.5.mlp.up_proj.weight
+  - layers.5.post_attention_layernorm.weight
+  - layers.5.self_attn.k_proj.weight
+  - layers.5.self_attn.o_proj.weight
+  - layers.5.self_attn.q_proj.weight
+  - layers.5.self_attn.v_proj.weight
+  - layers.6.input_layernorm.weight
+  - layers.6.mlp.down_proj.weight
+  - layers.6.mlp.gate_proj.weight
+  - layers.6.mlp.up_proj.weight
+  - layers.6.post_attention_layernorm.weight
+  - layers.6.self_attn.k_proj.weight
+  - layers.6.self_attn.o_proj.weight
+  - layers.6.self_attn.q_proj.weight
+  - layers.6.self_attn.v_proj.weight
+  - layers.7.input_layernorm.weight
+  - layers.7.mlp.down_proj.weight
+  - layers.7.mlp.gate_proj.weight
+  - layers.7.mlp.up_proj.weight
+  - layers.7.post_attention_layernorm.weight
+  - layers.7.self_attn.k_proj.weight
+  - layers.7.self_attn.o_proj.weight
+  - layers.7.self_attn.q_proj.weight
+  - layers.7.self_attn.v_proj.weight
+  - layers.8.input_layernorm.weight
+  - layers.8.mlp.down_proj.weight
+  - layers.8.mlp.gate_proj.weight
+  - layers.8.mlp.up_proj.weight
+  - layers.8.post_attention_layernorm.weight
+  - layers.8.self_attn.k_proj.weight
+  - layers.8.self_attn.o_proj.weight
+  - layers.8.self_attn.q_proj.weight
+  - layers.8.self_attn.v_proj.weight
+  - layers.9.input_layernorm.weight
+  - layers.9.mlp.down_proj.weight
+  - layers.9.mlp.gate_proj.weight
+  - layers.9.mlp.up_proj.weight
+  - layers.9.post_attention_layernorm.weight
+  - layers.9.self_attn.k_proj.weight
+  - layers.9.self_attn.o_proj.weight
+  - layers.9.self_attn.q_proj.weight
+  - layers.9.self_attn.v_proj.weight[transformers] The tokenizer you are loading from '/home/ttuser/.cache/huggingface/hub/models--mistralai--Mistral-Small-24B-Base-2501/snapshots/b0a2e4ed093c26997495ae625528f81ea04b749f' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+
+Loading weights:   0%|          | 0/21 [00:00<?, ?it/s]Loading weights:   5%|▍         | 1/21 [00:01<00:21,  1.08s/it]Loading weights: 100%|██████████| 21/21 [00:01<00:00, 19.17it/s]
+[transformers] [1mMistralForCausalLM LOAD REPORT[0m from: /home/ttuser/.cache/huggingface/hub/models--mistralai--Mistral-Small-24B-Base-2501/snapshots/b0a2e4ed093c26997495ae625528f81ea04b749f
+Key                                                   | Status     |  |
+------------------------------------------------------+------------+--+-
+model.layers.{2...39}.input_layernorm.weight          | UNEXPECTED |  |
+model.layers.{2...39}.mlp.down_proj.weight            | UNEXPECTED |  |
+model.layers.{2...39}.self_attn.k_proj.weight         | UNEXPECTED |  |
+model.layers.{2...39}.self_attn.v_proj.weight         | UNEXPECTED |  |
+model.layers.{2...39}.post_attention_layernorm.weight | UNEXPECTED |  |
+model.layers.{2...39}.self_attn.o_proj.weight         | UNEXPECTED |  |
+model.layers.{2...39}.mlp.up_proj.weight              | UNEXPECTED |  |
+model.layers.{2...39}.self_attn.q_proj.weight         | UNEXPECTED |  |
+model.layers.{2...39}.mlp.gate_proj.weight            | UNEXPECTED |  |
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+checkpoint logits, 2 of 40 layers: tensor | shape | PCC | rel err | bar
+  logits                       (1, 1, 1024, 131072)     0.999976 5.77e-03  (>= 0.999, <= 0.03) ok
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[model.embed_tokens.weight-embed_tokens.weight] PASSED
+tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[model.wte.weight-embed_tokens.weight] PASSED
+tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[transformer.wte.weight-embed_tokens.weight] PASSED
+tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[lm_head.weight-lm_head.weight] PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_directory_without_safetensors_files 2026-10-29 09:15:00.070 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] FileNotFoundError message="No .safetensors files found"
+2026-10-29 09:15:00.070 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] FileNotFoundError message="No .safetensors files found"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_quantized_tensor_before_reading_it 2026-10-29 09:15:00.072 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="stored as I8"
+2026-10-29 09:15:00.072 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="stored as I8"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_reads_a_tensor_in_its_stored_dtype[f32] PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_reads_a_tensor_in_its_stored_dtype[bf16] PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_reshapes_a_1d_gamma_to_one_row PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_tensor_that_is_neither_1d_nor_2d 2026-10-29 09:15:00.075 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="expected a 1-D or 2-D tensor"
+2026-10-29 09:15:00.075 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="expected a 1-D or 2-D tensor"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_two_spellings_of_one_tensor 2026-10-29 09:15:00.076 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="collides with another tensor"
+2026-10-29 09:15:00.076 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="collides with another tensor"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_tensor_present_in_two_shards 2026-10-29 09:15:00.077 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="collides with another tensor"
+2026-10-29 09:15:00.077 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="collides with another tensor"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestCoverage::test_rejects_a_checkpoint_that_ships_a_bias_the_model_has 2026-10-29 09:15:00.078 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="bias shipped for    Llama/blocks/0/attention/qkv_linear/bias"
+2026-10-29 09:15:00.078 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="bias shipped for    Llama/blocks/0/attention/qkv_linear/bias"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestSources::test_tied_checkpoint_on_an_untied_model_says_to_tie 2026-10-29 09:15:00.079 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="load it with weight_tying=Enabled"
+2026-10-29 09:15:00.079 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="load it with weight_tying=Enabled"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestSources::test_untied_checkpoint_on_a_tied_model_says_to_untie 2026-10-29 09:15:00.080 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="load it with weight_tying=Disabled"
+2026-10-29 09:15:00.080 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="load it with weight_tying=Disabled"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestSources::test_a_tied_checkpoint_may_keep_a_copy_of_its_embedding_as_lm_head PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_checkpoint_missing_a_fused_source 2026-10-29 09:15:00.084 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="the checkpoint has no"
+2026-10-29 09:15:00.089 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="the checkpoint has no"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_a_tied_checkpoint_may_keep_a_copy_of_its_embedding_as_lm_head PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_checkpoint_whose_vocab_disagrees_with_the_config[shorter] 2026-10-29 09:15:00.099 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="does not match the config-implied shape"
+2026-10-29 09:15:00.101 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="does not match the config-implied shape"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_checkpoint_whose_vocab_disagrees_with_the_config[longer] 2026-10-29 09:15:00.104 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="does not match the config-implied shape"
+2026-10-29 09:15:00.107 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="does not match the config-implied shape"
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[untied-default rope] Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 2062.10it/s]
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[untied-llama3 rope] Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 2259.86it/s]
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[tied-default rope] Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 2632.96it/s]
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[tied-llama3 rope] Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 2830.16it/s]
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_sees_llama3_scaling_ignored 2026-10-29 09:15:00.200 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="logits vs HF: ulp="
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 2707.75it/s]
+2026-10-29 09:15:00.215 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="logits vs HF: ulp="
+PASSED
+tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_sees_q_and_k_left_in_hf_row_order 2026-10-29 09:15:00.215 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] AssertionError message="logits vs HF: ulp="
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]Writing model shards: 100%|██████████| 1/1 [00:00<00:00, 2750.36it/s]
+2026-10-29 09:15:00.230 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] AssertionError message="logits vs HF: ulp="
+PASSED
+
+=============================== warnings summary ===============================
+tt-train/tests/python/test_mistral.py::test_logits_match_huggingface[2]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+tt-train/tests/python/test_mistral.py::test_logits_match_huggingface[2]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/agobeljic/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+39.10s call     tt-train/tests/python/test_mistral.py::test_logits_match_huggingface[2]
+0.04s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[untied-default rope]
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[untied-llama3 rope]
+0.02s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[tied-default rope]
+0.01s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_sees_llama3_scaling_ignored
+0.01s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[tied-llama3 rope]
+0.01s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_sees_q_and_k_left_in_hf_row_order
+0.01s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_checkpoint_missing_a_fused_source
+0.01s call     tt-train/tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_a_tied_checkpoint_may_keep_a_copy_of_its_embedding_as_lm_head
+
+(16 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED tests/python/test_mistral.py::test_logits_match_huggingface[2]
+PASSED tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[model.embed_tokens.weight-embed_tokens.weight]
+PASSED tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[model.wte.weight-embed_tokens.weight]
+PASSED tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[transformer.wte.weight-embed_tokens.weight]
+PASSED tests/python/test_llama_safetensors_loader.py::TestHelpers::test_canonical_collapses_checkpoint_spellings[lm_head.weight-lm_head.weight]
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_directory_without_safetensors_files
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_quantized_tensor_before_reading_it
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_reads_a_tensor_in_its_stored_dtype[f32]
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_reads_a_tensor_in_its_stored_dtype[bf16]
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_reshapes_a_1d_gamma_to_one_row
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_tensor_that_is_neither_1d_nor_2d
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_two_spellings_of_one_tensor
+PASSED tests/python/test_llama_safetensors_loader.py::TestReadCheckpoint::test_rejects_a_tensor_present_in_two_shards
+PASSED tests/python/test_llama_safetensors_loader.py::TestCoverage::test_rejects_a_checkpoint_that_ships_a_bias_the_model_has
+PASSED tests/python/test_llama_safetensors_loader.py::TestSources::test_tied_checkpoint_on_an_untied_model_says_to_tie
+PASSED tests/python/test_llama_safetensors_loader.py::TestSources::test_untied_checkpoint_on_a_tied_model_says_to_untie
+PASSED tests/python/test_llama_safetensors_loader.py::TestSources::test_a_tied_checkpoint_may_keep_a_copy_of_its_embedding_as_lm_head
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_checkpoint_missing_a_fused_source
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_a_tied_checkpoint_may_keep_a_copy_of_its_embedding_as_lm_head
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_checkpoint_whose_vocab_disagrees_with_the_config[shorter]
+PASSED tests/python/test_llama_safetensors_loader.py::TestLoadIntoModel::test_rejects_a_checkpoint_whose_vocab_disagrees_with_the_config[longer]
+PASSED tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[untied-default rope]
+PASSED tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[untied-llama3 rope]
+PASSED tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[tied-default rope]
+PASSED tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_logits[tied-llama3 rope]
+PASSED tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_sees_llama3_scaling_ignored
+PASSED tests/python/test_llama_safetensors_loader.py::TestMatchesHuggingFace::test_sees_q_and_k_left_in_hf_row_order
+================ 27 passed, 82 deselected, 2 warnings in 39.30s ================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-10-29 09:15:02.041 | info     |    BuildKernels | JIT cache stats: 221/221 hits (100.0%) [221 cached, 36 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-29 09:15:02.041 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-29 09:15:02.056 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-29 09:15:02.056 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-29 09:15:02.216 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-29 09:15:02.216 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-29 09:15:02.216 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

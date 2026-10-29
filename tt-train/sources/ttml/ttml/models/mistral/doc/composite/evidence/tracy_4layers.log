@@ -1,0 +1,69 @@
+2026-10-29 09:25:45.650 | INFO     | __main__:main:222 - Setting profiler artifacts folder to /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/composite/evidence/tracy_4layers
+2026-10-29 09:25:45.653 | INFO     | __main__:main:381 - Using port 8086
+2026-10-29 09:25:45.653 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-10-29 09:25:45.667 | INFO     | __main__:run_workload:416 - Test process started
+2026-10-29 09:25:46.133 | INFO     | __main__:main:222 - Setting profiler artifacts folder to /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/composite/evidence/tracy_4layers
+2026-10-29 09:25:47.722 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+Fetching 18 files:   0%|          | 0/18 [00:00<?, ?it/s]Fetching 18 files: 100%|██████████| 18/18 [00:00<00:00, 54432.21it/s]
+2026-10-29 09:25:49.450 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-29 09:25:49.450 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-29 09:25:49.450 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-29 09:25:49.450 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-29 09:25:49.465 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-29 09:25:49.466 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-29 09:25:49.642 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-29 09:25:49.642 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-29 09:25:49.642 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-29 09:25:49.643 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-29 09:25:49.648 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-29 09:25:49.893 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-29 09:25:49.949 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-29 09:25:49.949 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-29 09:25:49.949 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-29 09:25:50.050 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-29 09:25:50.476 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-10-29 09:26:44.428 | info     |           Metal | Device kernel duration perf summary (device=0): count=1476, min=1351ns, avg=603689.9ns, max=22167882ns (profiler_analysis.cpp:729)
+2026-10-29 09:26:44.428 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=2216700ns, range=[0..22167000), underflow(<0ns)=0, overflow(>=22167000ns)=1) (profiler_analysis.cpp:772)
+2026-10-29 09:26:44.428 | info     |           Metal |   [           0 ..      2216700) |########################################|     1389 (profiler_analysis.cpp:777)
+2026-10-29 09:26:44.428 | info     |           Metal |   [     2216700 ..      4433400) |#                                       |       40 (profiler_analysis.cpp:777)
+2026-10-29 09:26:44.428 | info     |           Metal |   [     4433400 ..      6650100) |                                        |        2 (profiler_analysis.cpp:777)
+2026-10-29 09:26:44.428 | info     |           Metal |   [     6650100 ..      8866800) |#                                       |       21 (profiler_analysis.cpp:777)
+2026-10-29 09:26:44.428 | info     |           Metal |   [     8866800 ..     11083500) |                                        |       10 (profiler_analysis.cpp:777)
+2026-10-29 09:26:44.428 | info     |           Metal |   [    11083500 ..     13300200) |                                        |        6 (profiler_analysis.cpp:777)
+2026-10-29 09:26:44.428 | info     |           Metal |   [    13300200 ..     15516900) |                                        |        4 (profiler_analysis.cpp:777)
+2026-10-29 09:26:44.428 | info     |           Metal |   [    15516900 ..     17733600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-10-29 09:26:44.428 | info     |           Metal |   [    17733600 ..     19950300) |                                        |        0 (profiler_analysis.cpp:777)
+2026-10-29 09:26:44.428 | info     |           Metal |   [    19950300 ..     22167000) |                                        |        3 (profiler_analysis.cpp:777)
+Mistral: 4 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+LoRA rank 16 alpha 32.0: 8.3M trainable parameters
+useful FLOPs/step 12.111 T (4 layers), peak 148.5 TFLOP/s
+step    1/4  loss 11.9375     703.0 ms
+step    2/4  loss 11.9375     240.9 ms
+step    3/4  loss 12.0000     250.7 ms
+step    4/4  loss 11.9375     252.8 ms
+4 of 40 layers: 251.7 ms/step over 2 steps (best 250.7), 48.1 TFLOP/s, MFU 32.40%
+2026-10-29 09:26:47.263 | info     |    BuildKernels | JIT cache stats: 431/431 hits (100.0%) [431 cached, 137 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-29 09:26:47.263 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-29 09:26:47.290 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-29 09:26:47.290 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-29 09:26:47.502 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-29 09:26:47.502 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-29 09:26:47.502 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+2026-10-29 09:26:48.313 | INFO     | __main__:main:490 - Copying /home/ttuser/agobeljic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/agobeljic/tt-metal/build/profiler/build_wasm/traces/train_2026_10_29_09_26_48.tracy
+2026-10-29 09:26:48.313 | WARNING  | __main__:main:495 - Could not copy /home/ttuser/agobeljic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/agobeljic/tt-metal/build/profiler/build_wasm/traces/train_2026_10_29_09_26_48.tracy: [Errno 2] No such file or directory: '/home/ttuser/agobeljic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy'
+2026-10-29 09:26:48.314 | INFO     | __main__:main:502 - embed.tracy -> traces/train_2026_10_29_09_26_48.tracy
+2026-10-29 09:26:48.314 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-10-29 09:26:48.314 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-10-29 09:26:48.314 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-10-29 09:26:50.540 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/composite/evidence/tracy_4layers/.logs/tracy_ops_times.csv
+2026-10-29 09:26:50.615 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/composite/evidence/tracy_4layers/.logs/tracy_ops_data.csv
+2026-10-29 09:26:50.616 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/home/ttuser/agobeljic/tt-metal/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-10-29 09:26:55.800 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-10-29 09:26:55.801 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-10-29 09:27:02.026 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-10-29 09:27:02.026 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-10-29 09:27:02.142 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-10-29 09:27:03.215 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/composite/evidence/tracy_4layers/reports/2026_10_29_09_27_02/ops_perf_results_2026_10_29_09_27_02.csv

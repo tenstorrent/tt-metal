@@ -1,0 +1,161 @@
+2026-10-29 09:11:34.530 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/agobeljic/tt-metal/tt-train/../python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/agobeljic/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, dash-2.15.0, anyio-4.15.1, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 11 items / 1 deselected / 10 selected
+
+tests/python/test_mistral.py::test_rmsnorm_forward_and_gradients 2026-10-29 09:11:34.841 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-29 09:11:34.841 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-29 09:11:34.841 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-29 09:11:34.841 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-29 09:11:34.852 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-29 09:11:34.852 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-29 09:11:34.934 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-29 09:11:34.934 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-29 09:11:34.934 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-29 09:11:34.934 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-29 09:11:34.936 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-29 09:11:35.091 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-29 09:11:35.125 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-29 09:11:35.125 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-29 09:11:35.125 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-29 09:11:35.168 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+FAILED
+tests/python/test_mistral.py::test_rmsnorm_frozen_gamma_gets_no_gradient PASSED
+tests/python/test_mistral.py::test_attention_forward_and_gradients Building ncrisc, compile step:
+/home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_bw/device/kernels/dataflow -include /home/ttuser/.cache/tt-metal-cache/pch/2d26ef525aaf937f/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DBALANCED_PARALLELISM=1 -DCAUSAL_MASK=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="sdpa_bw_q_reader_kernel/14518261309570647252/" -DKERNEL_COMPILE_TIME_ARGS=4,4,32,32,4,2,2048,2,2048,2,2048,2,2048,2,2048,0,0,2,4096,0,0 -c -o /home/ttuser/.cache/tt-metal-cache/18093610123397052272/kernels/sdpa_bw_q_reader_kernel/14518261309570647252/ncrisc/ncrisck.8310639424705817410_357221.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/ttuser/.cache/tt-metal-cache/18093610123397052272/kernels/sdpa_bw_q_reader_kernel/14518261309570647252/ncrisc/ncrisck.8310639424705817410_357221.d
+In file included from ../kernel_includes.hpp:2,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_bw/device/kernels/dataflow/sdpa_bw_q_reader_kernel.cpp: In function 'void kernel_main()':
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/ops/sdpa_bw/device/kernels/dataflow/sdpa_bw_q_reader_kernel.cpp:65:16: warning: variable 'mask_addr_generator' set but not used [-Wunused-but-set-variable]
+   65 |     const auto mask_addr_generator = TensorAccessor(mask_args, mask_addr, tile_bytes);
+      |                ^~~~~~~~~~~~~~~~~~~
+attention (qkv, heads, rope, causal GQA sdpa, concat, out-proj): tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999989 4.81e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999984 6.00e-03  (>= 0.98, <= 0.08) ok
+  d w_qkv                      (6144, 5120)             0.999984 5.99e-03  (>= 0.98, <= 0.08) ok
+  d w_out                      (5120, 4096)             0.999989 4.83e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_mlp_forward_and_gradients mlp (gate_up, swiglu_packed, down): tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999992 3.97e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999990 4.48e-03  (>= 0.99, <= 0.05) ok
+  d w_gate_up                  (65536, 5120)            0.999990 4.48e-03  (>= 0.99, <= 0.05) ok
+  d w2                         (5120, 32768)            0.999992 3.96e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_lora_linear_forward_and_gradients_frozen_base lora linear (qkv shape): tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 6144)       0.999997 2.41e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999997 2.40e-03  (>= 0.99, <= 0.05) ok
+  d lora_A                     (16, 5120)               0.999997 2.39e-03  (>= 0.99, <= 0.05) ok
+  d lora_B                     (6144, 16)               0.999997 2.40e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora decoder block under LoRA: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999991 4.58e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999981 7.07e-03  (>= 0.98, <= 0.08) ok
+  d lora_A qkv_linear          (16, 5120)               0.999947 1.55e-02  (>= 0.98, <= 0.08) ok
+  d lora_B qkv_linear          (6144, 16)               0.999947 1.50e-02  (>= 0.98, <= 0.08) ok
+  d lora_A out_linear          (16, 4096)               0.999958 1.14e-02  (>= 0.98, <= 0.08) ok
+  d lora_B out_linear          (5120, 16)               0.999961 1.18e-02  (>= 0.98, <= 0.08) ok
+  d lora_A w_gate_up           (16, 5120)               0.999976 8.48e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w_gate_up           (65536, 16)              0.999976 8.48e-03  (>= 0.99, <= 0.05) ok
+  d lora_A w2                  (16, 32768)              0.999978 8.07e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w2                  (5120, 16)               0.999979 8.02e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_frozen_embedding_matches_the_ttml_op frozen embedding: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       1.000000 0.00e+00  (>= 1.0, <= 0.0) ok
+  out vs table rows            (1, 1, 1024, 5120)       1.000000 0.00e+00  (>= 1.0, <= 0.0) ok
+PASSED
+tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients lm head + cross-entropy (frozen head): tensor | shape | PCC | rel err | bar
+  logits                       (1, 1, 1024, 131072)     0.999999 1.68e-03  (>= 0.999, <= 0.02) ok
+  loss                         (1,)                     0.000000 8.63e-04  (>= 0.0, <= 0.01) ok
+  dx                           (1, 1, 1024, 5120)       0.999999 4.23e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_config_from_hf_reads_mistral PASSED
+tests/python/test_mistral.py::test_useful_flops_match_the_plan PASSED
+
+=================================== FAILURES ===================================
+______________________ test_rmsnorm_forward_and_gradients ______________________
+
+    def test_rmsnorm_forward_and_gradients():
+        rng = seeded(1)
+        x_np, g_np = rand_x(rng), bf16(rng.normal(1.0, 0.1, (1, 1, 1, HIDDEN)))
+        dout_np = rand_x(rng, std=0.01)
+
+        layer = RMSNormLayer(HIDDEN, EPS)
+        assign(layer.gamma.tensor, g_np)
+        x = to_device(x_np, requires_grad=True)
+        out = layer(x)
+        out_val = to_host(out)
+>       ttml.autograd.create_tensor(out_val.astype(np.float32))  # keep host copy semantics explicit
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: create_tensor(): incompatible function arguments. The following argument types are supported:
+E           1. create_tensor(value: ttnn._ttnn.tensor.Tensor, requires_grad: bool = True) -> _ttml.autograd.Tensor
+E           2. create_tensor() -> _ttml.autograd.Tensor
+E
+E       Invoked with types: ndarray
+
+tests/python/test_mistral.py:228: TypeError
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/agobeljic/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+25.70s call     tt-train/tests/python/test_mistral.py::test_mlp_forward_and_gradients
+22.28s call     tt-train/tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients
+21.73s call     tt-train/tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora
+16.15s call     tt-train/tests/python/test_mistral.py::test_frozen_embedding_matches_the_ttml_op
+10.34s call     tt-train/tests/python/test_mistral.py::test_attention_forward_and_gradients
+4.42s call     tt-train/tests/python/test_mistral.py::test_lora_linear_forward_and_gradients_frozen_base
+2.58s call     tt-train/tests/python/test_mistral.py::test_rmsnorm_forward_and_gradients
+0.72s call     tt-train/tests/python/test_mistral.py::test_rmsnorm_frozen_gamma_gets_no_gradient
+
+(17 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED tests/python/test_mistral.py::test_rmsnorm_frozen_gamma_gets_no_gradient
+PASSED tests/python/test_mistral.py::test_attention_forward_and_gradients
+PASSED tests/python/test_mistral.py::test_mlp_forward_and_gradients
+PASSED tests/python/test_mistral.py::test_lora_linear_forward_and_gradients_frozen_base
+PASSED tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora
+PASSED tests/python/test_mistral.py::test_frozen_embedding_matches_the_ttml_op
+PASSED tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients
+PASSED tests/python/test_mistral.py::test_config_from_hf_reads_mistral
+PASSED tests/python/test_mistral.py::test_useful_flops_match_the_plan
+FAILED tests/python/test_mistral.py::test_rmsnorm_forward_and_gradients - Typ...
+============ 1 failed, 9 passed, 1 deselected in 103.98s (0:01:43) =============
+nanobind: leaked 2 instances!
+nanobind: leaked 20 types!
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "_ttml.modules.ModuleBase"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - leaked type "TensorMemoryLayout"
+ - ... skipped remainder
+nanobind: leaked 272 functions!
+ - leaked function "get_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "to_list"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "__repr__"
+ - leaked function "to"
+ - leaked function "get_device_ids"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-10-29 09:13:19.575 | info     |    BuildKernels | JIT cache stats: 54/440 hits (12.3%) [54 cached, 89 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-29 09:13:19.575 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-29 09:13:19.589 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-29 09:13:19.589 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-29 09:13:19.804 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-29 09:13:19.804 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-29 09:13:19.804 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

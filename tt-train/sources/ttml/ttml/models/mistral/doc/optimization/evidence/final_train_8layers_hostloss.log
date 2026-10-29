@@ -1,0 +1,333 @@
+2026-10-29 14:21:33.753 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+Fetching 18 files:   0%|          | 0/18 [00:00<?, ?it/s]Fetching 18 files: 100%|██████████| 18/18 [00:00<00:00, 47274.56it/s]
+2026-10-29 14:21:34.652 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-29 14:21:34.652 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-29 14:21:34.652 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-29 14:21:34.652 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-29 14:21:34.663 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-29 14:21:34.663 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-29 14:21:34.741 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-29 14:21:34.741 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-29 14:21:34.741 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-29 14:21:34.741 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-29 14:21:34.743 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-29 14:21:34.835 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-10-29 14:21:35.014 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-29 14:21:35.048 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-29 14:21:35.048 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-29 14:21:35.048 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-29 14:21:35.088 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Mistral: 8 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+Loaded 51 parameters.
+Note: 288 checkpoint tensors were not used:
+  - layers.10.input_layernorm.weight
+  - layers.10.mlp.down_proj.weight
+  - layers.10.mlp.gate_proj.weight
+  - layers.10.mlp.up_proj.weight
+  - layers.10.post_attention_layernorm.weight
+  - layers.10.self_attn.k_proj.weight
+  - layers.10.self_attn.o_proj.weight
+  - layers.10.self_attn.q_proj.weight
+  - layers.10.self_attn.v_proj.weight
+  - layers.11.input_layernorm.weight
+  - layers.11.mlp.down_proj.weight
+  - layers.11.mlp.gate_proj.weight
+  - layers.11.mlp.up_proj.weight
+  - layers.11.post_attention_layernorm.weight
+  - layers.11.self_attn.k_proj.weight
+  - layers.11.self_attn.o_proj.weight
+  - layers.11.self_attn.q_proj.weight
+  - layers.11.self_attn.v_proj.weight
+  - layers.12.input_layernorm.weight
+  - layers.12.mlp.down_proj.weight
+  - layers.12.mlp.gate_proj.weight
+  - layers.12.mlp.up_proj.weight
+  - layers.12.post_attention_layernorm.weight
+  - layers.12.self_attn.k_proj.weight
+  - layers.12.self_attn.o_proj.weight
+  - layers.12.self_attn.q_proj.weight
+  - layers.12.self_attn.v_proj.weight
+  - layers.13.input_layernorm.weight
+  - layers.13.mlp.down_proj.weight
+  - layers.13.mlp.gate_proj.weight
+  - layers.13.mlp.up_proj.weight
+  - layers.13.post_attention_layernorm.weight
+  - layers.13.self_attn.k_proj.weight
+  - layers.13.self_attn.o_proj.weight
+  - layers.13.self_attn.q_proj.weight
+  - layers.13.self_attn.v_proj.weight
+  - layers.14.input_layernorm.weight
+  - layers.14.mlp.down_proj.weight
+  - layers.14.mlp.gate_proj.weight
+  - layers.14.mlp.up_proj.weight
+  - layers.14.post_attention_layernorm.weight
+  - layers.14.self_attn.k_proj.weight
+  - layers.14.self_attn.o_proj.weight
+  - layers.14.self_attn.q_proj.weight
+  - layers.14.self_attn.v_proj.weight
+  - layers.15.input_layernorm.weight
+  - layers.15.mlp.down_proj.weight
+  - layers.15.mlp.gate_proj.weight
+  - layers.15.mlp.up_proj.weight
+  - layers.15.post_attention_layernorm.weight
+  - layers.15.self_attn.k_proj.weight
+  - layers.15.self_attn.o_proj.weight
+  - layers.15.self_attn.q_proj.weight
+  - layers.15.self_attn.v_proj.weight
+  - layers.16.input_layernorm.weight
+  - layers.16.mlp.down_proj.weight
+  - layers.16.mlp.gate_proj.weight
+  - layers.16.mlp.up_proj.weight
+  - layers.16.post_attention_layernorm.weight
+  - layers.16.self_attn.k_proj.weight
+  - layers.16.self_attn.o_proj.weight
+  - layers.16.self_attn.q_proj.weight
+  - layers.16.self_attn.v_proj.weight
+  - layers.17.input_layernorm.weight
+  - layers.17.mlp.down_proj.weight
+  - layers.17.mlp.gate_proj.weight
+  - layers.17.mlp.up_proj.weight
+  - layers.17.post_attention_layernorm.weight
+  - layers.17.self_attn.k_proj.weight
+  - layers.17.self_attn.o_proj.weight
+  - layers.17.self_attn.q_proj.weight
+  - layers.17.self_attn.v_proj.weight
+  - layers.18.input_layernorm.weight
+  - layers.18.mlp.down_proj.weight
+  - layers.18.mlp.gate_proj.weight
+  - layers.18.mlp.up_proj.weight
+  - layers.18.post_attention_layernorm.weight
+  - layers.18.self_attn.k_proj.weight
+  - layers.18.self_attn.o_proj.weight
+  - layers.18.self_attn.q_proj.weight
+  - layers.18.self_attn.v_proj.weight
+  - layers.19.input_layernorm.weight
+  - layers.19.mlp.down_proj.weight
+  - layers.19.mlp.gate_proj.weight
+  - layers.19.mlp.up_proj.weight
+  - layers.19.post_attention_layernorm.weight
+  - layers.19.self_attn.k_proj.weight
+  - layers.19.self_attn.o_proj.weight
+  - layers.19.self_attn.q_proj.weight
+  - layers.19.self_attn.v_proj.weight
+  - layers.20.input_layernorm.weight
+  - layers.20.mlp.down_proj.weight
+  - layers.20.mlp.gate_proj.weight
+  - layers.20.mlp.up_proj.weight
+  - layers.20.post_attention_layernorm.weight
+  - layers.20.self_attn.k_proj.weight
+  - layers.20.self_attn.o_proj.weight
+  - layers.20.self_attn.q_proj.weight
+  - layers.20.self_attn.v_proj.weight
+  - layers.21.input_layernorm.weight
+  - layers.21.mlp.down_proj.weight
+  - layers.21.mlp.gate_proj.weight
+  - layers.21.mlp.up_proj.weight
+  - layers.21.post_attention_layernorm.weight
+  - layers.21.self_attn.k_proj.weight
+  - layers.21.self_attn.o_proj.weight
+  - layers.21.self_attn.q_proj.weight
+  - layers.21.self_attn.v_proj.weight
+  - layers.22.input_layernorm.weight
+  - layers.22.mlp.down_proj.weight
+  - layers.22.mlp.gate_proj.weight
+  - layers.22.mlp.up_proj.weight
+  - layers.22.post_attention_layernorm.weight
+  - layers.22.self_attn.k_proj.weight
+  - layers.22.self_attn.o_proj.weight
+  - layers.22.self_attn.q_proj.weight
+  - layers.22.self_attn.v_proj.weight
+  - layers.23.input_layernorm.weight
+  - layers.23.mlp.down_proj.weight
+  - layers.23.mlp.gate_proj.weight
+  - layers.23.mlp.up_proj.weight
+  - layers.23.post_attention_layernorm.weight
+  - layers.23.self_attn.k_proj.weight
+  - layers.23.self_attn.o_proj.weight
+  - layers.23.self_attn.q_proj.weight
+  - layers.23.self_attn.v_proj.weight
+  - layers.24.input_layernorm.weight
+  - layers.24.mlp.down_proj.weight
+  - layers.24.mlp.gate_proj.weight
+  - layers.24.mlp.up_proj.weight
+  - layers.24.post_attention_layernorm.weight
+  - layers.24.self_attn.k_proj.weight
+  - layers.24.self_attn.o_proj.weight
+  - layers.24.self_attn.q_proj.weight
+  - layers.24.self_attn.v_proj.weight
+  - layers.25.input_layernorm.weight
+  - layers.25.mlp.down_proj.weight
+  - layers.25.mlp.gate_proj.weight
+  - layers.25.mlp.up_proj.weight
+  - layers.25.post_attention_layernorm.weight
+  - layers.25.self_attn.k_proj.weight
+  - layers.25.self_attn.o_proj.weight
+  - layers.25.self_attn.q_proj.weight
+  - layers.25.self_attn.v_proj.weight
+  - layers.26.input_layernorm.weight
+  - layers.26.mlp.down_proj.weight
+  - layers.26.mlp.gate_proj.weight
+  - layers.26.mlp.up_proj.weight
+  - layers.26.post_attention_layernorm.weight
+  - layers.26.self_attn.k_proj.weight
+  - layers.26.self_attn.o_proj.weight
+  - layers.26.self_attn.q_proj.weight
+  - layers.26.self_attn.v_proj.weight
+  - layers.27.input_layernorm.weight
+  - layers.27.mlp.down_proj.weight
+  - layers.27.mlp.gate_proj.weight
+  - layers.27.mlp.up_proj.weight
+  - layers.27.post_attention_layernorm.weight
+  - layers.27.self_attn.k_proj.weight
+  - layers.27.self_attn.o_proj.weight
+  - layers.27.self_attn.q_proj.weight
+  - layers.27.self_attn.v_proj.weight
+  - layers.28.input_layernorm.weight
+  - layers.28.mlp.down_proj.weight
+  - layers.28.mlp.gate_proj.weight
+  - layers.28.mlp.up_proj.weight
+  - layers.28.post_attention_layernorm.weight
+  - layers.28.self_attn.k_proj.weight
+  - layers.28.self_attn.o_proj.weight
+  - layers.28.self_attn.q_proj.weight
+  - layers.28.self_attn.v_proj.weight
+  - layers.29.input_layernorm.weight
+  - layers.29.mlp.down_proj.weight
+  - layers.29.mlp.gate_proj.weight
+  - layers.29.mlp.up_proj.weight
+  - layers.29.post_attention_layernorm.weight
+  - layers.29.self_attn.k_proj.weight
+  - layers.29.self_attn.o_proj.weight
+  - layers.29.self_attn.q_proj.weight
+  - layers.29.self_attn.v_proj.weight
+  - layers.30.input_layernorm.weight
+  - layers.30.mlp.down_proj.weight
+  - layers.30.mlp.gate_proj.weight
+  - layers.30.mlp.up_proj.weight
+  - layers.30.post_attention_layernorm.weight
+  - layers.30.self_attn.k_proj.weight
+  - layers.30.self_attn.o_proj.weight
+  - layers.30.self_attn.q_proj.weight
+  - layers.30.self_attn.v_proj.weight
+  - layers.31.input_layernorm.weight
+  - layers.31.mlp.down_proj.weight
+  - layers.31.mlp.gate_proj.weight
+  - layers.31.mlp.up_proj.weight
+  - layers.31.post_attention_layernorm.weight
+  - layers.31.self_attn.k_proj.weight
+  - layers.31.self_attn.o_proj.weight
+  - layers.31.self_attn.q_proj.weight
+  - layers.31.self_attn.v_proj.weight
+  - layers.32.input_layernorm.weight
+  - layers.32.mlp.down_proj.weight
+  - layers.32.mlp.gate_proj.weight
+  - layers.32.mlp.up_proj.weight
+  - layers.32.post_attention_layernorm.weight
+  - layers.32.self_attn.k_proj.weight
+  - layers.32.self_attn.o_proj.weight
+  - layers.32.self_attn.q_proj.weight
+  - layers.32.self_attn.v_proj.weight
+  - layers.33.input_layernorm.weight
+  - layers.33.mlp.down_proj.weight
+  - layers.33.mlp.gate_proj.weight
+  - layers.33.mlp.up_proj.weight
+  - layers.33.post_attention_layernorm.weight
+  - layers.33.self_attn.k_proj.weight
+  - layers.33.self_attn.o_proj.weight
+  - layers.33.self_attn.q_proj.weight
+  - layers.33.self_attn.v_proj.weight
+  - layers.34.input_layernorm.weight
+  - layers.34.mlp.down_proj.weight
+  - layers.34.mlp.gate_proj.weight
+  - layers.34.mlp.up_proj.weight
+  - layers.34.post_attention_layernorm.weight
+  - layers.34.self_attn.k_proj.weight
+  - layers.34.self_attn.o_proj.weight
+  - layers.34.self_attn.q_proj.weight
+  - layers.34.self_attn.v_proj.weight
+  - layers.35.input_layernorm.weight
+  - layers.35.mlp.down_proj.weight
+  - layers.35.mlp.gate_proj.weight
+  - layers.35.mlp.up_proj.weight
+  - layers.35.post_attention_layernorm.weight
+  - layers.35.self_attn.k_proj.weight
+  - layers.35.self_attn.o_proj.weight
+  - layers.35.self_attn.q_proj.weight
+  - layers.35.self_attn.v_proj.weight
+  - layers.36.input_layernorm.weight
+  - layers.36.mlp.down_proj.weight
+  - layers.36.mlp.gate_proj.weight
+  - layers.36.mlp.up_proj.weight
+  - layers.36.post_attention_layernorm.weight
+  - layers.36.self_attn.k_proj.weight
+  - layers.36.self_attn.o_proj.weight
+  - layers.36.self_attn.q_proj.weight
+  - layers.36.self_attn.v_proj.weight
+  - layers.37.input_layernorm.weight
+  - layers.37.mlp.down_proj.weight
+  - layers.37.mlp.gate_proj.weight
+  - layers.37.mlp.up_proj.weight
+  - layers.37.post_attention_layernorm.weight
+  - layers.37.self_attn.k_proj.weight
+  - layers.37.self_attn.o_proj.weight
+  - layers.37.self_attn.q_proj.weight
+  - layers.37.self_attn.v_proj.weight
+  - layers.38.input_layernorm.weight
+  - layers.38.mlp.down_proj.weight
+  - layers.38.mlp.gate_proj.weight
+  - layers.38.mlp.up_proj.weight
+  - layers.38.post_attention_layernorm.weight
+  - layers.38.self_attn.k_proj.weight
+  - layers.38.self_attn.o_proj.weight
+  - layers.38.self_attn.q_proj.weight
+  - layers.38.self_attn.v_proj.weight
+  - layers.39.input_layernorm.weight
+  - layers.39.mlp.down_proj.weight
+  - layers.39.mlp.gate_proj.weight
+  - layers.39.mlp.up_proj.weight
+  - layers.39.post_attention_layernorm.weight
+  - layers.39.self_attn.k_proj.weight
+  - layers.39.self_attn.o_proj.weight
+  - layers.39.self_attn.q_proj.weight
+  - layers.39.self_attn.v_proj.weight
+  - layers.8.input_layernorm.weight
+  - layers.8.mlp.down_proj.weight
+  - layers.8.mlp.gate_proj.weight
+  - layers.8.mlp.up_proj.weight
+  - layers.8.post_attention_layernorm.weight
+  - layers.8.self_attn.k_proj.weight
+  - layers.8.self_attn.o_proj.weight
+  - layers.8.self_attn.q_proj.weight
+  - layers.8.self_attn.v_proj.weight
+  - layers.9.input_layernorm.weight
+  - layers.9.mlp.down_proj.weight
+  - layers.9.mlp.gate_proj.weight
+  - layers.9.mlp.up_proj.weight
+  - layers.9.post_attention_layernorm.weight
+  - layers.9.self_attn.k_proj.weight
+  - layers.9.self_attn.o_proj.weight
+  - layers.9.self_attn.q_proj.weight
+  - layers.9.self_attn.v_proj.weight
+frozen weights stored transposed: 25 linears
+LoRA update fused into the base matmul: 24 linears
+LoRA rank 16 alpha 32.0: 16.5M trainable parameters
+useful FLOPs/step 21.473 T (8 layers), peak 148.5 TFLOP/s (1 chip)
+step    1/10  loss 12.1250  host fp32 loss 12.1101     861.2 ms
+step    2/10  loss 11.8750  host fp32 loss 11.8549     790.8 ms
+step    3/10  loss 11.3125  host fp32 loss 11.3152     799.8 ms
+step    4/10  loss 10.4375  host fp32 loss 10.4130     792.8 ms
+step    5/10  loss 9.6875  host fp32 loss 9.7167     792.3 ms
+step    6/10  loss 9.8750  host fp32 loss 9.8864     813.8 ms
+step    7/10  loss 9.2500  host fp32 loss 9.2291     807.1 ms
+step    8/10  loss 8.6875  host fp32 loss 8.6798     802.4 ms
+step    9/10  loss 9.0000  host fp32 loss 8.9677     781.0 ms
+step   10/10  loss 8.6250  host fp32 loss 8.5927     782.1 ms
+8 of 40 layers, tp 1: 796.4 ms/step over 8 steps (best 781.0), 27.0 TFLOP/s, MFU 18.16%
+2026-10-29 14:22:35.646 | info     |    BuildKernels | JIT cache stats: 449/449 hits (100.0%) [449 cached, 145 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-29 14:22:35.646 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-29 14:22:35.663 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-29 14:22:35.663 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-29 14:22:35.943 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-29 14:22:35.943 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-29 14:22:35.943 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

@@ -1,0 +1,7 @@
+=== iter2_transposed_tp TP=4 MFU after 300s cool-down 2026-10-29T12:14:00Z
+rc=1
+Mistral: 40 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+=== iter2_transposed_tp TP=4 Tracy 4 layers 2026-10-29T12:22:19Z
+rc=0
+Mistral: 4 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+=== done 2026-10-29T12:23:04Z

@@ -1,0 +1,7 @@
+=== iter1_loraapply TP=4 MFU after 600s cool-down 2026-10-29T11:17:35Z
+rc=0
+40 of 40 layers, tp 4: 574.3 ms/step over 6 steps (best 571.3), 167.8 TFLOP/s, MFU 28.25%
+=== iter1_loraapply TP=4 Tracy 4 layers 2026-10-29T11:30:59Z
+rc=0
+4 of 40 layers, tp 4: 70.9 ms/step over 2 steps (best 69.4), 170.8 TFLOP/s, MFU 28.75%
+=== done 2026-10-29T11:32:17Z

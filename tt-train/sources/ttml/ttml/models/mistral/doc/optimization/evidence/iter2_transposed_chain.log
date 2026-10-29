@@ -1,0 +1,15 @@
+=== iter2_transposed harness 2026-10-29T11:44:12Z
+harness rc=0
+================== 13 passed, 2 warnings in 156.82s (0:02:36) ==================
+=== iter2_transposed tracy 1/2/4/8 2026-10-29T11:46:53Z
+tracy 1 rc=0
+tracy 2 rc=0
+tracy 4 rc=0
+tracy 8 rc=0
+=== iter2_transposed single-chip MFU, 8 layers (cool-down 600s first) 2026-10-29T11:49:52Z
+rc=0
+8 of 40 layers, tp 1: 416.6 ms/step over 8 steps (best 414.4), 51.5 TFLOP/s, MFU 34.71%
+=== iter2_transposed TP=4 full model MFU (cool-down 600s first) 2026-10-29T12:00:43Z
+rc=1
+useful FLOPs/step 96.371 T (40 layers), peak 594.0 TFLOP/s (4 chips)
+=== done 2026-10-29T12:14:00Z

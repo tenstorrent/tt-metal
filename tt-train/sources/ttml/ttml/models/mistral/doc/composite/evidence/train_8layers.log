@@ -1,0 +1,358 @@
+2026-10-29 09:17:27.902 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+Fetching 18 files:   0%|          | 0/18 [00:00<?, ?it/s]Fetching 18 files: 100%|██████████| 18/18 [00:00<00:00, 45617.81it/s]
+2026-10-29 09:17:29.148 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-29 09:17:29.148 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-29 09:17:29.148 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-29 09:17:29.148 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-29 09:17:29.160 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-29 09:17:29.160 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-29 09:17:29.247 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-29 09:17:29.247 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-29 09:17:29.247 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-29 09:17:29.247 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-29 09:17:29.249 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-29 09:17:29.434 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-29 09:17:29.474 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-29 09:17:29.474 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-29 09:17:29.474 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-29 09:17:29.515 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Mistral: 8 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+Loaded 51 parameters.
+Note: 288 checkpoint tensors were not used:
+  - layers.10.input_layernorm.weight
+  - layers.10.mlp.down_proj.weight
+  - layers.10.mlp.gate_proj.weight
+  - layers.10.mlp.up_proj.weight
+  - layers.10.post_attention_layernorm.weight
+  - layers.10.self_attn.k_proj.weight
+  - layers.10.self_attn.o_proj.weight
+  - layers.10.self_attn.q_proj.weight
+  - layers.10.self_attn.v_proj.weight
+  - layers.11.input_layernorm.weight
+  - layers.11.mlp.down_proj.weight
+  - layers.11.mlp.gate_proj.weight
+  - layers.11.mlp.up_proj.weight
+  - layers.11.post_attention_layernorm.weight
+  - layers.11.self_attn.k_proj.weight
+  - layers.11.self_attn.o_proj.weight
+  - layers.11.self_attn.q_proj.weight
+  - layers.11.self_attn.v_proj.weight
+  - layers.12.input_layernorm.weight
+  - layers.12.mlp.down_proj.weight
+  - layers.12.mlp.gate_proj.weight
+  - layers.12.mlp.up_proj.weight
+  - layers.12.post_attention_layernorm.weight
+  - layers.12.self_attn.k_proj.weight
+  - layers.12.self_attn.o_proj.weight
+  - layers.12.self_attn.q_proj.weight
+  - layers.12.self_attn.v_proj.weight
+  - layers.13.input_layernorm.weight
+  - layers.13.mlp.down_proj.weight
+  - layers.13.mlp.gate_proj.weight
+  - layers.13.mlp.up_proj.weight
+  - layers.13.post_attention_layernorm.weight
+  - layers.13.self_attn.k_proj.weight
+  - layers.13.self_attn.o_proj.weight
+  - layers.13.self_attn.q_proj.weight
+  - layers.13.self_attn.v_proj.weight
+  - layers.14.input_layernorm.weight
+  - layers.14.mlp.down_proj.weight
+  - layers.14.mlp.gate_proj.weight
+  - layers.14.mlp.up_proj.weight
+  - layers.14.post_attention_layernorm.weight
+  - layers.14.self_attn.k_proj.weight
+  - layers.14.self_attn.o_proj.weight
+  - layers.14.self_attn.q_proj.weight
+  - layers.14.self_attn.v_proj.weight
+  - layers.15.input_layernorm.weight
+  - layers.15.mlp.down_proj.weight
+  - layers.15.mlp.gate_proj.weight
+  - layers.15.mlp.up_proj.weight
+  - layers.15.post_attention_layernorm.weight
+  - layers.15.self_attn.k_proj.weight
+  - layers.15.self_attn.o_proj.weight
+  - layers.15.self_attn.q_proj.weight
+  - layers.15.self_attn.v_proj.weight
+  - layers.16.input_layernorm.weight
+  - layers.16.mlp.down_proj.weight
+  - layers.16.mlp.gate_proj.weight
+  - layers.16.mlp.up_proj.weight
+  - layers.16.post_attention_layernorm.weight
+  - layers.16.self_attn.k_proj.weight
+  - layers.16.self_attn.o_proj.weight
+  - layers.16.self_attn.q_proj.weight
+  - layers.16.self_attn.v_proj.weight
+  - layers.17.input_layernorm.weight
+  - layers.17.mlp.down_proj.weight
+  - layers.17.mlp.gate_proj.weight
+  - layers.17.mlp.up_proj.weight
+  - layers.17.post_attention_layernorm.weight
+  - layers.17.self_attn.k_proj.weight
+  - layers.17.self_attn.o_proj.weight
+  - layers.17.self_attn.q_proj.weight
+  - layers.17.self_attn.v_proj.weight
+  - layers.18.input_layernorm.weight
+  - layers.18.mlp.down_proj.weight
+  - layers.18.mlp.gate_proj.weight
+  - layers.18.mlp.up_proj.weight
+  - layers.18.post_attention_layernorm.weight
+  - layers.18.self_attn.k_proj.weight
+  - layers.18.self_attn.o_proj.weight
+  - layers.18.self_attn.q_proj.weight
+  - layers.18.self_attn.v_proj.weight
+  - layers.19.input_layernorm.weight
+  - layers.19.mlp.down_proj.weight
+  - layers.19.mlp.gate_proj.weight
+  - layers.19.mlp.up_proj.weight
+  - layers.19.post_attention_layernorm.weight
+  - layers.19.self_attn.k_proj.weight
+  - layers.19.self_attn.o_proj.weight
+  - layers.19.self_attn.q_proj.weight
+  - layers.19.self_attn.v_proj.weight
+  - layers.20.input_layernorm.weight
+  - layers.20.mlp.down_proj.weight
+  - layers.20.mlp.gate_proj.weight
+  - layers.20.mlp.up_proj.weight
+  - layers.20.post_attention_layernorm.weight
+  - layers.20.self_attn.k_proj.weight
+  - layers.20.self_attn.o_proj.weight
+  - layers.20.self_attn.q_proj.weight
+  - layers.20.self_attn.v_proj.weight
+  - layers.21.input_layernorm.weight
+  - layers.21.mlp.down_proj.weight
+  - layers.21.mlp.gate_proj.weight
+  - layers.21.mlp.up_proj.weight
+  - layers.21.post_attention_layernorm.weight
+  - layers.21.self_attn.k_proj.weight
+  - layers.21.self_attn.o_proj.weight
+  - layers.21.self_attn.q_proj.weight
+  - layers.21.self_attn.v_proj.weight
+  - layers.22.input_layernorm.weight
+  - layers.22.mlp.down_proj.weight
+  - layers.22.mlp.gate_proj.weight
+  - layers.22.mlp.up_proj.weight
+  - layers.22.post_attention_layernorm.weight
+  - layers.22.self_attn.k_proj.weight
+  - layers.22.self_attn.o_proj.weight
+  - layers.22.self_attn.q_proj.weight
+  - layers.22.self_attn.v_proj.weight
+  - layers.23.input_layernorm.weight
+  - layers.23.mlp.down_proj.weight
+  - layers.23.mlp.gate_proj.weight
+  - layers.23.mlp.up_proj.weight
+  - layers.23.post_attention_layernorm.weight
+  - layers.23.self_attn.k_proj.weight
+  - layers.23.self_attn.o_proj.weight
+  - layers.23.self_attn.q_proj.weight
+  - layers.23.self_attn.v_proj.weight
+  - layers.24.input_layernorm.weight
+  - layers.24.mlp.down_proj.weight
+  - layers.24.mlp.gate_proj.weight
+  - layers.24.mlp.up_proj.weight
+  - layers.24.post_attention_layernorm.weight
+  - layers.24.self_attn.k_proj.weight
+  - layers.24.self_attn.o_proj.weight
+  - layers.24.self_attn.q_proj.weight
+  - layers.24.self_attn.v_proj.weight
+  - layers.25.input_layernorm.weight
+  - layers.25.mlp.down_proj.weight
+  - layers.25.mlp.gate_proj.weight
+  - layers.25.mlp.up_proj.weight
+  - layers.25.post_attention_layernorm.weight
+  - layers.25.self_attn.k_proj.weight
+  - layers.25.self_attn.o_proj.weight
+  - layers.25.self_attn.q_proj.weight
+  - layers.25.self_attn.v_proj.weight
+  - layers.26.input_layernorm.weight
+  - layers.26.mlp.down_proj.weight
+  - layers.26.mlp.gate_proj.weight
+  - layers.26.mlp.up_proj.weight
+  - layers.26.post_attention_layernorm.weight
+  - layers.26.self_attn.k_proj.weight
+  - layers.26.self_attn.o_proj.weight
+  - layers.26.self_attn.q_proj.weight
+  - layers.26.self_attn.v_proj.weight
+  - layers.27.input_layernorm.weight
+  - layers.27.mlp.down_proj.weight
+  - layers.27.mlp.gate_proj.weight
+  - layers.27.mlp.up_proj.weight
+  - layers.27.post_attention_layernorm.weight
+  - layers.27.self_attn.k_proj.weight
+  - layers.27.self_attn.o_proj.weight
+  - layers.27.self_attn.q_proj.weight
+  - layers.27.self_attn.v_proj.weight
+  - layers.28.input_layernorm.weight
+  - layers.28.mlp.down_proj.weight
+  - layers.28.mlp.gate_proj.weight
+  - layers.28.mlp.up_proj.weight
+  - layers.28.post_attention_layernorm.weight
+  - layers.28.self_attn.k_proj.weight
+  - layers.28.self_attn.o_proj.weight
+  - layers.28.self_attn.q_proj.weight
+  - layers.28.self_attn.v_proj.weight
+  - layers.29.input_layernorm.weight
+  - layers.29.mlp.down_proj.weight
+  - layers.29.mlp.gate_proj.weight
+  - layers.29.mlp.up_proj.weight
+  - layers.29.post_attention_layernorm.weight
+  - layers.29.self_attn.k_proj.weight
+  - layers.29.self_attn.o_proj.weight
+  - layers.29.self_attn.q_proj.weight
+  - layers.29.self_attn.v_proj.weight
+  - layers.30.input_layernorm.weight
+  - layers.30.mlp.down_proj.weight
+  - layers.30.mlp.gate_proj.weight
+  - layers.30.mlp.up_proj.weight
+  - layers.30.post_attention_layernorm.weight
+  - layers.30.self_attn.k_proj.weight
+  - layers.30.self_attn.o_proj.weight
+  - layers.30.self_attn.q_proj.weight
+  - layers.30.self_attn.v_proj.weight
+  - layers.31.input_layernorm.weight
+  - layers.31.mlp.down_proj.weight
+  - layers.31.mlp.gate_proj.weight
+  - layers.31.mlp.up_proj.weight
+  - layers.31.post_attention_layernorm.weight
+  - layers.31.self_attn.k_proj.weight
+  - layers.31.self_attn.o_proj.weight
+  - layers.31.self_attn.q_proj.weight
+  - layers.31.self_attn.v_proj.weight
+  - layers.32.input_layernorm.weight
+  - layers.32.mlp.down_proj.weight
+  - layers.32.mlp.gate_proj.weight
+  - layers.32.mlp.up_proj.weight
+  - layers.32.post_attention_layernorm.weight
+  - layers.32.self_attn.k_proj.weight
+  - layers.32.self_attn.o_proj.weight
+  - layers.32.self_attn.q_proj.weight
+  - layers.32.self_attn.v_proj.weight
+  - layers.33.input_layernorm.weight
+  - layers.33.mlp.down_proj.weight
+  - layers.33.mlp.gate_proj.weight
+  - layers.33.mlp.up_proj.weight
+  - layers.33.post_attention_layernorm.weight
+  - layers.33.self_attn.k_proj.weight
+  - layers.33.self_attn.o_proj.weight
+  - layers.33.self_attn.q_proj.weight
+  - layers.33.self_attn.v_proj.weight
+  - layers.34.input_layernorm.weight
+  - layers.34.mlp.down_proj.weight
+  - layers.34.mlp.gate_proj.weight
+  - layers.34.mlp.up_proj.weight
+  - layers.34.post_attention_layernorm.weight
+  - layers.34.self_attn.k_proj.weight
+  - layers.34.self_attn.o_proj.weight
+  - layers.34.self_attn.q_proj.weight
+  - layers.34.self_attn.v_proj.weight
+  - layers.35.input_layernorm.weight
+  - layers.35.mlp.down_proj.weight
+  - layers.35.mlp.gate_proj.weight
+  - layers.35.mlp.up_proj.weight
+  - layers.35.post_attention_layernorm.weight
+  - layers.35.self_attn.k_proj.weight
+  - layers.35.self_attn.o_proj.weight
+  - layers.35.self_attn.q_proj.weight
+  - layers.35.self_attn.v_proj.weight
+  - layers.36.input_layernorm.weight
+  - layers.36.mlp.down_proj.weight
+  - layers.36.mlp.gate_proj.weight
+  - layers.36.mlp.up_proj.weight
+  - layers.36.post_attention_layernorm.weight
+  - layers.36.self_attn.k_proj.weight
+  - layers.36.self_attn.o_proj.weight
+  - layers.36.self_attn.q_proj.weight
+  - layers.36.self_attn.v_proj.weight
+  - layers.37.input_layernorm.weight
+  - layers.37.mlp.down_proj.weight
+  - layers.37.mlp.gate_proj.weight
+  - layers.37.mlp.up_proj.weight
+  - layers.37.post_attention_layernorm.weight
+  - layers.37.self_attn.k_proj.weight
+  - layers.37.self_attn.o_proj.weight
+  - layers.37.self_attn.q_proj.weight
+  - layers.37.self_attn.v_proj.weight
+  - layers.38.input_layernorm.weight
+  - layers.38.mlp.down_proj.weight
+  - layers.38.mlp.gate_proj.weight
+  - layers.38.mlp.up_proj.weight
+  - layers.38.post_attention_layernorm.weight
+  - layers.38.self_attn.k_proj.weight
+  - layers.38.self_attn.o_proj.weight
+  - layers.38.self_attn.q_proj.weight
+  - layers.38.self_attn.v_proj.weight
+  - layers.39.input_layernorm.weight
+  - layers.39.mlp.down_proj.weight
+  - layers.39.mlp.gate_proj.weight
+  - layers.39.mlp.up_proj.weight
+  - layers.39.post_attention_layernorm.weight
+  - layers.39.self_attn.k_proj.weight
+  - layers.39.self_attn.o_proj.weight
+  - layers.39.self_attn.q_proj.weight
+  - layers.39.self_attn.v_proj.weight
+  - layers.8.input_layernorm.weight
+  - layers.8.mlp.down_proj.weight
+  - layers.8.mlp.gate_proj.weight
+  - layers.8.mlp.up_proj.weight
+  - layers.8.post_attention_layernorm.weight
+  - layers.8.self_attn.k_proj.weight
+  - layers.8.self_attn.o_proj.weight
+  - layers.8.self_attn.q_proj.weight
+  - layers.8.self_attn.v_proj.weight
+  - layers.9.input_layernorm.weight
+  - layers.9.mlp.down_proj.weight
+  - layers.9.mlp.gate_proj.weight
+  - layers.9.mlp.up_proj.weight
+  - layers.9.post_attention_layernorm.weight
+  - layers.9.self_attn.k_proj.weight
+  - layers.9.self_attn.o_proj.weight
+  - layers.9.self_attn.q_proj.weight
+  - layers.9.self_attn.v_proj.weight[transformers] The tokenizer you are loading from '/home/ttuser/.cache/huggingface/hub/models--mistralai--Mistral-Small-24B-Base-2501/snapshots/b0a2e4ed093c26997495ae625528f81ea04b749f' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+Building brisc, compile step:
+/home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/optimizers/adamw/device/kernels/dataflow -include /home/ttuser/.cache/tt-metal-cache/pch/2d26ef525aaf937f/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DAMSGRAD=0 -DSTOCH_ROUND=0 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_adamw/11708888534112873790/" -DKERNEL_COMPILE_TIME_ARGS=2,2,2048,2,2048,2,2048,0,0 -c -o /home/ttuser/.cache/tt-metal-cache/18093610123397052272/kernels/writer_adamw/11708888534112873790/brisc/brisck.821292969676192985_368777.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/ttuser/.cache/tt-metal-cache/18093610123397052272/kernels/writer_adamw/11708888534112873790/brisc/brisck.821292969676192985_368777.d
+In file included from ../kernel_includes.hpp:2,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/optimizers/adamw/device/kernels/dataflow/writer_adamw.cpp: In function 'void kernel_main()':
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/optimizers/adamw/device/kernels/dataflow/writer_adamw.cpp:36:16: warning: variable 'max_exp_avg_sq_out_addr_gen' set but not used [-Wunused-but-set-variable]
+   36 |     const auto max_exp_avg_sq_out_addr_gen = TensorAccessor(max_exp_avg_sq_out_args, max_exp_avg_sq_addr);
+      |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/home/ttuser/agobeljic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/home/ttuser/agobeljic/tt-metal/ -I/home/ttuser/agobeljic/tt-metal/ttnn -I/home/ttuser/agobeljic/tt-metal/ttnn/cpp -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tools/include -I/home/ttuser/agobeljic/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/agobeljic/tt-metal/tt_metal/api/ -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/agobeljic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/optimizers/adamw/device/kernels/dataflow -include /home/ttuser/.cache/tt-metal-cache/pch/2d26ef525aaf937f/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DAMSGRAD=0 -DSTOCH_ROUND=0 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_adamw/15855321937656265045/" -DKERNEL_COMPILE_TIME_ARGS=2,2,2048,2,2048,2,2048,2,2048,0,0 -c -o /home/ttuser/.cache/tt-metal-cache/18093610123397052272/kernels/reader_adamw/15855321937656265045/ncrisc/ncrisck.821292969676192985_368777.o /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/ttuser/.cache/tt-metal-cache/18093610123397052272/kernels/reader_adamw/15855321937656265045/ncrisc/ncrisck.821292969676192985_368777.d
+In file included from ../kernel_includes.hpp:2,
+                 from /home/ttuser/agobeljic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/optimizers/adamw/device/kernels/dataflow/reader_adamw.cpp: In function 'void kernel_main()':
+/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/metal/optimizers/adamw/device/kernels/dataflow/reader_adamw.cpp:44:16: warning: variable 'max_exp_avg_sq_addr_gen' set but not used [-Wunused-but-set-variable]
+   44 |     const auto max_exp_avg_sq_addr_gen = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr);
+      |                ^~~~~~~~~~~~~~~~~~~~~~~
+
+LoRA rank 16 alpha 32.0: 16.5M trainable parameters
+useful FLOPs/step 21.473 T (8 layers), peak 148.5 TFLOP/s
+step    1/10  loss 12.1250    2342.2 ms
+step    2/10  loss 11.9375     426.1 ms
+step    3/10  loss 11.3125     433.1 ms
+step    4/10  loss 10.4375     434.2 ms
+step    5/10  loss 9.7500     435.3 ms
+step    6/10  loss 9.8750     435.2 ms
+step    7/10  loss 9.2500     432.4 ms
+step    8/10  loss 8.6875     435.4 ms
+step    9/10  loss 8.9375     433.6 ms
+step   10/10  loss 8.5625     433.1 ms
+8 of 40 layers: 434.0 ms/step over 8 steps (best 432.4), 49.5 TFLOP/s, MFU 33.32%
+=== Memory Usage Summary ===
+
+--- FIRST_STEP ---
+  DRAM: Segment Peak 0.00 MB, Allocations 0.00 MB, Deallocations 0.00 MB, Segment Change +0.00 MB
+  DRAM: Cumulative Peak 0.00 MB, Cumulative Current 0.00 MB
+  L1: Peak CB 0.00 MB, Peak Buffer 0.00 MB, Peak Total 0.00 MB
+
+=== Final Totals ===
+Overall DRAM Peak: 0.00 MB, Final DRAM Usage: 0.00 MB
+
+2026-10-29 09:18:34.475 | info     |    BuildKernels | JIT cache stats: 400/422 hits (94.8%) [400 cached, 112 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-29 09:18:34.475 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-29 09:18:34.495 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-29 09:18:34.495 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-29 09:18:34.742 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-29 09:18:34.742 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-29 09:18:34.742 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+rc=0

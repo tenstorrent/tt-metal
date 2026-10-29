@@ -1,0 +1,15 @@
+=== harness at final iteration-2 code 2026-10-29T13:08:33Z
+rc=0
+================== 13 passed, 2 warnings in 161.50s (0:02:41) ==================
+=== TP smoke 2 layers 2026-10-29T13:11:18Z
+rc=0
+Mistral: 2 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+frozen weights stored transposed: 5 linears
+2 of 40 layers, tp 4: 41.6 ms/step over 2 steps (best 41.2), 178.5 TFLOP/s, MFU 30.05%
+=== iter2c_transposed_tp TP=4 MFU after 420s cool-down 2026-10-29T13:11:45Z
+rc=0
+40 of 40 layers, tp 4: 564.5 ms/step over 6 steps (best 561.5), 170.7 TFLOP/s, MFU 28.74%
+=== iter2c_transposed_tp TP=4 Tracy 4 layers 2026-10-29T13:22:08Z
+rc=0
+4 of 40 layers, tp 4: 70.5 ms/step over 2 steps (best 70.3), 171.7 TFLOP/s, MFU 28.91%
+=== done 2026-10-29T13:23:30Z

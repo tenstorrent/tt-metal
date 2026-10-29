@@ -1,0 +1,129 @@
+2026-10-29 12:19:00.722 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+Fetching 18 files:   0%|          | 0/18 [00:00<?, ?it/s]Fetching 18 files: 100%|██████████| 18/18 [00:00<00:00, 55553.70it/s]
+[tt-train] Inferred fabric config 7 from MGD dim_types
+2026-10-29 12:19:01.614 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-29 12:19:01.614 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-29 12:19:01.614 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-29 12:19:01.614 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-29 12:19:01.625 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-29 12:19:01.626 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-29 12:19:01.705 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-29 12:19:01.705 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-29 12:19:01.705 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-29 12:19:01.705 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-29 12:19:01.707 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-29 12:19:01.934 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-29 12:19:01.968 | info     |     Distributed | Using custom mesh graph descriptor: /home/ttuser/agobeljic/tt-metal/tt-train/configs/mgd/bh_p300x2_1_4_ring_ring.textproto (metal_env.cpp:533)
+2026-10-29 12:19:01.968 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-29 12:19:01.969 | warning  |          Fabric | Physical groupings: Mesh graph descriptor 'M0': no PGD grouping could be placed on the PSD (4 topology match(es)); continuing without pinning hints for this mesh (physical_grouping_descriptor_matching.cpp:1848)
+2026-10-29 12:19:02.013 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-29 12:19:02.013 | info     |          Fabric | mesh 0 shape 1x4: axis topologies derived as Y=LINE X=RING (control_plane.cpp:2606)
+2026-10-29 12:19:02.050 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-10-29 12:19:02.050 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_2D_TORUS_XY (fabric_firmware_initializer.cpp:336)
+2026-10-29 12:22:17.379 | critical |          Always | TT_FATAL: The k dimension does not match between tensors (assert.hpp:104)
+Mistral: 40 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+MGD validated: dims=[1, 4], file=/home/ttuser/agobeljic/tt-metal/tt-train/configs/mgd/bh_p300x2_1_4_ring_ring.textproto
+frozen weights stored transposed: 161 linears
+LoRA rank 16 alpha 32.0: 30.5M trainable parameters
+useful FLOPs/step 96.371 T (40 layers), peak 594.0 TFLOP/s (4 chips)
+Traceback (most recent call last):
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/examples/mistral_train/train.py", line 285, in <module>
+    main()
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/examples/mistral_train/train.py", line 212, in main
+    logits = model(x, None)
+             ^^^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/modules/module_base.py", line 117, in __call__
+    return self.forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/modules/lora.py", line 422, in forward
+    return self.model(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/modules/module_base.py", line 117, in __call__
+    return self.forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/llama/__init__.py", line 386, in forward
+    logits = self.fc(out)
+             ^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/modules/module_base.py", line 117, in __call__
+    return self.forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/modules/linear.py", line 133, in forward
+    x = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/config/matmul_program_config.cpp:459: inteneded_k_size_of_a == inteneded_k_size_of_b
+info:
+The k dimension does not match between tensors
+backtrace:
+ --- /home/ttuser/agobeljic/tt-metal/ttnn/ttnn/_ttnn.so(+0x806073) [0x7c3e00c06073]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x1360a41) [0x7c3dfe560a41]
+ --- ttnn::operations::matmul::get_program_config(ttnn::Tensor const&, ttnn::Tensor const&, bool, bool, unsigned int, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(+0x12c888d) [0x7c3dfe4c888d]
+ --- /home/ttuser/agobeljic/tt-metal/build_Release/ttnn/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEERKSt6vectorISt10shared_ptrINS1M_14PrefetcherPipeEESaIS22_EES5_IjE+0x363) [0x7c3dfe4cad73]
+ --- ttml::ops::linear_op(std::shared_ptr<ttml::autograd::Tensor> const&, std::shared_ptr<ttml::autograd::Tensor> const&, std::shared_ptr<ttml::autograd::Tensor> const&)
+ --- /home/ttuser/agobeljic/tt-metal/build/tt-train/sources/ttml/_ttml.abi3.so(+0x1a475b) [0x7c3dc61a475b]
+ --- /home/ttuser/agobeljic/tt-metal/build/tt-train/sources/ttml/_ttml.abi3.so(+0x1d650e) [0x7c3dc61d650e]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x3133) [0x18154f3]
+ --- ../python_env/bin/python() [0x181199a]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x537f) [0x181773f]
+ --- ../python_env/bin/python(_PyObject_Call_Prepend+0xa0) [0x1890428]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python() [0x181199a]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x537f) [0x181773f]
+ --- ../python_env/bin/python(_PyObject_Call_Prepend+0xa0) [0x1890428]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x5466) [0x1817826]
+ --- ../python_env/bin/python() [0x181199a]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x537f) [0x181773f]
+ --- ../python_env/bin/python(_PyObject_Call_Prepend+0xa0) [0x1890428]
+ --- ../python_env/bin/python() [0x1890366]
+ --- ../python_env/bin/python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815368]
+ --- ../python_env/bin/python(PyEval_EvalCode+0xde) [0x187cd9e]
+ --- ../python_env/bin/python() [0x18bb609]
+ --- ../python_env/bin/python() [0x19f8885]
+ --- ../python_env/bin/python(_PyRun_SimpleFileObject+0x106) [0x19f8646]
+ --- ../python_env/bin/python(_PyRun_AnyFileObject+0x4a) [0x19f83ca]
+ --- ../python_env/bin/python() [0x19f8350]
+ --- ../python_env/bin/python() [0x19f825d]
+ --- ../python_env/bin/python() [0x1ae65e3]
+ --- ../python_env/bin/python() [0x1972218]
+ --- ../python_env/bin/python() [0x197202c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7c3e2b7a71ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7c3e2b7a728b]
+ --- ../python_env/bin/python(_start+0x29) [0x19bf069]
+
+nanobind: leaked 1681 instances!
+nanobind: leaked 1040 keep_alive records!
+nanobind: leaked 20 types!
+ - leaked type "PreferredPrecision"
+ - leaked type "RunMode"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "_ttml.modules.ModuleBase"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - leaked type "TensorMemoryLayout"
+ - ... skipped remainder
+nanobind: leaked 265 functions!
+ - leaked function ""
+ - leaked function "to_json"
+ - leaked function "buffer_num_pages"
+ - leaked function ""
+ - leaked function "override_module"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "buffer_aligned_page_size"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-10-29 12:22:17.844 | info     |    BuildKernels | JIT cache stats: 359/359 hits (100.0%) [359 cached, 147 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-29 12:22:17.844 | info     |    BuildKernels | JIT telemetry: 32 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-29 12:22:17.859 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-29 12:22:17.859 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-29 12:22:17.970 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-29 12:22:17.970 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-29 12:22:17.970 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

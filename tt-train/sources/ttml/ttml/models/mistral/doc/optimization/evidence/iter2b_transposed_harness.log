@@ -1,0 +1,566 @@
+2026-10-29 12:27:48.258 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/agobeljic/tt-metal/tt-train/../python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/agobeljic/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, dash-2.15.0, anyio-4.15.1, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 13 items
+
+tests/python/test_mistral.py::test_rmsnorm_forward_and_gradients 2026-10-29 12:27:48.543 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-29 12:27:48.543 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-29 12:27:48.543 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-29 12:27:48.543 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-29 12:27:48.554 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-29 12:27:48.554 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-29 12:27:48.634 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-29 12:27:48.634 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-29 12:27:48.634 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-29 12:27:48.634 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-29 12:27:48.636 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-29 12:27:48.898 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-29 12:27:48.932 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-29 12:27:48.932 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-29 12:27:48.932 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-29 12:27:48.972 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+rmsnorm: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999998 2.44e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999996 4.41e-03  (>= 0.99, <= 0.05) ok
+  dgamma                       (1, 1, 1, 5120)          0.999994 4.73e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_rmsnorm_frozen_gamma_gets_no_gradient PASSED
+tests/python/test_mistral.py::test_attention_forward_and_gradients attention (qkv, heads, rope, causal GQA sdpa, concat, out-proj): tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999989 4.81e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999984 6.00e-03  (>= 0.98, <= 0.08) ok
+  d w_qkv                      (6144, 5120)             0.999984 5.99e-03  (>= 0.98, <= 0.08) ok
+  d w_out                      (5120, 4096)             0.999989 4.83e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_mlp_forward_and_gradients mlp (gate_up, swiglu_packed, down): tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999992 3.97e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999990 4.48e-03  (>= 0.99, <= 0.05) ok
+  d w_gate_up                  (65536, 5120)            0.999990 4.48e-03  (>= 0.99, <= 0.05) ok
+  d w2                         (5120, 32768)            0.999992 3.96e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_lora_linear_forward_and_gradients_frozen_base lora linear (qkv shape): tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 6144)       0.999997 2.41e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999997 2.40e-03  (>= 0.99, <= 0.05) ok
+  d lora_A                     (16, 5120)               0.999997 2.39e-03  (>= 0.99, <= 0.05) ok
+  d lora_B                     (6144, 16)               0.999997 2.40e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[weights [out,in]] decoder block under LoRA: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.999991 4.58e-03  (>= 0.999, <= 0.02) ok
+  dx                           (1, 1, 1024, 5120)       0.999981 7.07e-03  (>= 0.98, <= 0.08) ok
+  d lora_A qkv_linear          (16, 5120)               0.999946 1.54e-02  (>= 0.98, <= 0.08) ok
+  d lora_B qkv_linear          (6144, 16)               0.999947 1.50e-02  (>= 0.98, <= 0.08) ok
+  d lora_A out_linear          (16, 4096)               0.999958 1.14e-02  (>= 0.98, <= 0.08) ok
+  d lora_B out_linear          (5120, 16)               0.999961 1.18e-02  (>= 0.98, <= 0.08) ok
+  d lora_A w_gate_up           (16, 5120)               0.999976 8.47e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w_gate_up           (65536, 16)              0.999976 8.48e-03  (>= 0.99, <= 0.05) ok
+  d lora_A w2                  (16, 32768)              0.999978 8.07e-03  (>= 0.99, <= 0.05) ok
+  d lora_B w2                  (5120, 16)               0.999979 8.02e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[frozen weights transposed] FAILED
+tests/python/test_mistral.py::test_frozen_embedding_matches_the_ttml_op frozen embedding: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       1.000000 0.00e+00  (>= 1.0, <= 0.0) ok
+  out vs table rows            (1, 1, 1024, 5120)       1.000000 0.00e+00  (>= 1.0, <= 0.0) ok
+PASSED
+tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients[weights [out,in]] lm head + cross-entropy (frozen head): tensor | shape | PCC | rel err | bar
+  logits                       (1, 1, 1024, 131072)     0.999999 1.68e-03  (>= 0.999, <= 0.02) ok
+  loss                         (1,)                     0.000000 8.63e-04  (>= 0.0, <= 0.01) ok
+  dx                           (1, 1, 1024, 5120)       0.999999 4.23e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients[frozen weights transposed] lm head + cross-entropy (frozen head): tensor | shape | PCC | rel err | bar
+  logits                       (1, 1, 1024, 131072)     0.999999 1.68e-03  (>= 0.999, <= 0.02) ok
+  loss                         (1,)                     0.000000 8.63e-04  (>= 0.0, <= 0.01) ok
+  dx                           (1, 1, 1024, 5120)       0.999999 4.23e-03  (>= 0.99, <= 0.05) ok
+PASSED
+tests/python/test_mistral.py::test_config_from_hf_reads_mistral 2026-10-29 12:29:41.777 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="sliding_window"
+2026-10-29 12:29:41.777 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="sliding_window"
+2026-10-29 12:29:41.777 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="not a Mistral"
+2026-10-29 12:29:41.778 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="not a Mistral"
+PASSED
+tests/python/test_mistral.py::test_useful_flops_match_the_plan PASSED
+tests/python/test_mistral.py::test_logits_match_huggingface[2] Loaded 15 parameters.
+Note: 342 checkpoint tensors were not used:
+  - layers.10.input_layernorm.weight
+  - layers.10.mlp.down_proj.weight
+  - layers.10.mlp.gate_proj.weight
+  - layers.10.mlp.up_proj.weight
+  - layers.10.post_attention_layernorm.weight
+  - layers.10.self_attn.k_proj.weight
+  - layers.10.self_attn.o_proj.weight
+  - layers.10.self_attn.q_proj.weight
+  - layers.10.self_attn.v_proj.weight
+  - layers.11.input_layernorm.weight
+  - layers.11.mlp.down_proj.weight
+  - layers.11.mlp.gate_proj.weight
+  - layers.11.mlp.up_proj.weight
+  - layers.11.post_attention_layernorm.weight
+  - layers.11.self_attn.k_proj.weight
+  - layers.11.self_attn.o_proj.weight
+  - layers.11.self_attn.q_proj.weight
+  - layers.11.self_attn.v_proj.weight
+  - layers.12.input_layernorm.weight
+  - layers.12.mlp.down_proj.weight
+  - layers.12.mlp.gate_proj.weight
+  - layers.12.mlp.up_proj.weight
+  - layers.12.post_attention_layernorm.weight
+  - layers.12.self_attn.k_proj.weight
+  - layers.12.self_attn.o_proj.weight
+  - layers.12.self_attn.q_proj.weight
+  - layers.12.self_attn.v_proj.weight
+  - layers.13.input_layernorm.weight
+  - layers.13.mlp.down_proj.weight
+  - layers.13.mlp.gate_proj.weight
+  - layers.13.mlp.up_proj.weight
+  - layers.13.post_attention_layernorm.weight
+  - layers.13.self_attn.k_proj.weight
+  - layers.13.self_attn.o_proj.weight
+  - layers.13.self_attn.q_proj.weight
+  - layers.13.self_attn.v_proj.weight
+  - layers.14.input_layernorm.weight
+  - layers.14.mlp.down_proj.weight
+  - layers.14.mlp.gate_proj.weight
+  - layers.14.mlp.up_proj.weight
+  - layers.14.post_attention_layernorm.weight
+  - layers.14.self_attn.k_proj.weight
+  - layers.14.self_attn.o_proj.weight
+  - layers.14.self_attn.q_proj.weight
+  - layers.14.self_attn.v_proj.weight
+  - layers.15.input_layernorm.weight
+  - layers.15.mlp.down_proj.weight
+  - layers.15.mlp.gate_proj.weight
+  - layers.15.mlp.up_proj.weight
+  - layers.15.post_attention_layernorm.weight
+  - layers.15.self_attn.k_proj.weight
+  - layers.15.self_attn.o_proj.weight
+  - layers.15.self_attn.q_proj.weight
+  - layers.15.self_attn.v_proj.weight
+  - layers.16.input_layernorm.weight
+  - layers.16.mlp.down_proj.weight
+  - layers.16.mlp.gate_proj.weight
+  - layers.16.mlp.up_proj.weight
+  - layers.16.post_attention_layernorm.weight
+  - layers.16.self_attn.k_proj.weight
+  - layers.16.self_attn.o_proj.weight
+  - layers.16.self_attn.q_proj.weight
+  - layers.16.self_attn.v_proj.weight
+  - layers.17.input_layernorm.weight
+  - layers.17.mlp.down_proj.weight
+  - layers.17.mlp.gate_proj.weight
+  - layers.17.mlp.up_proj.weight
+  - layers.17.post_attention_layernorm.weight
+  - layers.17.self_attn.k_proj.weight
+  - layers.17.self_attn.o_proj.weight
+  - layers.17.self_attn.q_proj.weight
+  - layers.17.self_attn.v_proj.weight
+  - layers.18.input_layernorm.weight
+  - layers.18.mlp.down_proj.weight
+  - layers.18.mlp.gate_proj.weight
+  - layers.18.mlp.up_proj.weight
+  - layers.18.post_attention_layernorm.weight
+  - layers.18.self_attn.k_proj.weight
+  - layers.18.self_attn.o_proj.weight
+  - layers.18.self_attn.q_proj.weight
+  - layers.18.self_attn.v_proj.weight
+  - layers.19.input_layernorm.weight
+  - layers.19.mlp.down_proj.weight
+  - layers.19.mlp.gate_proj.weight
+  - layers.19.mlp.up_proj.weight
+  - layers.19.post_attention_layernorm.weight
+  - layers.19.self_attn.k_proj.weight
+  - layers.19.self_attn.o_proj.weight
+  - layers.19.self_attn.q_proj.weight
+  - layers.19.self_attn.v_proj.weight
+  - layers.2.input_layernorm.weight
+  - layers.2.mlp.down_proj.weight
+  - layers.2.mlp.gate_proj.weight
+  - layers.2.mlp.up_proj.weight
+  - layers.2.post_attention_layernorm.weight
+  - layers.2.self_attn.k_proj.weight
+  - layers.2.self_attn.o_proj.weight
+  - layers.2.self_attn.q_proj.weight
+  - layers.2.self_attn.v_proj.weight
+  - layers.20.input_layernorm.weight
+  - layers.20.mlp.down_proj.weight
+  - layers.20.mlp.gate_proj.weight
+  - layers.20.mlp.up_proj.weight
+  - layers.20.post_attention_layernorm.weight
+  - layers.20.self_attn.k_proj.weight
+  - layers.20.self_attn.o_proj.weight
+  - layers.20.self_attn.q_proj.weight
+  - layers.20.self_attn.v_proj.weight
+  - layers.21.input_layernorm.weight
+  - layers.21.mlp.down_proj.weight
+  - layers.21.mlp.gate_proj.weight
+  - layers.21.mlp.up_proj.weight
+  - layers.21.post_attention_layernorm.weight
+  - layers.21.self_attn.k_proj.weight
+  - layers.21.self_attn.o_proj.weight
+  - layers.21.self_attn.q_proj.weight
+  - layers.21.self_attn.v_proj.weight
+  - layers.22.input_layernorm.weight
+  - layers.22.mlp.down_proj.weight
+  - layers.22.mlp.gate_proj.weight
+  - layers.22.mlp.up_proj.weight
+  - layers.22.post_attention_layernorm.weight
+  - layers.22.self_attn.k_proj.weight
+  - layers.22.self_attn.o_proj.weight
+  - layers.22.self_attn.q_proj.weight
+  - layers.22.self_attn.v_proj.weight
+  - layers.23.input_layernorm.weight
+  - layers.23.mlp.down_proj.weight
+  - layers.23.mlp.gate_proj.weight
+  - layers.23.mlp.up_proj.weight
+  - layers.23.post_attention_layernorm.weight
+  - layers.23.self_attn.k_proj.weight
+  - layers.23.self_attn.o_proj.weight
+  - layers.23.self_attn.q_proj.weight
+  - layers.23.self_attn.v_proj.weight
+  - layers.24.input_layernorm.weight
+  - layers.24.mlp.down_proj.weight
+  - layers.24.mlp.gate_proj.weight
+  - layers.24.mlp.up_proj.weight
+  - layers.24.post_attention_layernorm.weight
+  - layers.24.self_attn.k_proj.weight
+  - layers.24.self_attn.o_proj.weight
+  - layers.24.self_attn.q_proj.weight
+  - layers.24.self_attn.v_proj.weight
+  - layers.25.input_layernorm.weight
+  - layers.25.mlp.down_proj.weight
+  - layers.25.mlp.gate_proj.weight
+  - layers.25.mlp.up_proj.weight
+  - layers.25.post_attention_layernorm.weight
+  - layers.25.self_attn.k_proj.weight
+  - layers.25.self_attn.o_proj.weight
+  - layers.25.self_attn.q_proj.weight
+  - layers.25.self_attn.v_proj.weight
+  - layers.26.input_layernorm.weight
+  - layers.26.mlp.down_proj.weight
+  - layers.26.mlp.gate_proj.weight
+  - layers.26.mlp.up_proj.weight
+  - layers.26.post_attention_layernorm.weight
+  - layers.26.self_attn.k_proj.weight
+  - layers.26.self_attn.o_proj.weight
+  - layers.26.self_attn.q_proj.weight
+  - layers.26.self_attn.v_proj.weight
+  - layers.27.input_layernorm.weight
+  - layers.27.mlp.down_proj.weight
+  - layers.27.mlp.gate_proj.weight
+  - layers.27.mlp.up_proj.weight
+  - layers.27.post_attention_layernorm.weight
+  - layers.27.self_attn.k_proj.weight
+  - layers.27.self_attn.o_proj.weight
+  - layers.27.self_attn.q_proj.weight
+  - layers.27.self_attn.v_proj.weight
+  - layers.28.input_layernorm.weight
+  - layers.28.mlp.down_proj.weight
+  - layers.28.mlp.gate_proj.weight
+  - layers.28.mlp.up_proj.weight
+  - layers.28.post_attention_layernorm.weight
+  - layers.28.self_attn.k_proj.weight
+  - layers.28.self_attn.o_proj.weight
+  - layers.28.self_attn.q_proj.weight
+  - layers.28.self_attn.v_proj.weight
+  - layers.29.input_layernorm.weight
+  - layers.29.mlp.down_proj.weight
+  - layers.29.mlp.gate_proj.weight
+  - layers.29.mlp.up_proj.weight
+  - layers.29.post_attention_layernorm.weight
+  - layers.29.self_attn.k_proj.weight
+  - layers.29.self_attn.o_proj.weight
+  - layers.29.self_attn.q_proj.weight
+  - layers.29.self_attn.v_proj.weight
+  - layers.3.input_layernorm.weight
+  - layers.3.mlp.down_proj.weight
+  - layers.3.mlp.gate_proj.weight
+  - layers.3.mlp.up_proj.weight
+  - layers.3.post_attention_layernorm.weight
+  - layers.3.self_attn.k_proj.weight
+  - layers.3.self_attn.o_proj.weight
+  - layers.3.self_attn.q_proj.weight
+  - layers.3.self_attn.v_proj.weight
+  - layers.30.input_layernorm.weight
+  - layers.30.mlp.down_proj.weight
+  - layers.30.mlp.gate_proj.weight
+  - layers.30.mlp.up_proj.weight
+  - layers.30.post_attention_layernorm.weight
+  - layers.30.self_attn.k_proj.weight
+  - layers.30.self_attn.o_proj.weight
+  - layers.30.self_attn.q_proj.weight
+  - layers.30.self_attn.v_proj.weight
+  - layers.31.input_layernorm.weight
+  - layers.31.mlp.down_proj.weight
+  - layers.31.mlp.gate_proj.weight
+  - layers.31.mlp.up_proj.weight
+  - layers.31.post_attention_layernorm.weight
+  - layers.31.self_attn.k_proj.weight
+  - layers.31.self_attn.o_proj.weight
+  - layers.31.self_attn.q_proj.weight
+  - layers.31.self_attn.v_proj.weight
+  - layers.32.input_layernorm.weight
+  - layers.32.mlp.down_proj.weight
+  - layers.32.mlp.gate_proj.weight
+  - layers.32.mlp.up_proj.weight
+  - layers.32.post_attention_layernorm.weight
+  - layers.32.self_attn.k_proj.weight
+  - layers.32.self_attn.o_proj.weight
+  - layers.32.self_attn.q_proj.weight
+  - layers.32.self_attn.v_proj.weight
+  - layers.33.input_layernorm.weight
+  - layers.33.mlp.down_proj.weight
+  - layers.33.mlp.gate_proj.weight
+  - layers.33.mlp.up_proj.weight
+  - layers.33.post_attention_layernorm.weight
+  - layers.33.self_attn.k_proj.weight
+  - layers.33.self_attn.o_proj.weight
+  - layers.33.self_attn.q_proj.weight
+  - layers.33.self_attn.v_proj.weight
+  - layers.34.input_layernorm.weight
+  - layers.34.mlp.down_proj.weight
+  - layers.34.mlp.gate_proj.weight
+  - layers.34.mlp.up_proj.weight
+  - layers.34.post_attention_layernorm.weight
+  - layers.34.self_attn.k_proj.weight
+  - layers.34.self_attn.o_proj.weight
+  - layers.34.self_attn.q_proj.weight
+  - layers.34.self_attn.v_proj.weight
+  - layers.35.input_layernorm.weight
+  - layers.35.mlp.down_proj.weight
+  - layers.35.mlp.gate_proj.weight
+  - layers.35.mlp.up_proj.weight
+  - layers.35.post_attention_layernorm.weight
+  - layers.35.self_attn.k_proj.weight
+  - layers.35.self_attn.o_proj.weight
+  - layers.35.self_attn.q_proj.weight
+  - layers.35.self_attn.v_proj.weight
+  - layers.36.input_layernorm.weight
+  - layers.36.mlp.down_proj.weight
+  - layers.36.mlp.gate_proj.weight
+  - layers.36.mlp.up_proj.weight
+  - layers.36.post_attention_layernorm.weight
+  - layers.36.self_attn.k_proj.weight
+  - layers.36.self_attn.o_proj.weight
+  - layers.36.self_attn.q_proj.weight
+  - layers.36.self_attn.v_proj.weight
+  - layers.37.input_layernorm.weight
+  - layers.37.mlp.down_proj.weight
+  - layers.37.mlp.gate_proj.weight
+  - layers.37.mlp.up_proj.weight
+  - layers.37.post_attention_layernorm.weight
+  - layers.37.self_attn.k_proj.weight
+  - layers.37.self_attn.o_proj.weight
+  - layers.37.self_attn.q_proj.weight
+  - layers.37.self_attn.v_proj.weight
+  - layers.38.input_layernorm.weight
+  - layers.38.mlp.down_proj.weight
+  - layers.38.mlp.gate_proj.weight
+  - layers.38.mlp.up_proj.weight
+  - layers.38.post_attention_layernorm.weight
+  - layers.38.self_attn.k_proj.weight
+  - layers.38.self_attn.o_proj.weight
+  - layers.38.self_attn.q_proj.weight
+  - layers.38.self_attn.v_proj.weight
+  - layers.39.input_layernorm.weight
+  - layers.39.mlp.down_proj.weight
+  - layers.39.mlp.gate_proj.weight
+  - layers.39.mlp.up_proj.weight
+  - layers.39.post_attention_layernorm.weight
+  - layers.39.self_attn.k_proj.weight
+  - layers.39.self_attn.o_proj.weight
+  - layers.39.self_attn.q_proj.weight
+  - layers.39.self_attn.v_proj.weight
+  - layers.4.input_layernorm.weight
+  - layers.4.mlp.down_proj.weight
+  - layers.4.mlp.gate_proj.weight
+  - layers.4.mlp.up_proj.weight
+  - layers.4.post_attention_layernorm.weight
+  - layers.4.self_attn.k_proj.weight
+  - layers.4.self_attn.o_proj.weight
+  - layers.4.self_attn.q_proj.weight
+  - layers.4.self_attn.v_proj.weight
+  - layers.5.input_layernorm.weight
+  - layers.5.mlp.down_proj.weight
+  - layers.5.mlp.gate_proj.weight
+  - layers.5.mlp.up_proj.weight
+  - layers.5.post_attention_layernorm.weight
+  - layers.5.self_attn.k_proj.weight
+  - layers.5.self_attn.o_proj.weight
+  - layers.5.self_attn.q_proj.weight
+  - layers.5.self_attn.v_proj.weight
+  - layers.6.input_layernorm.weight
+  - layers.6.mlp.down_proj.weight
+  - layers.6.mlp.gate_proj.weight
+  - layers.6.mlp.up_proj.weight
+  - layers.6.post_attention_layernorm.weight
+  - layers.6.self_attn.k_proj.weight
+  - layers.6.self_attn.o_proj.weight
+  - layers.6.self_attn.q_proj.weight
+  - layers.6.self_attn.v_proj.weight
+  - layers.7.input_layernorm.weight
+  - layers.7.mlp.down_proj.weight
+  - layers.7.mlp.gate_proj.weight
+  - layers.7.mlp.up_proj.weight
+  - layers.7.post_attention_layernorm.weight
+  - layers.7.self_attn.k_proj.weight
+  - layers.7.self_attn.o_proj.weight
+  - layers.7.self_attn.q_proj.weight
+  - layers.7.self_attn.v_proj.weight
+  - layers.8.input_layernorm.weight
+  - layers.8.mlp.down_proj.weight
+  - layers.8.mlp.gate_proj.weight
+  - layers.8.mlp.up_proj.weight
+  - layers.8.post_attention_layernorm.weight
+  - layers.8.self_attn.k_proj.weight
+  - layers.8.self_attn.o_proj.weight
+  - layers.8.self_attn.q_proj.weight
+  - layers.8.self_attn.v_proj.weight
+  - layers.9.input_layernorm.weight
+  - layers.9.mlp.down_proj.weight
+  - layers.9.mlp.gate_proj.weight
+  - layers.9.mlp.up_proj.weight
+  - layers.9.post_attention_layernorm.weight
+  - layers.9.self_attn.k_proj.weight
+  - layers.9.self_attn.o_proj.weight
+  - layers.9.self_attn.q_proj.weight
+  - layers.9.self_attn.v_proj.weight[transformers] The tokenizer you are loading from '/home/ttuser/.cache/huggingface/hub/models--mistralai--Mistral-Small-24B-Base-2501/snapshots/b0a2e4ed093c26997495ae625528f81ea04b749f' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+
+Loading weights:   0%|          | 0/21 [00:00<?, ?it/s]Loading weights:   5%|▍         | 1/21 [00:00<00:19,  1.01it/s]Loading weights: 100%|██████████| 21/21 [00:01<00:00, 19.51it/s]
+[transformers] [1mMistralForCausalLM LOAD REPORT[0m from: /home/ttuser/.cache/huggingface/hub/models--mistralai--Mistral-Small-24B-Base-2501/snapshots/b0a2e4ed093c26997495ae625528f81ea04b749f
+Key                                                   | Status     |  |
+------------------------------------------------------+------------+--+-
+model.layers.{2...39}.self_attn.k_proj.weight         | UNEXPECTED |  |
+model.layers.{2...39}.mlp.down_proj.weight            | UNEXPECTED |  |
+model.layers.{2...39}.self_attn.o_proj.weight         | UNEXPECTED |  |
+model.layers.{2...39}.self_attn.q_proj.weight         | UNEXPECTED |  |
+model.layers.{2...39}.input_layernorm.weight          | UNEXPECTED |  |
+model.layers.{2...39}.mlp.gate_proj.weight            | UNEXPECTED |  |
+model.layers.{2...39}.mlp.up_proj.weight              | UNEXPECTED |  |
+model.layers.{2...39}.post_attention_layernorm.weight | UNEXPECTED |  |
+model.layers.{2...39}.self_attn.v_proj.weight         | UNEXPECTED |  |
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+checkpoint logits, 2 of 40 layers: tensor | shape | PCC | rel err | bar
+  logits                       (1, 1, 1024, 131072)     0.999976 5.77e-03  (>= 0.999, <= 0.03) ok
+PASSED
+
+=================================== FAILURES ===================================
+____ test_block_forward_and_gradients_under_lora[frozen weights transposed] ____
+
+transposed = True
+
+    @pytest.mark.parametrize("transposed", [False, True], ids=["weights [out,in]", "frozen weights transposed"])
+    def test_block_forward_and_gradients_under_lora(transposed):
+        """A whole decoder block at real shapes with LoRA on its four linears: output, dx, every adapter gradient;
+        base weights and gammas frozen and gradient-free. ``transposed`` runs the base projections through the
+        transposed-weight path (``transpose_frozen_weights``) the training example uses."""
+        rng = seeded(6)
+        x_np = rand_x(rng)
+        gammas = [bf16(rng.normal(1.0, 0.1, (1, 1, 1, HIDDEN))) for _ in range(2)]
+        w_qkv = rand_weight(rng, (HEADS + 2 * KV_HEADS) * HEAD_DIM, HIDDEN)
+        w_out = rand_weight(rng, HIDDEN, HEADS * HEAD_DIM, std=0.02)
+        w_gu = rand_weight(rng, 2 * INTER, HIDDEN)
+        w2 = rand_weight(rng, HIDDEN, INTER, std=0.004)
+        dout_np = rand_x(rng, std=0.01)
+        shapes = {
+            "qkv_linear": (HIDDEN, w_qkv.shape[2]),
+            "out_linear": (HEADS * HEAD_DIM, HIDDEN),
+            "w_gate_up": (HIDDEN, 2 * INTER),
+            "w2": (INTER, HIDDEN),
+        }
+        adapters = {
+            name: (
+                bf16(rng.uniform(-1 / math.sqrt(i), 1 / math.sqrt(i), (1, 1, RANK, i))),
+                bf16(rng.normal(0.0, 0.02, (1, 1, o, RANK))),
+            )
+            for name, (i, o) in shapes.items()
+        }
+
+        block = LlamaBlock(
+            HIDDEN, HEADS, KV_HEADS, rope_params(), head_dim=HEAD_DIM, intermediate_size=INTER, rms_norm_eps=EPS
+        )
+        assign(block.attention_norm.gamma.tensor, gammas[0])
+        assign(block.mlp_norm.gamma.tensor, gammas[1])
+        assign(block.attention.qkv_linear.weight.tensor, w_qkv)
+        assign(block.attention.out_linear.weight.tensor, w_out)
+        assign(block.mlp.w_gate_up.weight.tensor, w_gu)
+        assign(block.mlp.w2.weight.tensor, w2)
+        lora = LoraModel(
+            block,
+            LoraConfig(
+                rank=RANK,
+                alpha=ALPHA,
+                target_modules=[r"attention\.qkv_linear$", r"attention\.out_linear$", r"mlp\.w_gate_up$", r"mlp\.w2$"],
+            ),
+        )
+        lora_layers = {
+            "qkv_linear": block.attention.qkv_linear,
+            "out_linear": block.attention.out_linear,
+            "w_gate_up": block.mlp.w_gate_up,
+            "w2": block.mlp.w2,
+        }
+        for name, layer in lora_layers.items():
+            assert isinstance(layer, LoraLinear), name
+            assign(layer.lora_A.tensor, adapters[name][0])
+            assign(layer.lora_B.tensor, adapters[name][1])
+        if transposed:
+            converted = transpose_frozen_weights(lora)
+>           assert len(converted) == 4, converted
+E           AssertionError: ['model.mlp.w_gate_up', 'model.attention.qkv_linear', 'model.attention.out_linear']
+E           assert 3 == 4
+E            +  where 3 = len(['model.mlp.w_gate_up', 'model.attention.qkv_linear', 'model.attention.out_linear'])
+
+tests/python/test_mistral.py:403: AssertionError
+=============================== warnings summary ===============================
+tt-train/tests/python/test_mistral.py::test_logits_match_huggingface[2]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+tt-train/tests/python/test_mistral.py::test_logits_match_huggingface[2]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/agobeljic/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+37.64s call     tt-train/tests/python/test_mistral.py::test_logits_match_huggingface[2]
+22.74s call     tt-train/tests/python/test_mistral.py::test_mlp_forward_and_gradients
+21.02s call     tt-train/tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients[frozen weights transposed]
+20.81s call     tt-train/tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients[weights [out,in]]
+17.12s call     tt-train/tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[weights [out,in]]
+15.67s call     tt-train/tests/python/test_mistral.py::test_frozen_embedding_matches_the_ttml_op
+9.86s call     tt-train/tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[frozen weights transposed]
+3.14s call     tt-train/tests/python/test_mistral.py::test_attention_forward_and_gradients
+1.52s call     tt-train/tests/python/test_mistral.py::test_rmsnorm_forward_and_gradients
+1.24s call     tt-train/tests/python/test_mistral.py::test_lora_linear_forward_and_gradients_frozen_base
+0.16s call     tt-train/tests/python/test_mistral.py::test_rmsnorm_frozen_gamma_gets_no_gradient
+
+(14 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED tests/python/test_mistral.py::test_rmsnorm_forward_and_gradients
+PASSED tests/python/test_mistral.py::test_rmsnorm_frozen_gamma_gets_no_gradient
+PASSED tests/python/test_mistral.py::test_attention_forward_and_gradients
+PASSED tests/python/test_mistral.py::test_mlp_forward_and_gradients
+PASSED tests/python/test_mistral.py::test_lora_linear_forward_and_gradients_frozen_base
+PASSED tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[weights [out,in]]
+PASSED tests/python/test_mistral.py::test_frozen_embedding_matches_the_ttml_op
+PASSED tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients[weights [out,in]]
+PASSED tests/python/test_mistral.py::test_lm_head_and_cross_entropy_forward_and_gradients[frozen weights transposed]
+PASSED tests/python/test_mistral.py::test_config_from_hf_reads_mistral
+PASSED tests/python/test_mistral.py::test_useful_flops_match_the_plan
+PASSED tests/python/test_mistral.py::test_logits_match_huggingface[2]
+FAILED tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[frozen weights transposed]
+============= 1 failed, 12 passed, 2 warnings in 151.00s (0:02:31) =============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-10-29 12:30:21.090 | info     |    BuildKernels | JIT cache stats: 495/495 hits (100.0%) [495 cached, 103 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-29 12:30:21.090 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-29 12:30:21.104 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-29 12:30:21.104 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-29 12:30:21.229 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-29 12:30:21.229 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-29 12:30:21.229 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
