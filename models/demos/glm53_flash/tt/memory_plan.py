@@ -139,6 +139,9 @@ class MemoryPlan:
     partition: bool
     scratch_slot: bool = True  # the SP prefill v1 scratch slot of the partitioned cache (sparse_1m.md section 7)
     trace_mb: int = 512
+    # waves (doc/mesh/row_ownership.md): every row runs W = wave_rows of its own chunk; the MoE gathers rows x W tokens
+    # per chip, so the chunk working set is that of a rows x W global chunk: neutral at W = 2048 on the 8x4 (16 K)
+    wave_rows: int = 2048
 
     @classmethod
     def estimate(
@@ -195,7 +198,24 @@ class MemoryPlan:
         return -(-users_per_row // self.cols) + (1 if self.scratch_slot else 0)
 
     def headroom(self, isl: int) -> float:
-        return self.dram_bytes - self.weights_bytes - reserve_bytes(isl, self.trace_mb)
+        chunk_tokens = max(16384, self.rows * int(self.wave_rows))  # the SP chunk, or the rows' wave chunks gathered
+        return self.dram_bytes - self.weights_bytes - reserve_bytes(isl, self.trace_mb, chunk_tokens=chunk_tokens)
+
+    def max_wave_rows(self, users_per_row: int, isl: int, step: int = 128) -> int:
+        """The largest wave width W (a multiple of ``step``, >= 2048) at which ``users_per_row`` users per row fit
+        ``isl``; 0 when not even W = 2048 fits (the planner refuses a wider wave at a full cell)."""
+        from dataclasses import replace
+
+        if not replace(self, wave_rows=2048).fits(users_per_row, isl):
+            return 0
+        lo, hi = 2048, 1 << 20
+        while hi - lo > step:
+            mid = ((lo + hi) // 2 // step) * step
+            if replace(self, wave_rows=mid).fits(users_per_row, isl):
+                lo = mid
+            else:
+                hi = mid
+        return lo
 
     def bytes_for(self, users_per_row: int, isl: int) -> float:
         return self.slots_per_chip(users_per_row) * (isl * self.cache_per_token + self.fixed_per_user)

@@ -41,6 +41,18 @@ def test_memory_plan_8x4_table():
     # the chunk working-set term keeps >= 2 GiB after the caches: 28 users per row (7 slots per chip) is the 128 K profile
     assert not part.fits(32, 131072) and part.fits(28, 131072) and part.max_users_per_row(131072) == 28
     assert rep.fits(4, 65536), "4 users per row at 64 K (one expert copy: the regions-sourced streaming decode) runs"
+    # waves (row_ownership.md step 8): W = 2048 rows per row is memory-neutral on the 8x4 (8 x 2048 = the 16 K SP chunk
+    # the working-set term already models); a wider wave costs 4 x (rows x W - 16384) x 4384 x 4 B of chunk working set,
+    # so the full 1 M x 4 cell admits no wave above 2048 and the planner's bound says so
+    from dataclasses import replace
+
+    assert replace(part, wave_rows=2048).headroom(1048576) == part.headroom(1048576)
+    wide = reserve_bytes(1048576, part.trace_mb, chunk_tokens=8 * 4096) - reserve_bytes(1048576, part.trace_mb)
+    assert wide > 0 and part.headroom(1048576) - replace(part, wave_rows=4096).headroom(1048576) == wide
+    w_1m, w_128k = part.max_wave_rows(4, 1048576), part.max_wave_rows(28, 131072)
+    logger.info(f"max wave rows: 1 M x 4 per row {w_1m}, 128 K x 28 per row {w_128k}")
+    assert 2048 <= w_1m < 4096 and part.max_wave_rows(5, 1048576) == 0
+    assert w_128k >= 2048 and part.max_wave_rows(4, 131072) >= 4096, "the 128 K cell has room for wider waves"
     # (the 2026-10-2x "both expert forms at 64 K x 4" pin is retired: GLM53_REGIONS_DECODE=stream never builds the
     # stacked copy, and the chunk working-set floor sizes the reserve for the one-copy configurations only)
 
