@@ -14,8 +14,7 @@ on:
           "disagg_prefill" runs the disaggregated-prefill runner+producer legs on SC1 and SC4.
           "gemma4_d_p_layer_perf" needs a Tracy build and runs only when named; "all" and tags exclude it.
           "dsv4_transformer_depth" (real weights, every layer of both DeepSeek-V4 models) also runs only when named.
-          Stages in group "weekly" run on the weekly cron (Saturday 20:00 UTC) instead of the daily one; "all" excludes
-          them, and naming them (or "weekly") runs them on dispatch.
+          Group "weekly" runs on the Saturday cron, not daily; "all" excludes it.
           Valid stages: dsv4_prefill_perf_suite, dsv4_prefill_suite, dsv4_transformer_depth, gemma4_d_p, gemma4_d_p_layer_perf, gemma4_d_p_perf, gemma4_d_p_prefill_accuracy, gemma4_prefill_kv_pcc, glm_chunked_accuracy_suite, glm_chunked_perf_suite, glm_components_suite, gpt_oss_prefill_suite, high_bw_all_gather_perf, k3_accuracy_suite, k3_dspark_runner, k3_dspark_suite, k3_mla_perf, k3_prefill_runner_24l, k3_prefill_runner_93l, k3_transformer_suite, kimi_chunked_accuracy_suite, kimi_chunked_perf_suite, kimi_components_suite, kimi_k3_moe, kimi_moe_perf, kimi_rmsnorm, kv_cache_table, llama31_prefill_runner, llama31_prefill_suite, minimax_prefill_kv_pcc, minimax_prefill_matrix, minimax_prefill_perf, mistral4_chunked_padded, mistral4_chunked_perf, mistral4_mla, mistral4_mla_chunked, mistral4_moe, mistral4_pp4_kv_pcc, mistral4_prefill_block, mistral4_prefill_suite, mistral4_prefill_transformer, mistral4_traced_vs_eager, moe_gate, prefill_runner, prefill_runner_kv_pcc, ring_joint_sdpa_perf.
           Tags (each runs every matching stage): accuracy, block, ccl, csa, csa_chunked, csa_chunked_pro, determinism, dflash, dsa_mla_glm, dspark, dsv4_flash, gate, gemma4_d_p, glm_5_3, glm_chunked, glm_chunked_accuracy, glm_chunked_padded, glm_chunked_untraced_perf, glm_moe, glm_mtp, glm_prefill_block, gpt_oss_prefill_kv_pcc, gpt_oss_prefill_kv_pcc_1k, gpt_oss_varchunk_smoke, hca, hca_chunked, hca_perf, k3_chunked_prefill, k3_contracts, k3_kda, k3_kda_perf, k3_mla, k3_mla_trace, k3_transformer_depth, k3_transformer_traced, kda, kimi_chunked, kimi_chunked_padded, kimi_chunked_untraced_perf, kimi_dflash, kimi_k2_7, kimi_k3, kimi_moe, kv_cache, llama31, llama31_prefill_book_top5, llama31_prefill_components, minimax_m3, mistral4, mistral4_chunked_padded, mistral4_mla, mistral4_mla_chunked, mistral4_moe, mistral4_prefill_block, mistral4_prefill_transformer, mla, mla_chunked, moe, mtp, prefill_block_determinism, prefill_transformer_determinism, runner, sdpa, swa, swa_mixed, swa_perf, transformer, v4_block_chunked, v4_transformer.
         required: false
@@ -47,7 +46,7 @@ on:
         description: "Enable Link Time Optimization (LTO)"
   schedule:
     - cron: "0 5 * * *" # Run at 5:00 AM UTC every day
-    - cron: "0 20 * * 6" # Saturday 20:00 UTC: only the test_group "weekly" entries; validate-test-type matches this string
+    - cron: "0 20 * * 6" # Saturday 20:00 UTC, test_group "weekly" only; matched in validate-test-type
 
 jobs:
   validate-test-type:
@@ -69,8 +68,7 @@ jobs:
         # Pass the user input via env (not direct ${{ }} interpolation) to avoid
         # shell injection from the workflow_dispatch input.
         env:
-          # The weekly cron (keep the string in sync with on.schedule) selects the test_group "weekly"; the daily
-          # cron passes no input (-> "all") and a dispatch passes its test-type.
+          # Weekly cron (keep in sync with on.schedule) -> test_group "weekly".
           TEST_TYPE: ${{ github.event.schedule == '0 20 * * 6' && 'weekly' || inputs.test-type }}
         run: |
           python3 .github/scripts/utils/validate_test_type_selection.py \
@@ -189,7 +187,6 @@ jobs:
       sp-config: sc4
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       resource-prefix: sc4
-      # Weekly entries run in Galaxy-Blaze-models-prefill-weekly-sc4.
       exclude-test-group: weekly
       # The runner is a server that idles in an unbounded request loop until the producer
       # connects and drives H2D, so no device op completes for tens of seconds by design.
@@ -200,8 +197,7 @@ jobs:
 
   Galaxy-Blaze-models-prefill-weekly-sc4:
     needs: [validate-test-type, check-harbor, build-artifact]
-    # SC4 entries in test_group "weekly": skipped on "all" (the daily cron and a plain dispatch), run on the weekly
-    # cron and whenever a dispatch selects them by name, tag or group. The impl's selection filter decides which run.
+    # test_group "weekly" on SC4: never on "all".
     if: ${{ needs.validate-test-type.outputs.test-type != 'all' }}
     permissions:
       id-token: write
@@ -217,7 +213,6 @@ jobs:
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       include-test-group: weekly
       resource-prefix: sc4-weekly
-      # Same as the SC4 job: the runner idles in its request loop by design, so no watchdog.
       hang-detection-timeout: 0
 
   Galaxy-Blaze-models-prefill-sc1-runner:

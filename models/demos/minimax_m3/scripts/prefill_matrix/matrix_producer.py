@@ -57,12 +57,9 @@ from models.demos.common.prefill.runners.layer_completion_ring_reader import (  
 
 
 def start_completion_discard(timeout_s: int):
-    """Pop and drop the master router's scheduler-facing completion ring on a daemon thread. The ring holds 1024
-    messages; with no consumer the router blocks once it is full, then every rank's ring fills and the pipeline
-    hangs (~1000 chunks into a launch). Completion is measured from the timing CSVs, so the messages are only
-    counted. Not LayerCompletionDrain: its reader rejects overlapping spans of one (slot, pos_start, pos_end) key,
-    and the loaded streams re-push a slot's positions while its previous request is still in the pipeline.
-    Returns a callable giving the number of messages dropped so far."""
+    """Drop the scheduler's layer-completion messages on a daemon thread; returns a callable giving the count.
+    Nothing else reads that ring here, and a full ring (1024) stalls the pipeline. Not LayerCompletionDrain: it
+    rejects the repeated (slot, positions) keys of the loaded streams."""
     ring = connect_layer_completion_channel(timeout_s)
     if ring is None:
         logger.warning("[matrix] no completion ring to drain; the runner hangs once its scheduler ring is full")

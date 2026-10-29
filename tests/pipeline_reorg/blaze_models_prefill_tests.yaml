@@ -1382,14 +1382,8 @@
   sp_config: sc1
 
 
-# MiniMax-M3 16-stage pipeline-prefill perf matrix (new x cached tokens, tt-metal#57827), the 5x7 table of the #57827
-# comments: cached 0 / 61440 (p25) / 143360 (p50) / 312320 (p75, runs at 311296, a multiple of 2048) / 552960 (p90) x
-# new 640 (p25) / 1600 (p50) / 3072 (p75) / 5120 / 6900 (p90) / 32768 / 51200 (p99), idle (3 iters) + loaded (4 users x
-# 240 chunks). The 860160 (p99) row of the benchmark definition has never been measured and is left out, as there.
-# Config C of #57827 (2026-09-27, re-measured 2026-10-11): chunk 2048 and one dense layer alone on each of stages 0-2.
-# 16 ranks of [2,4] over the 4 galaxies, placed by tt-run discovery on the z-chain mesh graph. Perf is reported (job
-# summary in the #57827 table layout + artifact), not gated. One runner launch serves every row, with the KV capacity at
-# the model's max context (1048576, as in production), so the weights are loaded once (see ci/run_matrix_ci.sh).
+# MiniMax-M3 16-stage pipeline-prefill perf matrix (tt-metal#57827): 5 cached x 7 new token counts, idle + loaded,
+# chunk 2048, dense layers on their own stages, one runner with a 1M-token KV cache. Perf is reported, not gated.
 - name: "(MiniMax-M3-428B) pipeline prefill perf matrix 5x7 16-stage, SC4"
   cmd: |
     set -euo pipefail
@@ -1408,15 +1402,11 @@
     exec bash models/demos/minimax_m3/scripts/prefill_matrix/ci/run_matrix_ci.sh
   test_type: minimax_prefill_matrix
   test_tags: [minimax_m3, runner]
-  # Runs on the weekly cron (Saturday 20:00 UTC), not daily.
-  test_group: weekly
+  test_group: weekly # Saturday only, not daily
   artifact_subdir: m3_prefill_matrix
   skus:
     bh_sc4:
-      # Run 39751806622 (3x3 table, one launch per row): first launch 2m19s to ready, ~13 s producer attach and
-      # ~20-35 s per cell (idle + loaded) per row, cached prefix 19 s at 143k and 72 s at 553k, ~25 s shutdown.
-      # Estimate for this table with one launch: ~20-22 min test step. Lower once measured.
-      timeout: 60
+      timeout: 60 # ~20-22 min expected
       tier: 2
       release_ready: false
   owner_id: U08ECJQ848G # Viacheslav Melnykov
