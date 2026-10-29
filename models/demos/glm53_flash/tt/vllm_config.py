@@ -1109,6 +1109,19 @@ class SlotPrefixCache:
                 best = (key, PrefixHit(c.row, c.user, snap[0], snap[1]))
         return None if best is None else best[1]
 
+    def slot_holding(self, ids: torch.Tensor, spans: Sequence[MMSpan], slots) -> tuple[int, int] | None:
+        """The free retained slot whose content starts with the whole prompt ``ids`` (the most recently used one),
+        for a miss that re-prefills from 0: the prompt lands on the row that served it before (``SlotTable`` is
+        ``slots``: a live slot is skipped). None when no retained slot holds it."""
+        n = int(torch.as_tensor(ids).reshape(-1).numel())
+        best = None
+        for c in self._content.values():
+            if not c.retained or (c.row, c.user) in slots._occupied or not c.matches(ids, spans, n):
+                continue
+            if best is None or c.last_used > best.last_used:
+                best = c
+        return None if best is None else (best.row, best.user)
+
     def plan_snapshot(self, row: int, user: int, position: int, kind: str) -> int | None:
         """Which ring entry a KDA snapshot of the slot at ``position`` goes to (None: no ring, position 0, not a
         32-multiple, or already held). Records it: the caller then copies the device state into that entry."""

@@ -1698,7 +1698,7 @@ class GLM53FlashForCausalLM:
                             "pixels (vLLM strips fully cached items): the prefill from 0 is impossible. Needs the "
                             "plugin's hit confirmation hook (doc/serving/prefix_caching.md s.5) or APC off"
                         )
-                    state = self._allocate_slot(logical, end)
+                    state = self._allocate_slot(logical, end, at=apc.slot_holding(tokens[i], spans, self.slots))
                     apc.stats["downgraded"] += 1
                     logger.info(
                         f"[glm53-apc] miss: slot {logical}: no retained slot holds the {start}-token prefix; "
@@ -1759,7 +1759,8 @@ class GLM53FlashForCausalLM:
                 self._apc_alloc_check(f"the prefill [{start}, {end}) of slot {logical} (user {state.user})")
         else:
             by_logical = {logical: (i, state, start, end, ids) for i, logical, state, start, end, ids, _ in items}
-            if apc is not None:  # the wave path records content; its snapshots are the decode crossings only
+            if apc is not None:  # content recorded for every row; the SP step snapshots its chunk ends (``on_chunk``),
+                # the wave path only the aligned decode crossings (a wave member's carry is one row of a batched write)
                 for _, _, state, start, _, ids, spans in items:
                     apc.record_prefill(state.row, state.user, start, ids, spans)
             steps = self.waves.plan(
@@ -1771,7 +1772,9 @@ class GLM53FlashForCausalLM:
                     i, state, start, end, ids = by_logical[step.logical]
                     mm = media.get(i)
                     if mm is None:
-                        first, last_logits = self._prefill_one(ids, state.user, step.plan, want_logits=not wants_tokens)
+                        first, last_logits = self._prefill_one(
+                            ids, state.user, step.plan, want_logits=not wants_tokens, on_chunk=on_chunk(state)
+                        )
                     else:  # the multimodal eager prefill: the vision features scattered into the chunk's streams
                         first, last_logits = self._prefill_one_mm(
                             mm[1], state.user, step.plan, mm[0], want_logits=not wants_tokens
@@ -2574,12 +2577,15 @@ class GLM53FlashForCausalLM:
         return 0 if hit is None else int(hit.position)
 
     # ================================================================================= helpers
-    def _allocate_slot(self, logical: int, end: int = 0, sp_required: bool = False):
+    def _allocate_slot(self, logical: int, end: int = 0, sp_required: bool = False, at=None):
         """A fresh prompt's physical slot: the column / row balance, then (APC) a slot without retained content
         before the least recently used resident prefix; a logical slot still mapped (never released) retains first.
         ``end``: the first chunk's end; under per-row ownership a prompt no traced wave holds (it prefills eagerly)
         takes a slot index live on no row, so its chunks run sequence-parallel (``SlotTable.allocate(prefer_sp)``);
-        ``sp_required`` (a multimodal prompt) marks the slot so the planner never routes it through a wave."""
+        ``sp_required`` (a multimodal prompt) marks the slot so the planner never routes it through a wave. ``at``
+        (APC): the free slot whose retained content is this very prompt (``SlotPrefixCache.slot_holding``): the
+        prompt re-prefills there, on the same mesh row, so a repeated greedy request repeats its text (rows differ
+        in the last ulp; the smoke's stage b)."""
         prefer_sp = self.geometry.rows_independent and (
             sp_required or self.waves.captured_wave_length(int(end)) is None
         )
@@ -2589,7 +2595,7 @@ class GLM53FlashForCausalLM:
             old = self.slots.physical(logical)
             if old is not None:
                 self.apc.release(old.row, old.user)
-            state = self.slots.allocate(logical, slot_rank=self.apc.slot_rank, prefer_sp=prefer_sp)
+            state = self.slots.allocate(logical, at=at, slot_rank=self.apc.slot_rank, prefer_sp=prefer_sp)
             self.apc.begin(state.row, state.user, 0)
         state.sp_required = bool(sp_required)
         return state

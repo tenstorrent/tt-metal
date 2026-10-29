@@ -200,6 +200,11 @@ def test_hit_miss_reused_slot_downgrade_and_lru():
     assert (t2.allocate(0, at=(0, 2)).row, t2.physical(0).user) == (0, 2)
     with expect_error(RuntimeError, "is live"):
         t2.allocate(1, at=(0, 2))
+    # a repeated prompt re-prefills on the free slot that retains it (the same mesh row: its greedy text repeats
+    # bit-exactly, rows differ in the last ulp); a live slot or an evicted content is no candidate
+    assert apc.slot_holding(ids_b, [], t2) == (0, 0), "slot (0, 0) retains prompt B"
+    assert apc.slot_holding(ids_a, [], t2) is None, "prompt A's content was evicted by B"
+    assert apc.slot_holding(apc.content(0, 2).tokens[:300], [], t2) is None, "slot (0, 2) is live in t2"
 
 
 def test_snapshot_ring_policy():
