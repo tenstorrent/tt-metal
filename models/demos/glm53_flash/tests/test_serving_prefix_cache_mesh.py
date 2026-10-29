@@ -283,3 +283,93 @@ def test_served_prefix_cache_hit_matches_from_scratch(mesh_device, monkeypatch, 
     # a downgraded miss IS a from-scratch prefill in the same slot: bit-identical
     assert torch.equal(miss_logits, ref2_logits) and miss_toks == ref2_toks
     a.release_persistent_capture()
+
+
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(
+    "device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+def test_served_vllm_cached_prefix_miss_with_budget_split(mesh_device, monkeypatch):
+    """What vLLM's OWN prefix cache does to the adapter (the 2026-10-29 APC smoke on 45 layers): two prompts share a
+    2048-token prefix. While A is mid-prefill vLLM reports the shared blocks computed for B (``num_computed_tokens``
+    2048) and splits the step's token budget, so B's first scheduled chunk ends at 2112 (64 new tokens). The adapter
+    holds no snapshot of that prefix in a retained slot (A's slot is live), recomputes ``[0, 2112)`` in B's own slot
+    (device chunks 1024, 1024, 64) and then continues B from the chunk-UNALIGNED 2112 while A continues from 2048.
+    Both decode greedily and must agree with their from-scratch prefills (the layer-level chunk plans are
+    bit-identical -- ``test_chunked_prefill``; this is the adapter's miss + continuation + decode path)."""
+    if B % MESH[1]:
+        pytest.skip(f"the user partition needs users_per_row {B} % cols {MESH[1]} == 0")
+    monkeypatch.setenv("GLM53_PARTITION_USERS", "1")
+    monkeypatch.setenv("GLM53_PREFILL_PARTITION", "heads2users")
+    monkeypatch.setenv("GLM53_VLLM_WARMUP_PREFILL", "128,2048")
+    monkeypatch.setenv("GLM53_VLLM_APC_TAIL_SPLIT", "0")
+    monkeypatch.setenv(APC_ALLOC_CHECK_ENV, "1")
+    layers = _layer_range()
+    cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
+    model = GLM53MeshModel(
+        mesh_device,
+        cfg,
+        layers,
+        max_batch=B,
+        max_seq_len=MAX_SEQ_LEN,
+        weight_cache_path=CACHE_ROOT,
+        expert_dtype=EXPERT_DTYPE,
+        expert_down_dtype=EXPERT_DOWN_DTYPE,
+    )
+    entries = 2
+    model.allocate_kda_snapshots(entries, "host")
+    g = ServingGeometry(
+        rows=MESH[0],
+        cols=MESH[1],
+        users_per_row=B,
+        max_seq_len=MAX_SEQ_LEN,
+        partitioned=True,
+        device_prefill_chunk=CHUNK,
+        pad_token_id=cfg.pad_token_id,
+        traced_prefill_lengths=(),
+    )
+    a = GLM53FlashForCausalLM(model, g, pad_token_id=cfg.pad_token_id, prefix_cache_entries=entries)
+    a.warmup_model_prefill(enable_trace=False, can_sample_on_device=False)
+    a.warmup_model_decode(enable_trace=False, max_batch_size=B, num_blocks=1)
+    a.warmup_model_decode(enable_trace=True, max_batch_size=B, num_blocks=1)
+    srv = _Served(a)
+    vocab = cfg.vocab_size
+    shared = _ids(2 * CHUNK, 11, vocab)
+    A = torch.cat([shared, _ids(300, 12, vocab)])
+    Bp = torch.cat([shared, _ids(300, 13, vocab)])
+    n = int(A.numel())
+    split_end = 2 * CHUNK + 64
+    # A's first two device chunks (two vLLM steps), then B joins with the shared prefix "computed" and 64 tokens of budget
+    srv.prefill(0, A[:CHUNK], 0)
+    srv.prefill(0, A[: 2 * CHUNK], CHUNK)
+    t0 = time.perf_counter()
+    srv.prefill(1, Bp[:split_end], 2 * CHUNK)
+    miss_ms = (time.perf_counter() - t0) * 1000
+    sa, sb = a.slots.physical(0), a.slots.physical(1)
+    assert (sa.row, sa.user) != (sb.row, sb.user)
+    logger.info(f"budget split: B's miss recompute [0, {split_end}) in {miss_ms:.0f} ms; apc {a.apc.stats}")
+    la = srv.prefill(0, A, 2 * CHUNK)  # A continues from 2048
+    lb = srv.prefill(1, Bp, split_end)  # B continues from the chunk-unaligned 2112
+    toks_a, outs_a = srv.generate(0, la, n, N_CHECK)
+    toks_b, outs_b = srv.generate(1, lb, n, N_CHECK)
+    a.release_request(0)
+    a.release_request(1)
+    for key in a.apc.retained_slots():
+        a.apc.forget(*key)
+    # the from-scratch references (the adapter's own 1024-token chunk plan from 0)
+    ra = srv.prefill(0, A, 0)
+    same_a = (a.slots.physical(0).row, a.slots.physical(0).user) == (sa.row, sa.user)
+    rtoks_a, routs_a = srv.generate(0, ra, n, N_CHECK)
+    a.release_request(0)
+    rb = srv.prefill(1, Bp, 0)
+    same_b = (a.slots.physical(1).row, a.slots.physical(1).user) == (sb.row, sb.user)
+    rtoks_b, routs_b = srv.generate(1, rb, n, N_CHECK)
+    a.release_request(1)
+    logger.info(
+        f"budget split: A tokens {toks_a} ref {rtoks_a} (same slot {same_a}, prefill logits equal {torch.equal(la, ra)}); "
+        f"B tokens {toks_b} ref {rtoks_b} (same slot {same_b}, equal {torch.equal(lb, rb)}); apc {a.apc.stats}"
+    )
+    _assert_agree("A continued at 2048 vs from scratch", [la] + outs_a, [ra] + routs_a)
+    _assert_agree("B: vLLM-cached 2048 miss, chunk end 2112, continued vs from scratch", [lb] + outs_b, [rb] + routs_b)
+    a.release_persistent_capture()
