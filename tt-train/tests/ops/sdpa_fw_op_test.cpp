@@ -2030,8 +2030,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits_Backward) {
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_Long) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // S=2048: 128-row chunks of up to eight pieces, 64-row chunks of two, 128 one-tile-row items when the
-    // shape rule picks (it shrinks Sq to fill the cores), and on 48 cores.
+    // S=2048: 128-row chunks of four pieces at 256-row steps and of up to eight at 128-row steps (a piece
+    // needs two steps, so eight pieces need sixteen steps), 64-row chunks of two, the shape rule's own pick,
+    // and on 48 cores.
     const SDPATestConfig base{
         .batch_size = 1U,
         .sequence_length = 2048U,
@@ -2041,8 +2042,8 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_Long) {
         .num_key_heads = 2U,
         .mask_type = ttml::metal::AttentionMaskType::Causal,
         .test_name = "ChunkKnobs_SplitUnits_Long"};
-    run_chunk_knob_sweep(base, {{128, 256, 1, 4, 0}, {128, 256, 1, 8, 0}, {64, 128, 1, 2, 0}, {64, 128, 1, 0, 48}});
-    run_split_vs_unsplit(base, {128, 256, 1, 8, 0});
+    run_chunk_knob_sweep(base, {{128, 256, 1, 4, 0}, {128, 128, 1, 8, 0}, {64, 128, 1, 2, 0}, {64, 128, 1, 0, 48}});
+    run_split_vs_unsplit(base, {128, 128, 1, 8, 0});
 }
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_ManyPieces) {
