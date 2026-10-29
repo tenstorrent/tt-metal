@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <cstdlib>
@@ -262,6 +263,36 @@ struct RingSemaphores {
 // tt::tt_metal::NUM_SEMAPHORES, which no public header exposes to a ttnn op.
 constexpr uint32_t kSemaphoresPerCore = 16;
 
+struct OwnRingSemaphores {
+    tt::tt_metal::GlobalSemaphore credit_done;
+    std::vector<tt::tt_metal::GlobalSemaphore> vc_arrived, vc_freed, vc_outbox;
+};
+
+// The mesh's one set of the op's own ring semaphores (every MoE layer runs one after another and leaves the counts as
+// it found them, as the caller's fwd_arrived / final_arrived), made on the full worker grid at the first call.
+const OwnRingSemaphores& ring_semaphores(ttnn::MeshDevice* mesh) {
+    static std::mutex mu;
+    static std::map<int, OwnRingSemaphores> cache;
+    std::lock_guard<std::mutex> lock(mu);
+    auto it = cache.find(mesh->id());
+    if (it == cache.end()) {
+        const auto grid = mesh->compute_with_storage_grid_size();
+        const CoreRangeSet all_workers(CoreRange(CoreCoord{0, 0}, CoreCoord{grid.x - 1, grid.y - 1}));
+        auto make = [&] {
+            return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
+        };
+        OwnRingSemaphores own{make(), {}, {}, {}};
+        for (uint32_t v = 0; v < cmbf2d::MAX_VCS; v++) {
+            own.vc_arrived.push_back(make());
+            own.vc_freed.push_back(make());
+            own.vc_outbox.push_back(make());
+        }
+        tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
+        it = cache.emplace(mesh->id(), std::move(own)).first;
+    }
+    return it->second;
+}
+
 RingSemaphores allocate_ring_semaphores(
     ttnn::MeshDevice* mesh, uint32_t num_links, uint32_t untilizers_per_group, const CombineL1& provided) {
     // Allocated on the full worker grid so the address is uniform across the mesh. One semaphore of each kind
@@ -278,23 +309,19 @@ RingSemaphores allocate_ring_semaphores(
         }
         return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
     };
-    auto make = [&] {
-        return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
-    };
+    // The op's own semaphores (credit_done and the per-VC ones): made once per mesh and kept (ring_semaphores), not
+    // per program build - a build runs under the caller's per-call L1 arena, which can hold every free byte of L1
+    // (GLM-5.3: "Out of Memory ... free: 0 B" making them), and it may run during a trace capture
+    const auto& own = ring_semaphores(mesh);
     RingSemaphores sems{
         make_or_take(provided.fwd_arrived),
         make_or_take(provided.final_arrived),
-        make(),
-        {},
-        {},
-        {},
+        own.credit_done,
+        own.vc_arrived,
+        own.vc_freed,
+        own.vc_outbox,
         untilizers_per_group,
         num_links};
-    for (uint32_t v = 0; v < cmbf2d::MAX_VCS; v++) {
-        sems.vc_arrived.push_back(make());
-        sems.vc_freed.push_back(make());
-        sems.vc_outbox.push_back(make());
-    }
     TT_FATAL(
         sems.num_program_semaphores() <= kSemaphoresPerCore,
         "combine_fabric2d: {} program semaphores per combine core exceed the {} a core has ({} untilizers per "
@@ -303,7 +330,9 @@ RingSemaphores allocate_ring_semaphores(
         kSemaphoresPerCore,
         untilizers_per_group,
         num_links);
-    tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
+    if (provided.fwd_arrived == nullptr) {  // (made fwd_arrived / final_arrived here: zeroed before a neighbour bumps)
+        tt::tt_metal::distributed::Synchronize(mesh, std::nullopt, {});
+    }
     return sems;
 }
 
@@ -662,6 +691,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     return desc;
 }
 }  // namespace
+
+void prepare_ring_semaphores(ttnn::MeshDevice* mesh) { (void)ring_semaphores(mesh); }
 
 tt::tt_metal::TensorSpec forwarding_buffer_spec(const CombineFabric2dParams& args, uint32_t token_size_bytes) {
     const uint32_t page_bytes = token_size_bytes + cmbf2d::FORWARDING_METADATA_SIZE;
