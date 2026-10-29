@@ -48,33 +48,43 @@ inline void calculate_tiled_prod() {
     static_assert(
         ITERATIONS * static_cast<int>(SFP_DESTREG_STRIDE) == static_cast<int>(FACE_R_DIM),
         "calculate_tiled_prod: ITERATIONS steps of SFP_DESTREG_STRIDE Dest rows must cover one face");
-    // Per element the chain is MUL (product *= v) ; LOAD the next v ; STORE the product. The load
-    // of element d+1 sits in the MUL -> STORE latency slot, so no SFPNOP is needed except for the
-    // last element; the loaded value alternates between LREG1 and LREG2 so a two-element body can
-    // be recorded once and replayed. SFPMUL with LCONST_0 as the addend is a plain multiply, and
-    // the product starts at 1.0 (LCONST_1), as the previous sfpi loop did (`result = 1.0f; result
-    // *= v`), so the instruction stream computes the same products in the same order.
+    // Per element the chain is LOAD the next v ; STORE the product ; MUL (product *= v). The load
+    // sits in the MUL -> STORE latency slot of the previous element, so sfpi needs no SFPNOP except
+    // before the last store, and the store advances the Dest counter (ADDR_MOD_2, see
+    // tiled_prod_init) instead of a TTINCRWC. Two elements of that body are recorded once and
+    // replayed; the product is their only carried value, and sfpi multiplies it in place
+    // (`sfpmul L0, L0, L1`), so each replay picks it up where the previous one left it.
+    //
+    // TILED_PROD_REPLAY_LEN is the instruction count sfpi emits for the recorded loop below:
+    //   2x (SFPLOAD, SFPSTORE, SFPMUL)
+    // If the body changes, re-check it against the generated kernel.
+    //
+    // The product is seeded with 1.0 through a pinned LReg rather than a literal: sfpi folds a
+    // literal `1.0f * v` to `v`, which skips the first SFPMUL and stores a -0.0 first element
+    // as -0.0 instead of the +0 SFPMUL returns. This keeps the previous loop's numerics
+    // (`result = 1.0f; result *= v`): the same multiplies in the same order.
     constexpr int STEPS = static_cast<int>(TILE_NUM_FACES) * ITERATIONS;  // 32 elements per lane
-    TTI_SFPMOV(0, p_sfpu::LCONST_1, p_sfpu::LREG0, 0);
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+    l_reg[LRegs::LReg0] = vFloat(1.0f);
+    vFloat result = l_reg[LRegs::LReg0];
+    vFloat v = dst_reg[0];
+    result *= v;
     lltt::record<lltt::Exec>(TILED_PROD_REPLAY_SLOT, TILED_PROD_REPLAY_LEN);
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, SFP_DESTREG_STRIDE);
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, SFP_DESTREG_STRIDE);
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+#pragma GCC unroll 2
+    for (int k = 0; k < 2; k++) {
+        v = dst_reg[1];
+        dst_reg[0].mode(ADDR_MOD_2) = result;
+        result *= v;
+    }
+    // The recording ran elements 1 and 2 and the last element runs below, so the replays cover
+    // elements 3 to STEPS - 2.
 #pragma GCC unroll 16
     for (int i = 0; i < STEPS / 2 - 2; i++) {
         lltt::replay(TILED_PROD_REPLAY_SLOT, TILED_PROD_REPLAY_LEN);
     }
-    // Last pair: nothing to prefetch past the tile, so the final MUL -> STORE gap is an SFPNOP.
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, SFP_DESTREG_STRIDE);
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+    v = dst_reg[1];
+    dst_reg[0].mode(ADDR_MOD_2) = result;
+    result *= v;
+    dst_reg[0].mode(ADDR_MOD_2) = result;
 }
 
 }  // namespace sfpu
