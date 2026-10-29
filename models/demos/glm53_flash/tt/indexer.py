@@ -889,6 +889,11 @@ class TtDSAIndexer(LightweightModule):
             # movement either way, bit-identical.
             # indexer_score_dsa emits a ROW_MAJOR block (measured 2026-10-26: untilize_with_unpadding rejects it), so
             # the one-pass crop applies only to a tile-major block; a row-major block takes the plain slice.
+            if os.environ.get("GLM53_INDEXER_DEBUG") == "1":  # the shapes the sealed program cache keys on
+                logger.info(
+                    f"[indexer] rank_pools T={T} kv_len={kv_len} scores={tuple(scores.shape)} {scores.layout} "
+                    f"op_start={op_start} num_pools_valid={num_pools_valid} row_starts={row_starts} bounded={bounded}"
+                )
             if kv_len < scores.shape[-1]:
                 if scores.layout == ttnn.TILE_LAYOUT:
                     scores_rm = ttnn.untilize_with_unpadding(scores, [0, 0, T - 1, kv_len - 1])
