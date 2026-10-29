@@ -31,9 +31,11 @@ void kernel_main() {
     const uint32_t alpha_bits = get_common_arg_val<uint32_t>(compute_arg::ALPHA_BITS);
 
     compute_kernel_hw_startup(cb::A, cb::B, cb::OUT);
+    DataflowBuffer a(cb::A), b(cb::B), out(cb::OUT);
 
     const auto shape = ckl::IterationShape::grid(num_rows, Wt);
 #ifdef TOY_SCALED_ADD_HAS_GAMMA
+    DataflowBuffer gamma(cb::GAMMA);
     ckl::eltwise_chain(
         shape,
         ckl::BinaryFpu<
@@ -44,16 +46,16 @@ void kernel_main() {
                 ckl::BroadcastDim::Row,
                 ckl::WaitPolicy::Upfront,
                 ckl::PopPolicy::AtEnd,
-                ckl::InputTileMapping::Row)>{},
+                ckl::InputTileMapping::Row)>{b, gamma},
         ckl::MulUnary<>{alpha_bits},
-        ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, ckl::input(cb::A), ckl::DestReuseType::DEST_TO_SRCA>{},
-        ckl::PackTile<ckl::output(cb::OUT)>{});
+        ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, ckl::input(cb::A), ckl::DestReuseType::DEST_TO_SRCA>{a},
+        ckl::PackTile<ckl::output(cb::OUT)>{out});
 #else
     ckl::eltwise_chain(
         shape,
-        ckl::CopyTile<ckl::input(cb::B)>{},
+        ckl::CopyTile<ckl::input(cb::B)>{b},
         ckl::MulUnary<>{alpha_bits},
-        ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, ckl::input(cb::A), ckl::DestReuseType::DEST_TO_SRCA>{},
-        ckl::PackTile<ckl::output(cb::OUT)>{});
+        ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, ckl::input(cb::A), ckl::DestReuseType::DEST_TO_SRCA>{a},
+        ckl::PackTile<ckl::output(cb::OUT)>{out});
 #endif
 }
