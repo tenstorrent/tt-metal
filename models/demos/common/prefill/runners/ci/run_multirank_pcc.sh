@@ -103,7 +103,8 @@ case "${MODEL}" in
     if [ "${VARIANT#_mtp}" != "${VARIANT}" ]; then
       MTP=1
       MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
-      MTP_PCC_THRESHOLD=0.80
+      # 1M tail on CI SC4: MTP kvpe 0.955, MTP index 0.987 (GPU A-vs-A floor 0.985 / 0.994).
+      MTP_PCC_THRESHOLD=0.93
       # Same 1M request and tail window as the trunk golden above, so the MTP compare reuses its window.
       MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-1M-last5120}"
       PRODUCER_ENV+=" export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
