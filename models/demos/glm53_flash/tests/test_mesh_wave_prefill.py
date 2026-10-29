@@ -328,6 +328,7 @@ LONG_MAX_SEQ_LEN = int(os.environ.get("GLM53_WAVE_TEST_MAX_SEQ_LEN", SERVED_MAX_
 LONG_PROMPTS = tuple(int(v) for v in os.environ.get("GLM53_WAVE_TEST_PROMPTS", "18000,19000,20000,21000").split(","))
 LONG_STEP_CHUNK = int(os.environ.get("GLM53_WAVE_TEST_STEP_CHUNK", 16384))  # vLLM's per-request chunk (the model's max)
 LONG_STEP_BUDGET = int(os.environ.get("GLM53_WAVE_TEST_STEP_BUDGET", 2 * 16384))  # vLLM's max_num_batched_tokens
+LONG_STEP_ALIGN = int(os.environ.get("GLM53_WAVE_TEST_STEP_ALIGN", 256))  # the catalog's prefill_chunk_alignment
 
 
 def vllm_steps(
@@ -347,8 +348,8 @@ def vllm_steps(
             if arrivals[i] > t or done[i] >= n or left <= 0:
                 continue
             take = min(n - done[i], chunk, left)
-            if take < n - done[i]:  # a partial chunk is block-aligned (r3's 224-token remainder; never a 22-token one)
-                take -= take % 32
+            if take < n - done[i]:  # a partial chunk ends on the alignment grid or waits for a step that reaches it
+                take = (done[i] + take) // LONG_STEP_ALIGN * LONG_STEP_ALIGN - done[i]
             if take <= 0:
                 continue
             step.append((i, done[i], done[i] + take))
@@ -632,14 +633,14 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
             )
         logger.info("served waves: PASS (e) four staggered prompts on rows 0-3")
 
-    # (f) a member whose first chunk is vLLM's budget remainder (224 tokens: 32-aligned, not 128-aligned), continued
-    # at 224 mod 2048 beside another prompt (the served needle stage's late requests: '(2, 0, 224)'): the pool start
-    # 56 sits inside a 32-pool tile
+    # (f) a member whose first chunk is vLLM's budget remainder on the alignment grid (256 tokens: the catalog's
+    # prefill_chunk_alignment; a KV-block end short of the grid, r3's '(2, 0, 224)', is refused by the planner), continued
+    # at 256 mod 2048 beside another prompt: every wave of B crosses a 2048 boundary and the dense rows P
     pa, pb = _served_ids(4000, 30, vocab), _served_ids(4500, 31, vocab)
-    step_prefill([(14, pa[:2048], 0), (15, pb[:224], 0)])
-    first_a = step_prefill([(14, pa, 2048), (15, pb[:2272], 224)])
-    step_prefill([(15, pb[:4320], 2272)])
-    first_b = step_prefill([(15, pb, 4320)])
+    step_prefill([(14, pa[:2048], 0), (15, pb[:256], 0)])
+    first_a = step_prefill([(14, pa, 2048), (15, pb[:2304], 256)])
+    step_prefill([(15, pb[:4352], 2304)])
+    first_b = step_prefill([(15, pb, 4352)])
     outs = decode_jointly({14: first_a[14], 15: first_b[15]}, {14: 4000, 15: 4500})
     gots = {14: [first_a[14]] + outs[14], 15: [first_b[15]] + outs[15]}
     a.release_request(14)
@@ -647,10 +648,10 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
     ref_a, ref_b = reference(pa), reference(pb)
     _assert_agree("(f) A (2048 + 1952) vs SP", gots[14], ref_a, pcc_min=PCC_BAR_SP)
     _assert_agree(
-        "(f) B (224 + 2048 + 2048 + 180: continuations at 224 mod 2048) vs SP", gots[15], ref_b, pcc_min=PCC_BAR_SP
+        "(f) B (256 + 2048 + 2048 + 148: continuations at 256 mod 2048) vs SP", gots[15], ref_b, pcc_min=PCC_BAR_SP
     )
     logger.info(
         f"(f) budget-remainder first chunk: first tokens {int(first_a[14].argmax())} / {int(first_b[15].argmax())} "
         f"(SP {int(ref_a[0].argmax())} / {int(ref_b[0].argmax())}), pcc {pcc(first_a[14], ref_a[0]):.5f} / {pcc(first_b[15], ref_b[0]):.5f}"
     )
-    logger.info("served waves: PASS (f) continuations at 224 mod 2048")
+    logger.info("served waves: PASS (f) continuations at 256 mod 2048")

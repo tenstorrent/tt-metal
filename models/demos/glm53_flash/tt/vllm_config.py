@@ -46,6 +46,10 @@ PREFIX_BUCKET_ENV = "GLM53_PREFIX_BUCKET"
 
 TILE = 32
 DENSE_PREFILL_ROWS = 2048  # the traced per-length prefill covers prompts up to this many tokens
+WAVE_CHUNK_UNIT = (
+    128  # a wave member's chunk start: TILE x the index pool size (the pools are written per 32-pool tile,
+)
+# ``TtDSAIndexer.maintain_prefill_wave``); vLLM's prefill_chunk_alignment must be a multiple of it under waves
 PREFILL_BUCKETS_ENV = "GLM53_PREFILL_BUCKETS"
 # The sparse prefill's prefix read (``TtLatentCache.user_rows_rm``: the user's latent rows [0, start + T)) rounds its
 # row count up to a multiple of this (0 = exact): the kv shape of a continued chunk then depends on the prefix bucket,
@@ -183,8 +187,9 @@ class ServingGeometry:
     def chunk_unit(self) -> int:
         """Prefill chunk alignment: a chunk start must be a multiple of 32 (the FunctionalDecoder contract) and,
         under the sequence-parallel prefill, every chunk but the last a multiple of ``32 * rows`` (tile-aligned
-        row slabs); a wave's per-row chunks need the 32-row alignment only."""
-        return TILE if self.rows_independent else TILE * self.rows
+        row slabs); a wave's per-row chunks start on the 128-token grid (``WAVE_CHUNK_UNIT``: whole pool tiles).
+        The served catalog's ``prefill_chunk_alignment`` (256) is a multiple of both."""
+        return WAVE_CHUNK_UNIT if self.rows_independent else TILE * self.rows
 
     def wave_user_order(self) -> list[int]:
         """The slot indices in the order the wave-affine placement fills them (``wave_affinity="user"``): index
@@ -725,6 +730,16 @@ class WavePlanner:
         chunk of every row's current request."""
         queues: dict[int, list] = {}
         for logical, s, start, end in group:
+            if start % WAVE_CHUNK_UNIT:
+                # the device side writes a member's pools per 32-pool tile and the traced maintenance resumes on the
+                # 128 grid; vLLM hands out such a start when its prefill_chunk_alignment is not a multiple of 128 or
+                # the plugin ends a running request's chunk on a KV block short of the grid (the 2026-10-29 r3 engine
+                # death: a 96-token chunk after a 128-token prefix-cache hit, then '(2, 0, 224)')
+                raise ValueError(
+                    f"wave member {logical} continues at {start}, off the {WAVE_CHUNK_UNIT}-token grid: vLLM's "
+                    f"prefill_chunk_alignment must be a multiple of {WAVE_CHUNK_UNIT} and a running request's chunk "
+                    f"must end on that grid (never on a KV block)"
+                )
             chunks = list(self.pp.walk(start, end, self.g.wave_rows))
             queues.setdefault(s.row, []).append([logical, s.user, chunks])
         out = []

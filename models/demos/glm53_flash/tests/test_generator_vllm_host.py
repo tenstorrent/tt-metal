@@ -144,7 +144,7 @@ def test_slot_table_rows_independent_placement():
     assert (s6.row, s6.user) == (1, 0)
     # the 8x4 at 1 M: 4 users per row, one per column -> the first 8 arrivals land on slot index 0 of rows 0..7
     g8 = ServingGeometry(rows=8, cols=4, users_per_row=4, max_seq_len=1048576, rows_independent=True)
-    assert g8.wave_user_order() == [0, 1, 2, 3] and g8.request_capacity == 32 and g8.chunk_unit == 32
+    assert g8.wave_user_order() == [0, 1, 2, 3] and g8.request_capacity == 32 and g8.chunk_unit == 128
     t8 = SlotTable(g8)
     assert [(s.row, s.user) for s in (t8.allocate(i) for i in range(9))] == [(r, 0) for r in range(8)] + [(0, 1)]
     # the non-partitioned layout: plain index order
@@ -255,6 +255,8 @@ def test_wave_planner_groups_walks_and_traces():
         [(5, 0, 1)],
     ]
     assert [c.t_pad for c in waves] == [2048, 960, 2048]
+    with expect_error(ValueError, "off the 128-token grid"):  # r3's '(2, 0, 224)': a KV-block end short of the grid
+        wp.plan([(0, 224, 4000), (1, 0, 4000)])
     with expect_error(ValueError, "appears twice"):
         p2.plan([(0, 0, 64), (0, 64, 128)])
     with expect_error(RuntimeError, "holds no request"):
