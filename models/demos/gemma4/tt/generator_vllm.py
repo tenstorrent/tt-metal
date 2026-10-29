@@ -4903,7 +4903,19 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
         self._spec_entry_since = True
         self._spec_policy.calibration.note_reseed(tuple(shape), ms, table_ms)
 
-    def _spec_interval_begin(self, live_rows, tokens):
+    @staticmethod
+    def _spec_committed(counts, live, width):
+        """``(tokens, rows)`` the runner committed in the interval that just closed: per live row the count
+        clamped to the block width (0 for a row that did not step: just prefilled, or a slot the runner still
+        lists), summed over the rows, and the number of rows that committed at least one token. Without counts
+        every live row stepped once (the plain decode)."""
+        if counts is None:
+            return len(live), len(live)
+        flat = counts.reshape(-1) if hasattr(counts, "reshape") else counts
+        per_row = [max(0, min(int(flat[r]), int(width))) for r in live]
+        return sum(per_row), sum(1 for c in per_row if c >= 1)
+
+    def _spec_interval_begin(self, live_rows, tokens, committing=None):
         """At the top of a proposal: the wall since the previous proposal began is one step of the mode that
         proposal decided, counted dirty or clean (a prefill ran inside it, a reseed started it, the mode changed
         at its start or the live rows changed: the cause is kept for the stats line), unless it is idle: a
@@ -4914,6 +4926,9 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
         if last is not None:
             t_begin, mode, prev_live, before, table_ms = last
             idle = bool(self._spec_prefills_since) and self._spec_dropped_since >= int(prev_live)
+            # the tokens per row of the closed interval are over the rows that committed in it (``committing``),
+            # not the rows the proposal saw: a slot the runner lists but did not step dilutes the acceptance pool
+            rows_for_pool = int(committing) if committing else int(prev_live)
             if self._spec_prefills_since:
                 cause = "prefill"
             elif self._spec_entry_since:
@@ -4927,7 +4942,7 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
             else:
                 cause = None
             self._spec_policy.calibration.note_step(
-                mode, (now - t_begin) * 1e3, tokens, cause is None, table_ms, prev_live, cause, idle=idle
+                mode, (now - t_begin) * 1e3, tokens, cause is None, table_ms, rows_for_pool, cause, idle=idle
             )
         self._spec_prefills_since = 0
         self._spec_dropped_since = 0
@@ -6418,8 +6433,8 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
             rows = int(committed.shape[0]) if committed is not None and committed.dim() > 1 else 1
             live = self._spec_live_rows(positions, rows)
             width = int(committed.shape[1]) if committed is not None and committed.dim() > 1 else 1
-            tokens = sum(max(1, min(int(counts.reshape(-1)[r]), width)) if counts is not None else 1 for r in live)
-            t_begin = self._spec_interval_begin(len(live), tokens)
+            tokens, committing = self._spec_committed(counts, live, width)
+            t_begin = self._spec_interval_begin(len(live), tokens, committing)
             self._spec_mode_now = ("plain", self._spec_plain_bucket(max(1, len(live))))
             top = max((int(self._spec_row(positions, rows, r)[0]) for r in live), default=0)
             self._spec_table_now = self._spec_plain_table_ms(max(1, len(live)), top)
@@ -7791,8 +7806,8 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             # (the 32-row all-declined step paid ~1 ms in them).
             counts_rows = counts.reshape(-1).tolist() if counts is not None else None
             pos_rows = positions.reshape(int(rows), -1).tolist()
-            tokens = sum(max(1, min(int(counts_rows[r]), width)) if counts_rows is not None else 1 for r in live)
-            t_begin = self._spec_interval_begin(len(live), tokens)
+            tokens, committing = self._spec_committed(counts_rows, live, width)
+            t_begin = self._spec_interval_begin(len(live), tokens, committing)
             self._spec_mode_now = ("plain", self._spec_plain_bucket(len(live)))
             top = max(int(pos_rows[r][0]) for r in live)
             self._spec_table_now = self._spec_plain_table_ms(len(live), top)
