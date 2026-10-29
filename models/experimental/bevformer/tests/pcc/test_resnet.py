@@ -71,14 +71,14 @@ def test_bottleneck_layer1(device, reset_seeds, reference_and_parameters):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_bottleneck_layer3(device, reset_seeds, reference_and_parameters):
+def test_reslayer3_first_blocks(device, reset_seeds, reference_and_parameters):
     reference_model, parameters = reference_and_parameters
     torch_input = torch.randn(NUM_CAMS, 512, IMAGE_HEIGHT // 8, IMAGE_WIDTH // 8)
     torch_output = reference_model.layer3[1].eval()(reference_model.layer3[0].eval()(torch_input))
 
-    # layer3's first two blocks, run as TTResNet runs layer3: the second on a group of cameras at a
-    # time in L1, the first too unless its group input does not fit (TTResLayer), when it runs on
-    # the whole batch.
+    # layer3's first two blocks, run as TTResLayer runs layer3: on a group of cameras at a time in
+    # L1, with the first block on the whole batch where TTResLayer puts it there.
+    layout = _input_layout(parameters, 2)
     ttnn_model = TTResLayer(
         [parameters.conv_args.layer3[j] for j in range(2)],
         [parameters["res_model"]["layer3"][j] for j in range(2)],
@@ -99,7 +99,8 @@ def test_bottleneck_layer4(device, reset_seeds, reference_and_parameters):
     torch_output = reference_model.layer4[0].eval()(torch_input)
 
     kwargs = _layer_kwargs(parameters, 3)
-    assert kwargs.pop("cameras") is None, "layer4 runs per camera; test it through TTResLayer"
+    assert kwargs.pop("cameras") is None, "this test runs layer4's block on the whole batch, as TTResNet does"
+    layout = _input_layout(parameters, 3)
     ttnn_model = TTBottleneck(
         parameters.conv_args.layer4[0],
         parameters["res_model"]["layer4"][0],

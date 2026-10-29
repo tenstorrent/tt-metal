@@ -515,7 +515,7 @@ class TTCameraBottleneck:
         ttnn.deallocate(self._conv2(warmup))
 
     # Act blocks up to this many tile rows fit L1 beside the block's identity and the double-buffered
-    # weights at layer1's and layer2's shapes; taller ones are unverified.
+    # weights at base's one-camera layer1 and layer2 shapes; taller ones are unverified.
     CONV2_MAX_ACT_BLOCK_TILES = 9
 
     def conv2_act_block_h(self):
@@ -529,7 +529,8 @@ class TTCameraBottleneck:
         return grid_height_sharded(self.device, self.shard_tiles if shard_tiles is None else shard_tiles, channels)
 
     # Weight tiles a linear multicasts per inner block: every core holds that block, in0_block_w by
-    # the whole output width, which for layer4's 2048-channel outputs would outgrow L1.
+    # the whole output width, which for layer3's 1024-channel conv3 and downsample next to the
+    # group's activations would outgrow L1.
     LINEAR_WEIGHT_BLOCK_TILES = 128
     # Inner blocks wider than this measured no faster.
     LINEAR_MAX_IN0_BLOCK_W = 16
@@ -550,7 +551,7 @@ class TTCameraBottleneck:
             for w in range(1, min(in_t, self.LINEAR_MAX_IN0_BLOCK_W) + 1)
             if in_t % w == 0 and w * out_t <= self.LINEAR_WEIGHT_BLOCK_TILES
         )
-        partial_tile_bytes = 4096 if self.fp32_acc else 2048
+        partial_tile_bytes = ttnn.TILE_SIZE * ttnn.TILE_SIZE * (4 if self.fp32_acc else 2)
         out_block_h = max(
             h
             for h in range(1, self.shard_tiles + 1)
@@ -592,9 +593,10 @@ class TTCameraBottleneck:
                 staged = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(x)
             else:
-                # The DCN's circular buffers fill L1 from the bottom up to the lowest tensor in it,
-                # so its ROW_MAJOR input moves to the top of L1 once the TILE copies, x among them,
-                # are freed.
+                # conv1's linear keeps its shards on the cores that hold rows, which can be fewer than
+                # the grid the DCN takes. The DCN's circular buffers fill L1 from the bottom up to the
+                # lowest tensor in it, so its ROW_MAJOR input moves to the top of L1 once the TILE
+                # copies, x among them, are freed.
                 tiled = ttnn.to_memory_config(x, self.dcn.input_memory_config)
                 staged = ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT)
                 ttnn.deallocate(tiled)
@@ -967,8 +969,8 @@ class TTResNet:
         # The stem conv reads its input through conv2d's DRAM slicing, which fetches a ROW_MAJOR
         # tensor one pixel at a time, millions of reads whatever the channel count; a TILE input is
         # read in tiles. Tilizing NCHW, whose rows are image rows, is cheap; NCHW goes to NHWC
-        # already tiled, and its (1, 1, N*H*W, 3) view is free as W is a tile multiple. Two
-        # transposes, NHCW then NHWC, run in under half the time of the one permute.
+        # already tiled, by two transposes, NHCW then NHWC, and its (1, 1, N*H*W, 3) view is free as
+        # W is a tile multiple.
         n, c, h, w = x.shape
         assert x.layout == ttnn.ROW_MAJOR_LAYOUT, f"the images come ROW_MAJOR, got {x.layout}"
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
