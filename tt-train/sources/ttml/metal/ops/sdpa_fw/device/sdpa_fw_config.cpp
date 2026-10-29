@@ -138,17 +138,24 @@ uint32_t num_work_items(const SDPAForwardShape& shape, const SDPAForwardChunks& 
     return num_stacks * (shape.St / chunks.Sq_chunk_t);
 }
 
+uint32_t num_causal_pairs(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks) {
+    const bool pairs = shape.mask_type == AttentionMaskType::Causal && (shape.St / chunks.Sq_chunk_t) % 2U == 0U;
+    return pairs ? num_work_items(shape, chunks) / 2U : 0U;
+}
+
 namespace {
 
-bool pairs_causal_chunks(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks) {
-    return shape.mask_type == AttentionMaskType::Causal && (shape.St / chunks.Sq_chunk_t) % 2U == 0U;
+// Main's rule: the balanced pairs only when every core gets one; fewer pairs than cores would idle cores.
+bool pairs_causal_chunks(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_available_cores) {
+    const uint32_t pairs = num_causal_pairs(shape, chunks);
+    return pairs > 0U && pairs >= num_available_cores;
 }
 
 }  // namespace
 
-uint32_t num_work_units(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks) {
-    const uint32_t items = num_work_items(shape, chunks);
-    return pairs_causal_chunks(shape, chunks) ? items / 2U : items;
+uint32_t num_work_units(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_available_cores) {
+    return pairs_causal_chunks(shape, chunks, num_available_cores) ? num_causal_pairs(shape, chunks)
+                                                                   : num_work_items(shape, chunks);
 }
 
 SDPAForwardShape shape_of(
@@ -172,11 +179,11 @@ SDPAForwardShape shape_of(
 }
 
 std::vector<CoreItemRuns> split_work(
-    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
-    const uint32_t total_units = num_work_units(shape, chunks);
+    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t num_available_cores) {
+    const uint32_t total_units = num_work_units(shape, chunks, num_available_cores);
     TT_FATAL(num_cores > 0 && num_cores <= total_units, "split_work: need 1..{} cores, got {}", total_units, num_cores);
     std::vector<CoreItemRuns> per_core_runs;
-    if (pairs_causal_chunks(shape, chunks)) {
+    if (pairs_causal_chunks(shape, chunks, num_available_cores)) {
         const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
         const uint32_t num_stacks = shape.batch * shape.q_heads / chunks.heads_per_item;
         per_core_runs = split_items_paired(num_stacks, q_num_chunks, num_cores);
@@ -247,9 +254,9 @@ SDPAForwardChunks resolve_chunks(
     // four K/V tiles do better once the inner dim reaches 128 tiles-wide traffic or with a mask tensor
     // (the step then reads mask tiles on top of K/V). More rows per item only pay off once the work is
     // scheduled by cost rather than paired, so heads_per_item stays 1 unless asked for. The chunks shrink
-    // while they do not fit L1 or would leave cores idle: causal work is handed out as light/heavy chunk
-    // pairs, so a pair per core is the floor there (main's one-row chunks on every core), an item per core
-    // otherwise.
+    // while they do not fit L1 or would leave cores idle: causal work goes out as light/heavy chunk pairs
+    // once there is a pair per core (main's rule), so a pair per core is the floor there (main's one-row
+    // chunks on every core), an item per core otherwise.
     constexpr uint32_t kDefaultSqChunkT = 4U;
     const uint32_t default_sk_chunk_t = (shape.qWt >= 4U || shape.mask_type == AttentionMaskType::Arbitrary) ? 4U : 8U;
     SDPAForwardChunks chunks{
@@ -258,8 +265,12 @@ SDPAForwardChunks resolve_chunks(
         .heads_per_item = std::max(user.heads_per_item, 1U)};
     if (chunks.Sq_chunk_t == 0U) {
         chunks.Sq_chunk_t = kDefaultSqChunkT;
+        const auto units_for_balance = [&]() {
+            const uint32_t pairs = num_causal_pairs(shape, chunks);
+            return pairs > 0U ? pairs : num_work_items(shape, chunks);
+        };
         while (chunks.Sq_chunk_t > 1U &&
-               (shape.St % chunks.Sq_chunk_t != 0U || num_work_units(shape, chunks) < num_available_cores)) {
+               (shape.St % chunks.Sq_chunk_t != 0U || units_for_balance() < num_available_cores)) {
             chunks.Sq_chunk_t /= 2U;
         }
     }

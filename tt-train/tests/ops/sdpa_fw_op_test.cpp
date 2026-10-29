@@ -1756,13 +1756,14 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
     few_seqs.kv_heads = 8U;
     const auto picked_few = resolve_chunks({}, few_seqs, kBudget, kCores);
     EXPECT_EQ(picked_few.Sq_chunk_t, 1U);
-    EXPECT_GE(num_work_units(few_seqs, picked_few), kCores);
+    EXPECT_GE(num_work_units(few_seqs, picked_few, kCores), kCores);
     EXPECT_EQ(picked_few.Sk_chunk_t, picked.Sk_chunk_t) << "the K/V step does not depend on the core count";
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
-    // Host-only: causal chunks go out as (i, n-1-i) pairs, every item exactly once, on min(cores, pairs)
-    // cores; an odd chunk count and the other mask modes get contiguous blocks.
+    // Host-only: causal chunks go out as (i, n-1-i) pairs, every item exactly once, when there is a pair for
+    // every core (main's rule); fewer pairs than cores, an odd chunk count and the other mask modes get
+    // contiguous blocks of items.
     using namespace ttml::metal::ops::sdpa_fw::device;
     constexpr uint32_t kCores = 130U;
     const auto items_of = [](const CoreItemRuns& runs) {
@@ -1798,12 +1799,23 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
         .has_gate = false,
         .return_intermediates = true};
     const SDPAForwardChunks four_rows{.Sq_chunk_t = 4U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
-    // 32 sequences x 4 chunks = 128 items = 64 pairs < 130 cores: paired on 64 cores.
+    // 32 sequences x 4 chunks = 128 items = 64 pairs. With 130 cores that is fewer pairs than cores, so as
+    // on main the items go out contiguously, one per core on 128 cores.
     ASSERT_EQ(num_work_items(causal, four_rows), 128U);
-    ASSERT_EQ(num_work_units(causal, four_rows), 64U);
-    const uint32_t num_cores = std::min(kCores, num_work_units(causal, four_rows));
+    ASSERT_EQ(num_causal_pairs(causal, four_rows), 64U);
+    EXPECT_EQ(num_work_units(causal, four_rows, kCores), 128U);
+    const auto unpaired = split_work(causal, four_rows, 128U, kCores);
+    ASSERT_EQ(unpaired.size(), 128U);
+    check_each_item_once(unpaired, 128U);
+    for (const auto& runs : unpaired) {
+        EXPECT_EQ(items_of(runs).size(), 1U) << "one item per core";
+    }
+    // With 64 cores every core gets a pair: paired on 64 cores.
+    constexpr uint32_t kPairCores = 64U;
+    ASSERT_EQ(num_work_units(causal, four_rows, kPairCores), 64U);
+    const uint32_t num_cores = std::min(kPairCores, num_work_units(causal, four_rows, kPairCores));
     EXPECT_EQ(num_cores, 64U);
-    const auto paired = split_work(causal, four_rows, num_cores);
+    const auto paired = split_work(causal, four_rows, num_cores, kPairCores);
     ASSERT_EQ(paired.size(), num_cores);
     check_each_item_once(paired, 128U);
     constexpr uint32_t kChunksPerSeq = 4U;
@@ -1816,15 +1828,17 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
             << "chunk i goes with chunk n-1-i";
     }
     // Fewer cores than pairs: pairs are shared out contiguously, still each item once.
-    const auto paired_fewer = split_work(causal, four_rows, 40U);
+    const auto paired_fewer = split_work(causal, four_rows, 40U, 40U);
     ASSERT_EQ(paired_fewer.size(), 40U);
     check_each_item_once(paired_fewer, 128U);
 
     // Odd chunk count (St=12, Sq=4 -> 3 chunks): contiguous over min(cores, items).
     SDPAForwardShape odd = causal;
     odd.St = 12U;
-    EXPECT_EQ(num_work_units(odd, four_rows), num_work_items(odd, four_rows));
-    const auto contiguous = split_work(odd, four_rows, std::min(kCores, num_work_units(odd, four_rows)));
+    EXPECT_EQ(num_causal_pairs(odd, four_rows), 0U);
+    EXPECT_EQ(num_work_units(odd, four_rows, kCores), num_work_items(odd, four_rows));
+    const auto contiguous =
+        split_work(odd, four_rows, std::min(kCores, num_work_units(odd, four_rows, kCores)), kCores);
     ASSERT_EQ(contiguous.size(), 96U);
     check_each_item_once(contiguous, 96U);
     for (const auto& runs : contiguous) {
@@ -1834,13 +1848,13 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
     // No mask: items, not pairs.
     SDPAForwardShape none = causal;
     none.mask_type = ttml::metal::AttentionMaskType::None;
-    EXPECT_EQ(num_work_units(none, four_rows), 128U);
-    const uint32_t none_cores = std::min(kCores, num_work_units(none, four_rows));
-    const auto none_split = split_work(none, four_rows, none_cores);
+    EXPECT_EQ(num_work_units(none, four_rows, kCores), 128U);
+    const uint32_t none_cores = std::min(kCores, num_work_units(none, four_rows, kCores));
+    const auto none_split = split_work(none, four_rows, none_cores, kCores);
     ASSERT_EQ(none_split.size(), none_cores);
     check_each_item_once(none_split, 128U);
 
-    EXPECT_ANY_THROW(split_work(causal, four_rows, 65U)) << "more cores than pairs is a caller bug";
+    EXPECT_ANY_THROW(split_work(causal, four_rows, 65U, kPairCores)) << "more cores than pairs is a caller bug";
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultFitsLargeHeadDim) {
