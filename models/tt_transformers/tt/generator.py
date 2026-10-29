@@ -69,6 +69,7 @@ def prefill_chunk_sizes(real_len, max_chunk_size, padded_len):
         remaining -= c
     return sizes
 
+
 # Power-of-2 batch sizes supported by trace caching for batched prefill.
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 
@@ -2069,8 +2070,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # (power-of-two) length is then decomposed into smaller power-of-two chunks that cover
         # only the real tokens (see prefill_chunk_sizes), e.g. 9,000 real tokens -> 8192 + 2048
         # instead of one 16384 prefill. Needs paged attention like the existing chunked path.
+        # Single-user prompts only: the batched prefill path (vLLM warmup and serving, batch_size > 1)
+        # passes a per-user list as last_token_idx and takes the single-shot path.
         can_decompose = (
-            page_table is not None and kv_cache is not None and last_token_idx is not None and not use_prefix_caching
+            page_table is not None
+            and kv_cache is not None
+            and last_token_idx is not None
+            and not isinstance(last_token_idx, (list, tuple))
+            and batch_size == 1
+            and not use_prefix_caching
         )
         use_chunked_prefill = seq_len > max_chunk or (can_decompose and seq_len > MIN_PREFILL_CHUNK_SIZE)
         if use_chunked_prefill or use_prefix_caching:
@@ -2102,7 +2110,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 chunk_sizes = [chunk_size] * num_chunks
             else:
                 chunk_sizes = prefill_chunk_sizes(last_token_idx_in_seq + 1, max_chunk, seq_len)
-            logger.info(f"Chunked prefill: {len(chunk_sizes)} chunk(s) {chunk_sizes} for {last_token_idx_in_seq + 1} tokens")
+            logger.info(
+                f"Chunked prefill: {len(chunk_sizes)} chunk(s) {chunk_sizes} for {last_token_idx_in_seq + 1} tokens"
+            )
             # Hybrid models may substitute a full-attention per-layer table here
             # so ``chunk_page_table`` carries the block IDs (and column stride) that
             # full-layer fill actually writes (legacy ``page_table`` is often
