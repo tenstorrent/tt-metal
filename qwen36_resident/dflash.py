@@ -34,14 +34,18 @@ def cache_root():
     return f"{root}/resident_dflash" if root else None
 
 
-def lm_head_vshard(mesh, ck, cache_dir=None):
-    """the checkpoint's lm_head as [H, V / n] bf8 per chip (vocab-sharded, no norm folded)"""
-    name = f"{cache_dir}/lm_head.vshard" if cache_dir else None
+DTYPES = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b, "bf4": ttnn.bfloat4_b}
+
+
+def lm_head_vshard(mesh, ck, cache_dir=None, dtype=ttnn.bfloat8_b):
+    """the checkpoint's lm_head as [H, V / n] per chip (vocab-sharded, no norm folded; bf8 by default)"""
+    tag = "" if dtype == ttnn.bfloat8_b else f".{str(dtype).split('.')[-1]}"
+    name = f"{cache_dir}/lm_head.vshard{tag}" if cache_dir else None
     w = ck.get("lm_head.weight")  # [V, H]
     return ttnn.as_tensor(
         w,
         preprocess=lambda t: t.T.contiguous(),
-        dtype=ttnn.bfloat8_b,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=mesh,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -51,7 +55,9 @@ def lm_head_vshard(mesh, ck, cache_dir=None):
 
 
 def build_drafter(mesh, ck, weights_dir=None, embed=None, block=None):
-    """DFlash2DrafterTP on `mesh` for the target checkpoint ck; weights cached under $TT_CACHE_PATH/resident_dflash"""
+    """DFlash2DrafterTP on `mesh` for the target checkpoint ck; weights cached under $TT_CACHE_PATH/resident_dflash.
+    DFL_MLP_DTYPE / DFL_LM_DTYPE (bf16 | bf8 | bf4): the drafter's MLP weights (default bf16) and its lm_head
+    (default bf8)"""
     weights_dir = weights_dir or os.environ.get("DFLASH_WEIGHTS", DEFAULT_WEIGHTS)
     real = os.path.realpath(resolve_weights_dir(weights_dir))
     root = cache_root()
@@ -59,7 +65,8 @@ def build_drafter(mesh, ck, weights_dir=None, embed=None, block=None):
         os.makedirs(root, exist_ok=True)
     cache = f"{root}/{os.path.basename(real)}-{hashlib.sha1(real.encode()).hexdigest()[:10]}" if root else None
     emb = (Q.embedding(ck) if embed is None else embed).to(torch.bfloat16)
-    lm = lm_head_vshard(mesh, ck, root)
+    mlp_dtype = DTYPES[os.environ.get("DFL_MLP_DTYPE", "bf16")]
+    lm = lm_head_vshard(mesh, ck, root, DTYPES[os.environ.get("DFL_LM_DTYPE", "bf8")])
     drafter = DFlash2DrafterTP(
         mesh,
         weights_dir,
@@ -69,6 +76,7 @@ def build_drafter(mesh, ck, weights_dir=None, embed=None, block=None):
         lm,
         lm_vocab_sharded=True,
         block=block,
+        mlp_dtype=mlp_dtype,
         cache_dir=cache,
     )
     logger.info(
