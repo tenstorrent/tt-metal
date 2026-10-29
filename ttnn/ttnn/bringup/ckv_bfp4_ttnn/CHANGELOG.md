@@ -54,3 +54,15 @@ Source: none (new op), deepseek_v41_flash_d_p 4-bit compressed KV (owner 2026-10
   other pages untouched, deterministic. Time: 28 us for 2176 rows, as the records.
 - Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit)
 - Files: ckv_bfp4.py, kernels/ckv_bfp4_{compute,writer}.cpp, tests/reference.py, tests/unit/test_ckv_bfp4.py
+
+### bfp_round prepared=True
+- What: `bfp_round(..., prepared=True)` builds the round program once per (mesh, tiles, dtype, memory configs) and
+  dispatches it by ttnn.bringup.run_prepared, the table's first page a value slot (as ckv_bfp4's row0). The writer
+  takes the core's first tile and the table's first page as two runtime args (was one sum), so the page is one value
+  for every core. Default (prepared=False) the same program apart from that argument split; same bytes.
+- Why: deepseek_v41_flash_d_p lowbit phase 2 rounds the index keys and query every chunk (INDEX_K_FORMAT /
+  INDEX_Q_FORMAT=bfp4): host time per call (DS41-135, P.7's pattern).
+- Exactness: tests/unit/test_bfp_round.py::test_bfp_round_prepared (new outputs and in-place writes at other rows /
+  tables equal generic_op byte for byte, prepared once); tests/unit 19 pass.
+- Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit phase 2)
+- Files: ckv_bfp4.py, kernels/bfp_round_writer.cpp, tests/unit/test_bfp_round.py

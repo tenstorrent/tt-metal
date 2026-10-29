@@ -621,11 +621,41 @@ TABLE = {
         "0.19-0.21), layers within limits (worst L20 0.032 / 0.051, L24 0.029 / 0.042); table 3.3x smaller. "
         "bf16 = bf16 rows, stock sparse_sdpa",
     ),
+    "WINDOW_KV_FORMAT": Setting(
+        "bfp8_blocks",
+        ("bf16", "bfp8_blocks"),
+        "the window KV sparse_sdpa reads (DS41-150, OWNER DECISION 2026-10-29 13:00; developed on the 2x2): the reference "
+        "stores it as e4m3 with a power-of-two scale per 32 (ds41_ref.py _window_kv). bfp8_blocks = the [carry 128 | "
+        "chunk S] window region as bfloat8_b blocks of 32 consecutive rows a page (ttnn.bringup.ckv_bfp4 dtype=bfloat8_b "
+        "blocks=True: SFPU round to nearest even), read by the sdpa fork as kv_window (compressed layers, CKV_FORMAT="
+        "bfp4_rows) or kv_format ROW_BFP8 (window-only layers), two NoC reads a block: 3-4x closer to native than the "
+        "reference's e4m3 (lowbit_derisk/LOWBIT_PHASE1.md), sparse_sdpa -4 % compressed / -17 % window-only layers on one "
+        "card. The served 0_window_kv cache stays bf16 (contract unchanged; temporary, owner 2026-10-29 13:25). bf16 = "
+        "the bf16 row table (the path before)",
+    ),
+    "INDEX_K_FORMAT": Setting(
+        "bfp4",
+        ("bf16", "bfp4"),
+        "the index keys the indexer scores (DS41-150, OWNER DECISION 2026-10-29 13:00): the reference stores them as "
+        "fp4 e2m1 with a power-of-two scale per 32 (ds41_ref.py _compressor). bfp4 = the tiled key slab rounded to "
+        "bfloat4_b (ttnn.bringup.bfp_round, nearest even) and the ring's key buffer bfloat4_b (ring_indexer_score_dsa "
+        "reads them through the unpacker): top-512 selection error 7.6-15.7 % vs the reference's own fp4 8.0-16.6 % "
+        "(CPU, native goldens), 3.6x less ring traffic. The served index-key cache stays bf16. bf16 = the path before",
+    ),
+    "INDEX_Q_FORMAT": Setting(
+        "bfp4",
+        ("bf16", "bfp4"),
+        "the index query (DS41-150, OWNER DECISION 2026-10-29 13:00): the reference quantizes it to fp4 e2m1 with a "
+        "power-of-two scale per 32 after its RoPE (ds41_ref.py _indexer). bfp4 = the roped bf16 query rounded to "
+        "bfloat4_b (ttnn.bringup.bfp_round, nearest even) before the score. bf16 = the path before",
+    ),
     "CKV_BFP4_PREPARED": Setting(
         "on",
         ("on", "off"),
         "P.7 (galaxy 8x4, owner focus: host time per chunk; DS41-135): on = ttnn.bringup.ckv_bfp4 (CKV_FORMAT=bfp4_rows, "
-        "tt/compressor.AttnTable.append_tiles) builds its program once per (mesh, n, rounded) and dispatches it as a "
+        "tt/compressor.AttnTable.append_tiles; WINDOW_KV_FORMAT=bfp8_blocks, tt/attention._put_blocks) and "
+        "ttnn.bringup.bfp_round (INDEX_K_FORMAT / INDEX_Q_FORMAT=bfp4, tt/indexer.py) build their program once per "
+        "(mesh, n, rounded) and dispatch it as a "
         "prepared program (fork option prepared=True: ttnn.bringup.prepare_program with row0 as a value slot, "
         "run_prepared each call). off = a fresh ProgramDescriptor through ttnn.generic_op every call (the path before "
         "P.7). Same program, same runtime arguments, same bytes",
