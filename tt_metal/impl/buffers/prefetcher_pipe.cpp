@@ -34,8 +34,12 @@
 #include "hostdev/remote_dfb_config_layout.h"
 #include "llrt/tt_cluster.hpp"
 #include "mesh_device.hpp"
+#include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/api/tt-metalium/tt_metal.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/tensor_prefetcher.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -133,9 +137,7 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
     // Quasar reserves lane slots up front; the active count (default 1) is raised per pipe by the
     // first multi-thread receiver bind. WH/BH stay single-lane.
     credit_lane_capacity_(device.arch() == tt::ARCH::QUASAR ? PREFETCHER_PIPE_MAX_CREDIT_LANES : 1u) {
-    TT_FATAL(
-        config_.buffer_type == BufferType::L1,
-        "PrefetcherPipeSpace: persistent-arena allocations require BufferType::L1");
+    TT_FATAL(config_.buffer_type == BufferType::L1, "PrefetcherPipeSpace: buffer_type must be BufferType::L1");
     TT_FATAL(config_.ring_size > 0, "PrefetcherPipeSpace: ring_size must be > 0");
     const uint32_t l1_alignment = l1_alignment_for(device_);
     TT_FATAL(
@@ -160,65 +162,40 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
     TT_FATAL(
         config_.sender_cores.num_cores() > 0 || config_.num_dram_senders > 0,
         "PrefetcherPipeSpace: provide worker sender_cores, num_dram_senders, or both");
+    if (config_.l1_source == PrefetcherPipeL1Source::Default) {
+        config_.l1_source =
+            config_.num_dram_senders > 0 ? PrefetcherPipeL1Source::Allocator : PrefetcherPipeL1Source::PersistentArena;
+    }
+    TT_FATAL(
+        config_.num_dram_senders == 0 || config_.l1_source == PrefetcherPipeL1Source::Allocator,
+        "PrefetcherPipeSpace: a space with DRAM senders ({} requested) takes its L1 from the allocator; "
+        "PrefetcherPipeL1Source::PersistentArena is for worker-only spaces",
+        config_.num_dram_senders);
     reservation_cores_ = config_.sender_cores.merge(config_.receiver_domain);
     // Worker-only public surface: sender_cores / receiver_domain are logical worker coordinates,
-    // which the persistent arena validates against the worker grid on allocate.
+    // which the persistent arena and the L1 allocator validate against the worker grid.
     layout_ =
         compute_prefetcher_pipe_config_page_layout(config_.max_receivers_per_pipe, credit_lane_capacity_, l1_alignment);
+}
 
-    try {
-        setup_reservation();
-    } catch (...) {
-        release_allocations();
-        throw;
+void PrefetcherPipeSpaceImpl::attach_l1(std::shared_ptr<PrefetcherPipeSpaceL1> l1) {
+    TT_FATAL(l1 != nullptr && l1_ == nullptr, "PrefetcherPipeSpace: L1 is attached exactly once");
+    TT_FATAL(
+        l1->source() == config_.l1_source,
+        "PrefetcherPipeSpace: L1 from the wrong source attached to the space (internal error)");
+    l1_ = std::move(l1);
+    // Domain template: every reservation core holds a zeroed page at config_address(), so a page
+    // exists (and is harmless) on cores no pipe ever claims. Carving overwrites the real pages. An
+    // Allocator space's config buffer was zeroed when it was allocated.
+    if (config_.l1_source == PrefetcherPipeL1Source::PersistentArena) {
+        const std::vector<uint32_t> zero_page(layout_.page_size / sizeof(uint32_t), 0);
+        write_page(reservation_cores_, zero_page);
     }
 }
 
-void PrefetcherPipeSpaceImpl::setup_reservation() {
-    const uint32_t l1_alignment = l1_alignment_for(device_);
-    auto& arena = device_->allocator_impl()->persistent_l1();
-
-    // One ring allocation and one page allocation over the whole domain: every domain core gets
-    // the same two addresses, which is the lockstep contract every carved pipe relies on.
-    auto data_allocation = arena.allocate(reservation_cores_, config_.ring_size, l1_alignment);
-    data_allocation_id_ = data_allocation.id;
-    TT_FATAL(
-        data_allocation.address <= std::numeric_limits<uint32_t>::max(),
-        "PrefetcherPipeSpace ring address {} exceeds device-address width",
-        data_allocation.address);
-    data_address_ = static_cast<uint32_t>(data_allocation.address);
-
-    // Page-relative block offsets are only line-aligned if the page itself is.
-    auto config_allocation = arena.allocate(
-        reservation_cores_, layout_.page_size, std::max(l1_alignment, PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN));
-    config_allocation_id_ = config_allocation.id;
-    TT_FATAL(
-        config_allocation.address <= std::numeric_limits<uint32_t>::max(),
-        "PrefetcherPipeSpace config address {} exceeds device-address width",
-        config_allocation.address);
-    config_address_ = static_cast<uint32_t>(config_allocation.address);
-
-    const DeviceAddr persistent_begin = std::min(data_allocation.address, config_allocation.address);
-    const DeviceAddr persistent_end =
-        std::max(data_allocation.address + data_allocation.size, config_allocation.address + config_allocation.size);
-    for (const CoreCoord& core : corerange_to_cores(reservation_cores_)) {
-        const auto& bank_ids = device_->allocator_impl()->get_bank_ids_from_logical_core(BufferType::L1, core);
-        TT_FATAL(bank_ids.size() == 1, "Expected one L1 bank for PrefetcherPipeSpace core {}", core.str());
-        const auto lowest_global_allocation =
-            device_->allocator_impl()->get_lowest_occupied_l1_address(bank_ids.front());
-        TT_FATAL(
-            !lowest_global_allocation.has_value() || persistent_end <= *lowest_global_allocation,
-            "PrefetcherPipeSpace persistent L1 region [{}, {}) overlaps an existing L1 allocation at {} on core {}",
-            persistent_begin,
-            persistent_end,
-            lowest_global_allocation.value_or(0),
-            core.str());
-    }
-
-    // Domain template: every reservation core holds a zeroed page at config_address(), so a page
-    // exists (and is harmless) on cores no pipe ever claims. Carving overwrites the real pages.
-    const std::vector<uint32_t> zero_page(layout_.page_size / sizeof(uint32_t), 0);
-    write_page(reservation_cores_, zero_page);
+const PrefetcherPipeSpaceL1& PrefetcherPipeSpaceImpl::l1() const {
+    TT_FATAL(l1_ != nullptr, "PrefetcherPipeSpace has no L1 attached (internal error)");
+    return *l1_;
 }
 
 PrefetcherPipeSpaceImpl::~PrefetcherPipeSpaceImpl() {
@@ -235,10 +212,128 @@ PrefetcherPipeSpaceImpl::~PrefetcherPipeSpaceImpl() {
         }
         live_pipes_.clear();
     }
-    release_allocations();
 }
 
-void PrefetcherPipeSpaceImpl::release_allocations() noexcept {
+// ---------------------------------------------------------------------------------------------
+// PrefetcherPipeSpaceL1
+// ---------------------------------------------------------------------------------------------
+
+PrefetcherPipeSpaceL1::PrefetcherPipeSpaceL1(
+    distributed::MeshDevice& device,
+    PrefetcherPipeL1Source source,
+    const CoreRangeSet& cores,
+    uint32_t ring_size,
+    uint32_t config_page_size) :
+    device_(&device), source_(source) {
+    TT_FATAL(
+        source_ != PrefetcherPipeL1Source::Default,
+        "PrefetcherPipeSpaceL1 requires a resolved L1 source (internal error)");
+    try {
+        if (source_ == PrefetcherPipeL1Source::PersistentArena) {
+            allocate_from_arena(cores, ring_size, config_page_size);
+        } else {
+            allocate_from_allocator(cores, ring_size, config_page_size);
+        }
+    } catch (...) {
+        release();
+        throw;
+    }
+}
+
+PrefetcherPipeSpaceL1::~PrefetcherPipeSpaceL1() { release(); }
+
+void PrefetcherPipeSpaceL1::allocate_from_arena(
+    const CoreRangeSet& cores, uint32_t ring_size, uint32_t config_page_size) {
+    const uint32_t l1_alignment = l1_alignment_for(device_);
+    auto& arena = device_->allocator_impl()->persistent_l1();
+
+    // One ring allocation and one page allocation over the whole domain: every domain core gets
+    // the same two addresses, which is the lockstep contract every carved pipe relies on.
+    auto data_allocation = arena.allocate(cores, ring_size, l1_alignment);
+    data_allocation_id_ = data_allocation.id;
+    TT_FATAL(
+        data_allocation.address <= std::numeric_limits<uint32_t>::max(),
+        "PrefetcherPipeSpace ring address {} exceeds device-address width",
+        data_allocation.address);
+    data_address_ = static_cast<uint32_t>(data_allocation.address);
+
+    // Page-relative block offsets are only line-aligned if the page itself is.
+    auto config_allocation =
+        arena.allocate(cores, config_page_size, std::max(l1_alignment, PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN));
+    config_allocation_id_ = config_allocation.id;
+    TT_FATAL(
+        config_allocation.address <= std::numeric_limits<uint32_t>::max(),
+        "PrefetcherPipeSpace config address {} exceeds device-address width",
+        config_allocation.address);
+    config_address_ = static_cast<uint32_t>(config_allocation.address);
+
+    const DeviceAddr persistent_begin = std::min(data_allocation.address, config_allocation.address);
+    const DeviceAddr persistent_end =
+        std::max(data_allocation.address + data_allocation.size, config_allocation.address + config_allocation.size);
+    for (const CoreCoord& core : corerange_to_cores(cores)) {
+        const auto& bank_ids = device_->allocator_impl()->get_bank_ids_from_logical_core(BufferType::L1, core);
+        TT_FATAL(bank_ids.size() == 1, "Expected one L1 bank for PrefetcherPipeSpace core {}", core.str());
+        const auto lowest_global_allocation =
+            device_->allocator_impl()->get_lowest_occupied_l1_address(bank_ids.front());
+        TT_FATAL(
+            !lowest_global_allocation.has_value() || persistent_end <= *lowest_global_allocation,
+            "PrefetcherPipeSpace persistent L1 region [{}, {}) overlaps an existing L1 allocation at {} on core {}",
+            persistent_begin,
+            persistent_end,
+            lowest_global_allocation.value_or(0),
+            core.str());
+    }
+}
+
+void PrefetcherPipeSpaceL1::allocate_from_allocator(
+    const CoreRangeSet& cores, uint32_t ring_size, uint32_t config_page_size) {
+    const uint32_t l1_alignment = l1_alignment_for(device_);
+    const uint32_t num_cores = cores.num_cores();
+    // One page per core, so every core holds its slice at the buffer's single lockstep address.
+    auto allocate_per_core = [&](uint32_t bytes_per_core) {
+        ShardSpecBuffer shard_parameters(cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = static_cast<DeviceAddr>(bytes_per_core) * num_cores},
+            distributed::DeviceLocalBufferConfig{
+                .page_size = bytes_per_core,
+                .buffer_type = BufferType::L1,
+                .sharding_args = BufferShardingArgs(std::move(shard_parameters), TensorMemoryLayout::HEIGHT_SHARDED),
+            },
+            device_);
+    };
+
+    data_buffer_ = allocate_per_core(ring_size);
+    TT_FATAL(
+        data_buffer_->address() <= std::numeric_limits<uint32_t>::max(),
+        "PrefetcherPipeSpace ring address {} exceeds device-address width",
+        data_buffer_->address());
+    data_address_ = static_cast<uint32_t>(data_buffer_->address());
+
+    // Page-relative block offsets are only line-aligned if the page itself is. The allocator only
+    // guarantees L1 alignment, so each core's slot carries the slack to move the page up to a line.
+    const uint32_t config_alignment = std::max(l1_alignment, PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN);
+    const uint32_t config_slot_size = tt::align(config_page_size, l1_alignment) + (config_alignment - l1_alignment);
+    config_buffer_ = allocate_per_core(config_slot_size);
+    const DeviceAddr aligned_config_address = tt::align(config_buffer_->address(), config_alignment);
+    TT_FATAL(
+        aligned_config_address <= std::numeric_limits<uint32_t>::max(),
+        "PrefetcherPipeSpace config address {} exceeds device-address width",
+        aligned_config_address);
+    config_address_ = static_cast<uint32_t>(aligned_config_address);
+
+    // Zero every core's page, which is the template a core no pipe has claimed holds. Through the
+    // command queue, like the pages carved later, because earlier work may still be using this L1.
+    const std::vector<uint32_t> zeros(config_buffer_->size() / sizeof(uint32_t), 0);
+    distributed::EnqueueWriteMeshBuffer(device_->mesh_command_queue(), config_buffer_, zeros, /*blocking=*/false);
+}
+
+void PrefetcherPipeSpaceL1::release() noexcept {
+    // MeshBuffer handles a device that is already closed.
+    data_buffer_.reset();
+    config_buffer_.reset();
+    if (data_allocation_id_ == 0 && config_allocation_id_ == 0) {
+        return;
+    }
     if (device_ == nullptr || !device_->is_initialized()) {
         config_allocation_id_ = 0;
         data_allocation_id_ = 0;
@@ -246,8 +341,12 @@ void PrefetcherPipeSpaceImpl::release_allocations() noexcept {
     }
     try {
         auto& arena = device_->allocator_impl()->persistent_l1();
-        arena.deallocate(config_allocation_id_);
-        arena.deallocate(data_allocation_id_);
+        if (config_allocation_id_ != 0) {
+            arena.deallocate(config_allocation_id_);
+        }
+        if (data_allocation_id_ != 0) {
+            arena.deallocate(data_allocation_id_);
+        }
     } catch (...) {
         // Destructors must not throw. A missing allocation indicates an internal
         // lifetime error and will be caught by focused arena tests.
@@ -321,8 +420,24 @@ void PrefetcherPipeSpaceImpl::unclaim(const CoreRangeSet& cores, PrefetcherPipeI
     live_pipes_.erase(&owner);
 }
 
+bool PrefetcherPipeSpaceImpl::writes_through_command_queue() const {
+    // Arena L1 is never shared with program-local L1, so a direct write cannot race the queue.
+    // Slow dispatch writes every buffer directly from the host, and these pages follow it.
+    return l1().source() == PrefetcherPipeL1Source::Allocator &&
+           dynamic_cast<distributed::FDMeshCommandQueue*>(&device_->mesh_command_queue()) != nullptr;
+}
+
 void PrefetcherPipeSpaceImpl::write_page(const CoreRangeSet& cores, const std::vector<uint32_t>& page) const {
     TT_FATAL(page.size() * sizeof(uint32_t) == layout_.page_size, "PrefetcherPipeSpace: page has the wrong size");
+    if (writes_through_command_queue()) {
+        const std::vector<CoreCoord> core_list = corerange_to_cores(cores);
+        for (auto* target_device : device_->impl().get_devices()) {
+            for (const CoreCoord& core : core_list) {
+                write_core_page(target_device, core, page);
+            }
+        }
+        return;
+    }
     const auto& cluster = device_->impl().metal_env().get_cluster();
     const uint32_t page_bytes = static_cast<uint32_t>(page.size() * sizeof(uint32_t));
     // Named: ranges() returns a view into the merged set, which must outlive the loop.
@@ -330,21 +445,51 @@ void PrefetcherPipeSpaceImpl::write_page(const CoreRangeSet& cores, const std::v
     for (auto* target_device : device_->impl().get_devices()) {
         for (const CoreRange& range : merged.ranges()) {
             if (range.size() == 1) {
-                auto page_copy = page;
-                TT_FATAL(
-                    ::tt::tt_metal::detail::WriteToDeviceL1(
-                        target_device, range.start_coord, config_address_, page_copy),
-                    "Failed to write PrefetcherPipe config page to core {} on device {}",
-                    range.start_coord.str(),
-                    target_device->id());
+                write_core_page(target_device, range.start_coord, page);
                 continue;
             }
             // Logical worker rectangles map to virtual rectangles (same mapping dispatch uses for
             // its multicasts), so one NOC multicast covers the range.
             const CoreCoord start = target_device->virtual_core_from_logical_core(range.start_coord, CoreType::WORKER);
             const CoreCoord end = target_device->virtual_core_from_logical_core(range.end_coord, CoreType::WORKER);
-            cluster.noc_multicast_write(page.data(), page_bytes, target_device->id(), start, end, config_address_);
+            cluster.noc_multicast_write(page.data(), page_bytes, target_device->id(), start, end, config_address());
         }
+    }
+}
+
+void PrefetcherPipeSpaceImpl::write_core_page(
+    IDevice* target_device, const CoreCoord& core, const std::vector<uint32_t>& page) const {
+    TT_FATAL(page.size() * sizeof(uint32_t) == layout_.page_size, "PrefetcherPipeSpace: page has the wrong size");
+    if (writes_through_command_queue()) {
+        auto& cq = dynamic_cast<distributed::FDMeshCommandQueue&>(device_->mesh_command_queue());
+        const distributed::DeviceMemoryAddress address{
+            .device_coord = device_->get_view().find_device(target_device->id()),
+            .virtual_core_coord = target_device->virtual_core_from_logical_core(core, CoreType::WORKER),
+            .address = config_address()};
+        cq.enqueue_write_shard_to_core(address, page.data(), layout_.page_size, /*blocking=*/false);
+        return;
+    }
+    auto page_copy = page;
+    TT_FATAL(
+        ::tt::tt_metal::detail::WriteToDeviceL1(target_device, core, config_address(), page_copy),
+        "Failed to write PrefetcherPipe config page to core {} on device {}",
+        core.str(),
+        target_device->id());
+}
+
+void PrefetcherPipeSpaceImpl::order_dram_sender_pages() const {
+    if (!writes_through_command_queue()) {
+        return;
+    }
+    // A DRISC sender writes ring data and credits into receiver L1 as soon as a request reaches it,
+    // and requests arrive over its H2D socket, not the command queue. A running Tensor prefetcher
+    // holds every later request until the queue gets here. One started later is launched straight
+    // from the host, so the queue has to have drained by then.
+    auto& cq = device_->mesh_command_queue();
+    if (device_->impl().is_tensor_prefetcher_active()) {
+        WaitForCqOnTensorPrefetcher(cq, std::nullopt);
+    } else {
+        distributed::Finish(cq);
     }
 }
 
@@ -704,13 +849,7 @@ void PrefetcherPipeImpl::build_dram_sender_config_pages() {
             const uint32_t sender_acked_slot = sender_page_addr + layout.acked_offset + r * l1_alignment;
             auto receiver_page =
                 build_receiver_config_page(common, r, sender_acked_slot - space_->config_address(), sender_virtual);
-            auto page_copy = receiver_page;
-            TT_FATAL(
-                ::tt::tt_metal::detail::WriteToDeviceL1(
-                    target_device, receivers[r], space_->config_address(), page_copy),
-                "Failed to write DRAM-sender PrefetcherPipe receiver page on core {} device {}",
-                receivers[r].str(),
-                target_device->id());
+            space_->write_core_page(target_device, receivers[r], receiver_page);
             if (!config_pages_.contains(receivers[r])) {
                 config_pages_.emplace(receivers[r], std::move(receiver_page));
             }
@@ -872,9 +1011,55 @@ std::vector<PrefetcherPipe> PrefetcherPipeSpace::create_pipes(
     return pimpl_->create_pipes(pipes);
 }
 
+PrefetcherPipeL1Source PrefetcherPipeSpace::l1_source() const { return pimpl_->l1_source(); }
+
 PrefetcherPipeSpace CreatePrefetcherPipeSpace(
-    const distributed::MeshDevice& device, const PrefetcherPipeSpaceConfig& config) {
-    return PrefetcherPipeSpace(std::make_unique<PrefetcherPipeSpaceImpl>(device, config));
+    distributed::MeshDevice& device, const PrefetcherPipeSpaceConfig& config) {
+    std::vector<PrefetcherPipeSpace> spaces = CreatePrefetcherPipeSpaces(device, std::span(&config, 1));
+    return std::move(spaces.front());
+}
+
+std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
+    distributed::MeshDevice& device, std::span<const PrefetcherPipeSpaceConfig> configs) {
+    TT_FATAL(!configs.empty(), "CreatePrefetcherPipeSpaces requires at least one config");
+    std::vector<std::unique_ptr<PrefetcherPipeSpaceImpl>> impls;
+    impls.reserve(configs.size());
+    for (const PrefetcherPipeSpaceConfig& config : configs) {
+        impls.push_back(std::make_unique<PrefetcherPipeSpaceImpl>(device, config));
+    }
+
+    // The spaces share one address per allocation, so they need one source and no core in common.
+    const PrefetcherPipeL1Source source = impls.front()->l1_source();
+    CoreRangeSet cores;
+    uint32_t ring_size = 0;
+    uint32_t config_page_size = 0;
+    for (size_t i = 0; i < impls.size(); ++i) {
+        const PrefetcherPipeSpaceImpl& impl = *impls[i];
+        TT_FATAL(
+            impl.l1_source() == source,
+            "CreatePrefetcherPipeSpaces: config {} resolves to a different PrefetcherPipeL1Source than config 0; "
+            "spaces "
+            "that share L1 must take it from the same source",
+            i);
+        TT_FATAL(
+            !cores.intersects(impl.reservation_cores()),
+            "CreatePrefetcherPipeSpaces: config {} reserves cores {} that an earlier config also reserves; spaces that "
+            "share L1 addresses must be on disjoint cores",
+            i,
+            impl.reservation_cores().intersection(cores).str());
+        cores = cores.merge(impl.reservation_cores());
+        ring_size = std::max(ring_size, impl.ring_size());
+        config_page_size = std::max(config_page_size, impl.config_page_size());
+    }
+
+    auto l1 = std::make_shared<PrefetcherPipeSpaceL1>(device, source, cores, ring_size, config_page_size);
+    std::vector<PrefetcherPipeSpace> spaces;
+    spaces.reserve(impls.size());
+    for (auto& impl : impls) {
+        impl->attach_l1(l1);
+        spaces.emplace_back(std::move(impl));
+    }
+    return spaces;
 }
 
 void set_dram_sender_cores(PrefetcherPipeSpace& space, std::span<const CoreCoord> dram_senders) {
@@ -888,8 +1073,10 @@ PrefetcherPipe create_dram_sender_pipe(
     uint32_t recv_index_base,
     uint64_t tensor_prefetcher_factory_id,
     uint32_t tensor_prefetcher_factory_num_pipes) {
-    return space.impl().create_dram_sender_pipe(
+    PrefetcherPipe pipe = space.impl().create_dram_sender_pipe(
         dram_sender, receivers, recv_index_base, tensor_prefetcher_factory_id, tensor_prefetcher_factory_num_pipes);
+    space.impl().order_dram_sender_pages();
+    return pipe;
 }
 
 std::vector<std::pair<CoreCoord, CoreRangeSet>> GetPrefetcherPipeSenderReceiverMapping(

@@ -152,7 +152,7 @@ def test_space_config_rejects(device, expect_error):
         ttnn.experimental.create_prefetcher_pipe_space(
             device, sender_cores, ttnn.CoreRangeSet([]), ring_size=RING_SIZE, max_receivers_per_pipe=1
         )
-    with expect_error(RuntimeError, "persistent-arena allocations require BufferType::L1"):
+    with expect_error(RuntimeError, "buffer_type must be BufferType::L1"):
         ttnn.experimental.create_prefetcher_pipe_space(
             device,
             sender_cores,
@@ -161,6 +161,34 @@ def test_space_config_rejects(device, expect_error):
             max_receivers_per_pipe=1,
             buffer_type=ttnn.BufferType.DRAM,
         )
+
+
+@pytest.mark.requires_grid_size((2, 1))
+def test_l1_source(device, expect_error):
+    L1Source = ttnn.experimental.PrefetcherPipeL1Source
+
+    def create(**kwargs):
+        return ttnn.experimental.create_prefetcher_pipe_space(
+            device,
+            sender_cores=_cores((0, 0)),
+            receiver_domain=_cores((1, 0)),
+            ring_size=RING_SIZE,
+            max_receivers_per_pipe=1,
+            **kwargs,
+        )
+
+    # Default is the arena for a worker-only space and the allocator once DRAM senders are asked for.
+    assert create().l1_source() == L1Source.PersistentArena
+    assert create(num_dram_senders=1).l1_source() == L1Source.Allocator
+
+    space = create(l1_source=L1Source.Allocator)
+    assert space.l1_source() == L1Source.Allocator
+    pipe = space.create_pipe(_core(0, 0), _cores((1, 0)))
+    assert pipe.buffer_address() == space.buffer_address()
+    assert pipe.config_address() == space.config_address()
+
+    with expect_error(RuntimeError, "PersistentArena is for worker-only spaces"):
+        create(num_dram_senders=1, l1_source=L1Source.PersistentArena)
 
 
 @pytest.mark.requires_grid_size((3, 1))

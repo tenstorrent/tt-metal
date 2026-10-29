@@ -402,6 +402,8 @@ public:
     // the manager bound to this mesh device; subsequent calls return the same instance.
     // experimental::StartTensorPrefetcher / StopTensorPrefetcher delegate here.
     TensorPrefetcherManager& tensor_prefetcher(MeshDevice* mesh_device);
+    // Whether a Tensor prefetcher is running on this mesh. Does not create the manager.
+    bool is_tensor_prefetcher_active() const;
     // Created on first use. One per mesh: the region is provisioned against this device's
     // PCIe endpoint, so two meshes cannot share one. A handle, so a holder that may outlive
     // this mesh (RingAlias) keeps the object valid; see host_region_. After close() it
