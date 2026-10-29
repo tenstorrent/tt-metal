@@ -7824,6 +7824,96 @@
     "tp_axis": 1,
     "valid_global": 26624
    }
+  },
+  {
+   "sig": "51aed81c27",
+   "sig_full": "51aed81c27",
+   "count": 2,
+   "op": "ttnn.bringup.topk_large_indices",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      55296
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "k": 512,
+    "valid_length": 55296
+   }
+  },
+  {
+   "sig": "a49d0dc1d0",
+   "sig_full": "a49d0dc1d0",
+   "count": 2,
+   "op": "ttnn.bringup.topk_large_indices",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      27648
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "k": 512,
+    "valid_length": 27648
+   }
+  },
+  {
+   "sig": "d040f5a6f7",
+   "sig_full": "d040f5a6f7",
+   "count": 1,
+   "op": "ttnn.bringup.topk_large_indices",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      6912
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "k": 2048,
+    "valid_length": 6912
+   }
   }
  ]
 }
