@@ -132,3 +132,43 @@ def test_runner_api_explicit_conclusion_aliases_do_not_flag_cancellations(
 
     assert job.conclusion == canonical
     assert ("Leftover process" in result.signature_labels) is (canonical in {"failure", "timed_out"})
+
+
+@pytest.mark.parametrize("status", ["completed", "COMPLETED"])
+@pytest.mark.parametrize(
+    ("outcome", "expected_conclusion"),
+    [
+        ({}, ""),
+        ({"JOB_SUCCESS": None}, ""),
+        ({"CONCLUSION": None, "JOB_CONCLUSION": None}, ""),
+        ({"JOB_SUCCESS": False}, "failure"),
+        ({"JOB_SUCCESS": True}, "success"),
+        ({"CONCLUSION": "failure"}, "failure"),
+        ({"CONCLUSION": "success"}, "success"),
+    ],
+)
+def test_completed_runner_api_job_requires_a_known_outcome(monkeypatch, status, outcome, expected_conclusion) -> None:
+    def download(command, **kwargs):
+        kwargs["stdout"].write(
+            b"Waiting for KMD lock 20 on /dev/tenstorrent/16, which is currently held by another handle\n"
+        )
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr("runner_failure_common.subprocess.run", download)
+    monkeypatch.setattr("runner_failure_common.gh_api_json", lambda *_args, **_kwargs: {})
+    job = recent_job_from_runner_api_row(
+        {
+            "GITHUB_JOB_LINK": "https://github.com/tenstorrent/tt-metal/actions/runs/1/job/2",
+            "JOB_STATUS": status,
+            **outcome,
+        },
+        fallback_runner_name="runner",
+        fallback_owner_repo="tenstorrent/tt-metal",
+    )
+
+    result = scan_job(job, timeout=120)
+
+    assert job.status == "completed"
+    assert job.conclusion == expected_conclusion
+    assert result.log_checked
+    assert result.signature_labels == (("Leftover process",) if expected_conclusion == "failure" else ())

@@ -523,6 +523,8 @@ def normalize_conclusion(row: dict[str, Any]) -> str:
         )
 
     status = clean_string(row_value(row, "JOB_STATUS", "status", "job_status")).lower()
+    if status == "completed":
+        status = ""
     if status in {"cancelled", "canceled", "skipped", "timed_out", "timed out"}:
         return {"canceled": "cancelled", "timed out": "timed_out"}.get(status, status)
 
