@@ -1581,6 +1581,23 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 22:15: APC on the 1 M profile: three served rounds, three defects, the needle at 1 M
+
+`served_8x4_apc_r1` died at boot: the snapshot ring sized from the live DRAM was re-checked against the planner's
+envelope, which refuses 4 users x 1 M plus 141 MiB (its model counts the partitioned cache's scratch slot at full
+length). `apc_r2` passed every check (a-e, 8/8 needles, image + video) but served no hit: with one ring entry each
+decode crossing overwrote the chunk-end snapshot the hit restores from (and cost a save per step: 11.8 vs 14.1 tok/s
+per user), the plugin's hit confirmer was never installed (its config-time install ran inside the engine core's own
+constructor), and the unconfirmed 128-token hits of the bench's prompts shrank their first device chunk to 256 tokens,
+which sent 64 K prompts through waves (TTFT 347 s vs 87). `needle1m_r3` (one 1 040 000-token needle, the device ring
+on) died at the chunk [917504, 933888) with a DRAM allocation failure: the 141 MiB ring starved the 1 M tail chunks (231
+MiB free per bank after the warm-up against 254 without it); the planner's "no ring at 1 M" was right and the live fit
+had measured the free DRAM before the warm-ups' ~540 MiB. Fixes: decode snapshots only at hit-aligned crossings
+(7d6c01ff1f2), the plugin installs the confirmer from its load hooks (arg/glm53_registration 4755a94), the live ring fit
+leaves a 768 MiB warm-up allowance (the 1 M profile takes the HOST store) and the host save reads each chip without
+blocking behind one recorded event (9c07ba76ecd), the smoke's stage e repeats the image prompt (the cached-image hit).
+`apc_r3` (64 K needles, device ring) checks the hit path; `needle1m_r4` the 1 M prompt on the host store.
+
 ### 2026-10-29 19:55: step 3 prepared (async scheduling); the block test's resident pass; the knob catalogued
 
 `resident_block_v2` on the rows-4-5 block (both partitions): the resident traced chain is bit-identical to the direct

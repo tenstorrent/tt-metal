@@ -94,8 +94,8 @@ wave than under SP (policy (c) keeps SP for it); idle rows cost wasted expert wo
 | item | status 2026-10-29 20:25 | gate |
 |---|---|---|
 | multimodal (image + video) on the 1 M profile | DONE 19:16 (served_8x4_mm_32_r3: both answers correct, TTFT 5.4 / 5.7 s) | stage e of every later smoke |
-| 1 M context through the API | queued: served_8x4_needle1m_r1 (one 1 040 000-token needle, ~485 s of SP prefill) | the needle found, TTFT + decode booked in the README |
-| APC on (both switches) at 32 slots | coded fec8111b9ba (the cache under the resident chain, confirms_prefix_cache_hits, the ring sized from the live DRAM) + plugin 4d96dec (identifiers, hit confirmation); queued: served_8x4_apc_r1 (a-e, two needle rounds, one device entry per slot) | the multi-turn hit served from the snapshot, the bench within noise of APC off, stage e twice (the image hit) |
+| 1 M context through the API | needle1m_r3 reached position 917504 (55 chunks at 7.5 s) before the device ring's DRAM starved the tail chunk; needle1m_r4 queued on the host store | the needle found, TTFT + decode booked in the README |
+| APC on (both switches) at 32 slots | r1 (boot gate) and r2 (no hit served: one ring entry rolled by decode crossings, the confirmer never installed, the bench's unconfirmed hits defeated SP-first) fixed: 7d6c01ff1f2 + 9c07ba76ecd (aligned decode snapshots, the ring fit's warm-up allowance -> host store at 1 M, non-blocking host save), plugin 4755a94; running: apc_r3 (64 K hits, device ring), then needle1m_r4 (host store at 1 M) | the multi-turn hit served from the snapshot, the bench within noise of APC off, stage e twice (the image hit) |
 | 32 users x 1 M | the profile admits it (32 slots, pool 33.5 M tokens); the capstone run (~4.5 h of prefill) needs the queue runner restarted with a 7 h stage budget and `SMOKE_CLIENT_TIMEOUT_S=20000` | 32 needles found under APC + resident; TTFT per arrival and the decode at 32 x ~1 M booked |
 
 ## 3. Workstream B: the decode step to the roofline floor
