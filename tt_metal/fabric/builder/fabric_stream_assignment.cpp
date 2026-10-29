@@ -15,9 +15,6 @@
 
 namespace tt::tt_fabric {
 
-// CreditTransportPlan keeps each VC's reasons as the bits of a uint8_t.
-static_assert(enchantum::count<L1CreditCounterReason> <= 8, "L1CreditCounterReason has more values than bits");
-
 // ============================================================================
 // Requirement-driven assignment
 // ============================================================================
@@ -55,11 +52,11 @@ StreamRequirements stream_requirements(const StreamPlacementInputs& placement, c
     need.add(StreamRole::RECEIVER_PKTS_SENT, 2, (vc1_has_receiver && vc2_has_receiver) ? 1 : 0);
 
     // A VC still on registers needs one ack (VC0 only) and one completion register per sender.
-    if (!plan.vc_uses_counters(0)) {
+    if (!plan.vc0_uses_counters) {
         need.add(StreamRole::SENDER_PKTS_ACKED, 0, placement.max_sender_counts[0]);
         need.add(StreamRole::SENDER_PKTS_COMPLETED, 0, placement.max_sender_counts[0]);
     }
-    if (!plan.vc_uses_counters(1)) {
+    if (!plan.vc1_uses_counters) {
         // The family's full VC1 width is the need. The completed table's declared extent covers
         // every position VC0 and VC1 can produce (0..8), and the register budget is
         // make_stream_assignment's check -- no extent arithmetic belongs here.
@@ -72,7 +69,7 @@ StreamRequirements stream_requirements(const StreamPlacementInputs& placement, c
     // the other mechanism, which wedges the link with no error. Widening the table to ten names
     // (kernel header included) is what it would take to put VC2 back on registers.
     TT_FATAL(
-        !placement.vc2_present || plan.vc_uses_counters(2),
+        !placement.vc2_present || plan.vc2_uses_counters,
         "VC2 is present but its credit plan says stream registers. Its sender is flat position {}, past "
         "the completed table's declared extent of {} positions, so it has no completion register.",
         need.sender_flat_base[2],
