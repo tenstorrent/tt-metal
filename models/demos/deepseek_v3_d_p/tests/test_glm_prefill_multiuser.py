@@ -372,8 +372,11 @@ def _packed_schedule(chunk):
     C = chunk
     lengths = [3 * C, C + 704, 896, 2 * C]  # A: 3 full, B: full + partial, C: one partial, D: 2 full
     E = PrefillChunk(0, 0, 0)
+    first = [PrefillChunk(0, 0, C), PrefillChunk(2, 0, 896), PrefillChunk(1, 0, C), E]
+    if os.environ.get("GLM_DEBUG_C_FIRST") == "1":  # DEBUG: the partial chunk first in its forward
+        first = [first[1], first[0], first[2], first[3]]
     forwards = [
-        [PrefillChunk(0, 0, C), PrefillChunk(2, 0, 896), PrefillChunk(1, 0, C), E],
+        first,
         [PrefillChunk(0, C, 2 * C), PrefillChunk(1, C, C + 704), PrefillChunk(3, 0, C), PrefillChunk(3, C, 2 * C)],
         [PrefillChunk(0, 2 * C, 3 * C), E, E, E],
     ]
