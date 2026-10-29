@@ -793,6 +793,7 @@
   cmd: |
     # Host-only layout tests (rotated / packed chunk layout) have no mesh id; run them here.
     pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout"
+    pytest --timeout 60 models/demos/common/prefill/tests/test_media.py models/demos/common/prefill/tests/test_media_prefill.py models/demos/common/prefill/tests/test_media_ring.py
   model: minimax-m3
   skus:
     bh_p150:
