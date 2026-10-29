@@ -14,7 +14,8 @@
 // super_block_plan) and the output-chunk search (chunk_candidates, plan_chunk_geometry, chunk_cost_us). Integers in,
 // integers out: no device, no tensors. Fixed policy: lag a relay's finish only when its arrival is produced late,
 // model-based chunk choice, staging sized exactly, one entry per block, one arrival increment per wave, mirrored half
-// orders, resident stream depths {3, 2}, 2 zone sets, kb <= 16 (32 when chunked), 4 chunks per port batch.
+// orders, resident stream depths {3, 2}, 2 zone sets, kb <= 16 (32 when chunked), 4 chunks per port batch, the
+// folded 1D grid for a one-tile-row block whenever it has more cores than the 2D grid.
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::detail {
 
 // The schedule kind: "line", "ring_unbalanced" (odd G >= 3), "ring_balanced" (even G >= 4).
@@ -24,6 +25,11 @@ enum class Direction : uint8_t { Fwd, Bwd, Fin };
 // Ports strip (logical row 0 / last logical column) and the grid orientation.
 enum class Strip : uint8_t { Row, Col };
 enum class Orient : uint8_t { MOnX, MOnY };
+// The matmul flow. Grid2D: a grid_m x grid_n rectangle, A multicast along its m-lines and W along its n-lines.
+// Folded1D (a block of at most kFoldedMaxM tile rows): one m-line of grid_n cores folded row-major into a
+// rows x cols rectangle; every core holds the whole block's rows, A is multicast to the whole rectangle and each
+// core reads its own W columns.
+enum class Flow : uint8_t { Grid2D, Folded1D };
 // How the matmul cores split into halves ("k": row-major core index, "n"/"m": along that grid axis).
 enum class HalfSplit : uint8_t { K, N, M };
 
@@ -60,6 +66,9 @@ struct GridChoice {
     uint32_t core_m = 0;
     uint32_t core_n = 0;
     std::array<uint32_t, 2> subblock{};  // (sb_h, sb_w)
+    Flow flow = Flow::Grid2D;
+    uint32_t fold_rows = 0;  // Folded1D: logical core gn sits at (gn % fold_cols, gn / fold_cols) of the rectangle
+    uint32_t fold_cols = 0;
 };
 
 struct WaveDesc {

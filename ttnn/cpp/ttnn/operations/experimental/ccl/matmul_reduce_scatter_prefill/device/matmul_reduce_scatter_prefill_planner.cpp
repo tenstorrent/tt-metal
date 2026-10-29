@@ -45,6 +45,7 @@ constexpr uint32_t kMaxAutoChunks = 256;
 constexpr uint32_t kKbMax = 16;
 constexpr uint32_t kKbMaxChunked = 32;
 constexpr uint32_t kKbMinResident = 8;
+constexpr uint32_t kFoldedMaxM = 1;             // block tile rows up to which the folded 1D flow is considered
 constexpr uint32_t kDestTilesFp32FullSync = 8;  // subblock area cap
 // chunk_cost_us() fit
 constexpr double kCostFpuEff = 0.93;
@@ -283,6 +284,47 @@ GridChoice choose_grid(uint32_t gx, uint32_t gy, uint32_t block_m, uint32_t bloc
     return best->second;
 }
 
+// The folded 1D grid of a block with at most kFoldedMaxM tile rows: every core holds all block_m rows and the fewest
+// columns (core_n) whose core count folds exactly into a rows x cols rectangle of the matmul area, the row strip first
+// and as tall as it fits (measured on decode rows: a tall fold with W read on both NoCs beats the short, wide one by
+// up to 18%); nothing when the block is taller or no rectangle fits.
+std::optional<GridChoice> choose_grid_folded(uint32_t gx, uint32_t gy, uint32_t block_m, uint32_t block_n, uint32_t L) {
+    if (block_m > kFoldedMaxM) {
+        return std::nullopt;
+    }
+    for (uint32_t core_n = 1; core_n <= block_n; ++core_n) {
+        const uint32_t n = tt::div_up(block_n, core_n);
+        if (tt::div_up(block_n, n) != core_n) {
+            continue;  // the same core count as a narrower core_n
+        }
+        for (Strip strip : {Strip::Row, Strip::Col}) {
+            const uint32_t strip_len = strip == Strip::Row ? gx : gy;
+            if (2 * L > strip_len) {
+                continue;
+            }
+            const uint32_t rx = strip == Strip::Row ? gx : gx - 1;
+            const uint32_t ry = strip == Strip::Row ? gy - 1 : gy;
+            for (uint32_t rows = ry; rows >= 1; --rows) {
+                if (n % rows != 0 || n / rows > rx) {
+                    continue;
+                }
+                GridChoice c;
+                c.strip = strip;
+                c.grid_m = 1;
+                c.grid_n = n;
+                c.core_m = block_m;
+                c.core_n = core_n;
+                c.subblock = choose_subblock(c.core_m, c.core_n);
+                c.flow = Flow::Folded1D;
+                c.fold_rows = rows;
+                c.fold_cols = n / rows;
+                return c;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 std::vector<std::pair<uint32_t, uint32_t>> chunk_candidates(uint32_t block_m, uint32_t block_n, int32_t scatter_dim) {
     const bool inner_n = scatter_dim == -1;
     std::set<std::pair<uint32_t, uint32_t>> seen;
@@ -320,6 +362,11 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
     const uint32_t chunks = pl.n_m * pl.n_n;
     pl.zone_sets = chunks == 1 ? 1 : std::max(1u, std::min(kZoneSets, chunks));
     pl.grid = choose_grid(in.gx, in.gy, pl.chunk_m, pl.chunk_n, in.L);
+    // a short block puts every core of the 2D grid on one m-line; the folded 1D grid spreads it over more cores
+    if (auto folded = choose_grid_folded(in.gx, in.gy, pl.chunk_m, pl.chunk_n, in.L);
+        folded.has_value() && folded->grid_n > pl.grid.grid_m * pl.grid.grid_n) {
+        pl.grid = *folded;
+    }
     const GridChoice& gd = pl.grid;
     if (in.kind == ScheduleKind::RingBalanced && gd.grid_m * gd.grid_n < 2) {
         throw GeometryMiss("matmul_reduce_scatter_prefill: a balanced ring needs >= 2 matmul cores (two halves)");

@@ -5,7 +5,8 @@
 
 Every device of a group along cluster_axis holds a K-slice A[g] (..., M, K) and W[g] (K, N); the output is the group
 sum of A[g] @ W[g], scattered along scatter_dim. Shapes are per-device prefill shapes of the row-parallel linears of
-DeepSeek-V3, Kimi K2.7 / K3, GLM 5.x, MiniMax-M3 and MiMo-V2 at TP=4, at each model's production precision.
+DeepSeek-V3, Kimi K2.7 / K3, GLM 5.x, MiniMax-M3 and MiMo-V2 at TP=4, at each model's production precision, plus
+decode rows (M = 32) of Kimi K2.7 and Llama-70B, which take the folded 1D grid.
 
 The Ring cases need the whole box as one ring: a QuietBox 2 opened as 1x4 under FABRIC_2D_TORUS_XY closes its snake
 cycle. The Linear cases run on the whole box as a 1x2 (p300) or 1x4 (QuietBox 2) line; other machines skip.
@@ -153,6 +154,11 @@ MODEL_CASES = {
     # output chunks (the block misses L1): 1 x 6 and 3 x 2 chunks on a 1x4 ring
     "chunked_n": ((1, 1, 2048, 1024), (1024, 16384), -1, ttnn.bfloat16, ttnn.bfloat16),
     "chunked_mn": ((1, 1, 4096, 1024), (1024, 8192), -1, ttnn.bfloat16, ttnn.bfloat16),
+    # decode (one tile row): the folded 1D grid (56, 16 and 30 cores), and a block too narrow for it (2D, 4 cores)
+    "kimi_k27_o_proj_decode": ((1, 1, 32, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
+    "llama_70b_w2_decode": ((1, 1, 32, 3584), (3584, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b),
+    "llama_70b_ff1_decode_bf4b": ((1, 1, 32, 2048), (2048, 3840), -1, ttnn.bfloat16, ttnn.bfloat4_b),
+    "decode_narrow_n": ((1, 1, 32, 1024), (1024, 512), -1, ttnn.bfloat16, ttnn.bfloat8_b),
 }
 
 
@@ -228,6 +234,23 @@ def test_line(mesh_device, scatter_dim, num_links):
         (2048, 7168),
         cluster_axis=1,
         scatter_dim=scatter_dim,
+        topology=ttnn.Topology.Linear,
+        num_links=num_links,
+    )
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [line_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 2), (1, 4)], ids=["1x2", "1x4"], indirect=True)
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
+def test_line_decode(mesh_device, num_links):
+    """A decode row on a line: the folded 1D grid with the line schedule (no mirrored halves)."""
+    run_case(
+        mesh_device,
+        (1, 1, 32, 2048),
+        (2048, 7168),
+        cluster_axis=1,
+        scatter_dim=-1,
         topology=ttnn.Topology.Linear,
         num_links=num_links,
     )
