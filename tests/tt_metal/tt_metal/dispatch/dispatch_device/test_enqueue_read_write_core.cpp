@@ -7,6 +7,7 @@
 #include "hal_types.hpp"
 #include "llrt.hpp"
 #include "dispatch_test_utils.hpp"
+#include "tests/tt_metal/tt_metal/common/host_transfer_stats_scope.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
@@ -40,6 +41,38 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestBasicReadWriteL1) {
         distributed::Finish(fd_cq);
 
         EXPECT_EQ(src_data, dst_data);
+    }
+}
+
+TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestHostTransferStatsCountCoreWriteAndRead) {
+    if (!tt::tt_metal::test::buffer_transfers_recorded()) {
+        GTEST_SKIP() << "Fast dispatch transfers are not recorded on this target";
+    }
+    const uint32_t num_bytes = 1000 * sizeof(uint32_t);
+    const std::vector<uint32_t> src_data = generate_arange_vector(num_bytes);
+    const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+
+    for (const auto& mesh_device : this->devices_) {
+        auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+        const distributed::MeshCoordinate device_coord =
+            mesh_device->get_view().find_device(mesh_device->get_device_ids()[0]);
+        const distributed::DeviceMemoryAddress device_memory_address = {
+            device_coord, mesh_device->worker_core_from_logical_core({0, 0}), address};
+
+        tt::tt_metal::test::HostTransferStatsScope transfer_stats;
+        fd_cq.enqueue_write_shard_to_core(device_memory_address, src_data.data(), num_bytes, /*blocking=*/false);
+        std::vector<uint32_t> dst_data(src_data.size(), 0);
+        fd_cq.enqueue_read_shard_from_core(device_memory_address, dst_data.data(), num_bytes, /*blocking=*/true);
+        distributed::Finish(fd_cq);
+        EXPECT_EQ(src_data, dst_data);
+
+        for (const auto kind : {HostTransfer::CoreWriteFastDispatch, HostTransfer::CoreReadFastDispatch}) {
+            const auto totals = transfer_stats.totals(kind);
+            EXPECT_EQ(totals.bytes, num_bytes);
+            EXPECT_EQ(totals.transfers, 1u);
+            EXPECT_GT(totals.busy, HostTransferStats::Clock::duration::zero());
+        }
     }
 }
 
