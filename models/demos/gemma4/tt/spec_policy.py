@@ -502,7 +502,11 @@ def fresh_indices(fresh, n):
 
 def rank_records(candidates, rows, plain_ms, optimistic=()):
     """Every candidate scored: ``[RecordChoice]`` sorted best gain first (ties: the cheaper record). Rows in
-    ``optimistic`` are credited every draft (``k + 1`` tokens a step): the trial's hypothesis for new rows."""
+    ``optimistic`` are credited every draft (``k + 1`` tokens a step) on a record serving has not measured at
+    the rung: the trial's hypothesis for new rows. A measured record (``tokens_per_row``) credits them its
+    measured tokens like every other row: what its replays delivered is known, and a wave of new rows
+    cannot argue with it (the 26B at eight rows: seven new rows of eight re-trialed a record measured at 1.5
+    tokens a row every wave)."""
     n = len(rows)
     if n < 1:
         raise ValueError("rank_records needs at least one drafting row")
@@ -522,12 +526,12 @@ def rank_records(candidates, rows, plain_ms, optimistic=()):
         if members is not None and (not members or any(i < 0 or i >= n for i in members)):
             raise ValueError(f"record {cand.shape} names members {members} outside the {n} rows")
         inside = range(n) if members is None else members
-        hoped = sum(1 for i in inside if i in optimistic)
         if cand.tokens_per_row is not None:
-            tokens = float(cand.tokens_per_row) * (len(inside) - hoped) + (n - len(inside))
+            tokens = float(cand.tokens_per_row) * len(inside) + (n - len(inside))
         else:
+            hoped = sum(1 for i in inside if i in optimistic)
             tokens = sum(rows[i].expected_tokens(k_v) for i in inside if i not in optimistic) + (n - len(inside))
-        tokens += hoped * (k_v + 1)
+            tokens += hoped * (k_v + 1)
         gain = (tokens / n) / (cost / plain_ms)
         ranked.append(
             RecordChoice(
@@ -943,10 +947,11 @@ class SpecPolicy:
     def trial_choice(self, ranked, plain_ms=None, hypothetical=None, remaining=None):
         """A new request's one trial, or None: the cheapest candidate (entry plus step) when its gain estimate is
         at least ``trial_gain`` and, for a batch that is not all new, its hypothesis holds: ``hypothetical`` (the
-        same candidates ranked with the new rows accepting every draft) clears ``min_gain`` and its entry pays
-        over the horizon. A batch of informed rows a new row cannot lift above the entry bar has nothing to learn
-        from a trial that reseeds the whole batch; independent of the retry cadence, the reseed is its only extra
-        cost."""
+        same candidates ranked with the new rows accepting every draft on a record serving has not measured at
+        the rung; a measured record keeps its measured tokens per row) clears ``min_gain`` and its entry pays
+        over the horizon. A batch of informed rows a new row cannot lift above the entry bar, or a record whose
+        replays already measured below it, has nothing to learn from a trial that reseeds the whole batch;
+        independent of the retry cadence, the reseed is its only extra cost."""
         cheapest = min(ranked, key=lambda c: (c.entry_ms + c.cost_ms, c.shape))
         if cheapest.gain < self.config.trial_gain:
             return None

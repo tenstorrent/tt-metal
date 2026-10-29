@@ -2602,6 +2602,17 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(0, 1, 2)).reason == "trial"
     assert eight.decide(reseeding8, batch, _PLAIN, 3, remaining=10, fresh=(0, 1, 2)) is None
     assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=True).reason == "trial", "a batch all new: the floor"
+    # a record serving measured at the rung keeps its measured tokens per row for the new rows too: seven new
+    # rows of eight (the 26B's arrival waves) no longer re-trial an (8,3) measured at 1.46 tokens a row (0.83x),
+    # while the same record unmeasured is their trial; the floor still refuses a measured record below it
+    measured8 = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.46)]
+    wave = tuple(range(7))
+    assert rank_records(measured8, batch, _PLAIN, optimistic=wave)[0].expected_tokens == pytest.approx(8 * 1.46)
+    assert eight.decide(measured8, batch, _PLAIN, 3, fresh=wave) is None and eight.last_reason == "declined"
+    assert eight.decide([RecordCandidate((8, 3), 2048, 35.0, 230.0)], batch, _PLAIN, 3, fresh=wave).reason == "trial"
+    good = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=2.4)]  # measured above the bar: an entry
+    assert eight.decide(good, batch, _PLAIN, 3, fresh=wave).reason == "enter"
+    assert eight.decide(measured8, batch, _PLAIN, 3, fresh=True).reason == "trial", "all new: the floor (0.83 >= 0.6)"
     with pytest.raises(ValueError, match="fresh rows .* outside the 8 rows"):  # allow-pytest.raises (pure)
         eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(8,))
     # the calibration probe: a speculating batch serves one plain step once calib_probe_steps passed without
