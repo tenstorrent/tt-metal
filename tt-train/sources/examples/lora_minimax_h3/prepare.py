@@ -87,13 +87,23 @@ def fit_image(image: Image.Image, height: int, width: int, resample) -> Image.Im
 
 def read_pairs_dir(folder: Path, captions: str) -> list[tuple[Path, str]]:
     """`images/N.png` with `<captions>/N.txt`; falls back to `prompts/N.txt`."""
-    pairs = []
+    pairs, fallbacks = [], []
     for png in sorted((folder / "images").glob("*.png"), key=lambda q: int(q.stem) if q.stem.isdigit() else q.stem):
         txt = folder / captions / f"{png.stem}.txt"
         if not txt.exists():
             txt = folder / "prompts" / f"{png.stem}.txt"
+            if captions != "prompts" and txt.exists():
+                fallbacks.append(png.stem)
         if txt.exists() and txt.read_text(encoding="utf-8").strip():
             pairs.append((png, txt.read_text(encoding="utf-8").strip()))
+    if fallbacks:
+        log.warning(
+            "%d of %d images have no %s/N.txt and use prompts/N.txt instead, mixing caption formats (e.g. %s)",
+            len(fallbacks),
+            len(pairs),
+            captions,
+            ", ".join(fallbacks[:5]),
+        )
     return pairs
 
 
