@@ -3,13 +3,15 @@
 //
 // Device profiler with NoC-event tracing (TT_METAL_DEVICE_PROFILER=1 TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1): one
 // worker core, BRISC fills its 512-word L1 profiler ring to exactly argv[1] words (510 or 512, default 512) with
-// 2-word event records and then issues one DRAM page read; NCRISC issues one read. The NoC event's quick_push then
-// writes its START/END pair at the ring index without a room check, so the pair overruns BRISC's ring into the NCRISC
-// ring that follows it in L1 and overwrites the NCRISC chunk header (see the kernel).
+// 2-word event records, with argv[2] == "zone" opens and closes an empty zone, and then issues one DRAM page read;
+// NCRISC issues one read. The NoC event's quick_push then pushes BRISC's ring (see the kernel).
 //
-// Expected failure modes: 510 -> ReadMeshDeviceProfilerResults aborts (BRISC START without END); 512 -> the NCRISC
-// header carries the pair instead of the (0, 0) run-start sentinel, the host drops the whole NCRISC lane, and
-// profile_log_device.csv has no NCRISC rows at all (the test fails on that). Run from the repo root.
+// Guards against profiler markers written past the end of the ring, into the NCRISC ring that follows it in L1: the
+// quick-push START/END pair when the ring stands at 510 or 512, and a zone END when the zone was opened at 510. Such
+// an overrun overwrites the NCRISC chunk header, which the host then drops (no NCRISC rows in profile_log_device.csv),
+// parses as a zone marker with timer id 0 when the lane already holds earlier chunks, or aborts on at mesh close
+// (BRISC START without END). The test fails on a missing NCRISC lane or on a zone marker with timer id 0. Run from
+// the repo root.
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -46,8 +48,11 @@ std::string device_csv_path() {
     return prefix + "generated/profiler/.logs/profile_log_device.csv";
 }
 
-// Per-RISC row counts of the device CSV and its rows with timer id 0 (a chunk header read as a marker).
-// Columns: PCIe slot, core_x, core_y, RISC processor type, timer_id, ...
+// Per-RISC row counts of the device CSV and its zone-marker rows with timer id 0 (a chunk header read as a marker:
+// the id words of the header decode as ZONE_START/ZONE_END with id 0; a TS_EVENT with id 0 would be a legitimate
+// DeviceRecordEvent(0)).
+// Columns: PCIe slot, core_x, core_y, RISC processor type, timer_id, time, data, run host ID, trace id, trace id
+// counter, zone name, type, ...
 void scan_device_csv(const std::string& path, std::map<std::string, uint32_t>& rows_per_risc, std::vector<std::string>& id0) {
     std::ifstream csv(path);
     if (!csv) {
@@ -60,16 +65,19 @@ void scan_device_csv(const std::string& path, std::map<std::string, uint32_t>& r
         std::stringstream fields(line);
         std::string risc;
         std::string timer_id;
+        std::string type;
         std::string field;
-        for (int i = 0; i < 5 && std::getline(fields, field, ','); i++) {
+        for (int i = 0; i < 12 && std::getline(fields, field, ','); i++) {
             if (i == 3) {
                 risc = field;
             } else if (i == 4) {
                 timer_id = field;
+            } else if (i == 11) {
+                type = field;
             }
         }
         rows_per_risc[risc]++;
-        if (timer_id == "0") {
+        if (timer_id == "0" && (type == "ZONE_START" || type == "ZONE_END")) {
             id0.push_back(line);
         }
     }
@@ -79,12 +87,18 @@ void scan_device_csv(const std::string& path, std::map<std::string, uint32_t>& r
 
 int main(int argc, char** argv) {
     const uint32_t ring_index = argc > 1 ? static_cast<uint32_t>(std::strtoul(argv[1], nullptr, 10)) : RING_WORDS;
-    if (ring_index < RING_FIRST_USER || ring_index > RING_WORDS || ring_index % 2) {
-        fmt::print(stderr, "usage: {} [brisc ring index, even, {}..{}]\n", argv[0], RING_FIRST_USER, RING_WORDS);
+    const bool tail_zone = argc > 2 && std::string(argv[2]) == "zone";
+    if (ring_index < RING_FIRST_USER || ring_index > RING_WORDS || ring_index % 2 || (argc > 2 && !tail_zone)) {
+        fmt::print(
+            stderr, "usage: {} [brisc ring index, even, {}..{}] [zone]\n", argv[0], RING_FIRST_USER, RING_WORDS);
         return 1;
     }
     const uint32_t brisc_events = (ring_index - RING_FIRST_USER) / 2;
-    fmt::print("noc_event_ring_overrun: BRISC ring index {} ({} event records), then one NoC read\n", ring_index, brisc_events);
+    fmt::print(
+        "noc_event_ring_overrun: BRISC ring index {} ({} event records), {}then one NoC read\n",
+        ring_index,
+        brisc_events,
+        tail_zone ? "an empty zone, " : "");
 
     bool pass = true;
     try {
@@ -101,7 +115,10 @@ int main(int argc, char** argv) {
             CircularBufferConfig(PAGE_SIZE, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, PAGE_SIZE);
         CreateCircularBuffer(program, core, cb_config);
 
-        const std::map<std::string, std::string> defines = {{"BRISC_EVENTS", std::to_string(brisc_events)}};
+        std::map<std::string, std::string> defines = {{"BRISC_EVENTS", std::to_string(brisc_events)}};
+        if (tail_zone) {
+            defines["BRISC_TAIL_ZONE"] = "1";
+        }
         std::vector<uint32_t> compile_args;
         TensorAccessorArgs(*dram_buffer->get_reference_buffer()).append_to(compile_args);
         const std::vector<uint32_t> runtime_args = {PAGE_SIZE, static_cast<uint32_t>(dram_buffer->address())};
@@ -146,7 +163,11 @@ int main(int argc, char** argv) {
         }
         if (!id0.empty()) {
             pass = false;
-            fmt::print(stderr, "{} marker(s) with timer id 0 (a chunk header read as a marker), first: {}\n", id0.size(), id0.front());
+            fmt::print(
+                stderr,
+                "{} zone marker(s) with timer id 0 (a chunk header read as a marker), first: {}\n",
+                id0.size(),
+                id0.front());
         }
     } catch (const std::exception& e) {
         pass = false;

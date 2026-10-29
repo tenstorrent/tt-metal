@@ -4,13 +4,14 @@
 // Data-movement kernel of test_noc_event_ring_overrun. BRISC fills its L1 profiler ring to a known index with 2-word
 // event records: the ring holds PROFILER_L1_VECTOR_SIZE = 512 words, user records start at CUSTOM_MARKERS = 12 and
 // DeviceRecordEvent writes while `wIndex < 512 - stackSize` (no headroom for the quick push), so after BRISC_EVENTS
-// records the index is 12 + 2 * BRISC_EVENTS (249 -> 510, 250 -> 512). Then one DRAM page read: with NoC-event
-// tracing on, the event's own room check (which does reserve that headroom) fails and quick_push writes its START/END
-// pair at the current index without any check, past the end of BRISC's ring and into NCRISC's. NCRISC only does the
-// read, so its ring exists and its header gets pushed to DRAM.
+// records the index is 12 + 2 * BRISC_EVENTS (249 -> 510, 250 -> 512). With BRISC_TAIL_ZONE it then opens and closes
+// an empty zone (a zone opened at 510 only fits if its END is accounted for). Then one DRAM page read: with NoC-event
+// tracing on, the event's own room check (which does reserve that headroom) fails and quick_push pushes the ring to
+// DRAM; its own START/END pair must stay inside BRISC's ring, which the NCRISC ring follows in L1. NCRISC only does
+// the read, so its ring exists and its header gets pushed to DRAM.
 //
-// Compile-time defines: BRISC_EVENTS. Compile args: TensorAccessorArgs of the DRAM page buffer at 0. Runtime args:
-// page size, DRAM buffer address.
+// Compile-time defines: BRISC_EVENTS, optionally BRISC_TAIL_ZONE. Compile args: TensorAccessorArgs of the DRAM page
+// buffer at 0. Runtime args: page size, DRAM buffer address.
 #include <cstdint>
 
 void kernel_main() {
@@ -24,6 +25,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < BRISC_EVENTS; i++) {
         DeviceRecordEvent(i + 1);  // ids from 1: the host test treats a marker with timer id 0 as a corrupted header
     }
+#if defined(BRISC_TAIL_ZONE)
+    {
+        DeviceZoneScopedN("TAIL-ZONE");
+    }
+#endif
 #endif
     noc_async_read_page(0, dram, l1_dst);
     noc_async_read_barrier();

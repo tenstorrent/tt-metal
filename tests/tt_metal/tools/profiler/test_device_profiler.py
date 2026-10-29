@@ -1216,16 +1216,17 @@ def test_noc_event_profiler_linked_multicast_hang():
         noc_trace_data = json.load(nocTraceJson)
 
 
-@pytest.mark.parametrize("brisc_ring_index", [510, 512])
-def test_noc_event_ring_overrun(brisc_ring_index):
-    # One worker core. BRISC fills its 512-word L1 profiler ring to exactly `brisc_ring_index` with 2-word event
-    # records (accepted by the plain room check, which reserves no headroom for the quick push), then issues one NoC
-    # read with NoC-event tracing on: quick_push writes its own START/END pair at that index, so 2 (510) or 4 (512)
-    # of its words land in the NCRISC ring that follows in L1 and overwrite the NCRISC chunk header. 510: the host
-    # aborts at mesh close (BRISC START without END). 512: the NCRISC header starts with the pair instead of the
-    # (0, 0) sentinel and the host silently drops the whole NCRISC lane; the binary fails on the missing lane.
+@pytest.mark.parametrize("brisc_ring_index, tail_zone", [(510, ""), (512, ""), (510, "zone")])
+def test_noc_event_ring_overrun(brisc_ring_index, tail_zone):
+    # Regression test for profiler markers written past the end of the L1 ring. One worker core: BRISC fills its
+    # 512-word profiler ring to exactly `brisc_ring_index` with 2-word event records (accepted by the plain room
+    # check, which reserves no headroom for the quick push), optionally opens and closes an empty zone, then issues
+    # one NoC read with NoC-event tracing on. The quick-push START/END pair (510, 512) or the zone's END (510 zone)
+    # must not overrun into the NCRISC ring that follows in L1: that overwrites the NCRISC chunk header, which aborts
+    # the host at mesh close or drops the whole NCRISC lane. The binary fails on a missing NCRISC lane or a zone
+    # marker with timer id 0.
     run_device_profiler_test(
-        testName=f"build/test/tt_metal/tools/profiler/test_noc_event_ring_overrun {brisc_ring_index}",
+        testName=f"build/test/tt_metal/tools/profiler/test_noc_event_ring_overrun {brisc_ring_index} {tail_zone}",
         enable_noc_tracing=True,
         noPostProcess=True,
     )
