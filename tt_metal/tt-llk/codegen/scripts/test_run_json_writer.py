@@ -2482,7 +2482,9 @@ resolve_worktree_base
 @pytest.mark.parametrize(
     "artifact", ["generated.patch", "supervisor-checkpoint.patch", "../escaped.patch"]
 )
-@pytest.mark.parametrize("timeout_classification", ["outer_timeout", "wall_timeout"])
+@pytest.mark.parametrize(
+    "timeout_classification", ["outer_timeout", "wall_timeout", None]
+)
 @pytest.mark.parametrize("legacy_abbreviated_patch", [False, True])
 def test_setup_worktree_records_exact_base_before_bootstrap(
     tmp_path, timeout_classification, legacy_abbreviated_patch, artifact
