@@ -1367,6 +1367,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 cmp_len,
                 start=golden_offset,
                 rope_layout=mtp_index_layout if is_mtp_row else "interleaved",
+                position0=first_pos + skip_rows,
             )
             dev_ik = (dev_ik.float() @ index_hadamard).to(torch.bfloat16)
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
