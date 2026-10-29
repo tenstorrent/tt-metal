@@ -230,13 +230,8 @@ def _replay_records(words):
 
 
 def _unbracketed_records(words, records, enable_slack_words=ENABLE_SLACK_WORDS):
-    """The records in ``records`` that are not inside disable_gathering()/enable_gathering().
-
-    Bracketed means: the last three cfg0 CSR ops before the record are disable_gathering()'s
-    csrrs/csrrs/csrrc, and the first cfg0 CSR op after the recorded body (within
-    ``enable_slack_words``) is enable_gathering()'s csrrc. Requiring the *first* op after the
-    body to be the csrrc is what tells enable_gathering() apart from the csrrs that opens the
-    next disable_gathering().
+    """The records not bracketed by disable_gathering()'s csrrs/csrrs/csrrc before and
+    enable_gathering()'s csrrc as the first cfg0 CSR op after the body (within the slack).
     """
     unbracketed = []
     for index, length in records:
@@ -333,14 +328,8 @@ def test_replay_records_are_gathering_bracketed():
 
 @blackhole_only
 def test_welfords_replay_record_is_gathering_bracketed():
-    """With ENABLE_GATHERING, the Welford SFPU init's replay record must sit inside
-    disable_gathering()/enable_gathering().
-
-    _program_welfords_replay_buffer_ (shared with Wormhole) records the four per-LREG row
-    bodies at init; on Blackhole that record has to go through ckernel::load_replay_buf, the
-    only place the bracket is emitted. A functional sweep cannot see the difference (the
-    gathering hazard is a codegen lottery), so the binary is inspected instead.
-    """
+    """With ENABLE_GATHERING, _program_welfords_replay_buffer_'s record must sit inside
+    disable_gathering()/enable_gathering(); only the math ELF can show that."""
     from helpers.llk_params import DestAccumulation
 
     formats = input_output_formats([DataFormat.Float16_b], same=True)[0]
@@ -378,14 +367,8 @@ def test_welfords_replay_record_is_gathering_bracketed():
 
 @blackhole_only
 def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
-    """With ENABLE_GATHERING and DISABLE_SFPLOADMACRO, the where kernel's replay record must
-    sit inside disable_gathering()/enable_gathering().
-
-    _calculate_where_ has three record sites: the two SFPLOADMACRO paths already record through
-    ckernel::load_replay_buf; the plain-SFPLOAD path selected by DISABLE_SFPLOADMACRO
-    (TT_METAL_DISABLE_SFPLOADMACRO=1) must do the same. Its recorded body takes runtime Dst
-    offsets, so the enable_gathering() csrrc lands further past the record than for an
-    all-immediate body.
+    """With ENABLE_GATHERING and DISABLE_SFPLOADMACRO, _calculate_where_'s plain-SFPLOAD
+    record must sit inside disable_gathering()/enable_gathering() like its two siblings.
     """
     from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
     from helpers.test_variant_parameters import (
