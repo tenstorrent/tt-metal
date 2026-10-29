@@ -4,7 +4,7 @@
 
 ## Read this first
 
-**Primary audience**: AI agents performing the [audit](../audit/metal2_audit.md) on a TTNN op. The audit's final step is to confirm the op fits one of the two Metal 2.0 factory concepts, decide which, and record the choice in the audit report.
+**Primary audience**: AI agents performing the [audit](../audit/metal2_audit.md) on a TTNN op. The audit's final step is to confirm the op fits the Metal 2.0 factory concept the readiness sheet names, and record it in the audit report.
 
 **Secondary audience**: AI agents performing the [port](../port/metal2_port.md). The port inherits the audit's decision and implements the factory entry point against it. The "Port plan" and "Port report" deliverable sections at the bottom of this document carry the decision forward through the port artifacts.
 
@@ -24,6 +24,8 @@ Both are built on the same method, `create_program_artifacts`, and both build th
 | **`CustomProgramSpecFactoryConcept`** | exactly what the op's `override_runtime_arguments` returns | the op author |
 
 **One question decides which one this op targets: does the ported-from factory have an `override_runtime_arguments`?** No → the base concept. Yes → the custom concept, and the port's job is to *translate* that method rather than delete it. The audit records the target concept; the porter inherits it and does not re-decide.
+
+An op whose ported-from factory builds a program per mesh coordinate takes a third concept instead: [`MeshWorkloadSpecFactoryConcept`](#per-coordinate-programs-meshworkloadspecfactoryconcept).
 
 **What does *not* decide it: a custom `compute_program_hash`.** The two axes are independent and the corpus populates all four combinations. A pointer-patching op can legitimately carry a custom hash — it may be shrinking the *cost* of hashing derived attributes rather than widening the cache-equivalence class — and an op with an `override_runtime_arguments` may have no custom hash at all. Don't read either as a signal about the other. What the port does about a custom hash is the same on both paths: [leave it alone](#the-cache-key-leave-the-custom-hash-alone).
 
@@ -105,7 +107,7 @@ Only the **return type** is concept-enforced. A ported-from `override_runtime_ar
 
 On every cache hit the adapter calls `override_runtime_arguments` **once per mesh coordinate range**, passing that range's start coordinate, and applies the result via `UpdateProgramRunArgs`. The factory is not re-run; the `Program` is not rebuilt.
 
-- **Per-device values are expressible** — that is what `coord` is for. Use it where the ported-from override varied values by device.
+- **`coord` is the start of the range one `Program` covers** (usually the whole mesh), and the result applies to every device in that range. It is the coordinate the ported-from adapter passed, unless that op built a program per coordinate (then it is only the first); use it wherever the ported-from override did. Values that vary per device need a program per coordinate: that is [`MeshWorkloadSpecFactoryConcept`](#per-coordinate-programs-meshworkloadspecfactoryconcept). A `descriptor (per-coord)` op reaches this concept only when its coordinate turned out unused; drop the coordinate.
 - **`UpdateProgramRunArgs` is an arbitrary *partial* update.** Anything you leave out keeps whatever value it was last given, from the cache-miss `SetProgramRunArgs` or from an earlier hit. That makes **the set of things the override refreshes part of the op's behavior** — and that set is **inherited, not decided.** Refresh exactly what the ported-from override refreshed: no more, no less. Adding a refresh it didn't do is as much a deviation as dropping one it did. You are not being asked to work out what does or doesn't vary across the enqueue loop; the ported-from override already encodes that answer.
 - **Borrowed-memory DFBs couple the two.** If the override sets a size override for a borrowed-memory DFB, it must *also* supply that DFB's backing tensor argument.
 
@@ -123,6 +125,8 @@ On the base concept the framework refreshes tensor bindings for you. On the cust
 | Addresses travel as | raw buffer addresses written into runtime args / CB fields | `TensorArgument`s in `tensor_args` |
 
 So the address-handling statements in the ported-from override do not disappear on the way across — **they become `tensor_args` entries.** Re-expressing them as runtime-arg *values* instead is the smuggling anti-pattern the binding model exists to prevent: it would mean declaring a runtime argument that should not exist, for something Metal 2.0 represents as a binding.
+
+**Exception: a `WorkloadDescriptor` source.** There the descriptor adapter patches the bindings it resolved at cache miss and *then* calls the override (the `has_workload_descriptor` branch of `apply_descriptor` in `mesh_device_operation_adapter.hpp`), so the ported-from override may omit addresses. The bindings the framework patched become the Metal 2.0 override's job: return a `TensorArgument` for every io-tensor `TensorParameter`, whatever the ported-from override contains.
 
 **The failure that is silent is the opposite mistake:** assuming the framework still patches bindings for you. It does on the base concept — which is what every other example in these docs shows — and it does not here. An override that simply omits `tensor_args` compiles, runs, and returns wrong numbers only on cache hits, and only once the incoming tensors stop landing at the first call's addresses.
 
@@ -154,31 +158,51 @@ ProgramRunArgs MyProgramFactory::override_runtime_arguments(
 }
 ```
 
-**If the ported-from override skipped a binding, skip it too.** An op author may deliberately omit one they know cannot change, to save the patching cost — and from the outside that is indistinguishable from an oversight. Either way it is not yours to adjudicate: reproduce the set you found. If the omission looks wrong to you, that is a line in the port report, not an edit to the port. The port reproduces the ported-from op's behavior *including its bugs* — see [the porting invariant](../port/metal2_port.md#the-principle) for why that is a rule rather than a resignation.
+**If the ported-from override skipped a binding, skip it too** (except from a `WorkloadDescriptor` source, above). An op author may deliberately omit one they know cannot change, to save the patching cost — and from the outside that is indistinguishable from an oversight. Either way it is not yours to adjudicate: reproduce the set you found. If the omission looks wrong to you, that is a line in the port report, not an edit to the port. The port reproduces the ported-from op's behavior *including its bugs* — see [the porting invariant](../port/metal2_port.md#the-principle) for why that is a rule rather than a resignation.
+
+---
+
+## Per-coordinate programs: `MeshWorkloadSpecFactoryConcept`
+
+The target when the ported-from factory builds a different program per mesh coordinate: an MPMD op, or an SPMD op whose args vary by device (the sheet's `Execution Model`). A `MeshWorkload` holds one `Program` per coordinate range, so per-device values need per-device `Program`s in every API. The ported-from op already builds them, so the port loses nothing.
+
+```cpp
+struct MyMeshWorkloadFactory {
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+        const operation_attributes_t&       attributes,
+        const tensor_args_t&                tensor_args,
+        tensor_return_value_t&              tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+
+    // Only if the ported-from factory has an override_runtime_arguments:
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        const operation_attributes_t&    attributes,
+        const tensor_args_t&             tensor_args,
+        tensor_return_value_t&           tensor_return_value,
+        const ttnn::MeshCoordinateRange& range);
+};
+```
+
+`MeshWorkloadArtifacts::programs` is a list of `{range, spec, run_params}`. **Keep the ported-from granularity**, one entry per program the ported-from op built:
+
+- From a per-coordinate `create_descriptor(…, coord)`: one entry per coordinate. Iterate `tensor_coords.coords()` and set `range = ttnn::MeshCoordinateRange(coord)`.
+- From a `WorkloadDescriptor`: one entry per `programs` entry, with the same range.
+
+Build each entry's spec and run-args the way the [port recipe](../port/metal2_port.md) builds the single-program artifact, using that coordinate's values. Ranges must lie inside `tensor_coords` and must not overlap, and there must be at least one entry; violations fail at runtime. A coordinate where the ported-from op built an empty program gets no entry. Worked example on main: `experimental/dropout`'s `DropoutMeshWorkloadFactory`, one entry per coordinate, each with its own seed.
+
+- **No op-owned tensors.** `MeshWorkloadArtifacts` has no `op_owned_tensors` field.
+- **Cache hit, no override:** the framework refreshes tensor bindings per range, as on the base concept.
+- **Cache hit, with an override:** the framework calls it once per range and applies the result to that range's `Program`. As on the custom concept, the override owns the tensor bindings, and [the cache-hit contract](#the-cache-hit-contract) applies unchanged. The ported-from override received each range's start coordinate; here that is `range.start_coord()`.
 
 ---
 
 ## Feasibility gate
 
-The audit's job here is one question: **does the op fit one of the two concepts above?** Their limits are identical — the fork between them is about the cache-hit path, not about what the op is allowed to be.
+The audit's job here is one question: **does the op fit the concept the sheet's `Porting Target` names?**
 
-- **Single-program** (the common case — op-owned tensors are fine) → proceed, on whichever concept the [selector](#the-two-metal-20-factory-concepts) picks.
-- **Op-owned `GlobalSemaphore`s.** The factory allocates its own in its body, and the artifact carries only `MeshTensor`s — no slot for them. Not porter-resolvable: record RED and stop. Op-owned *tensors* are supported and **not** blocked.
-- **Multi-program / per-coord variation.** The op's programs genuinely differ across mesh coordinates (CCL-style), and both concepts above stamp one spec everywhere. **Don't RED this on your own judgment** — see below.
-
-### Multi-program: the sheet gates, you name the target
-
-A Metal 2.0 mesh-workload concept was expected to follow the two above, so this document holds no verdict on whether one exists — that would go stale the day it lands. The sheet's `Is able to port?` is the gate and already accounts for framework support: [read that cell, don't vet it](../audit/metal2_audit.md#ttnn-factory-concept-prerequisite). Attribute and route a `no` like any other; on a `yes`, name the target concept from the code:
-
-```bash
-grep -n "concept \|create_" ttnn/api/ttnn/operation_concepts.hpp
-```
-
-Look for a **Metal 2.0** concept — one built on a `ProgramSpec` / `ProgramArtifacts` entry point rather than a `ProgramDescriptor` — that admits per-coordinate programs, and record its name as the target. **As of 2026-08-31 there was none:** the only two Metal 2.0 concepts were `ProgramSpecFactoryConcept` and `CustomProgramSpecFactoryConcept`, both single-program, both excluding `MeshWorkloadFactoryConcept`. If that is still the picture, record **target concept: none yet** and RED, citing this lookup as the evidence.
-
-Either way the **port procedure covers only the two single-program concepts**: a mesh-workload target means the porter stops at [its coverage boundary](../port/metal2_port.md#what-this-procedure-covers). Note that in the brief so the stop reads as expected, not as a failed port.
-
-> **Heads-up — a legacy `MeshWorkload` is not automatically a multi-program op.** Some legacy ops construct a `MeshWorkload` only because the legacy framework couldn't carry op-owned tensors on the single-program path. If every per-coord program is structurally identical (same kernels, same DFB shape, same bindings — only the tensor data differs) and the only thing pushing it multi-program was a resource workaround, the op is *morally* single-program and **ports cleanly** — carry its **op-owned** tensors in `op_owned_tensors` on the single-program concept and drop the `MeshWorkload`. Record it as a resource-workaround unwind rather than genuine per-coord variation.
+- **`ProgramSpecFactoryConcept` / `CustomProgramSpecFactoryConcept`** → proceed. Op-owned tensors are fine.
+- **`MeshWorkloadSpecFactoryConcept`** → proceed, unless the op has op-owned tensors. This concept has no slot for them, so record RED.
+- **Op-owned `GlobalSemaphore`s**, on any concept. The factory allocates its own in its body, and no artifact has a slot for them. Not porter-resolvable: record RED and stop.
 
 ### Tensor-arg matching — keep strict
 
@@ -275,20 +299,20 @@ The auditor adds the following to `METAL2_PREPORT_AUDIT.md`. The decision is rec
 ## TTNN ProgramFactory
 
 ### Concept
-[ProgramSpecFactoryConcept (ported-from factory has no override_runtime_arguments) / CustomProgramSpecFactoryConcept (it does — name the method's file:line) / <mesh-workload concept, named from the header lookup> / BLOCKED (op-owned GlobalSemaphores, or multi-program with no concept yet; see below)]
+[the sheet's `Porting Target`: ProgramSpecFactoryConcept / CustomProgramSpecFactoryConcept (name the override's file:line) / MeshWorkloadSpecFactoryConcept (name the per-coordinate entry point's file:line, and the override's if any) / BLOCKED (see below)]
 
 ### Fit
-- Single vs multi-program: [single — one ProgramSpec stamped across the mesh / multi — quote the sheet's `Is able to port?` cell and the header-lookup result]
-- Op-owned device resources: [none / op-owned tensors (supported) / op-owned GlobalSemaphores — BLOCKED, list them]
+- Execution model: [the sheet's `Execution Model`; for MPMD or per-device args, what varies per coordinate]
+- Op-owned device resources: [none / op-owned tensors (supported, except on MeshWorkloadSpecFactoryConcept) / op-owned GlobalSemaphores — BLOCKED, list them]
 - Tensor-arg matching: strict [default; deviation requires a paragraph and is not a port-time call]
-- Legacy-to-Metal-2.0 shape: [1:1 with legacy — or — legacy MeshWorkload was a resource workaround, see heads-up]
+- Ported-from shape: [1:1 — or — collapsing to one spec: a `WorkloadDescriptor` that exists only to carry op-owned tensors, or a `descriptor (per-coord)` whose coordinate is unused]
 
 ### Custom compute_program_hash
 [present at file:line / backdoor (attribute_values | to_hash) at file:line / none — default reflection-based hash]
 [Recorded so the porter knows it is there and leaves it alone; the port never edits it.]
 
 ### Stop signals
-[If BLOCKED: which framework capability is missing (op-owned GlobalSemaphores, or multi-program with no concept yet — for that one quote the sheet cell and the lookup), and confirm the overall audit result is RED. If the target is a mesh-workload concept: note that the port procedure does not cover it yet, so the porter will stop at its coverage boundary. Otherwise: "None."]
+[If BLOCKED: which framework capability is missing (op-owned GlobalSemaphores, or op-owned tensors on MeshWorkloadSpecFactoryConcept), and confirm the overall audit result is RED. Otherwise: "None."]
 ```
 
 ## Port plan deliverable (porter-facing)
@@ -297,7 +321,7 @@ The porter inherits the audit's decision; the port plan's TTNN section is a brie
 
 ```markdown
 ## TTNN ProgramFactory
-- Concept (inherited from audit): [ProgramSpecFactoryConcept / CustomProgramSpecFactoryConcept — anything else is outside this procedure; stop and report]
+- Concept (inherited from audit): [ProgramSpecFactoryConcept / CustomProgramSpecFactoryConcept / MeshWorkloadSpecFactoryConcept — anything else is outside this procedure; stop and report]
 - Custom compute_program_hash: [present at file:line — leave intact / none]
 - Implementation notes: [optional — anything specific about how this op realizes the concept; most ports won't need this]
 ```
@@ -313,7 +337,8 @@ The porter adds the following to `METAL2_PORT_REPORT.md` at the end of the port.
 
 ### Concept realized
 [Confirm the concept the audit chose, or — if something changed — explain why and confirm it was surfaced with the invoker before re-deciding.
-On CustomProgramSpecFactoryConcept, also confirm the override returns a TensorArgument for every io-tensor TensorParameter (op-owned ones are excluded by construction), or name the ones deliberately skipped and the ported-from statement that justifies each.]
+On CustomProgramSpecFactoryConcept, also confirm the override returns a TensorArgument for every io-tensor TensorParameter (op-owned ones are excluded by construction), or name the ones deliberately skipped and the ported-from statement that justifies each. The same applies to an override on MeshWorkloadSpecFactoryConcept.
+On MeshWorkloadSpecFactoryConcept, confirm `create_mesh_workload_artifacts` emits one `programs` entry per ported-from program, over the same ranges.]
 
 ### Device-op-class edits
 - Pybind entry points removed: [file + function, or "none"]
@@ -322,7 +347,7 @@ On CustomProgramSpecFactoryConcept, also confirm the override returns a TensorAr
 ### Open items
 [Anything noticed about the factory layer during the port:
 - Relaxation candidates (kernels that would tolerate relaxed tensor matching — not applied during port).
-- Reasons the op would benefit from a capability not yet on this concept (op-owned GlobalSemaphores, multi-program, caching-strategy control).
+- Reasons the op would benefit from a capability not yet on this concept (op-owned GlobalSemaphores, caching-strategy control).
 - Friction with the concept fit or the entry-point wiring.]
 ```
 
