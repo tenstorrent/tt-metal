@@ -509,6 +509,7 @@ def run_training(
     if args.track_memory:
         MemoryUsageTracker.snapshot("MODEL_CREATION")
 
+    # Applies precision.param_dtype before building the optimizer; a resumed checkpoint loads into those tensors later.
     optimizer = create_optimizer(model, yaml_config)
     if args.track_memory:
         MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
@@ -654,6 +655,11 @@ def run_training(
         ("lr", ", ".join(f"{lr:.2e}" for lr in optimizer.get_group_lrs())),
         ("schedule", schedule_str),
     ]
+    native = ttml.autograd.PreferredPrecision.NATIVE
+    param_dtypes = {
+        t.get_value(native).dtype.name.lower() for t in model.parameters().values() if t.get_requires_grad()
+    }
+    optimizer_fields.append(("param dtype", ", ".join(sorted(param_dtypes))))
     if training_cfg.use_clip_grad_norm:
         optimizer_fields.append(("clip", f"max-norm {training_cfg.clip_grad_norm_max_norm}"))
 

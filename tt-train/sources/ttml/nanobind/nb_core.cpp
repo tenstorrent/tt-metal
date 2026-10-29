@@ -17,6 +17,7 @@
 #include <ttnn/distributed/distributed_tensor.hpp>
 
 #include "nanobind/nb_export_enum.hpp"
+#include "nanobind/nb_util.hpp"
 #include "serialization/serializable.hpp"
 #include "tt-metalium/distributed_context.hpp"
 #include "ttnn/distributed/create_socket.hpp"
@@ -33,6 +34,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
+#include "core/parameter_dtype.hpp"
 #include "core/tt_profiler.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -125,6 +127,27 @@ void py_module(nb::module_& m) {
         nb::arg("p_norm_type") = 2.0f,
         nb::arg("error_if_nonfinite") = false,
         "Clip gradients of parameters to a maximum norm. Returns the total norm after clipping.");
+
+    // Parameter precision (training_config.precision.param_dtype)
+    m.def(
+        "store_trainable_parameters_as",
+        [](const ttml::serialization::NamedParameters& parameters, ttnn::DataType dtype) {
+            ttml::core::store_trainable_parameters_as(parameters, dtype);
+        },
+        nb::arg("parameters"),
+        nb::arg("dtype"),
+        "Store every trainable bf16 or fp32 parameter in dtype (BFLOAT16 or FLOAT32). Call before creating the "
+        "optimizer.");
+
+    m.def(
+        "apply_precision_config",
+        [](nb::dict training_config, const ttml::serialization::NamedParameters& parameters) {
+            return ttml::core::apply_precision_config(ttml::nanobind::util::obj_to_yaml(training_config), parameters);
+        },
+        nb::arg("training_config"),
+        nb::arg("parameters"),
+        "Apply training_config.precision to the parameters (precision.param_dtype) before creating the optimizer. "
+        "Returns the dtype applied, or None.");
 
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));

@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import ttml
 import ttnn
+from ttml.common.utils import create_optimizer
 from ttml.modules import AbstractModuleBase, Parameter
 
 
@@ -137,7 +138,7 @@ def test_param_groups_require_modules(expect_error):
         ttml.optimizers.create_optimizer({"type": "AdamW", "param_groups": [{"weight_decay": 0.0}]}, params)
 
 
-@pytest.mark.parametrize("optimizer_type", ["AdamW", "AdamWFullPrecision", "SGD", "MuonComposite"])
+@pytest.mark.parametrize("optimizer_type", ["AdamW", "SGD", "MuonComposite"])
 def test_param_groups_accepted_by_ported_optimizers(optimizer_type):
     params = ttml.NamedParameters()
     # "lr" is a per-group option of every ported optimizer (Muon has no weight_decay).
@@ -176,7 +177,7 @@ def test_param_groups_rejected_for_python_optimizer(expect_error):
         ttml.optimizers.create_optimizer({"type": "PyOptNoDecay", "param_groups": NO_DECAY_GROUPS}, params)
 
 
-@pytest.mark.parametrize("optimizer_type", ["AdamW", "AdamWFullPrecision", "SGD", "MuonComposite"])
+@pytest.mark.parametrize("optimizer_type", ["AdamW", "SGD", "MuonComposite"])
 @pytest.mark.parametrize("value", [True, False])
 def test_removed_weight_decay_skip_1d_is_rejected(expect_error, optimizer_type, value):
     """yaml-cpp ignores unknown keys, so without an explicit check an old config would load and silently start
@@ -375,3 +376,42 @@ def test_registry_reads_variant_only_adamw_options():
     for kahan_summation, num_buffers in ((True, len(params)), (False, 0)):
         opt = ttml.optimizers.create_optimizer({"type": "AdamWComposite", "kahan_summation": kahan_summation}, params)
         assert len(opt.get_state_dict()["kahan_compensation"]) == num_buffers
+
+
+def _param_dtypes(model) -> set:
+    return {t.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype for t in model.parameters().values()}
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize(
+    "precision, expected",
+    [
+        ({"param_dtype": "float32"}, ttnn.DataType.FLOAT32),
+        (None, ttnn.DataType.BFLOAT16),
+        ({}, ttnn.DataType.BFLOAT16),
+        ({"param_dtype": None}, ttnn.DataType.BFLOAT16),
+    ],
+)
+def test_create_optimizer_applies_param_dtype(precision, expected):
+    """With a full config, create_optimizer first stores the trainable parameters in precision.param_dtype, so every
+    runner that calls it gets fp32 master weights for float32; without the key they keep the model's dtype."""
+    model = ttml.modules.LinearLayer(32, 32)
+    training_config = {"optimizer": {"type": "AdamW"}}
+    if precision is not None:
+        training_config["precision"] = precision
+
+    create_optimizer(model, {"training_config": training_config})
+
+    assert _param_dtypes(model) == {expected}
+
+
+class _ModelWithoutParameters:
+    def parameters(self):
+        return ttml.NamedParameters()
+
+
+def test_create_optimizer_rejects_an_unknown_param_dtype(expect_error):
+    """The name is checked before any parameter is touched, so this needs no device."""
+    config = {"training_config": {"precision": {"param_dtype": "float16"}, "optimizer": {"type": "AdamW"}}}
+    with expect_error(RuntimeError, "param_dtype"):
+        create_optimizer(_ModelWithoutParameters(), config)

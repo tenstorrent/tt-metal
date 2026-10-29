@@ -35,10 +35,9 @@ class CheckpointShapeError(ValueError):
     """A tensor would be saved or restored at a shape that contradicts the shape it must have.
 
     Invariant guarded: every optimizer state tensor keyed by a parameter name (AdamW ``exp_avg`` /
-    ``exp_avg_sq`` / ``max_exp_avg_sq``, SGD ``theta``, Muon's momentum buffer, the fp32 master copy, ...)
+    ``exp_avg_sq`` / ``max_exp_avg_sq``, SGD ``theta``, Muon's momentum buffer, ...)
     is created as ``zeros_like(param)`` or ``typecast(param)`` and therefore gathers to the same full shape as
-    its parameter. Only shapes are compared -- never dtype (``AdamWFullPrecision`` keeps a float32 master of a
-    bf16 parameter).
+    its parameter. Only shapes are compared -- never dtype.
 
     ``save_checkpoint`` gathers each tensor by its own topology label, so a label that does not describe the
     data (a moment reporting ``Replicate`` on a mesh axis its parameter is sharded on, say) gathers to one

@@ -24,8 +24,9 @@ void require_bf16_parameters(const serialization::NamedParameters& parameters, s
         const auto dtype = tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE).dtype();
         TT_FATAL(
             dtype == ttnn::DataType::BFLOAT16,
-            "{} supports bf16 parameters only, but parameter '{}' is stored as {}. fp32 parameters are supported by "
-            "AdamW, and by other optimizers once the precision config lands (#56513).",
+            "{} supports bf16 parameters only, but parameter '{}' is stored as {}. fp32 parameters "
+            "(precision.param_dtype: float32) are supported by AdamW; the other optimizers get fp32 support later "
+            "(#56513).",
             optimizer_name,
             name,
             dtype);

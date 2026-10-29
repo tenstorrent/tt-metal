@@ -54,6 +54,11 @@ Optimizer is configured inline under `training_config.optimizer`. See [Optimizer
 | `use_clip_grad_norm` | bool | false | Enable gradient norm clipping |
 | `clip_grad_norm_max_norm` | float | 1.0 | Maximum gradient norm for clipping |
 
+### Precision Parameters
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `precision.param_dtype` | str | unset | Dtype trainable parameters are stored in: `"bfloat16"` or `"float32"`. `"float32"` gives fp32 master weights with fused `AdamW`; see [fp32 master weights](../docs/MIXED_PRECISION.md#fp32-master-weights). Unset keeps the model's dtype (bf16) |
+
 ### Example
 ```yaml
 training_config:
@@ -245,8 +250,7 @@ The optimizer is configured inline under `training_config.optimizer`.
 
 | Type | Description |
 |------|-------------|
-| `AdamW` | Fused AdamW — bf16 state, single custom kernel per step (default, recommended). Supports stochastic rounding. |
-| `AdamWFullPrecision` | AdamW with fp32 master weights and optimizer state; casts back to bf16 for the forward pass. Use when bf16 accumulation causes training instability. |
+| `AdamW` | Fused AdamW, a single custom kernel per step (default, recommended). Its state takes the parameters' dtype: bf16, or fp32 with `precision.param_dtype: float32` for fp32 master weights (use when bf16 accumulation causes training instability). Supports stochastic rounding for bf16 parameters. |
 | `MorehAdamW` | AdamW via `ttnn::moreh_adamw` — uses the Moreh team's kernel implementation. |
 | `AdamWComposite` | AdamW built from individual TTNN ops (no custom kernel). Supports Kahan summation. |
 | `SGD` | Fused SGD — bf16 state, single custom kernel per step (default, recommended). |
@@ -291,7 +295,6 @@ groups 1, 2, ... in order. LR schedulers drive every group from its own base LR.
 | Optimizer | Per-group options | Optimizer-wide only |
 |-----------|-------------------|---------------------|
 | `AdamW` | `lr`, `beta1`, `beta2`, `epsilon`, `weight_decay` | `amsgrad`, `stochastic_rounding` |
-| `AdamWFullPrecision` | `lr`, `beta1`, `beta2`, `epsilon`, `weight_decay` | `amsgrad` |
 | `MorehAdamW` | `lr`, `beta1`, `beta2`, `epsilon`, `weight_decay` | - |
 | `AdamWComposite` | `lr`, `beta1`, `beta2`, `epsilon`, `weight_decay` | `amsgrad`, `kahan_summation` |
 | `SGD`, `SGDComposite` | `lr`, `momentum`, `dampening`, `weight_decay` | `nesterov` |

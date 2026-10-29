@@ -20,7 +20,6 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "optimizers/adamw_composite.hpp"
-#include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/muon_composite.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
@@ -976,8 +975,7 @@ TEST(ParamGroupDefaultsTest, FloatFieldsArePerGroupOptions) {
         return names;
     };
     const std::vector<std::string> adamw_keys = {"beta1", "beta2", "epsilon", "lr", "weight_decay"};
-    EXPECT_EQ(keys(param_group_defaults(AdamWConfig{})), adamw_keys);  // not amsgrad / stochastic_rounding
-    EXPECT_EQ(keys(param_group_defaults(AdamWFullPrecisionConfig{})), adamw_keys);
+    EXPECT_EQ(keys(param_group_defaults(AdamWConfig{})), adamw_keys);           // not amsgrad / stochastic_rounding
     EXPECT_EQ(keys(param_group_defaults(AdamWCompositeConfig{})), adamw_keys);  // not kahan_summation
     const std::vector<std::string> sgd_keys = {"dampening", "lr", "momentum", "weight_decay"};
     EXPECT_EQ(keys(param_group_defaults(SGDConfig{})), sgd_keys);  // not nesterov

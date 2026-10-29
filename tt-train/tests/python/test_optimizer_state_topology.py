@@ -11,7 +11,7 @@ mesh: every moment reports its parameter's placements and distribution shape, a 
 device-for-device into a fresh model, and (TP) an optimizer step cannot relabel a parameter through a mislabelled
 gradient.
 
-Every optimizer with per-parameter state is covered. The fused kernels (``AdamW``, ``AdamWFullPrecision``, ``SGD``)
+Every optimizer with per-parameter state is covered. The fused kernels (``AdamW``, also on fp32 parameters, and ``SGD``)
 and ``MuonComposite`` have Python classes; ``MorehAdamW``, ``AdamWComposite`` and ``SGDComposite`` have none, but
 ``ttml.optimizers.create_optimizer`` reaches them through the C++ ``OptimizerRegistry`` and hands back an
 ``OptimizerBase`` whose ``step`` / ``get_state_dict`` dispatch virtually (nanobind falls back to the registered base
@@ -49,7 +49,7 @@ DIM = 64  # tile-aligned per device after a 2-way split (32 rows / cols per shar
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 # Fused-kernel optimizers with a Python class.
-OPTIMIZERS = ["AdamW", "AdamWFullPrecision", "SGD"]
+OPTIMIZERS = ["AdamW", "AdamW+fp32", "SGD"]
 
 # Composite optimizers, reachable only through ``create_optimizer`` (registry keys in optimizer_registry.cpp). The
 # weight-decay default (0.01) is kept on the AdamW variants so ``AdamWComposite::step``'s weight-decay write is among
@@ -76,11 +76,10 @@ ALL_OPTIMIZERS = SHARDED_PARAM_OPTIMIZERS + ["MuonComposite"]
 def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimizers.OptimizerBase":
     if name == "AdamW":
         return make_adamw(params)
-    if name == "AdamWFullPrecision":
-        cfg = ttml.optimizers.AdamWFullPrecisionConfig.make(
-            lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0
-        )
-        return ttml.optimizers.AdamWFullPrecision(params, cfg)
+    if name == "AdamW+fp32":
+        # fp32 master weights: the trainable parameters are stored in fp32, and fused AdamW keeps fp32 moments.
+        ttml.core.store_trainable_parameters_as(params, ttnn.DataType.FLOAT32)
+        return _make_optimizer("AdamW", params)
     if name == "SGD":
         cfg = ttml.optimizers.SGDConfig.make(lr=1e-3, momentum=0.9, dampening=0.0, weight_decay=0.0, nesterov=False)
         return ttml.optimizers.SGD(params, cfg)

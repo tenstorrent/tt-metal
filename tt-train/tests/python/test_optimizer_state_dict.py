@@ -43,9 +43,9 @@ optimizer subclass.
    Pre-fix this throws; post-fix it must succeed.
 3. ``test_set_state_dict_after_steps_inprocess_roundtrip`` (parametrized)
    -- runs the same round-trip with a non-zero ``m_steps`` for every
-   Python-bound optimizer (AdamW, AdamWFullPrecision, SGD, MuonComposite,
-   NoOp). A regression in the binding wrapper would surface as a uniform
-   failure across this matrix.
+   Python-bound optimizer (AdamW, SGD, MuonComposite, NoOp). A regression
+   in the binding wrapper would surface as a uniform failure across this
+   matrix.
 """
 
 import numpy as np
@@ -103,11 +103,6 @@ def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimize
     if name == "AdamW":
         cfg = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0)
         return ttml.optimizers.AdamW(params, cfg)
-    if name == "AdamWFullPrecision":
-        cfg = ttml.optimizers.AdamWFullPrecisionConfig.make(
-            lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0
-        )
-        return ttml.optimizers.AdamWFullPrecision(params, cfg)
     if name == "SGD":
         cfg = ttml.optimizers.SGDConfig.make(lr=1e-3, momentum=0.0, dampening=0.0, weight_decay=0.0, nesterov=False)
         return ttml.optimizers.SGD(params, cfg)
@@ -123,10 +118,10 @@ def _make_optimizer(name: str, params: "ttml.NamedParameters") -> "ttml.optimize
 # in-process. Keep this list in sync with the ``nb::class_<..., OptimizerBase>``
 # declarations in nb_optimizers.cpp:py_module_types. See ``_make_optimizer``
 # above for what is intentionally excluded and why.
-_PY_BOUND_OPTIMIZERS = ["AdamW", "AdamWFullPrecision", "SGD", "MuonComposite", "NoOp"]
+_PY_BOUND_OPTIMIZERS = ["AdamW", "SGD", "MuonComposite", "NoOp"]
 
 # Optimizers whose lr is a constructor argument (NoOp's single group has a fixed, unused lr of 0).
-_LR_OPTIMIZERS = ["AdamW", "AdamWFullPrecision", "SGD", "MuonComposite"]
+_LR_OPTIMIZERS = ["AdamW", "SGD", "MuonComposite"]
 
 # State dict key of the lr (of the first, here the only, param group).
 _LR_KEY = "param_groups.0.lr"
@@ -187,8 +182,8 @@ def test_adamw_set_state_dict_inprocess_roundtrip():
 def test_set_state_dict_after_steps_inprocess_roundtrip(optimizer_name):
     """``set_state_dict(get_state_dict())`` must round-trip with non-zero steps.
 
-    Replicated across every Python-bound optimizer (AdamW, AdamWFullPrecision,
-    SGD, MuonComposite, NoOp) because all of them store their step counter as
+    Replicated across every Python-bound optimizer (AdamW, SGD, MuonComposite,
+    NoOp) because all of them store their step counter as
     a ``size_t m_steps`` field and read it back via
     ``serialization::get_value_type<size_t>(dict, "steps")``. The variant
     routing fix lives in ``nb_optimizers.cpp::set_state_dict``, which is
@@ -270,12 +265,6 @@ _HYPERPARAMS_BY_OPTIMIZER = {
         "param_groups.0.weight_decay": 1e-2,
         "stochastic_rounding": False,
     },
-    "AdamWFullPrecision": {
-        "param_groups.0.beta1": 0.8,
-        "param_groups.0.beta2": 0.99,
-        "param_groups.0.epsilon": 1e-6,
-        "param_groups.0.weight_decay": 1e-2,
-    },
     "SGD": {
         "param_groups.0.momentum": 0.9,
         "param_groups.0.dampening": 0.1,
@@ -352,11 +341,6 @@ def test_adamw_group_options_get_and_set_every_group(expect_error):
 
 
 _GROUPED_OPTIMIZERS = {
-    "AdamWFullPrecision": lambda groups: ttml.optimizers.AdamWFullPrecision(
-        ttml.NamedParameters(),
-        ttml.optimizers.AdamWFullPrecisionConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.1),
-        param_groups=groups,
-    ),
     "SGD": lambda groups: ttml.optimizers.SGD(
         ttml.NamedParameters(),
         ttml.optimizers.SGDConfig.make(lr=1e-3, momentum=0.9, dampening=0.0, weight_decay=0.1, nesterov=False),

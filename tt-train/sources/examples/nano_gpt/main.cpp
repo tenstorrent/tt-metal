@@ -14,6 +14,7 @@
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
+#include "core/parameter_dtype.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
@@ -124,7 +125,7 @@ uint64_t get_number_of_parameters(Model &model, bool tp) {
     auto parameters = get_model_parameters(model);
     uint64_t num_params = 0;
     for (const auto &[name, tensor_ptr] : parameters) {
-        auto tensor = tensor_ptr->get_value();
+        const auto &tensor = tensor_ptr->get_value(ttml::autograd::PreferredPrecision::NATIVE);
         auto params_in_tensor = tensor.logical_volume();
         if (tp && (contains(name, "fc") || contains(name, "linear") || contains(name, "mlp/w"))) {
             auto tp_size = ttml::autograd::ctx().get_parallelism_context().get_tp_size();
@@ -718,6 +719,15 @@ int main(int argc, char **argv) {
         serializer.serialize(save_and_exit_path);
         fmt::println("Model saved to {}", save_and_exit_path);
         std::exit(0);
+    }
+
+    // Before the checkpoint is loaded and the optimizer is created, so both follow the stored dtype. 3-tier workers
+    // keep bf16 parameters for RemoteOptimizer; the optimizer worker holds the fp32 master weights.
+    if (!is_three_tier_training(multihost_config)) {
+        if (auto param_dtype =
+                ttml::core::apply_precision_config(yaml_config["training_config"], get_model_parameters(model))) {
+            fmt::print("Parameter dtype: {}\n", *param_dtype);
+        }
     }
 
     // Load model parameters if in eval mode and model path exists

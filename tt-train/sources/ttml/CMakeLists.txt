@@ -13,6 +13,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/socket_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/parameter_dtype.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tt_tensor_utils.cpp
@@ -95,7 +96,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_composite.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
