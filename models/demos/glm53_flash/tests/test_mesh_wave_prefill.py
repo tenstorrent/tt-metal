@@ -316,8 +316,11 @@ def test_wave_first_token_vs_hf(mesh_device):
 
 
 # ------------------------------------------------------------------------------------------ the served adapter
-SERVED_CHUNK = 2048  # the SP device chunk = the wave width (a prefill bucket): the continuation waves start there
-SERVED_MAX_SEQ_LEN = 8192  # three prefix-bucket starts for the ladders
+SERVED_W = 2048  # the wave width (a prefill bucket, >= the dense range): the continuation waves start there
+SERVED_CHUNK = 1024  # the SP device chunk: 512 local rows per rank on 2 rows (ttKDA's SP scan clashes its L1 group
+# summaries with the exclusive scan's CBs at 1024 local rows x 2 ranks: the 2026-10-29 block runs; the 8x4's 16384
+# chunk = 2048 local rows is unaffected)
+SERVED_MAX_SEQ_LEN = 8192  # the prefix-bucket starts for the ladders
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 N_DECODE = 4  # decode steps compared after every prefill
 
@@ -368,7 +371,7 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch):
         device_prefill_chunk=SERVED_CHUNK,
         pad_token_id=cfg.pad_token_id,
         traced_prefill_lengths=(),  # the SP reference stays eager; the waves are traced (the model's per-row lengths)
-        wave_rows=SERVED_CHUNK,
+        wave_rows=SERVED_W,
     )
     a = GLM53FlashForCausalLM(model, g, pad_token_id=cfg.pad_token_id)
     assert (
@@ -439,7 +442,7 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch):
 
     # (b) a prompt beyond the wave width beside a short one: wave 1 traced at 2048 (both at 0), wave 2 = the long
     # prompt's [2048, 2348) alone (eager: the sparse rows at the width, row 1 idle)
-    p2, p3 = _served_ids(SERVED_CHUNK + 300, 3, vocab), _served_ids(500, 4, vocab)
+    p2, p3 = _served_ids(SERVED_W + 300, 3, vocab), _served_ids(500, 4, vocab)
     first = step_prefill([(2, p2, 0), (3, p3, 0)])
     outs = decode_jointly(first, {2: int(p2.numel()), 3: 500})
     got2, got3 = [first[2]] + outs[2], [first[3]] + outs[3]

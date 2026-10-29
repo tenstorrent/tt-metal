@@ -11,18 +11,19 @@ instance, another user slot) with the same media and prompt:
    bucket -- first token == the harness's, last-token logits PCC > 0.999 (bit-exactness is reported: the harness pads
    to 320 rows, the served chunk to 512), then 8 traced decode steps through ``decode_forward`` == the harness's
    replays of the same trace;
-2. the same image behind 800 filler tokens (image rows 811..1066, 1086 tokens): the served prompt walks TWO
-   1024-token device chunks, the image straddling the boundary (213 rows in the first chunk, 43 in the second),
-   against the harness's single 1088-row prefill -- first token equal, logits PCC > 0.999;
+2. the same image behind 288 filler tokens (image rows 299..554, 574 tokens): the served prompt walks TWO
+   512-token device chunks, the image straddling the boundary (213 rows in the first chunk, 43 in the second),
+   against the harness's single-shot prefill (the 1024 bucket) -- first token equal, logits PCC > 0.999;
 3. a synthetic 4-frame clip of the image (``synthetic_clip``: 2 temporal groups, 512 vision tokens in two runs
    with timestamps, 549 tokens) as a video item -- first token equal, logits PCC > 0.999; the tower's features for
    the clip against the HF fp32 reference when ``bringup/references/glm53_flash/MMV_shapes_clip4`` exists.
 
 Layers 0-3 only (``GLM53_MODEL_LAYERS``): the tokens are meaningless, the check is served-path == harness-path.
-The 1024-token chunk keeps the row slabs at 512 rows (the KDA L1 hazard of ``test_decode_packed_inputs_mesh.py``);
+The 512-token chunk keeps the row slabs at 256 rows and the harness's single shot at 512 (the KDA L1 hazard at 1024-row
+slabs on 2 rows, ``test_decode_packed_inputs_mesh.py``);
 ``max_seq_len`` 1536 keeps the traced ladder at 256 / 512 / 1024 on 2 rows (the 2048 trace = 1024-row slabs).
 
-    GLM53_MESH_SHAPE=2,4 GLM53_MODEL_LAYERS=0-3 GLM53_MODEL_B=4 GLM53_VLLM_PREFILL_CHUNK=1024 GLM53_MODEL_TRACE_MB=512 \\
+    GLM53_MESH_SHAPE=2,4 GLM53_MODEL_LAYERS=0-3 GLM53_MODEL_B=4 GLM53_VLLM_PREFILL_CHUNK=512 GLM53_MODEL_TRACE_MB=512 \\
         TT_VISIBLE_DEVICES=<rows-4-5 block> MESH_DEVICE=P150x8 TT_MESH_GRAPH_DESC_PATH=<p150_x8 descriptor> \\
         pytest models/demos/glm53_flash/tests/test_serving_image_mesh.py -s --timeout 3600
 
@@ -30,7 +31,7 @@ Expected: three "SERVED_IMAGE_RESULT ... first token == harness" lines, decode t
 ``GLM53_VLLM_VISION_RESIDENT=0`` runs the same with the per-request tower (build + release per prefill).
 First failure candidates (in order): (a) a ``prefill_streams`` shape / pad mismatch between the 512-bucket chunk
 and the layers (``eager_pad_length`` vs ``PrefillTraceInputs``: an assertion in ``FunctionalDecoder.prefill_forward``);
-(b) the straddling case's second chunk (``start=1024``, 62 tokens padded to 256) disagreeing with the single-shot
+(b) the straddling case's second chunk (``start=512``, 62 tokens padded to 256) disagreeing with the single-shot
 prefill in the KDA chunked scan (``next_start`` contract): first token differs, PCC < 0.999 -> compare against
 ``prefill_chunked`` of the text path with the same boundary before blaming the scatter; (c) the video item's
 placeholder range (``mm_placeholder_offsets`` at ``<|begin_of_video|>``) counting 512 rows -- a ValueError from
@@ -71,7 +72,9 @@ MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","
 B = int(os.environ.get("GLM53_MODEL_B", "4"))  # users per row = max_num_seqs
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 MAX_SEQ_LEN = 1536
-CHUNK = 1024  # two device chunks inside MAX_SEQ_LEN on any row count (a multiple of 32 * rows up to 32 rows)
+CHUNK = 512  # two device chunks inside MAX_SEQ_LEN on any row count up to 16 rows; 256 local rows per rank on 2 rows
+# and the harness's single-shot bucket (1024) at 512: ttKDA's SP scan clashes its L1 group summaries with the exclusive
+# scan's CBs at 1024 local rows x 2 ranks (the 2026-10-29 block runs; the 8x4's 2048 local rows are unaffected)
 N_DECODE = int(os.environ.get("GLM53_MM_DECODE_STEPS", "8"))
 SAMPLE_DIR = Path(__file__).resolve().parents[1] / "demo" / "sample_prompts"
 IMAGE = Path(os.environ.get("GLM53_MM_IMAGE", SAMPLE_DIR / "shapes_hello.png"))
@@ -79,7 +82,7 @@ QUESTION = "What shapes and what word are in this image? Answer in one sentence.
 QUESTION_V = "What happens in this clip? Answer in one sentence."
 REF_CLIP = Path("bringup/references/glm53_flash/MMV_shapes_clip4")
 LOGITS_PCC_BAR = 0.999
-FILLER = 800
+FILLER = 288
 
 
 def _plugin_kwargs(items, prefix_ids: torch.Tensor) -> dict:
@@ -114,7 +117,7 @@ def _greedy(n):
 
 def _warm_harness(adapter, n_tokens: int, user: int) -> None:
     """Build the reference path's programs for an ``n_tokens`` prompt BEFORE the trace captures: ``prefill_multimodal``
-    runs the whole prompt single-shot (its padded bucket, e.g. 2048 rows for the straddling prompt), a row count the
+    runs the whole prompt single-shot (its padded bucket, e.g. 1024 rows for the straddling prompt), a row count the
     served warm-up never runs (the adapter chunks at the device chunk), so without this the first reference call
     compiles under the sealed program cache (EmbeddingsDeviceOperation, 2026-10-28 8x4). Zero features at the image
     rows; slot ``user``'s state is overwritten by its next prompt."""
@@ -255,7 +258,7 @@ def test_served_image_and_video_match_the_harness(mesh_device, monkeypatch):
     _compare("image/1 chunk", served, harness, tok)
     a.release_request(0)
 
-    # 2. the image behind filler text: two device chunks, the image straddling the 1024 boundary
+    # 2. the image behind filler text: two device chunks, the image straddling the chunk boundary
     filler = torch.tensor(
         tok.encode(" The quick brown fox jumps over the lazy dog." * 100, add_special_tokens=False)[:FILLER]
     )
