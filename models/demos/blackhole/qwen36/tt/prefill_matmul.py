@@ -54,7 +54,7 @@ def enabled():
     return os.environ.get("QWEN36_PREFILL_MINIMAL_MATMUL", "0") == "1"
 
 
-# Measured on Blackhole p150 (11x10), LoFi + fp32 acc, bit-identical to 8/8/8.
+# Measured on Blackhole p150 (11x10), LoFi + fp32 acc, bit-identical to 8/8/8. Used when fp32 acc is on.
 # (K, N) -> (blocks for 4096 <= M < 8192, blocks for M >= 8192); blocks = (M_block, K_block, N_block) in tiles.
 _SHAPE_BLOCKS = {
     (2048, 8224): ((8, 4, 16), (8, 4, 16)),
@@ -65,17 +65,33 @@ _SHAPE_BLOCKS = {
     (2048, 2048): ((16, 4, 8), (8, 4, 8)),
 }
 
+# Re-swept with fp32 acc off (trace-timed, LoFi bf16 x bfp8). Overrides _SHAPE_BLOCKS when fp32 acc is off:
+# (K, N) -> (blocks for 512 < M < 4096, blocks for 4096 <= M < 8192, blocks for M >= 8192); None keeps the
+# fp32-acc table (8/8/8 below 4096). A (blocks, subblock) entry sets the subblock; otherwise _subblock picks it.
+_NO_ACC_BLOCKS = {
+    (2048, 8256): (((4, 4, 24), None), ((4, 4, 24), None), ((4, 4, 32), (1, 4))),  # (1, 8) at N block 32: 2% slower
+    (2048, 5120): (((8, 4, 16), None), None, None),
+}
+
 
 def _blocks(m_tiles, k_tiles, n_tiles):
+    """(M, K, N) block sizes in tiles and an explicit subblock (None: let _subblock pick)."""
     m = m_tiles * 32
-    entry = _SHAPE_BLOCKS.get((k_tiles * 32, n_tiles * 32)) if m >= 4096 else None
+    key = (k_tiles * 32, n_tiles * 32)
+    if not fp32_acc() and 512 < m:
+        tiers = _NO_ACC_BLOCKS.get(key)
+        tier = tiers[0 if m < 4096 else 1 if m < 8192 else 2] if tiers else None
+        if tier is not None:
+            return (*tier[0], tier[1])
+    entry = _SHAPE_BLOCKS.get(key) if m >= 4096 else None
     if entry is None:
-        return BLOCK_M, BLOCK_K, BLOCK_N
-    return entry[1] if m >= 8192 else entry[0]
+        return BLOCK_M, BLOCK_K, BLOCK_N, None
+    return (*(entry[1] if m >= 8192 else entry[0]), None)
 
 
 SWIGLU_ROWS_MIN = 512  # fused SwiGLU only above this many rows (the cases where SiLU is not fused into w1)
 SWIGLU_BLOCKS = (4, 32, 8)  # (M, K, N) blocks for the fused SwiGLU matmul; K block 64 overflows L1
+SWIGLU_BLOCKS_NO_ACC = (4, 16, 12)  # same, swept with fp32 acc off
 
 
 def swiglu_enabled():
@@ -84,13 +100,13 @@ def swiglu_enabled():
 
 def _config(device, m_tiles, k_tiles, n_tiles):
     grid = device.compute_with_storage_grid_size()
-    bm, bk, bn = _blocks(m_tiles, k_tiles, n_tiles)
+    bm, bk, bn, explicit_sub = _blocks(m_tiles, k_tiles, n_tiles)
     key = (grid.x, grid.y, m_tiles, k_tiles, n_tiles, bm, bk, bn, fp32_acc())
     cfg = _configs.get(key)
     if cfg is None:
         kw = {}
         nb = max(1, min(bn, n_tiles))
-        sub = _subblock(nb, SUBBLOCK)
+        sub = explicit_sub or _subblock(nb, SUBBLOCK)
         if sub is not None:
             kw = dict(subblock_h=sub[0], subblock_w=sub[1])
         cfg = _configs[key] = ttnn.MinimalMatmulConfig(
@@ -214,7 +230,7 @@ def prefill_swiglu(x, w_gu, compute_kernel_config, memory_config=None):
     m_tiles = _rows_tiles(x)
     k_tiles, n_tiles = (x.shape[-1] + 31) // 32, (w_gu.shape[-1] + 31) // 32
     grid = x.device().compute_with_storage_grid_size()
-    bm, bk, bn = SWIGLU_BLOCKS
+    bm, bk, bn = SWIGLU_BLOCKS if fp32_acc() else SWIGLU_BLOCKS_NO_ACC
     key = ("swiglu", grid.x, grid.y, m_tiles, k_tiles, n_tiles, bm, bk, bn, fp32_acc())
     cfg = _configs.get(key)
     if cfg is None:
