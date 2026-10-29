@@ -1581,6 +1581,22 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 08:50: 16 K needles pass, a wave costs an SP chunk, SP-first placement, the 128 grid
+
+The served 16 K needle stage (4 x 16365 tokens, 4 concurrent, 2 rounds, APC off) retrieved 8/8 with identical texts
+across rounds, so the 2-of-4 corruption of r5 needs the 64 K shapes (32-wave spans, the 131072 prefix bucket, 65514
+tokens); the harness now replays that exact shape (`test_mesh_wave_prefill.py` long profile: vLLM's chunked-prefill
+schedule emulated, 65514 x 4 at 1 M by env, each prompt against its own SP path) at 4 and 45 layers. Its TTFTs settle
+the policy: a lone 16 K SP chunk 7.7 s, a two-member wave step of 16 K 56-64 s (eight 2048-row waves at ~7 s: a wave
+is a 2048-row forward per row, as is a 16 K SP chunk), so `SlotTable.allocate(prefer_sp)` places an eager prompt on
+a slot index live on no row (SP-eligible, up to `users_per_row` concurrent long prompts) and keeps the wave-affine
+order for short prompts (a traced wave of eight beats eight traced SP calls). r3's engine death is explained: a
+96-token leftover-budget chunk after a 128-token prefix-cache hit ended on the 224 KV block (the plugin's fallback
+for a running request short of the 256 grid), and `maintain_prefill_wave` needs every member start on the 128 grid;
+`chunk_unit` is now 128 under per-row ownership, the planner refuses an off-grid start naming the cause, and the
+plugin branch `arg/prefill_align_wait` (local, pending the go) makes such a request wait for a step that reaches the
+grid instead.
+
 ### 2026-10-29 08:01: the APC-off 32-request served run (r5)
 
 With the ragged ladder, no SP prefill traces, wave traces 256/512 and the APC off: stage a both prompts = HF (the dump

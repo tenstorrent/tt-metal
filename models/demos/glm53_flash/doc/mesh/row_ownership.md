@@ -122,6 +122,13 @@ Under this rule a lone arrival at low occupancy keeps today's TTFT; beyond `user
 impossible (every slot index has a live user on some row) and everything is waves. Numbers: the (a) table for waves;
 today's 27 s / 460 s for SP.
 
+Measured 2026-10-29 (45 layers, 8x4, 16 K needles): a lone 16 K SP chunk 7.7 s; a two-member wave step of 16 K 56 s
+(8 waves of 2048 rows at ~7 s each: one eager 2048-row wave costs one 16 K SP chunk, since both are a 2048-row forward
+per row), so an eager wave pays only near full occupancy and `SlotTable.allocate(prefer_sp=True)` (an eager prompt: no
+traced wave holds it) takes a slot index live on NO row first (the lowest-load row), keeping up to `users_per_row`
+concurrent long prompts SP-eligible; short prompts keep the wave-affine order (one traced wave of `rows` members beats
+`rows` traced SP calls). r5's four 64 K needles in pairs of waves averaged 321 s of TTFT; as SP chunks ~70 s.
+
 ### 2.5 (e) SP with owner-row masks (the README's "next step") and owner-row attention
 
 Masks alone (row-sharded slot indices with dummy targets on the non-owner rows, the mechanism of section 1 #7 and
@@ -229,11 +236,16 @@ independent-rows placement and now covers both affinities.
 `tt/vllm_config.py`:
 
 * `ServingGeometry`: `wave_rows` (W, default 2048, `>= DENSE_PREFILL_ROWS`, a multiple of 32), `wave_affinity`
-  (`"user"` = phase 1 uniform slot index, `"row"` = phase 2), `sp_fallback` (policy (c)); `chunk_unit` is 32 when
-  independent; `device_prefill_chunk` keeps SP's `32 x rows` unit.
+  (`"user"` = phase 1 uniform slot index, `"row"` = phase 2), `sp_fallback` (policy (c)); `chunk_unit` is 128 when
+  independent (`WAVE_CHUNK_UNIT`: a wave member's pools are written per 32-pool tile, so every member start sits on
+  the 128-token grid; vLLM's `prefill_chunk_alignment` 256 is a multiple, and the planner refuses an off-grid start
+  with the cause: the plugin's KV-block fallback for a running request short of the grid, r3's `(2, 0, 224)` after a
+  128-token prefix-cache hit, fixed plugin-side by waiting for a step that reaches the grid); `device_prefill_chunk`
+  keeps SP's `32 x rows` unit.
 * `SlotTable.allocate`: the wave-affine order under `rows_independent` + `"user"` (slot index `u` filled across the
-  rows before the next `u`, `u` in column-interleaved order); the previous rule (column load, then row load) stays
-  for `"row"`. `SlotState.sp_only` tracks the one-way SP -> wave switch; `sp_eligible(logical)` is the rule of 2.4.
+  rows before the next `u`, `u` in column-interleaved order), preceded for an eager prompt (`prefer_sp`) by a slot
+  index live on no row (section 2.4's measurement); the previous rule (column load, then row load) stays for
+  `"row"`. `SlotState.sp_only` tracks the one-way SP -> wave switch; `sp_eligible(logical)` is the rule of 2.4.
 * `WavePlanner.plan(pending)`: `pending = [(logical, start, end)]` -> an ordered list of `SPStep` (one request, its
   SP device chunks from `PrefillPlanner`) and `WaveStep` (`user` or None, `t_pad`, `members`: `(logical, row, user,
   start, end)`, at most one per row), walking every member's range in `wave_rows` device chunks; `WaveCall` is the
