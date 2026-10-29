@@ -107,9 +107,9 @@ sfpi_inline void expm1_cw_clamped_pair(sfpi::vFloat& a, sfpi::vFloat& b) {
     constexpr int kC231Bias = 0x4B3FFF81;
     sfpi::vFloat ea, eb;
     {
-        const sfpi::vInt bias = kC231Bias;
-        ea = sfpi::setexp(1.0f, sfpi::as<sfpi::vInt>(ta) - bias);
-        eb = sfpi::setexp(1.0f, sfpi::as<sfpi::vInt>(tb) - bias);
+        const sfpi::vInt neg_bias = -kC231Bias;
+        ea = sfpi::setexp(1.0f, sfpi::as<sfpi::vInt>(ta) + neg_bias);
+        eb = sfpi::setexp(1.0f, sfpi::as<sfpi::vInt>(tb) + neg_bias);
     }
     a = (ea - 1.0f) + ea * ha;
     b = (eb - 1.0f) + eb * hb;
