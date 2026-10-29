@@ -8,6 +8,8 @@ fp32 WIDTH_SHARDED) is already all zeros (host data nonzero) — the op is hande
 passes alone, after any two of that file's three test groups, with --no-precompile, and inside the golden suite.
 Not an op defect; kept to document the investigation."""
 
+import os
+
 import pytest
 import torch
 import ttnn
@@ -15,6 +17,12 @@ import ttnn
 from eval.golden_tests.distributed_rms_norm.conftest import _FabricMeshCache
 from eval.golden_tests.distributed_rms_norm import helpers as H
 from ttnn.operations.distributed_rms_norm import distributed_rms_norm
+
+
+# Investigation aid only: it reproduces a harness input-creation artifact, not an op behaviour. Opt in explicitly.
+pytestmark = pytest.mark.skipif(
+    os.environ.get("DRMS_R1_DEBUG") != "1", reason="debug reproducer (set DRMS_R1_DEBUG=1 to run)"
+)
 
 
 @pytest.fixture(scope="module")
