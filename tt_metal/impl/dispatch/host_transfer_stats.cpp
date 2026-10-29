@@ -12,7 +12,7 @@ namespace tt::tt_metal {
 
 namespace {
 
-constexpr std::array<const char*, 12> kLabels = {
+constexpr std::array<const char*, 13> kLabels = {
     "buffer writes, fast dispatch",
     "buffer writes, slow dispatch",
     "buffer reads, fast dispatch",
@@ -23,6 +23,7 @@ constexpr std::array<const char*, 12> kLabels = {
     "program binaries, slow dispatch",
     "program config, fast dispatch",
     "program config, slow dispatch",
+    "firmware",
     "H2D socket writes, host push",
     "H2D socket writes, device pull",
 };
