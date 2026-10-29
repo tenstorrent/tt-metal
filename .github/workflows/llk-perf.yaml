@@ -22,7 +22,7 @@ jobs:
       matrix:
         case: ${{ fromJSON(inputs.cases) }}
     name: "replay ${{ matrix.case }}"
-    runs-on: tt-ubuntu-2204-P150b-stable
+    runs-on: ${{ contains(matrix.case, 'wormhole') && 'tt-ubuntu-2204-N150-viommu-stable' || 'tt-ubuntu-2204-P150b-stable' }}
     timeout-minutes: 240
     container:
       image: ${{ needs.build-images.outputs.llk-ci-tag }}
