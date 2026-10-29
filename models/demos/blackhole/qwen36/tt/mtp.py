@@ -46,8 +46,17 @@ def draft_argmax(mtp, logits):
     QWEN36_DRAFT_SHARDED_ARGMAX (resolved once in Qwen36MTP.__init__) selects the sharded form, in
     which ``logits`` is THIS device's [1,1,B,vocab/tp] fp32 shard and the vocab all-gather never
     happened; off, ``logits`` is the gathered full-vocab row and this is exactly argmax_last.
+    With the sharded form, QWEN36_SPEC_ARGMAX_FUSED=1 (``mtp._fused_argmax``) picks the same ids through the fused
+    per-shard argmax (tt/spec_argmax_fused.py) instead of _argmax_sharded.
     """
     if mtp._sharded_argmax:
+        fused = getattr(mtp, "_fused_argmax", None)  # QWEN36_SPEC_ARGMAX_FUSED (tt/spec_argmax_fused.py)
+        if fused is not None:
+            from models.demos.blackhole.qwen36.tt.spec_argmax_fused import ROWS
+
+            ids = fused.ids(logits, ROWS)
+            if ids is not None:
+                return ids
         return mtp._argmax_sharded(logits)  # per-shard argmax + device-only winner pick
     return argmax_last(logits)  # full-vocab gathered row: untilize + argmax
 
@@ -176,6 +185,7 @@ class Qwen36MTP:
         # whenever this resolves to False. The attributes are always defined so draft_argmax can
         # test `mtp._sharded_argmax` without a getattr dance.
         self._sharded_argmax = False
+        self._fused_argmax = None  # QWEN36_SPEC_ARGMAX_FUSED: FusedShardArgmax (set by _init_sharded_argmax)
         self._shard_off = None  # [1,1,B,_LANES] int32, per device: d * vocab_shard in every lane
         self._sel_lane = None  # [1,1,B,_LANES*num_devices] int32 replicated: lane j holds j
         self._argmax_consts = (
@@ -270,6 +280,14 @@ class Qwen36MTP:
             f"MTP drafter: per-shard argmax enabled (B={B}, vocab {vocab} = {nd} x {shard}, "
             f"maxval grid {self._maxval_r}x{self._maxval_c})"
         )
+        # QWEN36_SPEC_ARGMAX_FUSED=1 (default 0): draft_argmax runs the fused per-shard argmax instead of
+        # _argmax_sharded (same ids, same [1,1,b,1] uint32 RM contract; tt/spec_argmax_fused.py). Off, nothing is built.
+        from models.demos.blackhole.qwen36.tt.spec_argmax_fused import FusedShardArgmax, spec_argmax_fused_enabled
+
+        self._fused_argmax = None
+        if spec_argmax_fused_enabled():
+            self._fused_argmax = FusedShardArgmax(self.mesh_device, vocab, nd)
+            logger.info("MTP drafter: fused per-shard argmax (QWEN36_SPEC_ARGMAX_FUSED=1)")
 
     def _maxval_dev(self, shard):
         """Max over ONE device's [1,1,B,vocab/tp] fp32 logit shard -> [1,1,B,1] fp32 TILE (per row).

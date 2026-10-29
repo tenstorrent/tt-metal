@@ -23,6 +23,7 @@ from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.prefix_cache import alloc_zeros_like
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
+from models.demos.blackhole.qwen36.tt.spec_argmax_fused import LANES as _ARGMAX_FUSED_LANES
 from models.demos.blackhole.qwen36.tt.tp_common import aliases as _tpc_aliases
 from models.demos.blackhole.qwen36.tt.tp_common import kv_cache_bf8_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
@@ -2423,13 +2424,19 @@ class Qwen36Model:
                     ttnn.deallocate(t)
         if self._vfy_sharded:
             shard_logits, rows_out, normed = self._spec_tail(x, sharded=True)
-            idx, val = self.shard_argmax_max_rows(shard_logits, rows)
+            # QWEN36_SPEC_ARGMAX_FUSED: the same ids row from the fused per-shard argmax (tt/spec_argmax_fused.py); None
+            # (flag off, or a shard it does not take) runs the shipped tail below, unchanged.
+            fused = getattr(self, "_vfy_argmax_fused", None)
+            ids = fused.ids(shard_logits, _ARGMAX_FUSED_LANES) if fused is not None else None
+            if ids is None:
+                idx, val = self.shard_argmax_max_rows(shard_logits, rows)
             if getattr(self, "_vfy_topk", False):
                 keep = shard_logits  # the topk trace ranks this exact tensor (QWEN36_VERIFY_DEVICE_TOPK)
             else:
                 ttnn.deallocate(shard_logits)
                 keep = None
-            ids = self._dl_greedy_token_row_batched(idx, val, bk.dl if bucket else self._vfy_dl)  # [1,1,1,32] uint32 RM
+            if ids is None:  # [1,1,1,32] uint32 RM
+                ids = self._dl_greedy_token_row_batched(idx, val, bk.dl if bucket else self._vfy_dl)
             for t in owned:
                 ttnn.deallocate(t)
             if bucket:
@@ -2571,6 +2578,7 @@ class Qwen36Model:
         argmax, then min index over the shards whose max equals the global max), which is torch.argmax on
         the full logits."""
         self._vfy_sharded = False
+        self._vfy_argmax_fused = None
         old = getattr(self, "_vfy_dl", None)
         if old is not None:
             old.release()
@@ -2583,6 +2591,13 @@ class Qwen36Model:
             return
         self._vfy_dl = self._vfy_new_dl(rows)
         self._vfy_sharded = True
+        # QWEN36_SPEC_ARGMAX_FUSED=1 (default 0): the verify body's ids come from the fused per-shard argmax (stateless;
+        # shared by every row bucket; tt/spec_argmax_fused.py).
+        from models.demos.blackhole.qwen36.tt.spec_argmax_fused import FusedShardArgmax, spec_argmax_fused_enabled
+
+        if spec_argmax_fused_enabled():
+            self._vfy_argmax_fused = FusedShardArgmax(self.mesh_device, self.vocab_size, self.num_devices)
+            logger.info("verify: fused per-shard argmax (QWEN36_SPEC_ARGMAX_FUSED=1)")
 
     def _vfy_new_dl(self, rows):
         """The sharded-argmax constants of a verify bucket of ``rows`` rows (per-device vocab offset), outside any trace."""
