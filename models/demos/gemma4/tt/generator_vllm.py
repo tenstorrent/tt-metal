@@ -7207,8 +7207,20 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             return self._mtp_ordinary_step(args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live)
         if spec_mode not in ("argmax_ids", "logits"):
             raise ValueError(f"Gemma4MTP speculative contract: unsupported spec_mode {spec_mode!r}")
-        return self._mtp_verify_step(
-            args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live, num_valid, spec_mode
+        # Timed as its own phase: a verify answered from the retained replay runs no device work, so its wall is
+        # the host assembly of the answer and the sampling state (the stats line's "verify" ms/call).
+        return self._spec_timed(
+            "verify",
+            self._mtp_verify_step,
+            args,
+            kwargs,
+            page_tables_per_layer,
+            tokens,
+            start_pos,
+            rows,
+            live,
+            num_valid,
+            spec_mode,
         )
 
     def _mtp_any_retained(self):

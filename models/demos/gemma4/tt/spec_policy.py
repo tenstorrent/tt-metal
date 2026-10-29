@@ -617,14 +617,14 @@ class ModeStats:
         if idle:
             self.idle[0] += 1
             self.idle[1] += float(wall_ms)
-            return
+            return False
         if table_ms is None:
-            return
+            return False
         ratio = float(wall_ms) / max(float(table_ms), 1e-9)
         if clean and len(self.ratios) >= OUTLIER_MIN_SAMPLES and ratio > OUTLIER_FACTOR * self.ratio():
             self.outliers[0] += 1
             self.outliers[1] += float(wall_ms)
-            return
+            return False
         self.busy += 1
         self.busy_wall += float(wall_ms)
         self.busy_tokens += int(tokens)
@@ -634,6 +634,7 @@ class ModeStats:
             self.tokens_sum += int(tokens)
         self.ratios.append(ratio)
         self.rows_tokens.append(float(tokens) / max(int(live_rows), 1))
+        return True
 
     def ratio(self):
         """The median ratio of the counted walls (dirty included) to the table, or None without a sample."""
@@ -723,6 +724,10 @@ class Calibration:
         self.total = [0, 0.0, 0]  # steps, ms, tokens
         self.window_total = [0, 0.0, 0]
         self.steps_since = {}  # mode kind ("plain" / "step") -> steps since its last clean sample
+        # The measured tokens per live row the decision reads, as an EWMA (``alpha``) over the counted samples
+        # of a pool: the records of one draft length at one rung share a pool (the drafter's acceptance does
+        # not depend on the record's rows), the plain step at a bucket is its own. [ewma, samples]
+        self.tokens_pool = {}
 
     def note_step(self, mode, wall_ms, tokens, clean, table_ms, live_rows=1, cause=None, idle=False):
         """One served step of ``mode`` (``("plain", bucket)`` or ``("step", shape, width)``) whose wall is
@@ -731,8 +736,14 @@ class Calibration:
         mode = tuple(mode)
         if idle:
             clean, cause = False, "idle"
+        counted = False
         for table in (self.modes, self.window):
-            table.setdefault(mode, ModeStats()).note(wall_ms, tokens, clean, table_ms, live_rows, idle)
+            counted = table.setdefault(mode, ModeStats()).note(wall_ms, tokens, clean, table_ms, live_rows, idle)
+        if counted:
+            pool = self.tokens_pool.setdefault(self._tokens_pool_key(mode), [None, 0])
+            per_row = float(tokens) / max(int(live_rows), 1)
+            pool[0] = per_row if pool[0] is None else pool[0] + self.alpha * (per_row - pool[0])
+            pool[1] += 1
         for total in (self.total, self.window_total):
             total[0] += 1
             total[1] += float(wall_ms)
@@ -794,25 +805,26 @@ class Calibration:
             return float(prior) * stats.ratio()
         return float(prior)
 
-    def tokens_per_row(self, mode):
-        """The measured tokens per row and step of ``mode`` once ``min_samples`` counted samples exist, else None
-        (the model decides). A record's samples are pooled over the records of its draft length at its rung
-        (``("step", (rows, k), width)`` for every ``rows``): the drafter's acceptance does not depend on the
-        record's rows, so a record the serving never replayed reads its calibrated sibling's."""
+    @staticmethod
+    def _tokens_pool_key(mode):
+        """The pool a mode's tokens-per-row samples feed: ``("step", k, width)`` for a record (every record of
+        the draft length at the rung shares it), the mode itself for a plain bucket."""
         mode = tuple(mode)
         if mode[0] == "step":
-            kind, shape, width = mode
-            samples = [
-                t
-                for key, stats in self.modes.items()
-                if len(key) == 3 and key[0] == kind and key[2] == width and int(key[1][1]) == int(shape[1])
-                for t in stats.rows_tokens
-            ]
-        else:
-            stats = self.modes.get(mode)
-            samples = list(stats.rows_tokens) if stats is not None else []
-        if len(samples) >= self.min_samples:
-            return sum(samples) / len(samples)
+            return ("step", int(mode[1][1]), int(mode[2]))
+        return mode
+
+    def tokens_per_row(self, mode):
+        """The measured tokens per row and step of ``mode`` once its pool holds ``min_samples`` counted samples,
+        else None (the model decides): an EWMA (``alpha``) over the samples in the order served, so it follows
+        the regime in a handful of steps (a 32-sample mean carried the random-prompt c1 point into the prose
+        point that followed and kept it plain, the 12B Galaxy 2026-10-29). A record's samples are pooled over
+        the records of its draft length at its rung (``("step", (rows, k), width)`` for every ``rows``): the
+        drafter's acceptance does not depend on the record's rows, so a record the serving never replayed
+        reads its calibrated sibling's."""
+        pool = self.tokens_pool.get(self._tokens_pool_key(mode))
+        if pool is not None and pool[1] >= self.min_samples:
+            return pool[0]
         return None
 
     def reseed_ms(self, shape, prior):
