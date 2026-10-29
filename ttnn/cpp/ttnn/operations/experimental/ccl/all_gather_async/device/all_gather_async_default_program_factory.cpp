@@ -118,8 +118,8 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     const bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // Tensor Info
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor buffer is null");
-    TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor buffer is null");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor buffer is null");
+    TT_FATAL(output_tensor.is_allocated(), "Output tensor buffer is null");
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
@@ -285,7 +285,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
     TT_FATAL(
         packet_size_bytes >= l1_scratch_cb_page_size_bytes,
@@ -420,7 +420,7 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
 
     auto num_full_size_channels = num_workers_per_direction;
     auto num_header_only_channels = 0;
-    size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
