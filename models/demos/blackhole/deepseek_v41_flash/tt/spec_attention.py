@@ -17,6 +17,8 @@ previous token of row j = the compressor input of row j-1 (row 0: ``prev_cs``, c
 junk latent to a trash slot (see spec_state.py); ``commit(m)`` selects the new ``prev_cs`` after the accept decision.
 """
 
+import os
+
 import torch
 
 import ttnn
@@ -67,7 +69,11 @@ class _PagedMixin:
         ):  # (row-major: DSV41_ATTN_POSTFUSE, any T <= 32)
             return super()._finish(o, st)
         Tp = -(-T // 8) * 8
-        o = self._rope_heads(o, st["Ch"], st["nSh"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if os.environ.get("DSV41_SPEC_FINISH_FUSED_ROPE", "0") == "1":
+            # the inverse RoPE as the in-place partial-RoPE program of the T <= 8 / T % 8 == 0 path (mul + 512x512 matmul + addcmul is ~47 us per layer at T = 10 / 12 / 20)
+            o = self._rope_heads(o, st["Ch"], st["nSh"], memory_config=ttnn.DRAM_MEMORY_CONFIG, fused_users=T)
+        else:
+            o = self._rope_heads(o, st["Ch"], st["nSh"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         o = ttnn.pad(o, [(0, 0), (0, Tp - T), (0, 0), (0, 0)], 0.0)
         cfg = ttnn.create_sharded_memory_config(
             shape=(32, HEAD_DIM),

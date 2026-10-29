@@ -207,8 +207,11 @@ class DSV41MHC:
             _taware()
             and (
                 T <= 8
-                or (T <= 16 and (_flag("DSV41_MHC_PRE16") or _flag("DSV41_MHC_PRE24")))
-                or (T <= 24 and _flag("DSV41_MHC_PRE24"))
+                or T
+                <= (
+                    getattr(self, "pre_max", None)
+                    or (24 if _flag("DSV41_MHC_PRE24") else 16 if _flag("DSV41_MHC_PRE16") else 8)
+                )
             )
             and _flag("DSV41_MHC_PRE", "1")
             and _flag("DSV41_MHC_MIXES_V2", "1")

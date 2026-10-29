@@ -255,7 +255,14 @@ class DraftMoEBlock:
             )
         self.md, self.decode_config = md, cfg
         self.gate = DraftGate(md, weights["gate_weight"], weights["gate_bias"])
-        self.decode = TTMoEDecode(
+        dec_cls = TTMoEDecode
+        if (
+            os.environ.get("DSV41_DRAFT_MOE_TAIL", "0") == "1"
+        ):  # fused tilize + fast_reduce tail (moe_tail.py) as in the 384-expert decode MoE (K = 3 here), T_d < 32 rows
+            from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import _TailDecode
+
+            dec_cls = _TailDecode
+        self.decode = dec_cls(
             mesh_device=md,
             config=cfg,
             torch_w0=weights["w0"],
@@ -264,6 +271,7 @@ class DraftMoEBlock:
             weight_cache_dir=weights.get("cache_dir"),
             buffers=buffers,
         )
+        self.decode._mesh = md  # (_TailDecode.forward: the column tensor of the fused tail)
 
     def warmup(self):
         """Same L1 steering as ``DSV41MoEBlock.warmup`` (hole under the persistent allocations before the program's first compile)."""
@@ -334,6 +342,17 @@ class DraftLayer(DSV41Layer):
         self.mhc_attn = DSV41MHC(md, *mhc_params["attn"])
         self.mhc_ffn = DSV41MHC(md, *mhc_params["ffn"])
         _l1v(md, "  layer: after mhc x2")
+        # drafter-scoped mHC switches (the global DSV41_MHC_PRE16 / DSV41_MHC_X2LITE also change the verify layers): fused mixes+collapse+norm front at T_d = 9..16, lite x2 write
+        pre_max = int(
+            os.environ.get(
+                "DSV41_DRAFT_MHC_PRE_MAX", "16" if os.environ.get("DSV41_DRAFT_MHC_PRE16", "0") == "1" else "0"
+            )
+        )
+        if pre_max:
+            self.mhc_attn.pre_max = self.mhc_ffn.pre_max = pre_max
+        self.x2lite = os.environ.get("DSV41_DRAFT_X2LITE", "0") == "1"
+        # DSV41_DRAFT_STREAM_BF16=1 (numerics-changing): the drafter's residual stream is rounded to bf16 after every hc_post (the bf16 reference / GPU model), the verify stream stays fp32
+        self.stream_bf16 = os.environ.get("DSV41_DRAFT_STREAM_BF16", "0") == "1"
         self.moe = DraftMoEBlock(md, moe_weights, users_rows, buffers=moe_buffers)
         _l1v(md, "  layer: after moe block ctor")
         self.moe.warmup()
@@ -486,13 +505,23 @@ class DraftState:
         )
         self.off_d = fl(torch.arange(self.T_d) // U + 1, self.T_d)  # query position = f + 1 + i
         self._fl = fl
+        self._fl_n = lambda n_, T_: ttnn.from_torch(  # [1,1,n,T]: row j = (row index % n == j)
+            torch.stack([(torch.arange(T_) % n_ == j) for j in range(n_)]).float().reshape(1, 1, n_, T_),
+            device=md,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=rep,
+        )
         self.jmask = [fl((torch.arange(self.T_v) % n == j), self.T_v) for j in range(n)]
+        self.jmask_all = self._fl_n(n, self.T_v)
 
     def view_n(self, n):
         """Shallow copy for another verify block size n (position tables shared, own per-j masks)."""
         v = copy.copy(self)
         v.n, v.T_v = n, self.U * n
         v.jmask = [self._fl((torch.arange(v.T_v) % n == j), v.T_v) for j in range(n)]
+        v.jmask_all = self._fl_n(n, v.T_v)
         return v
 
     def _rows(self, name, idx, shape):
@@ -564,6 +593,13 @@ class DraftState:
         f1 = ttnn.add(
             ttnn.typecast(ttnn.to_layout(ttnn.reshape(slot, [1, 1, 1, T]), ttnn.TILE_LAYOUT), ttnn.float32), 1.0
         )
+        if os.environ.get("DSV41_DRAFT_RINGJ_VEC", "0") == "1":
+            # all n slot-index vectors in one multiply / subtract / typecast / untilize (bit-identical: the same integer-valued fp32 arithmetic), then n row slices
+            ii = ttnn.to_layout(
+                ttnn.typecast(ttnn.subtract(ttnn.multiply(f1, self.jmask_all), 1.0), ttnn.int32), ttnn.ROW_MAJOR_LAYOUT
+            )  # [1,1,n,T]
+            st["ring_j"] = [ttnn.reshape(ttnn.slice(ii, [0, 0, j, 0], [1, 1, j + 1, T]), [T]) for j in range(self.n)]
+            return st
         st["ring_j"] = [
             ttnn.reshape(
                 ttnn.to_layout(
@@ -626,7 +662,16 @@ class DSparkDrafter:
             _l1v(md, f"after layer {len(self.layers) - 1} init")
         w0 = stage_w[0]
         wdt = ttnn.bfloat8_b if bfp8_main else ttnn.bfloat16
-        self.main_proj = up(w0["main_proj"].T.reshape(1, 1, 3 * 5120, 5120), wdt)
+        self.main_proj_sh = None
+        if os.environ.get("DSV41_DRAFT_MAINPROJ_SHARD", "0") == "1":
+            self.main_proj = None
+            self.main_proj_sh = up(
+                w0["main_proj"].T.reshape(1, 1, 3 * 5120, 5120),
+                wdt,
+                mapper=ttnn.ShardTensor2dMesh(md, dims=(None, 3), mesh_shape=(self.rows, self.cols)),
+            )
+        else:
+            self.main_proj = up(w0["main_proj"].T.reshape(1, 1, 3 * 5120, 5120), wdt)
         self.main_norm = up(w0["main_norm"].reshape(1, 1, 1, 5120))
         self.wkv_cat = up(
             torch.cat([w["attn"]["wkv"].T for w in stage_w], dim=1).reshape(1, 1, 5120, 3 * HEAD_DIM), wdt
@@ -648,6 +693,22 @@ class DSparkDrafter:
             ttnn.TILE_LAYOUT,
             ttnn.ShardTensor2dMesh(md, dims=(None, 3), mesh_shape=(self.rows, self.cols)),
         )  # vocab-sharded over the columns
+        # DSV41_DRAFT_HEAD_BF16=1 (default off, numerics-changing, +88 MB per device): the draft logits come from a bf16 copy of the LM head instead of the shared bfp8 one (the verify head is unchanged)
+        self.head_w_d = None
+        bg = os.environ.get(
+            "DSV41_DRAFT_BIAS_GRID", ""
+        )  # "YxX": core grid of the markov-bias matmul (default: the matmul picks; bit-identical, K = 256 is not split)
+        self._bias_kw = {"core_grid": ttnn.CoreGrid(y=int(bg.split("x")[0]), x=int(bg.split("x")[1]))} if bg else {}
+        if os.environ.get("DSV41_DRAFT_HEAD_BF16", "0") == "1":
+            hw = _Shards().get("head.weight")  # [V, 5120] bf16
+            self.head_w_d = ttnn.from_torch(
+                hw.t().contiguous().reshape(1, 1, hw.shape[1], hw.shape[0]).to(torch.bfloat16),
+                device=md,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(None, 3), mesh_shape=(self.rows, self.cols)),
+            )
         cw = w2["conf"].reshape(-1)  # [5376] = [x (5120) | markov_embed (256)]
         pad = lambda v: torch.nn.functional.pad(v.reshape(-1, 1), (0, 31))
         self.conf_x, self.conf_m = up(pad(cw[:5120]).reshape(1, 1, 5120, 32), ttnn.float32), up(
@@ -677,6 +738,27 @@ class DSparkDrafter:
             use_height_and_width_as_shard_shape=True,
         )
 
+    def _main_proj(self, hidden):
+        """main_proj of the verify taps [1,1,M,15360] -> [1,1,M,5120] bf16. DSV41_DRAFT_MAINPROJ_SHARD=1: the 84 MB weight is split over the 8 mesh columns (10.5 MB per device) and the
+        [M,640] slices are all-gathered (the replicated matmul reads all 84 MB on every device)."""
+        if self.main_proj_sh is None:
+            return ttnn.matmul(
+                hidden,
+                self.main_proj,
+                compute_kernel_config=self.ckc,
+                core_grid=ttnn.CoreGrid(y=8, x=8),
+                dtype=ttnn.bfloat16,
+            )
+        gy, gx = (int(v) for v in os.environ.get("DSV41_DRAFT_MP_GRID", "2x10").split("x"))
+        part = ttnn.matmul(
+            hidden,
+            self.main_proj_sh,
+            compute_kernel_config=self.ckc,
+            core_grid=ttnn.CoreGrid(y=gy, x=gx),
+            dtype=ttnn.bfloat16,
+        )
+        return self.mesh_config.allgather(part, self.ccl, axis=1, dim=3)
+
     def seed_from_taps(self, hidden, pos, perm, keep):
         """Seed the rings of this drafter (U users per mesh row) from the prefill taps (tt/prefill_taps.py) instead of a replay of the prompt tail through the verify trace.
         ``hidden`` [1,1,M,15360] bf16 tile, M = TAP_ROWS * U, user-major rows (``u * 128 + slot``): the concat of the stream means at the input of layers 37 / 38 / 39 of the position held by
@@ -685,13 +767,7 @@ class DSparkDrafter:
         moved to their ring slots with ONE selection matmul per stage (exact: every output row has at most one non-zero term) and merged into the cache in place.
         """
         M, U = int(hidden.shape[2]), self.U
-        mp = ttnn.matmul(
-            hidden,
-            self.main_proj,
-            compute_kernel_config=self.ckc,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
-            dtype=ttnn.bfloat16,
-        )
+        mp = self._main_proj(hidden)
         main_x = ttnn.rms_norm(mp, weight=self.main_norm, epsilon=1e-20)
         kvc = ttnn.matmul(
             main_x, self.wkv_cat, compute_kernel_config=self.ckc, core_grid=ttnn.CoreGrid(y=2, x=8), dtype=ttnn.bfloat16
@@ -738,13 +814,7 @@ class DSparkDrafter:
         st_v = state.build_verify(pos_v)."""
         T = self.T_v
         _l1v(self.md, "write_main start")
-        mp = ttnn.matmul(
-            hidden,
-            self.main_proj,
-            compute_kernel_config=self.ckc,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
-            dtype=ttnn.bfloat16,
-        )
+        mp = self._main_proj(hidden)
         main_x = ttnn.rms_norm(mp, weight=self.main_norm, epsilon=1e-20)
         kvc = ttnn.matmul(
             main_x, self.wkv_cat, compute_kernel_config=self.ckc, core_grid=ttnn.CoreGrid(y=2, x=8), dtype=ttnn.bfloat16
@@ -757,7 +827,12 @@ class DSparkDrafter:
             rows = ttnn.to_layout(
                 ttnn.pad(rm, [(0, 0), (0, 0), (0, 31), (0, 0)], 0.0), ttnn.TILE_LAYOUT
             )  # [1,T,32,512], row 0 valid
-            rows = a._rope_heads(rows, st_v["Ch"], st_v["Sh"])
+            rows = a._rope_heads(
+                rows,
+                st_v["Ch"],
+                st_v["Sh"],
+                fused_users=T if os.environ.get("DSV41_DRAFT_WM_FUSED_ROPE", "0") == "1" else None,
+            )  # fused: the partial-RoPE program of the decode attention in place of multiply + 512x512 matmul + addcmul (~55 us per stage)
             a.write_main_rows(ttnn.to_memory_config(rows, self.ucfg_v), st_v["ring_j"])
             _l1v(self.md, f"write_main stage {s} done")
 
@@ -785,6 +860,14 @@ class DSparkDrafter:
                 emb = ttnn.embedding(tok8, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [Tp,1,5120]
                 x = ttnn.repeat(ttnn.typecast(ttnn.reshape(emb, [Tp, 1, 1, 5120]), ttnn.float32), [1, 1, 4, 1])
             pre = self.pre0p
+        elif os.environ.get("DSV41_DRAFT_X_RM2", "0") == "1":
+            # bit-identical to the branch below: the 4 stream copies are built in row-major (bf16 table rows are exact in fp32) and tilized once as fp32 (the typecast + 3 repeats of the tile path are ~130 us)
+            e = ttnn.reshape(
+                ttnn.embedding(tok_rows, self.embed_w, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16),
+                [T, 1, 1, 5120],
+            )
+            x = ttnn.to_layout(ttnn.concat([e, e, e, e], dim=2), ttnn.TILE_LAYOUT, dtype=ttnn.float32)
+            pre = self.pre0
         else:
             emb = ttnn.embedding(tok_rows, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [T,1,5120]
             x = ttnn.repeat(ttnn.typecast(ttnn.reshape(emb, [T, 1, 1, 5120]), ttnn.float32), [1, 1, 4, 1])
@@ -812,11 +895,22 @@ class DSparkDrafter:
         R = (
             Tp or T
         )  # rows carried to the end (the pad rows are independent of the real ones; every consumer takes the first T rows)
-        y = ttnn.matmul(pre, x, compute_kernel_config=self.ckc)  # hc_pre -> [Tp or T,1,1,D]
-        xb = ttnn.typecast(ttnn.reshape(y, [1, 1, R, 5120]), ttnn.bfloat16)  # pre-norm (the confidence head reads this)
+        if os.environ.get("DSV41_DRAFT_HEAD_COLLAPSE", "0") == "1" and R <= 32:
+            # hc_pre collapse + bf16 rounding in the mHC collapse program (same maths as the matmul below; no [R,1,1,D] -> [1,1,R,D] retile)
+            from models.demos.blackhole.deepseek_v41_flash.tt.mhc_collapse import mhc_collapse
+
+            xb = mhc_collapse(x, pre)[0]
+        else:
+            y = ttnn.matmul(pre, x, compute_kernel_config=self.ckc)  # hc_pre -> [Tp or T,1,1,D]
+            xb = ttnn.typecast(
+                ttnn.reshape(y, [1, 1, R, 5120]), ttnn.bfloat16
+            )  # pre-norm (the confidence head reads this)
         xn = ttnn.rms_norm(xb, weight=self.norm_w, epsilon=1e-20)
         logits = ttnn.matmul(
-            xn, self.head.head_w, compute_kernel_config=self.head.ckc, dtype=ttnn.float32
+            xn,
+            self.head.head_w if self.head_w_d is None else self.head_w_d,
+            compute_kernel_config=self.head.ckc if self.head_w_d is None else self.ckc,
+            dtype=ttnn.float32,
         )  # [1,1,R,V/cols]
         if self.stop == "head":
             return {"tokens": [], "logits": [], "conf": logits}
@@ -829,11 +923,18 @@ class DSparkDrafter:
                 logits, ttnn.ROW_MAJOR_LAYOUT
             )  # untilize once; the 5 steps slice / add / argmax in row-major
         V8 = logits.shape[3]
+        # DSV41_DRAFT_PAIRSEL=1 (bit-identical): the 8-column reduction of the sampler + the markov-embedding lookup of the next step are ONE scalar-core program (pair_select.py)
+        pairsel = rm_mode and conf_rm and os.environ.get("DSV41_DRAFT_PAIRSEL", "0") == "1" and U <= 32
+        me_next = None
         for i in range(BLOCK):
             if conf_rm:
-                me_rm = ttnn.reshape(
-                    ttnn.embedding(tok, self.embed_m, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16), [1, 1, U, 256]
-                )  # row-major
+                if me_next is not None:
+                    me_rm = me_next
+                else:
+                    me_rm = ttnn.reshape(
+                        ttnn.embedding(tok, self.embed_m, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16),
+                        [1, 1, U, 256],
+                    )  # row-major
                 mes.append(me_rm)
                 me = ttnn.to_layout(me_rm, ttnn.TILE_LAYOUT)
             else:
@@ -841,13 +942,20 @@ class DSparkDrafter:
                     ttnn.embedding(tok, self.embed_m, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16), [1, 1, U, 256]
                 )
                 mes.append(me)
-            bias = ttnn.matmul(me, self.head_m, compute_kernel_config=self.ckc, dtype=ttnn.float32)
+            bias = ttnn.matmul(me, self.head_m, compute_kernel_config=self.ckc, dtype=ttnn.float32, **self._bias_kw)
             if rm_mode:
                 lg = ttnn.add(
                     ttnn.slice(lrm, [0, 0, i * U, 0], [1, 1, (i + 1) * U, V8]),
                     ttnn.to_layout(bias, ttnn.ROW_MAJOR_LAYOUT),
                 )
-                tok = self.head.sample_global_rm(lg, self.mesh_config, self.ccl)
+                if pairsel:
+                    from models.demos.blackhole.deepseek_v41_flash.tt.pair_select import pair_select
+
+                    tp = os.environ.get("DSV41_DRAFT_PAIRSEL_TILES", "1") == "1"
+                    pair = self.head.sample_pair_rm(lg, self.mesh_config, self.ccl, tile_pairs=tp)
+                    tok, me_next = pair_select(pair, self.head.shard, self.embed_m, tile_pairs=tp)
+                else:
+                    tok = self.head.sample_global_rm(lg, self.mesh_config, self.ccl)
             else:
                 lg = ttnn.add(ttnn.slice(logits, [0, 0, i * U, 0], [1, 1, (i + 1) * U, V8]), bias)
                 tok = self.head.sample_global(

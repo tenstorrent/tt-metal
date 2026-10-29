@@ -213,6 +213,27 @@ class DSV41DeviceHead:
         T = tok.shape[2]
         return ttnn.reshape(ttnn.to_layout(ttnn.typecast(tok, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [T, 1])
 
+    @property
+    def shard(self):
+        return VOCAB // self.cols
+
+    def sample_pair_rm(self, rm, mesh_config, ccl, tile_pairs=False):
+        """First half of ``sample_global_rm``: the all-gathered (max_c, local index_c) pairs of the 8 columns, fp32 TILE [1,1,T,2*cols] (reduced by pair_select.py).
+        tile_pairs=True: max and index as two tile-aligned columns [1,1,T,64] (col 0 of each tile) and the one-worker all-gather: [1,1,T,64*cols]; the 2-wide gather is two programs of ~25 us,
+        the tile-aligned one is one program (45.9 -> 20.2 us, 14.2 us lean: tests/test_pair_gather_bench.py)."""
+        idx = ttnn.argmax(rm, dim=-1, keepdim=True)
+        mx = ttnn.gather(rm, 3, idx)
+        if tile_pairs:
+            pad = [(0, 0), (0, 0), (0, 0), (0, 31)]
+            both = ttnn.to_layout(
+                ttnn.concat([ttnn.pad(mx, pad, 0.0), ttnn.pad(ttnn.typecast(idx, ttnn.float32), pad, 0.0)], dim=3),
+                ttnn.TILE_LAYOUT,
+            )  # [1,1,T,64] row = [max, 0 x 31, idx, 0 x 31]
+            kw = {"lean_ag": True} if getattr(mesh_config, "_dsv41_lean", False) else {}
+            return mesh_config.allgather(both, ccl, axis=1, dim=3, **kw)
+        pair_in = ttnn.to_layout(ttnn.concat([mx, ttnn.typecast(idx, ttnn.float32)], dim=3), ttnn.TILE_LAYOUT)
+        return mesh_config.allgather(pair_in, ccl, axis=1, dim=3)
+
     def sample_global_rm(self, rm, mesh_config, ccl):
         """``sample_global`` from the ROW-MAJOR fp32 logits [1,1,T,V/cols] of this column: the same tokens (exact: the max is the gathered element at the argmax index, ties -> lowest index like torch),
         in 12 ops instead of 30: the width-16160 ``max`` (3 single-core programs, 123 us) is a 3 us ``gather``, the (max, index) pair is built and the 8 pairs are reduced in row-major with strided slices.

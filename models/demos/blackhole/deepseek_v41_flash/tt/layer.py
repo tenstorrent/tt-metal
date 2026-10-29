@@ -222,8 +222,11 @@ class DSV41Layer:
         # Branch taken only on this decode path: _odd_t(T) is None for T in (4, 8, 16, 32) and for DSV41_MHC_PAD8=0,
         # where P*/S* are the identity and every call below is exactly the previous code.
         # The drafter keeps its stream ALREADY padded (x / pre_in [Tp,1,..] on entry, same on exit): no pad on entry, no slice on exit, between its 3 stages.
-        kept = (not _STREAM_BF16) and _odd_t(T) is not None and int(x.shape[0]) == _odd_t(T)
-        Tp = None if (_STREAM_BF16 or (int(x.shape[0]) != T and not kept)) else _odd_t(T)
+        sbf = _STREAM_BF16 or getattr(
+            self, "stream_bf16", False
+        )  # per-layer switch (the drafter stages: DSV41_DRAFT_STREAM_BF16=1)
+        kept = (not sbf) and _odd_t(T) is not None and int(x.shape[0]) == _odd_t(T)
+        Tp = None if (sbf or (int(x.shape[0]) != T and not kept)) else _odd_t(T)
         if Tp:
             P0 = lambda t: _pad_rows(t, T, Tp, 0)  # noqa: E731
             P2 = lambda t: _pad_rows(t, T, Tp, 2)  # noqa: E731
@@ -234,7 +237,7 @@ class DSV41Layer:
         xp, prep = (x, pre_in) if kept else (P0(x), P0(pre_in))
         S0o = (lambda t: t) if kept else S0  # stream outputs
 
-        fuse_pre = (not _STREAM_BF16) and self.mhc_attn.pre_fused_ok(
+        fuse_pre = (not sbf) and self.mhc_attn.pre_fused_ok(
             int(xp.shape[0])
         )  # L02: mixes + collapse + norm of a sub-block in ONE program
         if (
@@ -260,16 +263,20 @@ class DSV41Layer:
         a = self.attention.forward(h, st)  # [1,1,T,D] bf16, replicated
         mark("attention")
         # a: bf16 [1,1,T,D], consumed as is; expand + the FFN-side mixes are one program with DSV41_MHC_EP=1
-        if (
-            _STREAM_BF16
-        ):  # accuracy study: round the stream to bf16 at every hc_post like the bf16 reference / GPU model
+        if sbf:  # accuracy study: round the stream to bf16 at every hc_post like the bf16 reference / GPU model
             x2 = _rnd_bf16(self.mhc_attn.expand(a, xp, attn_post, attn_comb, None))
             ffn_pre, ffn_post, ffn_comb = self.mhc_ffn.mixes(x2)
         elif fuse_pre:
             # DSV41_MHC_X2LITE=1: x2 only feeds the FFN-side mHC kernels (rows 0..3 read with 256 B reads): write just those rows
             # (superseded by the valid-row write when DSV41_MHC_EXPAND_VALID=1 and the pooled buffer applies)
             x2 = self.mhc_attn.expand(
-                P2(a), xp, attn_post, attn_comb, None, lite=_X2LITE, pool=(self.mhc_pool_tag, "attn")
+                P2(a),
+                xp,
+                attn_post,
+                attn_comb,
+                None,
+                lite=_X2LITE or getattr(self, "x2lite", False),
+                pool=(self.mhc_pool_tag, "attn"),
             )
         else:
             x2, (ffn_pre, ffn_post, ffn_comb) = self.mhc_attn.expand_mixes(
@@ -319,7 +326,7 @@ class DSV41Layer:
                 P2(m), x2, ffn_post, ffn_comb, None if sh is None else P2(sh), pool=(self.mhc_pool_tag, "ffn")
             )
         )  # post * (routed + shared) + comb^T x, summed inside the kernel
-        if _STREAM_BF16:
+        if sbf:
             x3 = _rnd_bf16(x3)
         mark("mhc_ffn_expand")
         # hand DRAM-resident tensors to the caller (the next layer): an L1-sharded `ffn_pre` kept alive across

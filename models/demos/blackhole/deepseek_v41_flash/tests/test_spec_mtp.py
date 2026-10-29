@@ -227,3 +227,53 @@ def test_spec_mtp(mesh_device):
         res_b[f"draft<={stop}"] = timed(lambda: dr.draft(tok_d, f_d))
     dr.stop = None
     log("MTP_BREAKDOWN (cumulative ms) " + ", ".join(f"{k_} {v:.2f}" for k_, v in res_b.items()))
+
+    if os.environ.get(
+        "DSV41_MTP_PROF"
+    ):  # per-op profile of write_main + draft (run under `python -m tracy`): rows + segments -> DSV41_MTP_PROF/raw.json
+        import json
+
+        from models.demos.blackhole.deepseek_v41_flash.tests.op_table_recorder import OpRecorder, dev_id
+
+        out_dir = os.environ["DSV41_MTP_PROF"]
+        os.makedirs(out_dir, exist_ok=True)
+        seg = []
+
+        def wrap(obj, name, label):
+            f = getattr(obj, name)
+
+            def w(*a, **k):
+                i0 = dev_id()
+                r = f(*a, **k)
+                seg.append((label, i0, dev_id()))
+                return r
+
+            setattr(obj, name, w)
+
+        for i, dl in enumerate(dr.layers):
+            wrap(dl, "forward", f"D{i}")
+        wrap(dr, "write_main", "write_main")
+        wrap(dr.head, "sample_global_rm", "sample")
+        wrap(dr.head, "sample_global", "sample")
+        wrap(dr, "_conf_quant", "conf_quant")
+        wrap(dr.state, "build_both", "state_both")
+        upload(0)
+        run()
+        ttnn.synchronize_device(md)
+        rec = OpRecorder()
+        rec.install()
+        rec.rows, rec.zero, rec.marks = [], {}, []
+        rec.enabled = True
+        tid3 = ttnn.begin_trace_capture(md, cq_id=0)
+        c0 = dev_id()
+        run()
+        c1 = dev_id()
+        ttnn.end_trace_capture(md, tid3, cq_id=0)
+        rec.enabled = False
+        ttnn.synchronize_device(md)
+        ttnn.ReadDeviceProfiler(md)
+        for _ in range(int(os.environ.get("DP_REPS", "3"))):
+            ttnn.execute_trace(md, tid3, cq_id=0, blocking=True)
+            ttnn.ReadDeviceProfiler(md)
+        json.dump(dict(c0=c0, c1=c1, segs=seg, rows=rec.rows, n=n, B=B), open(os.path.join(out_dir, "raw.json"), "w"))
+        log(f"MTP_PROF done c0={c0} c1={c1} rows={len(rec.rows)}")

@@ -8,12 +8,16 @@ while the projections run.
 
 Core map: collapse+norm = the 4x8 rectangle (cx 0..3); projection cores = columns >= 4 (plan.cores of them); post core = the next one."""
 
+import os
 import struct
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_collapse import _acc, _cb, _hash, _kernel
 
 f32, bf16 = ttnn.float32, ttnn.bfloat16
+_PRE_MAX = int(
+    os.environ.get("DSV41_MHC_PRE_LIMIT", "32")
+)  # largest T the fused front is built for (callers gate with pre_fused_ok; DSV41_MHC_PRE16 / drafter pre_max)
 
 
 def _bits(v):
@@ -26,8 +30,8 @@ def mhc_mixes_cn(
     """-> (pre [T,1,1,4], post [T,1,4,1], comb [T,1,4,4], h bf16 [1,1,T,D] (norm applied), rm bf16 [T,1,1,D] or None)"""
     T, _, n, D = (int(v) for v in x.shape)
     assert (
-        n == 4 and T == plan.tv and D == plan.D and (T <= 8 or (T <= 24 and plan.TG == 4))
-    )  # T = 9..24: G = 3..6 groups of 4 tokens (DSV41_MHC_PRE16: T <= 16, DSV41_MHC_PRE24: T <= 24)
+        n == 4 and T == plan.tv and D == plan.D and (T <= 8 or (T <= _PRE_MAX and plan.TG == 4))
+    )  # T = 9..: G groups of 4 tokens (DSV41_MHC_PRE16: T <= 16, DSV41_MHC_PRE24: T <= 24, drafter pre_max; callers gate with pre_fused_ok)
     TG, G, S, TPJ, PPT, PGPG, NPG = plan.TG, plan.G, plan.S, plan.TPJ, plan.PPT, plan.PGPG, plan.NPG
     mesh = x.device()
     grid = mesh.compute_with_storage_grid_size()
