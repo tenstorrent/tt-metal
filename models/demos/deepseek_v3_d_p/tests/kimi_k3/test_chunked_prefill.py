@@ -42,7 +42,7 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_at
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, TRACE_100K, resolve_checkpoint, resolve_trace
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
-    PLACEMENTS,
+    PLACEMENTS_8X4,
     SP_AXIS,
     TP_AXIS,
     _compose,
@@ -121,7 +121,7 @@ def _dram_bytes(mesh_device):
 
 # Same weight-loading floor as the depth ladder, then eleven chunks of real work on top of it.
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS_8X4, indirect=True)
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
 def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layers):
     tp_shard_kv = True

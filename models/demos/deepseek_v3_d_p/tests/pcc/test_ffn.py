@@ -17,8 +17,10 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.tests.chunk_params import with_sp4_depth
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_x_device_params,
@@ -37,25 +39,30 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
-    "batch_seq_len, hidden_dim, activation",
-    [
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, HIDDEN_DIM, ACTIVATION_SILU),
-        # Kimi-K3's layer-0 dense FFN: 33792 wide, on the checkpoint's SiTU-GLU (#53625). Both the
-        # width and the activation are new here — 33792 is 1.8x DSv3's 18432, and it is far past
-        # ttnn.situ_glu's 3072 L1 cutoff, so every intermediate is a full-size DRAM tensor.
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
-        # TtFfn's clamped branch at the DeepSeek default width. No shipped config selects it --
-        # V4, the only clamped model, is MoE on every layer -- so this is its only coverage.
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, HIDDEN_DIM, ACTIVATION_CLAMPED_SILU_GLU),
-    ],
-    ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_5k-v4-18432-clamped"],
+    "batch_seq_len, emb_dim, hidden_dim, activation",
+    with_sp4_depth(
+        [
+            (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, HIDDEN_DIM, ACTIVATION_SILU),
+            # Kimi-K3's layer-0 dense FFN: 33792 wide, on the checkpoint's SiTU-GLU (#53625). Both the
+            # width and the activation are new here — 33792 is 1.8x DSv3's 18432, and it is far past
+            # ttnn.situ_glu's 3072 L1 cutoff, so every intermediate is a full-size DRAM tensor.
+            (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
+            # TtFfn's clamped branch at the DeepSeek default width. No shipped config selects it --
+            # V4, the only clamped model, is MoE on every layer -- so this is its only coverage.
+            (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, HIDDEN_DIM, ACTIVATION_CLAMPED_SILU_GLU),
+            # GLM-5.3's dense layers 0-2: 6144 -> 12288, SiLU-GLU.
+            (PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.INTERMEDIATE_SIZE, ACTIVATION_SILU),
+        ],
+        ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_5k-v4-18432-clamped", "isl_5k-glm-12288"],
+    ),
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, tp_axis",
     [
         pytest.param(
             (1, 4),
             torus_x_device_params(),
+            1,
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="torus-x-1x4",
@@ -65,16 +72,45 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             (2, 4),
             fabric2d_device_params(),
             2,
+            1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
+        ),
+        # The same LoudBox, transposed: TP=4 on mesh axis 0, as when SP moves to axis 1.
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(),
+            2,
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2-tp0",
         ),
         # BH Galaxy, the production shape.
         pytest.param(
             (8, 4),
             torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
             2,
+            1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
+        ),
+        # The same Galaxy with TP=8 on mesh axis 0, as when SP moves to axis 1.
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4-tp0",
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half): TP=4 on the axis-0 line, SP's ring on axis 1.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-tp0",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -83,9 +119,11 @@ def test_ffn_pcc(
     mesh_device,
     device_params,
     batch_seq_len: int,
+    emb_dim: int,
     hidden_dim: int,
     activation: str,
     num_links: int,
+    tp_axis: int,
 ):
     """
     Test TtFfn PCC against TorchExpert reference.
@@ -115,21 +153,21 @@ def test_ffn_pcc(
     clamp_limit = DeepSeekV4ProConfig.SWIGLU_LIMIT
     gate_up_scale = 4.5 if is_clamped else 1.0
 
-    topology = per_axis_topology(device_params["fabric_config"])[1]
+    topology = per_axis_topology(device_params["fabric_config"])[tp_axis]
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
     logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
-    logger.debug(f"batch_seq_len={batch_seq_len}, emb_dim={EMB_DIM}, hidden_dim={hidden_dim}, {activation=}")
+    logger.debug(f"batch_seq_len={batch_seq_len}, emb_dim={emb_dim}, hidden_dim={hidden_dim}, {activation=}")
 
     signpost(f"FFN PCC test - {mesh_shape=} {batch_seq_len=} {hidden_dim=} {activation=} {num_links=} {topology=}")
 
-    actual_num_links = get_num_links(mesh_device, cluster_axis=1)
-    logger.debug(f"Available ethernet links along mesh columns: {actual_num_links}")
+    actual_num_links = get_num_links(mesh_device, cluster_axis=tp_axis)
+    logger.debug(f"Available ethernet links along the TP axis: {actual_num_links}")
     logger.debug(f"Using num_links={num_links}, topology={topology}")
 
     # Create PyTorch reference model with FFN dimensions
     logger.debug("Creating TorchExpert reference with FFN dimensions")
-    torch_model = TorchExpert(EMB_DIM, hidden_dim, activation=activation, **situ_betas)
+    torch_model = TorchExpert(emb_dim, hidden_dim, activation=activation, **situ_betas)
 
     # In place, so both sides are graded on one set of weights. down_proj only rescales the
     # output, so it is left alone.
@@ -149,6 +187,7 @@ def test_ffn_pcc(
     tt_model = TtFfn(
         mesh_device=mesh_device,
         torch_weights=torch_weights,
+        emb_dim=emb_dim,
         hidden_dim=hidden_dim,
         num_links=num_links,
         topology=topology,
@@ -156,11 +195,12 @@ def test_ffn_pcc(
         weights_dtype=weights_dtype,
         activation=activation,
         clamped_silu_glu_limit=clamp_limit,
+        tp_axis=tp_axis,
         **situ_betas,
     )
 
     # Create input tensor (replicated across all devices)
-    torch_input = torch.randn(batch_seq_len, EMB_DIM, dtype=torch.float32)
+    torch_input = torch.randn(batch_seq_len, emb_dim, dtype=torch.float32)
     logger.debug(f"Created torch input: {torch_input.shape}")
 
     tt_input = ttnn.from_torch(
@@ -185,18 +225,20 @@ def test_ffn_pcc(
     logger.debug("Converting TTNN output to torch for comparison")
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1) if tp_axis == 1 else (-1, 0)
+        ),
     )
     logger.debug(f"TTNN output converted to torch: {tt_output_torch.shape}")
 
-    # The input is replicated across mesh ROWS (only the TP axis, dim 1, is sharded), so composing
-    # dim 0 stacks mesh_shape[0] copies of the same result. Tile the reference to match rather than
+    # The input is replicated across the non-TP axis (only the TP axis is sharded), so composing
+    # dim 0 stacks mesh_shape[1 - tp_axis] copies of the same result. Tile the reference to match rather than
     # slicing off one copy: a row that diverged would then still show up in the PCC. No-op on a
     # single-row mesh, which is what every non-Galaxy param here is.
     #
     # Tile once and only once -- at K3's 3200x7168 each fp32 copy is ~92 MB, ~734 MB tiled across a
     # Galaxy's 8 rows, in a test that is already multi-gigabyte on the host.
-    torch_reference = torch_output.repeat(mesh_shape[0], 1)
+    torch_reference = torch_output.repeat(mesh_shape[1 - tp_axis], 1)
 
     logger.debug("Comparing outputs with PCC")
     pcc_passed, pcc_message = assert_with_pcc(

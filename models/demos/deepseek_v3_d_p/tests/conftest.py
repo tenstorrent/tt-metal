@@ -140,8 +140,10 @@ def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):
     kept = []
     is_bh = is_blackhole()
     for item in items:
-        marker = item.get_closest_marker("uncollect_if")
-        if marker is None:
+        # Every uncollect_if mark counts, not just the closest: a function-level one and a per-param one
+        # (tests/chunk_params.py) can sit on the same case.
+        markers = list(item.iter_markers("uncollect_if"))
+        if not markers:
             kept.append(item)
             continue
         params = dict(getattr(getattr(item, "callspec", None), "params", {}))
@@ -149,7 +151,7 @@ def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):
         params.setdefault("is_ci_env", is_ci_env)
         params.setdefault("is_ci_v2_env", is_ci_v2_env)
         params.setdefault("is_bh", is_bh)
-        if not marker.kwargs["pred"](**params):
+        if not any(marker.kwargs["pred"](**params) for marker in markers):
             kept.append(item)
 
     return kept
