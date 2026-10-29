@@ -492,7 +492,7 @@
 # ttnn indexer_score group moved too, but needs no entry: its WH coverage is the
 # full indexer_score file in "ttnn nightly experimental tests (wormhole)" above.
 
-- name: ttnn conv group (WH, from sanity)
+- name: ttnn conv group
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
@@ -502,7 +502,7 @@
   budget_type: unit
   category: conv
 
-- name: ttnn pool group (WH, from sanity)
+- name: ttnn pool group
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
@@ -512,7 +512,7 @@
   budget_type: unit
   category: pool
 
-- name: ttnn sdpa group (WH, from sanity)
+- name: ttnn sdpa group
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
@@ -522,7 +522,7 @@
   budget_type: unit
   category: sdpa
 
-- name: ttnn matmul group (WH, from sanity)
+- name: ttnn matmul group
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
@@ -532,7 +532,7 @@
   budget_type: unit
   category: matmul
 
-- name: ttnn fused group 1 (WH, from sanity)
+- name: ttnn fused group 1
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
@@ -542,7 +542,7 @@
   budget_type: unit
   category: fused
 
-- name: ttnn fused group 2 (WH, from sanity)
+- name: ttnn fused group 2
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 2 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
@@ -552,7 +552,7 @@
   budget_type: unit
   category: fused
 
-- name: ttnn reduce group (WH, from sanity)
+- name: ttnn reduce group
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
