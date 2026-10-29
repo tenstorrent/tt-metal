@@ -5,8 +5,10 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -495,7 +497,8 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
     ASSERT_LT(std::sqrt(squared_error / squared_golden), 0.02);
 }
 
-Program make_sdpa_chunk_compile_program(const std::vector<std::uint32_t>& args) {
+Program make_sdpa_chunk_compile_program(
+    const std::vector<std::uint32_t>& args, const std::map<std::string, std::string>& defines = {}) {
     Program program = CreateProgram();
     const CoreCoord core{0, 0};
     for (const auto cb : {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_3, tt::CBIndex::c_16}) {
@@ -509,7 +512,8 @@ Program make_sdpa_chunk_compile_program(const std::vector<std::uint32_t>& args) 
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_chunk_compile_limits.cpp",
         core,
-        ComputeConfig{.math_fidelity = MathFidelity::LoFi, .fp32_dest_acc_en = false, .compile_args = args});
+        ComputeConfig{
+            .math_fidelity = MathFidelity::LoFi, .fp32_dest_acc_en = false, .compile_args = args, .defines = defines});
     return program;
 }
 
@@ -576,7 +580,7 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
         SCOPED_TRACE(::testing::Message() << "chunk=" << args[0] << ", qk=" << args[1] << ", exp=" << args[2]);
         const bool fits = args[0] / args[1] + 1 <= 15 && args[0] / args[2] + 1 <= 15;
         auto compile_args = args;
-        compile_args.insert(compile_args.end(), {2, 2, 0, 0, 0});
+        compile_args.insert(compile_args.end(), {2, 2, 0, 0, 0, 0});
         auto program = make_sdpa_chunk_compile_program(compile_args);
         if (fits) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
@@ -587,24 +591,42 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvCompileLimits) {
-    // row_tiles, V width, V offset, contraction, separate-V, accepted.
+    // row_tiles, V width, V offset, contraction, separate-V, transpose-V, accepted.
     // An odd physical stride is valid when the QK contraction remains even.
-    const std::array<std::array<std::uint32_t, 6>, 8> cases{{
-        {6, 2, 3, 2, 0, 1},
-        {5, 2, 3, 2, 0, 1},
-        {2, 2, 0, 0, 1, 1},
-        {6, 2, 3, 1, 0, 0},
-        {6, 2, 3, 3, 0, 0},
-        {6, 2, 3, 8, 0, 0},
-        {6, 2, 5, 2, 0, 0},
-        {6, 2, 1, 2, 1, 0},
+    // The reuse-dest-SrcB OV matmul does not implement a V transpose, so
+    // transpose_v must be rejected at compile time rather than use V as stored.
+    const std::array<std::array<std::uint32_t, 7>, 9> cases{{
+        {6, 2, 3, 2, 0, 0, 1},
+        {5, 2, 3, 2, 0, 0, 1},
+        {2, 2, 0, 0, 1, 0, 1},
+        {6, 2, 3, 1, 0, 0, 0},
+        {6, 2, 3, 3, 0, 0, 0},
+        {6, 2, 3, 8, 0, 0, 0},
+        {6, 2, 5, 2, 0, 0, 0},
+        {6, 2, 1, 2, 1, 0, 0},
+        {6, 2, 3, 2, 0, 1, 0},
     }};
     for (const auto& test : cases) {
         SCOPED_TRACE(
             ::testing::Message() << "row_tiles=" << test[0] << ", v_tiles=" << test[1] << ", v_offset=" << test[2]
-                                 << ", qk_tiles=" << test[3] << ", separate_v=" << test[4]);
-        auto program = make_sdpa_chunk_compile_program({2, 1, 1, test[0], test[1], test[2], test[3], test[4]});
-        if (test[5]) {
+                                 << ", qk_tiles=" << test[3] << ", separate_v=" << test[4]
+                                 << ", transpose_v=" << test[5]);
+        auto program = make_sdpa_chunk_compile_program({2, 1, 1, test[0], test[1], test[2], test[3], test[4], test[5]});
+        if (test[6]) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        }
+    }
+    // Direct reuse-dest-SrcB calls (SDPA_DIRECT_CALL in the kernel): the current argument
+    // lists compile, with std::uint32_t values and with integer literals (1); a legacy list
+    // with an integer transpose also compiles and is left to the run-time range assert (2);
+    // legacy lists with a bool transpose must not compile (3-6).
+    for (const std::uint32_t mode : {1u, 2u, 3u, 4u, 5u, 6u}) {
+        SCOPED_TRACE(::testing::Message() << "direct_call=" << mode);
+        auto program =
+            make_sdpa_chunk_compile_program({2, 1, 1, 6, 2, 3, 2, 0, 0}, {{"SDPA_DIRECT_CALL", std::to_string(mode)}});
+        if (mode <= 2) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {
             EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
