@@ -248,6 +248,26 @@ def test_proxy_health_and_metrics():
     assert status == 503
 
 
+def test_proxy_metrics_without_a_dead_or_hung_engine(monkeypatch):
+    monkeypatch.setattr(lb, "PROBE_TIMEOUT_S", 0.5)
+
+    async def hung_metrics(_):
+        await asyncio.sleep(30)
+
+    hung = web.Application()
+    hung.router.add_get("/metrics", hung_metrics)
+
+    async def run(session, url, router, backends):
+        async with session.get(url + "/metrics") as r:
+            return r.status, await r.text()
+
+    status, text = asyncio.run(with_proxy([fake_engine("A"), hung], run, dead=1))
+    assert status == 200
+    assert text.startswith("# engine 1 (")  # the hung engine
+    assert "# engine 2 (" in text  # the one nothing listens for
+    assert 'vllm:generation_tokens_total{model_name="m",engine="0"} 5.0' in text
+
+
 @pytest.mark.parametrize("dead", [1])
 def test_proxy_health_with_a_dead_engine(dead):
     async def run(session, url, router, backends):
