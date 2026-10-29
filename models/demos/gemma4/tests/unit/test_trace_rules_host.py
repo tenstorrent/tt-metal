@@ -107,6 +107,19 @@ def test_warmup_captured_trace_gets_its_baseline_at_the_first_replay(monkeypatch
     g = _guard(monkeypatch, levels)
     assert not g._g4_trace_guard_should_recapture("w")  # no baseline yet: recorded, no re-capture
     assert g._g4_trace_alloc_baseline["w"] == g._g4_alloc_levels()
+    # A capture (the warmup's next bucket, or a key first replayed after a release) allocates its own trace
+    # inputs and output after the other keys' captures (the 12B at TP8: 328064 B per bank for the batch-32
+    # key); they are the generator's, not a stray allocation under a replay, so every key's baseline moves:
+    # the older key's next check re-baselines instead of releasing every trace again (the re-capture cascade).
+    levels[ttnn.BufferType.DRAM] += 328064
+    g._g4_note_decode_trace_captured("c")
+    assert g._g4_trace_alloc_baseline == {"c": g._g4_alloc_levels()}
+    g._g4_alloc_check_pending = True
+    assert not g._g4_trace_guard_should_recapture("w")
+    assert g._g4_trace_alloc_baseline["w"] == g._g4_alloc_levels()
+    levels[ttnn.BufferType.DRAM] += 4480  # a stray allocation after that capture still re-captures
+    g._g4_alloc_check_pending = True
+    assert g._g4_trace_guard_should_recapture("w")
 
 
 def test_release_drops_every_trace_and_resets_sampling(monkeypatch):

@@ -768,6 +768,9 @@ class SpeculativeDecoder:
         self._srv_iota = {}  # key-chunk length -> [1, 1, 1, n] fp32 iota for the in-trace masks
         self._srv_uploaded = {}  # last uploaded small inputs, by key
         self._srv_last = None  # {"shape", "rows", "K"} of the last replay
+        self._srv_frozen = (
+            False  # True once serving_prepare ran: the device set is complete, nothing allocates after it
+        )
         self._srv_seeded = {}  # row id -> reseed-pool row
         self._srv_projection = None  # ServingTraceProjection of the prepared plan
 
@@ -2444,6 +2447,20 @@ class SpeculativeDecoder:
         declared capacity is checked here. Nothing on the device is sized by
         ``max_rows`` itself: the per-shape buffers are B_v rows, the hidden and
         logits buffers 32 rows.
+
+        Nothing allocates on the device after this call returns. Every
+        buffer a reseed or a replay touches exists now: the per-shape inputs
+        (anchors, seed rows, positions, drafter tables, the reseed forward's
+        own token and position inputs), the per-record verify tables, the
+        hidden pools and the logits buffer (made by the first eager seed and
+        body) and the mask iotas (one per key-chunk length the ladder needs,
+        made by the eager bodies). ``serving_reseed``, ``serving_step`` and
+        ``serving_refresh_page_tables`` only upload into them; a buffer one
+        of them would have to create is an error, never an allocation. The
+        decode-trace guard releases and re-captures every decode trace when
+        the allocator grows after a capture (0.7 s per re-capture), and the
+        eager target forward of a reseed is the one serving call that still
+        allocates: the model's own transients, freed before it returns.
         """
         from loguru import logger as _lg
 
@@ -2497,6 +2514,7 @@ class SpeculativeDecoder:
         self._srv_last = None
         self._srv_seeded = {}
         self._srv_captured = False
+        self._srv_frozen = False
         for shape in shapes:
             B = shape[0]
             S = self._srv_alloc_shape(shape)
@@ -2516,6 +2534,8 @@ class SpeculativeDecoder:
                 _lg.info(f"[spec-serving] prepared record shape={shape} S_k={w}")
         self._srv_last = None
         self._srv_seeded = {}
+        # The device set is complete: from here on a missing buffer is a bug, not an allocation.
+        self._srv_frozen = True
         _lg.info(
             f"[spec-serving] prepared {len(self._srv_records)} records for shapes {shapes} "
             f"(max_rows={max_rows}) in {time.perf_counter() - t0:.1f}s"
@@ -2819,6 +2839,9 @@ class SpeculativeDecoder:
             for key in (
                 "anchor_tok",
                 "seed_idx",
+                "seed_tok",
+                "seed_pu",
+                "seed_pi",
                 "d_pu",
                 "d_pi",
                 "d_ptl_slots",
@@ -2829,6 +2852,7 @@ class SpeculativeDecoder:
             ):
                 self._free_tensor_tree(S.get(key))
         self._srv_shape_bufs = {}
+        self._srv_frozen = False
         for t in (self._srv_pool_v, self._srv_pool_s, self._srv_logits, *self._srv_iota.values()):
             self._free_tensor_tree(t)
         self._srv_pool_v = self._srv_pool_s = self._srv_logits = None
@@ -2843,6 +2867,7 @@ class SpeculativeDecoder:
         B, K = shape
         P = K + 1
         pu, pi = self._pos_tensors([0] * B)
+        seed_pu, seed_pi = self._pos_tensors([0] * B)
         slots = self._srv_slots
         d_ptl_slots = [
             self._pv_from_torch(torch.zeros(B, self._srv_blocks, dtype=torch.int32), ttnn.int32)
@@ -2867,6 +2892,10 @@ class SpeculativeDecoder:
             "seed_idx": self._tokens_tensor([0] * B),  # [1, B] uint32 rows of the hidden pool
             "d_pu": pu,  # [1, 32] uint32 drafter positions (B filled)
             "d_pi": pi,  # [B] int32
+            # The reseed forward's own inputs (_srv_seed_rows): uploaded per reseed, never re-allocated.
+            "seed_tok": self._tokens_tensor([0] * B),  # [1, B] uint32 anchor tokens
+            "seed_pu": seed_pu,  # [1, 32] uint32 positions (B filled)
+            "seed_pi": seed_pi,  # [B] int32
             "d_ptl": d_ptl,  # {layer_type: [B, blocks] int32} the shared-KV layer's slot table per type
             "d_ptl_slots": d_ptl_slots,  # one [B, blocks] int32 table per KV group slot
             "d_ptl_list": [d_ptl_slots[slot] for slot in slots],  # per target layer: its slot's table
@@ -2928,18 +2957,32 @@ class SpeculativeDecoder:
         B = S["B"]
         if len(tokens) != B or len(positions) != B:
             raise ValueError(f"shape {shape}: seed needs {B} tokens/positions, got {len(tokens)}/{len(positions)}")
-        x = self._tokens_tensor(tokens)
-        pu, pi = self._pos_tensors(positions)
+        # The forward's inputs are the shape's persistent buffers, refreshed from host staging tensors: a
+        # reseed allocates nothing on the device itself (serving_prepare), only the eager forward's own
+        # transients come and go.
+        host_tok = self._host_tokens([int(t) for t in tokens])
+        ttnn.copy_host_to_device_tensor(host_tok, S["seed_tok"])
+        host_tok.deallocate(True)
+        hpu, hpi = self._host_pos([int(p) for p in positions])
+        ttnn.copy_host_to_device_tensor(hpu, S["seed_pu"])
+        ttnn.copy_host_to_device_tensor(hpi, S["seed_pi"])
+        hpu.deallocate(True)
+        hpi.deallocate(True)
         logits, hidden = self.target.ttnn_verify_forward(
-            x=x,
-            current_pos=pu,
-            current_pos_cache=pi,
+            x=S["seed_tok"],
+            current_pos=S["seed_pu"],
+            current_pos_cache=S["seed_pi"],
             page_table=S["d_ptl"][self._srv_flat_type],
             kv_cache=self.tt_kv_cache,
             page_tables_per_layer=S["d_ptl_list"],
         )
         logits.deallocate(True)
         if self._srv_pool_v is None:
+            if getattr(self, "_srv_frozen", False):
+                raise RuntimeError(
+                    "the hidden pools do not exist after serving_prepare: a reseed never allocates (the first eager "
+                    "seed of serving_prepare makes them)"
+                )
             if hidden.dtype != ttnn.bfloat16:
                 raise TypeError(f"the verify hidden is {hidden.dtype}; the hidden pool (ttnn.assign) needs bfloat16")
             self._srv_backbone = int(hidden.shape[-1])
@@ -2948,8 +2991,6 @@ class SpeculativeDecoder:
             self._srv_pool_s = self._pv_from_torch(zeros, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         self._srv_publish_hidden(hidden, self._srv_pool_s)
         hidden.deallocate(True)
-        for t in (x, pu, pi):
-            t.deallocate(True)
 
     def _srv_body(self, rec):
         """The fused record graph over persistent buffers (compile and capture).
@@ -3039,6 +3080,11 @@ class SpeculativeDecoder:
         """Copy the [1, 1, B*P, V_padded] verify logits into the shared 32-row logits buffer (allocated on
         the first eager body at the logits' own width and dtype)."""
         if self._srv_logits is None:
+            if getattr(self, "_srv_frozen", False):
+                raise RuntimeError(
+                    "the shared logits buffer does not exist after serving_prepare: a replay never allocates (the "
+                    "first eager body of serving_prepare makes it)"
+                )
             if vlogits.dtype != ttnn.bfloat16:
                 raise TypeError(
                     f"the verify logits are {vlogits.dtype}; the shared logits buffer (ttnn.assign) needs bfloat16"
@@ -3051,6 +3097,11 @@ class SpeculativeDecoder:
         """Persistent [1, 1, 1, n] fp32 key iota 0..n-1 (dFlash ``pv_iota``; fp32 keeps every position exact)."""
         t = self._srv_iota.get(int(n))
         if t is None:
+            if getattr(self, "_srv_frozen", False):
+                raise RuntimeError(
+                    f"no mask iota of length {n} after serving_prepare: the eager bodies made one per key-chunk "
+                    f"length of the ladder ({sorted(self._srv_iota)}); a replay never allocates"
+                )
             t = self._pv_from_torch(
                 torch.arange(int(n), dtype=torch.float32).reshape(1, 1, 1, int(n)),
                 ttnn.float32,

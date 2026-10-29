@@ -1538,7 +1538,198 @@ def _bare_decoder(n_layers=3):
     return spec
 
 
-def test_capture_and_step_refuse_to_run_out_of_order():
+def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
+    """The serving rail on a recording ttnn: every device buffer a refresh, a reseed or a replay touches exists
+    after serving_prepare, for every record and rung, first-time row sets, seed-column patterns and positions
+    included; a buffer one of them would have to create is an error, never an allocation (the decode-trace
+    guard releases and re-captures every decode trace when the allocator grows after a capture, 0.7 s each)."""
+    import models.demos.gemma4.tt.spec_decode as spec_decode_module
+
+    class _Buf:
+        made = [0]
+
+        def __init__(self, host, dtype=None, on_device=False):
+            _Buf.made[0] += 1
+            self.address = _Buf.made[0]
+            self.host, self.dtype, self.on_device, self.freed = host, dtype, on_device, False
+
+        @property
+        def shape(self):
+            return tuple(self.host.shape)
+
+        def buffer_address(self):
+            return self.address
+
+        def deallocate(self, force=False):
+            self.freed = True
+
+    allocated, ops, h2d, replays, forwards = [], [], [], [], []
+
+    def forbidden(name):
+        def call(*args, **kwargs):
+            raise AssertionError(f"ttnn.{name} would allocate on the device after serving_capture")
+
+        return call
+
+    def from_torch(t, device=None, layout=None, dtype=None, mesh_mapper=None):
+        buf = _Buf(t.clone(), dtype, on_device=device is not None)
+        if device is not None:
+            allocated.append(buf)  # the only device constructor the rail uses
+        return buf
+
+    def copy_host_to_device_tensor(host, dev):
+        assert dev.on_device and not dev.freed and not host.on_device
+        dev.host = host.host.clone()
+        h2d.append(dev.address)
+
+    def pad(t, pads, value=0.0):
+        out = _Buf(torch.zeros(1, 1, t.host.shape[2] + pads[2][1], t.host.shape[-1]), t.dtype, on_device=True)
+        ops.append(out)  # an op output inside the eager reseed: transient, freed before the call returns
+        return out
+
+    def assign(src, dst):
+        dst.host = src.host
+
+    fake = SimpleNamespace(
+        ROW_MAJOR_LAYOUT=object(),
+        TILE_LAYOUT=object(),
+        DRAM_MEMORY_CONFIG=object(),
+        uint32=object(),
+        int32=object(),
+        bfloat16=object(),
+        float32=object(),
+        Tensor=type("Tensor", (), {}),
+        from_torch=from_torch,
+        copy_host_to_device_tensor=copy_host_to_device_tensor,
+        execute_trace=lambda mesh, tid, cq_id=0, blocking=False: replays.append(tid),
+        release_trace=lambda mesh, tid: None,
+        synchronize_device=lambda mesh: None,
+        get_device_tensors=lambda t: [t],
+        to_torch=lambda t: t.host,
+        to_memory_config=lambda t, cfg: t,
+        pad=pad,
+        assign=assign,
+        **{
+            name: forbidden(name)
+            for name in ("to_device", "zeros", "ones", "full", "empty", "arange", "allocate_tensor")
+        },
+    )
+    monkeypatch.setattr(spec_decode_module, "ttnn", fake)
+    shapes = [(1, 5), (5, 5), (8, 3), (16, 1)]
+    ladder = [2048, 8192, 32768, 131072, 263168]  # the 12B ladder
+    layer_types = ["sliding_attention", "sliding_attention", "full_attention", "sliding_attention", "full_attention"]
+    backbone, vocab, wire_rows = 64, 96, 32
+
+    def verify_forward(x, current_pos, current_pos_cache, page_table, kv_cache, page_tables_per_layer):
+        rows = int(x.host.shape[-1])
+        forwards.append((x.address, current_pos.address, current_pos_cache.address, rows))
+        logits = _Buf(torch.zeros(1, 1, rows, vocab), fake.bfloat16, on_device=True)
+        hidden = _Buf(torch.zeros(1, 1, rows, backbone), fake.bfloat16, on_device=True)
+        ops.extend((logits, hidden))
+        return logits, hidden
+
+    spec = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    spec.mesh_device, spec._mapper, spec._tp, spec.tt_kv_cache = object(), None, 8, []
+    spec.target = SimpleNamespace(
+        layers=list(range(len(layer_types))),
+        hf_config=SimpleNamespace(layer_types=layer_types),
+        last_kv_layer_by_type={"sliding_attention": 3, "full_attention": 4},
+        vocab_size=vocab,
+        ttnn_verify_forward=verify_forward,
+    )
+    spec._pv_ring = {"sliding_attention": None, "full_attention": None}
+    spec._pv_bs_t = {"sliding_attention": 128, "full_attention": 64}
+    spec._pv_ring_rep = {"sliding_attention": 3, "full_attention": 4}
+    spec._srv_blocks = ladder[-1] // 64
+    spec._srv_slots, spec._srv_n_slots = serving_kv_group_slots(layer_types)
+    spec._srv_flat_type = "full_attention"
+    spec._srv_per_layer, spec._srv_uploaded, spec._srv_last, spec._srv_seeded = None, {}, None, {}
+    spec._srv_pool_v = spec._srv_pool_s = spec._srv_logits = spec._srv_backbone = None
+    spec._srv_iota, spec._srv_records, spec._srv_shape_bufs = {}, {}, {}
+    spec._srv_widths, spec._srv_shapes = {shape: list(ladder) for shape in shapes}, shapes
+    spec._srv_captured = spec._srv_frozen = False
+    # serving_prepare's device set through the real allocators; the eager bodies are stubbed, so their iotas
+    # and the logits buffer are made the way they make them
+    for n, shape in enumerate(shapes):
+        B, K = shape
+        S = spec._srv_alloc_shape(shape)
+        spec._srv_shape_bufs[shape] = S
+        spec._srv_seed_rows(shape, [0] * B, [0] * B)
+        for w in ladder:
+            rec = spec._srv_alloc_width(shape, S, w)
+            rec["id"] = 100 * n + ladder.index(w)
+            rec["verify_x"] = _Buf(torch.arange(B * (K + 1)), fake.uint32, on_device=True)
+            rec["vidx"] = _Buf(torch.arange(B * (K + 1)).reshape(1, 1, -1), fake.uint32, on_device=True)
+            for _j0, n_keys in spec._srv_mask_chunks(w):
+                spec._srv_iota_for(n_keys)
+            spec._srv_records[(shape, w)] = rec
+    spec._srv_publish_logits(_Buf(torch.zeros(1, 1, 32, vocab), fake.bfloat16, on_device=True))
+    assert sorted(spec._srv_iota) == [1024, 2048, 8192, 32768]  # 263168 = 8 x 32768 + 1024
+    prepared = {buf.address for buf in allocated}
+    assert all(op.freed for op in ops), "the eager seed's transients are freed before it returns"
+    spec._srv_captured = spec._srv_frozen = True
+    allocated.clear(), ops.clear(), h2d.clear(), forwards.clear()
+    # every record and rung: a first-time refresh, row set and position, a reseed, a seeded replay, then a
+    # continuing replay (seed columns from the last replay's verify hidden)
+    group_tables, used = {}, []
+    for shape in shapes:
+        B, K = shape
+        live = min(B, 3)
+        for w, first, last in SpeculativeDecoder.serving_measure_positions(ladder, K, None):
+            rec = spec._srv_records[(shape, w)]
+            for pos in sorted({first, last}):
+                tables = []
+                for slot in spec._srv_slots:
+                    t = group_tables.get((slot, pos))
+                    if t is None:
+                        t = torch.arange(wire_rows * spec._srv_blocks, dtype=torch.int32).reshape(wire_rows, -1) % 977
+                        t = group_tables[(slot, pos)] = t + pos % 5 + slot
+                    tables.append(t)
+                spec.serving_refresh_page_tables(tables)
+                rows = [(pos + 7 * i) % wire_rows for i in range(live)]
+                positions = [max(0, pos - i) for i in range(live)]
+                table = torch.zeros(B, spec._srv_blocks, dtype=torch.int32)
+                for i, r in enumerate(rows):
+                    table[i] = tables[0][r]
+                spec.serving_reseed(shape, rows, [1 + i for i in range(live)], positions, table)
+                result = spec.serving_step(shape, rows, [1 + i for i in range(live)], positions, table, [None] * live)
+                assert (result.width, result.live) == (w, live) and result.logits_to_host().shape == (
+                    live,
+                    K + 1,
+                    vocab,
+                )
+                cols = [min(K, i) for i in range(live)]
+                result = spec.serving_step(shape, rows, [2 + i for i in range(live)], positions, table, cols)
+                assert result.width == w
+                used.extend([rec["id"], rec["id"]])
+    assert allocated == [], [buf.shape for buf in allocated]
+    assert all(op.freed for op in ops) and set(h2d) <= prepared and replays == used
+    seeds = {
+        (S["seed_tok"].address, S["seed_pu"].address, S["seed_pi"].address, S["B"])
+        for S in spec._srv_shape_bufs.values()
+    }
+    assert set(forwards) <= seeds, "every reseed forward ran on its shape's persistent inputs"
+    # a buffer a call would have to create is an error, never an allocation
+    with expect_error(RuntimeError, "a replay never allocates"):
+        spec._srv_iota_for(4096)
+    logits = spec._srv_logits
+    spec._srv_logits = None
+    with expect_error(RuntimeError, "a replay never allocates"):
+        spec._srv_publish_logits(_Buf(torch.zeros(1, 1, 32, vocab), fake.bfloat16, on_device=True))
+    spec._srv_logits = logits
+    pools = spec._srv_pool_v, spec._srv_pool_s
+    spec._srv_pool_v = None
+    with expect_error(RuntimeError, "a reseed never allocates"):
+        spec.serving_reseed((1, 5), [0], [1], [0], torch.zeros(1, spec._srv_blocks, dtype=torch.int32))
+    spec._srv_pool_v, spec._srv_pool_s = pools
+    assert allocated == []
+    # the release frees the reseed inputs with everything else and lifts the freeze
+    bufs = list(spec._srv_shape_bufs.values())
+    spec.serving_release()
+    assert all(S[key].freed for S in bufs for key in ("seed_tok", "seed_pu", "seed_pi")) and not spec._srv_frozen
+
+
+def test_capture_and_step_refuse_to_run_out_of_order(monkeypatch, expect_error):
     spec = _bare_decoder()
     spec.serving_release()  # a no-op before prepare
     assert spec._srv_records is None
@@ -1552,6 +1743,7 @@ def test_capture_and_step_refuse_to_run_out_of_order():
     spec._srv_captured = True
     with pytest.raises(RuntimeError, match="serving_capture already ran"):  # allow-pytest.raises (pure)
         spec.serving_capture()
+    _rail_allocates_nothing_after_capture(monkeypatch, expect_error)
 
 
 def test_refresh_installs_one_host_table_per_layer_as_int64_rows():

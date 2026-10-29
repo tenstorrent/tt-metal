@@ -820,6 +820,14 @@ class ChunkedPrefillPageTableGuardMixin:
                 return int(pt.shape[0]) if pt.dim() > 1 else 1
         return None
 
+    @staticmethod
+    def _page_tables_identity(page_tables_per_layer):
+        """What makes a per-layer host table list the one already installed: the same tensor objects (kept alive
+        by the record, so an id cannot be reused by a later table) at the same in-place version, in order."""
+        return tuple(
+            (id(pt), int(pt._version)) if isinstance(pt, torch.Tensor) else None for pt in page_tables_per_layer
+        )
+
     @classmethod
     def _install_per_layer_page_tables(cls, model, page_tables_per_layer, *, writer):
         """H2D the per-layer tables into the persistent buffers for their row count and record the writer.
@@ -828,7 +836,10 @@ class ChunkedPrefillPageTableGuardMixin:
         a prefill must re-upload after a decode wrote (its trace inputs rewrite the device table), so a prefill
         forces the upload unless the last writer for this row count was prefill: then the host-side "unchanged"
         shortcut of ``update_persistent_per_layer_page_tables`` may skip the H2D (the chunks of one long prompt,
-        back-to-back prefills on the same table).
+        back-to-back prefills on the same table). A prefill handing this row count the very host tables it
+        already holds (the same tensor objects, unmodified: the restore after a sequential per-user prefill, the
+        chunks of one prompt) is not even compared: the per-layer pad-and-compare of every layer is the host
+        cost of an install when nothing changed (``install=...xN`` on the prefill perf line).
         """
         if not hasattr(model, "update_persistent_per_layer_page_tables"):
             return
@@ -837,8 +848,16 @@ class ChunkedPrefillPageTableGuardMixin:
         if writers is None:
             writers = {}
             model._g4_page_table_writer_by_rows = writers
+        installed = getattr(model, "_g4_page_tables_installed_by_rows", None)
+        if installed is None:
+            installed = {}
+            model._g4_page_tables_installed_by_rows = installed
         last_writer = writers.get(rows) if rows is not None else None
         force = writer == "prefill" and last_writer != "prefill"
+        identity = cls._page_tables_identity(page_tables_per_layer)
+        held = installed.get(rows) if rows is not None else None
+        if writer == "prefill" and not force and held is not None and held[0] == identity:
+            return  # the device already holds exactly these tables, written by prefill
         t0 = time.perf_counter()
         model.update_persistent_per_layer_page_tables(page_tables_per_layer, force=force)
         add = getattr(model, "_g4_pf_add", None)
@@ -848,6 +867,8 @@ class ChunkedPrefillPageTableGuardMixin:
         if rows is None:
             return
         writers[rows] = writer
+        # The tensors are kept with the identity so their ids stay theirs while the record lives.
+        installed[rows] = (identity, list(page_tables_per_layer)) if writer == "prefill" else None
 
     @classmethod
     def _page_tables_written_by_prefill(cls, models, per_submesh) -> bool:
@@ -3234,6 +3255,24 @@ class ChunkedPrefillPageTableGuardMixin:
         )
         return True
 
+    def _g4_note_decode_trace_captured(self, decode_trace_key) -> None:
+        """A decode trace was just captured for ``decode_trace_key``: its baseline is the level now, and every
+        other key's baseline is re-taken at that key's next replay.
+
+        A capture allocates the key's own trace inputs and output after the
+        other keys' captures (the 12B at TP8: the ``[32, V/8]`` bf16 logits,
+        262144 B per bank; a ``[batch, 4096]`` int32 page table, 16384 B per
+        bank per 8 rows; three 128 B controls: 328064 B per bank for the
+        batch-32 key, 278848 for a key of 8 rows or fewer). With per-key
+        baselines a key captured lazily after a release (a bucket first
+        replayed later) read as a stray allocation to the older keys' next
+        check, which released every trace again: a cascade of 0.7 s
+        re-captures, one per first use of a bucket (10 in one 32-user point
+        of the MTP rail). The capture's own buffers are this generator's,
+        not a stray allocation under a replay, so they move every baseline.
+        """
+        self._g4_trace_alloc_baseline = {decode_trace_key: self._g4_alloc_levels()}
+
     def _g4_release_decode_traces(self, reason: str, *, in_warmup: bool = False) -> int:
         """Release every captured decode trace (and the sampling traces bound to its logits).
 
@@ -3314,7 +3353,7 @@ class ChunkedPrefillPageTableGuardMixin:
             self.trace_ids_decode[decode_trace_key] = trace_ids
             self.trace_inputs_decode[decode_trace_key] = device_inputs
             self.trace_output_decode[decode_trace_key] = tt_out_trace
-            self._g4_trace_alloc_baseline[decode_trace_key] = self._g4_alloc_levels()
+            self._g4_note_decode_trace_captured(decode_trace_key)
             self._g4_alloc_dump(f"cap_b{batch}_")
 
         for i in range(self.data_parallel):
