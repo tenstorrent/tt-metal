@@ -31,6 +31,7 @@ from ttml.models import EmbeddingPlacement
 from ttml.models.mistral import Mistral, MistralConfig, load_from_safetensors, useful_flops_per_step
 from ttml.modules import LoraConfig, LoraModel, fuse_lora_into_frozen_weights, transpose_frozen_weights
 from ttml.modules.fused_lora import reduce_partial_lora_grads
+from ttml.models.mistral.rmsnorm_allcore import use_allcore_rmsnorm_backward
 
 DEFAULT_MODEL = "mistralai/Mistral-Small-24B-Base-2501"
 DEFAULT_REVISION = "b0a2e4ed093c26997495ae625528f81ea04b749f"
@@ -61,6 +62,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--no-fused-lora", action="store_true", help="keep the LoRA update as separate ops (no K-concat fusion)"
     )
+    p.add_argument("--no-allcore-rmsnorm", action="store_true", help="keep the one-core-per-tile-row RMSNorm backward")
     p.add_argument(
         "--no-transposed-weights",
         action="store_true",
@@ -168,6 +170,9 @@ def main() -> None:
         if not args.no_fused_lora:
             fused = fuse_lora_into_frozen_weights(model)
             print(f"LoRA update fused into the base matmul: {len(fused)} linears")
+    if not args.no_allcore_rmsnorm:
+        norms = use_allcore_rmsnorm_backward(model)
+        print(f"RMSNorm layers on the all-core backward: {len(norms)}")
     model.train()
     params = model.parameters()
     trainable = sum(int(np.prod(t.shape())) for t in params.values() if t.get_requires_grad())

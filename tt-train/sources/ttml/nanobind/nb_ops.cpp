@@ -20,6 +20,7 @@
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "metal/ops/rmsnorm_bw/rmsnorm_bw.hpp"
+#include "metal/ops/rmsnorm_bw_allcore/rmsnorm_bw_allcore.hpp"
 #include "metal/ops/rmsnorm_fw/rmsnorm_fw.hpp"
 #include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
 #include "metal/ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
@@ -753,6 +754,17 @@ void py_module(nb::module_& m) {
             nb::arg("preallocated_dL_dpacked") = nb::none(),
             "Backward of swiglu_packed_fw: (packed [gate|up], dL_dh [.., R, I]) -> "
             "dL/dpacked [.., R, 2*I] = [dgate|dup].");
+        py_metal.def(
+            "rmsnorm_bw_allcore",
+            &ttml::metal::rmsnorm_bw_allcore,
+            nb::arg("input"),
+            nb::arg("gamma"),
+            nb::arg("rms"),
+            nb::arg("dL_dout"),
+            nb::arg("compute_dgamma") = true,
+            "RMSNorm backward (ungated) -> [dL_dinput, dL_dgamma or None], every tile-row split over several cores "
+            "(two phases: per-slice partial sums, then the row scale and the gradients) instead of one core per "
+            "tile-row.");
         py_metal.def(
             "write_tile_block",
             &ttml::metal::write_tile_block,

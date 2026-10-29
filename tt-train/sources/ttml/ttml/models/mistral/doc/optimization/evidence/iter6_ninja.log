@@ -1,0 +1,22 @@
+[0/2] Re-checking globbed directories...
+[1/20] Refreshing tt-metal version header
+-- Found Git: /usr/bin/git (found version "2.43.0")
+[2/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/softmax_backward_op.cpp.o
+[3/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/mla_kv_assemble_op.cpp.o
+[4/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/swiglu_op.cpp.o
+[5/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/layernorm_op.cpp.o
+[6/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/unary_ops.cpp.o
+[7/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/adamw.cpp.o
+[8/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/adamw_full_precision.cpp.o
+[9/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/losses.cpp.o
+[10/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/core/tt_profiler.cpp.o
+[11/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/write_tile_block/device/write_tile_block_program_factory.cpp.o
+[12/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/qkv_causal_conv1d_silu_op.cpp.o
+[13/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/rmsnorm_op.cpp.o
+[14/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/scaled_dot_product_attention.cpp.o
+[15/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/sgd.cpp.o
+[16/20] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/moe_ffn_swiglu_op.cpp.o
+[17/20] Building CXX object ttnn/CMakeFiles/ttnn_core.dir/Unity/unity_2_cxx.cxx.o
+[18/20] Linking CXX static library tt-train/sources/ttml/libttml.a
+[19/20] Linking CXX shared library ttnn/_ttnncpp.so
+[20/20] Linking CXX shared module tt-train/sources/ttml/_ttml.abi3.so

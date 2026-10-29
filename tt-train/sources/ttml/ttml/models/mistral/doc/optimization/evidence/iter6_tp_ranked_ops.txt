@@ -1,0 +1,42 @@
+chip 2: 2 steps, 57.01 ms kernels per profiled step; classes: math 40.67, other 6.59, glue 5.54, layout 4.22
+   ms/step   ops  op | in0 | in1 | cores
+     6.155     4  Matmul | 1x1x1024x5184 | 1x1x5184x16384 | 110
+     5.515     4  Matmul | 1x1x5184x16384 | 1x1x1024x16384 | 110
+     3.691     4  Matmul | 1x1x1024x8256 | 1x1x8256x5120 | 88
+     3.511    18  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+     3.040     1  Matmul | 1x1x1024x5120 | 1x1x5120x32768 | 110
+     2.800     4  Matmul | 1x1x8256x5120 | 1x1x1024x5120 | 110
+     2.754     1  Matmul | 1x1x5120x32768 | 1x1x1024x32768 | 110
+     2.102    18  AllGatherAsync | 1x1x1024x1280 |  | 20
+     1.847    31  BinaryNg | 1x1x1024x5120 | 1x1x1024x5120 | 110
+     1.826     4  SDPABackwardKV | 1x8x1024x128 | 1x8x1024x128 | 64
+     1.651     3  BinaryNg | 1x1x1024x32768 | 1x1x1024x32[1] | 110
+     1.520     1  UntilizeCodegen | 1x1x32768x5120 |  | 110
+     1.376     9  RMSNormForward | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
+     1.130     1  SubtractAtTarget | 1x1x1024x32768 | 1x1x1x1024 | 32
+     1.049     4  SDPABackwardQ | 1x8x1024x128 | 1x8x1024x128 | 110
+     1.046     4  SwigluPackedBw | 1x1x1024x16384 | 1x1x1024x8192 | 110
+     1.044     4  SDPAForward | 1x8x1024x128 | 1x2x1024x128 | 110
+     0.960     9  RMSNormBackward | 1x1x1024x5120 | 1x1x32[1]x5120 | 96
+     0.788     9  RMSNormBackwardPartial | 1x1x1024x5120 | 1x1x32[1]x5120 | 96
+     0.778     4  Matmul | 1x1x1024x1536 | 1x1x1536x5120 | 88
+     0.758     4  Matmul | 1x1x1024x5120 | 1x1x1536x5120 | 80
+     0.670     2  Reduce | 1x1x1024x32768 |  | 32
+     0.612     8  Matmul | 1x1x1024x5120 | 1x1x32[16]x5120 | 33
+     0.587     4  Matmul | 1x1x1024x1024 | 1x1x5120x1024 | 88
+     0.573     4  Matmul | 1x1x1024x16384 | 1x1x1024x32[16] | 110
+     0.563     8  Matmul | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88
+     0.533     4  Matmul | 1x1x1024x32[16] | 1x1x32[16]x8192 | 88
+     0.485     4  Matmul | 1x1x1024x8192 | 1x1x32[16]x8192 | 33
+     0.478     4  Matmul | 1x1x1024x5120 | 1x1x5120x1024 | 88
+     0.442     4  SwigluPackedFw | 1x1x1024x16384 |  | 110
+     0.392     8  Matmul | 1x1x1024x5120 | 1x1x1024x32[16] | 88
+     0.338     8  BinaryNg | 1x1x1024x1536 | 1x1x1024x1536 | 110
+     0.337     1  BinaryNg | 1x1x1024x32768 | 1x1x32[1]x32[1] | 110
+     0.323     4  Concat | 1x1x1024x8192 | 1x1x1024x64 | 110
+     0.318     4  Slice | 1x1x8256x1024 |  | 110
+     0.314     4  Transpose | 1x1x8192x1024 |  | 110
+     0.302     4  Matmul | 1x1x1024x5120 | 1x1x5120x32[16] | 33
+     0.284     8  Matmul | 1x1x1024x32[16] | 1x1x1024x5120 | 88
+     0.251     5  Transpose | 1x1x5120x1024 |  | 110
+     0.205     4  Concat | 1x1x1024x5120 | 1x1x1024x64 | 110

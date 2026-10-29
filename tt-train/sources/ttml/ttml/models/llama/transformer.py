@@ -52,10 +52,9 @@ class RMSNormLayer(AbstractModuleBase):
             Normalized output tensor
         """
 
-        if self.use_composite:
-            rmsnorm_op = ttml.ops.rmsnorm.rmsnorm_composite
-        else:
-            rmsnorm_op = ttml.ops.rmsnorm.rmsnorm
+        rmsnorm_op = getattr(self, "rmsnorm_op", None)  # an injected (x, gamma, eps) callable wins
+        if rmsnorm_op is None:
+            rmsnorm_op = ttml.ops.rmsnorm.rmsnorm_composite if self.use_composite else ttml.ops.rmsnorm.rmsnorm
 
         return rmsnorm_op(x, self.gamma.tensor, self.epsilon)
 

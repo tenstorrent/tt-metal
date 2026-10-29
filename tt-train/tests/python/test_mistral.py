@@ -265,6 +265,34 @@ def test_rmsnorm_frozen_gamma_gets_no_gradient():
     assert not layer.gamma.tensor.is_grad_initialized()
 
 
+def test_rmsnorm_allcore_backward_with_frozen_gamma():
+    """The all-core RMSNorm backward (`rmsnorm_bw_allcore`, iteration 6) on a frozen-gamma layer matches torch."""
+    from ttml.models.mistral.rmsnorm_allcore import use_allcore_rmsnorm_backward
+
+    rng = seeded(3)
+    x_np, g_np = rand_x(rng), bf16(rng.normal(1.0, 0.1, (1, 1, 1, HIDDEN)))
+    dout_np = rand_x(rng, std=0.01)
+
+    layer = RMSNormLayer(HIDDEN, EPS)
+    assign(layer.gamma.tensor, g_np)
+    layer.gamma.tensor.set_requires_grad(False)
+    assert use_allcore_rmsnorm_backward(layer) == [""], "the frozen-gamma layer itself is converted"
+    x = to_device(x_np, requires_grad=True)
+    out = layer(x)
+    out_val = to_host(out)
+    _backward(out, dout_np)
+    assert not layer.gamma.tensor.is_grad_initialized()
+
+    xr, gr = t(x_np, True), t(g_np, False)
+    ref = ref_rmsnorm(xr, gr)
+    ref.backward(t(dout_np))
+
+    rep = Report("rmsnorm all-core backward")
+    rep.check("out", out_val, ref.detach().numpy(), FWD_PCC, FWD_REL)
+    rep.check("dx", grad_of(x), xr.grad.numpy(), GRAD_PCC, GRAD_REL)
+    rep.done()
+
+
 def test_attention_forward_and_gradients():
     rng = seeded(3)
     x_np = rand_x(rng)

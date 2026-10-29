@@ -1,0 +1,11 @@
+=== iter5 TP measurement done, stopping its sweeps 2026-10-29T18:29:26Z
+=== build _ttml 2026-10-29T18:29:31Z
+build rc=0
+=== wire iteration 6 into the scripts
+iter6 wiring applied
+=== iter6 rmsnorm test 2026-10-29T18:29:44Z
+rmsnorm tests rc=1
+E           RuntimeError: Error in backward of RMSNormFrozenGamma: RMSNormFrozenGamma.backward() returned 3 gradients but expected 2 (one per tensor input). Return None for inputs that don't need gradients.
+sources/ttml/ttml/autograd/function.py:296: RuntimeError
+================== 1 failed, 2 passed, 12 deselected in 2.67s ==================
+=== done 2026-10-29T18:29:49Z

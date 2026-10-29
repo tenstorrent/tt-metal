@@ -151,6 +151,10 @@ def main():
         ttml.autograd.assign_numpy(tensor, value, mapper=sharding.derive_mapper())
     converted = [] if args.no_transpose else transpose_frozen_weights(model)
     fused = [] if (args.no_fuse or args.no_transpose) else fuse_lora_into_frozen_weights(model)
+    from ttml.models.mistral.rmsnorm_allcore import use_allcore_rmsnorm_backward
+
+    norms = use_allcore_rmsnorm_backward(model)
+    print(f"RMSNorm layers on the all-core backward: {len(norms)}")
     print(f"tp {args.tp}: transposed {len(converted)}, fused {len(fused)}")
     model.train()
 

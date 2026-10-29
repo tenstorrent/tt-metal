@@ -168,6 +168,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/profiler_no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_program_factory.cpp
+    # RMSNorm Backward, all-core two-phase variant
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw_allcore/rmsnorm_bw_allcore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw_allcore/device/rmsnorm_bw_allcore_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw_allcore/device/rmsnorm_bw_allcore_program_factory.cpp
     # WriteTileBlock
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/write_tile_block/write_tile_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/write_tile_block/device/write_tile_block_device_operation.cpp
