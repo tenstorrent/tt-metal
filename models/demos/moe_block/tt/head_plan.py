@@ -84,6 +84,9 @@ class HeadLayout:
     GX: int = 11
     compact: bool = False  # (the RS arrival zones compact - se_rs.RsPlan: only where P-tile slots do not fit)
     split: bool = False  # (the router's fin + top-K over two cores a row tile: router_stream's split)
+    # (the DRAM fallback - only where no resident layout fits: x gathered over TP into DRAM ahead of the program, x own
+    # a ring of 2 chunks reloaded from it, no x streams; the router cores may take a rectangle of the free rows)
+    xdram: bool = False
 
 
 @dataclass
@@ -234,6 +237,7 @@ def _size(shape, lay, cap, compact):
             router=dict(ET=shape.E // 32, KTO=shape.H // shape.G // 32) if lay.on_engine else None,
             arena_max=cap,
             w_dtype=_wdt(shape.w_dtype),
+            xring=2 if lay.xdram else 0,
         )
     except ArenaTooLarge as err:
         return None, err.need, {}, f"arena {err.need / 1024:.0f} KB > {cap / 1024:.0f} KB (W ring at the least)"
@@ -337,8 +341,11 @@ def cores_check(shape: HeadShape, lay: HeadLayout, eng, rs_plan, arena):
     else:
         if lay.split:
             return f"router split: {nrt} router cores + {2 * L} ports + the watcher > the mover column's {gy} cells"
+        from models.demos.moe_block.tt.fused_head import router_rect
+
         free = (gy - lay.GY) * lay.GX
-        if lay.GY >= gy or not (nrt <= lay.GX or (lay.on_engine and nrt <= free)):
+        rect = lay.xdram and not lay.on_engine and router_rect(nrt, lay.GX, gy - lay.GY)
+        if lay.GY >= gy or not (nrt <= lay.GX or (lay.on_engine and nrt <= free) or rect):
             return (
                 f"router cores: {nrt} (a row tile each of a chip's owned rows) fit neither the mover column ({gy} cells "
                 f"less {2 * L} ports and the watcher) nor the {free} free cells under the engine "
@@ -434,6 +441,10 @@ def cost(shape: HeadShape, lay: HeadLayout, eng, c: Cost = None):
     t_se = (t_x + t_lat) / n + (n - 1) * steady + comp - hidden + t_rs / n
     if n == 1:
         t_se = max(t_se, t_w + t_dn + t_rs)
+    t_xd = 0.0
+    if lay.xdram:  # (the fallback: the x all-gather ahead of the program, then every core's x reloads from DRAM)
+        t_xd = t_x + shape.rows * shape.H * 2 / (c.dram_gbs * 1e3)
+        t_se += t_xd
     # router: on the engine its logits phase (every chunk's rows, my expert tiles) delays the SE path and starts the
     # chain; on the router cores (a row tile each of the owners' rows: all E tiles x all of H) their matmul
     ET = shape.E // 32
@@ -459,10 +470,19 @@ def cost(shape: HeadShape, lay: HeadLayout, eng, c: Cost = None):
         se=round(t_se),
         chain=round(t_chain),
         wring=eng.WRING,
+        xdram=round(t_xd),
     )
 
 
-def plan(shape: HeadShape, arena_max=ARENA_MAX, c: Cost = None, keep_unfit=False, placement="measured", split=False):
+def plan(
+    shape: HeadShape,
+    arena_max=ARENA_MAX,
+    c: Cost = None,
+    keep_unfit=False,
+    placement="measured",
+    split=False,
+    xdram=False,
+):
     """Every candidate layout that fits (arena_max: bytes, or the device's cap a K step - se_engine3.arena_cap), ranked
     by predicted time. The router's placement a layout: "measured" -
     fused_head.router_placement's (its rates from measured A/Bs: the cost model's engine / router-core gap is inside
@@ -486,8 +506,8 @@ def plan(shape: HeadShape, arena_max=ARENA_MAX, c: Cost = None, keep_unfit=False
             if split and not sp:
                 continue
             for on in (True, False) if pref in (None, True) else (False, True):
-                if cells == "rows" and not on:  # (the router cores' W_r multicast: one row)
-                    continue
+                if cells == "rows" and not on and not xdram:  # (the router cores' W_r multicast: one row - the
+                    continue  # fallback's: a rectangle, a rotating multicast a row)
                 if sp and not on:
                     continue
                 # (P-tile RS zones where they fit - the layouts measured before compact zones, byte for byte - else
@@ -502,6 +522,7 @@ def plan(shape: HeadShape, arena_max=ARENA_MAX, c: Cost = None, keep_unfit=False
                         GX=engine_width(shape, sp),
                         compact=compact,
                         split=sp,
+                        xdram=xdram,
                     )
                     eng, arena, sizes, why = size(shape, lay, arena_max)
                     if eng is not None:
@@ -520,7 +541,7 @@ def plan(shape: HeadShape, arena_max=ARENA_MAX, c: Cost = None, keep_unfit=False
     # all of W again (K2.7 1024 rows: 2 chunks 680 us, 4 750; 768: 2 530, 3 554; GLM-5.3 1024: 2 607, 4 638) - then
     # the layout the fit-first rule took, every measured head's (GLM-5.3 at 512 rows: K step 6 on slots 331 us, 12
     # compact 349, 8 compact 357), then the prediction)
-    if out and not split:
+    if out and not split and not xdram:
         old = legacy(shape, arena_max, c)
         pool = out + ([old] if old is not None else [])
         best = min(p.t for p in pool)
@@ -696,9 +717,12 @@ def fit(
     placement="measured",
     largest=True,
     explain=True,
+    fallback=True,
 ):
     """The head's whole host plan (module docstring). arena_max: bytes, or a function of the K step (the build: the
     device's cap); None: fit()'s own from L1_FREE - L1_MARGIN and the shape's payload. on_engine / KB: given (A/B).
+    fallback (MoEOptions.head_dram_fallback): where no resident layout fits, the DRAM fallback's (HeadLayout.xdram: x
+    gathered into DRAM ahead of the program, reloaded a chunk at a time) - the note names its cost.
     largest: on an L1 refusal, also the largest rows a mesh row that fit (a few more plans); explain: the unconstrained
     pick and the L1 note (one more plan)."""
     if arena_max is None:
@@ -721,6 +745,25 @@ def fit(
         if not unfit:
             return HeadFit(False, why=f"no layout with the router {on_engine=} and K step {KB}")
         why = _summary(unfit, shape, arena_max)
+        if fallback and not split:
+            pxa = plan(shape, arena_max, placement=placement, xdram=True, keep_unfit=True)
+            px = [p for p in pxa if p.t != float("inf") and want(p)]
+            if not px:
+                ux = [p for p in pxa if p.t == float("inf")]
+                if ux:
+                    why += "; the DRAM fallback (x own a ring of 2 chunks) does not fit either - " + _summary(
+                        ux, shape, arena_max
+                    )
+            if px:
+                return HeadFit(
+                    True,
+                    planned=px,
+                    note=(
+                        f"x from DRAM (the fallback: {why.split(';')[0]}): x gathered over TP ahead of the program, "
+                        f"x own a ring of 2 chunks reloaded from it - predicted {px[0].t:.0f} us, the gather and the "
+                        f"reloads {px[0].parts.get('xdram', 0)} us of it"
+                    ),
+                )
         if largest and "L1:" in why:
             r = shape.rows
             step = 32 * shape.G
@@ -735,6 +778,7 @@ def fit(
                     KB=KB,
                     largest=False,
                     explain=False,
+                    fallback=fallback,
                 )
                 lo, hi = (mid, hi) if f.ok else (lo, mid - 1)
             if lo:

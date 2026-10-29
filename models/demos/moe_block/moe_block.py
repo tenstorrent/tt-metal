@@ -152,6 +152,10 @@ class MoEOptions:
     # raises (the default: a shape the fused head should take never silently runs the ops head); True takes the ops
     # head. The reason is logged either way
     head_fallback: bool = False
+    # the fused head where no layout keeps x resident in L1 (large rows a mesh row): True - its DRAM fallback (x gathered
+    # over TP into DRAM ahead of the program, x own a ring of 2 chunks reloaded from it; the planner names its cost);
+    # False - such a shape takes the ops head
+    head_dram_fallback: bool = True
     # the fused head's router logits: on the engine's cores at the start, on their own router cores, or "auto" (the
     # head's cost model: tt/fused_head.py router_placement - the router's FLOPs a core vs the SE path)
     router: Literal["auto", "engine", "router_cores"] = "auto"
@@ -490,7 +494,9 @@ class MoEBlock(LightweightModule):
                     from loguru import logger
 
                     logger.info(f"MoEBlock: combine accumulators on the ports' cells ({acc}): ports apart does not fit here")
-                self.head_fit = FusedHead.plan(g, model, dtypes, mesh=mesh_device, accumulators=acc)
+                self.head_fit = FusedHead.plan(
+                    g, model, dtypes, mesh=mesh_device, accumulators=acc, fallback=options.head_dram_fallback
+                )
                 fits = True if self.head_fit.ok else self.head_fit.why
         if options.head == "fused" and fits is not True:
             raise ValueError(f"MoEBlock: the fused head (MoEOptions.head fused) does not fit: {fits}")
@@ -575,6 +581,7 @@ class MoEBlock(LightweightModule):
                     router_split=options.router_split,
                     fidelity=dtypes.shared_fidelity,
                     w_dtype=dtypes.shared_weights,
+                    dram_fallback=options.head_dram_fallback,
                 )
                 self._warm_up_head()
                 self.fused.head.settle_arena()
@@ -716,14 +723,23 @@ class MoEBlock(LightweightModule):
         if self.fused is not None:
             # (one L1 allocation a forward: the exchange's arena, the head's range inside it - the head runs there first)
             eng = self.fused.head.eng
-            arena = self.exchange.take_arena(inside=(eng.base, eng.arena_bytes), floor=self.fused.head.static_top)
+            xs = x
             if self.options.residual == "owners":  # (the fused head reads the width split [S/SP, H/TP])
                 xs = self._tp_a2a(x, cat_dim=2, split_dim=3)
                 self._mark("x_a2a")
-                se, out = self.fused(xs, arena)
+            if self.fused.head.xdram:  # (the DRAM fallback: x gathered over TP first, while L1 is clear)
+                self.fused.gather_x(xs, self._tp_topology())
+                self._mark("x_gather")
+            # (the DRAM fallback runs in its own arena: inside the exchange's, its first call gave wrong rows (GLM-5.3-
+            # Flash 2x4 2560, owners 0 / 1 of chunk 0) and its router-core rectangle hung - two arenas: clean)
+            arena = (
+                None
+                if self.fused.head.xdram
+                else self.exchange.take_arena(inside=(eng.base, eng.arena_bytes), floor=self.fused.head.static_top)
+            )
+            se, out = self.fused(xs, arena)
+            if xs is not x:
                 ttnn.deallocate(xs)
-            else:
-                se, out = self.fused(x, arena)
             self._mark("head")
             if self.keep_taps == "device":
                 self._taps = dict(rows_dev=out.pop("rows"))
@@ -1312,6 +1328,7 @@ class FusedHead:
         router_split=False,
         fidelity=ttnn.MathFidelity.HiFi2,  # (the shared expert's: MoEDtypes.shared_fidelity)
         w_dtype=ttnn.bfloat8_b,  # (the shared expert's weights: MoEDtypes.shared_weights)
+        dram_fallback=True,  # (MoEOptions.head_dram_fallback)
     ):
         from models.demos.moe_block.tt.fused_head import HeadSE3, RouterSpec, RoutingSpec
 
@@ -1338,6 +1355,8 @@ class FusedHead:
             glu=model.shared_expert_activation,
             fidelity=fidelity,
             w_dtype=w_dtype,
+            xdram=bool(layout is not None and layout.xdram),
+            dram_fallback=dram_fallback,
             num_links=g.links,
             rs_dim=-1 if latent else -2,  # (K3: the latent up lands the width split, the shared output too)
             rs_mode="fused",
@@ -1370,6 +1389,22 @@ class FusedHead:
             ttnn.DRAM_MEMORY_CONFIG,
         )
         self.head.rw = rw
+        # (the DRAM fallback: x gathered over TP into this [rows, H] buffer ahead of the head program, every call)
+        self.x_full = None
+        if self.head.xdram:
+            self.x_full = ttnn.from_torch(  # (zeros: the build's warm-up call reads it before any gather)
+                torch.zeros(1, 1, g.tokens_per_row, H),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+
+    def gather_x(self, x, topology):
+        """The DRAM fallback's x all-gather over TP into self.x_full (before the head's arena is taken: the gather's
+        static circular buffers sit at the bottom of L1)."""
+        ttnn.all_gather(x, dim=3, cluster_axis=1, output_tensor=self.x_full, topology=topology)
 
     def layer_weights(self, w: MoEWeights):
         """A layer's shared expert (and latent down) and router laid out for this head: (engine weights, router
@@ -1418,7 +1453,7 @@ class FusedHead:
             ttnn.copy(x, self.x)
         if arena is not None:
             self.head.use_arena(*arena)
-        se = self.head.run(self.x, self.w)
+        se = self.head.run(self.x, self.w, x_full=self.x_full)
         out = dict(self.head.outputs)
         if arena is None:
             self.head.free_arena()

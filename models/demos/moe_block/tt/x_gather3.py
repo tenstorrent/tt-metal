@@ -770,8 +770,12 @@ class XGather3:
         sub_core_grid=None,
         placement="auto",
         watcher=None,
+        xdram=False,
     ):
-        """watcher: the watcher's logical core (default: the plan's first copy core)."""
+        """watcher: the watcher's logical core (default: the plan's first copy core). xdram (the head's DRAM fallback):
+        no x streams - the engine loads every shard from a gathered DRAM copy; the ports keep the call fence and carry
+        the reduce-scatter, the logits, the latent and the routing."""
+        self.xdram = xdram
         self.mesh, self.eng = mesh_device, engine
         e = engine
         G = self.G = tuple(mesh_device.shape)[1]
@@ -997,6 +1001,9 @@ class XGather3:
         for (d, v), core in ports.items():
             pl = port_plan(chips, coord, d, v, CR=e.CR, nv=self.nv, sps=self.sps, kb=e.KB, rp=self.rp, nch=e.NCH)
             peer, mine, acc = pl["peer"], pl["mine"], pl["up_ipc"]
+            fence = bool(mine)  # (the call fence: the port waits for its peer's "started" before writing its L1)
+            if self.xdram:  # (no x: no entries, nothing arrives; the fence stays)
+                mine, acc, pl = [], 0, dict(pl, expect_in=0)
             if pl["has_up"]:
                 streams_in.append(self.watch[(d, v)])
             ent_r = [x_ for q, part, ub, npk in mine for x_ in (q, part, ub, npk)]
@@ -1012,14 +1019,14 @@ class XGather3:
             rsb = self.rs_block(rs, d, v) if rs else [0, 0] + [0] * (self.G + RSX)
             rsb = rsb + (router.port_block(coord, d, v) if router else [0, 0] + [0] * 9)
             lab = self.la_block(rs, la, d, v)
-            assert lab[0] == 0 or mine, "the latent needs the gather's fence"
+            assert lab[0] == 0 or fence, "the latent needs the gather's fence"
             rab = routing.send_block(coord, ("x", d, v)) if routing is not None else [0]
             rab = rab + (routing.fwd_block(coord, ("x", d, v)) if routing is not None else [0])
-            assert rab[0] == 0 or mine or not rab[1], "the routing's fabric packets need the gather's fence"
+            assert rab[0] == 0 or fence or not rab[1], "the routing's fabric packets need the gather's fence"
             rsb = rsb + lab + rab
-            assert rsb[0] == 0 or mine, "a port sending reduce-scatter units must have the gather's fence"
-            assert not (router and router.port_block(coord, d, v)[0]) or mine, "the logits need the gather's fence"
-            args = [xown, v, self.arrival, pl["expect_in"], self.ready, int(bool(mine))]
+            assert rsb[0] == 0 or fence, "a port sending reduce-scatter units must have the gather's fence"
+            assert not (router and router.port_block(coord, d, v)[0]) or fence, "the logits need the gather's fence"
+            args = [xown, v, self.arrival, pl["expect_in"], self.ready, int(fence)]
             if peer is not None and rg.get(f"{d}_links"):
                 pp = {(dd, ll): cc for (_, dd, ll), cc in chips[peer]["ports"].items()}
                 rc, pc, wc = virt(pp[(_OPP[d], v)]), virt(pp[(d, v)]), virt(self.watcher_core(peer))
@@ -1094,15 +1101,16 @@ class XGather3:
         wc = self.watcher_core(coord)
         shards, carry = self.order(coord)
         finals, wargs = {}, []
-        for q in shards[1:]:
+        for q in shards[1:] if not self.xdram else []:  # (xdram: nothing to watch - one shard, the engine's own load)
             wargs += [len(carry[q])] + [x_ for d, v, j, n in carry[q] for x_ in (self.watch[(d, v)], j, n)]
-        for d in ("fwd", "bwd"):  # (a stream counts all its entries, also those carrying nothing on this link)
+        for d in ("fwd", "bwd") if not self.xdram else ():  # (a stream counts all its entries, also those carrying
+            # nothing on this link)
             up = rg["prev"] if d == "fwd" else rg["next"]
             if up is not None and chips[up]["rings"][0][d]:
                 for v in range(self.nv):
                     finals[self.watch[(d, v)]] = e.NCH * len(chips[up]["rings"][0][d])
         wl = (
-            [e.NCH, xready_sem, len(shards) - 1, len(ecores), len(finals)]
+            [e.NCH, xready_sem, 0 if self.xdram else len(shards) - 1, len(ecores), len(finals)]
             + [x_ for k_, f in finals.items() for x_ in (k_, f)]
             + [v_ for c in ecores for v_ in (c.x, c.y)]
             + wargs

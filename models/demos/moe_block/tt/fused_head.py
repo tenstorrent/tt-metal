@@ -62,6 +62,15 @@ ENG_OVERHEAD = 3.0  # (the logits phase on the engine vs its FLOPs: K3 E 448 ~35
 CHAIN_US = 150.0  # (the routing chain past the logits: GLM's chain-bound head 166 us less its ~16 us logits phase)
 
 
+def router_rect(nrt, cols, rows):
+    """The columns of a rectangle of nrt router cores in `rows` free rows of `cols` cells (whole rows, a multicast group
+    of at least two a row), or 0."""
+    for c in range(min(cols, nrt), 1, -1):
+        if nrt % c == 0 and nrt // c <= rows:
+            return c
+    return 0
+
+
 def router_placement(*, E, H, I, G, rows, latent, GX, GY, MT, NCH):
     """(on the engine?, estimates us). The head ends at max(SE path, routing chain). On the router cores (a row
     tile each of every owner's rows: 2 x G 32 tokens x E x H / G FLOP a core, whatever the rows) the chain is their
@@ -146,6 +155,8 @@ class HeadSE3:
         routing=None,
         l1_hole=None,
         w_dtype=ttnn.bfloat8_b,
+        xdram=False,
+        dram_fallback=True,
     ):
         """rs_dim (-2: rows to their owners, GLM; -1: the width, K3): the down + SE reduce-scatter - rs_mode "fused":
         in this program (se_rs: h from the L1 gate / up left it in, bf16 partials into the next chip's same core, fp32
@@ -199,7 +210,7 @@ class HeadSE3:
             )  # fmt: skip
             hf = fit(
                 shape, arena_max=lambda kb: arena_cap(mesh_device, kb), split=router.split,
-                on_engine=router.on_engine, KB=KB,
+                on_engine=router.on_engine, KB=KB, fallback=dram_fallback,
             )  # fmt: skip
             if not hf.ok:
                 raise ValueError(f"HeadSE3: no layout builds at {rows} rows a mesh row: {hf.why}")
@@ -219,6 +230,10 @@ class HeadSE3:
         last_err = None
         self._GX, self._dims = GX, dict(H=H, I=I, G=G, rows=rows)
         self._on = None  # (the planned router placement)
+        # (the DRAM fallback - head_plan's xdram layouts, only where no resident one fits: x gathered into DRAM ahead of
+        # the program, no x streams on the ports, x own a ring of 2 chunks reloaded from it; router cores may take a
+        # rectangle of the free rows)
+        self.xdram = xdram
         self._compact = compact  # (the RS zones: the planner's; None - se_rs's default)
 
         def build(GY, MT, kb):  # (the RS plan and the engine at one layout and K step; False: its arena does not fit)
@@ -253,6 +268,7 @@ class HeadSE3:
                     fidelity=fidelity,
                     shards=G,
                     w_dtype=w_dtype,
+                    xring=2 if self.xdram else 0,
                     down=self.rs_mode != "mrs",
                     rs=self.plan,
                     latent=latent // 32 // G if latent else None,
@@ -277,6 +293,7 @@ class HeadSE3:
             for p_ in planned:
                 self._on = p_.lay.on_engine
                 self._compact = p_.lay.compact
+                self.xdram = p_.lay.xdram
                 GX = p_.lay.GX
                 self._GX = GX
                 if build(p_.lay.GY, p_.lay.MT, p_.lay.KB):
@@ -326,9 +343,20 @@ class HeadSE3:
                 # free rows under it)
                 assert not router.split, "HeadSE3: the router's split - the mover column's cells only"
                 free = [ttnn.CoreCoord(c, y) for y in range(GY, grid.y) for c in range(GX)]
-                if not (nrt <= GX or (self.router_on_engine(router, latent) and nrt <= len(free))):
-                    raise ValueError(f"HeadSE3: no cells for {nrt} router cores (free core rows: GY {GY} < {grid.y})")
-                self.rcores = free[:nrt]
+                rect = router_rect(nrt, GX, grid.y - GY)
+                if nrt <= GX or self.router_on_engine(router, latent):
+                    if nrt > len(free):
+                        raise ValueError(
+                            f"HeadSE3: no cells for {nrt} router cores (free core rows: GY {GY} < {grid.y})"
+                        )
+                    self.rcores = free[:nrt]
+                elif self.xdram and rect:  # (the fallback: a rectangle, W_r by a rotating multicast a row)
+                    self.rcores = [ttnn.CoreCoord(c, GY + r) for r in range(nrt // rect) for c in range(rect)]
+                else:
+                    raise ValueError(
+                        f"HeadSE3: {nrt} router cores (logits on them) fit neither one free row ({GX} cells) nor the "
+                        f"mover column"
+                    )
                 watcher = ttnn.CoreCoord(MX, grid.y - 1)
         else:
             watcher = None
@@ -339,6 +367,7 @@ class HeadSE3:
             sub_core_grid=movers,
             placement="simple" if grid.x - MX < 4 else "auto",
             watcher=watcher,
+            xdram=self.xdram,
         )
         self.eng.ring_dir = self.xg.ring_dir  # (the latent's multi-hop sends: the gather's ring directions)
         # (the program's static circular buffers end here - the port cores' packet CB, from the allocator's L1 base: an
@@ -654,7 +683,10 @@ class HeadSE3:
                 self._persist[name] = t
         return t
 
-    def run(self, x, w):
+    def run(self, x, w, x_full=None):
+        """x_full (the DRAM fallback, self.xdram): x gathered over TP [rows, H] - the engine loads every shard from it."""
+        assert not self.xdram or x_full is not None, "HeadSE3: the DRAM fallback runs on the gathered x (x_full)"
+        self._xfull = x_full
         if not hasattr(self, "_persist"):
             self._persist = {}
         if self.rs_mode == "fused" and not self.eng.arena.is_allocated():
@@ -740,6 +772,9 @@ class HeadSE3:
             io += [self.routing.slots] + list(self.routing.outs.values())
             if self.routing.dbg is not None:
                 io += [self.routing.dbg]
+        xf = getattr(self, "_xfull", None) if self.xdram else None
+        if xf is not None:
+            io += [xf]
         # Prepared dispatch (ttnn.bringup.prepare_program): the descriptor is built and prepared once; each call
         # patches only the runtime args holding an io tensor's address (x: the block input, at a new address per
         # call - its args are its base address) and the CBs on the arena. Rebuilt when the arena's base or any other
@@ -767,6 +802,7 @@ class HeadSE3:
             self.eng.base,
         )
         key += tuple(int(t.buffer_address()) for t in self.outputs.values())
+        key += (int(xf.buffer_address()),) if xf is not None else ()
         if self.state["key"] == key and self.state["arena"] is not self.eng.arena:
             self._rebind()  # (the arena taken again at its address: only the CBs bound to it change)
         if self.state["key"] != key:
@@ -819,12 +855,12 @@ class HeadSE3:
                 if self.routing is not None:
                     k0 = k0 + self.routing.y_kernels(coord, prog)
                 c1, k1, sems = e.pieces(
-                    x,
+                    xf if xf is not None else x,
                     w,
                     y,
-                    x_k0=p * self.xg.klt,
-                    x_ct=self.xg.klt,
-                    shard_order=self.xg.order(coord)[0],
+                    x_k0=0 if xf is not None else p * self.xg.klt,
+                    x_ct=e.KT if xf is not None else self.xg.klt,
+                    shard_order=None if xf is not None else self.xg.order(coord)[0],
                     ports=self.xg.port_cores(coord),
                     xloaded=self.xg.xloaded,
                     extra_sem_cores=[self.xg.watcher_core(coord)],
@@ -837,7 +873,7 @@ class HeadSE3:
                         dict(
                             xbuf=self.outputs["xbuf"],
                             me=coord[0] * tuple(self.mesh.shape)[1] + coord[1],
-                            shard_order=self.xg.order(coord)[0],
+                            shard_order=[0] if xf is not None else self.xg.order(coord)[0],
                         )
                         if "xbuf" in self.outputs
                         else None

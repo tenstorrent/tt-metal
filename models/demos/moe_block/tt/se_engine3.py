@@ -43,6 +43,7 @@ NOUT = 2  # (down passes OUT holds)
 RS_CB = dict(hold=6, finb=7, arrf=8, arrb=9, finc=10, outf=11, psync=12, ffree=20)  # (down + reduce-scatter CBs)
 LAT_CB = 13  # (the latent block [MT][LWMAX], bf16)
 PREP_CB = dict(pu=14, po=15, lrdy=16)
+XFREE_CB = 21  # (x own's ring: a chunk's prep read its slot - the compute's credit to the BRISC's reload)
 RTR_CB = dict(
     rx=17, rw=18, ro=19
 )  # (the router logits on the engine: x rows [KTO][MT], W_r^T [ETC][KTO], out fp32)  # (dispatch prep: the units' source view, the untilized rows, latent ready)
@@ -141,9 +142,12 @@ void kernel_main() {
     const uint32_t nown = (i0 < GX ? NOWN0 : 0) + (i1 < GX ? NOWN1 : 0);  // (my steps a chunk)
     auto mine = [&](uint32_t j) { return (j & 1) ? ((j / 2) % S1 == i1) : ((j / 2) % S0 == i0); };
     // my steps' x-own slot: [chunk][family 0 slots, then family 1][MT][KB]
-    auto own_addr = [&](uint32_t m, uint32_t j) {
+#ifndef SE_XRING
+#define SE_XRING NCH  // (x own: every chunk resident)
+#endif
+    auto own_addr = [&](uint32_t m, uint32_t j) {  // (chunk m in slot m % SE_XRING: the DRAM fallback's ring)
         const uint32_t slot = (j & 1) ? (i0 < GX ? NOWN0 : 0) + own_slot(j) : own_slot(j);
-        return xown + ((m * nown + slot) * MT) * KB * 2048;
+        return xown + (((m % SE_XRING) * nown + slot) * MT) * KB * 2048;
     };
 #ifdef SE_RTR
     auto rtrx = [&]() {  // (SE_XFIRST: after my own-shard x load - the gather's ports wait on every core's)
@@ -235,7 +239,7 @@ void kernel_main() {
         xload_upto(xports ? NSG : SE_XL);
         if (xports) noc_async_read_barrier();
 #else
-        for (uint32_t m = 0; m < NCH; ++m)
+        for (uint32_t m = 0; m < SE_XRING; ++m)  // (the ring's first chunks; the rest as their slots free)
             for (uint32_t j = 0; j < NSG; ++j) xload_step(m, j);
         noc_async_read_barrier();
 #endif
@@ -309,6 +313,10 @@ void kernel_main() {
     auto r1 = mx1.optional_receiver(noc);
     volatile tt_l1_ptr uint32_t* xready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(XREADY));
     for (uint32_t m = 0; m < NCH; ++m) {
+        if (SE_XRING < NCH && m >= SE_XRING && x_ct) {  // (the ring: chunk m's x own, issued at chunk m - 1's end)
+            DeviceZoneScopedN("SE-XRELOAD");
+            noc_async_read_barrier();
+        }
         {
         DeviceZoneScopedN("SE-XROUNDS");
         // shard-major: each shard (own first, then as it lands) through every pass before the next shard
@@ -416,7 +424,24 @@ void kernel_main() {
         if constexpr (NCH > 1) cb_pop_front(SE_FINC, nh);  // (the next chunk's hand-offs from the front again)
     }
 #endif
+        if (SE_XRING < NCH && m + SE_XRING < NCH && x_ct) {
+            // (the ring: chunk m + SE_XRING into chunk m's slot - its rounds sent, its prep done (my hand-offs above
+            // waited for the chunk's fins, after its prep op): the load lands under the chunks between)
+#ifdef SE_XFREE
+            cb_wait_front(SE_XFREE, 1);
+            cb_pop_front(SE_XFREE, 1);
+#endif
+            noc_async_writes_flushed();
+            for (uint32_t j = 0; j < NSG; ++j) xload_step(m + SE_XRING, j);
+        }
     }
+#ifdef SE_XFREE
+    {  // (the last chunks' credits, unused: popped - a call ends with the CB empty, the next one's credits its own)
+        constexpr uint32_t left = SE_XRING < NCH ? SE_XRING : NCH;
+        cb_wait_front(SE_XFREE, left);
+        cb_pop_front(SE_XFREE, left);
+    }
+#endif
 #ifdef SE_BRW
     noc_async_read_barrier();
 #ifdef SE_BRW_BAR
@@ -1546,6 +1571,10 @@ void kernel_main() {
                 if (nu) pack_untilize_uninit(SE_PO);
                 UNPACK((get_local_cb_interface(SE_PU).fifo_rd_ptr = pu0));
                 (void)lrdy;
+#ifdef SE_XFREE
+                cb_reserve_back(SE_XFREE, 1);  // (x own's ring: this chunk's slot read - the BRISC may reload it)
+                cb_push_back(SE_XFREE, 1);
+#endif
 #endif
             } else {
                 const uint32_t e6 = et0 + 6 * idx, cnt = se_arg(e6), mode = se_arg(e6 + 1);
@@ -1593,7 +1622,7 @@ void kernel_main() {
             cb_wait_front(SE_PSYNC, npass);
             cb_pop_front(SE_PSYNC, npass);
             uint32_t mf = 0;
-            for (uint32_t e = 0; e < G; ++e) mf |= se_arg(et0 + 6 * e + 1);
+            for (uint32_t e = 0; e < SE_NENT; ++e) mf |= se_arg(et0 + 6 * e + 1);  // (the RS's entries: TP of them)
             if (mf & 1) {
                 cb_wait_front(SE_ARRF, SE_ZF);
                 cb_pop_front(SE_ARRF, SE_ZF);
@@ -1791,6 +1820,7 @@ class SeEngine3:
         prep=False,
         router=None,
         arena_max=None,
+        xring=0,
     ):
         """arena_max: host planning (mesh_device None) - size the arena against this cap and stop (no device state).
         prep: the dispatch prep's owned rows (pieces(prep=...)): x own's rows of the chip's owned tokens (or, with a
@@ -1908,7 +1938,12 @@ class SeEngine3:
         self.WRING = 0
         self.HSL = 1
         nown = max((nf // self.S0 if c in self.fam0 else 0) + (nf // self.S1 if c in self.fam1 else 0) for c in cols)
-        self.xown_t = self.NCH * nown * MT * self.KB
+        # (x own: every chunk's steps resident - or xring (the head's DRAM fallback: x from a gathered DRAM copy) a ring of
+        # XR chunk slots, each reloaded from DRAM once its chunk's rounds (and prep) are done)
+        self.XR = min(xring, self.NCH) if xring else self.NCH
+        self.xring = self.XR < self.NCH
+        self.xfree = self.xring and prep and not latent  # (prep reads x own: the slot's reload waits for it)
+        self.xown_t = self.XR * nown * MT * self.KB
         # dispatch prep: a unit = one row tile's run of x own (a K step: KB tiles) or of a latent block (LWMAX)
         self.prep = prep
         self.PFULL = self.LWMAX if latent else self.KB
@@ -1943,6 +1978,7 @@ class SeEngine3:
                     ("acc", self.acc_pages * 4096),
                     ("out", NOUT * MT * self.PWDMAX * 2048 if down and rs is None else 0),
                     ("words", 256),
+                    ("xfree", 16 * self.NCH if self.xfree else 0),
                 ]
                 + rsr
                 + (
@@ -2303,6 +2339,8 @@ class SeEngine3:
             cb(PREP_CB["po"], "po", 2 * self.PFULL * 2048, ttnn.bfloat16, 2048)
             if self.LT:
                 cb(PREP_CB["lrdy"], "lrdy", self._lrdy_bytes(), ttnn.bfloat16, 16)
+        if self.xfree:
+            cb(XFREE_CB, "xfree", 16 * self.NCH, ttnn.bfloat16, 16)
         if rtr is not None:
             KTO = self.rtr["KTO"]
             cb(RTR_CB["rx"], "rx", 2 * self.KC * MT * self.NCH * 2048, ttnn.bfloat16, 2048)  # (two rounds' buffers)
@@ -2442,9 +2480,15 @@ class SeEngine3:
                 b0 = self.mesh.worker_core_from_logical_core(ttnn.CoreCoord(cx0, 0))
                 nd += f"#define SE_BRW_BAR\n#define SE_BAR_X {b0.x}\n#define SE_BAR_Y {b0.y}\n#define SE_BAR_N {GX * GY}u\n"
 
-        if self.NCH > 1:  # (dispatch prep: every chunk's units in the last chunk's prep op - see the worklog)
+        if self.NCH > 1 and not self.xfree:  # (dispatch prep: every chunk's units in the last chunk's prep op - see
+            # the worklog; x own a ring: every chunk's own, before its slot is reloaded)
             nd += "#define SE_PREP_LAST\n"
+        if self.xring:
+            nd += f"#define SE_XRING {self.XR}u\n"
+        if self.xfree:
+            nd += f"#define SE_XFREE {XFREE_CB}\n"
         if self.rs is not None:
+            nd += f"#define SE_NENT {self.rs.G}\n"  # (the RS's entries - TP - not the gate / up's x shards, G)
             nd += "#define SE_RS\n" + "".join(f"#define SE_{k.upper()} {v}\n" for k, v in RS_CB.items())
             if self._fin_rows():
                 nd += "#define SE_FIN_ROWS\n"
@@ -2453,7 +2497,7 @@ class SeEngine3:
             assert self.rs is not None, "the latent's all-to-all rides the reduce-scatter's ports and args"
             nd += f"#define SE_LAT {LAT_CB}\n#define SE_NGU {self.NGU}\n#define SE_LWMAX {self.LWMAX}\n"
             nd += f"#define SE_LATP {self.LATP}\n#define SE_LRB {self.CR // self.shards}\n"
-            nd += f"#define G_LT {len(so) * self.LT}\n"
+            nd += f"#define G_LT {self.shards * self.LT}\n"  # (the latent's width in tiles: every chip's slice)
         if rtr is not None:
             nct_len = len(nct + w_ct + y_ct) + (
                 len(ttnn.TensorAccessorArgs(la["out"]).get_compile_time_args()) if self.LT else 0
@@ -2720,7 +2764,15 @@ class SeEngine3:
                     continue
                 h = pos // 2
                 slot = n0 + h // self.S1 if f else h // self.S0
-                out.append((((m * nown + slot) * MT + r) * KB * 2048, KB, 0, row0 + (R - p * RBo) * 32, j * KB * 64))
+                out.append(
+                    (
+                        (((m % self.XR) * nown + slot) * MT + r) * KB * 2048,
+                        KB,
+                        0,
+                        row0 + (R - p * RBo) * 32,
+                        j * KB * 64,
+                    )
+                )
         return out
 
     def _prep_compute(self, ra, n_pre, p, prep, cx, cy):
