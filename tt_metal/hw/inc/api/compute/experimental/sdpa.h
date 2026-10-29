@@ -349,14 +349,14 @@ void compute_sdpa_chunk(
     static_assert(
         chunk_size % qk_signal_granularity == 0,
         "compute_sdpa_chunk: chunk_size must be divisible by qk_signal_granularity");
-    // The custom-MM unpacks issue a single MOP of (kt_dim/2)-1 iterations and only support an even
-    // kt_dim >= 2 (see the "kt_dim: even number from 2 to 256" note in the unpack LLK headers). With
-    // kt_dim < 2 the count underflows to ~4 billion and the unpacker hangs silently. Fail at compile
-    // time instead. OV matmul: kt_dim = chunk_size (Sk_chunk_t); QK matmul: kt_dim = qk_kt.
+    // OV matmul: kt_dim = chunk_size (Sk_chunk_t). Its reuse-dest unpack runs a MOP over K-tile pairs
+    // plus a replay tail for an odd last tile, so odd chunk sizes work. A 1-tile chunk does not: the
+    // chunk computes a wrong running max on device (SdpaChunkSizeCompileLimits pins the rejection).
     static_assert(
-        chunk_size >= 2 && chunk_size % 2 == 0,
-        "compute_sdpa_chunk: chunk_size (Sk_chunk_t = OV-matmul kt_dim) must be even and >= 2; "
-        "k_chunk_size of 32 gives Sk_chunk_t=1, which underflows the OV custom-MM unpack MOP and hangs");
+        chunk_size >= 2,
+        "compute_sdpa_chunk: chunk_size (Sk_chunk_t) must be >= 2; k_chunk_size of 32 gives Sk_chunk_t=1, "
+        "which computes a wrong running max");
+    // QK matmul: kt_dim = qk_kt. Kept even and >= 2 (pinned by SdpaChunkMergedKvCompileLimits).
     static_assert(
         qk_kt >= 2 && qk_kt % 2 == 0,
         "compute_sdpa_chunk: QK contraction must be even and >= 2 for the custom-MM unpack");
