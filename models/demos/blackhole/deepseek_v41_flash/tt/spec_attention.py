@@ -252,7 +252,12 @@ class SpecCompressedAttention(_PagedMixin, DSV41CompressedAttention):
         if self.ratio != 2 or self.source is not None:
             return
         U, n = self.U, self.n
-        if m is None:
+        gidx = getattr(self, "_commit_idx", None)
+        if m is not None and gidx is not None:
+            # DSV41_SPEC_COMMIT_GATHER=1: block index m[u] of every user picked by one row-major gather (gidx [U,1,1024] uint32, built once per round); the one-hot multiply + sum picks the
+            # same elements (exact in fp32) after a 50 us single-core tilize of cs_block per layer
+            sel = ttnn.gather(self.cs_block, 1, gidx)
+        elif m is None:
             sel = ttnn.slice(self.cs_block, [0, n - 1, 0], [U, n, 2 * HEAD_DIM])
         else:  # m: [U,n,1] fp32 row-major one-hot over block index
             prod = ttnn.multiply(

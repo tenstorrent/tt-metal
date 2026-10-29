@@ -358,7 +358,9 @@ class DraftLayer(DSV41Layer):
         self.moe.warmup()
         _l1v(md, "  layer: after moe warmup")
         w0, w1, w2 = moe_weights["shared"]
-        self.shared = DSV41SharedExpert(md, w0, w1, w2)
+        self.shared = DSV41SharedExpert(
+            md, w0, w1, w2, dtype=ttnn.bfloat16 if os.environ.get("DSV41_DRAFT_SHARED_DT") == "bf16" else ttnn.bfloat8_b
+        )  # DSV41_DRAFT_SHARED_DT=bf16: numerics probe
         _l1v(md, "  layer: after shared expert")
         up = lambda t: ttnn.from_torch(
             t.reshape(1, 1, 1, -1).float(),
@@ -648,7 +650,19 @@ class DSparkDrafter:
         self._up = up
         freqs = rope_freqs(0, max_pos)
         _l1v(md, "drafter init start")
-        self.attn = [DraftAttention(md, mesh_config, ccl, w["attn"], freqs, U, n) for w in stage_w]
+        # DSV41_DRAFT_ATTN_WDT=bf16 (numerics probe, default off): the attention weights of the 3 stages in bf16 instead of bfp8 (the verify layers keep DSV41_ATTN_WDT)
+        _wd = os.environ.get("DSV41_DRAFT_ATTN_WDT")
+        _old = os.environ.get("DSV41_ATTN_WDT")
+        if _wd:
+            os.environ["DSV41_ATTN_WDT"] = _wd
+        try:
+            self.attn = [DraftAttention(md, mesh_config, ccl, w["attn"], freqs, U, n) for w in stage_w]
+        finally:
+            if _wd:
+                if _old is None:
+                    os.environ.pop("DSV41_ATTN_WDT", None)
+                else:
+                    os.environ["DSV41_ATTN_WDT"] = _old
         _l1v(md, "after attn x3")
         self.state = DraftState(md, self.attn[0], U, n, max_pos=max_pos, share_rope=share_rope)
         _l1v(md, "after state")
@@ -661,7 +675,9 @@ class DSparkDrafter:
             self.layers.append(layer)
             _l1v(md, f"after layer {len(self.layers) - 1} init")
         w0 = stage_w[0]
-        wdt = ttnn.bfloat8_b if bfp8_main else ttnn.bfloat16
+        wdt = (
+            ttnn.bfloat8_b if (bfp8_main and os.environ.get("DSV41_DRAFT_MAIN_BF16", "0") != "1") else ttnn.bfloat16
+        )  # DSV41_DRAFT_MAIN_BF16=1: numerics probe
         self.main_proj_sh = None
         if os.environ.get("DSV41_DRAFT_MAINPROJ_SHARD", "0") == "1":
             self.main_proj = None

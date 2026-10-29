@@ -356,7 +356,14 @@ class SpecDecoder(SpecVerifier):
         x2 = ttnn.typecast(ttnn.reshape(tokens, [U, n]), ttnn.float32)
         col = lambda t, j: ttnn.to_layout(ttnn.slice(t, [0, j], [U, j + 1]), ttnn.TILE_LAYOUT)  # [U,1] tile
         c, mcount = None, None
-        for j in range(n - 1):
+        if n > 1 and os.environ.get("DSV41_SPEC_ACCEPT_VEC", "0") == "1":
+            # all n - 1 comparisons at once: eq of the shifted columns, cumulative product (leading run of matches), sum = accept count (same 0/1 fp32 values as the per-column chain)
+            e = ttnn.eq(
+                ttnn.to_layout(ttnn.slice(a2, [0, 0], [U, n - 1]), ttnn.TILE_LAYOUT),
+                ttnn.to_layout(ttnn.slice(x2, [0, 1], [U, n]), ttnn.TILE_LAYOUT),
+            )
+            mcount = ttnn.sum(ttnn.cumprod(e, dim=1), dim=1, keepdim=True)
+        for j in range(n - 1 if mcount is None else 0):
             e = ttnn.eq(col(a2, j), col(x2, j + 1))  # draft d_{j+1} (input of row j+1) == argmax of row j
             c = e if c is None else ttnn.multiply(c, e)
             mcount = c if mcount is None else ttnn.add(mcount, c)
@@ -379,8 +386,17 @@ class SpecDecoder(SpecVerifier):
         if self.stop_after == "accept":
             return t_next
         # ---- commit compressor state, write main_kv of the n rows, draft ----
-        oh3 = ttnn.reshape(ttnn.to_layout(onehot, rm), [U, n, 1])
-        self.commit(oh3)
+        if os.environ.get("DSV41_SPEC_COMMIT_GATHER", "0") == "1":
+            mi = ttnn.typecast(ttnn.to_layout(mcount, rm), ttnn.uint32)  # [U,1]
+            idx3 = ttnn.repeat(
+                ttnn.reshape(mi, [U, 1, 1]), [1, 1, 1024]
+            )  # [U,1,1024] uint32: block index m[u] on every lane
+            for _, layer, _ in self.layers:
+                layer.attention._commit_idx = idx3
+            self.commit(idx3)
+        else:
+            oh3 = ttnn.reshape(ttnn.to_layout(onehot, rm), [U, n, 1])
+            self.commit(oh3)
         if hidden is None:
             hidden = self._hidden(taps, x, xs)
         dr = self.drafter
