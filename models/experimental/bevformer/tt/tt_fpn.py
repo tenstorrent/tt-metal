@@ -12,6 +12,17 @@ import ttnn
 from models.experimental.bevformer.tt.tt_common import TTConv2D, signpost
 
 
+def _to_dram(out):
+    """An output conv's level, interleaved in DRAM. A level that fits L1 comes out in conv2d's
+    shards; the levels live through the whole detector, and one left in L1 shrinks what the
+    encoder's attention can stage there."""
+    if not out.is_sharded():
+        return out
+    moved = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(out)
+    return moved
+
+
 class TTConvModule:
     """One FPN convolution.
 
@@ -175,19 +186,12 @@ class TTFPN:
             # for it, TTConv2D): its consumer splits the cameras in ROW_MAJOR anyway
             # (TTPerceptionTransformer.camera_features), and the extra conv reshapes the last level
             # to NHWC, which in TILE copies it, as its width is not a tile multiple.
-            out = self.fpn_convs[i](lateral)
-            if out.is_sharded():
-                # A level that fits L1 comes out in conv2d's shards. The levels live through the
-                # whole detector, and one left in L1 shrinks what the encoder's attention can stage
-                # there; the extra conv's weights are prepared for an interleaved DRAM input too.
-                moved = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
-                ttnn.deallocate(out)
-                out = moved
-            outs.append(out)
+            # The extra conv's weights are prepared for an interleaved DRAM input.
+            outs.append(_to_dram(self.fpn_convs[i](lateral)))
         for i in range(used_backbone_levels, len(self.fpn_convs)):
             extra_source = outs[-1]
             if i > used_backbone_levels and self.relu_before_extra_convs:
                 extra_source = ttnn.relu(extra_source)
-            outs.append(self.fpn_convs[i](extra_source))
+            outs.append(_to_dram(self.fpn_convs[i](extra_source)))
         signpost(header="TTNN FPN Forward End")
         return tuple(outs)
