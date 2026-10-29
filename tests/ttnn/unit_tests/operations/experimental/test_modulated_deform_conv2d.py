@@ -167,12 +167,13 @@ def test_modulated_deform_conv2d_sharded_input(device, batch, in_h, in_w, channe
 
 
 def test_modulated_deform_conv2d_weight_multicast(device):
-    """Two full rows of the grid's blocks form a rectangle short of the grid, so one core multicasts
-    each weight slice to a few rows of cores."""
+    """The blocks fill two whole columns of the grid, a rectangle short of the grid, so one core
+    multicasts each weight slice to those cores only."""
     grid = device.compute_with_storage_grid_size()
     conv = ((3, 3), (1, 1), (1, 1), (1, 1))
-    # 16 rows of 4 * grid.x pixels: 2 * grid.x blocks of 32 output rows, one per core of two rows.
-    x, offset, logits, weight, bias = random_inputs(1, 16, 4 * grid.x, 64, 64, *conv, 1.0)
+    # 16 rows of 4 * grid.y pixels: 2 * grid.y blocks of 32 output rows, which the interleaved
+    # split lays out column by column.
+    x, offset, logits, weight, bias = random_inputs(1, 16, 4 * grid.y, 64, 64, *conv, 1.0)
     actual = run_conv(device, x, offset, logits, weight, bias, *conv, True)
     expected = (reference_columns(x, offset, logits.sigmoid(), *conv) @ weight + bias).clamp(min=0)
     assert_close(expected, actual)
