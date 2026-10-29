@@ -7,8 +7,8 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <array>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -18,6 +18,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
@@ -51,8 +53,6 @@ using test_helpers::pipe_sender_node;
 using test_helpers::PipeSpaceOwner;
 using test_helpers::PrefetcherPipeSpecTestQuasar;
 using test_helpers::relay_dfb_name;
-using test_helpers::ScopedSlowDispatchOverride;
-
 ProgramRunArgs PipeArgs(std::vector<std::pair<PrefetcherPipeParamName, PrefetcherPipe*>> pipes) {
     ProgramRunArgs params;
     for (auto& [name, pipe] : pipes) {
@@ -373,28 +373,24 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_PipeOutlivingSpaceIsDetached) {
 class PrefetcherPipeSpecTestGen1TwoChips : public ::testing::Test, protected PipeSpaceOwner {
 protected:
     void SetUp() override {
-        slow_dispatch_override_.emplace();
-        experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 2);
-        auto meshes = distributed::MeshDevice::create_unit_meshes({0, 1});
+        env_ = std::make_unique<MetalEnv>(MetalEnvDescriptor{
+            .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
+        const std::array<ChipId, 2> device_ids{0, 1};
+        auto meshes = distributed::MeshDevice::open_unit_meshes(*env_, device_ids);
         ASSERT_EQ(meshes.size(), 2u);
         mesh_a_ = meshes.at(0);
         mesh_b_ = meshes.at(1);
     }
     void TearDown() override {
         ReleasePipeSpaces();
-        for (auto* mesh : {&mesh_a_, &mesh_b_}) {
-            if (*mesh) {
-                (*mesh)->close();
-                mesh->reset();
-            }
-        }
-        experimental::disable_mock_mode();
-        slow_dispatch_override_.reset();
+        mesh_a_.reset();
+        mesh_b_.reset();
+        env_.reset();
     }
 
+    std::unique_ptr<MetalEnv> env_;  // outlives the meshes
     std::shared_ptr<distributed::MeshDevice> mesh_a_;
     std::shared_ptr<distributed::MeshDevice> mesh_b_;
-    std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
 
 TEST_F(PrefetcherPipeSpecTestGen1TwoChips, CPU_PipeFromAnotherMeshFails) {
