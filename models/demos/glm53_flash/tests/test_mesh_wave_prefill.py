@@ -313,3 +313,158 @@ def test_wave_first_token_vs_hf(mesh_device):
         f"PERF waves on {MESH}: SP prefill of one {rows * T_big}-token chunk {t_sp * 1e3:.0f} ms vs one wave of {rows} x "
         f"{T_big}-token prompts {t_wave * 1e3:.0f} ms (warm): {rows * T_big / t_sp:.0f} vs {rows * T_big / t_wave:.0f} tok/s"
     )
+
+
+# ------------------------------------------------------------------------------------------ the served adapter
+SERVED_CHUNK = 2048  # the SP device chunk = the wave width (a prefill bucket): the continuation waves start there
+SERVED_MAX_SEQ_LEN = 8192  # three prefix-bucket starts for the ladders
+TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
+N_DECODE = 4  # decode steps compared after every prefill
+
+
+def _served_ids(n: int, seed: int, vocab: int) -> torch.Tensor:
+    g = torch.Generator().manual_seed(seed)
+    return torch.randint(5, vocab - 5, (n,), generator=g).to(torch.int32)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(
+    "device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch):
+    """The served adapter under per-row prefill ownership (``ServingGeometry.rows_independent``, the
+    GLM53_VLLM_ROWS_INDEPENDENT flip) on the partitioned heads2users cache: the warm-up ladders (SP + waves), the wave
+    traces prepared before and captured after the prefill traces, the program cache sealed (no request-time compile);
+    then, each against the same prompt alone through the sequence-parallel path from scratch (a released slot index):
+    (a) two prompts of one step on different rows = one traced wave, decoded jointly; (b) a prompt beyond the wave
+    width beside a short one: a traced wave, then its eager continuation wave at the width (the sparse rows);
+    (c) vLLM's chunked prefill of one request over two steps (a wave member starting at 1024). The first-token
+    logits and every decode step >= PCC_BAR_SP with the near-tie rule (the SP scan groups the recurrence differently).
+    """
+    from models.demos.glm53_flash.tests.test_serving_prefix_cache_mesh import _assert_agree, _Served
+    from models.demos.glm53_flash.tt.generator_vllm import GLM53FlashForCausalLM
+    from models.demos.glm53_flash.tt.vllm_config import ServingGeometry
+
+    if B % MESH[1]:
+        pytest.skip(f"the user partition needs users per row {B} % cols {MESH[1]} == 0")
+    monkeypatch.setenv("GLM53_PARTITION_USERS", "1")
+    monkeypatch.setenv("GLM53_PREFILL_PARTITION", "heads2users")
+    monkeypatch.setenv("GLM53_PREFIX_BUCKET", str(SERVED_CHUNK))  # the adapter's launcher sets it; a direct build must
+    cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
+    layers = _layers()
+    model = GLM53MeshModel(
+        mesh_device, cfg, layers, max_batch=B, max_seq_len=SERVED_MAX_SEQ_LEN, weight_cache_path=CACHE_ROOT
+    )
+    rows = model.mesh.rows
+    assert rows > 1, "waves are the multi-row case"
+    g = ServingGeometry(
+        rows=rows,
+        cols=MESH[1],
+        users_per_row=B,
+        max_seq_len=SERVED_MAX_SEQ_LEN,
+        partitioned=True,
+        rows_independent=True,
+        device_prefill_chunk=SERVED_CHUNK,
+        pad_token_id=cfg.pad_token_id,
+        traced_prefill_lengths=(),  # the SP reference stays eager; the waves are traced (the model's per-row lengths)
+        wave_rows=SERVED_CHUNK,
+    )
+    a = GLM53FlashForCausalLM(model, g, pad_token_id=cfg.pad_token_id)
+    assert (
+        a.geometry.traced_wave_lengths == tuple(model.wave_trace_lengths()) and a.geometry.request_capacity == rows * B
+    )
+    n = a.geometry.request_capacity
+    t0 = time.perf_counter()
+    a.warmup_model_prefill(enable_trace=False, can_sample_on_device=False)
+    a.warmup_model_decode(enable_trace=False, max_batch_size=n, num_blocks=1)
+    a.warmup_model_prefill(enable_trace=True, can_sample_on_device=False)
+    a.warmup_model_decode(enable_trace=True, max_batch_size=n, num_blocks=1)
+    logger.info(
+        f"served waves: {len(layers)} layers, {rows} rows x {B} users, warm-up + captures in {time.perf_counter() - t0:.0f} s; "
+        f"wave traces {sorted(model.wave_traces)}"
+    )
+    srv = _Served(a)
+    vocab = cfg.vocab_size
+
+    def step_prefill(reqs: list[tuple[int, torch.Tensor, int]]) -> dict[int, torch.Tensor]:
+        """One vLLM prefill step: ``(logical, ids of the whole prompt so far, start)`` per request -> last logits."""
+        L = max(int(ids.numel()) for _, ids, _ in reqs)
+        toks = torch.zeros(len(reqs), L, dtype=torch.int32)
+        for i, (_, ids, _) in enumerate(reqs):
+            toks[i, : ids.numel()] = ids
+        out = a.prefill_forward(
+            toks,
+            prompt_lens=[int(ids.numel()) for _, ids, _ in reqs],
+            start_pos=torch.tensor([s for _, _, s in reqs]),
+            empty_slots=[l for l, _, _ in reqs],
+            enable_trace=True,
+        )
+        return {l: out[i, 0].clone() for i, (l, _, _) in enumerate(reqs)}
+
+    def decode_jointly(first: dict[int, torch.Tensor], lengths: dict[int, int]) -> dict[int, list[torch.Tensor]]:
+        """``N_DECODE`` greedy steps of every request at once -> per request the logits per step."""
+        toks = {l: int(first[l].argmax()) for l in first}
+        outs: dict[int, list[torch.Tensor]] = {l: [] for l in first}
+        for k in range(N_DECODE):
+            res = srv.decode({l: (toks[l], lengths[l] + k) for l in first})
+            for l in first:
+                outs[l].append(res[l])
+                toks[l] = int(res[l].argmax())
+        return outs
+
+    def reference(ids: torch.Tensor) -> list[torch.Tensor]:
+        """The prompt alone in logical 0 (SP-eligible: alone on its slot index) through the eager SP chunks."""
+        logits = srv.prefill(0, ids, 0)
+        _, outs = srv.generate(0, logits, int(ids.numel()), N_DECODE)
+        a.release_request(0)
+        return [logits] + outs
+
+    # (a) two fresh prompts in one step on slot index 0 of rows 0 and 1: one traced wave (both within 1024)
+    p0, p1 = _served_ids(300, 1, vocab), _served_ids(700, 2, vocab)
+    first = step_prefill([(0, p0, 0), (1, p1, 0)])
+    s0, s1 = a.slots.physical(0), a.slots.physical(1)
+    assert (s0.user, s1.user) == (0, 0) and s0.row != s1.row, [(s0.row, s0.user), (s1.row, s1.user)]
+    outs = decode_jointly(first, {0: 300, 1: 700})
+    got0, got1 = [first[0]] + outs[0], [first[1]] + outs[1]
+    a.release_request(0)
+    a.release_request(1)
+    ref0, ref1 = reference(p0), reference(p1)
+    _assert_agree("(a) wave member 300 (row 0) vs SP", got0, ref0, pcc_min=PCC_BAR_SP)
+    _assert_agree("(a) wave member 700 (row 1) vs SP", got1, ref1, pcc_min=PCC_BAR_SP)
+    logger.info(
+        f"(a) traced wave of 300 + 700 tokens: first tokens {int(first[0].argmax())} / {int(first[1].argmax())} "
+        f"(SP {int(ref0[0].argmax())} / {int(ref1[0].argmax())}), pcc {pcc(first[0], ref0[0]):.5f} / {pcc(first[1], ref1[0]):.5f}"
+    )
+
+    # (b) a prompt beyond the wave width beside a short one: wave 1 traced at 2048 (both at 0), wave 2 = the long
+    # prompt's [2048, 2348) alone (eager: the sparse rows at the width, row 1 idle)
+    p2, p3 = _served_ids(SERVED_CHUNK + 300, 3, vocab), _served_ids(500, 4, vocab)
+    first = step_prefill([(2, p2, 0), (3, p3, 0)])
+    outs = decode_jointly(first, {2: int(p2.numel()), 3: 500})
+    got2, got3 = [first[2]] + outs[2], [first[3]] + outs[3]
+    a.release_request(2)
+    a.release_request(3)
+    ref2, ref3 = reference(p2), reference(p3)
+    _assert_agree("(b) long member 2348 (two waves) vs SP", got2, ref2, pcc_min=PCC_BAR_SP)
+    _assert_agree("(b) short member 500 vs SP", got3, ref3, pcc_min=PCC_BAR_SP)
+    logger.info(
+        f"(b) 2348 + 500 tokens: first tokens {int(first[2].argmax())} / {int(first[3].argmax())}, pcc {pcc(first[2], ref2[0]):.5f} / {pcc(first[3], ref3[0]):.5f}"
+    )
+
+    # (c) vLLM's chunked prefill: one request over two steps ([0, 1024) then [1024, 1500)), the second chunk a wave
+    # member starting at 1024 (eager), with another fresh prompt in the second step (a wave of two)
+    p4, p5 = _served_ids(1500, 5, vocab), _served_ids(200, 6, vocab)
+    step_prefill([(4, p4[:1024], 0)])
+    first = step_prefill([(4, p4, 1024), (5, p5, 0)])
+    outs = decode_jointly(first, {4: 1500, 5: 200})
+    got4, got5 = [first[4]] + outs[4], [first[5]] + outs[5]
+    a.release_request(4)
+    a.release_request(5)
+    ref4, ref5 = reference(p4), reference(p5)
+    _assert_agree("(c) chunked request 1024 + 476 vs SP", got4, ref4, pcc_min=PCC_BAR_SP)
+    _assert_agree("(c) the fresh prompt 200 beside it vs SP", got5, ref5, pcc_min=PCC_BAR_SP)
+    logger.info(
+        f"(c) chunked 1500 + fresh 200: first tokens {int(first[4].argmax())} / {int(first[5].argmax())}, pcc {pcc(first[4], ref4[0]):.5f} / {pcc(first[5], ref5[0]):.5f}"
+    )
+    logger.info("served waves: PASS (a) traced wave, (b) traced + eager continuation wave, (c) chunked member at 1024")
