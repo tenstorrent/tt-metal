@@ -375,11 +375,11 @@ class WanPipeline(PipelineAPIMixin):
             Whether to run the cond and uncond passes of classifier-free guidance as one transformer forward on
             twice the rows. Faster, but needs memory for twice the activations; the output is not bit-identical
             to two forwards (other matmul shapes, so another accumulation order). On in the WH Galaxy 4x8 preset.
-            Calls that run with DBCache step caching run the two passes separately.
+            With DBCache step caching (untraced), the passes run batched in the steps where both compute the middle
+            blocks, and separately where one of them reuses its cached residual.
         cross_kv_cache (`bool`, *optional*, defaults to `False`):
             Whether to compute the cross-attention K/V of each prompt once per generation instead of in every
-            denoising step. Costs the DRAM of the cached K/V; off while tracing and in calls with DBCache step
-            caching. On in the WH Galaxy 4x8 preset.
+            denoising step. Costs the DRAM of the cached K/V; off while tracing. On in the WH Galaxy 4x8 preset.
         shard_text_embeddings (`bool`, *optional*, defaults to `False`):
             Whether to shard the text encoder's token embedding table over its tensor parallel axis instead of
             replicating it (saves DRAM). On in the WH Galaxy 4x8 preset, which also places the text encoder on
@@ -1083,10 +1083,10 @@ class WanPipeline(PipelineAPIMixin):
         mask = torch.ones(latents.shape, dtype=torch.float32, device=device)
 
         # A trace captured on a cross-attention K/V cache hit has no K/V ops, so the cache stays off under trace.
-        # It stays off with DBCache too: the cache runners stage the cond and uncond prompts in one shared input
-        # tensor, and the K/V cache is keyed by the prompt tensor, so the uncond pass would get the cond K/V.
+        # (Traced, the DBCache runners also stage both prompts in one shared input tensor, while the K/V cache is
+        # kept per prompt tensor.)
         for model in (self.transformer, self.transformer_2):
-            model.set_cross_kv_cache_enabled(self._cross_kv_cache and not traced and cache_runners is None)
+            model.set_cross_kv_cache_enabled(self._cross_kv_cache and not traced)
 
         # 6. Denoising loop
         if effective_boundary_ratio is not None:
@@ -1203,6 +1203,11 @@ class WanPipeline(PipelineAPIMixin):
                 on_event(DenoiseStep(step=i + 1, total=num_inference_steps, sigma=self._solver.sigmas[i]))
 
         self._current_timestep = None
+
+        # The cached cross-attention K/V serve only the denoising loop: free their DRAM for the VAE decode (the next
+        # call enables the cache again).
+        for model in (self.transformer, self.transformer_2):
+            model.set_cross_kv_cache_enabled(False)
 
         sp_axis = ts.model.parallel_config.sequence_parallel.mesh_axis
         permuted_latent_tt = ts.model.ccl_manager.all_gather_persistent_buffer(
