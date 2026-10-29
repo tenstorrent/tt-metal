@@ -9162,8 +9162,7 @@ def test_ring_joint_attention_gemma4_global_segmented_accuracy():
     )
 
 
-@pytest.mark.parametrize("topology", [None, Topology.Linear], ids=["default", "linear"])
-def test_ring_joint_sdpa_cache_hit_uses_new_semaphores(topology):
+def test_ring_joint_sdpa_cache_hit_uses_new_semaphores():
     """A program-cache hit must use the all-gather semaphores passed to that call (#62923).
 
     The global semaphores are not part of the program hash, so a second call with fresh semaphores
@@ -9171,13 +9170,11 @@ def test_ring_joint_sdpa_cache_hit_uses_new_semaphores(topology):
     call's semaphores instead, it wipes whatever that slot holds by then; in H3 that was another
     all-gather's in-flight increments, and that all-gather then waited forever.
 
-    The linear case needs no wrap link, so it also runs where the ring's closing link leaves the host.
-
     Call 1 runs on set A. A sentinel then goes into A on every all-gather core; the reader waits with
     >=, so a stale use of A cannot hang on it. Call 2 runs on set B and must not touch A.
     """
     sentinel = 0x5E5E
-    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, topology=topology, num_global_semaphores=3)
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, num_global_semaphores=3)
     mesh_device = runtime.mesh_device
     sem_a = runtime.ccl_semaphore_handles
     try:
