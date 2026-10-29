@@ -24,7 +24,7 @@ from safetensors import safe_open
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_kv_validation import GOLDEN_KV_ENV, _load_golden_kv
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_to_halfsplit_perm
@@ -45,6 +45,29 @@ CHUNK_GLOBAL = PREFILL_CHUNK_TOKENS
 
 # Per-user cache depth
 MAX_SEQ_LEN = 11 * CHUNK_GLOBAL
+
+
+# The meshes the drafter runs on: the full Galaxy with SP on axis 0, and one 4x4 prefill stage (a Galaxy tray
+# half) with SP=4 on the axis-1 ring and TP=4 on the axis-0 line. The 4x4 row needs the Galaxy narrowed to one
+# tray half (tests/run_4x4_stage_tests.sh); unnarrowed, requires_mesh_topology skips it.
+MESHES = [
+    pytest.param(
+        (8, 4),
+        torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+        2,
+        0,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="torus-xy-8x4",
+    ),
+    pytest.param(
+        (4, 4),
+        torus_x_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+        2,
+        1,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-x-4x4-sp1",
+    ),
+]
 
 
 def _unrotate_blockcyclic(rotated: torch.Tensor, sp: int, chunk_global: int) -> torch.Tensor:
@@ -69,17 +92,19 @@ def _reshuffle_k_to_interleaved_layout(rk: torch.Tensor, cfg) -> torch.Tensor:
     return rk
 
 
-def _read_cache_natural(cache, mesh_device, mesh_shape, sp: int, chunk_global: int, num_layers: int, out_len: int):
+def _read_cache_natural(cache, mesh_device, mesh_shape, sp_axis: int, chunk_global: int, num_layers: int, out_len: int):
     """Read a drafter K/V cache back as ``[num_layers, kv_heads, out_len, head_dim]`` in natural token order.
 
     The cache is SP-sharded on seq and TP-sharded on kv-head, so concat SP along seq (dim 2) and TP along
     kv-head (dim 1). Slot 0 is dim0 rows ``[0, num_layers)`` under the writer's user-major linearization
     (``slot = user_id * num_layers + layer_idx``).
     """
+    dims = [1, 1]
+    dims[sp_axis] = 2
     host = ttnn.to_torch(
-        cache, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_shape)
+        cache, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(dims), mesh_shape=mesh_shape)
     )
-    natural = _unrotate_blockcyclic(host[:num_layers].float(), sp, chunk_global)
+    natural = _unrotate_blockcyclic(host[:num_layers].float(), mesh_shape[sp_axis], chunk_global)
     return natural[:, :, :out_len, :]
 
 
@@ -107,22 +132,13 @@ def _load_golden_taps(taps_dir: Path, target_layer_ids, out_len: int) -> list:
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    [
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
+    "mesh_device, device_params, num_links, sp_axis", MESHES, indirect=["mesh_device", "device_params"]
 )
 def test_dflash_pcc(
     mesh_device,
     device_params,
     num_links,
+    sp_axis,
     ctx_len,
     n_chunks,
     use_pretrained,
@@ -130,13 +146,13 @@ def test_dflash_pcc(
     drafter_state_dict,
     hf_context_kv,
 ):
-    topology = per_axis_topology(device_params["fabric_config"])[1]
+    topology = per_axis_topology(device_params["fabric_config"])  # the drafter takes its TP axis's entry
     logger.info(f"weights={'pretrained' if use_pretrained else 'random'}  ctx_len={ctx_len}  n_chunks={n_chunks}")
     cfg = drafter_cfg
     sd = drafter_state_dict
 
     mesh_shape = tuple(mesh_device.shape)
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     sp, tp = mesh_shape[sp_axis], mesh_shape[tp_axis]
     assert cfg.num_key_value_heads % tp == 0, f"num_kv_heads {cfg.num_key_value_heads} not divisible by tp {tp}"
     H = cfg.hidden_size
@@ -190,8 +206,8 @@ def test_dflash_pcc(
     ttnn.synchronize_device(mesh_device)
 
     # [num_layers, kv_heads, ctx_len, head_dim] in natural token order
-    dk = _read_cache_natural(k_cache, mesh_device, mesh_shape, sp, chunk_global, cfg.num_hidden_layers, ctx_len)
-    dv = _read_cache_natural(v_cache, mesh_device, mesh_shape, sp, chunk_global, cfg.num_hidden_layers, ctx_len)
+    dk = _read_cache_natural(k_cache, mesh_device, mesh_shape, sp_axis, chunk_global, cfg.num_hidden_layers, ctx_len)
+    dv = _read_cache_natural(v_cache, mesh_device, mesh_shape, sp_axis, chunk_global, cfg.num_hidden_layers, ctx_len)
 
     for i in range(cfg.num_hidden_layers):
         rk, rv = real[i]
@@ -221,22 +237,13 @@ def test_dflash_pcc(
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    [
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
+    "mesh_device, device_params, num_links, sp_axis", MESHES, indirect=["mesh_device", "device_params"]
 )
 def test_dflash_golden_pcc(
     mesh_device,
     device_params,
     num_links,
+    sp_axis,
     ctx_len,
     n_chunks,
     use_pretrained,
@@ -246,14 +253,14 @@ def test_dflash_golden_pcc(
     """Teacher-forced against a GPU trace: the trace's own taps go in, and the device context K/V must match the
     K/V the GPU drafter built from those same taps. The verifier is not involved, so this measures the drafter
     alone and holds it to the same threshold as against HF."""
-    topology = per_axis_topology(device_params["fabric_config"])[1]
+    topology = per_axis_topology(device_params["fabric_config"])  # the drafter takes its TP axis's entry
     cfg = drafter_cfg
     sd = drafter_state_dict
     golden_dir, taps_dir = Path(os.environ[GOLDEN_KV_ENV]), Path(os.environ[GOLDEN_TAPS_ENV])
     logger.info(f"golden K/V={golden_dir}  taps={taps_dir}  ctx_len={ctx_len}  n_chunks={n_chunks}")
 
     mesh_shape = tuple(mesh_device.shape)
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     sp, tp = mesh_shape[sp_axis], mesh_shape[tp_axis]
     assert cfg.num_key_value_heads % tp == 0, f"num_kv_heads {cfg.num_key_value_heads} not divisible by tp {tp}"
     H = cfg.hidden_size
@@ -303,8 +310,8 @@ def test_dflash_golden_pcc(
         drafter.forward(k_cache, v_cache, lo)
     ttnn.synchronize_device(mesh_device)
 
-    dk = _read_cache_natural(k_cache, mesh_device, mesh_shape, sp, chunk_global, cfg.num_hidden_layers, ctx_len)
-    dv = _read_cache_natural(v_cache, mesh_device, mesh_shape, sp, chunk_global, cfg.num_hidden_layers, ctx_len)
+    dk = _read_cache_natural(k_cache, mesh_device, mesh_shape, sp_axis, chunk_global, cfg.num_hidden_layers, ctx_len)
+    dv = _read_cache_natural(v_cache, mesh_device, mesh_shape, sp_axis, chunk_global, cfg.num_hidden_layers, ctx_len)
 
     for i in range(cfg.num_hidden_layers):
         ok_k, pcc_k = comp_pcc(gk[i], dk[i], PCC_THRESHOLD)
@@ -329,34 +336,25 @@ _MULTITURN_ITERS = [
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.parametrize("iters_isl", _MULTITURN_ITERS)
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    [
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
+    "mesh_device, device_params, num_links, sp_axis", MESHES, indirect=["mesh_device", "device_params"]
 )
 def test_dflash_multiturn_pcc(
     mesh_device,
     device_params,
     num_links,
+    sp_axis,
     iters_isl,
     use_pretrained,
     drafter_cfg,
     drafter_state_dict,
     hf_context_kv,
 ):
-    topology = per_axis_topology(device_params["fabric_config"])[1]
+    topology = per_axis_topology(device_params["fabric_config"])  # the drafter takes its TP axis's entry
     cfg = drafter_cfg
     sd = drafter_state_dict
 
     mesh_shape = tuple(mesh_device.shape)
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     sp, tp = mesh_shape[sp_axis], mesh_shape[tp_axis]
     assert cfg.num_key_value_heads % tp == 0, f"num_kv_heads {cfg.num_key_value_heads} not divisible by tp {tp}"
     H = cfg.hidden_size
@@ -446,8 +444,8 @@ def test_dflash_multiturn_pcc(
     # Every position < total_len is covered, and the LAST write to reach it is a valid (non-pad) one: the
     # turns' valid ranges [kv_actual_i, valid_end_i) tile [0, total_len) consecutively, and a turn's pad tail
     # only ever lands on territory a later turn reclaims. So the whole [0, total_len) window must match.
-    dk = _read_cache_natural(k_cache, mesh_device, mesh_shape, sp, chunk_global, cfg.num_hidden_layers, total_len)
-    dv = _read_cache_natural(v_cache, mesh_device, mesh_shape, sp, chunk_global, cfg.num_hidden_layers, total_len)
+    dk = _read_cache_natural(k_cache, mesh_device, mesh_shape, sp_axis, chunk_global, cfg.num_hidden_layers, total_len)
+    dv = _read_cache_natural(v_cache, mesh_device, mesh_shape, sp_axis, chunk_global, cfg.num_hidden_layers, total_len)
 
     for i in range(cfg.num_hidden_layers):
         rk, rv = real[i]
