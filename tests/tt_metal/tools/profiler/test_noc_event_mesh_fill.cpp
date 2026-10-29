@@ -76,6 +76,13 @@ int main() {
         const uint32_t pre_reads = env_u32("MESH_FILL_PRE_READS", 0);
         const uint32_t zones_brisc = env_u32("MESH_FILL_ZONES_BRISC", 1);
         const uint32_t zones_ncrisc = env_u32("MESH_FILL_ZONES_NCRISC", 1);
+        // Calibration kernel (MESH_FILL_KERNEL=calib): BRISC fills its ring with CALIB_EVENTS 2-word records, then
+        // CALIB_READS NoC reads; see kernels/noc_event_ring_calib.cpp.
+        const char* kernel_kind = std::getenv("MESH_FILL_KERNEL");
+        const bool calib = kernel_kind && std::string(kernel_kind) == "calib";
+        const uint32_t calib_events = env_u32("MESH_FILL_CALIB_EVENTS", 250);
+        const uint32_t calib_in_zone = env_u32("MESH_FILL_CALIB_IN_ZONE", 0);
+        const uint32_t calib_reads = env_u32("MESH_FILL_CALIB_READS", 1);
         // blaze runs the failing layer with worker_l1_size 1373312 (MINIMAX_M3_WORKER_L1_SIZE); the kernel config
         // buffer is what is left of L1 above it, 70656 B at the default (job 162391: a 125-op kernel did not fit).
         const size_t worker_l1 = env_u32("MESH_FILL_WORKER_L1", 1373312);
@@ -97,11 +104,11 @@ int main() {
             "noc_event_mesh_fill: mesh {}x{} ({} devices) cores {}x{} iters={} ops={} nest={} reads={} writes={} sems={} "
             "mcast_every={} mcast_linked={} delay_nops={} page_size={} num_pages={} programs={} blocking={} skip_read={} "
             "trisc={} bloat_bss={} bloat_data={} bloat_code={} worker_l1={} iter_zone={} gap_reads={} pre_reads={} "
-            "zones_brisc={} zones_ncrisc={}\n",
+            "zones_brisc={} zones_ncrisc={} kernel={} calib_events={} calib_in_zone={} calib_reads={}\n",
             mesh_device->num_rows(), mesh_device->num_cols(), mesh_device->num_devices(), grid_w, grid_h, iters, ops,
             nest, reads, writes, sems, mcast_every, mcast_linked, delay_nops, page_size, num_pages, programs, blocking,
             skip_read, with_trisc, bloat_bss, bloat_data, bloat_code, worker_l1, iter_zone, gap_reads, pre_reads,
-            zones_brisc, zones_ncrisc);
+            zones_brisc, zones_ncrisc, calib ? "calib" : "mesh_fill", calib_events, calib_in_zone, calib_reads);
 
         // One DRAM page buffer per device (replicated), read by every core.
         const distributed::DeviceLocalBufferConfig local_config{.page_size = page_size, .buffer_type = BufferType::DRAM};
@@ -134,11 +141,15 @@ int main() {
             {"GAP_READS", std::to_string(gap_reads)},
             {"PRE_READS", std::to_string(pre_reads)},
             {"ZONES_BRISC", std::to_string(zones_brisc)},
-            {"ZONES_NCRISC", std::to_string(zones_ncrisc)}};
+            {"ZONES_NCRISC", std::to_string(zones_ncrisc)},
+            {"CALIB_EVENTS", std::to_string(calib_events)},
+            {"CALIB_IN_ZONE", std::to_string(calib_in_zone)},
+            {"CALIB_READS", std::to_string(calib_reads)}};
         std::vector<uint32_t> compile_args;
         TensorAccessorArgs(*dram_buffer->get_reference_buffer()).append_to(compile_args);
 
-        const std::string dm_kernel = "tests/tt_metal/tools/profiler/kernels/noc_event_mesh_fill_dm.cpp";
+        const std::string dm_kernel = calib ? "tests/tt_metal/tools/profiler/kernels/noc_event_ring_calib.cpp"
+                                            : "tests/tt_metal/tools/profiler/kernels/noc_event_mesh_fill_dm.cpp";
         KernelHandle brisc = CreateKernel(
             program, dm_kernel, cores,
             DataMovementConfig{
