@@ -885,6 +885,8 @@ class ResidentModel:
 
         self.ts_t = ts_buf(grid, S, layers * 32) if timeline else None
         ts_addr = self.ts_t.buffer_address() if timeline else 0
+        # the hub's: per round 8 words (mlp_hub.cpp kHubTs)
+        self.hub_ts_t = ts_buf(hub_grid, 1, (2 * layers + int(self.fc)) * 8) if timeline else None
 
         # ---- per sub-batch decode state (sub-batch 0's is above)
         subs = [
@@ -1336,6 +1338,7 @@ class ResidentModel:
                     if feed_kind:
                         hub_args.append(self.feed_peer.buffer_address())
                 hub_args += [t.buffer_address() for _, t in self.taps]
+                hub_args.append(self.hub_ts_t.buffer_address() if self.hub_ts_t is not None else 0)
                 hub_rt = ttnn.RuntimeArgs()
                 hub_rt[hub.x][hub.y] = hub_args
 
@@ -1490,7 +1493,7 @@ class ResidentModel:
                 if self.feed_peer is not None:
                     io.append(self.feed_peer)
             if timeline:
-                io.append(self.ts_t)
+                io += [self.ts_t, self.hub_ts_t]
             io += [t for _, t in self.taps]
             return mesh_pd, io
 
