@@ -249,6 +249,7 @@ struct DFBAdvancedOptions {
     //   - Aliased DFBs must have the same total size (num_entries * entry_size).
     //   - All members must target the same node set
     //     (derived from their bound kernels' WorkUnitSpecs).
+    //   - If any member overrides allocation, all members must use the same arena parameter and byte offset.
     Group<DFBSpecName> alias_with;
 
     ////////////////////////////////////////////////////////////////////////////////

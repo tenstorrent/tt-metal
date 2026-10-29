@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // ProgramSpec structural invariants on DFBAdvancedOptions::alias_with (program_spec.hpp): alias groups
-// are symmetric and agree on total size, node set, borrowed_from, and arena parameter.
+// are symmetric and agree on total size, node set, borrowed_from, arena parameter, and byte offset.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -54,8 +54,8 @@ ProgramSpec MakeArenaAliasSpecForTest() {
     second.advanced_options.alias_with = {DFBSpecName{"first"}};
     ProgramSpec spec = MakeAliasProgramSpec(NodeCoord{0, 0}, first, second);
     spec.advanced_options.sram_arena_parameters = {
-        {.unique_id = SRAMArenaParamName{"first_arena"}, .properties = LockstepSRAMArenaProperties{4096}},
-        {.unique_id = SRAMArenaParamName{"second_arena"}, .properties = LockstepSRAMArenaProperties{4096}}};
+        {.unique_id = SRAMArenaParamName{"first_arena"}, .properties = LockstepSRAMArenaProperties{8192}},
+        {.unique_id = SRAMArenaParamName{"second_arena"}, .properties = LockstepSRAMArenaProperties{8192}}};
     return spec;
 }
 }  // anonymous namespace
@@ -201,6 +201,30 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaAliasedDFBsUseSameArena) {
     spec.dataflow_buffers[1].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}};
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, SRAMArenaAliasedDFBsUseSameNonzeroOffset) {
+    // Aliased DFBs can allocate at the same nonzero offset in an arena.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    ProgramSpec spec = MakeArenaAliasSpecForTest();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}, .offset = 4096};
+    spec.dataflow_buffers[1].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}, .offset = 4096};
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, SRAMArenaAliasedDFBsRejectDifferentOffsets) {
+    // Aliased DFBs must use the same byte offset in an arena.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    ProgramSpec spec = MakeArenaAliasSpecForTest();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}, .offset = 0};
+    spec.dataflow_buffers[1].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}, .offset = 4096};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different allocation_override offsets")));
 }
 
 TEST_F(ProgramSpecTestQuasar, SRAMArenaAliasedDFBsRejectDifferentArenas) {
