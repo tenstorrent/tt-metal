@@ -4546,9 +4546,9 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             if isinstance(y, torch.Tensor)
             else torch.tensor(float(y))
         )
-        # The kernel's log operand is flushed to zero when it is a positive denormal
-        # (Blackhole: by the SFPSTORE of the Dest round trip, or by the biased-exponent == 0
-        # test of _calculate_log_body_on_reg_), so log(denormal) = -inf. A negative denormal
+        # The kernel's log operand is flushed to zero when it is a positive denormal (by the
+        # Dest round trip, or by the biased-exponent == 0 test of _calculate_log_body_on_reg_
+        # that replaces it on a 32-bit Dest), so log(denormal) = -inf. A negative denormal
         # is not flushed here: the kernel's NaN guard (`in1 < 0.0f`) reads the sign bit of the
         # unflushed register, so that lane is NaN, which is also log of a negative.
         denormal = yf.abs() < torch.finfo(torch.float32).tiny

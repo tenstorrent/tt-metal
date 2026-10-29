@@ -115,9 +115,9 @@ sfpi_inline sfpi::vFloat _calculate_log_series_(const sfpi::vFloat in, const sfp
  * @brief One row of ln(x) in place in Dest.
  *
  * The zero test is bitwise, so -0.0 is not mapped to -inf: XLOGY turns -0.0 into NaN before
- * calling, _calculate_log_ returns a finite value for it. A caller that holds its operand in
- * a register uses @ref _calculate_log_body_on_reg_ instead, whose biased-exponent test maps
- * +-0 and the denormals to -inf.
+ * calling, _calculate_log_ returns a finite value for it. On a 32-bit Dest, a caller that
+ * holds a sign-clear operand in a register can use @ref _calculate_log_body_on_reg_ instead;
+ * see its @note for where the two differ.
  *
  * @param c: LogPoly::C, bound outside the caller's row loop.
  * @param d: LogPoly::D, bound outside the caller's row loop.
@@ -147,17 +147,24 @@ sfpi_inline void _calculate_log_body_(const sfpi::vFloat c, const sfpi::vFloat d
  * and would otherwise store it to Dest, run the in-place body and reload the result (two
  * SFPSTOREs and two SFPLOADs per row).
  *
- * The -inf lane is every input whose biased exponent is 0: +-0 *and* the denormals. That is
- * what the Dest round trip it replaces produces: SFPSTORE flushes a denormal to zero (measured
- * on Wormhole, fp32 Dest: xlogy(1, 0x00000001) and xlogy(1, 0x007FFFFF) read -inf), so the
- * in-place body only ever sees 0 there. An `in == 0.0F` test would instead return a finite
- * value for a denormal (about -88.0..-87.3 for a positive one: setexp gives 1.m and exexp the
- * raw 0 - 127, since SFPEXEXP does not normalize).
+ * The -inf lane is every input whose biased exponent is 0: +-0 *and* the denormals. For a
+ * sign-clear input that is what the Dest round trip it replaces produces: on a 32-bit Dest the
+ * round trip flushes a denormal to a zero of the same sign (measured on Wormhole: xlogy(1, y)
+ * reads -inf for y = 0x00000001 and 0x007FFFFF), so the in-place body sees +0 there. An
+ * `in == 0.0F` test would instead return a finite value for a denormal (about -88.0..-87.3
+ * for a positive one: setexp gives 1.m and exexp the raw 0 - 127, since SFPEXEXP does not
+ * normalize).
  *
  * @param in: Input value.
  * @param c: LogPoly::C, bound outside the caller's row loop.
  * @param d: LogPoly::D, bound outside the caller's row loop.
  * @note Call @ref _init_log_ first.
+ * @note Equivalent to the store / _calculate_log_body_ / reload round trip only on a 32-bit
+ *       Dest and for sign-clear inputs. On a 16-bit Dest the store also truncates the log
+ *       before the reload. For -0.0 and a negative denormal (flushed to -0.0) the in-place
+ *       body's bitwise zero test misses, so the round trip returns a finite value where this
+ *       body returns -inf. XLOGY stays bit-identical only because its `in1 < 0.0f` guard
+ *       overwrites those lanes with NaN.
  */
 sfpi_inline sfpi::vFloat _calculate_log_body_on_reg_(
     const sfpi::vFloat in, const sfpi::vFloat c, const sfpi::vFloat d) {

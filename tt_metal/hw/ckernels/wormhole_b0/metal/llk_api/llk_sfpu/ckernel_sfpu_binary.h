@@ -138,14 +138,15 @@ inline void calculate_sfpu_binary(
             if constexpr (is_fp32_dest_acc_en) {
                 // ln(in1) on the register. The Dest round trip below (a store of in1, the
                 // in-place log body's load and store, and a reload) is exact on a 32-bit Dest
-                // except for the denormal flush of the store, which the register body
-                // reproduces, so this is bit-identical and four Dest accesses per row cheaper.
+                // except for its denormal flush, which the register body reproduces for
+                // sign-clear in1; the guard turns the sign-set lanes, where the two differ,
+                // into NaN. So this is bit-identical and four Dest accesses per row cheaper.
                 result = _calculate_log_body_on_reg_(in1, log_c, log_d) * in0;
                 v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
                 v_endif;
             } else {
-                // A 16-bit Dest rounds the log intermediate through the store before the
-                // multiply; kept so the result stays bit-identical on that Dest.
+                // The store to a 16-bit Dest truncates the log intermediate to the Dest format
+                // before the multiply; kept so the result stays bit-identical on that Dest.
                 v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
                 v_else {
                     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
