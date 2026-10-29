@@ -1720,12 +1720,19 @@ class GLM53FlashForCausalLM:
                 t0 = time.perf_counter()
                 if isinstance(step, SPStep):
                     i, state, start, end, ids = by_logical[step.logical]
-                    first, last_logits = self._prefill_one(ids, state.user, step.plan, want_logits=not wants_tokens)
+                    mm = media.get(i)
+                    if mm is None:
+                        first, last_logits = self._prefill_one(ids, state.user, step.plan, want_logits=not wants_tokens)
+                    else:  # the multimodal eager prefill: the vision features scattered into the chunk's streams
+                        first, last_logits = self._prefill_one_mm(
+                            mm[1], state.user, step.plan, mm[0], want_logits=not wants_tokens
+                        )
                     record(i, state, end, first, last_logits)
                     logger.info(
                         f"GLM53 vLLM: SP prefill slot {step.logical} -> user {state.user} (row {state.row}) [{start}, "
                         f"{end}) via {step.plan.kind} ({len(step.plan.chunks)} chunk(s)) in "
                         f"{(time.perf_counter() - t0) * 1000:.0f} ms, chunk-end token {first}"
+                        + (f", {len(mm[0])} multimodal item(s): {[it.kind for it in mm[0]]}" if mm is not None else "")
                     )
                     self._apc_alloc_check(f"the SP prefill [{start}, {end}) of slot {step.logical}")
                     continue

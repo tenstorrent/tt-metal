@@ -736,7 +736,9 @@ class WavePlanner:
             ):
                 sp = False  # a short fresh prompt alone on its slot index: the traced wave beats an eager SP chunk
             if sp:
-                steps.append(SPStep(logical, self.pp.plan(start, end, enable_trace=enable_trace)))
+                # a multimodal prompt's SP chunks stay eager: the traced prefill embeds the ids inside the capture,
+                # the vision features are scattered into the eager chunk's streams
+                steps.append(SPStep(logical, self.pp.plan(start, end, enable_trace=enable_trace and not s.sp_required)))
             else:
                 wave_items.append((logical, s, start, end))
         if not wave_items:
