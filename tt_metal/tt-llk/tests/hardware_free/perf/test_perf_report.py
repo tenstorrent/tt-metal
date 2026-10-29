@@ -1172,3 +1172,55 @@ def test_worker_csv_rejects_chunks_with_different_columns(tmp_path, monkeypatch)
 
     assert pd.read_csv(tmp_path / "perf_mod.gw0.csv")["x"].tolist() == [1]
 
+
+def _zone_words(entries):
+    """Profiler buffer words for (type, marker id, timestamp) entries, as profiler.h writes them."""
+    from helpers.profiler import EntryType
+
+    words = []
+    for kind, marker_id, timestamp in entries:
+        meta = (EntryType[kind].value << Profiler.ENTRY_TYPE_SHAMT) | (
+            marker_id << Profiler.ENTRY_ID_SHAMT
+        )
+        words += [meta | (timestamp >> 32), timestamp & 0xFFFFFFFF]
+    return words + [0]
+
+
+_ZONE_META = {
+    1: SimpleNamespace(marker="OUTER", file="t.cpp", line=1, id=1),
+    2: SimpleNamespace(marker="INNER", file="t.cpp", line=2, id=2),
+}
+
+
+def test_nested_zones_keep_their_row_order():
+    # both records of a zone are written at scope exit, so the inner zone's pair comes first, as its rows always did
+    words = _zone_words(
+        [
+            ("ZONE_START", 2, 20),
+            ("ZONE_END", 2, 30),
+            ("ZONE_START", 1, 10),
+            ("ZONE_END", 1, 40),
+        ]
+    )
+    rows = Profiler._parse_thread("unpack", words, _ZONE_META)
+
+    assert [(r[MARKER], r["type"], r["timestamp"]) for r in rows] == [
+        ("INNER", "ZONE_START", 20),
+        ("INNER", "ZONE_END", 30),
+        ("OUTER", "ZONE_START", 10),
+        ("OUTER", "ZONE_END", 40),
+    ]
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [("ZONE_START", 1, 10), ("ZONE_START", 2, 20), ("ZONE_END", 2, 30)],
+        [("ZONE_END", 1, 10)],
+        [("ZONE_START", 1, 10), ("ZONE_END", 2, 20)],
+    ],
+    ids=["start_after_start", "end_without_start", "end_of_another_zone"],
+)
+def test_unpaired_zone_records_are_rejected(entries):
+    with pytest.raises(ValueError, match="buffer corruption"):
+        Profiler._parse_thread("unpack", _zone_words(entries), _ZONE_META)
