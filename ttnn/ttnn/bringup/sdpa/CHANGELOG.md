@@ -473,3 +473,21 @@ Build fixes after fork_op.py (no behaviour change):
 - Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit)
 - Files: device/sparse_sdpa_{device_operation,program_factory}.cpp, device/kernels/sparse_sdpa_common.hpp,
   device/kernels/dataflow/sparse_sdpa_{gather.hpp,reader.cpp,writer.cpp}, tests/unit/test_sparse_sdpa_row_bfp4.py
+
+### sparse_sdpa ROW_BFP4: one DRAM read a 4-bit row (default; output bit-identical)
+- What: the bfloat4_b chunks' gather reads each whole 320 B record from DRAM into a record scratch (cb_k4_rec, 41 KB),
+  then two local NoC copies put its exponents and values into the staging block (gather_bfp4_rows_staged). Before:
+  two DRAM reads a row (32 B exponents + 256 B values). The staging block, the unpacker and the record format are
+  unchanged. This changes the default ROW_BFP4 program (one more CB, one more compile-time arg); the output is the
+  same bit for bit.
+- Why: the 32 B DRAM read cost about as much as the values (diagnosis: the exponent read from local L1 instead of DRAM,
+  same transaction count, compressed layers 1242 -> 970 us; a deeper trid ring, one address lookup a row and a
+  batched bfp -> tile conversion changed nothing).
+- Time, one p150b, compressed layers (640 keys), bf16 window: 512 q 1242 -> 978 us (-21 %), 160 q 352 -> 293 us
+  (-17 %); with the bfloat8_b window blocks 1188 -> 938 / 339 -> 284 us.
+- Exactness: tests/unit 62 pass (10 skipped: ring tests needing 8 devices), the model case passes; the DeepSeek-V4.1
+  compressed attention step tests on the 2x2 give the same numbers as before the change (3 of 5 fail the same way
+  before and after: the second-input checks chunk0 / layer2 / mixed at rel 0.037-0.043 > 0.03, pre-existing).
+- Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit)
+- Files: device/sparse_sdpa_program_factory.cpp, device/kernels/sparse_sdpa_common.hpp,
+  device/kernels/dataflow/sparse_sdpa_{gather.hpp,reader.cpp,writer.cpp}

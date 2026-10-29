@@ -139,6 +139,54 @@ FORCE_INLINE void gather_bfp4_rows(
     experimental::set_read_trid(noc, 0);
 }
 
+// gather_bfp4_rows with one DRAM read a row: each whole record (exponents twice, then the values) lands in the
+// record scratch rec_l1 (64 B aligned, ROW_BYTES apart), then two local NoC copies put its exponents (the copy in the
+// staging slot's 64 B phase) and its values in place. A 32 B DRAM read costs nearly as much as the row's values.
+template <uint32_t K_DIM, uint32_t K_CHUNK, uint32_t RingDepth, typename Accessor>
+FORCE_INLINE void gather_bfp4_rows_staged(
+    Noc& noc,
+    const Accessor& kv,
+    uint32_t block_l1,
+    uint32_t rec_l1,
+    volatile tt_l1_ptr uint32_t* idx_ptr,
+    uint32_t base,
+    uint32_t lo,
+    uint32_t hi,
+    uint32_t page_offset) {
+    constexpr uint32_t eb = row_bfp4_exp_bytes(K_DIM);
+    constexpr uint32_t db = K_DIM / 2;
+    constexpr uint32_t rb = row_bfp4_bytes(K_DIM);
+    static_assert(rb % ROW_BFP4_ALIGN == 0, "records stay 64 B aligned in the scratch");
+    constexpr uint32_t D = RingDepth;
+    const UnicastEndpoint local_l1;
+    const uint32_t data_l1 = block_l1 + K_CHUNK * eb;
+    const uint8_t nid = noc.get_noc_id();
+    auto split = [&](uint32_t p) {
+        const uint32_t rec = rec_l1 + p * rb;
+        noc_async_read(get_noc_addr(rec + (p & 1) * eb, nid), block_l1 + p * eb, eb, nid);
+        noc_async_read(get_noc_addr(rec + 2 * eb, nid), data_l1 + p * db, db, nid);
+    };
+    const uint32_t cnt = hi - lo;
+    for (uint32_t i = 0; i < cnt; ++i) {
+        const uint32_t p = lo + i;
+        const uint32_t trid = (i % D) + 1;
+        if (i >= D) {
+            experimental::async_read_barrier_with_trid(noc, trid);
+            split(p - D);
+        }
+        experimental::set_read_trid(noc, trid);
+        noc.async_read(kv, local_l1, rb, {.page_id = page_offset + idx_ptr[base + p]}, {.addr = rec_l1 + p * rb});
+    }
+    const uint32_t to_drain = (cnt < D) ? cnt : D;
+    for (uint32_t d = 0; d < to_drain; ++d) {
+        const uint32_t i = cnt - to_drain + d;
+        experimental::async_read_barrier_with_trid(noc, (i % D) + 1);
+        split(lo + i);
+    }
+    experimental::set_read_trid(noc, 0);
+    noc.async_read_barrier();
+}
+
 // The bfloat8_b window as blocks (WINDOW_BLOCK_ROWS consecutive rows a page, window_block_bytes): staging rows
 // [lo, hi) of the window chunk = rows r0 + lo.. (the window's ids are consecutive), two reads a block. A row's
 // exponents come from the copy whose 32 B phase in a 64 B line matches their staging slot.
