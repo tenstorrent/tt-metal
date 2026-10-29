@@ -750,8 +750,7 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
     }
 
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
-    // This thread now waits on the devices and on the reader thread; dispatch workers polling through their spin
-    // window would only take CPU time from that path.
+    // This thread now waits on the devices and the reader thread; polling dispatch workers would only slow that.
     dispatch_thread_pool_->close_spin_window();
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
