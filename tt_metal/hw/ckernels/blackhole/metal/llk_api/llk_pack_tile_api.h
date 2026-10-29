@@ -269,6 +269,13 @@ inline void llk_pack_block_dense_init(const std::uint32_t output) {
     }
 }
 
+// Next to HiFi math the closed block-float pack makes the op read slower than per-tile packs, except for 4 and 8 tiles at HiFi4; HiFi2 never gained.
+template <MathFidelity math_fidelity>
+constexpr bool llk_pack_block_closed_pays(const std::uint32_t dst_format, const std::uint32_t ntiles) {
+    return math_fidelity == MathFidelity::LoFi || !IS_BFP_FORMAT(dst_format) ||
+           (math_fidelity == MathFidelity::HiFi4 && (ntiles == 4 || ntiles == 8));
+}
+
 #ifndef LLK_PACK_BLOCK_MIN_TILES
 #define LLK_PACK_BLOCK_MIN_TILES 4
 #endif
@@ -322,6 +329,7 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
             start_tile_index, pack_tile_addr, ntiles, get_output_face_r_dim(output_id), get_output_num_faces(output_id));
     } else if (
         block_form && llk_pack_block_is_closable(output_id) &&
+        llk_pack_block_closed_pays<MATH_FIDELITY>(pack_dst_format[output_id], ntiles) &&
         !(guard_dest_straddle && IS_BFP_FORMAT(pack_dst_format[output_id]) && ntiles == 2 && (start_tile_index & 3) == 3)) {
         const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
         std::uint32_t pack_tile_addr =
