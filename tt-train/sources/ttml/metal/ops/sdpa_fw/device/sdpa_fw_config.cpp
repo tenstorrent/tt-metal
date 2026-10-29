@@ -465,7 +465,27 @@ SDPAForwardSchedule schedule_pieces(
     if (!fits_runtime_args(schedule.per_core)) {
         return {};
     }
+    schedule.predicted_us = *std::max_element(loads.begin(), loads.end());
     return schedule;
+}
+
+// The busiest core's units summed: the makespan of a schedule without mergers.
+double makespan_us(
+    const SDPAForwardShape& shape,
+    const SDPAForwardChunks& chunks,
+    const std::vector<CoreUnits>& per_core,
+    uint32_t num_cores) {
+    const double step = step_us(shape, chunks, num_cores);
+    const double fixed = item_fixed_us(shape, chunks, num_cores);
+    double makespan = 0.0;
+    for (const CoreUnits& units : per_core) {
+        double load = 0.0;
+        for (const WorkUnit& unit : units) {
+            load += unit_us(shape, chunks, unit, step, fixed, num_cores);
+        }
+        makespan = std::max(makespan, load);
+    }
+    return makespan;
 }
 
 }  // namespace
@@ -474,28 +494,45 @@ SDPAForwardSchedule make_schedule(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t max_pieces) {
     const uint32_t total_items = num_work_items(shape, chunks);
     TT_FATAL(num_cores > 0, "make_schedule: num_cores must be > 0");
+    SDPAForwardSchedule schedule;
     if (shape.mask_type == AttentionMaskType::Causal) {
-        for (const uint32_t pieces : {max_pieces, 1U}) {
-            if (pieces == 1U && num_cores > total_items) {
-                break;  // uncut items can not keep more cores busy than there are items
-            }
-            SDPAForwardSchedule schedule = schedule_pieces(shape, chunks, num_cores, pieces);
-            if (!schedule.per_core.empty()) {
-                return schedule;
+        // The cut schedule is kept only when the model rates it faster than the items uncut: the cut test
+        // alone (an item heavier than the fair share) says nothing about where the mergers land. Both are
+        // modelled on the same core count, which is how the model's DRAM share was calibrated; uncut items
+        // can not keep more cores busy than there are items, and the idle cores are dropped below.
+        const uint32_t uncut_cores = max_pieces > 1U ? num_cores : std::min(num_cores, total_items);
+        schedule = schedule_pieces(shape, chunks, uncut_cores, 1U);
+        if (max_pieces > 1U) {
+            SDPAForwardSchedule cut = schedule_pieces(shape, chunks, num_cores, max_pieces);
+            if (!cut.per_core.empty() && (schedule.per_core.empty() || cut.predicted_us < schedule.predicted_us)) {
+                schedule = std::move(cut);
             }
         }
+    }
+    if (schedule.per_core.empty() && shape.mask_type == AttentionMaskType::Causal) {
         // Longest-first scatters a stack's items over the cores, so its lists outgrow the runtime args at
         // about 112 items per core. Heavy/light pairs balance nearly as well and fold into a few runs.
         const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
         const uint32_t num_stacks = shape.batch * shape.q_heads / chunks.heads_per_item;
         if (q_num_chunks % 2U == 0U && num_stacks * (q_num_chunks / 2U) >= num_cores) {
-            SDPAForwardSchedule paired{.per_core = split_items_paired(num_stacks, q_num_chunks, num_cores)};
-            if (fits_runtime_args(paired.per_core)) {
-                return paired;
+            schedule.per_core = split_items_paired(num_stacks, q_num_chunks, num_cores);
+            if (!fits_runtime_args(schedule.per_core)) {
+                schedule.per_core.clear();
             }
         }
     }
-    return SDPAForwardSchedule{.per_core = split_items_contiguous(total_items, std::min(num_cores, total_items))};
+    if (schedule.per_core.empty()) {
+        schedule.per_core = split_items_contiguous(total_items, std::min(num_cores, total_items));
+    }
+    // Longest first fills the cores from the first, so the cores without work are the last ones.
+    while (!schedule.per_core.empty() && schedule.per_core.back().empty()) {
+        schedule.per_core.pop_back();
+    }
+    if (schedule.num_slots == 0U) {
+        schedule.predicted_us =
+            makespan_us(shape, chunks, schedule.per_core, static_cast<uint32_t>(schedule.per_core.size()));
+    }
+    return schedule;
 }
 
 SDPAForwardSchedule schedule_for(

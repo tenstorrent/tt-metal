@@ -2293,6 +2293,20 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
     EXPECT_GT(count_role(cut, UnitRole::Merger), 0U);
     check_schedule(two_heads, sq4sk8, cut, kDefaultMaxPieces);
 
+    // Items at one to two per core: cutting would put the mergers on cores the whole items already fill, so
+    // the model rates the uncut schedule faster and make_schedule keeps it (8 heads / 2 kv, S=2048, D=128:
+    // 128 items on 80 cores); on the full grid the cut wins.
+    const SDPAForwardShape tp4 = causal_shape(1U, 8U, 2U, 64U, 4U);
+    const SDPAForwardChunks sq4sk4{.Sq_chunk_t = 4U, .Sk_chunk_t = 4U, .heads_per_item = 1U};
+    const SDPAForwardSchedule crowded = make_schedule(tp4, sq4sk4, 80U, kDefaultMaxPieces);
+    EXPECT_EQ(crowded.num_slots, 0U) << "cutting at 1.6 items per core loses; the schedule must not cut";
+    EXPECT_GT(crowded.predicted_us, 0.0);
+    check_schedule(tp4, sq4sk4, crowded, kDefaultMaxPieces);
+    const SDPAForwardSchedule roomy = make_schedule(tp4, sq4sk4, kCores, kDefaultMaxPieces);
+    EXPECT_GT(roomy.num_slots, 0U);
+    EXPECT_LT(roomy.predicted_us, make_schedule(tp4, sq4sk4, kCores, 1U).predicted_us);
+    check_schedule(tp4, sq4sk4, roomy, kDefaultMaxPieces);
+
     // max_pieces = 1 never cuts.
     const SDPAForwardSchedule one_piece = make_schedule(two_heads, sq4sk8, kCores, 1U);
     EXPECT_EQ(one_piece.num_slots, 0U);

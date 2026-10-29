@@ -116,14 +116,17 @@ uint32_t partial_tiles_per_row(const SDPAForwardShape& shape);  // a sender's ro
 
 struct SDPAForwardSchedule {
     std::vector<CoreUnits> per_core;
-    uint32_t num_slots = 0;  // scratch slots (one per sender)
+    uint32_t num_slots = 0;     // scratch slots (one per sender)
+    double predicted_us = 0.0;  // the cost model's makespan: the busiest core's units, merges after their partials
 };
 
 // Work for num_cores cores. Causal: items heavier than a core's fair share are cut into up to
 // max_pieces step ranges (senders + one merger), then all pieces go longest first to the least loaded
 // core; every core runs its senders first, then its whole items, then its mergers, so a merger never
-// waits for a piece behind another merger. Everything else: contiguous blocks. When the lists would not
-// fit the runtime args, tries one piece per item, then heavy/light chunk pairs, then contiguous blocks.
+// waits for a piece behind another merger. The cut schedule is kept only when the cost model predicts it
+// faster than the same items uncut (with items at one to two per core the mergers land on cores the whole
+// items already fill, and cutting loses). Everything else: contiguous blocks. When the lists would not fit
+// the runtime args, tries one piece per item, then heavy/light chunk pairs, then contiguous blocks.
 SDPAForwardSchedule make_schedule(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t max_pieces);
 
