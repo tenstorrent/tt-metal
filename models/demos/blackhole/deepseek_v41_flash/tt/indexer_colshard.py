@@ -1,18 +1,22 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Column-sharded decode indexer key slab (candidate, NOT wired into the model; see tests/test_indexer_colshard.py).
+"""Column-sharded decode indexer key slab (``DSV41_IDX_KEY_SHARD=1``, default off; wired into ``DSV41DecodeIndexer`` / ``SpecIndexer``, ``dsv41_model.Model._build_indexer``).
 
 The key slab of an index-source layer is [U,1,n_alloc,128] per mesh row, replicated over the ``cols`` mesh columns. Here the slab is sharded over the columns by an ENTRY INTERLEAVE
 (entry e lives on column e % cols at local slot e // cols: the layout of the column-sharded prefill key FIFO, ``prefill_sparse.PrefillIndexer.keys_full``), so that
 
-  * "the first nb entries" (decode position buckets) are the first nb / cols local slots on EVERY column,
-  * the valid entries of every column are a prefix (valid count of column c: ceil((N - c) / cols)),
-  * global id = cols * local_id + c  (exact in float32 up to 2**24).
+  * "the first nb entries" (decode position buckets) are the first nb / cols local slots on EVERY column (balanced work at every context length),
+  * the valid entries of every column are a prefix (valid count of column c: ceil((N - c) / cols)): the fused score kernel (tt/idx_score.py) reads that count on the device,
+  * global id = cols * local_id + c  (exact in float32 up to 2**24),
+  * the prefill key FIFO has the same interleave, so the hand-off is column-local when the FIFO offset is a multiple of cols (``dsv41_model._export_user_keys_cs``).
 
-Selection: each column scores its n_alloc / cols keys (same matmul code as the replicated path, run by ``loc``, a decode indexer of n_alloc / cols entries whose ``k_cache`` is the local slab), takes a local
-top-k, the (score, global id) candidates of the cols columns are all-gathered over the mesh columns (R x cols*k) and a global top-k is taken among them. The global top-k is contained in the union of
-the local top-k, so the selected SET equals the replicated one (ties aside); the KV pool stays replicated, so the ids index it directly.
+Selection: each column scores its n_alloc / cols keys (the same matmul / fused score code as the replicated path on the local slab, per-row valid LOCAL counts), takes a local top-k, the (score, global
+id) candidates of the cols columns are all-gathered over the mesh columns (R x cols*k) and a global top-k is taken among them. The global top-k is contained in the union of the local top-k, so the
+selected SET equals the replicated one except for the choice among entries TIED at the k-th score (bf16 scores tie at the cutoff in most rows at long context; which of the tied entries the replicated
+``topk_large_indices`` returns is a function of its chunk / segment merge tree, not of the entry ids, and cannot be reproduced from candidate lists: tests/test_idx_cs_merge.py ``test_tie_probe``). The KV pool
+stays replicated, so the ids index it directly. The merge (``cs_merge_fast``, default; DSV41_IDX_CS_FAST=0 selects the op chain of ``cs_select``) is two JIT data-movement kernels (tt/idx_cs_kernels: candidate
+values + global ids, final gather + ascending id sort) around two all_gathers and the merge top-k.
 """
 
 import os

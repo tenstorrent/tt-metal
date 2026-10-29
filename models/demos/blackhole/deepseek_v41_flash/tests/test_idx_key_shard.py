@@ -438,3 +438,125 @@ def test_ks_append_time(mesh_device):
             )
             rep = cs = None
             gc.collect()
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", DEV, indirect=True)
+@pytest.mark.timeout(3600)
+@torch.no_grad()
+def test_ks_bucket(mesh_device):
+    """decode bucket (tt/decode_buckets.py / spec_model.py): the indexer views of Ub < U users of the shared slab (``U_slab``, ``_pad_idx``): key append + forward of the bucket users, sharded vs replicated.
+    Slab entries of the bucket users after the append are bit-equal; the selected sets are equal up to k-th-score ties.
+    """
+    import copy
+
+    md = mesh_device
+    rows, cols = tuple(md.shape)
+    cfg_m, ccl = mesh_4x8(), CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
+    w, _ = load_weights()
+    ref = torch.load(os.path.join(STATE_DIR, "layer2_N32768.pt"))
+    base_keys = ref["index_k"].float()
+    g = torch.Generator().manual_seed(3)
+    wk = (torch.randn(128, 512, generator=g) * 0.05).to(torch.bfloat16)
+    knorm = torch.ones(128).to(torch.bfloat16)
+    N = 70000
+    Uf, Ub = 4, 2
+    for ratio in (1, 2):
+        for n in (1, 6):
+            kind = "spec" if n > 1 else "plain"
+            R = Ub * n
+            n_alloc = -(-(N + 32) // 32) * 32
+            freqs = rope_freqs(LAYER, ratio * N + 64)
+            kw = dict(users_per_row=Uf, ratio=ratio, key_dtype=ttnn.bfloat8_b, fp4_q=True, backend="matmul")
+            cls = SpecIndexer if kind == "spec" else DSV41DecodeIndexer
+            extra = dict(n=n) if kind == "spec" else {}
+            full_ix = []
+            for colshard in (False, True):
+                ix = cls(
+                    md,
+                    w,
+                    freqs,
+                    n_alloc=n_alloc,
+                    **kw,
+                    **extra,
+                    **(dict(colshard=True, mesh_config=cfg_m, ccl=ccl) if colshard else {}),
+                )
+                ix.set_key_weights(wk, knorm)
+                ix.load_keys(gen_keys(base_keys, rows * Uf, N - 200, seed=ratio + n))
+                ix.set_pos_bucket(None)
+                v = copy.copy(ix)
+                v.T, v.B, v.U_slab, v._kc_view, v._slab_owner = Ub, rows * Ub, Uf, None, None
+                if kind == "spec":
+                    v.R = Ub * n
+                v._pad_idx = ttnn.from_torch(
+                    torch.full((Uf - Ub,), -1 if kind == "spec" else 0, dtype=torch.int32),
+                    device=md,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+                )
+                full_ix.append((ix, v))
+            (rep, rv), (cs, cv) = full_ix
+            Nfill = N - 200
+            lat = shard_rows(md, torch.randn(rows, 1, R, 512, generator=g).to(torch.bfloat16))
+            posb = torch.tensor([ratio * Nfill + (i % n) + (1 if ratio == 2 else 0) for i in range(rows * R)])
+            C, S = rope_rows(freqs, posb)
+            mk = lambda: {
+                "iCg": shard_rows(md, C.reshape(rows, 1, R, 128).to(torch.bfloat16)),
+                "iSg": shard_rows(md, S.reshape(rows, 1, R, 128).to(torch.bfloat16)),
+                "C": shard_rows(md, C.reshape(rows * R, 1, 1, 128).to(torch.bfloat16)),
+                "S": shard_rows(md, S.reshape(rows * R, 1, 1, 128).to(torch.bfloat16)),
+                "pos": shard_rows(md, posb.reshape(rows * R).to(torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+                "ent": shard_rows(
+                    md,
+                    (torch.arange(rows * Ub) % 5 + Nfill - 8).reshape(rows * Ub).to(torch.int32),
+                    ttnn.int32,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                ),
+                "valid": rep_up(
+                    md, torch.full((1, 1, 1, 1), Nfill, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+                ),
+            }
+            nvalid = torch.tensor([Nfill - (3 * (i % R)) for i in range(rows * R)], dtype=torch.float32)
+            for v in (rv, cv):
+                st = mk()
+                (v.append_key_block if kind == "spec" else v.append_key)(lat, st)
+            a, b = slab_host(md, rep, Uf), slab_host(md, cs, Uf)
+            m = min(a.shape[2], b.shape[2])
+            eq = bool((a[:, :Ub, :m] == b[:, :Ub, :m]).all())
+            gq = torch.Generator().manual_seed(1)
+            x_q, qr = ref["x_q"], ref["qr"]
+            x = (x_q[None] + 0.3 * x_q.std() * torch.randn(R, 5120, generator=gq)).reshape(1, 1, R, 5120)
+            qrr = (qr[None] + 0.3 * qr.std() * torch.randn(R, 1280, generator=gq)).reshape(1, 1, R, 1280)
+            x, qrr = rep_up(md, x.to(torch.bfloat16)), rep_up(md, qrr.to(torch.bfloat16))
+            ids = []
+            for v in (rv, cv):
+                st = mk()
+                if kind == "spec":
+                    st["nvalid"] = shard_rows(md, nvalid.reshape(rows * R, 1, 1, 1), ttnn.float32)
+                ids.append(v.forward(x, qrr, st))
+            ttnn.synchronize_device(md)
+            q, wv = rv.project(x, qrr, mk())
+            sc = rv.score(q, wv)  # replicated scores of the bucket users (unmasked)
+            ex = same = ties = real = 0
+            for r in range(rows):
+                ai = dev_rows(md, ids[0], r).reshape(R, -1).long()
+                bi = dev_rows(md, ids[1], r).reshape(R, -1).long()
+                scr = dev_rows(md, sc, r).reshape(R, -1).float()
+                for i in range(R):
+                    nvi = int(nvalid[r * R + i]) if kind == "spec" else Nfill
+                    srow = scr[i].clone()
+                    srow[nvi:] = -1e30
+                    e_, s_, t_, b_ = classify(ai[i].tolist(), bi[i].tolist(), srow, nvi)
+                    ex += e_
+                    same += s_
+                    ties += t_
+                    real += b_
+            print(
+                f"IKSB ratio={ratio} {kind} U={Uf}->{Ub} n={n}: bucket users' slab entries bit-equal after append {eq}; forward: bit-identical {ex}/{rows * R}, same set {same}, equal up to k-th-score ties {ties}, REAL mismatches {real}",
+                flush=True,
+            )
+            assert eq and real == 0
+            rep = cs = rv = cv = None
+            gc.collect()

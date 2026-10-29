@@ -217,3 +217,147 @@ def test_cs_merge(mesh_device):
                     ttnn.deallocate(t)
     print("\n".join(summary))
     assert n_bad == 0, f"{n_bad} rows differ beyond ties"
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", DEV, indirect=True)
+@pytest.mark.timeout(3600)
+@torch.no_grad()
+def test_cs_breakdown(mesh_device):
+    """traced us of every stage of the column-sharded selection (JIT merge) on synthetic score rows: local top-k, candidate kernel, the two all_gathers, merge top-k, final kernel; and the replicated top-k of
+    the whole row for comparison. Env DSV41_ICM_N (entries), DSV41_ICM_R (rows)."""
+    from models.demos.blackhole.deepseek_v41_flash.tests.test_indexer_colshard import traced_us
+    from models.demos.blackhole.deepseek_v41_flash.tt.indexer_colshard import cs_cand, cs_final
+
+    md = mesh_device
+    rows, cols = tuple(md.shape)
+    mc, ccl = mesh_4x8(), CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
+    for N in NS:
+        n_alloc = -(-(N + 32) // (32 * cols)) * (32 * cols)
+        n_local = n_alloc // cols
+        consts = _cs_consts(md, n_local)
+        for R in RS:
+            g = torch.Generator().manual_seed(N + R)
+            s = gen_scores("random", R, n_alloc, g).to(torch.bfloat16)
+            full = upload(md, s.reshape(R, 1, 1, n_alloc), (None, None), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+            loc = upload(
+                md,
+                s.reshape(R, n_local, cols).permute(2, 0, 1).contiguous().reshape(cols * R, 1, 1, n_local),
+                (None, 0),
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
+            )
+            vmax = max(N, TOPK)
+            vl_full = upload(
+                md, torch.full((1, 1, 1, 1), vmax, dtype=torch.int32), (None, None), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+            )
+            vlc = torch.tensor([max(-(-(vmax - c) // cols), TOPK) for c in range(cols)], dtype=torch.int32)
+            vl_loc = upload(md, vlc.reshape(cols, 1, 1, 1), (None, 0), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+            sr = ttnn.reshape(loc, [1, 1, R, n_local])
+            lids = ttnn.reshape(
+                ttnn.experimental.topk_large_indices(sr, k=TOPK, valid_length_tensor=vl_loc), [R, 1, 1, TOPK]
+            )
+            vals, gids = cs_cand(loc, lids, consts["col_u32"], cols)
+            cv = mc.allgather(vals, ccl, axis=1, dim=3)
+            ci = mc.allgather(gids, ccl, axis=1, dim=3)
+            W = int(cv.shape[-1])
+            pos = ttnn.reshape(
+                ttnn.experimental.topk_large_indices(ttnn.reshape(cv, [1, 1, R, W]), k=TOPK), [R, 1, 1, TOPK]
+            )
+            ids = cs_final(pos, ci)
+            ttnn.synchronize_device(md)
+            st = {
+                "replicated topk (whole row)": lambda: ttnn.experimental.topk_large_indices(
+                    ttnn.reshape(full, [1, 1, R, n_alloc]), k=TOPK, valid_length_tensor=vl_full
+                ),
+                "local topk (1/8 row)": lambda: ttnn.experimental.topk_large_indices(
+                    sr, k=TOPK, valid_length_tensor=vl_loc
+                ),
+                "cs_cand kernel": lambda: cs_cand(loc, lids, consts["col_u32"], cols),
+                "all_gather vals": lambda: mc.allgather(vals, ccl, axis=1, dim=3),
+                "all_gather gids": lambda: mc.allgather(gids, ccl, axis=1, dim=3),
+                "merge topk (8 x 512)": lambda: ttnn.experimental.topk_large_indices(
+                    ttnn.reshape(cv, [1, 1, R, W]), k=TOPK
+                ),
+                "cs_final kernel": lambda: cs_final(pos, ci),
+            }
+            out = []
+            for name, fn in st.items():
+                try:
+                    out.append(f"{name} {traced_us(md, fn, inner=10, reps=5):.0f}")
+                except Exception as e:  # noqa: BLE001
+                    out.append(f"{name} ERR {str(e)[:60]}")
+            print(f"ICMB N={N} R={R}: " + "; ".join(out) + " (us)", flush=True)
+            for t in (full, loc, vl_full, vl_loc, vals, gids, cv, ci, ids):
+                ttnn.deallocate(t)
+
+
+def _ranges(idx):
+    """sorted list of ints -> 'a-b,c-d' compressed ranges"""
+    out, s = [], None
+    for i, v in enumerate(idx):
+        if s is None:
+            s = p = v
+        elif v == p + 1:
+            p = v
+        else:
+            out.append(f"{s}-{p}" if s != p else f"{s}")
+            s = p = v
+    if s is not None:
+        out.append(f"{s}-{p}" if s != p else f"{s}")
+    return ",".join(out[:24]) + (f",...({len(out)} ranges)" if len(out) > 24 else "")
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", DEV, indirect=True)
+@pytest.mark.timeout(1800)
+@torch.no_grad()
+def test_tie_probe(mesh_device):
+    """how does the replicated ``topk_large_indices`` resolve ties at the k-th score? One row per case on mesh device 0: the tie class T (entries with the cutoff score, ids ascending) and WHICH of them are selected, as
+    ranges of positions in T. Cases: flat row; a plateau (value 5) under 100 high entries (value 10)."""
+    md = mesh_device
+    for N in (4096, 5000, 16384, 20000, 40000, 100000, 300000):
+        n_alloc = -(-(N + 32) // 32) * 32
+        for case in ("flat", "plateau"):
+            g = torch.Generator().manual_seed(N)
+            s = torch.full((1, n_alloc), -1e30)
+            s[0, :N] = 5.0
+            hi = torch.zeros(0, dtype=torch.long)
+            if case == "plateau":
+                hi = torch.randperm(N, generator=g)[:100]
+                s[0, hi] = 10.0
+            t_in = ttnn.from_torch(
+                s.to(torch.bfloat16).reshape(1, 1, 1, n_alloc),
+                device=md,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+            )
+            vl = ttnn.from_torch(
+                torch.full((1, 1, 1, 1), max(N, TOPK), dtype=torch.int32),
+                device=md,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+            )
+            ids = (
+                ttnn.to_torch(
+                    ttnn.get_device_tensors(ttnn.experimental.topk_large_indices(t_in, k=TOPK, valid_length_tensor=vl))[
+                        0
+                    ]
+                )
+                .reshape(-1)
+                .long()
+            )
+            tie = torch.tensor(sorted(set(range(N)) - set(hi.tolist())))
+            chosen = sorted(set(ids.tolist()) - set(hi.tolist()))
+            pos = {v: i for i, v in enumerate(tie.tolist())}
+            ranks = sorted(pos[c] for c in chosen if c in pos)
+            print(
+                f"ICMP N={N} {case}: tie class {len(tie)}, selected ties {len(chosen)} at tie-ranks {_ranges(ranks)}; order of the returned ids: first 8 {ids[:8].tolist()}",
+                flush=True,
+            )
+            ttnn.deallocate(t_in)
+            ttnn.deallocate(vl)
