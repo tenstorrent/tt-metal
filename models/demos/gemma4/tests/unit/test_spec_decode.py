@@ -1994,7 +1994,7 @@ def test_spec_decode_sampling_acceptance(mesh_device, device_params, reset_seeds
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_spec_decode_traced(mesh_device, reset_seeds):
+def test_spec_decode_traced(mesh_device, device_params, reset_seeds):
     """Traced spec-decode: correctness (vs untraced greedy) + traced tok/s/u.
 
     Opens the device with a trace region and runs greedy spec-decode through the
@@ -2103,7 +2103,7 @@ def test_spec_decode_traced(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_verify_trace_batched_capture(mesh_device, reset_seeds):
+def test_verify_trace_batched_capture(mesh_device, device_params, reset_seeds):
     """ISOLATED probe: does a batch=K+1 VERIFY trace capture + replay on a clean device?
 
     The batched verify trace was previously flagged as "replay HANGS" but that
@@ -2237,7 +2237,7 @@ def test_verify_trace_batched_capture(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_ondevice_argmax_probe(mesh_device, reset_seeds):
+def test_ondevice_argmax_probe(mesh_device, device_params, reset_seeds):
     """PROBE (eager, no trace): on-device argmax -> token id -> re-embed.
 
     The fused single-iteration trace needs the drafter recurrence and the verify
@@ -2366,7 +2366,7 @@ def test_ondevice_argmax_probe(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_fused_iter_eager(mesh_device, reset_seeds):
+def test_fused_iter_eager(mesh_device, device_params, reset_seeds):
     """EAGER fused iteration == _draft + _verify + host argmax (same anchor).
 
     _fused_iter does the K drafter steps, verify-input assembly, and both argmaxes
@@ -2458,7 +2458,7 @@ def test_fused_iter_eager(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_fused_loop_eager(mesh_device, reset_seeds):
+def test_fused_loop_eager(mesh_device, device_params, reset_seeds):
     """EAGER fused LOOP (generate_fused) — the real loop pattern, no re-prefill.
 
     Runs the on-device fused iteration repeatedly, advancing the anchor via the
@@ -2560,7 +2560,7 @@ def test_fused_loop_eager(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_fused_loop_traced(mesh_device, reset_seeds):
+def test_fused_loop_traced(mesh_device, device_params, reset_seeds):
     """FUSED single-iteration TRACE: K drafter steps + verify in ONE CCL trace.
 
     The draft/verify alternation deadlocks when distinct CCL traces interleave;
@@ -2661,7 +2661,7 @@ def test_fused_loop_traced(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_fused_trace_minimal(mesh_device, reset_seeds):
+def test_fused_trace_minimal(mesh_device, device_params, reset_seeds):
     """ISOLATE the fused trace: prefill ONCE, then traced generate_fused.
 
     No eager reference loop and no second prefill (those confound with a
@@ -2743,7 +2743,7 @@ def test_fused_trace_minimal(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_verify_seqkv_cost(mesh_device, reset_seeds):
+def test_verify_seqkv_cost(mesh_device, device_params, reset_seeds):
     """MEASURE how much of the verify cost is the sequential_kv_write loop.
 
     Captures a batch=(K+1) verify-only trace TWICE: once with the race-safe
@@ -2857,7 +2857,7 @@ def test_verify_seqkv_cost(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_draft_step_breakdown(mesh_device, reset_seeds):
+def test_draft_step_breakdown(mesh_device, device_params, reset_seeds):
     """MEASURE where a single drafter step's ~15 ms goes on tp=4.
 
     Times a traced drafter step (full) vs a step with lm_head + its 262144-wide
@@ -2964,7 +2964,7 @@ def test_draft_step_breakdown(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_argmax_cost(mesh_device, reset_seeds):
+def test_argmax_cost(mesh_device, device_params, reset_seeds):
     """Time ttnn.argmax over a 262144-wide vocab (the suspected fused-iter cost).
 
     Drafter does 4 argmax over [1,1,1,V]; verify does 1 over [1,1,K+1,V]. If each
@@ -3097,7 +3097,7 @@ def test_argmax_cost(mesh_device, reset_seeds):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
     indirect=True,
 )
-def test_spec_decode_batched(mesh_device, reset_seeds):
+def test_spec_decode_batched(mesh_device, device_params, reset_seeds):
     """End-to-end BATCHED (B>1) greedy speculative decode for B independent users.
 
     Each iteration drafts every user at batch=1 and runs ONE batched packed
@@ -3476,7 +3476,7 @@ def _serving_run(spec, shape, rows, anchors, positions, page_tables, n_new, rese
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
     indirect=True,
 )
-def test_serving_record_matches_plain_greedy(mesh_device, reset_seeds, shape):
+def test_serving_record_matches_plain_greedy(mesh_device, device_params, reset_seeds, shape):
     """One serving record per default shape: prepare + capture (masks built in-trace from the uploaded
     positions, no host masks), then per live row greedy parity with the plain decode (up to the first
     target near-tie, the contract of test_spec_decode_batched), the [live, P, V] bf16 readback of the
@@ -3565,7 +3565,7 @@ def test_serving_record_matches_plain_greedy(mesh_device, reset_seeds, shape):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
     indirect=True,
 )
-def test_serving_all_shapes_capture_and_switch(mesh_device, reset_seeds):
+def test_serving_all_shapes_capture_and_switch(mesh_device, device_params, reset_seeds):
     """All four default shapes x a two-rung ladder captured in one process (every graph eager before the
     first capture), then consecutive steps that switch shape: the seed gather indexes the PREVIOUS record's
     (B_prev, P_prev) hidden layout, and the verify's column 0 stays the plain next token of every row."""
@@ -3678,7 +3678,7 @@ def _serving_upload(spec, host, dev, dtype, layout):
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
     indirect=True,
 )
-def test_serving_body_stages_at_batch(mesh_device, reset_seeds, shape):
+def test_serving_body_stages_at_batch(mesh_device, device_params, reset_seeds, shape):
     """Every per-row stage of the record body, run EAGERLY at B rows and checked row by row against host
     truth. A defect that leaves the verify's anchor column right but the draft columns wrong at B > 1 must
     live in one of them: (a) the seed gather from the hidden pools through the uploaded row index (rows r' != r,
