@@ -12,7 +12,8 @@
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32] or [32, 16] ([16, 32] with transpose), giving [{1, 2, 4, 8}, 32] or [{1, 2, 4, 8}, 16]
+ *                 output tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34 (DEST capacity also bounds it, see llk_math_custom_mm_api.h)
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -28,7 +29,8 @@
  * @tparam transpose: Transpose the SrcA read, values = <true/false>
  * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>
  * @param operand0: CB of the activations, whose face_r_dim this reads. Its data goes to SrcB.
- * @param operand1: CB of the weights, whose unpack format selects the instruction tuning. Its data goes to SrcA.
+ * @param operand1: CB of the weights, whose unpack format selects the instruction tuning and whose face count (4, or 2
+ *                  for [32, 16] tiles) sets the SrcA unpack size. Its data goes to SrcA.
  * @param ct_dim: Output width in tiles, 1 to 34.
  * @note Call this before @ref llk_unpack_AB_custom_mm, and again after any other op has run, in particular one
  *       that writes SrcB.
@@ -43,8 +45,10 @@ inline void llk_unpack_AB_custom_mm_init(
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
     const std::uint32_t operandA_unpack_dst_format = unpack_dst_format[operandA_id];
+    const std::uint32_t operandA_num_faces = get_operand_num_faces(operandA_id);
 
-    _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(operandB_face_r_dim, operandA_unpack_dst_format, ct_dim);
+    _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
+        operandB_face_r_dim, operandA_unpack_dst_format, ct_dim, operandA_num_faces);
 }
 
 /**

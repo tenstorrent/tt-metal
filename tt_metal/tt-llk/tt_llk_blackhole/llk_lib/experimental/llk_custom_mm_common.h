@@ -9,7 +9,8 @@ namespace ckernel
 {
 
 /**
- * Where custom_mm puts its [{1, 2, 4, 8}, 32] output tiles in DEST. Each tile has two output faces of up to 8 rows.
+ * Where custom_mm puts its [{1, 2, 4, 8}, 32] output tiles in DEST. Each tile has two output faces of up to 8 rows,
+ * or only output face 0 when in1 is a 2-face [32, 16] tile (see custom_mm_narrow); the face 1 slot then stays unused.
  *
  *   Default          tiles 64 rows apart, output face 1 at row 16
  *   DefaultSplitAcc  as Default, accumulating the second k-face's partials at rows 8 and 24 for finalize to merge
@@ -50,6 +51,13 @@ constexpr std::uint32_t custom_mm_tile_rows(const CustomMmDestLayout layout)
 constexpr bool custom_mm_split_acc(const CustomMmDestLayout layout)
 {
     return layout == CustomMmDestLayout::DefaultSplitAcc || layout == CustomMmDestLayout::DenseSplitAcc;
+}
+
+// Whether in1 is a 2-face [32, 16] tile ([16, 32] with transpose), giving [M, 16] output tiles, rather than a full
+// [32, 32] tile. Both store their two faces in k order, so SrcA walks them the same way with or without transpose.
+constexpr bool custom_mm_narrow(const std::uint32_t in1_num_faces)
+{
+    return in1_num_faces == 2;
 }
 
 // Widest ct_dim the unpack MOP covers: the full unpack and 8 reuses, two more runs of 8 reuses, then 9 reuses ending

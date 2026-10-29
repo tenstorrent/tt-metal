@@ -12,7 +12,8 @@
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32] or [32, 16] ([16, 32] with transpose), giving [{1, 2, 4, 8}, 32] or [{1, 2, 4, 8}, 16]
+ *                 output tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in the DEST sync region
  *         (custom_mm_tile_rows of the CustomMmDestLayout each)
@@ -29,9 +30,11 @@ inline void llk_math_custom_mm_init(
     SAN_HOOK(unsupported());
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandB_id = get_operand_id(operand0);
+    const std::uint32_t operandA_id = get_operand_id(operand1);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const std::uint32_t operandA_num_faces = get_operand_num_faces(operandA_id);
 
-    _llk_math_custom_mm_init_<transpose, layout>(operandB_face_r_dim, ct_dim);
+    _llk_math_custom_mm_init_<transpose, layout>(operandB_face_r_dim, ct_dim, operandA_num_faces);
 }
 
 // Shared by the CB-id execute below and the LLKOperand one (experimental/2_0/llk_math_custom_mm.h), which
@@ -41,12 +44,13 @@ inline void llk_math_custom_mm_impl(
     const std::uint32_t operandB_face_r_dim,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t in1_num_faces = TILE_NUM_FACES) {
     LLK_ASSERT(
         (custom_mm_fits_dest<DST_SYNC_MODE, layout>(dst_index, ct_dim)),
         "custom_mm: dst_index + ct_dim output tiles overrun the DEST sync region");
 
-    _llk_math_custom_mm_<layout, finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
+    _llk_math_custom_mm_<layout, finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim, in1_num_faces);
 }
 
 template <CustomMmDestLayout layout = CustomMmDestLayout::Default, bool finalize = custom_mm_split_acc(layout)>
@@ -59,7 +63,9 @@ inline void llk_math_custom_mm(
     SAN_HOOK(unsupported());
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandB_id = get_operand_id(operand0);
+    const std::uint32_t operandA_id = get_operand_id(operand1);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
+    const std::uint32_t operandA_num_faces = get_operand_num_faces(operandA_id);
 
-    llk_math_custom_mm_impl<layout, finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
+    llk_math_custom_mm_impl<layout, finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim, operandA_num_faces);
 }

@@ -13,8 +13,8 @@
  * LLK MATH CUSTOM_MM -- LLKOperand (id-free, compile-time NTTP) overload (execute only)
  *
  * The execute needs in0's face row count, which the CB-id overload looks up from the operand id. This one
- * takes it from the in0 (SrcB) descriptor instead. The init takes it as a plain argument already, so the
- * id-free path calls _llk_math_custom_mm_init_ directly.
+ * takes it from the in0 (SrcB) descriptor instead, and in1's face count as an argument. The init takes both as
+ * plain arguments already, so the id-free path calls _llk_math_custom_mm_init_ directly.
  *************************************************************************/
 
 template <
@@ -22,7 +22,10 @@ template <
     bool finalize = ckernel::custom_mm_split_acc(layout),
     ckernel::experimental::LLKMemDescriptor IN0_DESC>
 inline void llk_math_custom_mm(
-    const std::uint32_t dst_index, const std::uint32_t kt_dim, const std::uint32_t ct_dim = 1) {
+    const std::uint32_t dst_index,
+    const std::uint32_t kt_dim,
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t in1_num_faces = TILE_NUM_FACES) {
     SAN_HOOK(unsupported());
-    llk_math_custom_mm_impl<layout, finalize>(IN0_DESC.shape.face_r_dim, dst_index, kt_dim, ct_dim);
+    llk_math_custom_mm_impl<layout, finalize>(IN0_DESC.shape.face_r_dim, dst_index, kt_dim, ct_dim, in1_num_faces);
 }

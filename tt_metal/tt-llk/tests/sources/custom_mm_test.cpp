@@ -23,7 +23,8 @@
 //
 //   in0 (A, the [M,K] operand)  -> SrcB, tile shape [{1,2,4,8}, 32]  (only the top two
 //                                  faces, each face_r_dim rows tall; face_r_dim = M)
-//   in1 (B, the [K,N] operand)  -> SrcA, full [32,32] tiles
+//   in1 (B, the [K,N] operand)  -> SrcA, full [32,32] tiles, or [32,16] ones (num_faces_B = 2)
+//                                  giving [M,16] output tiles (num_faces = 1)
 //   rt_dim = 1, ct_dim in [1,34] (bounded by DEST capacity), kt_dim in [1,256], LoFi only.
 //
 // So the header restricts M to {1,2,4,8} rows: only those DEST rows are defined. The math
@@ -88,7 +89,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-    // in1 (B, full [32,32] tiles) is SrcA; in0 (A, [M,32] tiles) is SrcB.
+    // in1 (B, [32,32] tiles, or [32,16] ones of half the size when num_faces_B is 2) is SrcA; in0 (A, [M,32] tiles)
+    // is SrcB.
+    const std::uint32_t in1_tile_size = params.TILE_SIZE_UNPACK_B / TILE_NUM_FACES * params.num_faces_B;
+
     // hw_configure takes the SrcA operand first, so pass the B-matrix (buffer_B) params
     // in the A slot and the A-matrix (buffer_A) params in the B slot -- exactly the
     // in0/in1 swap custom_mm.h line 57 performs.
@@ -101,7 +105,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.in0_face_r_dim,
         params.num_faces_B,
         params.num_faces_A,
-        params.TILE_SIZE_UNPACK_B,
+        in1_tile_size,
         params.TILE_SIZE_UNPACK_A);
 
     if constexpr (num_calls > 1)
@@ -114,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // unpB_face_r_dim = in0 (SrcB) face rows in {1,2,4,8}; unpA_dst_format tunes the
     // instruction sequence (post1 only for Bfp4_b). transpose=false.
-    _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM);
+    _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM, params.num_faces_B);
 
     // SrcA=buffer_B (B matrix, full tiles), SrcB=buffer_A (A matrix). Call c takes K tiles
     // [c * kt_per_call, (c + 1) * kt_per_call): B is k-major, so its tiles start at c * kt_per_call * ct,
@@ -127,7 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             L1_ADDRESS(params.buffer_A[0]) + call * kt_per_call * 4 * params.in0_face_r_dim,
             call * kt_per_call * CT_DIM /* tile_index_a */,
             0 /* tile_index_b */,
-            params.TILE_SIZE_UNPACK_B,
+            in1_tile_size,
             params.TILE_SIZE_UNPACK_A,
             kt_per_call,
             CT_DIM);
@@ -158,7 +162,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // transpose=false. operandB_face_r_dim = in0 M.
-    _llk_math_custom_mm_init_<false /* transpose */, dest_layout>(params.in0_face_r_dim, CT_DIM);
+    _llk_math_custom_mm_init_<false /* transpose */, dest_layout>(params.in0_face_r_dim, CT_DIM, params.num_faces_B);
 
     LLK_ASSERT((custom_mm_fits_dest<dest_sync, dest_layout>(0 /* dst_index */, CT_DIM)), "custom_mm: CT_DIM output tiles overrun the DEST sync region");
 
@@ -177,11 +181,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         if (split_acc && call == num_calls - 1)
         {
-            _llk_math_custom_mm_<dest_layout>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+            _llk_math_custom_mm_<dest_layout>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM, params.num_faces_B);
         }
         else
         {
-            _llk_math_custom_mm_<dest_layout, false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+            _llk_math_custom_mm_<dest_layout, false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM, params.num_faces_B);
         }
     }
 
@@ -205,11 +209,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Pack with the in0 face geometry (M rows, 2 faces) that lands in DEST, and the strides of the layout's tile
     // spacing, as custom_mm_block_init sets them.
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+    // Output tiles are [M, 32], or [M, 16] (a single face) when in1 is a [32, 16] tile
+    const std::uint32_t out_tile_c_dim = params.num_faces * FACE_C_DIM;
+
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true);
+        formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, out_tile_c_dim, params.num_faces, true);
 
     _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, true /*skip_packer_strides*/>(
-        formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
+        formats.pack_src, params.in0_face_r_dim, out_tile_c_dim, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
     _llk_pack_custom_mm_init_<dest_layout>(formats.pack_src);
 
     _llk_packer_wait_for_math_done_();
