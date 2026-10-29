@@ -28,6 +28,7 @@ from models.demos.common.prefill.runners.migration import (
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    PREFILL_CHUNK_TOKENS,
     create_kv_chunk_address_table_block_cyclic,
     is_tp_deduped_kv_cache,
     kda_chunk_n_tokens,
@@ -169,8 +170,8 @@ def build_and_serialize_kv_chunk_table(
     the WHOLE cache, but any sub-cache migration (a [0, N) prefix, or a prompt shorter than
     max_seq_len) lists the wrong, block-cyclically-scattered chunks and fails its PCC check.
 
-    ``chunk_size_global`` is the block-cyclic period (the runtime's prefill chunk size); every config
-    of the table is built at it.
+    ``chunk_size_global`` is the block-cyclic period; the kimi builder hardcodes it as
+    PREFILL_CHUNK_TOKENS, so a non-default period is rejected here rather than mismapped.
 
     ``index_kv_cache`` (sparse/DSA models only): when given, a single MERGED table describes BOTH
     caches — config 0 = the KVPE cache, config 1 = the index-key cache — sharing one device-group
@@ -202,6 +203,11 @@ def build_and_serialize_kv_chunk_table(
 
     KV dedup is read from the KVPE cache's declared topology (is_tp_deduped_kv_cache), so the table cannot
     disagree with the allocation. ``tp_axis`` is the dflash head-count geometry, not the dedup switch."""
+    assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
+        f"create_kv_chunk_address_table_block_cyclic assumes a block-cyclic period of "
+        f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "
+        f"A different period would mismap every position; re-introduce a parametrized builder if needed."
+    )
 
     primary_cache = kvpe_cache.storage
     # One tagged list of every cache this rank owns, merged into ONE table downstream. The tag routes
@@ -257,7 +263,6 @@ def build_and_serialize_kv_chunk_table(
             stage_layout=stage_layout,
             layer_rows=layer_rows,
             tp_axis=tp_axis if kv_dedup else None,
-            chunk_size_global=chunk_size_global,
         )
 
     return serialize_kv_chunk_table(
@@ -535,7 +540,6 @@ def _build_and_serialize_merged_kv_chunk_table(
                 ),
                 tp_axis=tp_axis if kv_dedup else None,
                 alias_rows=kvpe_alias_rows if name == kvpe_config_name else None,
-                chunk_size_global=chunk_size_global,
             )
         else:  # one global kv-head of the drafter's K or V cache
             populate_kv_chunk_address_table_dflash(

@@ -3,21 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Smaller prefill chunks plus packed forwards vs today's big chunks, on one workload: real tokens per second.
+Packed forwards vs one chunk per forward, on one multi-user workload: real tokens per second.
 
-The question behind smaller chunks / N users per forward vs today's 8x4 / 5K / 1 user: a short request padded
-up to a big chunk wastes compute, a small chunk wastes less but runs the MoE on fewer tokens per call,
-and packing several users' chunks into one forward wins that back.
+Packing F users' chunks into one forward runs attention per chunk and the MoE once on all F chunks' rows, so
+the expert weights are read once per forward instead of once per chunk.
 
 Workload: USERS users, each with history tokens of KV already prefilled (filled untimed, through the
 same runtime), then one new request each (PRODUCTION_REQUEST_LENGTHS). The timed phase prefills every
 new request, traced, in the configuration's forwards (cK-fF: K-token chunks, F chunks per forward).
 
-  galaxy 8x4   c5120-f1 (today's production shape), c5120-f2 / f4 (packing alone, same padding),
-               c2048-f1 / f2 / f4 (smaller chunk on the same mesh; 2,560 would be 80 rows per TP rank, not
-               whole tiles, which the indexer refuses)
-  LoudBox 2x4  everything at half scale (history, requests and chunks): c2560-f1, c1280-f1 / f2 / f4. A
-               fixed-mesh comparison: TP and experts/chip stay as they are.
+  galaxy 8x4   c5120-f1 (today's production shape), c5120-f2 / f4 (same chunks, 2 or 4 per forward)
 
 Model: 4 layers starting at global layer 6 (one full-indexer MoE layer, three that reuse its top-k,
 GLM-5.3's 1:3 ratio among MoE layers), synthetic weights with the experts shared across layers (each layer
@@ -25,7 +20,7 @@ has its own gate). Record only, no gate: logs GLM_WORKLOAD lines.
 
 Control: every config saves each user's KVPE and indexer-K rows (natural order: the last history chunk and
 the new request) to GLM_WORKLOAD_KV_DIR, and test_glm_chunk_batching_workload_kv_agree (host only, run it
-after the four configs) requires the packed configs to match c1280-f1 exactly and c2560-f1 to match closely.
+after the configs) requires the packed configs to match c5120-f1 closely.
 """
 
 import copy
@@ -41,11 +36,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.prefill_chunk import PrefillChunk
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    fabric2d_device_params,
-    moe_fabric_payload,
-    torus_xy_device_params,
-)
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_transformer_state_dict
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
@@ -76,7 +67,7 @@ _TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 
 def _workload(scale):
-    """(history, request lengths) at ``scale`` (1 = production, 2 = the LoudBox's half scale)."""
+    """(history, request lengths) at ``scale`` (1 = production; larger divides history and requests)."""
     return PRODUCTION_HISTORY // scale, [n // scale for n in PRODUCTION_REQUEST_LENGTHS]
 
 
@@ -87,15 +78,7 @@ _MESHES = {
         "mesh-8x4",
         2,
         1,
-        [(5120, 1), (5120, 2), (5120, 4), (2048, 1), (2048, 2), (2048, 4)],
-    ),
-    "loudbox-fabric2d-2x4": (
-        (2, 4),
-        fabric2d_device_params,
-        "mesh-2x4",
-        1,
-        2,
-        [(2560, 1), (1280, 1), (1280, 2), (1280, 4)],
+        [(5120, 1), (5120, 2), (5120, 4)],
     ),
 }
 
@@ -169,7 +152,7 @@ def test_glm_chunk_batching_workload(
     big_chunk = 5120 // scale  # the largest chunk any config of this scale uses
     assert history_len % big_chunk == 0, f"history {history_len} must be whole {big_chunk}-token chunks"
     assert history_len >= KV_TAIL, f"history {history_len} is shorter than the saved KV tail {KV_TAIL}"
-    # Room for the longest request, in whole chunks of every size (2 x 5,120 is a multiple of 2,048 too).
+    # Room for the longest request, in whole 2 x 5,120-token blocks.
     seq_cache = history_len + 2 * big_chunk * -(-max(request_lengths) // (2 * big_chunk))
     config = copy.deepcopy(config_only)
     config.max_seq_len = seq_cache
@@ -304,13 +287,12 @@ def test_glm_chunk_batching_workload(
     )
 
 
-# Host only: compares what the configs above saved, each against its mesh's small-chunk, one-chunk-per-forward
-# config. Packing changes only the MoE's batch (and with it which routed-expert kernel runs); on the LoudBox
-# the KV drifts from layer 7 on, to 0.985 at layer 9, the same for every user and position, as flipped top-8
-# choices under the synthetic router would. A different chunk size should be no further off: attention sees
-# the same tokens. (On the LoudBox c2560-f1 is: 0.89 at layer 7, 0.69 at layer 9. Unexplained.)
+# Host only: compares what the configs above saved, each against its mesh's one-chunk-per-forward config.
+# Packing changes only the MoE's batch (and with it which routed-expert kernel runs); on the LoudBox the KV
+# drifted from layer 7 on, to 0.985 at layer 9, the same for every user and position, as flipped top-8
+# choices under the synthetic router would.
 _KV_PCC = 0.98
-_KV_REFERENCE = {"galaxy-8x4": (2048, 1), "loudbox-fabric2d-2x4": (1280, 1)}
+_KV_REFERENCE = {"galaxy-8x4": (5120, 1)}
 
 
 @pytest.mark.parametrize(

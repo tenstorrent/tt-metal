@@ -194,8 +194,8 @@ def test_glm_packed_forward_perf(
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("forward_chunks", [1, 2, 4], ids=["f1", "f2", "f4"])
-# Rows per chip of one chunk: 640 is the production chunk (5K on 8x4); 256 is 8x4's 2,048-token chunk.
-@pytest.mark.parametrize("rows_per_chip", [PREFILL_CHUNK_TOKENS_PER_CHIP, 256], ids=["r640", "r256"])
+# Rows per chip of one chunk: 640 is the production chunk (5K on 8x4).
+@pytest.mark.parametrize("rows_per_chip", [PREFILL_CHUNK_TOKENS_PER_CHIP], ids=["r640"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
