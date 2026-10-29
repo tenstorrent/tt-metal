@@ -26,8 +26,10 @@ struct Ctx {
     uint32_t sem_expected;
 };
 
+// One shared, out-of-line body: inlined into 128 zone blocks it made the kernel 434 KB (job 162391), far over the
+// kernel config buffer; the per-op code is now only the zone enter/exit and a call.
 template <typename Accessor>
-FORCE_INLINE void micro_op(Ctx& c, const Accessor& dram) {
+__attribute__((noinline)) void micro_op(Ctx& c, const Accessor& dram) {
     for (uint32_t k = 0; k < NEST; k++) {
         DeviceZoneScopedN("SUBOP");
         for (uint32_t r = 0; r < READS; r++) {
@@ -61,7 +63,7 @@ FORCE_INLINE void micro_op(Ctx& c, const Accessor& dram) {
         }
     }
     if constexpr (MCAST_EVERY > 0) {
-        if (c.is_sender && (c.op_counter % MCAST_EVERY) == 0) {
+        if (c.is_sender && (c.op_counter % (MCAST_EVERY > 0 ? MCAST_EVERY : 1)) == 0) {  // no div-by-zero when compiled out
             for (uint32_t m = 0; m < MCAST_LINKED; m++) {
                 noc_async_write_multicast(c.l1_src, c.mcast_noc_addr, c.page_size, c.mcast_num_dests, /*linked=*/true);
             }

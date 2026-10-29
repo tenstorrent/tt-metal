@@ -12,6 +12,7 @@
 // MCAST_LINKED (4), DELAY_NOPS (0), PAGE_SIZE (2048), NUM_PAGES (1024), PROGRAMS (1: launches of the same program),
 // BLOCKING (1), SKIP_READ (0), TRISC (1: compute kernel with zones), WAIT_SPINS (200000), BLOAT_BSS / BLOAT_DATA (words
 // added to the DM kernels' .bss / .data) and BLOAT_CODE (unrolled nops): kernel-size knobs, see the DM kernel.
+// WORKER_L1 (1373312, blaze's value for the failing layer): worker L1 size, which sizes the kernel config buffer.
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -69,11 +70,17 @@ int main() {
         const uint32_t bloat_bss = env_u32("MESH_FILL_BLOAT_BSS", 0);
         const uint32_t bloat_data = env_u32("MESH_FILL_BLOAT_DATA", 0);
         const uint32_t bloat_code = env_u32("MESH_FILL_BLOAT_CODE", 0);
+        // blaze runs the failing layer with worker_l1_size 1373312 (MINIMAX_M3_WORKER_L1_SIZE); the kernel config
+        // buffer is what is left of L1 above it, 70656 B at the default (job 162391: a 125-op kernel did not fit).
+        const size_t worker_l1 = env_u32("MESH_FILL_WORKER_L1", 1373312);
 
         std::shared_ptr<distributed::MeshDevice> mesh_device =
             (mesh_rows && mesh_cols)
-                ? distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape(mesh_rows, mesh_cols)))
-                : distributed::MeshDevice::create_unit_mesh(0);
+                ? distributed::MeshDevice::create(
+                      distributed::MeshDeviceConfig(distributed::MeshShape(mesh_rows, mesh_cols)),
+                      DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{}, {}, worker_l1)
+                : distributed::MeshDevice::create_unit_mesh(
+                      0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{}, {}, worker_l1);
         const distributed::MeshCoordinateRange device_range(mesh_device->shape());
 
         const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
@@ -83,10 +90,10 @@ int main() {
         fmt::print(
             "noc_event_mesh_fill: mesh {}x{} ({} devices) cores {}x{} iters={} ops={} nest={} reads={} writes={} sems={} "
             "mcast_every={} mcast_linked={} delay_nops={} page_size={} num_pages={} programs={} blocking={} skip_read={} "
-            "trisc={} bloat_bss={} bloat_data={} bloat_code={}\n",
+            "trisc={} bloat_bss={} bloat_data={} bloat_code={} worker_l1={}\n",
             mesh_device->num_rows(), mesh_device->num_cols(), mesh_device->num_devices(), grid_w, grid_h, iters, ops,
             nest, reads, writes, sems, mcast_every, mcast_linked, delay_nops, page_size, num_pages, programs, blocking,
-            skip_read, with_trisc, bloat_bss, bloat_data, bloat_code);
+            skip_read, with_trisc, bloat_bss, bloat_data, bloat_code, worker_l1);
 
         // One DRAM page buffer per device (replicated), read by every core.
         const distributed::DeviceLocalBufferConfig local_config{.page_size = page_size, .buffer_type = BufferType::DRAM};
