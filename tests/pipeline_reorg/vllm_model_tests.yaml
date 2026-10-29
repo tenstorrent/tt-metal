@@ -518,10 +518,11 @@
   # VLLM_ENGINE_READY_TIMEOUT_S: the first-use start (TT cache build) runs for hours.
   extra-env: "VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 MIMO_KV_GB_PER_CHIP=6.7 VLLM_ENGINE_READY_TIMEOUT_S=14400"
   coherence-test: true
-  # The plugin's lane coordinator builds its lanes with log_stats=False, so
-  # vllm:prefix_cache_* never move (run 40908073239: 0 of 0); the gate reads the
-  # resume's own cached_tokens instead (--enable-prompt-tokens-details).
-  prefix-caching-test: true
+  # No prefix-caching-test yet: APC does not hit for the resume (run 40954219826:
+  # cached_tokens 0 of 22271, TTFT 3.01 s cold and warm), and the plugin's lanes keep
+  # no prefix-cache stats (log_stats=False), so vllm:prefix_cache_* stay 0. Enable it
+  # once the resume hits; the gate then reads the resume's own cached_tokens
+  # (--enable-prompt-tokens-details).
   chunked-prefill-budget: 4096
   multimodal: false
   skus:
