@@ -1812,14 +1812,20 @@ class ResidentModel:
         return host[:, page % d.banks, page // d.banks].reshape(d.n, self._attn_copies, self.kv_copy_pages, TILE, HD)
 
     def read_slot(self, s):
-        """slot s's state as stored: GDN states [n, copies, heads, 16 * 1024] fp32, conv histories [n * S * copies,
-        slots * kBlk * 32] bf16 (its row's elements), K / V [n, copies, its pages, TILE, HD] (paged pool)"""
+        """slot s's state as stored: GDN states [n, copies, heads, 16 * 1024] fp32, conv histories (its row's
+        elements of the q|k|v tiles, the ones the conv reads; a whole-view write-back also fills the views' other
+        tiles, which nothing reads), K / V [n, copies, its pages, TILE, HD] (paged pool)"""
         assert self.rows and self.kv_paged
-        k, u, hist_el, pages = self._slot_index(s)
-        sub, d = self.subs[k], self.d
+        k, u, _, pages = self._slot_index(s)
+        sub, d, B, G = self.subs[k], self.d, self.batch, self._gdn_copies
         cat = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0)).float()
-        state = cat(sub["state"]).reshape(d.n, self._gdn_copies, d.nv, self.batch, -1)[:, :, :, u]
-        hist = cat(sub["hist"])[:, hist_el]
+        state = cat(sub["state"]).reshape(d.n, G, d.nv, B, -1)[:, :, :, u]
+        hrows, hcols, _ = self.hist_index()  # per conv element (streamer, element of a batch-1 slot)
+        blk = self._blk * TILE * B
+        el = torch.cat([j * blk + tiny_index(hcols, u, B) for j in range(CONV_K - 1)])
+        rows = hrows.repeat_interleave(TILE).repeat(CONV_K - 1)
+        per_chip = cat(sub["hist"]).reshape(d.n, self._S * G, -1)
+        hist = torch.stack([per_chip[:, rows * G + c, el] for c in range(G)], dim=1)
         return dict(
             state=state,
             hist=hist,
