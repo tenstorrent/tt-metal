@@ -663,7 +663,7 @@ public:
         }
         auto* job = acquire_job();
         if (job == nullptr) {
-            // Every job is held, e.g. by the parallel_for calls this one is nested in: run the calls here.
+            // No free job, e.g. when the enclosing parallel_for calls hold them all: run every call on this thread.
             for (const uint32_t device_id : device_ids) {
                 worker_of(device_id);  // Throws for a device the pool does not serve, as planning would.
             }
