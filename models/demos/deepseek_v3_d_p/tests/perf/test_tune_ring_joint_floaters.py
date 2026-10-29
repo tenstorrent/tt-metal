@@ -45,6 +45,9 @@ MIN_GAIN = 0.02
 NOISE = 0.003
 SAMPLES = 3
 LOG_DIR = Path("generated/floater_tune")
+# The floater layout the measurements are of (ring_joint_floater_layout.hpp): part of each record's key, so a log written
+# under another layout is not reused. Change it with the layout.
+LAYOUT = "dense-homes"
 
 # The search's starting points: kFloaterLayoutSchedules' entries (iter0, iter1, frac0, frac1, donate_tail,
 # merge0..merge4) for Kimi K3 (24 heads x 2 bands) and K2.7 (16 x 3). Keep them in step with the table.
@@ -68,7 +71,7 @@ def _text(schedule):
 
 def _neighbours(schedule, frac_step):
     """Single-coordinate moves of a schedule that the layout accepts: each donation iteration, each fraction, the
-    donated end, and all merge points together."""
+    donated end, each merge point, and all merge points together."""
     i0, i1, f0, f1, tail, *merges = schedule
     moves = []
     for d in (-1, 1):
@@ -77,6 +80,8 @@ def _neighbours(schedule, frac_step):
         moves.append((i0, i1, f0 + d * frac_step, f1, tail, *merges))
         moves.append((i0, i1, f0, f1 + d * frac_step, tail, *merges))
         moves.append((i0, i1, f0, f1, tail, *(m + d for m in merges)))
+        for v in range(len(merges)):
+            moves.append((i0, i1, f0, f1, tail, *(m + d if u == v else m for u, m in enumerate(merges))))
     moves.append((i0, i1, f0, f1, 1 - tail, *merges))
 
     def valid(s):
@@ -226,7 +231,9 @@ def test_tune_ring_joint_floaters(request, mesh_device, device_params, variant, 
     kvpe = config_only.kv_lora_rank + config_only.qk_rope_head_dim
     qk_head_dim = config_only.qk_nope_head_dim + config_only.qk_rope_head_dim
     q_chunk, k_chunk, bands = ttMLA._EXPANDED_K_SDPA_CHUNKS[(kvpe, qk_head_dim, heads, chunk // sp)]
-    key = f"{variant.name} heads={heads} bands={bands} q={q_chunk} k={k_chunk} prefixes={list(PREFIXES)}"
+    key = (
+        f"{variant.name} layout={LAYOUT} heads={heads} bands={bands} q={q_chunk} k={k_chunk} prefixes={list(PREFIXES)}"
+    )
     require_realtime_profiler("floater tuning")
     log = _Log(LOG_DIR / f"{variant.name}_c{chunk}.jsonl", key)
     logger.info(f"floater tune: {key}, log {log.path}")

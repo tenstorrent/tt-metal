@@ -53,7 +53,9 @@ static_assert(kDonatedPieces == 2, "DonationSchedule spells out two pieces");
 constexpr uint32_t piece_ordinal(uint32_t ksplit_count, uint32_t piece) { return ksplit_count + 1 + piece; }
 
 // Chunks of `band` that `frac` donates.
-inline uint32_t donated_cut(KSplitRange band, uint32_t frac) {
+// Out of line: homes and floaters both cut (kept_after_donation, donated_piece), in one binary near the kernel config
+// buffer's size. Only floater programs call it.
+__attribute__((noinline)) inline uint32_t donated_cut(KSplitRange band, uint32_t frac) {
     const uint32_t len = band.end > band.begin ? band.end - band.begin : 0;
     return len * frac / kDonationFracOne;
 }

@@ -39,7 +39,14 @@ using RowRange = ChunkRange;
 // extra chunk to the same bands and make them the longest. The order is unchanged, so the last band ends at num_chunks.
 // Fewer chunks than bands keep the floor split [i * n / bands, (i + 1) * n / bands), which the K split's reducer
 // relies on to tell which senders staged nothing.
-inline uint32_t band_begin(uint32_t num_chunks, uint32_t bands, uint32_t band, uint32_t key) {
+// Out of line where RING_JOINT_BAND_BEGIN_OUT_OF_LINE is set: a ring_joint floater program calls it at several sites
+// per kernel (every band range, homes' and floaters'), in binaries near the kernel config buffer's size.
+#ifdef RING_JOINT_BAND_BEGIN_OUT_OF_LINE
+#define RING_JOINT_BAND_BEGIN_INLINE __attribute__((noinline)) inline
+#else
+#define RING_JOINT_BAND_BEGIN_INLINE inline
+#endif
+RING_JOINT_BAND_BEGIN_INLINE uint32_t band_begin(uint32_t num_chunks, uint32_t bands, uint32_t band, uint32_t key) {
     if (num_chunks < bands) {
         return band * num_chunks / bands;
     }

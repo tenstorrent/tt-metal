@@ -876,14 +876,45 @@ void kernel_main() {
     const uint32_t source_group_size = packed_schedule.source_group_size;
     const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
+    // Lands a state (max, sum, out) staged in half A of core (x, y) in the restore CBs: a K-split sender's on the
+    // reducer, a floater's on its home. Half A holds one entry at the same L1 offset on every core. Out of line in a
+    // floater program, where both call it; inlined at the reducer's one call otherwise.
+    auto land_state_body = [&](uint32_t x, uint32_t y) {
+        constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
+        UnicastEndpoint remote_l1;
+        auto pull = [&](CircularBuffer& cb, uint32_t source_cb, uint32_t tiles) {
+            cb.reserve_back(tiles);
+            noc.async_read(
+                remote_l1,
+                CoreLocalMem<uint32_t>(cb.get_write_ptr()),
+                tiles * get_tile_size(source_cb),
+                {.noc_x = x, .noc_y = y, .addr = CircularBuffer(source_cb).get_read_ptr()},
+                {});
+        };
+        CircularBuffer in_max(cb_max_in);
+        CircularBuffer in_sum(ksplit_cb_sum_in);
+        CircularBuffer in_out(cb_prev_out);
+        pull(in_max, cb_max_A, Sq_chunk_t);
+        pull(in_sum, cb_sum_A, Sq_chunk_t);
+        pull(in_out, cb_out_im_A, out_tiles);
+        noc.async_read_barrier();
+        in_max.push_back(Sq_chunk_t);
+        in_sum.push_back(Sq_chunk_t);
+        in_out.push_back(out_tiles);
+    };
+    auto land_state_out_of_line = [&](uint32_t x, uint32_t y) __attribute__((noinline)) { land_state_body(x, y); };
+    auto land_state = [&](uint32_t x, uint32_t y) {
+        if constexpr (floaters) {
+            land_state_out_of_line(x, y);
+        } else {
+            land_state_body(x, y);
+        }
+    };
     if (floater_home && ksplit_active) {
         // Land the floaters' partials of this core's donated pieces in ring order, each read from its floater's half A
         // once staged there (their bits follow the senders', ordinals ksplit_count + 1 + piece), and tell the floater
-        // its half A is free. Half A holds one entry at the same L1 offset on every core, as for the K split's senders.
-        // Compute's merge of the first frees the restore CBs for the second. The ring loop below pushes nothing compute
-        // needs on a K-split core, so this waits here.
-        constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
-        UnicastEndpoint floater_l1;
+        // its half A is free. Compute's merge of the first frees the restore CBs for the second. The ring loop below
+        // pushes nothing compute needs on a K-split core, so this waits here.
         for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
             const uint32_t a = floater_args + 1 + piece * ring_joint::kFloaterHomePieceArgs;
             // An inactive ring iteration runs on no core: no floater visits it, and compute expects no partial.
@@ -893,26 +924,8 @@ void kernel_main() {
             const uint32_t x = get_arg_val<uint32_t>(a);
             const uint32_t y = get_arg_val<uint32_t>(a + 1);
             ksplit_bits.wait(ring_joint::piece_ordinal(ksplit_count, piece));
-            auto pull = [&](CircularBuffer& cb, uint32_t source_cb, uint32_t tiles) {
-                cb.reserve_back(tiles);
-                noc.async_read(
-                    floater_l1,
-                    CoreLocalMem<uint32_t>(cb.get_write_ptr()),
-                    tiles * get_tile_size(source_cb),
-                    {.noc_x = x, .noc_y = y, .addr = CircularBuffer(source_cb).get_read_ptr()},
-                    {});
-            };
-            CircularBuffer in_max(cb_max_in);
-            CircularBuffer in_sum(ksplit_cb_sum_in);
-            CircularBuffer in_out(cb_prev_out);
-            pull(in_max, cb_max_A, Sq_chunk_t);
-            pull(in_sum, cb_sum_A, Sq_chunk_t);
-            pull(in_out, cb_out_im_A, out_tiles);
-            noc.async_read_barrier();
+            land_state(x, y);
             ksplit_bits.signal(noc, x, y, get_arg_val<uint32_t>(a + 2));
-            in_max.push_back(Sq_chunk_t);
-            in_sum.push_back(Sq_chunk_t);
-            in_out.push_back(out_tiles);
         }
         noc.async_atomic_barrier();
     }
@@ -1464,34 +1477,14 @@ void kernel_main() {
             staged.pop_front(1);
         } else if (ksplit_active) {
             // Reducer: land each sender's state in the restore CBs, one at a time (they hold one entry each).
-            constexpr uint32_t out_tiles = Sq_chunk_t * vDHt;
             static_assert(
                 !ksplit_enabled || get_tile_size(cb_out_im_A) == get_tile_size(cb_prev_out),
                 "K split copies out tiles raw");
-            UnicastEndpoint sender_l1;
             for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
-                const uint32_t x = get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender);
-                const uint32_t y = get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender + 1);
                 ksplit_bits.wait(sender + 1);
-                auto pull = [&](CircularBuffer& cb, uint32_t source_cb, uint32_t tiles) {
-                    cb.reserve_back(tiles);
-                    noc.async_read(
-                        sender_l1,
-                        CoreLocalMem<uint32_t>(cb.get_write_ptr()),
-                        tiles * get_tile_size(source_cb),
-                        {.noc_x = x, .noc_y = y, .addr = CircularBuffer(source_cb).get_read_ptr()},
-                        {});
-                };
-                CircularBuffer in_max(cb_max_in);
-                CircularBuffer in_sum(ksplit_cb_sum_in);
-                CircularBuffer in_out(cb_prev_out);
-                pull(in_max, cb_max_A, Sq_chunk_t);
-                pull(in_sum, cb_sum_A, Sq_chunk_t);
-                pull(in_out, cb_out_im_A, out_tiles);
-                noc.async_read_barrier();
-                in_max.push_back(Sq_chunk_t);
-                in_sum.push_back(Sq_chunk_t);
-                in_out.push_back(out_tiles);
+                land_state(
+                    get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender),
+                    get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender + 1));
             }
             ksplit_bits.reset_after_run();
 

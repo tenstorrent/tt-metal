@@ -3386,6 +3386,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         "gather_cache_tiles",
         std::min(input_tensor_k.padded_shape()[2], input_tensor_v.padded_shape()[2]) / tt::constants::TILE_HEIGHT);
     compute_kernel.defines = kernel_defines;
+    if (floaters) {
+        // A floater program's one binary set carries both roles. To fit the kernel config buffer it keeps the
+        // data-format reconfiguration (compute_streaming.hpp) and the band split (ring_attention_slice_readiness.hpp)
+        // out of line; programs without floaters keep both inlined.
+        compute_kernel.defines.emplace_back("SDPA_RECONFIG_OUT_OF_LINE", "1");
+        for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
+            kernel->defines.emplace_back("RING_JOINT_BAND_BEGIN_OUT_OF_LINE", "1");
+        }
+    }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

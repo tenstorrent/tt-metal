@@ -304,13 +304,30 @@ constexpr bool sdpa_unpack_format_changed() {
 #endif
 }
 
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH)
+#ifdef SDPA_RECONFIG_OUT_OF_LINE
+// One out-of-line copy of the unpack/math data-format reconfiguration for every SDPA site, for programs whose binaries
+// are near the kernel config buffer's size (the ring_joint factory sets the define): inlined with constant CB indices,
+// each site folds its own copy of the LLK reconfiguration (~100-470 B on the unpacker).
+static __attribute__((noinline, noclone)) void sdpa_reconfig_data_format(
+    uint32_t srca_old_cb, uint32_t srca_new_cb, uint32_t srcb_old_cb, uint32_t srcb_new_cb) {
+    reconfig_data_format(srca_old_cb, srca_new_cb, srcb_old_cb, srcb_new_cb);
+}
+#else
+ALWI void sdpa_reconfig_data_format(
+    uint32_t srca_old_cb, uint32_t srca_new_cb, uint32_t srcb_old_cb, uint32_t srcb_new_cb) {
+    reconfig_data_format(srca_old_cb, srca_new_cb, srcb_old_cb, srcb_new_cb);
+}
+#endif
+#endif
+
 template <uint32_t srca_old_cb, uint32_t srca_new_cb, uint32_t srcb_old_cb, uint32_t srcb_new_cb>
 ALWI void sdpa_maybe_reconfig_data_format() {
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
     if constexpr (
         sdpa_unpack_format_changed<srca_old_cb, srca_new_cb>() ||
         sdpa_unpack_format_changed<srcb_old_cb, srcb_new_cb>()) {
-        reconfig_data_format(srca_old_cb, srca_new_cb, srcb_old_cb, srcb_new_cb);
+        sdpa_reconfig_data_format(srca_old_cb, srca_new_cb, srcb_old_cb, srcb_new_cb);
     }
 #endif
 }
@@ -321,7 +338,7 @@ ALWI void sdpa_maybe_reconfig_data_format(uint32_t runtime_srca_old_cb, uint32_t
     if constexpr (
         sdpa_unpack_format_changed<srca_old_cb, srca_new_cb>() ||
         sdpa_unpack_format_changed<srcb_old_cb, srcb_new_cb>()) {
-        reconfig_data_format(runtime_srca_old_cb, srca_new_cb, runtime_srcb_old_cb, srcb_new_cb);
+        sdpa_reconfig_data_format(runtime_srca_old_cb, srca_new_cb, runtime_srcb_old_cb, srcb_new_cb);
     }
 #endif
 }
