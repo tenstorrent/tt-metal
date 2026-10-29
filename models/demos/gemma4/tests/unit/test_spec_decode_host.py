@@ -2538,6 +2538,21 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     assert not skew.calibrated(("step", (5, 5), 263168)), "its step cost still reads the table"
     skew.note_step(("step", (5, 5), 263168), 200.0, 10, True, 200.0, 5)  # 2 per row joins the pool
     assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(3.0 + 0.25 * (2.0 - 3.0))
+    # a pool no step fed for pool_stale intervals is stale: the model decides again (the K=5 pool the 31B QB2
+    # froze at 1.54 after an exit outranked by its K=3 sibling for the server's life); any noted step is the clock
+    stale = Calibration(2, pool_stale=3)
+    for tokens in (3, 3):
+        stale.note_step(("step", (1, 5), 2048), 50.0, tokens, True, 45.0, 1)
+    assert stale.tokens_per_row(("step", (1, 5), 2048)) == 3.0
+    for _ in range(3):
+        stale.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
+    assert stale.tokens_per_row(("step", (1, 5), 2048)) == 3.0, "fed 3 intervals ago: fresh"
+    stale.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
+    assert stale.tokens_per_row(("step", (1, 5), 2048)) is None, "4 intervals: stale"
+    stale.note_step(("step", (1, 5), 2048), 50.0, 4, True, 45.0, 1)
+    assert stale.tokens_per_row(("step", (1, 5), 2048)) == pytest.approx(3.25), "one fresh sample revives it"
+    assert SpecPolicyConfig.from_env({"GEMMA4_SPEC_POOL_STALE_STEPS": "7"}).pool_stale == 7
+    assert SpecPolicy(SpecPolicyConfig(pool_stale=9), 5).calibration.pool_stale == 9
     regime = Calibration(2)  # four random-prompt verifies at 1.5 a row, then prose at 3.3: the estimate follows
     for tokens in (1.5, 1.5, 1.5, 1.5):
         regime.note_step(("step", (1, 5), 2048), 50.0, tokens, True, 45.0, 1)
@@ -2607,9 +2622,18 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     # the measured tokens per row of a calibrated record replace the acceptance model
     measured = [RecordCandidate((8, 3), 2048, 35.0, 0.0, tokens_per_row=1.2)]
     assert rank_records(measured, [row], _PLAIN)[0].expected_tokens == pytest.approx(1.2)
+    # ... and is bounded above by the rows' observed acceptance: a pool is the last steps served on the record,
+    # the rows say what they accept now (a 3.9 pool against a row at 0.4 a position credits the row's 1.62)
+    generous = [RecordCandidate((8, 3), 2048, 35.0, 0.0, tokens_per_row=3.9)]
+    assert rank_records(generous, [row], _PLAIN)[0].expected_tokens == pytest.approx(row.expected_tokens(3))
+    assert rank_records(generous, [row, row], _PLAIN, optimistic=(1,))[0].expected_tokens == pytest.approx(
+        min(row.expected_tokens(3) + 4.0, 3.9 * 2)
+    )
     assert SpecPolicy(SpecPolicyConfig(), 5).decide(measured, [row], _PLAIN, 3) is None
     partial = [RecordCandidate((8, 3), 2048, 55.0, 0.0, members=(0,), tokens_per_row=3.0)]
-    assert rank_records(partial, [row, row], _PLAIN)[0].expected_tokens == pytest.approx(3.0 + 1.0)
+    assert rank_records(partial, [row, row], _PLAIN)[0].expected_tokens == pytest.approx(
+        min(3.0, row.expected_tokens(3)) + 1.0
+    ), "the member row's measured credit, bounded by its acceptance, plus the left-out row's plain token"
 
 
 def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length(expect_error=None):

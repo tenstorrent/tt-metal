@@ -194,6 +194,8 @@ SPEC_CALIB_MIN_ENV = "GEMMA4_SPEC_CALIB_MIN"
 SPEC_CALIB_MIN_DEFAULT = "8"
 SPEC_CALIB_PROBE_STEPS_ENV = "GEMMA4_SPEC_CALIB_PROBE_STEPS"
 SPEC_CALIB_PROBE_STEPS_DEFAULT = "256"
+SPEC_POOL_STALE_ENV = "GEMMA4_SPEC_POOL_STALE_STEPS"
+SPEC_POOL_STALE_DEFAULT = "128"
 #: The env knobs the policy reads, for harnesses that clear the shell's values.
 SPEC_POLICY_ENV = (
     SPEC_ADAPTIVE_ENV,
@@ -210,6 +212,7 @@ SPEC_POLICY_ENV = (
     SPEC_CALIB_PROBE_STEPS_ENV,
     SPEC_TRIAL_GAIN_ENV,
     SPEC_TRIAL_STEPS_ENV,
+    SPEC_POOL_STALE_ENV,
 )
 #: The EWMA weight of the request-length estimate (steps per request) the entry horizon is capped by.
 CALIB_EWMA = 0.25
@@ -287,6 +290,7 @@ class SpecPolicyConfig:
     calib_probe_steps: int = 256
     trial_gain: float = 0.6
     trial_steps: int = 3
+    pool_stale: int = 128
 
     @classmethod
     def from_env(cls, env=None):
@@ -311,6 +315,7 @@ class SpecPolicyConfig:
             calib_probe_steps=_env_int(env, SPEC_CALIB_PROBE_STEPS_ENV, SPEC_CALIB_PROBE_STEPS_DEFAULT, low=0),
             trial_gain=_env_float(env, SPEC_TRIAL_GAIN_ENV, SPEC_TRIAL_GAIN_DEFAULT, low=0.0),
             trial_steps=_env_int(env, SPEC_TRIAL_STEPS_ENV, SPEC_TRIAL_STEPS_DEFAULT, low=1),
+            pool_stale=_env_int(env, SPEC_POOL_STALE_ENV, SPEC_POOL_STALE_DEFAULT, low=1),
         )
 
 
@@ -521,7 +526,9 @@ def rank_records(candidates, rows, plain_ms, optimistic=()):
     the rung: the trial's hypothesis for new rows. A measured record (``tokens_per_row``) credits them its
     measured tokens like every other row: what its replays delivered is known, and a wave of new rows
     cannot argue with it (the 26B at eight rows: seven new rows of eight re-trialed a record measured at 1.5
-    tokens a row every wave)."""
+    tokens a row every wave). The measured credit is bounded above by what the rows' observed acceptance
+    predicts: a pool is an EWMA of the steps last served on the record, and the rows say what they accept now.
+    """
     n = len(rows)
     if n < 1:
         raise ValueError("rank_records needs at least one drafting row")
@@ -541,12 +548,11 @@ def rank_records(candidates, rows, plain_ms, optimistic=()):
         if members is not None and (not members or any(i < 0 or i >= n for i in members)):
             raise ValueError(f"record {cand.shape} names members {members} outside the {n} rows")
         inside = range(n) if members is None else members
+        hoped = sum(1 for i in inside if i in optimistic)
+        tokens = sum(rows[i].expected_tokens(k_v) for i in inside if i not in optimistic) + (n - len(inside))
+        tokens += hoped * (k_v + 1)
         if cand.tokens_per_row is not None:
-            tokens = float(cand.tokens_per_row) * len(inside) + (n - len(inside))
-        else:
-            hoped = sum(1 for i in inside if i in optimistic)
-            tokens = sum(rows[i].expected_tokens(k_v) for i in inside if i not in optimistic) + (n - len(inside))
-            tokens += hoped * (k_v + 1)
+            tokens = min(tokens, float(cand.tokens_per_row) * len(inside) + (n - len(inside)))
         gain = (tokens / n) / (cost / plain_ms)
         ranked.append(
             RecordChoice(
@@ -714,9 +720,11 @@ class Calibration:
 
     CAUSES = ("prefill", "reseed", "switch", "rows", "untabled", "idle")
 
-    def __init__(self, min_samples, alpha=CALIB_EWMA):
+    def __init__(self, min_samples, alpha=CALIB_EWMA, pool_stale=128):
         self.min_samples = int(min_samples)
         self.alpha = float(alpha)
+        self.pool_stale = int(pool_stale)
+        self.intervals = 0  # every step noted (the clock a pool's freshness is read against)
         if self.min_samples < 1:
             raise ValueError(f"Calibration needs min_samples >= 1, got {min_samples}")
         self.modes = {}
@@ -734,7 +742,8 @@ class Calibration:
         self.steps_since = {}  # mode kind ("plain" / "step") -> steps since its last clean sample
         # The measured tokens per live row the decision reads, as an EWMA (``alpha``) over the counted samples
         # of a pool: the records of one draft length at one rung share a pool (the drafter's acceptance does
-        # not depend on the record's rows), the plain step at a bucket is its own. [ewma, samples]
+        # not depend on the record's rows), the plain step at a bucket is its own. [ewma, samples, interval of the
+        # last sample]: a pool no step fed for ``pool_stale`` intervals is stale and the model decides again.
         self.tokens_pool = {}
 
     def note_step(self, mode, wall_ms, tokens, clean, table_ms, live_rows=1, cause=None, idle=False):
@@ -742,6 +751,7 @@ class Calibration:
         compared to ``table_ms``, the warmup table at the step's position; an unclean step names its ``cause``,
         an ``idle`` one (every row of the previous step ended before this one) is reported and never counted."""
         mode = tuple(mode)
+        self.intervals += 1
         if idle:
             clean, cause = False, "idle"
         # the step right after a reseed carries the entry (charged as entry_ms): it is reported, never a cost
@@ -756,10 +766,11 @@ class Calibration:
             # the acceptance pool is steady-state: a dirty step (the one right after a reseed, a switch, a prefill)
             # calibrates the wall but not the tokens per row, else a retry's single first step (reseed + the
             # drafts from a fresh seed) ratchets the pool down and the next retry is declined before it runs
-            pool = self.tokens_pool.setdefault(self._tokens_pool_key(mode), [None, 0])
+            pool = self.tokens_pool.setdefault(self._tokens_pool_key(mode), [None, 0, 0])
             per_row = float(tokens) / max(int(live_rows), 1)
             pool[0] = per_row if pool[0] is None else pool[0] + self.alpha * (per_row - pool[0])
             pool[1] += 1
+            pool[2] = self.intervals
         for total in (self.total, self.window_total):
             total[0] += 1
             total[1] += float(wall_ms)
@@ -837,9 +848,12 @@ class Calibration:
         point that followed and kept it plain, the 12B Galaxy 2026-10-29). A record's samples are pooled over
         the records of its draft length at its rung (``("step", (rows, k), width)`` for every ``rows``): the
         drafter's acceptance does not depend on the record's rows, so a record the serving never replayed
-        reads its calibrated sibling's."""
+        reads its calibrated sibling's. A pool no step fed for ``pool_stale`` intervals is stale (None): the
+        last samples before an exit are the low ones that caused it, and a stale reading of them ranked the
+        31B QB2's K=5 record (1.54 a row, frozen) under its K=3 sibling (3.55) for the rest of the server's
+        life while the rows' observed acceptance said 3.3 (2026-10-29 sweep)."""
         pool = self.tokens_pool.get(self._tokens_pool_key(mode))
-        if pool is not None and pool[1] >= self.min_samples:
+        if pool is not None and pool[1] >= self.min_samples and self.intervals - pool[2] <= self.pool_stale:
             return pool[0]
         return None
 
@@ -938,7 +952,7 @@ class SpecPolicy:
         self.config = config
         self.k_max = int(k_max)
         self.prior = AcceptanceStats(self.k_max, config.ewma)
-        self.calibration = Calibration(config.calib_min)
+        self.calibration = Calibration(config.calib_min, pool_stale=config.pool_stale)
         self.declined = 0
         self.below_exit = 0
         self.below_cap = 0
