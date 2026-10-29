@@ -34,3 +34,7 @@ There is no matched Terminal8 control or GPU reference in this pilot. Its
 2.1 roster must not silently stand in for the Gemma Terminal89 2.0 roster;
 select the benchmark version before running Terminal89. This pilot does not
 support an accuracy or time projection for the full 89 tasks.
+
+The [Qwen model card](https://huggingface.co/Qwen/Qwen3.8-27B) reports 73.0
+on Terminal Bench 2.1 with Terminus. It gives no task-matched eight-case
+result for this pilot, so 25% and 73.0 are not a controlled comparison.

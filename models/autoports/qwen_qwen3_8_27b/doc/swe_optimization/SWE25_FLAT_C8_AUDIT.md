@@ -46,3 +46,8 @@ The review establishes no observed external answer retrieval in this run. It
 does not prove absence of pretraining contamination, packet-level network
 isolation, GPU parity, or statistical superiority. The trial envelope excludes
 server startup and artifact collection.
+
+The [Qwen model card](https://huggingface.co/Qwen/Qwen3.8-27B) reports 61.7
+on **SWE-bench Pro** using the Claude Code harness. This pilot uses
+**SWE-bench Verified** with mini-swe-agent, so that published score is a
+reference to a different benchmark and cannot be used as a parity target.
