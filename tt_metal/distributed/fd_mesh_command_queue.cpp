@@ -749,9 +749,8 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
         }
     }
 
-    auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
-    // This thread now waits on the devices and the reader thread; polling dispatch workers would only slow that.
-    dispatch_thread_pool_->close_spin_window();
+    // This thread waits right after this fan-out; polling dispatch workers would only slow that wait.
+    auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids, std::nullopt, ThreadPool::AfterFanOut::Park);
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
     this->wait_for_outstanding_reads(lock);
@@ -945,7 +944,8 @@ void FDMeshCommandQueue::submit_core_data_memcpy_request(
 MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
     ttsl::Span<const SubDeviceId> sub_device_ids,
     bool notify_host,
-    const std::optional<MeshCoordinateRange>& device_range) {
+    const std::optional<MeshCoordinateRange>& device_range,
+    ThreadPool::AfterFanOut after) {
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {
         // Return a dummy event for mock devices
@@ -980,7 +980,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
         device_ids.push_back(mesh_device_->impl().get_device(coord)->id());
     });
     dispatch_thread_pool_->parallel_for(
-        device_ids, [&dispatch_lambda, &coords](size_t i) { dispatch_lambda(coords[i]); });
+        device_ids, [&dispatch_lambda, &coords](size_t i) { dispatch_lambda(coords[i]); }, after);
     return event;
 }
 
@@ -999,7 +999,14 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event(
 
 MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host_nolock(
     ttsl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
-    auto event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/true, device_range);
+    return this->enqueue_record_event_to_host_nolock(sub_device_ids, device_range, ThreadPool::AfterFanOut::Spin);
+}
+
+MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host_nolock(
+    ttsl::Span<const SubDeviceId> sub_device_ids,
+    const std::optional<MeshCoordinateRange>& device_range,
+    ThreadPool::AfterFanOut after) {
+    auto event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/true, device_range, after);
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
         std::in_place_type<MeshReadEventDescriptor>,
         ReadEventDescriptor(event.impl().id()),

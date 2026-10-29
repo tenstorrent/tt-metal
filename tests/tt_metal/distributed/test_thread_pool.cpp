@@ -305,6 +305,23 @@ TEST(ThreadPoolTest, ParallelForNested) {
     EXPECT_EQ(leaves.load(), 1u << DEPTH);
 }
 
+// AfterFanOut::Park on every path (nothing to run, one participant, a full fan-out) still runs every call, and later
+// fan-outs run as before.
+TEST(ThreadPoolTest, ParallelForParkAfter) {
+    auto thread_pool = create_pool_per_device();
+    const auto device_ids = one_call_per_device(2);
+    const std::vector<uint32_t> one_device(4, 0);
+    std::atomic<uint32_t> runs = 0;
+    auto count = [&runs](size_t) { runs++; };
+    for (uint32_t iter = 0; iter < 200; iter++) {
+        thread_pool->parallel_for({}, count, ThreadPool::AfterFanOut::Park);
+        thread_pool->parallel_for(one_device, count, ThreadPool::AfterFanOut::Park);
+        thread_pool->parallel_for(device_ids, count, ThreadPool::AfterFanOut::Park);
+        thread_pool->parallel_for(device_ids, count);
+    }
+    EXPECT_EQ(runs.load(), 200 * (one_device.size() + 2 * device_ids.size()));
+}
+
 // Destroying the pool right after a fan-out, while workers may still hold the job, is safe.
 TEST(ThreadPoolTest, ParallelForThenDestroy) {
     auto device_ids = one_call_per_device(1);

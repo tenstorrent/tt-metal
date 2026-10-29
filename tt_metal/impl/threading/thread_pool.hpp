@@ -29,13 +29,16 @@ public:
     // will choose a thread based on a round robin distribution strategy.
     virtual void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) = 0;
     virtual void wait() = 0;
+    // What idle workers do after a parallel_for: poll through the pool's spin window, or park as soon as their calls
+    // are done, for a caller that waits on something slow right after.
+    enum class AfterFanOut : uint8_t { Spin, Park };
     // Calls fn(i) for each i in [0, device_ids.size()) and returns once all calls have finished. Calls may run
     // concurrently, on the workers or on the calling thread, but calls for the same device run one at a time, in index
     // order. Rethrows the first exception thrown by fn. Independent of enqueue() and wait().
-    virtual void parallel_for(ttsl::Span<const uint32_t> device_ids, const std::function<void(size_t)>& fn) = 0;
-    // For a caller about to wait on something slow: closes idle workers' spin window, so they park now instead of
-    // polling. Does not wait for them; they get a new spin window after the next fan-out.
-    virtual void close_spin_window() {}
+    virtual void parallel_for(
+        ttsl::Span<const uint32_t> device_ids,
+        const std::function<void(size_t)>& fn,
+        AfterFanOut after = AfterFanOut::Spin) = 0;
 };
 
 // API accespting the number of threads to spawn in the pool. Will bind each thread to a CPU core, but the
