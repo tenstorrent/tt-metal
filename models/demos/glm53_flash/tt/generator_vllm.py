@@ -252,7 +252,9 @@ def mesh_cache_root() -> Path | None:
 COMPILE_CHECK_ENV = "GLM53_VLLM_COMPILE_CHECK"  # "1" (default): seal the program cache after the last capture
 MEM_LOG_ENV = "GLM53_VLLM_MEM_LOG"  # "1": log the DRAM allocator's state after every eager prefill device chunk
 WAVE_TRACE_LENGTHS_ENV = "GLM53_VLLM_WAVE_TRACE_LENGTHS"  # the per-row wave lengths captured at boot (rows_independent)
-DEFAULT_WAVE_TRACE_LENGTHS = "128,256,512"
+DEFAULT_WAVE_TRACE_LENGTHS = (
+    "256,512"  # 256 = the smallest: the 45-layer wave gate validated it; a 128-token prompt pads to it
+)
 SP_TRACES_ENV = "GLM53_VLLM_SP_TRACES"  # "1": keep the sequence-parallel prefill traces under per-row ownership
 
 
@@ -1338,7 +1340,8 @@ class GLM53FlashForCausalLM:
 
     def _wave_trace_lengths(self) -> list[int]:
         """The per-row wave lengths captured at boot: ``GLM53_VLLM_WAVE_TRACE_LENGTHS``, a comma list drawn from the
-        model's ``wave_trace_lengths`` (``all`` = every one, ``0`` = none: eager waves only; default 128,256,512).
+        model's ``wave_trace_lengths`` (``all`` = every one, ``0`` = none: eager waves only; default 256,512: the
+        45-layer wave gate validated the 256-row wave, to which a shorter prompt pads, as the eager path does).
         A wave trace of T rows per row costs about the SP trace of rows x T tokens: the 1024 / 2048-row waves are
         the 8 K / 16 K-token class serving never traced, and with the prefill traces they overflowed the 512 MB
         trace region on the 8x4 (2026-10-29: 550 MB at the first wave capture). Longer prompts take the eager wave;
