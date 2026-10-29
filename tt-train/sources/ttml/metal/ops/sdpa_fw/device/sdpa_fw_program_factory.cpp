@@ -334,9 +334,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // waits on one of its core's semaphores until every sender has bumped it. The scratch is owned by the
     // cached program, so it lives as long as the cache entry: num_slots * rows * (vWt + 2) fp32 tiles.
     // An item is cut only when it is heavier than a core's fair share, so the cut items' pieces, and the
-    // slots, number fewer than num_cores: under 120 * 4 * 6 tiles = 11 MiB at D=128 with 4-row items, and
-    // less in practice (the default picks need about 60 slots). Shapes with enough items per core cut
-    // nothing and own none. The scratch is DRAM whatever the inputs' placement.
+    // slots, number at most num_cores: 120 * 4 * 6 tiles = 11 MiB at D=128 with 4-row items, scaling with
+    // the rows of an item, and less in practice (the default picks need about 60 slots). Shapes with
+    // enough items per core cut nothing and own none. The scratch is DRAM whatever the inputs' placement.
     std::optional<ttnn::Tensor> scratch;
     if (split_units) {
         [[maybe_unused]] auto cb_partial_in = create_circular_buffer(

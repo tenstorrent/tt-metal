@@ -2281,6 +2281,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
     // Enough items per core: nothing is cut, every core gets whole items.
     const SDPAForwardShape tinyllama = causal_shape(1U, 32U, 4U, 64U, 2U);
     const SDPAForwardChunks sq4sk8{.Sq_chunk_t = 4U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
+    const SDPAForwardChunks sq4sk1{.Sq_chunk_t = 4U, .Sk_chunk_t = 1U, .heads_per_item = 1U};
     const SDPAForwardSchedule uncut = make_schedule(tinyllama, sq4sk8, kCores, kDefaultMaxPieces);
     EXPECT_EQ(uncut.num_slots, 0U);
     EXPECT_EQ(count_role(uncut, UnitRole::Sender), 0U);
@@ -2311,6 +2312,14 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
     EXPECT_LT(roomy.predicted_us, make_schedule(tp4, sq4sk4, kCores, 1U).predicted_us);
     check_schedule(tp4, sq4sk4, roomy, kDefaultMaxPieces);
 
+    // Equal items on as many cores: the fair share is an item's cost up to a rounding, and a tie must not
+    // cut every item in two (3 heads, S=128, one-chunk items of 4 steps on 3 cores).
+    const SDPAForwardShape equal_items = causal_shape(1U, 3U, 3U, 4U, 1U);
+    const SDPAForwardSchedule tie = make_schedule(equal_items, sq4sk1, 3U, kDefaultMaxPieces);
+    EXPECT_EQ(tie.num_slots, 0U) << "equal items on as many cores must not be cut";
+    EXPECT_EQ(tie.per_core.size(), 3U);
+    check_schedule(equal_items, sq4sk1, tie, kDefaultMaxPieces);
+
     // max_pieces = 1 never cuts.
     const SDPAForwardSchedule one_piece = make_schedule(two_heads, sq4sk8, kCores, 1U);
     EXPECT_EQ(one_piece.num_slots, 0U);
@@ -2319,7 +2328,6 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
     // One head with one K tile per step: items of up to 64 steps cut into many pieces, more partials than
     // any device test reaches, several mergers on one core.
     const SDPAForwardShape one_head = causal_shape(1U, 1U, 1U, 64U, 2U);
-    const SDPAForwardChunks sq4sk1{.Sq_chunk_t = 4U, .Sk_chunk_t = 1U, .heads_per_item = 1U};
     const SDPAForwardSchedule many = make_schedule(one_head, sq4sk1, kCores, 16U);
     uint32_t most_partials = 0;
     for (const auto& units : many.per_core) {

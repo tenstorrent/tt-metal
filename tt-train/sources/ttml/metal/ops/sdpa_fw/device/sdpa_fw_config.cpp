@@ -315,7 +315,10 @@ SDPAForwardSchedule schedule_pieces(
     for (uint32_t item = 0; item < total_items; ++item) {
         total += fixed + step * num_kv_steps(shape, chunks, item);
     }
+    // An item is cut when it is heavier than the fair share by a margin: equal items on as many cores sum
+    // to a fair share one rounding away from an item's cost, and a tie must not cut every item in two.
     const double fair = total / num_cores;
+    const double cut_above = fair * (1.0 + 1e-6);
 
     // Cut the heavy items. Pieces of one item are consecutive in `pieces`, the merger last.
     std::vector<Piece> pieces;
@@ -328,7 +331,7 @@ SDPAForwardSchedule schedule_pieces(
         const uint32_t steps = num_kv_steps(shape, chunks, item);
         const double cost = fixed + step * steps;
         uint32_t n = 1U;
-        if (max_pieces > 1U && cost > fair && steps >= 2U * kMinStepsPerPiece) {
+        if (max_pieces > 1U && cost > cut_above && steps >= 2U * kMinStepsPerPiece) {
             n = std::min({static_cast<uint32_t>(std::ceil(cost / fair)), max_pieces, steps / kMinStepsPerPiece});
         }
         if (n <= 1U) {
