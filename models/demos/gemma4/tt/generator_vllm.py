@@ -4786,6 +4786,7 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
         # window.
         self._spec_last_propose = None
         self._spec_prefills_since = 0
+        self._spec_dropped_since = 0  # rows (sessions) that ended since the last proposal: an idle interval test
         self._spec_entry_since = False
         self._spec_call_phases = {}
         self._spec_last_phase_ms = 0.0
@@ -4862,9 +4863,16 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
         self._spec_policy.calibration.note_phase(phase, ms)
         return out
 
-    def _spec_note_prefill(self):
+    def _spec_note_prefill(self, empty_slots=None):
+        """A prefill ran; ``empty_slots`` (the dFlash rail, which keeps no per-row session) are rows that ended."""
         self._spec_prefills_since += 1
+        if empty_slots is not None:
+            self._spec_dropped_since += len(list(empty_slots))
         self._spec_policy.calibration.note_prefill()
+
+    def _spec_note_row_ended(self):
+        """A row's session ended (the MTP rail): the interval that holds it is idle when every row did."""
+        self._spec_dropped_since += 1
 
     def _spec_note_entry(self, shape, ms, table_ms=None):
         """A reseed (or bootstrap) of ``shape`` took ``ms`` against the table's ``table_ms``: the interval it
@@ -4874,13 +4882,15 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
 
     def _spec_interval_begin(self, live_rows, tokens):
         """At the top of a proposal: the wall since the previous proposal began is one step of the mode that
-        proposal decided, a clean sample unless a prefill ran inside it, a reseed started it, the mode changed
-        at its start or the live rows changed (the cause is kept for the stats line); ``tokens`` is what the
-        runner committed in it."""
+        proposal decided, counted dirty or clean (a prefill ran inside it, a reseed started it, the mode changed
+        at its start or the live rows changed: the cause is kept for the stats line), unless it is idle: a
+        prefill ran and every row the previous proposal served ended before this one, so the wall is the gap
+        between requests, not the mode's work; ``tokens`` is what the runner committed in it."""
         now = time.perf_counter()
         last = self._spec_last_propose
         if last is not None:
             t_begin, mode, prev_live, before, table_ms = last
+            idle = bool(self._spec_prefills_since) and self._spec_dropped_since >= int(prev_live)
             if self._spec_prefills_since:
                 cause = "prefill"
             elif self._spec_entry_since:
@@ -4894,9 +4904,10 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
             else:
                 cause = None
             self._spec_policy.calibration.note_step(
-                mode, (now - t_begin) * 1e3, tokens, cause is None, table_ms, prev_live, cause
+                mode, (now - t_begin) * 1e3, tokens, cause is None, table_ms, prev_live, cause, idle=idle
             )
         self._spec_prefills_since = 0
+        self._spec_dropped_since = 0
         self._spec_entry_since = False
         self._spec_call_phases = {}
         self._spec_mode_now = None
@@ -5870,7 +5881,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         if args:
             kwargs["tokens"] = args[0]
             args = args[1:]
-        self._spec_note_prefill()
+        self._spec_note_prefill(kwargs.get("empty_slots"))
         tokens = kwargs.get("tokens")
         rows = int(tokens.shape[0]) if tokens is not None else 1
         prompt_lens = kwargs.get("prompt_lens")
@@ -6449,11 +6460,14 @@ SPEC_DRAFT_LEN_ENV = "GEMMA4_SPEC_DRAFT_LEN"
 #   GEMMA4_SPEC_PLAIN_STEP_MS     the plain decode step cost (``ms`` flat, or ``ms_at_0,ms_at_top``); unset = timed
 #                                 at warmup at position 0 and at the top position, per warmed decode bucket (every
 #                                 cost is a line in the position)
-#   GEMMA4_SPEC_CALIB_MIN=8       clean serving samples of a mode (the plain step at a bucket, a record at a rung)
+#   GEMMA4_SPEC_CALIB_MIN=8       counted serving samples of a mode (the plain step at a bucket, a record at a rung)
 #                                 after which the median ratio of its measured walls to the table scales the
-#                                 table at the step's position in the decision (outliers above 3x are reported,
-#                                 never used); the measured tokens per row (the window mean, pooled over the
-#                                 records of one draft length at the rung) and the reseed as served follow
+#                                 table at the step's position in the decision; every interval counts, dirty
+#                                 ones included (the prefill, switch, reseed or row change inside it is the
+#                                 served cost of the mode in force), except idle intervals (the batch emptied)
+#                                 and clean outliers above 3x, which are reported, never used; the measured
+#                                 tokens per row (the window mean, pooled over the records of one draft length
+#                                 at the rung) and the reseed as served follow
 #   GEMMA4_SPEC_CALIB_PROBE_STEPS=256  steps a speculating batch serves without a plain sample before one plain
 #                                 step refreshes the plain estimate (overhead-gated like the retry; 0 = off)
 #   GEMMA4_SPEC_STATS_STEPS=256   proposals per "adaptive stats:" line (steps, tokens, clean walls per mode,
@@ -6970,6 +6984,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         session = self._mtp_sessions.pop(int(slot), None)
         if session is None:
             return
+        self._spec_note_row_ended()
         if session.steps:
             self._spec_policy.note_request_steps(session.steps)
             stats = session.stats

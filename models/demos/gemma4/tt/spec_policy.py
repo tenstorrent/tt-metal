@@ -104,17 +104,26 @@ too). The measured tokens per row are pooled over the records of one draft
 length at a rung: the drafter's acceptance does not depend on the record's
 rows, so a sibling record reads the calibrated one's instead of the model
 (which the batch prior inflates at the deep positions) and cannot outrank
-it on the model alone. A sample is clean when no prefill ran inside the
-interval, the mode did not change at its start, nothing reseeded at its
-start and the live rows stayed; a clean sample above ``OUTLIER_FACTOR``
-times the running median (a wait that is not the mode's work, such as the
-lock-step wait on another engine's prefill) is an outlier, reported and
-never averaged in. Once a mode has ``GEMMA4_SPEC_CALIB_MIN`` clean samples
-the decision reads the table scaled by its ratio and the measured tokens per
-row instead of the acceptance model; the entry rule compares that against
-the measured plain step, with the reseed as served, over a horizon capped
-by the measured request length in steps (``note_request_steps``): a short
-request cannot amortize a reseed a long one can. While one mode serves,
+it on the model alone. The decision reads the TOTAL wall of the mode in
+force: every interval counts, dirty ones included (a prefill ran inside
+it, the mode changed or a reseed ran at its start, the live rows changed),
+because the served latency carries them -- an arrival's prefill stalls a
+batch that speculation desynchronized, a join reseeds, a switch replays
+another record -- and a batch whose speculative steps each look profitable
+can still serve more ms per token than plain once those are in. Two kinds
+of interval are quarantined, reported and never averaged in: an idle one
+(every row the previous step served ended before the next proposal, so the
+wall is the gap between requests, not the mode's work) and a clean one
+above ``OUTLIER_FACTOR`` times the running median (a wait that is not the
+mode's work, such as the lock-step wait on another engine's prefill). The
+clean figures (no prefill, no switch, no reseed, no row change) stay on
+the stats line as the breakdown. Once a mode has ``GEMMA4_SPEC_CALIB_MIN``
+counted samples the decision reads the table scaled by its ratio and the
+measured tokens per row instead of the acceptance model; the entry rule
+compares that against the measured plain step, with the reseed as served,
+over a horizon capped by the measured request length in steps
+(``note_request_steps``): a short request cannot amortize a reseed a long
+one can. While one mode serves,
 after ``GEMMA4_SPEC_CALIB_PROBE_STEPS`` steps without a sample of the other
 one a bounded probe of the other mode (one step, overhead-gated like the
 retry) keeps both estimates fresh.
@@ -477,18 +486,35 @@ def rank_records(candidates, rows, plain_ms):
 class ModeStats:
     """What one mode (the plain step at a bucket, or a record at a rung) measured in serving.
 
-    ``steps``/``tokens`` count every step served in the mode and ``clean``
-    the samples that calibrate it. A clean sample is kept as its ratio to
-    the warmup table at the step's own position (so the position stays in
-    the model), in a window of the last ``CALIB_WINDOW`` samples whose
-    median calibrates the mode; a sample above ``OUTLIER_FACTOR`` times the
-    running median (a wait that is not this mode's work) goes to
-    ``outliers`` and is reported, never averaged in. ``rows_tokens`` keeps
-    the tokens per live row of the same samples, whose mean is the measured
-    tokens a step of the mode commits per row.
+    ``steps``/``tokens`` count every step served in the mode; ``busy`` the
+    samples that calibrate it (every interval with a table that was not idle
+    and not an outlier, dirty ones included: the mode in force pays for the
+    prefill, switch, reseed or row change inside it) and ``clean`` the
+    subset of them with none of those (the stats line's breakdown). A
+    counted sample is kept as its ratio to the warmup table at the step's
+    own position (so the position stays in the model), in a window of the
+    last ``CALIB_WINDOW`` samples whose median calibrates the mode; a clean
+    sample above ``OUTLIER_FACTOR`` times the running median (a wait that is
+    not this mode's work) goes to ``outliers``, an idle interval (the batch
+    emptied inside it) to ``idle``; both are reported, never averaged in.
+    ``rows_tokens`` keeps the tokens per live row of the counted samples,
+    whose mean is the measured tokens a step of the mode commits per row.
     """
 
-    __slots__ = ("steps", "tokens", "clean", "wall_sum", "tokens_sum", "ratios", "rows_tokens", "outliers")
+    __slots__ = (
+        "steps",
+        "tokens",
+        "clean",
+        "wall_sum",
+        "tokens_sum",
+        "busy",
+        "busy_wall",
+        "busy_tokens",
+        "ratios",
+        "rows_tokens",
+        "outliers",
+        "idle",
+    )
 
     def __init__(self):
         self.steps = 0
@@ -496,29 +522,43 @@ class ModeStats:
         self.clean = 0
         self.wall_sum = 0.0
         self.tokens_sum = 0
+        self.busy = 0
+        self.busy_wall = 0.0
+        self.busy_tokens = 0
         self.ratios = collections.deque(maxlen=CALIB_WINDOW)
         self.rows_tokens = collections.deque(maxlen=CALIB_WINDOW)
         self.outliers = [0, 0.0]  # count, ms
+        self.idle = [0, 0.0]  # count, ms
 
-    def note(self, wall_ms, tokens, clean, table_ms, live_rows):
-        """One step: ``wall_ms`` against ``table_ms`` (the warmup table at its position); clean samples calibrate."""
+    def note(self, wall_ms, tokens, clean, table_ms, live_rows, idle=False):
+        """One step: ``wall_ms`` against ``table_ms`` (the warmup table at its position). Every interval with a
+        table calibrates, dirty ones included, except an ``idle`` one (the batch emptied inside it) and a clean
+        one far above the running median (an outlier)."""
         self.steps += 1
         self.tokens += int(tokens)
-        if not clean or table_ms is None:
+        if idle:
+            self.idle[0] += 1
+            self.idle[1] += float(wall_ms)
+            return
+        if table_ms is None:
             return
         ratio = float(wall_ms) / max(float(table_ms), 1e-9)
-        if len(self.ratios) >= OUTLIER_MIN_SAMPLES and ratio > OUTLIER_FACTOR * self.ratio():
+        if clean and len(self.ratios) >= OUTLIER_MIN_SAMPLES and ratio > OUTLIER_FACTOR * self.ratio():
             self.outliers[0] += 1
             self.outliers[1] += float(wall_ms)
             return
-        self.clean += 1
-        self.wall_sum += float(wall_ms)
-        self.tokens_sum += int(tokens)
+        self.busy += 1
+        self.busy_wall += float(wall_ms)
+        self.busy_tokens += int(tokens)
+        if clean:
+            self.clean += 1
+            self.wall_sum += float(wall_ms)
+            self.tokens_sum += int(tokens)
         self.ratios.append(ratio)
         self.rows_tokens.append(float(tokens) / max(int(live_rows), 1))
 
     def ratio(self):
-        """The median ratio of the clean walls to the table, or None without a sample."""
+        """The median ratio of the counted walls (dirty included) to the table, or None without a sample."""
         return _median(self.ratios)
 
     def tokens_per_row(self):
@@ -529,17 +569,28 @@ class ModeStats:
         return sum(self.rows_tokens) / len(self.rows_tokens)
 
     def describe(self, name):
+        """``steps, tokens, clean`` then the clean breakdown (ms/step, tokens/step, ms/token), the total of the
+        counted samples (dirty included: the decision's figures) and the ratio; outliers and idle apart."""
         if self.clean:
             mean = self.wall_sum / self.clean
             tokens = self.tokens_sum / self.clean
             text = (
                 f"{name}: {self.steps} steps, {self.tokens} tokens, {self.clean} clean, {mean:.1f} ms/step, "
-                f"{tokens:.2f} tokens/step, {mean / max(tokens, 1e-9):.1f} ms/token, ratio {self.ratio():.2f}x"
+                f"{tokens:.2f} tokens/step, {mean / max(tokens, 1e-9):.1f} ms/token, "
             )
         else:
-            text = f"{name}: {self.steps} steps, {self.tokens} tokens, 0 clean"
+            text = f"{name}: {self.steps} steps, {self.tokens} tokens, 0 clean, "
+        if self.busy:
+            text += (
+                f"total {self.busy_wall / self.busy:.1f} ms/step "
+                f"{self.busy_wall / max(self.busy_tokens, 1):.1f} ms/token, ratio {self.ratio():.2f}x"
+            )
+        else:
+            text = text[:-2]
         if self.outliers[0]:
             text += f", outliers {self.outliers[0]} at {self.outliers[1] / self.outliers[0]:.1f} ms"
+        if self.idle[0]:
+            text += f", idle {self.idle[0]} at {self.idle[1] / self.idle[0]:.1f} ms"
         return text
 
 
@@ -568,11 +619,13 @@ class Calibration:
     ones since the last stats line; ``reseeds`` the reseed of each shape as
     served (count, ms, ratios to the table), ``dirty`` the steps whose
     interval was not a clean sample by cause (prefill, reseed, switch,
-    rows) and ``total`` every step's wall and tokens, both per window and
-    engine life, so the clean figures reconcile with the served latency.
+    rows, idle) and ``total`` every step's wall and tokens, both per window
+    and engine life, so the figures reconcile with the served latency. The
+    decision figures (``step_ms``, ``tokens_per_row``) are the modes' counted
+    samples: dirty intervals included, idle ones and outliers apart.
     """
 
-    CAUSES = ("prefill", "reseed", "switch", "rows", "untabled")
+    CAUSES = ("prefill", "reseed", "switch", "rows", "untabled", "idle")
 
     def __init__(self, min_samples, alpha=CALIB_EWMA):
         self.min_samples = int(min_samples)
@@ -593,12 +646,15 @@ class Calibration:
         self.window_total = [0, 0.0, 0]
         self.steps_since = {}  # mode kind ("plain" / "step") -> steps since its last clean sample
 
-    def note_step(self, mode, wall_ms, tokens, clean, table_ms, live_rows=1, cause=None):
+    def note_step(self, mode, wall_ms, tokens, clean, table_ms, live_rows=1, cause=None, idle=False):
         """One served step of ``mode`` (``("plain", bucket)`` or ``("step", shape, width)``) whose wall is
-        compared to ``table_ms``, the warmup table at the step's position; an unclean step names its ``cause``."""
+        compared to ``table_ms``, the warmup table at the step's position; an unclean step names its ``cause``,
+        an ``idle`` one (every row of the previous step ended before this one) is reported and never counted."""
         mode = tuple(mode)
+        if idle:
+            clean, cause = False, "idle"
         for table in (self.modes, self.window):
-            table.setdefault(mode, ModeStats()).note(wall_ms, tokens, clean, table_ms, live_rows)
+            table.setdefault(mode, ModeStats()).note(wall_ms, tokens, clean, table_ms, live_rows, idle)
         for total in (self.total, self.window_total):
             total[0] += 1
             total[1] += float(wall_ms)
@@ -640,14 +696,15 @@ class Calibration:
         return stats is not None and len(stats.ratios) >= self.min_samples
 
     def step_ms(self, mode, prior):
-        """``prior`` (the warmup table at the step's position) scaled by the mode's measured ratio once calibrated."""
+        """``prior`` (the warmup table at the step's position) scaled by the mode's measured ratio once calibrated:
+        the median over its counted intervals, dirty ones included (the total wall the mode in force served)."""
         stats = self.modes.get(tuple(mode))
         if stats is not None and len(stats.ratios) >= self.min_samples:
             return float(prior) * stats.ratio()
         return float(prior)
 
     def tokens_per_row(self, mode):
-        """The measured tokens per row and step of ``mode`` once ``min_samples`` clean samples exist, else None
+        """The measured tokens per row and step of ``mode`` once ``min_samples`` counted samples exist, else None
         (the model decides). A record's samples are pooled over the records of its draft length at its rung
         (``("step", (rows, k), width)`` for every ``rows``): the drafter's acceptance does not depend on the
         record's rows, so a record the serving never replayed reads its calibrated sibling's."""

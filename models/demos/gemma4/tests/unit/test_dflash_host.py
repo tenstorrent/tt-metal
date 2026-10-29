@@ -3754,7 +3754,8 @@ def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
     assert len(lines) == 2 and lines[0].startswith("Gemma4MTP adaptive stats: window 4 steps | (1,5)@1024: 3 steps")
     assert re.search(
         r"\(1,5\)@1024: 3 steps, 18 tokens, 2 clean, \d+\.\d ms/step, 6\.00 tokens/step, \d+\.\d ms/token, "
-        r"ratio \d+\.\d\dx \| reseeds 1 at \d+\.\d ms \| dirty 1 steps, \d+ ms: reseed 1/\d+ \| total 3 steps, "
+        r"total \d+\.\d ms/step \d+\.\d ms/token, ratio \d+\.\d\dx \| reseeds 1 at \d+\.\d ms \| "
+        r"dirty 1 steps, \d+ ms: reseed 1/\d+ \| total 3 steps, "
         r"\d+ ms, 18 tokens, \d+\.\d ms/token \| phases ms/call: tables \d+\.\d, refresh \d+\.\d, "
         r"reseed \d+\.\d, replay \d+\.\d, host \d+\.\d \| prefills 1 \| calibrated: none$",
         lines[0],

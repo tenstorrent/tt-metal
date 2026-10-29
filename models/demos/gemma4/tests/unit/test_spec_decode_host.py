@@ -2373,16 +2373,19 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     assert cost_at(30.0, 700) == 30.0 and cost_at((0, 30.0, 1000, 80.0), 250) == 42.5 and cost_at(line, 250) == 42.5
     assert CostLine.of(line) is line and CostLine.flat(7.0, 100) == CostLine(0, 7.0, 100, 7.0)
     assert CostLine(0, 30.0, 0, 80.0).at(10) == 30.0, "a line without a span is flat"
-    # online calibration: a mode reads the warmup table until it has min_samples clean steps, then the table
-    # scaled by the median ratio of its clean walls to the table at each step's own position
+    # online calibration: a mode reads the warmup table until it has min_samples counted steps, then the table
+    # scaled by the median ratio of its walls to the table at each step's own position; a dirty step (a prefill
+    # ran inside it) counts like a clean one: the mode in force served that wall (the batch points lost to plain
+    # on arrival stalls, joins and switches each clean step looked profitable through)
     calib = Calibration(2)
     mode = ("step", (8, 3), 2048)
     assert calib.step_ms(mode, 35.0) == 35.0 and not calib.calibrated(mode)
     calib.note_step(mode, 80.0, 3, True, 40.0, 1)  # ratio 2.0
-    calib.note_step(mode, 90.0, 3, False, 40.0, 1, cause="prefill")  # not clean: counted, never calibrates
-    assert calib.step_ms(mode, 35.0) == 35.0 and calib.modes[mode].steps == 2 and calib.modes[mode].clean == 1
+    calib.note_step(mode, 90.0, 3, False, 40.0, 1, cause="prefill")  # dirty: counted, calibrates, not clean
+    assert calib.calibrated(mode) and calib.step_ms(mode, 35.0) == pytest.approx(35.0 * 2.125)
+    assert calib.modes[mode].steps == 2 and calib.modes[mode].clean == 1 and calib.modes[mode].busy == 2
     calib.note_step(mode, 100.0, 3, True, 40.0, 1)  # ratio 2.5
-    assert calib.calibrated(mode) and calib.step_ms(mode, 35.0) == pytest.approx(35.0 * 2.25)
+    assert calib.step_ms(mode, 35.0) == pytest.approx(35.0 * 2.25)
     assert calib.step_ms(mode, 136.0) == pytest.approx(136.0 * 2.25), "the position stays in the table"
     assert calib.tokens_per_row(mode) == 3.0 and calib.modes[mode].tokens == 9
     assert calib.dirty == {"prefill": [1, 90.0]} and calib.total == [3, 270.0, 9]
@@ -2403,20 +2406,27 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(16.0 / 6)
     skew.note_step(("plain", 1), 80.0, 1, True, 80.0, 1)
     assert skew.tokens_per_row(("plain", 1)) is None, "the plain step pools nothing and needs its own samples"
-    # an outlier: above 3x the running median once four samples exist; reported, never averaged in
+    # an outlier: a clean sample above 3x the running median once four samples exist; reported, never averaged in
     for wall in (84.0, 88.0):
         calib.note_step(mode, wall, 3, True, 40.0, 1)
     calib.note_step(mode, 800.0, 3, True, 40.0, 1)
     assert calib.modes[mode].outliers == [1, 800.0] and calib.modes[mode].clean == 4
-    assert calib.step_ms(mode, 40.0) == pytest.approx(40.0 * 2.15)  # the median of 2.0, 2.5, 2.1, 2.2
+    # an idle interval (every row of the previous step ended before this one: the gap between requests) is
+    # reported, never counted; a dirty stall of any size the mode was in force for is counted
+    calib.note_step(mode, 16000.0, 1, False, 40.0, 1, cause="prefill", idle=True)
+    assert calib.dirty["idle"] == [1, 16000.0] and calib.modes[mode].idle == [1, 16000.0]
+    assert calib.modes[mode].busy == 5 and calib.step_ms(mode, 40.0) == pytest.approx(40.0 * 2.2)
+    calib.note_step(mode, 400.0, 3, False, 40.0, 1, cause="prefill")  # 10x the table: an arrival's prefill
+    assert calib.modes[mode].busy == 6 and calib.step_ms(mode, 40.0) == pytest.approx(40.0 * 2.225)
+    assert calib.dirty == {"prefill": [2, 490.0], "idle": [1, 16000.0]} and calib.tokens_per_row(mode) == 3.0
     assert calib.reseed_ms((8, 3), 250.0) == 250.0
     calib.note_reseed((8, 3), 300.0, 250.0)
     calib.note_reseed((8, 3), 350.0, 250.0)
     assert calib.reseed_ms((8, 3), 250.0) == pytest.approx(250.0 * 1.3) and calib.reseeds[(8, 3)][0] == 2
     assert calib.reseed_ms((8, 3), 500.0) == pytest.approx(650.0), "a ratio too: the position stays in the line"
-    assert calib.steps_without("plain") == 6 and calib.steps_without("step") == 0
+    assert calib.steps_without("plain") == 8 and calib.steps_without("step") == 2  # a dirty or idle step resets nothing
     calib.note_step(("plain", 8), 31.0, 8, True, 30.0, 8)
-    assert calib.steps_without("plain") == 0 and calib.steps_without("step") == 1
+    assert calib.steps_without("plain") == 0 and calib.steps_without("step") == 3
     with expect_error(ValueError, "min_samples"):
         Calibration(0)
     # the entry horizon follows the measured request length (steps), capped by GEMMA4_SPEC_ENTRY_HORIZON
@@ -2562,12 +2572,17 @@ def _policy_describe_costs_lists_the_plain_step_then_every_record(expect_error=N
     stats.note(33.0, 8, True, 30.0, 8)
     stats.note(99.0, 8, False, 30.0, 8)
     assert stats.describe("plain[b=8]") == (
-        "plain[b=8]: 3 steps, 24 tokens, 2 clean, 32.0 ms/step, 8.00 tokens/step, 4.0 ms/token, ratio 1.07x"
+        "plain[b=8]: 3 steps, 24 tokens, 2 clean, 32.0 ms/step, 8.00 tokens/step, 4.0 ms/token, "
+        "total 54.3 ms/step 6.8 ms/token, ratio 1.10x"
     )
     for wall in (30.0, 32.0, 900.0):
         stats.note(wall, 8, True, 30.0, 8)
-    assert stats.describe("plain[b=8]").endswith("3.9 ms/token, ratio 1.05x, outliers 1 at 900.0 ms")
-    assert stats.tokens_per_row() == 1.0 and stats.clean == 4
+    assert stats.describe("plain[b=8]").endswith(
+        "3.9 ms/token, total 45.0 ms/step 5.6 ms/token, ratio 1.07x, outliers 1 at 900.0 ms"
+    )
+    assert stats.tokens_per_row() == 1.0 and stats.clean == 4 and stats.busy == 5
+    stats.note(5000.0, 8, False, 30.0, 8, idle=True)
+    assert stats.describe("plain[b=8]").endswith("outliers 1 at 900.0 ms, idle 1 at 5000.0 ms") and stats.busy == 5
     calib = Calibration(8)
     calib.note_step(("plain", 8), 31.0, 8, True, 30.0, 8)
     calib.note_step(("plain", 8), 250.0, 8, False, 30.0, 8, cause="switch")
@@ -2576,7 +2591,8 @@ def _policy_describe_costs_lists_the_plain_step_then_every_record(expect_error=N
     calib.note_phase("replay", 42.5)
     calib.note_prefill()
     assert calib.describe() == (
-        "plain[b=8]: 2 steps, 16 tokens, 1 clean, 31.0 ms/step, 8.00 tokens/step, 3.9 ms/token, ratio 1.03x | "
+        "plain[b=8]: 2 steps, 16 tokens, 1 clean, 31.0 ms/step, 8.00 tokens/step, 3.9 ms/token, "
+        "total 140.5 ms/step 17.6 ms/token, ratio 4.68x | "
         "reseeds 1 at 248.0 ms | dirty 1 steps, 250 ms: switch 1/250 | total 2 steps, 281 ms, 16 tokens, "
         "17.6 ms/token | phases ms/call: replay 42.0 | prefills 1 | calibrated: none"
     )
