@@ -5,14 +5,22 @@
 """The decode step's flash-decode SDPA (``tt/v41/flash_sdpa.py``, ``V41_DECODE_SDPA=flash``)
 against ``sparse_sdpa`` on the chip's own heads.
 
-No weights, the decode tile: ``V41_SL_TRIALS`` random bf16 ``[1, 1, 32, 16 * 512]`` query tiles a chip (every chip its
-own), random RoPE tables, a random KV cache in both served formats (BF16 rows and the pool's packed scaled FP8),
-index rows in the c1 pattern (one live row a mesh row, the others sentinels), the ``k2`` / ``k3`` patterns (the live
-row and K draft rows of the same user, each with its own index row: the speculative verify step's layout) and the
-32-row pattern (every row live, varying counts). The two SDPAs' ``[1, 32, 32, 512]`` outputs are compared on the live
-rows (max abs difference, max relative to the largest output, PCC; the accumulation order differs, so bit equality
-is not expected), the dead rows of the flash output checked zero; then each SDPA alone under trace (``V41_SL_REPLAYS``
-replays of ``V41_SL_CALLS`` calls) per pattern and format, and the whole local chain (``q_heads``, SDPA, ``o_heads``)
+No weights, the decode tile: ``V41_SL_TRIALS`` random bf16 ``[1, 1, 32, 16 * 512]`` query tiles a chip (every
+chip its
+own), random RoPE tables, a random KV cache in both served formats (BF16 rows and the pool's packed scaled
+FP8),
+index rows in the c1 pattern (one live row a mesh row, the others sentinels), the ``k2`` / ``k3`` patterns
+(the live
+row and K draft rows of the same user, each with its own index row: the speculative verify step's layout) and
+the
+32-row pattern (every row live, varying counts). The two SDPAs' ``[1, 32, 32, 512]`` outputs are compared on
+the live
+rows (max abs difference, max relative to the largest output, PCC; the accumulation order differs, so bit
+equality
+is not expected), the dead rows of the flash output checked zero; then each SDPA alone under trace
+(``V41_SL_REPLAYS``
+replays of ``V41_SL_CALLS`` calls) per pattern and format, and the whole local chain (``q_heads``, SDPA,
+``o_heads``)
 for the c1 pattern. Results: ``V41_FS_RESULT``, ``V41_SL_OUT``."""
 
 import json
@@ -82,7 +90,8 @@ def test_v41_flash_sdpa(mesh_device, device_params):
     shard = lambda dims: ttnn.ShardTensor2dMesh(mesh_device, (sp, tp), dims=dims)
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
     torch.manual_seed(143)
-    # the trials' instance copies every partial to its DRAM scratch for the diagnostic; the timing instances do not
+    # the trials' instance copies every partial to its DRAM scratch for the diagnostic; the timing instances
+    # do not
     # (``fs_t`` every row's slots, the test's default; ``fs_c1`` one slot, the decoder's c1-capture layout)
     geo = dict(heads=sdpa_heads, rows=ROWS, width=width, v_dim=v_dim, real_heads=local_heads)
     fs = FlashSdpa(mesh_device, debug_scratch=True, **geo)
@@ -132,9 +141,12 @@ def test_v41_flash_sdpa(mesh_device, device_params):
         return packed
 
     def index_rows(pattern: str, seed: int):
-        """``[1, 1, 32, width]`` uint32 per mesh row and the live rows per mesh row: ``c1`` one live row (a random
-        one, every key), ``kK`` the live row and K draft rows (rows 28.. as the verify step's c1 layout: each draft
-        row sees the user's keys and the drafts before it, at a random valid count), ``fK`` the first K rows live
+        """``[1, 1, 32, width]`` uint32 per mesh row and the live rows per mesh row: ``c1`` one live row (a
+        random
+        one, every key), ``kK`` the live row and K draft rows (rows 28.. as the verify step's c1 layout: each
+        draft
+        row sees the user's keys and the drafts before it, at a random valid count), ``fK`` the first K rows
+        live
         and ``full`` every row live, with random valid counts (a sentinel tail)."""
         gen = torch.Generator().manual_seed(seed)
         rows = torch.full((1, sp, ROWS, width), SENTINEL, dtype=torch.int64)
@@ -165,9 +177,11 @@ def test_v41_flash_sdpa(mesh_device, device_params):
         return rm(rows.to(torch.int32), (1, None), ttnn.uint32), live_rows, fs.live_page(live_rows[0])
 
     def diagnose(qh, out_flash, out_sparse, live_r, chip: int = 0):
-        """The bf16 case on one chip against a torch reference, per live row: the flash and sparse outputs against
+        """The bf16 case on one chip against a torch reference, per live row: the flash and sparse outputs
+        against
         torch, and the partials read back from the scratch (each unit's max, sum tile and acc against the same
-        arithmetic in torch, then the merge of the device partials in torch against the flash output) -> a list of
+        arithmetic in torch, then the merge of the device partials in torch against the flash output) -> a
+        list of
         per-row dicts."""
         qt = ttnn.to_torch(ttnn.get_device_tensors(qh)[chip]).float()[0]  # [32 heads, 32 rows, 512]
         fl_all = ttnn.to_torch(ttnn.get_device_tensors(out_flash)[chip]).float()[0]
@@ -196,7 +210,12 @@ def test_v41_flash_sdpa(mesh_device, device_params):
                 p_ref = torch.exp((s_j - m_ref[:, None]) * scale)
                 a_ref = p_ref @ keys[j * fs.kpu : (j + 1) * fs.kpu]
                 pm.append(_pcc(m_ref[:local_heads], tile(0)[:local_heads, 0]))
-                ps.append(_pcc(p_ref[:local_heads], tile(1)[:local_heads, : s_j.shape[1]]))
+                p_dev = tile(1)[:local_heads, : s_j.shape[1]]
+                ps.append(
+                    _pcc(p_ref[:local_heads], p_dev)
+                    if s_j.shape[1] > 1
+                    else float((p_ref[:local_heads] - p_dev).abs().max() < 0.02)  # one key: exp(0) = 1 exactly
+                )
                 acc = torch.cat([tile(2 + v) for v in range(fs.vt)], 1)
                 pa.append(_pcc(a_ref[:local_heads], acc[:local_heads]))
                 ms.append(tile(0)[:, 0])
@@ -228,7 +247,7 @@ def test_v41_flash_sdpa(mesh_device, device_params):
         sin = tiled(angle.sin().view(1, 1, sp * ROWS, rope_dim).to(torch.bfloat16), (2, None))
         return tiled(q.to(torch.bfloat16), (2, 3)), cos, sin
 
-    def sparse(qh, kv, rows, fmt, w):
+    def sparse(qh, kv, rows, fmt, w, live=None):  # ``live`` is the flash program's; the timing calls pass it to both
         return ttnn.transformer.sparse_sdpa(
             qh,
             kv,
@@ -334,7 +353,8 @@ def test_v41_flash_sdpa(mesh_device, device_params):
                     logger.info(f"flash sdpa traced chain {name} c1: {timing[f'chain_{name}_c1']} us a layer")
             for t in (rows, live):
                 ttnn.deallocate(t)
-    # the window layers' geometry: bf16 rows, 128 keys in every row (the pool's window rows are constants: every
+    # the window layers' geometry: bf16 rows, 128 keys in every row (the pool's window rows are constants:
+    # every
     # row of the tile reads its user's ring), one live row
     if width > 128:
         rows_w = torch.zeros((1, sp, ROWS, 128), dtype=torch.int64)
