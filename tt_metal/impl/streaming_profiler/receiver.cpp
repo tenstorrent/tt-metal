@@ -32,7 +32,7 @@
 
 #include "context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "llrt/zone_meta.hpp"
+#include "llrt/observability_event_meta.hpp"
 #include "impl/streaming_profiler/spsc_packet.h"
 
 namespace tt::tt_metal::streaming_profiler {
