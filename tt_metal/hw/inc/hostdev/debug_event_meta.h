@@ -56,10 +56,14 @@ struct ZoneColorMeta {
     uint32_t color;  // 0xRRGGBB
 };
 
-struct ZoneVerbosityMeta {
+// How a consumer should present a zone's duration. The device and the host still count in cycles; this is only a
+// preference carried with the zone's metadata.
+enum class TimeUnit : uint8_t { Cycles, Nanoseconds, Microseconds, Milliseconds };
+
+struct ZoneUnitMeta {
     const char* name;
-    uint32_t color;     // 0xRRGGBB
-    uint8_t verbosity;  // carried to the host as is; the device does not filter on it
+    uint32_t color;  // 0xRRGGBB
+    TimeUnit unit;
 };
 
 // ---- Field walk, shared by the device marshaller and the host unmarshaller -----------------------------------------
@@ -639,7 +643,7 @@ struct FieldValue {
 
 // A site's metadata as the host holds it before anyone asks for a type.
 struct SiteMeta {
-    std::string_view signature;  // "<type name>:<field codes>"
+    std::string_view signature;      // "<type name>:<field codes>"
     std::vector<FieldValue> fields;  // one per leaf field, nested structs flattened
 
     std::string_view type_name() const { return signature.substr(0, signature.rfind(':')); }
