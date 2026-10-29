@@ -103,8 +103,8 @@ FORCE_INLINE void trid_ring_gather(
 
 // ROW_BFP4 (fork option): rows [lo, hi) of a chunk, two NoC reads a row (the data-movement RISC only issues reads):
 // the exponent copy congruent with exps + p * eb (mod 64) -> there, the nibbles -> data + p * k_dim / 2. block_l1 is
-// 64 B aligned (data then is too: k_chunk * eb is a multiple of 64).
-template <uint32_t K_DIM, uint32_t K_CHUNK, uint32_t RingDepth, typename Accessor>
+// 64 B aligned (data then is too: k_chunk * eb is a multiple of 64). DB: the record's value bytes (bfloat8_b: K_DIM).
+template <uint32_t K_DIM, uint32_t K_CHUNK, uint32_t RingDepth, uint32_t DB = K_DIM / 2, typename Accessor>
 FORCE_INLINE void gather_bfp4_rows(
     Noc& noc,
     const Accessor& kv,
@@ -115,7 +115,7 @@ FORCE_INLINE void gather_bfp4_rows(
     uint32_t hi,
     uint32_t page_offset) {
     constexpr uint32_t eb = row_bfp4_exp_bytes(K_DIM);
-    constexpr uint32_t db = K_DIM / 2;
+    constexpr uint32_t db = DB;
     static_assert(2 * eb == ROW_BFP4_ALIGN, "the two exponent copies cover both 32 B phases of a 64 B line");
     constexpr uint32_t D = RingDepth;
     const UnicastEndpoint local_l1;

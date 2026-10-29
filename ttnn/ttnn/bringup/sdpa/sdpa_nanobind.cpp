@@ -326,7 +326,8 @@ void bind_sdpa(nb::module_& mod) {
         .value("BF16", ttnn::transformer::bringup::SparseKVFormat::BF16)
         .value("FP8_E4M3", ttnn::transformer::bringup::SparseKVFormat::FP8_E4M3)
         .value("SCALED_FP8", ttnn::transformer::bringup::SparseKVFormat::SCALED_FP8)
-        .value("ROW_BFP4", ttnn::transformer::bringup::SparseKVFormat::ROW_BFP4);
+        .value("ROW_BFP4", ttnn::transformer::bringup::SparseKVFormat::ROW_BFP4)
+        .value("ROW_BFP8", ttnn::transformer::bringup::SparseKVFormat::ROW_BFP8);
 
     const auto* const doc =
         R"doc(
@@ -443,7 +444,10 @@ void bind_sdpa(nb::module_& mod) {
                 output dtype).
             kv_window (ttnn.Tensor, optional): kv_format ROW_BFP4 only (bring-up fork option): [1, 1, Tw, K_DIM] bf16
                 ROW_MAJOR rows read by the first k_chunk of each index row; kv then holds bfloat4_b row records
-                [B, 1, T, 320] uint8 (K_DIM 512; ttnn.bringup.ckv_bfp4) read by the rest.
+                [B, 1, T, 320] uint8 (K_DIM 512; ttnn.bringup.ckv_bfp4) read by the rest. Or [1, 1, Tw, 576] uint8
+                bfloat8_b row records (ttnn.bringup.ckv_bfp4(dtype=ttnn.bfloat8_b)), read into bfloat8_b K tiles.
+                kv_format ROW_BFP8 (fork option, a window-only layer): kv [1, 1, T, 576] uint8 bfloat8_b row records,
+                TOPK == k_chunk_size, no kv_window.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8), or
             Float32 with fp32_output.

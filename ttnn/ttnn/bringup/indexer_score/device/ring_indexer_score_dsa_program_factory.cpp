@@ -243,10 +243,9 @@ ProgramDescriptor build_ring_program_descriptor(
 
     const uint32_t bf16_tile = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t fp32_tile = tt::tile_size(tt::DataFormat::Float32);
-    const bool q_is_bfp8 = q.dtype() == tt::tt_metal::DataType::BFLOAT8_B;
-    const bool k_is_bfp8 = k.dtype() == tt::tt_metal::DataType::BFLOAT8_B;
-    const tt::DataFormat q_fmt = q_is_bfp8 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
-    const tt::DataFormat k_fmt = k_is_bfp8 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
+    // fork: q / k bf16, bfloat8_b or bfloat4_b, each in its own format
+    const tt::DataFormat q_fmt = tt::tt_metal::datatype_to_dataformat_converter(q.dtype());
+    const tt::DataFormat k_fmt = tt::tt_metal::datatype_to_dataformat_converter(k.dtype());
     const uint32_t q_tile = tt::tile_size(q_fmt);
     const uint32_t k_tile = tt::tile_size(k_fmt);
     const tt::DataFormat acc_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;

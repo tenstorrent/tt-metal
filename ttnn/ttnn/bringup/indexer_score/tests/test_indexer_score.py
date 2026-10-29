@@ -362,20 +362,23 @@ def test_ring_indexer_score_dsa_ds41(mesh_device, device_params, case):
 
     chips = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(0, 1))
 
+    qk_dt = getattr(ttnn, c.get("qk_dtype", "bfloat16"))  # lowbit: bfloat4_b q / k (inputs on its grid)
+    on_grid = (lambda t: ref.bfp_grid(t).to(torch.bfloat16)) if qk_dt == ttnn.bfloat4_b else (lambda t: t)
+
     def inputs(seed):
         g = torch.Generator().manual_seed(seed)
-        q = torch.randn(1, H, S, D, generator=g).to(torch.bfloat16)
+        q = on_grid(torch.randn(1, H, S, D, generator=g).to(torch.bfloat16))
         wt = (torch.randn(1, 1, S, H, generator=g) * c["gate_scale"]).to(torch.bfloat16)
-        k_nat = torch.randn(T, D, generator=g).to(torch.bfloat16)
+        k_nat = on_grid(torch.randn(T, D, generator=g).to(torch.bfloat16))
         garbage = torch.randn(1, 1, T, D, generator=g).to(torch.bfloat16)
         pos = ref.k_local_positions(T, sp, 1, W // r)
         k_local = k_nat[pos.reshape(-1)].reshape(sp, 1, T // sp, D)
         qd = q.reshape(1, H, sp, tp, Sq, D).permute(2, 3, 1, 4, 5, 0).reshape(sp, tp * H, Sq, D)
         wd = wt.reshape(1, 1, sp, tp, Sq, H).permute(2, 3, 0, 1, 4, 5).reshape(sp, tp, Sq, H)
         dev = {
-            "q": put(qd, chips),
+            "q": put(qd, chips, qk_dt),
             "w": put(wd, chips),
-            "k_local": put(k_local, ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(0, None))),
+            "k_local": put(k_local, ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(0, None)), qk_dt),
         }
         host = {"q": q, "w": wt, "k": k_nat, "garbage": garbage}
         if "block_bias" in c:
@@ -387,7 +390,10 @@ def test_ring_indexer_score_dsa_ds41(mesh_device, device_params, case):
 
     def kbufs(host):
         """Fresh k buffers for every call on these inputs (the first, B or the A repeats), all written now."""
-        return [put(host["garbage"], ttnn.ReplicateTensorToMesh(mesh_device)) for _ in range(determinism.repeats() + 1)]
+        return [
+            put(host["garbage"], ttnn.ReplicateTensorToMesh(mesh_device), qk_dt)
+            for _ in range(determinism.repeats() + 1)
+        ]
 
     def call(host, dev):
         """One call on a fresh, pre-written copy of the k buffer's garbage (and the block-max buffer's sentinel, which

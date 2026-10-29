@@ -50,6 +50,8 @@ enum SparseCB : uint32_t {
     cb_sink_scratch,    // writer scratch for gathering sink scalars
     cb_k4_rm,           // ROW_BFP4 only: a chunk's gathered staging block [exponents | nibbles] (row-major bfloat4_b)
     cb_k4,              // ROW_BFP4 only: the chunk's K as bfloat4_b tiles [Skt, DHt], made by the unpacker (compute)
+    cb_k8_rm,           // bfloat8_b window only: the window chunk's staging block [exponents | bytes]
+    cb_k8,              // bfloat8_b window only: the window chunk's K as bfloat8_b tiles [Skt, DHt]
     cb_count
 };
 
@@ -76,8 +78,14 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const bool scaled_kv = attrs.has_scaled_kv();
     // ROW_BFP4 (fork option): the plain-K path (cb_k_rm -> tilize -> cb_k_in) carries the bf16 window rows of chunk 0;
     // kv holds the bfloat4_b row records, gathered into cb_k4_rm and shuffled into cb_k4.
-    const bool row_bfp4 = attrs.has_row_bfp4();
-    const uint32_t kv_elem_bytes = row_bfp4 ? t.kv_window->element_size() : t.kv.element_size();
+    // ROW_BFP8 (fork option, a window-only layer) runs the ROW_BFP4 kernels with kv as the window and no top-k part.
+    // A uint8 window (kv_window, or kv with ROW_BFP8) is bfloat8_b row records: SPARSE_SDPA_WINDOW_BFP8, the window
+    // chunk gathered into cb_k8_rm and turned into bfloat8_b tiles (cb_k8) like the top-k chunks; the bf16 window
+    // path's cb_k_rm / cb_k_in are then only formats (one page each).
+    const bool row_bfp4 = attrs.has_row_bfp4() || attrs.has_row_bfp8();
+    const Tensor* window = attrs.has_row_bfp8() ? &t.kv : (t.kv_window.has_value() ? &t.kv_window.value() : nullptr);
+    const bool window_bfp8 = window != nullptr && window->dtype() == DataType::UINT8;
+    const uint32_t kv_elem_bytes = window_bfp8 ? 2u : row_bfp4 ? window->element_size() : t.kv.element_size();
 
     const uint32_t idx_elem_bytes = t.indices.element_size();  // uint32 -> 4
     const uint32_t out_elem_bytes = output.element_size();
@@ -94,7 +102,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // and both matmuls read it directly (the HW within-face transpose works on block-float). The compute
     // kernel restores the bf16 unpack srcA / pack formats after each per-chunk K tilize (see comments there).
     const tt::DataFormat native_kv_df =
-        tt::tt_metal::datatype_to_dataformat_converter(row_bfp4 ? t.kv_window->dtype() : t.kv.dtype());
+        window_bfp8 ? tt::DataFormat::Float16_b
+                    : tt::tt_metal::datatype_to_dataformat_converter(row_bfp4 ? window->dtype() : t.kv.dtype());
     const bool kv_storage_is_fp8 = native_kv_df == tt::DataFormat::Fp8_e4m3;
     const bool plain_kv_is_fp8 = !scaled_kv && kv_storage_is_fp8;
     // When K arrives as fp8, tilize it into bfp8_b cb_k_in (fp8->bfp8 is near-lossless, PCC 0.99998) to
@@ -153,9 +162,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
             }},
         });
     } else {
-        cb(cb_k_rm, k_row_bytes, k_chunk, native_kv_df);
+        cb(cb_k_rm, k_row_bytes, window_bfp8 ? 1u : k_chunk, native_kv_df);
     }
-    cb(cb_k_in, k_in_tile_bytes, Skt * k_in_width_tiles, k_in_df);
+    cb(cb_k_in, k_in_tile_bytes, window_bfp8 ? 1u : Skt * k_in_width_tiles, k_in_df);
     cb(cb_neginf, tile_bytes, 1, bf);
     cb(cb_mask_part, tile_bytes, 1, bf);
     cb(cb_scale, tile_bytes, 1, bf);
@@ -202,6 +211,13 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
            tt::DataFormat::Bfp4_b);
         cb(cb_k4, tt::tile_size(tt::DataFormat::Bfp4_b), Skt * DHt, tt::DataFormat::Bfp4_b);
     }
+    if (window_bfp8) {
+        cb(cb_k8_rm,
+           ::sparse_sdpa::row_bfp8_block_bytes(k_dim, k_chunk),
+           ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH,
+           tt::DataFormat::Bfp8_b);
+        cb(cb_k8, tt::tile_size(tt::DataFormat::Bfp8_b), Skt * DHt, tt::DataFormat::Bfp8_b);
+    }
 
     if (use_attention_sink) {
         cb(cb_attention_sink, tile_bytes, Sqt, bf);
@@ -244,7 +260,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     TT_FATAL(
         reader_ct.size() == ::sparse_sdpa::reader_ct_arg::END,
         "sparse_sdpa reader compile-time argument layout is out of sync");
-    const std::vector<uint32_t> row_bfp4_ct = {cb_k4_rm, cb_k4, k_chunk};  // row_bfp4_ct_arg order
+    std::vector<uint32_t> row_bfp4_ct = {cb_k4_rm, cb_k4, k_chunk};  // row_bfp4_ct_arg order
+    if (window_bfp8) {
+        row_bfp4_ct.insert(row_bfp4_ct.end(), {cb_k8_rm, cb_k8});
+    }
     if (row_bfp4) {
         reader_ct.insert(reader_ct.end(), row_bfp4_ct.begin(), row_bfp4_ct.end());
     }
@@ -258,7 +277,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         .append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
     if (row_bfp4) {
-        tt::tt_metal::TensorAccessorArgs(t.kv_window->buffer()).append_to(reader_ct, reader_crt);
+        tt::tt_metal::TensorAccessorArgs(window->buffer()).append_to(reader_ct, reader_crt);
     }
     // The writer is the lighter dataflow kernel, so it builds the three persistent compute-input tiles.
     std::vector<uint32_t> writer_ct = {H, S, vDHt, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
@@ -280,7 +299,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(use_attention_sink ? t.attention_sink->buffer() : nullptr)
         .append_to(writer_ct, writer_crt);
     if (row_bfp4) {
-        tt::tt_metal::TensorAccessorArgs(t.kv_window->buffer()).append_to(writer_ct, writer_crt);
+        tt::tt_metal::TensorAccessorArgs(window->buffer()).append_to(writer_ct, writer_crt);
     }
 
     std::vector<uint32_t> compute_ct = {H,
@@ -358,6 +377,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         compute_ct.push_back(cb_k4);
         compute_ct.push_back(cb_k4_rm);
     }
+    if (window_bfp8) {
+        compute_ct.push_back(cb_k8);
+        compute_ct.push_back(cb_k8_rm);
+    }
 
     tt::tt_metal::KernelDescriptor compute_desc;
     compute_desc.kernel_source = kdir + "compute/sparse_sdpa_compute.cpp";
@@ -379,6 +402,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     if (row_bfp4) {
         for (auto* k : {&reader_desc, &writer_desc, &compute_desc}) {
             k->defines.emplace_back("SPARSE_SDPA_ROW_BFP4", "1");
+            if (window_bfp8) {
+                k->defines.emplace_back("SPARSE_SDPA_WINDOW_BFP8", "1");
+            }
         }
     }
     // fp8 inputs must unpack into a 32-bit dest (fp8 -> fp32 in DEST, then packed to bfp8 cb_*_in).
@@ -416,9 +442,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         reader_desc.common_runtime_args.size() == ::sparse_sdpa::reader_common_arg::END &&
             writer_desc.common_runtime_args.size() == ::sparse_sdpa::writer_common_arg::END,
         "sparse_sdpa common runtime argument layout is out of sync");
-    if (row_bfp4) {  // the kv_window address right after the fixed common args (ROW_BFP4_COMMON_COUNT)
-        reader_desc.emplace_common_runtime_args({t.kv_window->buffer()});
-        writer_desc.emplace_common_runtime_args({t.kv_window->buffer()});
+    if (row_bfp4) {  // the window's address right after the fixed common args (ROW_BFP4_COMMON_COUNT)
+        reader_desc.emplace_common_runtime_args({window->buffer()});
+        writer_desc.emplace_common_runtime_args({window->buffer()});
     }
     reader_desc.common_runtime_args.insert(reader_desc.common_runtime_args.end(), reader_crt.begin(), reader_crt.end());
     writer_desc.common_runtime_args.insert(writer_desc.common_runtime_args.end(), writer_crt.begin(), writer_crt.end());
@@ -460,9 +486,10 @@ void SparseSDPAOperation::SparseSDPAProgramFactory::override_runtime_arguments(
     writer_args[::sparse_sdpa::writer_common_arg::KV_BATCH_PAGE_OFFSET] = offset;
     writer_args[::sparse_sdpa::writer_common_arg::ATTENTION_SINK_ADDRESS] =
         t.attention_sink.has_value() ? t.attention_sink->buffer()->address() : 0u;
-    if (t.kv_window.has_value()) {
-        reader_args[::sparse_sdpa::reader_common_arg::END] = t.kv_window->buffer()->address();
-        writer_args[::sparse_sdpa::writer_common_arg::END] = t.kv_window->buffer()->address();
+    if (t.kv_window.has_value() || operation_attributes.has_row_bfp8()) {  // the window: kv with ROW_BFP8
+        const uint32_t w = t.kv_window.has_value() ? t.kv_window->buffer()->address() : kv;
+        reader_args[::sparse_sdpa::reader_common_arg::END] = w;
+        writer_args[::sparse_sdpa::writer_common_arg::END] = w;
     }
 }
 

@@ -105,6 +105,10 @@ void kernel_main() {
         TensorAccessorArgs<idx_args.next_compile_time_args_offset(), idx_args.next_common_runtime_args_offset()>();
     const auto kvw = TensorAccessor(kvw_args, get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::END));
     experimental::CB k4_rm_cb(cb_k4_rm);  // one page = one chunk's staging block, consumed by compute
+#ifdef SPARSE_SDPA_WINDOW_BFP8
+    // the window as bfloat8_b row records (kv_window uint8, or kv itself with ROW_BFP8): its own staging block
+    experimental::CB k8_rm_cb(get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::CB_K8_RM));
+#endif
 #endif
     // Reader-internal scratch for one token's index row (reserved once, reused).
     idx_cb.reserve_back(1);
@@ -224,6 +228,40 @@ void kernel_main() {
                 kack_cb.pop_front(1);
                 k4_rm_cb.push_back(1);
             } else {
+#ifdef SPARSE_SDPA_WINDOW_BFP8
+                // chunk 0: the window's bfloat8_b row records -> its staging block, as the bfloat4_b chunks above
+                const uint32_t half = valid >> 1;
+                k8_rm_cb.reserve_back(1);
+                const uint32_t page_l1 = k8_rm_cb.get_write_ptr();
+                const uint32_t block_off = (sparse_sdpa::ROW_BFP4_ALIGN - (page_l1 % sparse_sdpa::ROW_BFP4_ALIGN)) %
+                                           sparse_sdpa::ROW_BFP4_ALIGN;
+                const uint32_t block_l1 = page_l1 + block_off;
+                kreq_cb.reserve_back(1);
+                {
+                    volatile tt_l1_ptr uint32_t* request =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+                    request[sparse_sdpa::gather_request::BASE] = base;
+                    request[sparse_sdpa::gather_request::SPLIT] = half;
+                    request[sparse_sdpa::gather_request::IS_LAST] = chunk == n_active - 1;
+                    request[sparse_sdpa::gather_request::DST_L1] = block_l1;
+                    request[sparse_sdpa::gather_request::KIND] = sparse_sdpa::gather_request::KIND_WINDOW;
+                }
+                kreq_cb.push_back(1);
+                sparse_sdpa::gather_bfp4_rows<k_dim, k_chunk, sparse_sdpa::SCALED_K_TRID_RING, k_dim>(
+                    noc, kvw, block_l1, idx_ptr, base, half, valid, 0);
+                if (valid < k_chunk) {
+                    noc.async_write_zeros(
+                        k8_rm_cb, (k_chunk - valid) * k4_eb, {.offset_bytes = block_off + valid * k4_eb});
+                    noc.async_write_zeros(
+                        k8_rm_cb,
+                        (k_chunk - valid) * k_dim,
+                        {.offset_bytes = block_off + k_chunk * k4_eb + valid * k_dim});
+                    noc.write_zeros_l1_barrier();
+                }
+                kack_cb.wait_front(1);
+                kack_cb.pop_front(1);
+                k8_rm_cb.push_back(1);
+#else
                 // chunk 0: the window's bf16 rows (kv_window), tilized by compute as a BF16 kv
                 k_cb.reserve_back(k_chunk);
                 const uint32_t k_write_ptr = k_cb.get_write_ptr();
@@ -248,6 +286,7 @@ void kernel_main() {
                     noc.write_zeros_l1_barrier();
                 }
                 k_cb.push_back(k_chunk);
+#endif
             }
 #else
             const uint32_t valid = (nv - base) < k_chunk ? (nv - base) : k_chunk;  // (0, k_chunk]

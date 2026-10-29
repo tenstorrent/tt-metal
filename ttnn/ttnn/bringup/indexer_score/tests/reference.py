@@ -105,3 +105,20 @@ def dsa_score_at(q, k, w, q_start, key_stride=1, fidelity=None):
     r = key_stride
     future = (r * torch.arange(k.shape[0])[None, :] + r - 1) > (q_start + torch.arange(q.shape[1]))[:, None]
     return score.masked_fill_(future, float("-inf"))
+
+
+def bfp_grid(x: torch.Tensor, mbits: int = 3) -> torch.Tensor:
+    """x on tt-metal's host bfloat4_b (mbits 3) / bfloat8_b (7) grid (convert_u32_to_bfp: per 16 values along the last
+    dim the max exponent, each significand shifted to it, rounded to nearest even, clamped), as fp32: inputs that
+    ttnn.from_torch packs exactly."""
+    u = x.float().contiguous().view(torch.int32).to(torch.int64) & 0xFFFFFFFF
+    exp, sign, man = (u >> 23) & 0xFF, u >> 31, (u & 0x7FFFFF) | (1 << 23)
+    eg = exp.view(-1, 16)
+    e = eg.amax(-1, keepdim=True)
+    m = man.view(-1, 16) >> (e - eg).clamp(max=62)
+    sh = 24 - mbits
+    q, rv, half = m >> sh, m & ((1 << sh) - 1), 1 << (sh - 1)
+    q = (q + ((rv > half) | ((rv == half) & ((q & 1) == 1))).long()).clamp(max=(1 << mbits) - 1)
+    q = torch.where(eg == 0, torch.zeros_like(q), q)
+    v = q.double() * torch.pow(2.0, (e - 127 - (mbits - 1)).double())
+    return torch.where(sign.view(-1, 16) == 1, -v, v).float().view(x.shape)

@@ -238,7 +238,7 @@ inline void tile(uint32_t base16, uint32_t r0, uint32_t g0) {
 
 // The chunk's staging block (cb_k4_rm, one page, 64 B aligned within it) -> its K tiles [Skt, DHt] in cb_k4: the
 // unpacker reads the rows (row_bfp4_unpack), the stock datacopy -> DEST, the pack to bfloat4_b (the values are on the
-// bfp4 grid: the pack copies them).
+// bfp4 grid: the pack copies them). The bfloat8_b window (SPARSE_SDPA_WINDOW_BFP8) the same way, by its CBs' format.
 template <uint32_t K_DIM, uint32_t Skt, uint32_t DHt>
 ALWI void row_bfp4_to_tiles(uint32_t cb_k4_rm, uint32_t cb_k4, uint32_t cb_k_in) {
     constexpr uint32_t K_CHUNK = Skt * tt::constants::TILE_HEIGHT;
@@ -293,6 +293,11 @@ void kernel_main() {
     // ROW_BFP4 (fork option): chunks >= 1 arrive as bfloat4_b tiles the dataflow kernels shuffled from row records
     constexpr uint32_t cb_k4 = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::END);
     constexpr uint32_t cb_k4_rm = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::END + 1);
+#ifdef SPARSE_SDPA_WINDOW_BFP8
+    // the window (chunk 0) as bfloat8_b row records: its staging block -> bfloat8_b tiles, as the bfloat4_b chunks
+    constexpr uint32_t cb_k8 = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::END + 2);
+    constexpr uint32_t cb_k8_rm = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::END + 3);
+#endif
 #endif
     constexpr uint32_t cb_neginf = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_NEGINF);
     constexpr uint32_t cb_mask_part = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_MASK_PART);
@@ -365,7 +370,11 @@ void kernel_main() {
         for (uint32_t chunk = 0; chunk < num_active_chunks; ++chunk) {
 #ifdef SPARSE_SDPA_ROW_BFP4
             const bool bfp4_chunk = chunk > 0;  // chunk 0 = the bf16 window, tilized below
+#ifdef SPARSE_SDPA_WINDOW_BFP8
+            const uint32_t cb_k = bfp4_chunk ? cb_k4 : cb_k8;
+#else
             const uint32_t cb_k = bfp4_chunk ? cb_k4 : cb_k_in;
+#endif
 #else
             constexpr uint32_t cb_k = cb_k_in;
 #endif
@@ -445,6 +454,13 @@ void kernel_main() {
                 k_in_cb.push_back(Skt * vDHt);
             } else {
                 // tilize K rows -> [Skt, DHt] (waits on reader cb_k_rm -> absorbs the K-read stall)
+#if defined(SPARSE_SDPA_ROW_BFP4) && defined(SPARSE_SDPA_WINDOW_BFP8)
+                if (bfp4_chunk) {
+                    row_bfp4_to_tiles<DHt * tt::constants::TILE_WIDTH, Skt, DHt>(cb_k4_rm, cb_k4, cb_k_in);
+                } else {
+                    row_bfp4_to_tiles<DHt * tt::constants::TILE_WIDTH, Skt, DHt>(cb_k8_rm, cb_k8, cb_k_in);
+                }
+#else
 #ifdef SPARSE_SDPA_ROW_BFP4
                 if (bfp4_chunk) {
                     row_bfp4_to_tiles<DHt * tt::constants::TILE_WIDTH, Skt, DHt>(cb_k4_rm, cb_k4, cb_k_in);
@@ -452,6 +468,7 @@ void kernel_main() {
 #endif
                     compute_kernel_lib::tilize<DHt, cb_k_rm, cb_k_in>(
                         /*num_blocks=*/Skt, /*total_input_pages=*/Skt * tt::constants::TILE_HEIGHT);
+#endif
             }
             // fp8 K tilize leaves srcA in fp8. QK reads K (transposed -> srcA) and Q (srcB), so restore
             // srcA=cb_k_in (bfp8 for fp8 K), srcB=cb_q_in. Reconfigure the tiled descriptor geometry/strides;
