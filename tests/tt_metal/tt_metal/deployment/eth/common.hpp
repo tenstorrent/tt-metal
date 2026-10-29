@@ -827,6 +827,60 @@ static bool ensure_links(std::span<std::shared_ptr<distributed::MeshDevice>> dev
     return pass;
 }
 
+[[maybe_unused]]
+static uint64_t read_eth_mac(IDevice* const device, const CoreCoord& core) {
+    if (device->arch() != tt::ARCH::BLACKHOLE) {
+        throw std::runtime_error("Requires blackhole");
+    }
+
+    uint64_t mac_org = read_eth_l1_u32(device, core, 0x7CFCC);
+    uint64_t mac_id = read_eth_l1_u32(device, core, 0x7CFD0);
+    uint64_t mac = (mac_org << 24) | mac_id;
+
+    return mac;
+}
+
+[[maybe_unused]]
+static std::string read_eth_mac_str(IDevice* const device, const CoreCoord& core) {
+    uint64_t mac = read_eth_mac(device, core);
+
+    return fmt::format(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        (mac >> 40) & 0xff,
+        (mac >> 32) & 0xff,
+        (mac >> 24) & 0xff,
+        (mac >> 16) & 0xff,
+        (mac >> 8) & 0xff,
+        (mac >> 0) & 0xff);
+}
+
+[[maybe_unused]]
+static int get_eth_phys_id(IDevice* const device, const CoreCoord& core) {
+    if (device->arch() != tt::ARCH::BLACKHOLE) {
+        throw std::runtime_error("Requires blackhole");
+    }
+
+    const auto& soc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
+
+    const auto coord = tt::umd::CoreCoord(core.x, core.y, tt::CoreType::ETH, tt::CoordSystem::LOGICAL);
+    const auto physical = soc.translate_coord_to(coord, tt::CoordSystem::NOC0);
+
+    const auto& all_eth = soc.get_arch_descriptor().get_eth_cores();
+    const auto pair = tt_xy_pair(physical.x, physical.y);
+    const auto it = std::find(all_eth.begin(), all_eth.end(), pair);
+
+    TT_FATAL(it != all_eth.end(), "Ethernet core missing from architecture descriptor");
+    return std::distance(all_eth.begin(), it);
+}
+
+[[maybe_unused]]
+static std::string get_eth_unique_id(IDevice* const device, const CoreCoord& core) {
+    std::string sn = get_asic_serial_string(device->id());
+    int ethn = get_eth_phys_id(device, core);
+
+    return fmt::format("{}/eth{:02}", sn, ethn);
+}
+
 }  // namespace tt::tt_metal
 
 #endif /* ETH_COMMON_HPP */
