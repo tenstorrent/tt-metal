@@ -590,7 +590,7 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
     for (const auto num_tiles_v : {14u, 15u}) {
         SCOPED_TRACE(::testing::Message() << "num_tiles_v=" << num_tiles_v << ", output_granularity=1");
         const bool fits = num_tiles_v / 1 + 1 <= 15;
-        auto program = make_sdpa_chunk_compile_program({2, 1, 1, num_tiles_v, num_tiles_v, 0, 2, 0});
+        auto program = make_sdpa_chunk_compile_program(this->device(), {2, 1, 1, num_tiles_v, num_tiles_v, 0, 2, 0});
         if (fits) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {
