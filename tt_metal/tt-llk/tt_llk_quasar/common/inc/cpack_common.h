@@ -34,7 +34,6 @@ union pack_untilize_stride_cfg_u
     pack_untilize_stride_cfg_t f;
 };
 
-constexpr static std::uint32_t PACR_STRIDE_OFFSET_ROWS = 8;
 // Dest bank cleared by the dvalid pack section-done (SyncHalf), toggles 0/1 per section.
 // thread_local so each pack TRISC (one per Neo) has its own toggle (tt-llk#1678). Mirrors dest_register_offset:
 // ENV_LLK_INFRA uses a plain static; the metal build defines it in tt_metal/hw/firmware/src/tt-2xx/trisc.cc.

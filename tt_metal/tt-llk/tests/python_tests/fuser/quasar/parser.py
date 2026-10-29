@@ -373,17 +373,10 @@ FPU_MAP = {
     ),
 }
 
-# Quasar has no strided pack path for tiny tiles, so the shared full-tile rule carries
-# an arch-specific hint here.
-_untilize_full_tile = reject(
-    lambda s, output: output.tile_shape.total_num_faces() != 4,
-    "PackUntilize supports only 32x32 output tiles, tiny tiles need strided pack",
-)
-
 PACKER_MAP = {
     "Packer": (Packer, [L1_ACC_FORMAT_SUPPORTED]),
     "MatmulPacker": (MatmulPacker, [L1_ACC_FORMAT_SUPPORTED]),
-    "PackUntilize": (PackUntilize, [_untilize_full_tile, PACK_NO_L1_ACC]),
+    "PackUntilize": (PackUntilize, [PACK_NO_L1_ACC]),
 }
 
 OUTPUT_DIMS = {

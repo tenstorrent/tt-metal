@@ -9,7 +9,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.pack.untilize import untilize_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource
+from fuser.operand import BfdResource, L1AccessMode
 from fuser.pack_node import PackNode
 
 from .packer import Packer
@@ -39,10 +39,16 @@ class PackUntilize(Packer):
         block_ct_dim = block.block_cols
         tensor_shape = pack_node.output.tile_shape.cpp_value
 
+        mode = (
+            L1AccessMode.CONTINUOUS
+            if pack_node.output.tile_shape.total_num_faces() == 4
+            else L1AccessMode.STRIDED
+        )
+
         return (
             "{\n"
             + pack_node.output.bfd_alloc_and_program(
-                BfdResource.PACK0, result_name="bfd_id"
+                BfdResource.PACK0, mode, result_name="bfd_id"
             )
             + f"_llk_pack_untilize_init_<{full_ct_dim}, {block_ct_dim}>"
             f"(bfd_id, {tensor_shape});\n"
@@ -64,6 +70,6 @@ class PackUntilize(Packer):
         l1_row_idx = f"{row_stride} * ({tile_row}) + ({tile_col})"
 
         return (
-            f"_llk_pack_untilize_set_dst_offset_({tensor_shape}, {l1_row_idx});\n"
-            f"_llk_pack_untilize_({block.tile_id_dest}, 0);\n"
+            f"_llk_pack_untilize_<{full_ct_dim}>"
+            f"({block.tile_id_dest}, {l1_row_idx}, {tensor_shape});\n"
         )
