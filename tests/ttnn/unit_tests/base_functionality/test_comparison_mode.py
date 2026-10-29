@@ -618,7 +618,6 @@ def test_ema_golden_matches_recurrence():
 
 
 def test_var_hw_and_std_hw_goldens_use_biased_correction():
-    # A tile-aligned plane: the device divides by the tile-padded H * W, which equals the logical area only here.
     input_tensor = torch.tensor([[1.0, 2.0], [3.0, 4.0]]).repeat(16, 16).reshape(1, 1, 32, 32)
 
     var_output = ttnn.get_golden_function(ttnn.var_hw)(input_tensor)
