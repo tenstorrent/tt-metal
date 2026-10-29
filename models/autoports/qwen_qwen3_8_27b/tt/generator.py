@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Readiness generator. Model and sampling traces share persistent device inputs."""
 from pathlib import Path
+import os
 import torch
 import json
 import time
@@ -100,6 +101,7 @@ class Generator(GeneratorContract):
                 active_mask=model.put(torch.zeros(batch_size,1,1)),
             )
         self.prefill_output = model.put(torch.zeros(batch_size,1,model.config.vocab_size//4))
+        self._init_unpadded_prefill(max_bucket)
         self.prepared_buckets = set()
         self._warm_layer_indices = None
         self._warming = False
@@ -462,6 +464,19 @@ class Generator(GeneratorContract):
                         start_position=128,return_device=True)
                     del pref
                 self.prepared_buckets.add(physical)
+                if self.unpadded_prefill:
+                    # Every compact shape at both start alignments; rows beyond b stay idle.
+                    active_event[0]['signature']['compact_batches'] = list(self.compact_sizes)
+                    for b in self.compact_sizes:
+                        for offset in ([0,128] if self.context_length>128 and physical<=self.physical_length(self.context_length-128) else [0]):
+                            preparation_reset()
+                            length=min(physical,self.context_length-offset)
+                            pref=self.prefill_forward(torch.zeros(self.batch_size,length,dtype=torch.int64),
+                                page_table=self.page_table,kv_cache=self.kv_cache,
+                                prompt_lens=[length]*b+[0]*(self.batch_size-b),
+                                start_position=offset,return_device=True)
+                            del pref
+                        self.prepared_compact.add((b,physical))
                 finish_event(active_event)
                 active_event = None
             self._warming = False
@@ -588,6 +603,136 @@ class Generator(GeneratorContract):
                 preparation_event[0]['completed_cleanup_releases'] = sum(
                     event['phase']=='release' and event['status']=='complete' for event in events)
 
+    def _init_unpadded_prefill(self, max_bucket):
+        """Opt-in (QWEN38_UNPADDED_PREFILL=1): prefill only live rows.
+
+        Live rows' recurrent/convolution state is copied byte-exactly into a small
+        compact scratch around each recurrent layer, attention writes the shared
+        paged pool through a compact page table, and terminal logits are merged
+        back into the resident B-row output. Decode traces are untouched.
+        """
+        flag = os.environ.get('QWEN38_UNPADDED_PREFILL', '0')
+        if flag not in ('0', '1'):
+            raise ValueError('QWEN38_UNPADDED_PREFILL must be 0 or 1')
+        sizes = sorted({int(v) for v in os.environ.get('QWEN38_UNPADDED_PREFILL_BATCHES', '1,2,4,8').split(',')})
+        if any(b not in (1, 2, 4, 8, 16) for b in sizes):
+            raise ValueError('QWEN38_UNPADDED_PREFILL_BATCHES must be drawn from 1,2,4,8,16')
+        sizes = [b for b in sizes if b < self.batch_size]
+        self.unpadded_prefill = flag == '1' and bool(sizes)
+        self.compact_sizes = sizes if self.unpadded_prefill else []
+        self.compact_buckets = {}
+        self.compact_states = {}
+        self.prepared_compact = set()
+        self.unpadded_counters = dict(calls=0, rows=0, padded_rows=0)
+        if not self.unpadded_prefill:
+            return
+        model, width = self.model, self.page_table.shape[-1]
+        recurrent = next((state for state, layer in zip(self.kv_cache, model.layers)
+                          if layer.layer_type == 'linear_attention'), None)
+        for b in sizes:
+            for physical in [1, *range(32, max_bucket+1, 32)]:
+                self.compact_buckets[b, physical] = dict(
+                    tokens=self.put(torch.zeros(b,physical,dtype=torch.int32),ttnn.uint32),
+                    positions=self.put(torch.zeros(b,physical,dtype=torch.int32),ttnn.uint32),
+                    valid_mask=model.put(torch.zeros(b,physical,1)),
+                    history_indices=self.put(torch.zeros(b,3,dtype=torch.int32),ttnn.uint32),
+                    merge_indices=self.put(torch.zeros(self.batch_size,1,dtype=torch.int32),ttnn.uint32),
+                    fill_page_table=self.put(torch.zeros(b,((physical+255)//256)*8,dtype=torch.int32),ttnn.int32),
+                    chunk_start=self.put(torch.zeros(1,dtype=torch.int32),ttnn.int32),
+                    active_mask=model.put(torch.zeros(self.batch_size,1,1)),
+                )
+            from .optimized_decoder import LinearState
+            self.compact_states[b] = dict(
+                page_table=self.put(torch.zeros(b,width,dtype=torch.int32),ttnn.int32),
+                # Row k of ids: (slot,k) gathers, row b+k: (k,slot) scatters.
+                ids=self.put(torch.zeros(2*b,8,dtype=torch.int32),ttnn.uint32),
+                state=None if recurrent is None else LinearState(
+                    ttnn.zeros([b,*tuple(recurrent.conv.shape)[1:]],dtype=recurrent.conv.dtype,
+                        layout=recurrent.conv.layout,device=self.mesh,memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                    ttnn.zeros([b,*tuple(recurrent.recurrent.shape)[1:]],dtype=recurrent.recurrent.dtype,
+                        layout=recurrent.recurrent.layout,device=self.mesh,memory_config=ttnn.DRAM_MEMORY_CONFIG)))
+
+    def _host_page_table(self):
+        if not self._page_table_host_valid:
+            self.page_table_host = ttnn.to_torch(ttnn.get_device_tensors(self.page_table)[0]).clone()
+            self._page_table_host_valid = True
+        return self.page_table_host
+
+    def _compact_prefill(self, physical, tokens, lens, start, rows, start_position, kv_cache, compute_logits):
+        """Run one physical chunk over only `rows` (resident slot indices)."""
+        from .serving_state import copy_state_row
+        from .optimized_decoder import LinearState
+        live = len(rows)
+        b = next(size for size in self.compact_sizes if size >= live)
+        if self.model_trace is not None and (b, physical) not in self.prepared_compact:
+            raise RuntimeError('Compact prefill bucket was not prepared before capture')
+        # Pad with distinct idle slots; zero-length rows copy their state back unchanged.
+        slots = list(rows) + [s for s in range(self.batch_size) if s not in rows][:b-live]
+        bucket, compact = self.compact_buckets[b, physical], self.compact_states[b]
+        absolute_start = start_position + start
+        n = torch.tensor([lens[s] for s in slots], dtype=torch.int32)
+        ids = torch.zeros(b, physical, dtype=torch.int32)
+        for k, s in enumerate(rows):
+            ids[k, :lens[s]] = tokens[s, start:start+lens[s]].to(torch.int32)
+        table = self._host_page_table()[slots].contiguous()
+        first_page, page_count = absolute_start // 32, table.shape[-1]
+        if first_page + (physical + 31)//32 > page_count:
+            raise ValueError('Page table does not cover the physical prefill chunk')
+        window = (torch.arange(bucket['fill_page_table'].shape[-1],dtype=torch.int32)+first_page).clamp_max(page_count-1)
+        merge = torch.zeros(self.batch_size, 1, dtype=torch.int32)
+        merge_mask = torch.zeros(self.batch_size, 1, 1)
+        for k, s in enumerate(rows):
+            merge[s, 0] = k*physical + max(lens[s]-1, 0)
+            merge_mask[s] = 1.0
+        self.refresh(ids, bucket['tokens'])
+        self.refresh(torch.arange(absolute_start,absolute_start+physical,dtype=torch.int32).expand(b,-1).contiguous(),
+                     bucket['positions'])
+        self.refresh((torch.arange(physical)[None,:] < n[:,None]).unsqueeze(-1).float(), bucket['valid_mask'])
+        self.refresh(torch.arange(b,dtype=torch.int32)[:,None]*(physical+3)+n[:,None]+torch.arange(3,dtype=torch.int32),
+                     bucket['history_indices'])
+        self.refresh(merge, bucket['merge_indices'])
+        self.refresh(merge_mask, bucket['active_mask'])
+        self.refresh(table[:, window].contiguous(), bucket['fill_page_table'])
+        self.refresh(torch.tensor([absolute_start],dtype=torch.int32), bucket['chunk_start'])
+        self.refresh(table, compact['page_table'])
+        copy_ids = torch.zeros(2*b, 8, dtype=torch.int32)
+        for k, s in enumerate(slots):
+            copy_ids[k, 0], copy_ids[k, 1] = s, k
+            copy_ids[b+k, 0], copy_ids[b+k, 1] = k, s
+        self.refresh(copy_ids, compact['ids'])
+        meta = {**bucket, 'active_rows': tuple(range(live)), 'start_alignment': absolute_start % 256}
+        model = self.model
+        hidden = model.embed(bucket['tokens'], batch=b, length=physical)
+        cos, sin = model.rope(bucket['positions'], batch=b, length=physical)
+        scratch = compact['state']
+        for index, (layer, state) in enumerate(zip(model.layers, kv_cache)):
+            if self._warm_layer_indices is not None and index not in self._warm_layer_indices:
+                continue
+            if layer.layer_type == 'linear_attention':
+                for k in range(b):
+                    copy_state_row(self.mesh, state.conv, scratch.conv, compact['ids'], k)
+                    copy_state_row(self.mesh, state.recurrent, scratch.recurrent, compact['ids'], k)
+                hidden = layer.prefill_forward(hidden, state=scratch, page_table=compact['page_table'],
+                    cos=cos, sin=sin, start_position=0, prepared_metadata=meta)
+                for k in range(b):
+                    copy_state_row(self.mesh, scratch.conv, state.conv, compact['ids'], b+k)
+                    copy_state_row(self.mesh, scratch.recurrent, state.recurrent, compact['ids'], b+k)
+            else:
+                hidden = layer.prefill_forward(hidden, state=state, page_table=compact['page_table'],
+                    cos=cos, sin=sin, start_position=0, prepared_metadata=meta)
+        self.unpadded_counters['calls'] += 1
+        self.unpadded_counters['rows'] += live
+        self.unpadded_counters['padded_rows'] += b - live
+        if compute_logits:
+            logits = model.terminal(model.select_rows(hidden, bucket['merge_indices']),
+                pack_decode_rows=self.pack_prefill_terminal)
+            if self.pack_prefill_terminal:
+                logits = ttnn.reshape(logits,[self.batch_size,1,model.config.vocab_size//4])
+            merged = ttnn.where(bucket['active_mask'], logits, self.prefill_output)
+            ttnn.copy(merged, self.prefill_output)
+            del logits, merged
+        del hidden
+
     def reset(self):
         self._decode_active=None
         # In-place reset preserves cache addresses and existing trace bindings.
@@ -688,6 +833,12 @@ class Generator(GeneratorContract):
             for physical in groups:
                 active = [i for i,n in enumerate(tails) if n and self.physical_length(n)==physical]
                 lens = [n if i in active else 0 for i,n in enumerate(tails)]
+                if self.unpadded_prefill and not return_all_logits:
+                    widest = self.compact_sizes[-1]
+                    for begin in range(0, len(active), widest):
+                        self._compact_prefill(physical, tokens, lens, start, active[begin:begin+widest],
+                                              start_position, kv_cache, compute_logits)
+                    continue
                 if self.model_trace is not None and physical not in self.prepared_buckets:
                     raise RuntimeError('Physical prefill bucket was not prepared before capture')
                 meta = self._set_bucket(physical,tokens,lens,start,active,start_position)

@@ -16,6 +16,42 @@ from .optimized_decoder import LinearState
 _KERNEL = str(Path(__file__).with_name('kernels') / 'serving_state_copy.cpp')
 
 
+def copy_state_row(mesh, source, destination, ids, layer_row):
+    """Exact byte copy of one batch row; ids[layer_row]=(source row, destination row) on device."""
+    if source.buffer_address() == destination.buffer_address():
+        raise ValueError('Snapshot copies require distinct live and pool allocations')
+    if source.is_sharded() or destination.is_sharded():
+        raise ValueError('Snapshot storage must be interleaved DRAM')
+    if source.layout == ttnn.ROW_MAJOR_LAYOUT:
+        page_bytes = int(source.shape[-1])*2
+        pages_per_row = math.prod(tuple(source.shape)[1:-1])
+    else:
+        page_bytes = 4096  # exact FP32 tile, including every mantissa bit
+        pages_per_row = math.prod(tuple(source.padded_shape)[1:])//1024
+    count = min(8,pages_per_row)
+    grid = mesh.compute_with_storage_grid_size()
+    if count > grid.x*grid.y:
+        raise ValueError('Insufficient worker cores for state copy')
+    coords = [ttnn.CoreCoord(i//grid.y,i%grid.y) for i in range(count)]
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(core,core) for core in coords])
+    compile_args = [page_bytes,pages_per_row,count,int(source.shape[0]),int(destination.shape[0])]
+    for tensor in (source,destination,ids):
+        compile_args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+    runtime = ttnn.RuntimeArgs()
+    for ordinal,core in enumerate(coords):
+        runtime[core.x][core.y] = [source.buffer_address(),destination.buffer_address(),
+            ids.buffer_address(),layer_row,ordinal]
+    descriptor = ttnn.ProgramDescriptor(kernels=[ttnn.KernelDescriptor(
+        kernel_source=_KERNEL,core_ranges=cores,compile_time_args=compile_args,
+        runtime_args=runtime,config=ttnn.ReaderConfigDescriptor())],cbs=[
+            ttnn.CBDescriptor(total_size=page_bytes,core_ranges=cores,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0,data_format=source.dtype,page_size=page_bytes)]),
+            ttnn.CBDescriptor(total_size=32,core_ranges=cores,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=1,data_format=ttnn.uint32,page_size=32)])
+        ],semaphores=[])
+    ttnn.generic_op([source,destination,ids],descriptor)
+
+
 class ServingStatePool:
     def __init__(self, model, active_states, num_blocks_by_layer, sharing_groups=None):
         self.mesh = model.mesh
@@ -79,38 +115,7 @@ class ServingStatePool:
             for pool in unique_pools.values())
 
     def _copy_tensor(self, source, destination, layer_row):
-        if source.buffer_address() == destination.buffer_address():
-            raise ValueError('Snapshot copies require distinct live and pool allocations')
-        if source.is_sharded() or destination.is_sharded():
-            raise ValueError('Snapshot storage must be interleaved DRAM')
-        if source.layout == ttnn.ROW_MAJOR_LAYOUT:
-            page_bytes = int(source.shape[-1])*2
-            pages_per_row = math.prod(tuple(source.shape)[1:-1])
-        else:
-            page_bytes = 4096  # exact FP32 tile, including every mantissa bit
-            pages_per_row = math.prod(tuple(source.padded_shape)[1:])//1024
-        count = min(8,pages_per_row)
-        grid = self.mesh.compute_with_storage_grid_size()
-        if count > grid.x*grid.y:
-            raise ValueError('Insufficient worker cores for state copy')
-        coords = [ttnn.CoreCoord(i//grid.y,i%grid.y) for i in range(count)]
-        cores = ttnn.CoreRangeSet([ttnn.CoreRange(core,core) for core in coords])
-        compile_args = [page_bytes,pages_per_row,count,int(source.shape[0]),int(destination.shape[0])]
-        for tensor in (source,destination,self.ids):
-            compile_args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
-        runtime = ttnn.RuntimeArgs()
-        for ordinal,core in enumerate(coords):
-            runtime[core.x][core.y] = [source.buffer_address(),destination.buffer_address(),
-                self.ids.buffer_address(),layer_row,ordinal]
-        descriptor = ttnn.ProgramDescriptor(kernels=[ttnn.KernelDescriptor(
-            kernel_source=_KERNEL,core_ranges=cores,compile_time_args=compile_args,
-            runtime_args=runtime,config=ttnn.ReaderConfigDescriptor())],cbs=[
-                ttnn.CBDescriptor(total_size=page_bytes,core_ranges=cores,
-                    format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0,data_format=source.dtype,page_size=page_bytes)]),
-                ttnn.CBDescriptor(total_size=32,core_ranges=cores,
-                    format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=1,data_format=ttnn.uint32,page_size=32)])
-            ],semaphores=[])
-        ttnn.generic_op([source,destination,self.ids],descriptor)
+        copy_state_row(self.mesh, source, destination, self.ids, layer_row)
 
     def _transfer(self, slot, block_ids, restore):
         slot = operator.index(slot)
