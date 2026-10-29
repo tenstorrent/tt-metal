@@ -36,7 +36,6 @@ class MiniMaxM3VLModelArgs:
     spatial_merge_size: int = 2
     layer_norm_eps: float = 1e-5
     rope_theta: float = 10000.0
-    rope_axis_dim: int = 26  # per-axis rotary dim; 3*26 = 78 of head_dim rotated, 2 pass-through
 
     # Projector / connector.
     projector_hidden_size: int = 6144
@@ -53,10 +52,6 @@ class MiniMaxM3VLModelArgs:
     @property
     def padded_head_dim(self) -> int:
         return _next_tile_multiple(self.head_dim)  # 96
-
-    @property
-    def rope_rot_dim(self) -> int:
-        return 3 * self.rope_axis_dim  # 78
 
     @property
     def patch_flat_dim(self) -> int:
