@@ -1,0 +1,60 @@
+chip 0: 2 steps, 59.78 ms kernels per 4-layer step; classes: math 41.79, other 8.57, glue 5.57, layout 3.84
+   ms/step    x40/4   ops  op | in0 | in1 | cores
+     6.149     61.5     4  Matmul | 1x1x1024x5184 | 1x1x5184x16384 | 110
+     5.516     55.2     4  Matmul | 1x1x5184x16384 | 1x1x1024x16384 | 110
+     3.693     36.9     4  Matmul | 1x1x1024x8256 | 1x1x8256x5120 | 88
+     3.284     32.8    17  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+     3.043     30.4     1  Matmul | 1x1x1024x5120 | 1x1x5120x32768 | 110
+     2.931     29.3     8  RMSNormBackward | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
+     2.803     28.0     4  Matmul | 1x1x8256x5120 | 1x1x1024x5120 | 110
+     2.754     27.5     1  Matmul | 1x1x5120x32768 | 1x1x1024x32768 | 110
+     2.105     21.1    17  AllGatherAsync | 1x1x1024x1280 |  | 20
+     1.845     18.4     4  SDPABackwardKV | 1x8x1024x128 | 1x8x1024x128 | 64
+     1.825     18.2    30  BinaryNg | 1x1x1024x5120 | 1x1x1024x5120 | 110
+     1.776     17.8    16  ReduceScatterMinimalAsync | 1x1x1024x32[16] |  | 12
+     1.672     16.7     3  BinaryNg | 1x1x1024x32768 | 1x1x1024x32[1] | 110
+     1.549     15.5     1  UntilizeCodegen | 1x1x32768x5120 |  | 110
+     1.379     13.8     9  RMSNormForward | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
+     1.127     11.3     1  SubtractAtTarget | 1x1x1024x32768 | 1x1x1x1024 | 32
+     1.085     10.8     4  SDPABackwardQ | 1x8x1024x128 | 1x8x1024x128 | 110
+     1.074     10.7     4  SDPAForward | 1x8x1024x128 | 1x2x1024x128 | 110
+     1.047     10.5     4  SwigluPackedBw | 1x1x1024x16384 | 1x1x1024x8192 | 110
+     0.758      7.6     4  Matmul | 1x1x1024x5120 | 1x1x1536x5120 | 80
+     0.693      6.9     2  Reduce | 1x1x1024x32768 |  | 32
+     0.613      6.1     8  Matmul | 1x1x1024x5120 | 1x1x32[16]x5120 | 33
+     0.589      5.9     4  Matmul | 1x1x1024x1024 | 1x1x5120x1024 | 88
+     0.585      5.9     3  Matmul | 1x1x1024x1536 | 1x1x1536x5120 | 88
+     0.576      5.8     4  Matmul | 1x1x1024x16384 | 1x1x1024x32[16] | 110
+     0.562      5.6     8  Matmul | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88
+     0.535      5.3     4  Matmul | 1x1x1024x32[16] | 1x1x32[16]x8192 | 88
+     0.484      4.8     4  Matmul | 1x1x1024x8192 | 1x1x32[16]x8192 | 33
+chip 2: 2 steps, 58.09 ms kernels per 4-layer step; classes: math 41.65, other 7.17, glue 5.50, layout 3.77
+   ms/step    x40/4   ops  op | in0 | in1 | cores
+     6.149     61.5     4  Matmul | 1x1x1024x5184 | 1x1x5184x16384 | 110
+     5.513     55.1     4  Matmul | 1x1x5184x16384 | 1x1x1024x16384 | 110
+     3.691     36.9     4  Matmul | 1x1x1024x8256 | 1x1x8256x5120 | 88
+     3.037     30.4     1  Matmul | 1x1x1024x5120 | 1x1x5120x32768 | 110
+     2.926     29.3     8  RMSNormBackward | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
+     2.801     28.0     4  Matmul | 1x1x8256x5120 | 1x1x1024x5120 | 110
+     2.754     27.5     1  Matmul | 1x1x5120x32768 | 1x1x1024x32768 | 110
+     2.307     23.1    17  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+     2.043     20.4    17  AllGatherAsync | 1x1x1024x1280 |  | 20
+     1.828     18.3     4  SDPABackwardKV | 1x8x1024x128 | 1x8x1024x128 | 64
+     1.795     18.0    30  BinaryNg | 1x1x1024x5120 | 1x1x1024x5120 | 110
+     1.795     17.9    16  ReduceScatterMinimalAsync | 1x1x1024x32[16] |  | 12
+     1.651     16.5     3  BinaryNg | 1x1x1024x32768 | 1x1x1024x32[1] | 110
+     1.480     14.8     1  UntilizeCodegen | 1x1x32768x5120 |  | 110
+     1.374     13.7     9  RMSNormForward | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
+     1.129     11.3     1  SubtractAtTarget | 1x1x1024x32768 | 1x1x1x1024 | 32
+     1.076     10.8     4  SwigluPackedBw | 1x1x1024x16384 | 1x1x1024x8192 | 110
+     1.049     10.5     4  SDPABackwardQ | 1x8x1024x128 | 1x8x1024x128 | 110
+     1.041     10.4     4  SDPAForward | 1x8x1024x128 | 1x2x1024x128 | 110
+     0.757      7.6     4  Matmul | 1x1x1024x5120 | 1x1x1536x5120 | 80
+     0.673      6.7     2  Reduce | 1x1x1024x32768 |  | 32
+     0.612      6.1     8  Matmul | 1x1x1024x5120 | 1x1x32[16]x5120 | 33
+     0.585      5.9     4  Matmul | 1x1x1024x1024 | 1x1x5120x1024 | 88
+     0.583      5.8     3  Matmul | 1x1x1024x1536 | 1x1x1536x5120 | 88
+     0.571      5.7     4  Matmul | 1x1x1024x16384 | 1x1x1024x32[16] | 110
+     0.561      5.6     8  Matmul | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88
+     0.535      5.3     4  Matmul | 1x1x1024x32[16] | 1x1x32[16]x8192 | 88
+     0.486      4.9     4  Matmul | 1x1x1024x8192 | 1x1x32[16]x8192 | 33

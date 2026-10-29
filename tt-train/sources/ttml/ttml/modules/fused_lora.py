@@ -31,7 +31,7 @@ from ttml.autograd import Function
 
 from .frozen_linear import TRANSPOSED_SHAPES, _compute_config, forward_matmul_kwargs, full_core_grid, local_in_out
 
-__all__ = ["FusedLoraLinearT", "fuse_lora_into_frozen_weights", "TAIL_ROWS"]
+__all__ = ["FusedLoraLinearT", "fuse_lora_into_frozen_weights", "reduce_partial_lora_grads", "TAIL_ROWS"]
 
 # Two tile rows: the first holds s * B^T (rank 16, zero-padded to 32), the second stays zero. K then grows by two
 # tiles (162 for in = 5120), which ttnn's block heuristic handles like 160; one extra tile (161, prime) cost 5 % on
@@ -143,9 +143,15 @@ def fused_lora_linear_t(
     )
 
 
-def fuse_lora_into_frozen_weights(model) -> list[str]:
+def fuse_lora_into_frozen_weights(model, batched_tp_grads: bool = True) -> list[str]:
     """Extend every transposed frozen weight of a LoRA wrapper by a zero tail of ``TAIL_ROWS`` rows and switch the
-    wrapper to :class:`FusedLoraLinearT`. Call after :func:`transpose_frozen_weights`."""
+    wrapper to :class:`FusedLoraLinearT`. Call after :func:`transpose_frozen_weights`.
+
+    ``batched_tp_grads``: under TP, drop the per-layer all-reduces of the LoRA ``h`` / ``dh`` (``[T, r]``, four per
+    layer, latency-bound at ~150 us each on the 1x4 ring) and leave the replicated adapter of each parallel layer
+    (``A`` of a column-parallel, ``B`` of a row-parallel layer) with a partial gradient, which
+    :func:`reduce_partial_lora_grads` sums over the TP axis in two collectives per step. The training step must
+    call it after the backward and before the optimizer step."""
     from .lora import LoraColumnParallelLinear, LoraLinear, LoraRowParallelLinear
 
     converted: list[str] = []
@@ -167,5 +173,48 @@ def fuse_lora_into_frozen_weights(model) -> list[str]:
         ttnn.deallocate(value)
         ttnn.deallocate(zeros)
         module.lora_fused = True
+        if batched_tp_grads and isinstance(module, LoraColumnParallelLinear):
+            module.tp_partial_grads = ("lora_A",)
+        elif batched_tp_grads and isinstance(module, LoraRowParallelLinear):
+            module.tp_partial_grads = ("lora_B",)
         converted.append(name)
     return converted
+
+
+def reduce_partial_lora_grads(model, cluster_axis) -> int:
+    """Sum the partial LoRA adapter gradients left by the batched fused TP path over ``cluster_axis``: the ``[r, in]``
+    ``dA`` partials are stacked on their row dim and the ``[out, r]`` ``dB`` partials side by side on their column
+    dim, so a step reduces two tensors instead of four ``[T, r]`` ones per layer. Returns the number of gradients
+    reduced; a no-op for models fused without ``batched_tp_grads``."""
+    groups: dict[tuple, list] = {}
+    for _, module in model.named_modules():
+        for pname in getattr(module, "tp_partial_grads", ()):
+            param = getattr(module, pname).tensor
+            if not param.is_grad_initialized():
+                continue
+            grad = param.get_grad()
+            rows, cols = int(grad.shape[-2]), int(grad.shape[-1])
+            dim = 2 if rows <= cols else 3  # [r, in] stack rows, [out, r] stack columns
+            key = (dim, cols if dim == 2 else rows)
+            groups.setdefault(key, []).append((param, grad))
+    reduced = 0
+    for (dim, _), entries in groups.items():
+        if len(entries) == 1:
+            cat = entries[0][1]
+        else:
+            cat = ttnn.concat([g for _, g in entries], dim=dim)
+        cat = ttml.core.distributed.all_reduce(cat, cluster_axis=cluster_axis)
+        offset = 0
+        for param, grad in entries:
+            n = int(grad.shape[dim])
+            if len(entries) == 1:
+                part = cat
+            else:
+                start = [0, 0, 0, 0]
+                end = list(int(d) for d in cat.shape)
+                start[dim], end[dim] = offset, offset + n
+                part = ttnn.slice(cat, start, end)
+            param.set_grad(part)
+            offset += n
+            reduced += 1
+    return reduced

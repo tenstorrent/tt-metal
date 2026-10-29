@@ -165,6 +165,10 @@ def main():
     else:
         loss = ttml.ops.loss.cross_entropy_loss(logits, y, ttml.ops.ReduceType.MEAN)
     loss.backward(False)
+    if use_tp:
+        from ttml.modules.fused_lora import reduce_partial_lora_grads
+
+        print(f"partial LoRA gradients reduced over tp: {reduce_partial_lora_grads(model, mesh.axis_index('tp'))}")
     loss_val = float(get_loss_over_devices(loss)) if use_tp else float(loss.to_numpy(ttnn.DataType.FLOAT32).item())
 
     out = {"loss": np.array([loss_val])}

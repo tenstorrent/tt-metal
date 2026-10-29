@@ -30,6 +30,7 @@ from ttml.common.utils import get_loss_over_devices
 from ttml.models import EmbeddingPlacement
 from ttml.models.mistral import Mistral, MistralConfig, load_from_safetensors, useful_flops_per_step
 from ttml.modules import LoraConfig, LoraModel, fuse_lora_into_frozen_weights, transpose_frozen_weights
+from ttml.modules.fused_lora import reduce_partial_lora_grads
 
 DEFAULT_MODEL = "mistralai/Mistral-Small-24B-Base-2501"
 DEFAULT_REVISION = "b0a2e4ed093c26997495ae625528f81ea04b749f"
@@ -225,6 +226,8 @@ def main() -> None:
         if args.mem_probe and step <= 2:
             print(f"step {step}: DRAM allocated after forward {dram_allocated_gib():.2f} GiB")
         loss.backward(False)
+        if use_tp:
+            reduce_partial_lora_grads(model, mesh.axis_index("tp"))
         if args.mem_probe and step <= 2:
             print(f"step {step}: DRAM allocated after backward {dram_allocated_gib():.2f} GiB")
         ctx.reset_graph()
