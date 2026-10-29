@@ -11,8 +11,7 @@ reach L1, and the hardware applies them in this order:
 Rounding sits between ReLU and the mask in hardware, but the mask *replaces* a
 datum outright, so masking before the format conversion gives the same bytes.
 
-Two of the three are exactly modellable. Stochastic rounding is not — see
-:func:`is_deterministic`.
+See `README.md`, "units/pack_effects.py".
 """
 
 import struct
@@ -35,9 +34,8 @@ EDGE_MASK_COUNT = 4
 class EdgeMaskMode(IntEnum):
     """What a masked datum becomes.
 
-    An ``IntEnum`` because these are hardware field values, so a caller holding
-    a raw 0 or 1 still compares and packs correctly, while the names carry the
-    meaning.
+    An ``IntEnum`` so a caller holding a raw 0 or 1 still compares and packs
+    correctly, while the names carry the meaning.
     """
 
     # Masked datums are zeroed.
@@ -51,21 +49,15 @@ class PackEdgeMask:
     """Edge masking at tile edges, as the packer's configuration registers hold it.
 
     Args:
-        masks: up to ``EDGE_MASK_COUNT`` masks of ``EDGE_MASK_WIDTH`` bits, the raw
-            register values. Bit *j* covers datum *j* of a 16-datum row. Whether a
-            set bit keeps or masks that datum depends on the architecture, so the
-            caller says which.
-            Required, with no pass-everything default, because there isn't one:
-            0xFFFF passes a row through on Wormhole/Blackhole but masks it on
-            Quasar, whose pass-through is ``EDGE_MASK_ROW_DATUMS_NONE`` (0x0000).
-            A default would read as "no masking" and mean the opposite on one of
-            the two.
-        select: which mask each 16-datum row uses. An int uses one mask for every
-            row; a sequence gives one index per row, in the order the rows sit in
-            the data. The hardware selector is 2 bits **per row**, never per datum
-            (Quasar's ``EDGE_MASK_SELECT_FACE*``, Wormhole/Blackhole's
-            ``TILE_ROW_SET_MAPPING``), so a row cannot mix masks.
-        mode: :class:`EdgeMaskMode` -- zero or negative-saturate.
+        masks: up to ``EDGE_MASK_COUNT`` masks of ``EDGE_MASK_WIDTH`` bits, the
+            raw register values. Bit *j* covers datum *j* of a 16-datum row.
+            Whether a set bit keeps or masks that datum is per-architecture, so
+            the caller says which. There is no safe default, since 0xFFFF
+            passes a row through on Wormhole/Blackhole and masks it on Quasar.
+        select: which mask each 16-datum row uses. An int uses one mask for
+            every row, and a sequence gives one index per row. The hardware selector
+            is 2 bits **per row**, never per datum, so a row cannot mix masks.
+        mode: :class:`EdgeMaskMode`, zero or negative-saturate.
     """
 
     masks: Sequence[int]
@@ -103,8 +95,8 @@ class PackEdgeMask:
     ) -> "PackEdgeMask":
         """Build from Quasar's ``EDGE_MASK_SELECT_FACE0..3`` register words.
 
-        Each 32-bit word holds a 2-bit selector for each of a face's 16 rows,
-        row 0 in the low bits, which is the row-major order this class indexes.
+        Each 32-bit word holds a 2-bit selector for each of a face's 16 rows, row 0
+        in the low bits, which is the row-major order this class indexes.
         """
         select = [
             (word >> (2 * row)) & 0x3
@@ -112,7 +104,7 @@ class PackEdgeMask:
             for row in range(MAX_FACE_R_DIM)
         ]
         # One word per face, so the pattern covers exactly one tile and repeats
-        # for the next -- which is what the packer does with these registers.
+        # for the next, which is what the packer does with these registers.
         return cls(
             masks=masks,
             select=select,
@@ -123,9 +115,8 @@ class PackEdgeMask:
     def keep(self, count: int, *, masked_when_set: bool = False) -> torch.Tensor:
         """Bool tensor, True where datum *i* survives the mask.
 
-        `masked_when_set` is the architecture's polarity: True on Quasar, whose
-        packer inverts the register before the gasket applies it, False on
-        Wormhole/Blackhole, where a set bit passes the datum through.
+        `masked_when_set` is the architecture's polarity: True on Quasar, False on
+        Wormhole/Blackhole.
         """
         if count % EDGE_MASK_WIDTH:
             raise ValueError(
@@ -185,12 +176,9 @@ FP16_THRESHOLD_FORMATS = (DataFormat.Float16, DataFormat.Bfp8)
 def _encode_threshold_bits(threshold: float, dest_format: DataFormat) -> int:
     """The 16-bit threshold field as the packer's config register stores it.
 
-    The field is 16 bits wide whatever the pack format, so the threshold is
-    narrowed to reach it -- and the two branches narrow *differently*. The
-    Float16 family reads the field as fp16, so the value is **rounded** to
-    fp16. Everything else reads it as bf16, which the register takes as the top
-    half of the fp32 and therefore **truncates**; for a 32-bit Dest the
-    hardware shifts those bits back up by 16 to rebuild the comparand.
+    The field is 16 bits whatever the pack format, and the two branches narrow
+    *differently*: the Float16 family reads it as fp16 and so **rounds**,
+    everything else reads it as bf16 and so **truncates**.
     """
     if dest_format in FP16_THRESHOLD_FORMATS:
         return torch.tensor(threshold, dtype=torch.float16).view(torch.uint16).item()
@@ -199,7 +187,7 @@ def _encode_threshold_bits(threshold: float, dest_format: DataFormat) -> int:
 
 
 def _decode_threshold_bits(bits: int, dest_format: DataFormat) -> float:
-    """The value those 16 bits represent -- the inverse of the encode above."""
+    """The value those 16 bits represent, the inverse of the encode above."""
     if dest_format in FP16_THRESHOLD_FORMATS:
         return torch.tensor(bits, dtype=torch.uint16).view(torch.float16).item()
     return struct.unpack(">f", struct.pack(">I", (bits & 0xFFFF) << 16))[0]
@@ -208,20 +196,10 @@ def _decode_threshold_bits(bits: int, dest_format: DataFormat) -> float:
 def _encode_threshold(threshold: float, dest_format: DataFormat) -> float:
     """The threshold as the configuration register actually holds it.
 
-    A ReLU compares against the register, not against the float the test asked
-    for, so the golden has to narrow first. Narrowing with a plain bf16 cast
-    rounds where the register truncates, which shifts the threshold a full bf16
-    step for any value with mantissa bits below the cut -- 0.3 becomes 0.30078
-    instead of 0.29883, and every datum between the two is then clamped
-    differently.
-
-    This duplicates the encoding in ``PackGolden`` on purpose: heavyweight owns
-    its own model of the packer so the old golden can be retired without
-    stranding it. The two were bit-identical across every format and threshold
-    swept when this was written, and nothing enforces that they stay so -- there
-    is no test comparing them, deliberately, since one would reintroduce the
-    dependency. Treat the agreement as a fact about that moment, not a
-    guarantee, and re-check before relying on either matching the other.
+    A ReLU compares against the register, not the float the test asked for, so
+    narrowing with a plain bf16 cast rounds where the register truncates and
+    shifts the threshold a full bf16 step. This duplicates ``PackGolden`` on
+    purpose. See `README.md`, "Why the threshold is encoded twice".
     """
     return _decode_threshold_bits(
         _encode_threshold_bits(threshold, dest_format), dest_format
@@ -234,10 +212,11 @@ def apply_relu(
     threshold: float = 0.0,
     dest_format: DataFormat = DataFormat.Float16_b,
 ) -> torch.Tensor:
-    """
+    """Apply the packer's ReLU to `values`.
+
     Takes the type and threshold directly rather than the packed 32-bit
     ``relu_config`` word, and narrows the threshold to what the register holds
-    before comparing -- see :func:`_encode_threshold`.
+    before comparing.
     """
     if relu_type is PackerReluType.NoRelu:
         return values
@@ -246,7 +225,7 @@ def apply_relu(
 
     limit = _encode_threshold(threshold, dest_format)
     if relu_type is PackerReluType.MinThresholdRelu:
-        # Below the threshold is flushed; above it passes through untouched.
+        # Below the threshold is flushed, and above it passes through untouched.
         return torch.where(values <= limit, torch.zeros_like(values), values)
     if relu_type is PackerReluType.MaxThresholdRelu:
         return torch.clamp(values, min=0.0, max=limit)
@@ -275,12 +254,10 @@ def is_deterministic(stoch_rnd: StochasticRounding) -> bool:
     """Whether this golden can reproduce `stoch_rnd` bit-exactly.
 
     Only ``No``. The others round up or down at random from a device-seeded
-    sequence, so this model can only give the round-to-nearest answer, which
-    hardware matches in expectation rather than datum by datum. ``Fpu`` counts
-    too: there the randomness moves to the FPU's Dest write rather than the
-    packer, and is no more reproducible from here.
+    sequence, so this model can only give the round-to-nearest answer.
+    ``Fpu`` counts too: the randomness just moves to the FPU's Dest write.
 
-    Conservative by design -- an exact Dest write has nothing to randomise, so
+    Conservative by design, since an exact Dest write has nothing to randomise, so
     a test that knows its own is exact can still compare exactly under ``Fpu``.
     """
     return stoch_rnd is StochasticRounding.No
@@ -295,11 +272,7 @@ def apply_pack_effects(
     edge_mask: Optional[PackEdgeMask] = None,
     edge_mask_masked_when_set: bool = False,
 ) -> torch.Tensor:
-    """ReLU then edge masking, in the order the packer applies them.
-
-    `edge_mask_masked_when_set` is the architecture's mask polarity -- see
-    :meth:`PackEdgeMask.keep`.
-    """
+    """ReLU then edge masking, in the order the packer applies them."""
     values = apply_relu(values, relu_type, relu_threshold, dest_format)
     if edge_mask is not None:
         values = edge_mask.apply(values, masked_when_set=edge_mask_masked_when_set)

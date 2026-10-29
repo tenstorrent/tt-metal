@@ -3,15 +3,11 @@
 
 """Which L1 formats an architecture has, and the checks that depend on it.
 
-Every unit needs this and none of them owns it: the unpacker reads L1, the
-packer writes it, and both have to refuse a format the architecture cannot
-hold. Keeping it in its own module lets the units and :mod:`.arch` both import
-it without a cycle -- an architecture holds units, so a unit cannot hold the
-architecture.
+Every unit needs this and none of them owns it. Its own module so the units
+and :mod:`.arch` can both import it without a cycle. An architecture holds
+units, so a unit cannot hold the architecture.
 
-It carries the architecture's `name` purely so a refusal can say which device
-refused. Error messages that name ``DataTransferBlocks`` are useless when three
-architectures share the class.
+It carries the architecture's `name` so a refusal can say which device refused.
 """
 
 from dataclasses import dataclass
@@ -49,20 +45,16 @@ class L1Support:
     def supports(self, l1_format: DataFormat) -> bool:
         """Whether this golden can move `l1_format` through L1 on this arch.
 
-        Two conditions, and they are not the same question: the architecture
-        has to be able to hold the format in L1, *and* this golden has to have
-        a codec for it. ``Tf32`` is a real L1 format everywhere and ``Bfp8`` on
-        Wormhole/Blackhole, but neither has a codec here, so answering on
-        architecture support alone would promise bytes that cannot be written.
-        :meth:`check` says which of the two failed.
+        Two conditions, and not the same question: the architecture has to hold the
+        format, *and* this golden has to have a codec for it. :meth:`check` says
+        which of the two failed.
         """
         return l1_format in self.formats and l1_format in MODELLED_L1_FORMATS
 
     def check(self, l1_format: DataFormat) -> None:
-        # Two different failures, kept apart because they call for opposite
-        # responses: a format the hardware cannot hold means the test is asking
-        # for something impossible, while a missing codec means the test is
-        # reasonable and the model has a hole.
+        # Two failures, kept apart because they call for opposite responses:
+        # a format the hardware cannot hold means the test asks the
+        # impossible, and a missing codec means the model has a hole.
         if l1_format not in self.formats:
             raise ValueError(
                 f"{self.name} cannot read {l1_format} from L1 on this " f"architecture."
@@ -111,11 +103,9 @@ L1Buffer = Union[Sequence[int], bytes]
 def _normalised_geometry(geometry: dict) -> dict:
     """`geometry` with any ``dest_acc`` reduced to a bool.
 
-    The codec tests it with a plain ``if``, and ``DestAccumulation`` has no
-    ``__bool__``, so ``DestAccumulation.No`` passed straight through would
-    select the 32-bit SrcS slice layout -- 1280 bytes where 1152 is correct.
-    Nothing downstream notices: the read back finds one tile's worth of datums
-    in the wrong layout and returns them.
+    The codec tests it with a plain ``if`` and ``DestAccumulation`` has no
+    ``__bool__``, so ``DestAccumulation.No`` would select the 32-bit SrcS slice
+    layout, 1280 bytes where 1152 is correct, and nothing downstream notices.
 
     Every block reaches L1 through :meth:`L1Support.write` or
     :meth:`L1Support.read`, so normalising in both covers the lot.

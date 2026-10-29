@@ -3,7 +3,7 @@
 
 """L1 <-> register-file data-transfer blocks.
 
-:class:`DataTransferBlocks` is the façade; the transfers live on the units in
+:class:`DataTransferBlocks` is the façade. The transfers live on the units in
 :mod:`.units`, and an architecture (:mod:`.arch`) is a set of those units.
 """
 

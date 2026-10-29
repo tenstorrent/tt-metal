@@ -5,6 +5,8 @@
 
 Owns the ``Dest -> L1`` legality table, the edge-mask polarity, and the
 pipeline of effects the packer applies on the way out.
+
+See `README.md`, "units/pack.py".
 """
 
 import warnings
@@ -27,12 +29,10 @@ from .pack_effects import (
 class UnmodelledHardwareWarning(RuntimeWarning):
     """A hardware behaviour this golden knowingly does not reproduce.
 
-    A ``RuntimeWarning`` subclass on purpose. ``pytest.ini`` sets
-    ``ignore::UserWarning`` for the whole suite, so a plain ``UserWarning``
-    reaches nobody running the tests -- and that is the only audience for a
-    warning whose message is "this answer is approximate". ``pytest.warns``
-    bypasses the filter, so the unit test would keep passing while the suite
-    stayed silent.
+    A ``RuntimeWarning`` on purpose: ``pytest.ini`` sets ``ignore::UserWarning``
+    for the whole suite, so a plain ``UserWarning`` would reach nobody running
+    the tests, while ``pytest.warns`` bypasses the filter and the unit test
+    would keep passing.
     """
 
 
@@ -47,21 +47,16 @@ class Pack:
         edge_mask_masked_when_set: bool = False,
         promotes_outlier_to_32_bit_dest: bool = True,
     ) -> None:
-        #: Legal ``Dest format -> L1 format`` pairs, the pack-side counterpart
-        #: of the unpacker's pair table. The packer converts on the way out,
-        #: but not between arbitrary pairs: a 32-bit Dest reaches the narrow
-        #: floats, a 16-bit float Dest does not reach Float32, and the integer
-        #: widths each reach only their own. Empty means unmodelled.
+        #: Legal ``Dest -> L1`` pairs, the pack-side counterpart of the
+        #: unpacker's table. Empty means unmodelled.
         self.to_l1_formats = to_l1_formats or {}
 
-        #: Whether a set bit in an edge-mask register masks the datum. False is
-        #: Wormhole/Blackhole, where ``PCK_EDGE_OFFSET`` mask 0xFFFF passes a
-        #: row through and 0x0 clears it; Quasar is the other way round.
+        #: Whether a set bit in an edge-mask register masks the datum.
+        #: False on Wormhole/Blackhole, True on Quasar.
         self.edge_mask_masked_when_set = edge_mask_masked_when_set
 
         #: Whether the harness promotes an exponent-B input with a Float16
-        #: output to a 32-bit Dest. True for every architecture except Quasar,
-        #: which ``TestConfig`` names explicitly.
+        #: output to a 32-bit Dest. Every architecture except Quasar.
         self.promotes_outlier_to_32_bit_dest = promotes_outlier_to_32_bit_dest
 
         self.l1 = l1
@@ -69,18 +64,10 @@ class Pack:
     def check_pack_pair(self, dest_format: DataFormat, l1_format: DataFormat) -> None:
         """Refuse a ``Dest -> L1`` pair this architecture's packer cannot do.
 
-        The unpack side has ``Unpack.is_valid_src_format`` for the mirror of
-        this. Without it a Float16 Dest packed to Float32, or an Int32 Dest
-        packed to a float, returns bytes that decode to believable numbers for
-        a conversion the hardware refuses to perform.
-
-        Narrowing out is the ordinary case -- a Float32 Dest reaches every
-        float and MX format. What the packer will not do is upcast to a 32-bit
-        output, so no 16-bit Dest produces Float32, or cross between integer
-        and float. The integer rows are tighter than either rule implies and
-        are worth reading rather than inferring: Int32 reaches Int8 and UInt8
-        but *not* Int16, and Int16 and the 8-bit formats reach only
-        themselves.
+        Without it a Float16 Dest packed to Float32, or an Int32 Dest packed to a
+        float, returns bytes that decode to believable numbers for a conversion the
+        hardware refuses. The rows are worth reading rather than inferring. See
+        `README.md`, "What the packer will and will not convert".
         """
         if not self.to_l1_formats:
             return
@@ -97,15 +84,10 @@ class Pack:
     ) -> None:
         """Refuse the 16-bit Dest the harness would have promoted away.
 
-        An exponent-B input packed to Float16 is the combination
-        ``is_format_combination_outlier`` names: the hardware cannot convert an
-        8-bit-exponent datum straight to Float16, so ``TestConfig`` turns
-        ``dest_acc`` on and runs a 32-bit Dest instead. A Float16_b Dest is the
-        tell, since that is what an exponent-B input resolves to without
-        accumulation.
-
-        Without this the golden models a bf16 Dest while the device ran fp32 --
-        a real precision difference, presented as an arithmetic disagreement.
+        ``TestConfig`` turns ``dest_acc`` on for an exponent-B input with a Float16
+        output, so the device runs a 32-bit Dest. A Float16_b Dest is the tell.
+        Without this the golden models bf16 while the device ran fp32, and the
+        precision gap shows up as an arithmetic disagreement.
         """
         if (
             self.promotes_outlier_to_32_bit_dest
@@ -132,41 +114,24 @@ class Pack:
         stoch_rnd: StochasticRounding = StochasticRounding.No,
         **geometry,
     ) -> list:
-        """Pack Dest into L1 -- the T2 half, mirroring the unpacker.
+        """Pack Dest into L1, the T2 half that mirrors the unpacker.
 
-        The packer's pipeline, in hardware order:
-
-        1. **Dest storage precision.** What a Dest slot can hold, which is
-           32-bit under accumulation and 16-bit otherwise. Idempotent if the
-           FPU block upstream already applied it, so it is safe to hand this a
-           plain fp32 result from a torch golden.
-        2. **ReLU**. The threshold is narrowed to the 16 bits the packer's
-           configuration register holds before it is compared against.
-        3. **Edge mask**, zeroing or negative-saturating datums at tile edges.
-        4. **The packer.** Rounding and requantization into `l1_format` are
-           whatever :mod:`helpers.pack` implements -- the same codec the test
-           harness writes L1 with.
+        ReLU, then rounding, then the edge mask, then the format conversion.
 
         `dest_format` cannot be inferred from `l1_format`: Dest follows the
-        *unpacker's* output, i.e. the input format, never the pack format. Use
-        ``Unpack.dest_format_for`` to derive it from the input side.
+        *unpacker's* output, never the pack format. Use ``Unpack.dest_format_for``
+        to derive it from the input side.
 
-        `stoch_rnd` is accepted so a caller can describe the hardware
-        configuration it is comparing against, but any mode other than ``No``
-        **warns** rather than being silently ignored -- including ``Fpu``, which
-        randomises the Dest write rather than this block's. See
-        :func:`.pack_effects.is_deterministic`.
+        `stoch_rnd` is accepted so a caller can describe the hardware it is
+        comparing against, but any mode other than ``No`` **warns**, including
+        ``Fpu``, which randomises the Dest write rather than this block's.
         """
         self.l1.check_dest_format(dest_format)
         self.check_pack_pair(dest_format, l1_format)
         if not is_deterministic(stoch_rnd):
-            # The golden cannot follow a device-seeded random sequence, so say
-            # so at the call site rather than hand back round-to-nearest bytes
-            # that look like a reproducible answer. Name the stage that is
-            # actually randomised: under Fpu the packer behaves normally and it
-            # is the Dest write that drifts, so blaming the packer would send a
-            # reader looking in the wrong block. warnings dedupes per location,
-            # so a multi-tile run reports this once.
+            # Name the stage actually randomised: under Fpu the packer
+            # behaves normally and it is the Dest write that drifts, so
+            # blaming the packer would send a reader to the wrong block.
             warnings.warn(
                 f"{stoch_rnd} cannot be reproduced -- "
                 f"{STOCH_RND_EFFECTS[stoch_rnd]}, driven by a device-seeded "
@@ -178,7 +143,7 @@ class Pack:
                 stacklevel=2,
             )
         self.check_outlier_promotion(dest_format, l1_format)
-        # Normally already at Dest precision (src_to_dest wrote it there); this
+        # Normally already at Dest precision (src_to_dest wrote it there), so this
         # is a no-op then, and a safety net for a caller that bypassed Dest.
         values = to_dest_storage(dest_values, dest_format)
         values = apply_pack_effects(

@@ -4,39 +4,34 @@
 """Value-level model of the L1 <-> register-file data-transfer blocks.
 
 Each block answers one question: given a buffer sitting in L1, what does the
-consumer see after the hardware has moved it? Blocks take and return the things
-the hardware takes and returns — **L1 takes bytes** — so a golden op can chain
-them the way the pipeline does:
+consumer see after the hardware has moved it? Blocks take and return what the
+hardware does, and **L1 takes bytes**, so a golden op can chain them:
 
     l1_bytes -> l1_to_srcA -> [math] -> dest_to_l1 -> l1_bytes
 
-There is deliberately no quantization step. Storing a tensor as MxFp8R *is* the
-quantization; by the time the L1 bytes exist the loss has happened, and reading
-them back just reports it. Use :func:`.l1_codec.pack_to_l1` to build a buffer.
+There is no quantization step. Storing a tensor as MxFp8R *is* the
+quantization, and reading it back just reports the loss.
 
-That leaves one real conversion for these blocks to model: the unpacker lands
-every L1 format in one of a small number of src-register storage families. The
-family, not the L1 format, is what the FPU reads.
+**This class is the facade, not the implementation.** The transfers live in
+units, one per hardware stage. An architecture is a set of those units
+(`.arch`), injected here. Nothing subclasses this and nothing overrides a
+method.
 
-One unit does more than move: the FPU also computes, so it owns the arithmetic
-and everything about how this device performs it -- the multiplier's width, the
-fidelity phases, the pre-carry flush. An operation reaches it through
-:attr:`DataTransferBlocks.fpu` and says *which* instruction to run; the FPU
-says what that instruction does.
-
-**This class is the façade, not the implementation.** The transfers live on the
-units in :mod:`.units` -- one per hardware stage -- and an architecture is a
-set of those units (:mod:`.arch`), injected here. Nothing subclasses this and
-nothing overrides a method: there is one implementation of each transfer, and
-architectures differ in the data their units carry. See :mod:`.arch` for why.
+See `README.md` for what each block models and why.
 """
 
 from functools import partial
-from typing import FrozenSet, Optional, Union
+from typing import FrozenSet, Optional, Tuple, Union
 
 import torch
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, PackerReluType, StochasticRounding
+from helpers.llk_params import (
+    DestAccumulation,
+    MathFidelity,
+    MathOperation,
+    PackerReluType,
+    StochasticRounding,
+)
 
 from .arch import (
     BLOCK_FLOAT_FORMATS,
@@ -48,10 +43,9 @@ from .arch import (
 )
 from .l1_support import L1Buffer, L1Support
 
-# Re-exported so the operations layer keeps importing the register rules from
-# the blocks that apply them, rather than reaching past them into storage.
-# Listed in __all__ because autoflake strips an import nothing in this module
-# body uses, which is exactly what a re-export is.
+# Re-exported so the operations layer imports the register rules from the
+# blocks that apply them rather than reaching past into storage. The noqa and
+# the __all__ entry both stop autoflake deleting what looks unused.
 from .storage import (  # noqa: F401
     BF16_MANT_BITS,
     DEST_32_BIT_FORMATS,
@@ -66,7 +60,6 @@ from .storage import (  # noqa: F401
     truncate_mantissa,
     truncate_src_mantissa,
 )
-from .units import Fpu
 from .units.pack import UnmodelledHardwareWarning  # noqa: F401
 from .units.pack_effects import PackEdgeMask
 
@@ -222,7 +215,7 @@ class DataTransferBlocks:
         """Whether the harness promotes this architecture's outlier combination.
 
         An exponent-B input with a Float16 output runs with a 32-bit Dest
-        everywhere except Quasar. The packer owns the rule; the operations
+        everywhere except Quasar. The packer owns the rule, and the operations
         layer needs the answer when it resolves ``dest_acc``.
         """
         return self.arch.pack.promotes_outlier_to_32_bit_dest
@@ -257,38 +250,70 @@ class DataTransferBlocks:
         )
 
     # ------------------------------------------------------------------
-    # The unit that computes
+    # The FPU: what it computes, and how its multiplier behaves.
+    #
+    # Forwarded one method at a time, so an operation never holds an Fpu and
+    # the units stay private. The fpu_ prefix says which unit decides the
+    # answer, which a bare phases() or operand_halves() would not.
     # ------------------------------------------------------------------
 
-    @property
-    def fpu(self) -> Fpu:
-        """The FPU, for an operation that needs it to compute rather than move.
+    def fpu_elementwise(
+        self, operation: MathOperation, srcA: torch.Tensor, srcB: torch.Tensor
+    ) -> torch.Tensor:
+        """One element-wise FPU operation on two src registers."""
+        return self.arch.fpu.elementwise(operation, srcA, srcB)
 
-        Handed over as the unit rather than forwarded method by method. The
-        methods above are *transfers*, each named for the hardware path it
-        models; multiplying two src registers is not one, and dressing it up as
-        a transfer would hide which unit decides how the multiply behaves. An
-        operation selects the instruction -- ``blocks.fpu.elementwise(Elwmul,
-        a, b)`` -- and the FPU supplies the phases, the mantissa window and the
-        flush that go with it.
+    def fpu_sum_of_products(
+        self, srcB_rows: torch.Tensor, srcA_cols: torch.Tensor
+    ) -> torch.Tensor:
+        """One matrix multiply, accumulated wider than its operands."""
+        return self.arch.fpu.sum_of_products(srcB_rows, srcA_cols)
+
+    def fpu_models_fidelity(self, in_format: DataFormat) -> bool:
+        """Whether a multiply on `in_format` decomposes into fidelity phases."""
+        return self.arch.fpu.models_fidelity(in_format)
+
+    def fpu_phases(self, math_fidelity: MathFidelity) -> range:
+        """The phase indices a multiply at `math_fidelity` runs."""
+        return self.arch.fpu.phases(math_fidelity)
+
+    def fpu_operand_halves(
+        self, srcA: torch.Tensor, srcB: torch.Tensor, phase: int
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """The slice of each operand this multiplier takes on `phase`."""
+        return self.arch.fpu.operand_halves(srcA, srcB, phase)
+
+    def fpu_partial_product(
+        self,
+        srcA: torch.Tensor,
+        srcB: torch.Tensor,
+        phase: int,
+        dest_format: Optional[DataFormat] = None,
+    ) -> torch.Tensor:
+        """One fidelity phase of a multiply: window, multiply, flush."""
+        return self.arch.fpu.partial_product(srcA, srcB, phase, dest_format)
+
+    def fpu_warn_split_unmodelled(self, op_name: str, stacklevel: int = 4) -> None:
+        """Say so when a multiply here falls back to the exact product.
+
+        `stacklevel` is 4 rather than the FPU's own 3 because this wrapper adds
+        a frame: the count starts at ``warnings.warn`` and has to reach past
+        the warning helper, the FPU method and this one to land on the caller.
+        A caller that adds a frame of its own raises it again.
         """
-        return self.arch.fpu
+        self.arch.fpu.warn_split_unmodelled(op_name, stacklevel=stacklevel)
 
 
 # ----------------------------------------------------------------------
 # Architecture factories, under the names the architecture classes used to
 # have, so callers construct blocks the same way they always did.
 #
-# Deliberately not subclasses: a subclass would reintroduce somewhere to
-# override a transfer, which is the thing this structure exists to remove.
+# Not subclasses: a subclass would reintroduce somewhere to override a
+# transfer, which is what this structure exists to remove.
 #
-# ``partial`` rather than a plain function. Not strictly required today -- the
-# operations layer holds these in an ``ArchProfile`` dataclass *field*, which
-# stores on the instance, so the descriptor protocol never fires. It matters
-# the moment one is assigned as a **class attribute**: a plain function is a
-# descriptor and would bind as a method, passing ``self`` as the architecture.
-# ``partial`` is not, so it survives either way, and it takes the ``__name__``
-# and ``__doc__`` set below.
+# ``partial`` rather than a plain function, so one assigned as a *class
+# attribute* does not bind as a method and pass ``self`` as the architecture.
+# A plain function is a descriptor, and ``partial`` is not.
 # ----------------------------------------------------------------------
 
 QuasarDataTransferBlocks = partial(DataTransferBlocks, QuasarArch())

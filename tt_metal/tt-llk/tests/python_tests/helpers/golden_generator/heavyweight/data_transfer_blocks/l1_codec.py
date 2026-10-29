@@ -1,16 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""Getting tensors into and out of L1 for the heavyweight data-transfer blocks.
+"""Getting tensors into and out of L1.
 
-L1 holds bytes, so the blocks take bytes. There is no quantization step anywhere
-in this package: storing a tensor as MxFp8R *is* the quantization, and by the
-time those bytes exist the loss has already happened. Unpacking them just reads
-back what is there.
+L1 holds bytes, so the blocks take bytes. There is no quantization step
+anywhere in this package: storing a tensor as MxFp8R *is* the quantization,
+and unpacking just reads back what is there.
 
-This module is the thin dispatch over the real codecs in :mod:`helpers.pack` and
-:mod:`helpers.unpack` — one entry point each way, so a chain of blocks can hand
-L1 buffers to each other the way the hardware does.
+A thin dispatch over the real codecs in :mod:`helpers.pack` and
+:mod:`helpers.unpack`, with one entry point each way, so a chain of blocks can
+hand L1 buffers to each other the way the hardware does.
 """
 
 import inspect
@@ -49,8 +48,6 @@ from helpers.tile_constants import (
 )
 from helpers.unpack import unpack_res_tiles
 
-#: Tensor -> L1 bytes, per format. Mirrors ``StimuliConfig.get_packer``, which is
-#: what the test harness uses to write operands into device L1.
 PACKERS: Dict[DataFormat, Callable] = {
     DataFormat.Float32: pack_fp32,
     DataFormat.Float16: pack_fp16,
@@ -77,9 +74,11 @@ PACKERS: Dict[DataFormat, Callable] = {
 def _call_accepted(fn: Callable, tensor: torch.Tensor, **kwargs):
     """Call `fn` passing only the keyword arguments it declares.
 
-    The packers take different subsets of the tile geometry — ``pack_fp16`` takes
-    none, ``pack_bfp8_b`` takes faces, the MX packers also take the SrcS layout
-    flags and the extra rounding controls. Filtering by signature keeps one call site.
+    The packers take different subsets of the tile geometry, so filtering by
+    signature keeps one call site instead of a branch per format group.
+
+    Matches on **name**: rename a packer's parameter and the call quietly falls
+    back to that parameter's default.
     """
     accepted = inspect.signature(fn).parameters
     return fn(tensor, **{k: v for k, v in kwargs.items() if k in accepted})
@@ -96,7 +95,7 @@ def tile_dimensions_for(num_faces: int, face_r_dim: int) -> list:
     """``[rows, cols]`` for a tile of `num_faces` faces of `face_r_dim` rows.
 
     Faces tile the 32-datum row before they stack, so up to two sit side by
-    side and the rest go underneath: 1 face is 16 wide, 2 or more are 32.
+    side and the rest go underneath.
     """
     faces_c = min(num_faces, MAX_NUM_FACES_C_DIM)
     return [(num_faces // faces_c) * face_r_dim, faces_c * FACE_C_DIM]
@@ -111,18 +110,9 @@ def tile_bytes_for(
 ) -> int:
     """Bytes one tile of `l1_format` occupies in L1, as the harness sizes it.
 
-    Delegates to :func:`helpers.tile_constants.calculate_tile_size_bytes`, the
-    same sizing ``StimuliConfig`` uses, because a datum count is not enough:
-
-    * the **BFP** packers hold a minimum of 16 exponents, so a tile with fewer
-      than 8 rows per face occupies more bytes than its datums imply -- 48
-      rather than 34 for a 1x32 ``Bfp8_b`` tile.
-    * with **use_srcs** an MX tile is written as 16-byte-aligned per-slice
-      blocks, 1152 bytes rather than the dense 1056, and 1280 under
-      ``dest_acc``.
-
-    Computing the stride from ``num_bytes_per_tile(datums)`` misses both, which
-    truncates a single-tile read and misaligns every tile after the first.
+    A datum count is not enough: the BFP packers hold a minimum of 16
+    exponents, and ``use_srcs`` writes 16-byte-aligned slices. See `README.md`,
+    "Multi-tile layout".
     """
     return calculate_tile_size_bytes(
         l1_format,
@@ -146,20 +136,8 @@ def pack_to_l1(
 ) -> List[int]:
     """Lay `tensor` out in L1 as `l1_format`, returning the bytes.
 
-    This is where precision is lost for the block-scaled formats — the bytes that
-    come back are the quantized truth, and nothing downstream re-quantizes.
-
-    The codecs in :mod:`helpers.pack` handle exactly one tile, so a multi-tile
-    tensor is split and packed tile by tile, matching how ``unpack_res_tiles``
-    reads it back. `tile_count` defaults to what the tensor holds at this
-    geometry, which must be a whole number of tiles; pass it explicitly to pack
-    a prefix.
-
-    `twos_complement` matches the flag on :func:`unpack_from_l1`: the integer
-    packers write sign-magnitude by default and two's complement when it is
-    set, which is the layout the SFPU tests configure. Without it this side
-    could not produce the L1 the other side knows how to read. Formats whose
-    packer does not declare it ignore it, via :func:`_call_accepted`.
+    This is where precision is lost for the block-scaled formats. The bytes
+    that come back are the quantized truth, and nothing downstream requantizes.
     """
     packer = PACKERS.get(l1_format)
     if packer is None:
@@ -203,12 +181,9 @@ def pack_to_l1(
     return packed
 
 
-#: L1 formats this module can actually move bytes for. Derived from
-#: :data:`PACKERS` because the two directions cover exactly the same formats --
-#: there is no format with a packer and no unpacker, or the reverse -- so one
-#: gate is enough for both. Deliberately separate from an architecture's
-#: ``SUPPORTED_L1_FORMATS``, which says what the *hardware* can hold: a format
-#: can be perfectly real on the device and still have no codec here.
+# Every format that has a packer, since looping a dict yields its keys. Not the
+# same question as what the hardware holds: a format can be real on the
+# device and still have no codec here.
 MODELLED_L1_FORMATS: FrozenSet[DataFormat] = frozenset(PACKERS)
 
 
@@ -236,14 +211,8 @@ def unpack_from_l1(
     """Read `packed` L1 bytes back as values, exactly as the unpacker sees them.
 
     `tile_stride_bytes` defaults to what :func:`pack_to_l1` actually writes at
-    this geometry, via :func:`tile_bytes_for` -- which accounts for the BFP
-    exponent minimum and the ``use_srcs`` slice layout, neither of which a
-    datum count captures. Left to its own devices ``unpack_res_tiles`` assumes a
-    full 32x32 tile stride for backward compatibility, which is only correct
-    when the geometry really is 32x32; pass the device's stride explicitly when
-    reading a buffer laid out some other way.
-
-    `tile_count` defaults to however many whole tiles the buffer holds.
+    this geometry. Left alone, ``unpack_res_tiles`` assumes a full 32x32 stride
+    for backward compatibility, which is only right when the geometry is 32x32.
     """
     if l1_format not in MODELLED_L1_FORMATS:
         # unpack_res_tiles would reach a bare dict lookup and raise KeyError
@@ -256,10 +225,10 @@ def unpack_from_l1(
         )
     if tile_count is None:
         # A partial trailing tile means the stride and the buffer disagree, and
-        # rounding it away decodes plausible values from a wrong layout -- a
+        # rounding it away decodes plausible values from a wrong layout, a
         # 1280-byte SrcS MX tile read at the 1152-byte stride would come back
         # as one tile with no complaint. pack_to_l1 refuses a partial tile on
-        # the way in; refuse it on the way out too.
+        # the way in, refuse it on the way out too.
         tile_count, remainder = divmod(len(packed), tile_stride_bytes)
         if remainder or not tile_count:
             raise ValueError(
