@@ -8,12 +8,12 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_row_pair.h"
+#include "ckernel_sfpu_row_pair.h"
 
 namespace ckernel::sfpu {
 
 inline void square_init() {
-    // The two-row body advances Dest from its second store (see sfpu/ckernel_sfpu_row_pair.h).
+    // The two-row body advances Dest from its second store (see ckernel_sfpu_row_pair.h).
     _init_sfpu_row_pair_();
     math::reset_counters(p_setrwc::SET_ABD_F);
 

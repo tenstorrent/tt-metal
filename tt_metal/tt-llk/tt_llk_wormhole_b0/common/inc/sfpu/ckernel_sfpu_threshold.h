@@ -8,10 +8,10 @@
 #include <type_traits>
 
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_row_pair.h"
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpu/ckernel_sfpu_row_pair.h"
 
 namespace ckernel::sfpu
 {
@@ -31,6 +31,19 @@ inline void _init_threshold_()
 {
     _init_sfpu_row_pair_();
     math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+/**
+ * @brief Metal's per-op threshold init, declared in llk_math_eltwise_unary_sfpu_init.h.
+ *
+ * Defined next to the kernel, as the other per-op inits are, because the kernel is here; llk_sfpu's
+ * ckernel_sfpu_threshold.h only forwards to this header.
+ *
+ * @note Same contract as @ref _init_threshold_.
+ */
+inline void threshold_init()
+{
+    _init_threshold_();
 }
 
 /**
