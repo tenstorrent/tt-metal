@@ -121,5 +121,20 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaUnusedParameterBesideUsedParameterFai
             ::testing::HasSubstr("SRAMArenaParameter 'unused' is not used by any DFB or scratchpad")));
 }
 
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaUnboundScratchpadFails) {
+    // Program construction rejects an arena-backed scratchpad that no kernel binds.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 4096}}};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"orphan_scratch"}, .size_per_node = 1024}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("ScratchpadSpec 'orphan_scratch' is declared but not bound by any kernel.")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

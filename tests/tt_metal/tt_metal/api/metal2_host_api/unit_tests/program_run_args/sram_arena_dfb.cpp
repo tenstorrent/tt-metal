@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 #include "impl/sram_arena/sram_arena_impl.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
@@ -93,6 +94,23 @@ std::array<uint32_t, 6> GetArenaBindingAddressesForTest(Program& program) {
         alias->borrowed_addr_,
         scratchpad.allocated_address,
         kernel->common_runtime_args_data()[scratchpad.addr_crta_word]};
+}
+
+// Arena DFB "fifo" (512 B x 4 at offset 1024) plus DFB "borrowed" (16 B x 2) backed by L1 TensorParameter "t" (64 B).
+ProgramSpec MakeArenaAndBorrowedDFBSpecForTest() {
+    ProgramSpec spec = ArenaDFBSpec(512, 4, 1024);
+    spec.dataflow_buffers.push_back(test_helpers::MakeMinimalDFB("borrowed", 16, 2));
+    spec.dataflow_buffers.back().borrowed_from = TensorParamName{"t"};
+    spec.kernels[0].dfb_bindings.push_back(ProducerOf(DFBSpecName{"borrowed"}, "borrowed"));
+    spec.kernels[1].dfb_bindings.push_back(ConsumerOf(DFBSpecName{"borrowed"}, "borrowed"));
+    spec.tensor_parameters = {test_helpers::MakeMinimalTensorParameter("t", BufferType::L1)};
+    return spec;
+}
+
+ProgramRunArgs MakeArenaAndTensorArgsForTest(const SRAMArena& arena, const MeshTensor& tensor) {
+    ProgramRunArgs args = MakeArenaArgsForTest(arena);
+    args.tensor_args = {{TensorParamName{"t"}, std::cref(tensor)}};
+    return args;
 }
 
 TEST_F(SRAMArenaDFBTest, CPU_WaitsForAllocationArgument) {
@@ -306,6 +324,71 @@ TEST_F(SRAMArenaDFBTest, CPU_PartialUpdateLateFailurePreservesArenaBindings) {
         [&] { UpdateProgramRunArgs(program, args); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("was not overridden")));
     EXPECT_EQ(GetArenaBindingAddressesForTest(program), original_addresses);
+}
+
+TEST_F(SRAMArenaDFBTest, CPU_RejectsStorageSizeThatOverflows32Bits) {
+    // A DFB whose entry_size * num_entries passes 2^32 cannot fit a small arena allocation.
+    ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/1u << 31, /*num_entries=*/2, /*offset=*/0);
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device(), spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds SRAMArenaParameter 'arena'")));
+}
+
+TEST_F(SRAMArenaDFBTest, CPU_ResizeRejectsStorageSizeThatOverflows32Bits) {
+    // A resize whose entry_size * num_entries passes 2^32 cannot fit the arena allocation.
+    SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
+    ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/1024);
+    Program program = MakeProgramFromSpec(fixture_device(), spec);
+    ProgramRunArgs args;
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
+    args.dfb_run_overrides = {{.dfb = DFBSpecName{"fifo"}, .entry_size = 1u << 31, .num_entries = 2}};
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, args); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds SRAMArenaParameter 'arena'")));
+}
+
+TEST_F(SRAMArenaDFBTest, CPU_FullSetBorrowedFitFailurePreservesArenaBindings) {
+    // A full set rejected by the borrowed-tensor fit check keeps the DFB on the previously bound arena.
+    SRAMArena first = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
+    SRAMArena second = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
+    ProgramSpec spec = MakeArenaAndBorrowedDFBSpecForTest();
+    MeshTensor tensor = MeshTensor::allocate_on_device(fixture_device(), spec.tensor_parameters[0].spec);
+    Program program = MakeProgramFromSpec(fixture_device(), spec);
+    SetProgramRunArgs(program, MakeArenaAndTensorArgsForTest(first, tensor));
+    ProgramRunArgs args = MakeArenaAndTensorArgsForTest(second, tensor);
+    args.dfb_run_overrides = {{.dfb = DFBSpecName{"borrowed"}, .num_entries = 64}};
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, args); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds the borrowed")));
+    EXPECT_EQ(ArenaDFB(program).borrowed_addr_, ArenaBase(first) + 1024);
+}
+
+TEST_F(SRAMArenaDFBTest, CPU_PartialUpdateBorrowedFitFailurePreservesArenaBindings) {
+    // A partial update rejected by the borrowed-tensor fit check keeps the DFB on the previously bound arena.
+    SRAMArena first = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
+    SRAMArena second = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
+    ProgramSpec spec = MakeArenaAndBorrowedDFBSpecForTest();
+    MeshTensor tensor = MeshTensor::allocate_on_device(fixture_device(), spec.tensor_parameters[0].spec);
+    Program program = MakeProgramFromSpec(fixture_device(), spec);
+    SetProgramRunArgs(program, MakeArenaAndTensorArgsForTest(first, tensor));
+    ProgramRunArgs update = MakeArenaAndTensorArgsForTest(second, tensor);
+    update.dfb_run_overrides = {{.dfb = DFBSpecName{"borrowed"}, .num_entries = 64}};
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, update); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds the borrowed")));
+    EXPECT_EQ(ArenaDFB(program).borrowed_addr_, ArenaBase(first) + 1024);
+}
+
+TEST_F(SRAMArenaDFBTest, CPU_RejectsArenaAddressBeyond32Bits) {
+    // Binding an arena whose base plus the DFB offset passes 2^32 is rejected instead of truncated.
+    SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
+    ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/0xFFFFFFF0u);
+    Program program = MakeProgramFromSpec(fixture_device(), spec, /*skip_validation=*/true);
+    ProgramRunArgs args;
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, args); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds uint32_t max")));
 }
 
 }  // namespace
