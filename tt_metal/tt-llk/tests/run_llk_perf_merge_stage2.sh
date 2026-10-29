@@ -36,14 +36,18 @@ fi
 python3 "$LLK/perf/placement_check.py" nodes --candidates "$OUT/stage1.regressions.csv" \
   --map "$LLK/perf_data/runs/**/*.windowhash" --cap 1000000 --out "$OUT/nodes.txt"
 
+# measure <side> <tree> <deadline> <part>: the part's tests at the 5 positions, kept as perf_data/runs/p<shift>-<part>.
 measure() {
   local left=$(( $3 - $(date +%s) ))
   if (( left < 30 )); then
-    echo "::warning::No time left to measure the $1 side."
+    echo "::warning::No time left to measure part $4 on the $1 side."
     return
   fi
-  LLK_PERF_NODE_LIST="$OUT/nodes.txt" RUNNER_TEMP="$OUT/tmp-$1" timeout -k 20 "$(( left - 20 ))" "$2/tests/run_llk_perf_placement.sh" \
-    || echo "::warning::Stage 2 on the $1 side did not finish; what it missed is reported as not re-measured."
+  LLK_PERF_NODE_LIST="$OUT/nodes.$4" RUNNER_TEMP="$OUT/tmp-$1-$4" timeout -k 20 "$(( left - 20 ))" "$2/tests/run_llk_perf_placement.sh" \
+    || echo "::warning::Stage 2 part $4 on the $1 side did not finish; what it missed is reported as not re-measured."
+  for d in "$2"/perf_data/runs/p{0,4,20,36,52}; do
+    [[ -d $d ]] && mv "$d" "$d-$4"
+  done
 }
 
 BASE="$OUT/base"
@@ -65,9 +69,16 @@ elif ! cmp -s "$LLK/tests/sfpi-version" "$BASE/tt_metal/tt-llk/tests/sfpi-versio
 fi
 ln -s "$LLK/tests/sfpi" "$BASE/tt_metal/tt-llk/tests/sfpi"
 # No test limit: stage 2 measures until the deadline, and what it did not measure on both sides blocks.
-# Each side gets half of the time left.
-measure head "$LLK" $(( ($(date +%s) + DEADLINE) / 2 ))
-measure base "$BASE/tt_metal/tt-llk" "$DEADLINE"
+# The largest slowdowns go first, as a part of their own on both sides, so a leg that runs out of time
+# still has verdicts for them. Within a part, each side gets half of the time left.
+FIRST="${LLK_STAGE2_FIRST:-10}"
+head -n "$FIRST" "$OUT/nodes.txt" > "$OUT/nodes.1"
+tail -n +"$(( FIRST + 1 ))" "$OUT/nodes.txt" > "$OUT/nodes.2"
+for part in 1 2; do
+  [[ -s "$OUT/nodes.$part" ]] || continue
+  measure head "$LLK" $(( ($(date +%s) + DEADLINE) / 2 )) "$part"
+  measure base "$BASE/tt_metal/tt-llk" "$DEADLINE" "$part"
+done
 
 mkdir -p "$BASE/tt_metal/tt-llk/perf_data/runs"
 python3 "$LLK/perf/placement_check.py" decide "${COMPARE[@]}" --candidates "$OUT/stage1.regressions.csv" \
