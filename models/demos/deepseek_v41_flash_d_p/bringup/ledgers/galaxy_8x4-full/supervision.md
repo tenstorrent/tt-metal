@@ -1022,3 +1022,4 @@ line that DRAM holds row records, tiles only in L1).
   0/50k/100k/200k/500k + 5k chunk, ~1.5 h), then the 4-bit page (FIX.14 window / index) and the profile page, then
   P.4 -> P.5 -> P.11 (launcher with --until P.11).
 - 19:00 OWNER: do the host-time cut of FIX.14's low-bit writes -> P.12 LOWBIT_HOST queued after P.11 (X.3 deps P.12): check bfp_round's prepared path (0.5 ms vs ckv_bfp4's 0.21), one window-block write per layer (80 -> 40 calls), move per-call host work out. Both ops were already prepared=True (the 2x2 applied P.7's pattern); the remaining cost is per call.
+- 19:10 OWNER: stop the LOW profile series (stopped during its device part); P.12 first (deps FIX.14; P.4 now deps P.12), then the profile, then P.4 -> P.5 -> P.11. Launcher run_ds41_p12.sh (--until P.12).
