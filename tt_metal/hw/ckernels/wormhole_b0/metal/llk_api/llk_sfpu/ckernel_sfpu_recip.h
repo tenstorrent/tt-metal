@@ -104,6 +104,7 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     return y;
 }
 
+#ifndef DISABLE_SFPLOADMACRO
 constexpr std::uint32_t RECIP_SEQ_NEG_MANT = 0x0084;
 constexpr std::uint32_t RECIP_SEQ_SCALE_BF16 = 0x2705;
 constexpr std::uint32_t RECIP_SEQ_SCALE_FP32_A = 0x3705;
@@ -215,6 +216,7 @@ inline void reciprocal_fp32_macro2_tail_b() {
     TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
     TTI_SFPLOADMACRO((2 << 2) | 1, 0, ADDR_MOD_2, 2 | 1);
 }
+#endif
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void _calculate_reciprocal_internal_(const int iterations) {
@@ -238,7 +240,9 @@ inline void _calculate_reciprocal_internal_(const int iterations) {
             sfpi::dst_reg[0] = out;
             sfpi::dst_reg++;
         }
-    } else if constexpr (is_fp32_dest_acc_en) {
+    }
+#ifndef DISABLE_SFPLOADMACRO
+    else if constexpr (is_fp32_dest_acc_en) {
         TTI_SFPCONFIG(RECIP_MACRO_MISC, 8, 1);
         TTI_SFPNOP;
         TTI_SFPLOADMACRO((0 << 2) | 0, 0, ADDR_MOD_3, 0);
@@ -281,6 +285,7 @@ inline void _calculate_reciprocal_internal_(const int iterations) {
         TTI_SFPNOP;
         TTI_SFPNOP;
     }
+#endif
 }
 
 template <bool APPROXIMATE = false, bool save_reg = true /* Unused. Enough registers available. */>
