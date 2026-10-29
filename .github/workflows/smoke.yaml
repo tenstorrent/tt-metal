@@ -80,32 +80,15 @@ jobs:
             tests/pipeline_reorg
           sparse-checkout-cone-mode: true
 
-      # The matrix script must come from main, not from this branch: a branch
-      # cut before prepare_test_matrix.py existed, or before its interface last
-      # changed, still has to build its matrix with the current script rather
-      # than a stale or missing copy of its own (#57555, #57579).
-      #
-      # Referencing the action as @main achieves that too, but a remote `uses:`
-      # makes the runner download the whole tt-metal tree (~425 MB, 25.5k files)
-      # to resolve a 1.6 MB action -- measured at 23-44s of "Set up job" on
-      # every load-test-matrix job, against 0s on a sibling job on the same
-      # runner with no remote `uses:`. This sparse checkout fetches only the
-      # action and the script it runs; actions/checkout applies
-      # --filter=blob:none automatically whenever sparse-checkout is set, so
-      # the other 423 MB is never transferred.
-      #
-      # Must stay AFTER the checkout above: that step cleans its target with
-      # `git clean -ffdx`, which deletes ci-main as an untracked directory if
-      # the workspace is reused.
+      # Supplies the matrix script from upstream main rather than this branch
+      # (#57555, #57579). Must stay AFTER the checkout above, whose
+      # `git clean -ffdx` would delete this directory.
       - name: Checkout CI actions from main
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          # Named explicitly rather than left to default to github.repository:
-          # the `uses: tenstorrent/tt-metal/...@main` this replaces always
-          # resolved against the upstream repo, so when the workflow runs
-          # inside a fork this has to as well, or the matrix would be built
-          # with the fork's main instead of upstream's.
+          # Explicit: defaults to github.repository, which is the fork when
+          # the workflow runs inside one.
           repository: tenstorrent/tt-metal
           ref: main
           path: ci-main
@@ -120,11 +103,8 @@ jobs:
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
-        # Local path into the main checkout above, so GITHUB_ACTION_PATH -- and
-        # with it the prepare_test_matrix.py the action runs two levels up --
-        # resolves inside ci-main. tests-yaml and sku-config stay relative to
-        # the workspace root, i.e. this branch's own checkout: the config
-        # follows the branch, the script follows main.
+        # Via ci-main so GITHUB_ACTION_PATH reaches main's script; the yaml
+        # inputs below stay workspace-relative, so config follows the branch.
         uses: ./ci-main/.github/actions/prepare-test-matrix
         with:
           tests-yaml: "${{ env.TESTS_YAML_PATH }}"
@@ -363,11 +343,7 @@ jobs:
           include_passed: false
           fail_on_failure: false
 
-      # Unlike prepare-test-matrix, this action carries no script and has no
-      # reason to be pinned to main -- it is a thin wrapper around
-      # actions/upload-artifact. It predates the pinning convention
-      # (#18756) rather than being chosen by it, so the branch's own copy
-      # is fine and saves this matrix job the same whole-tree download.
+      # Carries no script, so nothing here needs pinning to main.
       - uses: ./.github/actions/upload-artifact-with-job-uuid
         if: ${{ !cancelled() }}
         timeout-minutes: 10
