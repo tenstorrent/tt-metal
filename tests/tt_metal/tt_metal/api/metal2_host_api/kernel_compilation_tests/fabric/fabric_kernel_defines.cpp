@@ -41,8 +41,7 @@ protected:
         env_ = std::make_unique<MetalEnv>(MetalEnvDescriptor{
             .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
         env_->configure_fabric({.fabric_config = GetParam()});
-        const std::array<ChipId, 2> device_ids{0, 1};
-        devices_ = distributed::MeshDevice::open_unit_meshes(*env_, device_ids);
+        devices_ = distributed::MeshDevice::open_unit_meshes(*env_, std::array{0, 1});
     }
     void TearDown() override {
         devices_.clear();

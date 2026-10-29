@@ -21,7 +21,6 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
-#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -375,8 +374,7 @@ protected:
     void SetUp() override {
         env_ = std::make_unique<MetalEnv>(MetalEnvDescriptor{
             .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
-        const std::array<ChipId, 2> device_ids{0, 1};
-        auto meshes = distributed::MeshDevice::open_unit_meshes(*env_, device_ids);
+        auto meshes = distributed::MeshDevice::open_unit_meshes(*env_, std::array{0, 1});
         ASSERT_EQ(meshes.size(), 2u);
         mesh_a_ = meshes.at(0);
         mesh_b_ = meshes.at(1);

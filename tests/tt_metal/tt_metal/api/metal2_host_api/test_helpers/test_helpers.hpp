@@ -11,7 +11,6 @@
 #include <cstdlib>
 #include <optional>
 #include <string>
-#include <variant>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>

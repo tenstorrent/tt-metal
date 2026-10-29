@@ -16,7 +16,6 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
-#include "metal2_host_api/test_helpers/test_helpers.hpp"
 namespace tt::tt_metal::experimental::test_helpers {
 
 // One 1x1 MeshDevice on a mock cluster of the given architecture.
