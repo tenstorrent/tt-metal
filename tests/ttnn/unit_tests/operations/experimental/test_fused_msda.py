@@ -737,6 +737,70 @@ def test_fused_msda_v2_tiled_masks_out_of_bounds_corners(device, memory, Q, D):
     )
 
 
+# Raw bf16 bit patterns: converting a float32 NaN to bf16 drops its sign.
+@pytest.mark.parametrize("bad", [0x7FC0, 0xFFC0, 0x7F80, 0xFF80], ids=["nan", "neg_nan", "inf", "neg_inf"])
+@pytest.mark.parametrize("path", ["v1", "v2", "v2_tiled"])
+def test_fused_msda_nonfinite_sampling_location_contributes_nothing(device, path, bad):
+    """A sample whose x, y or both is NaN or infinite must add nothing.
+
+    `msda_geometry.hpp::corner_word` clamps the floored corner before its bounds
+    tests, so such a sample's corner word must have every flag clear: the
+    gathers issue no read for it and compute zeroes its weights, although the
+    attention weight handed to the op is live. The reference drops the poisoned
+    samples instead, and the other points of the same queries must be
+    untouched: on the tiled path a poisoned offset is one column of the block
+    matmul. "v2" (L * P = 8) takes the per-point geometry, "v2_tiled"
+    (L * P = 16) the tiled one on Blackhole.
+    """
+    B, Q, H, D = 1, 64, 2, 32
+    if path == "v2_tiled":
+        spatial_shapes, P, R = [(16, 20), (8, 10), (4, 5), (2, 3)], 4, 4
+    else:
+        spatial_shapes, P, R = [(16, 20), (8, 10)], 4, 2
+    L = len(spatial_shapes)
+
+    torch.manual_seed(0)
+    poisoned = torch.rand(B, Q, H, L, P) < 0.1
+    # 0: x only, 1: y only, 2: both
+    which = torch.randint(0, 3, (B, Q, H, L, P))
+    bad_x = poisoned & (which != 1)
+    bad_y = poisoned & (which != 0)
+
+    if path == "v1":
+        value, coords, attn = _random_case(B, Q, H, L, P, D, spatial_shapes)
+        loc = coords
+    else:
+        value, ref_pts, coords, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes)
+        loc = _locations_from_offsets(ref_pts, coords, spatial_shapes, "pillar")
+    sent = coords.to(torch.bfloat16)
+    bits = sent.view(torch.int16)
+    bad_int16 = bad - 0x10000 if bad >= 0x8000 else bad
+    bits[..., 0][bad_x] = bad_int16
+    bits[..., 1][bad_y] = bad_int16
+
+    ref = _msda_reference(value, loc, attn.masked_fill(poisoned, 0.0), spatial_shapes)
+    if path == "v1":
+        out = ttnn.experimental.fused_msda(
+            _to_device(value, device),
+            _to_device(_pack_locations(sent), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+        )
+    else:
+        out = ttnn.experimental.fused_msda_from_offsets(
+            _to_device(_pack_value(value), device),
+            _to_device(ref_pts, device),
+            _to_device(_pack_locations(sent), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+            reference_mode="pillar",
+        )
+    out = ttnn.to_torch(out).to(torch.float32)
+
+    assert out.isfinite().all(), f"{(~out.isfinite()).sum()} non-finite outputs: a poisoned sample kept a live weight"
+    _assert_close(ref, out)
+
+
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("memory", ["dram", "l1"])
 def test_fused_msda_v1_repeated_calls_hit_program_cache(device, memory):
