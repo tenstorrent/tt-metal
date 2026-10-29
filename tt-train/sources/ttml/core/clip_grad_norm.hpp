@@ -21,4 +21,16 @@ autograd::TensorPtr clip_grad_norm(
     float max_norm,
     float p_norm_type = 2.0F,
     bool error_if_nonfinite = true);
+
+// Tensor-parallel clip_grad_norm. `sharded` gradients are split along mesh axis `cluster_axis`
+// (their Sum[|g|^p] is all-reduced across it); `replicated` ones are identical on that axis and
+// counted once. Clips in place; returns the pre-clip norm on device without a host sync, so a
+// non-finite norm NaNs the gradients instead of throwing.
+autograd::TensorPtr clip_grad_norm_tp(
+    const serialization::NamedParameters& sharded,
+    const serialization::NamedParameters& replicated,
+    float max_norm,
+    uint32_t cluster_axis,
+    float p_norm_type = 2.0F);
+
 }  // namespace ttml::core
