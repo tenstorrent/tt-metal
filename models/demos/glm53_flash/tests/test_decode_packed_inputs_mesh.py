@@ -263,7 +263,7 @@ def test_packed_decode_inputs_bit_identical(mesh_device, monkeypatch, partition)
     if partition == "1" and B % MESH[1]:
         pytest.skip(f"the user partition needs users_per_row {B} % cols {MESH[1]} == 0")
     monkeypatch.setenv("GLM53_PARTITION_USERS", partition)
-    monkeypatch.delenv(PACKED_INPUTS_ENV, raising=False)
+    monkeypatch.setenv(PACKED_INPUTS_ENV, "0")  # the direct path first (the knob defaults on since 2026-10-27)
     layers = _layer_range()
     cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
     model = GLM53MeshModel(
@@ -343,7 +343,7 @@ def test_packed_decode_inputs_bit_identical(mesh_device, monkeypatch, partition)
     )
 
     # ---- pass D: the direct refreshes, traced (the knob off again; the segments stay allocated, unused)
-    monkeypatch.delenv(PACKED_INPUTS_ENV, raising=False)
+    monkeypatch.setenv(PACKED_INPUTS_ENV, "0")
     model.packed = None
     trace_id, trace_outs = model.capture(ids0, pos0)
     model.reset_kda_states()
