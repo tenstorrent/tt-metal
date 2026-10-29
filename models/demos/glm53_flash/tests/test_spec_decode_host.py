@@ -140,12 +140,16 @@ def test_accept_greedy_cases():
 def test_serving_draft_len_cap_mirrors_spec_draft_len():
     """``tt/vllm_spec.py`` (host-only, no ttnn) carries its own copy of the policy for the adapter's ``spec_plan``."""
     from models.demos.glm53_flash.tt.vllm_spec import MAX_VERIFY_ROWS as SERVING_MAX_ROWS
-    from models.demos.glm53_flash.tt.vllm_spec import draft_len_cap
+    from models.demos.glm53_flash.tt.vllm_spec import VERIFY_ROWS_CAP, draft_len_cap
 
-    assert SERVING_MAX_ROWS == MAX_VERIFY_ROWS
+    assert SERVING_MAX_ROWS == MAX_VERIFY_ROWS and VERIFY_ROWS_CAP == MAX_VERIFY_ROWS - 1
     for B in (1, 2, 3, 4, 5, 8, 10, 16, 17, 32, 33):
         for k in (1, 3, 7, 31):
-            assert draft_len_cap(B, k) == spec_draft_len(B, k), (B, k)
+            # the same rule at the same row limit; the policy's default limit stays below the full tile (B (K + 1) = 32
+            # diverges on mesh row 5: the 2026-10-29 sweep), the op's limit is the tile
+            assert draft_len_cap(B, k, MAX_VERIFY_ROWS) == spec_draft_len(B, k), (B, k)
+            assert draft_len_cap(B, k) == spec_draft_len(B, k, VERIFY_ROWS_CAP), (B, k)
+            assert B * (draft_len_cap(B, k) + 1) < MAX_VERIFY_ROWS or draft_len_cap(B, k) == 0, (B, k)
     # the other ttnn-free mirrors of tt/vllm_spec.py: the eager prefill buckets / padding (tt/mesh_model.py) and the
     # pad-row mask tensors (tt/moe.py) the drafter's prompt fill is planned and warmed with
     from models.demos.glm53_flash.tt import vllm_spec as vs
