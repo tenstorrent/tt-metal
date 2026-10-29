@@ -13,15 +13,19 @@ The same ~1.5K-token prompt is prefilled three ways on every replica, each into 
 All three must give near-identical next-token logits and pick the same next token up to a bf16 near-tie
 (a token the other run scores within ``TIE_STEPS`` bf16 steps of its best: this prompt's top two are one
 step apart). Then every slot decodes greedily from the one-shot slot's first token for a few steps, which
-reads the KV the chunks wrote; the generated text is logged and the first tokens must agree. Later chunks of the SWA layers read only the window before them from the cache; those of the
-global layers read the whole context through chunked MLA prefill on the chip that owns the slot.
+reads the KV the chunks wrote; the generated text is logged and the first ``AGREE_TOKENS`` tokens must agree
+with the one-shot slot's up to their first difference, which passes only as the same kind of near-tie (each
+slot's pick near the top of the other's logits there; common.first_divergence). The histories fork there, so
+later tokens are not compared: the chunked slots' logits differ from one shot's by bf16 noise (PCC ~0.998), and
+the prompt's continuation has decode steps whose top two are under a step apart. Later chunks of the SWA layers
+read only the window before them from the cache; those of the global layers read the whole context through
+chunked MLA prefill on the chip that owns the slot.
 
 ``pair_split``: the global layers' KV pair split (TtMiMoModel(kv_pair_split=True), vLLM's default layout): each chip
 of a pair keeps half of every 128-token block, a later chunk runs pair-split chunked MLA prefill on both chips and
 merges by LSE, and decode attends each chip's half and merges (tt/pair_split.py).
 """
 
-import math
 import os
 
 import pytest
@@ -33,9 +37,12 @@ from models.experimental.mimo_v2_6_flash.tests.common import (
     DP,
     GALAXY_DEVICE_PARAMS,
     cache_dir,
+    first_divergence,
     load_config_and_ckpt,
     model_path,
+    near_top,
     pcc,
+    tie_margin,
 )
 from models.experimental.mimo_v2_6_flash.tt.attention import PAIR_SPLIT_OPS
 from models.experimental.mimo_v2_6_flash.tt.generator import MiMoGalaxyGenerator
@@ -46,14 +53,6 @@ CHUNKS = (128, 256, 512, 1024)  # chunk size on replica rows 0..3
 MAX_PREFILL_CHUNK = 2048  # one-shot prefill of the whole prompt must fit in one chunk
 GREEDY_TOKENS = 8
 AGREE_TOKENS = 4
-TIE_STEPS = 2
-
-
-def near_top(logits, token):
-    """``token`` scores within TIE_STEPS bf16 steps of the best logit (ties from rounding the logits to bf16)."""
-    best = float(logits.max())
-    step = 2.0 ** (math.floor(math.log2(abs(best))) - 7)
-    return float(logits[token]) >= best - TIE_STEPS * step
 
 
 def long_prompt(tok):
@@ -118,18 +117,40 @@ def test_model_chunked_tp8_dp4(mesh_device, kv_pair_split):
     # ---- greedy decode from all three slots on every row, all from the one-shot slot's first token
     users = {r * 4 + s: s for r in range(DP) for s in range(3)}
     gen_tokens = {u: [int(first[(gen.locate(u)[0], 0)].argmax())] for u in users}
+    gen_logits = {u: [first[(gen.locate(u)[0], s)]] for u, s in users.items()}  # gen_logits[u][k] picked token k
     positions = {u: n for u in users}
-    for _ in range(GREEDY_TOKENS - 1):
+    for k in range(1, GREEDY_TOKENS):
         out = gen.decode({u: t[-1] for u, t in gen_tokens.items()}, positions)
         for u, lg in out.items():
             gen_tokens[u].append(int(lg.argmax()))
+            if k < AGREE_TOKENS:
+                gen_logits[u].append(lg)
             positions[u] += 1
     agree_decode = True
     for r in range(DP):
         texts = [gen_tokens[r * 4 + s] for s in range(3)]
         logger.info(f"row {r}: " + " | ".join(repr(tok.decode(t)) for t in texts))
-        agree_decode = agree_decode and all(t[:AGREE_TOKENS] == texts[0][:AGREE_TOKENS] for t in texts)
+        ref = r * 4
+        for slot, name in ((1, f"chunks of {CHUNKS[r]}"), (2, f"prefix hit at {PREFIX}")):
+            u = ref + slot
+            fork = first_divergence(
+                gen_tokens[u][:AGREE_TOKENS], gen_logits[u], gen_tokens[ref][:AGREE_TOKENS], gen_logits[ref]
+            )
+            if fork is None:
+                continue
+            k, tie = fork
+            agree_decode = agree_decode and tie
+            picks = [(gen_tokens[v][k], gen_logits[v][k], gen_logits[w][k]) for v, w in ((ref, u), (u, ref))]
+            logger.info(
+                f"row {r} {name}: greedy decode differs from one shot at step {k}, near-tie {tie}; "
+                + " vs ".join(
+                    f"{who} picks {tok.decode([t])!r} ({float(own[t]):.4f}), "
+                    f"which the other scores {float(other[t]):.4f}, "
+                    f"{tie_margin(other, t):.2f} bf16 steps below its best {float(other.max()):.4f}"
+                    for who, (t, own, other) in zip(("one shot", name), picks)
+                )
+            )
 
     assert agree, "chunked or prefix-hit prefill picked a different next token than one-shot prefill"
     assert worst_pcc > 0.99, worst_pcc
-    assert agree_decode, f"greedy decode diverged within {AGREE_TOKENS} tokens"
+    assert agree_decode, f"greedy decode diverged beyond a bf16 near-tie within {AGREE_TOKENS} tokens"

@@ -1063,9 +1063,7 @@
     # greedy continuations of the shared prompt can differ ("replicas disagree on the shared prompt");
     # the per-pair stream is the path this test has been validated on.
     MIMO_MOE_DEDUP=0 pytest --timeout $PYTEST_TIMEOUT $T/test_model_tp8_dp4.py
-    # pair_split only: the users layout (kv_pair_split=False) diverges at greedy decode token 2 on mimo-v2.6/dev
-    # as well; vLLM serves the pair-split layout. Re-enable [users] once that is fixed.
-    pytest --timeout $PYTEST_TIMEOUT $T/test_model_chunked_tp8_dp4.py -k pair_split
+    pytest --timeout $PYTEST_TIMEOUT $T/test_model_chunked_tp8_dp4.py
   model: mimo-v2.6-flash
   model_family: MiMo
   skus:
