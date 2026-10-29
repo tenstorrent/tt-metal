@@ -630,6 +630,17 @@ TABLE = {
         "run_prepared each call). off = a fresh ProgramDescriptor through ttnn.generic_op every call (the path before "
         "P.7). Same program, same runtime arguments, same bytes",
     ),
+    "INDEXER_TOPK_LOCAL": Setting(
+        "on",
+        ("on", "off"),
+        "P.8 (galaxy 8x4, owner decision 2026-10-29, option C of the SP=32 study): on = the all-device model's indexer "
+        "top-k stays on the chip that scored it ([1, 1, Sq, K] uint32, the chip's own query rows; tt/indexer.py "
+        "TtIndexer.local): no all_gather over TP after topk_large_indices and no mesh_partition back to the chip's "
+        "rows in the sparse attention's index list (tt/sparse_attention.py _index / _index_static), as DeepSeek-V3's "
+        "sparse MLA when attention is not head-sharded; the state read-back concatenates the chips' rows "
+        "(tt/model.py _ids_to_host). off = the top-k gathered over TP to [1, 1, S/SP, K] and partitioned again by "
+        "the attention (the path before P.8). Same ids, same bytes",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8

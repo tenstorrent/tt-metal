@@ -3864,3 +3864,30 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   DS41_CKV_BFP4_PREPARED=off.
 - Attempt 3 (P.7): only docs fixed after attempt 2 failed the lint: ckv_bfp4_ttnn/README.md now has the `## Options`,
   `## Limits` and `## How to call` sections (ops_lint: 0 problems); DS41-135's fix line labelled `Fix:`. Code unchanged.
+
+## P.8 (galaxy 8x4, perf): INDEXER_TOPK_LOCAL, the indexer top-k stays on the chip that scored it (option C)
+
+- What: setting INDEXER_TOPK_LOCAL (tt/settings.py, default on; off = the old path). On, the all-device model's
+  indexers (`TtDS41Block` sets `indexer.local = topk_local()`, tt/model.py) return topk_large_indices' own
+  [1, 1, Sq, 512] rows (no `ccl.all_gather` over TP in `TtIndexer.topk_of`), and the sparse attention's index list
+  (`TtSparseAttention._mine`, used by `_index` / `_index_static`) skips the `mesh_partition` back to the chip's rows
+  when the top-k already has q_rows rows. That works because the indexer's chip rows (natural blocks r W + c Sq + i)
+  are the attention's query rows after its head->seq reshard (`WindowTables.geo.query_offsets`).
+- Sizes come from the mesh (`geo.q_rows`, `geo.w`, `mesh.shape`); TP == 1 boxes take neither op, as before.
+- The state read-back (`DS41DeviceState._index_rows` -> `_ids_to_host(per_chip=True)`) joins the chips' rows in device
+  order (chip r TP + c), ids as given (the ladder compares sets, testing/ladder.py:index_overlap).
+- Component / swap harnesses (bringup/hooks.py, outside this step's paths) build their indexers with `local=False`, so
+  they keep the gathered layout their readback (ConcatMesh2dToTensor, column 0) and the uploaded reader top-k expect.
+  `_mine` takes both layouts.
+- Calls removed per chunk (40 layers, 8 index sources 2/8/14/20/24/28/32/36): 8 all_gathers (one a source layer)
+  and 8 mesh_partitions. That is 16 calls, not the ~46 the study estimated, because ChunkMemo (INDEXER_GLUE, P.16)
+  already builds one index list per index source, not one per compressed layer (38). Collectives per layer: an
+  index-source layer has 1 TP all_gather fewer; other layers are unchanged. DRAM: a kept top-k is [Sq, 512] uint32 a
+  chip instead of [W, 512] (0.33 instead of 1.31 MB per index-source layer per kept chunk on 8x4).
+- Accuracy (measure --task P.8, quick, switch on): every limit holds, and every metric equals P.7's (same ids, same
+  bytes): L39 err 0.9072 / limit 1.533, err_state_max 0.1998, topk_idx overlaps L02 0.980 ... L36 0.921 (P.7 has the
+  same values), host_transfers_per_layer 0. Warm wall 417.5 ms (spread 52.7; P.7 415.1, spread 25.6): any gain is
+  inside the run-to-run spread. No profile was run in this step. The orchestrator's A/B profile gives device ms per
+  section and op calls on / off.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.8`; old path
+  `DS41_INDEXER_TOPK_LOCAL=off`.
