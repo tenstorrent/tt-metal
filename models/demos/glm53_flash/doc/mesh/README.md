@@ -1581,6 +1581,18 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 19:55: step 3 prepared (async scheduling); the block test's resident pass; the knob catalogued
+
+`resident_block_v2` on the rows-4-5 block (both partitions): the resident traced chain is bit-identical to the direct
+eager chain over 16 steps, every device-advanced field equals the host formulas after each replay, a parked slot
+keeps its position; replay-only steps 4.95-5.05 ms against 7.2-9.0 ms with the per-step upload (v1 was a stale
+test: the packed knob defaults on since 10-27). The 1 M catalog profile carries `GLM53_RESIDENT_DECODE: "1"`
+(tt-inference-server 6df71ff0d). For vLLM's async scheduling (step 3) the adapter's `read_decode_output(async_read=True)`
+now reads the greedy ids without blocking (one per-row read on the command queue and one recorded event the plugin
+synchronizes before the host processing; the logits path stays blocking), the 1 M profile's `async-scheduling: true`
+sits in the catalog working tree until its smoke (`served_8x4_async_r1`, queued behind the 128 K profile's resident
+smoke) decides.
+
 ### 2026-10-29 19:45: resident decode served: +28 % decode at 32 users, ids identical
 
 `served_8x4_resident_r1` (the catalogued 1 M profile, 32 slots, `GLM53_RESIDENT_DECODE=1`): the in-graph feedback

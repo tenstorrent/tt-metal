@@ -136,6 +136,15 @@ waves the same four take 180 / 237 / 408 / 464 s and still answer 4/4). Eager wa
 wave costs a 16 K SP chunk), so eager prompts take a free slot index first (`SlotTable.allocate(prefer_sp)`,
 `doc/mesh/row_ownership.md` 2.4) and the waves serve the fifth concurrent long prompt on and every short burst.
 
+Resident decode (2026-10-29 19:40, the same 1 M profile with `GLM53_RESIDENT_DECODE=1`, now catalogued; one smoke run):
+the traced decode step feeds its sampled ids back and advances the live positions on device (`tt/resident_decode.py`),
+so a steady-state step is a replay with no host upload (the plugin's `reload_inputs=False` chain under
+`supports_async_decode`); the greedy texts are identical to the reload path's. `vllm bench` 128 x 128 at 32 concurrent
+requests: TTFT 5.2 s mean (unchanged), **14.1 tok/s per user, 288 tok/s output** (from 11.0 / 244); 4 concurrent
+65 514-token prompts: TTFT 87.3 s mean. On the rows-4-5 block the replay-only step is 5.0 ms against 7.2-9.0 ms with the
+per-step upload (`tests/test_decode_packed_inputs_mesh.py`). Next on this path: vLLM's async scheduling over the chain
+(the adapter's ids readback is non-blocking) and a decode step between prefill chunks (`doc/mesh/resident_decode.md`).
+
 The 128 K profile served the same way (192 distinct requests = 6 slots per chip under per-row prefill ownership, prefix
 cache off; 2026-10-29 14:58, one smoke run, 0 program-cache misses; 224 = 7 per chip runs out of DRAM at boot): 4 concurrent
 65 514-token prompts 4/4 (TTFT 49 / 64 / 106 / 113 s), `vllm bench` 128 x 128 at 192 concurrent requests TTFT 27.0 s mean,
