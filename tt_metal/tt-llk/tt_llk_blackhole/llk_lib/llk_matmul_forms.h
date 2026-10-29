@@ -212,7 +212,10 @@ constexpr bool matmul_mixed_main_form()
          (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp4_b && out_format == DataFormat::Bfp4_b && rt_dim == 2 && ct_dim == 4 && kt_per_section == 1) ||
          (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp4_b && out_format == DataFormat::Float32 && rt_dim == 1 && ct_dim == 2 && kt_per_section == 4) ||
          (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp8_b && out_format == DataFormat::Bfp4_b && rt_dim == 4 && ct_dim == 2 && kt_per_section == 1));
-    return lofi_cell || (math_fidelity == MathFidelity::HiFi2 &&
+    // HiFi3, half sync, 32-bit DEST, Bfp8_b in in1 against Float32 in in0 into Float32, a single tile of one k step: the keyed forms read 0.1 cycles behind main
+    constexpr bool hifi3_cell = math_fidelity == MathFidelity::HiFi3 && sync == 0 && fp32_dest && in0 == DataFormat::Float32 && in1 == DataFormat::Bfp8_b &&
+                                out_format == DataFormat::Float32 && kt_per_section == 1 && ct_dim == 1 && rt_dim == 1;
+    return lofi_cell || hifi3_cell || (math_fidelity == MathFidelity::HiFi2 &&
            ((f32_in1 && !keyed) || (in0 == DataFormat::Float32 && matmul_block_float_format(in1) && sync == 0 && kt_per_section == 1) ||
             (!fp32_dest && kt_per_section == 1 && sync == 0 && in1 == DataFormat::Bfp8_b && in0 == DataFormat::Float16_b && out_format == DataFormat::Float32)));
 }
