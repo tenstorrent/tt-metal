@@ -16,12 +16,12 @@ from models.demos.strands_agent.tt.prompting import EncodedQuestion, encode_requ
 from models.tt_transformers.tt.common import Mode
 
 MAX_BATCH = 32  # prompts per forward (upstream max_batch)
-# Padded tokens per forward (batch * bucket). Per-prompt cost stops falling near 4-8k tokens; at 16k one chip
-# runs about 2.5x slower per token.
+# Padded tokens per forward (batch * bucket). Per-prompt cost stops falling near 4-8k tokens; larger forwards
+# run slightly slower.
 MAX_BATCH_TOKENS = 8192
 # One forward on one chip costs about FWD_FIXED_MS + TOKEN_MS * batch * bucket (measured, S 128-4096, B 1-32).
-FWD_FIXED_MS = 20.0
-TOKEN_MS = 0.135
+FWD_FIXED_MS = 11.0
+TOKEN_MS = 0.041
 
 
 def plan_batches(lengths, max_batch=MAX_BATCH, max_tokens=MAX_BATCH_TOKENS) -> list[list[int]]:
