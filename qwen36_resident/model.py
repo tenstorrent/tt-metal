@@ -34,10 +34,13 @@ from qwen36_resident.common import (
     PER_BANK,
     TILE,
     TILE_BYTES,
+    Deferred,
     bank_core_cols,
     block_geometry,
+    device_zeros,
     f32_bits,
     gate_up_core_cols,
+    materialize,
     quantize,
     rect_cover,
     split,
@@ -57,7 +60,15 @@ PROJ_DT, OUT_DT, GU_DT, DOWN_DT, HEAD_DT = (
     ttnn.bfloat8_b,
     ttnn.bfloat8_b,
 )
-WORKERS, FANIN = 32, 8
+# attention workers (the last one the tail core); more workers split long contexts finer (and change the summation
+# order of the partials). 40 still fits a rectangle of the P300 grid next to the streamers.
+WORKERS = int(os.environ.get("RESIDENT_ATTN_WORKERS", "32"))
+FANIN = 8
+# chunk workers take tiles round robin over all banks (attn_common.hpp chunk_of)
+ATTN_RR = os.environ.get("RESIDENT_ATTN_RR", "0") == "1"
+# chunk workers read their KV tiles over both NOCs (attn_common.hpp two_nocs; the same reads and arithmetic, so
+# the same numbers): 24.1 -> 20.5 ms TPOT at 262K, the KV stream is NOC-bound on one NOC
+ATTN_2NOC = os.environ.get("RESIDENT_ATTN_2NOC", "1") == "1"
 KV_BLOCK = 8  # KV position tiles per streamed block of an attention worker
 (
     SEM_SLOTS,
@@ -151,9 +162,11 @@ def quantize_rows(t, dtype=ttnn.bfloat8_b):
 class State:
     """Decode state (torch): GDN recurrent states / conv histories per GDN copy, KV caches per attention
     copy (positions < pos, bf8), shared by the device model (as its initial DRAM contents) and the
-    reference (updated in place by torch_step)."""
+    reference (updated in place by torch_step).
+    kv=False: no host KV images (K, V None): the device model allocates its KV caches on device, zero-filled
+    (what a served model does: at max_pos 256K the fp32 images would be ~34 GB of host memory)."""
 
-    def __init__(self, d, gdn_copies, attn_copies, pos, max_pos, seed=1, zero=False):
+    def __init__(self, d, gdn_copies, attn_copies, pos, max_pos, seed=1, zero=False, kv=True):
         g = torch.Generator().manual_seed(seed)
         rn = (lambda *s: torch.zeros(*s)) if zero else (lambda *s: torch.randn(*s, generator=g))
         self.pos, self.max_pos = pos, max_pos
@@ -162,8 +175,8 @@ class State:
         # [copy][chip] [3, conv_ch] inputs at pos - 3, pos - 2, pos - 1 (bf16)
         self.hist = [[bf16(rn(CONV_K - 1, d.conv_ch)) for _ in range(d.n)] for _ in range(gdn_copies)]
         # [copy][chip] bf8 [max_pos, HD], rows >= pos zero
-        self.K, self.V = [], []
-        for _ in range(attn_copies):
+        self.K, self.V = ([], []) if kv else (None, None)
+        for _ in range(attn_copies if kv else 0):
             ks, vs = [], []
             for _ in range(d.n):
                 k, v = quantize_rows(rn(max_pos, HD)), quantize_rows(rn(max_pos, HD))
@@ -345,7 +358,10 @@ def worker_rect(mesh, used, count):
 
 
 def chunk_of(w, tp, banks):
-    """Mirror of attn_common.hpp chunk_of: (bank, j, J, rows) of chunk worker w."""
+    """Mirror of attn_common.hpp chunk_of: (bank, j, J, rows) of chunk worker w (round robin: (None, w,
+    WORKERS - 1, tiles))."""
+    if ATTN_RR:
+        return None, w, WORKERS - 1, (tp - w + WORKERS - 2) // (WORKERS - 1) if tp > w else 0
     live = min(tp, banks)
     if live == 0:
         return 0, 0, 1, 0
@@ -362,19 +378,31 @@ def tile_bytes_rows_replicated(v):
     return np.concatenate([face_rows[0], face_rows[1], face_rows[0], face_rows[1]]).reshape(-1)
 
 
-def rope_words(n):
-    """[n, 3, 1024] uint16: for positions 0..n-1 the cos, sin and -sin tiles of rope_tables, as
-    tile_bytes_rows_replicated lays them out"""
+def rope_compact(n):
+    """[n, ROT] uint16: for positions 0..n-1 the bf16 bits of rope_tables' cos (ROT / 2) then sin (ROT / 2), the
+    rope table the feeding hub expands (mlp_hub.cpp expand_rope; 128 B per position)"""
     inv = 1.0 / ROPE_THETA ** (torch.arange(0, ROT, 2, dtype=torch.float64) / ROT)
     ang = torch.arange(n, dtype=torch.float64)[:, None] * inv
     cos, sin = torch.cos(ang).float(), torch.sin(ang).float()
+    return torch.cat([cos, sin], dim=1).bfloat16().view(torch.int16).numpy().astype(np.uint16)
+
+
+def rope_expand(c):
+    """[..., ROT] rope_compact rows -> [..., 3, 1024] uint16: the cos, sin and -sin tiles, as
+    tile_bytes_rows_replicated lays them out (-sin: the sign bits flipped, as bf16(-x) == -bf16(x))"""
+    h = ROT // 2
     out = []
-    for v in (cos, sin, -sin):
-        b = v.bfloat16().view(torch.int16).numpy().astype(np.uint16)
-        lo = np.repeat(b[:, None, :16], 16, axis=1).reshape(n, -1)
-        hi = np.repeat(b[:, None, 16:], 16, axis=1).reshape(n, -1)
-        out.append(np.concatenate([lo, hi, lo, hi], axis=1))
-    return np.stack(out, axis=1)
+    for v in (c[..., :h], c[..., h:], c[..., h:] ^ np.uint16(0x8000)):
+        lo = np.repeat(v[..., None, :16], 16, axis=-2).reshape(*v.shape[:-1], -1)
+        hi = np.repeat(v[..., None, 16:], 16, axis=-2).reshape(*v.shape[:-1], -1)
+        out.append(np.concatenate([lo, hi, lo, hi], axis=-1))
+    return np.stack(out, axis=-2)
+
+
+def rope_words(n):
+    """[n, 3, 1024] uint16: for positions 0..n-1 the cos, sin and -sin tiles of rope_tables, as
+    tile_bytes_rows_replicated lays them out"""
+    return rope_expand(rope_compact(n))
 
 
 def tiny_order(mat):
@@ -573,13 +601,17 @@ class ResidentModel:
             bank_core_cols(d.Ht, banks),
             bank_core_cols(d.vocab // TILE, banks) if d.vocab else None,
         ]
+        # per entry, per copy: a function giving the copy's per-chip matrices, called as the copy is placed (the
+        # weights may be Deferred, read from the checkpoint only then: weights.load(lazy=True))
+        mat = materialize
+        gate_up = lambda cm: mat(cm["GU"]) if "GU" in cm else torch.cat([mat(cm["G"]), mat(cm["U"])], dim=1)
         per_entry_mats = [
-            [list(fc)] if self.fc else [[c["Wq"] for c in wg["chips"]] for wg in w["gdn"]],
-            [[c["Wq"] for c in wa["chips"]] for wa in w["attn"]],
-            [list(o) for o in w["out"]],
-            [[torch.cat([cm["G"], cm["U"]], dim=1) for cm in m] for m in w["mlp"]],
-            [[cm["D"] for cm in m] for m in w["mlp"]],
-            [list(w["head"])] if lm_head else [],
+            [lambda: list(fc)] if self.fc else [lambda wg=wg: [mat(c["Wq"]) for c in wg["chips"]] for wg in w["gdn"]],
+            [lambda wa=wa: [mat(c["Wq"]) for c in wa["chips"]] for wa in w["attn"]],
+            [lambda o=o: [mat(x) for x in o] for o in w["out"]],
+            [lambda m=m: [gate_up(cm) for cm in m] for m in w["mlp"]],
+            [lambda m=m: [mat(cm["D"]) for cm in m] for m in w["mlp"]],
+            [lambda: [mat(h) for h in w["head"]]] if lm_head else [],
         ]
         # one DRAM tensor per copy, allocated back to back so the copies sit at a fixed per-bank stride
         self._keep = []
@@ -597,7 +629,7 @@ class ResidentModel:
             copies = []
             for m in mats:
                 t = ttnn.from_torch(
-                    torch.stack([layout(mm) for mm in m]).unsqueeze(1),
+                    torch.stack([layout(mm) for mm in m()]).unsqueeze(1),
                     dtype=dt,
                     layout=ttnn.TILE_LAYOUT,
                     device=mesh,
@@ -613,6 +645,7 @@ class ResidentModel:
             )
             self._keep += copies
             self.w_entries.append((copies[0], stride, len(copies)))
+        Deferred.release()
 
         lcm = math.lcm(*TILE_BYTES.values())
 
@@ -659,7 +692,7 @@ class ResidentModel:
         self._sts = sts
         hist = self._hist_host(sts)
         self.hist_t = dram_t(hist, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
-        # host copies of the decode state's initial contents (reset() restores them)
+        # host copies of the recurrent state's initial contents (reset() restores them; not the KV caches, see reset)
         self._initial = [(ttnn.from_torch(hist, dtype=ttnn.bfloat16, mesh_mapper=per_chip), self.hist_t)]
 
         # ---- mixer rows (GDN heads, attention leader and tail core)
@@ -706,18 +739,17 @@ class ResidentModel:
         )
 
         def cache(which, sts_=sts):
-            flat = self._kv_host(sts_, which)
-            dev = ttnn.from_torch(
-                flat,
+            if sts_[0].K is None:
+                # no host images: zero-filled on device (stale rows are only ever read masked, but must be finite)
+                return device_zeros(mesh, [banks * B * attn_copies * rpb * TILE, HD], ttnn.bfloat8_b, self._kv_mc)
+            return ttnn.from_torch(
+                self._kv_host(sts_, which),
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh,
                 memory_config=self._kv_mc,
                 mesh_mapper=per_chip,
             )
-            host = ttnn.from_torch(flat, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, mesh_mapper=per_chip)
-            self._initial.append((host, dev))
-            return dev
 
         self.kv_paged = kv_pool_blocks is not None
         if self.kv_paged:  # the pools stand in for the caches, addressed through the page lists (no stride)
@@ -757,8 +789,9 @@ class ResidentModel:
             if lm_head
             else None
         )
-        # feed: the hubs' candidate slots, their semaphore and launch counters, the rope tiles of every
-        # position (a page per position, laid out as in the token state) and the (token, position) out word
+        # feed: the hubs' candidate slots, their semaphore and launch counters, the rope table (a compact page per
+        # position, rope_compact; the hub expands it into the token state's tiles) and the (token, position) out
+        # word
         self.feed = embed is not None
         if self.feed:
             assert lm_head and (B == 1 or verify) and n_sub == 1, "the hub feeds batch 1 with the lm_head"
@@ -773,7 +806,7 @@ class ResidentModel:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
             self.feed_sems = [ttnn.create_global_semaphore(mesh, hub_grid, 0) for _ in range(2)]  # candidates, launches
-            rope = rope_words(sts[0].max_pos).reshape(sts[0].max_pos, -1).view(np.int32)
+            rope = rope_compact(sts[0].max_pos).view(np.int32)
             self.rope_t = dram_t(torch.from_numpy(rope.copy()), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep)
             self.out_t = dram_t(torch.zeros(1, 16, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep)
             self.params_t = dram_t(torch.zeros(1, 16, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep)
@@ -1056,6 +1089,8 @@ class ResidentModel:
                 SEM_LOCAL,
                 B,
                 int(self.verify),
+                int(ATTN_RR),
+                int(ATTN_2NOC),
             ]
             # attention worker reader / writer: paged KV (attn_paged.hpp)
             pg = self.kv_paged
@@ -1394,11 +1429,9 @@ class ResidentModel:
         words[TOK_X0 // 2 : TOK_X0 // 2 + x0.numel()] = bf16_bits(tiny_order(x0))
         r0 = self.rope_off // 2
         if not hasattr(self, "_rope"):
-            # every position's tiles, built once: building them per token costs ~0.2 ms
-            self._rope = rope_words(self._sts[0].max_pos)
-        for u in range(B):
-            o = r0 + 3 * u * 1024
-            words[o : o + 3 * 1024] = self._rope[pos[u]].reshape(-1)
+            # every position's compact entry, built once (expanding one costs microseconds)
+            self._rope = rope_compact(self._sts[0].max_pos)
+        words[r0 : r0 + 3 * 1024 * B] = rope_expand(self._rope[pos]).reshape(-1)
         t = torch.from_numpy(words.view(np.int32).copy()).reshape(1, -1)
         return ttnn.from_torch(
             t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)
@@ -1521,16 +1554,20 @@ class ResidentModel:
         )
         pools = []
         for which in ("K", "V"):
-            pools.append(
-                ttnn.from_torch(
-                    self._kv_pool_host(sts, which),
-                    dtype=ttnn.bfloat8_b,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.mesh,
-                    memory_config=self._pool_mc,
-                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+            if sts[0].K is None:  # no host images (State kv=False): zero-filled on device
+                shape = [banks * self._kv_pool_rows * TILE, HD]
+                pools.append(device_zeros(self.mesh, shape, ttnn.bfloat8_b, self._pool_mc))
+            else:
+                pools.append(
+                    ttnn.from_torch(
+                        self._kv_pool_host(sts, which),
+                        dtype=ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.mesh,
+                        memory_config=self._pool_mc,
+                        mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+                    )
                 )
-            )
             ttnn.synchronize_device(self.mesh)
         # (not restored by reset(): positions at or past a step's are only read masked; stale rows are finite)
         self.K_t, self.V_t = pools
@@ -1612,8 +1649,14 @@ class ResidentModel:
         ttnn.synchronize_device(self.mesh)
 
     def reset(self, state=True):
-        """restore the decode state (GDN states, conv histories, KV caches) to its initial contents; state=False
-        only resets the feeding hubs' counters, for a caller that overwrites every state it reads"""
+        """restore the recurrent decode state (GDN states, conv histories) to its initial contents; state=False
+        only resets the feeding hubs' counters, for a caller that overwrites every state it reads.
+        The KV caches are not restored: a step at position p reads the complete position tiles below p's tile
+        (chunk workers, attn_common.hpp chunk_of) and p's own tile with every column past p masked to -inf
+        (the tail core's cb_mask), so rows at positions >= p only ever get weight exp(-inf) = 0. Rows below the
+        state's initial position are never written by a step, and a prefill handoff rewrites the prompt's. Stale
+        rows must only be finite (0 * inf would poison the masked sums): device-allocated caches start zeroed and
+        every later write is a computed K / V row."""
         if state:
             for host, dev in self._initial:
                 ttnn.copy_host_to_device_tensor(host, dev)

@@ -16,9 +16,9 @@
 // one row of kv_pt_row_bytes per row of the batch; entry b of row u is the physical block of user u's logical
 // block b (positions b * 32 * kv_tpb ...). Verify: both rows are user 0 and read row 0.
 //
-// The workers partition the logical position tiles exactly as in contiguous mode (chunk_of), so both modes run
-// the same arithmetic in the same order; only the DRAM addresses differ (a tile's bank is no longer the bank its
-// worker was assigned for). At kernel start every worker (and the tail core) looks up the page of each of its
+// The workers partition the logical position tiles exactly as in contiguous mode (chunk_of, bank-affine or round
+// robin), so both modes run the same arithmetic in the same order; only the DRAM addresses differ (a tile's bank
+// is the page's, not tile % banks). At kernel start every worker (and the tail core) looks up the page of each of its
 // tiles of every user once (cb_pages: batch x kv_max_n page numbers relative to copy 0, then a window of the page
 // table); all of the step's layers use them. The tail core's writer reads its tail pages there too, after the
 // reader's cb_ntiles push.
@@ -38,8 +38,8 @@ static_assert(!kv_paged || kv_pt_row_bytes % 64 == 0, "page table rows are whole
 constexpr uint32_t cb_pages = 30;     // worker / tail core: page lists, then the page-table window
 constexpr uint32_t kPtWindow = 2048;  // bytes of a page-table row read at once (512 blocks)
 
-// the first tile of chunk ch's k-th row (contiguous: shard row j + k J of bank `bank` = tile bank + banks * row)
-FORCE_INLINE uint32_t chunk_tile(const Chunk& ch, uint32_t k) { return ch.bank + banks * (ch.j + k * ch.J); }
+// the k-th tile of chunk ch
+FORCE_INLINE uint32_t chunk_tile(const Chunk& ch, uint32_t k) { return ch.t0 + k * ch.dt; }
 
 FORCE_INLINE uint32_t pages_base() {
     auto& iface = get_local_cb_interface(cb_pages);
@@ -52,8 +52,8 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* page_list(uint32_t u) {
 }
 
 // NoC address of page `page` of the pool at `pool`
-FORCE_INLINE uint64_t page_noc_addr(uint32_t pool, uint32_t page) {
-    return get_noc_addr_from_bank_id<true>(page % banks, pool + (page / banks) * kKvRow);
+FORCE_INLINE uint64_t page_noc_addr(uint32_t pool, uint32_t page, uint8_t noc = noc_index) {
+    return get_noc_addr_from_bank_id<true>(page % banks, pool + (page / banks) * kKvRow, noc);
 }
 
 // fills user u's page list from page-table row `row` for the n tiles of chunk ch (ascending, so the table is

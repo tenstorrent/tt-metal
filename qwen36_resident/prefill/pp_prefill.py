@@ -22,6 +22,7 @@ TP-sharded State.
 """
 
 import math
+import os
 
 import torch
 
@@ -30,7 +31,7 @@ from qwen36_resident import PKG_DIR
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from qwen36_resident.prefill import pp_weights as PW
 from qwen36_resident.prefill.smm import SmallMatmul
-from qwen36_resident.common import EPS, HIDDEN, INTER
+from qwen36_resident.common import EPS, HIDDEN, INTER, device_zeros
 from qwen36_resident.model import (
     CONV_K,
     DK,
@@ -83,6 +84,29 @@ MM_BEST = {
     ("gu", 128): ("1d", 13, 10, 8, 1, 5),
     ("down", 128): ("1d", 13, 5, 8, 2, 3),
 }
+# the same on the P300 die (11 x 10 = 110 cores), tests/sweep_pp_matmul.py 2026-10-29: per (projection, chunk) the
+# fastest config whose output is bit-identical to the config used before (MM_BEST where it fits, else the qwen36
+# heuristic; gate's fused SiLU included), so the prefill's numbers do not change. ms: before -> after on one chip
+MM_BEST_11x10 = {
+    ("gdn", 1024): (10, 8, 4, 2, 4),  # 0.665 -> 0.645
+    ("attn", 1024): (10, 8, 4, 2, 3),  # 0.691 -> 0.569
+    ("out", 1024): (11, 8, 16, 2, 3),  # 0.230 -> 0.222
+    ("gu", 1024): (11, 8, 4, 4, 2),  # 0.817 -> 0.669
+    ("down", 1024): (11, 8, 16, 2, 3),  # 0.548 -> 0.523
+    ("gdn", 512): (11, 8, 4, 2, 1),  # 0.465 -> 0.444
+    ("attn", 512): ("1d", 10, 9, 4, 8, 1),  # 0.487 -> 0.340
+    ("out", 512): (11, 8, 4, 2, 3),  # 0.201 -> 0.192
+    ("gu", 512): (11, 8, 4, 1, 5),  # 0.537 -> 0.415
+    ("down", 512): (11, 6, 4, 1, 5),  # 0.520 -> 0.489
+    ("gdn", 256): (11, 8, 4, 1, 1),  # 0.424 -> 0.407
+    ("attn", 256): ("1d", 10, 9, 4, 8, 1),  # 0.447 -> 0.304
+    ("out", 256): ("1d", 10, 8, 4, 4, 2),  # 0.187 -> 0.171
+    ("gu", 256): ("1d", 8, 8, 4, 2, 3),  # MM_BEST's (fits): 0.260, nothing identical was faster
+    ("down", 256): ("1d", 10, 8, 4, 4, 2),  # 0.488 -> 0.437
+    ("out", 128): ("1d", 10, 8, 4, 4, 2),  # 0.366 -> 0.120
+    ("down", 128): ("1d", 10, 8, 4, 4, 2),  # 0.468 -> 0.301
+}
+MM_BEST_BY_GRID = {(13, 10): MM_BEST, (11, 10): MM_BEST_11x10}
 
 
 # a 64-layer tick at chunk C takes about base + slope * (mean context in K tokens) ms (QB2, traced: the
@@ -93,6 +117,10 @@ SMM_SHAPES = dict(
     gu=(HIDDEN, INTER, ttnn.bfloat4_b), gdn=(HIDDEN, GDN_COLS, ttnn.bfloat8_b), attn=(HIDDEN, ATTN_COLS, ttnn.bfloat8_b)
 )
 TICK_MS = {128: (22.4, 1.6), 256: (32.5, 2.9), 512: (45.5, 3.2), 1024: (81.0, 3.0)}
+# the attention layers' chunked SDPA runs HiFi4 over 128-token q and k chunks. RESIDENT_PP_SDPA_FIDELITY=HiFi2 (opt-in,
+# not bit-identical; the ttnn TP prefill's fidelity): 1024 queries at a 255K context 155 -> 125 ms on P300
+# (sweep_pp_matmul --sdpa; 256-token k chunks were another -5%, 256-token q chunks 1.8x slower)
+SDPA_FIDELITY = os.environ.get("RESIDENT_PP_SDPA_FIDELITY", "HiFi4")
 
 
 def rope_cos_sin(positions):
@@ -141,7 +169,10 @@ class PPPrefill:
             mesh.arch(), math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
         )
         self.hifi = ttnn.init_device_compute_kernel_config(
-            mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
+            mesh.arch(),
+            math_fidelity=getattr(ttnn.MathFidelity, SDPA_FIDELITY),
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         )
 
         # chunks up to SMM_MAX_C stream the big projections through SmallMatmul, from their own
@@ -207,8 +238,9 @@ class PPPrefill:
         self.S, self.carry, self.K, self.V = {}, {}, {}, {}
         for j, attn in enumerate(self.kinds):
             if attn:
-                z = torch.zeros(n * kv_blocks, NKV, block, HD)
-                self.K[j], self.V[j] = dev(z, ttnn.bfloat8_b), dev(z, ttnn.bfloat8_b)
+                # zero-filled on device: at max_len 256K a host image would be 4.3 GB of fp32 per cache
+                kv = lambda: device_zeros(mesh, [kv_blocks, NKV, block, HD], ttnn.bfloat8_b, DRAM)
+                self.K[j], self.V[j] = kv(), kv()
             else:
                 self.S[j] = dev(torch.zeros(n, NV, DK, DV), ttnn.float32)
                 self.carry[j] = dev(torch.zeros(n, 1, TILE, CONV_CH), ttnn.bfloat16)
@@ -714,14 +746,15 @@ class PPPrefill:
 
     # ------------------------------------------------------------------ layers
     def _mm_config(self, key, fused_activation=None):
-        """the measured best matmul config of a projection at this chunk (tests/bench_pp_matmul.py), else
-        the qwen36 prefill heuristic"""
+        """the measured best matmul config of a projection at this chunk for the device grid (MM_BEST_BY_GRID),
+        else the qwen36 prefill heuristic"""
         K, N = MM_SHAPES[key]
-        best = MM_BEST.get((key, self.C))
+        grid = self.mesh.compute_with_storage_grid_size()
+        table = MM_BEST_BY_GRID.get((grid.x, grid.y), MM_BEST)
+        best = table.get((key, self.C))
         if best not in (None, "auto"):
-            # MM_BEST was swept on a 13 x 10 grid; a smaller die (P300: 11 x 10) takes the heuristic instead
+            # a config swept on a larger grid (MM_BEST: 13 x 10) that does not fit takes the heuristic instead
             gx, gy = best[1:3] if best[0] == "1d" else best[:2]
-            grid = self.mesh.compute_with_storage_grid_size()
             if gx > grid.x or gy > grid.y:
                 best = None
         if best is None:

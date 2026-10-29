@@ -53,7 +53,7 @@ class Qwen36ResidentForCausalLM:
         C = max(PREFILL_CHUNKS)
         max_len = -(-max_seq_len // C) * C
         n_attn = sum((l + 1) % interval == 0 for l in range(layers))
-        st = State(self.d, layers - n_attn, n_attn, 0, max_pos=max_len + 64, zero=True)
+        st = State(self.d, layers - n_attn, n_attn, 0, max_pos=max_len + 64, zero=True, kv=False)
         # the prefill's embedding table is also the one the decode hub feeds from
         self.pp = PPPrefill(mesh, ck, layers, interval, chunk=list(PREFILL_CHUNKS), max_len=max_len)
         w = Q.load(ck, self.d, layers, interval)

@@ -70,7 +70,7 @@ def main():
         logits = {}
         captured = False
         for mode in a.modes.split(","):
-            st = State(d, layers - n_attn, n_attn, 0, max_pos=max_pos, zero=True)
+            st = State(d, layers - n_attn, n_attn, 0, max_pos=max_pos, zero=True, kv=False)
             w = Q.load(ck, d, layers, interval)
             kw = dict(kv_pool_blocks=blocks, block_tables=tables) if mode == "paged" else {}
             model = ResidentModel(mesh, d, w, st, layers, interval, lm_head=True, embed=pp.embed, **kw)

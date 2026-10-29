@@ -92,7 +92,7 @@ void kernel_main() {
         const uint32_t tp = pos / 32;
         tps[u] = tp;
         tail_rs[u] = pos % 32;
-        chs[u] = role == 2 ? Chunk{tp % banks, tp / banks, 1, 1} : chunk_of(w, tp);
+        chs[u] = role == 2 ? Chunk{tp, 1, 1} : chunk_of(w, tp);
     }
     if constexpr (kv_paged) {
         // the pages of this core's tiles (the writer's tail pages too: it reads them after the cb_ntiles push)
@@ -139,8 +139,14 @@ void kernel_main() {
         push_resident(cb_mean, 1);
     }
 
-    // rows from, from + 1, ... of chunk ch (shard rows j + k J of the bank), one kv_row each (paged: addr is
-    // the pool, pages the user's page list and copy_page the layer copy's first page)
+    // two_nocs: a chunk worker's KV reads alternate between the NOCs (the other one's counters start here)
+    const bool dual = two_nocs && role == 1;
+    const uint8_t other_noc = 1 - noc_index;
+    if (dual) {
+        noc_local_state_init(other_noc);
+    }
+    // tiles from, from + 1, ... of chunk ch (tile t: row t / banks of bank t % banks; paged: page copy_page +
+    // pages[k] of the pool at addr, attn_paged.hpp), one kv_row each
     auto read_rows = [&](const Chunk& ch,
                          uint32_t addr,
                          uint32_t from,
@@ -149,11 +155,15 @@ void kernel_main() {
                          volatile tt_l1_ptr uint32_t* pages,
                          uint32_t copy_page) {
         for (uint32_t k = from; k < from + n; k++, l1 += kKvRow) {
+            const uint8_t noc = dual && (k & 1) ? other_noc : noc_index;
+            uint64_t src;
             if constexpr (kv_paged) {
-                noc_async_read(page_noc_addr(addr, copy_page + pages[k]), l1, kKvRow);
+                src = page_noc_addr(addr, copy_page + pages[k], noc);
             } else {
-                noc_async_read(get_noc_addr_from_bank_id<true>(ch.bank, addr + (ch.j + k * ch.J) * kKvRow), l1, kKvRow);
+                const uint32_t t = ch.t0 + k * ch.dt;
+                src = get_noc_addr_from_bank_id<true>(t % banks, addr + (t / banks) * kKvRow, noc);
             }
+            noc_async_read(src, l1, kKvRow, noc);
         }
     };
 
@@ -162,11 +172,8 @@ void kernel_main() {
     // verify, p the last row of its tile: whether row 1's chunk of this worker holds that tile
     bool waits_tail = false, same_tile = false;
     if constexpr (verify) {
-        const Chunk& c1 = chs[1];
-        const uint32_t row = tps[0] / banks;
         same_tile = tps[1] == tps[0];
-        waits_tail = role == 1 && !same_tile && c1.n > 0 && c1.bank == tps[0] % banks && row >= c1.j &&
-                     (row - c1.j) % c1.J == 0 && (row - c1.j) / c1.J < c1.n;
+        waits_tail = role == 1 && !same_tile && holds(chs[1], tps[0]);
     }
     for (uint32_t i = 0; i < iters; i++) {
         const uint32_t l = i / batch, u = i % batch;
@@ -184,6 +191,9 @@ void kernel_main() {
                 read_rows(ch, k_addr, b0, nb, get_write_ptr(cb_k), pages, copy_page);
                 read_rows(ch, v_addr, b0, nb, get_write_ptr(cb_v), pages, copy_page);
                 noc_async_read_barrier();
+                if (dual) {
+                    noc_async_read_barrier(other_noc);
+                }
                 cb_push_back(cb_k, chunk_max * Dt);
                 cb_push_back(cb_v, chunk_max * Dt);
             }
