@@ -71,7 +71,8 @@ private:
     MeshEvent enqueue_record_event_helper(
         ttsl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt,
+        ThreadPool::AfterFanOut after = ThreadPool::AfterFanOut::Spin);
     void write_program_commands_to_devices(
         const std::vector<Device*>& devices,
         ProgramCommandSequence& program_cmd_seq,
@@ -221,7 +222,8 @@ private:
     MeshEvent record_event_to_host_nolock(
         ttsl::Span<const SubDeviceId> sub_device_ids,
         const std::optional<MeshCoordinateRange>& device_range,
-        std::function<void(std::chrono::steady_clock::time_point)> on_complete);
+        std::function<void(std::chrono::steady_clock::time_point)> on_complete,
+        ThreadPool::AfterFanOut after = ThreadPool::AfterFanOut::Spin);
 
     // Whether the open transfer records start and end events. Set and read under lock_api_function_().
     bool transfer_stats_events_ = false;
