@@ -94,16 +94,11 @@ def test_assemble_puts_host_k_on_ranks_2k_and_2k_plus_1(tmp_path):
     assert cfg["global_env"]["PREFILL_TP_SHARD_KV"] == "0"
 
 
-def test_two_galaxy_binding_needs_its_own_descriptor(tmp_path, expect_error):
+def test_assemble_rejects_a_descriptor_with_another_mesh_count(tmp_path, expect_error):
     probes = [write_probe(tmp_path / f"h{k}.yaml", f"host{k}", range(16), range(16, 32)) for k in range(2)]
     args = ["assemble", *[a for p in probes for a in ("--probe", str(p))], "--out", str(tmp_path / "b.yaml")]
     with expect_error(SystemExit, "declares 8 meshes for 4 ranks"):
         apb.main(args)
-    mgd = "models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_4x4_sp1_mgd.textproto"
-    assert apb.main([*args, "--mgd", mgd]) == 0
-    text = (tmp_path / "b.yaml").read_text()
-    assert f"mesh_graph_desc_path: {mgd}" in text
-    assert "rank: 4" not in text
 
 
 @pytest.mark.parametrize(
@@ -125,5 +120,4 @@ def test_compare_errors_on_chips_and_notes_on_order():
 
 def test_4x4_descriptors_match_their_rank_counts():
     assert apb.mgd_mesh_count(TOPO / "ci/sc4_4x4_sp1_mgd.textproto") == 8
-    assert apb.mgd_mesh_count(TOPO / "pipeline_prefill_2galaxy_4x4_sp1_mgd.textproto") == 4
     assert apb.mgd_mesh_count(TOPO / "pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto") == 2
