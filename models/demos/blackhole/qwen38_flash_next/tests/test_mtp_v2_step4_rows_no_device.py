@@ -567,6 +567,26 @@ def make_fake_ttnn(chunk: FakeChunk) -> SimpleNamespace:
     )
 
 
+def pin_stock_decode_paths(monkeypatch, fake_ttnn):
+    """Route the default-on fused decode sites' stock fallbacks to the fake ttnn.  The row_gather site
+    (``fused.resolve_admitted("row_gather")``) and ``edge_trim.hidden_gather`` fall back to the stock all_gather through
+    their own ``import ttnn``, i.e. the real op on fake tensors.  Fake tensors fail ``row_gather.admits`` (the call
+    is wrapped in try/except), so the stock all_gather of the fake serves, as the inline call did before they existed.
+    """
+
+    monkeypatch.setenv("QWEN38_EDGE_TRIM", "0")  # the merged PLE key|value matmul / embed reduce are device-only
+    from models.demos.blackhole.qwen38_flash_next.ttnn.fused import edge_trim, mm_stream, row_gather, row_reduce
+
+    monkeypatch.setattr(row_gather, "ttnn", fake_ttnn)
+    monkeypatch.setattr(row_reduce, "ttnn", fake_ttnn)  # row_reduce_or_reduce_scatter's stock reduce_scatter
+    monkeypatch.setattr(mm_stream, "ttnn", fake_ttnn)  # mm_stream.linear: not admitted for fakes -> the stock linear
+    monkeypatch.setattr(
+        edge_trim,
+        "hidden_gather",
+        lambda x, *, memory_config: fake_ttnn.all_gather(x, dim=3, cluster_axis=1, memory_config=memory_config),
+    )
+
+
 def install_source_chunk_fake(monkeypatch, chunk):
     """Composition tests replace only the numerical recurrence boundary.
 
@@ -595,6 +615,7 @@ def install_source_chunk_fake(monkeypatch, chunk):
         )
 
     monkeypatch.setattr(gdn_module.fused.gdn_source_chunk, "chunk_token_major", source_chunk)
+    pin_stock_decode_paths(monkeypatch, make_fake_ttnn(chunk))
 
 
 class FakeContract:

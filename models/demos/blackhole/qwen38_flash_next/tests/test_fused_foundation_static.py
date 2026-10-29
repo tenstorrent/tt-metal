@@ -30,24 +30,30 @@ def test_registry_default_is_the_composed_chain_for_an_opt_in_kernel():
     assert fused.enabled(NAME, {}) is False
 
 
+# row_gather serves by default through its own switch (QWEN38_ROW_GATHER, default on), not through DEFAULT_ON, and
+# ``enabled_names`` adds it after QWEN38_FUSED_OFF is applied.
+OWN_SWITCH_ON = frozenset({"row_gather"})
+
+
 def test_registry_serves_the_proven_kernels_by_default():
     assert "router_tail" in DEFAULT_ON and DEFAULT_ON <= set(fused.kernels())
     assert fused.default_names() == DEFAULT_ON
-    assert fused.enabled_names({}) == DEFAULT_ON
+    assert fused.enabled_names({}) == DEFAULT_ON | OWN_SWITCH_ON
+    assert fused.enabled_names({"QWEN38_ROW_GATHER": "0"}) == DEFAULT_ON
     for name in DEFAULT_ON:
         entry = fused.kernel(name)
         assert entry.default_on
         assert entry.tolerance == fused.BITWISE or (entry.tolerance == fused.COMPONENT and entry.component_proof)
         assert fused.resolve(name, {}) is fused.kernel(name).fused
         assert fused.resolve(name, {fused.OFF_ENV: name}) is fused.kernel(name).composed
-    for name in set(fused.kernels()) - DEFAULT_ON:
+    for name in set(fused.kernels()) - DEFAULT_ON - OWN_SWITCH_ON:
         assert not fused.kernel(name).default_on and fused.resolve(name, {}) is fused.kernel(name).composed
-    assert fused.enabled_names({fused.OFF_ENV: "router_tail"}) == DEFAULT_ON - {"router_tail"}
-    assert fused.enabled_names({fused.OFF_ENV: "all"}) == frozenset()
-    assert fused.enabled_names({fused.ENV: "all", fused.OFF_ENV: "all"}) == frozenset()
+    assert fused.enabled_names({fused.OFF_ENV: "router_tail"}) == (DEFAULT_ON | OWN_SWITCH_ON) - {"router_tail"}
+    assert fused.enabled_names({fused.OFF_ENV: "all"}) == OWN_SWITCH_ON  # QWEN38_FUSED_OFF does not reach row_gather
+    assert fused.enabled_names({fused.ENV: "all", fused.OFF_ENV: "all"}) == OWN_SWITCH_ON
     both = {fused.ENV: "gr_read", fused.OFF_ENV: "router_tail"}
-    assert fused.enabled_names(both) == (DEFAULT_ON | {"gr_read"}) - {"router_tail"}
-    assert fused.enabled_names({fused.ENV: NAME}) == DEFAULT_ON | {NAME}
+    assert fused.enabled_names(both) == (DEFAULT_ON | OWN_SWITCH_ON | {"gr_read"}) - {"router_tail"}
+    assert fused.enabled_names({fused.ENV: NAME}) == DEFAULT_ON | OWN_SWITCH_ON | {NAME}
 
 
 def test_default_on_list_must_name_registered_kernels(expect_error, monkeypatch):

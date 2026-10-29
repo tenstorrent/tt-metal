@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """x46 static pins of QWEN38_MOE_FUSE=1: the index-ready semaphore raise exists only behind the define MOE_FUSE_SEM, which only
-the moe_experts fused form (``index_signal``) sets; without it router_tail_sc's descriptors and kernels are unchanged."""
+the moe_experts fused form (``index_signal``) sets; without it router_tail_sc's descriptors and kernels are unchanged.
+"""
 
 from pathlib import Path
 
@@ -42,7 +43,16 @@ def test_moe_dense_unfused_keeps_its_groups():
 
 
 def test_experts_reader_waits_only_with_a_semaphore():
-    text = (ROOT / "moe_experts" / "kernels" / "reader_moe_experts.cpp").read_text()
-    assert "if constexpr (wait_sem != 0xFFFF)" in text
+    # The wait is split by program: the plain reader never names a semaphore; the fused reader (the moe_dense program's
+    # experts) always waits on it; the host picks the fused reader exactly when a wait semaphore is given.
+    kernels = ROOT / "moe_experts" / "kernels"
+    plain = (kernels / "reader_moe_experts.cpp").read_text()
+    fused_reader = (kernels / "reader_moe_experts_fused.cpp").read_text()
+    assert "wait_sem" not in plain and "noc_semaphore_wait_min" not in plain
+    assert (
+        'get_named_compile_time_arg_val("wait_sem")' in fused_reader
+        and "noc_semaphore_wait_min(ready, 1)" in fused_reader
+    )
     init = (ROOT / "moe_experts" / "__init__.py").read_text()
-    assert "0xFFFF if wait_sem is None else wait_sem" in init
+    assert '*(() if wait_sem is None else (("wait_sem", wait_sem),))' in init
+    assert 'KERNELS["reader"] if wait_sem is None else KERNELS["reader_fused"]' in init

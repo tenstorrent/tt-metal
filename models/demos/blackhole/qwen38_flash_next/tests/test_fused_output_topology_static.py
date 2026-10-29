@@ -90,6 +90,10 @@ UNDECLARED: dict[tuple[str, str], str] = {
         "router_tail",
         '"lanes" if lanes else "single_core"',
     ): "the MoE module stamps the scores and indices (fused.program.stamp_topology) after the launch",
+    (
+        "router_tail_sc",
+        '"sort_core"',
+    ): "the two-core router tail (router_tail_sc_into, a test and bench entry): its caller stamps like router_tail's",
     ("sampler_tail", '"sample"'): "the token is read back to the host",
     ("sparse_sdpa_tiled", '"flash"'): "the slab attention's output is consumed by the out-projection on the same die",
     ("kv_page_scatter", '"scatter_rows"'): "the pool is written in place on the same die (the prompt's KV hand-over)",

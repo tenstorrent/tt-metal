@@ -305,9 +305,10 @@ def read_front(residual, gamma_rows, down_inject):
         gathered_stats, normalized, gathered_partials = front3.stats_recip_down_gather(
             residual, gamma_rows, down_inject
         )
-    elif (
-        os.environ.get("QWEN38_GR_FRONT_V2", "1") == "1"
-    ):  # default on (x44 A/B -0.72 ms); front2.py: the cheaper exchanges, bit-identical valid rows (rows > 16: this front)
+    elif os.environ.get("QWEN38_GR_FRONT_V2", "0") == "1":
+        # front2.py: the cheaper exchanges, bit-identical valid rows (rows > 16: this front). Default OFF: its lockstep L1
+        # landing buffer (~12 KB per row count) makes the batched prefill program's CBs clash with L1 buffers (x64 sweep);
+        # x44 measured -0.72 ms at B=1.
         from . import front2
 
         gathered_stats, normalized, gathered_partials = front2.stats_recip_down_gather(

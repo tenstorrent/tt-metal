@@ -22,8 +22,8 @@ def _code(text):
     return re.sub(r"\s+", "", re.sub(r"//[^\n]*|/\*.*?\*/", "", text, flags=re.S))
 
 
-def test_off_by_default_and_option_plumbing():
-    assert sc.fast_opts({}) == () and sc.fast_opts({sc.FAST_ENV: "0"}) == ()
+def test_on_by_default_and_option_plumbing():  # default on since x42; QWEN38_ROUTER_TAIL_FAST=0 restores the sort-core tail
+    assert sc.fast_opts({}) == sc.FAST_DEFAULT_OPTS and sc.fast_opts({sc.FAST_ENV: "0"}) == ()
     assert sc.fast_opts({sc.FAST_ENV: "1"}) == sc.FAST_DEFAULT_OPTS
     assert sc.fast_opts({sc.FAST_ENV: "1", sc.FAST_OPTS_ENV: "row0,split"}) == ("row0", "split")
     with pytest.raises(ValueError):  # allow-pytest.raises: no-device Python-level check, no device error text to triage
@@ -74,7 +74,7 @@ def test_fast_program_has_the_split_index_kernel_and_defines(monkeypatch, stubs)
 
 
 def test_fast_off_builds_the_sort_core_sources(monkeypatch, stubs):
-    monkeypatch.delenv(sc.FAST_ENV, raising=False)
+    monkeypatch.setenv(sc.FAST_ENV, "0")  # the fast tail is the default; "0" builds the sort-core sources
     kernels, _cbs, _sem = sc.two_core_parts(
         _Logits(), _Logits(), _Logits(), _Logits(), rows=1, top_k=10, rectangle=stubs
     )

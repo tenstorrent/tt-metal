@@ -256,6 +256,16 @@ def admits(partial, *, cluster_axis=1, memory_config=None) -> bool:
             or (memory_config is not None and memory_config != ttnn.DRAM_MEMORY_CONFIG)
         ):
             return False
+        # the slice's dense tile must fit one tile page (TP=4 has 20 slice tiles: a 2-row bf16 partial, or a 1-row bf16
+        # DRAM partial on v2's 64 B read pitch, does not fit) -> the stock op
+        _rows, _tiles, out_tiles, chunk, packed, _slot, _scratch = _geometry(partial)
+        tile_bytes = fp.TILE_BYTES[partial.dtype]
+        if version() == 2:
+            pitch = chunk if (chunk % READ_ALIGN == 0 or fp.in_l1(partial)) else READ_ALIGN
+            if out_tiles * 2 * pitch > tile_bytes:
+                return False
+        elif out_tiles * packed > tile_bytes:
+            return False
         gr_fold.line(partial.device())
         return _payload() >= 16
     except Exception:

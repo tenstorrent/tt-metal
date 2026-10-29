@@ -105,8 +105,12 @@ def _call_blocks(source: str, names: tuple[str, ...]) -> list[str]:
 
 
 def _check_module(
-    module, weights: tuple[str, ...], attribute: str, expected: int, calls=("ttnn.linear", "prefill_linear")
-):
+    module,
+    weights: tuple[str, ...],
+    attribute: str,
+    expected: int,
+    calls=("ttnn.linear", "fused_mm_stream.linear", "prefill_linear"),
+):  # fused_mm_stream.linear: the default-on decode wrapper of ttnn.linear (same arguments)
     source = inspect.getsource(module)
     converted = [b for b in _call_blocks(source, calls) if any(w in b for w in weights)]
     assert len(converted) == expected, (len(converted), expected)
@@ -167,9 +171,19 @@ def test_shared_expert_linears_run_the_weight_fidelity_and_the_router_keeps_hifi
         ("self.weights.shared_",),
         "shared_compute_config",
         11,
-        calls=("ttnn.linear", "prefill_linear", "fused.shared_expert.shared_expert", "fused.moe_dense.moe_dense"),
+        calls=(
+            "ttnn.linear",
+            "fused_mm_stream.linear",
+            "prefill_linear",
+            "fused.shared_expert.shared_expert",
+            "fused.moe_dense.moe_dense",
+        ),
     )
-    router = [b for b in _call_blocks(source, ("ttnn.linear", "prefill_linear")) if "self.weights.router" in b]
+    router = [
+        b
+        for b in _call_blocks(source, ("ttnn.linear", "fused_mm_stream.linear", "prefill_linear"))
+        if "self.weights.router" in b
+    ]
     assert router and all("compute_kernel_config=self.compute_config" in b for b in router)
     loader = inspect.getsource(moe_module.Qwen38TTNNMoEWeights.from_checkpoint)
     assert (

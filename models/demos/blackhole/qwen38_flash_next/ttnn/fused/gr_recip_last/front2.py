@@ -69,7 +69,7 @@ def fits(rows: int) -> bool:
 
 
 def enabled() -> bool:
-    return os.environ.get(ENV, "1") == "1"  # default on (x44 A/B -0.72 ms)
+    return os.environ.get(ENV, "0") == "1"  # default off: its landing buffer makes batched prefill CBs clash (x64)
 
 
 def _persistent(mesh, slot_bytes: int, cores):

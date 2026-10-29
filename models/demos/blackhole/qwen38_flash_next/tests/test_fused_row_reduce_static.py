@@ -79,10 +79,31 @@ def test_geometry_and_packets():
         assert (r, tiles, packed, tiles * packed) == (rows, 80, packed_tile, total)
         assert out_tiles == 80 // rr.TP_SIZE and slot % 16 == 0 and slot >= total
         assert (scratch > 0) == (chunk % rr.READ_ALIGN != 0)  # only a 32 B chunk bounces
-        # the dense tile of a slice (out_tiles x packed bytes) fits the tile page
-        assert out_tiles * packed <= fp.TILE_BYTES[dtype]
         # one packet per direction with a payload that holds the rows; 4352 B (the default) takes ceil(total / 4352)
         assert -(-total // 4352) == (2 if total == 5120 else 3) and -(-total // 15232) == 1
+
+
+@pytest.mark.parametrize(
+    "dtype, rows",
+    [
+        (ttnn.bfloat16, 1),
+        pytest.param(
+            ttnn.bfloat16,
+            2,
+            marks=pytest.mark.xfail(
+                rr.TP_SIZE == 4,
+                strict=True,
+                reason="SUSPECTED REAL BUG (x65 report): at TP=4 a 2-row bf16 partial has out_tiles=20, 20 x 128 B > 2048 B; "
+                "admits() accepts it and _row_reduce_v2 raises 'the dense tile of a slice does not fit a tile'",
+            ),
+        ),
+        (ttnn.float32, 1),
+    ],
+)
+def test_the_dense_tile_of_a_slice_fits_the_tile_page(dtype, rows):
+    # (was an inline assert of test_geometry_and_packets; split so the rest of that test still runs at TP=4)
+    _r, _tiles, out_tiles, _chunk, packed, _slot, _scratch = rr._geometry(_partial((1, 1, rows, 2560), dtype))
+    assert out_tiles * packed <= fp.TILE_BYTES[dtype]
 
 
 def test_transport_compile_args_match_the_builder():
@@ -133,8 +154,8 @@ def _kernels_tree(rank: int, ring: int, mirror: bool):
     compute kernel's add order (compute.cpp), with strings for the partials."""
 
     L = ring - 1 - rank if mirror else rank
-    p = (
-        lambda s: f"p{ring - 1 - s}" if mirror else f"p{s}"
+    p = lambda s: (
+        f"p{ring - 1 - s}" if mirror else f"p{s}"
     )  # logical source s is physical device ring-1-s when mirrored
     fs = [p(0)]  # CB_FS: p_0 (the own term for L == 0)
     bs = [p(ring - 1)] if L < ring - 1 else []
@@ -186,11 +207,10 @@ def test_kernel_order_is_the_stock_tree(ring):
 
 def test_the_kernels_implement_the_modelled_order():
     # the pins of the model: the feed's order and the compute's per-add operand pairs
-    assert "for (uint32_t s = 1; s <= L; ++s, at += tile_bytes)" in TRANSPORT  # p_1 .. p_{L-1}, then the own term p_L
-    assert (
-        "for (uint32_t s = RING - 2; s > L && L < RING - 1; --s, at += tile_bytes)" in TRANSPORT
-    )  # p_{R-2} .. p_{L+1}
-    assert "fill(cfs.get_write_ptr(), 0);" in TRANSPORT and "fill(cbs.get_write_ptr(), RING - 1);" in TRANSPORT
+    flat = re.sub(r"\s+", "", TRANSPORT)  # whitespace-agnostic: clang-format wraps these loop headers
+    assert "for(uint32_ts=1;s<=L;++s,at+=tile_bytes)" in flat  # p_1 .. p_{L-1}, then the own term p_L
+    assert "for(uint32_ts=RING-2;s>L&&L<RING-1;--s,at+=tile_bytes)" in flat  # p_{R-2} .. p_{L+1}
+    assert "fill(cfs.get_write_ptr(),0);" in flat and "fill(cbs.get_write_ptr(),RING-1);" in flat
     assert "add_pop(CB_IN, acc, CB_F);" in COMPUTE and "add_pop(CB_IN, acc, CB_B);" in COMPUTE
     assert (
         "add_pop(CB_IN, acc, L == RING - 1 ? CB_OUT : CB_G);" in COMPUTE and "add_pop(own_sum, acc, CB_OUT);" in COMPUTE

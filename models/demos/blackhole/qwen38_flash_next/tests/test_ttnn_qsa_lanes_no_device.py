@@ -511,6 +511,7 @@ def fake(monkeypatch):
     for module in (qsa_module, contracts_module, model_module, rope_module, decode_matmul_module):
         monkeypatch.setattr(module, "ttnn", fake)
         monkeypatch.setattr(module, "replicate_tensor_2d_mesh_mapper", lambda device: "replicate", raising=False)
+    step4.pin_stock_decode_paths(monkeypatch, fake)  # row_reduce / row_gather / mm_stream stock fallbacks -> the fake
     # the fake's bf16 is the dense plan's bf16 for the projection weights (dense_dtype_tag / the fidelity name)
     monkeypatch.setitem(decode_matmul_module.DENSE_DTYPE_TAGS, BF16, "bf16")
     monkeypatch.setitem(decode_matmul_module.DENSE_MATH_FIDELITY_NAMES, BF16, "HiFi4")

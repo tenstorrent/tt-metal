@@ -809,6 +809,9 @@ _DEVICE_OPS_PER_CALL = {
 }
 
 
+_STOCK_OF_DISPATCH = {"fused.resolve_admitted('row_gather')": "all_gather", "fused_mm_stream.linear": "linear"}
+
+
 def _production_ttnn_calls(function) -> list[str]:
     """ttnn calls on the one-row production path, in source order.
 
@@ -836,6 +839,10 @@ def _production_ttnn_calls(function) -> list[str]:
             calls.append((node.lineno, node.col_offset, node.func.id))
         elif isinstance(node.func, ast.Attribute) and ast.unparse(node.func.value) in {"ttnn", "ttnn.experimental"}:
             calls.append((node.lineno, node.col_offset, node.func.attr))
+        elif (
+            ast.unparse(node.func) in _STOCK_OF_DISPATCH
+        ):  # default-on fused sites: the stock op outside their contract
+            calls.append((node.lineno, node.col_offset, _STOCK_OF_DISPATCH[ast.unparse(node.func)]))
     return [name for _line, _column, name in sorted(calls) if name != "deallocate"]
 
 
@@ -887,6 +894,9 @@ def test_one_row_moe_layer_device_op_sequence_and_count() -> None:
     assert per_layer == 33
     assert per_layer * builder_module.BACKBONE_LAYERS == 1584
     gather = inspect.getsource(Qwen38TTNNMoE._all_gather_hidden)
+    gather = gather.replace(
+        'fused.resolve_admitted("row_gather")(', "ttnn.all_gather("
+    )  # the stock op outside its contract
     gather_call = gather.split("full_hidden = ttnn.all_gather(", 1)[1].split("\n        )", 1)[0]
     assert "memory_config=self.hidden_gather_memory_config" in gather_call
     assert "cluster_axis=EP_AXIS" in gather_call

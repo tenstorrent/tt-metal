@@ -189,7 +189,7 @@ def test_model_switch_sites():
     routed = MOE[MOE.index("    def _routed_partial(") : MOE.index("    def _routed_local_sum(")]
     assert "outputs = ttnn.experimental.moe_compute(" in routed and "ttnn.fill(self.local_combine_output" in routed
     assert (
-        "fused.moe_post.moe_post(\n            outputs[5],\n            routing.scores,\n            routing.indices,\n            self.expert_owner,"
+        "fused.moe_post.moe_post(\n            combine,\n            routing.scores,\n            routing.indices,\n            self.expert_owner,"
         in local_sum
     )
     shared = MOE[MOE.index("    def _shared_partial(") : MOE.index("    def forward(")]

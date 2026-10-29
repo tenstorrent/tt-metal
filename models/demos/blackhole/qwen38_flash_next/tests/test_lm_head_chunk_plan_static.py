@@ -27,6 +27,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.blackhole.qwen38_flash_next.ttnn import decode_matmul as decode_matmul_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import embedding as embedding_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TP_SIZE
 from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
@@ -99,7 +100,14 @@ def test_chunk_plan_tiles_the_local_vocabulary_exactly() -> None:
     assert torch.equal(local, torch.arange(LOCAL_VOCAB_SIZE) - starts[owner])
 
 
-def test_every_chunk_streams_whole_noc_bursts_from_all_eight_banks() -> None:
+@pytest.fixture
+def stock_block(monkeypatch):
+    # The chunk plan's in0_block_w 2 is the stock block; the wide block (QWEN38_MM_WIDE_BLOCK, default on, read once at
+    # import) is pinned by test_mm_wide_block_static.  Pin the stock block here.
+    monkeypatch.setattr(decode_matmul_module, "_MM_WIDE_BLOCK_ON", False)
+
+
+def test_every_chunk_streams_whole_noc_bursts_from_all_eight_banks(stock_block) -> None:
     total_padding = 0
     for width in PLAN:
         tiles_per_bank, padding, block_tiles, page, program = _bank_stream(width)

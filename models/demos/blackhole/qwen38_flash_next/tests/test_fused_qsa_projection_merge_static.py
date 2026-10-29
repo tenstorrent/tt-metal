@@ -192,7 +192,9 @@ def test_the_served_path_runs_one_linear_and_the_tails_read_its_windows() -> Non
         'qg_first=0ifmergedisNoneelsePROJECTION_FIRST_TILE["qg"],)'
     ) in forward
     project = inspect.getsource(qsa.Qwen38TTNNQSA._project_merged)
-    assert project.count("ttnn.linear(") == 1 and "self.weights.projections," in project
+    assert (
+        project.count("fused_mm_stream.linear(") == 1 and "self.weights.projections," in project
+    )  # the stock ttnn.linear unless QWEN38_MM_STREAM
     assert (
         "program_config=self.proj_program_config" in project
         and "compute_kernel_config=self.projection_compute_config" in project

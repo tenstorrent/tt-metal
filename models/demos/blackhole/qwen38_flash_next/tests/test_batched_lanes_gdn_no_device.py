@@ -480,6 +480,18 @@ def _calls(function) -> list[str]:
     return [ast.unparse(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)]
 
 
+# Default-on fused sites that are the stock op within their wrappers' contract (the fallback outside it): counted as the
+# stock ttnn op they stand for, so the one-row / lanes stage comparison keeps comparing the same ttnn walk.
+STOCK_OF_WRAPPER = {
+    "fused_mm_stream.linear": "ttnn.linear",
+    "fused.row_reduce.row_reduce_or_reduce_scatter": "ttnn.reduce_scatter",
+}
+
+
+def _stock_calls(function) -> list[str]:
+    return [STOCK_OF_WRAPPER.get(c, c) for c in _calls(function)]
+
+
 HOST_IO = ("ttnn.from_torch", "ttnn.to_torch", "ttnn.copy_host_to_device_tensor", "torch.")
 
 
@@ -518,10 +530,16 @@ def test_gdn_lanes_body_is_the_one_row_walk_with_the_lanes_suffix_and_the_one_ro
     assert [lane_names[-1] for _, lane_names in stages] == lanes[1:]
     for one_names, lane_names in stages:
         one_calls = {
-            c for name in one_names for c in _calls(getattr(gdn_module.Qwen38TTNNGDN, name)) if c.startswith("ttnn.")
+            c
+            for name in one_names
+            for c in _stock_calls(getattr(gdn_module.Qwen38TTNNGDN, name))
+            if c.startswith("ttnn.")
         }
         lane_calls = {
-            c for name in lane_names for c in _calls(getattr(gdn_module.Qwen38TTNNGDN, name)) if c.startswith("ttnn.")
+            c
+            for name in lane_names
+            for c in _stock_calls(getattr(gdn_module.Qwen38TTNNGDN, name))
+            if c.startswith("ttnn.")
         }
         assert one_calls == lane_calls, (one_names, lane_names)
     assert _self_walk(gdn_module.Qwen38TTNNGDN._project_lanes)[0] == "_project_lanes_unsplit"
@@ -607,7 +625,7 @@ def test_gdn_fused_lanes_body_is_the_one_row_fused_walk_on_b_rows_and_binds_unde
     # is the one reduce-scatter of the lanes body.
     unsplit = _calls(cls._project_lanes_unsplit)
     assert "ttnn.slice" not in unsplit and unsplit.count("ttnn.linear") == 1
-    assert _calls(cls._out_project_lanes).count("ttnn.reduce_scatter") == 1
+    assert _stock_calls(cls._out_project_lanes).count("ttnn.reduce_scatter") == 1
     assert "lanes" in fused.kernel("gdn_step").replaces and "_forward_decode_lanes_fused" in gdn_step_module.__doc__
     # The binding: the one ``if fused.enabled("gdn_step")`` of the constructor assigns the partial over the class
     # attribute; the kernel serves by default (since 2026-09-25) and QWEN38_FUSED_OFF=gdn_step unbinds it; the class

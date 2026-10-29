@@ -100,7 +100,7 @@ def test_mm_stream_vs_stock(mesh_device, op):
                 {int(c) // 32 for c in torch.nonzero(ref_t.view(torch.int16) != mine_t.view(torch.int16))[:, 1]}
             )
             logger.info(
-                f"ref[64:72]={r[0,64:72].tolist()} got[64:72]={o[0,64:72].tolist()} ref[0:4]={r[0,0:4].tolist()} got[0:4]={o[0,0:4].tolist()}"
+                f"ref[64:72]={ref_t[0,64:72].tolist()} got[64:72]={mine_t[0,64:72].tolist()} ref[0:4]={ref_t[0,0:4].tolist()} got[0:4]={mine_t[0,0:4].tolist()}"
             )
             logger.info(f"differing tile columns {cols_bad}")
         all_equal &= eq

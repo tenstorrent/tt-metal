@@ -158,6 +158,15 @@ def _module_functions(module: ast.Module) -> dict[str, ast.FunctionDef]:
     return {node.name: node for node in module.body if isinstance(node, ast.FunctionDef)}
 
 
+# Default-on fused dispatch sites that are, outside their contract (and at QWEN38_ROW_GATHER=0 / QWEN38_ROW_REDUCE=0 /
+# without QWEN38_MM_STREAM), exactly the stock ttnn op: walked as that op, so the pin still counts the stock chain.
+STOCK_OF_DISPATCH = {
+    "fused.resolve_admitted('row_gather')": "ttnn.all_gather",
+    "fused_mm_stream.linear": "ttnn.linear",
+    "fused.row_reduce.row_reduce_or_reduce_scatter": "ttnn.reduce_scatter",
+}
+
+
 def _device_ops(method: ast.FunctionDef, constants: dict[str, int], helpers: dict[str, ast.FunctionDef]) -> list[str]:
     loops = [node for node in ast.walk(method) if isinstance(node, ast.For)]
     calls = sorted(
@@ -165,13 +174,16 @@ def _device_ops(method: ast.FunctionDef, constants: dict[str, int], helpers: dic
             node
             for node in ast.walk(method)
             if isinstance(node, ast.Call)
-            and (ast.unparse(node.func).startswith("ttnn.") or ast.unparse(node.func) in helpers)
+            and (
+                STOCK_OF_DISPATCH.get(ast.unparse(node.func), ast.unparse(node.func)).startswith("ttnn.")
+                or ast.unparse(node.func) in helpers
+            )
         ),
         key=lambda node: (node.lineno, node.col_offset),
     )
     sequence: list[str] = []
     for call in calls:
-        target = ast.unparse(call.func)
+        target = STOCK_OF_DISPATCH.get(ast.unparse(call.func), ast.unparse(call.func))
         if target in helpers:
             ops = _device_ops(helpers[target], constants, helpers)
         else:
@@ -283,14 +295,18 @@ def test_collectives_read_and_write_the_matmul_shard_layouts_directly() -> None:
     """The gather writes the in-proj activation shard; the reduce-scatter reads the out-proj partial shard."""
 
     gather = _method_source("_all_gather_hidden")
+    # the gather is the row_gather dispatch (the stock ttnn.all_gather outside its contract / at QWEN38_ROW_GATHER=0)
+    gather = gather.replace('fused.resolve_admitted("row_gather")(', "ttnn.all_gather(")
     gather_call = gather.split("full_hidden = ttnn.all_gather(", 1)[1].split("\n        )", 1)[0]
     assert "memory_config=self.in_proj_act_memory_config" in gather_call
     assert "cluster_axis=TP_AXIS" in gather_call
     project = _method_source("_project")
     assert "to_memory_config(full_hidden" not in project
     assert "hidden_ws" not in project
-    assert "projected_ws = ttnn.linear(\n            full_hidden," in project
-    # the reduce is the row_reduce dispatch (the stock ttnn.reduce_scatter unless QWEN38_ROW_REDUCE=1)
+    assert (
+        "projected_ws = fused_mm_stream.linear(\n            full_hidden," in project
+    )  # the stock linear unless QWEN38_MM_STREAM
+    # the reduce is the row_reduce dispatch (the stock ttnn.reduce_scatter outside its contract or at QWEN38_ROW_REDUCE=0)
     gate = _method_source("_out_project").replace(
         "fused.row_reduce.row_reduce_or_reduce_scatter(", "ttnn.reduce_scatter("
     )
