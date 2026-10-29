@@ -8,7 +8,9 @@
 // connected tracy-capture. Grid and iterations via argv.
 //
 // --bench K prices one marker kind on the device instead: K = 0 spin only, 1 empty DeviceZoneScopedN,
-// 2 DeviceRecordEvent, 3 DeviceTimestampedData, 4 / 5 DeviceZoneScopedNIf with an opaque runtime true / false.
+// 2 DeviceRecordEvent, 3 DeviceTimestampedData, 4 / 5 DeviceZoneScopedNIf with an opaque runtime true / false,
+// 6 DeviceZoneSetCounter on the data-movement RISCs, and DevicePublish of 7 a plain struct, 8 a bit-field struct, 9 a
+// struct with a bit-field after a smaller field, 10 a struct with padding between its fields beside another value.
 // Each RISC times bursts against its wall clock and the host prints cycles per marker; the K = 0 run with the
 // same --benchdelay is the loop's own cost to subtract. Measure on a 1x1 grid with a paced --benchdelay (20 is
 // enough) and no "profiler stalls" or "FAILED TO START" in the log, or the number is the stall.
@@ -67,9 +69,10 @@ int main(int argc, char** argv) {
         }
     }
 
-    // A counting callback, so the capture is decoded and totalled even with no sink armed.
+    // A counting callback, so the capture is decoded and totalled even with no sink armed. Each stall arrives as a
+    // zone named STALL_ZONE_NAME, which ends after it starts on both clocks.
     struct Totals {
-        std::atomic<uint64_t> zones{0}, points{0}, stalls{0};
+        std::atomic<uint64_t> zones{0}, points{0}, stalls{0}, unordered_stall_zones{0}, mismatched_batches{0};
     } totals;
     using experimental::streaming_profiler::Batch;
     using experimental::streaming_profiler::Event;
@@ -80,9 +83,18 @@ int main(int argc, char** argv) {
         [&](const Batch<Zone, TimestampedData, Event>& batch) {
             // Counts only the Tensix grid's zones, which are the workload's. Whether an eth core's last firmware zone
             // ships depends on teardown timing.
-            totals.zones += std::ranges::count_if(batch.records<Zone>(), [](const Zone& zone) {
+            uint64_t stall_zones = 0;
+            totals.zones += std::ranges::count_if(batch.records<Zone>(), [&](const Zone& zone) {
+                if (zone.metadata().name == experimental::streaming_profiler::STALL_ZONE_NAME) {
+                    const auto& [start, end] = zone.payload();
+                    const bool ordered =
+                        start.device_cycles() < end.device_cycles() && start.host_cycles() < end.host_cycles();
+                    ++stall_zones;
+                    totals.unordered_stall_zones += ordered ? 0 : 1;
+                }
                 return zone.core().processor != Processor::ERISC0 && zone.core().processor != Processor::ERISC1;
             });
+            totals.mismatched_batches += stall_zones == batch.stall_count() ? 0 : 1;
             totals.points += batch.records<Event>().size() + batch.records<TimestampedData>().size();
             totals.stalls += batch.stall_count();
         },
@@ -205,9 +217,12 @@ int main(int argc, char** argv) {
     mesh_device->close();
     callback.reset();
     printf(
-        "[streaming profiler zones] subscriber saw %llu zones, %llu points, %llu stalls\n",
+        "[streaming profiler zones] callback saw %llu zones, %llu points, %llu stalls, "
+        "%llu unordered stall zones, %llu batches whose stall zones differ from their stalls\n",
         (unsigned long long)totals.zones.load(),
         (unsigned long long)totals.points.load(),
-        (unsigned long long)totals.stalls.load());
-    return 0;
+        (unsigned long long)totals.stalls.load(),
+        (unsigned long long)totals.unordered_stall_zones.load(),
+        (unsigned long long)totals.mismatched_batches.load());
+    return totals.mismatched_batches == 0 && totals.unordered_stall_zones == 0 ? 0 : 1;
 }

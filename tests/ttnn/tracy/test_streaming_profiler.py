@@ -63,6 +63,7 @@ CAPTURE_ITERS = 50
 
 # Complete commands, fixed at import. A caller picks one by key; no caller-supplied value is ever spliced into
 # an argument list, which keeps the set of programs and arguments this module can run closed and reviewable.
+# --markers 1 makes the workload publish events and timestamped data, which it otherwise doesn't.
 COMMANDS = {
     "csvexport": [str(TOOLS["csvexport"]), "-u", str(CAPTURE_FILE)],
     "workload-smoke": [
@@ -141,12 +142,12 @@ def _device_zone_rows() -> list[dict]:
     return [row for row in csv.DictReader(io.StringIO(out)) if row["src_file"] == "kernel_profiler"]
 
 
-# The workload's own subscriber counts every record the host decoded, which is the only place events and
+# The workload's own callback counts every record the host decoded, which is the only place events and
 # timestamped data are observable end to end: tracy-csvexport can export zones (-u/-g), messages (-m) and
 # plots (-p), but not GPU markers, so the Tracy capture alone cannot prove the point-marker wire paths.
-def _subscriber_totals(log: str) -> tuple[int, int, int]:
-    m = re.search(r"subscriber saw (\d+) zones, (\d+) points, (\d+) stalls", log)
-    assert m, f"workload printed no subscriber totals:\n{log[-2000:]}"
+def _callback_totals(log: str) -> tuple[int, int, int]:
+    m = re.search(r"callback saw (\d+) zones, (\d+) points, (\d+) stalls", log)
+    assert m, f"workload printed no callback totals:\n{log[-2000:]}"
     return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
 
@@ -165,8 +166,6 @@ def _run_workload(which: str, env_extra: dict) -> tuple[int, str]:
     env = dict(os.environ)
     env["TT_METAL_STREAMING_PROFILER"] = "1"  # its own mode; excludes TT_METAL_DEVICE_PROFILER
     env.update(env_extra)
-    # --markers 1: nothing else in the tree emits PP_EVENT / Data payload records, so without it those wire
-    # layouts go untested.
     rc, out, err = _run_tool(which, env=env, cwd=str(TT_METAL_HOME), timeout=300)
     return rc, out + err
 
@@ -192,7 +191,7 @@ def test_streaming_profiler_workload(gx, gy, iters):
     _skip_unless_streaming_started(log)
     assert rc == 0, f"workload failed (rc={rc}):\n{log[-2000:]}"
 
-    zones, points, stalls = _subscriber_totals(log)
+    zones, points, stalls = _callback_totals(log)
     assert stalls == 0, f"producers stalled ({stalls}); the relays are not keeping up:\n{log[-2000:]}"
     assert zones == _expected_zones(
         gx, gy, iters
@@ -244,18 +243,18 @@ def test_streaming_profiler_zones_capture(gx, gy, iters):
     lanes = len({row["thread"] for row in rows})
     assert lanes >= gx * gy * RISCS_PER_CORE, f"expected >= {gx * gy * RISCS_PER_CORE} lanes with zones, got {lanes}"
 
-    # Names must come back resolved, not blank or hashed: the ids on the wire are assigned to each image as
-    # it loads and the host resolves them per ELF from .tt_zone_meta, so an empty or missing name means that
-    # resolution broke even though zones still arrived.
+    # Names must come back resolved, not blank or hashed: the ids on the wire are assigned to each image as it loads and
+    # the host resolves them per ELF from .device_publish_descriptors, so an empty or missing name means that resolution
+    # broke even though zones still arrived.
     names = {row["name"] for row in rows}
     assert "" not in names, "a device zone came back unnamed -- ELF zone-name resolution failed"
     for tag in ("BR", "NC", "T0", "T1", "T2"):
         missing = {f"{tag}_Zone{i}" for i in range(ZONES_PER_ITER)} - names
         assert not missing, f"{tag}: device zones missing from the capture: {sorted(missing)}"
 
-    # Events and timestamped data are GPU markers, which tracy-csvexport cannot export; the subscriber's
+    # Events and timestamped data are GPU markers, which tracy-csvexport cannot export; the callback's
     # own totals are where the point-marker paths are observable.
-    zones, points, stalls = _subscriber_totals(log)
+    zones, points, stalls = _callback_totals(log)
     assert stalls == 0, f"producers stalled ({stalls})"
     assert zones == _expected_zones(
         gx, gy, iters

@@ -13,7 +13,7 @@
 #include <thread>
 #include <vector>
 
-#include "impl/streaming_profiler/service.hpp"
+#include "impl/streaming_profiler/receiver.hpp"
 
 using namespace tt::tt_metal::streaming_profiler;
 namespace kp = kernel_profiler;
