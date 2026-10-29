@@ -458,6 +458,12 @@ inline uint32_t pack_scalar_runtime_arg_float(const float scalar, const DataType
         //  -6.0f  → static_cast<int64_t> → -6LL → static_cast<uint32_t> → 0xFFFFFFFA
         return static_cast<uint32_t>(static_cast<int64_t>(scalar));
     }
+    TT_FATAL(
+        dtype != DataType::UINT16 && dtype != DataType::UINT8 && dtype != DataType::INT8,
+        "pack_scalar_runtime_arg_float: narrow integer scalar dtype {} is not supported. The "
+        "fallthrough packs IEEE-754 float bits into the uint32 runtime arg, silently corrupting "
+        "the scalar when the ternary kernel reads it as a narrow integer.",
+        dtype);
     return std::bit_cast<uint32_t>(scalar);
 }
 
@@ -472,6 +478,13 @@ uint32_t pack_scalar_runtime_arg(const ScalarVariant scalar, const DataType dtyp
                 if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
                     return std::bit_cast<uint32_t>(v);
                 }
+                TT_FATAL(
+                    dtype != DataType::UINT16 && dtype != DataType::UINT8 && dtype != DataType::INT8,
+                    "pack_scalar_runtime_arg: narrow integer scalar dtype {} is not supported for "
+                    "integer scalar variants. The fallthrough casts to float and packs IEEE-754 "
+                    "bits, silently corrupting the scalar when the ternary kernel reads it as a "
+                    "narrow integer.",
+                    dtype);
                 return std::bit_cast<uint32_t>(static_cast<float>(v));
             }
         },

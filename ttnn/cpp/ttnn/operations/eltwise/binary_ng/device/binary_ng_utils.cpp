@@ -752,6 +752,14 @@ uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataTy
                 auto val = static_cast<uint16_t>(static_cast<float>(v));
                 return (static_cast<uint32_t>(val) << 16) | val;
             }
+            TT_FATAL(
+                dtype != DataType::UINT8 && dtype != DataType::INT8,
+                "pack_scalar_runtime_arg: narrow integer scalar dtype {} is not supported. The "
+                "bfloat16-pair fallthrough below packs the scalar as two bf16 halves, which the "
+                "kernel reads as integer bits (e.g. scalar 1 becomes 0x3f803f80 = 1065369984 as a "
+                "uint16/uint8 lane). Add a byte-replicated or dtype-specific branch before this "
+                "point if narrow integer scalar support is needed.",
+                dtype);
             auto scalar_bf16 = bfloat16(static_cast<float>(v));
             return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
         },

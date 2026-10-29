@@ -202,8 +202,15 @@ Tensor clamp(
     bool has_int32_scalar = (min.has_value() && std::holds_alternative<std::int32_t>(min.value())) ||
                             (max.has_value() && std::holds_alternative<std::int32_t>(max.value()));
 
-    // Convert input tensor to float32 only if input is INT32 and scalars are float (not int32)
-    if (input_a.dtype() == DataType::INT32 && !has_int32_scalar) {
+    // Narrow and 32-bit integer inputs with float scalars must be typecast to FLOAT32 before the
+    // unary scalar packer runs. Only INT32 was handled before, so UINT32/UINT16/UINT8/INT8 inputs
+    // slipped through to clamp_tss with the float scalar going into the narrow-dtype packer
+    // fallthrough, which packs IEEE-754 bits as the scalar runtime arg.
+    const DataType in_dtype = input_a.dtype();
+    const bool is_integer_input = (in_dtype == DataType::INT32) || (in_dtype == DataType::UINT32) ||
+                                  (in_dtype == DataType::UINT16) || (in_dtype == DataType::UINT8) ||
+                                  (in_dtype == DataType::INT8);
+    if (is_integer_input && !has_int32_scalar) {
         a = ttnn::typecast(a, DataType::FLOAT32, output_mem_config);
     }
 
