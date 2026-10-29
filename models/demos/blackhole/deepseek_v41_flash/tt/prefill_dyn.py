@@ -85,7 +85,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.prefill_single import slot_s0 
 
 
 class DynCtx:
-    def __init__(self, md, C, S_pad, ratios, rope_src, per_row=False):
+    def __init__(self, md, C, S_pad, ratios, rope_src, per_row=False, U=1):
         """ratios: set of compress ratios present (0 = window only); rope_src: {compressed?: an attention object providing ``_rope_inputs``}."""
         self.md, self.C, self.S_pad = md, C, S_pad
         self.rope_src = rope_src
@@ -96,11 +96,14 @@ class DynCtx:
         # per_row (tt/prefill_single.py per_row_enabled): every per-chunk tensor holds one copy PER MESH ROW (sharded over the rows, the same [1, ...] per device), so every row replays its own chunk position
         self.per_row = bool(per_row)
         self.rows, self.cols = tuple(md.shape)
+        # DSV41_PREFILL_UP_BATCH: U prefill slots per mesh row, every slot its own chunk start: the tensors hold rows * U copies (dim 0, sharded over the rows: [U, ...] per device, slot u of the row = index u)
+        self.U = int(U) if self.per_row else 1
+        self.nslot = self.rows * self.U
         self._shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(self.rows, self.cols))
 
         def mk(shape, dtype=ttnn.bfloat16, fill=0.0):
             return ttnn.from_torch(
-                torch.full(([self.rows * shape[0]] if self.per_row else [shape[0]]) + list(shape[1:]), fill),
+                torch.full(([self.nslot * shape[0]] if self.per_row else [shape[0]]) + list(shape[1:]), fill),
                 device=md,
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
@@ -169,7 +172,7 @@ class DynCtx:
         or page tables), so they can be built before the window is known (``prebuild``)."""
         out = []
         if self.per_row:
-            s0s = slot_s0(s0, self.rows)
+            s0s = slot_s0(s0, self.nslot)  # one chunk start per prefill slot (row-major: slot = row * U + u)
             cache = {x: self._values(x) for x in set(s0s)}
             vals = {
                 k: [torch.cat([cache[x][k][i] for x in s0s], dim=0) for i in range(len(v))]
@@ -195,7 +198,7 @@ class DynCtx:
         p0 = self.p0
         if p0 is None:
             return [x == 0 for x in s0s]
-        if len(p0) == len(s0s):
+        if len(p0) == len(s0s):  # (per row, or per slot with DSV41_PREFILL_UP_BATCH)
             return [x <= p for x, p in zip(s0s, p0)]
         m = min(p0)
         return [x <= m for x in s0s]

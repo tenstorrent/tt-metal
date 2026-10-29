@@ -782,7 +782,7 @@ class DSV41PrefillModel:
         for _, pl in self.layers:
             ratios.add(pl.pa.ratio)
             rope_src.setdefault(pl.pa.compressed, pl.pa.a)
-        self.dyn = DynCtx(self.md, C, S_pad, ratios, rope_src, per_row=_PS.per_row_enabled(self.U))
+        self.dyn = DynCtx(self.md, C, S_pad, ratios, rope_src, per_row=_PS.per_row_enabled(self.U), U=self.U)
         # interleaved prefill (DSV41_PF_UMASK=1): per-user 0/1 mask [U,1,1,1] (per mesh row, persistent, refreshed before every replay) that gates every write of
         # the carried per-user prefill state (halo, latent / index-key FIFOs) INSIDE the trace, so users that are not part of a replay keep their state
         self.dyn.umask = None
@@ -1172,13 +1172,17 @@ class DSV41PrefillModel:
         self._log_chunk_trace(C, tr0, "B")
 
     def set_zone(self, p0_by_row):
-        """Bounded replay: first replay chunk start of the mesh rows {row: p0} (rows not named keep their value; a row with an unknown prompt length is 0 = every chunk runs all layers)."""
+        """Bounded replay: first replay chunk start of the mesh rows {row: p0} (``slot_zone``: of the prefill slots {row * U + u: p0}) (rows not named keep their value; a row with an unknown prompt length is 0 = every chunk runs all layers)."""
         if self.dyn is None or getattr(self, "dyn_trace_b", None) is None:
             return
-        p0 = self.dyn.p0 or [0] * self.rows
+        p0 = self.dyn.p0 or [0] * (self.rows * (self.U if self.slot_zone() else 1))
         for r, v in p0_by_row.items():
             p0[int(r)] = int(v)
         self.dyn.p0 = p0
+
+    def slot_zone(self):
+        """DSV41_PREFILL_UP_BATCH: the replay zone (``dyn.p0``) is per prefill SLOT (index row * U + u), else per mesh row."""
+        return bool(getattr(self.dyn, "per_row", False)) and self.U > 1
 
     def zone_start(self, total, C):
         """p0 of a prompt of ``total`` tokens (None = not known -> 0)."""

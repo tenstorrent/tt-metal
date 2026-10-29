@@ -487,8 +487,8 @@ class DSV41PrefillIndexer:
         k = ttnn.linear(x, d.wk, compute_kernel_config=self.ckc)
         k = ttnn.rms_norm(ttnn.typecast(k, ttnn.bfloat16), weight=d.k_norm_w, epsilon=d.k_eps)
         k = ttnn.reshape(k, [U, 1, Cc, IDIM])
-        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, Cc, HEAD_DIM])
-        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, Cc, HEAD_DIM])
+        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, Cc, HEAD_DIM])
+        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, Cc, HEAD_DIM])
         k = self._rope(k, (c, s_))
         if self.fp4_k:
             k = self._fp4(k)
@@ -588,8 +588,8 @@ class DSV41PrefillIndexer:
         k = ttnn.linear(x, d.wk, compute_kernel_config=self.ckc)
         k = ttnn.rms_norm(ttnn.typecast(k, ttnn.bfloat16), weight=d.k_norm_w, epsilon=d.k_eps)
         k = ttnn.reshape(k, [U, 1, Cc, IDIM])
-        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, Cc, HEAD_DIM])
-        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, Cc, HEAD_DIM])
+        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, Cc, HEAD_DIM])
+        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, Cc, HEAD_DIM])
         k = self._rope(k, (c, s_))
         if self.fp4_k:
             k = self._fp4(k)
@@ -639,8 +639,8 @@ class DSV41PrefillIndexer:
         w = ttnn.to_layout(ttnn.linear(h, d.wproj, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT)
         q = ttnn.to_layout(ttnn.linear(qr, d.wq_b, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT)
         qh = ttnn.to_layout(ttnn.permute(ttnn.reshape(q, [U, C, IHEADS, IDIM]), (0, 2, 1, 3)), ttnn.TILE_LAYOUT)
-        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
-        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
+        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, C, HEAD_DIM])
+        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, C, HEAD_DIM])
         qh = self._rope(qh, (c, s_))
         if self.fp4_q:
             qh = self._fp4(qh)
@@ -749,8 +749,8 @@ class DSV41PrefillIndexer:
         k = ttnn.linear(x, d.wk, compute_kernel_config=self.ckc)
         k = ttnn.rms_norm(ttnn.typecast(k, ttnn.bfloat16), weight=d.k_norm_w, epsilon=d.k_eps)
         k = ttnn.reshape(k, [U, 1, Cc, IDIM])
-        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, Cc, HEAD_DIM])
-        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, Cc, HEAD_DIM])
+        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, Cc, HEAD_DIM])
+        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, Cc, HEAD_DIM])
         k = self._rope(k, (c, s_))
         if self.fp4_k:
             k = self._fp4(k)
@@ -770,7 +770,9 @@ class DSV41PrefillIndexer:
         d, U, sh = self.dec, self.U, self.sh
         r = self.ratio
         cols, Lc, mc, ccl, Cc8 = sh["cols"], sh["Lc"], sh["mc"], sh["ccl"], sh["Cc8"]
-        nvalid = ctx.sg.nvalid[r]
+        nvalids = ctx.sg.nvalid[
+            r
+        ]  # one [1,1,1,1] length per slot (DSV41_PREFILL_UP_BATCH: every slot its own chunk start; else one shared)
         tk = PS.Ticker(self.md, f"select_single r{r}")
         w = ttnn.to_layout(ttnn.linear(h, d.wproj, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT)
         _qb_pc = (
@@ -794,8 +796,8 @@ class DSV41PrefillIndexer:
             ttnn.linear(qr, d.wq_b, compute_kernel_config=self.ckc, program_config=_qb_pc), ttnn.ROW_MAJOR_LAYOUT
         )
         qh = ttnn.to_layout(ttnn.permute(ttnn.reshape(q, [U, C, IHEADS, IDIM]), (0, 2, 1, 3)), ttnn.TILE_LAYOUT)
-        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
-        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
+        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, C, HEAD_DIM])
+        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, C, HEAD_DIM])
         qh = self._rope(qh, (c, s_))
         if self.fp4_q:
             qh = self._fp4(qh)
@@ -803,6 +805,7 @@ class DSV41PrefillIndexer:
         tk.tick("proj_rope_fp4")
         per_user = []
         for u in range(U):
+            nvalid = nvalids[min(u, len(nvalids) - 1)]
             qu = ttnn.slice(qh, [u, 0, 0, 0], [u + 1, IHEADS, C, IDIM])
             wu = ttnn.slice(wt, [u, 0, 0, 0], [u + 1, 1, C, IHEADS])
             kvarg = {"kv_len_tensor": nvalid} if PS.use_kv_tensor() else {"kv_len": Lc + 32}
@@ -857,8 +860,8 @@ class DSV41PrefillIndexer:
         w = ttnn.to_layout(ttnn.linear(h, d.wproj, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT)
         q = ttnn.to_layout(ttnn.linear(qr, d.wq_b, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT)
         qh = ttnn.to_layout(ttnn.permute(ttnn.reshape(q, [U, C, IHEADS, IDIM]), (0, 2, 1, 3)), ttnn.TILE_LAYOUT)
-        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
-        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
+        c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, C, HEAD_DIM])
+        s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [int(tab[0].shape[0]), 1, C, HEAD_DIM])
         qh = self._rope(qh, (c, s_))
         if self.fp4_q:
             qh = self._fp4(qh)
@@ -1104,11 +1107,16 @@ class DSV41PrefillSparse:
                 ctx.build_hooks.append(self._build_hook)
         mk_ = _rowsh if getattr(ctx, "per_row", False) else _rep  # per-row chunk starts: one copy per mesh row
         nr_ = ctx.rows if getattr(ctx, "per_row", False) else 1
+        ns_ = nr_ * (
+            ctx.U if getattr(ctx, "per_row", False) else 1
+        )  # (DSV41_PREFILL_UP_BATCH: one copy per prefill SLOT)
+        if ns_ > nr_:
+            assert paged, "DSV41_PREFILL_UP_BATCH needs DSV41_PF_PAGED=read"
         if not hasattr(ctx, "sp_perm"):
-            ctx.sp_perm = mk_(self.md, perm_table(True).repeat(nr_, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+            ctx.sp_perm = mk_(self.md, perm_table(True).repeat(ns_, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         if split_enabled() and not hasattr(ctx, "sp_perm_b"):
             assert paged, "DSV41_PF_REPLAY needs DSV41_PF_PAGED=read"
-            ctx.sp_perm_b = mk_(self.md, perm_table(True).repeat(nr_, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+            ctx.sp_perm_b = mk_(self.md, perm_table(True).repeat(ns_, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         if r not in ctx.sp_win:
             ctx.sp_win[r] = mk_(
                 self.md, torch.zeros(nr_, 1, ctx.C, WINDOW, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
@@ -1172,7 +1180,7 @@ class DSV41PrefillSparse:
     @staticmethod
     def _upd_hook(ctx, s0):
         pr = getattr(ctx, "per_row", False)
-        s0s = PS.slot_s0(s0, ctx.rows if pr else 1)
+        s0s = PS.slot_s0(s0, ctx.rows * ctx.U if pr else 1)  # (one start per prefill slot)
         mp = ctx._shard if pr else ctx._rep
         h2d(
             ttnn.from_torch(
@@ -1193,6 +1201,9 @@ class DSV41PrefillSparse:
                 ),
                 ctx.sp_perm_b,
             )
+        s0s = (
+            s0s[:: ctx.U] if pr else s0s
+        )  # (sp_win: the non-paged window ids, one copy per row; the paged read mode reads ``ctx.pg.win``)
         for r, dev in ctx.sp_win.items():
             L, C = ctx.L[r], ctx.C
             i = torch.arange(C).view(-1, 1)
@@ -1315,10 +1326,10 @@ class DSV41PrefillSparse:
         for u in range(U):
             pgw = ctx.pg.win_b if getattr(ctx, "back", False) else ctx.pg.win
             wu = ttnn.slice(pgw, [u, 0, 0, 0], [u + 1, 1, C, WINDOW]) if paged else win
-            idx = compact_rows(
-                ttnn.concat([wu, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3),
-                ctx.sp_perm_b if getattr(ctx, "back", False) else ctx.sp_perm,
-            )
+            perm = ctx.sp_perm_b if getattr(ctx, "back", False) else ctx.sp_perm
+            if int(perm.shape[0]) > 1:  # per-slot perm (DSV41_PREFILL_UP_BATCH)
+                perm = ttnn.slice(perm, [u, 0, 0, 0], [u + 1, 1, int(perm.shape[2]), int(perm.shape[3])])
+            idx = compact_rows(ttnn.concat([wu, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3), perm)
             qu = ttnn.to_layout(ttnn.slice(qh, [u, 0, 0, 0], [u + 1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT)
             qu = ttnn.concat([qu, zero_heads], dim=1)
             o = ttnn.transformer.sparse_sdpa(

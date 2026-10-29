@@ -10,9 +10,9 @@
 //
 //   ids   uint32 ROW_MAJOR [U*C, NID]   FIFO slots of the selected compressed entries (0xFFFFFFFF = none)
 //   pt    int32  ROW_MAJOR [U, MAXP]    page table of the user held by each prefill slot (-1 = no page)
-//   off   uint32 ROW_MAJOR [1, 32]      element 0: cs (first entry of the current chunk)
-//   out   uint32 ROW_MAJOR [U*C, NID]   pool rows, 0xFFFFFFFF where the id is a sentinel / not a visible entry / its
-//   page is unallocated
+//   off   uint32 ROW_MAJOR [1 or U, 32] element 0: cs (first entry of the current chunk); one row per user when runtime
+//   arg 1 is set out   uint32 ROW_MAJOR [U*C, NID]   pool rows, 0xFFFFFFFF where the id is a sentinel / not a visible
+//   entry / its page is unallocated
 //
 // Entry j of a source with ratio RATIO lives at pool row pt[u][(j*RATIO)/PAGE_TOK] * PAGE_ROWS + SRC_OFF + ((j*RATIO) %
 // PAGE_TOK) / RATIO (the same mapping as paged_kv_step.cpp / PageLayout.phys_rows). One core handles ROWS_PER_CORE
@@ -43,6 +43,7 @@ void kernel_main() {
     constexpr uint32_t B_PT = 0, B_OFF = B_PT + PT_B, B_IN = B_OFF + 64, B_OUT = B_IN + ROW_B;
 
     const uint32_t core = get_arg_val<uint32_t>(0);
+    const uint32_t off_per_user = get_arg_val<uint32_t>(1);  // 1: off has one row per user (DSV41_PREFILL_UP_BATCH)
     const uint32_t a_ids = get_common_arg_val<uint32_t>(0), a_pt = get_common_arg_val<uint32_t>(1),
                    a_off = get_common_arg_val<uint32_t>(2), a_out = get_common_arg_val<uint32_t>(3);
 
@@ -62,7 +63,7 @@ void kernel_main() {
     const uint32_t row0 = core * RPC;
     const uint32_t user = row0 / C;
     noc.async_read(pt_acc, cb, MAXP * 4, {.page_id = user, .offset_bytes = 0}, {.offset_bytes = B_PT});
-    noc.async_read(off_acc, cb, 64, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = B_OFF});
+    noc.async_read(off_acc, cb, 64, {.page_id = off_per_user ? user : 0, .offset_bytes = 0}, {.offset_bytes = B_OFF});
     noc.async_read_barrier();
     const uint32_t off = offb[0];
 

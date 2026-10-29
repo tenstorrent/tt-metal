@@ -86,9 +86,10 @@ class PagedCtx:
         )  # per-row chunk starts: off / win hold one copy per mesh row (U == 1 slot per row)
         self._m = shard if self.per_row else rep
         nr = self.rows if self.per_row else 1
+        self.nslot = nr * U if self.per_row else 1  # (DSV41_PREFILL_UP_BATCH: off / win hold one copy per prefill SLOT)
         self.off = {
             r: ttnn.from_torch(
-                torch.zeros(nr, 32, dtype=torch.int32),
+                torch.zeros(self.nslot, 32, dtype=torch.int32),
                 device=md,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -133,7 +134,9 @@ class PagedCtx:
                 if b is not None:
                     pt[r * U + u] = tab[b]
         h2d(ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._shard), self.pt)
-        s0s = slot_s0(s0, self.rows if self.per_row else 1)
+        s0s = slot_s0(
+            s0, self.nslot
+        )  # (per-row chunk starts: one per mesh row, with several slots per row one per slot)
         for r, dev in self.off.items():
             o = torch.zeros(len(s0s), 32, dtype=torch.int32)
             for k, x in enumerate(s0s):
@@ -154,10 +157,17 @@ class PagedCtx:
                 [torch.where(rel >= 0, self.scratch_base(u) + rel, torch.full_like(rel, -1)) for u in range(U)]
             ).reshape(U, 1, C, WINDOW)
             ws[x] = torch.where(w < 0, torch.full_like(w, -1), w).to(torch.int64).to(torch.int32)  # -1 -> 0xFFFFFFFF
-        w = torch.cat([ws[x] for x in s0s], dim=0)
+        if self.per_row:  # slot k = row * U + u: its own start and its own scratch rows
+            w = torch.cat([ws[x][k % U : k % U + 1] for k, x in enumerate(s0s)], dim=0)
+        else:
+            w = torch.cat([ws[x] for x in s0s], dim=0)
         h2d(ttnn.from_torch(w, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._m), self.win)
         if self.win_b is not None:
-            wb = torch.cat([ws[0] if f else ws[-1] for f in ctx.first_b(s0s)], dim=0)
+            fb = ctx.first_b(s0s)
+            if self.per_row:
+                wb = torch.cat([(ws[0] if f else ws[-1])[k % U : k % U + 1] for k, f in enumerate(fb)], dim=0)
+            else:
+                wb = torch.cat([ws[0] if f else ws[-1] for f in fb], dim=0)
             h2d(ttnn.from_torch(wb, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._m), self.win_b)
 
     def translate(self, ids, ratio, src_layer):

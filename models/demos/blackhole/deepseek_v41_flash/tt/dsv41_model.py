@@ -1948,7 +1948,9 @@ class Model:
                     rep
                 ):  # first replay chunk of the rows of this wave (per row: every row its own; else one value for all rows)
                     if per_row:
-                        pm.set_zone({slot_of[b] // Up: zone[b] for b, _, _, _ in wave})
+                        pm.set_zone(
+                            {(slot_of[b] if pm.slot_zone() else slot_of[b] // Up): zone[b] for b, _, _, _ in wave}
+                        )
                     else:
                         pm.set_zone({r_: min(zone[b] for b, _, _, _ in wave) for r_ in range(rows)})
                 if per_row:

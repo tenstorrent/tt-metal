@@ -41,11 +41,21 @@ def enabled():
     return os.environ.get("DSV41_PF_SINGLE", "0") == "1"
 
 
+def up_batch_enabled():
+    """DSV41_PREFILL_UP_BATCH=1 (default off): several prefill slots per mesh row (DSV41_PREFILL_UP > 1) replay in ONE trace pass even when their chunk starts differ: every per-chunk tensor
+    (RoPE tables, masks, lim / off, nvalid, pool window ids / off, perm) holds one copy PER SLOT (dim 0 = rows * Up, sharded over the rows).
+    """
+    return os.environ.get("DSV41_PREFILL_UP_BATCH", "0") == "1"
+
+
 def per_row_enabled(slots_per_row=1):
     """Per-ROW chunk starts (DSV41_PF_PERROW, default on with the single trace): every mesh row replays its own chunk position in ONE trace replay (users admitted step by step by the scheduler sit at
-    different positions; the window loop needed one replay per distinct position). Needs one prefill slot per mesh row (DSV41_PREFILL_UP=1).
+    different positions; the window loop needed one replay per distinct position). Needs one prefill slot per mesh row (DSV41_PREFILL_UP=1), or
+    DSV41_PREFILL_UP_BATCH=1 (one copy per slot).
     """
-    return enabled() and int(slots_per_row) == 1 and os.environ.get("DSV41_PF_PERROW", "1") == "1"
+    return (
+        enabled() and (int(slots_per_row) == 1 or up_batch_enabled()) and os.environ.get("DSV41_PF_PERROW", "1") == "1"
+    )
 
 
 def slot_s0(s0, n):
@@ -162,14 +172,18 @@ class SingleCtx:
         if r in self.nvalid:
             return
         md, U = self.md, self.U
-        self.nvalid[r] = ttnn.from_torch(
-            torch.zeros(self.rows if self.per_row else 1, 1, 1, 1, dtype=torch.int32),
-            device=md,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self._shard if self.per_row else self._rep,
-        )
+        # nvalid[r][u]: valid local key slots of slot u of every mesh row (one tensor per slot: the score / top-k ops take a [1,1,1,1] length per call)
+        self.nvalid[r] = [
+            ttnn.from_torch(
+                torch.zeros(self.rows if self.per_row else 1, 1, 1, 1, dtype=torch.int32),
+                device=md,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self._shard if self.per_row else self._rep,
+            )
+            for _ in range(U if self.per_row else 1)
+        ]
         self.kofs[r] = ttnn.from_torch(
             torch.zeros(self.rows * U, 32, dtype=torch.int32),
             device=md,
@@ -195,20 +209,21 @@ class SingleCtx:
         act = torch.ones(self.rows * self.U, dtype=torch.bool) if act is None else torch.as_tensor(act).bool()
         for r in self.nvalid:
             nloc, ko = self.values(r, s0, act)
-            if self.per_row:
-                nv = torch.tensor(nloc, dtype=torch.int32).reshape(self.rows, 1, 1, 1)
-            else:
-                assert len(set(nloc)) == 1, "per-row chunk starts need DSV41_PF_PERROW"
-                nv = torch.full((1, 1, 1, 1), nloc[0], dtype=torch.int32)
-            h2d(
-                ttnn.from_torch(
-                    nv,
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    mesh_mapper=self._shard if self.per_row else self._rep,
-                ),
-                self.nvalid[r],
-            )
+            for u, dev in enumerate(self.nvalid[r]):
+                if self.per_row:
+                    nv = torch.tensor(nloc[u :: self.U], dtype=torch.int32).reshape(self.rows, 1, 1, 1)
+                else:
+                    assert len(set(nloc)) == 1, "per-row chunk starts need DSV41_PF_PERROW"
+                    nv = torch.full((1, 1, 1, 1), nloc[0], dtype=torch.int32)
+                h2d(
+                    ttnn.from_torch(
+                        nv,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=self._shard if self.per_row else self._rep,
+                    ),
+                    dev,
+                )
             kk = torch.zeros(self.rows * self.U, 32, dtype=torch.int32)
             kk[:, 0] = ko.to(torch.int32)
             h2d(
@@ -246,8 +261,11 @@ def translate_ids_single(ids, pt, off, *, ratio, src_off, C, ccur, n_cores=64):
     ct = [rpc, C, ratio, src_off, maxp, NID, P.PAGE_TOKENS, P.PAGE_ROWS, 0, ccur]
     ct += _acc(ids2) + _acc(pt) + _acc(off) + _acc(out)
     rt = ttnn.RuntimeArgs()
+    off_per_user = (
+        1 if int(off.shape[0]) > 1 else 0
+    )  # (DSV41_PREFILL_UP_BATCH: off [U, 32] per device, row u = chunk start of slot u)
     for i, c in enumerate(cores):
-        rt[c.x][c.y] = [i]
+        rt[c.x][c.y] = [i, off_per_user]
     k = ttnn.KernelDescriptor(
         kernel_source=f"{P.KDIR}/prefill_id_translate_single.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
