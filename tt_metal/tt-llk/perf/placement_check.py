@@ -141,9 +141,12 @@ def nodes(candidates, window_map, cap):
 def _side(root):
     values, windows = [], {}
     for pos in POSITIONS:
+        # A position's reports, measured in one part (<pos>/) or in several (<pos>-<part>/).
+        dirs = [f"{root}/{pos}"] + glob.glob(f"{root}/{pos}-*")
         files = [
             p
-            for p in glob.glob(f"{root}/{pos}/**/*.csv", recursive=True)
+            for d in dirs
+            for p in glob.glob(f"{d}/**/*.csv", recursive=True)
             if not p.endswith(".post.csv")
         ]
         medians = _medians(_read_frames(files)) if files else {}
@@ -152,7 +155,11 @@ def _side(root):
         )
         if pos == "p0":
             windows = read_window_map(
-                glob.glob(f"{root}/{pos}/**/*.windowhash", recursive=True)
+                [
+                    w
+                    for d in dirs
+                    for w in glob.glob(f"{d}/**/*.windowhash", recursive=True)
+                ]
             )
     return values, windows
 

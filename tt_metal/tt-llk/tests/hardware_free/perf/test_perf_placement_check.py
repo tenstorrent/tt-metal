@@ -321,3 +321,15 @@ def test_other_markers_are_judged_by_the_positions(tmp_path):
         ("INIT", "regression"),
     ]
     assert blocks(results)
+
+
+def test_positions_measured_in_parts_are_read(tmp_path):
+    base = _side(tmp_path / "base", [_BASE] * 5, window="aaa")
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb")
+    for root in (base, cur):
+        for pos in POSITIONS:
+            (root / pos).rename(root / f"{pos}-1")
+
+    [result] = _decide(tmp_path, base, cur)
+
+    assert result["outcome"] == "regression"
