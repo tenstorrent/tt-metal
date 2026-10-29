@@ -126,13 +126,23 @@ void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_dev
     }
     auto sub_device_manager = sub_device_managers_.find(sub_device_manager_id);
     TT_FATAL(sub_device_manager != sub_device_managers_.end(), "Sub device manager does not exist");
-    this->reset_sub_device_state(sub_device_manager->second);
+    // Resize the global allocator first: when the new manager's L1 doesn't fit, this fails before the switch is sent
+    // to the device or recorded into a trace being captured.
     const auto& default_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
     default_allocator->reset_allocator_size(BufferType::L1);
-    // Reserve the full bottom-up span through the shifted sub-device regions:
-    // persistent arena occupancy followed by sub-device-local L1.
-    const auto bottom_reservation_size = sub_device_manager->second->global_l1_bottom_reservation_size();
-    default_allocator->shrink_allocator_size(BufferType::L1, bottom_reservation_size, /*bottom_up=*/true);
+    try {
+        // Reserve the full bottom-up span through the shifted sub-device regions:
+        // persistent arena occupancy followed by sub-device-local L1.
+        const auto bottom_reservation_size = sub_device_manager->second->global_l1_bottom_reservation_size();
+        default_allocator->shrink_allocator_size(BufferType::L1, bottom_reservation_size, /*bottom_up=*/true);
+        this->reset_sub_device_state(sub_device_manager->second);
+    } catch (...) {
+        // The previous manager stays active: give the allocator its reservation back.
+        default_allocator->reset_allocator_size(BufferType::L1);
+        default_allocator->shrink_allocator_size(
+            BufferType::L1, active_sub_device_manager_->global_l1_bottom_reservation_size(), /*bottom_up=*/true);
+        throw;
+    }
     active_sub_device_manager_ = sub_device_manager->second.get();
 }
 
@@ -157,6 +167,12 @@ void SubDeviceManagerTracker::remove_sub_device_manager(SubDeviceManagerId sub_d
 }
 
 SubDeviceManager* SubDeviceManagerTracker::get_active_sub_device_manager() const { return active_sub_device_manager_; }
+
+void SubDeviceManagerTracker::set_active_sub_device_manager_view(SubDeviceManagerId sub_device_manager_id) {
+    auto sub_device_manager = sub_device_managers_.find(sub_device_manager_id);
+    TT_FATAL(sub_device_manager != sub_device_managers_.end(), "Sub device manager does not exist");
+    active_sub_device_manager_ = sub_device_manager->second.get();
+}
 
 SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() const {
     return default_sub_device_manager_;
