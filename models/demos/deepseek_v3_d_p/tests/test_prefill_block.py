@@ -843,6 +843,7 @@ def test_glm_prefill_block(
         pytest.fail("determinism (baseline=iter0) failed: " + "; ".join(repeat_failures))
     if determinism_check:
         logger.success(f"[glm block {layer_type}] output bit-identical across {num_iterations} iterations")
+        return
 
     # --- composed reference (reference/glm_5_3): assembles MLA + norm/residual + FFN ---
     logger.info(
