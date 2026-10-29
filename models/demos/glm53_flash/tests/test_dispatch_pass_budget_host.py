@@ -436,7 +436,7 @@ def test_mask_and_guard_plumbing():
         in squeezed
     )
     dec = (TT / "decoder_layer.py").read_text()
-    assert "if mask is None and seq_len < T and pad_mask_enabled():" in dec
+    assert "elif mask is None and not wave_mode and seq_len < T and pad_mask_enabled():" in dec
     assert "mask, own = self.mesh.upload(pad_row_mask_host(T, seq_len), ttnn.bfloat16, rows=2), True" in dec
     assert "ffn = lambda t, m=mask: self.mlp(t, prefill=True, row_mask=m)" in dec
     assert 'self.mlp.experts.call_site = f"layer {layer_idx} MoE"' in dec

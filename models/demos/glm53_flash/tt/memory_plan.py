@@ -216,9 +216,6 @@ class MemoryPlan:
     partition: bool
     scratch_slot: bool = True  # the SP prefill v1 scratch slot of the partitioned cache (sparse_1m.md section 7)
     trace_mb: int = 512
-    # waves (doc/mesh/row_ownership.md): every row runs W = wave_rows of its own chunk; the MoE gathers rows x W tokens
-    # per chip, so the chunk working set is that of a rows x W global chunk: neutral at W = 2048 on the 8x4 (16 K)
-    wave_rows: int = 2048
     # the slot-level prefix cache's KDA snapshot ring: ``snapshot_entries`` per user slot, each one user's carries on
     # this chip (``kda_state_bytes``); counted per chip for EVERY user of the row (``snapshot_bytes_per_chip``)
     kda_state_bytes: float = 0.0
@@ -227,6 +224,9 @@ class MemoryPlan:
     # tower is built per request or images are off) and the per-request vision working set (``vision_transient_bytes``)
     vision_bytes: float = 0.0
     vision_transient: float = 0.0
+    # waves (doc/mesh/row_ownership.md): every row runs W = wave_rows of its own chunk; the MoE gathers rows x W tokens
+    # per chip, so the chunk working set is that of a rows x W global chunk: neutral at W = 2048 on the 8x4 (16 K)
+    wave_rows: int = 2048
 
     @classmethod
     def estimate(
