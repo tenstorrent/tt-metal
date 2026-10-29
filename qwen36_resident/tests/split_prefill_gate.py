@@ -60,9 +60,14 @@ def kv_rows(slot_state, n_pos):
     return out
 
 
-def conv_mask(model, shape):
-    """the elements of read_slot's history row [n * S * copies, slots * blk] the decode reads: per (chip, streamer,
-    copy) row the q|k|v columns of hist_index in each of the CONV_K - 1 slots"""
+def conv_mask(model, hist):
+    """the elements of read_slot's history the decode reads. The WP6 build's read_slot returns the slot's whole row
+    [n * S * copies, slots * blk]: per (chip, streamer, copy) row the q|k|v columns of hist_index in each of the
+    CONV_K - 1 slots. Later builds (qwen38-res-mu-wp7 bca5ff72252 on) return only those elements [n, copies, ...]:
+    every element counts"""
+    if hist.dim() == 3:
+        return torch.ones(hist.shape, dtype=torch.bool)
+    shape = hist.shape
     rows, cols, _ = model.hist_index()
     n, S, G, blk = model.d.n, model._S, model._gdn_copies, model._blk * TILE
     assert tuple(shape) == (n * S * G, (CONV_K - 1) * blk), (tuple(shape), n, S, G, blk)
@@ -232,7 +237,7 @@ def main():
 
             state_a, logits_a = whole(c)
             if mask is None:
-                mask = conv_mask(model, state_a["hist"].shape)
+                mask = conv_mask(model, state_a["hist"])
                 res["hist_conv_fraction"] = float(mask.float().mean())
             decode_live(2)
             state_b, logits_b = split(a.decode_steps)
