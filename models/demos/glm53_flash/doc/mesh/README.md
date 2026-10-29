@@ -1409,3 +1409,13 @@ bucket. Until then the served default restores at chunk-aligned snapshots only (
   shape-static index maintenance at any 32-aligned start (A3's index half).
 - Runtime rule: every wave / row-local test runs from `wt_kda_sp_base` (the ttnn override on the base commit) with the
   model folder overlaid; a frozen tree on the stock runtime fails on `ttKDA(sequence_parallel_size=)`.
+
+### 2026-10-29 01:55: correction on the APC artifacts
+
+The served r3 continuation starts (36736, 52992) are multiples of 128, so the served run stayed on the shape-static index
+maintenance with the program-cache seal on (the adapter's default) and compiled nothing at request time; the adapter also
+sets `GLM53_PREFIX_BUCKET` at init. The seal-off footprint change and the sealed chip-0 misses belong to the test's own
+2112 start (the offset path), an unset bucket outside the adapter and a cold second slot. The round-1 artifacts are open
+again; the one served shape the chip-0 tests had not covered, a 3968-row ragged chunk padded to the 16384 bucket and
+then continued, is queued (`test_chunked_prefill` served-padded variant). A3's index half remains the enabler for
+32-aligned APC restores and wave starts, not the artifact fix.
