@@ -5,10 +5,10 @@
 
     python models/demos/blackhole/llama_nemotron_rerank_1b/demo/bench.py --shapes 1x128 1x512 8x512 32x512
 
-Each shape: build inputs (all sequences full length, so no pair is padded and
-SDPA runs without a mask, as the serving runner does for such a batch; ``--masked``
-applies the all-zero padding mask anyway, the cost of a batch with any padded
-pair), compile, capture a trace, then replay it
+Each shape: build inputs (B rows of S tokens), compile, capture a trace with the
+attention mask applied, as for any batch whose rows hold packed or padded pairs
+(``--no-mask``: the unmasked trace TracedReranker uses only when every row is one
+pair of exactly S tokens), then replay it
 ``--iters`` times. Reported: the median replay latency over the second half (host-synchronized,
 inputs already on device), sequences/s and tokens/s, and the trace output
 checked against an untraced forward. ``--signpost`` wraps one replay in
@@ -75,7 +75,7 @@ def main():
     ap.add_argument("--shapes", nargs="+", default=["1x128", "1x512", "8x512", "32x512"])
     ap.add_argument("--iters", type=int, default=30, help="replays; the second half gives the sustained median")
     ap.add_argument("--signpost", action="store_true")
-    ap.add_argument("--masked", action="store_true", help="apply the padding mask (all zeros here)")
+    ap.add_argument("--no-mask", action="store_true", help="run SDPA without the attention mask")
     ap.add_argument("--cfg", nargs="*", default=[], help="RerankConfig overrides, key=value")
     args = ap.parse_args()
     dev = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=400_000_000)
@@ -85,7 +85,7 @@ def main():
         )
         for s in args.shapes:
             B, S = map(int, s.split("x"))
-            bench_shape(model, dev, B, S, args.iters, args.signpost, args.masked)
+            bench_shape(model, dev, B, S, args.iters, args.signpost, not args.no_mask)
     finally:
         ttnn.close_device(dev)
 

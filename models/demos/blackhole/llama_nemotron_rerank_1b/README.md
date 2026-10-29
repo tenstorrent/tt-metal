@@ -96,27 +96,27 @@ and nDCG@10 within 0.015 of HF.
 
 Traced forward, inputs on device. Each time is the median of the second half of 30 back-to-back replays:
 under continuous load the board holds its 150 W limit by lowering the clock from 1.35 GHz to about 0.95 GHz,
-so this is the latency under continuous load. "Now": every row is one pair that fills it, so SDPA runs
-without a mask (`TracedReranker` does the same for such a batch). "Mask on": the same inputs with the
-attention mask applied (`demo/bench.py --masked`). Any batch whose rows hold several packed pairs, or a
-padded pair, runs with the mask, so this column is the time per batch of full rows in normal use; what
-packing saves is rows per request, which is in the MIRACL table under "Packed rows".
+so this is the latency under continuous load. Every time is one batch of B rows of S tokens with the
+attention mask applied (`demo/bench.py`), as for any batch whose rows hold packed pairs or padding. The
+time does not depend on how many of a row's tokens are real; packing (see "Packed rows") reduces the
+number of rows a request needs, which the MIRACL table there shows.
 
-| batch x tokens | after bring-up | now | now, mask on | speed of light (kernel cycles) |
-|---|---|---|---|---|
-| 1 x 128 | 12.8 ms | 6.27 ms | 6.41 ms | |
-| 1 x 256 | | 6.47 ms | 6.70 ms | |
-| 1 x 512 | 15.6 ms | 7.69 ms | 8.02 ms | 33.7 % |
-| 1 x 1024 | | 15.2 ms | 16.7 ms | |
-| 8 x 512 | 76.2 ms | 39.8 ms | 42.1 ms | 58.6 % |
-| 32 x 512 | 329 ms | 190 ms | 193 ms | **71.3 %** (156.4 M cycles) |
-| 1 x 2048 | 46.5 ms | 24.7 ms | 27.7 ms | 51.9 % |
-| 1 x 4096 | | 66.6 ms | 77.2 ms | |
-| 1 x 8192 | 362 ms | 188 ms | 221 ms | 64.1 % |
+| batch x tokens | after bring-up | now | speed of light (kernel cycles) |
+|---|---|---|---|
+| 1 x 128 | 12.8 ms | 6.41 ms | |
+| 1 x 256 | | 6.70 ms | |
+| 1 x 512 | 15.6 ms | 8.02 ms | 32.7 % |
+| 1 x 1024 | | 16.7 ms | |
+| 8 x 512 | 76.2 ms | 42.1 ms | 55.0 % |
+| 32 x 512 | 329 ms | 193 ms | **65.8 %** (169.4 M cycles) |
+| 1 x 2048 | 46.5 ms | 27.7 ms | 47.1 % |
+| 1 x 4096 | | 77.2 ms | |
+| 1 x 8192 | 362 ms | 221 ms | 50.4 % |
 
-32 x 512 was at 75.9 % (147.0 M cycles, 175 ms) with FF1 + FF3 accumulating in bf16; packed rows put every
-pair through that shape, where bf16 accumulation fails the accuracy gate, so it now accumulates in fp32
-(see "Packed rows").
+A batch where every row is exactly one pair of S tokens skips the mask (`demo/bench.py --no-mask`; 32 x 512
+190 ms, 71.3 %); real traffic rarely has such a batch. FF1 + FF3 accumulates in fp32: with bf16 accumulation
+32 x 512 ran 175 ms unmasked (75.9 %), but packed rows put every pair through that shape, where bf16
+accumulation fails the accuracy gate (see "Packed rows").
 
 Speed of light: ideal cycles for the matmuls and attention at the precision each op runs at
 (130 cores x 4096 FLOP/cycle LoFi, / 2 for HiFi2, / 4 for HiFi4), divided by the sum of the ops' device
@@ -129,12 +129,12 @@ shape was benchmarked in its own process on an idle board.
 
 | op | M cycles | share | of its SoL |
 |---|---|---|---|
-| FF1 + FF3 + SwiGLU (`minimal_matmul`, HiFi2, fp32 accumulation) | 87.2 | 56 % | 76 % |
-| FF2 + residual add + RMSNorm (`matmul_add_norm`, LoFi) | 24.0 | 15 % | 69 % |
-| QKV + head split + RoPE (`matmul_qkv_rope`, HiFi2) | 18.3 | 12 % | 68 % |
-| SDPA (HiFi4, unmasked) | 14.1 | 9 % | 59 % |
-| WO + residual add + RMSNorm (`matmul_add_norm`, HiFi2) | 12.2 | 8 % | 67 % |
-| embedding + first RMSNorm (`embed_rmsnorm`), score head | 0.6 | 0.4 % | |
+| FF1 + FF3 + SwiGLU (`minimal_matmul`, HiFi2, fp32 accumulation) | 87.2 | 51 % | 76 % |
+| SDPA (HiFi4, with the mask; 14.1 M cycles without it) | 26.8 | 16 % | 31 % |
+| FF2 + residual add + RMSNorm (`matmul_add_norm`, LoFi) | 24.0 | 14 % | 69 % |
+| QKV + head split + RoPE (`matmul_qkv_rope`, HiFi2) | 18.3 | 11 % | 68 % |
+| WO + residual add + RMSNorm (`matmul_add_norm`, HiFi2) | 12.3 | 7 % | 67 % |
+| embedding + first RMSNorm (`embed_rmsnorm`), score head, mask | 0.8 | 0.5 % | |
 
 ## Packed rows
 
@@ -206,7 +206,9 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
 
 ## Open items
 
-* 32 x 512 is at 71.3 % of speed of light (75.9 % before FF1 + FF3 moved to fp32 accumulation). The rest
+* 32 x 512 is at 65.8 % of speed of light with the mask (71.3 % without; 75.9 % unmasked before FF1 + FF3
+  moved to fp32 accumulation). The mask almost doubles SDPA (26.8 vs 14.1 M cycles): ttnn's SDPA reads and
+  adds every mask tile of each computed block. The rest
   is spread over the ops: FF1 + FF3 is at 76 % (85 % with bf16 accumulation, which fails the accuracy gate
   with packed rows; the faster fp32 K-32 block is throttled by the board, see "Packed rows"); the fused
   WO / FF2 matmuls run at ~76-84 % of their limit inside their K loops (FF2 at LoFi with 4 x 1 subblocks, which
