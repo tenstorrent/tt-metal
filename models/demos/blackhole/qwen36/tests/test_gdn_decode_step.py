@@ -328,3 +328,150 @@ def test_gdn_decode_step_conv_timing(device, B):
         run()
     ttnn.synchronize_device(device)
     print(f"TIMING B={B}: {(time.perf_counter() - t0) / n * 1e6:.1f} us/call (host-measured, avg of {n})")
+
+
+def _run_value_blocks_chain(device, B, fp32_state, out_dtype, value_blocks, steps, seed):
+    """`steps` chained fused-conv fast_mode decode steps from a fixed seed; returns (outs, state, hist) on host."""
+    torch.manual_seed(seed)
+    Bmax = 32
+    scale = Dk**-0.5
+    C = 2 * KD + VD
+    W = C + VD + 32
+    az = C + VD
+    to_dev = lambda t, dt: ttnn.from_torch(t, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+    state = to_dev((0.05 * torch.randn(Bmax, Nv, Dk, Dv)).float(), ttnn.float32)
+    w_dev = to_dev((1.0 + 0.1 * torch.randn(Dv)).bfloat16(), ttnn.bfloat16)
+    taps = [(0.3 * torch.randn(C)).bfloat16() for _ in range(4)]
+    taps_dev = to_dev(_pack_rows_user(taps, 0, both=True), ttnn.bfloat16)
+    cs_all = [[(0.5 * torch.randn(C)).bfloat16() for _ in range(4)] for _ in range(Bmax)]
+    hist_dev = to_dev(torch.stack([_pack_rows_user(cs_all[b], b) for b in range(Bmax)]), ttnn.bfloat16)
+    dtb = to_dev((0.1 * torch.randn(Nv)).bfloat16(), ttnn.bfloat16)
+    nea = to_dev((-torch.exp(0.2 * torch.randn(Nv))).bfloat16(), ttnn.bfloat16)
+    vb_kw = {} if value_blocks == 1 else dict(value_blocks=value_blocks)
+    outs = []
+    for _ in range(steps):
+        rows = (0.5 * torch.randn(B, W)).bfloat16()
+        rows[:, az + 2 * Nv :] = 0
+        out = ttnn.experimental.kda.gdn_decode_step(
+            to_dev(rows.reshape(1, B, W), ttnn.bfloat16),
+            dtb,
+            nea,
+            state,
+            w_dev,
+            Nv,
+            Nk,
+            Dk,
+            Dv,
+            scale=scale,
+            output_dtype=out_dtype,
+            conv_hist=hist_dev,
+            conv_taps=taps_dev,
+            qkvz_dim=az,
+            fast_mode=True,
+            fp32_state=fp32_state,
+            **vb_kw,
+        )
+        outs.append(ttnn.to_torch(out).reshape(B, -1))
+        ttnn.deallocate(out)
+    return outs, ttnn.to_torch(state), ttnn.to_torch(hist_dev)
+
+
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("fp32_state", [True, False])
+@pytest.mark.parametrize("B", [1, 2, 4, 8, 32])
+@pytest.mark.parametrize("vb", [2, 4])
+def test_value_blocks_bit_identical_decode(device, vb, B, fp32_state, out_dtype):
+    """value_blocks = vb vs 1 (QWEN36_GDN_STEP_VALUE_BLOCKS): torch.equal on every step's out, the full rec_state
+    (incl. untouched slots >= B) and the packed history, over 3 chained steps. B = 32 resolves to 1 block on a
+    <= 110-core grid (12 groups x 6 heads x 2 > grid) -- then it is the original program and trivially equal."""
+    steps = 3
+    seed = 1234 + B
+    ref = _run_value_blocks_chain(device, B, fp32_state, out_dtype, 1, steps, seed)
+    got = _run_value_blocks_chain(device, B, fp32_state, out_dtype, vb, steps, seed)
+    for i in range(steps):
+        assert torch.equal(ref[0][i], got[0][i]), f"value_blocks={vb} B={B} step {i}: out differs"
+    assert torch.equal(ref[1], got[1]), f"value_blocks={vb} B={B}: rec_state differs"
+    assert torch.equal(ref[2], got[2]), f"value_blocks={vb} B={B}: packed history differs"
+    print(f"value_blocks {vb} == 1 at B={B} fp32_state={fp32_state} out={out_dtype}: torch.equal (out, state, hist)")
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 16 * 1024 * 1024}], indirect=True)
+@pytest.mark.parametrize("B", [1, 8])
+def test_value_blocks_trace_replay_decode(device, B):
+    """Eager step 0 + trace capture (records only) + 2 replays at value_blocks = 4 equal 3 eager value_blocks = 1
+    steps (semaphores re-initialized per launch; no hang)."""
+    steps = 3
+    seed = 99 + B
+    ref = _run_value_blocks_chain(device, B, True, ttnn.bfloat16, 1, steps, seed)
+    torch.manual_seed(seed)
+    Bmax = 32
+    scale = Dk**-0.5
+    C = 2 * KD + VD
+    W = C + VD + 32
+    az = C + VD
+    to_dev = lambda t, dt: ttnn.from_torch(t, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+    state = to_dev((0.05 * torch.randn(Bmax, Nv, Dk, Dv)).float(), ttnn.float32)
+    w_dev = to_dev((1.0 + 0.1 * torch.randn(Dv)).bfloat16(), ttnn.bfloat16)
+    taps = [(0.3 * torch.randn(C)).bfloat16() for _ in range(4)]
+    taps_dev = to_dev(_pack_rows_user(taps, 0, both=True), ttnn.bfloat16)
+    cs_all = [[(0.5 * torch.randn(C)).bfloat16() for _ in range(4)] for _ in range(Bmax)]
+    hist_dev = to_dev(torch.stack([_pack_rows_user(cs_all[b], b) for b in range(Bmax)]), ttnn.bfloat16)
+    dtb = to_dev((0.1 * torch.randn(Nv)).bfloat16(), ttnn.bfloat16)
+    nea = to_dev((-torch.exp(0.2 * torch.randn(Nv))).bfloat16(), ttnn.bfloat16)
+    row_list = []
+    for _ in range(steps):
+        rows = (0.5 * torch.randn(B, W)).bfloat16()
+        rows[:, az + 2 * Nv :] = 0
+        row_list.append(rows)
+    x = to_dev(row_list[0].reshape(1, B, W), ttnn.bfloat16)
+
+    def run():
+        return ttnn.experimental.kda.gdn_decode_step(
+            x,
+            dtb,
+            nea,
+            state,
+            w_dev,
+            Nv,
+            Nk,
+            Dk,
+            Dv,
+            scale=scale,
+            output_dtype=ttnn.bfloat16,
+            conv_hist=hist_dev,
+            conv_taps=taps_dev,
+            qkvz_dim=az,
+            fast_mode=True,
+            fp32_state=True,
+            value_blocks=4,
+        )
+
+    out0 = run()  # eager step 0 (compiles the program)
+    outs = [ttnn.to_torch(out0).reshape(B, -1)]
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    out_t = run()
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    for i in range(1, steps):
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(row_list[i].reshape(1, B, W), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), x
+        )
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        outs.append(ttnn.to_torch(out_t).reshape(B, -1))
+    ttnn.release_trace(device, tid)
+    for i in range(steps):
+        assert torch.equal(ref[0][i], outs[i]), f"trace value_blocks=4 B={B} step {i}: out differs from eager vb=1"
+    assert torch.equal(ref[1], ttnn.to_torch(state)), f"trace value_blocks=4 B={B}: rec_state differs"
+    assert torch.equal(ref[2], ttnn.to_torch(hist_dev)), f"trace value_blocks=4 B={B}: packed history differs"
+
+
+@pytest.mark.parametrize("vb", [1, 2, 4])
+@pytest.mark.parametrize("B", [1, 8])
+def test_value_blocks_timing_decode(device, B, vb):
+    """Host-measured time per call at value_blocks 1 / 2 / 4 (report only; use Tracy for the device kernel time)."""
+    import time
+
+    for i in range(2):
+        t0 = time.perf_counter() if i else None
+        _run_value_blocks_chain(device, B, True, ttnn.bfloat16, vb, 10, 5)
+        ttnn.synchronize_device(device)
+    print(f"TIMING value_blocks={vb} B={B}: {(time.perf_counter() - t0) / 10 * 1e6:.1f} us/call (incl. host I/O)")

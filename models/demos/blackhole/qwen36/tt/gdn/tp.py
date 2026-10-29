@@ -75,6 +75,20 @@ def gdn_spec_step_value_blocks():
     return vb
 
 
+def gdn_step_value_blocks():
+    """QWEN36_GDN_STEP_VALUE_BLOCKS (default "1" = off): gdn_decode_step's value_blocks for plain decode -- split each
+    (value head, user group)'s recurrent state columns over up to this many cores (tt-lab's 4-core GDN head split;
+    the plain-decode twin of QWEN36_SPEC_STEP_VALUE_BLOCKS). The op takes the largest divisor of Dv/32 <= the value
+    whose Nv*groups*blocks cores fit the grid (TP = 8, Nv = 6, B = 8: 24 items -> 4 blocks on 96 cores; B = 32 stays at
+    1) and stays bit-identical (out, rec_state, packed conv history) to one core per (head, group). Values: 1, 2 or 4;
+    1 passes nothing to the op, so a ttnn build without the attribute keeps working."""
+    env = os.environ.get("QWEN36_GDN_STEP_VALUE_BLOCKS", "1").strip() or "1"
+    vb = int(env)
+    if vb not in (1, 2, 4):
+        raise ValueError(f"QWEN36_GDN_STEP_VALUE_BLOCKS must be 1, 2 or 4, got {env!r}")
+    return vb
+
+
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
     """rows: list of 4 torch [C] vectors ([q | k | v] channels of one device) -> [Nv, 4, 32, 32] bf16 packed head
     tiles for gdn_decode_step: tile (h, s) holds rows[s]'s channels [q_hk | k_hk | v_h] (hk = h // rf) as 32-wide
@@ -796,7 +810,8 @@ class TPGatedDeltaNet:
             return False
         logger.info(
             "[GDN] decode path: gdn_decode_step op (QWEN36_GDN_DECODE_STEP_OP=0 reverts); "
-            f"fp32_state={'on' if self._decode_step_fp32_state else 'off'} (QWEN36_GDN_STEP_FP32_STATE=0 reverts)"
+            f"fp32_state={'on' if self._decode_step_fp32_state else 'off'} (QWEN36_GDN_STEP_FP32_STATE=0 reverts); "
+            f"value_blocks={gdn_step_value_blocks()} (QWEN36_GDN_STEP_VALUE_BLOCKS)"
         )
         return True
 
@@ -1847,6 +1862,9 @@ class TPGatedDeltaNet:
             out_memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         qkvzab = ttnn.reshape(qkvzab, (1, B, qkvzab.shape[-1]))
+        # QWEN36_GDN_STEP_VALUE_BLOCKS > 1: state column split over cores (bit-identical); nothing passed at 1
+        _vb = gdn_step_value_blocks()
+        extra = {"value_blocks": _vb} if _vb > 1 else {}
         gated = ttnn.experimental.kda.gdn_decode_step(
             qkvzab,
             tw["dt_bias_fp32"],
@@ -1865,6 +1883,7 @@ class TPGatedDeltaNet:
             qkvz_dim=self.qkvz_dim_tp,
             fast_mode=True,
             fp32_state=self._decode_step_fp32_state,
+            **extra,
         )  # [1, B, Nv*Dv] bf16
         ttnn.deallocate(qkvzab)
         partial = self._row_proj(gated, tw["out"])

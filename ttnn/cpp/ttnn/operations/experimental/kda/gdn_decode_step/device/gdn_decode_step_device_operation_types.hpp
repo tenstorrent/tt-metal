@@ -35,6 +35,14 @@ struct GdnDecodeStepParams {
     // (UnpackToDest) instead of the FPU (SrcA, which truncates the fp32 state every token). Costs one extra KV-tile
     // DFB. Part of the program hash (default attribute hashing).
     bool fp32_state = false;
+    // value_blocks (QWEN36_GDN_STEP_VALUE_BLOCKS; fused + fast_mode only): split each (head, user group)'s 128 state
+    // columns over up to this many cores (tt-lab's 4-core GDN head split, as gdn_spec_step's value_blocks). Each core
+    // runs the unchanged per-tile arithmetic on its Vt / value_blocks column tiles; the blocks of a head swap their
+    // pre-norm output tiles (exact fp32 bytes, unicast NoC writes + ready/valid semaphores) so each one runs the
+    // full-row gated RMSNorm as before and writes only its own output columns. Out, state and history are
+    // bit-identical to value_blocks = 1. The factory takes the largest divisor of Vt <= value_blocks (<= 4) whose cores
+    // fit the grid. 0 or 1 = the original program. Part of the program hash (default attribute hashing).
+    uint32_t value_blocks = 1;
 };
 
 struct GdnDecodeStepInputs {

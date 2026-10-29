@@ -41,6 +41,10 @@ void bind_gdn_decode_step(nb::module_& mod) {
                 output; the updated state keeps the full fp32 sum (the default path truncates it to TF32), so it
                 differs in the last bits.
             fp32_state (bool): default False. fp32_state: keep the recurrent-state decay/add in exact fp32 on the SFPU (fast_mode only); avoids per-token state truncation.
+            value_blocks (int): default 1. fast_mode only: split each (head, user group)'s state columns over up to
+                this many cores (<= 4; the largest divisor of Vt that fits the grid). The blocks swap their pre-norm
+                output tiles so the gated RMSNorm sees the full row. Bit-identical to value_blocks=1 (out, state,
+                history).
         Returns:
             ttnn.Tensor: ``[1, 1, Nv*Dv]`` normalized output (row 0 valid, padding rows zero).
         )doc",
@@ -65,7 +69,8 @@ void bind_gdn_decode_step(nb::module_& mod) {
         nb::arg("conv_taps") = nb::none(),
         nb::arg("qkvz_dim") = 0,
         nb::arg("fast_mode") = false,
-        nb::arg("fp32_state") = false);
+        nb::arg("fp32_state") = false,
+        nb::arg("value_blocks") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::kda::gdn_decode_step::detail
