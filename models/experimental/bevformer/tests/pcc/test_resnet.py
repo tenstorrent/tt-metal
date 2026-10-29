@@ -36,6 +36,16 @@ def _layer_kwargs(parameters, i):
     return TTResNet.layer_kwargs(i, **config)
 
 
+def _input_layout(parameters, i):
+    """The layout layer ``i`` receives in TTResNet: the max pool's TILE for layer1, else what layer
+    ``i - 1`` emits for its camera groups."""
+    if i == 0:
+        return ttnn.TILE_LAYOUT
+    conv1 = parameters.conv_args[f"layer{i + 1}"][0].conv1
+    cameras = _layer_kwargs(parameters, i - 1)["cameras"]
+    return TTResLayer.group_output_layout(cameras, conv1.input_height, conv1.input_width)
+
+
 def _check(torch_output, ttnn_model, ttnn_output):
     assert (
         ttnn_output.dtype == ttnn_model.output_dtype
@@ -74,8 +84,9 @@ def test_bottleneck_layer3(device, reset_seeds, reference_and_parameters):
         [parameters["res_model"]["layer3"][j] for j in range(2)],
         device,
         **_layer_kwargs(parameters, 2),
+        input_layout=layout,
     )
-    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16))
+    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16, layout))
     _check(torch_output, ttnn_model, ttnn_output)
 
 
@@ -94,8 +105,9 @@ def test_bottleneck_layer4(device, reset_seeds, reference_and_parameters):
         parameters["res_model"]["layer4"][0],
         device,
         **kwargs,
+        input_layout=layout,
     )
-    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16))
+    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16, layout))
     _check(torch_output, ttnn_model, ttnn_output)
 
 
@@ -121,11 +133,13 @@ def test_reslayer2(device, reset_seeds, reference_and_parameters):
     torch_input = torch.randn(NUM_CAMS, 256, IMAGE_HEIGHT // 4, IMAGE_WIDTH // 4)
     torch_output = reference_model.layer2.eval()(torch_input)
 
+    layout = _input_layout(parameters, 1)
     ttnn_model = TTResLayer(
         parameters.conv_args.layer2,
         parameters["res_model"]["layer2"],
         device,
         **_layer_kwargs(parameters, 1),
+        input_layout=layout,
     )
-    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16))
+    ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16, layout))
     _check(torch_output, ttnn_model, ttnn_output)

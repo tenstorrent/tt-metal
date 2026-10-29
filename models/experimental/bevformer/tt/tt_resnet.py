@@ -165,10 +165,9 @@ class TTResLayer:
         num_blocks = len(conv_pth)
         self.layer = []
         self.cameras = cameras
+        self.whole_first_block = None
         if cameras is not None:
-            assert input_layout == ttnn.TILE_LAYOUT, "a per-camera layer slices its cameras out of a TILE input"
-            self.whole_first_block = None
-            if self._first_block_too_wide(conv_args[0].conv1, cameras, device) or self._strided_conv2(conv_args[0]):
+            if self._group_input_too_large(conv_args[0].conv1, cameras, device) or self._strided_conv2(conv_args[0]):
                 self.whole_first_block = TTBottleneck(
                     conv_args[0],
                     conv_pth[0],
@@ -185,6 +184,7 @@ class TTResLayer:
                     input_layout=input_layout,
                 )
             start = 0 if self.whole_first_block is None else 1
+            assert num_blocks > start, "a whole first block needs a per-camera block after it"
             first = conv_args[start].conv1
             assert first.batch_size % cameras == 0, f"{first.batch_size} cameras do not split into groups of {cameras}"
             self.batch_size = first.batch_size
@@ -202,6 +202,12 @@ class TTResLayer:
                         weights_dtype=weights_dtype,
                     )
                 )
+            if self.whole_first_block is None and self.layer[0].stride == (1, 1):
+                assert (
+                    input_layout == ttnn.TILE_LAYOUT
+                ), "an unstrided per-camera block takes TILE rows into its linears"
+            last = self.layer[-1]
+            self.output_layout = self.group_output_layout(cameras, last.height, last.width)
             self.output_dtype = ttnn.bfloat16
             return
         for j in range(num_blocks):
@@ -223,10 +229,20 @@ class TTResLayer:
                     input_layout=input_layout if first else ttnn.TILE_LAYOUT,
                 )
             )
+        self.output_layout = ttnn.TILE_LAYOUT
         self.output_dtype = self.layer[-1].output_dtype
 
+    @staticmethod
+    def group_output_layout(cameras, height, width):
+        """The layout a layer emits whose blocks output ``height x width`` per camera: TILE, but
+        ROW_MAJOR when it runs ``cameras`` at a time and a group's rows are not whole tiles
+        (run_per_camera)."""
+        if cameras is None or cameras * height * width % ttnn.TILE_SIZE == 0:
+            return ttnn.TILE_LAYOUT
+        return ttnn.ROW_MAJOR_LAYOUT
+
     @classmethod
-    def _first_block_too_wide(cls, conv1, cameras, device):
+    def _group_input_too_large(cls, conv1, cameras, device):
         """Whether a group's input to a strided first block with ``conv1`` exceeds
         CAMERA_INPUT_MAX_SHARD_BYTES per core, in bfloat16."""
         if tuple(conv1.stride) == (1, 1):
@@ -307,7 +323,8 @@ class TTResLayer:
                 for block in layer.layer:
                     y = block(y)
             group_rows, channels = y.shape[2], y.shape[3]
-            tiled = group_rows % ttnn.TILE_SIZE == 0
+            tiled = layers[-1].output_layout == ttnn.TILE_LAYOUT
+            assert tiled == (group_rows % ttnn.TILE_SIZE == 0), f"{group_rows} rows per group"
             if not tiled:
                 # Untilized from L1 interleaved, which handles rows that end inside a tile row.
                 staged = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
@@ -885,12 +902,10 @@ class TTResNet:
             slice_type=ttnn.Op2DDRAMSliceHeight, num_slices=stem_maxpool_height_slices
         )
 
-        # The max pool and every whole-batch layer emit TILE: layer1's first block feeds its input to
-        # two linears, conv1 and the downsample, which would each tilize a ROW_MAJOR one. A
-        # per-camera layer whose groups are not whole tile rows emits ROW_MAJOR (TTResLayer.
-        # run_per_camera), which a strided first block subsamples as it is and a linear tilizes.
-        # Activations stay bfloat16: outlier channels lose their neighbours to bfloat8_b's shared
-        # block exponent.
+        # The max pool emits TILE: layer1's first block feeds its input to two linears, conv1 and
+        # the downsample, which would each tilize a ROW_MAJOR one. Each layer then takes the layout
+        # the one before emits (TTResLayer.output_layout). Activations stay bfloat16: outlier
+        # channels lose their neighbours to bfloat8_b's shared block exponent.
         layer_input_dtype = ttnn.bfloat16
         layer_input_layout = ttnn.TILE_LAYOUT
         self.output_dtypes = []
@@ -906,7 +921,7 @@ class TTResNet:
             )
             self.res_layers.append(res_layer)
             layer_input_dtype = res_layer.output_dtype
-            layer_input_layout = ttnn.TILE_LAYOUT
+            layer_input_layout = res_layer.output_layout
             if i in out_indices:
                 self.output_dtypes.append(layer_input_dtype)
 
