@@ -1611,13 +1611,13 @@ class GLM53FlashForCausalLM:
             state = self.slots.physical(logical)
             row_items = mm_items(kwargs, i) if has_mm else []
             if row_items:
-                if self.geometry.rows_independent:
-                    raise NotImplementedError("multimodal prompts under GLM53_VLLM_ROWS_INDEPENDENT are not wired")
                 prefix = tokens[i, :end].reshape(-1).to(torch.long)
                 feature_rows(prefix, row_items)  # the payload must match the prompt before any slot is taken
                 media[i] = (row_items, prefix)
             if start == 0:
-                state = self._allocate_slot(logical, end)
+                # a multimodal prompt takes the sequence-parallel path (the wave path has no vision scatter): under
+                # per-row ownership it needs its slot index free on every row, which the SP-first placement provides
+                state = self._allocate_slot(logical, end, sp_required=bool(row_items))
             elif state is not None and state.phase == "prefill" and state.prefilled_to == start:
                 pass  # a chunked continuation of this slot's own prompt
             elif state is None and apc is not None:
@@ -2425,19 +2425,24 @@ class GLM53FlashForCausalLM:
         return 0 if hit is None else int(hit.position)
 
     # ================================================================================= helpers
-    def _allocate_slot(self, logical: int, end: int = 0):
+    def _allocate_slot(self, logical: int, end: int = 0, sp_required: bool = False):
         """A fresh prompt's physical slot: the column / row balance, then (APC) a slot without retained content
         before the least recently used resident prefix; a logical slot still mapped (never released) retains first.
         ``end``: the first chunk's end; under per-row ownership a prompt no traced wave holds (it prefills eagerly)
-        takes a slot index live on no row, so its chunks run sequence-parallel (``SlotTable.allocate(prefer_sp)``)."""
-        prefer_sp = self.geometry.rows_independent and self.waves.captured_wave_length(int(end)) is None
+        takes a slot index live on no row, so its chunks run sequence-parallel (``SlotTable.allocate(prefer_sp)``);
+        ``sp_required`` (a multimodal prompt) marks the slot so the planner never routes it through a wave."""
+        prefer_sp = self.geometry.rows_independent and (
+            sp_required or self.waves.captured_wave_length(int(end)) is None
+        )
         if self.apc is None:
-            return self.slots.allocate(logical, prefer_sp=prefer_sp)
-        old = self.slots.physical(logical)
-        if old is not None:
-            self.apc.release(old.row, old.user)
-        state = self.slots.allocate(logical, slot_rank=self.apc.slot_rank, prefer_sp=prefer_sp)
-        self.apc.begin(state.row, state.user, 0)
+            state = self.slots.allocate(logical, prefer_sp=prefer_sp)
+        else:
+            old = self.slots.physical(logical)
+            if old is not None:
+                self.apc.release(old.row, old.user)
+            state = self.slots.allocate(logical, slot_rank=self.apc.slot_rank, prefer_sp=prefer_sp)
+            self.apc.begin(state.row, state.user, 0)
+        state.sp_required = bool(sp_required)
         return state
 
     def _snapshot(self, state, position: int, kind: str, *, sync: bool = False) -> bool:

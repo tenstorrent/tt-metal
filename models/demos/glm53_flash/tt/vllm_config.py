@@ -245,6 +245,7 @@ class SlotState:
     # every chunk so far went through the sequence-parallel path (its replicas sit in the other rows' slot ``user``,
     # so a later SP chunk finds the prefix there); a wave chunk exists on the owner row only and clears it for good
     sp_only: bool = True
+    sp_required: bool = False  # the request must take the sequence-parallel path (a multimodal prompt: the wave path has no vision scatter)
 
 
 class SlotTable:
@@ -719,8 +720,15 @@ class WavePlanner:
         wave_items = []
         for logical, s, start, end in items:
             sp = self.slots.sp_eligible(logical)
+            if s.sp_required and not sp:
+                raise NotImplementedError(
+                    f"request {logical} needs the sequence-parallel prefill (a multimodal prompt: the wave path has no "
+                    f"vision scatter) but slot index {s.user} holds another request on a different row; the SP-first "
+                    f"placement keeps up to users_per_row such prompts eligible"
+                )
             if (
                 sp
+                and not s.sp_required
                 and enable_trace
                 and start == 0
                 and self.pp.captured_length(end - start) is None

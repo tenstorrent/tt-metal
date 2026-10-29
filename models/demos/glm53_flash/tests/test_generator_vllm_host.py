@@ -284,6 +284,19 @@ def test_wave_planner_groups_walks_and_traces():
     assert [c.t_pad for c in waves] == [2048, 960, 2048]
     with expect_error(ValueError, "off the 128-token grid"):  # r3's '(2, 0, 224)': a KV-block end short of the grid
         wp.plan([(0, 224, 4000), (1, 0, 4000)])
+    # a multimodal prompt (sp_required) never takes a wave: alone on its index it is an SP step even within a captured
+    # wave length; with another request on its index it is refused with the cause
+    t.release(6)
+    mm = t.allocate(7, prefer_sp=True)
+    mm.sp_required = True
+    assert t.sp_eligible(7) and type(wp.plan([(7, 0, 200)])[0]).__name__ == "SPStep"
+    t.release(7)
+    t.allocate(5)  # the wave-affine order: index 0 is full, so (0, 1) ...
+    t.allocate(7)  # ... and (1, 1): index 1 now lives on another row, no SP for a multimodal prompt here
+    t.physical(7).sp_required = True
+    assert not t.sp_eligible(7)
+    with expect_error(NotImplementedError, "sequence-parallel prefill"):
+        wp.plan([(7, 0, 200)])
     with expect_error(ValueError, "appears twice"):
         p2.plan([(0, 0, 64), (0, 64, 128)])
     with expect_error(RuntimeError, "holds no request"):
