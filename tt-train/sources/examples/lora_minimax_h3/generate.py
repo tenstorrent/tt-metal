@@ -207,6 +207,7 @@ def main(argv=None) -> int:
     )
 
     adapter, trigger = ({}, None)
+    lora_name = "base"
     cache_key = f"base-s{args.lora_scale:g}"
     if args.lora:
         adapter, trigger = load_adapter(Path(args.lora))
