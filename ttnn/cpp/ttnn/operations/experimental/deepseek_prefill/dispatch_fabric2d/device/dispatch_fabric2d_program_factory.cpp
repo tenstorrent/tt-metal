@@ -37,9 +37,13 @@ namespace {
 // them on another. The signal header needs one fabric packet header (checked in compute_l1_layout) and the
 // drain sink one word; the gaps are slack.
 constexpr uint32_t PKT_HDR_SIGNAL_OFF = 0x0000;
+// The courier's own header. A credit can be posted from wherever the sender happens to be, including from
+// inside the wait for its reader, so it must not share a header with an arrival bump that may be in flight.
+constexpr uint32_t PKT_HDR_CREDIT_OFF = 0x0200;
 constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
 constexpr uint32_t QUEUE_OFF = 0x1000;
-static_assert(PKT_HDR_SIGNAL_OFF < DRAIN_SINK_OFF, "drain sink overlaps the signal packet header");
+static_assert(PKT_HDR_SIGNAL_OFF < PKT_HDR_CREDIT_OFF, "the credit header overlaps the signal header");
+static_assert(PKT_HDR_CREDIT_OFF < DRAIN_SINK_OFF, "drain sink overlaps the credit packet header");
 static_assert(DRAIN_SINK_OFF < QUEUE_OFF, "drain sink overlaps the token queue");
 
 uint32_t ring_extent_of(const DispatchFabric2dParams& args) {
@@ -87,13 +91,14 @@ L1Layout compute_l1_layout(
         static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
     L1Layout l;
     l.pkt_hdr_signal = base + PKT_HDR_SIGNAL_OFF;
+    l.pkt_hdr_credit = base + PKT_HDR_CREDIT_OFF;
     l.drain_sink = base + DRAIN_SINK_OFF;
     l.queue = base + QUEUE_OFF;
     l.pkt_hdr_queue = l.queue + dspf2d::QUEUE_DEPTH * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE);
     const uint32_t hdr_bytes = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     TT_FATAL(
-        PKT_HDR_SIGNAL_OFF + hdr_bytes <= DRAIN_SINK_OFF,
-        "dispatch_fabric2d: a {} B fabric packet header overlaps the drain sink",
+        PKT_HDR_SIGNAL_OFF + hdr_bytes <= PKT_HDR_CREDIT_OFF && PKT_HDR_CREDIT_OFF + hdr_bytes <= DRAIN_SINK_OFF,
+        "dispatch_fabric2d: a {} B fabric packet header does not fit between the signal, credit and drain slots",
         hdr_bytes);
     // One header per entry, the same stride the sender indexes the pool with.
     const uint32_t hdr_queue_bytes = dspf2d::QUEUE_DEPTH * hdr_bytes;
@@ -120,43 +125,69 @@ L1Layout compute_l1_layout(
     return l;
 }
 
-// Five counters: `filled` and `freed` are the reader/sender queue handshake, `fwd_arrived` is raised by
-// the upstream chip's sender as it fills this stream's fwd_section, `launch_credit` is raised by the
-// downstream chip when it starts a launch, and `untilized` is raised by this chip's untilizer writers as
-// they write tile rows to staging.
+// The fixed counters: `filled` and `freed` are the reader/sender queue handshake, `launch_credit` is
+// raised by the downstream chip when it starts a launch, and `untilized` is raised by this chip's untilizer
+// writers as they write tile rows to staging. The per-channel counters are described below.
 //
 // The launch credit crosses direction: our stream s sender grants it to the downstream chip's reverse stream
 // core, and our own `launch_credit` is granted by that core's sender. Our sender takes one before its first
 // send, so nothing it writes reaches the downstream chip before that chip is in the same launch.
 //
-// GlobalSemaphores so they sit at the same address on every chip: a neighbouring chip signals
-// `fwd_arrived` and `launch_credit` and has to know their address.
+// GlobalSemaphores so they sit at the same address on every chip: a neighbouring chip signals the arrival
+// and credit counters and has to know their address.
 //
 // Nothing resets them between launches, so the kernels undo each launch's count. `filled` and `freed` are
-// set to zero at end of run, and `untilized` too for a TILE input. `fwd_arrived` is lowered by the count
-// consumed, which stays right without relying on the launch credit. `launch_credit` is lowered by the one
-// credit taken at the start of the send loop, because the downstream chip can grant the next launch's credit
-// before this launch ends.
+// set to zero at end of run, and `untilized` too for a TILE input. Each channel's arrival count is lowered
+// by what this reader consumed and its credit count by what the reader placed downstream, which stays right
+// without relying on the launch credit. `launch_credit` is lowered by the one credit taken at the start of
+// the send loop, because the downstream chip can grant the next launch's credit before this launch ends.
+// The forwarding counters are per channel, because a reader serves each channel separately -- that is what
+// lets it drain one while another is blocked:
+//
+//   `vc_arrived[v]`  the upstream chip saying it put pages in our channel v. Travels with the data.
+//   `vc_freed[v]`    the DOWNSTREAM chip saying it took pages out of ITS channel v, so we may write there
+//                    again. It cannot tell us directly -- a stream's fabric connection only points
+//                    downstream -- so the credit rides the opposite direction's sender on this chip, which
+//                    already points that way.
+//   `vc_outbox[v]`   that courier's queue, filled across this chip by the opposite stream's reader.
+//
+// `credit_done` is that reader telling the courier it will queue nothing more, so the courier knows when it
+// may stop.
 struct StreamSemaphores {
     tt::tt_metal::GlobalSemaphore filled;
     tt::tt_metal::GlobalSemaphore freed;
-    tt::tt_metal::GlobalSemaphore fwd_arrived;
     tt::tt_metal::GlobalSemaphore launch_credit;
     // Allocated for both input layouts so the reader's argument list is the same; a row-major input never
     // uses it.
     tt::tt_metal::GlobalSemaphore untilized;
+    tt::tt_metal::GlobalSemaphore credit_done;
+    std::vector<tt::tt_metal::GlobalSemaphore> vc_arrived;
+    std::vector<tt::tt_metal::GlobalSemaphore> vc_freed;
+    std::vector<tt::tt_metal::GlobalSemaphore> vc_outbox;
 
     uint32_t lowest_address() const {
-        return static_cast<uint32_t>(std::min(
-            {filled.address(), freed.address(), fwd_arrived.address(), launch_credit.address(), untilized.address()}));
+        uint32_t lowest = static_cast<uint32_t>(std::min(
+            {filled.address(), freed.address(), launch_credit.address(), untilized.address(), credit_done.address()}));
+        for (const auto* group : {&vc_arrived, &vc_freed, &vc_outbox}) {
+            for (const auto& sem : *group) {
+                lowest = std::min(lowest, static_cast<uint32_t>(sem.address()));
+            }
+        }
+        return lowest;
     }
 };
 
-StreamSemaphores allocate_stream_semaphores(ttnn::MeshDevice* mesh, const CoreRangeSet& allowed_cores) {
+StreamSemaphores allocate_stream_semaphores(ttnn::MeshDevice* mesh, const CoreRangeSet& allowed_cores, uint32_t vcs) {
     const auto make = [&] {
         return ttnn::global_semaphore::create_global_semaphore(mesh, allowed_cores, 0, tt::tt_metal::BufferType::L1);
     };
-    StreamSemaphores sems{make(), make(), make(), make(), make()};
+    // filled, freed, launch_credit, untilized, credit_done; the three vectors fill in below.
+    StreamSemaphores sems{make(), make(), make(), make(), make(), {}, {}, {}};
+    for (uint32_t v = 0; v < vcs; v++) {
+        sems.vc_arrived.push_back(make());
+        sems.vc_freed.push_back(make());
+        sems.vc_outbox.push_back(make());
+    }
     tt::tt_metal::distributed::Synchronize(*mesh, std::nullopt, {});
     return sems;
 }
@@ -231,10 +262,18 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
 
     validate_descriptor_agreement(extent, args.num_links);
     const auto placement = decide_placement(mesh, args.axis, args.num_links, args.worker_core_range_set);
-    const auto sems = allocate_stream_semaphores(mesh, args.worker_core_range_set);
-    // A page is a token plus its fwd_meta, so one fabric write carries both.
-    const uint32_t fwd_pages = fwd_pages_per_stream(
-        extent, args.num_links, args.seq_len_per_chip, args.num_experts_per_tok, args.experts_per_chip);
+    const uint32_t vcs = num_vcs(extent);
+    TT_FATAL(
+        vcs <= dspf2d::MAX_VCS,
+        "dispatch_fabric2d: a {}-chip ring needs {} forwarding channels but the kernels carry arrays for {}",
+        extent,
+        vcs,
+        dspf2d::MAX_VCS);
+    const auto sems = allocate_stream_semaphores(mesh, args.worker_core_range_set, vcs);
+    // A page is a token plus its fwd_meta, so one fabric write carries both. Every channel is the same
+    // depth, so a stream's section is vcs channels of fwd_vc_pages.
+    const uint32_t vc_pages = args.fwd_vc_pages;
+    const uint32_t fwd_pages = fwd_pages_per_stream(extent, vc_pages);
     const OwnedBuffer fwd = allocate_buffer(
         mesh, fwd_pages * stream_count(args.num_links), token_bytes + dspf2d::FORWARDING_METADATA_SIZE, "forwarding");
     // Only for a TILE input: the untilized tokens, one row-major page each, so the stream cores address a
@@ -276,9 +315,14 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     tt::tt_metal::WorkloadDescriptor workload;
     workload.semaphores.push_back(sems.filled);
     workload.semaphores.push_back(sems.freed);
-    workload.semaphores.push_back(sems.fwd_arrived);
     workload.semaphores.push_back(sems.launch_credit);
     workload.semaphores.push_back(sems.untilized);
+    workload.semaphores.push_back(sems.credit_done);
+    for (const auto* group : {&sems.vc_arrived, &sems.vc_freed, &sems.vc_outbox}) {
+        for (const auto& sem : *group) {
+            workload.semaphores.push_back(sem);
+        }
+    }
     workload.buffers.push_back({fwd.owner, fwd.buffer});
     if (tiled) {
         workload.buffers.push_back({staging.owner, staging.buffer});
@@ -306,16 +350,36 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                 returning.downstream_coord == coord,
                 "dispatch_fabric2d: stream {} on the downstream chip does not send back to this chip",
                 reverse_stream(stream));
+            // Same link, other direction, on THIS chip: its sender points upstream of us, which is where
+            // our reader's credits must go for the chip that wrote our pages to hear about them.
+            const auto& opposite = placement.at(coord).at(reverse_stream(stream));
             const auto& work = work_by_stream.at(stream);
+
+            // Channel topology. A channel IS a forward descriptor's movement class, so these are indexed
+            // the same way the descriptor blocks are and the reader needs no mapping between them.
+            std::vector<uint32_t> vc_next_words;
+            vc_next_words.reserve(vcs);
+            for (uint32_t v = 0; v < vcs; v++) {
+                vc_next_words.push_back(vc_after_hop(v, extent));
+            }
 
             KernelPlan plan;
             plan.stream = stream;
             plan.extent = extent;
             plan.fwd_pages_per_stream = fwd_pages;
+            plan.vc_pages = vc_pages;
             plan.queue_filled_addr = static_cast<uint32_t>(sems.filled.address());
             plan.queue_freed_addr = static_cast<uint32_t>(sems.freed.address());
-            plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
             plan.launch_credit_addr = static_cast<uint32_t>(sems.launch_credit.address());
+            plan.credit_done_addr = static_cast<uint32_t>(sems.credit_done.address());
+            plan.vc_arrived_addr.clear();
+            plan.vc_freed_addr.clear();
+            plan.vc_outbox_addr.clear();
+            for (uint32_t v = 0; v < vcs; v++) {
+                plan.vc_arrived_addr.push_back(static_cast<uint32_t>(sems.vc_arrived[v].address()));
+                plan.vc_freed_addr.push_back(static_cast<uint32_t>(sems.vc_freed[v].address()));
+                plan.vc_outbox_addr.push_back(static_cast<uint32_t>(sems.vc_outbox[v].address()));
+            }
             plan.untilize_sem_addr = static_cast<uint32_t>(sems.untilized.address());
             plan.untilize_tile_rows = untilize_tile_rows;
 
@@ -325,8 +389,8 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                 "sender_dispatch_fabric2d.cpp";
             snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
             snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-            snd.compile_time_args =
-                dspf2d::SenderCtArgs(token_bytes, self, downstream, returning, l1, plan).to_ct_word_arr();
+            snd.compile_time_args = dspf2d::SenderCtArgs(token_bytes, self, downstream, returning, l1, plan)
+                                        .to_ct_word_arr(plan.vc_arrived_addr, plan.vc_freed_addr, plan.vc_outbox_addr);
             snd.config = tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 // NOC_1 routes -Y first, so a worker one core row from its eth core reaches it in a single hop.
@@ -337,6 +401,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
 
             uint32_t own_count = 0;
             std::vector<uint32_t> assignment_words;
+            std::vector<uint32_t> own_vc_words;
             for (const auto& a : work) {
                 if (a.is_forward) {
                     continue;
@@ -346,6 +411,12 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                 assignment_words.push_back(a.dst_pos);
                 assignment_words.push_back(a.split_idx);
                 assignment_words.push_back(a.split_count);
+                // Hops from the downstream chip to this destination, which is what names the channel the
+                // tokens land in over there. Distance 1 is the downstream chip itself: written straight
+                // into its output, so no channel at all.
+                const uint32_t distance = (a.dst_pos + extent - pos) % extent;
+                const uint32_t mirrored = (stream % 2 == 0) ? distance : extent - distance;
+                own_vc_words.push_back(vc_for_own(mirrored, extent));
             }
 
             const auto to_words = [](const std::vector<dspf2d::ChunkDescriptor>& cs) {
@@ -377,8 +448,18 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                                         l1,
                                         plan,
                                         own_count,
-                                        static_cast<uint32_t>(work.size()) - own_count)
-                                        .to_ct_word_arr(chip_ids, assignment_words, in_words, out_words);
+                                        static_cast<uint32_t>(work.size()) - own_count,
+                                        opposite)
+                                        .to_ct_word_arr(
+                                            chip_ids,
+                                            assignment_words,
+                                            in_words,
+                                            out_words,
+                                            plan.vc_arrived_addr,
+                                            plan.vc_freed_addr,
+                                            plan.vc_outbox_addr,
+                                            vc_next_words,
+                                            own_vc_words);
             for (tt::tt_metal::Buffer* buffer : dram) {
                 tt::tt_metal::TensorAccessorArgs(buffer).append_to(rdr.compile_time_args);
             }
