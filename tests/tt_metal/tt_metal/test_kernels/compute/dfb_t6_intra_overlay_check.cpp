@@ -3,27 +3,28 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // INTRA self-loop that samples the mirrored DM-visible overlay tile counters (0-15) so the host can
-// detect the Quasar T6→overlay alias bug. Pack only pushes, unpack only pops, no L1 payload
-// modification. Firmware has already programmed the ClientL capacity and the remapper alias before
-// this kernel runs.
+// detect the Quasar T6→overlay alias bug. The producer thread only pushes, the consumer thread only
+// pops, no L1 payload modification. Firmware has already programmed the ClientL capacity and the
+// remapper alias before this kernel runs. The producer is pack and the consumer unpack by default;
+// the host can move either side (or both) to trisc3, which issues the same pushes / pops.
 //
-// Pack issues every push before unpack is allowed to pop, so the ClientL counter is a deterministic
-// function of the tiles pushed/popped so far and the host can tell a single count from a double
-// count. Steps carry uneven tile counts for the same reason: a doubled event on a series of 1s is
-// indistinguishable from the next step's push.
+// The producer issues every push before the consumer is allowed to pop, so the ClientL counter is a
+// deterministic function of the tiles pushed/popped so far and the host can tell a single count from
+// a double count. Steps carry uneven tile counts for the same reason: a doubled event on a series of
+// 1s is indistinguishable from the next step's push.
 //
 // Two handshakes through uncached L1, one writer per word:
-//   ready       — pack has taken the baseline overlay sample; unpack may start
-//   pushes_done — pack has issued the whole push series; unpack may start popping
+//   ready       — the producer has taken the baseline overlay sample; the consumer may start
+//   pushes_done — the producer has issued the whole push series; the consumer may start popping
 //
 // Scratch layout (uncached L1 words) is defined by host CTAs:
 //   [0]                    scratch_magic
 //   [1]                    ClientL capacity after DataflowBuffer ctor (get_local_num_entries)
-//   [ready_idx]            handshake_ready once pack's baseline sample is in L1
+//   [ready_idx]            handshake_ready once the producer's baseline sample is in L1
 //   [pushes_done_idx]      handshake_pushes_done once every push has been issued
 //   [num_steps_idx]        step count decoded from the step CTAs
-//   [posted_base ..)       pack: ClientL tiles-available after each push
-//   [acked_base ..)        unpack: ClientL space-available after each pop
+//   [posted_base ..)       producer: ClientL tiles-available after each push
+//   [acked_base ..)        consumer: ClientL space-available after each pop
 //   [baseline_base ..)     mirrored DM TC0..N-1 baseline {cap, posted, acked}
 //   [final_base ..)        mirrored DM TC0..N-1 after the INTRA series {cap, posted, acked}
 //   [done_idx]             scratch_done
@@ -110,6 +111,11 @@ void kernel_main() {
     constexpr std::uint32_t baseline_base = get_arg(args::baseline_base);
     constexpr std::uint32_t final_base = get_arg(args::final_base);
     constexpr std::uint32_t done_idx = get_arg(args::done_idx);
+    // Which TRISC the host put on each side: trisc2 pushes and trisc0 pops by default.
+    constexpr bool pack_on_trisc3 = get_arg(args::pack_on_trisc3) != 0;
+    constexpr bool unpack_on_trisc3 = get_arg(args::unpack_on_trisc3) != 0;
+    constexpr bool i_produce = ckernel::TRISC_ID == (pack_on_trisc3 ? 3u : 2u);
+    constexpr bool i_consume = ckernel::TRISC_ID == (unpack_on_trisc3 ? 3u : 0u);
 
     const std::uint32_t step_tiles[max_steps] = {
         get_arg(args::step0), get_arg(args::step1), get_arg(args::step2), get_arg(args::step3)};
@@ -126,79 +132,80 @@ void kernel_main() {
     // together.
     compute_kernel_hw_startup(dfb::out, dfb::out);
 
-#ifdef UCK_CHLKC_PACK
-    // Firmware already programmed ClientL capacity + remapper alias. Snapshot mirrored DM TCs before
-    // any INTRA push so a leaked capacity/credit write would already show up here.
-    *scratch_ptr(scratch_l1_address, 0) = scratch_magic;
-    *scratch_ptr(scratch_l1_address, 1) = dfb.get_local_num_entries();
-    *scratch_ptr(scratch_l1_address, num_steps_idx) = num_steps;
-    sample_mirrored_dm_tc_block(scratch_l1_address, baseline_base, num_overlay_tcs, words_per_tc, settle_reads);
-    *scratch_ptr(scratch_l1_address, ready_idx) = handshake_ready;
-    DPRINT(
-        "PACK baseline: ClientL TC{} capacity={} mirrored_dm_tc0={}/{}/{}\n",
-        client_l_tc,
-        *scratch_ptr(scratch_l1_address, 1),
-        *scratch_ptr(scratch_l1_address, baseline_base + 0),
-        *scratch_ptr(scratch_l1_address, baseline_base + 1),
-        *scratch_ptr(scratch_l1_address, baseline_base + 2));
+    if constexpr (i_produce) {
+        // Firmware already programmed ClientL capacity + remapper alias. Snapshot mirrored DM TCs before
+        // any INTRA push so a leaked capacity/credit write would already show up here.
+        *scratch_ptr(scratch_l1_address, 0) = scratch_magic;
+        *scratch_ptr(scratch_l1_address, 1) = dfb.get_local_num_entries();
+        *scratch_ptr(scratch_l1_address, num_steps_idx) = num_steps;
+        sample_mirrored_dm_tc_block(scratch_l1_address, baseline_base, num_overlay_tcs, words_per_tc, settle_reads);
+        *scratch_ptr(scratch_l1_address, ready_idx) = handshake_ready;
+        DPRINT(
+            "producer baseline: ClientL TC{} capacity={} mirrored_dm_tc0={}/{}/{}\n",
+            client_l_tc,
+            *scratch_ptr(scratch_l1_address, 1),
+            *scratch_ptr(scratch_l1_address, baseline_base + 0),
+            *scratch_ptr(scratch_l1_address, baseline_base + 1),
+            *scratch_ptr(scratch_l1_address, baseline_base + 2));
 
-    // Whole series is issued before unpack pops, so ClientL tiles-available after step s must equal
-    // the tiles pushed through step s. Twice that means the update was counted twice.
-    for (std::uint32_t step = 0; step < num_steps; step++) {
-        const std::uint32_t num_tiles = step_tiles[step];
-        WAYPOINT("PW");
-        dfb.reserve_back(num_tiles);
-        WAYPOINT("PWD");
-        // TEN-4746: pack only pushes here (no PACR since reserve_back), so order push_back after
-        // reserve_back with a no-write dummy pack -- it writes nothing, so the overlay TC sampling below
-        // is unaffected.
-        ckernel::dummy_pack(dfb::out);
-        dfb.push_back(num_tiles);
-        WAYPOINT("PPD");
-        const std::uint32_t posted = settled_posted(client_l_tc, settle_reads);
-        *scratch_ptr(scratch_l1_address, posted_base + step) = posted;
-        DPRINT("PACK step{} push={} TC{} posted={}\n", step, num_tiles, client_l_tc, posted);
+        // Whole series is issued before the consumer pops, so ClientL tiles-available after step s must
+        // equal the tiles pushed through step s. Twice that means the update was counted twice.
+        for (std::uint32_t step = 0; step < num_steps; step++) {
+            const std::uint32_t num_tiles = step_tiles[step];
+            WAYPOINT("PW");
+            dfb.reserve_back(num_tiles);
+            WAYPOINT("PWD");
+            // TEN-4746: pack only pushes here (no PACR since reserve_back), so order push_back after
+            // reserve_back with a no-write dummy pack -- it writes nothing, so the overlay TC sampling
+            // below is unaffected. trisc3 has no pack op; its reserve_back already blocked the RISC.
+            ckernel::dummy_pack(dfb::out);
+            dfb.push_back(num_tiles);
+            WAYPOINT("PPD");
+            const std::uint32_t posted = settled_posted(client_l_tc, settle_reads);
+            *scratch_ptr(scratch_l1_address, posted_base + step) = posted;
+            DPRINT("producer step{} push={} TC{} posted={}\n", step, num_tiles, client_l_tc, posted);
+        }
+        *scratch_ptr(scratch_l1_address, pushes_done_idx) = handshake_pushes_done;
     }
-    *scratch_ptr(scratch_l1_address, pushes_done_idx) = handshake_pushes_done;
-#endif
 
-#ifdef UCK_CHLKC_UNPACK
-    WAYPOINT("URW");
-    while (*scratch_ptr(scratch_l1_address, ready_idx) != handshake_ready) {
-    }
-    WAYPOINT("URD");
+    if constexpr (i_consume) {
+        WAYPOINT("URW");
+        while (*scratch_ptr(scratch_l1_address, ready_idx) != handshake_ready) {
+        }
+        WAYPOINT("URD");
 
-    // Wait for the full push series so the pop arithmetic is a deterministic function of tiles popped.
-    WAYPOINT("UPW");
-    while (*scratch_ptr(scratch_l1_address, pushes_done_idx) != handshake_pushes_done) {
-    }
-    WAYPOINT("UPR");
+        // Wait for the full push series so the pop arithmetic is a deterministic function of tiles popped.
+        WAYPOINT("UPW");
+        while (*scratch_ptr(scratch_l1_address, pushes_done_idx) != handshake_pushes_done) {
+        }
+        WAYPOINT("UPR");
 
-    for (std::uint32_t step = 0; step < num_steps; step++) {
-        const std::uint32_t num_tiles = step_tiles[step];
-        WAYPOINT("WT");
-        dfb.wait_front(num_tiles);
-        WAYPOINT("WTD");
-        // TEN-4746: unpack only pops here (no UNPACR since wait_front), so order pop_front after
-        // wait_front with a dummy unpack -- it reads nothing from L1, so the TC sampling is unaffected.
-        ckernel::dummy_unpack(dfb::out);
-        dfb.pop_front(num_tiles);
-        WAYPOINT("UPD");
-        const std::uint32_t acked = settled_acked(client_l_tc, settle_reads);
-        *scratch_ptr(scratch_l1_address, acked_base + step) = acked;
-        DPRINT("UNPACK step{} pop={} TC{} acked={}\n", step, num_tiles, client_l_tc, acked);
+        for (std::uint32_t step = 0; step < num_steps; step++) {
+            const std::uint32_t num_tiles = step_tiles[step];
+            WAYPOINT("WT");
+            dfb.wait_front(num_tiles);
+            WAYPOINT("WTD");
+            // TEN-4746: unpack only pops here (no UNPACR since wait_front), so order pop_front after
+            // wait_front with a dummy unpack -- it reads nothing from L1, so the TC sampling is
+            // unaffected. trisc3 has no unpack op; its wait_front already blocked the RISC.
+            ckernel::dummy_unpack(dfb::out);
+            dfb.pop_front(num_tiles);
+            WAYPOINT("UPD");
+            const std::uint32_t acked = settled_acked(client_l_tc, settle_reads);
+            *scratch_ptr(scratch_l1_address, acked_base + step) = acked;
+            DPRINT("consumer step{} pop={} TC{} acked={}\n", step, num_tiles, client_l_tc, acked);
+        }
     }
-#endif
 
     dfb.finish();
 
-#ifdef UCK_CHLKC_PACK
-    sample_mirrored_dm_tc_block(scratch_l1_address, final_base, num_overlay_tcs, words_per_tc, settle_reads);
-    *scratch_ptr(scratch_l1_address, done_idx) = scratch_done;
-    DPRINT(
-        "PACK final: mirrored_dm_tc0={}/{}/{}\n",
-        *scratch_ptr(scratch_l1_address, final_base + 0),
-        *scratch_ptr(scratch_l1_address, final_base + 1),
-        *scratch_ptr(scratch_l1_address, final_base + 2));
-#endif
+    if constexpr (i_produce) {
+        sample_mirrored_dm_tc_block(scratch_l1_address, final_base, num_overlay_tcs, words_per_tc, settle_reads);
+        *scratch_ptr(scratch_l1_address, done_idx) = scratch_done;
+        DPRINT(
+            "producer final: mirrored_dm_tc0={}/{}/{}\n",
+            *scratch_ptr(scratch_l1_address, final_base + 0),
+            *scratch_ptr(scratch_l1_address, final_base + 1),
+            *scratch_ptr(scratch_l1_address, final_base + 2));
+    }
 }

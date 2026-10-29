@@ -141,8 +141,10 @@ ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) {
 ALWI uint32_t get_tile_l1_byte_address(uint32_t operand_id, uint32_t tile_index) {
 #ifdef ARCH_QUASAR
     LocalDFBInterface& local_dfb = get_local_dfb_interface(operand_id);
+    // A DFB trisc3 consumes has its front on trisc3: use DataflowBuffer::get_tile_address / read_tile_value.
+    ASSERT((local_dfb.tensix_trisc_mask & DFB_TRISC_ROLE_CONSUMER_T3) == 0);
     const auto& slot = local_dfb.tc_slots[local_dfb.tc_idx];
-    uint32_t base_address = slot.base_addr + dfb_slot_cursor_offset_units(local_dfb, slot, slot.cursor_entry_idx);
+    uint32_t base_address = slot.base_addr + dfb_slot_cursor_offset_units(local_dfb, slot, slot.rd_entry_idx);
     // Per-tile spacing is stride_size, not entry_size (matches pop_front/push_back).
     uint32_t offset_address = static_cast<uint32_t>(local_dfb.stride_size) * tile_index;
 #else
