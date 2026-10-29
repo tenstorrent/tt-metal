@@ -1293,10 +1293,14 @@ def test_unknown_native_stays_permissive(monkeypatch):
 # ===== Serving records (batched fused traces): the pure parts of the SpeculativeDecoder serving API.
 # Shape table -------------------------------------------------------------------------------------
 def test_default_k_by_rows_table_parses_to_the_catalog_entries():
-    assert parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT) == ((5, 5), (8, 3), (16, 1))
+    # The default stops at 5 live rows: the (8,3) and (16,1) records lost every measured batch point (the 12B and
+    # 31B Galaxy at 8 rows per engine: -3 % and -13 % against plain, random prompts), so above the table the step is
+    # the plain decode (K=0) and the batched records stay a catalog opt-in.
+    assert parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT) == ((5, 5),)
     assert parse_k_by_rows(" 5:5 , 8:3,16:1, ") == ((5, 5), (8, 3), (16, 1))
-    # the default capture shapes are one (1, k_max) record plus one per entry
-    table = parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT)
+    # the capture shapes are one (1, k_max) record plus one per entry
+    assert spec_capture_shapes(parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT), 5) == [(1, 5), (5, 5)]
+    table = parse_k_by_rows(" 5:5 , 8:3,16:1, ")
     assert spec_capture_shapes(table, 5) == [(1, 5), (5, 5), (8, 3), (16, 1)]
     # a table that already names (1, k_max) does not duplicate it
     assert spec_capture_shapes(((1, 5), (8, 3)), 5) == [(1, 5), (8, 3)]
@@ -1695,6 +1699,12 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     spec._srv_slots, spec._srv_n_slots = serving_kv_group_slots(layer_types)
     spec._srv_flat_type = "full_attention"
     spec._srv_per_layer, spec._srv_uploaded, spec._srv_last, spec._srv_seeded = None, {}, None, {}
+    spec._srv_phase_ms, spec._srv_replay_blocking = {}, False  # the replay's sub-phases, the attribution knob off
+    spec._srv_seed_traces, spec._srv_traced_seed = {}, True  # serving_capture adds one seed trace per shape
+    spec._srv_sharded_draft_argmax, spec._srv_draft_consts = (
+        False,
+        {},
+    )  # the gathered drafter argmax (the sharded one is device-tested)
     spec._srv_check_steps, spec._srv_checked, spec._srv_check_last = 1, {}, []  # GEMMA4_SPEC_VERIFY_CHECK=1
     spec._srv_measuring = False
     spec._srv_pool_v = spec._srv_pool_s = spec._srv_logits = spec._srv_backbone = None
@@ -1708,7 +1718,7 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     # argmax (their outputs are op outputs like any other), so the assembly of the record's outputs is the real one
     spec._shared_kv = object()
     spec.assistant = SimpleNamespace(
-        step=lambda tok, h, kv, d_ptl, d_pu, d_pi: (
+        step=lambda tok, h, kv, d_ptl, d_pu, d_pi, gather_logits=True: (
             op(torch.zeros(1, 1, tok.host.shape[-1], vocab), fake.bfloat16),
             op(h.host.clone(), fake.bfloat16),
         )
@@ -1750,7 +1760,9 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     spec.serving_capture()
     assert spec._srv_captured and allocated == [] and all(gone(ref) for ref in ops)
     assert {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()} == outputs
-    assert [rec["id"] for rec in spec._srv_records.values()] == traces and len(traces) == 20
+    # the records take the first 20 trace ids, then one seed trace per shape (577308f7637)
+    assert [rec["id"] for rec in spec._srv_records.values()] == traces[:20] and len(traces) == 20 + len(shapes)
+    assert list(spec._srv_seed_traces) == list(shapes) and list(spec._srv_seed_traces.values()) == traces[20:]
     spec._srv_frozen = True
     ops.clear(), h2d.clear(), copies.clear(), forwards.clear()
     # every record and rung: a first-time refresh, row set and position, a reseed, a seeded replay, then a
@@ -1776,6 +1788,7 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
                 for i, r in enumerate(rows):
                     table[i] = tables[0][r]
                 spec.serving_reseed(shape, rows, [1 + i for i in range(live)], positions, table)
+                used.append(spec._srv_seed_traces[shape])  # the reseed replays the shape's seed trace
                 result = spec.serving_step(shape, rows, [1 + i for i in range(live)], positions, table, [None] * live)
                 assert (result.width, result.live) == (w, live) and result.logits_to_host().shape == (
                     live,
@@ -2286,7 +2299,7 @@ def _row(cond, alpha=0.2):
 def _policy_policy_config_defaults_are_on_with_the_documented_knobs(expect_error=None):
     assert SpecPolicyConfig.from_env({}) == SpecPolicyConfig(
         adaptive=True,
-        min_gain=1.10,
+        min_gain=1.25,
         exit_gain=0.95,
         entry_horizon=64,
         retry_steps=8,
@@ -2323,7 +2336,7 @@ def _policy_policy_config_reads_every_knob_from_the_env(expect_error=None):
 _BAD_POLICY_KNOBS = [
     (SPEC_ADAPTIVE_ENV, "maybe", "must be 1 or 0"),
     (SPEC_MIN_GAIN_ENV, "0.9", "must be at least 1.0"),
-    (SPEC_EXIT_GAIN_ENV, "1.5", r"must be in \[0.0, 1.1\]"),
+    (SPEC_EXIT_GAIN_ENV, "1.5", r"must be in \[0.0, 1.25\]"),
     (SPEC_RETRY_STEPS_ENV, "-1", "must be at least 0"),
     (SPEC_PROBE_STEPS_ENV, "2.5", "must be an integer"),
     (SPEC_EWMA_ENV, "1.5", r"must be in \[0.0, 1.0\]"),
@@ -2517,21 +2530,35 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     assert calib.step_ms(mode, 136.0) == pytest.approx(136.0 * 2.25), "the position stays in the table"
     assert calib.tokens_per_row(mode) == 3.0 and calib.modes[mode].tokens == 9
     assert calib.dirty == {"prefill": [1, 90.0]} and calib.total == [3, 270.0, 9]
-    # the measured tokens per row are the window's MEAN (a throughput: a row taking 1,1,1,5,6 tokens on five
-    # verifies commits 2.8 per step, where the median 1 read the record as a loss and the policy left a 1.18x
-    # record at 256K), pooled over the records of one draft length at the rung: the drafter's acceptance does
-    # not depend on the record's rows, so an unreplayed sibling reads the calibrated one's instead of the
-    # model (whose deep positions sit at the prior) and cannot outrank it on the model alone
+    # the measured tokens per row are a recency-weighted throughput (an EWMA at 0.25 over the counted samples in
+    # the order served; never the median: a row taking 1,1,1,5,6 tokens on five verifies commits tokens where the
+    # median 1 read the record as a loss), pooled over the records of one draft length at the rung: the drafter's
+    # acceptance does not depend on the record's rows, so an unreplayed sibling reads the calibrated one's
+    # instead of the model (whose deep positions sit at the prior) and cannot outrank it on the model alone.
+    # Recency: a 32-sample mean carried the random-prompt regime into the prose point that followed and kept it
+    # plain (the 12B Galaxy, 2026-10-29); the EWMA follows a new regime in a handful of verifies.
     skew = Calibration(5)
     for tokens in (1, 1, 1, 5, 6):
         skew.note_step(("step", (1, 5), 263168), 150.0, tokens, True, 150.0, 1)
-    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(2.8)
-    assert skew.tokens_per_row(("step", (5, 5), 263168)) == pytest.approx(2.8), "same draft length, same rung"
+    ewma = 0.0
+    for first, tokens in enumerate((1, 1, 1, 5, 6)):
+        ewma = tokens if first == 0 else ewma + 0.25 * (tokens - ewma)
+    assert ewma == pytest.approx(3.0)
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(3.0)
+    assert skew.tokens_per_row(("step", (5, 5), 263168)) == pytest.approx(3.0), "same draft length, same rung"
     assert skew.tokens_per_row(("step", (8, 3), 263168)) is None, "another draft length is its own"
     assert skew.tokens_per_row(("step", (1, 5), 2048)) is None, "another rung is its own"
     assert not skew.calibrated(("step", (5, 5), 263168)), "its step cost still reads the table"
     skew.note_step(("step", (5, 5), 263168), 200.0, 10, True, 200.0, 5)  # 2 per row joins the pool
-    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(16.0 / 6)
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(3.0 + 0.25 * (2.0 - 3.0))
+    regime = Calibration(2)  # four random-prompt verifies at 1.5 a row, then prose at 3.3: the estimate follows
+    for tokens in (1.5, 1.5, 1.5, 1.5):
+        regime.note_step(("step", (1, 5), 2048), 50.0, tokens, True, 45.0, 1)
+    for _ in range(4):
+        regime.note_step(("step", (1, 5), 2048), 50.0, 3.3, True, 45.0, 1)
+    assert regime.tokens_per_row(("step", (1, 5), 2048)) == pytest.approx(
+        2.73, abs=0.01
+    ), "four prose verifies lift a random-regime pool from 1.5 to 2.7 (a 32-sample mean would sit at 2.4)"
     skew.note_step(("plain", 1), 80.0, 1, True, 80.0, 1)
     assert skew.tokens_per_row(("plain", 1)) is None, "the plain step pools nothing and needs its own samples"
     # an outlier: a clean sample above 3x the running median once four samples exist; reported, never averaged in
@@ -2642,7 +2669,7 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     # tokens makes 1.74 tokens/row = 0.99x < min_gain (declined); three new rows make 2.39 = 1.36x (trial), and
     # the (8,3)'s 230 ms reseed must pay over the joining rows' horizon (not over 10 steps: 12.8 ms x 10)
     batch = [_row([0.3] * 5) for _ in range(8)]
-    eight = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
+    eight = SpecPolicy(SpecPolicyConfig(min_gain=1.10, retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
     only83 = [c for c in _cands(_COSTS, n=8) if c.shape == (8, 3)]
     assert rank_records(only83, batch, _PLAIN)[0].gain == pytest.approx(1.417 * 20 / 35, abs=1e-3)
     hyped = rank_records(only83, batch, _PLAIN, optimistic=(0,))
@@ -2658,7 +2685,7 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert eight.decide(both, batch, _PLAIN, 3, fresh=(0, 1, 2)) is None
     assert eight.decide(both, batch, _PLAIN, 3, fresh=(0, 1, 2, 3, 4)).shape == (16, 1)
     reseeding8 = [RecordCandidate((8, 3), 2048, 35.0, 230.0), RecordCandidate((16, 1), 2048, 30.0, 300.0)]
-    eight = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
+    eight = SpecPolicy(SpecPolicyConfig(min_gain=1.10, retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
     assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(0, 1, 2)).reason == "trial"
     assert eight.decide(reseeding8, batch, _PLAIN, 3, remaining=10, fresh=(0, 1, 2)) is None
     assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=True).reason == "trial", "a batch all new: the floor"
@@ -2674,12 +2701,14 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert eight.decide(good, batch, _PLAIN, 3, fresh=wave).reason == "enter"
     assert (
         eight.decide(measured8, batch, _PLAIN, 3, fresh=True) is None and eight.last_reason == "declined"
-    ), "all new: a measured record below break-even (0.83x) gets no trial either"
-    even = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.75)]  # measured at break-even: 1.00x
-    assert eight.decide(even, batch, _PLAIN, 3, fresh=True).reason == "trial"
+    ), "all new: a measured record below the entry bar (0.83x) gets no trial either"
+    even = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.9)]  # 1.09x: below the 1.10 bar
+    assert eight.decide(even, batch, _PLAIN, 3, fresh=True) is None and eight.last_reason == "declined"
     assert (
-        SpecPolicy(SpecPolicyConfig(trial_gain=1.2, retry_steps=0), 5).decide(even, batch, _PLAIN, 3, fresh=True)
-        is None
+        SpecPolicy(SpecPolicyConfig(min_gain=1.05, retry_steps=0, entry_horizon=128), 5)
+        .decide(even, batch, _PLAIN, 3)
+        .reason
+        == "enter"
     )
     assert rank_records(even, batch, _PLAIN)[0].measured and not rank_records(reseeding8, batch, _PLAIN)[0].measured
     with pytest.raises(ValueError, match="fresh rows .* outside the 8 rows"):  # allow-pytest.raises (pure)
@@ -2709,7 +2738,7 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
 
 
 def _policy_below_the_cap_the_policy_probes_the_next_larger_draft_length_every_n_steps(expect_error=None):
-    policy = SpecPolicy(SpecPolicyConfig(probe_steps=3), 5)
+    policy = SpecPolicy(SpecPolicyConfig(min_gain=1.10, probe_steps=3), 5)
     rows = [_row([0.7] * 5) for _ in range(5)]
     out = [(c.shape, c.reason) for c in (policy.decide(_cands(_COSTS, n=5), rows, _PLAIN, 5) for _ in range(7))]
     assert out == [
@@ -2731,11 +2760,11 @@ def _policy_below_the_cap_the_policy_probes_the_next_larger_draft_length_every_n
         policy.decide(_cands(_COSTS, n=5), [_row([0.1] * 5) for _ in range(5)], _PLAIN, 5)
     assert policy.below_cap == 0 and policy.last_k == 0
     # entering (a reseed this step) is not a step below the cap: no probe starts from it
-    entering = SpecPolicy(SpecPolicyConfig(probe_steps=1), 5)
+    entering = SpecPolicy(SpecPolicyConfig(min_gain=1.10, probe_steps=1), 5)
     choice = entering.decide([RecordCandidate((8, 3), 2048, 35.0, 1.0)], rows, _PLAIN, 5)
     assert choice.reason == "enter" and entering.below_cap == 0
     # without a larger record the probe step keeps the choice
-    only = SpecPolicy(SpecPolicyConfig(probe_steps=1), 5)
+    only = SpecPolicy(SpecPolicyConfig(min_gain=1.10, probe_steps=1), 5)
     assert only.decide([RecordCandidate((16, 1), 2048, 30.0)], rows, _PLAIN, 5).reason == "gain"
 
 

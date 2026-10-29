@@ -301,7 +301,7 @@ def test_spec_plan_admits_concurrency_and_declares_narrow_decode(adapter, drafte
     assert plan.drafter_state == "shared_with_target"
     assert plan.drafter_target_cache_requires == ("named_layer_caches", "absolute_positions")
     assert plan.supports_narrow_decode is True
-    assert plan.k_by_rows == ((5, 5), (8, 3), (16, 1), (32, 1))
+    assert plan.k_by_rows == ((5, 5), (32, 1))  # the default table plus the plan's admission tail
     assert plan.extra_bytes_per_seq == 5376 * 2 + 16 and plan.extra_bytes_per_token == 0
     # -- the MTP rail: spec plan reads the table and clamps to the requested k
     monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", assistant_dir)
@@ -3055,23 +3055,28 @@ def test_eager_warmup_prepares_and_traced_warmup_captures_on_the_same_decoder(
         "time_plain",
     ]
     assert mtp.events[0] == ("base_warmup", False) and mtp.events[2] == ("base_warmup", True)
-    assert mtp.events[1] == ("prepare", list(mh.DEFAULT_SHAPES), 16)
+    assert mtp.events[1] == ("prepare", [(1, 5), (5, 5)], 5)  # the default table: K=5 up to 5 live rows
     assistant = dict(built[0][1])
-    assert built[0][0] == "assistant" and assistant["max_local_batch_size"] == 16
+    assert built[0][0] == "assistant" and assistant["max_local_batch_size"] == 5  # the table's last max_rows
     assert assistant["assistant_path"] == assistant_dir and assistant["max_seq_len"] == 1024 + 64
     decoder = dict(built[1][1])
     assert built[1][0] == "decoder" and decoder["draft_len"] == 5
-    assert tuple(decoder["page_table_torch"].shape) == (16, 8) and decoder["page_table_torch"].eq(0).all()
-    assert mtp._mtp_captured and mtp._mtp_max_rows == 16 and mtp._mtp_shapes == mh.DEFAULT_SHAPES
+    assert tuple(decoder["page_table_torch"].shape) == (5, 8) and decoder["page_table_torch"].eq(0).all()
+    assert mtp._mtp_captured and mtp._mtp_max_rows == 5 and mtp._mtp_shapes == ((1, 5), (5, 5))
     assert mtp._mtp_decoder.widths[(1, 5)] == adapter.mtp_pv_width_ladder(1024, 5)
-    assert mtp._mtp_decoder.widths[(16, 1)] == adapter.mtp_pv_width_ladder(1024, 1)
+    assert mtp._mtp_decoder.widths[(5, 5)] == adapter.mtp_pv_width_ladder(1024, 5)
     # -- the MTP rail: warmup caps the records at the engine batch and the row cap
     mtp = mh.build_mtp_model(
         adapter,
         monkeypatch,
         warm=False,
         max_batch_size=6,
-        env={"GEMMA4_ASSISTANT_MODEL": assistant_dir, "GEMMA4_SPEC_MAX_ROWS": "8", "GEMMA4_SPEC_MAX_ISL": "512"},
+        env={
+            "GEMMA4_ASSISTANT_MODEL": assistant_dir,
+            "GEMMA4_SPEC_K_BY_ROWS": "5:5,8:3,16:1",  # a table past the engine batch: capped at (6, 3)
+            "GEMMA4_SPEC_MAX_ROWS": "8",
+            "GEMMA4_SPEC_MAX_ISL": "512",
+        },
     )
     mh.stub_drafter_modules(monkeypatch, mtp.events)
     mh._warmup(mtp, False)
@@ -3399,6 +3404,7 @@ def _costed(adapter, monkeypatch):
         "GEMMA4_SPEC_RETRY_OVERHEAD": "0.6",
         "GEMMA4_SPEC_PROBE_STEPS": "0",
         "GEMMA4_SPEC_CALIB_MIN": "1000",  # the pinned sequences read the scripted table
+        "GEMMA4_SPEC_MIN_GAIN": "1.10",  # the band mechanics below are written at the 1.10 bar (the default is 1.25)
     }
     return _with_costs(build_model(adapter, monkeypatch, env=env))
 
@@ -3504,8 +3510,8 @@ def _dflash_after_n_plain_steps_the_next_request_bootstraps_and_its_first_propos
     lines = [m for m in messages if m.startswith("Gemma4DFlash adaptive K:")]
     assert lines[0] == (
         "Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> record (1, 5) S_k=1024 (gain; was none); EWMA accepted "
-        "prior, per-position 0.35/0.35/0.35/0.35/0.35, expected 1.54 tokens/row at 46.9 ms (1.38x plain 34.0), "
-        "gain 1.11x"
+        "prior, per-position 0.35/0.35/0.35/0.35/0.35, expected 1.54 tokens/row at 46.9 ms (1.38x plain 34.0, "
+        "pool none), gain 1.11x"
     )
     assert lines[1].startswith(
         "Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> plain step (exit; was K=5); EWMA accepted 0."
@@ -3711,7 +3717,7 @@ def _mtp_a_new_request_under_a_pessimistic_prior_gets_one_trial_whose_verify_cou
     steps = {(1, 5): 34.0, (5, 5): 40.0, (8, 3): 45.0, (16, 1): 50.0}
     outcomes = {}
     for name, rounds in (("accepted", [5, 5]), ("rejected", [0, 0, 0])):
-        model = _mtp_adaptive(adapter, monkeypatch)
+        model = _mtp_adaptive(adapter, monkeypatch, env={"GEMMA4_SPEC_MIN_GAIN": "1.10"})  # the 1.22x entry band
         mh.install_decoder(model, step_ms=steps, plain_ms=mh.PLAIN_MS)
         model._spec_costs.update({("reseed", shape): CostLine.flat(ms) for shape, ms in reseeds.items()})
         messages = []
@@ -3793,6 +3799,12 @@ def _mtp_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_
         "reseed": 2,
         "replay": 18,
         "host": 23,
+        # the runner's call boundaries (8b3f194aca3): a gap per proposal-to-step and step-to-proposal, by the step's kind
+        "gap_pv_v": 18,
+        "gap_vp_v": 18,
+        "gap_pv_p": 4,
+        "gap_vp_p": 5,
+        "verify": 18,
     }
     assert calib.prefills == 1 and calib.window_prefills == 1
     assert calib.total[0] == 22 and calib.total[2] == 6 + 16 + 5, "every closed interval, with its tokens"
@@ -3849,7 +3861,7 @@ def _mtp_a_batch_may_replay_a_smaller_record_than_its_rows_select(
     assert mtp._mtp_sessions[5].retained is None
     line = [m for m in messages if "for 5/6 rows" in m]
     assert len(line) == 1 and "-> record (8, 3) S_k=1024 for 5/6 rows (gain; was K=5)" in line[0]
-    assert "at 55.0 ms (2.75x plain 20.0), gain 1.27x" in line[0]
+    assert "at 55.0 ms (2.75x plain 20.0, pool " in line[0] and "), gain 1.27x" in line[0]
 
 
 def _mtp_the_reseed_cost_of_entering_speculation_is_part_of_the_candidates_cost(
@@ -3926,7 +3938,10 @@ def _mtp_a_bad_policy_knob_is_refused_when_the_adapter_is_built(
 def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain(
     adapter, monkeypatch, assistant_dir=None, expect_error=None
 ):
-    adaptive = _mtp_adaptive(adapter, monkeypatch)
+    # the switch ladder of the batched records ((8,3) then (16,1) on the retry) at the 1.10 bar it documents
+    adaptive = _mtp_adaptive(
+        adapter, monkeypatch, env={"GEMMA4_SPEC_K_BY_ROWS": "5:5,8:3,16:1", "GEMMA4_SPEC_MIN_GAIN": "1.10"}
+    )
     messages = []
     monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
     monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
@@ -3934,7 +3949,7 @@ def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
     lines = [m for m in messages if m.startswith("Gemma4MTP adaptive K:")]
     assert lines[0] == (
         "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> record (1, 5) S_k=1024 (gain; was none); EWMA accepted prior, "
-        "per-position 1.00/1.00/1.00/1.00/1.00, expected 6.00 tokens/row at 50.0 ms (2.50x plain 20.0), gain 2.40x"
+        "per-position 1.00/1.00/1.00/1.00/1.00, expected 6.00 tokens/row at 50.0 ms (2.50x plain 20.0, pool none), gain 2.40x"
     )
     assert [re.search(r"-> (record \(\d+, \d+\) S_k=\d+|plain step)", line).group(1) for line in lines] == [
         "record (1, 5) S_k=1024",
@@ -3943,7 +3958,11 @@ def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
         "record (16, 1) S_k=1024",
         "plain step",
     ]
-    assert "(retry; was K=0)" in lines[3] and "at 30.0 ms (1.50x plain 20.0), gain 0.79x" in lines[3]
+    assert (
+        "(retry; was K=0)" in lines[3]
+        and "at 30.0 ms (1.50x plain 20.0, pool " in lines[3]
+        and "), gain 0.79x" in lines[3]
+    )
     assert lines[2] == (
         "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> plain step (exit; was K=3); EWMA accepted 0.93, "
         "per-position 0.19/1.00/1.00/1.00/1.00, plain 20.0 ms"
@@ -3960,12 +3979,28 @@ def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
         r"\(1,5\)@1024: 3 steps, 18 tokens, 2 clean, \d+\.\d ms/step, 6\.00 tokens/step, \d+\.\d ms/token, "
         r"total \d+\.\d ms/step \d+\.\d ms/token, ratio \d+\.\d\dx \| reseeds 1 at \d+\.\d ms \| "
         r"dirty 1 steps, \d+ ms: reseed 1/\d+ \| total 3 steps, "
-        r"\d+ ms, 18 tokens, \d+\.\d ms/token \| phases ms/call: tables \d+\.\d, refresh \d+\.\d, "
-        r"reseed \d+\.\d, replay \d+\.\d, host \d+\.\d \| prefills 1 \| calibrated: none$",
+        r"\d+ ms, 18 tokens, \d+\.\d ms/token \| phases ms/call: (?:[a-z_]+ \d+\.\d(?:, )?)+ \| prefills 1 \| "
+        r"calibrated: none$",
         lines[0],
     )
+    phases = lines[0].split("phases ms/call: ")[1].split(" | prefills")[0]
+    # the first proposal follows the prefill's (plain) step; then the proposal's own phases and the runner's
+    # boundaries around the verify step
+    assert {name for name, _ms in (p.split(" ") for p in phases.split(", "))} == {
+        "gap_vp_p",
+        "tables",
+        "refresh",
+        "reseed",
+        "replay",
+        "host",
+        "gap_pv_v",
+        "verify",
+        "gap_vp_v",
+    }, phases
     assert lines[1].startswith("Gemma4MTP adaptive stats: window 4 steps | (1,5)@1024: 4 steps, 24 tokens, 4 clean")
-    assert "| reseeds 0 | total 4 steps, " in lines[1] and "| phases ms/call: tables" in lines[1]
+    assert "| reseeds 0 | total 4 steps, " in lines[1]
+    # the window opens on the previous verify's boundary gap, so its phases list does not start with "tables"
+    assert "tables" in lines[1].split("| phases ms/call: ")[1].split(" | prefills")[0]
     assert "| prefills 0 | calibrated: none" in lines[1] and "dirty" not in lines[1]
 
 

@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.ccl import ccl_allgather
 
 # Device argmax tile rule: the multicore argmax is exact for one 32-row tile,
 # so a serving shape packs ``rows * (drafts + 1) <= 32`` verify rows.
@@ -50,7 +51,7 @@ SPEC_ROW_TILE = 32
 # rows 32..63 the last reseed's target hidden (serving_seed_index).
 SPEC_POOL_ROWS = 2 * SPEC_ROW_TILE
 SPEC_K_BY_ROWS_ENV = "GEMMA4_SPEC_K_BY_ROWS"
-SPEC_K_BY_ROWS_DEFAULT = "5:5,8:3,16:1"
+SPEC_K_BY_ROWS_DEFAULT = "5:5"  # K=5 up to 5 live rows; above the table the step is the plain decode (K=0)
 # Additive mask value: -1e9, not -inf (flash kernels NaN on -inf).
 SPEC_MASK_NEG = -1e9
 # The in-trace mask builder works in key chunks of this width: its fp32
@@ -797,10 +798,24 @@ class SpeculativeDecoder:
         self._srv_per_layer = None  # adapter-installed per-layer host page tables
         self._srv_pool_v = None  # [1, 1, 32, backbone] last verify hidden
         self._srv_pool_s = None  # [1, 1, 32, backbone] last reseed hidden
+        # The seed forward as a trace per shape, captured with the records (serving_capture): a reseed replays it
+        # instead of dispatching the eager verify forward (108-186 ms on the 12B against a ~20 ms traced step).
+        # GEMMA4_SPEC_TRACED_SEED=0 keeps every reseed eager.
+        self._srv_seed_traces = {}  # shape -> trace id
+        self._srv_traced_seed = os.environ.get("GEMMA4_SPEC_TRACED_SEED", "1") == "1"
+        # The drafter's argmax on its TP-sharded logits (no vocab all-gather; the per-shard multicore argmax over
+        # vocab / tp columns is ~0.05 ms against ~1 ms over the gathered vocab) with the shards' (max, index)
+        # candidates exchanged over the TP axis. GEMMA4_SPEC_SHARDED_DRAFT_ARGMAX=0 keeps the gathered argmax.
+        self._srv_sharded_draft_argmax = os.environ.get("GEMMA4_SPEC_SHARDED_DRAFT_ARGMAX", "1") == "1"
+        self._srv_draft_consts = {}  # (gathered width, vocab slice) -> the candidate mask / column iota / slice offsets
         self._srv_logits = None  # [1, 1, 32, V_padded] the last replay's verify logits (shared by every record)
         self._srv_iota = {}  # key-chunk length -> [1, 1, 1, n] fp32 iota for the in-trace masks
         self._srv_uploaded = {}  # last uploaded small inputs, by key
         self._srv_last = None  # {"shape", "rows", "K"} of the last replay
+        self._srv_phase_ms = {}  # the last serving_step's wall by sub-phase (serving_step_phases)
+        # GEMMA4_SPEC_REPLAY_BLOCKING=1: block on the replay before its readback, so ``replay_exec`` is the record's
+        # device time and ``replay_read`` the readback alone (attribution runs); off, the readback absorbs the wait.
+        self._srv_replay_blocking = os.environ.get("GEMMA4_SPEC_REPLAY_BLOCKING", "0") == "1"
         self._srv_frozen = (
             False  # True once serving_prepare ran: the device set is complete, nothing allocates after it
         )
@@ -2539,6 +2554,8 @@ class SpeculativeDecoder:
         self._srv_shape_bufs = {}
         self._srv_pool_v = None
         self._srv_pool_s = None
+        self._srv_seed_traces = {}
+        self._srv_draft_consts = {}
         self._srv_logits = None
         self._srv_iota = {}
         self._srv_backbone = None
@@ -2549,6 +2566,7 @@ class SpeculativeDecoder:
         self._srv_slots, self._srv_n_slots = serving_kv_group_slots(self._srv_layer_types())
         self._srv_uploaded = {}
         self._srv_last = None
+        self._srv_phase_ms = {}
         self._srv_seeded = {}
         self._srv_captured = False
         self._srv_frozen = False
@@ -2633,6 +2651,27 @@ class SpeculativeDecoder:
                 f"+{now - used:.1f} MB trace, {now:.1f} MB in use"
             )
             used = now
+        if self._srv_traced_seed:
+            for shape in self._srv_shape_bufs:
+                t0 = time.perf_counter()
+                try:
+                    tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+                    self._srv_seed_body(shape)
+                    ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+                except RuntimeError as exc:
+                    region_text = f"{region:.0f} MB" if region is not None else "not readable"
+                    raise RuntimeError(
+                        f"serving_capture failed on the seed trace of shape={shape} after the {len(captured)} "
+                        f"records; trace region {used:.1f} MB in use of {region_text}; GEMMA4_SPEC_TRACED_SEED=0 "
+                        f"keeps the reseeds eager. Device error: {exc}"
+                    ) from exc
+                self._srv_seed_traces[shape] = tid
+                now = self._srv_trace_region_mb()
+                cost[("seed", shape)] = round(time.perf_counter() - t0, 2)
+                _lg.info(
+                    f"[spec-serving] captured seed trace shape={shape}: +{now - used:.1f} MB trace, {now:.1f} MB in use"
+                )
+                used = now
         self._srv_captured = True
         # The capture passes replayed nothing real: no previous verify, no seed.
         self._srv_last = None
@@ -2867,11 +2906,20 @@ class SpeculativeDecoder:
         rec = self._srv_records[(shape, width)]
         previous = None if self._srv_last is None else (self._srv_last["K"], self._srv_last["rows"])
         seed_idx = serving_seed_index(shape, rows, seed_cols, previous, self._srv_seeded)
+        t0 = time.perf_counter()
         self._srv_upload(rec, rows, live, anchors, positions, page_tables, seed_idx)
-        ttnn.execute_trace(self.mesh_device, rec["id"], cq_id=0, blocking=False)
+        t1 = time.perf_counter()
+        ttnn.execute_trace(self.mesh_device, rec["id"], cq_id=0, blocking=self._srv_replay_blocking)
+        t2 = time.perf_counter()
         vx = ttnn.get_device_tensors(rec["verify_x"])[0] if self._tp > 1 else rec["verify_x"]
         vx = ttnn.to_torch(vx).to(torch.int64).reshape(B, P)
         gids = torch.tensor(self._ids_to_host(rec["vidx"], B * P), dtype=torch.int64).reshape(B, P)
+        t3 = time.perf_counter()
+        self._srv_phase_ms = {
+            "replay_upload": (t1 - t0) * 1e3,
+            "replay_exec": (t2 - t1) * 1e3,
+            "replay_read": (t3 - t2) * 1e3,
+        }
         if (
             self._srv_check_steps > 0
             and not self._srv_measuring
@@ -2890,6 +2938,13 @@ class SpeculativeDecoder:
             _reader=lambda rec=rec, live=live: self._srv_logits_to_host(rec, live),
         )
 
+    def serving_step_phases(self):
+        """The last ``serving_step``'s wall by sub-phase, in ms: ``replay_upload`` (the record's persistent inputs),
+        ``replay_exec`` (the trace submit; the record's device time under GEMMA4_SPEC_REPLAY_BLOCKING=1) and
+        ``replay_read`` (the drafts and argmax ids back to host, plus the device wait when the submit did not block).
+        The adapter folds them into its stats line next to the ``replay`` phase they add up to."""
+        return dict(self._srv_phase_ms)
+
     def serving_release(self):
         """Release every record's trace and buffer; idempotent."""
         recs = self._srv_records
@@ -2897,6 +2952,9 @@ class SpeculativeDecoder:
             return
         self._srv_records = None
         self._srv_captured = False
+        for tid in self._srv_seed_traces.values():
+            ttnn.release_trace(self.mesh_device, tid)
+        self._srv_seed_traces = {}
         for rec in recs.values():
             if rec.get("id") is not None:
                 ttnn.release_trace(self.mesh_device, rec["id"])
@@ -2921,12 +2979,19 @@ class SpeculativeDecoder:
                 self._free_tensor_tree(S.get(key))
         self._srv_shape_bufs = {}
         self._srv_frozen = False
-        for t in (self._srv_pool_v, self._srv_pool_s, self._srv_logits, *self._srv_iota.values()):
+        for t in (
+            self._srv_pool_v,
+            self._srv_pool_s,
+            self._srv_logits,
+            *self._srv_iota.values(),
+            *(t for c in self._srv_draft_consts.values() for t in c.values()),
+        ):
             self._free_tensor_tree(t)
         self._srv_pool_v = self._srv_pool_s = self._srv_logits = None
         self._srv_iota = {}
         self._srv_uploaded = {}
         self._srv_last = None
+        self._srv_phase_ms = {}
         self._srv_seeded = {}
         self._srv_checked = {}
 
@@ -3039,6 +3104,12 @@ class SpeculativeDecoder:
         # The forward's inputs are the shape's persistent buffers, refreshed from host staging tensors: a
         # reseed allocates nothing on the device itself (serving_prepare), only the eager forward's own
         # transients come and go.
+        self._srv_seed_upload(shape, tokens, positions)
+        return self._srv_seed_forward(shape)
+
+    def _srv_seed_upload(self, shape, tokens, positions):
+        """Refresh the shape's persistent seed inputs (tokens, positions) from host."""
+        S = self._srv_shape_bufs[shape]
         host_tok = self._host_tokens([int(t) for t in tokens])
         ttnn.copy_host_to_device_tensor(host_tok, S["seed_tok"])
         host_tok.deallocate(True)
@@ -3047,6 +3118,10 @@ class SpeculativeDecoder:
         ttnn.copy_host_to_device_tensor(hpi, S["seed_pi"])
         hpu.deallocate(True)
         hpi.deallocate(True)
+
+    def _srv_seed_forward(self, shape):
+        """The device-only seed forward of the shape's persistent inputs (what the seed trace captures)."""
+        S = self._srv_shape_bufs[shape]
         return self.target.ttnn_verify_forward(
             x=S["seed_tok"],
             current_pos=S["seed_pu"],
@@ -3055,6 +3130,13 @@ class SpeculativeDecoder:
             kv_cache=self.tt_kv_cache,
             page_tables_per_layer=S["d_ptl_list"],
         )
+
+    def _srv_seed_body(self, shape):
+        """The seed forward and its publish into the reseed pool: the body of the shape's seed trace."""
+        logits, hidden = self._srv_seed_forward(shape)
+        logits.deallocate(True)
+        self._srv_publish_hidden(hidden, self._srv_pool_s)
+        hidden.deallocate(True)
 
     def _srv_verify_check(self, shape, rec, rows, live, anchors, positions, gids, zero_tables=False):
         """GEMMA4_SPEC_VERIFY_CHECK: the packed verify's row-0 argmax of every live row against the plain forward
@@ -3093,8 +3175,20 @@ class SpeculativeDecoder:
         return bad
 
     def _srv_seed_rows(self, shape, tokens, positions):
-        """Eager target forward of ``tokens`` at ``positions`` (B_v entries) through the
-        shape's drafter tables; its post-norm hidden fills the reseed pool rows."""
+        """Target forward of ``tokens`` at ``positions`` (B_v entries) through the shape's drafter tables; its
+        post-norm hidden fills the reseed pool rows. The shape's seed trace once serving_capture made it, the
+        eager forward before (the pools are made by the first seed of serving_prepare)."""
+        tid = self._srv_seed_traces.get(shape)
+        if tid is not None:
+            if self._srv_pool_v is None or self._srv_pool_s is None:
+                raise RuntimeError(
+                    "the hidden pools do not exist after serving_prepare: a reseed never allocates (the first eager "
+                    "seed of serving_prepare makes them)"
+                )
+            self._srv_seed_upload(shape, tokens, positions)
+            # blocking: the reseed phase is the seed's device time (the cost table's entry cost), nothing overlaps it
+            ttnn.execute_trace(self.mesh_device, tid, cq_id=0, blocking=True)
+            return
         logits, hidden = self._srv_eager_forward(shape, tokens, positions)
         logits.deallocate(True)
         if self._srv_pool_v is None:
@@ -3129,10 +3223,14 @@ class SpeculativeDecoder:
         tok = S["anchor_tok"]
         draft_cols = []
         for _ in range(K):
-            logits, h_next = self.assistant.step(tok, h, self._shared_kv, S["d_ptl"], S["d_pu"], S["d_pi"])
+            sharded = self._srv_sharded_draft_argmax and self._tp > 1
+            logits, h_next = self.assistant.step(
+                tok, h, self._shared_kv, S["d_ptl"], S["d_pu"], S["d_pi"], gather_logits=not sharded
+            )
             h.deallocate(True)
             h = h_next
-            idx = self._argmax_last(logits, rows=B)  # [1, 1, B] uint32
+            # [1, 1, B] uint32: the sharded argmax exchanges the shards' candidates, the gathered one scans the vocab
+            idx = self._draft_argmax_sharded(logits, rows=B) if sharded else self._argmax_last(logits, rows=B)
             logits.deallocate(True)
             tok = ttnn.reshape(idx, (1, B))
             draft_cols.append(tok)
@@ -3172,6 +3270,94 @@ class SpeculativeDecoder:
         ttnn.copy(vidx, rec["vidx"])
         vidx.deallocate(True)
         return rec["verify_x"], rec["vidx"]
+
+    def _srv_draft_consts_for(self, width, vocab_slice):
+        """The sharded argmax's persistent rows for a gathered width ``width`` (``tp`` slices of ``width / tp``
+        columns, a slice's maximum in its first column): the candidate mask (0 at a slice's first column, a large
+        negative elsewhere), the fp32 column iota and the fp32 offset of each column's slice in the vocab."""
+        key = (int(width), int(vocab_slice))
+        consts = self._srv_draft_consts.get(key)
+        if consts is None:
+            if getattr(self, "_srv_frozen", False):
+                raise RuntimeError(
+                    f"no sharded-argmax rows for a gathered width of {width} after serving_prepare: the eager "
+                    f"bodies made them ({sorted(self._srv_draft_consts)}); a replay never allocates"
+                )
+            per = int(width) // self._tp
+            cols = torch.arange(int(width), dtype=torch.float32)
+            mask = torch.where(cols % per == 0, 0.0, -30000.0).reshape(1, 1, 1, -1).expand(1, 1, SPEC_ROW_TILE, -1)
+            iota = cols.reshape(1, 1, 1, -1).expand(1, 1, SPEC_ROW_TILE, -1)
+            offset = ((cols // per) * float(vocab_slice)).reshape(1, 1, 1, -1).expand(1, 1, SPEC_ROW_TILE, -1)
+            consts = {
+                "mask": self._pv_from_torch(mask.contiguous(), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+                "iota": self._pv_from_torch(iota.contiguous(), ttnn.float32, layout=ttnn.TILE_LAYOUT),
+                "offset": self._pv_from_torch(offset.contiguous(), ttnn.float32, layout=ttnn.TILE_LAYOUT),
+            }
+            self._srv_draft_consts[key] = consts
+        return consts
+
+    def _draft_argmax_sharded(self, logits, rows):
+        """argmax over the vocab of the drafter's TP-sharded logits ``[1, 1, rows, vocab / tp]`` (TILE, one slice
+        per chip): ``[1, 1, rows]`` uint32 ROW_MAJOR, the same on every chip.
+
+        Per chip the slice's argmax (the multicore ROW_MAJOR argmax over ``vocab / tp`` columns) and its maximum;
+        both all-gathered over the TP axis (a 32-row tile per chip), the winning slice picked by an argmax over
+        the gathered maxima with the non-leading columns masked down, and its slice index offset by the slice's
+        first vocab id through a one-hot of the winning column. Ties between slices go to the lowest slice.
+        """
+        R32 = SPEC_ROW_TILE
+        vocab_slice = int(logits.shape[-1])
+        src, padded = logits, None
+        if int(logits.shape[2]) < R32:
+            padded = ttnn.pad(logits, [(0, 0), (0, 0), (0, R32 - int(logits.shape[2])), (0, 0)], value=0.0)
+            src = padded
+        local_idx = self._argmax_last(src, R32)  # [1, 1, 32] uint32 RM: the index within the slice
+        local_max = ttnn.max(src, dim=-1, keepdim=True)  # [1, 1, 32, 1] bf16 TILE
+        if padded is not None and not _same_device_buffer(padded, logits):
+            padded.deallocate(True)
+        idx_t = ttnn.to_layout(ttnn.reshape(local_idx, (1, 1, R32, 1)), ttnn.TILE_LAYOUT)
+        idx_f = ttnn.typecast(idx_t, ttnn.float32)  # [1, 1, 32, 1] fp32 TILE (exact: indices < 2**24)
+        idx_t.deallocate(True)
+        local_idx.deallocate(True)
+        vals_g = ccl_allgather(local_max, self.assistant.mesh_config, self.assistant.ccl_manager, dim=3)
+        idx_g = ccl_allgather(idx_f, self.assistant.mesh_config, self.assistant.ccl_manager, dim=3)
+        local_max.deallocate(True)
+        idx_f.deallocate(True)
+        consts = self._srv_draft_consts_for(int(vals_g.shape[-1]), vocab_slice)
+        masked = ttnn.add(vals_g, consts["mask"])  # only a slice's leading column can win
+        vals_g.deallocate(True)
+        best = self._argmax_last(masked, R32)  # [1, 1, 32] uint32 RM: the winning column
+        masked.deallocate(True)
+        best_t = ttnn.to_layout(ttnn.reshape(best, (1, 1, R32, 1)), ttnn.TILE_LAYOUT)
+        best_f = ttnn.typecast(best_t, ttnn.float32)  # [1, 1, 32, 1]
+        best_t.deallocate(True)
+        best.deallocate(True)
+        diff = ttnn.subtract(consts["iota"], best_f)
+        best_f.deallocate(True)
+        onehot = ttnn.eq(diff, 0.0)  # [1, 1, 32, W] fp32: 1.0 at the winning column
+        diff.deallocate(True)
+        picked = ttnn.multiply(idx_g, onehot)
+        idx_g.deallocate(True)
+        picked_idx = ttnn.sum(picked, dim=-1, keepdim=True)  # the winner's index within its slice
+        picked.deallocate(True)
+        offsets = ttnn.multiply(consts["offset"], onehot)
+        onehot.deallocate(True)
+        offset = ttnn.sum(offsets, dim=-1, keepdim=True)  # the winner's slice start
+        offsets.deallocate(True)
+        glob = ttnn.add(picked_idx, offset)  # [1, 1, 32, 1] fp32
+        picked_idx.deallocate(True)
+        offset.deallocate(True)
+        glob_u = ttnn.typecast(glob, ttnn.uint32)
+        glob.deallocate(True)
+        glob_rm = ttnn.to_layout(glob_u, ttnn.ROW_MAJOR_LAYOUT)
+        glob_u.deallocate(True)
+        out = ttnn.reshape(glob_rm, (1, 1, R32))
+        if rows < R32:
+            sliced = ttnn.slice(out, [0, 0, 0], [1, 1, rows])
+            if not _same_device_buffer(sliced, out):
+                out.deallocate(True)
+            out = sliced
+        return out
 
     def _srv_seed_gather(self, S):
         """Stage 1 of the body: the drafter seed [1, 1, B, backbone] = rows ``seed_idx`` of [pool_v | pool_s].

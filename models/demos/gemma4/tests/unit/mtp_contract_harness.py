@@ -234,6 +234,9 @@ class Decoder:
         fits = [w for w in self.widths[tuple(shape)] if w >= need]
         return min(fits) if fits else None
 
+    def serving_step_phases(self):
+        return {}
+
     def serving_step(self, shape, rows, anchors, positions, page_tables, seed_cols):
         self._check(shape)
         shape = tuple(shape)
