@@ -2692,7 +2692,12 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     const ttnn::Tensor causal_mask = core::from_xtensor(lower, device);
     const ttnn::Tensor anticausal_mask = core::from_xtensor(upper, device);  // both stay alive
     const auto entries_before_masked = device->num_program_cache_entries();  // the uploads cache their own ops
-    // Mask-tensor programs are never cut, so the run is held against the uncut run on the same inputs.
+    // Mask-tensor programs are never cut, so the run is held against the uncut causal run on the same inputs.
+    // The two differ by real rounding, not by chunking: the mask-tensor path walks every K/V step, and each
+    // fully masked step multiplies the running sum by alpha = 1 on the FPU, whose inputs are 19-bit, so the
+    // sum is truncated once more than on the causal path (2^-11 relative); the output is bf16 (2^-9). With V in
+    // [0, 1] the outputs sit near 0.5, so the bound is relative to the mean output: 1e-2 is ten times the
+    // measured gap and a hundred times under a misread mask (which flips whole rows).
     auto run_masked = [&](const ttnn::Tensor& mask) {
         return core::to_xtensor(metal::sdpa_fw(
                                     second.query,
@@ -2711,7 +2716,10 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     EXPECT_EQ(entries_masked, entries_before_masked + 1U) << "the mask tensor variant is its own program";
     const xt::xarray<float> out_anticausal = run_masked(anticausal_mask);
     EXPECT_EQ(device->num_program_cache_entries(), entries_masked) << "the second mask must hit";
-    EXPECT_LT(xt::mean(xt::abs(out_causal - out_a_second_unsplit))(), kCrossChunkingMeanAbsTol)
+    constexpr float kMaskPathMeanRelTol = 1e-2F;
+    EXPECT_LT(
+        xt::mean(xt::abs(out_causal - out_a_second_unsplit))(),
+        kMaskPathMeanRelTol * xt::mean(xt::abs(out_a_second_unsplit))())
         << "the lower-triangular mask tensor must agree with the causal kernel mask";
     const xt::xarray<float> anticausal_ref =
         sdpa_split_heads_naive_with_intermediates(first_q, first_k, first_v, upper).first;
