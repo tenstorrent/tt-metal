@@ -814,3 +814,15 @@ NEXT (owner order 22:00): merge origin/dnijemcevic/model_bringup_bfp4kv @ 969787
   Orchestrator PAUSE requested (stops after FIX.9); tmux ds41-chain3 = /scratch/dnijemcevic/run_ds41_chain3.sh waits
   for it, checks FIX.9 PASS, runs the profile, then resumes --until P.5 (P.7 -> P.4 -> P.5). Then publish the page
   (update https://claude.ai/artifact/EeioFZEY2jHgdzPRYXbaxc or a new one) comparing ENG (22:10) and CUR.
+
+## 2026-10-29 06:50 MILESTONE + HAND-OFF: FIX.9 PASS d1571ee35ac (shared expert x / h bfp8, DS41-132 closed)
+- se_engine3 x_dtype / h_dtype (TILE_BYTES from the dtype), x typecast once into a persistent bfp8 buffer (the router
+  keeps bf16 x), h packed precise (SE_PACK_PRECISE=on). moe_block defaults unchanged (bf16, pack_precise False) for
+  other users / the 2x2 ops head. Head 446 -> 451 us + 7 us typecast a layer; SE rel vs native 0.0116 -> 0.0165 (the
+  reference's own fp8 rounding). All gate units PASS incl. test_adapter_acks (layer 20 nope PCC within its limit) and
+  Paris through tt-d-gen. Overseer reviewed the diff.
+- DS41-137 (new): a packer's bfp8 output without bfp8_pack_precise rounds twice (ties away both times): +bias. Likely
+  every FIX.7 bfp8 activation written by a matmul packer; candidate follow-up (precise packing, same speed); the
+  ComputeKernel config hash ignores the flag (a source define works around it; the 2x2 found the same).
+- NOW: tmux ds41-chain3: fresh 0k-512k profile CUR on d1571ee35ac (~65 min, started 06:45), then resume --until P.5
+  (P.7 CKV_BFP4_PREPARED -> P.4 -> P.5). Then publish the profile page (ENG vs CUR).
