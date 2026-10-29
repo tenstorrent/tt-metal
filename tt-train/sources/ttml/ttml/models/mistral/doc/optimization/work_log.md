@@ -21,6 +21,8 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 
 - Iteration 6 (all-core RMSNorm backward): op exported from `umales/qwen38` with `git show` into the scratchpad, copied to `metal/ops/rmsnorm_bw_allcore/` with namespace / primitive / kernel-path renames (sed), object files compiled first without relinking (the iteration-5 chain was on the device), registered in `CMakeLists.txt`, `metal/operations.hpp`, `nanobind/nb_ops.cpp`; build + test queued behind the iteration-5 chain (`O/iter6_build_and_test.sh` -> `O/iter6_build_and_test.log`: `cmake . && ninja _ttml`, first test run failed on the backward's return arity, fixed, `O/iter6_rmsnorm_test.log` 3 passed); chain `O/iter6.sh` -> `O/iter6.log` (harness `O/iter6_harness.log` 15 passed, gradient check `O/iter6_tp_grad_check_tp4.{log,npz}` PASS, single-chip 8-layer profile `O/iter6_tracy_8layers` -> `O/iter6_tracy_8layers_ranked_ops.txt` with `O/iter4_tracy_8layers_ranked_ops.txt` as the reference, `tp_measure.sh iter6_tp` after 600 s: `O/iter6_tp_mfu_tp4.log` 547.5 ms, tt-smi, profile `O/iter6_tp_tracy_tp4_4layers` -> `O/iter6_tp_analysis.txt`, `O/iter6_tp_ranked_ops.txt`).
 
+- Iteration 7 trial (rejected): `TRANSPOSED_SHAPES` + `(5120, 1536)`, `(1024, 5120)`; chain `O/iter7.sh` -> `O/iter7.log` (gradient check `O/iter7_tp_grad_check_tp4.{log,npz}` PASS, `tp_measure.sh iter7_tp` after 600 s: `O/iter7_tp_mfu_tp4.log` 551.3 ms, profile `O/iter7_tp_tracy_tp4_4layers` -> `O/iter7_tp_analysis.txt`, `O/iter7_tp_ranked_ops.txt`); the allow-list change was reverted (`git checkout`), the chain's narrow TP-shape sweeps (`O/iter7_matmul_sweep1d_*.log`) continued on the device.
+
 ## Commits (local, never pushed)
 
 | iteration | commit | content |
@@ -36,7 +38,8 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 4 | `dc6ccf3db8e` | `write_tile_block` metal op, `FORWARD_PROGRAM_CONFIG` (swept gate_up config), sweep scripts, iteration-4 evidence, doc table fixes |
 | 5 | `7c19e385351` | batched TP all-reduce of the partial LoRA gradients (`reduce_partial_lora_grads`), TP-shape sweep filters, iteration-5 evidence |
 | 5b | `758a7300a8d` | batched mode for the composite TP adapters (qkv, out), `tp_rank_ops.py`, `EXTRA_ARGS` in `tp_measure.sh`, iteration-5b evidence |
-| 6 | (this commit) | `rmsnorm_bw_allcore` metal op, `rmsnorm_allcore.py`, `RMSNormLayer.rmsnorm_op` hook, harness case, iteration-6 evidence |
+| 6 | `190f3aad6fd` | `rmsnorm_bw_allcore` metal op, `rmsnorm_allcore.py`, `RMSNormLayer.rmsnorm_op` hook, harness case, iteration-6 evidence |
+| 7 (rejected) | (this commit) | evidence and write-up of the rejected qkv / out fused-path trial at TP; no code change |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run described in `perf_analysis.md`, "Iteration 1".
 - Review round 1 of the loop (`doc/optimization/review_round1.md`): required a TP=4 gradient-level check of the fused/transposed paths (`tp_gradient_check.py`: `O/tp_grad_check_single.{npz,log}`, `O/tp_grad_check_tp4_plain.{npz,log}`, `O/tp_grad_check_tp4_fused.{npz,log}`), the exit restated at the measured clock with the falling-clock anomaly classified, and arithmetic fixes in the gap decomposition; also taken: the 16-layer Tracy point the plan's rule asks for once 16 layers fit (`O/iter3_fused_tracy_16layers*`), the iteration-3 op sequence (`O/iter3_fused_op_sequence_1layer.txt`), the fused-LoRA isolation script and its after-fix log in evidence.
