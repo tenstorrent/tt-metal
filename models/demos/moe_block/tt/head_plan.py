@@ -6,11 +6,32 @@
 NCH row chunks, K step KB, the router's logits on the engine or on router cores), the ones whose L1 fits (the engine's
 own arena sizing, se_engine3.SeEngine3 with no device; the router cores' arena), ranked by a cost model calibrated on
 measured heads (MOE_BLOCK_WORKLOG.md, "the head planner"). Host only: tests/test_head_plan.py sweeps it over real and
-synthetic shapes."""
+synthetic shapes.
 
-from dataclasses import dataclass, field
+fit() is the head's whole host plan: every requirement its build checks (the engine's arena at each K step / W ring /
+row chunks, the RS plan, the mover column's cells, the router cores' arena and runtime args, the routing exchange's
+planner regions and port buffers, packet headers) on a HeadShape, no device. A shape fit() accepts builds (the build
+plans again with the device's own free L1, at least what fit() assumed); a shape it refuses says which requirement
+failed, with the numbers and what would fit (tests/test_fused_head_coverage.py sweeps it)."""
 
-from models.demos.moe_block.tt.se_engine3 import ARENA_MAX, dest_tiles
+from dataclasses import dataclass, field, replace
+from functools import lru_cache
+from types import SimpleNamespace
+
+from models.demos.moe_block.tt.se_engine3 import ARENA_MAX, arena_cap_of, dest_tiles
+
+# the machine, host-side defaults (a device build reads its own): the compute grid, the fabric payload, the L1 a core
+# has free when the head builds (bank 1461248 B less the allocator's base and what the block keeps before the head:
+# measured 1383 KB on the LoudBox 2x4 / ring of 4 - arena caps 1334 KB at K3's payload, 1319 KB at GLM-Flash's)
+GRID = (12, 10)
+L1_FREE = 1383 * 1024
+# (what fits() assumes below the device's measured free L1: the build plans again with the device's own figure - every
+# layout fit() accepted then still fits)
+L1_MARGIN = 8 * 1024
+PORT_GROUP = 4  # (x_gather3: a port sender's packet group - group + 1 packet headers)
+HEADERS = 12  # (fabric packet headers a RISC)
+ROUTER_ARGS = 341  # (router_stream's per-core runtime-arg bound)
+ROUTING_L = 2  # (the routing exchange's port tables: the combine's links)
 
 
 @dataclass(frozen=True)
@@ -30,10 +51,27 @@ class HeadShape:
     links: int = 2
     ring: bool = False
     grid: tuple = (12, 10)
+    R: int = 1  # (mesh rows: N = R G chips - the routing exchange's)
+    sp_ring: bool = False  # (the SP axis wraps)
+    payload: int = 8256  # (the fabric's packet payload bytes: the gather's pages a packet)
+    A: int = 16  # (the combine's accumulators: the routing planner's instances at most)
+    w_dtype: str = "bf8"  # (the shared expert's weights: bf4 / bf8 / bf16)
 
     @property
     def rs_dim(self):
         return -1 if self.latent else -2
+
+    @property
+    def N(self):
+        return self.R * self.G
+
+    @property
+    def S(self):  # (tokens a chip owns)
+        return self.rows // self.G
+
+    @property
+    def EPC(self):
+        return self.E // self.fold // self.N
 
 
 @dataclass(frozen=True, order=True)
@@ -135,26 +173,50 @@ def k_steps(shape: HeadShape):
     return sorted((d for d in range(1, 17) if klt % d == 0 and (klt // d) % 2 == 0), reverse=True)
 
 
+def _wdt(name):
+    import ttnn
+
+    return {"bf4": ttnn.bfloat4_b, "bf8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}[name]
+
+
+def _al(v):
+    return (v + 63) // 64 * 64
+
+
 def size(shape: HeadShape, lay: HeadLayout, arena_max=ARENA_MAX, compact=None):
-    """The engine sized at this layout (host): (SeEngine3 or None, arena bytes, region sizes, why not)."""
+    """The head sized at this layout (host): (SeEngine3 or None, arena bytes - the engine's, grown to the router
+    cores' least, as the build does; with why not: the bytes it would need, else 0 - region sizes, why not). Every
+    check of the build past the engine too (cores_check)."""
+    cap = arena_max(lay.KB) if callable(arena_max) else arena_max
+    key = (shape, lay, cap, compact)
+    if key not in _SIZED:
+        if len(_SIZED) > 20000:
+            _SIZED.clear()
+        _SIZED[key] = _size(shape, lay, cap, compact)
+    return _SIZED[key]
+
+
+_SIZED = {}  # (size's answers: a pure function of its arguments)
+
+
+def _size(shape, lay, cap, compact):
     from models.demos.moe_block.tt.router_stream import RouterStream
-    from models.demos.moe_block.tt.se_engine3 import SeEngine3
+    from models.demos.moe_block.tt.se_engine3 import ArenaTooLarge, SeEngine3
     from models.demos.moe_block.tt.se_rs import RsPlan
 
-    plan = RsPlan(
-        G=shape.G,
-        ring=shape.ring and shape.G > 2,
-        GX=lay.GX,
-        GY=lay.GY,
-        MT=lay.MT,
-        NTH=shape.H // 32,
-        scatter=shape.rs_dim,
-        nv=shape.links,
-        pwmax=dest_tiles() // lay.MT,
-        compact=lay.compact if compact is None else compact,
-    )
-    cap = arena_max(lay.KB) if callable(arena_max) else arena_max
     try:
+        plan = RsPlan(
+            G=shape.G,
+            ring=shape.ring and shape.G > 2,
+            GX=lay.GX,
+            GY=lay.GY,
+            MT=lay.MT,
+            NTH=shape.H // 32,
+            scatter=shape.rs_dim,
+            nv=shape.links,
+            pwmax=dest_tiles() // lay.MT,
+            compact=lay.compact if compact is None else compact,
+        )
         eng = SeEngine3(
             None,
             rows=shape.rows,
@@ -171,13 +233,174 @@ def size(shape: HeadShape, lay: HeadLayout, arena_max=ARENA_MAX, compact=None):
             prep=True,
             router=dict(ET=shape.E // 32, KTO=shape.H // shape.G // 32) if lay.on_engine else None,
             arena_max=cap,
+            w_dtype=_wdt(shape.w_dtype),
         )
-    except (ValueError, AssertionError) as err:
-        return None, 0, {}, " ".join(str(err).split())[:200]
-    need = (RouterStream.min_bytes(shape.G, shape.E, shape.K) + 63) // 64 * 64
+    except ArenaTooLarge as err:
+        return None, err.need, {}, f"arena {err.need / 1024:.0f} KB > {cap / 1024:.0f} KB (W ring at the least)"
+    except (ValueError, AssertionError, KeyError) as err:
+        return None, 0, {}, " ".join(str(err).split())[:240] or type(err).__name__
+    need = _al(RouterStream.min_bytes(shape.G, shape.E, shape.K, split=lay.split))
     if need > cap:
-        return None, eng.arena_bytes, eng.sizes, f"router cores' arena {need // 1024} KB"
-    return eng, max(eng.arena_bytes, need if not lay.on_engine else 0), eng.sizes, ""
+        return None, need, eng.sizes, f"router cores' arena {need / 1024:.0f} KB > {cap / 1024:.0f} KB"
+    arena = max(eng.arena_bytes, need)
+    why = cores_check(shape, lay, eng, plan, arena)
+    if why:
+        return None, arena, eng.sizes, why
+    return eng, arena, eng.sizes, ""
+
+
+def host_chips(R, C, ring, links):
+    """The x gather's ring plan of every chip (fabric_all_gather_py._plan's, no device: positions along the row, next /
+    prev, the schedules, which directions carry links, a port per (direction, link))."""
+    from ttnn.bringup.combine_rf.fabric_all_gather_py import _needs_ready, _schedule
+
+    chips = {}
+    for r in range(R):
+        for p in range(C):
+            nxt = (r, (p + 1) % C) if (ring or p < C - 1) else None
+            prv = (r, (p - 1) % C) if (ring or p > 0) else None
+            fwd, bwd = _schedule(p, C, ring, ring)
+            rg = dict(p=p, next=nxt, prev=prv, fwd=[(q, part) for q, part in fwd], bwd=[(q, part) for q, part in bwd])
+            chips[(r, p)] = dict(out=p, G=C, rings=[rg])
+    for coord, ch in chips.items():
+        rg = ch["rings"][0]
+        for d, peer in (("fwd", rg["next"]), ("bwd", rg["prev"])):
+            if peer is not None and (rg[d] or _needs_ready(chips, coord, 0, d)):
+                rg[f"{d}_links"] = list(range(links))
+        ch["ports"] = {(0, d, l): None for d in ("fwd", "bwd") for l in range(links)}
+    return chips
+
+
+def routing_shell(R, C, ring, wrap_y, links):
+    """A RoutingStream with its host-side state only (the paths, the senders, the forwarding slots): its pure methods
+    on an R x C mesh (ring: the TP axis wraps, wrap_y: the SP axis; links: the gather's)."""
+    from models.demos.moe_block.tt.routing_stream import RoutingStream
+
+    rs = object.__new__(RoutingStream)
+    rs.R, rs.C, rs.N, rs.L = R, C, R * C, ROUTING_L
+    rs.xg = SimpleNamespace(chips=host_chips(R, C, ring, links), ring=ring)
+    rs.wrap_x, rs.wrap_y = ring, wrap_y
+    rs.mesh = None
+    return rs
+
+
+@lru_cache(maxsize=256)
+def routing_paths(R, C, ring, wrap_y, links):
+    """(the most packets an X sender sends, a Y sender, a port forwards; the most senders a chip) of the routing
+    exchange on this mesh - or why its paths do not build."""
+    rsh = routing_shell(R, C, ring, wrap_y, links)
+    try:
+        serves = {c: rsh.serve(c) for c in rsh.xg.chips}
+        fw = rsh.fwd_plan()[0]
+    except AssertionError as err:
+        return str(err)
+    nx = max(len(v) for sv in serves.values() for k_, v in sv.items() if k_[0] == "x")
+    ny = max([len(v) for sv in serves.values() for k_, v in sv.items() if k_[0] == "y"] + [0])
+    nf = max([len(v) for v in fw.values()] + [0])
+    return nx, ny, nf, max(len(sv) for sv in serves.values())
+
+
+def la_dests(G, ring):
+    """The most latent destination blocks a port sends (one direction): a line's end chip all G - 1, a ring's half."""
+    return G // 2 if ring and G > 2 else G - 1
+
+
+def cores_check(shape: HeadShape, lay: HeadLayout, eng, rs_plan, arena):
+    """Every per-core requirement past the engine's arena (HeadSE3 / RouterStream / RoutingStream / XGather3's checks):
+    "" or why not, with the numbers."""
+    from ttnn.bringup.combine_rf.routing_a2a import routing_a2a_sizes, slot_bytes, worst_rows
+
+    from models.demos.moe_block.tt.router_stream import RouterStream
+
+    G, L, (gx, gy) = shape.G, shape.links, shape.grid
+    ring = shape.ring and G > 2
+    # (the SE reduce-scatter's per-core counts word: a byte a block)
+    if G > 4 or rs_plan.P >= 256:
+        return f"reduce-scatter counts word: TP {G} <= 4 blocks of < 256 tiles (P {rs_plan.P})"
+    if PORT_GROUP + 1 > HEADERS:
+        return "packet headers"
+    if shape.latent:
+        nd = la_dests(G, ring)
+        if nd > 3 or PORT_GROUP + 1 + nd > HEADERS:
+            return f"latent all-to-all: {nd} destination blocks a port > 3 (packet headers: {HEADERS} a RISC)"
+    # the mover column: ports (2 a link, from the top), the watcher, the router cores (a row tile each of the owners'
+    # rows; with the split two) - or the router cores in free core rows under the engine
+    nrt = shape.rows // 32 // G
+    S2 = 2 if lay.split else 1
+    if lay.GX * lay.GY // L > 128:
+        return f"a port's reduce-scatter cores: {lay.GX * lay.GY // L} > 128 (x_gather3's rdc / seen tables)"
+    if 3 * L > gy:
+        return f"mover column: {2 * L} ports + {L} copy cores > {gy} cells"
+    if nrt + 2 * L + 1 <= gy:
+        if lay.split and lay.GX > gx - 2:
+            return f"router split: column {gx - 2} must be free (engine {lay.GX} columns)"
+    else:
+        if lay.split:
+            return f"router split: {nrt} router cores + {2 * L} ports + the watcher > the mover column's {gy} cells"
+        free = (gy - lay.GY) * lay.GX
+        if lay.GY >= gy or not (nrt <= lay.GX or (lay.on_engine and nrt <= free)):
+            return (
+                f"router cores: {nrt} (a row tile each of a chip's owned rows) fit neither the mover column ({gy} cells "
+                f"less {2 * L} ports and the watcher) nor the {free} free cells under the engine "
+                f"({lay.GX}x{lay.GY}{', one row: the logits on the router cores' if not lay.on_engine else ''})"
+            )
+    nc = S2 * nrt
+    # the router cores' arena: the K block (<= 4 tiles dividing the chip's K) whose buffers fit, the ports' logits
+    # sub-blocks
+    ET = shape.E // 32
+    ETL = ET // S2
+    KT = shape.H // G // 32
+    layout = lambda kbr: RouterStream.layout_of(G, ETL, shape.K, kbr, ETF=ET)  # noqa: E731
+    fit_ = [d for d in range(1, 5) if KT % d == 0 and layout(d)[1] <= arena]
+    roff, rbytes = layout(max(fit_) if fit_ else 1)
+    if rbytes > arena:
+        return f"router cores: {rbytes / 1024:.0f} KB > the arena's {arena / 1024:.0f} KB"
+    ns = -(-nc // L)
+    while not lay.on_engine and ns > 1 and (G - 1) * ns * ETL * 4096 > arena // 2:
+        ns -= 1
+    pbuf = (G - 1) * ns * ETL * 4096
+    if pbuf > arena:
+        return f"the ports' logits sub-blocks: {pbuf / 1024:.0f} KB > the arena's {arena / 1024:.0f} KB"
+    # the routing exchange + planner (RoutingStream): instances whose regions fit the router cores, the ports' and the
+    # watcher's packet buffers
+    N, S, K, EPC, A = shape.N, shape.S, shape.K, shape.EPC, shape.A
+    if N * EPC > 1024 or S > 2048 or EPC > 64 or S % 32:
+        return f"routing planner: N EPC {N * EPC} <= 1024, S {S} <= 2048 tokens a chip, EPC {EPC} <= 64"
+    rows_cap = worst_rows(N, S, K, EPC)
+    for M in range(min(2 * nc, EPC, A, 14), 0, -1):
+        sz = routing_a2a_sizes(N=N, S=S, K=K, EPC=EPC, A=A, rows_cap=rows_cap, M=M)
+        step, per = _al(sz["plan_l1"]), -(-M // nc)
+        pl0 = 0 if per * step <= roff["bias"] else _al(rbytes)
+        if sz["fits"] and pl0 + per * step <= arena:
+            break
+    else:
+        return f"routing planner: {sz['why'] or f'{per} region(s) of {step / 1024:.0f} KB past {pl0 / 1024:.0f} KB'} > the arena's {arena / 1024:.0f} KB"
+    rt = routing_paths(shape.R, G, ring, bool(shape.sp_ring and shape.R > 2), L)
+    if isinstance(rt, str):
+        return f"routing exchange: {rt}"
+    nx, ny, nf, nsend = rt
+    if nf > 16:
+        return f"routing exchange: a port forwards {nf} packets > 16"
+    pcap = slot_bytes(S, K, EPC, M)
+    if _al(pbuf) + (nx + nf) * pcap > arena:
+        return (
+            f"routing exchange: a port's buffers {(_al(pbuf) + (nx + nf) * pcap) / 1024:.0f} KB (logits "
+            f"{pbuf / 1024:.0f} + {nx} + {nf} packets of {pcap / 1024:.1f} KB) > the arena's {arena / 1024:.0f} KB"
+        )
+    if 2 * ny * pcap > arena:
+        return f"routing exchange: the watcher's Y buffers {2 * ny * pcap / 1024:.0f} KB > the arena's {arena / 1024:.0f} KB"
+    # the router cores' runtime args (router_stream's bound): the first core's, the longest
+    plen = 26 + 5 * M + 3 * N + 3 * nsend
+    hand = 0 if lay.on_engine else G - 1
+    nargs = dict(
+        BRISC=1 + 6 * hand + 10 + 3 + 2 * nc + plen,
+        NCRISC=2 * G + 10 + (2 + plen if nc < M else 2),
+        compute=hand + G + 9,
+    )
+    big = {k: v for k, v in nargs.items() if v > ROUTER_ARGS}
+    if big:
+        return f"router cores' runtime args: {big} > {ROUTER_ARGS} ({nc} router cores, {M} planner instances, N {N})"
+    return ""
 
 
 def cost(shape: HeadShape, lay: HeadLayout, eng, c: Cost = None):
@@ -235,6 +458,7 @@ def cost(shape: HeadShape, lay: HeadLayout, eng, c: Cost = None):
         owners=min(eng.S0, eng.S1),
         se=round(t_se),
         chain=round(t_chain),
+        wring=eng.WRING,
     )
 
 
@@ -340,3 +564,188 @@ def describe(p: Planned):
         f"engine {lay.GX}x{lay.GY} MT {lay.MT} NCH {lay.NCH} KB {lay.KB} router "
         f"{'engine' if lay.on_engine else 'cores'}: predicted {p.t:.0f} us {p.parts}, arena {p.arena // 1024} KB"
     )
+
+
+@dataclass
+class HeadFit:
+    """fit()'s answer: ok, the planned layouts (every requirement met, best first), why not (with the numbers and what
+    would fit), the unconstrained best (the cost model's pick with unlimited L1) and what L1 forced (note)."""
+
+    ok: bool
+    planned: list = field(default_factory=list)
+    why: str = ""
+    free: Planned | None = None
+    note: str = ""
+
+    def __bool__(self):
+        return self.ok
+
+
+def shape_checks(shape: HeadShape):
+    """The shape-level requirements (no layout involved): why not, or ""."""
+    G, H = shape.G, shape.H
+    if G < 2:
+        return f"TP {G}: the fused head gathers x over the TP axis (TP >= 2)"
+    if G > 4:
+        return (
+            f"TP {G} > 4: the SE reduce-scatter's per-block tile counts are a byte each in one word (se_rs counts_word) "
+            f"- a mesh with TP 2 or 4"
+        )
+    if shape.links not in (1, 2):
+        return f"{shape.links} links: 1 or 2 (a port per direction and link)"
+    if H % (32 * G):
+        return f"H {H} is not whole tiles over TP {G} (a multiple of {32 * G})"
+    klt = H // 32 // G
+    if not k_steps(shape):
+        return f"H / 32 / TP = {klt} tiles a shard: no K step <= 16 gives an even count a shard (an even shard)"
+    if shape.I < 32 or shape.I % 32:
+        return f"the shared expert's I / TP = {shape.I}: whole tiles, at least one (I_s a multiple of {32 * G})"
+    if shape.latent and (shape.latent % (32 * G)):
+        return f"latent {shape.latent} is not whole tiles over TP {G} (a multiple of {32 * G})"
+    if shape.K % 2 or shape.K > 16:
+        return (
+            f"top-K {shape.K}: even and <= 16 (the joint routing rows - K ids + K weights in 64 B - router_topk, "
+            f"dispatch_prep, routing_a2a; the ops head has the same bound)"
+        )
+    if shape.E % 32:
+        return f"{shape.E} router candidates: whole tiles (a multiple of 32)"
+    if shape.rows % (32 * G):
+        nxt = -(-shape.rows // (32 * G)) * 32 * G
+        return f"rows a mesh row {shape.rows} must be a multiple of 32 x TP = {32 * G}; nearest valid {nxt}"
+    N, S, EPC = shape.N, shape.S, shape.EPC
+    if N > 32 or shape.A > 16:
+        return f"routing planner: N {N} <= 32 chips, accumulators {shape.A} <= 16"
+    if S > 2048:
+        return f"routing planner: {S} tokens a chip > 2048 (an entry's token field); chunk <= {2048 * N} tokens"
+    if EPC > 64 or N * EPC > 1024:
+        return f"routing planner: {EPC} experts a chip <= 64 and N x EPC {N * EPC} <= 1024 (fold the router)"
+    if engine_width(shape) < 1:
+        return f"no engine column: I / TP {shape.I} or latent tiles a chip"
+    return ""
+
+
+def _summary(unfit, shape, arena_max):
+    """Why no candidate fits: the L1 failures by the least arena any layout needed vs its cap, the others by their
+    reason at the layout with the fewest row chunks - both when both occur."""
+    is_l1 = lambda p: p.note.startswith(("arena", "router cores' arena")) or "of L1" in p.note  # noqa: E731
+    l1 = [p for p in unfit if is_l1(p)]
+    out = []
+    if l1:
+        least = min(
+            l1, key=lambda p: (p.arena or 1 << 40) - (arena_max(p.lay.KB) if callable(arena_max) else arena_max)
+        )
+        cap = arena_max(least.lay.KB) if callable(arena_max) else arena_max
+        out.append(
+            f"L1: the least arena any layout needs is {least.arena / 1024:.0f} KB ({describe_lay(least.lay)}), a core "
+            f"has {cap / 1024:.0f} KB; tried K steps {sorted({p.lay.KB for p in l1})}, row chunks "
+            f"{sorted({p.lay.NCH for p in l1})}, W rings off / 5 / 4 / 3"
+        )
+    other = [p for p in unfit if not is_l1(p)]
+    if other:
+        reasons = {}
+        for p in sorted(other, key=lambda p: (p.lay.NCH, -p.lay.KB)):
+            reasons.setdefault(p.note.split(":")[0], p)
+        first = next(iter(reasons.values()))
+        more = f" (and {len(reasons) - 1} other reason(s))" if len(reasons) > 1 else ""
+        out.append(f"{first.note} at {describe_lay(first.lay)}{more}")
+    return "; ".join(out)
+
+
+def describe_lay(lay: HeadLayout):
+    return (
+        f"engine {lay.GX}x{lay.GY} MT {lay.MT}, {lay.NCH} row chunk{'s' if lay.NCH > 1 else ''}, K step {lay.KB}, router "
+        f"{'on the engine' if lay.on_engine else 'cores'}{', split' if lay.split else ''}"
+    )
+
+
+def degradation(chosen: Planned, free: Planned):
+    """What L1 forced: the planned layout vs the cost model's pick with unlimited L1, with the predicted cost."""
+    if free is None or chosen.t <= free.t * 1.005:
+        return ""
+    a, b = chosen.lay, free.lay
+    d = []
+    if a.KB != b.KB:
+        d.append(f"K step {b.KB} -> {a.KB}")
+    if a.NCH != b.NCH:
+        d.append(f"row chunks {b.NCH} -> {a.NCH}")
+    if (a.GY, a.MT) != (b.GY, b.MT):
+        d.append(f"engine rows x MT {b.GY}x{b.MT} -> {a.GY}x{a.MT}")
+    if a.on_engine != b.on_engine:
+        d.append(f"router logits {'engine' if b.on_engine else 'cores'} -> {'engine' if a.on_engine else 'cores'}")
+    if a.compact != b.compact:
+        d.append("compact RS zones")
+    wr = chosen.parts.get("wring")
+    if wr:
+        d.append(f"W streamed from DRAM every chunk (a ring of {wr} slots)")
+    return (
+        f"L1-limited: {', '.join(d) or 'another layout'} - predicted {chosen.t:.0f} us vs {free.t:.0f} us with "
+        f"unlimited L1 (+{chosen.t - free.t:.0f} us, +{100 * (chosen.t / free.t - 1):.0f}%)"
+    )
+
+
+UNLIMITED = 1 << 40
+
+
+def fit(
+    shape: HeadShape,
+    arena_max=None,
+    *,
+    split=False,
+    on_engine=None,
+    KB=None,
+    placement="measured",
+    largest=True,
+    explain=True,
+):
+    """The head's whole host plan (module docstring). arena_max: bytes, or a function of the K step (the build: the
+    device's cap); None: fit()'s own from L1_FREE - L1_MARGIN and the shape's payload. on_engine / KB: given (A/B).
+    largest: on an L1 refusal, also the largest rows a mesh row that fit (a few more plans); explain: the unconstrained
+    pick and the L1 note (one more plan)."""
+    if arena_max is None:
+        arena_max = lambda kb: arena_cap_of(L1_FREE - L1_MARGIN, kb, payload=shape.payload)  # noqa: E731
+    why = shape_checks(shape)
+    if why:
+        return HeadFit(False, why=why)
+    if not head_layouts(shape):
+        nrt = shape.rows // 32 // shape.G
+        return HeadFit(
+            False,
+            why=f"no engine layout for {shape.rows} rows a mesh row ({nrt} row tiles an owner: row chunks of whole "
+            f"owner blocks, MT <= 2, the router cores' cells)",
+        )
+    ps = plan(shape, arena_max, keep_unfit=True, placement=placement, split=split)
+    want = lambda p: (on_engine is None or p.lay.on_engine == on_engine) and (not KB or p.lay.KB == KB)  # noqa: E731
+    ok = [p for p in ps if p.t != float("inf") and want(p)]
+    if not ok:
+        unfit = [p for p in ps if p.t == float("inf") and want(p)] or [p for p in ps if p.t == float("inf")]
+        if not unfit:
+            return HeadFit(False, why=f"no layout with the router {on_engine=} and K step {KB}")
+        why = _summary(unfit, shape, arena_max)
+        if largest and "L1:" in why:
+            r = shape.rows
+            step = 32 * shape.G
+            lo, hi = 0, r // step - 1
+            while lo < hi:  # (the largest rows a mesh row that fit, a multiple of 32 x TP)
+                mid = (lo + hi + 1) // 2
+                f = fit(
+                    replace(shape, rows=mid * step),
+                    arena_max,
+                    split=split,
+                    on_engine=on_engine,
+                    KB=KB,
+                    largest=False,
+                    explain=False,
+                )
+                lo, hi = (mid, hi) if f.ok else (lo, mid - 1)
+            if lo:
+                why += f"; the largest rows a mesh row that fit: {lo * step} (chunk {lo * step * shape.R})"
+        return HeadFit(False, why=why)
+    free = None
+    if not explain:
+        return HeadFit(True, planned=ok)
+    try:
+        fr = [p for p in plan(shape, UNLIMITED, placement=placement, split=split) if want(p)]
+        free = fr[0] if fr else None
+    except Exception:  # noqa: BLE001 - the unconstrained pick only explains the note
+        free = None
+    return HeadFit(True, planned=ok, free=free, note=degradation(ok[0], free))

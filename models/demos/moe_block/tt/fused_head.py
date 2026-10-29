@@ -145,6 +145,7 @@ class HeadSE3:
         latent=None,
         routing=None,
         l1_hole=None,
+        w_dtype=ttnn.bfloat8_b,
     ):
         """rs_dim (-2: rows to their owners, GLM; -1: the width, K3): the down + SE reduce-scatter - rs_mode "fused":
         in this program (se_rs: h from the L1 gate / up left it in, bf16 partials into the next chip's same core, fp32
@@ -182,20 +183,32 @@ class HeadSE3:
         self.planned = None
         planned = []
         if GY is None and self.rs_mode == "fused" and router is not None:
-            from models.demos.moe_block.tt.head_plan import HeadShape, describe, plan
-
-            shape = HeadShape(
-                rows=rows, H=H, I=I, G=G, E=router.E, K=router.K, latent=latent, fold=router.fold,
-                links=num_links, ring=self._ring(), grid=(GX + 1, grid_y),
-            )  # fmt: skip
+            # (the head's whole host plan - head_plan.fit, as FusedHead.fits ran it - on the device's own free L1: at
+            # least what fits() assumed, so a shape it accepted has a layout here)
+            from models.demos.moe_block.tt.head_plan import HeadShape, describe, fit
             from models.demos.moe_block.tt.se_engine3 import arena_cap
 
-            planned = [
-                p_
-                for p_ in plan(shape, arena_max=lambda kb: arena_cap(mesh_device, kb), split=router.split)
-                if (router.on_engine is None or p_.lay.on_engine == router.on_engine) and (not KB or p_.lay.KB == KB)
-            ]
-            assert planned, f"HeadSE3: the planner has no layout for {rows} rows ({shape})"
+            R_ = tuple(mesh_device.shape)[0]
+            shape = HeadShape(
+                rows=rows, H=H, I=I, G=G, E=router.E, K=router.K, latent=latent, fold=router.fold,
+                links=num_links, ring=self._ring(), grid=(GX + 1, grid_y), R=R_,
+                sp_ring=bool(routing is not None and routing.torus[1]),
+                payload=int(ttnn.get_tt_fabric_max_payload_size_bytes()),
+                A=routing.A if routing is not None else 16,
+                w_dtype={ttnn.bfloat4_b: "bf4", ttnn.bfloat8_b: "bf8", ttnn.bfloat16: "bf16"}[w_dtype],
+            )  # fmt: skip
+            hf = fit(
+                shape, arena_max=lambda kb: arena_cap(mesh_device, kb), split=router.split,
+                on_engine=router.on_engine, KB=KB,
+            )  # fmt: skip
+            if not hf.ok:
+                raise ValueError(f"HeadSE3: no layout builds at {rows} rows a mesh row: {hf.why}")
+            planned = hf.planned
+            self.head_fit = hf
+            if hf.note:
+                from loguru import logger
+
+                logger.warning(f"HeadSE3: {rows} rows: {hf.note}")
         layouts = (
             [(GY, MT, None)]
             if GY is not None
@@ -239,6 +252,7 @@ class HeadSE3:
                     KB=kb,
                     fidelity=fidelity,
                     shards=G,
+                    w_dtype=w_dtype,
                     down=self.rs_mode != "mrs",
                     rs=self.plan,
                     latent=latent // 32 // G if latent else None,
@@ -327,6 +341,14 @@ class HeadSE3:
             watcher=watcher,
         )
         self.eng.ring_dir = self.xg.ring_dir  # (the latent's multi-hop sends: the gather's ring directions)
+        # (the program's static circular buffers end here - the port cores' packet CB, from the allocator's L1 base: an
+        # L1 buffer the head runs in - a caller's arena - must start above it)
+        from models.demos.moe_block.tt.x_gather3 import port_cb_bytes
+
+        self.static_top = (
+            int(ttnn._ttnn.device.GetAllocatorBaseAddress(mesh_device, ttnn.BufferType.L1))
+            + (port_cb_bytes(self.eng.KB, self.xg.group) + 1023) // 1024 * 1024
+        )
         if self.rs_mode == "mrs":  # (the gather's semaphores above the arena too: the arena is freed every call)
             self.eng.alloc_arena()
         import os as _os
@@ -834,7 +856,10 @@ class HeadSE3:
                     i
                     for i, cb in enumerate(prog.cbs)
                     if cb.has_buffer()
-                    and (base in (cb.buffer_address(), cb.buffer_address() - cb.address_offset) or cb.buffer_address() == ab)
+                    and (
+                        base in (cb.buffer_address(), cb.buffer_address() - cb.address_offset)
+                        or cb.buffer_address() == ab
+                    )
                 ]
                 # (its structural hash once: a cached descriptor is not re-hashed - kernel sources and all - each call)
                 prog.custom_program_hash = ttnn.compute_program_descriptor_hash(prog)

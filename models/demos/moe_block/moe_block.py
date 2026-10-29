@@ -439,9 +439,43 @@ class MoEBlock(LightweightModule):
         # bring-up limits (each lifted by the piece that needs it)
         assert options.shared_expert == "tp_split", "bring-up: the shared expert TP-split, reduce-scattered in the head"
         assert not sequence_zigzag, "bring-up: natural sequence order"
-        fits = FusedHead.fits(g, model, dtypes)
-        assert options.head != "fused" or fits is True, f"the fused head: {fits}"
-        self.head_mode = "fused" if options.head == "fused" or (options.head == "auto" and fits is True) else "ops"
+        if layer is not None:
+            self.experts = layer.experts
+        else:
+            self.experts = RoutedExperts(mesh_device, g, model, weights.routed, dtypes, drisc=options.experts_drisc)
+        # (the fused head's planner and the exchange's combine agree on the accumulator count: planned here from the
+        # cells the experts' plan leaves free and the combine's ports - the ports-apart mode)
+        # (the count and the mode: the ports-apart mode where it fits, else the accumulators on the ports' cells - the
+        # ports' cells vary per Galaxy, plan_combine sizes the combine as the exchange will)
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import plan_combine
+
+        # (the fused head's whole host plan - head_plan.fit: every requirement its build checks, on this machine's grid,
+        # payload and free L1; a shape it accepts builds, one it refuses says why with the numbers)
+        self.head_fit, acc, acc_mode = None, None, None
+        if options.head == "ops":
+            fits = "MoEOptions.head ops"
+        else:
+            try:
+                acc, acc_mode = plan_combine(
+                    mesh_device,
+                    self.experts.op.plan,
+                    g.tokens_per_chip,
+                    model.routed_width,
+                    (g.tp_wraps, g.sp_wraps),
+                    options.experts_during_dispatch,
+                )
+            except Exception as e:  # noqa: BLE001 - the ops head plans its combine itself
+                fits = f"the combine's accumulators (the experts' free cells): {type(e).__name__} {e}"
+            else:
+                if acc_mode != "ports apart":
+                    from loguru import logger
+
+                    logger.info(f"MoEBlock: combine accumulators on the ports' cells ({acc}): ports apart does not fit here")
+                self.head_fit = FusedHead.plan(g, model, dtypes, mesh=mesh_device, accumulators=acc)
+                fits = True if self.head_fit.ok else self.head_fit.why
+        if options.head == "fused" and fits is not True:
+            raise ValueError(f"MoEBlock: the fused head (MoEOptions.head fused) does not fit: {fits}")
+        self.head_mode = "fused" if fits is True else "ops"
         # (the fused head plans the combine itself - routing_a2a's planner writes no order table: combine_snap instead)
         assert not (
             getattr(options, "combine_deterministic", False) and self.head_mode == "fused"  # (not an option on llk)
@@ -465,30 +499,8 @@ class MoEBlock(LightweightModule):
                 self.latent = layer.latent_ops()
             else:
                 self.latent = LatentProjections(mesh_device, g, model, weights.latent, dtypes)
-        if layer is not None:
-            self.experts = layer.experts
-        else:
-            self.experts = RoutedExperts(mesh_device, g, model, weights.routed, dtypes, drisc=options.experts_drisc)
-        # (the fused head's planner and the exchange's combine agree on the accumulator count: planned here from the
-        # cells the experts' plan leaves free and the combine's ports - the ports-apart mode)
-        # (the count and the mode: the ports-apart mode where it fits, else the accumulators on the ports' cells - the
-        # ports' cells vary per Galaxy, plan_combine sizes the combine as the exchange will)
-        acc = acc_mode = None
-        if self.head_mode == "fused":
-            from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import plan_combine
-
-            acc, acc_mode = plan_combine(
-                mesh_device,
-                self.experts.op.plan,
-                g.tokens_per_chip,
-                model.routed_width,
-                (g.tp_wraps, g.sp_wraps),
-                options.experts_during_dispatch,
-            )
-            if acc_mode != "ports apart":
-                from loguru import logger
-
-                logger.info(f"MoEBlock: combine accumulators on the ports' cells ({acc}): ports apart does not fit here")
+        if self.head_mode != "fused":
+            acc = acc_mode = None
         self.exchange = TokenExchange(
             mesh_device,
             g,
@@ -543,6 +555,7 @@ class MoEBlock(LightweightModule):
                     logits_first=options.logits_first,
                     router_split=options.router_split,
                     fidelity=dtypes.shared_fidelity,
+                    w_dtype=dtypes.shared_weights,
                 )
                 self._warm_up_head()
                 self.fused.head.settle_arena()
@@ -553,11 +566,13 @@ class MoEBlock(LightweightModule):
 
                 fits = "build: " + " ".join(str(e).split())[:400]
                 if options.head == "fused" or not options.head_fallback:
-                    logger.error(
-                        f"MoEBlock: the fused head does not build (mesh {g.sp}x{g.tp}, chunk {g.chunk_tokens}): "
-                        f"{fits}; raising (MoEOptions.head_fallback=True takes the ops head)"
+                    msg = (
+                        f"MoEBlock: the fused head does not build (mesh {g.sp}x{g.tp}, chunk {g.chunk_tokens}, "
+                        f"{g.tokens_per_row} rows a mesh row) though its host plan (head_plan.fit) accepted it - a "
+                        f"requirement the plan misses: {fits}; MoEOptions.head_fallback=True takes the ops head"
                     )
-                    raise
+                    logger.error(msg)
+                    raise HeadBuildError(msg) from e
                 logger.warning(
                     f"MoEBlock: the fused head does not build here ({fits}); the ops head (MoEOptions.head_fallback)"
                 )
@@ -585,8 +600,10 @@ class MoEBlock(LightweightModule):
         from loguru import logger
 
         # (the resolved plan in one line: what was picked and why - the generality map reads it)
+        note = getattr(getattr(self.fused, "head", None), "head_fit", None)
+        note = f" [{note.note}]" if note is not None and note.note else ""
         self.summary = (
-            f"head {self.head_mode}{'' if fits is True else f' (fused: {fits})'}{self.fused.describe() if self.fused else ''}; tail "
+            f"head {self.head_mode}{'' if fits is True else f' (fused: {fits})'}{self.fused.describe() if self.fused else ''}{note}; tail "
             f"{'fused' if self.tail else 'ops'}{'' if tfits is True else f' (fused: {tfits})'}"
         )
         logger.info(
@@ -1006,6 +1023,15 @@ def act_host(kind: ExpertActivation, g, u):
     raise ValueError(kind)
 
 
+# the fused head's shared expert activations (se_engine3's SE_GLU)
+SE_ACTS = ("silu", "situ", "clamped_silu", "swiglu_oai")
+
+
+def _payload_of(model: MoEModel):
+    """The fabric payload a block of this model opens (the combine's row: closeout_models.fabric_payload)."""
+    return max(7232, (2 * model.routed_width + 32 + 63) // 64 * 64)
+
+
 # the flat op's names for the routed activations
 _FLAT_ACT = {"silu": "silu", "situ": "situ", "clamped_silu": "clamped_silu", "swiglu_oai": "swigluoai"}
 
@@ -1116,6 +1142,10 @@ def _l1_hole(mesh, nbytes):
     )
 
 
+class HeadBuildError(RuntimeError):
+    """A fused head its host plan accepted that then failed to build (a requirement head_plan.fit misses)."""
+
+
 class FusedHead:
     """The head as one program a chip (tt/fused_head.py HeadSE3): the x all-gather over TP straight into the shared
     expert's engine, its down + reduce-scatter, the router (logits, top-K, the joint routing rows), the routing exchange
@@ -1126,15 +1156,35 @@ class FusedHead:
     HOLE = 24 * 1024  # (L1 a core kept above the head's arena for what the exchange keeps: its words, ~17 KB)
     HOLE_HEAD = 8 * 1024  # (two, for what the head keeps after placing its arena, and again: ~5 KB, ~1 KB)
 
-    @staticmethod
-    def fits(g: Geometry, model: MoEModel, dtypes: MoEDtypes):
-        """True, or why not."""
-        act = model.shared_expert_activation
-        from models.demos.moe_block.tt.head_plan import HeadShape, head_layouts
+    # (L1 a core the block takes after FusedHead.plan runs and before the head places its arena: HOLE, the two
+    # HOLE_HEAD, the fused tail's one-time L1 - plan() assumes this much less than the free L1 it sees)
+    BEFORE_HEAD = HOLE + 2 * HOLE_HEAD + 16 * 1024
 
-        if model.shared_expert_hidden_dim is None:
-            return "no shared expert"
-        shape = HeadShape(
+    @staticmethod
+    def env(mesh=None):
+        """What the machine gives the head (head_plan's grid, fabric payload, free L1 a core at the head's build):
+        the mesh's own, or (None) head_plan's host defaults."""
+        from models.demos.moe_block.tt import head_plan as hp
+
+        if mesh is None:
+            return dict(grid=hp.GRID, payload=None, l1_free=hp.L1_FREE - hp.L1_MARGIN)
+        from models.demos.moe_block.tt.se_engine3 import l1_free_bytes
+
+        gs = mesh.compute_with_storage_grid_size()
+        seen = l1_free_bytes(mesh)
+        free = min(hp.L1_FREE, seen - FusedHead.BEFORE_HEAD) - hp.L1_MARGIN
+        from loguru import logger
+
+        logger.debug(f"FusedHead.env: free L1 {seen // 1024} KB now, the plan assumes {free // 1024} KB at the build")
+        return dict(grid=(min(12, gs.x), gs.y), payload=int(ttnn.get_tt_fabric_max_payload_size_bytes()), l1_free=free)
+
+    @staticmethod
+    def shape(g: Geometry, model: MoEModel, dtypes: MoEDtypes, env: dict, accumulators=16):
+        """The head_plan.HeadShape of this block's head."""
+        from models.demos.moe_block.tt.head_plan import HeadShape
+
+        wd = {ttnn.bfloat4_b: "bf4", ttnn.bfloat8_b: "bf8", ttnn.bfloat16: "bf16"}.get(dtypes.shared_weights, "?")
+        return HeadShape(
             rows=g.tokens_per_row,
             H=model.emb_dim,
             I=model.shared_expert_hidden_dim // g.tp,
@@ -1145,27 +1195,60 @@ class FusedHead:
             fold=model.router.fold,
             links=g.links,
             ring=g.tp_wraps,
+            grid=env["grid"],
+            R=g.sp,
+            sp_ring=g.sp_wraps,
+            payload=env["payload"] or _payload_of(model),
+            A=accumulators,
+            w_dtype=wd,
         )
-        if not head_layouts(shape):
-            return f"{g.tokens_per_row} rows a mesh row: no engine layout (row chunks of whole owner blocks)"
-        if act.kind == "situ" and (act.beta, act.linear_beta) != (4.0, 25.0):
-            return "situ: only Kimi's (beta 4, linear beta 25)"
-        if act.kind == "clamped_silu" and act.limit != 10.0:
-            return "clamped silu: only limit 10 (the engine's compile-time limit)"
-        if act.kind not in ("silu", "situ", "clamped_silu"):
-            return f"shared activation {act.kind}"
+
+    @staticmethod
+    def model_checks(model: MoEModel, dtypes: MoEDtypes):
+        """The model-level requirements of the fused head: why not, or ""."""
+        if model.shared_expert_hidden_dim is None:
+            return "no shared expert (the fused head is built around the shared expert's matmul cores)"
+        act = model.shared_expert_activation
+        if act.kind not in SE_ACTS:
+            return f"shared activation {act.kind}: the fused head's are {', '.join(SE_ACTS)}"
         rc = model.router
-        if rc.score_func not in ("sigmoid", "sqrtsoftplus") or not rc.normalize_topk or rc.expert_groups != 1:
-            return "router: sigmoid / sqrtsoftplus scores, normalized top-K, no expert groups"
-        # (lines or rings on either axis - the gather's / RS's / routing exchange's ring schedules; 2 links: the
-        # exchange's ports and the tail's K halves are a link each)
-        if g.links != 2:
-            return f"{g.links} links (built for 2)"
-        # (LoFi: the engine's own fidelity - DeepSeek-V4.1's choice; the router's logits stay HiFi3 either way)
+        if rc.score_func not in ("sigmoid", "sqrtsoftplus"):
+            return f"router scores {rc.score_func}: the fused router computes sigmoid / sqrtsoftplus"
+        if not rc.normalize_topk:
+            return "router: unnormalized top-K weights (the fused router normalizes)"
+        if rc.expert_groups != 1:
+            return (
+                f"router: group-limited routing ({rc.expert_groups} groups, top {rc.topk_groups}) - the fused router's "
+                f"top-K is over every expert"
+            )
+        if dtypes.shared_weights not in (ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16):
+            return f"shared expert weights {dtypes.shared_weights}: bf4 / bf8 / bf16"
         fids = (ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi4)
-        if dtypes.shared_weights != ttnn.bfloat8_b or dtypes.shared_fidelity not in fids:
-            return "shared expert: bf8 weights at LoFi / HiFi2 / 3 / 4"
-        return True
+        if dtypes.shared_fidelity not in fids:
+            return f"shared expert fidelity {dtypes.shared_fidelity}"
+        return ""
+
+    @staticmethod
+    def plan(g: Geometry, model: MoEModel, dtypes: MoEDtypes, mesh=None, env=None, accumulators=16, **kw):
+        """The fused head's whole host plan (head_plan.fit) on this block: a HeadFit - ok, the planned layouts, or why
+        not (the requirement, its numbers, what would fit). mesh: the machine's grid / payload / free L1 (env: given;
+        neither: head_plan's host defaults). No device work past reading those."""
+        from models.demos.moe_block.tt.head_plan import HeadFit, fit
+
+        why = FusedHead.model_checks(model, dtypes)
+        if why:
+            return HeadFit(False, why=why)
+        env = env or FusedHead.env(mesh)
+        from models.demos.moe_block.tt.se_engine3 import arena_cap_of
+
+        sh = FusedHead.shape(g, model, dtypes, env, accumulators)
+        return fit(sh, arena_max=lambda kb: arena_cap_of(env["l1_free"], kb, payload=sh.payload), **kw)
+
+    @staticmethod
+    def fits(g: Geometry, model: MoEModel, dtypes: MoEDtypes, mesh=None, env=None, accumulators=16):
+        """True, or why not (FusedHead.plan's)."""
+        f = FusedHead.plan(g, model, dtypes, mesh=mesh, env=env, accumulators=accumulators)
+        return True if f.ok else f.why
 
     def __init__(
         self,
@@ -1181,6 +1264,7 @@ class FusedHead:
         logits_first=None,
         router_split=False,
         fidelity=ttnn.MathFidelity.HiFi2,  # (the shared expert's: MoEDtypes.shared_fidelity)
+        w_dtype=ttnn.bfloat8_b,  # (the shared expert's weights: MoEDtypes.shared_weights)
     ):
         from models.demos.moe_block.tt.fused_head import HeadSE3, RouterSpec, RoutingSpec
 
@@ -1204,8 +1288,9 @@ class FusedHead:
             rows=g.tokens_per_row,
             H=H,
             I=Is // g.tp,
-            glu=model.shared_expert_activation.kind,
+            glu=model.shared_expert_activation,
             fidelity=fidelity,
+            w_dtype=w_dtype,
             num_links=g.links,
             rs_dim=-1 if latent else -2,  # (K3: the latent up lands the width split, the shared output too)
             rs_mode="fused",
@@ -1658,7 +1743,9 @@ class TokenExchange:
             if not getattr(self, "_two_logged", False):
                 from loguru import logger
 
-                logger.info(f"MoEBlock: two arenas a forward (the head's [{inside[0]}, +{inside[1]}) not in [{a}, +{n})")
+                logger.info(
+                    f"MoEBlock: two arenas a forward (the head's [{inside[0]}, +{inside[1]}) not in [{a}, +{n})"
+                )
                 self._two_logged = True
             return None
         if inside is not None and not getattr(self, "_one_logged", False):
