@@ -248,8 +248,9 @@ fi
 # --profile: wrap pytest in the Tracy profiler. `python -m tracy -r` runs pytest
 #   as a child and post-processes results into ops_perf_results*.csv on pass or
 #   fail. Its exit-code masking is handled at the result check below.
+# -p profiles only the marked zones.
 if [[ "$PROFILE_MODE" == true ]]; then
-    PYTEST_CMD=(python -m tracy -r -m pytest "${TEST_PATH}")
+    PYTEST_CMD=(python -m tracy -p -r -m pytest "${TEST_PATH}")
 else
     PYTEST_CMD=(pytest "${TEST_PATH}")
 fi
