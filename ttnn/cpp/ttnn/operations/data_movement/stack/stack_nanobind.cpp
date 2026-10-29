@@ -18,11 +18,19 @@ namespace ttnn::operations::data_movement {
 void bind_stack(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        Stacks tensors along a new dimension.
+        Stacks tensors along a new dimension. All inputs must share shape, dtype and layout; the output
+        has one more dimension than each input, with the number of inputs at position `dim`. The output
+        currently lands in DRAM interleaved (concat's default), whatever the inputs' placement.
 
         Args:
             * :attr:`input_tensors`: List of tensors to stack.
-            * :attr:`dim`: Dimension along which to stack.
+            * :attr:`dim`: Position of the new dimension in the output, in [-(rank + 1), rank]; -1 and rank both mean a new last dimension.
+
+        Equivalent pytorch code:
+
+        .. code-block:: python
+
+            output = torch.stack(input_tensors, dim)
 
         Example:
            >>> input_tensor = ttnn.from_torch(torch.randn((2, 2), dtype=torch.bfloat16), device=device)

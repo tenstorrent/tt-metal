@@ -1,0 +1,8 @@
+{
+  "name": "TT-Metalium Ubuntu 24.04 dev",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "user": "user",
+  "install": "git submodule update --init --recursive"
+}

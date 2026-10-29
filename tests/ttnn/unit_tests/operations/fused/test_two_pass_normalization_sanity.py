@@ -9,23 +9,28 @@ import ttnn
 
 from tt_py_test_utils_common.utility_functions import run_for_wormhole_b0_or_blackhole
 from tests.ttnn.nightly.unit_tests.operations.fused import (
+    test_group_norm as nightly_group_norm,
     test_two_pass_group_norm as group_norm,
     test_two_pass_group_norm_dram as group_norm_dram,
     test_two_pass_layer_norm as layer_norm,
     test_two_pass_layer_norm_sharded as sharded_layer_norm,
 )
 from tests.ttnn.nightly.unit_tests.operations.fused.test_two_pass_layer_norm import enabled_program_cache
+from tests.ttnn.unit_tests.operations.fused import test_group_norm_DRAM as group_norm_dram_unit
 
 
+@pytest.mark.merge_gate
 def test_two_pass_layer_norm_unrepresentative_anchor(device):
     layer_norm.test_layer_norm_welford_unrepresentative_anchor(device, 128, 0)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("has_residual", [False, True])
 def test_two_pass_layer_norm_bf16_large_offset(device, has_residual):
     layer_norm.test_layer_norm_welford_large_offset(device, 256, has_residual)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("has_residual", [False, True])
 def test_two_pass_layer_norm_fp32_finalizer(device, has_residual):
     layer_norm.test_layer_norm_welford_fp32_finalizer_large_offset(
@@ -33,10 +38,12 @@ def test_two_pass_layer_norm_fp32_finalizer(device, has_residual):
     )
 
 
+@pytest.mark.merge_gate
 def test_two_pass_layer_norm_row_major_affine_repeated_rows(device):
     layer_norm.test_layer_norm_fp32_residual_with_row_major_affine(device, True, True, True)
 
 
+@pytest.mark.merge_gate
 @run_for_wormhole_b0_or_blackhole()
 def test_two_pass_layer_norm_nonfinite_anchor(device, enabled_program_cache):
     layer_norm.test_layer_norm_fp32_residual_nonfinite_anchor_is_row_local(
@@ -44,31 +51,37 @@ def test_two_pass_layer_norm_nonfinite_anchor(device, enabled_program_cache):
     )
 
 
+@pytest.mark.merge_gate
 def test_two_pass_layer_norm_bfp8_tile_stride(device):
     layer_norm.test_layer_norm_bfp8_compensated_subtraction_tile_stride(
         device, (1, 1, 37, 288), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("two_stage", [False, True])
 def test_two_pass_sharded_layer_norm_large_offset(device, two_stage):
     sharded_layer_norm.test_layer_norm_sharded_fp32_large_offset(device, 1_000_000.0, two_stage, True, True, True)
 
 
+@pytest.mark.merge_gate
 def test_two_pass_sharded_layer_norm_low_bits(device):
     sharded_layer_norm.test_layer_norm_sharded_fp32_preserves_centred_low_bits(device, 3, True)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("two_stage", [False, True])
 def test_two_pass_sharded_layer_norm_beta_only(device, two_stage):
     sharded_layer_norm.test_sharded_norm_beta_only(device, ttnn.float32, "layer", True, True, two_stage)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("constant", [None, 1e38, 1e-37], ids=["offset", "overflow", "underflow"])
 def test_two_pass_group_norm_fp32_large_offset(device, constant):
     group_norm.test_group_norm_sharded_fp32_large_offset(device, True, 16, constant)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
     "dtype,layout,mask_dtype,has_weight",
@@ -83,11 +96,35 @@ def test_two_pass_group_norm_affine_cache(device, enabled_program_cache, dtype, 
     )
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_two_pass_group_norm_dram_large_offset(device):
     group_norm_dram.test_group_norm_fp32_large_offset_DRAM(device, True, 2, None)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_two_pass_group_norm_dirty_padding(device):
     group_norm_dram.test_group_norm_non_tile_aligned_dirty_padding_grids_DRAM(device, 2, 1, 3, ttnn.TILE_LAYOUT)
+
+
+# The group-norm cases above run on one core, so they never reach the Welford receiver kernels or the
+# cross-core statistics combine. These multi-core cases do.
+@pytest.mark.merge_gate
+def test_two_pass_group_norm_sharded_multicore_fp32_offset(device):
+    nightly_group_norm.test_group_norm_sharded_two_pass_fp32_row_major_matches_tile(
+        device, 100.0, 1, 1280, 16, 16, 32, 4, 8
+    )
+
+
+@pytest.mark.merge_gate
+def test_two_pass_group_norm_dram_multicore_fp32(device):
+    group_norm_dram_unit.test_group_norm_interleaved_all_config(
+        device, 1, 128, 1, 512, 32, 2, 4, 4, ttnn.float32, ttnn.bfloat16, "two_pass"
+    )
+
+
+@pytest.mark.merge_gate
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+def test_two_pass_group_norm_dram_multicore_streaming(device):
+    group_norm_dram_unit.test_group_norm_DRAM(device, 1, 1152, 128, 128, 32, 2, 8, 4, "two_pass")

@@ -37,6 +37,8 @@
 
 namespace ckernel {
 
+// Every op (MUL, ADD, SUB) accumulates both passes into dest, so the output tiles must be zero on entry: a freshly
+// released dest section, or sdpa_bcast_col_reuse_preamble<true>, which zeroes the whole dest half / all of dest.
 template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     std::uint32_t num_tiles,
@@ -45,7 +47,7 @@ ALWI void sdpa_bcast_col_reuse_tiles_init(std::uint32_t icb0) {
     UNPACK((llk_unpack_A_sdpa_init<num_tiles, BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
         false, false, icb0)));
     MATH((llk_math_sdpa_bcast_col_srcb_reuse_init_with_operands<eltwise_binary_type, num_tiles, MATH_FIDELITY, dense>(
-        icb0, icb0, false)));
+        icb0, icb0)));
 }
 
 template <bool clear_dest = false>
@@ -213,16 +215,16 @@ inline void init_fast_approx_exp_constants() {
     constexpr float A_scaled = A * scale_fp32;
     constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
 
-    TTI_SFPLOADI(0, 0xA, sfpu::lo16(THRESHOLD_scaled));
-    TTI_SFPLOADI(0, 0x8, sfpu::hi16(THRESHOLD_scaled));
+    TTI_SFPLOADI(0, 0xA, sfpu::exp_detail::lo16(THRESHOLD_scaled));
+    TTI_SFPLOADI(0, 0x8, sfpu::exp_detail::hi16(THRESHOLD_scaled));
     TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
 
-    TTI_SFPLOADI(0, 0xA, sfpu::lo16(A_scaled));
-    TTI_SFPLOADI(0, 0x8, sfpu::hi16(A_scaled));
+    TTI_SFPLOADI(0, 0xA, sfpu::exp_detail::lo16(A_scaled));
+    TTI_SFPLOADI(0, 0x8, sfpu::exp_detail::hi16(A_scaled));
     TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
 
-    TTI_SFPLOADI(0, 0xA, sfpu::lo16(B_minus_C));
-    TTI_SFPLOADI(0, 0x8, sfpu::hi16(B_minus_C));
+    TTI_SFPLOADI(0, 0xA, sfpu::exp_detail::lo16(B_minus_C));
+    TTI_SFPLOADI(0, 0x8, sfpu::exp_detail::hi16(B_minus_C));
     TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 }
 
@@ -368,9 +370,12 @@ void compute_sdpa_chunk(
     static_assert(
         chunk_size / exp_signal_granularity + 1 <= 15,
         "compute_sdpa_chunk: bcast-sub posts (chunk_size/exp_signal_granularity)+1 must fit the 4-bit semaphore");
+    // On the last chunk the OV matmul posts one output group per output_granularity tiles while the
+    // bcast-mul/dummy post of this chunk may still be outstanding (PACK consumes it only after reduce-sum),
+    // so the semaphore must hold both; SEMPOST saturates at 15 and a lost post hangs the pack loop.
     static_assert(
-        num_tiles_v / output_granularity <= 15,
-        "compute_sdpa_chunk: num_tiles_v / output_granularity must be with tensix semaphore range");
+        num_tiles_v / output_granularity + 1 <= 15,
+        "compute_sdpa_chunk: output posts (num_tiles_v/output_granularity)+1 must fit the 4-bit semaphore");
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
     sdpa_custom_mm_block_init_short<transpose_k, mm_pack_init>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
