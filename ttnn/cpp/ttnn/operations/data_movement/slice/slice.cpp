@@ -525,7 +525,6 @@ ttnn::Tensor slice(
         TT_FATAL(
             slice_dim.has_value() && num_devices.has_value(),
             "slice_dim and num_devices must be provided for device-only tensor args slice");
-        TT_FATAL(num_devices.value() > 0, "num_devices must be greater than 0");
 
         TT_FATAL(
             output_tensor_start.storage_type() == StorageType::DEVICE,

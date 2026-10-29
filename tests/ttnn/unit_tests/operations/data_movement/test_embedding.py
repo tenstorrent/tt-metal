@@ -903,3 +903,18 @@ def test_embedding_tiled_input_index_dtypes_and_types(
 
     expected = torch.nn.functional.embedding(indices, torch_weights)
     assert_equal(expected, ttnn.to_torch(output_tensor).reshape(expected.shape))
+
+
+def test_embedding_sharded_output_rejects_zero_shard(device, expect_error):
+    # Validation takes the output shard height and width modulo the tile size and divides by them.
+    idx = ttnn.from_torch(torch.randint(0, 64, (1, 1, 1, 32)), dtype=ttnn.uint32, device=device)
+    weights = ttnn.from_torch(torch.randn(1, 1, 64, 64).bfloat16(), device=device)
+    out = ttnn.from_torch(torch.zeros(1, 1, 32, 64).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (0, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    with expect_error(RuntimeError, "Shard shape must be non-zero"):
+        ttnn.embedding(idx, weights, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, output_tensor=out)

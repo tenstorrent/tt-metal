@@ -231,3 +231,23 @@ def test_roll_cache_hit_larger_shape(device, first_shape, second_shape, shifts, 
         ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
         actual = ttnn.to_torch(ttnn.roll(ttnn_input, shifts, dims))
         assert_with_pcc(expected, actual)
+
+
+def _empty_rm(device):
+    return ttnn.from_torch(
+        torch.randn(0, 32).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+
+
+# Rolling an empty tensor is a no-op; it used to take `shift % 0`.
+@pytest.mark.parametrize("dims", [(0,), None], ids=["dim0", "flattened"])
+def test_roll_empty_tensor(device, dims):
+    x = _empty_rm(device)
+    out = ttnn.roll(x, 1, dims[0]) if dims else ttnn.roll(x, 1)
+    assert tuple(out.shape) == (0, 32)
+
+
+def test_roll_empty_tensor_honors_memory_config(device):
+    out = ttnn.roll(_empty_rm(device), 1, 0, memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert tuple(out.shape) == (0, 32)
+    assert out.memory_config().buffer_type == ttnn.BufferType.L1
