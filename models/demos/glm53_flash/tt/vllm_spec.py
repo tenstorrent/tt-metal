@@ -40,10 +40,12 @@ SPEC_K_ENV = "GLM53_VLLM_SPEC_K"
 # users per row -> K; a launch uses the entry at the smallest listed batch >= its own; the catalog's
 # num_speculative_tokens is the ceiling. GLM53_SPEC_K_BY_ROWS="B:K,B:K" replaces the table, "off" leaves the catalog's K.
 K_BY_ROWS_ENV = "GLM53_SPEC_K_BY_ROWS"
-# (8 -> 2) and (16 -> 0) keep the verify below the full tile: B (K + 1) = 32 breaks losslessness on mesh row 5 (the
-# 2026-10-29 sweep: B2_K15, B4_K7 and B8_K3 all diverge there at token 4; VERIFY_ROWS_CAP), so 8 users per row draft 2
-# and 16 per row decode plainly until the full-tile defect is fixed
-DEFAULT_K_BY_ROWS: tuple[tuple[int, int], ...] = ((1, 3), (2, 3), (4, 3), (8, 2), (16, 0))
+# the 2026-10-29 sweep (doc/mesh/spec_k_by_batch.md): the acceptance plateaus near 3 drafts whatever K, so the shortest K
+# that keeps it wins (1-4 per row: 3); every point on the full 32-row verify tile (B (K + 1) = 32: B2_K15, B4_K7, B8_K3,
+# B16_K1) breaks losslessness on mesh row 5 at token 4 (VERIFY_ROWS_CAP keeps the policy below it), and at 8 per row the
+# 24-row verify of K=2 is a padded tile that costs more than K=1's 16 rows (13.3 vs 19.8 tok/s per user), so 8 per row
+# draft 1 and 16 per row decode plainly until the full-tile defect is fixed
+DEFAULT_K_BY_ROWS: tuple[tuple[int, int], ...] = ((1, 3), (2, 3), (4, 3), (8, 1), (16, 0))
 DEFAULT_SPEC_K = 3  # the measured sweet spot on the 8x4 (24.0 tok/s per user at 32 users, K=3, fused commit)
 SPEC_COMMIT_ENV = "GLM53_SPEC_COMMIT"
 DEFAULT_SERVING_COMMIT = "fused"
