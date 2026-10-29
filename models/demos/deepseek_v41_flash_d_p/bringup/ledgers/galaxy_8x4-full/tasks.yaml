@@ -811,7 +811,44 @@ tasks:
       err_state_*_L*: <= limit
       err_final_hidden: <= limit
       top5_overlap: '>= limit'
-      chunk_wall_ms: < 544
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
+- id: P.7
+  title: 'CKV_BFP4_PREPARED: ttnn.bringup.ckv_bfp4 without rebuilding its program descriptor every call (DS41-135)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.6
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'Owner focus (2026-10-28): reduce HOST time per chunk; clean wins are accepted by the overseer. DS41-135
+      (FIX.8): with CKV_FORMAT=bfp4_rows (default) ttnn.bringup.ckv_bfp4 costs ~1.33 ms host a call, 4 calls a chunk
+      (~5.3 ms), because ckv_bfp4.py program() rebuilds its ProgramDescriptor and generic_op hashes / dispatches a fresh
+      one every call (row0 and buffer addresses change). Make it a prepared program (ttnn/ttnn/bringup/prepared_program,
+      as P.1 GENERIC_OP_PREPARED and P.2 TAIL_A2A_PREPARED did: build once per (n, table), patch row0 / addresses per
+      call) or a C++ op if that is simpler. Bytes identical to today (ckv_bfp4 tests/unit, test_sparse_sdpa_row_bfp4.py).
+      Behind the setting CKV_BFP4_PREPARED in tt/settings.py (default on, ''off'' = the old path). Do not touch
+      tt/engram*.py. Report the host ms saved per chunk (cProfile of warm chunks and the warm wall before/after,
+      DS41_ENGRAM_TABLE=resident) and the device time.'
+  ab:
+    env:
+      DS41_CKV_BFP4_PREPARED: 'off'
+      DS41_ENGRAM_TABLE: resident
+    change:
+      DS41_CKV_BFP4_PREPARED: 'on'
+      DS41_ENGRAM_TABLE: resident
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
       device_ms_total: <= 230
 - id: P.4
   title: 'CCL_PERSISTENT_OUT: persistent output buffers for the per-layer all-gathers (262 per chunk) and reduce-scatter'
@@ -822,6 +859,7 @@ tasks:
   - P.3
   - FIX.7
   - P.6
+  - P.7
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   brief:

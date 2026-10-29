@@ -781,3 +781,18 @@ Page: https://claude.ai/artifact/EeioFZEY2jHgdzPRYXbaxc . Results: overseer_tool
 Wall -28..-30 % (P.1 + P.2 + the engram host path); device flat (FIX.7 casts +88 op calls, ~+1 ms). Still host-bound.
 NEXT (owner order 22:00): merge origin/dnijemcevic/model_bringup_bfp4kv @ 9697878dfb0 -> ttnn rebuild -> release FIX.8
 (orchestrator --until FIX.8) -> P.6 (set its chunk_wall_ms bar from FIX.8's wall) -> FIX.9 -> P.4 / P.5 -> index query fp4.
+
+## 2026-10-29 01:35 MILESTONE + HAND-OFF: FIX.8 PASS c258011c8a5 (4-bit compressed KV at full size)
+- The 2x2's CKV_FORMAT=bfp4_rows (merged bf6c8b497a6 from model_bringup_bfp4kv @ 9697878dfb0) runs on the 8x4 with NO
+  code change; all 11 units PASS (W.1, M.1, L.s10240, L.last, L.s56320, L.smoke, K.1 incl. Paris through tt-d-gen).
+  final hidden s56320 0.1889 -> 0.1961 (limit 0.2586), top5 1.0, compressed-KV state worst 0.1547 -> 0.1973 (0.3294),
+  contract ckv PCC 0.9847 -> 0.9767 (>= 0.937); closest: W.1 layer 24 0.0318 / 0.0336.
+- Attention tables at 1,044,480 tokens: 2570.5 -> 817.4 MiB a chip (-1.71 GiB). sparse_sdpa +2.5 % (0k) / +4.2 % (512k);
+  device +0.2..0.6 %; host +~5 ms a chunk = ckv_bfp4 rebuilding its ProgramDescriptor every call (DS41-135) -> queued
+  perf task P.7 CKV_BFP4_PREPARED (after P.6, before P.4). Warm walls bf16 / bfp4: 0k 419.7 / 441.6 and 412.5 / 426.3,
+  512k 451.3 / 472.0 (noisy, spread 30-130 ms).
+- Framework: F210 (gate commits leave dashboard/*.html out; 77c60cd4291) and F211 (commit-only ignores the framework's
+  own records under a task's paths; 50720ab8ba6) - FIX.8's passed gate was refused twice; committed without a re-run.
+  Selftests 647 pass (the 1 failure = the known xing40 fixed threshold).
+- NEXT: P.6 ENGRAM_ASYNC (bar chunk_wall_ms < 434 = FIX.8's bfp4 walls at 0k), orchestrator --until P.6, accept on a
+  clean win; then release FIX.9 (shared expert bfp8) -> P.7 -> P.4 -> P.5 -> index query fp4.
