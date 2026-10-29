@@ -42,6 +42,11 @@ TWO_WORKER_PROJECTIONS: dict[tuple[int, int], int] = {
     (2560, 8192): 40,
     (2560, 7040): 40,
 }
+# Decode linears, by (K, N), that run tt-metal's multi-core DRAM-sharded pipeline (``use_multicore_pipeline``) on
+# PIPELINE_WORKERS_PER_DRAM_BANK cores per bank: the LM-head chunks and the final mixer's up projection. The per-layer
+# projections keep the single-reader program, because on the pipeline their served greedy streams change.
+PIPELINE_WORKERS_PER_DRAM_BANK = 3
+PIPELINE_PROJECTIONS: frozenset[tuple[int, int]] = frozenset({(2560, 8192), (2560, 7040), (320, 2560)})
 
 
 def validate_decode_dram_workers(value) -> int:
@@ -300,13 +305,17 @@ def dram_sharded_matmul_configs(mesh_device, k: int, n: int, *, num_cores: int, 
         ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    if (k, n) in PIPELINE_PROJECTIONS:
+        workers = {"num_workers_per_dram_bank": PIPELINE_WORKERS_PER_DRAM_BANK, "use_multicore_pipeline": True}
+    else:
+        # one reader leaves the field at its default (1)
+        workers = {} if num_workers_per_dram_bank == 1 else {"num_workers_per_dram_bank": num_workers_per_dram_bank}
     program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=in0_block_w,
         per_core_M=1,
         per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)) if num_workers_per_dram_bank == 1 else tiles,
         fused_activation=None,
-        # one reader leaves the field at its default (1)
-        **({} if num_workers_per_dram_bank == 1 else {"num_workers_per_dram_bank": num_workers_per_dram_bank}),
+        **workers,
     )
     return activation_memory_config, program_config
 
