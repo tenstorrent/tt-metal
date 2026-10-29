@@ -30,7 +30,6 @@ driver that lives outside ``tests/sources/``.
 
 import atexit
 import collections
-import csv
 import datetime
 import json
 import logging
@@ -1106,40 +1105,33 @@ def pytest_configure_node(node):
         node.workerinput[_SIM_HOST_PID_KEY] = _sim_server.pid
 
 
-_REPORTS_WRITTEN = set()
+# Every chunk of a module this worker ran (worksteal can split a module). Only this worker writes its
+# <module>.<worker> files and the controller reads them after the workers end, so no other process races them.
+_MODULE_REPORTS: dict[str, PerfReport] = {}
 
 
-def _dump_or_append(report, path):
-    """Write the report, keeping the rows of earlier chunks of this module on this worker (worksteal can run a
-    module in several chunks). A file this process has not written yet is stale and gets replaced.
-    """
-    if path not in _REPORTS_WRITTEN or not path.exists() or path.stat().st_size == 0:
-        _REPORTS_WRITTEN.add(path)
-        report.dump_csv(path)
-        return
-    chunk = path.with_name(path.name + ".chunk")
-    report.dump_csv(chunk)
-    tables = [t for t in (_read_csv_rows(path), _read_csv_rows(chunk)) if t]
-    if tables:
-        # The cells are copied as text, so the values are written back exactly as they were dumped.
-        columns = list(dict.fromkeys(c for header, _ in tables for c in header))
-        with open(path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=columns, restval="")
-            writer.writeheader()
-            for header, rows in tables:
-                writer.writerows(dict(zip(header, row)) for row in rows)
-    chunk.unlink(missing_ok=True)
+def _module_report(key: str, report: PerfReport, context: str) -> PerfReport:
+    """This chunk's rows added to the earlier chunks of the module, failing before any write if their column schemas
+    differ: a CSV must hold exactly one schema."""
+    merged = _MODULE_REPORTS.setdefault(key, PerfReport())
+    merged.append(report.frame(), label=context)
+    merged.assert_single_schema(context=context)
+    return merged
 
 
-def _read_csv_rows(path):
-    """(header, rows) of a CSV, or None: a chunk whose tests were all skipped dumps a file with no header."""
-    try:
-        with open(path, newline="") as f:
-            reader = csv.reader(f)
-            header = next(reader, None)
-            return (header, list(reader)) if header else None
-    except FileNotFoundError:
-        return None
+def _dump_perf_report(test_module: str, worker_id: str, report: PerfReport):
+    """Write this worker's raw and post-processed CSVs of the module, over every chunk of it the worker ran."""
+    # More than one schema means two unrelated tests/ops share this module (split them into separate files) or one
+    # test emits inconsistent columns across its sweep.
+    merged = _module_report(
+        f"{test_module}.{worker_id}", report, f"{test_module} (worker {worker_id})"
+    )
+    merged.dump_csv(TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv")
+
+    post = PerfReport()
+    post.append(merged.frame().copy())
+    post.post_process()
+    post.dump_csv(TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -1167,12 +1159,14 @@ def counter_report(request, worker_id):
     if PerfConfig.TEST_COUNTER == 0:
         return
 
-    temp_report.assert_single_schema(
-        context=f"{test_module} counters (worker {worker_id})"
+    merged = _module_report(
+        f"{test_module}.{worker_id}.counters",
+        temp_report,
+        f"{test_module} counters (worker {worker_id})",
     )
-
-    counters_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
-    _dump_or_append(temp_report, counters_path)
+    merged.dump_csv(
+        TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.counters.csv"
+    )
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -1193,17 +1187,7 @@ def perf_report(request, worker_id):
     if PerfConfig.TEST_COUNTER == 0:
         return
 
-    # Fail loud before writing: a single CSV must hold exactly one column schema.
-    # More than one means two unrelated tests/ops share this module (split them
-    # into separate files) or one test emits inconsistent columns across its sweep.
-    temp_report.assert_single_schema(context=f"{test_module} (worker {worker_id})")
-
-    raw_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.csv"
-    post_path = TestConfig.PERF_DATA_DIR / f"{test_module}.{worker_id}.post.csv"
-
-    _dump_or_append(temp_report, raw_path)
-    temp_report.post_process()
-    _dump_or_append(temp_report, post_path)
+    _dump_perf_report(test_module, worker_id, temp_report)
 
 
 @pytest.hookimpl(optionalhook=True)
