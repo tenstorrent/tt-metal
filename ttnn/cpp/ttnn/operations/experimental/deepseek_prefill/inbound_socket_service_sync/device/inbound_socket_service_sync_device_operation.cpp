@@ -40,7 +40,7 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
         "inbound_socket_service_sync: extra backing counts are inconsistent");
     for (size_t i = 0; i < tensor_args.extra_backings.size(); ++i) {
         TT_FATAL(
-            tensor_args.extra_backings[i].buffer() != nullptr && args.extra_page_sizes[i] > 0 &&
+            tensor_args.extra_backings[i].is_allocated() && args.extra_page_sizes[i] > 0 &&
                 args.extra_num_pages[i] > 0,
             "inbound_socket_service_sync: backing tensor {} must be allocated and have pages",
             i + 1);

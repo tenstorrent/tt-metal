@@ -50,7 +50,7 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
         const auto& extra_input = tensor_args.extra_inputs[i];
         const auto& extra_backing = tensor_args.extra_backings[i];
         TT_FATAL(
-            extra_input.storage_type() == StorageType::DEVICE && extra_input.buffer() != nullptr,
+            extra_input.storage_type() == StorageType::DEVICE && extra_input.is_allocated(),
             "outbound_socket_service_sync: input tensor {} must be allocated on device",
             i + 1);
         TT_FATAL(
