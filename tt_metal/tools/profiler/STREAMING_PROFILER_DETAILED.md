@@ -1128,7 +1128,7 @@ see [§4.1](#41-zones-and-point-markers-in-the-tracy-gui).
 Every zone ships whole, in one packet, emitted at scope **close** — the RAII scope object carries the
 start timestamp (`start_hi`/`start_lo`, 8 B of member state), so the open touches nothing but the wall
 clock. Packets are sized by need. `word0 = type(5) | id27` in all of them; the id is the full 27-bit
-structural zone id (`tu_id(13) << 14 | local(14)`, the split in `hostdev/profiler_zone_id.h`),
+structural zone id (`tu_id(13) << 14 | local(14)`, the split in `hostdev/observability_event_id.h`),
 ELF-name-resolved on the host.
 
 | type | name | words | payload after word0 | expresses |

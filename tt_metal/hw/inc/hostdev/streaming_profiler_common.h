@@ -14,7 +14,7 @@
 #include <cstdint>
 
 #include "hostdev/profiler_common.h"
-#include "hostdev/profiler_zone_id.h"
+#include "hostdev/observability_event_id.h"
 
 namespace kernel_profiler {
 

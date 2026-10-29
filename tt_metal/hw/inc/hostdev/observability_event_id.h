@@ -15,7 +15,7 @@
 // sh_addr; .tt_zone_str is "MS" so __FILE__ is stored once per file; .tt_zone_meta has a real sh_entsize of
 // 16 so the host walks a plain array; the id is stored explicitly because an inlined-away zone leaves a hole
 // in emission order.
-// Record layout (little-endian; must match ZoneMetaRecord in llrt/zone_meta.cpp):
+// Record layout (little-endian; must match ZoneMetaRecord in llrt/observability_event_meta.cpp):
 //   [0] u32 zone_id   [4] u32 name_ptr (VMA in .tt_zone_str)   [8] u32 file_ptr   [12] u32 line
 #pragma once
 
@@ -39,7 +39,7 @@
 // The profiler's own stall zone: recognized by value, so it has no ELF record and no source location.
 #define TT_ZONE_STALL_ID TT_ZONE_MAKE_ID(TT_ZONE_RESERVED_TU, 0)
 
-// Bytes per .tt_zone_meta record. Also the section's sh_entsize -- see the host walk in llrt/zone_meta.cpp.
+// Bytes per .tt_zone_meta record. Also the section's sh_entsize -- see the host walk in llrt/observability_event_meta.cpp.
 #define TT_ZONE_META_RECORD_BYTES 16
 
 #define TT_ZONE_STR_(x) #x
@@ -60,7 +60,7 @@
     static_assert(                                                                                         \
         TT_ZONE_LOCAL_IDX(ctr) < TT_ZONE_LOCAL_COUNT,                                                      \
         "too many KERNEL_PROFILER zone sites in one translation unit for TT_ZONE_LOCAL_BITS -- widen the " \
-        "split in hostdev/profiler_zone_id.h");                                                      \
+        "split in hostdev/observability_event_id.h");                                                      \
     static_assert(                                                                                         \
         (unsigned)(TT_PROFILER_TU_ID) < TT_ZONE_RESERVED_TU,                                               \
         "TT_PROFILER_TU_ID is not below TT_ZONE_RESERVED_TU -- the tu-id registry handed out an id this "  \
