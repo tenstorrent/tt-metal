@@ -1469,3 +1469,31 @@ untouched. Also: the served-padded ragged chunk + continuation is bit-exact on t
 (the 0.98 bar passes) but a top-1 agreement of 83.6 % (bar 85 %) and a top-5 overlap of 88.1 %, against 93.0 % / 95.5 %
 with bfp8 experts on the same gate. The PCC bar alone would have let it through; the top-1 gate catches the loss. C12
 stays bfp8 (the user rule: 4-bit only when accuracy and PCC are retained); its e2e perf point was dropped as moot.
+
+### 2026-10-29 03:58: the served round-1 artifacts' root cause, fixed; the ttKDA driver vendored
+
+- **Root cause.** ttKDA's sequence-parallel prefill places a chunk on the ranks block-cyclically by the ABSOLUTE
+  `actual_start` (`chronology.hpp` `derive`: first rank = start / local_rows mod ranks, a split segment at start mod
+  local_rows); the mesh model uploads a chunk as contiguous slabs (rank r = rows [r T/rows, (r+1) T/rows)). The two
+  agree only when the chunk start is a multiple of the padded chunk length, so a continuation at 2176 in a 256-row
+  chunk (vLLM's budget split on the block) or at 36736 in a 16384-row chunk (the served smoke's round 1) scanned the
+  slabs in the wrong order and carried the state at end mod T. The per-component state diff localized it (KDA conv
+  taps and recurrent states wrong after the 2176 chunk, every DSA latent row and pool before 2176 identical); the
+  adapter's miss-recompute path was exonerated first (B vs B2 at 0.9999). Every earlier chunk test had starts that
+  were multiples of the padded length (36736 = 2 x 16384 + 3968: the 32768 start is aligned).
+- **Fix (our folder).** `decoder_layer._prefill_forward_impl` hands ttKDA chunk-relative bounds (start 0, end = the
+  valid rows): KDA has no positional encoding and the carried state supplies the history, so the position enters
+  nothing else; the traced prefill already did this. Confirmed at the layer level (`test_mesh_local_kda`: the
+  budget-split plan 1024+1024+128/256+172/256 = the aligned plan against HF on 2348 tokens: last chunk 0.99995,
+  recurrent 0.99992, conv 0.99999) and at the served level (`apc_budget_split_block_r10` PASS). The 45-layer served
+  APC smoke with the fix is queued.
+- **The L1 clash** on the (2,4) block (`static dataflow buffers clash with L1 buffers`, the KDA exclusive scan at
+  1024-1088 local rows on 2 ranks; the old served tree and the override runtime fail identically; the 8x4's
+  16384-row chunks and <= 512 local rows run): the chunk terms' L1 budget (320 KiB per core) left no room for the
+  group summaries plus the scan's circular buffers at that geometry. At the user's direction the ttKDA Python driver
+  is now vendored as `tt/ttkda` (from `deepseek_v3_d_p/tt/kda` @ f8fabeb9b9c; the ttnn ops stay shared) and tuned
+  there: the budget is 256 KiB, which sends that class to DRAM like the longer chunks. The block served tests keep
+  their 2-rank chunks at <= 512 local rows meanwhile (image: chunk 512 + filler 288, PASS; waves: SP chunk 1024 under
+  the 2048 wave width, queued); the single-2176-chunk plan of the layer test is the clash's regression check.
+- Also: `e2e_8x4_B32_dispatch` (256 users, 45 layers, the 32-row dispatch expert path) 100.9 ms traced step = 9.9
+  tok/s per user, 2538 tok/s aggregate, TTFT 135 ms traced, first token = HF (the README's 256-user row).
