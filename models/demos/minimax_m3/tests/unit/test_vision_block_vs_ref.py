@@ -16,7 +16,7 @@ import torch
 
 import ttnn
 from models.demos.minimax_m3.tt.vision.block import M3VLBlock
-from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin_padded
+from models.demos.minimax_m3.tt.vision.rope import rope_tensors
 
 from ..test_factory import parametrize_mesh_with_fabric
 from .vision_helpers import assert_pcc, grid_name, parametrize_vision_grids, to_device, to_host
@@ -40,14 +40,14 @@ def test_vision_block_vs_ref(mesh_device, device_params, grid_thw, vision_refere
         head_dim=config.head_dim,
         dtype=ttnn.bfloat16,
     )
-    cos, sin = rope_cos_sin_padded(
+    cos_tt, sin_tt = rope_tensors(
+        mesh_device,
         acts["grid_thw"],
         head_dim=config.head_dim,
         padded_head_dim=tt_block.attention.padded_head_dim,
         theta=config.rope_theta,
         spatial_merge_size=config.spatial_merge_size,
     )
-    cos_tt, sin_tt = tt_block.attention.stage_cos_sin(cos, sin)
     out = to_host(tt_block(to_device(x_in, mesh_device), cos_tt, sin_tt), mesh_device, ref_out.shape)
 
     assert_pcc(f"block {grid_name(grid_thw)} L={x_in.shape[0]}", ref_out, out, 0.9999)

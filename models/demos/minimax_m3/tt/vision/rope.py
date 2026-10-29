@@ -2,39 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 """
-MiniMax-M3-VL 3D vision RoPE — host-side cos/sin precompute.
+MiniMax-M3-VL 3D vision RoPE: the cos and sin tables of the device's RoPE op.
 
-Like the Qwen-VL towers, the rotary cos/sin are computed on host from the
-`image_grid_thw` grid and pushed to device once per forward (they are
-position-only, weight-free). This module owns that precompute and a torch
-reference for the rotate-half application; the *device* application of the
-rotation lives in `attention.py` (it depends on the padded head layout).
-
-Reference (`MiniMaxM3VL3DRotaryEmbedding`, transformers 5.12):
-
-    rope_dims = 2 * (head_dim // 2)            # 80
-    axis_dim  = 2 * ((rope_dims // 3) // 2)    # 26  -> 13 freqs/axis
-    inv_freq  = 1 / theta ** (arange(0, axis_dim, 2) / axis_dim)   # (13,)
-    # per-image coords with the spatial_merge 2x2 block reordering:
-    #   hi = arange(h)[:,None].expand(h,w).reshape(h//m,m,w//m,m).permute(0,2,1,3).flatten()
-    #   wi = arange(w)[None,:].expand(h,w).reshape(h//m,m,w//m,m).permute(0,2,1,3).flatten()
-    #   ti = arange(t).repeat_interleave(h*w)
-    #   coords = stack([ti, hi.repeat(t), wi.repeat(t)], -1)        # (L, 3)
-    freqs = cat([coords[:, i:i+1] * inv_freq for i in range(3)], -1)  # (L, 39)
-    emb   = cat([freqs, freqs], -1)                                   # (L, 78)
-    cos, sin = emb.cos(), emb.sin()
-
-Apply (`apply_rotary_pos_emb_vision`): only the first `rot_dim = 78` head
-dims are rotated; the last 2 pass through.
-
-    rotate_half(x) = cat(-x[..., d/2:], x[..., :d/2])     # d = 78 -> split 39/39
-    q_rot = q[..., :78] * cos + rotate_half(q[..., :78]) * sin
-
-On device, `ttnn.experimental.rotary_embedding_llama` rotates q and k in one op
-per tensor. It pairs lanes (2i, 2i+1) of a head where rotate_half pairs dims i
-and i + 39, so q and k use the head order of `rope_head_permutation` (their
-weight rows are reordered at load, attention.py) and `rope_cos_sin_padded` lays
-out cos/sin in the same order.
+The angles are the reference's (reference/vision.py, rope_cos_sin), computed on host from `image_grid_thw`. On device,
+`ttnn.experimental.rotary_embedding_llama` rotates q and k, one op each. It rotates each pair of lanes (2i, 2i+1) of a
+head, where the reference's rotate_half rotates dims i and i + 39 of the 78 dims that rotate, so the q and k rows of
+wqkv are reordered at load (attention.py) and the tables follow the same head order.
 """
 from __future__ import annotations
 
@@ -42,113 +15,49 @@ from typing import Tuple
 
 import torch
 
-
-def rope_axis_dim(head_dim: int) -> int:
-    """Per-axis rotary dim: 2 * ((2*(head_dim//2) // 3) // 2). head_dim=80 -> 26."""
-    rope_dims = 2 * (head_dim // 2)
-    return 2 * ((rope_dims // 3) // 2)
-
-
-def rope_position_coords(grid_thw: torch.Tensor, spatial_merge_size: int) -> torch.Tensor:
-    """(num_images, 3) grid -> (L, 3) per-patch (t, h, w) coords, merge-block ordered.
-
-    Matches `MiniMaxM3VL3DRotaryEmbedding.forward`'s coord construction exactly
-    (the spatial_merge 2x2 reordering is what the image processor uses to lay
-    patches out in the sequence).
-    """
-    m = spatial_merge_size
-    coords = []
-    for t, h, w in grid_thw.tolist():
-        hi = torch.arange(h).unsqueeze(1).expand(-1, w)
-        hi = hi.reshape(h // m, m, w // m, m).permute(0, 2, 1, 3).flatten()
-        wi = torch.arange(w).unsqueeze(0).expand(h, -1)
-        wi = wi.reshape(h // m, m, w // m, m).permute(0, 2, 1, 3).flatten()
-        ti = torch.arange(t).repeat_interleave(h * w)
-        coords.append(torch.stack([ti, hi.repeat(t), wi.repeat(t)], dim=-1))
-    return torch.cat(coords).to(torch.float32)
-
-
-def rope_cos_sin(
-    grid_thw: torch.Tensor,
-    head_dim: int = 80,
-    theta: float = 10000.0,
-    spatial_merge_size: int = 2,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Compute the (L, rot_dim) cos/sin for the 3D vision RoPE.
-
-    rot_dim = 3 * axis_dim = 78 for head_dim 80. Returns fp32 tensors.
-    """
-    axis_dim = rope_axis_dim(head_dim)
-    coords = rope_position_coords(grid_thw, spatial_merge_size)  # (L, 3)
-    inv_freq = 1.0 / (theta ** (torch.arange(0, axis_dim, 2, dtype=torch.float32) / axis_dim))  # (axis_dim//2,)
-    freqs = torch.cat([coords[:, i : i + 1] * inv_freq for i in range(3)], dim=-1)  # (L, 3*axis_dim//2)
-    emb = torch.cat([freqs, freqs], dim=-1)  # (L, rot_dim)
-    return emb.cos(), emb.sin()
-
-
-def rotate_half(x: torch.Tensor) -> torch.Tensor:
-    """cat(-x[..., d/2:], x[..., :d/2]) — HF rotate_half convention."""
-    half = x.shape[-1] // 2
-    x1, x2 = x[..., :half], x[..., half:]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def rope_head_permutation(head_dim: int) -> torch.Tensor:
-    """(head_dim,) head order of q and k on device: lane j holds dim perm[j] of the reference head.
-
-    rotary_embedding_llama rotates each pair of lanes (2i, 2i+1) of a head:
-        out[2i] = x[2i] * cos - x[2i+1] * sin,    out[2i+1] = x[2i+1] * cos + x[2i] * sin
-    and rotate_half rotates dims i and i + h (h = rot_dim / 2 = 39) by one angle the same way:
-        out[i] = x[i] * cos - x[i+h] * sin,       out[i+h] = x[i+h] * cos + x[i] * sin
-    So lane 2i holds dim i and lane 2i+1 dim i + h, for i < h; the pass-through dims [rot_dim:head_dim] follow
-    in place. q and k share the order, so q.k is unchanged.
-    """
-    half = 3 * rope_axis_dim(head_dim) // 2  # 39
-    pairs = [d for i in range(half) for d in (i, i + half)]
-    return torch.tensor(pairs + list(range(2 * half, head_dim)), dtype=torch.long)
+import ttnn
+from models.demos.minimax_m3.reference.vision import rope_cos_sin
+from models.demos.minimax_m3.tt.vision.common import mesh_mapper
 
 
 def rope_cos_sin_padded(
-    grid_thw: torch.Tensor,
-    head_dim: int = 80,
-    padded_head_dim: int = 96,
-    theta: float = 10000.0,
-    spatial_merge_size: int = 2,
+    grid_thw: torch.Tensor, head_dim: int, padded_head_dim: int, theta: float, spatial_merge_size: int
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """cos/sin (L, padded_head_dim) in the device head order of `rope_head_permutation`, for rotary_embedding_llama.
+    """cos and sin (L, padded_head_dim) in fp32, in the head order of q and k on device.
 
-    Lane j takes the angle of dim perm[j]: both lanes of a rotated pair get the one angle of their two dims. The
-    tail (pass-through + pad) is cos=1, sin=0 (identity rotation).
+    The reference's columns are the angles of the 39 rotated pairs, then the same 39 again; lanes 2i and 2i+1 take
+    angle i. The pass-through and pad lanes take cos 1 and sin 0, which leaves them as they are.
     """
-    cos, sin = rope_cos_sin(grid_thw, head_dim, theta, spatial_merge_size)  # (L, rot_dim)
-    L, rot_dim = cos.shape
-    perm = rope_head_permutation(head_dim)[:rot_dim]
-    cos_p = torch.ones(L, padded_head_dim, dtype=cos.dtype)
-    sin_p = torch.zeros(L, padded_head_dim, dtype=sin.dtype)
-    cos_p[:, :rot_dim] = cos[:, perm]
-    sin_p[:, :rot_dim] = sin[:, perm]
-    return cos_p, sin_p
+    cos, sin = rope_cos_sin(grid_thw, head_dim, theta, spatial_merge_size)  # (L, 78)
+    num_patches, rot_dim = cos.shape
+    half = rot_dim // 2
+    cos_padded = torch.ones(num_patches, padded_head_dim, dtype=cos.dtype)
+    sin_padded = torch.zeros(num_patches, padded_head_dim, dtype=sin.dtype)
+    # Each angle twice in a row, as tt_transformers' RotaryEmbedding.permute_to_meta_format lays them out.
+    # repeat_interleave(2) gives the same tables but takes more host time.
+    cos_padded[:, :rot_dim] = torch.stack((cos[:, :half], cos[:, :half]), dim=-1).flatten(-2)
+    sin_padded[:, :rot_dim] = torch.stack((sin[:, :half], sin[:, :half]), dim=-1).flatten(-2)
+    return cos_padded, sin_padded
 
 
-def apply_rope_ref(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    cos: torch.Tensor,
-    sin: torch.Tensor,
-    unsqueeze_dim: int = -2,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Torch reference of `apply_rotary_pos_emb_vision`.
+def rope_tensors(
+    mesh_device, grid_thw: torch.Tensor, head_dim: int, padded_head_dim: int, theta: float, spatial_merge_size: int
+) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """The tables of rope_cos_sin_padded on mesh_device, new tensors that the caller owns.
 
-    q, k: (..., L, num_heads, head_dim). cos, sin: (L, rot_dim). Only the
-    first rot_dim head dims are rotated; the tail passes through.
+    Shaped (1, 1, L, padded_head_dim) so the op broadcasts them over the heads, and bfloat16, the only dtype
+    rotary_embedding_llama takes.
     """
-    rot_dim = cos.shape[-1]
-    cos = cos.unsqueeze(unsqueeze_dim)  # (L, 1, rot_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-
-    def _apply(x):
-        x_rot, x_pass = x[..., :rot_dim], x[..., rot_dim:]
-        x_rot = x_rot * cos + rotate_half(x_rot) * sin
-        return torch.cat([x_rot, x_pass], dim=-1)
-
-    return _apply(q), _apply(k)
+    cos, sin = rope_cos_sin_padded(grid_thw, head_dim, padded_head_dim, theta, spatial_merge_size)
+    mm = mesh_mapper(mesh_device)
+    return tuple(
+        ttnn.from_torch(
+            table.view(1, 1, *table.shape).to(torch.bfloat16),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mm,
+        )
+        for table in (cos, sin)
+    )

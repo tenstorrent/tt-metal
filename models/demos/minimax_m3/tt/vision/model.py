@@ -17,13 +17,15 @@ Forward pipeline (matches `MiniMaxM3VLVisionModel.forward` then
         -> vision tokens (L // 4, 6144)
 
 There is NO post-encoder LayerNorm and NO attention windowing — the tower
-attends fully. The 3D-RoPE cos/sin are precomputed host-side from
-`image_grid_thw` and pushed to device once per forward (shared by all
-blocks). Weights come from the Torch reference (reference/vision.py): seeded
-random weights in the unit tests, the checkpoint's through loader.build_reference.
+attends fully. The 3D-RoPE cos/sin depend only on `image_grid_thw`: they are
+computed on host and pushed to device with the first image of a grid, then
+kept for the next images of that grid (shared by all blocks). Weights come
+from the Torch reference (reference/vision.py): seeded random weights in the
+unit tests, the checkpoint's through loader.build_reference.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import List, Optional
 
 import torch
@@ -36,7 +38,12 @@ from models.demos.minimax_m3.tt.vision.image_input import check_image_input
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
 from models.demos.minimax_m3.tt.vision.projector import M3VLProjector
-from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin_padded
+from models.demos.minimax_m3.tt.vision.rope import rope_tensors
+
+# The RoPE tables of the ROPE_CACHE_GRIDS (at least 1) image grids used last stay on device. 16 is not tuned to any
+# mix of image sizes. It is cheap: cos and sin of a 672x672 image, the largest that the image processor makes (2304
+# patches), take 0.88 MB of DRAM, so 14 MB for 16 such grids.
+ROPE_CACHE_GRIDS = 16
 
 
 class M3VLVisionModel(LightweightModule):
@@ -62,6 +69,7 @@ class M3VLVisionModel(LightweightModule):
         self.pre_layrnorm = pre_layrnorm
         self.blocks = blocks
         self.projector = projector
+        self._rope_cache = OrderedDict()  # (t, h, w) -> (cos, sin) on device, the least recently used first
 
     @classmethod
     def from_torch(
@@ -115,14 +123,31 @@ class M3VLVisionModel(LightweightModule):
         )
 
     def _stage_rope(self, image_grid_thw: torch.Tensor):
-        cos_pt, sin_pt = rope_cos_sin_padded(
-            image_grid_thw.to(torch.int64),
+        """New cos and sin tables of the grid on device (rope_tensors), which the caller owns."""
+        return rope_tensors(
+            self.device,
+            image_grid_thw,
             head_dim=self.args.head_dim,
             padded_head_dim=self.args.padded_head_dim,
             theta=self.args.rope_theta,
             spatial_merge_size=self.args.spatial_merge_size,
         )
-        return self.blocks[0].attention.stage_cos_sin(cos_pt, sin_pt)
+
+    def _cached_rope(self, image_grid_thw: torch.Tensor):
+        """The cos and sin tables of the grid, staged with its first image and kept for the next images of that grid.
+
+        Holds the tables of the ROPE_CACHE_GRIDS grids used last and frees the two tables of the grid it drops. Only
+        forward_tower uses them, for the blocks, so no caller holds a table that this frees.
+        """
+        key = tuple(image_grid_thw[0].tolist())
+        if key in self._rope_cache:
+            self._rope_cache.move_to_end(key)
+            return self._rope_cache[key]
+        if len(self._rope_cache) >= ROPE_CACHE_GRIDS:
+            for table in self._rope_cache.popitem(last=False)[1]:
+                ttnn.deallocate(table)
+        self._rope_cache[key] = self._stage_rope(image_grid_thw)
+        return self._rope_cache[key]
 
     # ------------------------------------------------------------------
     def forward_tower(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
@@ -138,11 +163,9 @@ class M3VLVisionModel(LightweightModule):
         x_tt = self._push_pixel_values(pixel_values)
         x_tt = self.patch_embed(x_tt)
         x_tt = self.pre_layrnorm(x_tt)
-        cos_tt, sin_tt = self._stage_rope(image_grid_thw)
+        cos_tt, sin_tt = self._cached_rope(image_grid_thw)
         for blk in self.blocks:
             x_tt = blk(x_tt, cos_tt, sin_tt)
-        ttnn.deallocate(cos_tt)
-        ttnn.deallocate(sin_tt)
         return x_tt
 
     def forward(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
