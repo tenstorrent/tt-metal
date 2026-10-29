@@ -12,7 +12,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace {
@@ -156,7 +155,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
         auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].dtype());
         auto output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
-        auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
+        auto rounded_input_page_size = tt::round_up(input_unit_size, 32u);
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN0,
             .entry_size = rounded_input_page_size,
@@ -164,7 +163,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
             .data_format_metadata = src_cb_data_format,
         });
 
-        auto rounded_output_page_size = round_up_to_mul32(output_unit_size);
+        auto rounded_output_page_size = tt::round_up(output_unit_size, 32u);
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = OUT1,
             .entry_size = rounded_output_page_size,
@@ -520,7 +519,7 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
     auto src_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].dtype());
 
-    auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
+    auto rounded_input_page_size = tt::round_up(input_unit_size, 32u);
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN0,
         .entry_size = rounded_input_page_size,

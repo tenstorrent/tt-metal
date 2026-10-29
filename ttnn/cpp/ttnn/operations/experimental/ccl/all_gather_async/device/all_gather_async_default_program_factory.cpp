@@ -118,8 +118,8 @@ AllGatherDescriptorArtifacts build_all_gather_async_minimal_default_program_desc
     const bool reverse_order,
     const std::optional<CoreRangeSet>& sub_core_grid) {
     // Tensor Info
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor buffer is null");
-    TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor buffer is null");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor buffer is null");
+    TT_FATAL(output_tensor.is_allocated(), "Output tensor buffer is null");
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();

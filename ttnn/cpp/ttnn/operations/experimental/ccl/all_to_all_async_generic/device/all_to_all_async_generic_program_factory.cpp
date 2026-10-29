@@ -16,6 +16,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <internal/mesh_device.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <set>
@@ -370,7 +371,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     // complete construction; its translated NOC coordinates are never submitted by this rank. Local coordinates use
     // their own chip for harvesting-aware NOC translation.
     tt::tt_metal::IDevice* coordinate_device = device->is_local(mesh_coordinate)
-                                                   ? device->get_device(mesh_coordinate)
+                                                   ? tt::tt_metal::internal::get_device(*device, mesh_coordinate)
                                                    : static_cast<tt::tt_metal::IDevice*>(device);
 
     std::vector<Tensor> input_tensors = {tensor_args.input_tensor};

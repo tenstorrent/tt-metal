@@ -134,7 +134,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     conv2d/device/conv2d_op_width_sharded_program_factory.cpp
     # binary_ng (device backend; no host op / no nanobind)
     binary_ng/device/binary_ng_device_operation.cpp
-    binary_ng/device/binary_ng_program_factory.cpp
     binary_ng/device/binary_ng_metal_v2_factory.cpp
     binary_ng/device/binary_ng_quasar_native_factory.cpp
     binary_ng/device/binary_ng_utils.cpp
