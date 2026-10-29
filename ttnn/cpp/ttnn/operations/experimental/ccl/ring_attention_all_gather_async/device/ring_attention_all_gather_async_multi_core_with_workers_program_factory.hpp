@@ -21,9 +21,6 @@ namespace ttnn::experimental::prim {
 // lockstep; override_runtime_arguments() re-applies the semaphore address at these positions.
 namespace ring_attention_all_gather_async_dynamic {
 inline constexpr uint32_t kReaderForwardKernelIdx = 0;
-inline constexpr uint32_t kWriterForwardKernelIdx = 1;
-inline constexpr uint32_t kReaderBackwardKernelIdx = 2;
-inline constexpr uint32_t kWriterBackwardKernelIdx = 3;
 inline constexpr uint32_t kReaderSemaphoreArg = 2;
 inline constexpr uint32_t kWriterSemaphoreArg = 4;
 inline constexpr uint32_t kForwardSemaphoreIdx = 1;
@@ -117,6 +114,8 @@ struct RingAttentionAllGatherAsyncMeshWorkloadFactory {
         const RingAttentionAllGatherAsyncInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value);
 };
+
+static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<RingAttentionAllGatherAsyncMeshWorkloadFactory>);
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
