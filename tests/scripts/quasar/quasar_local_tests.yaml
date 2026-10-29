@@ -1,8 +1,8 @@
 # Quasar emulator regression tests
 #
 # Structure:
-#   <group>:              gtest binary under build/test/tt_metal/, or pytest file path
-#                         relative to TT_METAL_HOME
+#   <group>:              gtest binary under build/test/tt_metal/, or pytest file or
+#                         directory path relative to TT_METAL_HOME
 #     - filter: <pattern> (optional) gtest filter glob, or pytest node id after ::
 #                         Omit or use "" to run all tests in the gtest binary /
 #                         pytest file.
@@ -21,15 +21,17 @@
 #       runner: <type>    (optional) gtest (default) or pytest
 #       env:              (optional) Extra environment variables as key: value pairs
 #       gtest_repeat:     (optional, gtest only) --gtest_repeat=N
+#       pytest_mark:      (optional, pytest only) Passed as pytest -m <expr>
+#                         (for example, emulator). Omit to collect every test.
 #       back2back:        (optional) When true, run this entry in the same process as
 #                         other consecutive back2back entries that share the settings
 #                         below. Used by run_quasar_regression.sh. Defaults to false.
 #                         Gtest: same group (binary), config, env, and gtest_repeat.
 #                         Filters are joined into one --gtest_filter.
-#                         Pytest: same config, env, and gtest_repeat. The pytest file
-#                         (group) and filter may differ; matching entries are one
-#                         pytest command (pytest file_a.py::test_one file_a.py::test_two
-#                         file_b.py). Env key order does
+#                         Pytest: same config, env, gtest_repeat, and pytest_mark. The
+#                         pytest path (file or directory) and filter may differ;
+#                         matching entries are one pytest command
+#                         (pytest dir_a dir_b file_a.py::test_one file_b.py). Env key order does
 #                         not matter. Entries that differ in config or env stay in
 #                         separate processes, because one pytest process has one
 #                         simulator and one environment.
@@ -336,3 +338,14 @@ models/experimental/llama32_1b_quasar/tests/graph_ops:
       TT_METAL_ENV: dev
       TT_METAL_SLOW_DISPATCH_MODE: 1
       MESH_DEVICE: N150
+
+# Emulator-sized op subsets.
+models/experimental/ops/quasar/tests/yolo_ops:
+  - runner: pytest
+    config: 2x3_DISPATCH
+    pytest_mark: emulator
+
+models/experimental/ops/quasar/tests/qwen3_vl_ops:
+  - runner: pytest
+    config: 2x3_DISPATCH
+    pytest_mark: emulator

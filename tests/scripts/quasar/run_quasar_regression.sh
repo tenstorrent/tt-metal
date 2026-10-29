@@ -38,10 +38,10 @@ Run Quasar emulator regression tests defined in a YAML file, batching entries
 marked back2back: true into single invocations.
 
 Gtest entries batch when they share group, config, env, and gtest_repeat.
-Pytest entries batch when they share config, env, and gtest_repeat, even across
-different files or different filters in one file. Named filters become node ids
-in one pytest command
-(pytest file_a.py::test_one file_a.py::test_two file_b.py ...).
+Pytest entries batch when they share config, env, gtest_repeat, and pytest_mark,
+even across different files, directories, or filters. Named filters become node
+ids in one pytest command
+(pytest dir_a dir_b file_a.py::test_one file_a.py::test_two ...).
 Env key order does not matter.
 A single pytest process shares one simulator config and one environment, so
 entries that differ there stay in separate commands.
@@ -49,7 +49,7 @@ entries that differ there stay in separate commands.
 YAML entries default to runner: gtest (binary under build/test/tt_metal/<group>).
 Set runner: pytest for Python tests (group is a .py file or directory relative to TT_METAL_HOME;
 filter is the pytest node id after ::). Omit filter (or use "") to run all tests in the
-gtest binary / pytest file.
+gtest binary / pytest path. pytest_mark is passed as pytest -m (pytest only).
 
 Required environment variables:
   TT_METAL_SIMULATOR_BASE   Base path containing simulator build directories
@@ -184,6 +184,7 @@ ENV_SEP='|'  # separator between env KEY=value pairs (yq join() does not interpr
 EMPTY_ENV='-'  # TSV placeholder for empty env (bash read collapses consecutive tab fields)
 EMPTY_GTEST_REPEAT='-'  # TSV placeholder for empty gtest_repeat (same issue as env)
 EMPTY_FILTER='-'  # TSV placeholder for omitted/empty filter (run all tests)
+EMPTY_PYTEST_MARK='-'  # TSV placeholder for omitted pytest_mark (-m)
 VALID_RUNNERS=("gtest" "pytest")
 
 # yq @tsv RFC4180-quotes fields that contain tabs/quotes/commas/newlines; bash read does not
@@ -206,7 +207,7 @@ is_valid_runner() {
 }
 
 declare -a test_entries=()
-while IFS=$'\t' read -r group filter configs envvars gtest_repeat back2back runner; do
+while IFS=$'\t' read -r group filter configs envvars gtest_repeat back2back runner pytest_mark; do
     [[ -z "$group" ]] && continue
     group="$(tsv_unquote "$group")"
     filter="$(tsv_unquote "$filter")"
@@ -215,11 +216,17 @@ while IFS=$'\t' read -r group filter configs envvars gtest_repeat back2back runn
     gtest_repeat="$(tsv_unquote "$gtest_repeat")"
     back2back="$(tsv_unquote "$back2back")"
     runner="$(tsv_unquote "$runner")"
+    pytest_mark="$(tsv_unquote "$pytest_mark")"
     [[ "$filter" == "$EMPTY_FILTER" ]] && filter=""
     [[ "$gtest_repeat" == "$EMPTY_GTEST_REPEAT" ]] && gtest_repeat=""
+    [[ "$pytest_mark" == "$EMPTY_PYTEST_MARK" ]] && pytest_mark=""
     if ! is_valid_runner "$runner"; then
         echo "ERROR: invalid runner '$runner' for test '$filter' in group '$group'"
         echo "       Supported runners: ${VALID_RUNNERS[*]}"
+        exit 1
+    fi
+    if [[ "$runner" != "pytest" && -n "$pytest_mark" ]]; then
+        echo "ERROR: pytest_mark is only valid for runner: pytest (group '$group', filter '$filter')"
         exit 1
     fi
     if [[ "$runner" == "pytest" && -n "$gtest_repeat" ]]; then
@@ -235,9 +242,9 @@ while IFS=$'\t' read -r group filter configs envvars gtest_repeat back2back runn
             echo "       Supported configs: ${VALID_CONFIGS[*]}"
             exit 1
         fi
-        test_entries+=("${group}${SEP}${filter}${SEP}${config}${SEP}${envvars}${SEP}${gtest_repeat}${SEP}${back2back}${SEP}${runner}")
+        test_entries+=("${group}${SEP}${filter}${SEP}${config}${SEP}${envvars}${SEP}${gtest_repeat}${SEP}${back2back}${SEP}${runner}${SEP}${pytest_mark}")
     done
-done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, ((.filter // "" | tostring) | sub("^$"; "-")), .config, ((.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join("|") | sub("^$"; "-"))), ((.gtest_repeat // "" | tostring) | sub("^$"; "-")), (.back2back // false | tostring), (.runner // "gtest")] | @tsv' "$TESTS_FILE")
+done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, ((.filter // "" | tostring) | sub("^$"; "-")), .config, ((.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join("|") | sub("^$"; "-"))), ((.gtest_repeat // "" | tostring) | sub("^$"; "-")), (.back2back // false | tostring), (.runner // "gtest"), ((.pytest_mark // "" | tostring) | sub("^$"; "-"))] | @tsv' "$TESTS_FILE")
 
 total_tests=${#test_entries[@]}
 
@@ -767,10 +774,11 @@ canonical_env() {
 }
 
 batch_key() {
-    local group="$1" config="$2" envvars="$3" gtest_repeat="$4" runner="$5"
+    local group="$1" config="$2" envvars="$3" gtest_repeat="$4" runner="$5" pytest_mark="${6:-}"
     if [[ "$runner" == "pytest" ]]; then
-        # Different pytest files share one process when config and env match.
-        echo "pytest${SEP}${config}${SEP}$(canonical_env "$envvars")${SEP}${gtest_repeat}"
+        # Pytest paths share one process when config, env, and pytest_mark match.
+        # The path may be a file or a directory.
+        echo "pytest${SEP}${config}${SEP}$(canonical_env "$envvars")${SEP}${gtest_repeat}${SEP}${pytest_mark}"
     else
         echo "${group}${SEP}${config}${SEP}${envvars}${SEP}${gtest_repeat}${SEP}${runner}"
     fi
@@ -834,10 +842,13 @@ pytest_node_id() {
 }
 
 format_test_label() {
-    local runner="$1" config="$2" group="$3" filter_summary="$4" gtest_repeat="$5"
+    local runner="$1" config="$2" group="$3" filter_summary="$4" gtest_repeat="$5" pytest_mark="${6:-}"
     local label
     if [[ "$runner" == "pytest" ]]; then
         label="[$config] pytest $(pytest_node_id "$group" "$filter_summary")"
+        if [[ -n "$pytest_mark" ]]; then
+            label="$label -m $pytest_mark"
+        fi
     else
         label="[$config] $group"
         if [[ -n "$filter_summary" ]]; then
@@ -853,8 +864,8 @@ format_test_label() {
 # Args after label are group/filter pairs. Gtest pairs share one group; pytest
 # pairs may name different files that run in one pytest process.
 run_test_invocation() {
-    local runner="$1" config="$2" envvars="$3" gtest_repeat="$4" label="$5"
-    shift 5
+    local runner="$1" config="$2" envvars="$3" gtest_repeat="$4" label="$5" pytest_mark="${6:-}"
+    shift 6
     local -a groups=() filters=()
     if [[ $# -lt 2 || $(( $# % 2 )) -ne 0 ]]; then
         echo "ERROR: internal: run_test_invocation expected group/filter pairs"
@@ -931,6 +942,9 @@ run_test_invocation() {
             node_ids+=("$(pytest_node_id "$TT_METAL_HOME/${groups[$i]}" "${filters[$i]}")")
         done
         cmd_display="pytest ${node_ids[*]}"
+        if [[ -n "$pytest_mark" ]]; then
+            cmd_display+=" -m ${pytest_mark}"
+        fi
         echo "  CMD: $cmd_display"
     else
         combined_filter="$(combine_gtest_filters "${filters[@]}")"
@@ -1004,6 +1018,9 @@ run_test_invocation() {
         if [[ "$runner" == "pytest" ]]; then
             emu_run_cmd=(pytest -vv)
             emu_run_cmd+=("${node_ids[@]}")
+            if [[ -n "$pytest_mark" ]]; then
+                emu_run_cmd+=(-m "$pytest_mark")
+            fi
             if [[ -n "$result_file" ]]; then
                 emu_run_cmd+=(--junitxml="$result_file")
             fi
@@ -1069,6 +1086,7 @@ clear_back2back_batch() {
     batch_envvars=""
     batch_gtest_repeat=""
     batch_runner=""
+    batch_pytest_mark=""
     batch_key_current=""
 }
 
@@ -1146,7 +1164,10 @@ flush_back2back_batch() {
         if [[ ${#batch_filters[@]} -gt 1 ]]; then
             filter_summary="back2back(${#batch_filters[@]}): $(combine_gtest_filters "${batch_filters[@]}")"
         fi
-        label="$(format_test_label "$batch_runner" "$batch_config" "${batch_groups[0]}" "$filter_summary" "$batch_gtest_repeat")"
+        label="$(format_test_label "$batch_runner" "$batch_config" "${batch_groups[0]}" "$filter_summary" "$batch_gtest_repeat" "$batch_pytest_mark")"
+    fi
+    if [[ "$batch_runner" == "pytest" && -n "$batch_pytest_mark" && ${#batch_filters[@]} -gt 1 ]]; then
+        label="$label -m $batch_pytest_mark"
     fi
 
     # Capture and clear before invoking so an INT mid-run cannot re-enter with
@@ -1157,12 +1178,13 @@ flush_back2back_batch() {
     local config="$batch_config"
     local envvars="$batch_envvars" gtest_repeat="$batch_gtest_repeat"
     local runner="$batch_runner"
+    local pytest_mark="$batch_pytest_mark"
     for i in "${!filters_to_run[@]}"; do
         pair_args+=("${groups_to_run[$i]}" "${filters_to_run[$i]}")
     done
     clear_back2back_batch
 
-    run_test_invocation "$runner" "$config" "$envvars" "$gtest_repeat" "$label" "${pair_args[@]}"
+    run_test_invocation "$runner" "$config" "$envvars" "$gtest_repeat" "$label" "$pytest_mark" "${pair_args[@]}"
 }
 
 # Ctrl-C must not flush/re-run a batch: batch_filters used to remain set until
@@ -1210,10 +1232,11 @@ batch_config=""
 batch_envvars=""
 batch_gtest_repeat=""
 batch_runner=""
+batch_pytest_mark=""
 batch_key_current=""
 
 for entry in "${test_entries[@]}"; do
-    IFS="$SEP" read -r group filter config envvars gtest_repeat back2back runner <<< "$entry"
+    IFS="$SEP" read -r group filter config envvars gtest_repeat back2back runner pytest_mark <<< "$entry"
 
     if [[ -n "$FILTER_CONFIG" && "$config" != "$FILTER_CONFIG" ]]; then
         skipped=$((skipped + 1))
@@ -1225,7 +1248,7 @@ for entry in "${test_entries[@]}"; do
     fi
 
     if [[ "$BACK2BACK" == true && "$back2back" == "true" ]]; then
-        local_key="$(batch_key "$group" "$config" "$envvars" "$gtest_repeat" "$runner")"
+        local_key="$(batch_key "$group" "$config" "$envvars" "$gtest_repeat" "$runner" "$pytest_mark")"
         if [[ -n "$batch_key_current" && "$local_key" != "$batch_key_current" ]]; then
             flush_back2back_batch
         fi
@@ -1235,13 +1258,14 @@ for entry in "${test_entries[@]}"; do
         batch_envvars="$envvars"
         batch_gtest_repeat="$gtest_repeat"
         batch_runner="$runner"
+        batch_pytest_mark="$pytest_mark"
         batch_groups+=("$group")
         batch_filters+=("$filter")
     else
         flush_back2back_batch
         run_num=$((run_num + 1))
-        label="$(format_test_label "$runner" "$config" "$group" "$filter" "$gtest_repeat")"
-        run_test_invocation "$runner" "$config" "$envvars" "$gtest_repeat" "$label" "$group" "$filter"
+        label="$(format_test_label "$runner" "$config" "$group" "$filter" "$gtest_repeat" "$pytest_mark")"
+        run_test_invocation "$runner" "$config" "$envvars" "$gtest_repeat" "$label" "$pytest_mark" "$group" "$filter"
     fi
 done
 
