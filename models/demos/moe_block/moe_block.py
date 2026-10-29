@@ -405,7 +405,26 @@ class MoEBlock(LightweightModule):
         sequence_zigzag: bool = False,  # must match attention's sequence order
     ):
         self.mesh_device = mesh_device
-        self.geometry = Geometry.of(mesh_device, model, chunk_tokens, num_links, zigzag=sequence_zigzag)
+        # (a chunk not whole tiles a chip: the block runs at the next one that is - chunk_pad zero rows at the end of
+        # each mesh row (owners residual: of each chip's rows), padded in forward and cut from its output)
+        R_, C_ = tuple(mesh_device.shape)
+        unit = R_ * C_ * TILE
+        padded = -(-chunk_tokens // unit) * unit
+        div = R_ * C_ if options.residual == "owners" else R_
+        if padded != chunk_tokens and chunk_tokens % div:
+            raise ValueError(
+                f"MoEBlock: chunk {chunk_tokens} is not whole rows a {'chip' if div != R_ else 'mesh row'} ({div} "
+                f"{'chips' if div != R_ else 'mesh rows'}); nearest valid {-(-chunk_tokens // div) * div}"
+            )
+        self.chunk_real, self.chunk_pad = chunk_tokens, padded - chunk_tokens
+        if self.chunk_pad:
+            from loguru import logger
+
+            logger.info(
+                f"MoEBlock: chunk {chunk_tokens} is not whole tiles a chip: padded to {padded} ({self.chunk_pad} zero "
+                f"rows, +{100 * self.chunk_pad / chunk_tokens:.1f}% of the rows)"
+            )
+        self.geometry = Geometry.of(mesh_device, model, padded, num_links, zigzag=sequence_zigzag)
         self.model, self.dtypes, self.options, self.cache = model, dtypes, options, cache
         assert (
             options.shared_expert != "fold_into_combine" or model.latent_dim is None
@@ -651,10 +670,39 @@ class MoEBlock(LightweightModule):
                 self.tail.w = tw
         self.layer = layer
 
+    def _real_shape(self):
+        """x's shape a chip as the caller holds it (the chunk before padding)."""
+        R_, C_ = tuple(self.mesh_device.shape)
+        if self.options.residual == "owners":
+            return (1, 1, self.chunk_real // (R_ * C_), self.model.emb_dim)
+        return (1, 1, self.chunk_real // R_, self.model.emb_dim // C_)
+
     def forward(self, x: ttnn.Tensor, chunk: ChunkSpan | None = None, layer: MoELayer | None = None) -> ttnn.Tensor:
         """x: [1, 1, S/SP, H/TP] TILE, the residual as attention leaves it (MoEOptions.residual "owners": [1, 1, S/N, H],
         the chip's own tokens). Returns the same layout. chunk: which rows are real; None = all of them. layer: this
-        call's weights (MoELayer; None: the last used)."""
+        call's weights (MoELayer; None: the last used). A chunk not whole tiles a chip: zero rows padded at the end of
+        the rows (chunk_pad in all), cut from the output."""
+        if not self.chunk_pad:
+            return self._forward(x, chunk, layer)
+        real = self._real_shape()
+        assert tuple(x.shape) == real, f"x {tuple(x.shape)}, expected {real} on each chip (chunk {self.chunk_real})"
+        extra = self._x_shape()[2] - real[2]
+        pad = [(0, 0), (0, 0), (0, extra), (0, 0)]
+        if -(-real[2] // TILE) * TILE < self._x_shape()[2]:  # (one op: whole tiles of zeros past the last)
+            xt = ttnn.pad(x, pad, 0.0)
+        else:  # (the zeros inside the last tile: ttnn.pad's tile path refuses that - through row-major)
+            xr = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            xp = ttnn.pad(xr, pad, 0.0)
+            ttnn.deallocate(xr)
+            xt = ttnn.to_layout(xp, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(xp)
+        y = self._forward(xt, chunk, layer)
+        ttnn.deallocate(xt)
+        out = ttnn.slice(y, [0, 0, 0, 0], [1, 1, real[2], int(y.shape[-1])])
+        ttnn.deallocate(y)
+        return out
+
+    def _forward(self, x: ttnn.Tensor, chunk: ChunkSpan | None = None, layer: MoELayer | None = None) -> ttnn.Tensor:
         g, H = self.geometry, self.model.emb_dim
         assert tuple(x.shape) == self._x_shape(), (
             f"x {tuple(x.shape)}, expected {self._x_shape()} on each chip "
@@ -964,12 +1012,11 @@ class MoEBlock(LightweightModule):
     def input_buffer(self) -> ttnn.Tensor:
         """A persistent x [1, 1, S/SP, H/TP] TILE: forward(input_buffer()) reads it in place (the fused head's own x -
         no copy). A traced forward is captured on it; each replay's x is written into it first."""
-        if self.fused is not None and self.options.residual != "owners":
+        if self.fused is not None and self.options.residual != "owners" and not self.chunk_pad:
             return self.fused.x
         if getattr(self, "_x_in", None) is None:
-            g = self.geometry
             self._x_in = ttnn.allocate_tensor_on_device(
-                ttnn.Shape(list(self._x_shape())),
+                ttnn.Shape(list(self._real_shape())),
                 ttnn.bfloat16,
                 ttnn.TILE_LAYOUT,
                 self.mesh_device,
