@@ -19,7 +19,7 @@ using ttnn::prim::RingJointSDPADeviceOperation;
 using ttnn::prim::RingJointSDPAInputs;
 using ttnn::prim::RingJointSDPAParams;
 
-tt::tt_metal::Tensor seq(uint32_t n) {
+ttnn::Tensor seq(uint32_t n) {
     return ttnn::zeros(ttnn::Shape({1, 1, n, 32}), tt::tt_metal::DataType::BFLOAT16, ttnn::TILE_LAYOUT);
 }
 
