@@ -1707,7 +1707,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // per process.
     for (const char* knob : {"PASS", "ITER", "SKIP", "STEPS"}) {
         const std::string env_name = std::string("TT_SPARSE_PROF_") + knob;
-        if (const char* value = std::getenv(env_name.c_str())) {
+        if (const char* value = std::getenv(env_name.c_str()); value != nullptr && *value != 0) {
             const std::string define = std::string("SPARSE_PROF_") + knob;
             compute_kernel.defines.emplace_back(define, value);
             reader_kernel.defines.emplace_back(define, value);

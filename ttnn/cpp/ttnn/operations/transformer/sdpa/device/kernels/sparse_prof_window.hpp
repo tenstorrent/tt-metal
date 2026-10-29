@@ -34,7 +34,7 @@ inline bool iter_on = false;  // ... and the current ring iteration is the windo
 inline uint32_t step = 0;     // steps taken in the current iteration
 
 inline void begin_iter(uint32_t q_pass, uint32_t ring_iter) {
-    pass_on = q_pass == SPARSE_PROF_PASS;
+    pass_on = SPARSE_PROF_PASS < 0 || q_pass == static_cast<uint32_t>(SPARSE_PROF_PASS);  // -1 = every pass
     iter_on = pass_on && (SPARSE_PROF_ITER < 0 || ring_iter == static_cast<uint32_t>(SPARSE_PROF_ITER));
     step = 0;
 }

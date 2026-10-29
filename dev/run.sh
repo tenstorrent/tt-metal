@@ -10,9 +10,7 @@
 #   ./dev/run.sh dense      # short dense ring-joint regression
 #   ./dev/run.sh perf       # 5 s timing vs the cleanup baseline (test_sparse_ring_sdpa_perf.py)
 #   ./dev/run.sh perf_all   # the whole benchmark sweep
-#   ./dev/run.sh profile    # one 5 s sparse call under the device profiler + perf counters, summarized to
-#                           # log_val_profile_summary.txt. Needs a build with SPARSE_STEP_PROFILE (DEBUG commit)
-#                           # for the per-zone tables; PROFILE_K overrides the -k filter.
+#   ./dev/run.sh profile    # = profile5
 #   ./dev/run.sh profile10  # the same from dev/profile_case.py at 10 s (also profile5, profile15), summarized to
 #                           # log_val_profile10_summary.txt
 #   ./dev/run.sh sum10      # whole-op per-core step totals at 10 s from sum zones (also sum5, sum15)
@@ -35,10 +33,18 @@ run() {
     echo "=== $name  (log_val_$name.txt)"
     timeout -k 30 "$secs" "$@" > "log_val_$name.txt" 2>&1
     local rc=$?
+    note $rc
     echo "    exit $rc  (124 = timeout)"
     return $rc
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
+STEPS=" all smoke check prod dense perf perf_all profile profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs "
+case "$STEPS" in *" $ONLY "*) ;; *) echo "unknown step '$ONLY'; one of:$STEPS" >&2; exit 2 ;; esac
+WORST=0  # worst exit code of any step, returned at the end
+note() { local rc=$1; [ "$rc" -gt "$WORST" ] && WORST=$rc; return 0; }
+# pytest -k matches substrings of the whole node id: "5s" alone also matches "15s", and the module name
+# test_sparse_ring_sdpa_perf.py contains "sparse", hence the "not 15s" / "not kept" forms below.
+PERF5_K="5s and not 15s and (dense_and_gather or (k256 and not kept))"
 
 # The device profiler writes $TT_METAL_PROFILER_DIR/.logs/profile_log_device.csv, else
 # $TT_METAL_HOME/generated/profiler/.logs/ (on the cluster TT_METAL_HOME can be a node-local copy, not this
@@ -56,7 +62,7 @@ summarize_profile() {  # name, [per-core table file]
                "TT_METAL_HOME='${TT_METAL_HOME:-}'/generated/profiler or ./generated/profiler; found:"
           find "${TT_METAL_HOME:-.}" generated -name 'profile_log_device.csv' -printf '%TY-%Tm-%Td %TH:%TM %s %p\n' \
               2>/dev/null | sort | tail -10; } > "log_val_$name.txt"
-        echo "=== $name: no device CSV found (see log_val_$name.txt)"
+        echo "=== $name: no device CSV found (see log_val_$name.txt)"; note 1
         return 1
     fi
     echo "csv: $csv ($(du -h "$csv" | cut -f1), $(date -r "$csv"))" > "log_val_$name.txt"
@@ -64,7 +70,7 @@ summarize_profile() {  # name, [per-core table file]
     cat "log_val_${name}_tmp.txt" >> "log_val_$name.txt" && rm -f "log_val_${name}_tmp.txt"
 }
 
-want smoke && run smoke 900 pytest "$SPARSE" -s -k "keep_all_matches_dense and r512k512"
+want smoke && run smoke 900 pytest "$SPARSE" -s -k "test_keep_all_matches_dense and r512k512"
 want check && run check 3600 pytest "$SPARSE" -s -k "not production"
 want prod && run prod 2400 pytest "$SPARSE" -s -k production
 # Dense: test_ring_joint_attention_logical_tensor_accuracy is 3 cases (causal / balanced / noncausal) at 256
@@ -76,16 +82,10 @@ want dense && run dense 1200 pytest "$DENSE" -s -k "logical_tensor_accuracy"
 # Not part of "all": timing and profiling.
 # perf: the 5 s comparison with the cleanup-branch baseline (dense 7.2, tau 1/2/3 4.15/3.40/3.26, gather 3.09 ms):
 # dense + gather, and the sparse op at 256-key pieces with pooled K/V at the three densities.
-[ "$ONLY" = perf ] && run perf 2400 pytest "$PERF" -s -k "5s and (dense_and_gather or (k256 and sparse))"
+[ "$ONLY" = perf ] && run perf 2400 pytest "$PERF" -s -k "$PERF5_K"
 # perf_all: every shape, piece size, density and mode (long; 15 s builds ~1.5 GB host tensors per input).
 [ "$ONLY" = perf_all ] && run perf_all 10800 pytest "$PERF" -s
-if [ "$ONLY" = profile ]; then
-    # One untraced sparse call (the correctness test's 5 s case: 256-key pieces, density 0.15), so the per-core
-    # profiler buffer holds the whole op; the traced benchmark's replays would overrun it. PROFILE_K picks another.
-    run profile 1800 env TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=39 \
-        pytest "$SPARSE" -s -k "${PROFILE_K:-test_production_5s and 256 and 0.15}"
-    summarize_profile profile_summary
-fi
+[ "$ONLY" = profile ] && ONLY=profile5  # one sparse call only: the summary treats the longest run as the op
 # profile5 / profile10 / profile15: one untraced sparse call at 5 / 10 / 15 s from dev/profile_case.py (inputs made on
 # device, setup in seconds), 256-key pieces, density 0.2; PROFILE_K overrides the -k filter (see profile_case.py ids).
 case "$ONLY" in
@@ -109,8 +109,9 @@ case "$ONLY" in
     perf_pairs)
         for p in 0 1; do
             run "perf_pairs$p" 2400 env TT_SPARSE_PAIR_STEPS=$p \
-                pytest "$PERF" -s -k "5s and (dense_and_gather or (k256 and sparse))"
+                pytest "$PERF" -s -k "$PERF5_K"
         done
         ;;
 esac
-exit 0
+[ "$WORST" -ne 0 ] && echo "=== worst exit code: $WORST"
+exit "$WORST"

@@ -4,7 +4,7 @@ Lives only on the `-dev` branch; never merged into the clean branch.
 
 - `run.sh` — timeout-wrapped test steps (`smoke`, `check`, `prod`, `dense`, `perf`, `profile`; no arg = correctness steps); logs to `log_val_<step>.txt`.
 - `profile_summary.py` — turns `profile_log_device.csv` into a short text summary (zones per RISC, per-core tables, perf counters).
-- `capture_masks.py` — runs the Sol pre-pass on a `sosborne/sol-attn-cleanup` checkout and saves the mask + pooled K/V `.pt` the perf benchmark loads.
+- `capture_masks.py` — runs the Sol pre-pass on a `sosborne/sol-attn-cleanup` checkout and saves the mask + pooled K/V as a `.pt` (the perf benchmark uses synthetic masks; loading this file is not wired up yet).
 
 Branch workflow:
 - Kernel / op fixes are committed on the clean branch.

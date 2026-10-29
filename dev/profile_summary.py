@@ -19,6 +19,10 @@ import re
 import sys
 
 COMPUTE_ZONE = "RING_STEP"
+WINDOW_NOTE = (
+    "note: per-step zones cover only the TT_SPARSE_PROF_* window (default pass 0, ring iteration 1, steps 0-99), so busy /"
+    " idle / step counts below describe that window, not the whole op; use the sum5/10/15 steps for whole-op totals."
+)
 SUM_ZONE = "RING_STEP_SUM"
 READER_ZONES = [  # sparse_ring_reader.cpp
     "RD_RES_PIECES",
@@ -131,6 +135,7 @@ def main(path):
         if dev not in main_runs or max(v) > max(runs[(dev, main_runs[dev])]):
             main_runs[dev] = run
     print("\nthe attention op is taken as each device's longest run")
+    print(WINDOW_NOTE)
     if counters:
         # Busy fraction of each engine over the compute kernel (value / ref cycles), across the op's cores: how the
         # unpacker, FPU, SFPU and packer share the time (the dense kernel keeps them overlapped).
