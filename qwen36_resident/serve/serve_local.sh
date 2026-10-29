@@ -4,7 +4,7 @@
 #
 # vllm serve the resident Qwen3.6/3.8-27B on one 1 x 4 Blackhole mesh (QuietBox 2: 2x P300c).
 #
-# usage: HF_MODEL=<checkpoint snapshot dir> qwen36_resident/serve/serve_local.sh plain|mtp|dflash2|multi [vllm serve args]
+# usage: HF_MODEL=<checkpoint snapshot dir> qwen36_resident/serve/serve_local.sh plain|mtp|dflash2|multi|multi-long [args]
 #   plain: one user, any sampling; greedy and top_k <= 32 are drawn on device (full speed), others on the host.
 #   mtp:   one user, greedy only (a request with temperature > 0 is served greedily; the server warns once), MTP
 #          speculative decode (4 tokens per step) through the plugin's adaptive block output.
@@ -13,6 +13,8 @@
 #   multi: MAX_NUM_SEQS users (default 16) on the rows-mode build (launches of 8, paged KV pool), chunked prefill of
 #          PREFILL_CHUNK_TOKENS (default 1024) between decode steps. Needs vllm-tt-plugin branch resident-mu (TT chunk
 #          core). Host sampling unless SAMPLE_ON_DEVICE=1 (needs the rows-mode hub feed, WP7).
+#   multi-long: multi without the 128 PP chunk (RESIDENT_PREFILL_CHUNKS 256,512,1024) and with a 30,016-block pool
+#          (RESIDENT_MAX_TOKENS_ALL_USERS 1,921,024): more long-context users, TTFT +49 ms at 128-token prompts.
 #
 # env: HF_MODEL (required; a local checkpoint dir, or a repo id the offline HF cache resolves), PORT (8000),
 #   SERVED_MODEL_NAME (Qwen/Qwen3.8-27B), MAX_MODEL_LEN (32768), VLLM_VENV (a venv with vLLM 0.26 + vllm-tt-plugin),
@@ -20,7 +22,7 @@
 #   multi: MAX_NUM_SEQS, PREFILL_CHUNK_TOKENS, SAMPLE_ON_DEVICE, RESIDENT_MAX_TOKENS_ALL_USERS (KV pool tokens, default
 #   1,540,096 = 24,064 blocks), RESIDENT_ATTN_WORKERS / RESIDENT_HEAD_GROUPS (default 28 / 4 for this profile).
 set -euo pipefail
-PROFILE=${1:?usage: serve_local.sh plain|mtp|dflash2|multi [vllm serve args...]}
+PROFILE=${1:?usage: serve_local.sh plain|mtp|dflash2|multi|multi-long [vllm serve args...]}
 shift
 WT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 : "${HF_MODEL:?set HF_MODEL to the checkpoint snapshot dir}"
@@ -46,8 +48,14 @@ case $PROFILE in
   plain) ;;
   mtp) export TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentMTPForCausalLM ;;
   dflash2) export TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentDFlashForCausalLM ;;
-  multi)
-    SEQS=${MAX_NUM_SEQS:-16}  # the shipped multi profile: two launches
+  multi | multi-long)
+    if [ "$PROFILE" = multi-long ]; then
+      # long contexts: no 128 PP chunk (its small-matmul weight copies, 3.21 GB/chip) buys a 30,016-block pool
+      # (TTFT +49 ms at 128-token prompts, +20 ms at 512, none from 2K; accuracy-gated)
+      export RESIDENT_PREFILL_CHUNKS=${RESIDENT_PREFILL_CHUNKS:-256,512,1024}
+      export RESIDENT_MAX_TOKENS_ALL_USERS=${RESIDENT_MAX_TOKENS_ALL_USERS:-1921024}
+    fi
+    SEQS=${MAX_NUM_SEQS:-16}  # the shipped multi profiles: two launches
     # the rows build's attention / GDN core split: 28 attention workers, 4 GDN head groups (accuracy-gated, -6 to -9 %
     # step time at <= 32K); the single-user profiles keep the defaults (32 workers)
     export RESIDENT_ATTN_WORKERS=${RESIDENT_ATTN_WORKERS:-28} RESIDENT_HEAD_GROUPS=${RESIDENT_HEAD_GROUPS:-4}
@@ -57,7 +65,7 @@ case $PROFILE in
     [ "${SAMPLE_ON_DEVICE:-0}" = 1 ] && SAMPLING=', "sample_on_device_mode": "decode_only"'
     TT_CONFIG="{\"tt\": {\"trace_region_size\": 134217728, \"prefill_chunk_tokens\": ${PREFILL_CHUNK_TOKENS:-1024}$SAMPLING}}"
     ;;
-  *) echo "unknown profile $PROFILE (plain|mtp|dflash2|multi)" >&2; exit 2 ;;
+  *) echo "unknown profile $PROFILE (plain|mtp|dflash2|multi|multi-long)" >&2; exit 2 ;;
 esac
 
 VLLM=${VLLM_VENV:+$VLLM_VENV/bin/}vllm
