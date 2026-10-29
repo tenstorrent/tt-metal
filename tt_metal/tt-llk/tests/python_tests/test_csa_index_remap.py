@@ -132,10 +132,6 @@ def test_csa_index_remap_overflow_keeps_bank(row_offset, dst_index, dest_sync):
         expected.append(output_bank * ROWS_PER_BANK + output_row % ROWS_PER_BANK)
 
     result, golden = _run_remap(row_offset, dst_index, dest_sync, packed, expected)
-    bank = (result.flatten() >> 14) & 0x7
-    assert torch.equal(
-        bank, (golden >> 14) & 0x7
-    ), "out-of-window row spilled into the bank field"
     assert torch.equal(
         result.flatten(), golden
-    ), "CSA remap or untouched DEST lanes differ"
+    ), "out-of-window row spilled into the bank field, or untouched DEST lanes differ"
