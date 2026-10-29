@@ -9,14 +9,25 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ckv_share.hpp"
 
 void kernel_main() {
+#ifdef CKV_COMMON_GX  // (option compact: common [rows, per, extra, row0[, rounded]], no per-core args)
+    const uint32_t rows_addr = get_common_arg_val<uint32_t>(0);
+    uint32_t band0, n_bands;
+    ckv_share(get_common_arg_val<uint32_t>(1), get_common_arg_val<uint32_t>(2), CKV_COMMON_GX, band0, n_bands);
+    const uint32_t row0 = get_common_arg_val<uint32_t>(3);
+#ifdef CKV_ROUNDED_OUT
+    const uint32_t rounded_addr = get_common_arg_val<uint32_t>(4);
+#endif
+#else
     const uint32_t rows_addr = get_arg_val<uint32_t>(0);
     const uint32_t band0 = get_arg_val<uint32_t>(1);
     const uint32_t n_bands = get_arg_val<uint32_t>(2);
     const uint32_t row0 = get_arg_val<uint32_t>(3);
 #ifdef CKV_ROUNDED_OUT
     const uint32_t rounded_addr = get_arg_val<uint32_t>(4);
+#endif
 #endif
 
     constexpr uint32_t cb_rows = get_compile_time_arg_val(0);

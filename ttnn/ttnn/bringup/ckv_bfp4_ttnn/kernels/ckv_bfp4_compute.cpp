@@ -22,6 +22,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "ckv_round_bfp4.hpp"
+#include "ckv_share.hpp"
 
 #ifndef CKV_MBITS
 #define CKV_MBITS 3
@@ -172,7 +173,12 @@ inline void uninit(uint32_t src_bytes) {
 #endif
 
 void kernel_main() {
+#ifdef CKV_COMMON_GX  // (option compact: common [per, extra])
+    uint32_t band0, n_bands;
+    ckv_share(get_common_arg_val<uint32_t>(0), get_common_arg_val<uint32_t>(1), CKV_COMMON_GX, band0, n_bands);
+#else
     const uint32_t n_bands = get_arg_val<uint32_t>(0);
+#endif
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_rows = get_compile_time_arg_val(1);
 #ifdef CKV_ROUNDED_OUT
