@@ -23,7 +23,12 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.tt.vision.common import as_linear_bias, as_linear_weight, linear_compute_config
+from models.demos.minimax_m3.tt.vision.common import (
+    as_linear_bias,
+    as_linear_weight,
+    linear_compute_config,
+    linear_program_config,
+)
 
 
 class M3VLProjector(LightweightModule):
@@ -59,9 +64,16 @@ class M3VLProjector(LightweightModule):
     def from_torch(cls, mesh_device, ref_projector, spatial_merge_size, dtype=ttnn.bfloat16) -> "M3VLProjector":
         return cls(mesh_device, ref_projector, spatial_merge_size, dtype=dtype)
 
-    def _linear(self, x, w, b, act=False):
+    def _linear(self, x, w, b, act=False, memory_config=None):
         out = ttnn.linear(
-            x, w, bias=b, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            x,
+            w,
+            bias=b,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=linear_program_config(
+                self.device, x.shape[-2], w.shape[-2], w.shape[-1], self.compute_kernel_config
+            ),
+            memory_config=memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
         )
         if act:
             out = ttnn.gelu(out, fast_and_approximate_mode=False)
@@ -83,11 +95,4 @@ class M3VLProjector(LightweightModule):
 
         # Merge MLP: merge_linear_1 -> gelu -> merge_linear_2.
         h = self._linear(h, self.merge_1_w, self.merge_1_b, act=True)
-        out = ttnn.linear(
-            h,
-            self.merge_2_w,
-            bias=self.merge_2_b,
-            compute_kernel_config=self.compute_kernel_config,
-            memory_config=memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
-        )
-        return out
+        return self._linear(h, self.merge_2_w, self.merge_2_b, memory_config=memory_config)

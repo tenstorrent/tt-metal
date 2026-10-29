@@ -40,6 +40,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.minimax_m3.tt.vision.common import (
     hifi4_compute_config,
     linear_compute_config,
+    linear_program_config,
     mesh_mapper,
     next_tile_multiple,
     sdpa_program_config,
@@ -117,6 +118,7 @@ class M3VLAttention(LightweightModule):
         ), f"num_heads*head_dim ({num_heads}*{head_dim}) != hidden_size {hidden_size}"
         self.device = mesh_device
         self.dtype = dtype
+        self.hidden_size = int(hidden_size)
         self.num_heads = int(num_heads)
         self.head_dim = int(head_dim)
         self.padded_head_dim = next_tile_multiple(self.head_dim)
@@ -274,11 +276,16 @@ class M3VLAttention(LightweightModule):
         sin: ttnn.Tensor,
         memory_config: Optional["ttnn.MemoryConfig"] = None,
     ) -> ttnn.Tensor:
+        rows = x.shape[-2]
+        heads_size = self.num_heads * self.padded_head_dim  # q, k and v each, with the heads padded
         xqkv = ttnn.linear(
             x,
             self.wqkv,
             bias=self.wqkv_bias,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=linear_program_config(
+                self.device, rows, self.hidden_size, 3 * heads_size, self.compute_kernel_config
+            ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -316,6 +323,9 @@ class M3VLAttention(LightweightModule):
             self.wo,
             bias=self.wo_bias,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=linear_program_config(
+                self.device, rows, heads_size, self.hidden_size, self.compute_kernel_config
+            ),
             memory_config=memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_flat)
