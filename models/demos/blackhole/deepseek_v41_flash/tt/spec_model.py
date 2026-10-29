@@ -384,6 +384,30 @@ class SpecRunner:
 
         n, B = self.n, self.B
         c = self.sample_cfg
+        if hostopt.on("PACK"):
+            # DSV41_HOSTOPT_PACK=1: the per-row columns are rebuilt only when the sampling config changes; per round only the uniforms are drawn (same generator calls, same order) and uploaded
+            key = (repr(c["temperature"]), repr(c["top_k"]), repr(c["top_p"]))
+            if getattr(self, "_sp_key", None) != key:
+                rep0 = lambda x: [v for v in (list(x) if isinstance(x, (list, tuple)) else [x] * B) for _ in range(n)]
+                invT, k_, p_, _, gr = sampling_rows(
+                    rep0(c["temperature"]), rep0(c["top_k"]), rep0(c["top_p"]), torch.Generator().manual_seed(0), B * n
+                )
+                self.samp.set_params_tmpl(invT, k_, p_, gr)
+                self._sp_key = key
+            g = c["gens"]
+            if isinstance(g, (list, tuple)):
+                gens = [x for x in g for _ in range(n)]
+                u = torch.empty(B * n)
+                groups = {}
+                for i in range(B * n):
+                    gg = gens[i % len(gens)]
+                    groups.setdefault(id(gg), (gg, []))[1].append(i)
+                for gg, idx in groups.values():
+                    u[torch.tensor(idx)] = torch.rand(len(idx), generator=gg)
+            else:
+                u = torch.rand(B * n, generator=g)
+            self.samp.set_params_u(u.clamp(max=1 - 1e-7))
+            return
         rep = lambda x: [v for v in (list(x) if isinstance(x, (list, tuple)) else [x] * B) for _ in range(n)]
         g = c["gens"]
         gens = [x for x in g for _ in range(n)] if isinstance(g, (list, tuple)) else g

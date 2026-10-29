@@ -121,6 +121,25 @@ class DSV41DeviceSampler:
         h = ttnn.from_torch(host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._pmap)
         ttnn.copy_host_to_device_tensor(h, self.params)
 
+    def set_params_tmpl(self, invT, top_k, top_p, greedy):
+        """DSV41_HOSTOPT_PACK: remember the per-row columns that do not change between rounds (the host template of ``set_params``); only the draw column ``u`` is filled per round."""
+        B = self.rows * self.T
+        host = torch.zeros(1, 1, B, 32)
+        host[0, 0, :, 0] = torch.as_tensor(invT, dtype=torch.float32)
+        host[0, 0, :, 1] = torch.as_tensor(top_k, dtype=torch.float32).clamp(min=0)
+        host[0, 0, :, 2] = torch.as_tensor(top_p, dtype=torch.float32)
+        host[0, 0, :, 4] = torch.as_tensor(greedy, dtype=torch.float32)
+        kk = torch.as_tensor(top_k, dtype=torch.float32)
+        gr = torch.as_tensor(greedy, dtype=torch.float32) > 0
+        self.fast = bool(((kk > 0) & (kk <= self.kcand) | gr).all())
+        self._tmpl = host
+
+    def set_params_u(self, u):
+        host = self._tmpl.clone()
+        host[0, 0, :, 3] = u
+        h = ttnn.from_torch(host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._pmap)
+        ttnn.copy_host_to_device_tensor(h, self.params)
+
     # device side (inside the trace) -----------------------------------------------------------------------------------------------------
     def _allsum(self, x):
         """sum over the 8 mesh columns of x [1,1,T,n] -> [1,1,T,n] (all-gather + local sum)."""

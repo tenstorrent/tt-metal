@@ -105,7 +105,13 @@ class DSV41Decoder:
         B = token_ids.shape[0]
         mp = ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=(rows, cols))
         mpr = ttnn.ShardTensor2dMesh(self.md, dims=(0, 3), mesh_shape=(rows, cols)) if self.rows_shard else mp
-        ctrl = torch.zeros(B, 32, dtype=torch.int32)
+        if hostopt.on("PACK"):
+            # DSV41_HOSTOPT_PACK=1: ``from_torch`` with a mesh mapper borrows the torch memory (tests/test_hostopt_dev.py::test_host_tensor_alias), so the two host tensors are built ONCE per (T, rows buffer) and
+            # every round only refills the torch buffers in place (the previous round's copies are long done: every round ends with a synchronize)
+            key = (B, cat.data_ptr(), self.rows_shard)
+            hp = self.__dict__.setdefault("_hp", {})
+            if key not in hp:
+                ctrl = torch.zeros(B, 32, dtype=torch.int32)
                 hp[key] = (
                     ctrl,
                     ttnn.from_torch(ctrl, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mp),
