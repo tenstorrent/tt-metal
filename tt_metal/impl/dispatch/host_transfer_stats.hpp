@@ -85,8 +85,6 @@ class ScopedHostTransfer {
 public:
     ScopedHostTransfer(HostTransferStats* stats, HostTransfer kind, uint64_t bytes);
     ~ScopedHostTransfer();
-    // For transfers made of several writes whose sizes are known as they happen.
-    void add_bytes(uint64_t bytes) { bytes_ += bytes; }
 
     ScopedHostTransfer(const ScopedHostTransfer&) = delete;
     ScopedHostTransfer& operator=(const ScopedHostTransfer&) = delete;

@@ -383,13 +383,8 @@ void ConfigureProgramWithoutLaunch(IDevice* device, Program& program) {
             dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
             local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
-            tt::llrt::write_launch_msg_to_core(
-                MetalEnvAccessor(metal_ctx.get_env()).impl(),
-                device_id,
-                physical_core,
-                local_launch_msg.view(),
-                kg->go_msg.view(),
-                /*send_go=*/false);
+            slow_dispatch::WriteLaunchMsgToCore(
+                *device, physical_core, local_launch_msg.view(), kg->go_msg.view(), /*send_go=*/false);
         }
     }
     log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] launch msgs written, done", device_id);
@@ -455,9 +450,8 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
             local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
 
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
-            tt::llrt::write_launch_msg_to_core(
-                MetalEnvAccessor(metal_ctx.get_env()).impl(),
-                device_id,
+            slow_dispatch::WriteLaunchMsgToCore(
+                *device,
                 physical_core,
                 local_launch_msg.view(),
                 kg->go_msg.view(),
