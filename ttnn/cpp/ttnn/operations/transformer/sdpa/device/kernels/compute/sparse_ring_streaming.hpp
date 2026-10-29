@@ -1111,6 +1111,9 @@ void sdpa_ring_resident(
 #ifdef TRISC_PACK
     // ASSERT is a statement, not an expression: keep it out of the PACK(...) expression macro.
     ASSERT(get_local_cb_interface(cb_qkt_im).fifo_num_pages == kQkCap);
+    // The pair-step wrap check (kv_pos) assumes the K/V CBs hold exactly kv_cb_pages entries.
+    ASSERT(get_local_cb_interface(cb_kt_in).fifo_num_pages == kv_cb_pages * kt_entry_tiles);
+    ASSERT(get_local_cb_interface(cb_v_in).fifo_num_pages == kv_cb_pages * v_entry_tiles);
     ASSERT(get_local_cb_interface(cb_max_scratch).fifo_num_pages == kStatsCap);
     ASSERT(get_local_cb_interface(cb_exp_max_diff).fifo_num_pages == kStatsCap);
     ASSERT(get_local_cb_interface(cb_max_in).fifo_num_pages == kStatsCap);
