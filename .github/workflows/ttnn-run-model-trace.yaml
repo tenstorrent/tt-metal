@@ -109,8 +109,9 @@ jobs:
               print("::error::models must be a non-empty YAML/JSON list of {test_path, HF_MODEL?, extra_args?, env?} entries")
               sys.exit(1)
 
-          # The job itself depends on these, so a model entry may not override them.
-          RESERVED_ENV = {"PATH", "HOME", "PYTHONPATH", "TT_METAL_HOME", "HF_HOME", "HF_MODEL", "TEST_PATH", "EXTRA_ARGS"}
+          # The job itself depends on these, so a model entry may not override them. HF_HOME stays
+          # overridable because model tests pin their own checkpoint root (e.g. /mnt/MLPerf/huggingface).
+          RESERVED_ENV = {"PATH", "HOME", "PYTHONPATH", "TT_METAL_HOME", "HF_MODEL", "TEST_PATH", "EXTRA_ARGS"}
           RESERVED_ENV_PREFIXES = ("LD_", "PYTHON", "GITHUB_", "RUNNER_", "TTNN_OPERATION_TRACE")
 
           def env_errors(idx, env):
