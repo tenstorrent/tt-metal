@@ -227,8 +227,9 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations.
-    (61, 11, 10): [0.391, 0.389, 0.416, 0.446, 0.475, 0.504, 0.532, 0.561, 0.601, 0.634, 0.666],
+    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations. Per-chunk median of
+    # CI runs 40424879138, 40532334659, 40610708699 (attempts 1 and 3) and 40737604734.
+    (61, 11, 10): [0.380, 0.384, 0.407, 0.436, 0.469, 0.499, 0.523, 0.553, 0.592, 0.624, 0.657],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
