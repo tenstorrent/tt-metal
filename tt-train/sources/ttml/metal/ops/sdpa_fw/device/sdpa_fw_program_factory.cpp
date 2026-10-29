@@ -28,6 +28,7 @@ constexpr auto kComputeKernelPath =
 // writer runtime args
 constexpr uint32_t kOutputBufferIdx = 0;
 constexpr uint32_t kIntermediateBufferIdx = 1U;
+constexpr uint32_t kWriterArgScratch = 2U;  // partials scratch (split units); set at create, never patched
 
 constexpr auto kQueryCbIndex = tt::CBIndex::c_0;
 constexpr auto kKeyCbIndex = tt::CBIndex::c_1;
@@ -138,10 +139,10 @@ void assign_per_core_runtime_args(
         reader_args.insert(reader_args.end(), work_args.begin(), work_args.end());
         SetRuntimeArgs(program, kernels.reader, core, reader_args);
 
-        std::vector<uint32_t> writer_args = {
-            output_buffer->address(),
-            intermediates_buffer != nullptr ? intermediates_buffer->address() : 0,
-            scratch_buffer != nullptr ? scratch_buffer->address() : 0};
+        std::vector<uint32_t> writer_args(kWriterArgScratch + 1U);
+        writer_args[kOutputBufferIdx] = output_buffer->address();
+        writer_args[kIntermediateBufferIdx] = intermediates_buffer != nullptr ? intermediates_buffer->address() : 0;
+        writer_args[kWriterArgScratch] = scratch_buffer != nullptr ? scratch_buffer->address() : 0;
         writer_args.insert(writer_args.end(), work_args.begin(), work_args.end());
         SetRuntimeArgs(program, kernels.writer, core, writer_args);
 
