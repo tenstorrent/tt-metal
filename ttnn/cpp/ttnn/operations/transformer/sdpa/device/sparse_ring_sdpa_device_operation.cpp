@@ -478,7 +478,6 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const std::size_t num_devices = cluster_axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
 
     auto all_gather_operation_attributes = ttnn::experimental::prim::RingAttentionAllGatherAsyncParams{
-        {},
         gather_dim,
         num_links,
         static_cast<uint32_t>(num_devices),

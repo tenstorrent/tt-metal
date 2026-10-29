@@ -24,11 +24,8 @@
 #include "chunked_prefill_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
 #include "ring_joint_kv_pad_derivation.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
-#include "metadata_scalar_read.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 

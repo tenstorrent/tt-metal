@@ -408,7 +408,10 @@ void kernel_main() {
                 arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
         });
     const uint32_t source_group_size = packed_schedule.source_group_size;
-    const bool packed_sources = packed_schedule.packed();
+    // Grouped K/V sources are statically off (GROUPED_KV_SOURCE_COUNT == 1, asserted above); the constexpr guard lets
+    // the compiler drop the packed branches, as the dense reader does.
+    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
+    const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
     for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
         // This pass's blocks: the core's [q_pass, q_pass + 1) share of [global_q_start, global_q_end).
