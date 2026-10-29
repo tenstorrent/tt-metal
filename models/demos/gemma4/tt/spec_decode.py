@@ -2451,10 +2451,12 @@ class SpeculativeDecoder:
         Nothing allocates on the device after this call returns. Every
         buffer a reseed or a replay touches exists now: the per-shape inputs
         (anchors, seed rows, positions, drafter tables, the reseed forward's
-        own token and position inputs), the per-record verify tables, the
-        hidden pools and the logits buffer (made by the first eager seed and
-        body) and the mask iotas (one per key-chunk length the ladder needs,
-        made by the eager bodies). ``serving_reseed``, ``serving_step`` and
+        own token and position inputs), the per-record verify tables and
+        outputs (the verify input and its argmax ids the body writes in
+        place and the host reads back), the hidden pools and the logits
+        buffer (made by the first eager seed and body) and the mask iotas
+        (one per key-chunk length the ladder needs, made by the eager
+        bodies). ``serving_reseed``, ``serving_step`` and
         ``serving_refresh_page_tables`` only upload into them; a buffer one
         of them would have to create is an error, never an allocation. The
         decode-trace guard releases and re-captures every decode trace when
@@ -2526,10 +2528,8 @@ class SpeculativeDecoder:
             self._srv_seed_rows(shape, [0] * B, [0] * B)
             for w in widths[shape]:
                 rec = self._srv_alloc_width(shape, S, w)
-                outs = self._srv_body(rec)
+                self._srv_body(rec)  # writes the record's persistent outputs; nothing to free
                 ttnn.synchronize_device(self.mesh_device)
-                for t in outs:
-                    t.deallocate(True)
                 self._srv_records[(shape, w)] = rec
                 _lg.info(f"[spec-serving] prepared record shape={shape} S_k={w}")
         self._srv_last = None
@@ -2583,9 +2583,12 @@ class SpeculativeDecoder:
                     f"trace region {used:.1f} MB in use of {region_text}; plan: {self._srv_projection.describe()}; "
                     f"fewer rungs ({SPEC_WIDTH_RUNGS_ENV}) or shapes shrink the record set. Device error: {exc}"
                 ) from exc
+            if verify_x is not rec["verify_x"] or vidx is not rec["vidx"]:
+                raise RuntimeError(
+                    f"serving_capture: the body of record shape={rec['shape']} S_k={rec['S_k']} returned outputs "
+                    "that are not the record's persistent handles (an allocation inside the capture)"
+                )
             rec["id"] = tid
-            rec["verify_x"] = verify_x
-            rec["vidx"] = vidx
             cost[key] = round(time.perf_counter() - t0, 2)
             now = self._srv_trace_region_mb()
             rec["trace_mb"] = now - used
@@ -2930,6 +2933,13 @@ class SpeculativeDecoder:
             "v_ptl": v_ptl,  # {layer_type: [B, width_lt] int32} the representative layer's slot table per type
             "v_ptl_slots": v_ptl_slots,  # one [B, width of its type] int32 table per KV group slot
             "v_ptl_list": [v_ptl_slots[slot] for slot in slots],  # per target layer: its slot's table
+            # The replay's outputs the host reads back (serving_step): the user-major verify input and its
+            # argmax ids, allocated here, before any capture, and written in place by the body (ttnn.copy).
+            # Taken from the body's own op outputs inside the capture they were the one allocation after the
+            # decode-trace captures of the base warmup, and the guard's first armed check in serving released
+            # every decode trace (12B Galaxy: 20 records x 2 = 30 x 128 B + 10 x 64 B = 4480 B per bank).
+            "verify_x": self._from_b(torch.zeros(1, B * P, dtype=torch.int64), ttnn.uint32),  # [1, B*P] uint32
+            "vidx": self._from_b(torch.zeros(1, 1, B * P, dtype=torch.int64), ttnn.uint32),  # [1, 1, B*P] uint32
             "id": None,
         }
 
@@ -2995,8 +3005,11 @@ class SpeculativeDecoder:
     def _srv_body(self, rec):
         """The fused record graph over persistent buffers (compile and capture).
 
-        Returns the persistent outputs (verify_x [1, B*P], vidx [1, 1, B*P],
-        vlogits [1, 1, B*P, V_padded], vhidden [1, 1, B*P, backbone]).
+        Returns the record's persistent outputs ``(rec["verify_x"], rec["vidx"])``
+        (``[1, B*P]`` and ``[1, 1, B*P]`` uint32, allocated by ``_srv_alloc_width``),
+        written in place by the body's last two ops: the graph allocates nothing
+        that outlives it, so a capture binds only to buffers that existed before it.
+        The verify logits and hidden go to the shared pools (``_srv_publish_*``).
         """
         S = self._srv_shape_bufs[rec["shape"]]
         B, K, P = rec["B"], rec["K"], rec["P"]
@@ -3043,7 +3056,12 @@ class SpeculativeDecoder:
         vhidden.deallocate(True)
         vidx = self._argmax_last(vlogits, rows=B * P)  # [1, 1, B*P] uint32
         vlogits.deallocate(True)
-        return verify_x, vidx
+        # 6. the outputs into the record's persistent handles (allocated before any capture)
+        ttnn.copy(verify_x, rec["verify_x"])
+        verify_x.deallocate(True)
+        ttnn.copy(vidx, rec["vidx"])
+        vidx.deallocate(True)
+        return rec["verify_x"], rec["vidx"]
 
     def _srv_seed_gather(self, S):
         """Stage 1 of the body: the drafter seed [1, 1, B, backbone] = rows ``seed_idx`` of [pool_v | pool_s].

@@ -1543,6 +1543,8 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     after serving_prepare, for every record and rung, first-time row sets, seed-column patterns and positions
     included; a buffer one of them would have to create is an error, never an allocation (the decode-trace
     guard releases and re-captures every decode trace when the allocator grows after a capture, 0.7 s each)."""
+    import weakref
+
     import models.demos.gemma4.tt.spec_decode as spec_decode_module
 
     class _Buf:
@@ -1582,13 +1584,29 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
         dev.host = host.host.clone()
         h2d.append(dev.address)
 
-    def pad(t, pads, value=0.0):
-        out = _Buf(torch.zeros(1, 1, t.host.shape[2] + pads[2][1], t.host.shape[-1]), t.dtype, on_device=True)
-        ops.append(out)  # an op output inside the eager reseed: transient, freed before the call returns
+    def op(host, dtype=None, address=None):
+        out = _Buf(host, dtype, on_device=True)
+        if address is not None:
+            out.address = address  # a view: ttnn's same-volume reshape shares the source's buffer
+        ops.append(weakref.ref(out))  # an op output: freed explicitly or dropped (collected) before a call returns
         return out
+
+    def gone(ref):
+        return ref() is None or ref().freed
+
+    def pad(t, pads, value=0.0):
+        return op(torch.zeros(1, 1, t.host.shape[2] + pads[2][1], t.host.shape[-1]), t.dtype)
 
     def assign(src, dst):
         dst.host = src.host
+
+    def copy(src, dst):
+        assert dst.on_device and not dst.freed and dst.address in prepared, "ttnn.copy writes a prepared buffer"
+        assert tuple(src.host.shape) == tuple(dst.host.shape), (src.host.shape, dst.host.shape)
+        dst.host = src.host.clone()
+        copies.append(dst.address)
+
+    traces = []
 
     fake = SimpleNamespace(
         ROW_MAJOR_LAYOUT=object(),
@@ -1609,12 +1627,20 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
         to_memory_config=lambda t, cfg: t,
         pad=pad,
         assign=assign,
+        copy=copy,
+        reshape=lambda t, shape: op(t.host.reshape(*shape), t.dtype, address=t.address),
+        concat=lambda ts, dim: op(torch.cat([t.host for t in ts], dim=dim), ts[0].dtype),
+        permute=lambda t, dims: op(t.host.permute(*dims).contiguous(), t.dtype),
+        begin_trace_capture=lambda mesh, cq_id=0: traces.append(len(traces) + 1) or traces[-1],
+        end_trace_capture=lambda mesh, tid, cq_id=0: None,
+        BufferType=SimpleNamespace(TRACE=object()),
         **{
             name: forbidden(name)
             for name in ("to_device", "zeros", "ones", "full", "empty", "arange", "allocate_tensor")
         },
     )
     monkeypatch.setattr(spec_decode_module, "ttnn", fake)
+    prepared, copies = set(), []
     shapes = [(1, 5), (5, 5), (8, 3), (16, 1)]
     ladder = [2048, 8192, 32768, 131072, 263168]  # the 12B ladder
     layer_types = ["sliding_attention", "sliding_attention", "full_attention", "sliding_attention", "full_attention"]
@@ -1623,10 +1649,7 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     def verify_forward(x, current_pos, current_pos_cache, page_table, kv_cache, page_tables_per_layer):
         rows = int(x.host.shape[-1])
         forwards.append((x.address, current_pos.address, current_pos_cache.address, rows))
-        logits = _Buf(torch.zeros(1, 1, rows, vocab), fake.bfloat16, on_device=True)
-        hidden = _Buf(torch.zeros(1, 1, rows, backbone), fake.bfloat16, on_device=True)
-        ops.extend((logits, hidden))
-        return logits, hidden
+        return op(torch.zeros(1, 1, rows, vocab), fake.bfloat16), op(torch.zeros(1, 1, rows, backbone), fake.bfloat16)
 
     spec = SpeculativeDecoder.__new__(SpeculativeDecoder)
     spec.mesh_device, spec._mapper, spec._tp, spec.tt_kv_cache = object(), None, 8, []
@@ -1648,27 +1671,57 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     spec._srv_iota, spec._srv_records, spec._srv_shape_bufs = {}, {}, {}
     spec._srv_widths, spec._srv_shapes = {shape: list(ladder) for shape in shapes}, shapes
     spec._srv_captured = spec._srv_frozen = False
-    # serving_prepare's device set through the real allocators; the eager bodies are stubbed, so their iotas
-    # and the logits buffer are made the way they make them
-    for n, shape in enumerate(shapes):
+    spec._srv_shapes, spec._srv_projection = shapes, SimpleNamespace(describe=lambda: "fake plan")
+    spec._srv_trace_region_mb = lambda: 0.0
+    spec._srv_trace_region_size_mb = lambda: None
+    # the REAL body runs over fakes of the drafter step, the packed verify, the seed gather, the masks and the
+    # argmax (their outputs are op outputs like any other), so the assembly of the record's outputs is the real one
+    spec._shared_kv = object()
+    spec.assistant = SimpleNamespace(
+        step=lambda tok, h, kv, d_ptl, d_pu, d_pi: (
+            op(torch.zeros(1, 1, tok.host.shape[-1], vocab), fake.bfloat16),
+            op(h.host.clone(), fake.bfloat16),
+        )
+    )
+    spec.target.ttnn_packed_verify_forward = lambda x, **kw: (
+        op(torch.zeros(1, 1, x.host.shape[-1], vocab), fake.bfloat16),
+        op(torch.zeros(1, 1, x.host.shape[-1], backbone), fake.bfloat16),
+    )
+    spec._srv_seed_gather = lambda S: op(torch.zeros(1, 1, S["B"], backbone), fake.bfloat16)
+    spec._srv_masks_device = lambda S, rec: (
+        op(torch.zeros(1, 1, 32, rec["S_k"]), fake.bfloat16),
+        op(torch.zeros(1, 1, 32, rec["S_k"]), fake.bfloat16),
+    )
+    spec._argmax_last = lambda logits, rows: op(torch.arange(rows).reshape(1, 1, rows), fake.uint32)
+    # serving_prepare's device set through the real allocators and the real eager bodies (the iotas are made
+    # here the way the real masks make them)
+    for shape in shapes:
         B, K = shape
         S = spec._srv_alloc_shape(shape)
         spec._srv_shape_bufs[shape] = S
         spec._srv_seed_rows(shape, [0] * B, [0] * B)
         for w in ladder:
             rec = spec._srv_alloc_width(shape, S, w)
-            rec["id"] = 100 * n + ladder.index(w)
-            rec["verify_x"] = _Buf(torch.arange(B * (K + 1)), fake.uint32, on_device=True)
-            rec["vidx"] = _Buf(torch.arange(B * (K + 1)).reshape(1, 1, -1), fake.uint32, on_device=True)
+            prepared.update(buf.address for buf in allocated)
             for _j0, n_keys in spec._srv_mask_chunks(w):
                 spec._srv_iota_for(n_keys)
+            outs = spec._srv_body(rec)
+            assert outs == (rec["verify_x"], rec["vidx"]), "the body returns the record's persistent outputs"
+            assert rec["verify_x"].shape == (1, B * (K + 1)) and rec["vidx"].shape == (1, 1, B * (K + 1))
             spec._srv_records[(shape, w)] = rec
-    spec._srv_publish_logits(_Buf(torch.zeros(1, 1, 32, vocab), fake.bfloat16, on_device=True))
     assert sorted(spec._srv_iota) == [1024, 2048, 8192, 32768]  # 263168 = 8 x 32768 + 1024
     prepared = {buf.address for buf in allocated}
-    assert all(op.freed for op in ops), "the eager seed's transients are freed before it returns"
-    spec._srv_captured = spec._srv_frozen = True
-    allocated.clear(), ops.clear(), h2d.clear(), forwards.clear()
+    assert all(gone(ref) for ref in ops), "the eager bodies' transients are freed before they return"
+    outputs = {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()}
+    # the real capture binds only the record's own handles; an allocation inside it would be the one the
+    # decode-trace guard counted at the first served request (30 x 128 B + 10 x 64 B on the 12B Galaxy)
+    allocated.clear(), ops.clear()
+    spec.serving_capture()
+    assert spec._srv_captured and allocated == [] and all(gone(ref) for ref in ops)
+    assert {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()} == outputs
+    assert [rec["id"] for rec in spec._srv_records.values()] == traces and len(traces) == 20
+    spec._srv_frozen = True
+    ops.clear(), h2d.clear(), copies.clear(), forwards.clear()
     # every record and rung: a first-time refresh, row set and position, a reseed, a seeded replay, then a
     # continuing replay (seed columns from the last replay's verify hidden)
     group_tables, used = {}, []
@@ -1698,12 +1751,19 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
                     K + 1,
                     vocab,
                 )
+                assert result.drafts.shape == (live, K) and result.argmax_ids.shape == (live, K + 1)
                 cols = [min(K, i) for i in range(live)]
                 result = spec.serving_step(shape, rows, [2 + i for i in range(live)], positions, table, cols)
                 assert result.width == w
                 used.extend([rec["id"], rec["id"]])
     assert allocated == [], [buf.shape for buf in allocated]
-    assert all(op.freed for op in ops) and set(h2d) <= prepared and replays == used
+    assert all(gone(ref) for ref in ops) and set(h2d) <= prepared and replays == used and copies == []
+    assert {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()} == outputs
+    assert all(
+        buf.address in prepared and not buf.freed
+        for rec in spec._srv_records.values()
+        for buf in (rec["verify_x"], rec["vidx"])
+    ), "the readbacks come from the records' persistent outputs"
     seeds = {
         (S["seed_tok"].address, S["seed_pu"].address, S["seed_pi"].address, S["B"])
         for S in spec._srv_shape_bufs.values()
@@ -1724,9 +1784,10 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     spec._srv_pool_v, spec._srv_pool_s = pools
     assert allocated == []
     # the release frees the reseed inputs with everything else and lifts the freeze
-    bufs = list(spec._srv_shape_bufs.values())
+    bufs, recs = list(spec._srv_shape_bufs.values()), list(spec._srv_records.values())
     spec.serving_release()
     assert all(S[key].freed for S in bufs for key in ("seed_tok", "seed_pu", "seed_pi")) and not spec._srv_frozen
+    assert all(rec[key].freed for rec in recs for key in ("verify_x", "vidx"))
 
 
 def test_capture_and_step_refuse_to_run_out_of_order(monkeypatch, expect_error):
