@@ -18,7 +18,8 @@ User direction (2026-10-29): "you need to have different K value based on batch 
   (both at the bound) fail the same way: every user of mesh row 5, token 4. So the full tile is an open verify defect
   (`tt/spec_decode.py` candidate-major layout, row 5 specific) and the policy stays below it: `VERIFY_ROWS_CAP` = 31
   (B (K + 1) <= 31) and the table (1, 3), (2, 3), (4, 3), (8, 2), (16, plain). B8_K3 would have given 19.9 tok/s per
-  user (1274 aggregate, 3.2 accepted) -- the prize for fixing the full tile.
+  user (1274 aggregate, 3.2 accepted) and B16_K1 16.6 (2124 aggregate, 1.9 accepted) -- the prize for fixing the full
+  tile; B16_K1 (users 80-95 = row 5, token 4) is the fourth point with the same signature.
 * The plugin contract already allows a per-row draft count below the width: `propose_draft_tokens` returns
   `draft_token_ids [rows, K_max]` + `num_valid [rows]` (`model_runner.py`), and a row offering 0 takes the plain step.
 
