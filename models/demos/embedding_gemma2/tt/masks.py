@@ -160,7 +160,7 @@ class AttentionMasks(LightweightModule):
     def padded_block_map(self, keep: ttnn.Tensor) -> ttnn.Tensor | None:
         """Per-forward sliding block map, batch 1: the band map with every key chunk that holds only padding
         cleared, so SDPA skips those blocks (E9.4). The dense mask still masks padding keys inside the
-        visited blocks; a skipped block only held keys the mask sets to MASK_NEG. Five small device ops:
+        visited blocks; a skipped block only held keys the mask sets to MASK_NEG. Six small device ops:
         [1,1,1,S] keep -> [1,1,S/k,k] -> max over each chunk -> [1,1,1,S/k] -> x band [1,1,S/q,S/k] -> int32
         ROW_MAJOR (the layout SDPA reads)."""
         B, S = keep.shape[0], keep.shape[-1]
