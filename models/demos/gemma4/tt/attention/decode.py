@@ -9,7 +9,10 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 
 import os
 
+from loguru import logger
+
 import ttnn
+from models.demos.gemma4.custom_ops.grid import plan_packed_sdpa, sdpa_decode_cb_tiles, sdpa_decode_cores_per_head
 from models.demos.gemma4.custom_ops.qkv_norm_rope import QkvNormRope
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 from models.demos.gemma4.tt.mesh_orientation import decode_flag
@@ -499,7 +502,7 @@ def _packed_sdpa_grid(config, mesh_device):
     return ttnn.CoreCoord(device_grid.x, device_grid.y)
 
 
-def _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=None):
+def _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=None, max_cores_per_head=16, k_chunk=64):
     """How many QUERY-HEAD-wise sub-ops to split the packed-verify SDPA into.
 
     The packed verify folds ``H_local*P`` query rows onto ``nkv_local`` KV
@@ -518,7 +521,9 @@ def _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=None):
     are left unsplit.
 
     ``GEMMA4_PV_SDPA_HEAD_SPLITS`` overrides the count (clamped to the largest
-    valid split <= the request)."""
+    valid split <= the request). ``max_cores_per_head`` and ``k_chunk`` are
+    the packed SDPA program config's (``plan_packed_sdpa``), so the split and
+    the config read the same CB model."""
     if nkv_local != 1:
         return 1
     # Valid splits: whole heads per op AND 32-tile-aligned query-row slices.
@@ -531,31 +536,22 @@ def _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=None):
         return max(d for d in valid if d <= want)
     if (H_local * P) * head_dim <= 8192:  # not heavy (sliding) — one op fits
         return 1
-    # Mirror sdpa_decode_program_factory's core allocation (num_kv_heads == 1)
-    # and CB tile counts; keep grid / max_cores_per_head_batch / k_chunk in sync
-    # with the packed sdpa_program_config. Budget in 2 KB tiles with margin
+    # sdpa_decode_program_factory's core allocation (num_kv_heads == 1) and CB
+    # tile counts (custom_ops.grid), with the packed sdpa_program_config's grid,
+    # max_cores_per_head_batch and k_chunk. Budget in 2 KB tiles with margin
     # under the 768-tile (1.5 MB) L1 cap.
+    from models.demos.gemma4.custom_ops.grid import SDPA_DECODE_L1_BUDGET_TILES
+
     if grid is None:
         grid = 32 if head_dim >= 512 else 64
-    max_cores_per_head, k_chunk = 16, 64
-    cores_per_head = max(1, min(grid, max_cores_per_head * B) // max(1, B))
+    cores_per_head = sdpa_decode_cores_per_head(grid, B, 1, max_cores_per_head)
     DHt, Sk = head_dim // 32, max(1, k_chunk // 32)
-    BUDGET_TILES = 720
 
     def per_core_tiles(n):
-        pnht = (H_local * P) // (32 * n)
-        return (
-            2 * pnht * DHt  # Q-in + tilized-Q
-            + 5 * pnht * DHt  # 3 out-im + out-stats + out-final
-            + 2 * pnht * Sk  # attn-mask + QK-im
-            + 11 * pnht  # softmax stats CBs
-            + 4 * Sk * DHt  # K + V (double-buffered)
-            + 3  # scale / identity
-            + (pnht * DHt + 2 * pnht) * (cores_per_head - 1)  # cross-core flash reduction
-        )
+        return sdpa_decode_cb_tiles((H_local * P) // (32 * n), DHt, Sk, cores_per_head)
 
     for d in valid:  # ascending ⇒ smallest split that fits the budget
-        if per_core_tiles(d) <= BUDGET_TILES:
+        if per_core_tiles(d) <= SDPA_DECODE_L1_BUDGET_TILES:
             return d
     return valid[-1]
 
@@ -944,28 +940,38 @@ def packed_decode_forward(
     q_packed = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(tt_q)
 
-    # GEMMA4_PV_K_CHUNK: experiment knob only; keep the default 64. The
-    # rescale-count theory of the packed long-S_k greedy drift was TESTED and
-    # FALSIFIED: k_chunk=128 diverges at exactly the same token as 64 (char 165
-    # at 128k) with the same acceptance, and k_chunk=256 TT_THROWs at program
-    # build. The drift is inherent packed-vs-decode path numerics; it is handled
-    # by the ISL tier gate in spec_decode._fused_packed_enabled, not here.
-    _k_chunk = int(os.environ.get("GEMMA4_PV_K_CHUNK", "64"))
-    # The flash cross-core reduction CBs scale with PNHt * cores_per_head_batch.
-    # At PNHt<=2 (<=64 packed query rows) 16 cores fit L1; at PNHt=4 (the B>1
-    # dFlash fold, 128 rows) 16 cores overflow (~2.06 MB > 1.5 MB) and head
-    # splits can't help when nkv_local > 1 (31B sliding: 16 kv heads / tp8 = 2),
-    # so trade reduction parallelism for L1: 8 cores fits (~1.29 MB).
-    _pnht = (H_local * P + 31) // 32
+    # The K chunk and the cores per head come from the CB model of the op (custom_ops.grid.plan_packed_sdpa):
+    # every Q-shaped CB scales with the packed query rows (H_local * P, in tiles) and the cross-core reduction
+    # staging with the cores per head, so a geometry that stacks more local heads (the 31B at TP4: 8 local q
+    # heads on the head_dim-512 global layers) overflowed the per-core L1 at the op defaults. GEMMA4_PACKED_SDPA_
+    # K_CHUNK / _Q_CHUNK pin the chunks (GEMMA4_PV_K_CHUNK is the earlier name of the K knob); unset, derived. A
+    # wider K chunk than 64 is not on the ladder: k_chunk 256 TT_THROWs at program build and 128 buys nothing for
+    # the long-S_k greedy drift (tested; the ISL tier gate in spec_decode._fused_packed_enabled handles that).
+    _grid = _packed_sdpa_grid(config, mesh_device)
+    _plan = plan_packed_sdpa(H_local, nkv_local, P, head_dim, B, _grid.x * _grid.y)
+    if not _plan.fits and not getattr(packed_decode_forward, "_overflow_logged", False):
+        packed_decode_forward._overflow_logged = True
+        logger.warning(
+            f"Gemma4 packed verify: no SDPA config on the ladder fits the per-core L1 for H_local={H_local}, "
+            f"nkv_local={nkv_local}, P={P}, head_dim={head_dim}, B={B}, grid={_grid.x}x{_grid.y}: {_plan.describe()}"
+        )
     sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=_packed_sdpa_grid(config, mesh_device),
-        q_chunk_size=32,
-        k_chunk_size=_k_chunk,
+        compute_with_storage_grid_size=_grid,
+        q_chunk_size=_plan.q_chunk,
+        k_chunk_size=_plan.k_chunk,
         exp_approx_mode=False,
-        max_cores_per_head_batch=16 if _pnht <= 2 else 8,
+        max_cores_per_head_batch=_plan.max_cores_per_head_batch,
     )
-    _grid = sdpa_program_config.compute_with_storage_grid_size
-    n_sdpa_splits = _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=_grid.x * _grid.y)
+    n_sdpa_splits = _verify_head_splits(
+        B,
+        H_local,
+        nkv_local,
+        P,
+        head_dim,
+        grid=_grid.x * _grid.y,
+        max_cores_per_head=_plan.max_cores_per_head_batch,
+        k_chunk=_plan.k_chunk,
+    )
     eff_bs_sdpa = effective_block_size(k_cache_use, head_dim, nkv_local)
     tt_sdpa = _packed_verify_sdpa(
         q_packed,

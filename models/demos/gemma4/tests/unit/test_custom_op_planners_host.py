@@ -64,3 +64,62 @@ def test_compute_grid_cap(monkeypatch):
     assert g.compute_grid(Dev()) == (8, 8)
     monkeypatch.setenv("GEMMA4_TEST_GRID", "16x16")  # never above the device grid
     assert g.compute_grid(Dev()) == (13, 10)
+    # The packed-verify decode SDPA planner: sdpa_decode_program_factory's CB total per core, and the first
+    # (k_chunk, cores per head) rung that fits 15/16 of the 1.5 MB L1. The two programs that overflowed on the
+    # 31B at TP4 (a 2x2 Galaxy block): the global layer's packed verify (8 local q heads x 6 rows = PNHt 2,
+    # head_dim 512, 1 local KV head, the 8x4 grid) read 1,884,544 B against a model of 925 tiles = 1,894,400 B
+    # at (64, 16); the dFlash drafter (16 local heads x 17 rows = PNHt 9, head_dim 128, 2 local KV heads, the
+    # 12x10 grid) 2,362,752 B against 1232 tiles = 2,523,136 B -- the model over-reads both, never under.
+    assert g.sdpa_decode_cores_per_head(32, 1, 1, 16) == 16 and g.sdpa_decode_cores_per_head(120, 1, 2, 16) == 16
+    assert g.sdpa_decode_cores_per_head(32, 5, 1, 16) == 6 and g.sdpa_decode_cores_per_head(120, 16, 4, 16) == 1
+    assert g.sdpa_decode_cb_tiles(2, 16, 2, 16) == 925 and g.sdpa_decode_cb_tiles(9, 4, 2, 16) == 1232
+    assert g.sdpa_decode_cb_tiles(1, 16, 2, 16) == 528 and g.sdpa_decode_cb_tiles(1, 8, 2, 16) == 288
+    for name in (g.PACKED_SDPA_K_CHUNK_ENV, g.PACKED_SDPA_Q_CHUNK_ENV, g.PACKED_SDPA_K_CHUNK_LEGACY_ENV):
+        monkeypatch.delenv(name, raising=False)
+    plan = g.plan_packed_sdpa  # (h_local, nkv_local, rows, head_dim, batch, grid cores)
+    # 12B (16 q heads, 8 kv, global 1 kv at head_dim 512) and 31B (32 q, 16 kv, global 4 kv at head_dim 512):
+    # the (1,5) record (6 rows, batch 1); sliding layers on the 13x10 grid, global layers on the 8x4 grid
+    cases = {
+        "12B TP8 sliding": (2, 1, 6, 256, 1, 130),
+        "12B TP8 global": (2, 1, 6, 512, 1, 32),
+        "12B TP4 sliding": (4, 2, 6, 256, 1, 130),
+        "12B TP4 global": (4, 1, 6, 512, 1, 32),
+        "31B TP8 sliding": (4, 2, 6, 256, 1, 130),
+        "31B TP8 global": (4, 1, 6, 512, 1, 32),
+        "31B TP4 sliding": (8, 4, 6, 256, 1, 130),
+        "31B TP4 global": (8, 1, 6, 512, 1, 32),
+    }
+    chosen = {name: plan(*args) for name, args in cases.items()}
+    assert all(p.fits and p.q_chunk == 32 for p in chosen.values())
+    assert {name: (p.k_chunk, p.max_cores_per_head_batch, p.tiles) for name, p in chosen.items()} == {
+        "12B TP8 sliding": (64, 16, 288),
+        "12B TP8 global": (64, 16, 528),
+        "12B TP4 sliding": (64, 16, 288),
+        "12B TP4 global": (64, 16, 528),
+        "31B TP8 sliding": (64, 16, 288),
+        "31B TP8 global": (64, 16, 528),
+        "31B TP4 sliding": (64, 16, 509),
+        "31B TP4 global": (64, 8, 637),  # 925 tiles at the defaults, 857 at a 32 chunk: the cores halve
+    }
+    assert chosen["31B TP4 global"].cb_bytes == 637 * 2048 <= 15 * g.SDPA_DECODE_L1_BYTES // 16
+    # the 31B dFlash drafter at TP4 (PNHt 9 on head_dim 128): 1232 / 1198 / 800 / 766 tiles down the ladder, (64, 4)
+    # fits at 584; at TP8 (8 local heads x 17 rows: PNHt 5, 1 KV head) the defaults fit at 700 and stay
+    assert (plan(16, 2, 17, 128, 1, 120).k_chunk, plan(16, 2, 17, 128, 1, 120).max_cores_per_head_batch) == (64, 4)
+    assert plan(16, 2, 17, 128, 1, 120).tiles == 584 and plan(8, 1, 17, 128, 1, 120).tiles == 700
+    assert plan(8, 1, 17, 128, 1, 120).max_cores_per_head_batch == 16
+    # the batched records: (5,5) at batch 5 shares the 32-core global grid six ways per row, so the defaults fit
+    assert (plan(8, 1, 6, 512, 5, 32).max_cores_per_head_batch, plan(8, 1, 6, 512, 5, 32).cores_per_head) == (16, 6)
+    assert plan(8, 1, 6, 512, 5, 32).tiles == 565
+    # the env pins a chunk and the ladder walks the cores alone; the earlier GEMMA4_PV_K_CHUNK name still reads;
+    # a pin outside the multiples of 32 is refused by name
+    pinned = plan(8, 1, 6, 512, 1, 32, env={g.PACKED_SDPA_K_CHUNK_ENV: "32", g.PACKED_SDPA_Q_CHUNK_ENV: "64"})
+    assert (pinned.k_chunk, pinned.q_chunk, pinned.max_cores_per_head_batch, pinned.tiles) == (32, 64, 8, 569)
+    assert plan(8, 1, 6, 512, 1, 32, env={g.PACKED_SDPA_K_CHUNK_LEGACY_ENV: "32"}).k_chunk == 32
+    assert plan(8, 1, 6, 512, 1, 32, env={g.PACKED_SDPA_K_CHUNK_ENV: "128"}).k_chunk == 128
+    with pytest.raises(ValueError, match="K_CHUNK must be a positive multiple of 32"):  # allow-pytest.raises (pure)
+        plan(8, 1, 6, 512, 1, 32, env={g.PACKED_SDPA_K_CHUNK_ENV: "48"})
+    # nothing on the ladder fits: the smallest rung comes back flagged, never an exception
+    huge = plan(64, 1, 32, 512, 1, 32)
+    assert (
+        not huge.fits and (huge.k_chunk, huge.max_cores_per_head_batch) == (32, 1) and "over the L1" in huge.describe()
+    )
