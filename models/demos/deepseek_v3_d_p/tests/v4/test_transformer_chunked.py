@@ -19,14 +19,14 @@ chunk that attends the wrong request's state entirely still lands within ~0.002 
 far above the floors. Isolation is checked on device instead, where a rerun of the same chunks is
 exact. The third request replays the first one's opening chunk on the reused slot, and once the
 schedule is done the second request runs again alone, every other slot empty. Both must reproduce the
-interleaved outputs to ``_REPLAY_FLOOR``, which a full leak misses on every layer of both models.
+interleaved outputs to ``REPLAY_FLOOR``, which a full leak misses on every layer of both models.
 """
 
 import pytest
 import torch
 from loguru import logger
 
-from models.common.utility_functions import comp_pcc, is_blackhole
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.hf_config import v4_hf_config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.model import (
     build_v4_model_reference,
@@ -36,7 +36,11 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.model import (
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tests.v4.helpers import (
+    USER_ISOLATED,
+    USER_REQUESTS,
+    USER_SCHEDULE,
     assert_layers_and_output,
+    assert_same_on_device,
     hidden_to_host,
     mesh_params,
     streams_to_host,
@@ -50,37 +54,12 @@ CHUNK = PREFILL_CHUNK_TOKENS
 _PRO_FLOOR, _FLASH_FLOOR = 0.98, 0.99
 _NUM_LAYERS = 3
 _SEED = 7
-# Device-to-device agreement for a rerun chunk: same weights, tokens and programs over the same state. Reruns
-# measure 1.000000; a chunk that attends another request's state entirely measures 0.9996-0.9999 on
-# Flash's sliding layers and lower everywhere else.
-_REPLAY_FLOOR = 0.99999
-
-# (slot, chunks, replays) per request: ``replays`` names an earlier request whose opening tokens this one
-# repeats, or None for fresh tokens. The third request reuses slot 0 and is shorter than the one before
-# it there, so the rows that request left past the new one's end are still in slot 0's index key cache
-# and have to go unread.
-_REQUESTS = {1: [(0, 2, None)], 2: [(0, 2, None), (1, 2, None), (0, 1, 0)]}
-# (request, chunk) in the order the chunks reach the device.
-_SCHEDULE = {1: [(0, 0), (0, 1)], 2: [(0, 0), (1, 0), (0, 1), (2, 0), (1, 1)]}
-# Requests run again on their own slot once the schedule is done, every other slot empty.
-_ISOLATED = {1: [], 2: [1]}
 # Every slot's state spans the longest request.
-_MAX_CHUNKS = max(n for requests in _REQUESTS.values() for _, n, _ in requests)
-
-
-def _assert_same_on_device(label, first, again):
-    """Two device runs of the same chunks, each ``(per_layer, outs)``, agree to ``_REPLAY_FLOOR``."""
-    (first_layers, first_outs), (again_layers, again_outs) = first, again
-    for c in range(len(again_outs)):
-        taps = [(f"layer {i}", first_layers[i][c], again_layers[i][c]) for i in range(len(again_layers))]
-        for name, a, b in [*taps, ("output", first_outs[c], again_outs[c])]:
-            _, pcc = comp_pcc(a.float(), b.float())
-            logger.info(f"[{label}] chunk {c} {name}: PCC {pcc:.6f}")
-            assert pcc >= _REPLAY_FLOOR, f"[{label}] chunk {c} {name} {pcc:.6f} < {_REPLAY_FLOOR}"
+_MAX_CHUNKS = max(n for requests in USER_REQUESTS.values() for _, n, _ in requests)
 
 
 def run_transformer_chunked(mesh_device, device_params, num_links, num_users, model_config, floor):
-    requests, schedule = _REQUESTS[num_users], _SCHEDULE[num_users]
+    requests, schedule = USER_REQUESTS[num_users], USER_SCHEDULE[num_users]
     config = v4_hf_config(model_config, _NUM_LAYERS, max_seq_len=_MAX_CHUNKS * CHUNK)
     ref = build_v4_model_reference(config, seed=_SEED)
     input_ids, refs = [], []
@@ -143,7 +122,7 @@ def run_transformer_chunked(mesh_device, device_params, num_links, num_users, mo
         programs = now
 
     isolated = {}
-    for req in _ISOLATED[num_users]:
+    for req in USER_ISOLATED[num_users]:
         for slot in range(num_users):
             model.reset_streams(slot)
         isolated[req] = ([[] for _ in range(_NUM_LAYERS)], [])
@@ -173,15 +152,13 @@ def run_transformer_chunked(mesh_device, device_params, num_links, num_users, mo
                 f"{label} carried chunks",
             )
         if replays is not None:
-            _assert_same_on_device(
+            assert_same_on_device(
                 f"{label} vs request {replays} on device",
                 (per_layer[replays], outs[replays]),
                 (per_layer[req], outs[req]),
             )
         if req in isolated:
-            _assert_same_on_device(
-                f"{label} interleaved vs alone on device", (per_layer[req], outs[req]), isolated[req]
-            )
+            assert_same_on_device(f"{label} interleaved vs alone on device", (per_layer[req], outs[req]), isolated[req])
 
 
 @pytest.mark.parametrize(
