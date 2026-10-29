@@ -359,3 +359,89 @@ def test_dsa_attention_heads2users_long(mesh_device, monkeypatch, n_pos):
                 f"({n / w_got2[i]:.0f} tok/s) -> x{w_ref2[i] / w_got2[i]:.2f}"
             )
     assert not failures, "\n".join(failures)
+
+
+# ------------------------------------------------------------------------------------- waves (per-row chunks)
+def _wave_rows_in(mesh: GLMMesh, chunks: list[torch.Tensor], T: int) -> ttnn.Tensor:
+    """Row r's chunk rows ``chunks[r]`` [n_r, 4096] bf16 padded to ``T`` -> [1,1,T,4096] per row (row-sharded)."""
+    x = torch.zeros(1, 1, mesh.rows * T, chunks[0].shape[-1], dtype=torch.bfloat16)
+    for r, c in enumerate(chunks):
+        x[0, 0, r * T : r * T + c.shape[0]] = c
+    return mesh.upload(x, ttnn.bfloat16, rows=2)
+
+
+def _wave_rows_out(mesh: GLMMesh, y: ttnn.Tensor, valids: tuple[int, ...]) -> list[torch.Tensor]:
+    """Row r's first ``valids[r]`` output rows [n_r, 4096] fp32 (its columns must agree: the all-reduced o_proj)."""
+    grid = _shards(mesh, y)
+    out = []
+    for r in range(mesh.rows):
+        for c in range(1, mesh.cols):
+            assert torch.equal(grid[r][c], grid[r][0]), (r, c, "columns differ")
+        out.append(grid[r][0][0, 0, : valids[r]].float())
+    return out
+
+
+@pytest.mark.timeout(1500)
+@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+def test_dsa_attention_wave_vs_slab(mesh_device, monkeypatch):
+    """Layer-3 attention through a WAVE (``TtDSA.prefill_forward(wave=WaveInfo)``: every mesh row its own prompt in slot
+    ``user`` from its own start, per-chip page-table / pool views, the shape-static dense prefix with row-sharded Q
+    offsets, the sparse path with the rows' true positions) against the slab-local prefill of each prompt ALONE in the
+    same user slot (its owner column): (1) dense regime, prompt A (dump rows [0, 200)) on row 0 and prompt B (rows
+    [200, 500)) on row 1 at T = 384, then the prompts swapped across the rows; (2) the sparse regime: A = rows [0,
+    2500) and B = rows [1500, 3800) in two waves (A[:2048] | B[:1024] at start 0, then A[2048:] at 2048 | B[1024:] at
+    1024, T = 1280). Per-row PCC of every prompt's rows vs its slab prefill > ROW_PCC_BAR."""
+    from models.demos.glm53_flash.tt.decoder_layer import WaveInfo
+
+    raw, cfg = _load()
+    x_in = torch.load(R4097 / f"layer{LAYER}_prefill.pt")["x_in"]
+    rows_t = attention_input(raw, cfg, x_in)  # [S, 4096] bf16
+    attn, mesh = _attention(mesh_device, raw, cfg)
+    assert mesh.rows == 2, "the wave case below pairs two rows"
+    _, part = _caches(mesh_device, cfg, mesh, 4096 + 64 * mesh.rows)
+    monkeypatch.setenv("GLM53_PREFILL_QBLOCK", "2048")
+    user = 1  # owner column 1
+    failures = []
+
+    def wave(chunks, starts, valids, T):
+        x = _wave_rows_in(mesh, chunks, T)
+        info = WaveInfo(T=T, starts=starts, valids=valids, start_t=None, end_t=None)
+        y = attn.prefill_forward(x, part, user, T, start=0, wave=info)
+        out = _wave_rows_out(mesh, y, valids)
+        ttnn.deallocate(y)
+        ttnn.deallocate(x)
+        return out
+
+    def check(label, ref, got):
+        r = row_pcc(ref, got)
+        below = int((r < ROW_PCC_BAR).sum())
+        exact = int((ref == got).all(dim=1).sum())
+        logger.info(
+            f"{label}: rows {ref.shape[0]}: pcc min {r.min():.7f} (row {int(r.argmin())}) median {r.median():.7f}; "
+            f"rows < {ROW_PCC_BAR} {below}; bit-exact rows {exact}; max|diff| {(ref - got).abs().max():.3g}"
+        )
+        if below:
+            failures.append(f"{label}: {below} rows below {ROW_PCC_BAR} (min {r.min():.7f})")
+
+    # (1) dense regime, both orders
+    a, b = rows_t[0:200], rows_t[200:500]
+    ref_a, _, _ = prefill_user(attn, part, mesh, a, user, (200,), 0, 2048, monkeypatch, record=False)
+    ref_b, _, _ = prefill_user(attn, part, mesh, b, user, (300,), 0, 2048, monkeypatch, record=False)
+    got = wave([a, b], (0, 0), (200, 300), 384)
+    check("dense wave A on row 0", ref_a, got[0])
+    check("dense wave B on row 1", ref_b, got[1])
+    got = wave([b, a], (0, 0), (300, 200), 384)
+    check("dense wave B on row 0", ref_b, got[0])
+    check("dense wave A on row 1", ref_a, got[1])
+    # (2) the sparse regime in two waves with per-row starts
+    A, B = rows_t[0:2500], rows_t[1500:3800]
+    ref_A, _, _ = prefill_user(attn, part, mesh, A, user, (2048, 452), 0, 2048, monkeypatch, record=False)
+    ref_B, _, _ = prefill_user(attn, part, mesh, B, user, (1024, 1276), 0, 2048, monkeypatch, record=False)
+    got1 = wave([A[:2048], B[:1024]], (0, 0), (2048, 1024), 2048)
+    check("sparse wave 1: A[:2048] on row 0", ref_A[:2048], got1[0])
+    check("sparse wave 1: B[:1024] on row 1", ref_B[:1024], got1[1])
+    got2 = wave([A[2048:], B[1024:]], (2048, 1024), (452, 1276), 1280)
+    check("sparse wave 2: A[2048:2500] on row 0 (start 2048)", ref_A[2048:], got2[0])
+    check("sparse wave 2: B[1024:2300] on row 1 (start 1024)", ref_B[1024:], got2[1])
+    assert not failures, "\n".join(failures)
