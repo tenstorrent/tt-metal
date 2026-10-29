@@ -2219,13 +2219,13 @@ class ResidentModel:
     @staticmethod
     def sampling_words(temperature=0.0, top_k=1, top_p=1.0, seed=0):
         """the hub's sampling parameter words (sampling.hpp): temperature 0 or top_k 1 is greedy, top_k <= TOP_K
-        (< 1: TOP_K)"""
+        (< 1: TOP_K); seed None picks one (a request without a seed, per row in rows mode)"""
         top_k = TOP_K if top_k < 1 else min(int(top_k), TOP_K)
         words = np.zeros(16, dtype=np.uint32)
         words[0] = min(round(65536 / temperature), 2**31 - 1) if temperature > 0 else 0
         words[1] = top_k
         words[2] = min(max(round(top_p * 65536), 1), 65536)
-        words[3] = int(seed) & 0xFFFFFFFF
+        words[3] = (int(np.random.randint(0, 2**32, dtype=np.uint64)) if seed is None else int(seed)) & 0xFFFFFFFF
         return words
 
     def set_sampling(self, temperature=0.0, top_k=1, top_p=1.0, seed=None, rows=None):
