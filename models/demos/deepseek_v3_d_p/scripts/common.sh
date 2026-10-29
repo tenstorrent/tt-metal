@@ -37,6 +37,7 @@ ITERS_ID="${ITERS_ID:-iters20}"
 # The use_trace axis, on both models' tests: "notrace" replays nothing, "traced" captures the chunk
 # forward once and replays it per chunk.
 TRACE_ID="${TRACE_ID:-notrace}"
+DET_ID="${DET_ID:-no_determinism}"
 # Kimi only: the perf test's perf_margin axis. The single param is None — "take the band from the
 # mode" (TRACED_PERF_MARGIN / UNTRACED_PERF_MARGIN, resolved by kimi_chunked_perf_gate) — so its id
 # is "margin_auto". It was "margin5pct" while the param was the DEFAULT_PERF_MARGIN literal; keep
@@ -50,13 +51,13 @@ MARGIN_ID="${MARGIN_ID:-margin_auto}"
 case "${MODEL:-}" in
   KIMI_K2_7)
     TEST_FUNC="test_kimi_prefill_transformer_chunked_perf"
-    VARIANT_ID="kimi_k2_7"; LAYERS_ID="L61"; NODE_SUFFIX="-$MARGIN_ID-$TRACE_ID"
+    VARIANT_ID="kimi_k2_7"; LAYERS_ID="${LAYERS_ID:-L61}"; NODE_SUFFIX="-$MARGIN_ID-$DET_ID-$TRACE_ID"
     ENV_VARS='KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320'
     ;;
   GLM5_3)
     TEST_FUNC="test_glm_prefill_transformer_chunked_no_pcc"
     # The GLM test has no perf_margin param, so its node id has no margin token.
-    VARIANT_ID="glm53"; LAYERS_ID="L78"; NODE_SUFFIX="-$TRACE_ID"
+    VARIANT_ID="glm53"; LAYERS_ID="${LAYERS_ID:-L78}"; NODE_SUFFIX="-$DET_ID-$TRACE_ID"
     ENV_VARS='GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4 TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k'
     ;;
   *)
