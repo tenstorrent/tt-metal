@@ -367,6 +367,12 @@ void recip_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
 // through the CBs one row (Wt + 2 tiles) at a time. The partial's tiles and the sums are multiplied on the
 // FPU (19-bit inputs, once per partial); the merger's own fp32 output accumulator is scaled in DST so it is
 // never truncated.
+// A piece whose first step lies past a row's diagonal (Sq_chunk_t > 2 * Sk_chunk_t, or a piece of the
+// first chunks) sees only masked scores on that row: its running max is the mask value itself, so the row's
+// P is exp(0) = 1 everywhere and its partial is finite garbage, which the fold removes exactly (alpha =
+// exp(scale * (mask - real max)) underflows to 0). The whole path never does this, since every row has K
+// tile 0 unmasked at step 0. It holds while |score| stays far below the mask's fp32 spacing (measured
+// finite on Blackhole with raw scores past 32).
 #ifdef SPLIT_UNITS
 // dst_tiles: output tiles per DST pass when copying the output tiles through.
 template <uint32_t rows, uint32_t dst_tiles>
