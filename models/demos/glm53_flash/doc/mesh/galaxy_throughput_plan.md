@@ -84,7 +84,7 @@ wave than under SP (policy (c) keeps SP for it); idle rows cost wasted expert wo
 
 ## 3. Workstream B: the decode step to the roofline floor
 
-`tt/roofline.py` (`tests/test_roofline_host.py`) models the step from measured per-op rows; floor 28.3 ms at 4
+`tt/roofline.py` (`tests/test_roofline_host.py`) models the step from measured per-op rows (refreshed 2026-10-29 from the per-layer decode profiles today_8x4_dsa3 / kda4: the stream expert op 264 us, the gather glue 175 + 67 us, the padded reduce-scatter 269 us, the mHC pre-block 82 us; model 64.9 ms vs the 61.5 ms e2e step); floor 29.0 ms at 4
 users per row (the fused pre-block default), 51.7 ms at 32 per row. Measured: 61.5 ms (32 users), 57 ms (1 user),
 117 ms (256 users). The ranked actions (`ranked_actions`, 2026-10-28):
 

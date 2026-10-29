@@ -1506,3 +1506,20 @@ tokens: the round-1 artifacts are gone), stage c's four concurrent 64 K needles 
 test and the layer test this closes the served APC correctness item; the catalog flip (D7) is unblocked. The vendored
 driver's L1 budget was confirmed on the block meanwhile (`kda_unaligned_block_r2`: the 1088-local-row chunk runs, all
 plans match HF), and `tt/ttkda` now carries the A0 row-local plumbing, forwarded to the ops only when set.
+
+### 2026-10-29 04:43: the roofline's measured column refreshed; the spec harness's near-tie rule
+
+- `tt/roofline.py` measured entries (32 users) now come from the 2026-10-29 per-layer decode profiles
+  (`_logs/mesh/profiler/today_8x4_dsa3` / `kda4`, chip (0,0), one traced replay): the attention rows match the
+  2026-10-21/26 profiles within a microsecond; the MoE rows change: the stream expert op 264 us (the default path,
+  `Layout.expert_path="stream"`; the 683-us block and the 351-us chip-test projection are history), the hybrid
+  gather glue 175 us (x) + 67 us (routing) at their 11-op counts, the padded reduce-scatter 269 us at 32 ops, the
+  mHC pre-block 82 us per wrap, the in-trace gaps 68 / 47 us per layer. Per-layer measured totals 1789 (DSA) /
+  1375 (KDA) us vs the profiles' 1782 / 1380; the step model 64.9 ms vs the 61.5 ms e2e step at today's defaults;
+  floor 29.0 ms (the gap floor counts the glue ops). The ranking is unchanged in substance: H1 + H2 (the glue, 511 us
+  per layer measured) first, then the stream op's fixed cost (E1), the mHC pre-block (D13), the gaps (A1).
+- `tests/test_mtp_spec.py` lossless check: the 8 rows reduce in different orders and the 45-layer chain amplifies the
+  ulp into O(1) margins at a near-tie, so the PLAIN path itself disagreed across rows at token 4 of the sweep anchor
+  (rows 2 and 5, margins 0.125 and 2.06, the same two tokens swapped). A spec token the plain path picked on another
+  user now counts as that tie; the PERF-SPEC line is printed before the verdict. The K sweep is re-pointed and the
+  anchor re-queued.
