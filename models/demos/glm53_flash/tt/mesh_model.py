@@ -841,13 +841,6 @@ class GLM53MeshModel:
         self.kda_snapshots.load(user, entry)
         self.rewind_user(user, position)
 
-    def rewind_user(self, user: int, position: int) -> None:
-        """Set every layer's chunked-prefill cursor of slot ``user`` to ``position`` (a 32-multiple)."""
-        if position < 0 or position % 32:
-            raise ValueError(f"rewind position {position} must be a non-negative multiple of 32")
-        for dec in self.layers:
-            dec.next_start[user] = int(position)
-
     def reset_kda_states(self):
         for dec in self.layers:
             if dec.kda_batched is None:
