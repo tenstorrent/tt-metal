@@ -2613,7 +2613,7 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
 
 
 def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length(expect_error=None):
-    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.2, probe_steps=0), 5)
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.2, probe_steps=0, trial_steps=1), 5)
     row = _row([0.4] * 5)  # (16,1): 1.4 tokens at 1.5x = 0.93x, the cheapest record and above min_gain / 4
     kinds = []
     for _ in range(8):
@@ -2624,11 +2624,11 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert policy.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "a trial below the entry gain is not held"
     # the overhead gate: (30 - 20) / (N x 20) <= 0.03 needs 17 plain steps, whatever retry_steps says, so the
     # retry is the 18th decision
-    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0), 5)
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
     first = next(i for i in range(1, 40) if policy.decide(_cands(_COSTS), [row], _PLAIN, 5) is not None)
     assert first == 18
     # a reseed is part of the overhead: (900 + 30 - 20) / (N x 20) <= 0.2 needs 228 plain steps
-    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.2, probe_steps=0), 5)
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.2, probe_steps=0, trial_steps=1), 5)
     reseeding = [RecordCandidate(s, 1024, ms, 900.0) for s, ms in _COSTS.items()]
     assert all(policy.decide(reseeding, [row], _PLAIN, 5) is None for _ in range(228))
     assert policy.decide(reseeding, [row], _PLAIN, 5).reason == "retry"

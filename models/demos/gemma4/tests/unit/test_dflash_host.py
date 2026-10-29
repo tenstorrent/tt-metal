@@ -3347,6 +3347,7 @@ def _costed(adapter, monkeypatch):
         "GEMMA4_SPEC_PROBE_STEPS": "0",
         "GEMMA4_SPEC_CALIB_MIN": "1000",  # the pinned sequences read the scripted table
         "GEMMA4_SPEC_MIN_GAIN": "1.10",  # the band mechanics below are written at the 1.10 bar (the default is 1.25)
+        "GEMMA4_SPEC_TRIAL_STEPS": "1",  # the scenarios describe one-step trials and retries
     }
     return _with_costs(build_model(adapter, monkeypatch, env=env))
 
@@ -3606,6 +3607,7 @@ def _mtp_adaptive(adapter, monkeypatch, env=None):
         "GEMMA4_SPEC_RETRY_OVERHEAD": "0.2",
         "GEMMA4_SPEC_PROBE_STEPS": "0",
         "GEMMA4_SPEC_CALIB_MIN": "1000",
+        "GEMMA4_SPEC_TRIAL_STEPS": "1",  # the scenarios describe one-step trials and retries
         **(env or {}),
     }
     model = mh.build_mtp_model(adapter, monkeypatch, env=env)
