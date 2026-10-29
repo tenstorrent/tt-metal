@@ -224,7 +224,7 @@ tt_metal/impl/trace/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-runt
 tt_metal/jit_build/ @abhullar-tt @nathan-TT @jbaumanTT @kstevensTT @ruizhangTT
 tt_metal/jit_build/**/CMakeLists.txt @abhullar-tt @nathan-TT @jbaumanTT @ruizhangTT @tenstorrent/metalium-developers-infra
 tt_metal/llrt/ @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho
-tt_metal/llrt/zone_meta.* @mo-tenstorrent @yusufbashiTT
+tt_metal/llrt/call_sites.* @mo-tenstorrent @yusufbashiTT
 tt_metal/llrt/**/CMakeLists.txt @abhullar-tt @jbaumanTT @ruizhangTT @arikTT @tt-asaigal @tt-aho @tenstorrent/metalium-developers-infra
 tt_metal/llrt/rtoptions.cpp @tenstorrent/metalium-api-owners @jbaumanTT @abhullar-tt
 tt_metal/llrt/rtoptions.hpp @tenstorrent/metalium-api-owners
