@@ -103,7 +103,6 @@ ttnn::Tensor tilize_with_val_padding(
                                  : input_single_tile_size;
 
     uint32_t num_tiles_per_row = output_padded_shape[-1] / tt::constants::TILE_WIDTH;
-    uint32_t num_tiles_per_col = output_padded_shape[-2] / tt::constants::TILE_HEIGHT;
 
     // Fold in the block factory's c_1 staging CB so routing sees the true CB budget.
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
@@ -120,14 +119,6 @@ ttnn::Tensor tilize_with_val_padding(
         output_dtype.value_or(input_tensor.dtype()),
         Layout::TILE);
 
-    bool enough_space_width = operations::data_movement::is_enough_space(
-        input_tensor,
-        input_single_tile_size,
-        output_single_tile_size,
-        num_tiles_per_col,
-        staging_bytes_per_tile,
-        fixed_staging_bytes,
-        pending_l1_output_bytes);
     bool enough_space_height = operations::data_movement::is_enough_space(
         input_tensor,
         input_single_tile_size,
@@ -149,7 +140,6 @@ ttnn::Tensor tilize_with_val_padding(
                  .output_mem_config = output_mem_config,
                  .output_dtype = dtype,
                  .use_multicore = use_multicore,
-                 .enough_space_width = enough_space_width,
                  .enough_space_height = enough_space_height,
                  .sub_core_grids = sub_core_grids},
                 input_tensor)) {
@@ -160,7 +150,6 @@ ttnn::Tensor tilize_with_val_padding(
                 ttnn::DRAM_MEMORY_CONFIG,
                 dtype,
                 use_multicore,
-                enough_space_width,
                 /*enough_space_height=*/false,
                 sub_core_grids);
             return ttnn::to_memory_config(interleaved_tile, output_mem_config);
@@ -172,7 +161,6 @@ ttnn::Tensor tilize_with_val_padding(
             output_mem_config,
             dtype,
             use_multicore,
-            enough_space_width,
             enough_space_height,
             sub_core_grids);
     };

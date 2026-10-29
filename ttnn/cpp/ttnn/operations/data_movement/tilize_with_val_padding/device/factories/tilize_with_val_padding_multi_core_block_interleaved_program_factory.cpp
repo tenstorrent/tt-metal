@@ -27,11 +27,44 @@ namespace {
 using ttnn::operations::data_movement::BlockBufferSet;
 using ttnn::operations::data_movement::BlockCoreOrder;
 using ttnn::operations::data_movement::BlockDirection;
+using ttnn::operations::data_movement::BlockL1Fit;
 using ttnn::operations::data_movement::BlockPlan;
 using ttnn::operations::data_movement::buffer_set_for_core;
-using ttnn::operations::data_movement::make_block_plan;
 
 }  // namespace
+
+// The two take the same arguments; keep them in step. ColumnMajor: the runtime-arg loop in
+// create_program_artifacts walks `corerange_to_cores(available_grid)`, so the split hands cores out
+// in that same order.
+BlockPlan TilizeWithValPaddingMultiCoreBlockInterleavedFactory::block_plan(
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor, const Tensor& output_tensor) {
+    return ttnn::operations::data_movement::make_block_plan(
+        BlockDirection::Tilize,
+        BlockCoreOrder::ColumnMajor,
+        input_tensor,
+        output_tensor,
+        tt::tile_size(datatype_to_dataformat_converter(input_tensor.dtype())),
+        tt::tile_size(datatype_to_dataformat_converter(operation_attributes.output_dtype)),
+        TILE_HEIGHT,
+        TILE_WIDTH,
+        operation_attributes.sub_core_grids);
+}
+
+BlockL1Fit TilizeWithValPaddingMultiCoreBlockInterleavedFactory::block_l1_fit(
+    const TilizeWithValPaddingParams& operation_attributes,
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_padded_shape) {
+    return ttnn::operations::data_movement::block_l1_fit(
+        BlockDirection::Tilize,
+        BlockCoreOrder::ColumnMajor,
+        input_tensor,
+        output_padded_shape,
+        tt::tile_size(datatype_to_dataformat_converter(input_tensor.dtype())),
+        tt::tile_size(datatype_to_dataformat_converter(operation_attributes.output_dtype)),
+        TILE_HEIGHT,
+        TILE_WIDTH,
+        operation_attributes.sub_core_grids);
+}
 
 ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_program_artifacts(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor, Tensor& tensor_return_value) {
@@ -83,19 +116,9 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
 
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
-    // `make_block_plan` reads live L1 occupancy, so it is only valid on a program-cache miss -- which
-    // is the only time this function runs. ColumnMajor: the runtime-arg loop below walks
-    // `corerange_to_cores(available_grid)`, so the split hands cores out in that same order.
-    const BlockPlan plan = make_block_plan(
-        BlockDirection::Tilize,
-        BlockCoreOrder::ColumnMajor,
-        a,
-        output,
-        input_single_tile_size,
-        output_single_tile_size,
-        TILE_HEIGHT,
-        TILE_WIDTH,
-        sub_core_grids);
+    // `block_plan` reads live L1 occupancy. This runs only on a program-cache miss, and
+    // compute_program_hash keys on `block_l1_fit`, so a hit never replays a plan sized for other L1.
+    const BlockPlan plan = block_plan(operation_attributes, a, output);
     const BlockBufferSet& full_set = plan.full;
     const BlockBufferSet& cliffrow_set = plan.cliffrow;
     const auto& [ncores, all_cores, core_range, cliff_row_core_range, cliff_col_core_range, cliff_col_row_core_range, nblocks_per_core, single_block_size, single_block_size_cliff_row, single_block_size_cliff_col, has_cliff_row, has_cliff_col, full_cores_per_row, full_cores_per_col, single_sub_block_size] =
