@@ -52,6 +52,61 @@ def test_an_fp4_input_is_nudged_by_the_size_of_its_quantizers_rounding():
         NF.nudge(torch.randn(4, 24), 0, "fp4/16")
 
 
+def test_a_pow2_scale_fp4_input_is_nudged_by_the_size_of_its_quantizers_rounding():
+    """F224: an fp4e8/<block> input (e2m1 with a power-of-two scale 2^ceil(log2(amax / 6)), the indexer's keys / query)
+    moves inside its own e2m1 cell: the nudge's error matches that quantizer's (0.5-2x), its cell is the grid step on
+    the power-of-two scale (not amax / 6), and a grid value stays within half a step of itself."""
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(256, 512, generator=g) * torch.pow(2.0, torch.randint(-4, 4, (256, 1), generator=g).float())
+    grid = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0])
+    xg = x.view(256, -1, 32)
+    s = torch.pow(2.0, torch.ceil(torch.log2(xg.abs().amax(-1, keepdim=True) / 6.0)))
+    m = (xg.abs() / s).unsqueeze(-1)
+    q = (grid[(m - grid).abs().argmin(-1)] * xg.sign() * s).view_as(x)
+    rel = lambda a: ((a.double() - x.double()).norm() / x.double().norm()).item()  # noqa: E731
+    r_q, r_n = rel(q), rel(NF.nudge(x, 0, "fp4e8/32"))
+    assert 0.5 < r_n / r_q < 2.0, (r_n, r_q)
+    qg = q.view(256, -1, 32).abs() / s
+    step = torch.where(qg < 2, 0.5, torch.where(qg < 4, 1.0, 2.0)) * s
+    d = (NF.nudge(q, 1, "fp4e8/32") - q).view(256, -1, 32).abs()
+    assert (d <= 0.5 * step + 1e-6).all()
+    # the cell follows the power-of-two scale: on a block whose amax / 6 is just above a power of two the scale doubles
+    # and so does the cell, which an amax / 6 scale (fp4/32) would not show
+    y = torch.zeros(1, 32)
+    y[0, 0] = 6.0 * 1.01
+    y[0, 1:] = 0.9
+    dy = lambda dt: (NF.nudge(y, 2, dt) - y)[0, 1:].abs().max().item()  # noqa: E731
+    assert dy("fp4e8/32") > 1.5 * dy("fp4/32"), (dy("fp4e8/32"), dy("fp4/32"))
+    with pytest.raises(ValueError):
+        NF.nudge(torch.randn(4, 48), 0, "fp4e8/32")
+    with pytest.raises(ValueError):
+        NF.nudge(x, 0, "fp4e8/x")
+
+
+def test_nudge_inner_moves_a_steps_own_quantizer_only_in_its_marked_nudged_runs(tmp_path):
+    """F224: a step whose official code quantizes inside (e.g. the fp4 index query) marked ``nudge_inner: true``: in its
+    nudged runs the reference's quantizer (calling nudge_inner) moves inside its cell; the exact run, an unmarked step
+    and any call outside a nudged run see the value unchanged."""
+
+    class S:
+        bringup_dir = tmp_path
+
+    x = torch.randn(8, 64, generator=torch.Generator().manual_seed(0))
+    step = lambda a: NF.nudge_inner(a * 2.0, "fp4e8/32")  # noqa: E731
+    assert torch.equal(step(x), x * 2.0)
+    (tmp_path / NF.TAPS_FILE).write_text("steps:\n  indexer: {inputs: [fixed], nudge_inner: true}\n")
+    d = NF.input_dtypes(S, "csa", "indexer", 1)
+    assert d == ["fixed"] and d.inner and not NF.input_dtypes(S, "csa", "router", 1).inner
+    outs = NF.nudged(step, [x], d, seeds=2)
+    assert all(not torch.equal(o, x * 2.0) for o in outs) and not torch.equal(outs[0], outs[1])
+    # within half a cell: the top e2m1 step 2 s, s = 2^ceil(log2(amax / 6)) <= amax / 3
+    assert all(((o - x * 2.0).abs() <= (x * 2.0).abs().amax() / 3.0 + 1e-6).all() for o in outs)
+    assert torch.equal(NF.nudged(step, [x], d, seeds=2)[1], outs[1])  # seeded
+    plain = NF.Dtypes(["fixed"])
+    assert all(torch.equal(o, x * 2.0) for o in NF.nudged(step, [x], plain, seeds=2))
+    assert torch.equal(step(x), x * 2.0)  # the context is gone after the run
+
+
 def test_input_dtypes_come_from_the_official_taps_map(tmp_path):
     class S:
         bringup_dir = tmp_path
@@ -64,6 +119,11 @@ def test_input_dtypes_come_from_the_official_taps_map(tmp_path):
     assert NF.input_dtypes(S, "swa", "router", 1) == ["fp32"] and NF.input_dtypes(S, "mla", "router", 1) == ["bf16"]
     (tmp_path / NF.TAPS_FILE).write_text("steps:\n  attention: {inputs: [bf16, fp4/16]}\n")
     assert NF.input_dtypes(S, "swa", "attention", 2) == ["bf16", "fp4/16"]
+    (tmp_path / NF.TAPS_FILE).write_text("steps:\n  indexer: {inputs: [bf16, bf16, fp4e8/32]}\n")
+    assert NF.input_dtypes(S, "swa", "indexer", 3) == ["bf16", "bf16", "fp4e8/32"]
+    (tmp_path / NF.TAPS_FILE).write_text("steps:\n  indexer: {inputs: [fp4e8/0]}\n")
+    with pytest.raises(ValueError):
+        NF.input_dtypes(S, "swa", "indexer", 1)
     (tmp_path / NF.TAPS_FILE).write_text("steps:\n  attention: {inputs: [fp4/x]}\n")
     with pytest.raises(ValueError):
         NF.input_dtypes(S, "swa", "attention", 1)

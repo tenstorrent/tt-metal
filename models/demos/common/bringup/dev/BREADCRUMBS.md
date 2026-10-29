@@ -2378,3 +2378,24 @@ input `fp4/16` (e2m1, e4m3 scale per 16). The indexer's compressed input stays `
 re-round it. Result: chunk0 limit 0.0493 (was 0.03), pass; layer14 / mixed stay at 0.03 (their floor is lower).
 Selftest `test_noise_floor.py::test_an_fp4_input_is_nudged_by_the_size_of_its_quantizers_rounding`;
 noise_floor + swap_checks selftests 56 pass.
+
+## F224: the fp4 cell with a power-of-two scale, and a step's own quantizers in the nudge (DeepSeek-V4.1 2x2 lowbit, owner 2026-10-29)
+
+Lowbit phase 2 puts the index keys and the index query at the reference's width (bfloat4_b on device; the reference:
+e2m1 with an e8m0 power-of-two scale per 32, ds41_ref.py `_q4(..., 32)`). F223's `fp4/<block>` cell assumes a free
+scale (amax / 6, the compressed KV's e4m3 one). A power-of-two scale is 2^ceil(log2(amax / 6)), up to 2x coarser, so
+that cell understates the reference's rounding. And the index query is rounded inside the indexer step, not at an
+input: the CPU target (native, fp32) skips it, the golden check counts it through the official arithmetic, but the
+second inputs (chunk0 / layer / mixed) only see the input nudge, the F223 failure again once the device rounds the
+query. Fix: `noise_floor.nudge` takes `fp4e8/<block>` (the e2m1 grid step on the power-of-two scale), accepted by
+`input_dtypes`; and an opt-in `nudge_inner: true` per official_taps.yaml step makes its nudged runs (every caller:
+`nudged`, the component and swap selection paths, the swap chain) run under `noise_floor.inner`, where a reference's
+internal quantizer calling `noise_floor.nudge_inner(x, dtype)` moves inside its cell (one seed a call); the exact run,
+unmarked steps and calls outside a nudged run get x unchanged. DeepSeek-V4.1's `_q4` in native mode calls it (fp4/16
+for the e4m3-scale compressed KV, fp4e8/32 for the index keys / query). No taps entry is marked yet, so no limit
+changes today. Phase 2 (with INDEX_K_FORMAT / INDEX_Q_FORMAT): `indexer: {inputs: [bf16, bf16, fp4e8/32],
+nudge_inner: true}`. Not covered: an internal fp8 (e4m3, `_q8`) cell. Selftests `test_noise_floor.py::
+test_a_pow2_scale_fp4_input_is_nudged_by_the_size_of_its_quantizers_rounding` (fails with the power-of-two scale off)
+and `::test_nudge_inner_moves_a_steps_own_quantizer_only_in_its_marked_nudged_runs`; noise_floor + swap_checks +
+component_checks 109 pass; the whole selftest suite 660 pass, 1 failing before and after (test_e2e_runtime
+test_no_runner_contract_test_takes_a_fixed_threshold: xing40_a4b_d_p/tests/bringup/contract/server_rules.py:393).

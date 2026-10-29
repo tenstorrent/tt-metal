@@ -302,7 +302,10 @@ def _capturing(
                 _, sc, kk = NF.tapped(run, xs)
                 outs, nsc = [], []
                 for k_ in range(seeds or NF.SEEDS):
-                    o, ns, _ = NF.tapped(run, [NF.nudge(t, 1000 * k_ + j, dj) for j, (t, dj) in enumerate(zip(xs, d))])
+                    with NF.inner(k_, dtypes):
+                        o, ns, _ = NF.tapped(
+                            run, [NF.nudge(t, 1000 * k_ + j, dj) for j, (t, dj) in enumerate(zip(xs, d))]
+                        )
                     outs.append(o)
                     nsc.append(ns)
                 ok_scores = sc is not None and all(n is not None for n in nsc)
@@ -638,9 +641,12 @@ def _model_chain(s, ref, hooks, steps, layer: int, g, c: int, swapped, block_typ
             def as_nudged(name, seed=seed):
                 cpu = ref.component(layer, name)
                 d = NF.input_dtypes(s, block_type, name, len(_step(ref, layer, name).inputs))
-                return lambda ctx, *x: cpu(
-                    ctx, *[NF.nudge(t, 1000 * seed + j, dj) for j, (t, dj) in enumerate(zip(x, d))]
-                )
+
+                def f(ctx, *x):
+                    with NF.inner(seed, d):
+                        return cpu(ctx, *[NF.nudge(t, 1000 * seed + j, dj) for j, (t, dj) in enumerate(zip(x, d))])
+
+                return f
 
             out = {}
             run_block(
