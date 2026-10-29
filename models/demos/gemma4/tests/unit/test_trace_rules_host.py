@@ -54,9 +54,52 @@ def test_no_growth_no_recapture(monkeypatch):
     g._g4_alloc_check_pending = True
     assert not g._g4_trace_guard_should_recapture("k")
     assert g._g4_trace_alloc_baseline["k"][0] == 900
-    levels[ttnn.BufferType.DRAM] = 950  # above the lowest level seen: a post-capture allocation
+    # GEMMA4_TRACE_GUARD_DUMP=1 names the trigger: the blocks new since the baseline (snapshotted at the passing
+    # check above) with the tensors held at their addresses, and the tensors held now that were not held then
+    import models.demos.gemma4.tt.generator as generator_module
+
+    monkeypatch.setenv("GEMMA4_TRACE_GUARD_DUMP", "1")
     g._g4_alloc_check_pending = True
-    assert g._g4_trace_guard_should_recapture("k")
+    assert not g._g4_trace_guard_should_recapture("k")  # still 900: the snapshot is taken here
+    assert g._g4_guard_baseline_state["blocks"]["DRAM"] == {(0, 900), ((1 << 20) - 4096, 4096)}
+    grown = _View(900)
+    grown.total_bytes_allocated_per_bank += 50
+    grown.block_table.insert(1, {"address": "900", "size": "50", "allocated": "yes"})
+    grown.block_table[2] = {"address": "950", "size": str((1 << 20) - 950 - 4096), "allocated": "no"}
+    monkeypatch.setattr(
+        ttnn, "get_memory_view", lambda mesh, bt: grown if bt == ttnn.BufferType.DRAM else _View(levels[bt])
+    )
+    output = SimpleNamespace(buffer_address=lambda: 900, dtype="DataType.BFLOAT16", shape=(1, 1, 32, 8))
+    g.trace_output_decode["k"] = [output]
+    g.model[0].stray = SimpleNamespace(buffer_address=lambda: 123456, dtype="DataType.INT32", shape=(32, 4096))
+    logged = []
+    monkeypatch.setattr(generator_module.logger, "warning", lambda message, *a, **k: logged.append(message.format(*a)))
+    g._g4_alloc_check_pending = True
+    assert g._g4_trace_guard_should_recapture("k")  # above the lowest level seen: a post-capture allocation
+    assert logged[-1] == (
+        "Gemma4: trace guard dump (re-capture 1/8): 1 new block(s), +50 B per bank: "
+        "DRAM 50B@900 owner=generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8] | new tensors held: "
+        "generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8], model[0].stray INT32 [32,4096]"
+    )
+    assert logged[-2].startswith("Gemma4: device allocations grew after the decode-trace capture")
+    # without a block table the line carries the allocator statistics instead; off, nothing is snapshotted
+    bare = SimpleNamespace(total_bytes_allocated_per_bank=975, largest_contiguous_bytes_free_per_bank=7, block_table=[])
+    monkeypatch.setattr(ttnn, "get_memory_view", lambda mesh, bt: bare)
+    g._g4_guard_baseline_state = {
+        "blocks": {"DRAM": None, "L1": None},
+        "stats": {"DRAM": (900, 9), "L1": (10, 1)},
+        "tensors": set(),
+    }
+    g._g4_guard_dump(2, 8)
+    assert logged[-1] == (
+        "Gemma4: trace guard dump (re-capture 2/8): 0 new block(s), +0 B per bank: none | new tensors held: "
+        "generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8], model[0].stray INT32 [32,4096] | no block table: "
+        "DRAM allocated 900 -> 975, largest free 9 -> 7; L1 allocated 10 -> 975, largest free 1 -> 7"
+    )
+    monkeypatch.setenv("GEMMA4_TRACE_GUARD_DUMP", "0")
+    del g._g4_guard_baseline_state
+    g._g4_note_decode_trace_captured("k")
+    assert not hasattr(g, "_g4_guard_baseline_state")
 
 
 @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.DRAM, ttnn.BufferType.L1])

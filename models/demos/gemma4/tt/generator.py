@@ -3204,6 +3204,7 @@ class ChunkedPrefillPageTableGuardMixin:
         if baseline is None:
             # Captured by a warmup path: the level at this first replay is the baseline.
             self._g4_trace_alloc_baseline[decode_trace_key] = self._g4_alloc_levels()
+            self._g4_guard_snapshot()
             return False
         if not getattr(self, "_g4_alloc_check_pending", True):
             # nothing but replays since the last check: no new persistent allocation (the ``alloc`` arming
@@ -3220,6 +3221,7 @@ class ChunkedPrefillPageTableGuardMixin:
             # The level right after the capture can still include tensors the warmup frees later; the
             # lowest level seen at a replay is the true quiescent baseline, so track it downwards.
             self._g4_trace_alloc_baseline[decode_trace_key] = tuple(min(b, c) for b, c in zip(baseline, current))
+            self._g4_guard_snapshot()
             return False
         limit = int(os.environ.get("GEMMA4_TRACE_ALLOC_GUARD_MAX", "8"))
         now = time.monotonic()
@@ -3253,7 +3255,153 @@ class ChunkedPrefillPageTableGuardMixin:
             self._g4_trace_guard_recaptures,
             limit,
         )
+        if self._g4_guard_dump_on():
+            self._g4_guard_dump(self._g4_trace_guard_recaptures, limit)
         return True
+
+    # GEMMA4_TRACE_GUARD_DUMP=1 names the trigger of a fire: one WARNING line per fire listing the allocator blocks
+    # that exist at the fire and did not at the baseline (the allocated entries of the DRAM and L1 block tables,
+    # snapshotted at every baseline the guard takes or keeps), each with the ttnn tensors the generator or a model
+    # holds at that address (one attribute walk, three container levels deep, keyed by buffer address and by id),
+    # plus the tensors held now that were not held at the baseline. Without a block table the line carries the
+    # allocator statistics instead (allocated and largest free bytes per bank, baseline -> now). Off (the default):
+    # nothing is read, snapshotted or walked.
+    #   Gemma4: trace guard dump (re-capture N/MAX): K new block(s), +B B per bank: TYPE SIZEB@ADDR owner=PATH DTYPE
+    #   [SHAPE]; ... | new tensors held: PATH DTYPE [SHAPE], ... | no block table: TYPE allocated A -> B, largest
+    #   free C -> D
+    _G4_GUARD_DUMP_ENTRIES = 32
+
+    @staticmethod
+    def _g4_guard_dump_on() -> bool:
+        return os.environ.get("GEMMA4_TRACE_GUARD_DUMP", "0") == "1"
+
+    def _g4_guard_views(self):
+        """``{"DRAM": view, "L1": view}`` of the first mesh; a view that cannot be read is left out."""
+        args = getattr(self, "model_args", None) or []
+        mesh = getattr(args[0], "mesh_device", None) if args else None
+        views = {}
+        for name, buffer_type in (("DRAM", ttnn.BufferType.DRAM), ("L1", ttnn.BufferType.L1)):
+            try:
+                views[name] = ttnn.get_memory_view(mesh, buffer_type)
+            except Exception:  # noqa: BLE001 - diagnostics only
+                continue
+        return views
+
+    @staticmethod
+    def _g4_guard_blocks(view):
+        """``{(address, size)}`` of the allocated blocks of a memory view, or None without a block table."""
+        try:
+            table = list(view.block_table)
+        except Exception:  # noqa: BLE001
+            return None
+        if not table:
+            return None
+        return {
+            (int(b.get("address", 0)), int(b.get("size", 0)))
+            for b in table
+            if str(b.get("allocated", "")).lower() in ("yes", "true", "1")
+        }
+
+    @staticmethod
+    def _g4_guard_stats(view):
+        """(allocated bytes per bank, largest contiguous free bytes per bank) of a memory view."""
+        return tuple(
+            int(getattr(view, name, 0) or 0)
+            for name in ("total_bytes_allocated_per_bank", "largest_contiguous_bytes_free_per_bank")
+        )
+
+    def _g4_guard_tensors(self, budget=20000):
+        """``{id(tensor): (path, tensor)}`` of every ttnn tensor the generator or its models hold, reached through
+        their attributes and up to three container levels (dicts, lists, tuples); ``budget`` bounds the walk."""
+        found = {}
+        roots = [("generator", self)] + [(f"model[{i}]", m) for i, m in enumerate(getattr(self, "model", None) or [])]
+        stack = []
+        for name, root in roots:
+            for attr, value in list(getattr(root, "__dict__", {}).items()):
+                stack.append((f"{name}.{attr}", value, 0))
+        seen = set()
+        while stack and budget > 0:
+            path, value, depth = stack.pop()
+            budget -= 1
+            if callable(getattr(value, "buffer_address", None)):
+                found.setdefault(id(value), (path, value))
+                continue
+            if depth >= 3 or id(value) in seen:
+                continue
+            seen.add(id(value))
+            if isinstance(value, dict):
+                items = [(f"{path}[{key!r}]", item) for key, item in value.items()]
+            elif isinstance(value, (list, tuple)):
+                items = [(f"{path}[{i}]", item) for i, item in enumerate(value)]
+            else:
+                continue
+            for item_path, item in items:
+                stack.append((item_path, item, depth + 1))
+        return found
+
+    def _g4_guard_snapshot(self) -> None:
+        """GEMMA4_TRACE_GUARD_DUMP=1: the allocated blocks, allocator statistics and held tensors at a baseline."""
+        if not self._g4_guard_dump_on():
+            return
+        views = self._g4_guard_views()
+        self._g4_guard_baseline_state = {
+            "blocks": {name: self._g4_guard_blocks(view) for name, view in views.items()},
+            "stats": {name: self._g4_guard_stats(view) for name, view in views.items()},
+            "tensors": set(self._g4_guard_tensors()),
+        }
+
+    @staticmethod
+    def _g4_guard_describe(path, tensor):
+        try:
+            dtype = str(tensor.dtype).replace("DataType.", "")
+        except Exception:  # noqa: BLE001
+            dtype = "-"
+        try:
+            shape = "[" + ",".join(str(int(d)) for d in tensor.shape) + "]"
+        except Exception:  # noqa: BLE001
+            shape = "-"
+        return f"{path} {dtype} {shape}"
+
+    def _g4_guard_dump(self, n, limit) -> None:
+        """One WARNING line naming what grew since the baseline (``GEMMA4_TRACE_GUARD_DUMP=1``, after a fire)."""
+        state = getattr(self, "_g4_guard_baseline_state", None) or {"blocks": {}, "stats": {}, "tensors": set()}
+        views = self._g4_guard_views()
+        tensors = self._g4_guard_tensors()
+        by_address = {}
+        for path, tensor in tensors.values():
+            try:
+                by_address.setdefault(int(tensor.buffer_address()), []).append((path, tensor))
+            except Exception:  # noqa: BLE001 - a tensor whose address cannot be read is listed by id only
+                continue
+        entries, no_table, count, total = [], [], 0, 0
+        for name, view in views.items():
+            blocks = self._g4_guard_blocks(view)
+            before = state["blocks"].get(name)
+            if blocks is None or before is None:
+                was, now = state["stats"].get(name, (0, 0)), self._g4_guard_stats(view)
+                no_table.append(f"{name} allocated {was[0]} -> {now[0]}, largest free {was[1]} -> {now[1]}")
+                continue
+            for address, size in sorted(blocks - before, key=lambda block: (-block[1], block[0])):
+                count += 1
+                total += size
+                owners = by_address.get(address)
+                owner = "; ".join(self._g4_guard_describe(p, t) for p, t in owners) if owners else "?"
+                entries.append(f"{name} {size}B@{address} owner={owner}")
+        held = sorted(self._g4_guard_describe(p, t) for i, (p, t) in tensors.items() if i not in state["tensors"])
+        cap = self._G4_GUARD_DUMP_ENTRIES
+        for items in (entries, held):
+            if len(items) > cap:
+                del items[cap:]
+                items.append(f"and {len(items) - cap} more")
+        line = (
+            f"Gemma4: trace guard dump (re-capture {n}/{limit}): {count} new block(s), +{total} B per bank: "
+            + (", ".join(entries) if entries else "none")
+            + " | new tensors held: "
+            + (", ".join(held) if held else "none")
+        )
+        if no_table:
+            line += " | no block table: " + "; ".join(no_table)
+        logger.warning("{}", line)
 
     def _g4_note_decode_trace_captured(self, decode_trace_key) -> None:
         """A decode trace was just captured for ``decode_trace_key``: its baseline is the level now, and every
@@ -3272,6 +3420,7 @@ class ChunkedPrefillPageTableGuardMixin:
         not a stray allocation under a replay, so they move every baseline.
         """
         self._g4_trace_alloc_baseline = {decode_trace_key: self._g4_alloc_levels()}
+        self._g4_guard_snapshot()
 
     def _g4_release_decode_traces(self, reason: str, *, in_warmup: bool = False) -> int:
         """Release every captured decode trace (and the sampling traces bound to its logits).
