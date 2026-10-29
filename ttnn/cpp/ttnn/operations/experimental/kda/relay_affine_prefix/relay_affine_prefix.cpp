@@ -32,7 +32,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>> relay_affine
     uint32_t output_gate_copied_columns,
     const std::vector<tt::tt_metal::CoreCoord>& output_gate_copy_cores) {
     TT_FATAL(
-        packed.storage_type() == StorageType::DEVICE && packed.buffer() != nullptr,
+        packed.storage_type() == StorageType::DEVICE && packed.is_allocated(),
         "relay_affine_prefix: packed must be an allocated device tensor");
     TT_FATAL(semaphores.size() == 2, "relay_affine_prefix: needs two global semaphores, got {}", semaphores.size());
     const auto arch = packed.device()->arch();

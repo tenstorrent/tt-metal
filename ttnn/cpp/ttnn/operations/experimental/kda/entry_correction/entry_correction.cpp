@@ -22,7 +22,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> entry_correction(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL(
-        final_b.storage_type() == StorageType::DEVICE && final_b.buffer() != nullptr,
+        final_b.storage_type() == StorageType::DEVICE && final_b.is_allocated(),
         "entry_correction: final_b must be an allocated device tensor");
     // The products accumulate in the FP32 DST at the scan's fidelity.
     const auto kernel_config = init_device_compute_kernel_config(
