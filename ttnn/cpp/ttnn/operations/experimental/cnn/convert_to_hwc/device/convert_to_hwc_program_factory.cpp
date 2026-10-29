@@ -208,7 +208,7 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     config.element_size_bytes = tt::datum_size(config.input_format);
 
     // DRAM/L1 configuration
-    TT_FATAL(input.buffer() != nullptr, "Input buffer must be allocated on device");
+    TT_FATAL(input.is_allocated(), "Input buffer must be allocated on device");
     config.is_input_in_dram = input.buffer()->core_type() == tt::CoreType::DRAM;
     config.remote_buffer_type = input.buffer()->buffer_type();
     config.remote_core_type = input.buffer()->core_type();
@@ -395,7 +395,7 @@ tt::tt_metal::ProgramDescriptor ConvertToHWCProgramFactory::create_descriptor(
 
     const auto& a = tensor_args.input;
     auto& output = tensor_return_value;
-    TT_FATAL(output.buffer() != nullptr, "Output buffer must be allocated on device");
+    TT_FATAL(output.is_allocated(), "Output buffer must be allocated on device");
 
     // Create configuration from input tensors
     auto config = ConvertToHwcConfig::create_from_tensors(a, output);

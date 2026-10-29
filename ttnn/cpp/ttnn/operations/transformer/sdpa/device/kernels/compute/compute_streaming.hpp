@@ -843,6 +843,10 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 // DST[1] = exp((sink[s] - max[row_offset+s]) * scale); DST[0] += DST[1].
                 // max - sink with a negated scale is equivalent and avoids expanding the sink
                 // scalar to a first-column vector for every Q tile.
+                // The sink can have its own format (e.g. bfloat8_b): unpack from max/sink, then restore
+                // the matmul formats that the next row's folded reconfig assumes. scratch_cb stands in
+                // for cur_max: every caller allocates both in the intermediate format.
+                sdpa_maybe_reconfig_data_format<col_identity_cb, scratch_cb, scratch_cb, cb_attention_sink>();
                 if constexpr (sink_per_row) {
                     // Sparse SDPA packs different heads in each row; both inputs hold a first-column vector.
                     sub_init(cur_max_cb_rt, cb_attention_sink);
@@ -851,6 +855,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                     sub_bcast_scalar_init(cur_max_cb_rt, cb_attention_sink);
                     sub_tiles_bcast_scalar(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, 0, 1);
                 }
+                sdpa_maybe_reconfig_data_format<scratch_cb, col_identity_cb, cb_attention_sink, scratch_cb>();
                 // The custom first-column exp needs generic unary SFPU addrmod state, but not the
                 // Blackhole approximate exp_init macro/replay setup used by exp_tile<true>.
                 MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, DST_ACCUM_MODE>()));
