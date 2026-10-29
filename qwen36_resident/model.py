@@ -469,11 +469,12 @@ class ResidentModel:
         u * blocks_per_user ...), see set_page_table. The users' States are placed into the pool through them.
         rows (multi-user rows mode, kernels/active_rows.hpp): the rows of a launch are independent users, each run
         only when its active bit is set (token_state active=), with the conv history in canonical order; a user's
-        arithmetic does not depend on its neighbours. Batch > 1, no verify, no feed."""
+        arithmetic does not depend on its neighbours. Batch > 1, no verify. With embed, the hub of each launch feeds
+        each active row its own token (mlp_hub.cpp rows mode; per-row sampling parameters, set_sampling rows=)."""
         self.mesh, self.d, self.layers, self.interval, self.lm_head = mesh, d, layers, interval, lm_head
         self.verify = verify
         self.rows = rows
-        assert not rows or (not verify and embed is None), "rows mode: independent users, host-fed"
+        assert not rows or not verify, "rows mode: independent users"
         self.fc = fc is not None
         self.sample = embed is not None and not verify  # the hub draws the fed token (sampling.hpp)
         if verify:
@@ -786,7 +787,7 @@ class ResidentModel:
         self.ccl_sems = [ttnn.create_global_semaphore(mesh, hub_grid, 0) for _ in range(2)]  # per slot parity
         # per streamer (order key, vocab index) of its largest logit, written by the streamer writers
         # (sample: its top-k list, sampling.hpp)
-        rec_words = S * (2 * TOP_K if self.sample else B * 4)
+        rec_words = S * B * (2 * TOP_K if self.sample else 4)  # (sampling: B = 1, or rows mode)
         self.argmax_t = (
             l1(
                 torch.zeros(1, rec_words, dtype=torch.int32),
@@ -803,10 +804,13 @@ class ResidentModel:
         # word
         self.feed = embed is not None
         if self.feed:
-            assert lm_head and (B == 1 or verify) and n_sub == 1, "the hub feeds batch 1 with the lm_head"
+            assert (
+                lm_head and (B == 1 or verify or rows) and (n_sub == 1 or rows)
+            ), "the hub feeds batch 1, verify or rows"
             assert (feed_peer is not None) == verify
             self.embed, self.feed_peer = embed, feed_peer
-            cand_words = n * (2 * TOP_K if self.sample else 4)
+            fed_rows = B if rows else 2 if verify else 1  # tokens per launch (mlp_hub.cpp kCandWords)
+            cand_words = n * (2 * TOP_K * fed_rows if self.sample else max(4, 2 * fed_rows))
             self.cand_t = l1(
                 torch.zeros(1, cand_words, dtype=torch.int32),
                 hub_grid,
@@ -817,8 +821,13 @@ class ResidentModel:
             self.feed_sems = [ttnn.create_global_semaphore(mesh, hub_grid, 0) for _ in range(2)]  # candidates, launches
             rope = rope_compact(sts[0].max_pos).view(np.int32)
             self.rope_t = dram_t(torch.from_numpy(rope.copy()), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep)
-            self.out_t = dram_t(torch.zeros(1, 16, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep)
-            self.params_t = dram_t(torch.zeros(1, 16, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep)
+            # (rows mode: per launch, 16 B of out and 16 parameter words per row)
+            out_words, par_words = (4 * B, 16 * B) if rows else (16, 16)
+            self._feed_io = lambda: (
+                dram_t(torch.zeros(1, out_words, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep),
+                dram_t(torch.zeros(1, par_words, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep),
+            )
+            self.out_t, self.params_t = self._feed_io()
 
         # ---- optional timelines
         def ts_buf(grid_, count, words):
@@ -849,6 +858,8 @@ class ResidentModel:
                 x=self.x_t,
                 argmax=self.argmax_t,
                 logits=self.logits_t,
+                out=getattr(self, "out_t", None),
+                params=getattr(self, "params_t", None),
             )
         ]
         # paged KV: a page table per launch (rows = its users), apart from the token state (set_page_table)
@@ -870,9 +881,9 @@ class ResidentModel:
                 x=dram_t(torch.zeros(n, B * HIDDEN), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
                 argmax=(
                     l1(
-                        torch.zeros(1, S * B * 4, dtype=torch.int32),
+                        torch.zeros(1, rec_words, dtype=torch.int32),
                         hub_grid,
-                        [1, S * B * 4],
+                        [1, rec_words],
                         ttnn.uint32,
                         layout=ttnn.ROW_MAJOR_LAYOUT,
                     )
@@ -881,6 +892,8 @@ class ResidentModel:
                 ),
                 logits=l1(torch.zeros(S * B, nv_max * TILE), grid, [B, nv_max * TILE]) if lm_head else None,
             )
+            if self.feed:
+                sub["out"], sub["params"] = self._feed_io()
             self._initial.append((ttnn.from_torch(hist_k, dtype=ttnn.bfloat16, mesh_mapper=per_chip), sub["hist"]))
             self._initial.append(
                 (
@@ -1237,8 +1250,8 @@ class ResidentModel:
                         tok_addr,
                         self.embed.buffer_address(),
                         self.rope_t.buffer_address(),
-                        self.out_t.buffer_address(),
-                        self.params_t.buffer_address(),
+                        sub["out"].buffer_address(),
+                        sub["params"].buffer_address(),
                     ]
                     if feed_kind:
                         hub_args.append(self.feed_peer.buffer_address())
@@ -1386,7 +1399,7 @@ class ResidentModel:
             if self.kv_paged:
                 io.append(sub["pt"])
             if self.feed:
-                io += [self.cand_t, self.rope_t, self.out_t, self.params_t, self.embed]
+                io += [self.cand_t, self.rope_t, sub["out"], sub["params"], self.embed]
                 if self.feed_peer is not None:
                     io.append(self.feed_peer)
             if timeline:
@@ -1439,6 +1452,118 @@ class ResidentModel:
                 for k in range(self.n_sub)
             ]
         return self._token_state(x0, pos, ring, slot, words, active, preserve)
+
+    def token_state_rows(self, rows, preserve=False):
+        """rows mode: the host token state of one launch from its active rows, rows = {row: (x0 [HIDDEN], pos)}
+        (the launch's other rows inactive); preserve: see token_state"""
+        assert self.rows and len(rows) > 0
+        B = self.batch
+        x0, pos = torch.zeros(B, HIDDEN), [0] * B
+        for u, (v, p) in rows.items():
+            x0[u], pos[u] = v.reshape(-1).float(), int(p)
+        return self._token_state(x0, pos, None, active=[u in rows for u in range(B)], preserve=preserve)
+
+    def out_tensor(self, launch=0):
+        """the device out tensor of a launch's fed tokens (rows mode: 4 words per row, see fed_token)"""
+        return self.subs[launch]["out"]
+
+    def clear_slot(self, s):
+        """rows mode: zero slot s's GDN states and its row of the conv histories (a request's state before its first
+        token, what a prefill of no tokens hands off), every other slot untouched; its KV needs nothing (a step reads
+        positions below its own only). On device: the prefill handoff kernel copies a zero buffer into the slot's
+        state pages, hist_scatter writes zeros into its history row."""
+        assert self.rows
+        k, u = divmod(s, self.batch)
+        sub, d, mesh, n, B = self.subs[k], self.d, self.mesh, self.d.n, self.batch
+        pdir = f"{PKG_DIR}/prefill/kernels/"
+        rows, cols, _ = self.hist_index()
+        K, G = len(rows), self._gdn_copies
+        core = ttnn.CoreCoord(0, 0)
+        one_core = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+        if not hasattr(self, "_clear"):
+            dram, rep = ttnn.DRAM_MEMORY_CONFIG, ttnn.ReplicateTensorToMesh(mesh)
+            self._clear = dict(
+                sem=ttnn.create_global_semaphore(mesh, one_core, 0),
+                state=ttnn.from_torch(
+                    torch.zeros(16 * TILE, TILE),
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh,
+                    memory_config=dram,
+                    mesh_mapper=rep,
+                ),
+                hist=ttnn.from_torch(
+                    torch.zeros(G * (CONV_K - 1) * K, TILE),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=mesh,
+                    memory_config=dram,
+                    mesh_mapper=rep,
+                ),
+            )
+        zs, zh, sem = self._clear["state"], self._clear["hist"], self._clear["sem"]
+        # GDN states: per (copy, head) the slot's 16 pages, chip-local kind-0 jobs (kernels/handoff.cpp)
+        c, h = torch.meshgrid(torch.arange(G), torch.arange(d.nv), indexing="ij")
+        jobs = torch.zeros(n, G * d.nv, 16, dtype=torch.int64)
+        jobs[:, :, 1], jobs[:, :, 3], jobs[:, :, 5] = zs.buffer_address(), 4096, sub["state"].buffer_address()
+        jobs[:, :, 6], jobs[:, :, 7] = (((c * d.nv + h) * B + u) * 16).reshape(-1), 16
+        jobs[:, :, 0] = torch.arange(n)[:, None]
+        table = (jobs & 0xFFFFFFFF).numpy().astype(np.uint32).view(np.int32)
+        jobs_t = ttnn.from_torch(
+            torch.from_numpy(table.reshape(n * G * d.nv, 16).copy()),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        cb = lambda idx, total, page: ttnn.CBDescriptor(
+            total_size=total,
+            core_ranges=one_core,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.bfloat16, page_size=page)],
+        )
+        state_pd = ttnn.MeshProgramDescriptor()
+        for chip in range(n):
+            rt = ttnn.RuntimeArgs()
+            rt[core.x][core.y] = [jobs_t.buffer_address(), G * d.nv, chip, ttnn.get_global_semaphore_address(sem), 0]
+            rt[core.x][core.y] += [0, 0]  # no fabric connections: every job is chip-local
+            kern = ttnn.KernelDescriptor(
+                kernel_source=pdir + "handoff.cpp",
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=one_core,
+                compile_time_args=[],
+                runtime_args=rt,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+                ),
+            )
+            coord = ttnn.MeshCoordinate(0, chip)
+            state_pd[ttnn.MeshCoordinateRange(coord, coord)] = ttnn.ProgramDescriptor(
+                kernels=[kern], semaphores=[], cbs=[cb(0, 8 * 4096, 4096), cb(1, 64 * 64, 64)]
+            )
+        ttnn.generic_op([jobs_t, zs, sub["state"]], state_pd)
+        # conv history: zeros into row u of every (streamer, copy) row (prefill/kernels/hist_scatter.cpp)
+        tiles = (cols[::TILE] // TILE).tolist()
+        rt = ttnn.RuntimeArgs()
+        rt[core.x][core.y] = [zh.buffer_address(), sub["hist"].buffer_address(), 0, G]
+        rt[core.x][core.y] += [v for i in range(K) for v in (int(rows[i]), tiles[i])] + [u]
+        hist_kern = ttnn.KernelDescriptor(
+            kernel_source=pdir + "hist_scatter.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=one_core,
+            compile_time_args=[K, G, B, CONV_K - 1, self._blk * TILE * B, 1],
+            runtime_args=rt,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+            ),
+        )
+        hist_pd = ttnn.MeshProgramDescriptor()
+        hist_pd[
+            ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, n - 1))
+        ] = ttnn.ProgramDescriptor(kernels=[hist_kern], semaphores=[], cbs=[cb(0, K * 64, 64)])
+        ttnn.generic_op([zh, sub["hist"]], hist_pd)
+        ttnn.synchronize_device(mesh)
+        ttnn.deallocate(jobs_t)
 
     def _token_state(self, x0, pos, ring, slot=0, extra=None, active=None, preserve=False):
         B = self.batch
@@ -1860,23 +1985,35 @@ class ResidentModel:
         words[3] = int(seed) & 0xFFFFFFFF
         return words
 
-    def set_sampling(self, temperature=0.0, top_k=1, top_p=1.0, seed=None):
+    def set_sampling(self, temperature=0.0, top_k=1, top_p=1.0, seed=None, rows=None):
         """the parameters of the fed token's draw (sample), read by every step until set again; seed None picks
-        one (see sampling_words)"""
+        one (see sampling_words). Rows mode: rows = per user (temperature, top_k, top_p, seed) (default: the
+        arguments for every user), written to every launch"""
         assert self.sample
         if seed is None:
             seed = int(np.random.randint(0, 2**32, dtype=np.uint64))
-        words = self.sampling_words(temperature, top_k, top_p, seed)
-        t = ttnn.from_torch(
-            torch.from_numpy(words.view(np.int32).copy()).reshape(1, -1),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-        )
-        ttnn.copy_host_to_device_tensor(t, self.params_t)
+        per = rows if rows is not None else [(temperature, top_k, top_p, seed)] * (self.users if self.rows else 1)
+        assert len(per) == (self.users if self.rows else 1)
+        for k, sub in enumerate(self.subs if self.rows else self.subs[:1]):
+            chunk = per[k * self.batch : (k + 1) * self.batch] if self.rows else per
+            words = np.concatenate([self.sampling_words(*p) for p in chunk])
+            t = ttnn.from_torch(
+                torch.from_numpy(words.view(np.int32).copy()).reshape(1, -1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+            ttnn.copy_host_to_device_tensor(t, sub["params"])
 
     def fed_token(self):
-        """(token, position) the last step fed into the next one (feed)"""
+        """(token, position) the last step fed into the next one (feed); rows mode: per user (token, position,
+        active) of its launch's last step"""
+        if self.rows:
+            out = []
+            for sub in self.subs:
+                o = ttnn.to_torch(ttnn.get_device_tensors(sub["out"])[0]).reshape(self.batch, 4)
+                out += [(int(r[0]), int(r[1]), bool(r[2])) for r in o]
+            return out
         out = ttnn.to_torch(ttnn.get_device_tensors(self.out_t)[0]).reshape(-1)
         return int(out[0]), int(out[1])
 
@@ -1886,8 +2023,8 @@ class ResidentModel:
         out = []
         for sub in self.subs:
             raw = ttnn.to_torch(sub["argmax"], mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
-            if self.sample:  # each streamer's list starts with its largest (key, index)
-                c = raw.reshape(-1, self.S, 1, 2, TOP_K)[..., 0]
+            if self.sample:  # each streamer's list starts with its largest (key, index); lists [row][streamer]
+                c = raw.reshape(-1, self.batch, self.S, 2, TOP_K)[..., 0].transpose(1, 2)
             else:
                 c = raw.reshape(-1, self.S, self.batch, 4)[..., :2]
             c = c.to(torch.int64) & 0xFFFFFFFF
@@ -1897,8 +2034,9 @@ class ResidentModel:
                 out.append(int(cu[cu[:, 0] == best, 1].min()))
         return out[0] if self.users == 1 else out
 
-    def logits(self):
-        """per-chip logits [n, vocab_chip] in vocab order, or [users, n, vocab_chip]"""
+    def logits(self, launches=None):
+        """per-chip logits [n, vocab_chip] in vocab order, or [users, n, vocab_chip]; launches: only those launches'
+        users ([8 * len(launches), n, vocab_chip], launch order as given)"""
         B = self.batch
         if not hasattr(self, "_vocab_src"):
             # vocab column -> (streamer, column in its slice); one gather instead of a loop per streamer
@@ -1913,11 +2051,11 @@ class ResidentModel:
             self._vocab_src = (src_i.clamp(min=0), src_w, src_i < 0)
         src_i, src_w, unset = self._vocab_src
         outs = []
-        for sub in self.subs:
+        for sub in self.subs if launches is None else [self.subs[k] for k in launches]:
             raw = ttnn.to_torch(sub["logits"], mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0)).float()
             raw = raw.reshape(self.d.n, self.S, B, -1)
             out = raw[:, src_i, :, src_w].permute(2, 1, 0)  # [vocab, n, B] -> [B, n, vocab]
             out[:, :, unset] = 0
             outs.append(out)
         out = torch.cat(outs)
-        return out[0] if self.users == 1 else out
+        return out[0] if self.users == 1 and launches is None else out

@@ -33,8 +33,9 @@
 //
 // With the lm_head the writer scans this core's logits for their maximum (the first one on ties) and
 // writes (order key, vocab index) to record slot [core] on the hub, so the host reads num_streamers
-// candidates per chip instead of the logits. With sample (batch 1) it writes this core's top sampling::kTopK
-// instead, for the hub's on-device sampling (sampling.hpp).
+// candidates per chip instead of the logits. With sample it writes this core's top sampling::kTopK instead, for
+// the hub's on-device sampling (sampling.hpp): batch 1, or (rows mode) one list per row, the active rows' filled,
+// laid out [row][streamer] on the hub.
 
 #include "api/dataflow/dataflow_api.h"
 #include "sampling.hpp"
@@ -270,15 +271,22 @@ void kernel_main() {
             auto key = [](uint32_t b) { return sampling::key_of(b); };
             volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_pout));
             if constexpr (sample) {
-                static_assert(nd_max * kTileBytes >= sampling::kListBytes, "the list is staged in cb_pout");
-                sampling::clear(rec);
-                for (uint32_t i = 0; i < valid_cols; i += 2) {
-                    const uint32_t c = i % 32;
-                    const uint32_t w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        base + (i / 32) * kTileBytes + (c / 16) * 32)[(c % 16) / 2];
-                    sampling::insert(rec, key(w & 0xffff), first_index + i);
-                    if (i + 1 < valid_cols) {
-                        sampling::insert(rec, key(w >> 16), first_index + i + 1);
+                // per row its list (rows mode: the active rows'; the others stay cleared)
+                static_assert(nd_max * kTileBytes >= batch * sampling::kListBytes, "the lists are staged in cb_pout");
+                for (uint32_t u = 0; u < batch; u++) {
+                    volatile tt_l1_ptr uint32_t* list = rec + u * 2 * sampling::kTopK;
+                    sampling::clear(list);
+                    if (rows_mode && !((active_mask >> u) & 1)) {
+                        continue;
+                    }
+                    for (uint32_t i = 0; i < valid_cols; i += 2) {
+                        const uint32_t c = i % 32;
+                        const uint32_t w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                            base + (i / 32) * kTileBytes + ((c / 16) * batch + u) * 32)[(c % 16) / 2];
+                        sampling::insert(list, key(w & 0xffff), first_index + i);
+                        if (i + 1 < valid_cols) {
+                            sampling::insert(list, key(w >> 16), first_index + i + 1);
+                        }
                     }
                 }
             }
@@ -305,8 +313,18 @@ void kernel_main() {
                 rec[4 * u + 1] = first_index + best_i;
             }
             constexpr uint32_t rec_bytes = sample ? sampling::kListBytes : batch * 16;
-            noc_async_write(
-                get_write_ptr(cb_pout), get_noc_addr(hub_x, hub_y, argmax_addr + core * rec_bytes), rec_bytes);
+            if constexpr (sample && batch > 1) {
+                // row u's lists of every streamer back to back on the hub: [row][streamer]
+                for (uint32_t u = 0; u < batch; u++) {
+                    noc_async_write(
+                        get_write_ptr(cb_pout) + u * sampling::kListBytes,
+                        get_noc_addr(hub_x, hub_y, argmax_addr + (u * num_streamers + core) * sampling::kListBytes),
+                        sampling::kListBytes);
+                }
+            } else {
+                noc_async_write(
+                    get_write_ptr(cb_pout), get_noc_addr(hub_x, hub_y, argmax_addr + core * rec_bytes), rec_bytes);
+            }
             noc_async_write_barrier();
             noc_semaphore_inc(hub_gather_sem, 1);  // the record is on the hub (a feeding hub waits for it)
         }

@@ -149,7 +149,7 @@ constexpr uint32_t kHistSlots = verify ? 4 : 3;  // conv history slots per (stre
 constexpr uint32_t gdn_layers = layers - (attn_interval > 0 ? layers / attn_interval : 0);
 constexpr bool fc_in = get_compile_time_arg_val(60) != 0;
 constexpr bool sample = get_compile_time_arg_val(61) != 0;
-static_assert(!sample || batch == 1, "on-device sampling serves batch 1");
+// (sampling serves batch 1, or every row of a rows-mode batch: see streamer_writer.cpp)
 static_assert(!fc_in || gdn_layers == 0, "fc streams through the GDN projection entry");
 constexpr uint32_t kRound0 = fc_in ? 1 : 0;  // hub round of layer 0's mixer half
 

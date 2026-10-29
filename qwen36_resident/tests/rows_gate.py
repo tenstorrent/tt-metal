@@ -184,7 +184,19 @@ def main():
             diff = max(float((x - r).abs().max()) for x, r in zip(xs, ref))
             out["scenarios"][name] = dict(identical=same, of=len(ref), max_abs_diff=diff)
             print(f"P {name} vs alone: {same}/{len(ref)} steps bit-identical (max |diff| {diff})", flush=True)
+        # clear_slot: the slot's GDN states and history row zero, every other slot's state as it was
+        m = gate.model
+        before = {s: m.read_slot(s) for s in (2, 4, 6, 8)}
+        m.clear_slot(9)
+        cleared = m.read_slot(9)
+        zeroed = not cleared["state"].any() and not cleared["hist"].any()
+        kept = all(
+            torch.equal(before[s][key], m.read_slot(s)[key]) for s in before for key in ("state", "hist", "K", "V")
+        )
+        print(f"clear_slot(9): state and history zero {zeroed}; other slots unchanged {kept}", flush=True)
+        out["clear_slot"] = dict(zeroed=zeroed, others_kept=kept)
         ok = all(v["identical"] == v["of"] for v in out["scenarios"].values()) and not any(out["frozen"].values())
+        ok = ok and zeroed and kept
         print(f"rows gate: {'PASS' if ok else 'FAIL'}", flush=True)
         out["pass"] = ok
     finally:

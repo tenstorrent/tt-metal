@@ -1265,6 +1265,7 @@ class PPPrefill:
         for i, c in enumerate(coords):
             cnt = G // cores + (i < G % cores)
             rt[c.x][c.y] = [compact_t.buffer_address(), target["hist"].buffer_address(), first, cnt] + pairs
+            rt[c.x][c.y] += [row] if rows_mode else []
             first += cnt
         program = ttnn.ProgramDescriptor(
             kernels=[
@@ -1273,7 +1274,7 @@ class PPPrefill:
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=all_cores,
                     compile_time_args=[K, copies, rows_per_tile, slots, model._blk * TILE * model.batch]
-                    + [row + 1 if rows_mode else 0],
+                    + [int(rows_mode)],
                     runtime_args=rt,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
