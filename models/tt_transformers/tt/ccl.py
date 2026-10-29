@@ -160,11 +160,16 @@ def tt_all_reduce(
     if mesh_shape == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
         return input_tensor
 
-    # Auto-detect num_links if not provided
+    # Auto-detect num_links if not provided. On a 1xN / Nx1 mesh the collective below runs over the whole
+    # mesh, not along cluster_axis: callers pass the Galaxy axis (cluster_axis=0), which on a 1x2 mesh has
+    # no routing planes, so the fabric query found nothing, warned "Failed to discover available ethernet
+    # links" and the reduce-scatter ran on one link although the mesh has two. Count the links on
+    # whichever axis has them.
+    links_axis = None if 1 in mesh_shape else cluster_axis
     if num_reduce_scatter_links is None:
-        num_reduce_scatter_links = tt_ccl.get_num_links(cluster_axis)
+        num_reduce_scatter_links = tt_ccl.get_num_links(links_axis)
     if num_all_gather_links is None:
-        num_all_gather_links = tt_ccl.get_num_links(cluster_axis)
+        num_all_gather_links = tt_ccl.get_num_links(links_axis)
 
     # Ensure dim 0 and 1 are 1
     original_shape = input_tensor.shape
