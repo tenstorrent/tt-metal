@@ -6,6 +6,7 @@
 
 #include <string_view>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -66,8 +67,8 @@ DeformConvShapes derive_shapes(
     s.in_h = in[1];
     s.in_w = in[2];
     s.channels = in[3];
-    // A channel stick then fills whole tile rows, so the reader copies it into
-    // tiles without a ragged tail and the output columns tile exactly.
+    // Whole tiles of channels: compute tilizes each corner block into them, the channels split into
+    // whole per-pass chunks, and the output columns tile exactly.
     TT_FATAL(
         s.channels > 0 && s.channels % tt::constants::TILE_WIDTH == 0,
         "{}: input channels must be a positive multiple of {}, got {}",
@@ -142,36 +143,35 @@ DeformConvShapes derive_shapes(
     }
 
     const auto& w = args.weight;
-    TT_FATAL(w.storage_type() == StorageType::DEVICE, "modulated_deform_conv2d: weight must be on device");
-    TT_FATAL(w.device() == args.input.device(), "modulated_deform_conv2d: weight must be on the input's device");
-    TT_FATAL(w.dtype() == DataType::BFLOAT16, "modulated_deform_conv2d: weight must be BFLOAT16, got {}", w.dtype());
-    TT_FATAL(w.layout() == Layout::TILE, "modulated_deform_conv2d: weight must be TILE, got {}", w.layout());
+    TT_FATAL(w.storage_type() == StorageType::DEVICE, "{}: weight must be on device", op);
+    TT_FATAL(w.device() == args.input.device(), "{}: weight must be on the input's device", op);
+    TT_FATAL(w.dtype() == DataType::BFLOAT16, "{}: weight must be BFLOAT16, got {}", op, w.dtype());
+    TT_FATAL(w.layout() == Layout::TILE, "{}: weight must be TILE, got {}", op, w.layout());
     TT_FATAL(
-        w.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "modulated_deform_conv2d: weight must be INTERLEAVED");
+        w.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "{}: weight must be INTERLEAVED", op);
     const auto& ws = w.logical_shape();
     TT_FATAL(
         ws.rank() == 2 && static_cast<uint32_t>(ws[0]) == s.kernel_positions * s.channels && ws[1] > 0 &&
             ws[1] % tt::constants::TILE_WIDTH == 0,
-        "modulated_deform_conv2d: weight must be (K*K*C, C_out) = ({}, C_out), C_out a positive multiple of {}, "
-        "got {}",
+        "{}: weight must be (K*K*C, C_out) = ({}, C_out), C_out a positive multiple of {}, got {}",
+        op,
         s.kernel_positions * s.channels,
         tt::constants::TILE_WIDTH,
         ws);
     s.out_channels = ws[1];
     if (args.bias.has_value()) {
         const auto& b = *args.bias;
-        TT_FATAL(b.storage_type() == StorageType::DEVICE, "modulated_deform_conv2d: bias must be on device");
-        TT_FATAL(b.device() == args.input.device(), "modulated_deform_conv2d: bias must be on the input's device");
+        TT_FATAL(b.storage_type() == StorageType::DEVICE, "{}: bias must be on device", op);
+        TT_FATAL(b.device() == args.input.device(), "{}: bias must be on the input's device", op);
         TT_FATAL(
-            b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-            "modulated_deform_conv2d: bias must be INTERLEAVED");
-        TT_FATAL(b.dtype() == DataType::BFLOAT16, "modulated_deform_conv2d: bias must be BFLOAT16, got {}", b.dtype());
-        TT_FATAL(b.layout() == Layout::TILE, "modulated_deform_conv2d: bias must be TILE, got {}", b.layout());
+            b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "{}: bias must be INTERLEAVED", op);
+        TT_FATAL(b.dtype() == DataType::BFLOAT16, "{}: bias must be BFLOAT16, got {}", op, b.dtype());
+        TT_FATAL(b.layout() == Layout::TILE, "{}: bias must be TILE, got {}", op, b.layout());
         TT_FATAL(
             b.logical_shape().rank() == 2 && b.logical_shape()[0] == 1 &&
                 static_cast<uint32_t>(b.logical_shape()[1]) == s.out_channels,
-            "modulated_deform_conv2d: bias must be (1, {}), got {}",
+            "{}: bias must be (1, {}), got {}",
+            op,
             s.out_channels,
             b.logical_shape());
     }
@@ -223,7 +223,14 @@ ttnn::Tensor modulated_deform_conv2d(
     std::array<uint32_t, 2> dilation,
     bool relu,
     const std::optional<MemoryConfig>& memory_config) {
-    using OperationType = ttnn::operations::experimental::modulated_deform_conv2d::ModulatedDeformConv2dOperation;
+    using namespace ttnn::operations::experimental::modulated_deform_conv2d;
+    using OperationType = ModulatedDeformConv2dOperation;
+    // The program's buffers fill the L1 free now; the budget is an attribute, so it keys the program
+    // cache along with the shapes.
+    const auto* device = input.device();
+    const uint64_t l1_top = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
+    const uint64_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t l1_free = l1_top > l1_base ? l1_top - l1_base : 0;
     auto attrs = OperationType::operation_attributes_t{
         // The output is interleaved; a sharded input's would not be, so its default is DRAM.
         .output_memory_config = memory_config.value_or(
@@ -233,6 +240,7 @@ ttnn::Tensor modulated_deform_conv2d(
         .padding = padding,
         .dilation = dilation,
         .relu = relu,
+        .l1_budget = static_cast<uint32_t>(l1_free / kL1BudgetGranule * kL1BudgetGranule),
     };
     auto args =
         OperationType::tensor_args_t{.input = input, .offset_mask = offset_mask, .weight = weight, .bias = bias};

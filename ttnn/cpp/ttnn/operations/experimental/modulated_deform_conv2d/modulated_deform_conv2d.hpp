@@ -31,7 +31,12 @@ namespace ttnn::experimental {
 // The columns are bfloat16 and the products run at HiFi2 fidelity; each kernel position's
 // reduction accumulates in fp32, the sum over positions in bfloat16. Each core keeps the outputs
 // of all its 32-row blocks and two weight slices in L1, and fails with the L1 it needs when
-// they do not fit; C over 256 takes several passes per kernel position to keep the slices small.
+// they do not fit; C over 256 takes several passes per kernel position to keep the slices small,
+// each over the largest chunk of at most 8 channel tiles that divides C / 32.
+//
+// Limits: K_h * K_w at most 32; H, W, the padding and the dilated kernel span each at most 4096.
+// Offsets and mask logits saturate at +-4096, so a non-finite offset samples zero where mmcv and
+// torchvision would give NaN.
 //
 // Shapes:
 //   input        (B, H, W, C)                    ROW_MAJOR bfloat16, C a multiple of 32; INTERLEAVED,

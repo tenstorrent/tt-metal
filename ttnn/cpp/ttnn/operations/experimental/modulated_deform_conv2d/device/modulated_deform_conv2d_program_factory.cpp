@@ -23,13 +23,13 @@ namespace ttnn::operations::experimental::modulated_deform_conv2d {
 
 using namespace tt::tt_metal;
 
-// The whole conv in one program: each block's sampled columns of one kernel position are multiplied
-// by that position's C x C_out weight slice in the same core, so the columns never leave L1. Kernel
-// positions run outermost so a core loads each weight slice once; an input wider than
-// kConvMaxChunkTiles tiles takes several passes per position, one per chunk of channels. The work
-// unit is a block of 32 consecutive output rows, which shares one set of offset and mask loads;
-// blocks are split evenly over the cores, and each core keeps its blocks' geometry and output
-// accumulators for the whole run.
+// The whole conv in one program: each block's sampled columns of one chunk of channels at one kernel
+// position are multiplied by that pass's chunk x C_out weight slice in the same core, so the columns
+// never leave L1. Kernel positions run outermost so a core loads each weight slice once; an input
+// wider than kConvMaxChunkTiles tiles takes several passes per position, one per chunk of channels.
+// The work unit is a block of 32 consecutive output rows, which shares one set of offset and mask
+// loads; blocks are split evenly over the cores, or by shard for a sharded input, and each core keeps
+// its blocks' geometry and output accumulators for the whole run.
 ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args, Tensor& output) {
     ProgramDescriptor descriptor{};
@@ -44,6 +44,7 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     constexpr uint32_t CORNERS = 4;
     constexpr uint32_t GEOM_IN_TILES = 5;
     const uint32_t channel_tiles = s.channels / tt::constants::TILE_WIDTH;
+    // The widest chunk up to kConvMaxChunkTiles that splits the channels into whole chunks.
     uint32_t chunk_tiles = std::min(channel_tiles, kConvMaxChunkTiles);
     while (channel_tiles % chunk_tiles != 0) {
         --chunk_tiles;
@@ -189,34 +190,25 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     push_cb(bias_cb, out_tiles, tile_nbytes);
 
     const auto* device = input.device();
-    const uint64_t l1_top = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
-    const uint64_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    const uint64_t l1_free = l1_top > l1_base ? l1_top - l1_base : 0;
+    const uint64_t l1_budget = attrs.l1_budget;
     uint64_t other_cbs = 0;
     for (const auto& cb : descriptor.cbs) {
         other_cbs += cb.total_size;
     }
     // Each reader's output, two blocks deep where L1 allows; it only drains the epilogue.
-    const uint32_t output_depth = other_cbs + 4 * out_tiles * tile_nbytes <= l1_free ? 2 : 1;
+    const uint32_t output_depth = other_cbs + 4 * out_tiles * tile_nbytes <= l1_budget ? 2 : 1;
     for (const uint8_t cb : {output_tile_cb, odd_output_tile_cb}) {
         push_cb(cb, output_depth * out_tiles, tile_nbytes);
         other_cbs += output_depth * out_tiles * tile_nbytes;
     }
-    TT_FATAL(
-        other_cbs <= l1_free,
-        "modulated_deform_conv2d: needs {} KB of L1 per core, {} KB free: {} blocks of 32 rows per core, C {}, C_out "
-        "{} (output accumulators {} KB, weight slices {} KB)",
-        other_cbs / 1024,
-        l1_free / 1024,
-        max_blocks,
-        s.channels,
-        s.out_channels,
-        max_blocks * out_tiles * tile_nbytes / 1024,
-        2 * chunk_tiles * out_tiles * tile_nbytes / 1024);
     // The band is optional: without room for it the readers fetch the corners from the input where it
     // is. A sharded input needs none, its corners being in the core's own shard or a neighbour's.
-    const uint64_t band_budget =
-        !sharded_input && l1_free > other_cbs + kBandL1Reserve ? l1_free - other_cbs - kBandL1Reserve : 0;
+    // Its two halves take one page each even when unused, and a band of pages takes both halves
+    // rounded up to whole pages.
+    auto band_cbs_nbytes = [&](uint32_t pages) -> uint64_t {
+        return 2ull * std::max<uint32_t>(1, (pages + 1) / 2) * input_page_nbytes;
+    };
+    const uint64_t band_budget = !sharded_input && l1_budget > other_cbs ? l1_budget - other_cbs : 0;
     uint32_t band_margin = 0;
     uint32_t band_pages = 0;
     bool use_band = false;
@@ -227,7 +219,7 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
             pages = std::max(pages, band(cursor, blocks, margin).second);
             cursor += blocks;
         }
-        if (static_cast<uint64_t>(pages) * input_page_nbytes > band_budget) {
+        if (band_cbs_nbytes(pages) > band_budget) {
             break;
         }
         use_band = true;
@@ -238,6 +230,18 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     for (const uint8_t cb : {band_a_cb, band_b_cb}) {
         push_cb(cb, 1, band_half_pages * input_page_nbytes);
     }
+    other_cbs += band_cbs_nbytes(band_pages);
+    TT_FATAL(
+        other_cbs <= l1_budget,
+        "modulated_deform_conv2d: needs {} KB of L1 per core, {} KB free: {} blocks of 32 rows per core, C {}, C_out "
+        "{} (output accumulators {} KB, weight slices {} KB)",
+        other_cbs / 1024,
+        l1_budget / 1024,
+        max_blocks,
+        s.channels,
+        s.out_channels,
+        max_blocks * out_tiles * tile_nbytes / 1024,
+        2 * chunk_tiles * out_tiles * tile_nbytes / 1024);
 
     // One core reads the weight slices and multicasts them when the cores form one rectangle; the
     // multicast fills a rectangle, and a ragged set would leave it writing into idle cores' L1.
@@ -255,48 +259,54 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     // The weight slices go to the reader with fewer blocks on the busiest cores: with an odd count
     // the even reader has one more block of corners to gather.
     const uint32_t weight_parity = max_blocks % 2;
-    auto reader_ct = [&](bool first) {
-        KernelDescriptor::CompileTimeArgs ct{
-            first ? offset_mask_arena_cb : odd_offset_mask_arena_cb,
-            first ? corner_block_cb : odd_corner_block_cb,
-            first ? scalar_tile_cb : odd_scalar_tile_cb,
-            s.channels,
-            s.in_h,
-            s.in_w,
-            s.out_h,
-            s.out_w,
-            attrs.kernel_size[1],
-            s.kernel_positions,
-            attrs.stride[0],
-            attrs.stride[1],
-            attrs.padding[0],
-            attrs.padding[1],
-            attrs.dilation[0],
-            attrs.dilation[1],
-            input_page_nbytes,
-            offset_mask_page_nbytes,
-            kOffsetClampPixels,
-            first ? geom_in_cb : odd_geom_in_cb,
-            first ? geom_index_cb : odd_geom_index_cb,
-            first ? geom_weight_cb : odd_geom_weight_cb,
-            geom_kernel_cb,
-            first ? 0u : 1u,  // block parity
-            first ? output_tile_cb : odd_output_tile_cb,
-            tile_nbytes,
-            band_a_cb,
-            band_b_cb,
-            conv_weight_cb,
-            bias_cb,
-            out_tiles,
-            has_bias ? 1u : 0u,
-            mcast_weight ? 1u : 0u,
-            num_cores - 1,
-            weight_sender_sem_id,
-            weight_receiver_sem_id,
-            chunk_tiles,
-            sharded_input ? input.shard_spec()->shape[0] : 0u,  // pages per shard
-            weight_parity,
+    // The copy of a block parity: 0 takes the even blocks, 1 the odd ones.
+    auto reader_named_ct = [&](uint32_t parity) {
+        const bool even = parity == 0;
+        return KernelDescriptor::NamedCompileTimeArgs{
+            {"offset_mask_arena_cb", even ? offset_mask_arena_cb : odd_offset_mask_arena_cb},
+            {"corner_block_cb", even ? corner_block_cb : odd_corner_block_cb},
+            {"scalar_tile_cb", even ? scalar_tile_cb : odd_scalar_tile_cb},
+            {"geom_in_cb", even ? geom_in_cb : odd_geom_in_cb},
+            {"geom_index_cb", even ? geom_index_cb : odd_geom_index_cb},
+            {"geom_weight_cb", even ? geom_weight_cb : odd_geom_weight_cb},
+            {"output_cb", even ? output_tile_cb : odd_output_tile_cb},
+            {"geom_kernel_cb", geom_kernel_cb},
+            {"band_a_cb", band_a_cb},
+            {"band_b_cb", band_b_cb},
+            {"conv_weight_cb", conv_weight_cb},
+            {"bias_cb", bias_cb},
+            {"block_parity", parity},
+            {"weight_parity", weight_parity},
+            {"channels", s.channels},
+            {"in_h", s.in_h},
+            {"in_w", s.in_w},
+            {"out_h", s.out_h},
+            {"out_w", s.out_w},
+            {"kernel_w", attrs.kernel_size[1]},
+            {"kernel_positions", s.kernel_positions},
+            {"stride_h", attrs.stride[0]},
+            {"stride_w", attrs.stride[1]},
+            {"pad_h", attrs.padding[0]},
+            {"pad_w", attrs.padding[1]},
+            {"dilation_h", attrs.dilation[0]},
+            {"dilation_w", attrs.dilation[1]},
+            {"input_page_nbytes", input_page_nbytes},
+            {"offset_mask_page_nbytes", offset_mask_page_nbytes},
+            {"offset_clamp", kOffsetClampPixels},
+            {"tile_nbytes", tile_nbytes},
+            {"out_tiles", out_tiles},
+            {"chunk_tiles", chunk_tiles},
+            {"has_bias", has_bias ? 1u : 0u},
+            {"mcast_weight", mcast_weight ? 1u : 0u},
+            {"mcast_num_dests", num_cores - 1},
+            {"weight_sender_sem_id", weight_sender_sem_id},
+            {"weight_receiver_sem_id", weight_receiver_sem_id},
+            {"input_shard_pages", sharded_input ? input.shard_spec()->shape[0] : 0u},
         };
+    };
+    // Only the tensor accessors' args are positional, chained from index 0.
+    auto reader_ct = [&]() {
+        KernelDescriptor::CompileTimeArgs ct;
         TensorAccessorArgs(*input.buffer()).append_to(ct);
         TensorAccessorArgs(*offset_mask.buffer()).append_to(ct);
         TensorAccessorArgs(*output.buffer()).append_to(ct);
@@ -310,7 +320,8 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     reader_desc.kernel_source = std::string(kKernelDir) + "dataflow/reader_deform_conv.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = reader_ct(true);
+    reader_desc.compile_time_args = reader_ct();
+    reader_desc.named_compile_time_args = reader_named_ct(0);
     if (sharded_input) {
         // Both readers issue on either NoC, so each corner can take the NoC that suits its shard.
         reader_desc.config = DataMovementConfigDescriptor{
@@ -323,8 +334,9 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     odd_reader_desc.kernel_source = reader_desc.kernel_source;
     odd_reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     odd_reader_desc.core_ranges = all_cores;
-    odd_reader_desc.compile_time_args = reader_ct(false);
-    // The second copy runs on the other data-movement RISC-V and NoC, which a writer config selects.
+    odd_reader_desc.compile_time_args = reader_ct();
+    odd_reader_desc.named_compile_time_args = reader_named_ct(1);
+    // The second copy runs on the other data-movement RISC-V and NoC.
     if (sharded_input) {
         odd_reader_desc.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_1, .noc_mode = NOC_MODE::DM_DYNAMIC_NOC};
@@ -336,36 +348,37 @@ ProgramDescriptor ModulatedDeformConv2dOperation::create_descriptor(
     compute_desc.kernel_source = std::string(kKernelDir) + "compute/compute_deform_conv.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = {
-        corner_block_cb,
-        scalar_tile_cb,
-        output_tile_cb,
-        chunk_tiles,
-        s.kernel_positions,
-        tiled_block_cb,
-        geom_in_cb,
-        geom_index_cb,
-        geom_weight_cb,
-        geom_kernel_cb,
-        std::bit_cast<uint32_t>(static_cast<float>(s.in_h)),
-        std::bit_cast<uint32_t>(static_cast<float>(s.in_h) - 1.0f),
-        std::bit_cast<uint32_t>(static_cast<float>(s.in_w)),
-        std::bit_cast<uint32_t>(static_cast<float>(s.in_w) - 1.0f),
-        odd_corner_block_cb,
-        odd_scalar_tile_cb,
-        odd_geom_index_cb,
-        odd_geom_weight_cb,
-        odd_output_tile_cb,
-        column_cb,
-        conv_weight_cb,
-        acc_cb,
-        bias_cb,
-        out_tiles,
-        has_bias ? 1u : 0u,
-        attrs.relu ? 1u : 0u,
-        chunks,
-        odd_geom_in_cb,
-        geom_scratch_cb};
+    compute_desc.named_compile_time_args = {
+        {"corner_block_cb", corner_block_cb},
+        {"scalar_tile_cb", scalar_tile_cb},
+        {"geom_in_cb", geom_in_cb},
+        {"geom_index_cb", geom_index_cb},
+        {"geom_weight_cb", geom_weight_cb},
+        {"output_cb", output_tile_cb},
+        {"odd_corner_block_cb", odd_corner_block_cb},
+        {"odd_scalar_tile_cb", odd_scalar_tile_cb},
+        {"odd_geom_in_cb", odd_geom_in_cb},
+        {"odd_geom_index_cb", odd_geom_index_cb},
+        {"odd_geom_weight_cb", odd_geom_weight_cb},
+        {"odd_output_cb", odd_output_tile_cb},
+        {"geom_kernel_cb", geom_kernel_cb},
+        {"geom_scratch_cb", geom_scratch_cb},
+        {"tiled_block_cb", tiled_block_cb},
+        {"column_cb", column_cb},
+        {"conv_weight_cb", conv_weight_cb},
+        {"acc_cb", acc_cb},
+        {"bias_cb", bias_cb},
+        {"chunk_tiles", chunk_tiles},
+        {"chunks", chunks},
+        {"kernel_positions", s.kernel_positions},
+        {"out_tiles", out_tiles},
+        {"has_bias", has_bias ? 1u : 0u},
+        {"relu", attrs.relu ? 1u : 0u},
+        {"in_h_fp32", std::bit_cast<uint32_t>(static_cast<float>(s.in_h))},
+        {"in_h_less_one_fp32", std::bit_cast<uint32_t>(static_cast<float>(s.in_h) - 1.0f)},
+        {"in_w_fp32", std::bit_cast<uint32_t>(static_cast<float>(s.in_w))},
+        {"in_w_less_one_fp32", std::bit_cast<uint32_t>(static_cast<float>(s.in_w) - 1.0f)},
+    };
     // The geometry runs in fp32: its inputs and intermediates unpack straight to dest, as srcA would
     // round them to TF32. Each pass's matmul reduction accumulates in fp32 too. Half-sync dest, four
     // fp32 tiles a half, lets math fill one half while the packer drains the other.

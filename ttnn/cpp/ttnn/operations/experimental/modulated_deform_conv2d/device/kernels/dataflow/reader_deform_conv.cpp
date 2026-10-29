@@ -9,12 +9,12 @@
 // position's slice of the weight serves all of the core's blocks before the next slice replaces it.
 // An input wider than a chunk of channels takes one pass per chunk at each position, with that
 // chunk's rows of the weight; a pass reads only its chunk of each corner. Two copies of this kernel
-// run per core, one on each data-movement RISC-V and NoC: the first takes the core's even blocks,
-// the second the odd ones, and the one with fewer blocks on the busiest cores also loads the
-// weight slices and the bias. Each copy stages the
-// geometry inputs of its own blocks; compute returns each block's geometry, every sample's top-left
-// corner page within its image and its four weights, to the same copy, which keeps it for all
-// kernel positions.
+// run per core, one on each data-movement RISC-V and, for an interleaved input, on its own NoC (with
+// a sharded input both issue on either NoC): the first takes the core's even blocks, the second the
+// odd ones, and the one with fewer blocks on the busiest cores also loads the weight slices and the
+// bias. Each copy stages the geometry inputs of its own blocks; compute returns each block's
+// geometry, every sample's top-left corner page within its image and its four weights, to the same
+// copy, which keeps it for all kernel positions.
 //
 // The geometry is staged during the first kernel position, a copy's next block once it has handed
 // compute the corners of the current one, and compute derives it two blocks ahead of the block's
@@ -44,58 +44,59 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
-constexpr uint32_t offset_mask_arena_cb_index = get_compile_time_arg_val(0);
-constexpr uint32_t corner_block_cb_index = get_compile_time_arg_val(1);
-constexpr uint32_t scalar_tile_cb_index = get_compile_time_arg_val(2);
-constexpr uint32_t C = get_compile_time_arg_val(3);
-constexpr int32_t IN_H = get_compile_time_arg_val(4);
-constexpr int32_t IN_W = get_compile_time_arg_val(5);
-constexpr uint32_t OUT_H = get_compile_time_arg_val(6);
-constexpr uint32_t OUT_W = get_compile_time_arg_val(7);
-constexpr uint32_t KERNEL_W = get_compile_time_arg_val(8);
-constexpr uint32_t kernel_positions = get_compile_time_arg_val(9);
-constexpr int32_t STRIDE_H = get_compile_time_arg_val(10);
-constexpr int32_t STRIDE_W = get_compile_time_arg_val(11);
-constexpr int32_t PAD_H = get_compile_time_arg_val(12);
-constexpr int32_t PAD_W = get_compile_time_arg_val(13);
-constexpr int32_t DILATION_H = get_compile_time_arg_val(14);
-constexpr int32_t DILATION_W = get_compile_time_arg_val(15);
-// Page strides of the two row-major tensors, as their buffers lay them out.
-constexpr uint32_t input_page_nbytes = get_compile_time_arg_val(16);
-constexpr uint32_t offset_mask_page_nbytes = get_compile_time_arg_val(17);
-// The host validates that the input size, padding and kernel span stay below this.
-constexpr uint32_t OFFSET_CLAMP = get_compile_time_arg_val(18);
-constexpr uint32_t geom_in_cb_index = get_compile_time_arg_val(19);
-constexpr uint32_t geom_index_cb_index = get_compile_time_arg_val(20);
-constexpr uint32_t geom_weight_cb_index = get_compile_time_arg_val(21);
-constexpr uint32_t geom_kernel_cb_index = get_compile_time_arg_val(22);
+constexpr uint32_t offset_mask_arena_cb_index = get_named_compile_time_arg_val("offset_mask_arena_cb");
+constexpr uint32_t corner_block_cb_index = get_named_compile_time_arg_val("corner_block_cb");
+constexpr uint32_t scalar_tile_cb_index = get_named_compile_time_arg_val("scalar_tile_cb");
+constexpr uint32_t geom_in_cb_index = get_named_compile_time_arg_val("geom_in_cb");
+constexpr uint32_t geom_index_cb_index = get_named_compile_time_arg_val("geom_index_cb");
+constexpr uint32_t geom_weight_cb_index = get_named_compile_time_arg_val("geom_weight_cb");
+constexpr uint32_t output_cb_index = get_named_compile_time_arg_val("output_cb");
+constexpr uint32_t geom_kernel_cb_index = get_named_compile_time_arg_val("geom_kernel_cb");
+// The two halves of the core's input band: the first copy fills the first, the second the other.
+constexpr uint32_t band_a_cb_index = get_named_compile_time_arg_val("band_a_cb");
+constexpr uint32_t band_b_cb_index = get_named_compile_time_arg_val("band_b_cb");
+constexpr uint32_t conv_weight_cb_index = get_named_compile_time_arg_val("conv_weight_cb");
+constexpr uint32_t bias_cb_index = get_named_compile_time_arg_val("bias_cb");
 // This copy's role: the parity of the blocks it takes. The copy of WEIGHT_PARITY loads the weight
 // and the bias, the other writes the kernel offset tiles.
-constexpr uint32_t BLOCK_PARITY = get_compile_time_arg_val(23);
-constexpr uint32_t output_cb_index = get_compile_time_arg_val(24);
-constexpr uint32_t tile_nbytes = get_compile_time_arg_val(25);
-// The two halves of the core's input band: the first copy fills the first, the second the other.
-constexpr uint32_t band_a_cb_index = get_compile_time_arg_val(26);
-constexpr uint32_t band_b_cb_index = get_compile_time_arg_val(27);
-constexpr uint32_t conv_weight_cb_index = get_compile_time_arg_val(28);
-constexpr uint32_t bias_cb_index = get_compile_time_arg_val(29);
-constexpr uint32_t OUT_TILES = get_compile_time_arg_val(30);  // C_out / 32
-constexpr bool HAS_BIAS = get_compile_time_arg_val(31);
+constexpr uint32_t BLOCK_PARITY = get_named_compile_time_arg_val("block_parity");
+constexpr uint32_t WEIGHT_PARITY = get_named_compile_time_arg_val("weight_parity");
+constexpr uint32_t C = get_named_compile_time_arg_val("channels");
+constexpr int32_t IN_H = get_named_compile_time_arg_val("in_h");
+constexpr int32_t IN_W = get_named_compile_time_arg_val("in_w");
+constexpr uint32_t OUT_H = get_named_compile_time_arg_val("out_h");
+constexpr uint32_t OUT_W = get_named_compile_time_arg_val("out_w");
+constexpr uint32_t KERNEL_W = get_named_compile_time_arg_val("kernel_w");
+constexpr uint32_t kernel_positions = get_named_compile_time_arg_val("kernel_positions");
+constexpr int32_t STRIDE_H = get_named_compile_time_arg_val("stride_h");
+constexpr int32_t STRIDE_W = get_named_compile_time_arg_val("stride_w");
+constexpr int32_t PAD_H = get_named_compile_time_arg_val("pad_h");
+constexpr int32_t PAD_W = get_named_compile_time_arg_val("pad_w");
+constexpr int32_t DILATION_H = get_named_compile_time_arg_val("dilation_h");
+constexpr int32_t DILATION_W = get_named_compile_time_arg_val("dilation_w");
+// Page strides of the two row-major tensors, as their buffers lay them out.
+constexpr uint32_t input_page_nbytes = get_named_compile_time_arg_val("input_page_nbytes");
+constexpr uint32_t offset_mask_page_nbytes = get_named_compile_time_arg_val("offset_mask_page_nbytes");
+// The host validates that the input size, padding and kernel span stay below this.
+constexpr uint32_t OFFSET_CLAMP = get_named_compile_time_arg_val("offset_clamp");
+constexpr uint32_t tile_nbytes = get_named_compile_time_arg_val("tile_nbytes");
+constexpr uint32_t OUT_TILES = get_named_compile_time_arg_val("out_tiles");      // C_out / 32
+constexpr uint32_t CHUNK_TILES = get_named_compile_time_arg_val("chunk_tiles");  // input channels per pass / 32
+constexpr bool HAS_BIAS = get_named_compile_time_arg_val("has_bias");
 // One core reads each weight slice from DRAM and multicasts it to the others, so the slices cost
 // one DRAM read instead of one per core; the per-core reads otherwise congest the corner gather.
-constexpr bool MCAST_WEIGHT = get_compile_time_arg_val(32);
-constexpr uint32_t MCAST_NUM_DESTS = get_compile_time_arg_val(33);
-constexpr uint32_t weight_sender_sem_id = get_compile_time_arg_val(34);
-constexpr uint32_t weight_receiver_sem_id = get_compile_time_arg_val(35);
-constexpr uint32_t CHUNK_TILES = get_compile_time_arg_val(36);  // input channels per pass / 32
+constexpr bool MCAST_WEIGHT = get_named_compile_time_arg_val("mcast_weight");
+constexpr uint32_t MCAST_NUM_DESTS = get_named_compile_time_arg_val("mcast_num_dests");
+constexpr uint32_t weight_sender_sem_id = get_named_compile_time_arg_val("weight_sender_sem_id");
+constexpr uint32_t weight_receiver_sem_id = get_named_compile_time_arg_val("weight_receiver_sem_id");
 // A height-sharded input holds each core's own blocks' rows; corners outside them lie in a
 // neighbour's shard. Its pages per shard, 0 for an interleaved input.
-constexpr uint32_t INPUT_SHARD_PAGES = get_compile_time_arg_val(37);
+constexpr uint32_t INPUT_SHARD_PAGES = get_named_compile_time_arg_val("input_shard_pages");
 constexpr bool INPUT_SHARDED = INPUT_SHARD_PAGES != 0;
-constexpr uint32_t WEIGHT_PARITY = get_compile_time_arg_val(38);
 constexpr bool LOADS_WEIGHT = BLOCK_PARITY == WEIGHT_PARITY;
 constexpr bool WRITES_KERNEL_TILES = !LOADS_WEIGHT;
-constexpr auto input_args = TensorAccessorArgs<39>();
+// The tensor accessors' args are the only positional ones, chained from index 0.
+constexpr auto input_args = TensorAccessorArgs<0>();
 constexpr auto offset_mask_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 constexpr auto output_args = TensorAccessorArgs<offset_mask_args.next_compile_time_args_offset()>();
 constexpr auto weight_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
@@ -418,9 +419,8 @@ void kernel_main() {
 
     // A sharded input's own shard and its two neighbours hold nearly every corner. Their pages lie
     // back to back from a base the accessor resolves once here, so a corner in them costs an add
-    // rather than an accessor lookup. Corners in the previous shard go over NoC 0, in the next over
-    // NoC 1: on a single NoC per reader, the reads toward one neighbour are up to 60% slower than
-    // toward the other.
+    // rather than an accessor lookup. Corners in the previous shard go over NoC 0 and in the next over
+    // NoC 1, so each neighbour's reads take that neighbour's short NoC direction.
     const uint32_t shard_first = start_block * TILE_ROWS;
     const uint32_t prev_first = shard_first - INPUT_SHARD_PAGES;
     const uint32_t next_first = shard_first + INPUT_SHARD_PAGES;
