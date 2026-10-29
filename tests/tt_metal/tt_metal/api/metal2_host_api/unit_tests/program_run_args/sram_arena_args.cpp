@@ -49,6 +49,13 @@ ProgramSpec BorrowedScratchpadSpec(bool shared = false) {
     return spec;
 }
 
+ProgramSpec MakeScratchpadSpecWithArenaNodesForTest(const NodeRangeSet& nodes) {
+    ProgramSpec spec = BorrowedScratchpadSpec();
+    spec.advanced_options.sram_arena_parameters[0].properties =
+        RangeLockstepSRAMArenaProperties{.banks_to_be_allocated_on = nodes, .per_bank_size = 4096};
+    return spec;
+}
+
 ProgramRunArgs AllocationArgs(const SRAMArena& allocation, const char* name = "arena") {
     ProgramRunArgs args;
     args.advanced_options.sram_arena_args = {{SRAMArenaParamName{name}, std::cref(allocation)}};
@@ -122,6 +129,76 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadNodeMismatch) {
     auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec());
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, AllocationArgs(arena)); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("properties do not match")));
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSetDifferentRangeSplits) {
+    // Full argument sets accept the same nodes described by different range splits.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    const NodeRangeSet declared_nodes{NodeRange({0, 0}, {1, 0})};
+    const NodeRangeSet arena_nodes{std::vector<NodeRange>{NodeRange({0, 0}, {0, 0}), NodeRange({1, 0}, {1, 0})}};
+    auto arena = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{arena_nodes, 4096});
+    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
+    EXPECT_NO_THROW(SetProgramRunArgs(program, AllocationArgs(arena)));
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaUpdateDifferentRangeSplits) {
+    // Partial updates accept the same nodes described by different range splits.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    const NodeRangeSet declared_nodes{NodeRange({0, 0}, {1, 0})};
+    const NodeRangeSet arena_nodes{std::vector<NodeRange>{NodeRange({0, 0}, {0, 0}), NodeRange({1, 0}, {1, 0})}};
+    auto initial = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{declared_nodes, 4096});
+    auto arena = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{arena_nodes, 4096});
+    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
+    SetProgramRunArgs(program, AllocationArgs(initial));
+    EXPECT_NO_THROW(UpdateProgramRunArgs(program, AllocationArgs(arena)));
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSetDifferentRangeOrder) {
+    // Full argument sets accept the same node ranges in a different order.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    const NodeRangeSet declared_nodes{std::vector<NodeRange>{NodeRange({0, 0}, {0, 0}), NodeRange({1, 0}, {1, 0})}};
+    const NodeRangeSet arena_nodes{std::vector<NodeRange>{NodeRange({1, 0}, {1, 0}), NodeRange({0, 0}, {0, 0})}};
+    auto arena = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{arena_nodes, 4096});
+    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
+    EXPECT_NO_THROW(SetProgramRunArgs(program, AllocationArgs(arena)));
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaUpdateDifferentRangeOrder) {
+    // Partial updates accept the same node ranges in a different order.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    const NodeRangeSet declared_nodes{std::vector<NodeRange>{NodeRange({0, 0}, {0, 0}), NodeRange({1, 0}, {1, 0})}};
+    const NodeRangeSet arena_nodes{std::vector<NodeRange>{NodeRange({1, 0}, {1, 0}), NodeRange({0, 0}, {0, 0})}};
+    auto initial = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{declared_nodes, 4096});
+    auto arena = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{arena_nodes, 4096});
+    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
+    SetProgramRunArgs(program, AllocationArgs(initial));
+    EXPECT_NO_THROW(UpdateProgramRunArgs(program, AllocationArgs(arena)));
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSetDifferentNodesWithSameCount) {
+    // Full argument sets reject different node sets with the same node count.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    const NodeRangeSet declared_nodes{NodeRange({0, 0}, {1, 0})};
+    const NodeRangeSet arena_nodes{NodeRange({1, 0}, {2, 0})};
+    auto arena = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{arena_nodes, 4096});
+    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, AllocationArgs(arena)); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("properties do not match")));
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaUpdateDifferentNodesWithSameCount) {
+    // Partial updates reject different node sets with the same node count.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    const NodeRangeSet declared_nodes{NodeRange({0, 0}, {1, 0})};
+    const NodeRangeSet arena_nodes{NodeRange({1, 0}, {2, 0})};
+    auto initial = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{declared_nodes, 4096});
+    auto arena = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{arena_nodes, 4096});
+    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
+    SetProgramRunArgs(program, AllocationArgs(initial));
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, AllocationArgs(arena)); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("properties do not match")));
 }
 
