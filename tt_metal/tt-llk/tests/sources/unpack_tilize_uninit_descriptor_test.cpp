@@ -59,7 +59,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pre_num_faces = (tilize_num_faces == 4) ? 2 : 4;
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, face_r_dim, face_r_dim, pre_num_faces, pre_num_faces);
+        formats.unpack_A_src,
+        formats.unpack_B_src,
+        formats.unpack_A_dst,
+        formats.unpack_B_dst,
+        ckernel::make_tensor_shape_from_legacy(face_r_dim, pre_num_faces),
+        ckernel::make_tensor_shape_from_legacy(face_r_dim, pre_num_faces));
 
     drain_cfg_writes();
 

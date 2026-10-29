@@ -45,19 +45,33 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // CONTROL: configure DIRECTLY to next (fp32). ch1 Z-stride committed for fp32 -> asserts must pass.
         // Proves the fp32 path + the stride asserts are sound (isolates any failure to the reconfig path).
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            next_src, next_src, next_dst, next_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces, SIZE, SIZE);
+            next_src,
+            next_src,
+            next_dst,
+            next_dst,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+            SIZE,
+            SIZE);
     }
     else
     {
         // BUGGY PATH: configure to prev (bf16), then a format-only reconfig to next (fp32) with geometry OFF
         // -- exactly what reconfig_data_format<...>() does. The ch1 Z-stride is NOT re-committed.
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            prev_src, prev_src, prev_dst, prev_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces, SIZE, SIZE);
+            prev_src,
+            prev_src,
+            prev_dst,
+            prev_dst,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+            SIZE,
+            SIZE);
 
         _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
-            next_src, next_dst, SIZE, FACE_R_DIM, num_faces);
+            next_src, next_dst, SIZE, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
         _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
-            next_src, next_dst, SIZE, FACE_R_DIM, num_faces);
+            next_src, next_dst, SIZE, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
     }
 
     // Read back the ch1 Z-stride registers and compare against the NEW format's canonical value.
@@ -73,8 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     LLK_ASSERT(actual_a_z == expected_a_z, "BUG: srcA ch1 Z-stride is stale after a format-only reconfig (bf16->fp32); strides were not re-committed.");
 
     const std::uint32_t actual_b_z   = cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32];
-    const std::uint32_t expected_b_z = (datum_size_in_bytes(next_dst) * FACE_C_DIM * FACE_R_DIM)
-                                       << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT;
+    const std::uint32_t expected_b_z = (datum_size_in_bytes(next_dst) * FACE_C_DIM * FACE_R_DIM) << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT;
     LLK_ASSERT(actual_b_z == expected_b_z, "BUG: srcB ch1 Z-stride is stale after a format-only reconfig (bf16->fp32); strides were not re-committed.");
 }
 

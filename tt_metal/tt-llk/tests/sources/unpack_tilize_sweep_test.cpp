@@ -27,7 +27,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
+        formats.unpack_A_src,
+        formats.unpack_B_src,
+        formats.unpack_A_dst,
+        formats.unpack_B_dst,
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces),
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces));
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
 
     const std::uint32_t num_faces = params.num_faces;
