@@ -176,7 +176,8 @@ class AttnTable:
     CKV_FORMAT=bfp4_rows (FIX.8): ``buf`` is the history alone, [1, 1, hist, 320] uint8 ROW_MAJOR bfloat4_b row records
     written by ttnn.bringup.ckv_bfp4 (``append_tiles``: the compressor's gathered bf16 tiles, rounded to nearest even;
     it returns the rounded bf16 rows for the served cache), and ``win`` the window region [1, 1, 128 + S, 512] bf16
-    (base 0): sparse_sdpa's ROW_BFP4 reads the two, the index list [window ids | top-k ids] as built, not compacted."""
+    (base 0): sparse_sdpa's ROW_BFP4 reads the two, the index list [window ids | top-k ids] as built, not compacted.
+    WINDOW_KV_FORMAT=bfp8_blocks: no ``win``; the layers' window region is tt/attention.WindowTables.window_blocks."""
 
     def __init__(self, mesh, tables, hist: int, width: int):
         g = tables.geo
@@ -193,13 +194,14 @@ class AttnTable:
                 device=mesh,
                 memory_config=DRAM,
             )
-            self.win = ttnn.zeros(
-                [1, 1, self.rows, width],
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=mesh,
-                memory_config=DRAM,
-            )
+            if settings.get("WINDOW_KV_FORMAT") == "bf16":  # bfp8_blocks: tt/attention.WindowTables.window_blocks
+                self.win = ttnn.zeros(
+                    [1, 1, self.rows, width],
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=mesh,
+                    memory_config=DRAM,
+                )
         else:
             self.base, self.rows = hist, hist + WINDOW + g.chunk
             self.buf = ttnn.zeros(

@@ -19,6 +19,8 @@ exact). The scores are the same dot products (summed in another order).
 The table (one per chunk, ROW_MAJOR bf16, replicated):
     [window region (128 carry + S chunk rows, tt/attention._table: writes the chunk's window KV into the served
      0_window_kv cache first) | compressed rows]
+    (WINDOW_KV_FORMAT=bfp8_blocks, DS41-150, the default: the window region is tt/attention.WindowTables'
+    bfloat8_b blocks, passed as the sdpa fork's kv_window next to the CKV_FORMAT=bfp4_rows history)
     compressed rows = the KV source's served compressed cache (tt/compressor.TtServedRows, compressed rows, TP-dedup:
     token g on owner chip q = (g / stripe) % N, local row (g / (N stripe)) stripe + g mod stripe), the local rows of
     the first nb = ceil((start + S) / S) chunk periods (every group a query of this chunk can pick; the compressor
@@ -276,8 +278,14 @@ class TtSparseAttention(TtWindowAttention):
         assert self.INTERLEAVED, "the table holds the rows as stored (interleaved rope tail)"
         assert table is not None, "STATIC_TABLES=on: the KV source's compressed cache was built without its table"
         cos, sin = self._rope_rows(start, g.chunk)
-        carry, kv_rm = self._window_rows(kv, start, end, cache)
-        table.put_window(carry, kv_rm)
+        # WINDOW_KV_FORMAT=bfp8_blocks: [carry | chunk] into the shared window blocks (tt/attention.WindowTables)
+        carry, kv_rm = self._window_rows(kv, start, end, cache, blocks=self.win8)
+        if self.win8:
+            assert table.bfp4, "WINDOW_KV_FORMAT=bfp8_blocks reads the window as kv_window: CKV_FORMAT=bfp4_rows"
+            window = self.tables.window_blocks()
+        else:
+            table.put_window(carry, kv_rm)
+            window = table.win
         self._release_window(carry, kv_rm, cache, start, end)
         shared = memo is not None and sources is not None
         ikey = (start, id(ckv_cache), ckv_cache.version)
@@ -287,7 +295,7 @@ class TtSparseAttention(TtWindowAttention):
             if shared:
                 memo.put(("index", sources[1]), ikey, index)
         q_rm = self._q(q_resid, cos, sin)
-        o = self._sdpa(q_rm, table.buf, index, window=table.win)
+        o = self._sdpa(q_rm, table.buf, index, window=window)
         dealloc(q_rm)
         if not shared:
             dealloc(index)
@@ -317,6 +325,7 @@ class TtSparseAttention(TtWindowAttention):
         end = start + s if end is None else int(end)
         if self.static:
             return self._static(q_resid, kv, start, end, cache, ckv_cache, topk, memo, sources)
+        assert not self.win8, "WINDOW_KV_FORMAT=bfp8_blocks needs STATIC_TABLES=on"
         cos, sin = self._rope_rows(start, s)
         window = self._table(kv, start, end, cache)  # [1, 1, 128 + S, 512], interleaved tail (INTERLEAVED)
         shared = memo is not None and sources is not None

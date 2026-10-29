@@ -33,6 +33,7 @@ BLOCK_DATA = (BLOCK_EXP2 + 32 * 32 + 63) // 64 * 64
 BLOCK_BYTES = BLOCK_DATA + 32 * WIDTH
 CB_IN, CB_ROWS, CB_ROUNDED = 0, 16, 17
 K_WRITER, WR_ROW0 = 1, 3  # (program(): the writer's kernel index and row0's runtime-arg index)
+RW_PAGE0 = 3  # (round_program(): page0's runtime-arg index in the writer, kernel K_WRITER)
 _PREPARED_CAP = 64
 _PREPARED = OrderedDict()  # prepared=True: key -> (mesh device, PreparedProgram | None) (could not prepare), LRU
 _FMT = {}  # dtype -> (record bytes, magnitude bits); filled lazily (ttnn dtypes are hashable enum values)
@@ -198,7 +199,7 @@ def round_program(x: ttnn.Tensor, out: ttnn.Tensor, page0: int) -> ttnn.ProgramD
         n = per + (i < extra)
         rd[cx][cy] = [x.buffer_address(), n, t0]
         cp[cx][cy] = [n]
-        wr[cx][cy] = [out.buffer_address(), n, page0 + t0]
+        wr[cx][cy] = [out.buffer_address(), n, t0, page0]
         t0 += n
     cbs = [
         ttnn.CBDescriptor(
@@ -239,12 +240,20 @@ def round_program(x: ttnn.Tensor, out: ttnn.Tensor, page0: int) -> ttnn.ProgramD
 
 
 def bfp_round(
-    x: ttnn.Tensor, dtype=None, *, out: ttnn.Tensor | None = None, row0: int = 0, memory_config=None
+    x: ttnn.Tensor,
+    dtype=None,
+    *,
+    out: ttnn.Tensor | None = None,
+    row0: int = 0,
+    memory_config=None,
+    prepared: bool = False,
 ) -> ttnn.Tensor:
     """x bf16 TILE (any rank, its tiles in order) -> its values rounded to nearest even onto the ``dtype`` grid
     (bfloat4_b default, or bfloat8_b; one exponent per 16 values of a tile's face row), as a new TILE tensor of x's
     shape, or written in place into ``out`` (TILE, ``dtype``, x's width) at row ``row0`` (a multiple of 32) of its
-    flattened rows; returns that tensor. On a mesh, the same program on every chip."""
+    flattened rows; returns that tensor. On a mesh, the same program on every chip. ``prepared`` (default False: a
+    fresh descriptor through generic_op every call): built once per (mesh, tiles, dtype, memory configs) and dispatched
+    by ttnn.bringup.run_prepared, the table's first page a value slot (as ckv_bfp4's)."""
     dtype = dtype or (out.dtype if out is not None else ttnn.bfloat4_b)
     _fmt(dtype)
     assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT, (x.dtype, x.layout)
@@ -260,8 +269,38 @@ def bfp_round(
         rows_x, rows_out = _vol(x) // w, _vol(out) // w
         assert row0 % 32 == 0 and 0 <= row0 and row0 + rows_x <= rows_out, (row0, rows_x, rows_out)
         page0 = row0 // 32 * (w // 32)
-    ttnn.generic_op([x, out], round_program(x, out, page0))
+    io = [x, out]
+    pp = _prepared_round(x, out, page0, io) if prepared else None
+    if pp is not None:
+        ttnn.bringup.run_prepared(pp, io, [page0])
+    else:
+        ttnn.generic_op(io, round_program(x, out, page0))
     return out
+
+
+def _prepared_round(x, out, page0, io):
+    """bfp_round(prepared=True): the round program for this (mesh, tiles, dtype, memory configs), prepared once (page0 a
+    value slot), or None when it cannot be prepared (the patch count says a frozen arg matched an io address)."""
+    mesh = x.device()
+    nt = _vol(x) // 1024
+    key = ("round", mesh.id(), nt, str(out.dtype), str(x.memory_config()), str(out.memory_config()))
+    hit = _PREPARED.get(key)
+    if hit is not None:
+        _PREPARED.move_to_end(key)
+        return hit[1]
+    desc = round_program(x, out, page0)
+    shape = mesh.shape
+    md = ttnn.MeshProgramDescriptor()
+    md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(shape[0] - 1, shape[1] - 1))] = desc
+    pp = ttnn.bringup.prepare_program(md, io, [(K_WRITER, RW_PAGE0)])
+    g = mesh.compute_with_storage_grid_size()
+    cores = max(1, min(nt, g.x * g.y))
+    # reader: x; writer: out, page0 - one slot each a core; anything else matched a frozen value
+    entry = (mesh, pp if pp.patch_count == cores * 3 else None)
+    if len(_PREPARED) >= _PREPARED_CAP:
+        _PREPARED.popitem(last=False)
+    _PREPARED[key] = entry
+    return entry[1]
 
 
 def _prepared(ckv, rows, out, row0, io, dtype=None, blocks=False):

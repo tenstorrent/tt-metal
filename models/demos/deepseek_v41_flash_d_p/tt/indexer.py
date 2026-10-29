@@ -13,7 +13,9 @@ TtCsaIndexer (compressed keys); no Hadamard (the DS41 reference has none), keys 
     score = sum_h w_h relu(q_h . k_t), key t visible iff t < (pos + 1) // ratio
     topk  = the 512 best visible keys per query (fewer visible: pads)
 (the released code's fp8 / fp4 quant-dequant of the query and its matmul input is not emulated: the device keeps
-bf16 and computes in it, agent rule 17; FIX.8)
+bf16 and computes in it, agent rule 17; FIX.8. INDEX_Q_FORMAT / INDEX_K_FORMAT=bfp4 (DS41-150, the defaults): the
+query and the keys in the device's own 4-bit format, bfloat4_b, rounded to nearest even by ttnn.bringup.bfp_round;
+the score op and its ring read them as such)
 
 Per chip (r, c), inputs attn_norm [1, 1, W, H/TP] fp32 (hidden split) and q_resid [1, 1, W, 1280] fp32 (row split,
 replicated over TP), W = S / SP; the chip's queries are rows [c Sq, (c+1) Sq) of its row block, Sq = W / TP, i.e.
@@ -152,6 +154,10 @@ class TtIndexer:
         self.glue = indexer_glue()  # INDEXER_GLUE=on (P.16)
         self._memo = None  # (tt/sparse_attention.ChunkMemo, KV source layer): ``share``
         self.local = False  # INDEXER_TOPK_LOCAL=on (P.8): the top-k not gathered over TP (tt/model.py sets it)
+        # INDEX_K_FORMAT / INDEX_Q_FORMAT=bfp4 (DS41-150): keys and query rounded to bfloat4_b before the score
+        self.k_dtype = ttnn.bfloat4_b if settings.get("INDEX_K_FORMAT") == "bfp4" else ttnn.bfloat16
+        self.q_bfp4 = settings.get("INDEX_Q_FORMAT") == "bfp4"
+        self.prepared = settings.get("CKV_BFP4_PREPARED") == "on"  # P.7: bfp_round built once, addresses patched
 
     def share(self, memo, kv_src: int | None) -> None:
         """INDEXER_GLUE=on (P.16): the chunk's ChunkMemo and this layer's KV source (the tiled index keys are made once
@@ -165,7 +171,7 @@ class TtIndexer:
         if t not in self._kbuf:
             self._kbuf[t] = ttnn.from_torch(
                 torch.zeros(1, 1, t, self.hd),
-                dtype=ttnn.bfloat16,
+                dtype=self.k_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh,
                 memory_config=DRAM,
@@ -183,11 +189,16 @@ class TtIndexer:
     # ------------------------------------------------------------------ per chunk (device only)
     def _keys(self, cache) -> ttnn.Tensor:
         """The served index-key cache's slab [1, 1, rows / r, hd] bf16 ROW_MAJOR (ND-sharded) -> compressed rows
-        [1, 1, rows / r, hd] bf16 TILE, interleaved: the ring's k_local (block-cyclic layout unchanged)."""
+        [1, 1, rows / r, hd] bf16 TILE (INDEX_K_FORMAT=bfp4: rounded to bfloat4_b), interleaved: the ring's k_local
+        (block-cyclic layout unchanged)."""
         rm = cache.slab.slice_rows(0, cache.crows)
         kt = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=DRAM)
         dealloc(rm)
-        return kt
+        if self.k_dtype == ttnn.bfloat16:
+            return kt
+        k4 = ttnn.bringup.bfp_round(kt, self.k_dtype, memory_config=DRAM, prepared=self.prepared)
+        dealloc(kt)
+        return k4
 
     def _sub(self, t: ttnn.Tensor) -> ttnn.Tensor:
         """This chip's Sq query rows of a row-split, TP-replicated [1, 1, W, n] tensor (ATTN_SP32=on, P.10: ``t``
@@ -311,6 +322,10 @@ class TtIndexer:
         assert kv_len >= self.topk and start < kv_len * self.ratio, (start, kv_len, self.topk)
         w = self.gates(x)
         q = self.query(qr, start)
+        if self.q_bfp4:  # INDEX_Q_FORMAT=bfp4: the roped query on the bfloat4_b grid (nearest even)
+            q4 = ttnn.bringup.bfp_round(q, ttnn.bfloat4_b, memory_config=DRAM, prepared=self.prepared)
+            dealloc(q)
+            q = q4
         shared = self._memo is not None
         kkey = (start, id(cache), cache.version)
         k_local = self._memo[0].get(("keys", self._memo[1]), kkey) if shared else None

@@ -24,7 +24,10 @@ Chain (one path on every box; nothing on the host per chunk except picking load-
     window carry   positions [start - 128, start) read back from the served cache: the same local rows sliced on every
                    chip, gathered over the mesh, the owner's block kept (one or two pieces; zeros before position 0)
     table          [carry 128 | chunk S] rows x 512, ROW_MAJOR, replicated; the RoPE tail de-interleaved ([even |
-                   odd], as q's)
+                   odd], as q's). WINDOW_KV_FORMAT=bfp8_blocks (DS41-150, the default): the same rows (as stored) as
+                   bfloat8_b blocks of 32 rows, rounded to nearest even (ttnn.bringup.ckv_bfp4 blocks=True; the chunk
+                   from its tiles, the carry tiled), one buffer every layer writes in turn (WindowTables.window_blocks),
+                   read by the sdpa fork's kv_format ROW_BFP8; the served cache stays bf16
     q              bf16 cast -> ttnn.linear wq_b (the chip's heads, each head's rope rows de-interleaved,
                    ATTN_FIDELITY + fp32 acc, fp32 out) -> heads [1, H/TP, S/SP, 512] -> RoPE (fp32 SFPU,
                    tt/rope.rope_heads) -> x 512^-0.5 (the softmax scale folded into q: the op's scale is then 1, exact;
@@ -88,6 +91,16 @@ from .served import CacheSlab, DeviceScalars, alloc_served
 from .settings import settings
 
 WINDOW = 128  # sliding window (cfg.window); the table's carry region
+# WINDOW_KV_FORMAT=bfp8_blocks: one page per 32 consecutive window rows (ttnn.bringup.ckv_bfp4 blocks=True, 512 wide):
+# [32 x 32 shared exponents | a copy 32 B on, at 1056 | 32 x 512 sign-magnitude bytes at 2112]
+WINDOW_BLOCK_BYTES = 18496
+
+
+def window_bfp8() -> bool:
+    """WINDOW_KV_FORMAT=bfp8_blocks (DS41-150): the window region as bfloat8_b blocks of 32 rows (``WindowTables``)."""
+    return settings.get("WINDOW_KV_FORMAT") == "bfp8_blocks"
+
+
 SENTINEL = -1  # uploaded as int32 -1, read through uint32: 0xFFFFFFFF, sparse_sdpa's "no key"
 SDPA_K_CHUNK = 128
 
@@ -169,6 +182,21 @@ class WindowTables:
         # the chunk (window caches, compressed caches); the device scalars memoized likewise (tt/served.DeviceScalars)
         self.fold = settings.get("GLUE_FOLD") == "on"
         self._srv_row = None  # (k, [1, 1, 1, W] uint32)
+        self._blocks = None  # WINDOW_KV_FORMAT=bfp8_blocks: the window region every layer writes in turn
+
+    def window_blocks(self) -> ttnn.Tensor:
+        """WINDOW_KV_FORMAT=bfp8_blocks: the window region [carry 128 | chunk S] as bfloat8_b blocks of 32 rows,
+        [1, 1, (128 + S) / 32, WINDOW_BLOCK_BYTES] uint8 ROW_MAJOR, replicated; allocated once, each layer writes
+        its rows and runs its attention before the next (one queue)."""
+        if self._blocks is None:
+            self._blocks = ttnn.zeros(
+                [1, 1, (WINDOW + self.geo.chunk) // 32, WINDOW_BLOCK_BYTES],
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                memory_config=DRAM,
+            )
+        return self._blocks
 
     def index_lists(self, base: int) -> dict:
         """The window index lists per start class with the window region at table row ``base`` (load time): query d
@@ -434,6 +462,9 @@ class TtWindowAttention:
             assert self.stock or rope.pairs is not None, "ATTN_GLUE=on: the RopeTable was built without its PairPerm"
             self.pairs = rope.pairs
             self.INTERLEAVED = True  # the table as stored (no per-chunk transform of the window rows)
+        # WINDOW_KV_FORMAT=bfp8_blocks (DS41-150): the window region as bfloat8_b blocks, rows as stored
+        self.win8 = window_bfp8()
+        assert not self.win8 or self.INTERLEAVED, "WINDOW_KV_FORMAT=bfp8_blocks reads the rows as stored (ATTN_GLUE=on)"
         perm = torch.arange(self.d) if self.stock else deinterleave_perm(self.d, self.rd)
         # wq_b [heads * 512, q_lora] -> each head's rope rows de-interleaved -> [q_lora, heads * 512], columns split
         # over TP (chip c: heads [c H/TP, (c+1) H/TP)); bf16 exact (e4m3 x 2^k)
@@ -474,9 +505,10 @@ class TtWindowAttention:
         own S/(SP TP) query rows under ATTN_SP32_PROJ=on (P.9). Release with ``self.rope.free``."""
         return self.rope.rows(start, length, tp_split=self.sp32 and self.geo.tp > 1)
 
-    def _window_rows(self, kv: ttnn.Tensor, start: int, end: int, cache: TtWindowCache):
+    def _window_rows(self, kv: ttnn.Tensor, start: int, end: int, cache: TtWindowCache, blocks: bool = False):
         """Writes the chunk's rows into the cache; returns (carry [1, 1, 128, 512], kv_rm [1, 1, S, 512]) bf16
-        ROW_MAJOR, replicated, natural order (rope tail as stored). Release both with ``_release_window``."""
+        ROW_MAJOR, replicated, natural order (rope tail as stored). Release both with ``_release_window``.
+        ``blocks`` (WINDOW_KV_FORMAT=bfp8_blocks): also writes [carry | chunk] into the window blocks."""
         g = self.geo
         full = kv
         if g.tp > 1 and kv.shape[-2] == g.q_rows:
@@ -496,10 +528,31 @@ class TtWindowAttention:
             if full is not kv:
                 dealloc(full)
         kv_rm = ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        if blocks:
+            self._put_blocks(masked, WINDOW)
         if masked is not kv:
             dealloc(masked)
         cache.write(kv_rm, start, end)
-        return cache.carry(start), kv_rm
+        carry = cache.carry(start)
+        if blocks:
+            ct = ttnn.to_layout(carry, ttnn.TILE_LAYOUT, memory_config=DRAM)
+            self._put_blocks(ct, 0)
+            dealloc(ct)
+        return carry, kv_rm
+
+    def _put_blocks(self, rows_tile: ttnn.Tensor, row0: int) -> None:
+        """WINDOW_KV_FORMAT=bfp8_blocks: bf16 TILE rows (replicated, not consumed) at row0 of the window blocks,
+        rounded to nearest even onto the bfloat8_b grid."""
+        prepared = settings.get("CKV_BFP4_PREPARED") == "on"  # P.7: the program built once, row0 patched
+        ttnn.bringup.ckv_bfp4(
+            rows_tile,
+            self.tables.window_blocks(),
+            row0,
+            dtype=ttnn.bfloat8_b,
+            blocks=True,
+            memory_config=DRAM,
+            prepared=prepared,
+        )
 
     def _release_window(self, carry, kv_rm, cache: TtWindowCache, start: int, end: int) -> None:
         if carry is not self.tables.zero_carry:
@@ -627,7 +680,20 @@ class TtWindowAttention:
         return q_rm
 
     def _sdpa(self, q_rm, table, index, window=None):
-        if window is not None:  # CKV_FORMAT=bfp4_rows: bfloat4_b row records + the bf16 window (sdpa fork ROW_BFP4)
+        if window is None and table.dtype == ttnn.uint8:  # WINDOW_KV_FORMAT=bfp8_blocks, a window-only layer
+            return ttnn.bringup.sparse_sdpa(
+                q_rm,
+                table,
+                index,
+                self.d,
+                kv_format=ttnn.bringup.SparseKVFormat.ROW_BFP8,
+                scale=1.0,
+                k_chunk_size=SDPA_K_CHUNK,
+                compute_kernel_config=self.ckc,
+                attention_sink=self.sink,
+            )
+        if window is not None:  # CKV_FORMAT=bfp4_rows: bfloat4_b row records + the window, bf16 rows or bfloat8_b
+            # blocks (WINDOW_KV_FORMAT) (sdpa fork ROW_BFP4)
             return ttnn.bringup.sparse_sdpa(
                 q_rm,
                 table,
@@ -783,11 +849,17 @@ class TtWindowAttention:
         assert s == g.chunk, f"chunk of {s} rows; the window tables were built for {g.chunk}"
         end = start + s if end is None else int(end)
         cos, sin = self._rope_rows(start, s)
-        table = self._table(kv, start, end, cache)
+        if self.win8:  # WINDOW_KV_FORMAT=bfp8_blocks: the window blocks, read as kv_format ROW_BFP8
+            carry, kv_rm = self._window_rows(kv, start, end, cache, blocks=True)
+            self._release_window(carry, kv_rm, cache, start, end)
+            table = self.tables.window_blocks()
+        else:
+            table = self._table(kv, start, end, cache)
         q_rm = self._q(q_resid, cos, sin)
         o = self._sdpa(q_rm, table, self.tables.index[g.start_class(start)])
         dealloc(q_rm)
-        dealloc(table)
+        if not self.win8:
+            dealloc(table)
         out = self._out(o, cos, sin)
         dealloc(o)
         self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
