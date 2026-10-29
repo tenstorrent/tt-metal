@@ -86,18 +86,6 @@ inline void matmul_configure_addrmod_no_mop(
     }
         .set(ADDR_MOD_5);
 
-    if constexpr (THROTTLE_LEVEL)
-    {
-        // reset all, including fidelity
-        addr_mod_t {
-            .srca     = {.incr = 0, .clr = 1, .cr = 1},
-            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
-            .dest     = {.incr = 0, .clr = 1, .cr = 1},
-            .fidelity = {.incr = 0, .clr = 1},
-        }
-            .set(ADDR_MOD_6);
-    }
-
     if (transpose)
     {
         addr_mod_t {
@@ -465,6 +453,18 @@ inline void _llk_math_matmul_no_mop_(
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
     const bool partial_face            = false)
 {
+    if constexpr (THROTTLE_LEVEL > 0)
+    {
+        // The throttled sequence's last MVMUL resets all counters, including fidelity, through ADDR_MOD_6.
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 1, .cr = 1},
+            .fidelity = {.incr = 0, .clr = 1},
+        }
+            .set(ADDR_MOD_6);
+    }
+
     const bool reuse_a                = ct_dim >= rt_dim;
     const std::uint32_t t_dim         = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim       = reuse_a ? ct_dim : rt_dim; // reuse-dim
@@ -641,5 +641,11 @@ inline void _llk_math_matmul_no_mop_(
                 }
             }
         }
+    }
+
+    if constexpr (THROTTLE_LEVEL > 0)
+    {
+        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     }
 }
