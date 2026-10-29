@@ -15,7 +15,7 @@ OUTPUT_ARCH(riscv)
 
 #include "dev_mem_map.h"
 
-/* Fake VMAs for the kernel profiler's zone sections below. All three are (INFO), so they are
+/* Fake VMAs for the event descriptor tables below. All three are (INFO), so they are
    non-ALLOC, never appear in a PT_LOAD and are never placed on the device; the host resolves the
    pointers they hold by subtracting the section's own sh_addr (llrt/observability_event_meta.cpp). The string and
    record sections only need a defined base so that the link-time pointers from .tt_event_descriptor_meta into
@@ -164,7 +164,7 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  /* Observability event names + __FILE__ strings for the kernel profiler. Mergeable strings, so each distinct
+  /* Observability event names + __FILE__ strings. Mergeable strings, so each distinct
      string is stored once however many events reference it. .tt_event_descriptor_meta holds VMAs into here,
      which the host rebases by this section's sh_addr. (INFO) strips SHF_ALLOC, so the section
      never enters a PT_LOAD and costs no device memory. */
@@ -176,8 +176,8 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  /* Site records: {id, signature_ptr, file_ptr, line} followed by the site's metadata struct,
-     emitted by TT_DEBUG_SITE (hostdev/observability_event_descriptor.h, layout in hostdev/observability_event_meta.h);
+  /* Event records: {id, signature_ptr, file_ptr, line} followed by the event's metadata struct,
+     emitted by TT_OBSERVABILITY_EVENT (hostdev/observability_event_descriptor.h, layout in hostdev/observability_event_meta.h);
      the host sizes each record from its signature. (INFO) for the same reason as above. */
   .tt_event_descriptor_meta TT_EVENT_DESCRIPTOR_META_VMA (INFO) :
   {
@@ -187,10 +187,10 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  /* Zone ids: one byte per zone site, so a site's id is its address and one image's ids are dense
+  /* Descriptor ids: one byte per event, so an event's descriptor id is its address and one image's ids are dense
      from TT_EVENT_DESCRIPTOR_IDS_VMA in link order. The host moves the section to the image's block of the
      16-bit id space when it loads the image, re-resolving every relocation against it (which is
-     why the link keeps its relocations, -Wl,--emit-relocs); a site materializes its id as lui/addi
+     why the link keeps its relocations, -Wl,--emit-relocs); an event materializes its id as lui/addi
      of the handle, and this VMA's nonzero upper bits keep relaxation from folding that into a single
      addi the host could not rebase. (INFO) for the same reason as above. */
   .tt_event_descriptor_ids TT_EVENT_DESCRIPTOR_IDS_VMA (INFO) :
@@ -200,7 +200,7 @@ SECTIONS
     __tt_event_descriptor_ids_end = .;
   }
   ASSERT(__tt_event_descriptor_ids_end - __tt_event_descriptor_ids_start < 0xFFFF,
-         "more KERNEL_PROFILER zone sites in one image than the 16-bit zone id space holds")
+         "more observability events in one image than the 16-bit descriptor id space holds")
 
 #if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
   .text TEXT_START :

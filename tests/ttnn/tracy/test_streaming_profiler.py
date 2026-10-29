@@ -88,9 +88,9 @@ COMMANDS = {
         "--markers",
         "1",
     ],
-    # The debug event metadata round trip (tests/tt_metal/tt_metal/debug_tools/debug_event/), which needs the
+    # The observability event metadata round trip (tests/tt_metal/tt_metal/debug_tools/observability_event/), which needs the
     # profiler armed for its whole process.
-    "debug-event-meta": [str(TOOLS["debug_tools"]), "--gtest_filter=DebugEventMetaSilicon.*"],
+    "observability-event-meta": [str(TOOLS["debug_tools"]), "--gtest_filter=ObservabilityEventMetaSilicon.*"],
 }
 
 
@@ -269,12 +269,12 @@ def test_streaming_profiler_zones_capture(gx, gy, iters):
     ), f"point records (events + timestamped data) lost: got {points}, want {_expected_points(gx, gy, iters)}"
 
 
-def test_debug_event_metadata_round_trip():
-    """Every per-site metadata shape (nested structs, every integer width and sign, defaults, strings, a template
-    site) survives device compile, ELF and host decode on every RISC, read back through Zone::site().meta."""
+def test_observability_event_metadata_round_trip():
+    """Every per-event metadata shape (nested structs, every integer width and sign, defaults, strings, a template
+    event) survives device compile, ELF and host decode on every RISC, read back through Zone::event().meta."""
     assert DEBUG_TOOLS_BIN.exists(), f"unit_tests_debug_tools not built: {DEBUG_TOOLS_BIN} (--build-metal-tests)"
 
-    rc, log = _run_workload("debug-event-meta", {})
+    rc, log = _run_workload("observability-event-meta", {})
     _skip_unless_streaming_started(log)
     if "[  SKIPPED ]" in log:
         pytest.skip(f"the gtest skipped itself:\n{log[-1000:]}")

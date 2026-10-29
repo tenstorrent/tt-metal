@@ -26,7 +26,7 @@ namespace api = tt::tt_metal::experimental::streaming_profiler;
 namespace tt::tt_metal::experimental::streaming_profiler::detail {
 static_assert(EVENT_DESCRIPTOR_ID_BITS == TT_EVENT_DESCRIPTOR_ID_BITS);
 static_assert(EVENT_DESCRIPTOR_ID_COUNT == TT_EVENT_DESCRIPTOR_ID_COUNT);
-std::atomic<const ObservabilityEventDescriptor*> DescriptorRegistry::sites[EVENT_DESCRIPTOR_ID_COUNT];
+std::atomic<const ObservabilityEventDescriptor*> DescriptorRegistry::descriptors[EVENT_DESCRIPTOR_ID_COUNT];
 }  // namespace tt::tt_metal::experimental::streaming_profiler::detail
 
 namespace tt::tt_metal::streaming_profiler {
@@ -38,7 +38,7 @@ static_assert(TT_ZONE_STALL_ID < api::detail::EVENT_DESCRIPTOR_ID_COUNT);
 constexpr api::ObservabilityEventDescriptor kStallDescriptor{.name = api::STALL_ZONE_NAME};
 
 // Fills the table behind api::detail::descriptor_of from the zone-name registry as ELFs load. Nothing is ever
-// freed: a record may hold a site's address for the life of the process. Ids are unique per process by construction
+// freed: a record may hold an event's address for the life of the process. Ids are unique per process by construction
 // (each image owns a block), so a slot is written once; a repeat is a registry fault and the first writer wins.
 class DescriptorTables {
 public:
@@ -48,10 +48,10 @@ public:
             if (e->descriptor_id >= api::detail::EVENT_DESCRIPTOR_ID_COUNT) {
                 continue;
             }
-            auto& slot = api::detail::DescriptorRegistry::sites[e->descriptor_id];
+            auto& slot = api::detail::DescriptorRegistry::descriptors[e->descriptor_id];
             if (slot.load(std::memory_order_relaxed) == nullptr) {
                 slot.store(
-                    &sites_.emplace_back(api::ObservabilityEventDescriptor{
+                    &descriptors_.emplace_back(api::ObservabilityEventDescriptor{
                         .name = e->name, .location = {.file = e->file, .line = e->line}, .meta = &e->meta}),
                     std::memory_order_release);
             }
@@ -60,7 +60,7 @@ public:
 
 private:
     std::mutex mu_;
-    std::deque<api::ObservabilityEventDescriptor> sites_;
+    std::deque<api::ObservabilityEventDescriptor> descriptors_;
 };
 
 }  // namespace
@@ -68,7 +68,8 @@ private:
 void init_descriptor_registry() {
     static std::once_flag once;
     std::call_once(once, [] {
-        api::detail::DescriptorRegistry::sites[TT_ZONE_STALL_ID].store(&kStallDescriptor, std::memory_order_release);
+        api::detail::DescriptorRegistry::descriptors[TT_ZONE_STALL_ID].store(
+            &kStallDescriptor, std::memory_order_release);
         static ttsl::Indestructible<DescriptorTables> tables;
         tt::llrt::ObservabilityEventMetaRegistry::instance().set_listener(
             [](std::span<const tt::llrt::ObservabilityEventMetaEntry* const> entries) { tables.get().add(entries); });

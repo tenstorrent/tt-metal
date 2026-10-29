@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Metadata types and values shared by the kernel observability_event_meta_silicon.cpp and its host test,
-// tests/tt_metal/tt_metal/debug_tools/observability_event/test_observability_event_meta_silicon.cpp. The kernel's sites
-// carry exactly these values, so the host compares what it decoded against the same constants.
+// tests/tt_metal/tt_metal/debug_tools/observability_event/test_observability_event_meta_silicon.cpp. The kernel's
+// events carry exactly these values, so the host compares what it decoded against the same constants.
 #pragma once
 
 #include <stdint.h>
@@ -75,9 +75,9 @@ inline constexpr DefaultedMeta kDefaulted{"meta_defaulted"};
 // Every byte the assembler text has to escape: quotes, a backslash, a newline, a tab, UTF-8 and DEL.
 inline constexpr TwoStringsMeta kTwoStrings{"meta_two_strings", "line one\nline two\t\"quotes\" \\ \xC3\xA9 \x7F end"};
 inline constexpr uint32_t kColor = 0x42D4F4;
-inline constexpr tt::debug_event::TimeUnit kUnit = tt::debug_event::TimeUnit::Milliseconds;
+inline constexpr tt::observability_event::TimeUnit kUnit = tt::observability_event::TimeUnit::Milliseconds;
 
-// The template site is instantiated with these values: equal values share one site, so two distinct sites.
+// The template event is instantiated with these values: equal values share one event, so two distinct events.
 inline constexpr const char* kTemplatedName = "meta_templated";
 inline constexpr uint32_t kTemplatedA = 11;
 inline constexpr uint32_t kTemplatedB = 22;

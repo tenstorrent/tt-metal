@@ -5,8 +5,8 @@
 // One zone per metadata shape in observability_event_meta_silicon.h, for the silicon round trip in
 // tests/tt_metal/tt_metal/debug_tools/observability_event/test_observability_event_meta_silicon.cpp. Built as a
 // data-movement and as a compute kernel, so every RISC's image carries its own records. The zone macros take only their
-// fixed library types, so a zone with a metadata type of its own places its site through the metadata API,
-// TT_DEBUG_SITE, and opens the zone on that site.
+// fixed library types, so a zone with a metadata type of its own places its event through the metadata API,
+// TT_OBSERVABILITY_EVENT, and opens the zone on that event.
 
 #include <cstdint>
 
@@ -24,8 +24,8 @@ namespace m = observability_event_meta_silicon;
 
 template <uint32_t Value>
 void templated_zone() {
-    TT_DEBUG_SITE(site, m::TemplatedMeta{m::kTemplatedName, Value});
-    kernel_profiler::profileScope<site> zone;
+    TT_OBSERVABILITY_EVENT(event, m::TemplatedMeta{m::kTemplatedName, Value});
+    kernel_profiler::profileScope<event> zone;
 }
 
 void kernel_main() {
@@ -39,24 +39,24 @@ void kernel_main() {
         DeviceZoneScopedNCU("meta_unit", m::kColor, m::kUnit);
     }
     {
-        TT_DEBUG_SITE(site, m::kNested);
-        kernel_profiler::profileScope<site> zone;
+        TT_OBSERVABILITY_EVENT(event, m::kNested);
+        kernel_profiler::profileScope<event> zone;
     }
     {
-        TT_DEBUG_SITE(site, m::kDeep);
-        kernel_profiler::profileScope<site> zone;
+        TT_OBSERVABILITY_EVENT(event, m::kDeep);
+        kernel_profiler::profileScope<event> zone;
     }
     {
-        TT_DEBUG_SITE(site, m::kAllWidths);
-        kernel_profiler::profileScope<site> zone;
+        TT_OBSERVABILITY_EVENT(event, m::kAllWidths);
+        kernel_profiler::profileScope<event> zone;
     }
     {
-        TT_DEBUG_SITE(site, m::kDefaulted);
-        kernel_profiler::profileScope<site> zone;
+        TT_OBSERVABILITY_EVENT(event, m::kDefaulted);
+        kernel_profiler::profileScope<event> zone;
     }
     {
-        TT_DEBUG_SITE(site, m::kTwoStrings);
-        kernel_profiler::profileScope<site> zone;
+        TT_OBSERVABILITY_EVENT(event, m::kTwoStrings);
+        kernel_profiler::profileScope<event> zone;
     }
     templated_zone<m::kTemplatedA>();
     templated_zone<m::kTemplatedB>();

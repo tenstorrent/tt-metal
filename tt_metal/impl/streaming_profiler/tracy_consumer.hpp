@@ -50,7 +50,7 @@ private:
 
     int64_t timeline_ns(int64_t tsc) const;
     Lane lane(const Core& core);
-    // COLOR is a site's own colour (0xRRGGBB), or 0 for its processor's.
+    // COLOR is an event's own colour (0xRRGGBB), or 0 for its processor's.
     const tracy::SourceLocationData* srcloc(std::string_view name, uint32_t processor, uint32_t color);
     const tracy::SourceLocationData* srcloc_slow(std::string_view name, uint32_t processor, uint32_t color);
     void push_zone(const Core& core, std::string_view name, uint32_t color, int64_t start_tsc, int64_t end_tsc);

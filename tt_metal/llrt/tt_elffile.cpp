@@ -93,7 +93,7 @@ public:
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) = 0;
     virtual void ObjectifyExecutable() = 0;
     virtual void XIPify() = 0;
-    virtual uint32_t RebaseZoneIds(address_t base) = 0;
+    virtual uint32_t RebaseDescriptorIds(address_t base) = 0;
 
     virtual std::span<std::byte> GetSectionContents(std::string_view name, uint64_t& virtual_address) const = 0;
 
@@ -131,7 +131,7 @@ public:
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) override;
     virtual void ObjectifyExecutable() override;
     virtual void XIPify() override;
-    virtual uint32_t RebaseZoneIds(address_t base) override;
+    virtual uint32_t RebaseDescriptorIds(address_t base) override;
 
     virtual std::span<std::byte> GetSectionContents(std::string_view name, uint64_t& virtual_address) const override {
         for (const auto& shdr : GetShdrs()) {
@@ -352,7 +352,7 @@ void ElfFile::ObjectifyExecutable() { pimpl_->ObjectifyExecutable(); }
 
 void ElfFile::MakeExecuteInPlace() { pimpl_->XIPify(); }
 
-uint32_t ElfFile::RebaseZoneIds(address_t base) { return pimpl_->RebaseZoneIds(base); }
+uint32_t ElfFile::RebaseDescriptorIds(address_t base) { return pimpl_->RebaseDescriptorIds(base); }
 
 void ElfFile::Impl::XIPify() {
     // The text segment is now XIP
@@ -704,12 +704,12 @@ void ElfFile::Impl::Elf<Is64>::ObjectifyExecutable() {
     hdr.e_phentsize = 0;
 }
 
-// The zone-id section is the only one whose VMA the host chooses: the link places it at a fixed fake
-// address (hw/toolchain/main.ld) so that each site's id is lui/addi of a one-byte handle, and the loader moves
-// it to the image's block of the 16-bit id space by rewriting those immediates. Both halves of a pair carry
-// the full symbol value in their own reloc, so they are patched independently and need no pairing.
+// The descriptor id section is the only one whose VMA the host chooses: the link places it at a fixed fake
+// address (hw/toolchain/main.ld) so that each event's descriptor id is lui/addi of a one-byte handle, and the loader
+// moves it to the image's block of the 16-bit id space by rewriting those immediates. Both halves of a pair carry the
+// full symbol value in their own reloc, so they are patched independently and need no pairing.
 template <bool Is64>
-uint32_t ElfFile::Impl::Elf<Is64>::RebaseZoneIds(address_t base) {
+uint32_t ElfFile::Impl::Elf<Is64>::RebaseDescriptorIds(address_t base) {
     unsigned ids_ix = 0;
     for (unsigned ix = 1; ix < GetShdrs().size(); ix++) {
         if (std::strcmp(GetName(GetShdr(ix)), ".tt_event_descriptor_ids") == 0) {
@@ -731,9 +731,8 @@ uint32_t ElfFile::Impl::Elf<Is64>::RebaseZoneIds(address_t base) {
     // script's placement rules that out, and an orphan (a script without the section) lands at 0.
     if ((ids.sh_addr >> mask_hi20_shift) == 0) {
         TT_THROW(
-            "{}: .tt_event_descriptor_ids sits at {:#x}; the linker script must place it above 4 KiB so each zone "
-            "site keeps "
-            "its lui (hw/toolchain/main.ld TT_EVENT_DESCRIPTOR_IDS_VMA)",
+            "{}: .tt_event_descriptor_ids sits at {:#x}; the linker script must place it above 4 KiB so each event "
+            "keeps its lui (hw/toolchain/main.ld TT_EVENT_DESCRIPTOR_IDS_VMA)",
             path_,
             ids.sh_addr);
     }
@@ -765,7 +764,10 @@ uint32_t ElfFile::Impl::Elf<Is64>::RebaseZoneIds(address_t base) {
             if (reloc.r_offset < target.sh_addr ||
                 reloc.r_offset - target.sh_addr + sizeof(uint32_t) > target.sh_size) {
                 TT_THROW(
-                    "{}: zone-id relocation @ {:#x} is outside of section {}", path_, reloc.r_offset, GetName(target));
+                    "{}: descriptor id relocation @ {:#x} is outside of section {}",
+                    path_,
+                    reloc.r_offset,
+                    GetName(target));
             }
             const uint32_t value =
                 static_cast<uint32_t>(symbols[sym_ix].st_value) + static_cast<uint32_t>(reloc.r_addend) + delta;
@@ -798,7 +800,7 @@ uint32_t ElfFile::Impl::Elf<Is64>::RebaseZoneIds(address_t base) {
         }
     }
     if (!saw_relocs) {
-        TT_THROW("{}: has zone sites but no relocations; link it with -Wl,--emit-relocs", path_);
+        TT_THROW("{}: has events but no relocations; link it with -Wl,--emit-relocs", path_);
     }
 
     // Keep the symbol table and the section header consistent with the patched code, so that a dump of this
