@@ -208,10 +208,11 @@ class StrandsDecider:
         tokens = torch.zeros(B, S, dtype=torch.int32)
         for b, ids in enumerate(seqs):
             tokens[b, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
-        sel = torch.zeros(B, P, S, dtype=torch.float32)
-        for b, pos in enumerate(positions):
-            for i, p in enumerate(pos):
-                sel[b, i, p] = 1.0
+        sel = torch.zeros(B, P, S, dtype=torch.bfloat16)  # one-hot row select (bf16 is what the device takes)
+        counts = [len(pos) for pos in positions]
+        rows_b = torch.repeat_interleave(torch.arange(len(positions)), torch.tensor(counts))
+        rows_i = torch.cat([torch.arange(n) for n in counts])
+        sel[rows_b, rows_i, torch.tensor([p for pos in positions for p in pos])] = 1.0
         key = (B, S, P, traced)
         if key not in self._compiled:
             self.release_traces()
@@ -222,7 +223,7 @@ class StrandsDecider:
             out = self._run_traced(key, tokens, sel)
         else:
             out = self._run_eager(tokens, sel, [len(ids) for ids in seqs])
-        return [out[b, : len(pos)] for b, pos in enumerate(positions)]
+        return [out[b, : len(pos)].float() for b, pos in enumerate(positions)]
 
     def _run_eager(self, tokens, sel, valid):
         B, S = tokens.shape
@@ -234,7 +235,7 @@ class StrandsDecider:
         normed = self._body(tok, sel_tt, cos, sin, B, S, sel.shape[1], valid)
         ttnn.deallocate(tok)
         ttnn.deallocate(sel_tt)
-        out = ttnn.to_torch(normed).reshape(B, sel.shape[1], -1).float()
+        out = ttnn.to_torch(normed).reshape(B, sel.shape[1], -1)
         ttnn.deallocate(normed)
         return out
 
@@ -281,7 +282,10 @@ class StrandsDecider:
         normed = _rms_norm(model.norm, rows)
         if normed is not rows:
             ttnn.deallocate(rows)
-        return normed
+        # Row-major, so the host readback is a plain copy (no untilize).
+        out = ttnn.to_layout(normed, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(normed)
+        return out
 
     def _run_traced(self, key, tokens, sel):
         B, S, P, _ = key
@@ -314,7 +318,7 @@ class StrandsDecider:
                 self.trace_region_use[key] = self._trace_bytes() - before
         trace_id, out = self._traces[key]
         ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
-        return ttnn.to_torch(out).reshape(B, P, -1).float()
+        return ttnn.to_torch(out).reshape(B, P, -1)
 
     def _trace_bytes(self):
         view = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.TRACE)
@@ -336,11 +340,9 @@ class StrandsDecider:
         all_rows = self.hidden_rows_batch(
             [q.input_ids for q in qs], [[q.query_position, *q.option_positions] for q in qs]
         )
-        out = []
         with torch.no_grad():
-            for rows in all_rows:
-                out.append((self.head(rows[:1], rows[None, 1:])[0], rows))
-        return out
+            logits = self.head.forward_flat(all_rows)
+        return list(zip(logits, all_rows))
 
     def evaluate_batch(self, requests: list[tuple[str, dict]]) -> list[dict]:
         """evaluate() for several (state, questions) requests; all their questions share the batched forwards."""

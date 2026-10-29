@@ -44,6 +44,21 @@ class PointerHead(torch.nn.Module):
         k = self.k(self.norm(options))
         return (k @ q).squeeze(-1) * self.scale
 
+    def forward_flat(self, rows: list[torch.Tensor]) -> list[torch.Tensor]:
+        """Logits of many questions in one pass: rows[i] is [1 + K_i, d] (query row, then option rows)."""
+        if len(rows) == 1:  # nothing to batch
+            return [self(rows[0][:1], rows[0][None, 1:])[0]]
+        sizes = [r.shape[0] for r in rows]
+        allr = self.norm(torch.cat(rows))
+        starts = torch.tensor([0, *sizes[:-1]]).cumsum(0)
+        is_query = torch.zeros(allr.shape[0], dtype=torch.bool)
+        is_query[starts] = True
+        q = self.q(allr[starts])  # [N, pointer_dim]
+        k = self.k(allr[~is_query])  # [sum K_i, pointer_dim]
+        owner = torch.repeat_interleave(torch.arange(len(rows)), torch.tensor(sizes) - 1)
+        logits = (k * q[owner]).sum(-1) * self.scale
+        return list(logits.split([n - 1 for n in sizes]))
+
 
 def load_head(ckpt_dir, hidden: int) -> PointerHead:
     ckpt_dir = Path(ckpt_dir)
