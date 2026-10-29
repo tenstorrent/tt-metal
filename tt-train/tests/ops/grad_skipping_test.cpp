@@ -413,14 +413,14 @@ INSTANTIATE_TEST_SUITE_P(
             .make = [] { return layernorm(ttml::ops::composite_layernorm, /*with_beta=*/true); },
             .frozen = {2},
             .skips = {{kMorehSum, 3}}},
-        // dx is skipped inside layernorm_bw, which is still launched for dgamma and dbeta, so there is no op to count;
-        // the row checks that their grads are unchanged.
+        // dx is skipped inside layernorm_bw, which is still launched for dgamma, so there is no op to count; the row
+        // checks that the other grads are unchanged.
         GradSkipCase{
             .name = "LayerNorm_FrozenTensor",
             .make = [] { return layernorm(ttml::ops::layernorm, /*with_beta=*/true); },
             .frozen = {0},
             .changes_kernel_flags = true},
-        // The kernel skips the frozen side's partials and the wrapper skips their reduction.
+        // The kernel skips the frozen gamma's partials and the wrapper skips their reduction.
         GradSkipCase{
             .name = "LayerNorm_FrozenGamma",
             .make = [] { return layernorm(ttml::ops::layernorm, /*with_beta=*/true); },
@@ -433,12 +433,12 @@ INSTANTIATE_TEST_SUITE_P(
             .frozen = {1},
             .skips = {{kReduce, 1}},
             .changes_kernel_flags = true},
+        // The wrapper reduces dbeta from dL_dout, so a frozen beta skips that reduction and leaves the kernel as is.
         GradSkipCase{
             .name = "LayerNorm_FrozenBeta",
             .make = [] { return layernorm(ttml::ops::layernorm, /*with_beta=*/true); },
             .frozen = {2},
-            .skips = {{kReduce, 1}},
-            .changes_kernel_flags = true},
+            .skips = {{kReduce, 1}}},
         GradSkipCase{
             .name = "RMSNormComposite_FrozenTensor",
             .make = rmsnorm_composite,

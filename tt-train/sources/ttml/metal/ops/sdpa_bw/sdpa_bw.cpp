@@ -60,14 +60,14 @@ sdpa_bw(
             attn_mask,
             intermediates,
             dropout_probability,
+            {.grad_query = compute_grad_q,
+             .u_scaler = compute_grad_k,
+             .grad_gate = compute_grad_gate,
+             .gated_grad_output = compute_gated_grad_output},
             /*preallocated_grad_query=*/std::nullopt,
             /*preallocated_u_scaler=*/std::nullopt,
             gate,
-            preallocated_grad_gate,
-            /*compute_grad_query=*/compute_grad_q,
-            /*compute_u_scaler=*/compute_grad_k,
-            /*compute_grad_gate=*/compute_grad_gate,
-            /*compute_gated_grad_output=*/compute_gated_grad_output);
+            preallocated_grad_gate);
     }
 
     std::optional<ttnn::Tensor> grad_K;
@@ -85,10 +85,9 @@ sdpa_bw(
             intermediates,
             u_scaler,
             dropout_probability,
+            {.grad_key = compute_grad_k, .grad_value = compute_grad_v},
             /*preallocated_grad_key=*/std::nullopt,
-            /*preallocated_grad_value=*/std::nullopt,
-            /*compute_grad_key=*/compute_grad_k,
-            /*compute_grad_value=*/compute_grad_v);
+            /*preallocated_grad_value=*/std::nullopt);
     }
 
     // Each kernel only produces what was requested; the rest is nullopt.

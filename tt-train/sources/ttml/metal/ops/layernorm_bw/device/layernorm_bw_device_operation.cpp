@@ -19,7 +19,6 @@ void LayerNormBackwardDeviceOperation::validate_on_program_cache_miss(
     const auto& dL_dout_tensor = tensor_args.dL_dout;
     const auto& preallocated_dx_tensor = tensor_args.preallocated_dx;
     const auto& preallocated_dgamma_components_tensor = tensor_args.preallocated_dgamma_components;
-    const auto& preallocated_dbeta_components_tensor = tensor_args.preallocated_dbeta_components;
 
     check_device_tensor(input_tensor, "LayerNormBackward", "Input", {.buffer_type = tt::tt_metal::BufferType::DRAM});
     check_device_tensor(gamma_tensor, "LayerNormBackward", "Gamma", {.buffer_type = tt::tt_metal::BufferType::DRAM});
@@ -28,17 +27,14 @@ void LayerNormBackwardDeviceOperation::validate_on_program_cache_miss(
     check_device_tensor(
         dL_dout_tensor, "LayerNormBackward", "dL_dout", {.buffer_type = tt::tt_metal::BufferType::DRAM});
     TT_FATAL(
-        args.compute_grad_input || args.compute_grad_gamma || args.compute_grad_beta,
-        "LayerNormBackward: at least one of compute_grad_input, compute_grad_gamma and compute_grad_beta must be set");
+        args.outputs.grad_input || args.outputs.grad_gamma,
+        "LayerNormBackward: at least one of outputs.grad_input and outputs.grad_gamma must be set");
     TT_FATAL(
-        args.compute_grad_input || !preallocated_dx_tensor.has_value(),
-        "LayerNormBackward: preallocated dx given but compute_grad_input is false");
+        args.outputs.grad_input || !preallocated_dx_tensor.has_value(),
+        "LayerNormBackward: preallocated dx given but outputs.grad_input is false");
     TT_FATAL(
-        args.compute_grad_gamma || !preallocated_dgamma_components_tensor.has_value(),
-        "LayerNormBackward: preallocated dgamma_components given but compute_grad_gamma is false");
-    TT_FATAL(
-        args.compute_grad_beta || !preallocated_dbeta_components_tensor.has_value(),
-        "LayerNormBackward: preallocated dbeta_components given but compute_grad_beta is false");
+        args.outputs.grad_gamma || !preallocated_dgamma_components_tensor.has_value(),
+        "LayerNormBackward: preallocated dgamma_components given but outputs.grad_gamma is false");
     if (preallocated_dx_tensor.has_value()) {
         check_device_tensor(
             preallocated_dx_tensor.value(),
@@ -53,22 +49,15 @@ void LayerNormBackwardDeviceOperation::validate_on_program_cache_miss(
             "Preallocated dgamma_components",
             {.buffer_type = tt::tt_metal::BufferType::DRAM});
     }
-    if (preallocated_dbeta_components_tensor.has_value()) {
-        check_device_tensor(
-            preallocated_dbeta_components_tensor.value(),
-            "LayerNormBackward",
-            "Preallocated dbeta_components",
-            {.buffer_type = tt::tt_metal::BufferType::DRAM});
-    }
 }
 
 spec_return_value_t LayerNormBackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // All three slots are always present so that indices stay [dx, dgamma_components, dbeta_components].
-    spec_return_value_t output_specs(3U, std::nullopt);
+    // Both slots are always present so that indices stay [dx, dgamma_components].
+    spec_return_value_t output_specs(2U, std::nullopt);
 
     // dx (input gradient) - same shape as input
-    if (args.compute_grad_input) {
+    if (args.outputs.grad_input) {
         if (tensor_args.preallocated_dx.has_value()) {
             output_specs[0] = tensor_args.preallocated_dx->tensor_spec();
         } else {
@@ -80,23 +69,11 @@ spec_return_value_t LayerNormBackwardDeviceOperation::compute_output_specs(
     }
 
     // dgamma_components - same shape as input (will be reduced later)
-    if (args.compute_grad_gamma) {
+    if (args.outputs.grad_gamma) {
         if (tensor_args.preallocated_dgamma_components.has_value()) {
             output_specs[1] = tensor_args.preallocated_dgamma_components->tensor_spec();
         } else {
             output_specs[1] = tt::tt_metal::TensorSpec(
-                tensor_args.input.logical_shape(),
-                tt::tt_metal::TensorLayout(
-                    tensor_args.gamma.dtype(), tt::tt_metal::Layout::TILE, tensor_args.gamma.memory_config()));
-        }
-    }
-
-    // dbeta_components - same shape as input (will be reduced later)
-    if (args.compute_grad_beta) {
-        if (tensor_args.preallocated_dbeta_components.has_value()) {
-            output_specs[2] = tensor_args.preallocated_dbeta_components->tensor_spec();
-        } else {
-            output_specs[2] = tt::tt_metal::TensorSpec(
                 tensor_args.input.logical_shape(),
                 tt::tt_metal::TensorLayout(
                     tensor_args.gamma.dtype(), tt::tt_metal::Layout::TILE, tensor_args.gamma.memory_config()));
@@ -109,7 +86,7 @@ spec_return_value_t LayerNormBackwardDeviceOperation::compute_output_specs(
 tensor_return_value_t LayerNormBackwardDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     tensor_return_value_t output_tensors;
-    output_tensors.reserve(3U);
+    output_tensors.reserve(2U);
 
     spec_return_value_t output_specs = compute_output_specs(args, tensor_args);
 
@@ -130,9 +107,6 @@ tensor_return_value_t LayerNormBackwardDeviceOperation::create_output_tensors(
     // dgamma_components
     output_tensors.push_back(
         create_output(output_specs[1], tensor_args.preallocated_dgamma_components, tensor_args.gamma));
-    // dbeta_components
-    output_tensors.push_back(
-        create_output(output_specs[2], tensor_args.preallocated_dbeta_components, tensor_args.gamma));
 
     return output_tensors;
 }
@@ -157,18 +131,12 @@ ttml::metal::ops::layernorm_bw::device::LayerNormBackwardDeviceOperation::tensor
     const ttnn::Tensor& mean_tensor,
     const ttnn::Tensor& rstd_tensor,
     const ttnn::Tensor& dL_dout_tensor,
+    const ttml::metal::ops::layernorm_bw::device::LayerNormBackwardOutputs& outputs,
     const std::optional<ttnn::Tensor>& preallocated_dx,
-    const std::optional<ttnn::Tensor>& preallocated_dgamma_components,
-    const std::optional<ttnn::Tensor>& preallocated_dbeta_components,
-    bool compute_grad_input,
-    bool compute_grad_gamma,
-    bool compute_grad_beta) {
+    const std::optional<ttnn::Tensor>& preallocated_dgamma_components) {
     using OperationType = ttml::metal::ops::layernorm_bw::device::LayerNormBackwardDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{
-        .compute_grad_input = compute_grad_input,
-        .compute_grad_gamma = compute_grad_gamma,
-        .compute_grad_beta = compute_grad_beta};
+    auto operation_attributes = OperationType::operation_attributes_t{.outputs = outputs};
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .gamma = gamma_tensor,
@@ -177,7 +145,6 @@ ttml::metal::ops::layernorm_bw::device::LayerNormBackwardDeviceOperation::tensor
         .dL_dout = dL_dout_tensor,
         .preallocated_dx = preallocated_dx,
         .preallocated_dgamma_components = preallocated_dgamma_components,
-        .preallocated_dbeta_components = preallocated_dbeta_components,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

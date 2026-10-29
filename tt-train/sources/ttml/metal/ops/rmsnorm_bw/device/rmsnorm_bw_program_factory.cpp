@@ -159,8 +159,8 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     const auto& input = tensor_args.input;
     const auto& gate = tensor_args.gate;
     const bool gated = gate.has_value();
-    const bool compute_dgamma = args.compute_dgamma;
-    const bool compute_da = args.compute_da;
+    const bool compute_dgamma = args.outputs.dgamma;
+    const bool compute_da = args.outputs.da;
 
     auto* device = input.device();
     tt::tt_metal::Program program{};

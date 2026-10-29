@@ -31,7 +31,6 @@ constexpr uint32_t kDLdoutBufferIdx = 4U;
 // Writer buffer indices
 constexpr uint32_t kDxBufferIdx = 0;
 constexpr uint32_t kDgammaComponentsBufferIdx = 1U;
-constexpr uint32_t kDbetaComponentsBufferIdx = 2U;
 
 // CBs with input data
 constexpr auto kScalerCbIndex = tt::CBIndex::c_0;     // 1/N scaler
@@ -47,7 +46,6 @@ constexpr auto kMeanBcastCbIndex = tt::CBIndex::c_8;  // broadcasted mean (to av
 // CBs with output data
 constexpr auto kDxCbIndex = tt::CBIndex::c_9;                 // dx (input gradient)
 constexpr auto kDgammaComponentsCbIndex = tt::CBIndex::c_10;  // dgamma components
-constexpr auto kDbetaComponentsCbIndex = tt::CBIndex::c_11;   // dbeta components
 constexpr auto kRstdBcastCbIndex = tt::CBIndex::c_12;         // broadcasted rstd (to avoid conflict with reader)
 
 // CBs with intermediate computations
@@ -68,7 +66,6 @@ const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
 const std::string kComputeGradInputDefineKey = "COMPUTE_GRAD_INPUT";
 const std::string kComputeGradGammaDefineKey = "COMPUTE_GRAD_GAMMA";
-const std::string kComputeGradBetaDefineKey = "COMPUTE_GRAD_BETA";
 
 bool fits_in_l1_check(
     const uint32_t Wt,
@@ -78,7 +75,6 @@ bool fits_in_l1_check(
     const uint32_t float32_single_tile_size_bytes,
     const bool compute_grad_input,
     const bool compute_grad_gamma,
-    const bool compute_grad_beta,
     tt::tt_metal::IDevice* device) {
     // Calculate available L1 memory
     const uint32_t available_L1_in_bytes =
@@ -102,7 +98,6 @@ bool fits_in_l1_check(
     const uint32_t output_cb_memory = 2 * block_size * bfloat16_single_tile_size_bytes;
     const uint32_t dx_memory = compute_grad_input ? output_cb_memory : 0U;
     const uint32_t dgamma_components_memory = compute_grad_gamma ? output_cb_memory : 0U;
-    const uint32_t dbeta_components_memory = compute_grad_beta ? output_cb_memory : 0U;
 
     // Memory for intermediate computation CBs
     const uint32_t dy_gamma_sum_memory = compute_grad_input ? kNumDyGammaSumTiles * float32_single_tile_size_bytes : 0U;
@@ -114,8 +109,8 @@ bool fits_in_l1_check(
     // Total L1 memory required
     const uint32_t required_L1_in_bytes = scaler_memory + mask_memory + gamma_memory + x_hat_memory + input_memory +
                                           mean_memory + rstd_memory + dL_dout_memory + dx_memory +
-                                          dgamma_components_memory + dbeta_components_memory + dy_gamma_sum_memory +
-                                          dy_gamma_xnorm_sum_memory + rstd_bcast_memory + mean_bcast_memory;
+                                          dgamma_components_memory + dy_gamma_sum_memory + dy_gamma_xnorm_sum_memory +
+                                          rstd_bcast_memory + mean_bcast_memory;
 
     return required_L1_in_bytes <= available_L1_in_bytes;
 }
@@ -204,9 +199,8 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     // -------------------------------------------------------------------------
     const uint32_t twice_block_size = 2U * block_size;
 
-    const bool compute_grad_input = operation_attributes.compute_grad_input;
-    const bool compute_grad_gamma = operation_attributes.compute_grad_gamma;
-    const bool compute_grad_beta = operation_attributes.compute_grad_beta;
+    const bool compute_grad_input = operation_attributes.outputs.grad_input;
+    const bool compute_grad_gamma = operation_attributes.outputs.grad_gamma;
 
     const uint32_t closest_to_Wt_multiple_of_block_size = ((Wt + block_size - 1) / block_size) * block_size;
     const bool everything_fits_in_l1 = fits_in_l1_check(
@@ -217,7 +211,6 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         float32_single_tile_size_bytes,
         compute_grad_input,
         compute_grad_gamma,
-        compute_grad_beta,
         device);
 
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
@@ -269,15 +262,6 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
             bfloat16_single_tile_size_bytes,
             twice_block_size);
     }
-    if (compute_grad_beta) {
-        [[maybe_unused]] auto cb_dbeta_components = create_circular_buffer(
-            program,
-            all_cores,
-            kDbetaComponentsCbIndex,
-            default_data_format,
-            bfloat16_single_tile_size_bytes,
-            twice_block_size);
-    }
 
     // Intermediate computation CBs
     [[maybe_unused]] auto cb_rstd_bcast = create_circular_buffer(
@@ -315,7 +299,6 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     // An output is nullopt when its grad is not requested.
     auto* dx_buffer = compute_grad_input ? output[0].value().buffer() : nullptr;
     auto* dgamma_components_buffer = compute_grad_gamma ? output[1].value().buffer() : nullptr;
-    auto* dbeta_components_buffer = compute_grad_beta ? output[2].value().buffer() : nullptr;
 
     std::map<std::string, std::string> defines;
     if (mask_w != 0) {
@@ -329,9 +312,6 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     }
     if (compute_grad_gamma) {
         defines[kComputeGradGammaDefineKey] = "1";
-    }
-    if (compute_grad_beta) {
-        defines[kComputeGradBetaDefineKey] = "1";
     }
 
     LayerNormBackwardKernels kernels;
@@ -351,14 +331,14 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
     // A skipped output's buffer is nullptr, which gives placeholder args, so the writer's accessor offsets do not
     // depend on the flags.
-    for (const auto* buffer : {dx_buffer, dgamma_components_buffer, dbeta_components_buffer}) {
+    for (const auto* buffer : {dx_buffer, dgamma_components_buffer}) {
         tt::tt_metal::TensorAccessorArgs(buffer).append_to(writer_compile_time_args);
     }
     kernels.writer = create_writer_kernel(
         program,
         all_cores,
         writer_compile_time_args,
-        select_defines(defines, {kComputeGradInputDefineKey, kComputeGradGammaDefineKey, kComputeGradBetaDefineKey}),
+        select_defines(defines, {kComputeGradInputDefineKey, kComputeGradGammaDefineKey}),
         kWriterKernelPath);
 
     // -------------------------------------------------------------------------
@@ -420,7 +400,6 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
                 core,
                 {dx_buffer != nullptr ? dx_buffer->address() : 0U,
                  dgamma_components_buffer != nullptr ? dgamma_components_buffer->address() : 0U,
-                 dbeta_components_buffer != nullptr ? dbeta_components_buffer->address() : 0U,
                  start_row,
                  num_rows});
         });
@@ -457,9 +436,8 @@ void LayerNormBackwardProgramFactory::override_runtime_arguments(
     auto* dLdout_buffer = tensor_args.dL_dout.buffer();
 
     // An output is nullopt when its grad is not requested.
-    auto* dx_buffer = operation_attributes.compute_grad_input ? output[0].value().buffer() : nullptr;
-    auto* dgamma_buffer = operation_attributes.compute_grad_gamma ? output[1].value().buffer() : nullptr;
-    auto* dbeta_buffer = operation_attributes.compute_grad_beta ? output[2].value().buffer() : nullptr;
+    auto* dx_buffer = operation_attributes.outputs.grad_input ? output[0].value().buffer() : nullptr;
+    auto* dgamma_buffer = operation_attributes.outputs.grad_gamma ? output[1].value().buffer() : nullptr;
 
     // Only address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, layernorm_bw_reader_kernel_id);
@@ -484,9 +462,6 @@ void LayerNormBackwardProgramFactory::override_runtime_arguments(
             }
             if (dgamma_buffer != nullptr) {
                 runtime_args[kDgammaComponentsBufferIdx] = dgamma_buffer->address();
-            }
-            if (dbeta_buffer != nullptr) {
-                runtime_args[kDbetaComponentsBufferIdx] = dbeta_buffer->address();
             }
         }
     });
