@@ -649,6 +649,15 @@ TABLE = {
         "power-of-two scale per 32 after its RoPE (ds41_ref.py _indexer). bfp4 = the roped bf16 query rounded to "
         "bfloat4_b (ttnn.bringup.bfp_round, nearest even) before the score. bf16 = the path before",
     ),
+    "INDEX_TOPK_OP": Setting(
+        "fork",
+        ("fork", "stock"),
+        "the indexers' top-k op (DS41-151, owner 2026-10-29: a fork, the stock op untouched): fork = "
+        "ttnn.bringup.topk_large_indices, upstream's split LLK (#62035 / #62488 / #62411) plus the K' 512 port of the "
+        "split segmented body, in the fork with its own LLK copy (index top-k 512 over 27648 keys 596 -> 337 us, over "
+        "262144 2258 -> 954 us on one p150b; candidate k 2048 182 -> 138 us). stock = "
+        "ttnn.experimental.topk_large_indices (the path before)",
+    ),
     "CKV_BFP4_PREPARED": Setting(
         "on",
         ("on", "off"),

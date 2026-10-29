@@ -38,7 +38,7 @@ positions start + r W + c Sq + [0, Sq) (natural blocks, any 32-aligned start):
         ringing the keys over axis 0, key_compression_ratio 2 (fork option: causal t < (pos + 1) // 2) and
         natural_query_blocks (fork option: queries start + r W + c Sq + i at any tile-aligned start while the keys
         keep the cache's block-cyclic layout) -> [1, 1, Sq, T] bf16 ROW_MAJOR, columns >= kv_len unwritten
-    top-k ttnn.experimental.topk_large_indices(k 512, valid_length = kv_len) -> [1, 1, Sq, 512] uint32 (descending
+    top-k ttnn.bringup.topk_large_indices (INDEX_TOPK_OP; k 512, valid_length = kv_len) -> [1, 1, Sq, 512] uint32 (descending
         score, -inf -> 0xFFFFFFFF tail) -> all_gather over axis 1 -> [1, 1, W, 512], replicated over TP;
         INDEXER_TOPK_LOCAL=on (P.8, ``local``, set by the all-device model): no gather, the chip keeps its own
         [1, 1, Sq, 512] rows (the sparse attention reads exactly those)
@@ -72,6 +72,16 @@ Q_CHUNK, K_CHUNK = 64, 32  # score work unit: k 32 is the fork's fidelity-honour
 def topk_local() -> bool:
     """INDEXER_TOPK_LOCAL=on (P.8): the all-device model's indexers keep each chip's own top-k rows (no TP gather)."""
     return settings.get("INDEXER_TOPK_LOCAL") == "on"
+
+
+def topk_large_indices(x: ttnn.Tensor, **kw) -> ttnn.Tensor:
+    """INDEX_TOPK_OP (DS41-151): fork = ttnn.bringup.topk_large_indices (K' 512 split body), stock = the original."""
+    op = (
+        ttnn.bringup.topk_large_indices
+        if settings.get("INDEX_TOPK_OP") == "fork"
+        else ttnn.experimental.topk_large_indices
+    )
+    return op(x, **kw)
 
 
 def _upload(mesh, t, dtype, layout=ttnn.TILE_LAYOUT, dims=None):
@@ -360,7 +370,7 @@ class TtIndexer:
     def topk_of(self, logits: ttnn.Tensor, kv_len: int) -> ttnn.Tensor:
         """The 512 best keys per query of the chip's scores -> [1, 1, W, topk] uint32, gathered over TP (``local``:
         the chip's own [1, 1, Sq, topk])."""
-        local = ttnn.experimental.topk_large_indices(logits, k=self.topk, valid_length=kv_len)
+        local = topk_large_indices(logits, k=self.topk, valid_length=kv_len)
         if self.tp == 1 or self.local:
             return local
         out = ccl.all_gather(local, 2, TP_AXIS)  # [1, 1, W, topk]
@@ -441,7 +451,7 @@ class TtCandidateIndexer(TtIndexer):
         bm = self._bmax[t]
         if nbv >= self.ctopk:
             rm = ttnn.typecast(bm, ttnn.bfloat16, memory_config=DRAM)
-            out = ttnn.experimental.topk_large_indices(rm, k=self.ctopk, valid_length=nbv)
+            out = topk_large_indices(rm, k=self.ctopk, valid_length=nbv)
             dealloc(rm)
             return out
         sl = ttnn.slice(bm, [0, 0, 0, 0], [1, 1, self.sq, nbv], memory_config=DRAM)  # fewer blocks than k: pad -inf
@@ -450,7 +460,7 @@ class TtCandidateIndexer(TtIndexer):
             dealloc(sl)
         padded = ttnn.pad(rm, [(0, 0), (0, 0), (0, 0), (0, self.ctopk - nbv)], value=float("-inf"))
         dealloc(rm)
-        out = ttnn.experimental.topk_large_indices(padded, k=self.ctopk)
+        out = topk_large_indices(padded, k=self.ctopk)
         dealloc(padded)
         return out
 
@@ -501,7 +511,7 @@ class TtCandidateIndexer(TtIndexer):
             padded = ttnn.pad(rm, [(0, 0), (0, 0), (0, 0), (0, self.ctopk - nb)], value=float("-inf"))
             dealloc(rm)
             rm = padded
-        out = ttnn.experimental.topk_large_indices(rm, k=self.ctopk)
+        out = topk_large_indices(rm, k=self.ctopk)
         dealloc(rm)
         return out
 
