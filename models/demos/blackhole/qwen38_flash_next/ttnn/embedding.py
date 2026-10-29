@@ -1609,13 +1609,14 @@ class Qwen38TTNNTokenEmbedding:
             resident_async_result = synchronization_policy is Qwen38TTNNEmbeddingSyncPolicy.RESIDENT_ASYNC
         else:
             # Multi-token embedding uses the whole-line collective; tt_all_reduce consumes its input tensor, including
-            # any metadata view's backing allocation.
+            # any metadata view's backing allocation. It names the line's link count (axis 0's is one on (1,4)).
             hidden_shard = tt_all_reduce(
                 embedded,
                 self.mesh_device,
                 self.tt_ccl,
                 cluster_axis=0,
                 dim=3,
+                num_reduce_scatter_links=self.tt_ccl.get_num_links(TP_AXIS),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.collective_topology,
             )

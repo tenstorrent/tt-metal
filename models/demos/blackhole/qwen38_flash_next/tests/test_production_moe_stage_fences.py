@@ -61,7 +61,7 @@ def _bare_moe() -> Qwen38TTNNMoE:
     instance.synchronization_policy = Qwen38TTNNMoESyncPolicy.CORRECTNESS_FENCED
     instance.mesh_device = object()
     instance.mesh_contract = mock.Mock()
-    instance.tt_ccl = object()
+    instance.tt_ccl = SimpleNamespace(get_num_links=lambda axis: 2)
     instance.weights = object()
     instance.compute_config = object()
     instance.routing_l1_memory_config = object()

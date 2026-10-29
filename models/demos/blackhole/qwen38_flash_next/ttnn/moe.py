@@ -1897,7 +1897,8 @@ class Qwen38TTNNMoE:
             raise_deferred_phase_error()
 
             # cluster_axis=0 on (1,4) selects the whole-line minimal reduce-scatter with the model-scoped, cyclic
-            # TT_CCL semaphore pool (the Qwen3.6 TP4 line-mesh path).
+            # TT_CCL semaphore pool (the Qwen3.6 TP4 line-mesh path). Its link count would default to axis 0's (one on
+            # (1,4)), so the call names the line's.
             observe("before-output-reduce-scatter")
             raise_deferred_phase_error()
             temporaries["output"] = tt_all_reduce(
@@ -1906,6 +1907,7 @@ class Qwen38TTNNMoE:
                 self.tt_ccl,
                 cluster_axis=0,
                 dim=3,
+                num_reduce_scatter_links=self.tt_ccl.get_num_links(EP_AXIS),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.collective_topology,
             )
