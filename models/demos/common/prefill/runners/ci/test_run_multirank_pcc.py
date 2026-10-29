@@ -90,8 +90,18 @@ elif args and args[0].endswith("ttrun.py"):
     if "--rank-binding" not in args:
         rankfile = Path.cwd() / "generated/ttrun/test/rankfile"
         rankfile.parent.mkdir(parents=True, exist_ok=True)
-        hosts = ["worker%d" % i for i in range(4)]
-        rankfile.write_text("".join("rank %d=%s slot=0\n" % (i, host) for i, host in enumerate(hosts)))
+        if args[args.index("--mesh-graph-descriptor") + 1].endswith("sc4_4x4_sp1_mgd.textproto"):
+            # Discovery picks its own ring start: rotate the given hosts, two meshes on each.
+            hosts = args[args.index("--hosts") + 1].split(",")
+            hosts = hosts[1:] + hosts[:1]
+            ranks = [host for host in hosts for _ in range(2)]
+            if os.environ.get("TEST_TTRUN_INTERLEAVE"):
+                ranks = hosts + hosts
+            lines = ["rank %d=%s slot=%d\n" % (i, host, ranks[:i].count(host)) for i, host in enumerate(ranks)]
+            (rankfile.parent / "rank_bindings.yaml").write_text("rank_bindings: []\n")
+        else:
+            lines = ["rank %d=worker%d slot=0\n" % (i, i) for i in range(4)]
+        rankfile.write_text("".join(lines))
     sys.exit(shell_command())
 elif args and args[0].endswith("gen_pipeline_binding.py"):
     record("probe")
@@ -413,54 +423,51 @@ class MultirankPccHarnessTests(unittest.TestCase):
 
     SC4_HOSTS = ["c07u08", "c07u02", "c08u02", "c08u08"]
 
-    def test_kimi_k3_4x4_probes_every_host_and_binds_two_ranks_per_host(self):
+    def test_kimi_k3_4x4_binds_by_discovery_with_the_stage_settings(self):
         result, records = self.run_harness("kimi_k3", config="sc4_4x4", hosts=self.SC4_HOSTS)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        probes = [record for record in records if record["kind"] == "probe"]
-        self.assertEqual(sorted(p["env"]["OMPI_COMM_WORLD_RANK"] for p in probes), ["0", "1", "2", "3"])
-        self.assertEqual(probes[0]["env"]["TEST_MPI_HOST"], "c07u08:1,c07u02:1,c08u02:1,c08u08:1")
-        self.assertIn("--layout", probes[0]["args"])
-
+        self.assertFalse([record for record in records if record["kind"] == "probe"])
         launch = self.one_record(records, "runner_launch")["args"]
-        self.assertIn("--rank-binding", launch)
-        self.assertNotIn("--mesh-graph-descriptor", launch)
-        placement = "--host c07u08:2,c07u02:2,c08u02:2,c08u08:2 --map-by slot"
-        self.assertIn(placement, launch[launch.index("--mpi-args") + 1])
+        self.assertNotIn("--rank-binding", launch)
+        self.assertIn("--force-rediscovery", launch)
+        self.assertTrue(launch[launch.index("--mesh-graph-descriptor") + 1].endswith("ci/sc4_4x4_sp1_mgd.textproto"))
+        self.assertEqual(launch[launch.index("--hosts") + 1], ",".join(self.SC4_HOSTS))
         runner = self.one_record(records, "runner")["env"]
+        # The template's global_env, less the window, which stays the producer's.
+        self.assertEqual(runner["PREFILL_FABRIC_MODE"], "2d_torus_x")
+        self.assertEqual(runner["PREFILL_SP_AXIS"], "1")
+        self.assertEqual(runner["PREFILL_TP_SHARD_KV"], "0")
+        self.assertEqual((runner["PREFILL_SP"], runner["PREFILL_TP"]), ("4", "4"))
         self.assertEqual(runner["PREFILL_MAX_SEQ_LEN"], "1049600")
         self.assertTrue(runner["PREFILL_TTNN_CACHE"].endswith("cache"))
+        producer = self.one_record(records, "producer")["env"]
+        self.assertEqual((producer["PREFILL_SP"], producer["PREFILL_TP"]), ("4", "4"))
+        self.assertEqual(runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"], producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"])
+        self.assertIn("PCC GATE PASS", result.stdout)
 
+    def test_kimi_k3_4x4_producers_follow_the_discovered_ring(self):
+        result, records = self.run_harness("kimi_k3", config="sc4_4x4", hosts=self.SC4_HOSTS)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
         self.assertEqual(len(producer_mpi), 1)
         mpi_args = producer_mpi[0]["args"]
         self.assertEqual(mpi_args[mpi_args.index("-np") + 1], "8")
-        self.assertEqual(mpi_args[mpi_args.index("--host") + 1], "c07u08:2,c07u02:2,c08u02:2,c08u08:2")
-        producer = self.one_record(records, "producer")["env"]
-        self.assertEqual(producer["PREFILL_SP"], "4")
-        self.assertEqual(producer["PREFILL_TP"], "4")
-        self.assertEqual(runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"], producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"])
-        self.assertIn("PCC GATE PASS", result.stdout)
+        # The stub's discovery starts the ring at the hostfile's second host.
+        self.assertEqual(mpi_args[mpi_args.index("--host") + 1], "c07u02:2,c08u02:2,c08u08:2,c07u08:2")
+        self.assertIn("--map-by", mpi_args)
 
-    def test_kimi_k3_4x4_binding_follows_host_order(self):
-        result, records = self.run_harness("kimi_k3", config="sc4_4x4", hosts=self.SC4_HOSTS)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        launch = self.one_record(records, "runner_launch")["args"]
-        binding = Path(launch[launch.index("--rank-binding") + 1])
-        # The run's own copy is gone with its scratch dir; the evidence upload keeps one.
-        summaries = Path(self.one_record(records, "runner")["env"]["PREFILL_SUMMARIES"])
-        text = (summaries / "pcc/kimi_k3" / binding.name).read_text()
-        self.assertIn("Host order (rank 2k, 2k+1 on host k): c07u08, c07u02, c08u02, c08u08", text)
-        for rank in range(8):
-            host, half = divmod(rank, 2)
-            first = 100 * host + 16 * half
-            ids = ",".join(map(str, range(first, first + 16)))
-            line = '{rank: %d, mesh_id: %d, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "%s"}}'
-            self.assertIn(line % (rank, rank, ids), text)
+    def test_kimi_k3_4x4_rejects_interleaved_discovery(self):
+        result, records = self.run_harness(
+            "kimi_k3", config="sc4_4x4", hosts=self.SC4_HOSTS, extra_env={"TEST_TTRUN_INTERLEAVE": "1"}
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("interleaved hosts across ranks", result.stdout + result.stderr)
+        self.assertFalse([record for record in records if record["kind"] == "producer"])
 
     def test_kimi_k3_4x4_needs_four_hosts(self):
         result, records = self.run_harness("kimi_k3", config="sc4_4x4", hosts=self.SC4_HOSTS[:2])
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("requires exactly 4 Galaxy hosts", result.stderr)
+        self.assertIn("requires exactly 4 cabled Galaxy hosts", result.stderr)
         self.assertFalse([record for record in records if record["kind"] in ("mpi", "probe", "runner_launch")])
 
     def test_kimi_k3_4x4_missing_cache_fails_before_launch(self):
