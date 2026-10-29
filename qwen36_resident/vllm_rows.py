@@ -15,7 +15,9 @@ holds the host bookkeeping the vLLM plugin's contract (docs/DECODE_RELOAD_CONTRA
   active; preserve set when the launch has live neighbours) whose logits are the prefill's output.
 - Chunked prefill (the plugin's TT chunk core with tt_prefill_chunk_tokens and tt_prefill_exclusive_chunks): the
   PP pipeline keeps one prompt's state across calls; every call feeds whole PP chunks, the final call drains the
-  pipeline, hands off and runs the first-token launch. Decode steps of the live users run between the calls.
+  pipeline, hands off and runs the first-token launch. Decode steps of the live users run between the calls. Every
+  call of a sequence, split or whole, runs the PP chunk the sequence's whole length picks (prefill_total_lens from
+  the chunk core): a split prompt computes exactly what it would whole, whatever the other users were doing.
 - Decode: on reload_inputs the host writes every replayed launch's token state (all live rows of a launch active:
   without preserve a launch rewrites every row's conv history, so a live row that sits out needs preserve) and the
   page tables; reload_page_table rewrites only the page tables; otherwise the launches replay on the token states
@@ -167,6 +169,7 @@ class ResidentRowsAdapter:
         start_pos=None,
         empty_slots=None,
         prefill_final_mask=None,
+        prefill_total_lens=None,
         sampling_params=None,
         **kwargs,
     ):
@@ -174,6 +177,10 @@ class ResidentRowsAdapter:
         ends = [int(x) for x in prompt_lens]
         starts = [0] * n if start_pos is None else [int(x) for x in start_pos[:n]]
         finals = [True] * n if prefill_final_mask is None else [bool(x) for x in prefill_final_mask[:n]]
+        if prefill_final_mask is not None and prefill_total_lens is None:
+            raise RuntimeError("the TT chunk core passes prefill_total_lens: vllm-tt-plugin resident-mu is out of date")
+        # each row's whole sequence (without the chunk core every prompt runs whole: its end)
+        totals = ends if prefill_total_lens is None else [int(x) for x in prefill_total_lens[:n]]
         if empty_slots is None:
             raise RuntimeError("a stateful multi-user model needs the plugin's empty_slots (destination slots)")
         if sampling_params is not None:
@@ -195,12 +202,20 @@ class ResidentRowsAdapter:
         # whole prompts first, the first chunk of a split prompt last: a whole prompt restarts the PP pipeline
         for j in wholes + conts + firsts:
             ids = tokens[j, : ends[j]]
-            lg = self._prefill_row(ids, page_table[j], vslots[j], starts[j], ends[j], finals[j])
+            lg = self._prefill_row(ids, page_table[j], vslots[j], starts[j], ends[j], finals[j], totals[j])
             if lg is not None:
                 out[j, 0] = lg
         return (out, torch.zeros(n, dtype=torch.long)) if self.mrope else out
 
-    def _prefill_row(self, ids, table_row, vslot, start, end, final):
+    def _pp_chunk(self, total):
+        """the PP chunk of a sequence of `total` tokens, the same whether the scheduler splits it or not (a prompt run
+        at another chunk takes other rounding: its output would depend on the other users' timing)"""
+        c = self.engine.pick_chunk(total - 1)
+        if self.chunk % c:
+            raise RuntimeError(f"PP chunk {c} does not divide the chunk unit {self.chunk}")
+        return c
+
+    def _prefill_row(self, ids, table_row, vslot, start, end, final, total):
         C = self.chunk
         if start == 0:
             if self.pp_partial is not None:
@@ -212,32 +227,39 @@ class ResidentRowsAdapter:
             self.live.discard(r)
             if final:
                 T = end
+                if T != total:
+                    raise RuntimeError(f"a whole prompt of {T} tokens in a sequence of {total}")
                 if T > 1:
-                    self.engine.prefill_whole(ids[: T - 1], r, self._blocks_for(table_row, T))
+                    self.engine.prefill_whole(ids[: T - 1], r, self._blocks_for(table_row, T), self._pp_chunk(T))
                 else:
                     self.engine.clear_slot(r)
                 return self._first_token(r, ids, T, table_row)
             if end % C:
                 raise RuntimeError(f"first chunk ends at {end}, not a multiple of the PP chunk unit {C}")
+            c = self._pp_chunk(total)
             self.engine.prefill_begin(r)
-            self.engine.prefill_span(ids[:end], 0, end)
-            self.pp_partial = (r, end)
+            self.engine.prefill_span(ids[:end], 0, end, c)
+            self.pp_partial = (r, end, total, c)
             return None
         r = self.slots.res_of.get(vslot)
         if self.pp_partial is None or r is None or self.pp_partial[0] != r:
             raise RuntimeError(f"continuation for vLLM slot {vslot} (resident {r}) but the PP holds {self.pp_partial}")
-        fed = self.pp_partial[1]
+        _, fed, seq_total, c = self.pp_partial
         if start != fed:
             raise RuntimeError(f"continuation starts at {start}, the PP has {fed} tokens")
+        if total != seq_total:
+            raise RuntimeError(f"continuation of a sequence of {total} tokens, the PP holds one of {seq_total}")
         if not final:
             if end % C:
                 raise RuntimeError(f"chunk ends at {end}, not a multiple of the PP chunk unit {C}")
-            self.engine.prefill_span(ids[start:end], start // C, end)
-            self.pp_partial = (r, end)
+            self.engine.prefill_span(ids[start:end], start // c, end, c)
+            self.pp_partial = (r, end, total, c)
             return None
         T = end
+        if T != total:
+            raise RuntimeError(f"a final chunk ending at {T} in a sequence of {total}")
         # the PP takes all prompt tokens but the last; the tail may be empty (the final chunk is the last token)
-        self.engine.prefill_end(ids[start : T - 1], start // C, T - 1, r, self._blocks_for(table_row, T))
+        self.engine.prefill_end(ids[start : T - 1], start // c, T - 1, r, self._blocks_for(table_row, T), c)
         self.pp_partial = None
         return self._first_token(r, ids, T, table_row)
 
@@ -418,19 +440,23 @@ class RowsEngine:
     def set_page_table(self, tables):
         self.model.set_page_table([t if t else [0] for t in tables])
 
-    def prefill_whole(self, ids, r, blocks):
+    def pick_chunk(self, n_tokens):
+        """the PP chunk for a prefill of n_tokens (its fastest; the adapter keeps it for every span of the sequence)"""
+        return self.pp.pick_chunk(n_tokens)
+
+    def prefill_whole(self, ids, r, blocks, chunk):
         self.pp.reset()
-        self.pp.run(torch.as_tensor(ids))
+        self.pp.run(torch.as_tensor(ids), chunk=chunk)
         self.pp.handoff(self.model, len(ids), block_table=blocks, slot=r)
 
     def prefill_begin(self, r):
         self.pp.reset()
 
-    def prefill_span(self, ids, first_chunk, n_seen):
-        self.pp.run_span(torch.as_tensor(ids), first_chunk, n_seen, drain=False, chunk=self.chunk)
+    def prefill_span(self, ids, first_chunk, n_seen, chunk):
+        self.pp.run_span(torch.as_tensor(ids), first_chunk, n_seen, drain=False, chunk=chunk)
 
-    def prefill_end(self, ids, first_chunk, n_tokens, r, blocks):
-        self.pp.run_span(torch.as_tensor(ids), first_chunk, n_tokens, drain=True, chunk=self.chunk)
+    def prefill_end(self, ids, first_chunk, n_tokens, r, blocks, chunk):
+        self.pp.run_span(torch.as_tensor(ids), first_chunk, n_tokens, drain=True, chunk=chunk)
         self.pp.handoff(self.model, n_tokens, block_table=blocks, slot=r)
 
     def clear_slot(self, r):

@@ -9,7 +9,9 @@ would get wrong silently:
   its table and compares them with the slot's history (a wrong block table or a shared block shows up here);
 - a launch without preserve clobbers the conv history of its inactive rows; a live slot whose history was clobbered
   fails its next step (the adapter must keep live slots active, or set preserve);
-- the PP prefill holds one prompt; a resumed span must continue exactly where the last one stopped;
+- the PP prefill holds one prompt; a resumed span must continue exactly where the last one stopped; every call of
+  one prompt runs the PP chunk its length picks (pick_chunk), split or whole, so its numerics do not depend on the
+  scheduler's split;
 - the adapter sees each fake through Contract: the contract's public names only, read-only (MODEL_API, PP_API).
 Each row's next token is a function of its whole history (and, sampled, of its seed and position), so a slot mix-up
 anywhere changes the tokens the driver checks against its own reference.
@@ -138,24 +140,34 @@ class FakeModel:
 
 
 class FakePP:
-    """the PP prefill: one prompt; spans must continue where the last stopped. Counts the resumed spans with model
-    launches since the previous span (the interleave whose device safety split_prefill_gate.py checks)"""
+    """the PP prefill: one prompt; spans must continue where the last stopped, at the prompt's chunk; at the handoff
+    that chunk must be the one the prompt's length picks. Counts the resumed spans with model launches since the
+    previous span (the interleave whose device safety split_prefill_gate.py checks) and the spans per chunk"""
 
     def __init__(self, unit, model):
-        self.unit, self.ids, self.done = unit, None, False
+        self.unit, self.ids, self.done, self.chunk = unit, None, False, None
         self.model, self.spans, self.interleaved, self.mark = model, 0, 0, None
+        self.span_chunks = {}
+
+    def pick_chunk(self, n):
+        """a chunk dividing the unit, smaller for shorter prompts (as PPPrefill.pick_chunk)"""
+        return self.unit if n >= 2 * self.unit else self.unit // 2
 
     def reset(self):
-        self.ids, self.done = [], False
+        self.ids, self.done, self.chunk = [], False, None
 
-    def run(self, ids):
+    def run(self, ids, chunk=None):
         assert self.ids == [], "run() after a reset only"
-        self.ids, self.done = [int(t) for t in ids], True
+        assert chunk is not None, "the adapter names the chunk"
+        self.ids, self.done, self.chunk = [int(t) for t in ids], True, chunk
 
     def run_span(self, ids, first_chunk, n_tokens, drain=True, chunk=None):
-        assert chunk == self.unit and self.ids is not None and not self.done
+        assert self.ids is not None and not self.done and chunk and self.unit % chunk == 0
+        assert self.chunk in (None, chunk), f"a span at chunk {chunk} of a prompt run at {self.chunk}"
         assert first_chunk * chunk == len(self.ids), f"span from chunk {first_chunk}, the PP holds {len(self.ids)}"
+        self.chunk = chunk
         self.spans += 1
+        self.span_chunks[chunk] = self.span_chunks.get(chunk, 0) + 1
         self.interleaved += first_chunk > 0 and self.model.steps != self.mark
         self.mark = self.model.steps
         self.ids += [int(t) for t in ids]
@@ -165,6 +177,7 @@ class FakePP:
 
     def handoff(self, model, n_tokens, block_table=None, slot=None):
         assert self.done and len(self.ids) == n_tokens, (self.done, len(self.ids), n_tokens)
+        assert self.chunk == self.pick_chunk(n_tokens), f"{n_tokens} tokens run at chunk {self.chunk}"
         assert isinstance(model, Contract) and model._obj is self.model, "handoff into another model"
         model = self.model
         assert len(block_table) * BLOCK >= n_tokens
@@ -184,7 +197,7 @@ MODEL_API = (
     "out_tensor",
     "set_sampling",
 )
-PP_API = ("reset", "run", "run_span", "handoff")
+PP_API = ("pick_chunk", "reset", "run", "run_span", "handoff")
 
 
 class Contract:
@@ -331,6 +344,7 @@ class Sim:
             start_pos=torch.tensor([r.computed for r, _ in plan]),
             empty_slots=slots,
             prefill_final_mask=[end == len(r.tokens) for r, end in plan],
+            prefill_total_lens=[len(r.tokens) for r, _ in plan],
         )
         assert out.shape == (len(plan), 1, V)
         for i, (r, end) in enumerate(plan):
@@ -500,6 +514,7 @@ def test_churn(seed, sample, sync):
     n = _count_decodes(sim)
     stats = sim.run(700)
     assert stats["tokens"] > 1000 and stats["chunks"] > 5 and stats["finished"] > 10
+    assert set(sim.adapter.engine.pp._obj.span_chunks) == {64, 128}, "split prompts at both PP chunks"
     assert stats["preempted"] > 0 and stats["aborted"] > 0 and stats["skipped"] > 0 and n["remaps"] > 50
 
 
@@ -560,6 +575,7 @@ def test_a_continuation_beside_another_prompt_is_refused():
         start_pos=torch.tensor([0]),
         empty_slots=[0],
         prefill_final_mask=[False],
+        prefill_total_lens=[300],
     )
     with raises(RuntimeError, match="holds one prompt"):
         adapter.prefill_forward(
@@ -570,6 +586,23 @@ def test_a_continuation_beside_another_prompt_is_refused():
             start_pos=torch.tensor([128, 0]),
             empty_slots=[0, 1],
             prefill_final_mask=[False, True],
+            prefill_total_lens=[300, 5],
+        )
+
+
+def test_a_chunk_core_without_the_total_lens_is_refused():
+    """the chunk core's first chunk of a prompt does not say how long the prompt is: without prefill_total_lens the
+    adapter cannot pick the PP chunk the whole prompt would run at"""
+    adapter, _ = make_adapter(4, 128, False)
+    with raises(RuntimeError, match="prefill_total_lens"):
+        adapter.prefill_forward(
+            torch.zeros(1, 300, dtype=torch.int64),
+            torch.arange(1, 6)[None],
+            [],
+            torch.tensor([128]),
+            start_pos=torch.tensor([0]),
+            empty_slots=[0],
+            prefill_final_mask=[False],
         )
 
 
@@ -584,6 +617,7 @@ def test_an_unaligned_chunk_is_refused():
             start_pos=torch.tensor([0]),
             empty_slots=[0],
             prefill_final_mask=[False],
+            prefill_total_lens=[300],
         )
 
 
@@ -597,6 +631,7 @@ def test_device_sampling_without_the_hub_feed_is_refused():
         start_pos=torch.tensor([0]),
         empty_slots=[0],
         prefill_final_mask=[True],
+        prefill_total_lens=[3],
     )
     sp = SimpleNamespace(temperature=[0.0] * 4, top_k=[1] * 4, top_p=[1.0] * 4, seed=[0] * 4)
     with raises(RuntimeError, match="hub feed"):
@@ -623,6 +658,7 @@ def test_sync_scheduling_processes_the_raw_handle(sample):
         start_pos=torch.tensor([0]),
         empty_slots=[0],
         prefill_final_mask=[True],
+        prefill_total_lens=[3],
     )
     sp = SimpleNamespace(temperature=[0.0] * 4, top_k=[1] * 4, top_p=[1.0] * 4, seed=[0] * 4) if sample else None
     h = adapter.decode_forward(

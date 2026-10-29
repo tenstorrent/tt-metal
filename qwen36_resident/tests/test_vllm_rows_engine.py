@@ -283,6 +283,18 @@ def test_host_sampling(max_num_seqs, async_scheduling, seed):
         assert eng.pp.spans == 0, "every prompt runs whole"
 
 
+@pytest.mark.parametrize("async_scheduling", [False, True], ids=["sync", "async"])
+def test_a_split_prompt_runs_at_its_whole_prompt_chunk(async_scheduling):
+    """the PP chunk follows the sequence's length (prefill_total_lens), not the scheduler's split: prompts under two
+    units split into unit-aligned spans run at half the unit (FakePP.pick_chunk), longer ones at the unit, and every
+    handoff checks the prompt ran at the chunk its length picks, as it would have run whole"""
+    if not plugin_has_chunk_core():
+        pytest.skip("no TT chunk core: every prompt runs whole")
+    eng, done = drive(8, async_scheduling, False, 2, n_requests=16, lengths=[40, 300, 1100, 1500, 1900, 2500])
+    assert done >= 14 and eng.pp.interleaved > 0
+    assert set(eng.pp.span_chunks) == {CHUNK_UNIT // 2, CHUNK_UNIT}, eng.pp.span_chunks
+
+
 @pytest.mark.parametrize("seed", range(3))
 @pytest.mark.parametrize("async_scheduling", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("max_num_seqs", [1, 8])
