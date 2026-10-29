@@ -881,3 +881,9 @@ guards around the CUR walls ~412-438); the A/B decides.
   M.1 / ladder / K.1 are). Diagnostic now (tmux ctdiag, /scratch/dnijemcevic/ctdiag/run.sh, ~25 min): GEMM_INPUTS=bf16
   and CKV_FORMAT=bf16 one at a time, to tell a limit that misses the reference's own fp8 / fp4 rounding (framework,
   as F223) from a real accuracy loss. P.10 waits for it.
+- 12:30 DIAGNOSTIC RESULT (ctdiag): L00 SWA attention vs golden 0.0171 (GEMM_INPUTS=bf16: 0.0204) vs limit 0.0033 -> an
+  older ~10x gap to the reference's own arithmetic, not FIX.7; L02 compressed attention 0.0604 with 4-bit KV (bf16 KV
+  0.0182, both bf16 0.0237) vs 0.0499 -> FIX.8's bfp4 plus the other attention error. OWNER: FIX.11 (attention precision:
+  CPU attribution at device formats first, then raise the dominant items to the reference's precision: SDPA HiFi2 vs
+  fp32, RoPE tables, sink, bfp8 weights, DS41-137 packing) BEFORE P.10 (option A). Orchestrator --until P.10 (FIX.11
+  placed first; P.10 stops for the A/B decision).
