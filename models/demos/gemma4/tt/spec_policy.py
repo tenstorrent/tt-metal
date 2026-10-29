@@ -97,8 +97,14 @@ for a record at its rung) the clean walls as *ratios* to the warmup table
 at each step's own position, kept in a window of the last ``CALIB_WINDOW``
 samples whose median scales the table at decision time (so the position
 stays in the model: a long-context sample does not price a short-context
-step), the tokens those steps committed per row, and per shape the reseed
-as served (a ratio too). A sample is clean when no prefill ran inside the
+step), the tokens those steps committed per row (their MEAN: a throughput;
+the per-step counts are skewed, a median reads a record that commits
+1,1,1,5,6 tokens as a loss), and per shape the reseed as served (a ratio
+too). The measured tokens per row are pooled over the records of one draft
+length at a rung: the drafter's acceptance does not depend on the record's
+rows, so a sibling record reads the calibrated one's instead of the model
+(which the batch prior inflates at the deep positions) and cannot outrank
+it on the model alone. A sample is clean when no prefill ran inside the
 interval, the mode did not change at its start, nothing reseeded at its
 start and the live rows stayed; a clean sample above ``OUTLIER_FACTOR``
 times the running median (a wait that is not the mode's work, such as the
@@ -478,8 +484,8 @@ class ModeStats:
     median calibrates the mode; a sample above ``OUTLIER_FACTOR`` times the
     running median (a wait that is not this mode's work) goes to
     ``outliers`` and is reported, never averaged in. ``rows_tokens`` keeps
-    the tokens per live row of the same samples (the measured tokens a step
-    of the mode commits per row).
+    the tokens per live row of the same samples, whose mean is the measured
+    tokens a step of the mode commits per row.
     """
 
     __slots__ = ("steps", "tokens", "clean", "wall_sum", "tokens_sum", "ratios", "rows_tokens", "outliers")
@@ -516,8 +522,11 @@ class ModeStats:
         return _median(self.ratios)
 
     def tokens_per_row(self):
-        """The median tokens one step of the mode committed per live row, or None without a sample."""
-        return _median(self.rows_tokens)
+        """The mean tokens one step of the mode committed per live row over the window (a throughput: the
+        per-step counts are skewed, so never their median), or None without a sample."""
+        if not self.rows_tokens:
+            return None
+        return sum(self.rows_tokens) / len(self.rows_tokens)
 
     def describe(self, name):
         if self.clean:
@@ -638,10 +647,24 @@ class Calibration:
         return float(prior)
 
     def tokens_per_row(self, mode):
-        """The measured tokens per row and step of ``mode`` once calibrated, else None (the model decides)."""
-        stats = self.modes.get(tuple(mode))
-        if stats is not None and len(stats.ratios) >= self.min_samples:
-            return stats.tokens_per_row()
+        """The measured tokens per row and step of ``mode`` once ``min_samples`` clean samples exist, else None
+        (the model decides). A record's samples are pooled over the records of its draft length at its rung
+        (``("step", (rows, k), width)`` for every ``rows``): the drafter's acceptance does not depend on the
+        record's rows, so a record the serving never replayed reads its calibrated sibling's."""
+        mode = tuple(mode)
+        if mode[0] == "step":
+            kind, shape, width = mode
+            samples = [
+                t
+                for key, stats in self.modes.items()
+                if len(key) == 3 and key[0] == kind and key[2] == width and int(key[1][1]) == int(shape[1])
+                for t in stats.rows_tokens
+            ]
+        else:
+            stats = self.modes.get(mode)
+            samples = list(stats.rows_tokens) if stats is not None else []
+        if len(samples) >= self.min_samples:
+            return sum(samples) / len(samples)
         return None
 
     def reseed_ms(self, shape, prior):

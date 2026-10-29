@@ -6452,7 +6452,8 @@ SPEC_DRAFT_LEN_ENV = "GEMMA4_SPEC_DRAFT_LEN"
 #   GEMMA4_SPEC_CALIB_MIN=8       clean serving samples of a mode (the plain step at a bucket, a record at a rung)
 #                                 after which the median ratio of its measured walls to the table scales the
 #                                 table at the step's position in the decision (outliers above 3x are reported,
-#                                 never used); the measured tokens per row and the reseed as served follow
+#                                 never used); the measured tokens per row (the window mean, pooled over the
+#                                 records of one draft length at the rung) and the reseed as served follow
 #   GEMMA4_SPEC_CALIB_PROBE_STEPS=256  steps a speculating batch serves without a plain sample before one plain
 #                                 step refreshes the plain estimate (overhead-gated like the retry; 0 = off)
 #   GEMMA4_SPEC_STATS_STEPS=256   proposals per "adaptive stats:" line (steps, tokens, clean walls per mode,
@@ -7435,8 +7436,11 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         length (clamped to the runner's ``k``) caps the choice: every
         captured record covering the rows with a draft length up to that
         cap is a candidate, costed at the rows' top position (the warmup
-        line of its rung until serving calibrated it), with the reseed of
-        its shape as the entry cost when a row reseeds this step. When rows
+        line of its rung until serving calibrated it) and credited the
+        measured tokens per row of its draft length at the rung once
+        serving measured any record of that length there (else the
+        acceptance model), with the reseed of its shape as the entry cost
+        when a row reseeds this step. When rows
         continue from the last replay while others would reseed, the record
         over the continuing rows alone is a candidate too: the rows left out
         take one token per step from the plain decode the verify runs beside

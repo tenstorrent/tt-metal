@@ -2133,6 +2133,23 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     assert calib.step_ms(mode, 136.0) == pytest.approx(136.0 * 2.25), "the position stays in the table"
     assert calib.tokens_per_row(mode) == 3.0 and calib.modes[mode].tokens == 9
     assert calib.dirty == {"prefill": [1, 90.0]} and calib.total == [3, 270.0, 9]
+    # the measured tokens per row are the window's MEAN (a throughput: a row taking 1,1,1,5,6 tokens on five
+    # verifies commits 2.8 per step, where the median 1 read the record as a loss and the policy left a 1.18x
+    # record at 256K), pooled over the records of one draft length at the rung: the drafter's acceptance does
+    # not depend on the record's rows, so an unreplayed sibling reads the calibrated one's instead of the
+    # model (whose deep positions sit at the prior) and cannot outrank it on the model alone
+    skew = Calibration(5)
+    for tokens in (1, 1, 1, 5, 6):
+        skew.note_step(("step", (1, 5), 263168), 150.0, tokens, True, 150.0, 1)
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(2.8)
+    assert skew.tokens_per_row(("step", (5, 5), 263168)) == pytest.approx(2.8), "same draft length, same rung"
+    assert skew.tokens_per_row(("step", (8, 3), 263168)) is None, "another draft length is its own"
+    assert skew.tokens_per_row(("step", (1, 5), 2048)) is None, "another rung is its own"
+    assert not skew.calibrated(("step", (5, 5), 263168)), "its step cost still reads the table"
+    skew.note_step(("step", (5, 5), 263168), 200.0, 10, True, 200.0, 5)  # 2 per row joins the pool
+    assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(16.0 / 6)
+    skew.note_step(("plain", 1), 80.0, 1, True, 80.0, 1)
+    assert skew.tokens_per_row(("plain", 1)) is None, "the plain step pools nothing and needs its own samples"
     # an outlier: above 3x the running median once four samples exist; reported, never averaged in
     for wall in (84.0, 88.0):
         calib.note_step(mode, wall, 3, True, 40.0, 1)
