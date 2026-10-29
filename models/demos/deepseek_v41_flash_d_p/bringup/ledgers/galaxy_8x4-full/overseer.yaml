@@ -196,6 +196,15 @@ notes:
   t: '2026-10-29T02:24:27'
   text: 'The overseer stopped attempt 1 (overseer): Placed before P.6, which is accepted but not yet committed (the overseer''s
     ordering mistake / framework F213). Restarts after P.6''s gate commit; nothing to do differently.'
+- id: OV-20
+  tasks:
+  - FIX.11
+  status: open
+  t: '2026-10-29T12:27:57'
+  text: The 2x2 session is changing the sparse_sdpa fork's read path (ROW_BFP4 one-read records, bfloat8_b window blocks
+    / ROW_BFP8) on branch dnijemcevic/model_bringup_lowbit and rebases onto this branch after you land. If attention precision
+    needs a sparse_sdpa change, prefer the fork's existing precision options (math fidelity, fp32 dest / accumulation) set
+    from the model, or add one small option; do not restructure the reader / compute kernels. Same for ckv_bfp4.
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -447,6 +456,41 @@ fixes:
   paths:
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
   placed: '2026-10-28T19:29:59'
+- id: FIX.11
+  title: 'Attention precision vs the reference: layer 0 attention 10x its noise floor; layer 2 over with 4-bit KV'
+  gate:
+  - W.1
+  - M.1
+  - L.s10240
+  - L.last
+  - L.s56320
+  - L.smoke
+  - K.1
+  status: placed
+  t: '2026-10-29T12:18:46'
+  text: 'OWNER DECISION 2026-10-29 (FIX.11 before P.10). Evidence (overseer diagnostic, /scratch/dnijemcevic/ctdiag/*.log;
+    supervision.md 12:15-12:20): the seed''s component tests run on the 8x4 (BRINGUP_SPEC = the galaxy_8x4-full spec): test_c_swa_attention
+    L00 vs golden rel 0.0171 (GEMM_INPUTS=bf16: 0.0204) vs limit 0.0033 = 2 x the reference''s own noise floor 0.0017 ->
+    ~10x the reference''s arithmetic, independent of FIX.7; test_c_enc_source_attention L02 0.0604 with CKV_FORMAT=bfp4_rows
+    vs limit 0.0499 (bf16 KV: 0.0182 pass; both bf16: 0.0237 pass) -> the 4-bit KV plus the device''s other attention error
+    cross the line. These component tests are in no Galaxy gate; run them yourself (scripts/run_safe_pytest.sh --run-all
+    --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py and test_c_enc_source_attention.py
+    with BRINGUP_SPEC set) before and after. STEP 1 (CPU first, agents'' rule 14): attribute L00''s 0.017 to its causes
+    by running the attention step''s CPU reference at the device''s formats one item at a time: sparse_sdpa QK / PV at HiFi2
+    (operand truncation, DS41-68) vs the reference''s fp32 scores; RoPE cos / sin tables in bf16 (rope.py) vs fp32; the
+    attention sink uploaded bf16 (attention.py:444) vs fp32; dense weights re-rounded to bfp8 (DENSE_WEIGHTS) vs exact fp8;
+    bfp8 activations packed without bfp8_pack_precise (double rounding, DS41-137); anything else you find narrower than
+    the reference (precision table https://claude.ai/artifact/QP9f8tn3xDrojyyk8fMLUs). Report the table. STEP 2: raise the
+    dominant items to the reference''s precision - never above it (owner rule: realistic precision = whatever the reference
+    uses; HiFi4 / fp32 where the reference computes in fp32 is matching, not exceeding) - each behind a setting in tt/settings.py
+    (default on once the gates pass, ''off'' = today), forks before stock ops (ttnn/ttnn/bringup/INDEX.md: the sparse_sdpa
+    fork already has precision options). Do not touch the attention layout (P.9 / P.10''s work: keep ATTN_SP32_PROJ as is)
+    or tt/engram*.py. Report: per item the error contribution and the device / host cost; both component tests and the end-to-end
+    metrics before / after; device time and warm wall per chunk (DS41_ENGRAM_TABLE=resident).'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p
+  - ttnn/ttnn/bringup
+  placed: '2026-10-29T12:18:47'
 classified:
   L.smoke:
     kind: framework
