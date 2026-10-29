@@ -126,9 +126,9 @@ class TTPerceptionTransformer:
         ``(bs * num_cams, num_keys, C)`` with the camera and level embeddings added."""
         levels = []
         for (h, w), feat, embeds in zip(self.spatial_shapes, mlvl_feats, self.params.level_cams_embeds):
-            # Every level is bfloat16; the extra conv's level comes out of its L1 conv sharded. The
-            # per-camera split is a reshape of an interleaved tensor, free in ROW_MAJOR.
-            feat = ttnn.to_memory_config(feat, ttnn.DRAM_MEMORY_CONFIG)
+            # TTFPN emits every level bfloat16 and interleaved in DRAM, where the per-camera split
+            # is a reshape, free in ROW_MAJOR.
+            assert feat.dtype == ttnn.bfloat16 and not feat.is_sharded(), f"{feat.dtype} {feat.memory_config()}"
             feat = ttnn.reshape(
                 ttnn.to_layout(feat, ttnn.ROW_MAJOR_LAYOUT), (bs, self.num_cams, h * w, self.embed_dims)
             )
