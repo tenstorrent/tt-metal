@@ -286,7 +286,9 @@ class ResidentRowsAdapter:
         device, rows, row_slot, n = out
         read = self.engine.read_tokens(row_slot, async_read) if device else self.engine.read_logits(row_slot)
         host = (device, rows, n, read)
-        return (host, self.engine.read_events(read)) if async_read else host
+        # host-sampled logits are read synchronously (as the single-user adapter does); device-sampled tokens are
+        # enqueued reads of the launches' out words, complete at the events
+        return (host, self.engine.read_events(read) if device else []) if async_read else host
 
     def process_decode_output_host(self, out, is_tokens=True, **kwargs):
         if isinstance(out, torch.Tensor):
@@ -327,33 +329,32 @@ class ResidentRowsAdapter:
 
 class RowsEngine:
     """The device calls of ResidentRowsAdapter on a rows-mode ResidentModel and the PP prefill (the contract of
-    .omc/research/resident-multiuser-api.md). `model` / `pp` may be fakes with the same methods (tests)."""
+    .omc/research/resident-multiuser-api.md, as built on qwen38-res-mu-wp7). `model` / `pp` may be fakes with the same
+    methods (tests); `mesh` None reads the out words through model.out_rows(k) instead of ttnn."""
 
-    def __init__(self, model, pp, emb, vocab, vocab_chip, hidden, n_slots, chunk_unit, sync=None):
+    def __init__(self, model, pp, emb, vocab, vocab_chip, n_slots, chunk_unit, mesh=None):
         self.model, self.pp, self.emb = model, pp, emb
-        self.vocab, self.vocab_chip, self.hidden, self.n_slots = vocab, vocab_chip, hidden, n_slots
+        self.vocab, self.vocab_chip, self.n_slots = vocab, vocab_chip, n_slots
         self.chunk = chunk_unit
-        self.sync = sync or (lambda: None)
+        self.mesh = mesh
         # the rows-mode hub draws and feeds each row's next token (WP7: a model built with embed)
         self.device_sampling = bool(getattr(model, "sample", False))
 
-    def _launch_state(self, k, rows, preserve):
-        """the host token state of launch k: rows {u: (token, position)} active, the others inactive"""
-        if hasattr(self.model, "token_state_rows"):  # the contract's per-launch builder (resident-multiuser-api §4)
-            return self.model.token_state_rows(k, rows, preserve=preserve)
-        x0 = torch.zeros(ROWS, self.hidden)
-        pos, active = [0] * ROWS, [False] * ROWS
-        for u, (tok, p) in rows.items():
-            x0[u], pos[u], active[u] = self.emb[int(tok)].float(), int(p), True
-        # WP6 as built: token_state() builds every launch with one preserve flag; its per-launch builder takes one
-        return self.model._token_state(x0, pos, None, active=active, preserve=preserve)
+    def sync(self):
+        if self.mesh is not None:
+            import ttnn
+
+            ttnn.synchronize_device(self.mesh)
 
     def _token_states(self, feed, launches, preserve_launches=()):
-        """one host token state per launch, None for a launch left as it is"""
+        """one host token state per launch (model.token_state_rows: {row: (x0, position)} active, the rest inactive),
+        None for a launch left as it is"""
         by_launch = {k: {} for k in launches}
-        for r, tp in feed.items():
-            by_launch[r // ROWS][r % ROWS] = tp
-        states = {k: self._launch_state(k, rows, k in preserve_launches) for k, rows in by_launch.items()}
+        for r, (tok, p) in feed.items():
+            by_launch[r // ROWS][r % ROWS] = (self.emb[int(tok)].float(), int(p))
+        states = {
+            k: self.model.token_state_rows(rows, preserve=k in preserve_launches) for k, rows in by_launch.items()
+        }
         return [states.get(k) for k in range(self.n_slots // ROWS)]
 
     def set_page_table(self, tables):
@@ -390,9 +391,12 @@ class RowsEngine:
             self.model.step(self._token_states(feed, launches, preserve_launches), launches=launches)
 
     def _logits(self, slots):
-        lg = self.model.logits()  # [users, n, vocab_chip]
+        """[len(slots), vocab] logits of the given slots, read from their launches only"""
+        ks = sorted({r // ROWS for r in slots})
+        lg = self.model.logits(launches=ks)  # [8 * len(ks), n, vocab_chip] in the order of ks
         lg = lg[:, :, : self.vocab_chip].reshape(lg.shape[0], -1)[:, : self.vocab].float()
-        return lg[torch.as_tensor(slots, dtype=torch.long)].clone()
+        idx = [ks.index(r // ROWS) * ROWS + r % ROWS for r in slots]
+        return lg[torch.as_tensor(idx, dtype=torch.long)].clone()
 
     def read_logits(self, slots):
         self.sync()
@@ -406,12 +410,38 @@ class RowsEngine:
         self.model.set_sampling(rows=[per_slot.get(r, default) for r in range(self.n_slots)])
 
     def read_tokens(self, slots, async_read):
-        self.sync()
-        fed = self.model.fed_token()  # per slot (token, position, active)
-        return [int(fed[r][0]) for r in slots]
+        """enqueue the reads of the out words (token, position, active, 0 per row) of the slots' launches: (slots,
+        {launch: host read}, events)"""
+        ks = sorted({r // ROWS for r in slots})
+        if self.mesh is None:
+            return slots, {k: self.model.out_rows(k) for k in ks}, []
+        import ttnn
+
+        reads, events = {}, []
+        chip0 = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 0))
+        for k in ks:
+            view = ttnn.get_device_tensors(self.model.out_tensor(k))[0]
+            reads[k] = ttnn.from_device(view, blocking=not async_read)
+            if async_read:
+                events.append(ttnn.record_event(self.mesh, 0, device_range=chip0))
+        return slots, reads, events
 
     def read_events(self, read):
-        return []
+        return read[2]
 
     def tokens_from(self, read):
-        return read
+        slots, reads, _ = read
+        rows = {}
+        for k, host in reads.items():
+            if not isinstance(host, torch.Tensor):
+                import ttnn
+
+                host = ttnn.to_torch(host)
+            rows[k] = host.reshape(-1)[: ROWS * 4].reshape(ROWS, 4).to(torch.int64)
+        out = []
+        for r in slots:
+            w = rows[r // ROWS][r % ROWS]
+            if int(w[2]) != 1:
+                raise RuntimeError(f"slot {r}: its launch's out word is not active ({w.tolist()})")
+            out.append(int(w[0]))
+        return out

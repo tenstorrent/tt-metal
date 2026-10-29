@@ -62,14 +62,16 @@ class FakeModel:
         self.tables = [[0] for _ in range(n_slots)]
         self.tok = [None] * (n_slots // ROWS)
         self.lg = torch.zeros(n_slots, 1, V)
-        self.fed = [(0, 0, False)] * n_slots
+        self.out = torch.zeros(n_slots, 4, dtype=torch.int64)  # per slot its launch row's out word
         self.params = [(0.0, 1, 1.0, 0)] * n_slots
         self.steps = 0
 
-    def _token_state(self, x0, pos, ring, active=None, preserve=False):
-        """one launch's token state (ResidentModel._token_state in rows mode)"""
-        assert x0.shape == (ROWS, V) and len(pos) == ROWS == len(active) and ring is None
-        assert any(active), "a launch needs at least one active user"
+    def token_state_rows(self, rows, preserve=False):
+        """one launch's token state: rows {u: (x0, position)} active, the others inactive (x0 0, position 0)"""
+        assert rows, "a launch needs at least one active user"
+        x0, pos, active = torch.zeros(ROWS, V), [0] * ROWS, [False] * ROWS
+        for u, (x, p) in rows.items():
+            x0[u], pos[u], active[u] = x, int(p), True
         return FakeTok(x0, pos, active, preserve)
 
     def set_page_table(self, tables):
@@ -98,6 +100,7 @@ class FakeModel:
                 if not t.active[u]:
                     if not t.preserve:
                         self.conv_ok[r] = False  # a non-preserve launch rewrites every row's conv history
+                    self.out[r] = torch.tensor([0, t.pos[u], 0, 0])
                     continue
                 tok, p = int(t.x0[u].argmax()), t.pos[u]
                 assert float(t.x0[u].sum()) == 1.0, f"slot {r}: x0 is not one embedding row"
@@ -115,16 +118,18 @@ class FakeModel:
                 self.lg[r] = 0
                 self.lg[r, 0, ref_next(seq)] = 1.0  # logits: the greedy token
                 if self.sample:
-                    self.fed[r] = (nxt, p + 1, True)
+                    self.out[r] = torch.tensor([nxt, p + 1, 1, 0])
                     t.x0[u] = torch.nn.functional.one_hot(torch.tensor(nxt), V).float()  # the hub's feed
                     t.pos[u] = p + 1
         self.steps += 1
 
-    def logits(self):
-        return self.lg.clone()
+    def logits(self, launches):
+        """[8 * len(launches), 1, vocab] in the order given"""
+        return torch.cat([self.lg[k * ROWS : (k + 1) * ROWS] for k in launches]).clone()
 
-    def fed_token(self):
-        return list(self.fed)
+    def out_rows(self, k):
+        """launch k's out tensor (8 rows x 4 words), as the engine's host read of it"""
+        return self.out[k * ROWS : (k + 1) * ROWS].clone()
 
     def set_sampling(self, rows):
         assert len(rows) == self.S
@@ -166,7 +171,7 @@ class FakePP:
 def make_adapter(max_seqs, unit, sample):
     n_slots = -(-max_seqs // ROWS) * ROWS
     model, pp = FakeModel(n_slots, sample), FakePP(unit)
-    engine = RowsEngine(model, pp, torch.eye(V), V, V, V, n_slots, unit)
+    engine = RowsEngine(model, pp, torch.eye(V), V, V, n_slots, unit)
     return ResidentRowsAdapter(engine, V, 4096, max_seqs, unit), model
 
 

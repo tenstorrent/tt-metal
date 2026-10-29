@@ -28,7 +28,6 @@ from vllm.transformers_utils.config import uses_mrope
 
 import ttnn
 from qwen36_resident import weights as Q
-from qwen36_resident.common import HIDDEN
 from qwen36_resident.model import TOP_K, Dims, ResidentModel, State
 from qwen36_resident.mtp import SpecDecoder
 from qwen36_resident.prefill.pp_prefill import PPPrefill
@@ -214,7 +213,8 @@ class Qwen36ResidentRowsForCausalLM(ResidentRowsAdapter):
         ]
         logger.info(f"Resident rows model: {self.n_slots} slots, KV pool {nb} blocks")
         w = Q.load(self.ck, self.d, self.layers, self.interval)
-        # every slot starts on block 0 (vLLM's null block): the page tables come with each request
+        # every slot starts on block 0 (vLLM's null block): the page tables come with each request. embed: the hub
+        # draws each row's next token and feeds it (device sampling; the prefill's embedding table)
         model = ResidentModel(
             self.mesh,
             self.d,
@@ -223,6 +223,7 @@ class Qwen36ResidentRowsForCausalLM(ResidentRowsAdapter):
             self.layers,
             self.interval,
             lm_head=True,
+            embed=self.pp.embed,
             kv_pool_blocks=nb,
             block_tables=[[0]] * self.n_slots,
             rows=True,
@@ -230,17 +231,11 @@ class Qwen36ResidentRowsForCausalLM(ResidentRowsAdapter):
         del w
         model.capture_trace()
         self.pp.capture()
-        self.pp.handoff(model, 1, block_table=[0], slot=0)  # compiles the handoff kernels
+        self.pp.handoff(model, 1, block_table=[0], slot=0)  # compiles the handoff and hist_scatter programs
+        if model.sample:
+            model.reset(state=False)  # zero the feeding hubs' counters while idle
         self.engine = RowsEngine(
-            model,
-            self.pp,
-            self.emb,
-            self.vocab,
-            self.d.vocab_chip,
-            HIDDEN,
-            self.n_slots,
-            self.chunk,
-            sync=lambda: ttnn.synchronize_device(self.mesh),
+            model, self.pp, self.emb, self.vocab, self.d.vocab_chip, self.n_slots, self.chunk, mesh=self.mesh
         )
         return []
 
