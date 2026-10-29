@@ -129,12 +129,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src, // unpB_src : in0 (SrcB)
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            in1_face_r_dim,      // unpA_face_r_dim : in1 = FACE_R_DIM (16)
-            in0_face_r_dim,      // unpB_face_r_dim : in0 = M
-            num_faces_A,         // unpA_num_faces  : in1 = 4
-            num_faces_B,         // unpB_num_faces  : in0 = 2
-            TILE_SIZE_UNPACK_A,  // unpA_tile_size  : in1 [32,32]
-            TILE_SIZE_UNPACK_B); // unpB_tile_size  : in0 [M,32]
+            ckernel::make_tensor_shape_from_legacy(in1_face_r_dim, num_faces_A), // unpA: in1, 16-row faces x4
+            ckernel::make_tensor_shape_from_legacy(in0_face_r_dim, num_faces_B), // unpB: in0, M-row faces x2
+            TILE_SIZE_UNPACK_A,                                                  // unpA_tile_size: in1 [32,32]
+            TILE_SIZE_UNPACK_B);                                                 // unpB_tile_size: in0 [M,32]
 
         // init: unpB_face_r_dim = in0 row count (M), unpA_dst_format selects the profiling
         // heuristic (post1) in the MOP config.

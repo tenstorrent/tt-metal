@@ -57,10 +57,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            tensor_shape.face_r_dim,
-            tensor_shape.face_r_dim,
-            num_faces,
-            num_faces,
+            ckernel::make_tensor_shape_from_legacy(tensor_shape.face_r_dim, num_faces),
+            ckernel::make_tensor_shape_from_legacy(tensor_shape.face_r_dim, num_faces),
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
         _llk_unpack_tilizeA_B_init_wrapper_<NEGINF_SRCA, RELOAD_B, ZERO_SRCA, ZERO_SRCA_REDUCE>(
