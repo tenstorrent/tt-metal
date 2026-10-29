@@ -47,11 +47,6 @@ void hardshrink_init();
 void hardtanh_init();
 void heaviside_init();
 void i0_init();
-void isfinite_init();
-void isinf_init();
-void isnan_init();
-void isneginf_init();
-void isposinf_init();
 void left_shift_init();
 void less_than_equal_zero_init();
 void less_than_zero_init();
@@ -92,6 +87,25 @@ inline void frac_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 inline void round_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 inline void trunc_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+
+// Defined with the kernel in tt-llk's sfpu/ckernel_sfpu_isinf_isnan.h: programs the ADDR_MOD_6 the kernel's
+// predicated store advances Dest through (nothing in a kernel built with MM_THROTTLE).
+void _init_sfpu_isinf_isnan_();
+
+inline void isinf_isnan_init() {
+    _init_sfpu_isinf_isnan_();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+inline void isfinite_init() { isinf_isnan_init(); }
+
+inline void isinf_init() { isinf_isnan_init(); }
+
+inline void isnan_init() { isinf_isnan_init(); }
+
+inline void isneginf_init() { isinf_isnan_init(); }
+
+inline void isposinf_init() { isinf_isnan_init(); }
 
 inline void negative_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
