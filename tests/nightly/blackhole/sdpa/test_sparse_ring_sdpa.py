@@ -433,6 +433,97 @@ def test_forced_passes(runtime, geom, passes):
     assert p_one > 0.9999, f"{passes} passes vs one pass: pcc {p_one:.6f}"
 
 
+def _cb_bytes(geo, S, slots, kv_pages):
+    """The sparse op's slot-dependent CB bytes (lay_out_cbs in sparse_ring_sdpa_program_factory.cpp): bf16 tiles,
+    D 128, the pooled route on. Keep in step with the factory."""
+    sq, sk, dt = BLOCK // 32, geo.k_chunk // 32, D // 32
+    tiles = (
+        sq * dt * slots  # q
+        + 2 * sk * dt * kv_pages  # k, v
+        + 2  # identity scale, column identity
+        + max(sq * sk, min(slots, 4) * sq * sk)  # qk_im
+        + 4 * sq * slots  # max, exp max diff, stats, sum
+        + sq * dt  # out
+        + sq * dt * slots  # prev out
+        + 1  # recip scratch
+        + sk  # pooled bias
+    )
+    return tiles * 2048 + 64 + S * geo.nb_pad() * 4  # + the plan page
+
+
+def _pass_split(geo, S, most, usable):
+    """(kv pages, passes) the factory picks with `usable` bytes of L1 below the lowest live buffer, group delivery
+    on: 3 pages unless 2 need fewer passes."""
+
+    def passes(pages):
+        slots = next((s for s in range(min(32, most), 0, -1) if _cb_bytes(geo, S, s, pages) <= usable), 0)
+        return -(-most // slots) if slots else math.inf
+
+    p3, p2 = passes(3), passes(2)
+    return (2, p2) if p2 < p3 else (3, p3)
+
+
+def test_two_kv_pages_with_group_mcast(runtime):
+    """Group delivery over a 2-page K/V CB in several passes: the factory picks 2 pages when they need fewer passes
+    than 3, which happens with the pipeline's L1 (CCL buffers pinned) but not with this runtime's free L1. An L1
+    filler buffer lowers the live L1 top into a window where 3 pages need more passes than 2 (from the factory's CB
+    formula, mirrored in _cb_bytes). Assumes interleaved L1 buffers are allocated top-down in the allocator the
+    factory queries (lowest_occupied_compute_l1_address), so the filler is the lowest live buffer; the factory's
+    log line ("... K/V pages ...") shows the choice."""
+    geo = Geometry(2048, 2048 * MESH_CONFIG.sp_size, 256)
+    case = Case(runtime, geo)
+    most, fewest = case.blocks_per_core()
+    # Every window [lo, hi) of usable L1 over which the choice is constant; keep those where 2 pages win and still
+    # take several passes, the largest first (the smallest filler).
+    edges = sorted({_cb_bytes(geo, case.S, s, p) for s in range(1, most + 1) for p in (2, 3)})
+    target = None
+    for lo, hi in reversed(list(zip(edges, edges[1:]))):
+        pages, n_passes = _pass_split(geo, case.S, most, lo)
+        if pages == 2 and 2 <= n_passes <= fewest:
+            target = (lo + hi) // 2 // 32 * 32
+            break
+    if target is None:
+        pytest.skip(f"{most} / {fewest} blocks per core: no L1 size makes 2 pages win with several passes")
+
+    dev = runtime.mesh_device
+    base = ttnn._ttnn.device.GetAllocatorBaseAddress(dev, ttnn.BufferType.L1)
+
+    def l1_buffer(n_bytes):
+        return ttnn.from_torch(
+            torch.zeros(1, 1, 1, n_bytes // 2),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
+        )
+
+    mask = make_mask(geo, case.S, case.H, density=0.2, seed=12)
+    q, k, v = case.inputs(12)
+    unfilled = case.run(q, k, v, mask, want_dense=False, want_ref=False)
+    probe = l1_buffer(32)
+    filler_bytes = (probe.buffer_address() - base - target) // 32 * 32
+    if filler_bytes <= 0:
+        probe.deallocate()
+        pytest.skip(f"only {probe.buffer_address() - base} B of L1 free, the 2-page window needs {target}")
+    filler = l1_buffer(filler_bytes)
+    try:
+        usable = filler.buffer_address() - base
+        pages, n_passes = _pass_split(geo, case.S, most, usable)
+        assert pages == 2 and n_passes >= 2, f"filler left {usable} B (expected {target}): {pages} pages"
+        logger.info(f"[2 pages] {usable} B of L1 usable: {n_passes} passes over 2 K/V pages ({most} blocks per core)")
+        # The live L1 top is not in the program hash: rebuild instead of reusing the unfilled run's program.
+        dev.clear_program_cache()
+        r = case.run(q, k, v, mask, want_dense=False)
+    finally:
+        filler.deallocate()
+        probe.deallocate()
+        dev.clear_program_cache()
+    p_unfilled = _pcc(unfilled["sparse"], r["sparse"])
+    _check("2 kv pages", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+    assert p_unfilled > 0.9999, f"2 pages vs the unfilled run: pcc {p_unfilled:.6f}"
+
+
 @SLOW
 @pytest.mark.parametrize("density", [KEEP_ALL, 0.15])
 def test_production_10s(runtime, density):
