@@ -52,6 +52,7 @@ def _consts(gdn):
 
 _HEADS_PER_PROGRAM = 32  # heads one chunk-op program runs at once (B * Nv above this runs in sequential waves)
 _RESET_GATE = 128.0  # added (negated) to g at a row start: exp() underflows to exactly 0 in fp32, so the reset is exact
+_CONV_CHANNEL_CHUNK = 32  # one conv work item per 32 channels x 32 tokens; smallest is fastest, bit-exact
 
 
 def _fold_rows(B, nv):
@@ -80,8 +81,6 @@ def _reset_mask(gdn, S, nv):
 def stateless_prefill_forward(gdn, x):
     """x [B, S, dim] bf16 TILE DRAM, S a multiple of 32 -> [B, S, dim]. Weights and compute config as the
     mega-fused branch of gated_deltanet_forward_ttnn."""
-    from models.demos.blackhole.qwen36.tt.gdn.tp import kda_channel_chunk_size
-
     w = gdn.weights
     B, S = x.shape[0], x.shape[1]
     Nk, Dk, Nv, Dv = gdn.num_heads, gdn.head_k_dim, gdn.num_v_heads, gdn.head_v_dim
@@ -107,7 +106,7 @@ def stateless_prefill_forward(gdn, x):
     # Conv + SiLU + q/k/v split from a zero history, reading qkv (columns [0, C) of mega) in place. The op takes one
     # [1, T, W] row: the B rows fold into time, and segment_length=S restarts the history at every row start.
     start, hist = _consts(gdn)
-    cfg = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=kda_channel_chunk_size(C))
+    cfg = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=_CONV_CHANNEL_CHUNK)
     q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
         ttnn.reshape(mega, (1, B * S, mega.shape[-1])),
         hist,
