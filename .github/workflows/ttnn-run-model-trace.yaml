@@ -7,7 +7,8 @@ on:
         description: >-
           JSON array of models to trace (GitHub collapses multiline input, so use inline JSON).
           Example: [{"test_path":"models/tt_transformers/demo/simple_text_demo.py::test_demo_text","HF_MODEL":"meta-llama/Llama-3.2-1B-Instruct"},{"test_path":"models/demos/audio/whisper/demo/demo.py"}]
-          Keys: test_path (required), HF_MODEL (optional), extra_args (optional).
+          Keys: test_path (required), HF_MODEL (optional), extra_args (optional),
+          env (optional mapping of extra environment variables, e.g. {"MESH_DEVICE":"P150"}).
           All models share runner-label and are homogenized into one trace_run_id.
         required: true
         type: string
@@ -105,8 +106,25 @@ jobs:
               sys.exit(1)
 
           if not isinstance(entries, list) or not entries:
-              print("::error::models must be a non-empty YAML/JSON list of {test_path, HF_MODEL?, extra_args?} entries")
+              print("::error::models must be a non-empty YAML/JSON list of {test_path, HF_MODEL?, extra_args?, env?} entries")
               sys.exit(1)
+
+          # The job itself depends on these, so a model entry may not override them.
+          RESERVED_ENV = {"PATH", "HOME", "PYTHONPATH", "TT_METAL_HOME", "HF_HOME", "HF_MODEL", "TEST_PATH", "EXTRA_ARGS"}
+          RESERVED_ENV_PREFIXES = ("LD_", "PYTHON", "GITHUB_", "RUNNER_", "TTNN_OPERATION_TRACE")
+
+          def env_errors(idx, env):
+              if not isinstance(env, dict):
+                  return [f"entry #{idx}: 'env' must be a mapping, got {type(env).__name__}"]
+              errs = []
+              for name, value in env.items():
+                  if not isinstance(name, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+                      errs.append(f"entry #{idx}: env name {name!r} must match [A-Z][A-Z0-9_]*")
+                  elif name in RESERVED_ENV or name.startswith(RESERVED_ENV_PREFIXES):
+                      errs.append(f"entry #{idx}: env name {name} is reserved")
+                  if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+                      errs.append(f"entry #{idx}: env value for {name!r} must be a string or number")
+              return errs
 
           def make_slug(test_path):
               # Basename without extension, replace '::' with '_', keep only safe chars.
@@ -132,6 +150,12 @@ jobs:
                   errors.append(f"entry #{idx}: test_path file not found: {test_file}")
                   continue
 
+              env = entry.get("env") or {}
+              bad_env = env_errors(idx, env)
+              if bad_env:
+                  errors.extend(bad_env)
+                  continue
+
               base_slug = make_slug(test_path)
               n = slug_counts.get(base_slug, 0)
               slug_counts[base_slug] = n + 1
@@ -144,6 +168,7 @@ jobs:
                       "test_path": test_path,
                       "hf_model": entry.get("HF_MODEL", "") or "",
                       "extra_args": entry.get("extra_args", "") or "",
+                      "env_json": json.dumps({k: str(v) for k, v in env.items()}),
                   }
               )
 
@@ -347,8 +372,19 @@ jobs:
           HF_MODEL: ${{ matrix.hf_model }}
           TEST_PATH: ${{ matrix.test_path }}
           EXTRA_ARGS: ${{ matrix.extra_args }}
+          MODEL_ENV_JSON: ${{ matrix.env_json }}
         run: |
           TRACER_OUTPUT_DIR="model_tracer/traced_operations"
+
+          # Names were validated when the matrix was built; values are exported verbatim.
+          if [[ -n "$MODEL_ENV_JSON" ]]; then
+            while IFS= read -r -d '' kv; do
+              export "$kv"
+              echo "env: ${kv%%=*}=${kv#*=}"
+            done < <(
+              python3 -c 'import json, os, sys; [sys.stdout.write(f"{k}={v}\0") for k, v in json.loads(os.environ["MODEL_ENV_JSON"]).items()]'
+            )
+          fi
 
           # Reject extra_args that override output directory
           if [[ "$EXTRA_ARGS" =~ (^|[[:space:]])(--output-dir|-o)(=|[[:space:]]|$) ]]; then
