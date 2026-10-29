@@ -558,6 +558,9 @@ inline __attribute__((noinline)) void pack_head(const std::uint32_t num_chunks, 
 template <std::uint32_t K, typename Epilogue>
 inline void pack_row(const std::uint32_t num_chunks, const bool mirror_last, Epilogue&& epilogue)
 {
+    // The sort's alternate stores advance dest through ADDR_MOD_6 by one face row (+32).
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
+
     static_assert(supported_split<K>, "the split takes fused K = 512, 1024 and 2048 rows");
     LLK_ASSERT(num_chunks >= 1, "pack_row needs at least one chunk");
     // Only stages 7 and 8 read the rebuild direction, and a single-chunk row never reaches them, so it would
@@ -578,6 +581,9 @@ inline void pack_row(const std::uint32_t num_chunks, const bool mirror_last, Epi
     }
     epilogue();
     ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next PACK SFPU op.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 // A segmented row's later segment: after MATH's token (its unfused merge and rebuild done, or the previous segment's
