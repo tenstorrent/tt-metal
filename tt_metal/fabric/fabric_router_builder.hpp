@@ -4,7 +4,12 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <tt-metalium/kernel_types.hpp>                                 // DataMovementProcessor
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>               // RoutingDirection
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // FabricNodeId
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
@@ -20,6 +25,10 @@ class Program;
 namespace tt::tt_fabric {
 
 class FabricContext;
+
+namespace manifest {
+struct Router;
+}  // namespace manifest
 
 // ============ Router Location ============
 
@@ -50,6 +59,16 @@ struct KernelCreationContext {
     chan_id_t master_router_chan;
     size_t num_local_fabric_routers;
     uint32_t router_channels_mask;
+};
+
+/**
+ * What a router's create_kernel passed to CreateKernel: the defines every RISC shares, and each RISC's processor and
+ * named compile-time arguments.
+ */
+struct RouterKernelInputs {
+    std::map<std::string, std::string> defines;
+    std::vector<tt::tt_metal::DataMovementProcessor> processors;
+    std::vector<std::unordered_map<std::string, uint32_t>> named_ct_args;
 };
 
 // ============ Router Builder Abstract Base Class ============
@@ -146,6 +165,12 @@ public:
      * @param ctx Cluster-wide coordination info (master router, channel mask, etc.)
      */
     virtual void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) = 0;
+
+    /**
+     * Collect this router's manifest facts before the builder is destroyed.
+     * Call only after create_kernel(), when connection wiring and per-RISC compile-time arguments are final.
+     */
+    virtual manifest::Router collect_manifest_router(const ChipRoutingFacts& chip_facts) const = 0;
 
 protected:
     // Protected constructor - only derived classes can construct

@@ -1,0 +1,709 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fabric manifest",
+  "description": "The shape of a fabric manifest (docs/FORMAT.md in this directory). Fields are described by kind, not by key: docs/FIELDS.md names each key. Values the manifest defines (channel status, credit backing, stream register, field kind and category) are enumerated here; enums from the rest of fabric are lower-case names, and vocabulary lists every name each label key can hold.",
+  "type": "object",
+  "properties": {
+    "manifest_version": { "const": 1 },
+    "file_kind": { "const": "fabric_manifest" },
+    "run": { "$ref": "#/$defs/run" },
+    "fabric": { "$ref": "#/$defs/fabric" },
+    "arch": { "$ref": "#/$defs/arch" },
+    "types": { "$ref": "#/$defs/types" },
+    "vocabulary": { "$ref": "#/$defs/vocabulary" },
+    "meshes": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^M[0-9]+$" },
+      "additionalProperties": { "$ref": "#/$defs/mesh" }
+    }
+  },
+  "required": ["manifest_version", "file_kind", "run", "fabric", "arch", "types", "vocabulary", "meshes"],
+  "additionalProperties": false,
+
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "name": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+    "core": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/count" },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "router_path": { "type": "string", "pattern": "^M[0-9]+/C[0-9]+/[EWNSZ][0-9]+$" },
+    "vc_key": { "pattern": "^vc[0-9]+$" },
+    "field_category": { "enum": ["lifecycle", "kernel_params", "flow_control", "control_info", "diagnostics"] },
+    "field_kind": { "enum": ["l1", "stream", "number", "flag", "enum"] },
+    "channel_status": { "enum": ["active", "vc_not_serviced", "mux", "trimmed"] },
+    "z_port_role": { "enum": ["none", "intermesh_boundary", "express_chord"] },
+    "schema": {
+      "type": "string",
+      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*(<([0-9]+|true|false)(,([0-9]+|true|false))*>)?|enum:[A-Za-z_][A-Za-z0-9_]*|union:[A-Za-z_][A-Za-z0-9_]*)$"
+    },
+    "stream_register_layout": {
+      "description": "A register's byte offset in a stream's block, and how many of the word's low bits hold its value.",
+      "type": "object",
+      "properties": {
+        "offset": { "$ref": "#/$defs/count" },
+        "bits": { "type": "integer", "minimum": 1, "maximum": 32 }
+      },
+      "required": ["offset", "bits"],
+      "additionalProperties": false
+    },
+
+    "run": {
+      "description": "This process and the build it runs. Nothing about the fabric.",
+      "type": "object",
+      "properties": {
+        "host_rank": { "$ref": "#/$defs/count" },
+        "mpi_rank": { "$ref": "#/$defs/count" },
+        "world_size": { "type": "integer", "minimum": 1 },
+        "written_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+        "build": {
+          "type": "object",
+          "properties": {
+            "git_sha": {
+              "description": "The commit tt-metal was built from. Empty when the source tree is neither a git checkout nor a git archive export.",
+              "type": "string",
+              "pattern": "^([0-9a-f]{40})?$"
+            },
+            "git_dirty": {
+              "description": "Whether the build had uncommitted changes to tracked files.",
+              "type": "boolean"
+            }
+          },
+          "required": ["git_sha", "git_dirty"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["host_rank", "mpi_rank", "world_size", "written_at", "build"],
+      "additionalProperties": false
+    },
+
+    "fabric": {
+      "description": "This run's fabric: the settings a user asked for (config), and what FabricContext derived from them.",
+      "type": "object",
+      "properties": {
+        "config": {
+          "description": "The settings fabric was set up with: SetFabricConfig's arguments.",
+          "type": "object",
+          "properties": {
+            "fabric_config": { "$ref": "#/$defs/name" },
+            "reliability_mode": { "$ref": "#/$defs/name" },
+            "num_routing_planes": {
+              "description": "The most routing planes fabric opens per link, or null when it opens all of them.",
+              "anyOf": [{ "type": "null" }, { "type": "integer", "minimum": 1 }]
+            },
+            "tensix_config": { "$ref": "#/$defs/name" },
+            "udm_mode": { "$ref": "#/$defs/name" },
+            "fabric_manager": { "$ref": "#/$defs/name" },
+            "router_config": {
+              "type": "object",
+              "properties": {
+                "max_packet_payload_size_bytes": {
+                  "description": "The payload size override, or null when fabric uses its default for the arch and routing mode.",
+                  "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/count" }]
+                }
+              },
+              "required": ["max_packet_payload_size_bytes"],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fabric_config", "reliability_mode", "num_routing_planes", "tensix_config", "udm_mode", "fabric_manager",
+            "router_config"
+          ],
+          "additionalProperties": false
+        },
+        "topology": { "$ref": "#/$defs/name" },
+        "is_2d_routing": { "type": "boolean" },
+        "packet_header": {
+          "description": "The packet header type the run's routers use. Its layout is in types.structs.",
+          "$ref": "#/$defs/type_keys",
+          "properties": { "schema": { "pattern": "^struct:" } },
+          "unevaluatedProperties": false
+        },
+        "max_payload_size_bytes": { "$ref": "#/$defs/count" },
+        "channel_buffer_size_bytes": { "$ref": "#/$defs/count" },
+        "routing_2d_route_buffer_size": { "$ref": "#/$defs/count" },
+        "routing_1d_extension_words": { "$ref": "#/$defs/count" },
+        "multi_txq": { "type": "boolean" }
+      },
+      "required": [
+        "config", "topology", "is_2d_routing", "packet_header", "max_payload_size_bytes",
+        "channel_buffer_size_bytes", "multi_txq"
+      ],
+      "if": { "properties": { "is_2d_routing": { "const": true } } },
+      "then": { "required": ["routing_2d_route_buffer_size"], "not": { "required": ["routing_1d_extension_words"] } },
+      "else": { "required": ["routing_1d_extension_words"], "not": { "required": ["routing_2d_route_buffer_size"] } },
+      "additionalProperties": false
+    },
+
+    "name_list": { "type": "array", "items": { "$ref": "#/$defs/name" }, "uniqueItems": true },
+    "vocabulary": {
+      "description": "Every name each label can hold. Each list is named for what the label is, and the label's key refers to it below (a channel's status is channel_status). These are names the manifest writes as strings; enum values read from the device are in types.enums.",
+      "type": "object",
+      "properties": {
+        "arch": { "$ref": "#/$defs/name_list" },
+        "fabric_config": { "$ref": "#/$defs/name_list" },
+        "reliability_mode": { "$ref": "#/$defs/name_list" },
+        "tensix_config": { "$ref": "#/$defs/name_list" },
+        "udm_mode": { "$ref": "#/$defs/name_list" },
+        "fabric_manager_mode": { "$ref": "#/$defs/name_list" },
+        "fabric_topology": { "$ref": "#/$defs/name_list" },
+        "credit_backing": { "$ref": "#/$defs/name_list" },
+        "l1_credit_counter_reason": { "$ref": "#/$defs/name_list" },
+        "z_port_role": { "type": "array", "items": { "$ref": "#/$defs/z_port_role" }, "uniqueItems": true },
+        "edge_capability": { "$ref": "#/$defs/name_list" },
+        "credit_counter_indexed_by": { "$ref": "#/$defs/name_list" },
+        "stream_register": { "$ref": "#/$defs/name_list" },
+        "field_category": { "type": "array", "items": { "$ref": "#/$defs/field_category" }, "uniqueItems": true },
+        "field_kind": { "type": "array", "items": { "$ref": "#/$defs/field_kind" }, "uniqueItems": true },
+        "channel_status": { "type": "array", "items": { "$ref": "#/$defs/channel_status" }, "uniqueItems": true },
+        "erisc_processor": { "$ref": "#/$defs/name_list" }
+      },
+      "required": [
+        "arch", "fabric_config", "reliability_mode", "tensix_config", "udm_mode", "fabric_manager_mode",
+        "fabric_topology", "credit_backing", "l1_credit_counter_reason", "z_port_role", "edge_capability",
+        "credit_counter_indexed_by", "stream_register", "field_category", "field_kind", "channel_status",
+        "erisc_processor"
+      ],
+      "additionalProperties": false
+    },
+
+    "type_keys": {
+      "description": "A type's size and schema. An array also has num_elements and size_per_element, and a tagged union tag_member, the enclosing struct's member that holds its tag.",
+      "type": "object",
+      "properties": {
+        "size": { "$ref": "#/$defs/count" },
+        "num_elements": { "$ref": "#/$defs/count" },
+        "size_per_element": { "$ref": "#/$defs/count" },
+        "schema": { "$ref": "#/$defs/schema" },
+        "tag_member": { "type": "string", "minLength": 1 }
+      },
+      "required": ["size", "schema"],
+      "dependentRequired": {
+        "size_per_element": ["num_elements"]
+      },
+      "if": { "properties": { "schema": { "pattern": "^union:" } } },
+      "then": { "required": ["tag_member"] },
+      "else": { "not": { "required": ["tag_member"] } }
+    },
+    "region_keys": {
+      "$ref": "#/$defs/type_keys",
+      "properties": {
+        "address": { "$ref": "#/$defs/count" },
+        "cleared_by_host": { "type": "boolean" }
+      },
+      "required": ["address", "cleared_by_host"]
+    },
+    "region": { "$ref": "#/$defs/region_keys", "unevaluatedProperties": false },
+    "optional_region": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/region" }] },
+    "stream_keys": {
+      "type": "object",
+      "properties": {
+        "stream_id": { "$ref": "#/$defs/count" },
+        "register": { "enum": ["buf_space_available", "remote_src"] },
+        "schema": { "$ref": "#/$defs/schema" }
+      },
+      "required": ["stream_id", "register", "schema"]
+    },
+    "stream": { "$ref": "#/$defs/stream_keys", "unevaluatedProperties": false },
+    "core_register_keys": {
+      "$ref": "#/$defs/type_keys",
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "address": { "$ref": "#/$defs/count" }
+      },
+      "required": ["name", "address"]
+    },
+
+    "arch": {
+      "description": "What the architecture fixes on every router core: L1 areas at the HAL's addresses, and the register blocks.",
+      "type": "object",
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "l1_areas": {
+          "type": "object",
+          "properties": {
+            "heartbeat": {
+              "$ref": "#/$defs/region_keys",
+              "properties": {
+                "magic": { "$ref": "#/$defs/count" },
+                "magic_mask": { "$ref": "#/$defs/count" },
+                "period_iters": { "$ref": "#/$defs/count" }
+              },
+              "required": ["magic", "magic_mask", "period_iters"],
+              "unevaluatedProperties": false
+            },
+            "fabric_telemetry": { "$ref": "#/$defs/region" },
+            "routing_table": { "$ref": "#/$defs/region" },
+            "eth_fw_mailbox": { "$ref": "#/$defs/optional_region" },
+            "base_fw_port_status": { "$ref": "#/$defs/optional_region" },
+            "base_fw_train_status": { "$ref": "#/$defs/optional_region" },
+            "base_fw_retrain_count": { "$ref": "#/$defs/optional_region" },
+            "base_fw_rx_link_up": { "$ref": "#/$defs/optional_region" },
+            "base_fw_postcode": { "$ref": "#/$defs/optional_region" }
+          },
+          "required": [
+            "heartbeat", "fabric_telemetry", "routing_table",
+            "eth_fw_mailbox", "base_fw_port_status", "base_fw_train_status", "base_fw_retrain_count",
+            "base_fw_rx_link_up", "base_fw_postcode"
+          ],
+          "additionalProperties": false
+        },
+        "stream_registers": {
+          "description": "Where a stream register is: stream N's register R is at base + N * stride + registers[R].offset, and its value is the word's low registers[R].bits bits.",
+          "type": "object",
+          "properties": {
+            "base": { "$ref": "#/$defs/count" },
+            "stride": { "$ref": "#/$defs/count" },
+            "count": { "$ref": "#/$defs/count" },
+            "registers": {
+              "type": "object",
+              "properties": {
+                "buf_space_available": { "$ref": "#/$defs/stream_register_layout" },
+                "remote_src": { "$ref": "#/$defs/stream_register_layout" }
+              },
+              "required": ["buf_space_available", "remote_src"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["base", "stride", "count", "registers"],
+          "additionalProperties": false
+        },
+        "core_registers": {
+          "description": "A router core's soft reset and wall clock registers, in the order they are read: reading wall_clock_low latches wall_clock_high. reset_masks is indexed by physical ERISC, which a router ERISC's physical_erisc names.",
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/core_register_keys",
+              "properties": {
+                "name": { "const": "soft_reset" },
+                "reset_masks": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1 }
+              },
+              "required": ["reset_masks"],
+              "unevaluatedProperties": false
+            },
+            {
+              "$ref": "#/$defs/core_register_keys",
+              "properties": { "name": { "const": "wall_clock_low" } },
+              "unevaluatedProperties": false
+            },
+            {
+              "$ref": "#/$defs/core_register_keys",
+              "properties": { "name": { "const": "wall_clock_high" } },
+              "unevaluatedProperties": false
+            }
+          ],
+          "minItems": 3,
+          "items": false
+        }
+      },
+      "required": ["name", "l1_areas", "stream_registers", "core_registers"],
+      "additionalProperties": false
+    },
+
+    "types": {
+      "description": "The type catalog. A struct:<Name> schema names an entry in structs, an enum:<Name> schema one in enums, and a union:<Name> schema one in tagged_unions.",
+      "type": "object",
+      "properties": {
+        "structs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "size": { "$ref": "#/$defs/count" },
+              "members": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/type_keys",
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "offset": { "$ref": "#/$defs/count" }
+                  },
+                  "required": ["name", "offset"],
+                  "unevaluatedProperties": false
+                }
+              }
+            },
+            "required": ["size", "members"],
+            "additionalProperties": false
+          }
+        },
+        "enums": { "type": "object", "additionalProperties": { "$ref": "#/$defs/enum" } },
+        "tagged_unions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "size": { "$ref": "#/$defs/count" },
+              "tag": {
+                "description": "The enum the tag member holds.",
+                "type": "object",
+                "properties": { "schema": { "$ref": "#/$defs/schema", "pattern": "^enum:" } },
+                "required": ["schema"],
+                "additionalProperties": false
+              },
+              "cases": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/type_keys",
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "offset": { "$ref": "#/$defs/count" },
+                    "tag_value": { "$ref": "#/$defs/name" }
+                  },
+                  "required": ["name", "offset", "tag_value"],
+                  "unevaluatedProperties": false
+                }
+              }
+            },
+            "required": ["size", "tag", "cases"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["structs", "enums", "tagged_unions"],
+      "additionalProperties": false
+    },
+
+    "enum": {
+      "type": "object",
+      "properties": {
+        "values": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": { "$ref": "#/$defs/count" }
+        }
+      },
+      "required": ["values"],
+      "additionalProperties": false
+    },
+
+    "mesh": {
+      "type": "object",
+      "properties": {
+        "shape": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1 },
+        "torus": {
+          "type": "object",
+          "properties": { "y": { "type": "boolean" }, "x": { "type": "boolean" } },
+          "required": ["y", "x"],
+          "additionalProperties": false
+        },
+        "express_routing": { "type": "boolean" },
+        "credit_transport": {
+          "description": "Only for meshes on this host.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/vc_key" },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "backing": { "enum": ["stream_register", "l1_counter"] },
+              "reasons": { "type": "array", "items": { "$ref": "#/$defs/name" } }
+            },
+            "required": ["backing", "reasons"],
+            "additionalProperties": false
+          }
+        },
+        "chips": {
+          "type": "object",
+          "propertyNames": { "pattern": "^C[0-9]+$" },
+          "additionalProperties": { "$ref": "#/$defs/chip" }
+        }
+      },
+      "required": ["shape", "express_routing", "chips"],
+      "additionalProperties": false
+    },
+
+    "chip": {
+      "type": "object",
+      "properties": {
+        "mesh_coord": { "type": "array", "items": { "$ref": "#/$defs/count" }, "minItems": 1 },
+        "physical_chip_id": { "type": ["integer", "null"] },
+        "asic_id": { "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^0x[0-9a-f]{16}$" }] },
+        "is_local": { "type": "boolean" },
+        "z_port_role": { "$ref": "#/$defs/z_port_role" },
+        "local_sync": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/local_sync" }] },
+        "routers": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[EWNSZ][0-9]+$" },
+          "additionalProperties": { "$ref": "#/$defs/router" }
+        }
+      },
+      "required": ["mesh_coord", "physical_chip_id", "asic_id", "is_local"],
+      "if": { "properties": { "is_local": { "const": true } } },
+      "then": {
+        "properties": { "physical_chip_id": { "type": "integer" }, "asic_id": { "type": "string" } },
+        "required": ["z_port_role", "local_sync", "routers"]
+      },
+      "else": {
+        "description": "A chip this rank cannot map to a device.",
+        "properties": { "physical_chip_id": { "type": "null" }, "asic_id": { "type": "null" } },
+        "maxProperties": 4
+      },
+      "additionalProperties": false
+    },
+
+    "local_sync": {
+      "type": "object",
+      "properties": {
+        "master": { "$ref": "#/$defs/router_path" },
+        "num_routers": { "$ref": "#/$defs/count" },
+        "router_channels_mask": { "$ref": "#/$defs/count" }
+      },
+      "required": ["master", "num_routers", "router_channels_mask"],
+      "additionalProperties": false
+    },
+
+    "router": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "type": "object",
+          "properties": {
+            "eth_chan": { "$ref": "#/$defs/count" },
+            "logical_core": { "$ref": "#/$defs/core" },
+            "virtual_core": { "$ref": "#/$defs/core" }
+          },
+          "required": ["eth_chan", "logical_core", "virtual_core"],
+          "additionalProperties": false
+        },
+        "link": {
+          "type": "object",
+          "properties": {
+            "edge_capability": { "$ref": "#/$defs/name" },
+            "peer": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/router_path" }] },
+            "cross_host": { "type": "boolean" },
+            "wrap": { "type": "boolean" },
+            "dispatch_link": { "type": "boolean" }
+          },
+          "required": ["edge_capability", "peer", "cross_host", "wrap", "dispatch_link"],
+          "additionalProperties": false
+        },
+        "shape": {
+          "type": "object",
+          "properties": {
+            "num_vcs": { "$ref": "#/$defs/count" },
+            "senders_per_vc": { "type": "array", "items": { "$ref": "#/$defs/count" } },
+            "receivers_per_vc": { "type": "array", "items": { "$ref": "#/$defs/count" } },
+            "num_active_eriscs": { "type": "integer", "minimum": 1 },
+            "channel_trimming_overrides_applied": { "type": "boolean" },
+            "vc0_bubble_flow_control": { "type": "boolean" }
+          },
+          "required": [
+            "num_vcs", "senders_per_vc", "receivers_per_vc", "num_active_eriscs",
+            "channel_trimming_overrides_applied", "vc0_bubble_flow_control"
+          ],
+          "additionalProperties": false
+        },
+        "credit_counters": {
+          "type": "object",
+          "properties": {
+            "to_sender_ack": { "$ref": "#/$defs/counter_array" },
+            "to_sender_completion": { "$ref": "#/$defs/counter_array" },
+            "receiver_ack": { "$ref": "#/$defs/counter_array" },
+            "receiver_completion": { "$ref": "#/$defs/counter_array" }
+          },
+          "required": ["to_sender_ack", "to_sender_completion", "receiver_ack", "receiver_completion"],
+          "additionalProperties": false
+        },
+        "channels": {
+          "type": "object",
+          "properties": {
+            "senders": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/vc_key" },
+              "additionalProperties": {
+                "type": "object",
+                "propertyNames": { "pattern": "^ch[0-9]+$" },
+                "additionalProperties": { "$ref": "#/$defs/sender_channel" }
+              }
+            },
+            "receivers": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/vc_key" },
+              "additionalProperties": {
+                "type": "object",
+                "propertyNames": { "pattern": "^ch[0-9]+$" },
+                "additionalProperties": { "$ref": "#/$defs/receiver_channel" }
+              }
+            }
+          },
+          "required": ["senders", "receivers"],
+          "additionalProperties": false
+        },
+        "intra_chip_downstream_edges": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/vc_key" },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": { "pattern": "^edge[0-9]+$" },
+            "additionalProperties": { "$ref": "#/$defs/downstream_edge" }
+          }
+        },
+        "fields": { "$ref": "#/$defs/fields" },
+        "eriscs": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^erisc[0-9]+$" },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "processor": { "$ref": "#/$defs/name" },
+              "physical_erisc": { "$ref": "#/$defs/count" },
+              "fields": { "$ref": "#/$defs/fields" }
+            },
+            "required": ["processor", "physical_erisc", "fields"],
+            "additionalProperties": false
+          }
+        },
+        "leftover_l1": { "$ref": "#/$defs/optional_region" }
+      },
+      "required": [
+        "identity", "link", "shape", "credit_counters", "channels", "intra_chip_downstream_edges", "fields",
+        "eriscs", "leftover_l1"
+      ],
+      "additionalProperties": false
+    },
+
+    "counter_array": {
+      "$ref": "#/$defs/region_keys",
+      "properties": { "indexed_by": { "enum": ["own_sender_channel", "peer_sender_channel"] } },
+      "required": ["indexed_by"],
+      "unevaluatedProperties": false
+    },
+
+    "serviced_by": { "type": "array", "items": { "type": "string", "pattern": "^erisc[0-9]+$" }, "uniqueItems": true },
+
+    "credit_ref": {
+      "description": "A stream register, null when the builder did not allocate one, or an element of a credit counter array.",
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/stream" },
+        {
+          "type": "object",
+          "properties": {
+            "array": {
+              "type": "string",
+              "pattern": "^credit_counters/(to_sender_ack|to_sender_completion|receiver_ack|receiver_completion)$"
+            },
+            "index": { "$ref": "#/$defs/count" }
+          },
+          "required": ["array", "index"],
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "sender_channel": {
+      "type": "object",
+      "properties": {
+        "status": { "$ref": "#/$defs/channel_status" },
+        "serviced_by": { "$ref": "#/$defs/serviced_by" },
+        "producer": {
+          "anyOf": [
+            { "type": "null" },
+            { "enum": ["worker", "tensix_mux"] },
+            { "$ref": "#/$defs/router_path" }
+          ]
+        },
+        "ring_buffer": { "$ref": "#/$defs/optional_region" },
+        "credits": {
+          "type": "object",
+          "properties": {
+            "acked": { "$ref": "#/$defs/credit_ref" },
+            "completed": { "$ref": "#/$defs/credit_ref" }
+          },
+          "required": ["completed"],
+          "additionalProperties": false
+        },
+        "fields": { "$ref": "#/$defs/fields" }
+      },
+      "required": ["status", "serviced_by", "producer", "ring_buffer", "credits", "fields"],
+      "additionalProperties": false
+    },
+
+    "receiver_channel": {
+      "type": "object",
+      "properties": {
+        "status": { "$ref": "#/$defs/channel_status" },
+        "serviced_by": { "$ref": "#/$defs/serviced_by" },
+        "forwards_on": { "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^vc[0-9]+$" }] },
+        "ring_buffer": { "$ref": "#/$defs/optional_region" },
+        "fields": { "$ref": "#/$defs/fields" }
+      },
+      "required": ["status", "serviced_by", "forwards_on", "ring_buffer", "fields"],
+      "additionalProperties": false
+    },
+
+    "downstream_edge": {
+      "type": "object",
+      "properties": {
+        "downstream_channel": {
+          "type": "string",
+          "pattern": "^M[0-9]+/C[0-9]+/[EWNSZ][0-9]+/channels/senders/vc[0-9]+/ch[0-9]+$"
+        },
+        "through_tensix_mux": { "type": "boolean" },
+        "fields": { "$ref": "#/$defs/fields" }
+      },
+      "required": ["downstream_channel", "through_tensix_mux", "fields"],
+      "additionalProperties": false
+    },
+
+    "fields": {
+      "description": "Keyed by the field's key (docs/FIELDS.md lists them). Null for a buffer or stream register the builder did not allocate.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/field" }] }
+    },
+
+    "field": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/region_keys",
+          "properties": { "category": { "$ref": "#/$defs/field_category" }, "kind": { "const": "l1" } },
+          "required": ["category", "kind"],
+          "unevaluatedProperties": false
+        },
+        {
+          "$ref": "#/$defs/stream_keys",
+          "properties": { "category": { "$ref": "#/$defs/field_category" }, "kind": { "const": "stream" } },
+          "required": ["category", "kind"],
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "category": { "$ref": "#/$defs/field_category" },
+            "kind": { "const": "number" },
+            "value": { "$ref": "#/$defs/count" }
+          },
+          "required": ["category", "kind", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "category": { "$ref": "#/$defs/field_category" },
+            "kind": { "const": "flag" },
+            "value": { "type": "boolean" }
+          },
+          "required": ["category", "kind", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "category": { "$ref": "#/$defs/field_category" },
+            "kind": { "const": "enum" },
+            "value": { "$ref": "#/$defs/count" },
+            "schema": { "type": "string", "pattern": "^enum:[A-Za-z_][A-Za-z0-9_]*$" }
+          },
+          "required": ["category", "kind", "value", "schema"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

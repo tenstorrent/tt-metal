@@ -19,6 +19,10 @@
 
 namespace tt::tt_fabric {
 
+namespace manifest {
+class PublishedChips;
+}  // namespace manifest
+
 class FabricContext;
 
 
@@ -114,7 +118,7 @@ struct IntermeshVCConfig {
 class FabricBuilderContext {
 public:
     explicit FabricBuilderContext(const FabricContext& fabric_context);
-    ~FabricBuilderContext() = default;
+    ~FabricBuilderContext();
 
     // Non-copyable, non-movable (owned by FabricContext)
     FabricBuilderContext(const FabricBuilderContext&) = delete;
@@ -159,6 +163,12 @@ public:
 
     void set_fabric_master_router_chan(ChipId chip_id, chan_id_t chan_id);
     chan_id_t get_fabric_master_router_chan(ChipId chip_id) const;
+
+    // ============ Fabric Manifest ============
+    // Each chip's manifest facts, which its FabricBuilder publishes for the manifest's topology pass. The builder
+    // publishes through the non-const getter, and the topology pass reads through the const one.
+    manifest::PublishedChips& get_manifest_chips();
+    const manifest::PublishedChips& get_manifest_chips() const;
 
     // ============ Router Address Info ============
     std::vector<size_t> get_fabric_router_addresses_to_clear() const;
@@ -230,6 +240,7 @@ private:
     static constexpr uint32_t UNINITIALIZED_ROUTERS = std::numeric_limits<uint32_t>::max();
     std::vector<chan_id_t> master_router_chans_;
     std::vector<uint32_t> num_initialized_routers_;
+    std::unique_ptr<manifest::PublishedChips> manifest_chips_;
 
     // Helper to create EDM config with given options
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(

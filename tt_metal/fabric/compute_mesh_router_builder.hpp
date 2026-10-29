@@ -66,6 +66,8 @@ public:
 
     void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) override;
 
+    manifest::Router collect_manifest_router(const ChipRoutingFacts& chip_facts) const override;
+
     // ============ Compute-Mesh Specific Methods ============
 
     /**
@@ -179,6 +181,8 @@ private:
     bool downstream_is_tensix_builder_ = false;
     std::shared_ptr<ConnectionRegistry> connection_registry_;
     bool is_inter_mesh_;  // True if this router connects different meshes
+    // What create_kernel passed to CreateKernel, for the manifest.
+    RouterKernelInputs kernel_inputs_;
 };
 
 }  // namespace tt::tt_fabric
