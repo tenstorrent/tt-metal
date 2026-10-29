@@ -87,6 +87,10 @@ WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 TRIAGE_OUT_DIR="${REPO_DIR}/generated/tt-triage"
 LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
+# Written by a warm process just before its chip teardown at exit (see _warm_teardown_stuck).
+WARM_TEARDOWN_MARK="/tmp/tt-device.warm-teardown"
+# Metal's messages for active Ethernet cores left outside base firmware (see ETH_STUCK below).
+ETH_STUCK_RE="Skipping RISC reset on device [0-9]+ during teardown|Timed out while waiting for active ethernet core"
 TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
 TRIAGE_REPORT="${TRIAGE_OUT_DIR}/triage.txt"
 PROFILE_REPORTS_DIR="${REPO_DIR}/generated/profiler/reports"
@@ -403,7 +407,7 @@ if [[ "$SIM_MODE" == false && "$DEV_MODE" == false && "$PROFILE_MODE" == false \
     WARM_KEY=$(printf %s "$REPO_DIR" | sha1sum | cut -c1-12)
     WARM_LOG="/tmp/safe-pytest-warm-${WARM_KEY}.log"
     WARM_PID_FILE="/tmp/safe-pytest-warm-${WARM_KEY}.pid"
-    # Written by a warm process that closed the device because another runner wanted it. That
+    # Written by a warm process that exited because another runner wanted the device. That
     # runner may still be queued on the lock, and flock is not FIFO: a call that wins the lock
     # within this many seconds runs cold instead of starting a new warm process, so the lock is
     # free again right after it.
@@ -511,8 +515,26 @@ _lock_device() {
     fi
 }
 
+# A warm process closes the chip during its interpreter exit, after it last answered a caller, so
+# Metal's stuck-Ethernet messages from that teardown land in the warm log, not in any session's
+# output. Just before the teardown it writes "<log size> <log path>" to WARM_TEARDOWN_MARK. The
+# next holder of the lock (the process is gone by then) checks the log from that offset and
+# removes the mark. Returns 0 if the teardown left Ethernet cores stuck.
+_warm_teardown_stuck() {
+    local offset log
+    [[ -f "$WARM_TEARDOWN_MARK" ]] || return 1
+    read -r offset log < "$WARM_TEARDOWN_MARK"
+    rm -f "$WARM_TEARDOWN_MARK"
+    [[ "$offset" =~ ^[0-9]+$ && -f "$log" ]] || return 1
+    tail -c +"$((offset + 1))" "$log" | grep -aqE "$ETH_STUCK_RE"
+}
+
 # --- Check if device needs reset from previous hang (only while holding the lock) ---
 _reset_if_dirty() {
+    if [[ "$SIM_MODE" == false ]] && _warm_teardown_stuck; then
+        echo "SAFE_PYTEST: the last warm process left active Ethernet cores stuck at exit"
+        touch "$DIRTY_FLAG"
+    fi
     if [[ -f "$DIRTY_FLAG" ]]; then
         echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..."
         if ! tt-smi -r; then
@@ -822,8 +844,8 @@ _alive() {
     [[ -n "$1" && -d /proc/$1 ]] && [[ "$(ps -o stat= -p "$1" 2>/dev/null)" != Z* ]]
 }
 # Ask the warm process with pid $1 (and no other: a sibling call may have started a newer one)
-# to close the device and exit, then wait until it is gone. After 60 s (a device close stuck
-# after a hang) it is killed; the device is then dirty and gets reset.
+# to exit, then wait until it is gone. After 60 s (a chip teardown stuck after a hang) it is
+# killed; the device is then dirty and gets reset.
 _stop_warm() {
     local pid=$1 _i
     [[ -n "$pid" ]] || return 0
@@ -832,8 +854,8 @@ _stop_warm() {
         _alive "$pid" || return 0
         sleep 0.1
     done
-    # The whole process group: the warm process leads its own (setsid), and a `tt-smi -r` it
-    # started at device close must not outlive it.
+    # The whole process group: the warm process leads its own (setsid), and no child of it (a
+    # tt-triage it started on a dispatch timeout) may outlive it.
     echo "SAFE_PYTEST: warm process did not exit in 60 s; killing it"
     WARM_KILLED=true
     kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
@@ -841,8 +863,8 @@ _stop_warm() {
 }
 # Before this call touches the dirty flag or resets the device, it must hold the lock and the
 # warm process that ran its session must be gone. A call that started the warm process shares
-# its lock already. (A device close that leaves Ethernet cores stuck is reset by the warm process
-# itself, while it still holds the lock.)
+# its lock already. Stuck Ethernet cores from the warm process's chip teardown count as this
+# call's own (WARM_ETH_STUCK, read by ETH_STUCK below).
 _own_device() {
     [[ "$WARM" == attach || "$WARM" == spawn ]] || return 0
     [[ "${WARM_OWNED:-false}" == true ]] && return 0
@@ -853,6 +875,7 @@ _own_device() {
     _stop_warm "$pid"
     [[ "$WARM" == attach ]] && _lock_device
     [[ "${WARM_KILLED:-false}" == true ]] && touch "$DIRTY_FLAG"
+    _warm_teardown_stuck && WARM_ETH_STUCK=true
     WARM_OWNED=true
 }
 
@@ -972,10 +995,8 @@ fi
 # kernel asserts (--dev) leaves ERISC0 halted at teardown; Metal logs it and exits 0, and every
 # later fabric mesh open times out on those cores until a board reset. The run itself may pass,
 # so check its output and reset here rather than marking the device clean.
-ETH_STUCK=false
-if [[ "$SIM_MODE" == false ]] && grep -aqE \
-    "Skipping RISC reset on device [0-9]+ during teardown|Timed out while waiting for active ethernet core" \
-    "$PYTEST_STDOUT_LOG" 2>/dev/null; then
+ETH_STUCK=${WARM_ETH_STUCK:-false}
+if [[ "$SIM_MODE" == false ]] && grep -aqE "$ETH_STUCK_RE" "$PYTEST_STDOUT_LOG" 2>/dev/null; then
     ETH_STUCK=true
 fi
 
@@ -1011,7 +1032,7 @@ fi
 #   4 = usage error (bad args, nonexistent path)
 #   5 = no tests collected (typo in path, bad marker filter, etc.)
 if [[ $EXIT_CODE -eq 4 || $EXIT_CODE -eq 5 ]]; then
-    rm -f "$DIRTY_FLAG"
+    _clear_dirty_flag
     rm -f "$TRIAGE_LOG"
     rm -f "$PYTEST_STDOUT_LOG"
     if [[ $EXIT_CODE -eq 4 ]]; then

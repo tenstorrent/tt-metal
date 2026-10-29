@@ -52,10 +52,16 @@ State carried from one call to the next, and how it is handled:
     20 s retry), the worker exits, at once when idle or right after the session in progress, and
     leaves a mark that keeps the next lock winner from starting a new worker for 120 s. It also
     exits after SAFE_PYTEST_WARM_IDLE_S seconds without a call.
-  - Ethernet cores left outside base firmware at a device close are logged in the session's own
-    output, where run_safe_pytest.sh's stuck-Ethernet check sees them, as in a cold run.
-  - known gap: a passing session that leaves a device open (a test that opens one and never
-    closes it) is not detected; the next session's open of the same device would fail.
+  - devices left open: the worker counts opens and closes through ttnn's entry points and exits
+    after a session that does not close every device it opened (the next session's open of the
+    same device would fail). A device closed some other way (garbage collection) also counts as
+    left open, which only costs a cold start.
+  - chip teardown: the runtime closes the chip during interpreter exit, after the worker last
+    answered a caller, so a stuck-Ethernet message it logs lands in the worker's log, not in a
+    session's output. Before that teardown the worker writes WARM_TEARDOWN_MARK (the log's size and
+    path); the next run_safe_pytest.sh that holds the lock checks the log from there and resets the
+    device. A teardown that has not finished in TEARDOWN_LIMIT_S seconds is killed, with the
+    device marked dirty, so it cannot hold the lock forever.
 """
 
 from __future__ import annotations
@@ -75,6 +81,9 @@ EX_WORKER_DIED = 70  # the worker died mid-session; the device may be dirty
 # Same paths as run_safe_pytest.sh; overridable for tests that must not touch the real ones.
 DIRTY_FLAG = os.environ.get("SAFE_PYTEST_DIRTY_FLAG", "/tmp/tt-device.dirty")
 YIELD_MARK = os.environ.get("SAFE_PYTEST_WARM_YIELD", "/tmp/tt-device.warm-yield")
+TEARDOWN_MARK = os.environ.get("SAFE_PYTEST_WARM_TEARDOWN_MARK", "/tmp/tt-device.warm-teardown")
+# A healthy chip teardown at exit takes ~1-3 s.
+TEARDOWN_LIMIT_S = 120
 # 60 s covers ~94% of the gaps between consecutive calls in a tilize eval run (median 0.05 s).
 IDLE_S = float(os.environ.get("SAFE_PYTEST_WARM_IDLE_S", "60"))
 MAX_RUNS = int(os.environ.get("SAFE_PYTEST_WARM_MAX_RUNS", "200"))
@@ -87,6 +96,20 @@ MAX_RSS_GB = float(os.environ.get("SAFE_PYTEST_WARM_MAX_RSS_GB", "16"))
 # Environment variables the worker accepts with a different value than it started with: they are
 # read on every use (JIT server), or only by the Python side, which is re-imported per session.
 _DYNAMIC_ENV_PREFIXES = ("TT_METAL_JIT_SERVER_", "TT_METAL_JIT_PREPROCESS", "TT_DEVICE_TIMING_LOG")
+
+# ttnn's device open/close entry points, the modules that export them, and how each one changes
+# the number of open devices ("many": CreateDevices returns, CloseDevices takes, a collection).
+_DEVICE_MODULES = ("ttnn", "ttnn.device", "ttnn.distributed", "ttnn.distributed.distributed")
+_DEVICE_ENTRY_POINTS = {
+    "CreateDevice": (1, False),
+    "open_device": (1, False),
+    "open_mesh_device": (1, False),
+    "CreateDevices": (1, True),
+    "close_device": (-1, False),
+    "CloseDevice": (-1, False),
+    "close_mesh_device": (-1, False),
+    "CloseDevices": (-1, True),
+}
 
 
 def _key(repo: str) -> str:
@@ -235,23 +258,23 @@ class Worker:
         import torch
         import ttnn  # noqa: F401
 
-        # Session plugins wrap these (phase_timing); put the originals back after each session so a
+        # Count the devices sessions open and close (see _counted). Session plugins wrap these
+        # entry points too (phase_timing); the counting wrappers go back after each session so a
         # wrapper from a purged plugin module never outlives its session.
+        self.open_devices = 0
+        self._device_call_depth = 0
         self.patch_points = {}
-        for module_name in ("ttnn", "ttnn.device", "ttnn.distributed.distributed"):
+        counted = {}
+        for module_name in _DEVICE_MODULES:
             module = sys.modules.get(module_name)
-            for name in (
-                "CreateDevice",
-                "CreateDevices",
-                "open_device",
-                "open_mesh_device",
-                "close_device",
-                "CloseDevice",
-                "CloseDevices",
-                "close_mesh_device",
-            ):
-                if module is not None and hasattr(module, name):
-                    self.patch_points[(module_name, name)] = getattr(module, name)
+            for name, (sign, many) in _DEVICE_ENTRY_POINTS.items():
+                fn = getattr(module, name, None) if module is not None else None
+                if fn is None:
+                    continue
+                if id(fn) not in counted:
+                    counted[id(fn)] = self._counted(fn, sign, many)
+                setattr(module, name, counted[id(fn)])
+                self.patch_points[(module_name, name)] = counted[id(fn)]
         sys.stdout.reconfigure(line_buffering=True)
         sys.stderr.reconfigure(line_buffering=True)
 
@@ -276,6 +299,30 @@ class Worker:
 
         gc.collect()
         gc.freeze()
+
+    def _counted(self, fn, sign: int, many: bool):
+        """fn, keeping self.open_devices current. Only the outermost call counts (one entry point
+        may call another); a call that raises does not count."""
+        import functools
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            outer = self._device_call_depth == 0
+            self._device_call_depth += 1
+            try:
+                result = fn(*args, **kwargs)
+            finally:
+                self._device_call_depth -= 1
+            if outer:
+                if not many:
+                    self.open_devices += sign
+                elif sign > 0:
+                    self.open_devices += len(result)
+                else:
+                    self.open_devices -= len(args[0]) if args else 0
+            return result
+
+        return wrapper
 
     # -- what may not change under the worker --------------------------------------------------
 
@@ -573,18 +620,45 @@ class Worker:
                 os.unlink(DIRTY_FLAG)
             except FileNotFoundError:
                 pass
-        keep = code == 0 and self._rss_gb() < MAX_RSS_GB
+        keep = code == 0 and self.open_devices == 0 and self._rss_gb() < MAX_RSS_GB
         _send(conn, {"status": "done", "exit": code, "exiting": not keep})
-        if not keep:
+        if self.open_devices:
+            print(f"warm worker: session left {self.open_devices} device(s) open, exiting", flush=True)
+        elif not keep:
             print(f"warm worker: session exit {code}, exiting", flush=True)
         return keep
 
     def shutdown(self) -> None:
         import gc
+        import subprocess
 
         # The lock fd stays open on purpose: the runtime closes the chip during interpreter exit,
         # after this, and the kernel drops the lock only once the process is gone, so no other
         # runner can take the device while that teardown runs.
+        sys.stdout.flush()
+        try:
+            log = os.readlink("/proc/self/fd/1")
+            with open(TEARDOWN_MARK, "w") as f:
+                f.write(f"{os.fstat(1).st_size} {log}\n")
+        except OSError:
+            pass
+        # Bound that teardown: past the limit, mark the device dirty and kill this process, which
+        # releases the lock. Its own session, so the caller's process-group kill does not end it.
+        subprocess.Popen(
+            [
+                "bash",
+                "-c",
+                'sleep "$3"; grep -qa safe_pytest_warm.py "/proc/$1/cmdline" 2>/dev/null || exit 0; '
+                'echo "warm worker: chip teardown did not finish in $3 s, killing it"; '
+                ': >> "$2"; kill -KILL "$1"',
+                "_",
+                str(os.getpid()),
+                DIRTY_FLAG,
+                str(TEARDOWN_LIMIT_S),
+            ],
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
         # Let interpreter shutdown free what gc.freeze() pinned, or nanobind reports it as leaked.
         gc.unfreeze()
 
