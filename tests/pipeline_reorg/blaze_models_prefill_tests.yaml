@@ -805,18 +805,20 @@
       printf '%s' "$summary"
     }
 
+    # Measured 2.1 min x 1.25 + 1.
     section_start 1
     (
-      timeout -k 2m 6m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 4m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_hca.py::test_hca_chunked_prefill_mesh -k "flash and chunk5120-varying and torus-xy-8x4" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 2.1 min x 1.25 + 1.
     section_start 2
     (
-      timeout -k 2m 8m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 4m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_swa.py::test_swa_long_prefill_mesh -k "flash and mixed5120 and torus-xy-8x4" -vvv --tb=short
       '
@@ -862,9 +864,10 @@
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 0.7 min x 1.25 + 1.
     section_start 7
     (
-      timeout -k 2m 3m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 2m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_mhc.py::test_hc_head_tp_sharded -k "torus-xy-8x4" -vvv --tb=short
       '
@@ -878,8 +881,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the section timeouts (6+8+12+4+4+2+3 = 39).
-      timeout: 39
+      # Sum of the section timeouts (4+4+12+4+4+2+2 = 32).
+      timeout: 32
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
@@ -933,9 +936,10 @@
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 31.1 min x 1.25 + 1.
     section_start 2
     (
-      timeout -k 2m 45m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_chunked.py -k "torus-xy-8x4 and users2" -vvv --tb=short
       '
@@ -977,8 +981,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the section timeouts (37+45+27+30+31 = 170).
-      timeout: 170
+      # Sum of the section timeouts (37+40+27+30+31 = 165).
+      timeout: 165
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
