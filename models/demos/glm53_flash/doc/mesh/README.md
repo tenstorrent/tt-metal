@@ -1581,6 +1581,17 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 17:15: the end-to-end gate green on the day's tree; the K sweep closed
+
+`e2e_8x4_B4_default_green_r3` on today's tree (45 layers): traced decode step 48.48 ms = 20.6 tok/s per user, 660 aggregate;
+TTFT 928 ms warm; chain pcc vs HF 0.947 at 128 tokens, first token = HF (the residual-stream chain bar at the prior runs'
+convention, 0.5: that chain is depth-chaotic and not the gate). The morning's frozen tree failed its T=256 prefill capture
+with a host write; today's tree captures fine. The K sweep is complete (`spec_k_by_batch.md`): K=3 up to 4 users per row,
+K=1 at 8 (19.8 tok/s per user lossless; K=2's padded 24-row verify 13.3), plain at 16; every point on the full 32-row verify
+tile breaks losslessness on mesh row 5 at 45 layers (not at 4), so the policy caps B (K + 1) <= 31. The row diagnostic shows
+the verify's greedy ids differing across mesh rows from the first iteration between the prompt's two oscillating tokens; the
+margin run decides tie versus error.
+
 ### 2026-10-29 14:58: the 128 K profile served at 192 requests (A7's second half)
 
 224 requests (7 slots per chip) run out of DRAM at boot under per-row ownership (162 MiB per bank after the prefix walk, a
