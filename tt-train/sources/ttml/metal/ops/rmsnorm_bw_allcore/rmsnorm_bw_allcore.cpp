@@ -32,7 +32,7 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw_allcore(
         dL_dout_tensor,  // [B,1,S,C]
         partials,
         split,
-        /* epsilon */ 1e-6F,
+        /* epsilon */ 1e-6F,  // host-side attribute only, the kernels never read it (rms comes from the forward)
         compute_dgamma);
 
     std::vector<std::optional<ttnn::Tensor>> out{result[0], std::nullopt};

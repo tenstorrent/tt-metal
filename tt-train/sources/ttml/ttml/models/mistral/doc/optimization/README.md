@@ -51,7 +51,7 @@ The TP-local qkv / out shards were put on the transposed + fused LoRA path. Grad
 
 ## State after the resumed loop (2026-10-29)
 
-TP=4 full model 598.7 (composite baseline) -> 556.5 (loop exit, iteration 3) -> **545.9 ms / 29.72 % MFU** (iteration 8). The remaining ranking at TP=4 and what each item needs is in `../perf_analysis.md`, "Loop resumed": the base matmuls at ttnn's optimum for the TP shapes, inherent TP collectives, and three kernel projects (SDPA, attention on the fused heads layout, residual-fused RMSNorm forward / all-core forward).
+TP=4 full model 598.7 (composite baseline) -> 556.5 (loop exit, iteration 3) -> **545.7 ms / 29.73 % MFU** (iteration 8 + the review-3 follow-up). Loss match on this path: 8-layer host-loss max |diff| 0.027 vs torch, TP=4 real-weight trajectory as the baseline (`../perf_analysis.md`, "Review round 3 follow-up"). Stage review round 3: `review_round3.md` (more-work-needed, all findings answered in the follow-up). The remaining ranking at TP=4 and what each item needs is in `../perf_analysis.md`, "Loop resumed": the base matmuls at ttnn's optimum for the TP shapes, inherent TP collectives, and three kernel projects (SDPA, attention on the fused heads layout, residual-fused RMSNorm forward / all-core forward).
 
 ## Exit
 

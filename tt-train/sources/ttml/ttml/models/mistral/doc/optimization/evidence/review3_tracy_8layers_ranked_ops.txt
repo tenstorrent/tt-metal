@@ -1,0 +1,42 @@
+chip 0: 2 steps, 283.44 ms kernels per profiled step; classes: math 268.61, glue 8.41, layout 6.24, other 0.17
+   ms/step   ops  op | in0 | in1 | cores
+    50.883     8  Matmul | 1x1x1024x5184 | 1x1x5184x65536 | 100
+    43.093     8  Matmul | 1x1x5184x65536 | 1x1x1024x65536 | 110
+    27.548     8  Matmul | 1x1x1024x32768 | 1x1x5120x32768 | 88
+    24.323     8  Matmul | 1x1x1024x5120 | 1x1x5120x32768 | 110
+    18.081     1  Matmul | 1x1x1024x5120 | 1x1x5120x131072 | 110
+    10.896     1  Matmul | 1x1x5120x131072 | 1x1x1024x131072 | 110
+    10.875     8  SDPABackwardKV | 1x32x1024x128 | 1x32x1024x128 | 110
+     8.592     8  SwigluPackedBw | 1x1x1024x65536 | 1x1x1024x32768 | 110
+     7.294     1  CrossEntropyBackward | 1x1x1024x131072 | 1x1x1x1024 | 32
+     7.058     8  SDPAForward | 1x32x1024x128 | 1x8x1024x128 | 110
+     6.924     8  SDPABackwardQ | 1x32x1024x128 | 1x32x1024x128 | 110
+     6.541    71  BinaryNg | 1x1x1024x5120 | 1x1x1024x5120 | 110
+     5.296     8  Matmul | 1x1x1024x5184 | 1x1x5184x6144 | 88
+     4.552     8  Matmul | 1x1x1024x65536 | 1x1x1024x32[16] | 110
+     4.351     8  Matmul | 1x1x5184x6144 | 1x1x1024x6144 | 110
+     4.112     8  Matmul | 1x1x1024x4160 | 1x1x4160x5120 | 88
+     3.912     8  Matmul | 1x1x1024x32768 | 1x1x32[16]x32768 | 33
+     3.897     1  CrossEntropyForward | 1x1x1024x131072 | 1x1x1x1024 | 32
+     3.371     8  Matmul | 1x1x1024x32[16] | 1x1x32[16]x32768 | 110
+     3.237     8  SwigluPackedFw | 1x1x1024x65536 |  | 110
+     2.853     8  Matmul | 1x1x4160x5120 | 1x1x1024x5120 | 110
+     2.598    17  RMSNormForward | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
+     1.726    16  RMSNormBackward | 1x1x1024x5120 | 1x1x32[1]x5120 | 96
+     1.484    16  Matmul | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88
+     1.470    16  RMSNormBackwardPartial | 1x1x1024x5120 | 1x1x32[1]x5120 | 96
+     1.468     8  Matmul | 1x1x1024x32[16] | 1x1x1024x32768 | 110
+     1.307     1  BinaryNg | 1x1x1024x131072 | 1x1x32[1]x32[1] | 110
+     1.203    16  Matmul | 1x1x1024x5120 | 1x1x32[16]x5120 | 33
+     1.155    16  RotaryEmbeddingLlama | 1x32x1024x128 | 1x1x1024x128 | 110
+     0.819    17  Transpose | 1x1x5120x1024 |  | 110
+     0.779    16  Matmul | 1x1x1024x5120 | 1x1x1024x32[16] | 88
+     0.766    16  Concat | 1x1x1024x5120 | 1x1x1024x64 | 110
+     0.761    16  Slice | 1x1x5184x1024 |  | 110
+     0.689    16  Matmul | 1x1x1024x32[16] | 1x1x1024x5120 | 88
+     0.674     8  Matmul | 1x1x1024x32[16] | 1x1x32[16]x4096 | 66
+     0.663     8  AdamW | 1x1x65536x32[16] | 1x1x65536x32[16] | 110
+     0.604     8  Matmul | 1x1x1024x5120 | 1x1x5120x32[16] | 33
+     0.573    16  NLPConcatHeads | 1x32x1024x128 |  | 110
+     0.536    64  BinaryNg | 1x1x32[16]x6144 |  | 110
+     0.492     8  Concat | 1x1x1024x4096 | 1x1x1024x1024 | 110

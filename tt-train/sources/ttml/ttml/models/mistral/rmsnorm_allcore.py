@@ -38,6 +38,10 @@ class RMSNormFrozenGamma(Function):
 
 
 def _rmsnorm_frozen_gamma(x, gamma, epsilon):
+    if not x.get_requires_grad():
+        # Nothing upstream needs a gradient (the first norm reads the frozen embedding output): the C++ op builds
+        # no backward node here, while a Python Function always would (review round 3, finding 1).
+        return ttml.ops.rmsnorm.rmsnorm(x, gamma, epsilon)
     return RMSNormFrozenGamma.apply(x, gamma, epsilon)
 
 

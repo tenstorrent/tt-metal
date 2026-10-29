@@ -27,6 +27,8 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 
 - Iteration 8 (frozen vocab-parallel embedding): `FrozenVocabParallelEmbedding` in `frozen_embedding.py`; chain `O/iter8.sh` -> `O/iter8.log` (gradient check `O/iter8_tp_grad_check_tp4.{log,npz}` PASS, `tp_measure.sh iter8_tp` after 600 s: `O/iter8_tp_mfu_tp4.log` 545.9 ms, tt-smi, profile `O/iter8_tp_tracy_tp4_4layers` -> `O/iter8_tp_analysis.txt`, `O/iter8_tp_ranked_ops.txt`). The single-chip harness does not exercise the vocab-parallel path (no mesh); the TP gradient check (loss identical to single chip) is its correctness evidence.
 
+- Stage review round 3 (`review_round3.md`, more-work-needed, 7 findings). Follow-up: `frozen_embedding.py` / `rmsnorm_allcore.py` graph-free on no-grad inputs (finding 1); stacking microbenchmark `O/review3_stack_bench.{py,log}` (finding 2: no gain from tile-aligned stacking, cost recorded); chain `O/review3_followup.sh` -> `O/review3_followup.log`: harness `O/review3_harness.log` 15 passed, gradient check `O/review3_tp_grad_check_tp4.{log,npz}` PASS, 8-layer profile `O/review3_tracy_8layers` -> `O/review3_tracy_8layers_ranked_ops.txt`, `tp_measure.sh review3_tp` after 600 s (`O/review3_tp_mfu_tp4.log` 545.7 ms, `O/review3_tp_analysis.txt`, `O/review3_tp_ranked_ops.txt`: 17/17 collectives, 8+8 norm backward), 8-layer real-weight host-loss run `O/review3_train_8layers_hostloss.log` + `O/review3_loss_comparison.txt` (max 0.027, PASS), TP=4 real-weight 10 steps `O/review3_full_tp4_real.{log,json}` (finding 3); docs reworded per findings 4-7, the traceback file `iter6_diff_vs_iter4_8layers.txt` deleted.
+
 ## Commits (local, never pushed)
 
 | iteration | commit | content |

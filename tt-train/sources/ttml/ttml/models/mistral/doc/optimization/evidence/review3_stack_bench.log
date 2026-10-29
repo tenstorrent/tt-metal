@@ -1,0 +1,10 @@
+# Review round 3, finding 2: cost of stacking / unstacking the 16-row partial LoRA gradients (8 partials, one chip,
+# 20 reps, wall ms per call; script review3_stack_bench.py). Tile-aligned stacking does not help: the unpad back to
+# the 16-row logical shape costs what the unaligned slice cost.
+T: current A: concat 8x[16,5120] + 8 slices of 16 rows                       0.225 ms
+T: current B: concat 8x[5120,16] + 8 slices of 16 cols                       0.264 ms
+T: aligned A: 8 pads to 32 + concat + 8 aligned slices + 8 unpads            0.301 ms
+T: aligned B: same on columns                                                0.270 ms
+T: aligned A without the final unpad                                         0.183 ms
+R: aligned A equals current A: True
+R: aligned B equals current B: True
