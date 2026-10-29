@@ -18,6 +18,7 @@ SUBBLOCK = (1, 4)
 
 _configs = {}
 _small_configs = {}
+_mcast2d_configs = {}
 _acc_ccs = {}
 
 
@@ -144,6 +145,28 @@ def _small_config(device, m_tiles, k_tiles, n_tiles, activation):
     return cfg
 
 
+def _mcast2d_config(device, m_tiles, k_tiles):
+    """2D-mcast config for N=2048 at 128-512 rows, or None when the grid is too small."""
+    grid = device.compute_with_storage_grid_size()
+    key = (grid.x, grid.y, m_tiles, k_tiles)
+    if key not in _mcast2d_configs:
+        gy = 4 if m_tiles == 4 else 8
+        cfg = None
+        if grid.x >= 11 and grid.y >= gy:
+            cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(11, gy),
+                in0_block_w=8,
+                out_subblock_h=1,
+                out_subblock_w=3,
+                per_core_M=m_tiles // gy,
+                per_core_N=6,
+                transpose_mcast=False,
+                fused_activation=None,
+            )
+        _mcast2d_configs[key] = cfg
+    return _mcast2d_configs[key]
+
+
 def prefill_linear(x, w, compute_kernel_config, activation=None, memory_config=None):
     """x [B, S, K] (or [1, 1, S, K]) @ w [K, N], optional fused SiLU. Single-chip prefill only (no bias)."""
     if not enabled() or x.device().get_num_devices() != 1:
@@ -154,6 +177,17 @@ def prefill_linear(x, w, compute_kernel_config, activation=None, memory_config=N
     assert activation in (None, "silu"), activation
     m_tiles = _rows_tiles(x)
     k_tiles, n_tiles = (x.shape[-1] + 31) // 32, (w.shape[-1] + 31) // 32
+    if activation is None and n_tiles == 64 and m_tiles in (4, 8, 16) and k_tiles % 8 == 0:
+        # 2D mcast, bit-identical: 8-22% faster than the paths below for N=2048 at 128-512 rows.
+        pc = _mcast2d_config(x.device(), m_tiles, k_tiles)
+        if pc is not None:
+            return ttnn.linear(
+                x,
+                w,
+                program_config=pc,
+                compute_kernel_config=compute_kernel_config,
+                memory_config=memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
+            )
     path = _small_m_path(m_tiles, w.shape[-1], activation)
     if path is not None:
         pc = _small_config(x.device(), m_tiles, k_tiles, n_tiles, path if path == "silu" else None)
