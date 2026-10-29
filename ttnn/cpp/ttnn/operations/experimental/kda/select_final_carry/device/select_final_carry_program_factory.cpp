@@ -93,6 +93,10 @@ tt::tt_metal::ProgramDescriptor build_program(
             all_cores = all_cores.merge(fabric_range);
         }
     }
+    // A 2D multicast leaves every hop in one ETH direction. On a 2D fabric whose SP axis turns (the LoudBox and
+    // QuietBox rings), every send goes to each other rank as a 2D unicast, through the connection its route leaves on.
+    const bool unicast_peers = sp_size > 1 && tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) &&
+                               !ttnn::ccl::is_axis_straight(*mesh, axis);
     const uint32_t ring_index = ttnn::ccl::get_linearized_index_from_physical_coord(in.prefix_final, coord, axis);
     const auto [targets_forward, targets_backward] =
         sp_size > 1 ? ttnn::ccl::get_forward_backward_line_mcast_distance(sp_size, ring_index, topology, true)
@@ -141,7 +145,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         uint32_t(forward.has_value()),
         forward ? targets_forward : 0u,
         uint32_t(backward.has_value()),
-        backward ? targets_backward : 0u};
+        backward ? targets_backward : 0u,
+        uint32_t(unicast_peers)};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_args);
 
     tt::tt_metal::KernelDescriptor reader;
@@ -216,6 +221,29 @@ tt::tt_metal::ProgramDescriptor build_program(
                     writer_id,
                     core,
                     writer_rt);
+                if (unicast_peers) {
+                    const auto source = mesh->get_fabric_node_id(coord);
+                    std::vector<CoreCoord> connection_eth_cores;
+                    for (const auto& destination : destinations) {
+                        connection_eth_cores.push_back(
+                            tt::tt_fabric::get_forwarding_eth_core(*mesh, source, destination, link));
+                    }
+                    for (uint32_t step = 1; step < sp_size; ++step) {
+                        auto peer_coord = coord;
+                        peer_coord[axis] = (coord[axis] + step) % sp_size;
+                        const auto peer = mesh->get_fabric_node_id(peer_coord);
+                        const auto first_hop = tt::tt_fabric::get_forwarding_eth_core(*mesh, source, peer, link);
+                        const auto connection =
+                            std::find(connection_eth_cores.begin(), connection_eth_cores.end(), first_hop);
+                        TT_FATAL(
+                            connection != connection_eth_cores.end(),
+                            "select_final_carry: the route to SP rank {} does not leave through a neighbor's link",
+                            peer_coord[axis]);
+                        writer_rt.push_back(static_cast<uint32_t>(connection - connection_eth_cores.begin()));
+                        writer_rt.push_back(peer.chip_id);
+                        writer_rt.push_back(*peer.mesh_id);
+                    }
+                }
             }
             tt::tt_metal::KernelDescriptor::RTArgList writer_list;
             writer_list.reserve(writer_rt.size());
