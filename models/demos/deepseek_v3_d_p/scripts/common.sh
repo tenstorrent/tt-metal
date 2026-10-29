@@ -22,7 +22,7 @@ LOG_NAME="${1:-deepseek_v3_d_p_log}"
 LOOP="${LOOP:-${2:-20}}"
 
 # Per-run logs: one log_NN under here per outer iteration.
-LOG_DIR="/data/$USER/$LOG_NAME"
+LOG_DIR="${LOG_DIR:-/data/$USER/$LOG_NAME}"
 
 # Test selection — single source of truth. All models run the same chunked no-PCC file; MODEL picks
 # the test function, the parametrize ids, and the model's env vars (each adapter uses its own env var
