@@ -497,8 +497,10 @@ void kernel_main() {
 #if OUT_SHARDED
     // The sharded output stays in place, so this kernel only waits for compute to finish it. Pop what it
     // waited for so the buffer is left balanced.
-    const uint32_t out_sharded_num_tiles =
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h;
+    // Compute pushes out_block_num_tiles tiles for each of the num_blocks_h_dim * num_blocks_w_dim output
+    // blocks per batch, so this kernel pops the same number.
+    constexpr uint32_t out_block_num_tiles = get_arg(args::out_block_num_tiles);
+    const uint32_t out_sharded_num_tiles = batch * num_blocks_h_dim * num_blocks_w_dim * out_block_num_tiles;
     cb_out.wait_front(out_sharded_num_tiles);
     cb_out.pop_front(out_sharded_num_tiles);
 #endif

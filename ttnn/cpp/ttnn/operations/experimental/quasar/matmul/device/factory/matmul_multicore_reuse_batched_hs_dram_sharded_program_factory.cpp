@@ -275,7 +275,9 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     // CB 4 & 5: output and intermediate - on worker cores
     uint32_t output_cb_index = tt::CBIndex::c_4;
     uint32_t interm0_cb_index = tt::CBIndex::c_5;
-    if (interm0_data_format != output_data_format) {
+    const bool share_out_interm_buffer =
+        interm0_data_format == output_data_format && (!packer_l1_acc_en || out_shard_tiles == out_block_tiles);
+    if (!share_out_interm_buffer) {
         // Separate CBs for output and intermediate
         {
             CBDescriptor cb_desc;

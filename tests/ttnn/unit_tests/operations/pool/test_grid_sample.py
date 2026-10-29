@@ -381,6 +381,38 @@ def test_grid_sample_bilinear_weight_format(device, input_dtype, grid_kind, shar
     torch.testing.assert_close(ttnn.to_torch(output), expected, atol=0.02, rtol=0.02)
 
 
+# A float32 input under fp32_dest_acc_en=True is unpacked to Tf32 for the fused tilize+reduce, a
+# combination the other bilinear tests leave out (fp32 acc is swept with a bfloat16 input only; the
+# float32-input weight-format test runs with fp32 acc off).
+@pytest.mark.parametrize("grid_kind", ["float32", "bfloat16"])
+@pytest.mark.parametrize("align_corners", [False, True])
+@pytest.mark.parametrize("channels", [32, 384])
+def test_grid_sample_float32_input_fp32_dest_acc(device, grid_kind, align_corners, channels):
+    torch.manual_seed(42)
+    input_tensor = torch.randn(1, 8, 16, channels, dtype=torch.float32)
+    # Dyadic coordinates keep weights exactly representable while covering image boundaries.
+    grid = torch.randint(-12, 13, (1, 2, 32, 2)).float() / 8
+    expected = golden_grid_sample(input_tensor, grid, align_corners=align_corners)
+    grid_dtype = ttnn.float32 if grid_kind == "float32" else ttnn.bfloat16
+    grid_device = ttnn.from_torch(grid, dtype=grid_dtype, device=device)
+    input_device = ttnn.from_torch(input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+        math_approx_mode=False,
+    )
+    output = ttnn.grid_sample(
+        input_device,
+        grid_device,
+        mode="bilinear",
+        align_corners=align_corners,
+        compute_kernel_config=compute_kernel_config,
+    )
+    torch.testing.assert_close(ttnn.to_torch(output), expected, atol=0.02, rtol=0.02)
+
+
 @pytest.mark.parametrize("input_dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("batch_output_channels", [False, True])
 @pytest.mark.parametrize(

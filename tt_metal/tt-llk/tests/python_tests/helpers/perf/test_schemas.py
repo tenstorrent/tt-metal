@@ -50,6 +50,25 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
         "test_name_aliases": {"perf_bcast": "perf_bcast"},
     },
+    "perf_block_max8": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_block_max8": "perf_block_max8"},
+    },
     "perf_eltwise_bcast_col_custom": {
         "version": 3,
         "columns": [
@@ -1469,8 +1488,9 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_sfpu_exp_parallel_matmul_quasar": {
-        "version": 4,
+        "version": 5,
         "columns": [
+            "approx_mode",
             "c_dimm",
             "dest_acc",
             "dest_sync",
@@ -1491,12 +1511,15 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces_A",
             "num_faces_B",
             "r_dimm",
-            "sfpu_srcs_impl",
+            "sfpu_impl",
             "tile_cnt",
             "unpack_to_dest",
             "unpack_transpose_faces",
         ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "aliases": {
+            "formats.sfpu_math": "formats.sfpu_src",
+            "sfpu_srcs_impl": "sfpu_impl",
+        },
         "test_name_aliases": {
             "perf_sfpu_exp_parallel_matmul_quasar": "perf_sfpu_exp_parallel_matmul_quasar"
         },
