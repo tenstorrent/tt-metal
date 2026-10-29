@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_projection.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
@@ -131,7 +132,10 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
          {&in.actual_start, "actual_start"},
          {&in.entry_landing, "entry_landing"},
          {&in.state_staging, "state_staging"},
-         {&in.final_landing, "final_landing"}},
+         {&in.final_landing, "final_landing"},
+         {in.gate_input ? &*in.gate_input : nullptr, "output_gate_input"},
+         {in.gate_weight ? &*in.gate_weight : nullptr, "output_gate_weight"},
+         {in.gate_copy_source ? &*in.gate_copy_source : nullptr, "output_gate_copy_source"}},
         operation_name);
     kda_factory_detail::check_output_interleaved(attrs.entry_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
@@ -143,6 +147,15 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         operation_name,
         key_tiles,
         dst_tiles);
+    if (attrs.output_gate) {
+        const auto& gate = *attrs.output_gate;
+        TT_FATAL(in.gate_input && in.gate_weight, "{}: an output gate needs its input and weight", operation_name);
+        kda_factory_detail::check_projection(*in.gate_input, *in.gate_weight, gate.program_config, operation_name);
+        TT_FATAL(
+            gate.output_column == 0 || (in.gate_copy_source && !gate.copy_cores.empty()),
+            "{}: the output gate's copied columns need a copy source and copy cores",
+            operation_name);
+    }
 }
 
 RelayAffinePrefixOperation::spec_return_value_t RelayAffinePrefixOperation::compute_output_specs(
@@ -153,7 +166,19 @@ RelayAffinePrefixOperation::spec_return_value_t RelayAffinePrefixOperation::comp
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::FLOAT32, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory));
     };
-    return {spec(attrs.entry_mem_config), spec(ttnn::DRAM_MEMORY_CONFIG)};
+    spec_return_value_t specs = {spec(attrs.entry_mem_config), spec(ttnn::DRAM_MEMORY_CONFIG)};
+    if (attrs.output_gate) {
+        // The copied tile columns, then the projection's.
+        auto shape = in.gate_input->logical_shape();
+        shape[-1] = attrs.output_gate->output_column * tt::constants::TILE_WIDTH + in.gate_weight->logical_shape()[-1];
+        specs.emplace_back(
+            shape,
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                attrs.output_gate->output_mem_config));
+    }
+    return specs;
 }
 
 RelayAffinePrefixOperation::tensor_return_value_t RelayAffinePrefixOperation::create_output_tensors(
@@ -181,7 +206,7 @@ RelayAffinePrefixOperation::create_op_performance_model(
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
-std::tuple<Tensor, Tensor> relay_affine_prefix(
+std::tuple<Tensor, Tensor, std::optional<Tensor>> relay_affine_prefix(
     const Tensor& packed,
     const Tensor& initial_state,
     const Tensor& actual_start,
@@ -194,7 +219,11 @@ std::tuple<Tensor, Tensor> relay_affine_prefix(
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
     uint32_t num_links,
-    const std::vector<tt::tt_metal::CoreCoord>& cores) {
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    const std::optional<AffineRelayOutputGateParams>& output_gate,
+    const std::optional<Tensor>& gate_input,
+    const std::optional<Tensor>& gate_weight,
+    const std::optional<Tensor>& gate_copy_source) {
     auto outputs = ttnn::device_operation::launch<RelayAffinePrefixOperation>(
         RelayAffinePrefixParams{
             .sequence_parallel_axis = sequence_parallel_axis,
@@ -203,15 +232,19 @@ std::tuple<Tensor, Tensor> relay_affine_prefix(
             .cores = cores,
             .entry_mem_config = entry_memory_config,
             .compute_kernel_config = compute_kernel_config,
-            .semaphore_addresses = semaphore_addresses},
+            .semaphore_addresses = semaphore_addresses,
+            .output_gate = output_gate},
         RelayAffinePrefixInputs{
             .packed = packed,
             .initial_state = initial_state,
             .actual_start = actual_start,
             .entry_landing = entry_landing,
             .state_staging = state_staging,
-            .final_landing = final_landing});
-    return {outputs[0], outputs[1]};
+            .final_landing = final_landing,
+            .gate_input = gate_input,
+            .gate_weight = gate_weight,
+            .gate_copy_source = gate_copy_source});
+    return {outputs[0], outputs[1], outputs.size() > 2 ? std::optional<Tensor>(outputs[2]) : std::nullopt};
 }
 
 }  // namespace ttnn::experimental::prim

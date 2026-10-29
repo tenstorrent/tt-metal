@@ -183,6 +183,52 @@ def test_select_final_carry_rejects_contract_violations(mesh_device, case, error
         ttnn.experimental.kda.select_final_carry(rank_final, prefix_final, actual_start=actual_start, **kwargs)
 
 
+@pytest.mark.parametrize("mesh_device,device_params", _meshes(), indirect=True)
+def test_select_final_carry_with_projection_rejects_aliased_operands(mesh_device, expect_error):
+    """A cached program refreshes each buffer argument through its own binding: X @ X would leave the bindings
+    ambiguous and the cached program on the first call's buffers, so the op rejects it."""
+    state = lambda: ttnn.from_torch(
+        torch.zeros(_HEADS, _KEY, _VALUE),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    x = ttnn.from_torch(
+        torch.zeros(256, 256),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    grid = mesh_device.compute_with_storage_grid_size()
+    config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=2,
+        out_block_w=1,
+        per_core_M=2,
+        per_core_N=1,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    with expect_error(RuntimeError, "projection_input and projection_weight must be different tensors"):
+        ttnn.experimental.kda.select_final_carry_with_projection(
+            state(),
+            state(),
+            x,
+            x,
+            actual_start=make_actual_start(mesh_device),
+            local_rows=_ROWS,
+            cores=[ttnn.CoreCoord(grid.x - 1, y) for y in range(grid.y - 4, grid.y)],
+            projection_program_config=config,
+            prefix_on_last_rank=True,
+        )
+
+
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [
@@ -195,9 +241,10 @@ def test_select_final_carry_rejects_contract_violations(mesh_device, case, error
     ],
     indirect=True,
 )
-def test_select_final_carry_from_the_last_rank(mesh_device):
+@pytest.mark.parametrize("projection", [False, True], ids=["carry", "with-projection"])
+def test_select_final_carry_from_the_last_rank(mesh_device, projection):
     """prefix_on_last_rank: only the last chronological rank holds the prefix's final state and multicasts it, on the
-    caller's cores and semaphores."""
+    caller's cores and semaphores; with_projection also runs a ttnn.linear-equal projection in the same dispatch."""
     torch.manual_seed(0)
     sp_size, tp_size = tuple(mesh_device.shape)
     width = tp_size * _VALUE
@@ -213,11 +260,39 @@ def test_select_final_carry_from_the_last_rank(mesh_device):
     )
     rank_final_tt, prefix_tt = shard(rank_final), shard(prefix)
     grid = mesh_device.compute_with_storage_grid_size()
-    # The carry on the bottom of the last worker column.
+    # The carry on the bottom of the last worker column; the projection on the columns to its left.
     cores = [ttnn.CoreCoord(grid.x - 1, y) for y in range(grid.y - 4, grid.y)]
     core_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
     semaphores = [ttnn.create_global_semaphore(mesh_device, core_set, 0) for _ in range(2)]
     ttnn.synchronize_device(mesh_device)
+    replicate = lambda t: ttnn.from_torch(
+        t,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    x, w = replicate(torch.randn(1, 128, 256)), replicate(torch.randn(256, 512) * 0.05)
+    config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        out_block_h=1,
+        out_block_w=2,
+        per_core_M=1,
+        per_core_N=2,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True
+    )
+    expected_projection = ttnn.to_torch(
+        ttnn.linear(x, w, program_config=config, compute_kernel_config=compute_config),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    )
     try:
         for start in (0, _ROWS, _ROWS + 32, sp_size * _ROWS - 32):
             start_tt = make_actual_start(mesh_device, start)
@@ -230,7 +305,21 @@ def test_select_final_carry_from_the_last_rank(mesh_device):
                 prefix_on_last_rank=True,
                 semaphores=semaphores,
             )
-            carry = ttnn.experimental.kda.select_final_carry(rank_final_tt, prefix_tt, **kwargs)
+            if projection:
+                carry, projected = ttnn.experimental.kda.select_final_carry_with_projection(
+                    rank_final_tt,
+                    prefix_tt,
+                    x,
+                    w,
+                    projection_program_config=config,
+                    projection_compute_kernel_config=compute_config,
+                    **kwargs,
+                )
+                got = ttnn.to_torch(projected, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+                assert torch.equal(got, expected_projection), f"projection differs from ttnn.linear for start={start}"
+                ttnn.deallocate(projected)
+            else:
+                carry = ttnn.experimental.kda.select_final_carry(rank_final_tt, prefix_tt, **kwargs)
             first_rank = (start // _ROWS) % sp_size
             separated = start % _ROWS != 0
             expected = rank_final[first_rank] if separated else prefix[(first_rank + sp_size - 1) % sp_size]
@@ -244,5 +333,5 @@ def test_select_final_carry_from_the_last_rank(mesh_device):
             ttnn.deallocate(carry)
             ttnn.deallocate(start_tt)
     finally:
-        for tensor in (rank_final_tt, prefix_tt):
+        for tensor in (rank_final_tt, prefix_tt, x, w):
             ttnn.deallocate(tensor)
