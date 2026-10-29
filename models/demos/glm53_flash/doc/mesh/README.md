@@ -1580,3 +1580,18 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
   per chip per save, ~1.1 GB device-to-host plus a sync, per slot at every chunk end and decode crossing).
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
+
+### 2026-10-29 08:01: the APC-off 32-request served run (r5)
+
+With the ragged ladder, no SP prefill traces, wave traces 256/512 and the APC off: stage a both prompts = HF (the dump
+prompt through the 256-padded traced wave), stage b identical and distinct; the adapter's decode step 58-61 ms host wall
+over 32 live users = 16.3-17.5 tok/s per user, 523-549 tok/s aggregate (r3 with the APC's host-store snapshots: 725-1194
+ms), so the 32-slot per-step cost was the APC host store (35 MiB per chip per save plus a sync, per slot at every
+chunk end and decode crossing); the bench at ISL 128 x 32: TTFT mean 5.2 s (32 arrivals prefilled in waves; the
+catalog's `decode_interleave_enabled: false` holds decodes until no continuation is pending), decode 10.6 tok/s per
+user by the bench's wall. Stage c: 2 of 4 concurrent 64 K needles; the corrupted two are the smaller-start members of
+mixed-start waves whose slots held older, longer content past their prefix (`user_rows_rm` covers the wave's longest
+prefix on every row): the block case (d) re-runs over stale slot content. The 64 K x 4 bench completed 4/4 with a
+321 s mean TTFT: one row per prompt walks 32 chunks of 2048 at 7-10 s each, against the SP path's 4 chunks of 16 K at
+~12 s shared by 8 rows, so long prompts belong to SP whenever a slot index is free on every row; per-row ownership buys
+the decode capacity (32 distinct requests) at the cost of long-context TTFT when every index is busy.
