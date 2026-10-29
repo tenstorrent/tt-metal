@@ -200,6 +200,9 @@ class DFlash2DrafterTP:
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+        # one-tile-row matmuls (_lin): K blocks of up to this many tiles (QWEN36_DFLASH_MM_BW=0: the auto configs)
+        self._mm_bw = int(os.environ.get("QWEN36_DFLASH_MM_BW", "8"))
+        self._mm_cfgs = {}
         # the one-tile-row hidden RMSNorms (_rms_h): width-sharded, 4 tiles on each of 40 cores
         # (QWEN36_DFLASH_LN_SHARDED=0: interleaved, A/B)
         self._ln_sharded = os.environ.get("QWEN36_DFLASH_LN_SHARDED", "1") == "1"
@@ -368,8 +371,44 @@ class DFlash2DrafterTP:
         self.K = block - 1
 
     # ------------------------------------------------------------------ primitives
-    def _lin(self, x, w, **k):
-        return ttnn.linear(x, w, compute_kernel_config=CKC, **k)
+    def _lin(self, x, w, ckc=CKC, **k):
+        """x @ w; one tile row of x (the draft / extend rows) by a narrow weight: an explicit 1D config (_mm_cfg)"""
+        pc = None
+        if x.shape[-2] <= ttnn.TILE_SIZE and self._mm_bw:
+            pc = self._mm_cfg(x.shape[-1] // ttnn.TILE_SIZE, w.shape[-1] // ttnn.TILE_SIZE, k.get("activation"))
+            if pc is not None:
+                k.pop("activation", None)
+        if pc is None:
+            return ttnn.linear(x, w, compute_kernel_config=ckc, **k)
+        return ttnn.linear(x, w, compute_kernel_config=ckc, program_config=pc, **k)
+
+    def _mm_cfg(self, Kt, Nt, activation=None):
+        """A 1D (in0-multicast) config for a [32 x Kt tiles] @ [Kt x Nt] matmul whose N fits the grid one tile column
+        per core (or whose K is short): the auto config reads weight blocks of 2 tiles of K, a DRAM round trip per
+        2 tiles (64-84 us for 2.6-16 MB at one column per core). Blocks of up to _mm_bw tiles of K. None (the auto
+        config) for the wide weights (MLP, fc, lm_head), which the larger blocks slow down."""
+        key = (Kt, Nt, activation)
+        if key not in self._mm_cfgs:
+            g = self.mesh.compute_with_storage_grid_size()
+            cores = g.x * g.y
+            pcn = -(-Nt // cores)
+            if pcn > 1 and Kt > 16:
+                self._mm_cfgs[key] = None
+                return None
+            bw = max(b for b in range(1, self._mm_bw + 1) if Kt % b == 0)
+            sbw = max(b for b in range(1, 5) if pcn % b == 0)  # (fp32 dest: up to 4 tiles)
+            self._mm_cfgs[key] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(g.x, g.y),
+                in0_block_w=bw,
+                out_subblock_h=1,
+                out_subblock_w=sbw,
+                per_core_M=1,
+                per_core_N=pcn,
+                fuse_batch=True,
+                fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if activation == "silu" else None,
+                mcast_in0=True,
+            )
+        return self._mm_cfgs[key]
 
     def _rms(self, x, w):
         return ttnn.rms_norm(x, weight=w, epsilon=1e-6, compute_kernel_config=CKC)
@@ -1096,7 +1135,7 @@ class DFlash2DrafterTP:
         self._dv = None
         hn = self._rms_h(h, self.fnorm, self.fnorm_rm)
         ttnn.deallocate(h)
-        logits = ttnn.linear(hn, self.lm_w)  # [1,1,B,V/nd] per device
+        logits = self._lin(hn, self.lm_w, ckc=None)  # [1,1,B,V/nd] per device
         vals, idx = ttnn.topk(logits, self.topk, dim=-1, largest=True, sorted=True)
         ttnn.deallocate(logits)
         parts = [vals, idx] + ([self._lin(hn, self.hproj)] if self.has_selector else [])
