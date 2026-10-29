@@ -1641,6 +1641,13 @@ class ResidentModel:
         """the device out tensor of a launch's fed tokens (rows mode: 4 words per row, see fed_token)"""
         return self.subs[launch]["out"]
 
+    def row_order(self):
+        """rows mode: the order to fill a launch's rows in. Core g of a GDN value head runs rows g B / G .. (g + 1) B / G
+        one after another, so the i-th user goes to row (i % G) B / G + i // G: consecutive users on different head
+        cores (G = 2: 0, 4, 1, 5, ...). A user's tokens are the same in any row; only the step time changes."""
+        B, G = self.batch, self.head_groups
+        return [(i % G) * (B // G) + i // G for i in range(B)]
+
     def clear_slot(self, s):
         """rows mode: zero slot s's GDN states and its row of the conv histories (a request's state before its first
         token, what a prefill of no tokens hands off), every other slot untouched; its KV needs nothing (a step reads
