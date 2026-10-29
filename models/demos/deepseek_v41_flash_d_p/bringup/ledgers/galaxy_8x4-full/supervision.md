@@ -865,3 +865,8 @@ guards around the CUR walls ~412-438); the A/B decides.
   pairs 415.7/393.3 and 389.6/391.8 (first run of a session slow). Attempt 2 failed only on doc lint (ckv_bfp4 README
   sections from the 2x2, DS41-135 'Fix:'). F214 note: the accept is consumed when the orchestrator commits the pick.
   NOW: P.8 C INDEXER_TOPK_LOCAL (attempt 1), then P.9 B, P.10 A (conditional), P.4, P.5.
+- 10:00 P.8 INDEXER_TOPK_LOCAL ACCEPTED by the overseer (same class as P.7, which the owner accepted: work removed by
+  construction, accuracy identical to the byte, wall within noise 417.5 on / 415.8 off, spread ~53). Saves 16 op calls a
+  chunk (8 TP all-gathers + 8 mesh_partitions; the study's ~46 assumed one index list per layer, ChunkMemo already
+  builds one per index source); kept top-k 1.31 -> 0.33 MB a source layer. Component / swap tests keep local=False
+  (hooks.py outside the paths). NOW: P.9 B ATTN_SP32_PROJ.
