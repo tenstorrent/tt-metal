@@ -2633,9 +2633,9 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert all(policy.decide(reseeding, [row], _PLAIN, 5) is None for _ in range(228))
     assert policy.decide(reseeding, [row], _PLAIN, 5).reason == "retry"
     # a record the statistics rule out (gain below min_gain / 4) is never retried
-    hopeless = SpecPolicy(SpecPolicyConfig(retry_steps=1, retry_overhead=1.0, probe_steps=0), 5)
+    hopeless = SpecPolicy(SpecPolicyConfig(trial_steps=1, retry_steps=1, retry_overhead=1.0, probe_steps=0), 5)
     assert all(hopeless.decide([RecordCandidate((16, 1), 1024, 120.0)], [row], _PLAIN, 5) is None for _ in range(10))
-    never = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0), 5)
+    never = SpecPolicy(SpecPolicyConfig(trial_steps=1, retry_steps=0, retry_overhead=1.0), 5)
     assert all(never.decide(_cands(_COSTS), [row], _PLAIN, 5) is None for _ in range(20))
     # a new request's trial: declined otherwise, a fresh step replays the cheapest record (entry plus step) once
     # when the prior's gain clears trial_gain, whatever the retry cadence says; never held, reason "trial"
@@ -2647,7 +2647,10 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert not fresh.would_speculate(_cands(_COSTS), [row], _PLAIN)
     dear = [RecordCandidate((16, 1), 2048, 50.0)]  # 1.4 tokens at 2.5x plain: 0.56x, below the trial gain
     assert fresh.decide(dear, [row], _PLAIN, 5, fresh=True) is None and fresh.last_reason == "declined"
-    assert SpecPolicy(SpecPolicyConfig(trial_gain=0.5), 5).decide(dear, [row], _PLAIN, 5, fresh=True).reason == "trial"
+    assert (
+        SpecPolicy(SpecPolicyConfig(trial_steps=1, trial_gain=0.5), 5).decide(dear, [row], _PLAIN, 5, fresh=True).reason
+        == "trial"
+    )
     with_entry = [RecordCandidate((1, 5), 2048, 50.0, 170.0), RecordCandidate((16, 1), 2048, 30.0, 300.0)]
     assert fresh.decide(with_entry, [row], _PLAIN, 5, fresh=True).shape == (1, 5), "cheapest entry plus step"
     # a batch that is not all new: its trial needs the hypothesis that the new rows accept every draft to clear
@@ -2656,7 +2659,9 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     # tokens makes 1.74 tokens/row = 0.99x < min_gain (declined); three new rows make 2.39 = 1.36x (trial), and
     # the (8,3)'s 230 ms reseed must pay over the joining rows' horizon (not over 10 steps: 12.8 ms x 10)
     batch = [_row([0.3] * 5) for _ in range(8)]
-    eight = SpecPolicy(SpecPolicyConfig(min_gain=1.10, retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
+    eight = SpecPolicy(
+        SpecPolicyConfig(trial_steps=1, min_gain=1.10, retry_steps=0, retry_overhead=1.0, probe_steps=0), 5
+    )
     only83 = [c for c in _cands(_COSTS, n=8) if c.shape == (8, 3)]
     assert rank_records(only83, batch, _PLAIN)[0].gain == pytest.approx(1.417 * 20 / 35, abs=1e-3)
     hyped = rank_records(only83, batch, _PLAIN, optimistic=(0,))
@@ -2672,7 +2677,9 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert eight.decide(both, batch, _PLAIN, 3, fresh=(0, 1, 2)) is None
     assert eight.decide(both, batch, _PLAIN, 3, fresh=(0, 1, 2, 3, 4)).shape == (16, 1)
     reseeding8 = [RecordCandidate((8, 3), 2048, 35.0, 230.0), RecordCandidate((16, 1), 2048, 30.0, 300.0)]
-    eight = SpecPolicy(SpecPolicyConfig(min_gain=1.10, retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
+    eight = SpecPolicy(
+        SpecPolicyConfig(trial_steps=1, min_gain=1.10, retry_steps=0, retry_overhead=1.0, probe_steps=0), 5
+    )
     assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(0, 1, 2)).reason == "trial"
     assert eight.decide(reseeding8, batch, _PLAIN, 3, remaining=10, fresh=(0, 1, 2)) is None
     assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=True).reason == "trial", "a batch all new: the floor"
@@ -2692,7 +2699,7 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     even = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.9)]  # 1.09x: below the 1.10 bar
     assert eight.decide(even, batch, _PLAIN, 3, fresh=True) is None and eight.last_reason == "declined"
     assert (
-        SpecPolicy(SpecPolicyConfig(min_gain=1.05, retry_steps=0, entry_horizon=128), 5)
+        SpecPolicy(SpecPolicyConfig(trial_steps=1, min_gain=1.05, retry_steps=0, entry_horizon=128), 5)
         .decide(even, batch, _PLAIN, 3)
         .reason
         == "enter"
@@ -2702,7 +2709,7 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
         eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(8,))
     # the calibration probe: a speculating batch serves one plain step once calib_probe_steps passed without
     # a clean plain sample and the probe's cost (the reseed to resume, the tokens forgone) is amortized
-    probing = SpecPolicy(SpecPolicyConfig(calib_probe_steps=3, retry_overhead=2.0, probe_steps=0), 5)
+    probing = SpecPolicy(SpecPolicyConfig(trial_steps=1, calib_probe_steps=3, retry_overhead=2.0, probe_steps=0), 5)
     rows = [_row([1.0] * 5)]
     kinds = []
     for _ in range(5):
@@ -2714,11 +2721,11 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
             probing.calibration.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
     assert kinds == ["gain", "gain", "gain", None, "gain"] and probing.last_reason == "gain"
     assert probing.calibration.steps_without("plain") == 1
-    never = SpecPolicy(SpecPolicyConfig(calib_probe_steps=0, probe_steps=0), 5)
+    never = SpecPolicy(SpecPolicyConfig(trial_steps=1, calib_probe_steps=0, probe_steps=0), 5)
     for _ in range(6):
         assert never.decide(_cands(_COSTS), rows, _PLAIN, 5) is not None
         never.calibration.note_step(("step", (1, 5), 1024), 50.0, 6, True, 50.0, 1)
-    costly = SpecPolicy(SpecPolicyConfig(calib_probe_steps=3, retry_overhead=0.03, probe_steps=0), 5)
+    costly = SpecPolicy(SpecPolicyConfig(trial_steps=1, calib_probe_steps=3, retry_overhead=0.03, probe_steps=0), 5)
     for _ in range(6):  # 5 tokens forgone x 20 ms over 3+ steps is far above 3 % of them: no probe
         assert costly.decide(_cands(_COSTS), rows, _PLAIN, 5) is not None
         costly.calibration.note_step(("step", (1, 5), 1024), 50.0, 6, True, 50.0, 1)
