@@ -946,8 +946,9 @@ bool is_native_L1_sharding(
         }
 
         // A sharded input must place the same tensor region on each core as the output; a mismatch --
-        // another grid, shard shape, orientation or layout -- goes through the TensorAccessor path, which
-        // reshards. b needs no check of its own: the condition above makes its memory config a's.
+        // another grid, shard shape, orientation or layout -- declines the alias. The host then moves those
+        // L1 inputs to interleaved DRAM before launch. b needs no check of its own: the condition above
+        // makes its memory config a's.
         if (a.memory_config().is_sharded() && !c_shard_matches_a) {
             return false;
         }

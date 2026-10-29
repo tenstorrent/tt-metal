@@ -4751,6 +4751,7 @@ def _l1_sharded(layout, shard_shape, grid, orientation=ttnn.ShardOrientation.ROW
 
 
 _COL_4 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
+_COL_2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))})
 _GRID_2x2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
 
 _SAME_GRID_DIFFERENT_SPEC_CASES = [
@@ -4771,6 +4772,14 @@ _SAME_GRID_DIFFERENT_SPEC_CASES = [
         _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 32], _GRID_2x2),
         _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 32], _GRID_2x2, ttnn.ShardOrientation.COL_MAJOR),
         id="row_major_to_col_major",
+    ),
+    # Same layout, grid and orientation. Only the shard height changes, so a check that ignores shard shape
+    # would still alias these and return the height-96 rows in the height-128 slots.
+    pytest.param(
+        (192, 128),
+        _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [96, 128], _COL_2),
+        _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [128, 128], _COL_2),
+        id="same_layout_different_shard_shape",
     ),
     pytest.param(
         (128, 128),
@@ -4816,6 +4825,20 @@ def test_binary_sharded_same_grid_different_spec_output_tensor(device, shape, in
     )
     ttnn.add(tx, ty, output_tensor=out)
     assert out.memory_config() == out_mc
+    assert_with_ulp(expected_result=x + y, actual_result=ttnn.to_torch(out), ulp_threshold=2)
+
+
+# A sharded input with an interleaved L1 output must not alias the output buffer as a CB.
+def test_binary_sharded_input_interleaved_l1_output(device):
+    torch.manual_seed(0)
+    shape = (128, 128)
+    in_mc = _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 128], _COL_4)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    y = torch.randn(shape, dtype=torch.bfloat16)
+    tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    ty = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    out = ttnn.add(tx, ty, memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert out.memory_config() == ttnn.L1_MEMORY_CONFIG
     assert_with_ulp(expected_result=x + y, actual_result=ttnn.to_torch(out), ulp_threshold=2)
 
 
