@@ -1377,3 +1377,18 @@ bucket. Until then the served default restores at chunk-aligned snapshots only (
   H1+H2 (`allreduce` / `allreduce_ccl`) next in the queue.
 - APC r3 analysis and the chip-0 unaligned-continuation test: see the 00:30 entry's follow-up in the plan (D7) and the
   ledger note of 00:59 (`sched_validate.log`).
+
+### 2026-10-29 01:35: H1 + H2 measured (the 20 tok/s per user point), the unaligned-start maintenance finding
+
+- `e2e_8x4_B4_*_f103` (45 layers, 32 users, 128-token prompts, first token = HF in all three): H1 compact gather
+  55.80 ms; H1 + H2 all-reduce combine 48.70 ms (20.5 tok/s per user, 657 aggregate); H1 + H2 CCL all-reduce 47.86 ms
+  (20.9 tok/s per user, 669 aggregate) against 61.5 ms before. Next: the 2K-prose coherence gate on the combined
+  knobs, then the defaults flip and the served A/B.
+- The APC r3 artifacts, the real lead: the 4-layer served reproduction (`test_served_vllm_cached_prefix_miss_with_
+  budget_split`: B joins with the shared 2048 "computed" and 64 tokens of budget, continues from 2112) stopped at the
+  sealed program cache inside `TtDSAIndexer.maintain_prefill`: a start that is 32-aligned but not 128-aligned leaves the
+  shape-static maintenance for the OFFSET path (host-int slices = new programs). Served, the seal is off, so those
+  programs compile at request time under the live decode traces (the post-capture allocation class of the 2026-10-28
+  image hang). The chip-0 layer tests were bit-identical because they ran without live traces. A3's index half (static
+  maintenance at any 32-aligned start) is the fix; the rerun with the seal off (numerics under live traces) is queued.
+- Waves step A (KDA / dense layers + head) is on the block queue after a prompt-length fix.

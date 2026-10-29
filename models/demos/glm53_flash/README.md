@@ -109,6 +109,13 @@ prompts), greedy determinism across rounds through the chat template (thinking o
 (TTFT 26.5 / 52.6 / 78.6 / 104.8 s: the sequence-parallel prefill serves prompts one after another at ~2.5 K tok/s), `vllm bench`
 128 x 128 tokens at 32 requests (4 at a time) 32/32.
 
+Decode glue A/B on the 8x4 (2026-10-29, 45 layers, 4 users per row = 32, one e2e run each, `tests/test_mesh_e2e` on the
+base tree f103, first token = HF in every run): the compact hybrid gather (`GLM53_HYBRID_GATHER=compact`) takes the
+traced decode step from 61.5 to 55.80 ms (17.9 tok/s per user, 573 tok/s aggregate); with the all-reduce combine
+(`GLM53_HYBRID_COMBINE=allreduce`) 48.70 ms = 20.5 tok/s per user (657 aggregate), with the CCL all-reduce
+(`allreduce_ccl`) 47.86 ms = 20.9 tok/s per user (669 aggregate): the 20 tok/s per user point at 32 users. Both knobs
+stay opt-in until the 2K-prose coherence gate and the served A/B confirm them as defaults.
+
 Served 2026-10-29 on the merged serving tree (`arg/glm53_served`: APC + image/video + speculative decode in one adapter, 45
 layers, 1 M profile, one smoke run): exact first tokens (128-token TTFT 160 ms incl. HTTP), greedy determinism across rounds,
 4 concurrent 65 514-token needles 4/4 (TTFT 59.7 / 59.7 / 119.3 / 119.3 s: two prefills share a step), decode step 73.1 ms =
