@@ -47,12 +47,13 @@ _LOUDBOX_PERF_SKU = "bh_loudbox"
 _QUIETBOX_PERF_SKU = "bh_quietbox"
 _PERF_MARGIN = 0.03
 # Host wall time of one traced call: the median over _TIMING_SAMPLES samples, each of back-to-back trace replays
-# through device synchronization. Every case opens a 2D fabric with K3's payload (kda_device_params); the LoudBox and
-# QuietBox references below were measured on FABRIC_1D / FABRIC_1D_RING with 3-tile packets and are to be re-measured on
-# the dedicated runners.
+# through device synchronization. Every case opens a 2D fabric with K3's payload (kda_device_params). The LoudBox and
+# QuietBox SP rings turn, so a 2D multicast cannot follow them: the qkv history exchange and the final carry send to each
+# rank in turn. LoudBox's SP8xTP1 layer measures 1.425 ms here (1.128 ms on FABRIC_1D_RING with 3-tile packets).
+# Galaxy's straight axes keep the multicast.
 _PERF_REFERENCE_MS = {
     _LOUDBOX_PERF_SKU: {
-        "SP8xTP1": 1.128,
+        "SP8xTP1": 1.425,
         "TP4-linear": 0.188,
     },
     _QUIETBOX_PERF_SKU: {
