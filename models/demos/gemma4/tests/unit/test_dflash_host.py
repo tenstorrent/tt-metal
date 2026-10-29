@@ -3006,7 +3006,7 @@ def test_eager_warmup_prepares_and_traced_warmup_captures_on_the_same_decoder(
     assert tuple(decoder["page_table_torch"].shape) == (5, 8) and decoder["page_table_torch"].eq(0).all()
     assert mtp._mtp_captured and mtp._mtp_max_rows == 5 and mtp._mtp_shapes == ((1, 5), (5, 5))
     assert mtp._mtp_decoder.widths[(1, 5)] == adapter.mtp_pv_width_ladder(1024, 5)
-    assert mtp._mtp_decoder.widths[(16, 1)] == adapter.mtp_pv_width_ladder(1024, 1)
+    assert mtp._mtp_decoder.widths[(5, 5)] == adapter.mtp_pv_width_ladder(1024, 5)
     # -- the MTP rail: warmup caps the records at the engine batch and the row cap
     mtp = mh.build_mtp_model(
         adapter,
@@ -3736,6 +3736,12 @@ def _mtp_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_
         "reseed": 2,
         "replay": 18,
         "host": 23,
+        # the runner's call boundaries (8b3f194aca3): a gap per proposal-to-step and step-to-proposal, by the step's kind
+        "gap_pv_v": 18,
+        "gap_vp_v": 18,
+        "gap_pv_p": 4,
+        "gap_vp_p": 5,
+        "verify": 18,
     }
     assert calib.prefills == 1 and calib.window_prefills == 1
     assert calib.total[0] == 22 and calib.total[2] == 6 + 16 + 5, "every closed interval, with its tokens"
