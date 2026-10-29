@@ -12,7 +12,7 @@
 // Prefer to use API rather than internals in this
 // test as we are testing end to end functionality
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/discovery/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>

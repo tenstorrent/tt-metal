@@ -8,7 +8,7 @@
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <cstdint>
 #include <string>
-#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/discovery/metal_env.hpp>
 
 struct metal_SocDescriptor;
 

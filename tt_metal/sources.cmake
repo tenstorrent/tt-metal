@@ -24,6 +24,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/core_coord.hpp
     api/tt-metalium/device.hpp
     api/tt-metalium/device_types.hpp
+    api/tt-metalium/discovery/metal_env.hpp
     api/tt-metalium/dispatch_core_common.hpp
     api/tt-metalium/distributed.hpp
     api/tt-metalium/distributed_context.hpp
@@ -32,7 +33,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/allocator.hpp
     api/tt-metalium/experimental/dispatch_telemetry.hpp
     api/tt-metalium/experimental/trace_allocation_tracker.hpp
-    api/tt-metalium/experimental/context/metal_env.hpp
     api/tt-metalium/experimental/core_subset_write/buffer_write.hpp
     api/tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp
     api/tt-metalium/experimental/core_subset_write/tensor.hpp

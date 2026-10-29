@@ -15,7 +15,7 @@
 #include <vector>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/discovery/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "llrt/core_descriptor_types.hpp"
 #include "tt_metal/llrt/hal.hpp"

@@ -14,7 +14,7 @@
 #include "impl/device/firmware/firmware_initializer.hpp"
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "context_types.hpp"
-#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/discovery/metal_env.hpp>
 #include "hostdevcommon/common_values.hpp"
 namespace tt::tt_fabric {
 class ControlPlane;
