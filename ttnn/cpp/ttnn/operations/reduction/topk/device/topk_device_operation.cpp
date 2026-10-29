@@ -390,7 +390,16 @@ TopKDeviceOperation::spec_return_value_t TopKDeviceOperation::compute_output_spe
 
     // Compute output specifications dynamically
     auto output_shape = input_tensor.logical_shape();
-    output_shape[-1] = args.output_k.value_or(args.k);  // Set last dimension to K (number of top elements)
+    const uint32_t output_k = args.output_k.value_or(args.k);
+    const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    const bool output_width_matches_kernel =
+        output_k > 0 && output_k <= args.k && (output_k - 1) / tile_width == (args.k - 1) / tile_width;
+    TT_FATAL(
+        output_width_matches_kernel,
+        "TopK output_k={} must be positive, no larger than k={}, and have the same tile-rounded width",
+        output_k,
+        args.k);
+    output_shape[-1] = output_k;
 
     // Create values tensor specification (same data type as input)
     const auto values_spec = tt::tt_metal::TensorSpec(
