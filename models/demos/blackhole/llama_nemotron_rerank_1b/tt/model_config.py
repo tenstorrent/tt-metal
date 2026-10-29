@@ -178,6 +178,10 @@ class RerankConfig:
     mask_dtype: object = ttnn.bfloat4_b
     # Pass attn_mask_block_map so SDPA skips (q chunk, k chunk) blocks that hold no real query or key.
     sdpa_block_map: bool = True
+    # Masked SDPA at batch 8 / 32 and 128-512 tokens runs tt/custom_ops/sdpa_mask_cache: ttnn's SDPA with a reader
+    # that reads the [B, 1, S, S] mask from DRAM once per batch per core instead of once per Q head (bit-identical
+    # output). One 32x512 call: 1253 -> 835 us (DRAM output), 1019 -> 780 us (L1 output).
+    sdpa_mask_cache: bool = True
     # SDPA writes heads side by side ([B, 1, S, n_heads * head_dim]) so nlp_concat_heads is not needed.
     sdpa_concat_heads: bool = True
     # Residual add + following RMSNorm as one op (tt/custom_ops/fused_add_rmsnorm) writing both outputs.

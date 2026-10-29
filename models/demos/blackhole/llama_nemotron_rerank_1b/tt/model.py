@@ -33,6 +33,7 @@ from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.matmul_qkv_ro
     make_rope_table,
     matmul_qkv_rope,
 )
+from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.sdpa_mask_cache import sdpa_mask_cache
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.model_config import (
     MM_ADD_NORM_CONFIGS,
     MM_ADD_NORM_IN1_DEPTH,
@@ -358,28 +359,51 @@ class NemotronReranker:
             )
         else:
             q_r, k_r, v = self._qkv_heads(layer, xn, B, S, *rope)
-        attn = ttnn.transformer.scaled_dot_product_attention(
-            q_r,
-            k_r,
-            v,
-            is_causal=False,
-            attn_mask=mask,
-            attn_mask_block_map=block_map if (mask is not None and cfg.sdpa_block_map) else None,
-            output_concat_heads=cfg.sdpa_concat_heads,
-            scale=1.0,
-            compute_kernel_config=self.sdpa_ckc,
-            memory_config=self._mem(B * S, cfg.dim),
-            program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.grid,
-                q_chunk_size=qc,
-                k_chunk_size=kc,
-                exp_approx_mode=cfg.sdpa_exp_approx,
-                matmul_math_fidelity=cfg.sdpa_fidelity,
-                max_cores_per_head_batch=cfg.sdpa_max_cores_per_head_batch,
-                k_splits=cfg.sdpa_k_splits,
-                segmented_accumulation=cfg.sdpa_segmented_accumulation,
-            ),
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.grid,
+            q_chunk_size=qc,
+            k_chunk_size=kc,
+            exp_approx_mode=cfg.sdpa_exp_approx,
+            matmul_math_fidelity=cfg.sdpa_fidelity,
+            max_cores_per_head_batch=cfg.sdpa_max_cores_per_head_batch,
+            k_splits=cfg.sdpa_k_splits,
+            segmented_accumulation=cfg.sdpa_segmented_accumulation,
         )
+        use_block_map = mask is not None and cfg.sdpa_block_map
+        if (
+            cfg.sdpa_mask_cache
+            and use_block_map
+            and cfg.sdpa_concat_heads
+            and B in (8, 32)
+            and S in (128, 256, 512)
+            and (qc, kc) == (128, S)
+        ):
+            # Same op, same output (bit-identical), with a reader that reads the head-broadcast mask from DRAM
+            # once per batch per core instead of once per Q head (tt/custom_ops/sdpa_mask_cache).
+            attn = sdpa_mask_cache(
+                q_r,
+                k_r,
+                v,
+                attn_mask=mask,
+                attn_mask_block_map=block_map,
+                program_config=program_config,
+                compute_kernel_config=self.sdpa_ckc,
+                memory_config=self._mem(B * S, cfg.dim),
+            )
+        else:
+            attn = ttnn.transformer.scaled_dot_product_attention(
+                q_r,
+                k_r,
+                v,
+                is_causal=False,
+                attn_mask=mask,
+                attn_mask_block_map=block_map if use_block_map else None,
+                output_concat_heads=cfg.sdpa_concat_heads,
+                scale=1.0,
+                compute_kernel_config=self.sdpa_ckc,
+                memory_config=self._mem(B * S, cfg.dim),
+                program_config=program_config,
+            )
         for t in (q_r, k_r, v):
             ttnn.deallocate(t)
         if cfg.sdpa_concat_heads:

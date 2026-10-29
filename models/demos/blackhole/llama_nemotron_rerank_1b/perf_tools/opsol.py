@@ -39,6 +39,13 @@ for r in ops:
     k1, n1 = dim(r, "INPUT_1_Y_PAD[LOGICAL]"), dim(r, "INPUT_1_X_PAD[LOGICAL]")
     if name.startswith("GenericOp") and k1 == dim(r, "INPUT_0_X_PAD[LOGICAL]") and k1 >= 2048:
         name = "Matmul(fused) " + ("QKV+RoPE" if n1 == 3072 else "+add+RMSNorm")
+    # tt/custom_ops/sdpa_mask_cache runs SDPA as a generic op: Q [B, 32 heads, S, 64] is input 0.
+    if (
+        name.startswith("GenericOp")
+        and dim(r, "INPUT_0_Z_PAD[LOGICAL]") == 32
+        and dim(r, "INPUT_0_X_PAD[LOGICAL]") == 64
+    ):
+        name = "SDPAOperation (sdpa_mask_cache)"
     if "Matmul" in name:
         M = dim(r, "INPUT_0_Y_PAD[LOGICAL]") * dim(r, "INPUT_0_Z_PAD[LOGICAL]") * dim(r, "INPUT_0_W_PAD[LOGICAL]")
         K, N = dim(r, "INPUT_1_Y_PAD[LOGICAL]"), dim(r, "INPUT_1_X_PAD[LOGICAL]")

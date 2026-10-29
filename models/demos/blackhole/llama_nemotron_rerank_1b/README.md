@@ -24,7 +24,9 @@ llama_nemotron_rerank_1b/
                                (batch {1,8,32}) x (row length) bucket
   tt/custom_ops/               generic_op kernels: matmul_qkv_rope (QKV matmul + head split + RoPE), matmul_add_norm
                                (WO / FF2 + residual add + RMSNorm on the L1-resident residual; embed_rmsnorm),
-                               fused_add_rmsnorm (from pplx_embed_4b, < 4096 rows), fused_heads_rope (previous path)
+                               fused_add_rmsnorm (from pplx_embed_4b, < 4096 rows), fused_heads_rope (previous path),
+                               sdpa_mask_cache (ttnn's SDPA program ported to Python with a reader that reads the
+                               head-broadcast mask once per batch per core; ttnn's writer / compute kernels unchanged)
   reference/hf_reference.py    HF CPU reference
   demo/serve.py                FastAPI rerank server
   demo/generator_vllm.py       NemotronRerankForScoring (same interface as bge_m3's BgeM3ForEmbedding)
@@ -32,7 +34,7 @@ llama_nemotron_rerank_1b/
   demo/eval_miracl.py          device scores vs HF fp32 on MIRACL-en (nDCG@10, score error, Pearson)
   demo/bench.py                traced latency per (batch x length)
   perf_tools/                  matmul / SDPA sweeps, probes, cycle-level SoL report
-  tests/pcc/                   fused_heads_rope, one decoder layer, end-to-end scores (padded, unpadded, packed rows)
+  tests/pcc/                   fused_heads_rope, one decoder layer, end-to-end scores (padded, unpadded, packed rows; sdpa_mask_cache vs stock SDPA)
 ```
 
 ## Run
@@ -42,7 +44,7 @@ source python_env/bin/activate
 export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
 M=models/demos/blackhole/llama_nemotron_rerank_1b
 
-pytest -q $M/tests/pcc                                         # 9 tests
+pytest -q $M/tests/pcc                                         # 10 tests
 python $M/demo/bench.py --shapes 1x512 8x512 32x512 1x8192     # traced latency
 python $M/demo/eval_miracl.py --eval-set miracl_eval.pt --batch 8
 python $M/demo/serve.py --port 8000                            # server (one P150: --dp 1)
@@ -107,8 +109,8 @@ number of rows a request needs, which the MIRACL table there shows.
 | 1 x 256 | | 6.70 ms | |
 | 1 x 512 | 15.6 ms | 8.02 ms | 32.7 % |
 | 1 x 1024 | | 16.7 ms | |
-| 8 x 512 | 76.2 ms | 42.1 ms | 55.0 % |
-| 32 x 512 | 329 ms | 193 ms | **65.8 %** (169.4 M cycles) |
+| 8 x 512 | 76.2 ms | 41.3 ms | 56.2 % |
+| 32 x 512 | 329 ms | 191 ms | **69.5 %** (160.5 M cycles) |
 | 1 x 2048 | 46.5 ms | 27.7 ms | 47.1 % |
 | 1 x 4096 | | 77.2 ms | |
 | 1 x 8192 | 362 ms | 221 ms | 50.4 % |
@@ -139,11 +141,11 @@ shape was benchmarked in its own process on an idle board.
 | op | M cycles | share | of its SoL |
 |---|---|---|---|
 | FF1 + FF3 + SwiGLU (`minimal_matmul`, HiFi2, fp32 accumulation) | 87.2 | 51 % | 76 % |
-| SDPA (HiFi4, with the mask; 14.1 M cycles without it) | 26.8 | 16 % | 31 % |
-| FF2 + residual add + RMSNorm (`matmul_add_norm`, LoFi) | 24.0 | 14 % | 69 % |
+| FF2 + residual add + RMSNorm (`matmul_add_norm`, LoFi) | 24.0 | 15 % | 69 % |
 | QKV + head split + RoPE (`matmul_qkv_rope`, HiFi2) | 18.3 | 11 % | 68 % |
-| WO + residual add + RMSNorm (`matmul_add_norm`, HiFi2) | 12.3 | 7 % | 67 % |
-| embedding + first RMSNorm (`embed_rmsnorm`), score head, mask | 0.8 | 0.5 % | |
+| SDPA with the mask (`sdpa_mask_cache`, HiFi4; stock ttnn SDPA 26.8, unmasked 14.1) | 17.9 | 11 % | 46 % |
+| WO + residual add + RMSNorm (`matmul_add_norm`, HiFi2) | 12.3 | 8 % | 67 % |
+| embedding + first RMSNorm (`embed_rmsnorm`), score head, mask | 0.6 | 0.4 % | |
 
 ## Packed rows
 
@@ -197,6 +199,7 @@ Data movement, in the order they landed (32x512 unless noted):
 | padding mask built on device from a [B, 1, 32, S] valid row, stored as bfp4 | the mask holds only 0 and -1e9, exact in bfp4 at a quarter of bf16's bytes; the host sends no S x S tensor | SDPA 32x512 1780 -> 1113 us |
 | SDPA block map (`attn_mask_block_map`) | blocks with no real query or key are skipped | 1x2048 802 -> 389 us |
 | SDPA without the mask when no pair is padded: `forward(masked=False)`, and `TracedReranker` keeps a second trace per bucket for such batches | an all-zero padding mask is still read from DRAM and added on every K chunk | 32x512 SDPA 1101 -> 623 us per layer; 1x8192 220 -> 188 ms sustained |
+| masked SDPA through `tt/custom_ops/sdpa_mask_cache` (batch 8 / 32, 128-512 tokens): ttnn's SDPA program built in Python (`op.py`, a port of `sdpa_program_factory.cpp` for this configuration) with a copy of its reader that keeps the batch's [S, S] mask tiles in an extra L1 CB; ttnn's writer and compute kernels unchanged; bit-identical output (`perf_tools/probe_sdpa_mask_cache.py`, `tests/pcc`) | the [B, 1, S, S] mask is the same for all 32 Q heads, but ttnn's reader reads it from DRAM again per head: 151 MB per 32 x 512 call against 34 MB of K / V (one call 657 us unmasked, 1251 us masked, 693 us with the mask not read). A core runs several heads of one batch in a row, so each block now comes from DRAM once | one 32x512 call 1253 -> 835 us; 32x512 SDPA 26.8 -> 17.9 M cycles, forward 169.4 -> 160.5 M cycles (65.8 -> 69.5 % of SoL); sustained 193 -> 191 ms (the clock limit takes most of it back) |
 | softmax scale 1/8 folded into Wq (exact: power of two), SDPA at scale 1 | ttnn's SDPA wrapper otherwise multiplies the mask by 1/scale on every call | one [B, 1, S, S] pass per layer removed |
 | activations up to 8.5 MB in L1 | bs1 intermediates never touch DRAM | 1x512 10.1 -> 8.9 ms |
 | block-sharded RMSNorm up to 512 rows | stock rms_norm gives each core whole tile rows (16 cores at 512 rows) | 1x128 7.03 -> 6.27 ms |
@@ -215,13 +218,9 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
 
 ## Open items
 
-* 32 x 512 is at 65.8 % of speed of light with the mask (71.3 % without; 75.9 % unmasked before FF1 + FF3
-  moved to fp32 accumulation). The mask almost doubles SDPA (26.8 vs 14.1 M cycles), and ~95 % of that is
-  reading it: ttnn's SDPA reads the [B, 1, S, S] mask from DRAM again for every Q head (151 MB per 32 x 512
-  call against 34 MB of K / V; one call 657 us unmasked, 1251 us masked, 693 us with the mask not read). The
-  ttnn branch `jerrywangTT/sdpa-mask-head-cache` keeps a head-broadcast mask in L1 per batch (one call
-  834 us; this model at 32 x 512: SDPA 17.9 M cycles, forward 160.5 M cycles, 69.5 % of SoL; 32 x 512
-  sustained 193 -> 189 ms); this branch runs on stock ttnn. The rest
+* 32 x 512 is at 69.5 % of speed of light with the mask (75.9 % unmasked before FF1 + FF3 moved to fp32
+  accumulation). Masked SDPA still costs 17.9 vs 14.1 M cycles unmasked: the cached mask is still copied into
+  the mask CB and added per head. The rest
   is spread over the ops: FF1 + FF3 is at 76 % (85 % with bf16 accumulation, which fails the accuracy gate
   with packed rows; the faster fp32 K-32 block is throttled by the board, see "Packed rows"); the fused
   WO / FF2 matmuls run at ~76-84 % of their limit inside their K loops (FF2 at LoFi with 4 x 1 subblocks, which

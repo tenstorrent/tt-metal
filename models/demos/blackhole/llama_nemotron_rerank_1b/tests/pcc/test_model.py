@@ -95,3 +95,21 @@ def test_packed_rows(device, hf_model, tokenizer, state_dict):
     err_alone = max(abs(a - b) for a, b in zip(alone, ref))
     assert err_packed < MAX_ABS_ERR and err_packed < err_alone + 0.25
     assert sorted(range(len(ref)), key=lambda i: -ref[i]) == sorted(range(len(packed)), key=lambda i: -packed[i])
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_sdpa_mask_cache_matches_stock(device, tokenizer, state_dict):
+    """Batch 8 x 512 with packed rows runs SDPA through tt/custom_ops/sdpa_mask_cache (the mask read once per
+    batch per core); the same forward with stock ttnn SDPA must give the same scores, bit for bit."""
+    S, B = 512, 8
+    ids = tokenize_pairs(tokenizer, [(QUERY, d) for d in DOCS])
+    rows = [[ids[(b + j) % len(ids)][: 100 + 20 * j] for j in range(3)] for b in range(B)]
+    model = NemotronReranker(device, RerankConfig(), state_dict, cache_dir=None)
+    host, lens = model.prepare_packed_inputs(rows, S)
+    dev = model.to_device(host)
+    scores = {}
+    for use_cache in (True, False):
+        model.cfg.sdpa_mask_cache = use_cache
+        scores[use_cache] = model.scores_from_output(model.forward(*dev), lens)
+    print(f"mask cache {scores[True][:4]}\nstock      {scores[False][:4]}")
+    assert scores[True] == scores[False]
