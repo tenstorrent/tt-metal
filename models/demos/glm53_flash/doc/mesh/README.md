@@ -1429,3 +1429,15 @@ B[1024:2300] at 1024, T = 1280): bit-exact except 6 of the 452 continued rows of
 per-row page-table / pool views, the per-row index maintenance and the static attention with per-row starts are
 right; the model-level 0.9973 on prompt B (layers 0-3) is left to the MoE under the per-row pad mask: the layer-3-only
 wave test is queued (`prefill_wave` now runs without a KDA layer).
+
+### 2026-10-29 02:25: waves validated on the block, eager and traced (A2 / A4)
+
+`test_mesh_wave_prefill` on the (2,4) block from the override runtime, layers 0-2 (2 users per row) and 0-3 (heads2users,
+4 users per row): SP vs a wave on each row (first token equal, logits 0.99998 / 0.99992; prompt B at 0.9973 on 0-3 =
+near-tie MoE expert flips from the SP scan's different grouping, accepted by the near-tie gate: layer 3 alone agrees at
+0.99997 and the attention wave-vs-slab is bit-exact), the two rows' waves bit-identical, two prompts in one wave
+bit-identical to each alone, the idle row's slot untouched, 128-aligned continuations bit-identical to the unchunked
+wave, a mixed-start wave (row 0 at 128, row 1 at 0), a non-contiguous start refused; the TRACED waves (captured at 256
+and 2048 rows per row in 0.1-0.2 s each) bit-identical to the eager waves, the traced idle-row case leaving the slot
+untouched. Also: the served-padded ragged chunk + continuation is bit-exact on the block through the slab path (all
+16385 rows), the KDA padded-chunk carry test is queued, and the 4-layer sealed APC reproduction is on its last knob.
