@@ -1810,10 +1810,10 @@ reads it once, in its constructor, with calls that exist today (`get_asic_id`,
 `get_asic_neighbors`, `get_eth_connections`):
 
 ```cpp
-// PipelinePlacementEnumerationSession, private; its result is channels_. Pure: PSD + layout, no cluster, no MPI.
+// PipelinePlacementEnumerationSession, private; its result is channels_. Pure: PSD + full's layout, no cluster, no MPI.
 std::map<std::pair<FabricNodeId, FabricNodeId>, std::vector<tt::tt_metal::ExitNodeConnection>> inter_mesh_cables(
     const LogicalMultiMeshGraph& logical, const tt::tt_metal::PhysicalSystemDescriptor& psd,
-    const std::map<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId>& fabric_node_to_physical) const;
+    const TopologyMappingResult& full) const;
     // keyed by the two chips (both orders), one entry per ETH channel, lowest source channel first
 ```
 
@@ -2024,7 +2024,7 @@ MGD (merged)
 MultiMeshSolutionEnumerator::next()                                            topology_mapper_utils.cpp
                            seating → intra-mesh (today)
                            place_pipelines: one session, one next()             topology_mapper_utils.cpp P8
-                             PipelinePlacementEnumerationSession(logical_, psd, layout)                 P5
+                             PipelinePlacementEnumerationSession(logical_, psd, full)                   P5
                                C1 positions (they overlap); C2's pre-checks, constraints, solver
                              C2 session.next() → one carve, resolved                                    P5
                                 → each edge's channel, R → demand check (PipelineLayoutResult)         P6
@@ -2079,8 +2079,10 @@ and SAT session the seating uses:
   positions come from the stage shapes, the host grids and the intra-mesh layout. So the session
   owns them, as `SatPlacementEnumerationSession` owns its seat graph, and `PhysicalMultiMeshGraph`
   is unchanged. It is built per seating after intra-mesh success, and only when the MGD has
-  pipelines, from three inputs: `logical_`, the PSD and the seating's intra-mesh layout
-  (`full.fabric_node_to_physical`). The PSD, not the seating's `physical` graph, because `R` needs
+  pipelines, from three inputs: `logical_`, the PSD and the seating's intra-mesh result `full`
+  (the `TopologyMappingResult` `complete_intra_mesh_for_placement` returns; the session reads its
+  layout, `fabric_node_to_physical` and `physical_to_fabric_node`), so it is built right where
+  `full` is. The PSD, not the seating's `physical` graph, because `R` needs
   channel numbers and the exit-node graphs have none (3.3). The layout is needed because positions
   are logical chips (`FabricNodeId`) and the PSD is in ASIC ids, so the layout is what says which
   cable lands on which logical chip. A node is a *position*: a rectangle of host slices on one mesh that some stage
@@ -2231,15 +2233,17 @@ struct PipelineLayoutResult {
 // field, so PhysicalMultiMeshGraph is unchanged, and reads cables from the PSD: the seating's exit-node graphs
 // list one entry per channel but no channel numbers. Built per seating after intra-mesh success and only when the
 // stage graph has nodes, because which ASIC each logical chip sits on decides where the cables between positions
-// land. Methods in pipeline_builder.cpp.
+// land. Declared after TopologyMappingResult; PipelinePlacement and PipelineLayoutResult go before it, because
+// TopologyMappingResult::pipeline holds one. Methods in pipeline_builder.cpp.
 class PipelinePlacementEnumerationSession {
 public:
     PipelinePlacementEnumerationSession(
         const LogicalMultiMeshGraph& logical,                // stage graph and info, host grids, intra-mesh links,
                                                              // requested exit nodes, channels per MGD connection
         const tt::tt_metal::PhysicalSystemDescriptor& psd,   // every cable, one ExitNodeConnection per ETH channel
-        const std::map<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId>& fabric_node_to_physical);   // the
-                                                             // seating's layout: which logical chip each ASIC holds
+        const TopologyMappingResult& full);                  // the seating's intra-mesh result, as
+                                                             // complete_intra_mesh_for_placement returns it (success):
+                                                             // its layout, both ways
     PipelinePlacementEnumerationSession(const PipelinePlacementEnumerationSession&) = delete;
     PipelinePlacementEnumerationSession& operator=(const PipelinePlacementEnumerationSession&) = delete;
     PipelinePlacementEnumerationSession(PipelinePlacementEnumerationSession&&) = delete;
@@ -2271,7 +2275,7 @@ private:
     // under the gather's rules, keyed by the two chips (both orders), lowest source channel first.
     std::map<std::pair<FabricNodeId, FabricNodeId>, std::vector<tt::tt_metal::ExitNodeConnection>> inter_mesh_cables(
         const LogicalMultiMeshGraph& logical, const tt::tt_metal::PhysicalSystemDescriptor& psd,
-        const std::map<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId>& fabric_node_to_physical) const;
+        const TopologyMappingResult& full) const;
 
     // P6: fills placement.edge_channels, adds each channel R does not hold yet, and counts R per mesh pair.
     void record_channels(PipelinePlacement& placement,
@@ -2435,7 +2439,7 @@ Lines without `+` are today's code.
 +// reject copies the reason onto full, as an intra-mesh failure does. C4 stays with the caller.
 +bool MultiMeshSolutionEnumerator::place_pipelines(TopologyMappingResult& full) {
 +    PipelinePlacementEnumerationSession pipelines(
-+        logical_, *physical_system_descriptor_, full.fabric_node_to_physical);
++        logical_, *physical_system_descriptor_, full);
 +    PipelineLayoutResult layouts = pipelines.next();   // no second carve (open question 24)
 +    full.stats.pipeline_solve_seconds += std::chrono::duration<double>(layouts.solve_time).count();
 +    if (!layouts.success) {
@@ -2478,7 +2482,7 @@ First version (STRICT), in order. Each PR lands with its tests; P5 and P6 change
 
 | PR | Scope | Files | Done when |
 |---|---|---|---|
-| **P5** Pipeline graphs and the footprint solve (C1, C2's solve) | `PipelineStageNode` and its formatter; `PipelineStageInfo`; `LogicalMultiMeshGraph::pipeline_stage_graph_` (all pipelines merged), `pipeline_stages_` (shape and loopback marks per stage) and `mesh_host_grids_`, filled by `build_logical_multi_mesh_adjacency_graph`; `PipelinePlacementEnumerationSession(logical, psd, fabric_node_to_physical)` (its private `inter_mesh_cables`, the one PSD read): the positions with their chips, slices and links, the pre-checks, the constraints (resource completeness included) on the stage graph, and each pipeline's resolver inputs; `next()`, one more carve per call with the resolver run on it, returned as `PipelineLayoutResult` (each pipeline's `PipelinePlacement`: its chips and `GraphLayoutResult`) | utils `.hpp/.cpp`, pipeline_builder `.cpp`, `test_topology_mapper_utils.cpp`, `test_pipeline_builder.cpp` | the stage graph of the GPT-OSS ring, the dflash fork, two pipelines that both have a stage 0, two merged MGD parts whose pipelines land in one stage graph, a repeated edge and an isolated stage; each `mesh_host_grids_` cell equals `get_coord_range` for the rank at that coordinate; stage shapes match `dims`, edges are stored one way and `loopback_to` marks each loopback; no pipeline: the three fields are empty; positions on mixed slice shapes; overlapping positions are never adjacent and never both chosen; brute-force agreement up to 8 stages; a stage that cannot fit is filtered before the solve; area and counting failures stop at the pre-check; every `next()` is a new carve; a resolver throw is `pipeline_layout`; inter-mesh links follow the gather's rules on the SC16 and galaxy PSDs |
+| **P5** Pipeline graphs and the footprint solve (C1, C2's solve) | `PipelineStageNode` and its formatter; `PipelineStageInfo`; `LogicalMultiMeshGraph::pipeline_stage_graph_` (all pipelines merged), `pipeline_stages_` (shape and loopback marks per stage) and `mesh_host_grids_`, filled by `build_logical_multi_mesh_adjacency_graph`; `PipelinePlacementEnumerationSession(logical, psd, full)` (its private `inter_mesh_cables`, the one PSD read): the positions with their chips, slices and links, the pre-checks, the constraints (resource completeness included) on the stage graph, and each pipeline's resolver inputs; `next()`, one more carve per call with the resolver run on it, returned as `PipelineLayoutResult` (each pipeline's `PipelinePlacement`: its chips and `GraphLayoutResult`) | utils `.hpp/.cpp`, pipeline_builder `.cpp`, `test_topology_mapper_utils.cpp`, `test_pipeline_builder.cpp` | the stage graph of the GPT-OSS ring, the dflash fork, two pipelines that both have a stage 0, two merged MGD parts whose pipelines land in one stage graph, a repeated edge and an isolated stage; each `mesh_host_grids_` cell equals `get_coord_range` for the rank at that coordinate; stage shapes match `dims`, edges are stored one way and `loopback_to` marks each loopback; no pipeline: the three fields are empty; positions on mixed slice shapes; overlapping positions are never adjacent and never both chosen; brute-force agreement up to 8 stages; a stage that cannot fit is filtered before the solve; area and counting failures stop at the pre-check; every `next()` is a new carve; a resolver throw is `pipeline_layout`; inter-mesh links follow the gather's rules on the SC16 and galaxy PSDs |
 | **P6** Channels, `R` and the demand check, in `next()` (C2) | private `record_channels` (each crossing's exact channel into `PipelinePlacement::edge_channels`, each channel once into `PipelineLayoutResult::required_links`, `R`) and `first_over_demand` | utils `.hpp`, pipeline_builder `.cpp`, `test_pipeline_builder.cpp` | blaze-rejected rings accepted; `mixed4` (P,R) accepts, (P,Q) and Case B reject; every crossing's `edge_channels` entry joins the ASICs its resolved edge names; cable hashes equal today's gather on the SC16 and galaxy PSDs; a ring over a count-1 connection: `next()` returns `pipeline_binding` with the pair |
 | **P8** Tier C in the mapper (C4) | `check_pipelines`; the `next()` hook on `logical_` (private `place_pipelines`: one session, one `next()`) with `exclude_mapping` and the rejection cap; `unique_shapes` off; result, stats and part split; `TopologyMapper` storage and `R` broadcast | utils `.hpp/.cpp`, `topology_mapper.cpp`, `generate_rank_bindings.cpp` | `mesh4x4_stage4x2` Cases A, B, C: accept, reject, reject; GPT-OSS galaxy and llama_8b_pod accepted and built by blaze; the swapped-seat regression; no pipeline: every mapper golden unchanged |
 | **P9** Bind `R` (C3) | phase 0 in `pair_logical_intermesh_ports`; single-host phase 0; every rank checks `R` was bound | `control_plane.cpp` | the required channel wins over a lower hash; an unplaceable required channel fails on every rank together, no hang; no pipeline: `AnnotatedIntermeshConnections` byte-identical |
@@ -2511,9 +2515,9 @@ stage order and the crossings are all decided by the solve in C2. C1 is the firs
 `PipelinePlacementEnumerationSession`'s constructor.
 
 - **Inputs.** The session's three: `logical_` (stage shapes, host grids, the intra-mesh links the
-  topology routes over, requested exit nodes), the seating's `physical` (its exit-node graphs:
-  every cable between two seated meshes, one entry per channel), and the intra-mesh layout
-  `full.fabric_node_to_physical` (which ASIC each logical chip sits on). No PSD.
+  topology routes over, requested exit nodes), the PSD (every cable, one `ExitNodeConnection` per
+  channel), and the seating's intra-mesh result `full` (its layout: which ASIC each logical chip
+  sits on, both ways).
 - **Output.** The session's private position fields, in the resolver's own types: the chips
   of each position (`InternalChip`s) and, for each pair of touching positions, the candidate links
   between them (`DirectLinks`). Each chip pair between meshes keeps its PSD channels
@@ -2522,7 +2526,7 @@ stage order and the crossings are all decided by the solve in C2. C1 is the firs
   bound (C3), or what SAT offers next (C4).
 
 ```
-G = PipelinePlacementEnumerationSession(logical, psd, full.fabric_node_to_physical)   pipeline_builder.cpp
+G = PipelinePlacementEnumerationSession(logical, psd, full)   pipeline_builder.cpp
       slices:    logical.mesh_host_grids_[m]: one coordinate range per host; a chip is FabricNodeId(m, row-major id)
       shapes:    logical.pipeline_stages_, the distinct stage shapes
       cands:     inter_mesh_cables: the PSD's channels through the layout, gather rules (3.3) + routed intra-mesh links
@@ -2553,8 +2557,8 @@ Only links the control plane can route over count:
 
 To do:
 
-- In the session's constructor, `channels_ = inter_mesh_cables(logical, psd, layout)`: invert the
-  layout (ASIC to logical chip) and read each mapped ASIC's PSD channels to chips of a mesh the MGD
+- In the session's constructor, `channels_ = inter_mesh_cables(logical, psd, full)`: through
+  `full.physical_to_fabric_node` (ASIC to logical chip), read each mapped ASIC's PSD channels to chips of a mesh the MGD
   connects to its own.
 - Find the links the way `discover_submesh_links` does: for every ordered pair of disjoint
   positions, one `LinkPair` per linked chip pair, so each direction has its own exit and entry
@@ -2610,7 +2614,7 @@ seating**. If the carve fails the resolver or the demand check, the seating fail
 C2 does not ask for another carve ("When C2 fails", below).
 
 ```
-session = PipelinePlacementEnumerationSession(logical, psd, layout)       (P5)
+session = PipelinePlacementEnumerationSession(logical, psd, full)         (P5)
     G, C = C1's position graph and constraints                            (4.1)
     pre  = area, lattice count, colour and segment tests; drop ruled-out cables
 layouts = session.next():
