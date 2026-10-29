@@ -15,8 +15,9 @@ greedy from the prefill logits (sharply peaked). Runs: max_num_seqs 1 and 8 (and
 async scheduling, host and device sampling, mixed prompt lengths (long ones are chunked while others decode),
 aborts, and a small KV pool that forces preemptions.
 
-usage: PYTHONPATH=<vllm-tt-plugin resident-mu src>:<tt-metal> python -m pytest --noconftest -c /dev/null \
+usage: PYTHONPATH=<vllm-tt-plugin src>:<tt-metal> python -m pytest --noconftest -c /dev/null \
     qwen36_resident/tests/test_vllm_rows_engine.py   (a venv with vLLM; no device is opened)
+Runs on either plugin: resident-mu (the TT chunk core) or upstream da7c018 (whole prompts at any max_num_seqs).
 """
 import random
 from collections import deque
@@ -39,7 +40,13 @@ from vllm_tt_plugin.model_runner import TTModelRunner
 from vllm_tt_plugin.scheduler import TTScheduler
 
 from qwen36_resident.tests.test_vllm_rows_fake import make_adapter, ref_next
-from qwen36_resident.vllm_rows import BLOCK, CHUNK_UNIT, ResidentRowsAdapter, resident_capabilities
+from qwen36_resident.vllm_rows import (
+    BLOCK,
+    CHUNK_UNIT,
+    ResidentRowsAdapter,
+    plugin_has_chunk_core,
+    resident_capabilities,
+)
 
 # a tiny model config of the plugin's own tests (vocab 128): the scheduler and runner need one, the fake ignores it
 MODEL_CONFIG = Path(vllm_tt_plugin.__file__).resolve().parents[2] / "tests" / "model_configs" / "qwen2"
@@ -265,12 +272,13 @@ def drive(
 def test_host_sampling(max_num_seqs, async_scheduling, seed):
     eng, done = drive(max_num_seqs, async_scheduling, False, seed)
     assert done >= 20
-    chunked = eng.config.scheduler_config.enable_chunked_prefill
-    assert chunked == (max_num_seqs > 1), "the chunk core: off for one user, on for several"
-    if max_num_seqs == 1:
-        assert eng.pp.spans == 0, "one user: every prompt runs whole"
+    # several users split long prompts only on a plugin with the TT chunk core (resident-mu); one user never does
+    split = max_num_seqs > 1 and plugin_has_chunk_core()
+    assert eng.config.scheduler_config.enable_chunked_prefill == split
+    if split:
+        assert eng.pp.interleaved > 0, "decode launches run between a split prompt's spans"
     else:
-        assert eng.pp.interleaved > 0, "several users: decode launches run between a split prompt's spans"
+        assert eng.pp.spans == 0, "every prompt runs whole"
 
 
 @pytest.mark.parametrize("seed", range(3))
