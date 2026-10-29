@@ -433,8 +433,11 @@ class DFlash2DrafterTP:
         tile = ttnn.TILE_SIZE
         k_p = ttnn.pad(k, [1, R, tile, HD], [0, 0, 0, 0], 0.0)
         v_p = ttnn.pad(v, [1, R, tile, HD], [0, 0, 0, 0], 0.0)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+        # a pad within the tile padding is a re-view of the input's buffer: freeing the input then frees the
+        # padded rows, and the slices below may be allocated over them (a row's V lost, allocation dependent)
+        for t, t_p in ((k, k_p), (v, v_p)):
+            if not _aliases(t_p, t):
+                ttnn.deallocate(t)
         U, Bk = layout.U, layout.block
         grouped = (
             U > 1

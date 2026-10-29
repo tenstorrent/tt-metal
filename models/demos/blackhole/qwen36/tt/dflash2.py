@@ -487,8 +487,10 @@ class DFlash2Drafter(DFlash2Draft):
         nb = pt_t.shape[-1]
         k_p = ttnn.pad(k, [1, B, ttnn.TILE_SIZE, HD], [0, 0, 0, 0], 0.0)
         v_p = ttnn.pad(v, [1, B, ttnn.TILE_SIZE, HD], [0, 0, 0, 0], 0.0)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+        # a pad within the tile padding re-views the input's buffer: free the input only if pad copied
+        for t, t_p in ((k, k_p), (v, v_p)):
+            if t_p.buffer_address() != t.buffer_address():
+                ttnn.deallocate(t)
         for i in range(B):
             pos_i = ttnn.slice(pos_t, (i,), (i + 1,))
             pt_i = ttnn.slice(pt_t, (i, 0), (i + 1, nb))
