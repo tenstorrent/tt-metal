@@ -887,3 +887,11 @@ guards around the CUR walls ~412-438); the A/B decides.
   CPU attribution at device formats first, then raise the dominant items to the reference's precision: SDPA HiFi2 vs
   fp32, RoPE tables, sink, bfp8 weights, DS41-137 packing) BEFORE P.10 (option A). Orchestrator --until P.10 (FIX.11
   placed first; P.10 stops for the A/B decision).
+- 12:50 2x2 lowbit phase 1 (dnijemcevic/model_bringup_lowbit @ 18bc83c86d9, report bringup/lowbit_derisk/LOWBIT_PHASE1.md):
+  index K + Q bfloat4_b RNE = the reference's own top-512 selection error (7.6-15.7 % vs its 8.0-16.6 %), index score
+  -12 us, the per-chunk key re-tiling gone; window bfloat8_b blocks 3-4x closer to native than the reference's e4m3 and
+  faster than bf16 (-3 % compressed / -14 % window-only a layer); bonus for the Galaxy now: ROW_BFP4 read as one 320 B
+  DRAM read a record (-17..-21 % compressed-layer attention, bit-identical) and a shorter SFPU round (~-30 % 4-bit write).
+  Owner asked the 2x2 to rebase on model_bringup (P.7-P.9). Order: 2x2 fork / CPU work now; rebase again after FIX.11
+  lands (OV note to FIX.11: keep sparse_sdpa / ckv_bfp4 changes to options); model wiring (phase 2) after P.10.
+  Owner choices pending: index K/Q bfp4 (recommended), window bfp8 blocks (recommended).
