@@ -1711,6 +1711,11 @@ void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sw
             knobs.max_pieces,
             knobs.num_cores);
         SCOPED_TRACE(config.test_name);
+        if (knobs.max_pieces > 1U) {
+            // A row that asks for pieces is there to run split units; one that schedules none would pass
+            // for the wrong reason on any grid.
+            ASSERT_GT(host_schedule(config).num_slots, 0U) << config.test_name << " schedules no split units";
+        }
         xt::xarray<float> output;
         run_sdpa_test(config, &output);
         const float mean_abs_gap = xt::mean(xt::abs(output - default_output))();
@@ -2117,7 +2122,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits_GQA_Gate) {
 
 TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_GQA_Gate_Sweep) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    run_chunk_knob_sweep(kSplitUnitsGqaGateBase, {{64, 128, 2, 4, 0}, {128, 256, 2, 3, 16}});
+    // Three pieces on 16 cores: 128-row chunks of two heads at 32-row steps, so the heavy items have the
+    // steps to cut three ways.
+    run_chunk_knob_sweep(kSplitUnitsGqaGateBase, {{64, 128, 2, 4, 0}, {128, 32, 2, 3, 16}});
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_NumCores) {
