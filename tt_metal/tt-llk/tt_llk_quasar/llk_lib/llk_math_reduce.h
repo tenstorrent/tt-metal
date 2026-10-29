@@ -110,21 +110,21 @@ inline void _llk_math_reduce_row_sum_mop_config_(const MathFidelitySchedule fide
                     {
                         if (row < last_row)
                         {
-                            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, row);
+                            TTI_MVMUL(p_setrwc::CLR_NONE, 0 /*instr_mod19*/, ADDR_MOD_0, row);
                         }
                         else if (row == last_row)
                         {
                             if (phase < phase_count)
                             {
-                                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, row);
+                                TTI_MVMUL(p_setrwc::CLR_NONE, 0 /*instr_mod19*/, ADDR_MOD_1, row);
                             }
                             else if (face == 0)
                             {
-                                TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_2, row);
+                                TTI_MVMUL(p_setrwc::CLR_B, 0 /*instr_mod19*/, ADDR_MOD_2, row);
                             }
                             else
                             {
-                                TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_3, row);
+                                TTI_MVMUL(p_setrwc::CLR_B, 0 /*instr_mod19*/, ADDR_MOD_3, row);
                             }
                         }
                     }
@@ -132,8 +132,8 @@ inline void _llk_math_reduce_row_sum_mop_config_(const MathFidelitySchedule fide
             }
         });
 
-    const std::uint32_t face             = TT_OP_REPLAY(0, len, 0, 0, 0, 0);
-    const std::uint32_t last_face_in_row = TT_OP_REPLAY(len, len, 0, 0, 0, 0);
+    const std::uint32_t face             = TT_OP_REPLAY(0 /*start_idx*/, len, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
+    const std::uint32_t last_face_in_row = TT_OP_REPLAY(len, len, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
     ckernel_template temp = (tensor_shape.num_faces_c_dim == 1) ? ckernel_template(1 /*outer loop*/, tensor_shape.num_faces_r_dim, last_face_in_row)
                                                                 : ckernel_template(1 /*outer loop*/, tensor_shape.num_faces_r_dim, face, last_face_in_row);
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -176,26 +176,26 @@ inline void _llk_math_reduce_row_max_mop_config_(const TensorShape& tensor_shape
     load_replay_buf<0, 7 + REDUCE_ROW_GROUPS>(
         []
         {
-            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
-            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0);
-            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
-            TTI_GMPOOL(p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 0);
-            TTI_ZEROSRC(0, 0, 0, 0, p_zerosrc::READ_BANK, p_zerosrc::CURR_BANK, p_zerosrc::CLR_A);
+            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0 /*dst*/);
+            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_2, p_gpool::INDEX_DIS, 0 /*dst*/);
+            TTI_GMPOOL(p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0 /*dst*/);
+            TTI_GMPOOL(p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 0 /*dst*/);
+            TTI_ZEROSRC(0 /*packed_fmt*/, 0 /*int_fmt*/, 0 /*exp_bias*/, 0 /*zero_val*/, p_zerosrc::READ_BANK, p_zerosrc::CURR_BANK, p_zerosrc::CLR_A);
 
             // Src B can only transpose rows [16-31], and output them at [32-47]
-            TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 1 /*transpose*/, 0);
+            TTI_MOVD2B(0 /*dest_32b_lo*/, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 1 /*transpose*/, 0 /*dst*/);
 
             // Required for accumulating on multiple tiles at a time, accumulation can only work
             // on row not column
-            TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0 /*transpose*/, 0);
+            TTI_MOVD2B(0 /*dest_32b_lo*/, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0 /*transpose*/, 0 /*dst*/);
 
         // Copy transposed rows in SrcB from [32 - 47] to dest rows [0 - 16].
 #pragma GCC unroll 4
             for (std::uint32_t row_group = 1; row_group < REDUCE_ROW_GROUPS; row_group++)
             {
-                TTI_ELWADDDI(p_elwise::CLR_NONE, 0x0, p_movd2b::SRC_ROW32_OFFSET >> 2, 0x0, ADDR_MOD_4, 0);
+                TTI_ELWADDDI(p_elwise::CLR_NONE, 0x0 /*ins_mod*/, p_movd2b::SRC_ROW32_OFFSET >> 2, 0x0 /*srca_addr*/, ADDR_MOD_4, 0 /*dst*/);
             }
-            TTI_ELWADDDI(p_elwise::CLR_NONE, 0x0, p_movd2b::SRC_ROW32_OFFSET >> 2, 0x0, ADDR_MOD_5, 0);
+            TTI_ELWADDDI(p_elwise::CLR_NONE, 0x0 /*ins_mod*/, p_movd2b::SRC_ROW32_OFFSET >> 2, 0x0 /*srca_addr*/, ADDR_MOD_5, 0 /*dst*/);
         });
 
     const std::uint32_t num_faces  = tensor_shape.total_num_faces();
@@ -204,10 +204,10 @@ inline void _llk_math_reduce_row_max_mop_config_(const TensorShape& tensor_shape
     ckernel_template temp(
         1 /*outer loop*/,
         tensor_shape.num_faces_r_dim,
-        TT_OP_REPLAY(5, 2, 0, 0, 0, 0),
-        TT_OP_REPLAY(7 + REDUCE_ROW_GROUPS - row_groups, row_groups, 0, 0, 0, 0));
-    temp.set_start_op(TT_OP_REPLAY(4 - num_faces, num_faces + 1, 0, 0, 0, 0));
-    temp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_ABD_F));
+        TT_OP_REPLAY(5 /*start_idx*/, 2, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/),
+        TT_OP_REPLAY(7 + REDUCE_ROW_GROUPS - row_groups, row_groups, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/));
+    temp.set_start_op(TT_OP_REPLAY(4 - num_faces, num_faces + 1, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/));
+    temp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, 0 /*rwc_cr*/, 0 /*rwc_val*/, p_setrwc::SET_ABD_F));
     temp.program_bank0_sw_cntl(instrn_buffer);
 }
 
@@ -280,8 +280,10 @@ inline void _llk_math_reduce_col_mop_config_(const MathFidelitySchedule fidelity
             tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0x0>();
         });
 
-    const std::uint32_t pool_one_face_and_reset_dest_adc      = TT_OP_REPLAY(replay_buf_len >> 1, replay_buf_len >> 1, 0, 0, 0, 0);
-    const std::uint32_t pool_two_faces_and_ping_pong_dest_adc = TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
+    const std::uint32_t pool_one_face_and_reset_dest_adc =
+        TT_OP_REPLAY(replay_buf_len >> 1, replay_buf_len >> 1, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
+    const std::uint32_t pool_two_faces_and_ping_pong_dest_adc =
+        TT_OP_REPLAY(0 /*start_idx*/, replay_buf_len, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
 
     if (tensor_shape.total_num_faces() == 1)
     {
@@ -378,7 +380,7 @@ inline void _llk_math_reduce_scalar_mop_config_(const MathFidelitySchedule fidel
             // Only SrcB transpose can be done from Math
             // Rows [16:31] of SrcB are transposed, then written back into rows [32:47] of SrcB
             // Following will move 1x16 pool result to SrcB to be transposed into 16 rows
-            TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 1, scratch_dst_addr);
+            TTI_MOVD2B(0 /*dest_32b_lo*/, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 1 /*transpose*/, scratch_dst_addr);
 
 #pragma GCC unroll 4
             for (const auto row : fpu_row_offsets<FACE_R_DIM>())
@@ -387,7 +389,7 @@ inline void _llk_math_reduce_scalar_mop_config_(const MathFidelitySchedule fidel
             }
 
             // zero out scratch in dest
-            TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, EN_32BIT_DEST, 0, ADDR_MOD_0, scratch_dst_addr);
+            TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, EN_32BIT_DEST, 0 /*clear_zero_flags*/, ADDR_MOD_0, scratch_dst_addr);
 
             for (std::uint32_t fid_phase_idx = 0; fid_phase_idx < FINAL_FIDELITY_PHASES; fid_phase_idx++)
             {
@@ -398,7 +400,10 @@ inline void _llk_math_reduce_scalar_mop_config_(const MathFidelitySchedule fidel
             tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
         });
 
-    ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0));
+    ckernel_template temp(
+        MOP_OUTER_LOOP,
+        MOP_INNER_LOOP,
+        TT_OP_REPLAY(0 /*start_idx*/, replay_buf_len, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/));
     temp.program_bank0_sw_cntl(instrn_buffer);
 }
 
@@ -485,5 +490,5 @@ inline void _llk_math_reduce_(const std::uint32_t tile_idx, [[maybe_unused]] con
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 
     constexpr std::uint32_t clear_scaler = reduce_swaps_operands<POOL_TYPE, REDUCE_DIMENSION>() ? p_setrwc::CLR_A : p_setrwc::CLR_B;
-    TTI_SETRWC(clear_scaler, 0, 0, p_setrwc::SET_ABD_F);
+    TTI_SETRWC(clear_scaler, 0 /*rwc_cr*/, 0 /*rwc_val*/, p_setrwc::SET_ABD_F);
 }

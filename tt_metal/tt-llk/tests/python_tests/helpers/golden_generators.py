@@ -5274,6 +5274,7 @@ class ReduceGapoolGolden(FidelityMasking):
             num_faces,
             face_c_dim,
             fp32_acc=fp32_acc,
+            data_in_srcb=reduce_dim == ReduceDimension.Row,
         )
 
         # Combine results based on reduce dimension
@@ -5296,6 +5297,7 @@ class ReduceGapoolGolden(FidelityMasking):
         num_faces,
         dim,
         fp32_acc=False,
+        data_in_srcb=False,
     ):
         """Compute D = srcB @ srcA per face (dim x dim), accumulating across fidelity iterations."""
         if data_format.is_integer():
@@ -5309,9 +5311,14 @@ class ReduceGapoolGolden(FidelityMasking):
         )
 
         for fidelity_iter in range(fidelity_iter_count + 1):
-            a_masked, b_masked = self._apply_fidelity_masking(
-                data_format, src_a, src_b, fidelity_iter
-            )
+            if data_in_srcb:
+                b_masked, a_masked = self._apply_fidelity_masking(
+                    data_format, src_b, src_a, fidelity_iter
+                )
+            else:
+                a_masked, b_masked = self._apply_fidelity_masking(
+                    data_format, src_a, src_b, fidelity_iter
+                )
 
             a_faces = a_masked.view(num_faces, dim, dim)
             b_face = b_masked.view(1, dim, dim)

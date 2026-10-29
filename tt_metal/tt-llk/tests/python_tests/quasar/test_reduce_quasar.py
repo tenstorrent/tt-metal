@@ -324,11 +324,8 @@ _ARCH = get_chip_architecture()
 # Sub-datum expansion in the SrcA format-mux fires correctly for Sum/Average pool types.
 # Max pool uses GMPOOL which is NOT in the op_mmul list and is therefore excluded.
 #
-# Only reduce_dim=Column is exercised here. MXFP4_2x is op_mmul-family-only on Quasar
-# (MVMUL/MVMULDI/GAPOOL); the column-reduce LLK path issues only GAPOOLs and works as
-# designed. The row/scalar paths in llk_math_reduce.h commit per-face results via
-# MOVD2B -> ZEROSRC -> ELWADDDI, and ELWADDDI is not op_mmul, so it reads SrcB through
-# the FP4 zf mux while srca_fmt_spec is still MXFP4_2x -- producing all-zero Dest.
+# Only Column and Row are tested here because scalar reduce reads its partial results back
+# from Dest, which does not work with MXFP4_2x.
 @pytest.mark.quasar
 @pytest.mark.skipif(
     _ARCH != ChipArchitecture.QUASAR or is_4row_arch(),
@@ -349,7 +346,7 @@ _ARCH = get_chip_architecture()
         ),
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    reduce_dim=[ReduceDimension.Column],
+    reduce_dim=[ReduceDimension.Column, ReduceDimension.Row],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),

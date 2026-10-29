@@ -29,14 +29,13 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
-    // Column reduce is a GAPOOL (op-mmul family) and consumes MxFp4 SrcA as the 2x-packed
-    // src-register format, exactly like matmul. Derive the effective SrcA format from the L1/src
-    // format; the matching unpacker OUT_DATA_FORMAT override lives in llk_unpack_AB_reduce_init.
-    // Only REDUCE_COL supports 2x (row/scalar reduce post-pool ELWADDDI does not), and only GAPOOL
-    // (SUM/AVG) accepts a 2x SrcA - GMPOOL (MAX) does not.
+    // Column reduce is a GAPOOL and row SUM/AVG is a MVMUL (both op-mmul family) and consume MxFp4 SrcA as the
+    // 2x-packed src-register format, exactly like matmul. Derive the effective SrcA format from the L1/src format; the
+    // matching unpacker OUT_DATA_FORMAT override lives in llk_unpack_AB_reduce_init. Only REDUCE_COL and REDUCE_ROW
+    // support 2x (scalar reduce does not), and only GAPOOL/MVMUL (SUM/AVG) accepts a 2x SrcA - GMPOOL (MAX) does not.
     constexpr bool swap_operands = reduce_swaps_operands<pool_type, reduce_dim>();
     const bool srcA_2x = (pool_type == PoolType::SUM || pool_type == PoolType::AVG) &&
-                         (reduce_dim == ReduceDim::REDUCE_COL) &&
+                         (reduce_dim == ReduceDim::REDUCE_COL || reduce_dim == ReduceDim::REDUCE_ROW) &&
                          (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4);
     const DataFormat data_format = static_cast<DataFormat>(unpack_dst_format[operandA_id]);
     const DataFormat scaler_format = static_cast<DataFormat>(unpack_dst_format[operandB_id]);
@@ -65,7 +64,7 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
 }
 
 /**
- * @brief Restore the ALU SrcA/SrcB formats after a column reduce that consumed an MxFp4 (2x) operand.
+ * @brief Restore the ALU SrcA/SrcB formats after a column/row reduce that consumed an MxFp4 (2x) operand.
  *
  * @param operandA: The srcA (data) operand circular buffer (same as reduce init)
  *

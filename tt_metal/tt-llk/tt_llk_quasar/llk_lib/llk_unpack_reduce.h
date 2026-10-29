@@ -110,6 +110,8 @@ inline void _llk_unpack_reduce_init_(
  * @tparam REDUCE_DIMENSION: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param start_l1_tile_idx_0/1: Start tile index into the L1 buffer;
  *        start_l1_tile_idx_0 -> UNPACKER0 -> SRCA, start_l1_tile_idx_1 -> UNPACKER1 -> SRCB.
+ *        For REDUCE_ROW SUM/AVG the operands are swapped (see @ref reduce_swaps_operands):
+ *        start_l1_tile_idx_0 (data) -> UNPACKER1 -> SRCB, start_l1_tile_idx_1 (scaler) -> UNPACKER0 -> SRCA.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc.
  * @note Call @ref _llk_unpack_reduce_init_ with matching template args before this function.
  */

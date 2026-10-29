@@ -22,6 +22,8 @@
  *
  * This function initializes the UNPACKER0 to unpack a single tile from the input DFB to srcA
  * and UNPACKER1 to unpack a single face from the input DFB to srcB, with specified reduce dimension.
+ * For REDUCE_ROW SUM/AVG the operands are swapped (see @ref reduce_swaps_operands): operandA (data) goes
+ * UNPACKER1 -> SRCB and operandB (scaler) goes UNPACKER0 -> SRCA.
  *
  * Each operand gets a BFD id allocated from the unpack partition (operandA on Unp0 / UNPACR0,
  * operandB on Unp1 / UNPACR1) and its table entry is programmed here; the DFB ids are used only
@@ -41,13 +43,14 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
 
     _llk_unpack_reduce_init_<pool_type, reduce_dim>(bfd_a, bfd_b, tensor_shape);
 
-    // Column reduce (GAPOOL) consumes MxFp4 SrcA as the 2x-packed src-register format, like matmul.
-    // Override only the unpacker gasket OUT_DATA_FORMAT to MxFp4_2x_B (shadow register; unpacker idle
-    // at init before the first UNPACR; buffer descriptor keyed on the MxFp4 L1 format is unchanged).
-    // operandA -> SrcA -> UNP_A. Only REDUCE_COL supports 2x, and only GAPOOL (SUM/AVG) accepts a 2x
-    // SrcA - GMPOOL (MAX) does not. EN_32BIT_DEST does not affect the MxFp4->MxFp4_2x_B reconfig
-    // validity, so pass false.
-    if constexpr ((pool_type == PoolType::SUM || pool_type == PoolType::AVG) && reduce_dim == ReduceDim::REDUCE_COL) {
+    // Column reduce (GAPOOL) and row SUM/AVG (MVMUL) consume MxFp4 SrcA as the 2x-packed src-register format, like
+    // matmul. Override only the unpacker gasket OUT_DATA_FORMAT to MxFp4_2x_B (shadow register; unpacker idle at init
+    // before the first UNPACR; buffer descriptor keyed on the MxFp4 L1 format is unchanged). operandA -> SrcA -> UNP_A.
+    // Only REDUCE_COL and REDUCE_ROW support 2x, and only GAPOOL (SUM/AVG) accepts a 2x SrcA - GMPOOL (MAX) does not.
+    // EN_32BIT_DEST does not affect the MxFp4->MxFp4_2x_B reconfig validity, so pass false.
+    if constexpr (
+        (pool_type == PoolType::SUM || pool_type == PoolType::AVG) &&
+        (reduce_dim == ReduceDim::REDUCE_COL || reduce_dim == ReduceDim::REDUCE_ROW)) {
         if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) {
             _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false>(
                 get_operand_src_format(operandA_id), static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
@@ -85,6 +88,8 @@ inline void llk_unpack_AB_reduce_uninit(const std::uint32_t operandA) {
  * @param operandB: The srcB operand circular buffer identifier
  * @param tile_index_a: The L1 index in the input DFB to read from, tile_index_a -> UNPACKER0 -> SRCA
  * @param tile_index_b: The L1 index in the input DFB to read from, tile_index_b -> UNPACKER1 -> SRCB
+ *        (for REDUCE_ROW SUM/AVG the operands are swapped, see @ref reduce_swaps_operands:
+ *        tile_index_a -> UNPACKER1 -> SRCB, tile_index_b -> UNPACKER0 -> SRCA)
  *
  * This function performs unpacking for reduce kernels, the UNPACKER0 unpacks a single tile from the input DFB
  * to srcA and UNPACKER1 unpacks a single face from the input DFB to srcB.
