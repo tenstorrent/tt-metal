@@ -293,6 +293,21 @@ def test_rmsnorm_allcore_backward_with_frozen_gamma():
     rep.done()
 
 
+def test_rmsnorm_allcore_path_builds_no_node_for_a_no_grad_input():
+    """A no-grad input (the frozen embedding output) through the all-core norm wrapper takes the C++ op and gets
+    no backward node, so the first block does not compute a gradient it would discard (review round 3)."""
+    from ttml.models.mistral.rmsnorm_allcore import use_allcore_rmsnorm_backward
+
+    rng = seeded(4)
+    layer = RMSNormLayer(HIDDEN, EPS)
+    layer.gamma.tensor.set_requires_grad(False)
+    use_allcore_rmsnorm_backward(layer)
+    x = to_device(rand_x(rng), requires_grad=False)
+    out = layer(x)
+    assert not out.get_requires_grad()
+    assert out.get_node() is None
+
+
 def test_attention_forward_and_gradients():
     rng = seeded(3)
     x_np = rand_x(rng)
@@ -511,7 +526,9 @@ def test_frozen_embedding_matches_the_ttml_op():
     rep.check("out vs table rows", to_host(out), table[0, 0][ids[:, 0, 0]].reshape(BATCH, 1, SEQ, HIDDEN), 1.0, 0.0)
     rep.done()
     assert emb.weight.tensor.get_value().layout == ttnn.ROW_MAJOR_LAYOUT
-    assert out.get_node() is None or not emb.weight.tensor.get_requires_grad()
+    # The frozen lookup lives outside the autograd graph (review round 3, finding 1): no node, no gradient claim.
+    assert not out.get_requires_grad()
+    assert out.get_node() is None
 
 
 @pytest.mark.parametrize("transposed", [False, True], ids=["weights [out,in]", "frozen weights transposed"])

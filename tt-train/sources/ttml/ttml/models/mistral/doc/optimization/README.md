@@ -6,7 +6,7 @@ Phase 3 of the tt-train bring-up. Contract: `../plan.md` (target 1620 ms cycle-t
 
 - Single-chip Tracy at 1/2/4/8 layers (`analyze_tracy.py`, four-point fit, projection to 40) is the attribution and the cycle-time A/B (`diff_tracy.py`: targeted ops gone, nothing new). Tracy ms are cycles / 1.35 GHz; the delivered clock of each run is taken from the cycle counters (`clock_analysis.py`) so wall-clock comparisons are made at a stated clock.
 - Single-chip MFU at 8 of 40 layers (no profiler) with `tt-smi` sampled alongside; TP=4 full-model MFU (40 layers, 594 TFLOP/s denominator) with all four chips sampled, after a cool-down, and a 4-layer TP profile checked per chip (`tp_analysis.py`) for a stalled chip before any TP number is believed.
-- PCC harness (`tests/python/test_mistral.py`, 11 tests at the composite baseline, 14 at the final path with the transposed and fused cases; every module and layer kind, forward and every gradient) must pass before a change lands.
+- PCC harness (`tests/python/test_mistral.py`, 11 tests at the composite baseline, 15 at the final path with the transposed, fused and all-core-RMSNorm cases (16 since review round 4 added the no-grad norm case); every module and layer kind, forward and every gradient) must pass before a change lands.
 - From iteration 4 on (user priority, 2026-10-29): the full-model TP=4 MFU run after a cool-down is the result; the single-chip Tracy depths only attribute and rank; no single-chip MFU runs.
 
 ## Iterations
@@ -35,7 +35,7 @@ The fused TP wrappers keep the LoRA `h` / `dh` partial per rank (the reductions 
 
 ### Iteration 5b: batched TP gradient mode for the composite adapters (collectives), landed
 
-qkv and out run on the composite LoRA path at their TP-local shapes; they now keep their `h` / `dA` partial too (the row-parallel update joins the partial base before the output all-reduce), so no LoRA path issues a per-layer collective any more (4 partial gradients per layer stacked into two collectives per step). Harness 15 passed, TP=4 gradient check PASS. TP=4 **563.2 ms / 28.81 %** at 1.11-1.15 GHz effective on all chips vs 556.9 at 1.12-1.26 GHz: identical compute rows in cycle-time, the difference is the clock; neutral on this thermally bound box. Details in `../perf_analysis.md`, "Iteration 5b".
+qkv and out run on the composite LoRA path at their TP-local shapes; they now keep their `h` / `dA` partial too (the row-parallel update joins the partial base before the output all-reduce), so no LoRA path issues a per-layer collective any more (4 partial gradients per layer stacked into two collectives per step). Harness 15 passed, TP=4 gradient check PASS. TP=4 **563.2 ms / 28.81 %** at 1.11-1.15 GHz effective on all chips vs 556.9 at 1.12-1.26 GHz: identical compute rows in cycle-time, the difference is the clock; neutral in wall time on this box (lower effective clock at equal temperature in that run, cause not identified). Details in `../perf_analysis.md`, "Iteration 5b".
 
 ### Iteration 6: RMSNorm backward on all cores (math), landed
 

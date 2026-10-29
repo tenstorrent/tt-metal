@@ -47,7 +47,9 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 6 | `190f3aad6fd` | `rmsnorm_bw_allcore` metal op, `rmsnorm_allcore.py`, `RMSNormLayer.rmsnorm_op` hook, harness case, iteration-6 evidence |
 | 7 (rejected) | `d546567c67f` | evidence and write-up of the rejected qkv / out fused-path trial at TP; no code change |
 | TP sweeps | `d03dfffa23c` | TP-local shape sweeps: no config win; logs and write-up |
-| 8 | (this commit) | frozen vocab-parallel embedding table, resumed-loop state section, iteration-8 evidence |
+| 8 | `4777ff7646a` | frozen vocab-parallel embedding table, resumed-loop state section, iteration-8 evidence |
+| review 3 | `4ae4eef5bcc` | review round 3 and its follow-up: graph-free frozen paths, loss match on the final path, doc corrections |
+| review 4 | (this commit) | review round 4 items: README / work-log rows, frozen-embedding test assertion, no-grad norm harness case, sweep numbers |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run described in `perf_analysis.md`, "Iteration 1".
 - Review round 1 of the loop (`doc/optimization/review_round1.md`): required a TP=4 gradient-level check of the fused/transposed paths (`tp_gradient_check.py`: `O/tp_grad_check_single.{npz,log}`, `O/tp_grad_check_tp4_plain.{npz,log}`, `O/tp_grad_check_tp4_fused.{npz,log}`), the exit restated at the measured clock with the falling-clock anomaly classified, and arithmetic fixes in the gap decomposition; also taken: the 16-layer Tracy point the plan's rule asks for once 16 layers fit (`O/iter3_fused_tracy_16layers*`), the iteration-3 op sequence (`O/iter3_fused_op_sequence_1layer.txt`), the fused-LoRA isolation script and its after-fix log in evidence.
