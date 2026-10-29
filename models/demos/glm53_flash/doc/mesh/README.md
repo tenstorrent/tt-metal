@@ -1419,3 +1419,13 @@ sets `GLM53_PREFIX_BUCKET` at init. The seal-off footprint change and the sealed
 again; the one served shape the chip-0 tests had not covered, a 3968-row ragged chunk padded to the 16384 bucket and
 then continued, is queued (`test_chunked_prefill` served-padded variant). A3's index half remains the enabler for
 32-aligned APC restores and wave starts, not the artifact fix.
+
+### 2026-10-29 02:00: the DSA wave path is exact at the layer level
+
+`test_dsa_attention_wave_vs_slab` ((2,4) block, heads2users, layer 3 attention, user 1 = owner column 1): a wave of two
+prompts (dump rows [0, 200) on row 0, [200, 500) on row 1, T = 384) vs the slab prefill of each prompt alone: every row
+bit-exact, both row orders; the sparse regime in two waves (A[:2048] | B[:1024] at 0, then A[2048:2500] at 2048 |
+B[1024:2300] at 1024, T = 1280): bit-exact except 6 of the 452 continued rows of A at 1 ulp (max|diff| 0.002). So the
+per-row page-table / pool views, the per-row index maintenance and the static attention with per-row starts are
+right; the model-level 0.9973 on prompt B (layers 0-3) is left to the MoE under the per-row pad mask: the layer-3-only
+wave test is queued (`prefill_wave` now runs without a KDA layer).
