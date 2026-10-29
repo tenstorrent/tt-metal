@@ -131,94 +131,7 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
 }
 
 /**
- * out_cb = reduce[MAX,SUM](in0_cb * scale_cb)
- */
-template <
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    uint32_t in0_cb,
-    uint32_t scale_cb,
-    uint32_t rows,
-    uint32_t cols,
-    VectorMode vector_mode = VectorMode::C>
-void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
-    CircularBuffer cb_in0(in0_cb);
-    CircularBuffer cb_scale(scale_cb);
-    CircularBuffer cb_out(out_cb);
-    CircularBuffer cb_prev(prev_cb);
-    // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
-    // Precondition: scale_cb has 1 produced
-    // Precondition: out_cb has rows free
-    // Postcondition: in0_cb has rows*cols produced
-    // Precondition: scale_cb has 1 produced
-    // Postcondition: out_cb has rows produced
-    // If do_eltwise_max == true, prev_cb has rows produced.
-
-#if defined REDUCE_GRANULARITY
-    constexpr uint32_t dst_tiles = (rows < REDUCE_GRANULARITY) ? rows : REDUCE_GRANULARITY;
-    constexpr uint32_t granularity = (rows >= REDUCE_GRANULARITY) ? (rows / REDUCE_GRANULARITY) : 1;
-#else
-    constexpr uint32_t dst_tiles = 1;
-    constexpr uint32_t granularity = rows;
-#endif
-
-    cb_scale.wait_front(1);
-    cb_out.reserve_back(rows);
-
-    const uint32_t num_tiles_to_wait = dst_tiles * cols;
-    uint32_t in0_wait_tiles = num_tiles_to_wait;
-
-    uint32_t row_start_idx = 0;
-    for (uint32_t g = 0; g < granularity; g++) {
-        cb_in0.wait_front(in0_wait_tiles);
-        tile_regs_acquire();
-
-        if (do_eltwise_max) {
-            cb_prev.wait_front(g * dst_tiles);
-            /**
-             * Copy previous max values into DST register.
-             * Note that this special invocation of copy_tile is necessary to produce
-             * tiles in DST with transposed faces, as `reduce_block_max_row` expects.
-             */
-            reconfig_data_format_srca(prev_cb);
-            sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
-            for (uint32_t i = 0; i < dst_tiles; i++) {
-                const uint32_t cur_max_dst_idx = i;
-                copy_tile(prev_cb, (row_start_idx + i), cur_max_dst_idx);
-            }
-            reconfig_data_format_srca(in0_cb);
-        }
-
-        /**
-         * For `dst_tiles` number of rows, compute the max into the even indices of the DST register.
-         */
-        reduce_block_max_row_init<cols>(out_cb);
-        for (uint32_t i = 0; i < dst_tiles; i++) {
-            const uint32_t reduce_dst_idx = i;
-            reduce_block_max_row<cols>(in0_cb, scale_cb, (row_start_idx + i) * cols, reduce_dst_idx);
-        }
-        reduce_block_max_row_uninit(in0_cb);
-
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_reconfig_data_format(out_cb);
-        for (uint32_t i = 0; i < dst_tiles; i++) {
-            const uint32_t cur_max_dst_idx = i;
-            pack_tile<true>(cur_max_dst_idx, out_cb, (row_start_idx + i));
-        }
-        tile_regs_release();
-
-        row_start_idx += dst_tiles;
-        in0_wait_tiles += num_tiles_to_wait;
-    }
-
-    cb_out.push_back(rows);
-}
-
-/**
- * out_cb = reduce[MAX,SUM](in0_cb * scale_cb)
- *
- * In this version cols does not have to be a compile-time constant.
+ * out_cb = reduce[MAX,SUM](in0_cb * scale_cb), cols at runtime.
  */
 template <
     PoolType pool_type,
@@ -310,7 +223,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 }
 
 /**
- * in0_cb = exp((in0_cb - in1_cb) * scale_fp32)
+ * in0_cb = exp((in0_cb - in1_cb) * scale_fp32), in place. Only the in-place, non-reducing form is used (decode).
  */
 template <
     uint32_t in0_cb,
@@ -319,10 +232,10 @@ template <
     bool write_result_inplace = true,
     bool do_reduce = true,
     VectorMode vector_mode = VectorMode::RC>
-void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols) {
+void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t /*reduce_cb*/, uint32_t cols) {
+    static_assert(write_result_inplace && !do_reduce, "only the in-place, non-reducing form is used");
     CircularBuffer cb_in0(in0_cb);
     CircularBuffer cb_in1(in1_cb);
-    CircularBuffer cb_reduce(reduce_cb);
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -343,9 +256,6 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
 
     cb_in0.wait_front(rows * cols);
     cb_in1.wait_front(rows);
-    if constexpr (do_reduce) {
-        cb_reduce.reserve_back(rows);
-    }
 
 #ifdef SUB_EXP_GRANULARITY
     uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
@@ -378,64 +288,30 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                 }
             }
             tile_regs_commit();
-
-            if constexpr (write_result_inplace) {
-                cb_in0.pop_front(dst_tiles);
-                cb_in0.reserve_back(dst_tiles);
-            }
-
+            cb_in0.pop_front(dst_tiles);
+            cb_in0.reserve_back(dst_tiles);
             tile_regs_wait();
-
-            if constexpr (write_result_inplace) {
-                pack_reconfig_data_format(in0_cb);
-                for (uint32_t j = 0; j < dst_tiles; ++j) {
-                    pack_tile(j, in0_cb);
-                }
-                // Granular write output to enable following matmul unpack to start early.
-                cb_in0.push_back(dst_tiles);
+            pack_reconfig_data_format(in0_cb);
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile(j, in0_cb);
             }
-
-            if constexpr (do_reduce) {
-                pack_reconfig_data_format(reduce_cb);
-                // While we have results in DST, take advantage of L1 accumulation
-                // to reduce row x cols tiles to rows x 1 tiles.
-                if (u > 0) {
-                    // If on the same row, keep accumulating
-                    PACK((llk_pack_reconfig_l1_acc(1)));
-                }
-                for (uint32_t j = 0; j < dst_tiles; ++j) {
-                    pack_tile<true>(j, reduce_cb, i);
-                    if (u == 0 && j == 0) {
-                        // If this was the first tile of a row, start accumulating
-                        PACK((llk_pack_reconfig_l1_acc(1)));
-                    }
-                }
-            }
+            // Granular write output to enable following matmul unpack to start early.
+            cb_in0.push_back(dst_tiles);
             tile_regs_release();
-            if constexpr (do_reduce) {
-                PACK((llk_pack_reconfig_l1_acc(0)));
-            }
         }
-    }
-    if constexpr (do_reduce) {
-        cb_reduce.push_back(rows);
     }
 
     PACK((llk_pack_relu_config(ReluConfig::none())));
 }
 
 /**
- * out_cb = in0_cb * in1_cb
+ * out_cb = in0_cb * in1_cb, tile by tile with an immediate pop of each in0 tile (the only form used).
  * @tparam rows - Number of rows of tiles
  * @tparam cols - Number of columns of tiles
- * @tparam immediate_pop - If true, uses tile-by-tile processing with immediate CB pop after each tile.
- *                         If false, uses batched processing with deferred CB pop, processing multiple tiles in
- * parallel.
- * @tparam pack_accumulate - If true, enables L1 accumulation to accumulate results onto existing tiles
- *                           in out_cb. Only supported when immediate_pop=false.
  */
 template <uint32_t rows, uint32_t cols, bool immediate_pop, bool pack_accumulate>
 void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
+    static_assert(immediate_pop && !pack_accumulate, "only the immediate-pop form is used");
     CircularBuffer cb_in0(in0_cb);
     CircularBuffer cb_in1(in1_cb);
     CircularBuffer cb_out(out_cb);
@@ -454,61 +330,20 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(rows);
 
-    if constexpr (immediate_pop) {
-        static_assert(!pack_accumulate, "Unsupported parameter configuration");
-        for (uint32_t i = 0; i < rows; ++i) {
-            for (uint32_t j = 0; j < cols; ++j) {
-                tile_regs_acquire();
-                mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
-                tile_regs_commit();
-                cb_in0.pop_front(1);
-                cb_out.reserve_back(1);
-                tile_regs_wait();
-                pack_tile(0, out_cb);
-                tile_regs_release();
-                cb_out.push_back(1);
-            }
-        }
-        cb_in1.pop_front(rows);
-    } else {
-#ifdef DHT_GRANULARITY
-        constexpr uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
-        constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols / DHT_GRANULARITY) : 1;
-#else
-        constexpr uint32_t dst_tiles = 1;
-        constexpr uint32_t granularity = cols;
-#endif
-        PACK((llk_pack_reconfig_l1_acc(pack_accumulate)));
-        if (!pack_accumulate) {
-            cb_out.reserve_back(num_tiles);
-        }
-        uint32_t in0_index = 0;
-        for (uint32_t i = 0; i < rows; ++i) {
-            for (uint32_t u = 0; u < granularity; ++u) {
-                tile_regs_acquire();
-                for (uint32_t j = 0; j < dst_tiles; ++j) {
-                    mul_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
-                    in0_index++;
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t j = 0; j < dst_tiles; ++j) {
-                    pack_tile(j, out_cb);
-                }
-                tile_regs_release();
-            }
-        }
-        cb_in1.pop_front(rows);
-        cb_in0.pop_front(num_tiles);
-        if (pack_accumulate) {
-            PACK((llk_pack_reconfig_l1_acc(false)));
-            cb_out.pop_front(num_tiles);
-            cb_out.reserve_back(num_tiles);
-            cb_out.push_back(num_tiles);
-        } else {
-            cb_out.push_back(num_tiles);
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t j = 0; j < cols; ++j) {
+            tile_regs_acquire();
+            mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
+            tile_regs_commit();
+            cb_in0.pop_front(1);
+            cb_out.reserve_back(1);
+            tile_regs_wait();
+            pack_tile(0, out_cb);
+            tile_regs_release();
+            cb_out.push_back(1);
         }
     }
+    cb_in1.pop_front(rows);
 }
 
 /**
@@ -899,62 +734,6 @@ ALWI void matmul_blocks(
         cb_out.push_back(in0_subblock_all_cols_num_tiles);
     }
     cb_in1.pop_front(K * N);
-}
-
-template <uint32_t M>
-void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
-    CircularBuffer cb_in1(in1_cb);
-    CircularBuffer cb_out(out_cb);
-    // precondition: in0_cb has M*K produced
-    // precondition: in1_cb has K*N produced
-    // postcondition: in0_cb is full, in1_cb is empty
-    // postcondition: out_cb has M*N produced
-
-    constexpr uint32_t N = 1;  // Result of reduce is 1 column
-    constexpr uint32_t in0_block_w = N;
-    constexpr uint32_t subblock_w = N;
-    // Reuse the Sq_chunk_t granularity chosen for sub_exp_block
-#ifdef STATS_GRANULARITY
-    constexpr uint32_t subblock_h = STATS_GRANULARITY;
-    constexpr uint32_t in0_num_subblocks = M / STATS_GRANULARITY;
-#else
-    constexpr uint32_t subblock_h = 1;
-    constexpr uint32_t in0_num_subblocks = M;
-#endif
-
-    /**
-     * Use matmul on Mx1 input to reduce rows within tile to produce Mx1 output.
-     */
-
-    // matmul_block_init validates the live reverse-order unpacker setup
-    // (in1_cb -> SrcA, out_cb -> SrcB), so establish it before init.
-    reconfig_data_format(in1_cb, out_cb);
-    matmul_block_init(
-        out_cb, in1_cb, 0 /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
-
-    pack_reconfig_data_format(out_cb);
-    cb_in1.wait_front(N);
-    cb_out.wait_front(M);
-
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        tile_regs_acquire();
-
-        uint32_t dst_index = 0;
-        uint32_t in0_index = 0;
-        uint32_t in1_index = 0;
-
-        matmul_block(out_cb, in1_cb, in0_index, in1_index, dst_index, 0, subblock_w, subblock_h, in0_block_w);
-
-        tile_regs_commit();
-        cb_out.pop_front(subblock_h);
-
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_h; i++) {
-            pack_tile(i, out_cb);
-        }
-        tile_regs_release();
-        cb_out.push_back(subblock_h);
-    }
 }
 
 /**

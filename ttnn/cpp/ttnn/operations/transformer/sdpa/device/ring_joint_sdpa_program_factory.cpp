@@ -1003,7 +1003,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     generate a mask
             - compute attention
         - write the output Q chunk
-        - if this is not the first ring iteration, do the LSE update.
+        - if this is not the first ring iteration, restore and update the deferred-normalization state (O, max, sum).
     */
 
     log_debug(tt::LogOp, "RingJointSDPA create_descriptor");
@@ -1402,34 +1402,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
-    const bool use_streaming_compute = variant.resident_ring_state() || !fp32_dest_acc_en;
-    // Validated in validate_on_program_cache_miss.
-    TT_ASSERT(args.kv_stripe_split == 1 || use_streaming_compute);
-    TT_FATAL(
-        !kv_pad_rotation_enabled || use_streaming_compute,
-        "kv_actual_isl requires the ring-joint streaming compute path; the legacy sdpa_ring path selected by "
-        "fp32_dest_acc_en=true is not supported.");
+    TT_ASSERT(variant.resident_ring_state() || !fp32_dest_acc_en);  // validate_on_program_cache_miss rejects it
 
     // Recipe variants (resident ring state) run their own compute loop: no K split, no segmented accumulation.
     const bool legacy_compute = !variant.resident_ring_state();
-    // Sharded joint with a padded tail (logical_l < padded L) needs the reader to skip joint K chunks
-    // beyond the real tail. That skip is mirrored only in the streaming compute path (sdpa_ring_v2);
-    // the legacy fp32 path (sdpa_ring/sdpa_inner_loop) would leave compute waiting on K/V chunks the
-    // reader never pushed. Require streaming rather than risk a deadlock.
-    TT_FATAL(
-        !(joint_is_sharded && logical_l < L) || use_streaming_compute,
-        "Sharded joint with a padded joint tail (logical_l {} < padded L {}) requires the streaming compute "
-        "path (set fp32_dest_acc_en=false)",
-        logical_l,
-        L);
-    TT_FATAL(
-        use_streaming_compute || !v_shares_k_buffer,
-        "Latent-V ring attention is implemented only for streaming compute (fp32_dest_acc_en must be false)");
     log_debug(
         tt::LogOp,
-        "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",
-        use_streaming_compute,
+        "ring joint subblocks (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",
         args.is_causal,
         Sq_chunk_t,
         Sk_chunk_t,
@@ -1442,7 +1421,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         Sq_chunk_t,
         vDHt,
         dst_size,
-        /*max_subblock_h=*/use_streaming_compute ? 2 : UINT32_MAX,
+        /*max_subblock_h=*/2,
         /*max_subblock_w=*/kt_inplace_v ? 1u : UINT32_MAX);
     if (fixed_subblock_h) {
         out_out_subblock_h = *fixed_subblock_h;
@@ -1453,9 +1432,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // cadence that compute pushes, otherwise deferred-save rows can be popped and
     // reused before the matching grouped write has safely landed.
     uint32_t writer_out_row_group_h =
-        use_streaming_compute
-            ? ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t)
-            : out_out_subblock_h;
+        ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t);
     // K split and segmented accumulation apply only to chunked calls; others ignore them, so one config serves every
     // chunk. Both need one Q chunk per core and whole output row groups (static_assert in ring_joint_sdpa.cpp).
     // Returns why this call cannot apply them, or "".
@@ -1465,9 +1442,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         }
         if (args.is_balanced) {
             return "is_balanced is set";
-        }
-        if (!use_streaming_compute) {
-            return "fp32_dest_acc_en is set";
         }
         if (B != 1) {
             return fmt::format("the batch is {}", B);
@@ -1580,10 +1554,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     //    chunk against 2-row groups), as larger odd Q chunks already are by the fit check.
     // Otherwise keep the full-size cb_out (the default path).
     const bool streaming_shrink_fits = Sq_chunk_t <= 2 * writer_out_row_group_h;
-    const bool streaming_shrink_safe = use_streaming_compute &&
-                                       (args.all_gather_operation_attributes.ring_size == 1 || max_q_per_core == 1) &&
-                                       streaming_shrink_fits &&
-                                       (!fixed_subblock_h || Sq_chunk_t % out_out_subblock_h == 0);
+    const bool streaming_shrink_safe =
+        (args.all_gather_operation_attributes.ring_size == 1 || max_q_per_core == 1) && streaming_shrink_fits &&
+        (!fixed_subblock_h || Sq_chunk_t % out_out_subblock_h == 0);
     if (streaming_shrink_safe) {
         out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
         TT_FATAL(
@@ -1606,24 +1579,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     log_debug(tt::LogOp, "out_out_subblock_h: {}", out_out_subblock_h);
     log_debug(tt::LogOp, "out_in0_num_subblocks: {}", out_in0_num_subblocks);
     log_debug(tt::LogOp, "out_in1_num_subblocks: {}", out_in1_num_subblocks);
-
-    // Determine granularity for statistics computation
-    // Each granularity must evenly divide its tile count to avoid dropping tiles
-    const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
-    const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
-    // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
-    // so the granularity must evenly divide both to avoid dropping tiles.
-    uint32_t dht_granularity = std::min({DHt, vDHt, dst_size});
-    while (dht_granularity > 1 && (DHt % dht_granularity != 0 || vDHt % dht_granularity != 0)) {
-        dht_granularity--;
-    }
-    const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
-
-    // Log these
-    log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
-    log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
-    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
@@ -1868,7 +1823,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         args.all_gather_operation_attributes.ring_size,
         compile_time_global_n_partial_col,
         joint_l_partial_col,
-        static_cast<std::uint32_t>(use_streaming_compute),
+        1u,  // use_streaming_compute (the only path)
         kernel_is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
@@ -1939,7 +1894,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         out_in0_num_subblocks,
         out_in1_num_subblocks,
         scale_packed,
-        static_cast<std::uint32_t>(use_streaming_compute),
+        1u,  // use_streaming_compute (the only path)
         compile_time_global_n_partial_col,
         joint_l_partial_col,
         kernel_is_causal,
@@ -1995,13 +1950,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         active_ring_iter_mask,
         Sq_chunk_t * tt::constants::TILE_HEIGHT,
         kt_inplace_v ? "in-place" : (v_shares_k_buffer ? "materialized" : "separate"));
-    defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
-        TT_FATAL(use_streaming_compute, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
         defines["SDPA_MATMUL_FIDELITY"] =
             std::to_string(static_cast<uint32_t>(*args.program_config->matmul_math_fidelity));
     }
@@ -2138,7 +2088,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // These CBs carry accumulator state between passes: DRAM save/restore across ring iterations, or the K-split
     // reducer's partial results from the other bands. Unsplit sliding attention folds every K/V range into one pass per
     // Q and uses neither, so it aliases them to existing CBs to keep the compile-time ABI without reserving L1.
-    // A resident ring state never saves or restores accumulators through the LSE staging path either.
+    // A resident ring state never saves or restores accumulators through the deferred-normalization staging path
+    // either.
     const bool needs_accumulator_staging_cbs =
         (!has_sliding_window || ksplit_count > 1) && !variant.resident_ring_state();
     const uint32_t cb_stats_in =
@@ -2150,26 +2101,20 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
 
     // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
     // cb_scale_in is live in ring joint, so streaming uses a dedicated scratch CB.
-    const uint32_t cb_recip_scratch =
-        use_streaming_compute ? allocate_tile_cb(1, im_tile_size, im_df, ComputeCb::RecipScratch) : inactive_cb;
+    const uint32_t cb_recip_scratch = allocate_tile_cb(1, im_tile_size, im_df, ComputeCb::RecipScratch);
 
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
     // cb_sum_out = compute pushes sum for writer to save to DRAM.
     // cb_sum_in = writer pushes restored sum from DRAM for compute to read.
     const uint32_t cb_sum_out =
-        use_streaming_compute
-            ? (needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_A)
-            : inactive_cb;
+        needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_A;
     const uint32_t cb_sum_in =
-        use_streaming_compute
-            ? (needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_B)
-            : inactive_cb;
+        needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_B;
 
     // Signal CB: compute signals writer when last K-chunk starts.
     // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
     constexpr uint32_t signal_page_size = 16;
-    const uint32_t cb_signal =
-        use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
+    const uint32_t cb_signal = allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16);
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
     variant.finalize_cbs(desc, input_tensor_q.device(), cb_q_in, Sq_chunk_t * DHt * q_tile_size);
@@ -2771,10 +2716,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         !seg_accum &&
         // Separate-V head chains use static forwarding counts and cannot follow migrated chunks.
         !use_head_chain &&
-        // Only streaming compute consumes rotated IDs. The reader loads a sink for the
-        // scheduled Q head only on final normalization, so sinks need no ownership handoff.
-        // Balanced rotation requires whole low/high pairs; odd chunk layouts stay static.
-        use_streaming_compute && (!args.is_balanced || enable_zigzag_balancing) &&
+        // The reader loads a sink for the scheduled Q head only on final normalization, so sinks need no
+        // ownership handoff. Balanced rotation requires whole low/high pairs; odd chunk layouts stay static.
+        (!args.is_balanced || enable_zigzag_balancing) &&
         // A resident ring state keeps each Q chunk's (m, l, O) in L1 on its owning core; it never migrates.
         !variant.resident_ring_state() &&
         // Every core needs a complete unit to supply indices for padded reader slots.
@@ -2839,7 +2783,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         log_debug(
             tt::LogOp,
             "Ring joint rotated Q split declined: base={} floats={} groups_needed={} of {} groups, "
-            "balanced={} head_chain={} streaming={} attention_sink={} kv_chains={} groups=\"{}\"; "
+            "balanced={} head_chain={} attention_sink={} kv_chains={} groups=\"{}\"; "
             "using the static flat split.",
             rotated_base_chunks,
             rotated_float_chunks,
@@ -2847,7 +2791,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
             rotated_groups.size(),
             args.is_balanced,
             use_head_chain,
-            use_streaming_compute,
             use_attention_sink,
             build_kv_chains,
             rotated_group_reject.empty() ? "ok" : rotated_group_reject);
@@ -2860,11 +2803,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // TT_FATAL below pins that "last" so a future append fails loudly instead of silently
     // handing the kernels some other value.
     const uint32_t rotated_max_slots_ct = use_rotated_q_split ? rotated_base_chunks + rotation_unit_chunks : 0;
-    // Skip dense chunked K chunks past each device's causal end (reader and compute). Only the streaming path mirrors
-    // it, and only single-Q cores, where the writer does not order saves by a per-iteration K chunk count. Split KV
-    // masks its own packed streams: the skip's Q-end and region arithmetic assume the classic ring.
-    const bool dense_causal_skip = use_streaming_compute && kernel_chunked && !has_sliding_window &&
-                                   max_q_per_core == 1 && !use_rotated_q_split && args.kv_stripe_split == 1;
+    // Skip dense chunked K chunks past each device's causal end (reader and compute), only on single-Q cores, where
+    // the writer does not order saves by a per-iteration K chunk count. Split KV masks its own packed streams: the
+    // skip's Q-end and region arithmetic assume the classic ring.
+    const bool dense_causal_skip = kernel_chunked && !has_sliding_window && max_q_per_core == 1 &&
+                                   !use_rotated_q_split && args.kv_stripe_split == 1;
     for (auto* args : {&reader_compile_time_args, &writer_compile_time_args, &compute_compile_time_args}) {
         args->push_back(rotated_max_slots_ct);
     }
@@ -3825,7 +3768,7 @@ namespace ttnn::prim {
 
 namespace {
 
-// Legacy ring joint compute (precision unset): host-chosen subblocks, LSE / deferred-normalization
+// Legacy ring joint compute (precision unset): host-chosen subblocks, deferred-normalization (O, max, sum)
 // accumulator staging, CBs allocated from index 0.
 class LegacyRingJointCompute final : public ring_joint_sdpa::ComputeVariant {
 public:

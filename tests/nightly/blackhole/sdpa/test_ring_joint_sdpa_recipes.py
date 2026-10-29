@@ -493,7 +493,7 @@ def test_ring_joint_sdpa_recipe_causal(ring_mesh, variant, case, balanced):
 
 @pytest.mark.parametrize("variant", ["standard"])
 def test_ring_joint_sdpa_recipe_rejects_sliding_window(ring_mesh, variant, expect_error):
-    """The legacy FP32 ring kernel ignores sliding_window_size; the recipes reject it rather than ignore it."""
+    """The recipes reject sliding_window_size rather than ignore it."""
     mesh, semaphores, ccl_column = ring_mesh
     inputs, joints, backing, logical_n, kwargs, _, _ = ring_case(mesh, variant, "multi_q_checkpoint")
     with expect_error(RuntimeError, "do not support sliding_window_size"):

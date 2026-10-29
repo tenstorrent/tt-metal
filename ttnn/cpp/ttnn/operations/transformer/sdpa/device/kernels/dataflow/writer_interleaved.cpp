@@ -35,7 +35,7 @@ void kernel_main() {
     constexpr uint32_t is_chunked = get_compile_time_arg_val(14) == 1;
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(15);
     constexpr bool use_lightweight_mask = get_compile_time_arg_val(16) == 1;
-    constexpr bool use_streaming_compute = get_compile_time_arg_val(17) == 1;
+    static_assert(get_compile_time_arg_val(17) == 1, "SDPA has only its streaming compute path");
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(18);
     constexpr uint32_t k_partial_col = get_compile_time_arg_val(19);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(20) == 1;
@@ -84,9 +84,7 @@ void kernel_main() {
     const uint32_t cu_window_seqlens_eles = get_arg_val<uint32_t>(10);
     // Global row index of this tensor's first Q row. Non-zero when Q is a sequence-parallel shard:
     // Q/output are addressed locally, but cu_window_seqlens and K/V are global, so the mask generator
-    // needs the shard's global origin. Windowed builds only: the ring-distributed factory shares this
-    // kernel, never sets use_windowed_mask, and supplies runtime args only through slot 10 — so slots
-    // 11/12 must not be read there (mirrors the reader's guarded windowed tail).
+    // needs the shard's global origin. Windowed builds only (mirrors the reader's guarded windowed tail).
     uint32_t q_tok_offset = 0;
     // Per-device form: when a tensor was supplied its value wins, read below once cb_cu_window_in is
     // available. Zero address means the caller used the scalar above.
@@ -105,7 +103,6 @@ void kernel_main() {
         next_physical_x = get_arg_val<uint32_t>(14);
         next_physical_y = get_arg_val<uint32_t>(15);
     }
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
 
     constexpr uint32_t cb_arg_offset = q_offset_args.next_compile_time_args_offset();
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 0);
@@ -307,37 +304,22 @@ void kernel_main() {
             } else {
                 out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
             }
-            if constexpr (use_streaming_compute) {
-                // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
-                // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
-                // are padding and get popped without being written.
-                write_block_row_grouped<head_rows>(
-                    noc,
-                    out_writer,
-                    cb_out,
-                    Sq_chunk_t,
-                    out_row_tile_count,
-                    vDHt,
-                    out_tile_id,
-                    tile_bytes,
-                    out_subblock_h,
-                    barrier_threshold,
-                    out_row_stride,
-                    first_row_in_head);
-            } else {
-                write_block<head_rows>(
-                    noc,
-                    out_writer,
-                    cb_out,
-                    out_chunk_tiles,
-                    out_row_tile_count,
-                    vDHt,
-                    out_tile_id,
-                    tile_bytes,
-                    barrier_threshold,
-                    out_row_stride,
-                    first_row_in_head);
-            }
+            // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
+            // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
+            // are padding and get popped without being written.
+            write_block_row_grouped<head_rows>(
+                noc,
+                out_writer,
+                cb_out,
+                Sq_chunk_t,
+                out_row_tile_count,
+                vDHt,
+                out_tile_id,
+                tile_bytes,
+                out_subblock_h,
+                barrier_threshold,
+                out_row_stride,
+                first_row_in_head);
         }
     }  // close phase
 }
