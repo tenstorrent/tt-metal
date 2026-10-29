@@ -43,6 +43,13 @@ KERNEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol_kerne
 TILE_BYTES = 2048
 # Defaults of the pooled all-gather configuration (see SolPrepassFused.__init__): overridden per instance / by env.
 DEFAULT_GATHER_KWARGS: dict = {"num_workers_per_link": 1, "barrier": False}
+# Own global semaphores for the two pooled gathers (SOL_AG_OWN_SEMS, default 1). The CCL manager's all-gather ping-pong
+# semaphore pool is shared with the ring attention op's fused K/V gather, whose reader zeroes its semaphore at exit
+# (ring_attention_all_gather_reader.cpp); a chip that is already sending the next layer's pooled gather on the same set
+# while a lagging chip is still inside the ring op loses those credits (or the lagging chip consumes them as its own).
+# With its own two sets the pre-pass never shares a semaphore address with the ring op. Defensive: the 2026-10-29 hangs
+# were traced to the route's constants multicast (see sol_route_reader.cpp), not to this.
+DEFAULT_GATHER_OWN_SEMS = True
 DEFAULT_GATHER_PERSISTENT = False
 DEFAULT_PERSISTENT_INTERNAL = True  # q_bar / kc_local / vc_local allocated once and reused across calls
 L1_CB_BUDGET = 1_200_000  # circular-buffer bytes per core the route program may use (Blackhole L1 = 1.5 MB)
@@ -233,6 +240,9 @@ class SolPrepassFused:
         if os.environ.get("SOL_AG_KW"):
             self.gather_kwargs.update(json.loads(os.environ["SOL_AG_KW"]))
         self.gather_persistent = bool(gather_persistent or DEFAULT_GATHER_PERSISTENT)
+        self.gather_own_sems = os.environ.get("SOL_AG_OWN_SEMS", "1" if DEFAULT_GATHER_OWN_SEMS else "0") == "1"
+        self._ag_sems: list | None = None  # two sets of two global semaphores, alternated per gather call
+        self._ag_idx = 0
         # persistent_internal (SOL_PERSISTENT_INTERNAL, default 1): the pool outputs that never leave this object
         # (q_bar, the local pooled K / V) are allocated once per prepare() and reused: on the in-order command queue the
         # next call's pool program runs only after the previous call's gathers and route have consumed them. Saves three
@@ -504,8 +514,14 @@ class SolPrepassFused:
         # constant tiles to the grid as NoC rectangles of worker cores (physical columns come in contiguous runs with
         # non-worker columns between them). NoC 0 order: start <= end. Common args after the core coordinates:
         # count, then (x_start, y_start, x_end, y_end, cores) per rectangle.
+        # SOL_ROUTE_CONST_MCAST=0 (default since 2026-10-29): rectangle count 0, every core reads its own constants
+        # from DRAM; the multicast hung at the 10 s / 15 s geometries (jobs 162394, 163714, 163912, 164002: the
+        # sender's multicast never completed on NOC0, every route core waiting). 1 = the multicast as before.
+        const_mcast = os.environ.get("SOL_ROUTE_CONST_MCAST", "0") == "1"
         rects: list[int] = []
-        if units_per_shard:
+        if units_per_shard and not const_mcast:
+            rects = [0]
+        elif units_per_shard:
             assert H * S < nx * ny, "the constants sender must be a core without a unit"
             xs = sorted({core_xy[lx] & 0xFF for lx in range(nx)})
             ys = sorted({(core_xy[ly * nx] >> 8) & 0xFF for ly in range(ny)})
@@ -657,13 +673,22 @@ class SolPrepassFused:
         barrier = kw.pop("barrier", True) and not self.gather_persistent  # "barrier": False drops the ring-wide barrier
         if isinstance(topo, str):
             topo = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}[topo.lower()]
+        if self.gather_own_sems:
+            if self._ag_sems is None:
+                self._ag_sems = [
+                    [ttnn.create_global_semaphore(self.mesh_device, ccl.ccl_cores, 0) for _ in range(2)] for _ in range(2)
+                ]
+            sems = self._ag_sems[self._ag_idx]
+            self._ag_idx ^= 1
+        else:
+            sems = ccl.get_ag_ping_pong_semaphore(self.sp_axis)
         return ttnn.experimental.all_gather_async(
             t,
             persistent_output_buffer=(
                 ccl.get_ag_ping_pong_buffer(t.shape, 2, self.sp_axis, dtype=t.get_dtype()) if self.gather_persistent else None
             ),
             dim=2,
-            multi_device_global_semaphore=ccl.get_ag_ping_pong_semaphore(self.sp_axis),
+            multi_device_global_semaphore=sems,
             num_links=kw.pop("num_links", ccl.num_links),
             topology=topo if topo is not None else ccl.topology,
             cluster_axis=self.sp_axis,

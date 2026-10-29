@@ -147,9 +147,42 @@ void kernel_main() {
     // x_start, y_start, x_end, y_end, cores per rectangle). Every core's CBs sit at the same L1 addresses (one CB
     // configuration), so the multicast lands in place; semaphore 1 (set by multicast after the data barrier) tells
     // the receivers to push the pages. Receivers reset it for the next launch.
+    // No-multicast mode (host passes a rectangle count of 0; SOL_ROUTE_CONST_MCAST=0, the default since 2026-10-29):
+    // every core reads its own constants from DRAM, as before the multicast. The multicast is where jobs 162394,
+    // 163714, 163912 and 164002 hung: the sender core's noc_async_write_multicast of the constants never completed
+    // (NOC0 command buffer stuck, every other route core waiting on semaphore 1) at the 10 s / 15 s geometries, whose
+    // constant blocks exceed one 16 KB NoC burst; the 5 s geometry (every block under 16 KB) never hung.
     constexpr uint32_t CONST_PAGES[5] = {1, NQCT * NBPT, NBPT * NKCLT, NEED_EROW ? 32u : 0u, 8};
     constexpr uint32_t CONST_CBS[5] = {cb_ones, cb_qsel, cb_ksel, cb_erow, cb_shsel};
+    const uint32_t const_rect_base = 10 + NCORES;
+    const uint32_t const_n_rects = get_common_arg_val<uint32_t>(const_rect_base);
+    auto read_const = [&](auto& acc, uint32_t cb_id, uint32_t count) {
+        CircularBuffer cb(cb_id);
+        cb.reserve_back(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            noc.async_read(acc, cb, TILE_BYTES, {.page_id = i}, {.offset_bytes = i * TILE_BYTES});
+        }
+    };
+    auto read_all_constants = [&]() {
+        read_const(on, cb_ones, 1);
+        read_const(qs, cb_qsel, NQCT * NBPT);
+        read_const(ks, cb_ksel, NBPT * NKCLT);
+        if constexpr (NEED_EROW) {
+            read_const(er, cb_erow, 32);
+        }
+        read_const(sl, cb_shsel, 8);
+        noc.async_read_barrier();
+    };
     auto receive_constants = [&]() {
+        if (const_n_rects == 0) {
+            read_all_constants();
+            for (uint32_t k = 0; k < 5; ++k) {
+                if (CONST_PAGES[k] != 0) {
+                    CircularBuffer(CONST_CBS[k]).push_back(CONST_PAGES[k]);
+                }
+            }
+            return;
+        }
         volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(1));
         for (uint32_t k = 0; k < 5; ++k) {
             if (CONST_PAGES[k] != 0) {
@@ -165,24 +198,13 @@ void kernel_main() {
         }
     };
     auto send_constants = [&]() {
-        const uint32_t rect_base = 10 + NCORES;
-        const uint32_t n_rects = get_common_arg_val<uint32_t>(rect_base);
-        // Read into my own CBs (same addresses as everyone's), then multicast each CB's pages.
-        auto read_const = [&](auto& acc, uint32_t cb_id, uint32_t count) {
-            CircularBuffer cb(cb_id);
-            cb.reserve_back(count);
-            for (uint32_t i = 0; i < count; ++i) {
-                noc.async_read(acc, cb, TILE_BYTES, {.page_id = i}, {.offset_bytes = i * TILE_BYTES});
-            }
-        };
-        read_const(on, cb_ones, 1);
-        read_const(qs, cb_qsel, NQCT * NBPT);
-        read_const(ks, cb_ksel, NBPT * NKCLT);
-        if constexpr (NEED_EROW) {
-            read_const(er, cb_erow, 32);
+        const uint32_t rect_base = const_rect_base;
+        const uint32_t n_rects = const_n_rects;
+        if (n_rects == 0) {
+            return;  // no-multicast mode: every core reads its own constants; the sender holds no unit and is done
         }
-        read_const(sl, cb_shsel, 8);
-        noc.async_read_barrier();
+        // Read into my own CBs (same addresses as everyone's), then multicast each CB's pages.
+        read_all_constants();
         // A multicast never reaches the issuing core itself: the rectangle that contains this core gets the plain
         // multicast with one destination fewer (this core already holds the data), the others get it with every cell
         // counted. The destination count must match the cells written or the write barrier never settles.
