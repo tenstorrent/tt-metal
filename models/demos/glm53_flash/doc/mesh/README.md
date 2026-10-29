@@ -1549,3 +1549,11 @@ warm 962 ms), first token = HF: the README's 32-user row. The stage's chain test
 the harness's second `capture_prefill` ("KDA scalar(0) would allocate a device constant after a trace capture"): the
 harness captures the decode trace before the prefill traces, serving the other way round, and the traced prefill's
 constant start was first allocated at that capture; `TtKDA` now allocates it at construction.
+
+### 2026-10-29 06:25: the K sweep's anchor on the H1/H2 defaults
+
+`spec_sweep_8x4_B4_K3_r3` (4 users per row, K = 3, 45 layers, fused commit, wt_frozen125): spec 30.1 tok/s per user at 32
+users (964 tok/s aggregate, 33.2 ms per token, 3.37 tokens per user per iteration, 2.47 of 3 drafts accepted), lossless
+against plain greedy on all 32 users for 64 tokens (the 10-27 row: 23.8). The harness's own "plain" step (216 ms) reads
+the full logits every step for the near-tie gaps; the comparable plain step is the e2e's 48.4 ms, so K = 3 at 4 users per
+row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` table (S1).
