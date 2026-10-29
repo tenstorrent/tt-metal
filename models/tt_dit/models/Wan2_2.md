@@ -52,39 +52,41 @@ Performance work is ongoing to improve these numbers:
 # Set the directory to cache the weights to speed up future runs
 export TT_DIT_CACHE_DIR=/your/cache/path
 
+# T2V and I2V share one test; select the model with -k "t2v" or -k "i2v".
+
 # Text-to-Video (T2V)
 
 # Run T2V on Blackhole Quiet Box (2x2 mesh)
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "2x2sp0tp1"
+pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "t2v and 2x2sp0tp1"
 
 # Run T2V on Wormhole Loud Box (2x4 mesh)
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "2x4sp0tp1"
+pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "t2v and 2x4sp0tp1 and not bf8"
 
 # Run T2V on Blackhole Loud Box (2x4 mesh)
-pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_2x4sp1tp0"
+pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "t2v and 2x4sp1tp0"
 
 # Run T2V on Wormhole Galaxy (4x8 mesh)
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0"
+pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "t2v and 4x8sp1tp0nl4_ring"
 
 # Run T2V on Blackhole Galaxy (4x8 mesh)
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "bh_4x8sp1tp0"
+pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "t2v and 4x8sp1tp0nl2_ring"
 
 # Image-to-Video (I2V)
 
 # Run I2V on Blackhole Quiet Box (2x2 mesh)
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "2x2sp0tp1"
+pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "i2v and 2x2sp0tp1"
 
 # Run I2V on Wormhole Loud Box (2x4 mesh)
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "2x4sp0tp1"
+pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "i2v and 2x4sp0tp1"
 
 # Run I2V on Blackhole Loud Box (2x4 mesh)
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "bh_2x4sp1tp0"
+pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "i2v and 2x4sp1tp0"
 
 # Run I2V on Wormhole Galaxy (4x8 mesh)
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "wh_4x8sp1tp0"
+pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "i2v and 4x8sp1tp0nl4_ring"
 
 # Run I2V on Blackhole Galaxy (4x8 mesh)
-pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "bh_4x8sp1tp0"
+pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "i2v and 4x8sp1tp0nl2_linear"
 ```
 
 ## Scalability

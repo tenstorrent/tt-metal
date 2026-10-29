@@ -2205,6 +2205,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
+// ttnn/cpp/ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_gather_in0.cpp is the ProgramDescriptor
+// form of this builder (llama_reduce_scatter_matmul). A fix here (CB indices, formats, work split) belongs there too.
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0_program_and_create_override_variables(
     tt_metal::Program& program,
     const ttnn::Tensor& a,
@@ -3229,16 +3231,21 @@ void override_program_parameters(
 // set jointly by the pipes (the bank and bank-local shard each receiver is sent) and by the weight's
 // shard distribution (where shard i sits); pairing banks with the workers in any other order still
 // covers exactly the workers, and returns the output blocks permuted.
+//
+// A legacy K-row-major weight holds one shard per bank, fewer shards than workers: the prefetcher
+// slices each bank's shard across that bank's receivers in order, so bank-local slice r of bank b
+// holds the columns of output block b * R + r for R receivers per bank. That is the CONTIGUOUS_1D walk
+// with slices standing in for shards.
 static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const MeshTensor& in1_tensor,
     const std::vector<CoreCoord>& workers) {
     using tt::tt_metal::ShardDistributionStrategy;
-    const auto& bds = in1_tensor.mesh_buffer().get_reference_buffer()->buffer_distribution_spec();
+    const Buffer* weight_buffer = in1_tensor.mesh_buffer().get_reference_buffer();
+    const auto& bds = weight_buffer->buffer_distribution_spec();
     TT_FATAL(
         bds.has_value(),
-        "matmul over prefetcher_pipes needs a receiver-contiguous weight, which carries a buffer "
-        "distribution spec");
+        "matmul over prefetcher_pipes needs a DRAM-sharded weight, which carries a buffer distribution spec");
     const ShardDistributionStrategy strategy = bds->shard_distribution_strategy();
     TT_FATAL(
         strategy == ShardDistributionStrategy::ROUND_ROBIN_1D || strategy == ShardDistributionStrategy::CONTIGUOUS_1D,
@@ -3253,9 +3260,13 @@ static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
     }
 
     const std::vector<CoreCoord>& banks = bds->cores();
-    const bool contiguous = strategy == ShardDistributionStrategy::CONTIGUOUS_1D;
-    // CONTIGUOUS_1D weights hold the same number of shards in every bank.
-    const size_t shards_per_bank = bds->num_shards() / banks.size();
+    const bool krow_major = weight_buffer->has_shard_spec() && bds->num_shards() < workers.size();
+    const bool contiguous = krow_major || strategy == ShardDistributionStrategy::CONTIGUOUS_1D;
+    // A K-row-major weight's grid can name more banks than it has shards; only the first
+    // num_cores_with_data() hold one. Each bank holding data holds the same count: allocation requires
+    // CONTIGUOUS_1D shards to divide evenly over the grid, and tensor_prefetcher_block_count_for_matmul_1d
+    // gives every K-row-major bank the same number of receivers.
+    const size_t shards_per_bank = (krow_major ? workers.size() : bds->num_shards()) / bds->num_cores_with_data();
     for (size_t i = 0; i < workers.size(); ++i) {
         const size_t bank_index = contiguous ? i / shards_per_bank : i % banks.size();
         const auto bank_local_shard = static_cast<uint32_t>(contiguous ? i % shards_per_bank : i / banks.size());

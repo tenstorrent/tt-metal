@@ -74,17 +74,18 @@ SEQ_LEN = PREFILL_CHUNK_TOKENS_PER_CHIP
 # difference can reorder the selection, small enough to keep every value well inside bf16 range.
 MARGIN = 1.0
 
-# Effective comparison resolution of the top-k datapath, as a RELATIVE gap between two keys.
-# The network does not compare at fp32: measured on Blackhole over 5077 tokens (both input dtypes,
-# 4 seeds, Kimi geometry), selection is exactly torch's from a relative gap of 8e-4 upward and
-# starts deviating below it -- consistent with roughly a 10-bit effective mantissa in the sort
-# datapath. Keys closer than this are ties to the hardware however far apart fp32 says they are,
-# so every tie-freedom predicate below is a tolerance rather than an exact comparison. 2e-3 keeps
-# ~93% of tokens assertable with headroom over the measured 8e-4 floor.
-#
-# This is a property of the datapath, not of this PR: main deviates at the same ~1% rate on the
-# same near-boundary tokens. An exact predicate here reports a defect on every branch.
+# Comparison resolution of the top-k datapath, as a RELATIVE gap between two keys. The sort
+# compares 17 mantissa bits of the fp32 keys (the stable engine's rank tag takes the low 6), about
+# 8e-6 relative, and the device's activation differs slightly from torch's, so every tie-freedom
+# predicate below is a tolerance rather than an exact comparison. 2e-3 is the bound from when the
+# sort compared TF32 keys (10 mantissa bits); it is kept as a conservative margin where device keys
+# are held against torch.
 SORT_RESOLUTION = 2e-3
+# The stable-vs-unstable differential compares the device against itself on identical keys, so the
+# activation difference does not apply: the two engines can differ only where keys agree in the 17
+# bits the rank-tag engine compares (< ~1.5e-5 relative). 1e-4 clears that and keeps asserting in the
+# 1e-4..2e-3 band, where a regression to a 10-bit compare would show.
+DIFFERENTIAL_RESOLUTION = 1e-4
 
 
 def separated_gate_inputs(shape, k, score_func, margin=MARGIN, to_bf16=False):
@@ -235,8 +236,8 @@ def test_stable_matches_unstable(device, routing, score_func, input_dtype):
         "given identical keys, so this comparison says nothing about top-k"
     )
 
-    set_mask = boundary_strict(biased_stable, k)
-    order_mask = topk_strict(biased_stable, k)
+    set_mask = boundary_strict(biased_stable, k, resolution=DIFFERENTIAL_RESOLUTION)
+    order_mask = topk_strict(biased_stable, k, resolution=DIFFERENTIAL_RESOLUTION)
     tokens = set_mask.numel()
     logger.info(
         f"tie-free tokens: boundary {int(set_mask.sum())}/{tokens}, " f"full top-{k} {int(order_mask.sum())}/{tokens}"
