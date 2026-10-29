@@ -65,9 +65,19 @@ reference's e4m3.
 | sparse_sdpa, compressed layers, 160 q (8x4) / 512 q (2x2) | 351 / 1250 us | 362 / 1286 us | +3 % |
 | sparse_sdpa, window-only layers, 160 q / 512 q | 133 / 494 us | 138 / 567 us (ROW_BFP8) | +4 / +15 % |
 | e4m3 window, lower bound (plain fp8 rows, no scale multiply) | 133 / 494 us | 119 / 484 us | -10 / -2 % |
+| sparse_sdpa, compressed layers, bfloat8_b window blocks (consecutive window ids), 160 q / 512 q | 352 / 1242 us | 339 / 1188 us | -4 / -4 % |
+| sparse_sdpa, window-only layers, bfloat8_b blocks, 160 q / 512 q | 132 / 487 us | 110 / 404 us | -16 / -17 % |
+| window write as blocks, 2176 rows | 13 us | 28 us | +15 us |
 
 Index path per index layer at 55k on the 2x2: about -20 us (ratio 2) and -50 us (ratio 1), more at longer context.
-Window per layer: +15 us write + 3 % (compressed layers) / +4-15 % (window-only layers) read, no memory gained: the
+Window as 576 B records: the cost was the second NoC read a row (the exponents; switching it off took the window-only
+layers 567 -> 461 us), not the conversion (batched: no change), the ring depth or the address lookups. As blocks of 32
+consecutive rows a page (ckv_bfp4 blocks=True; two reads a block) the 8-bit window is faster than bf16: per layer at
+512 q, read + write, compressed layers 1255 -> 1216 us (-3 %), window-only 500 -> 432 us (-14 %). Part of that is the
+bulk read itself, which a bf16 window in blocks would also get (not built). The 4-bit compressed rows pay the same
+per-row exponent read (switching it off: compressed layers 1229 -> 986 us); their gather is random, so that needs the
+exponents beside the values in the unpacker's read (not built).
+Window as records (first measurement): +15 us write + 3 % (compressed layers) / +4-15 % (window-only layers) read, no memory gained: the
 window table is per-chunk scratch (2 MB); the served window cache (0_window_kv, the contract) stays bf16 unless the
 owner / server change it.
 
@@ -75,7 +85,7 @@ owner / server change it.
 1. Index keys + query: bfloat4_b (recommended: the reference's own selection error, slightly faster, 3.6x less ring
    traffic and key memory); or bfloat8_b (near bf16 selection); or bf16 (today, above the reference).
 2. Window KV:
-   - bfloat8_b rows (implemented; F208 "the reference's width in the device's own format"): 3-4x closer to native than
+   - bfloat8_b blocks (implemented; -3 % / -14 % a layer vs bf16, above) or rows (F208 "the reference's width in the device's own format"): 3-4x closer to native than
      the reference, costs +3 % / +15 us a layer, gains no memory;
    - e4m3 + 2^k scale per 32 (not built): the reference's numbers exactly, cost at least the fp8 lower bound plus 16
      broadcast multiplies per 32 keys in compute, and an SFPU RNE (the packer truncates e4m3);

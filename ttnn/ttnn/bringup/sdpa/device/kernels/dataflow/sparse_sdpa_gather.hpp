@@ -139,4 +139,31 @@ FORCE_INLINE void gather_bfp4_rows(
     experimental::set_read_trid(noc, 0);
 }
 
+// The bfloat8_b window as blocks (WINDOW_BLOCK_ROWS consecutive rows a page, window_block_bytes): staging rows
+// [lo, hi) of the window chunk = rows r0 + lo.. (the window's ids are consecutive), two reads a block. A row's
+// exponents come from the copy whose 32 B phase in a 64 B line matches their staging slot.
+template <uint32_t K_DIM, uint32_t K_CHUNK, typename Accessor>
+FORCE_INLINE void gather_bfp8_window_blocks(
+    Noc& noc, const Accessor& kv, uint32_t block_l1, uint32_t r0, uint32_t lo, uint32_t hi) {
+    constexpr uint32_t eb = row_bfp4_exp_bytes(K_DIM);
+    constexpr uint32_t WB = WINDOW_BLOCK_ROWS;
+    const UnicastEndpoint local_l1;
+    const uint32_t data_l1 = block_l1 + K_CHUNK * eb;
+    for (uint32_t p = lo; p < hi;) {
+        const uint32_t r = r0 + p, page = r / WB, off = r % WB;
+        const uint32_t n = (WB - off) < (hi - p) ? (WB - off) : (hi - p);
+        const uint32_t exp_off = ((r ^ p) & 1) ? window_block_exp2(K_DIM) : 0;
+        noc.async_read(
+            kv, local_l1, n * eb, {.page_id = page, .offset_bytes = exp_off + off * eb}, {.addr = block_l1 + p * eb});
+        noc.async_read(
+            kv,
+            local_l1,
+            n * K_DIM,
+            {.page_id = page, .offset_bytes = window_block_data(K_DIM) + off * K_DIM},
+            {.addr = data_l1 + p * K_DIM});
+        p += n;
+    }
+    noc.async_read_barrier();
+}
+
 }  // namespace sparse_sdpa

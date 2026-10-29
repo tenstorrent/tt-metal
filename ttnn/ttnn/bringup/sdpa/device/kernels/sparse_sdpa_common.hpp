@@ -59,6 +59,17 @@ constexpr uint32_t row_bfp8_bytes(uint32_t k_dim) { return 2 * row_bfp4_exp_byte
 constexpr uint32_t row_bfp8_block_bytes(uint32_t k_dim, uint32_t k_chunk) {
     return k_chunk * (row_bfp4_exp_bytes(k_dim) + k_dim) + ROW_BFP4_ALIGN;
 }
+// bfloat8_b window blocks (ckv_bfp4 blocks=True): WINDOW_BLOCK_ROWS consecutive rows a page, [their exponents | the
+// same, 32 B on | their values], so a window of consecutive rows reads in two NoC reads a block
+constexpr uint32_t WINDOW_BLOCK_ROWS = 32;
+constexpr uint32_t window_block_exp2(uint32_t k_dim) {
+    return WINDOW_BLOCK_ROWS * row_bfp4_exp_bytes(k_dim) + row_bfp4_exp_bytes(k_dim);
+}
+constexpr uint32_t window_block_data(uint32_t k_dim) {
+    return (window_block_exp2(k_dim) + WINDOW_BLOCK_ROWS * row_bfp4_exp_bytes(k_dim) + ROW_BFP4_ALIGN - 1) /
+           ROW_BFP4_ALIGN * ROW_BFP4_ALIGN;
+}
+constexpr uint32_t window_block_bytes(uint32_t k_dim) { return window_block_data(k_dim) + WINDOW_BLOCK_ROWS * k_dim; }
 
 // Reader -> writer dual-NoC gather request. SCALE_DST_L1 is used only by the scaled-cache path.
 namespace gather_request {

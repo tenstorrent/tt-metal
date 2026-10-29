@@ -91,13 +91,22 @@ def test_window_write(device):
     rec = ttnn.zeros([1, 1, n, 576], dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=DRAM)
     for _ in range(1 + REPS):
         ttnn.bringup.ckv_bfp4(x, rec, 0, dtype=ttnn.bfloat8_b)
+    blk = ttnn.zeros(
+        [1, 1, n // 32, ref.BLOCK_BYTES],
+        dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=DRAM,
+    )
+    for _ in range(1 + REPS):
+        ttnn.bringup.ckv_bfp4(x, blk, 0, dtype=ttnn.bfloat8_b, blocks=True)
     ttnn.synchronize_device(device)
 
 
 def _idx(S, Tw, T, n_top, g):
     idx = torch.full((1, 1, S, WIN + n_top), -1, dtype=torch.int64)
     for s in range(S):
-        idx[0, 0, s, :WIN] = torch.randperm(Tw, generator=g)[:WIN]
+        idx[0, 0, s, :WIN] = int(torch.randint(0, Tw - WIN + 1, (1,), generator=g)) + torch.arange(WIN)  # consecutive
         if n_top:
             idx[0, 0, s, WIN:] = torch.randperm(T, generator=g)[:n_top]
     return idx
@@ -114,10 +123,15 @@ def test_sdpa_window(device, S):
     rows = ref.encode_rows(torch.randn(T, K, generator=g).bfloat16())
     win = torch.randn(Tw, K, generator=g).bfloat16()
     rec8 = ref.encode_rows(win, mbits=7)
+    blk = torch.zeros(Tw // 32, ref.BLOCK_BYTES, dtype=torch.uint8)
+    e = rec8[:, :32].reshape(Tw // 32, -1)
+    blk[:, : e.shape[1]], blk[:, ref.BLOCK_EXP2 : ref.BLOCK_EXP2 + e.shape[1]] = e, e
+    blk[:, ref.BLOCK_DATA :] = rec8[:, 64:].reshape(Tw // 32, -1)
     rm = ttnn.ROW_MAJOR_LAYOUT
     t_rows = _t(rows.view(1, 1, T, -1), ttnn.uint8, device, rm)
     t_win = _t(win.view(1, 1, Tw, K), ttnn.bfloat16, device, rm)
     t_win8 = _t(rec8.view(1, 1, Tw, 576), ttnn.uint8, device, rm)
+    t_blk = _t(blk.view(1, 1, Tw // 32, -1), ttnn.uint8, device, rm)
     t_winfp8 = _t(win.float().view(1, 1, Tw, K), ttnn.fp8_e4m3, device, rm)
     sink = _t(torch.zeros(1, 1, 1, H).bfloat16(), ttnn.bfloat16, device, rm)
     q = _t((torch.randn(1, H, S, K, generator=g) * K**-0.5).bfloat16(), ttnn.bfloat16, device, rm)
@@ -132,6 +146,8 @@ def test_sdpa_window(device, S):
         lambda: ttnn.bringup.sparse_sdpa(q, t_win8, i_win, K, kv_format=F.ROW_BFP8, **common),
     ]
     runs.append(lambda: ttnn.bringup.sparse_sdpa(q, t_winfp8, i_win, K, kv_format=F.FP8_E4M3, **common))
+    runs.append(lambda: ttnn.bringup.sparse_sdpa(q, t_rows, i_csa, K, kv_format=F.ROW_BFP4, kv_window=t_blk, **common))
+    runs.append(lambda: ttnn.bringup.sparse_sdpa(q, t_blk, i_win, K, kv_format=F.ROW_BFP8, **common))
     for run in runs:
         for _ in range(1 + REPS):
             run().deallocate()

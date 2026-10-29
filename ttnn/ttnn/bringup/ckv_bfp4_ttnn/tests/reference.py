@@ -44,6 +44,23 @@ def encode_rows(x: torch.Tensor, exp_twice: bool = True, mbits: int = 3) -> torc
     return torch.cat(parts + [c], -1).to(torch.uint8)
 
 
+BLOCK_EXP2, BLOCK_DATA, BLOCK_BYTES = 1056, 2112, 2112 + 32 * 512
+
+
+def encode_blocks(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """[n, 512] (n % 32 == 0) -> bfloat8_b window blocks [n / 32, BLOCK_BYTES] uint8 (32 rows a page: their exponents at
+    0, again at BLOCK_EXP2, their values at BLOCK_DATA) and the mask of the defined bytes (the gaps are not written)."""
+    rec = encode_rows(x, mbits=7).view(-1, 32, 576)
+    nb = rec.shape[0]
+    out = torch.zeros(nb, BLOCK_BYTES, dtype=torch.uint8)
+    mask = torch.zeros(nb, BLOCK_BYTES, dtype=torch.bool)
+    e = rec[:, :, :32].reshape(nb, -1)
+    for o, v in ((0, e), (BLOCK_EXP2, e), (BLOCK_DATA, rec[:, :, 64:].reshape(nb, -1))):
+        out[:, o : o + v.shape[1]] = v
+        mask[:, o : o + v.shape[1]] = True
+    return out, mask
+
+
 def decode_rows(b: torch.Tensor) -> torch.Tensor:
     """[n, 320] (or [n, 288]; bfloat8_b [n, 576]) uint8 -> [n, 512] fp32."""
     e = b[:, :32].long()

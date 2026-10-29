@@ -456,3 +456,20 @@ Build fixes after fork_op.py (no behaviour change):
   device/sparse_sdpa_program_factory.cpp, device/kernels/sparse_sdpa_common.hpp,
   device/kernels/dataflow/sparse_sdpa_{reader,writer,gather}.{cpp,hpp}, device/kernels/compute/sparse_sdpa_compute.cpp,
   tests/unit/test_sparse_sdpa_row_bfp4.py
+
+### sparse_sdpa: the bfloat8_b window as blocks of 32 rows (two NoC reads a block)
+- What: kv_window (ROW_BFP4) or kv (ROW_BFP8) may be uint8 [1, 1, Tw / 32, 18496]: 32 consecutive window rows a page,
+  [their exponents | the same, 32 B on | their values] (ckv_bfp4 blocks=True). The window's ids must be consecutive
+  (the model's are: rows p - 127 .. p); the gather reads each 32-row block in two reads (exponents from the copy whose
+  64 B phase matches the staging slot, then the values) instead of two reads a row (SPARSE_SDPA_WINDOW_BLOCKS). Off
+  (records or bf16): the program is unchanged; the window width is in the program hash.
+- Why: the 576 B records' cost was the per-row exponent read (switching it off took the window-only layers 567 -> 461
+  us); batching the bfp8 -> tile conversion, a deeper trid ring and one address lookup a row changed nothing.
+- Exactness: equal to the records bit for bit (full / partial consecutive windows, odd / even starts, top-k 0 / 37 /
+  512, DEST 16 / 32, H 32 / 64), deterministic. Regression: unit 62 pass, 10 skipped (ring tests needing 8 devices),
+  the model case passes.
+- Time, one p150b, consecutive windows (bf16 / records / blocks): compressed layers 512 q 1242 / 1280 / 1188 us, 160 q
+  352 / 360 / 339 us; window-only layers 512 q 487 / 560 / 404 us, 160 q 132 / 137 / 110 us.
+- Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit)
+- Files: device/sparse_sdpa_{device_operation,program_factory}.cpp, device/kernels/sparse_sdpa_common.hpp,
+  device/kernels/dataflow/sparse_sdpa_{gather.hpp,reader.cpp,writer.cpp}, tests/unit/test_sparse_sdpa_row_bfp4.py
