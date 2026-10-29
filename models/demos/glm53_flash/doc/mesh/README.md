@@ -1581,6 +1581,14 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 13:10: the rows-2/3 corruption closed served-side
+
+r5's exact stage c on the finite-guard tree (4 x 65514 needles, `GLM53_VLLM_SP_FIRST=0` so the prompts share slot index 0
+and advance in paired waves: 64 waves + 1 SP chunk, APC off, 0 program-cache misses): 4/4 needles found, rows 2 and 3
+included, TTFT 179.5 / 236.7 / 407.6 / 464.1 s (r5's timing). With the SP-first placement (the default) the same four
+prompts take 60 / 60 / 119 / 119 s as SP chunks; the wave path now serves the fifth concurrent long prompt on and every
+short burst correctly. Still open on the wave path: the case-(f) sealed-cache miss (plan A11).
+
 ### 2026-10-29 12:45: the finite guard validated at 45 layers; the wave-vs-SP drift at 64 K is intrinsic
 
 The 45-layer harness replays of r5's schedule with the finite guard (l45_64k_r6-r8, 65514 x 4, 1 M profile): the NaN on
