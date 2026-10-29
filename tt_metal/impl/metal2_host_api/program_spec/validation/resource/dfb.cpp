@@ -725,8 +725,8 @@ void ValidateDFBEndpoints(const ValidationContext& ctx, tt::ARCH arch) {
 //  4. Consistent borrowed_from: either no member borrows, or all members borrow from
 //     the same TensorParameter. (Aliased borrows from the same memory object is a
 //     weird-but-valid scenario.)
-//  5. Consistent arena parameters: either no member overrides allocation, or all members
-//     allocate from the same SRAMArenaParameter.
+//  5. Consistent arena allocations: either no member overrides allocation, or all members
+//     allocate from the same SRAMArenaParameter at the same byte offset.
 // (That every alias_with name resolves, and is not the DFB itself, is checked in
 // ValidateDFBSpec.)
 void ValidateDFBAliasing(const ValidationContext& ctx) {
@@ -793,7 +793,7 @@ void ValidateDFBAliasing(const ValidationContext& ctx) {
                 dfb.unique_id,
                 alias_name);
 
-            // Rule 5: consistent arena parameters.
+            // Rule 5: consistent arena allocations.
             const auto& allocation = dfb.advanced_options.allocation_override;
             const auto& alias_allocation = alias_spec->advanced_options.allocation_override;
             TT_FATAL(
@@ -803,6 +803,16 @@ void ValidateDFBAliasing(const ValidationContext& ctx) {
                 "member overrides allocation, or all members allocate from the same SRAMArenaParameter.",
                 dfb.unique_id,
                 alias_name);
+            if (allocation) {
+                TT_FATAL(
+                    allocation->offset == alias_allocation->offset,
+                    "Aliased DFBs '{}' and '{}' have different allocation_override offsets "
+                    "({} vs {} bytes). Aliased DFBs must use the same byte offset.",
+                    dfb.unique_id,
+                    alias_name,
+                    allocation->offset,
+                    alias_allocation->offset);
+            }
         }
     }
 }
