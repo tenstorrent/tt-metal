@@ -3603,6 +3603,7 @@ def test_serving_record_matches_plain_greedy(mesh_device, device_params, reset_s
         _assert_rows_match_reference(outs, refs, gaps, near_tie_gap, label)
         mean_acc = [sum(a) / len(a) for a in accepts]
         logger.info(f"[{label}] accepted/iter per row: {[round(a, 2) for a in mean_acc]}")
+        logger.info(f"[{label}] accepted per step per row (reseed at step 2 when set): {accepts}")
         for r, u in enumerate(users):
             logger.info(f"  row {r} (user {u}): {tokenizer.decode(outs[r][:n_new])!r}")
         # Committed-token parity alone cannot see a verify that is right in column 0 and wrong in the

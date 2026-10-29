@@ -739,7 +739,10 @@ class Calibration:
         counted = False
         for table in (self.modes, self.window):
             counted = table.setdefault(mode, ModeStats()).note(wall_ms, tokens, clean, table_ms, live_rows, idle)
-        if counted:
+        if counted and clean:
+            # the acceptance pool is steady-state: a dirty step (the one right after a reseed, a switch, a prefill)
+            # calibrates the wall but not the tokens per row, else a retry's single first step (reseed + the
+            # drafts from a fresh seed) ratchets the pool down and the next retry is declined before it runs
             pool = self.tokens_pool.setdefault(self._tokens_pool_key(mode), [None, 0])
             per_row = float(tokens) / max(int(live_rows), 1)
             pool[0] = per_row if pool[0] is None else pool[0] + self.alpha * (per_row - pool[0])

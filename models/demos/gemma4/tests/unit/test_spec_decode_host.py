@@ -1775,6 +1775,7 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
                 for i, r in enumerate(rows):
                     table[i] = tables[0][r]
                 spec.serving_reseed(shape, rows, [1 + i for i in range(live)], positions, table)
+                used.append(spec._srv_seed_traces[shape])  # the reseed replays the shape's seed trace
                 result = spec.serving_step(shape, rows, [1 + i for i in range(live)], positions, table, [None] * live)
                 assert (result.width, result.live) == (w, live) and result.logits_to_host().shape == (
                     live,
