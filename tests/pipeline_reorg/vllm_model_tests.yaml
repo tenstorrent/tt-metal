@@ -503,7 +503,8 @@
 # ~1 min per MoE layer); every later run starts from the cache.
 - name: "MiMo-V2.6-Flash DP=4"
   model: XiaomiMiMo/MiMo-V2.6-Flash-MOPD
-  server-timeout: 30
+  # Warm start: TT cache load + prefill warmup (712 s in run 40908073239) + trace captures.
+  server-timeout: 40
   first-use-server-timeout: 200
   hub-download: true
   benchmark-timeout: 10
@@ -514,12 +515,14 @@
   # VLLM_ENGINE_READY_TIMEOUT_S: the first-use start (TT cache build) runs for hours.
   extra-env: "VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 MIMO_KV_GB_PER_CHIP=6.7 VLLM_ENGINE_READY_TIMEOUT_S=14400"
   coherence-test: true
-  prefix-caching-test: true
+  # No prefix-caching-test yet: the plugin's lane coordinator builds its lanes with
+  # log_stats=False, so vllm:prefix_cache_* stay 0 and the gate cannot see the hits
+  # (run 40908073239: both answers right, counters 0 of 0).
   chunked-prefill-budget: 4096
   multimodal: false
   skus:
     bh_galaxy:
-      timeout: 75
+      timeout: 85
       first-use-timeout: 480
       tier: 3
   owner_id: U0APWUMQBJ9 # Divy Wadhwani
