@@ -20,8 +20,8 @@ llama_nemotron_rerank_1b/
   tt/model.py                  NemotronReranker: embedding, 16 layers, norm, score, pooling (plain ttnn + custom ops)
   tt/model_config.py           shapes, precisions, matmul / SDPA block tables (every knob documented with its measurement)
   tt/weights.py                checkpoint -> device tensors (Q/K row permutation for RoPE, attention scale folded into Wq)
-  tt/runner.py                 TracedReranker: two traces (padded / unpadded batch) per (batch {1,8,32}) x (length
-                               bucket), batching by bucket
+  tt/runner.py                 TracedReranker: packs pairs into rows, two traces (masked / unmasked) per
+                               (batch {1,8,32}) x (row length) bucket
   tt/custom_ops/               generic_op kernels: matmul_qkv_rope (QKV matmul + head split + RoPE), matmul_add_norm
                                (WO / FF2 + residual add + RMSNorm on the L1-resident residual; embed_rmsnorm),
                                fused_add_rmsnorm (from pplx_embed_4b, < 4096 rows), fused_heads_rope (previous path)
@@ -32,7 +32,7 @@ llama_nemotron_rerank_1b/
   demo/eval_miracl.py          device scores vs HF fp32 on MIRACL-en (nDCG@10, score error, Pearson)
   demo/bench.py                traced latency per (batch x length)
   perf_tools/                  matmul / SDPA sweeps, probes, cycle-level SoL report
-  tests/pcc/                   fused_heads_rope, one decoder layer, end-to-end scores (padded and unpadded batches)
+  tests/pcc/                   fused_heads_rope, one decoder layer, end-to-end scores (padded, unpadded, packed rows)
 ```
 
 ## Run
@@ -42,7 +42,7 @@ source python_env/bin/activate
 export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
 M=models/demos/blackhole/llama_nemotron_rerank_1b
 
-pytest -q $M/tests/pcc                                         # 8 tests
+pytest -q $M/tests/pcc                                         # 9 tests
 python $M/demo/bench.py --shapes 1x512 8x512 32x512 1x8192     # traced latency
 python $M/demo/eval_miracl.py --eval-set miracl_eval.pt --batch 8
 python $M/demo/serve.py --port 8000                            # server (one P150: --dp 1)
@@ -66,7 +66,8 @@ python $M/perf_tools/opsol.py prof/reports/*/ops_perf_results_*.csv 32x512
 `demo/serve.py` follows the embedding servers' layout (`pplx_embed_0_6b/demo/serve.py`): FastAPI + uvicorn,
 one spawned worker process per chip holding a resident `TracedReranker`, an async pool handing requests
 to idle chips, a collector thread resolving futures. The server tokenizes the prompt template and ships
-token ids; the worker packs pairs by length bucket into traced batches of 1 / 8 / 32.
+token ids; the worker packs the pairs into rows and runs them as traced batches of 1 / 8 / 32 rows (see
+"Serving: packed rows" below).
 
 | endpoint | request | response |
 |---|---|---|
@@ -75,8 +76,8 @@ token ids; the worker packs pairs by length bucket into traced batches of 1 / 8 
 | `GET /health`, `/v1/models`, `/metrics` | | readiness, model id, per-request tokenize / device / wall ms |
 
 `relevance_score` is sigmoid(logit) (`--score raw` returns the logit); `logit` is always included.
-One P150, MIRACL-en through the server at concurrency 4: 172 pairs/s, nDCG@10 0.6844 (HF 0.6840),
-Pearson 0.99960 vs HF fp32.
+One P150, MIRACL-en through the server at concurrency 4, before packed rows: 172 pairs/s, nDCG@10 0.6844
+(HF 0.6840), Pearson 0.99960 vs HF fp32.
 
 ## Accuracy
 
@@ -88,6 +89,7 @@ and nDCG@10 within 0.015 of HF.
 | HF bf16 (CPU) | 0.064 | 0.99997 | 0.6845 | 0.6486 |
 | this model, batch 8 | 0.205 | 0.99966 | 0.6745 | 0.6361 |
 | this model, batch 32 | 0.235 | 0.99956 | 0.6841 | 0.6486 |
+| serving runner, packed rows (25-document requests) | 0.241 | 0.99957 | 0.6837 | |
 | HF fp32 (reference) | 0 | 1 | 0.6840 | 0.6486 |
 
 ## Performance (one P150)
@@ -101,15 +103,19 @@ same full-length inputs, so it is the upper bound for a padded batch of that sha
 
 | batch x tokens | after bring-up | now | now, padded batch | speed of light (kernel cycles) |
 |---|---|---|---|---|
-| 1 x 128 | 12.8 ms | 6.26 ms | 6.43 ms | |
-| 1 x 256 | | 6.45 ms | 6.72 ms | |
-| 1 x 512 | 15.6 ms | 7.70 ms | 8.05 ms | 33.7 % |
-| 1 x 1024 | | 15.2 ms | 16.6 ms | |
-| 8 x 512 | 76.2 ms | 38.8 ms | 41.6 ms | 58.6 % |
-| 32 x 512 | 329 ms | 175 ms | 180 ms | **75.9 %** (147.0 M cycles) |
-| 1 x 2048 | 46.5 ms | 24.9 ms | 27.7 ms | 51.9 % |
-| 1 x 4096 | | 63.8 ms | 74.8 ms | |
-| 1 x 8192 | 362 ms | 188 ms | 220 ms | 64.1 % |
+| 1 x 128 | 12.8 ms | 6.27 ms | 6.41 ms | |
+| 1 x 256 | | 6.47 ms | 6.70 ms | |
+| 1 x 512 | 15.6 ms | 7.69 ms | 8.02 ms | 33.7 % |
+| 1 x 1024 | | 15.2 ms | 16.7 ms | |
+| 8 x 512 | 76.2 ms | 39.8 ms | 42.1 ms | 58.6 % |
+| 32 x 512 | 329 ms | 190 ms | 193 ms | **71.3 %** (156.4 M cycles) |
+| 1 x 2048 | 46.5 ms | 24.7 ms | 27.7 ms | 51.9 % |
+| 1 x 4096 | | 66.6 ms | 77.2 ms | |
+| 1 x 8192 | 362 ms | 188 ms | 221 ms | 64.1 % |
+
+32 x 512 was at 75.9 % (147.0 M cycles, 175 ms) with FF1 + FF3 accumulating in bf16; packed rows put every
+pair through that shape, where bf16 accumulation fails the accuracy gate, so it now accumulates in fp32
+(see "Serving: packed rows").
 
 Speed of light: ideal cycles for the matmuls and attention at the precision each op runs at
 (130 cores x 4096 FLOP/cycle LoFi, / 2 for HiFi2, / 4 for HiFi4), divided by the sum of the ops' device
@@ -122,12 +128,45 @@ shape was benchmarked in its own process on an idle board.
 
 | op | M cycles | share | of its SoL |
 |---|---|---|---|
-| FF1 + FF3 + SwiGLU (`minimal_matmul`, HiFi2) | 77.8 | 53 % | 85 % |
-| FF2 + residual add + RMSNorm (`matmul_add_norm`, LoFi) | 24.0 | 16 % | 69 % |
+| FF1 + FF3 + SwiGLU (`minimal_matmul`, HiFi2, fp32 accumulation) | 87.2 | 56 % | 76 % |
+| FF2 + residual add + RMSNorm (`matmul_add_norm`, LoFi) | 24.0 | 15 % | 69 % |
 | QKV + head split + RoPE (`matmul_qkv_rope`, HiFi2) | 18.3 | 12 % | 68 % |
-| SDPA (HiFi4, unmasked) | 14.1 | 10 % | 59 % |
-| WO + residual add + RMSNorm (`matmul_add_norm`, HiFi2) | 12.2 | 8 % | 68 % |
+| SDPA (HiFi4, unmasked) | 14.1 | 9 % | 59 % |
+| WO + residual add + RMSNorm (`matmul_add_norm`, HiFi2) | 12.2 | 8 % | 67 % |
 | embedding + first RMSNorm (`embed_rmsnorm`), score head | 0.6 | 0.4 % | |
+
+## Serving: packed rows
+
+A trace runs one fixed shape, so a pair is padded to a row of S tokens (S = 128, 256, 512, ...). On MIRACL-en
+(median pair 140 tokens, p90 256) one pair per row left 33 % of the token slots as padding, and every pad
+token goes through all 16 layers. `TracedReranker` now packs several pairs back to back into each row (at
+most 32 pairs per row, first-fit decreasing; `prepare_packed_inputs`):
+
+* the `valid` input is a [32, S] segment matrix per row, row j = 1 on pair j's tokens;
+* the attention mask is segments^T @ segments (1 where query and key are in the same pair) -> 0 / -1e9 in
+  bfp4, so a pair never sees another pair or padding (`_segment_mask`);
+* RoPE needs no change: a score depends only on the distance between query and key, and both are in the
+  same pair, so a pair scores the same at any offset in the row;
+* pooling is unchanged: segments @ per-token scores gives one sum per pair.
+
+The runner picks the row length S with the least estimated cost, and splits the rows into batches of
+1 / 8 / 32 at the least cost (rows run, repeat rows included, plus ~0.7 row per launch: 1 x 512 takes
+7.7 ms, 8 x 512 39.8 ms). The old plan rounded 9 rows up to a batch of 32; it now runs 8 + 1.
+
+MIRACL-en, 40 requests of 25 documents each through the traced runner (`TracedReranker.score_ids`), then
+all 1000 pairs in one call:
+
+| | per request | 1000 pairs in one call | MIRACL Pearson | nDCG@10 |
+|---|---|---|---|---|
+| one pair per row, old batch plan | 142-156 ms | 385-400 pairs/s | 0.99960 | 0.6844 |
+| packed rows, new batch plan | 58.7 ms | 596-604 pairs/s | 0.99957 | 0.6837 |
+
+Packing first failed the accuracy gate (Pearson 0.99945): it runs every pair at 32 x 512 (16384 rows), where
+FF1 + FF3 accumulated in bf16 DST. One pair per row at 32 x 512 gives 0.99930, so the shape, not the packing,
+was the cause; the earlier batch-32 MIRACL number (0.99958) mostly ran 32 x 128 / 32 x 256 batches, which
+never take that path. fp32 accumulation everywhere: 0.99959 (packed). Its 16384-row block (4, 16, 8, 1, 4)
+costs 87.2 vs 77.8 M cycles for FF1 + FF3; (2, 32, 8, 1, 4) runs 79.4 M cycles but the board throttles it
+to 335 ms per 32 x 512 replay under continuous load (182-188 ms with K 16).
 
 ## What was done
 
@@ -166,8 +205,9 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
 
 ## Open items
 
-* 32 x 512 is at 75.9 % of speed of light. The rest is spread over the ops: FF1 + FF3 is at 85 % (every
-  `minimal_matmul` block config of that shape lands within 1 %, `perf_tools/sweep_mm.py`); the fused
+* 32 x 512 is at 71.3 % of speed of light (75.9 % before FF1 + FF3 moved to fp32 accumulation). The rest
+  is spread over the ops: FF1 + FF3 is at 76 % (85 % with bf16 accumulation, which fails the accuracy gate
+  with packed rows; the faster fp32 K-32 block is throttled by the board, see "Serving: packed rows"); the fused
   WO / FF2 matmuls run at ~76-84 % of their limit inside their K loops (FF2 at LoFi with 4 x 1 subblocks, which
   the 7-tile N slice per core forces) plus ~8 % of epilogue; QKV + RoPE's matmul runs at ~80 % of HiFi2 peak and
   waits ~10 % on its inputs (the rotation itself is ~1.5 %); SDPA's softmax bounds it (HiFi2 matmuls are no

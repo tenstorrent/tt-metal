@@ -155,28 +155,45 @@ class NemotronReranker:
         return next(b for b in SEQ_BUCKETS if b >= n)
 
     def prepare_host_inputs(self, batch_ids, seq_len=None):
-        """Token id lists -> host tensors (tokens, valid, block map) plus real lengths.
+        """Token id lists, one pair per row -> (host tensors, per-row pair lengths). See prepare_packed_inputs."""
+        S = seq_len or self.bucket(max(len(x) for x in batch_ids))
+        return self.prepare_packed_inputs([[ids] for ids in batch_ids], S)
 
-        ``valid`` [B, 1, 32, S] is 1 on real tokens and 0 on padding (all 32 rows equal). The
-        device turns it into the [B, 1, S, S] padding mask and uses it as the pooling vector,
-        so the host never builds or converts an S x S tensor per request.
+    def prepare_packed_inputs(self, rows, S):
+        """rows[b] = the pairs (token id lists) packed back to back into row b of S tokens, at most 32 per
+        row -> host tensors (tokens, segments, block map) plus the pair lengths per row.
+
+        ``segments`` [B, 1, 32, S] holds one row per pair: 1 on that pair's tokens, 0 elsewhere (rows of
+        absent pairs are all 0). The device builds the attention mask from it (a token only sees the
+        tokens of its own pair, so packed pairs do not interact and padding is never attended) and uses
+        it as the pooling matrix (row j of segments @ per-token scores = pair j's score sum). Positions run
+        on across a row; RoPE depends only on the distance between query and key, and both are in the
+        same pair, so a pair scores the same at any offset.
         """
-        lens = [len(x) for x in batch_ids]
-        S = seq_len or self.bucket(max(lens))
-        B = len(batch_ids)
+        B = len(rows)
         qc, kc = self.sdpa_chunks(B, S)
         tokens = torch.full((B, S), PAD_TOKEN_ID, dtype=torch.int32)
-        valid = torch.zeros(B, 1, 32, S, dtype=torch.bfloat16)
-        # (q chunk, k chunk) blocks: 0 = no real query row or no real key (skipped), 1 = computed.
+        segments = torch.zeros(B, 1, 32, S, dtype=torch.bfloat16)
+        # (q chunk, k chunk) blocks: 1 = some pair has tokens in both chunks (computed), 0 = skipped.
         block_map = torch.zeros(B, 1, (S + qc - 1) // qc, (S + kc - 1) // kc, dtype=torch.int32)
-        for b, ids in enumerate(batch_ids):
-            n = len(ids)
-            tokens[b, :n] = torch.tensor(ids, dtype=torch.int32)
-            valid[b, :, :, :n] = 1.0
-            block_map[b, 0, : (n + qc - 1) // qc, : (n + kc - 1) // kc] = 1
+        lens = []
+        for b, pairs in enumerate(rows):
+            if len(pairs) > 32:
+                raise ValueError(f"row {b} holds {len(pairs)} pairs; at most 32 fit")
+            pos, row_lens = 0, []
+            for j, ids in enumerate(pairs):
+                n = len(ids)
+                if pos + n > S:
+                    raise ValueError(f"row {b}: pairs take more than {S} tokens")
+                tokens[b, pos : pos + n] = torch.tensor(ids, dtype=torch.int32)
+                segments[b, 0, j, pos : pos + n] = 1.0
+                block_map[b, 0, pos // qc : (pos + n - 1) // qc + 1, pos // kc : (pos + n - 1) // kc + 1] = 1
+                pos += n
+                row_lens.append(n)
+            lens.append(row_lens)
         host = (
             ttnn.from_torch(tokens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
-            ttnn.from_torch(valid, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            ttnn.from_torch(segments, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
             ttnn.from_torch(block_map, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
         )
         return host, lens
@@ -457,26 +474,36 @@ class NemotronReranker:
             in1_depth=MM_ADD_NORM_IN1_DEPTH[kind],
         )
 
-    def _padding_mask(self, valid, S):
-        """valid [B, 1, 32, S] (1 real / 0 pad) -> additive mask [B, 1, S, S]: 0 on real keys, MASK_NEG on padding.
-        The arithmetic runs on the 32-row tensor (its rows are identical); only the bfp4 result is
-        repeated to S rows."""
-        row = ttnn.multiply(
-            ttnn.subtract(valid, 1.0), -MASK_NEG, dtype=self.cfg.mask_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    def _segment_mask(self, segments):
+        """segments [B, 1, 32, S] (row j = 1 on pair j's tokens) -> additive mask [B, 1, S, S]: 0 where query
+        and key belong to the same pair, MASK_NEG elsewhere (other pairs and padding). segments^T @ segments
+        is 1 exactly where both tokens are in one pair (each token is in at most one row), and the 0 / 1
+        values and 0 / MASK_NEG results are exact in bf16 and bfp4. A padding query sees no key; its
+        softmax row is uniform and its output is never pooled."""
+        same = ttnn.matmul(
+            segments,
+            segments,
+            transpose_a=True,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.mm_ckc,
         )
-        mask = ttnn.repeat(row, ttnn.Shape([1, 1, S // 32, 1]), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(row)
+        mask = ttnn.multiply(
+            ttnn.subtract(same, 1.0), -MASK_NEG, dtype=self.cfg.mask_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(same)
         return mask
 
     def forward(self, tokens, valid, block_map, masked=True):
-        """Device inputs from ``prepare_host_inputs`` -> [B, 1, 32, 32] fp32 tile, score sum at [b, 0, 0, 0].
+        """Device inputs from ``prepare_packed_inputs`` (``valid`` is its segments tensor) -> [B, 1, 32, 32]
+        fp32 tile, pair j of row b's score sum at [b, 0, j, 0].
 
-        ``masked=False`` is for a batch with no padded pair (every pair fills S tokens): its padding mask
-        is all zeros, so SDPA runs without one. Masked SDPA reads and adds every mask tile, and at
-        32 x 512 costs 1101 vs 623 us per layer (perf_tools/probe_sdpa_windowed.py --full)."""
+        ``masked=False`` is for a batch where every row is one pair of S tokens: its mask would be all
+        zeros, so SDPA runs without one. Masked SDPA reads and adds every mask tile, and at 32 x 512 costs
+        1101 vs 623 us per layer (perf_tools/probe_sdpa_windowed.py --full)."""
         B, S = tokens.shape[0], tokens.shape[1]
         rope = self.rot_mats(S)
-        mask = self._padding_mask(valid, S) if masked else None
+        mask = self._segment_mask(valid) if masked else None
         fused = self.cfg.fuse_add_norm and B * S >= self.cfg.fuse_add_norm_min_rows
         resid_l1 = fused and self.cfg.residual_l1
         resident = fused and self.cfg.resident_residual
@@ -573,7 +600,7 @@ class NemotronReranker:
         t = self._linear(xn, self.score_w, "score", dtype=ttnn.float32)
         ttnn.deallocate(xn)
         t = ttnn.reshape(t, [B, 1, S, 32])
-        # valid's rows are identical, so every output row holds the sum; row 0 is read.
+        # Row j of the segments matrix selects pair j's tokens: output row j holds that pair's score sum.
         pooled = ttnn.matmul(valid, t, dtype=ttnn.float32, compute_kernel_config=self.mm_ckc)
         ttnn.deallocate(t)
         if mask is not None:
@@ -582,12 +609,14 @@ class NemotronReranker:
 
     @staticmethod
     def needs_mask(lens, S):
-        """Whether a batch of real lengths ``lens`` padded to ``S`` tokens has any padding."""
-        return any(n < S for n in lens)
+        """Whether a batch (pair lengths per row, as prepare_packed_inputs returns) needs the mask: unless
+        every row is one pair of exactly S tokens."""
+        return any(row != [S] for row in lens)
 
     def scores_from_output(self, out, lens):
-        sums = ttnn.to_torch(out).float()[:, 0, 0, 0]
-        return [s / n for s, n in zip(sums[: len(lens)].tolist(), lens)]
+        """``lens`` from prepare_packed_inputs (pair lengths per row) -> scores in row-major pair order."""
+        sums = ttnn.to_torch(out).float()[:, 0, :, 0]
+        return [sums[b, j].item() / n for b, row in enumerate(lens) for j, n in enumerate(row)]
 
     def score(self, batch_ids, seq_len=None):
         """Convenience path (no trace): token id lists -> list of float scores."""

@@ -32,7 +32,11 @@ MM_CONFIGS = {
         8192: (4, 8, 8, 1, 4),
         16384: (8, 8, 4, 1, 4),
     },
-    "ff13s": {512: (8, 16, 8, 1, 4), 2048: (4, 16, 8, 1, 4), 4096: (4, 16, 8, 1, 4), 16384: (4, 32, 8, 1, 4)},
+    # 16384 rows with fp32 accumulation next to the resident residual (sweep_mm.py --l1-reserve-mb 64):
+    # (4, 32, 8, 1, 4) does not fit; (2, 32, 8, 1, 4) 3690 us alone and 32x512 148.5 M cycles (75.1 % of SoL),
+    # but under continuous replays the board throttles it hard: 32x512 111 ms per replay at first, 335 ms
+    # after ~12 replays, against 116 -> 182-188 ms for (4, 16, 8, 1, 4) (the best K 16 block, 4042 us alone).
+    "ff13s": {512: (8, 16, 8, 1, 4), 2048: (4, 16, 8, 1, 4), 4096: (4, 16, 8, 1, 4), 16384: (4, 16, 8, 1, 4)},
     "ff13": {512: (4, 8, 8, 1, 4), 4096: (4, 16, 16, 1, 4), 16384: (8, 16, 8, 1, 4)},
     "ff2": {
         512: (4, 16, 8, 2, 2),
@@ -145,9 +149,11 @@ class RerankConfig:
     # Matmul kinds (qkv, wo, ff13s, ff13, ff2) that run at LoFi instead of mm_fidelity, comma separated.
     # MIRACL Pearson vs fp32: ff2 0.99959 (baseline 0.99962), ff13s 0.99928, qkv+wo 0.99920, all 0.99918.
     lofi_kinds: str = "ff2"
-    # Matmul kinds that accumulate in bf16 DST (8-tile subblocks) instead of fp32 (4-tile), comma separated.
-    # 32x512: FF2 24.25 -> 21.13, FF1+FF3 78.93 -> 77.75 M cycles; MIRACL batch 32 Pearson 0.99958, nDCG@10 0.6834.
-    bf16_acc_kinds: str = "ff2,ff13s"
+    # Matmul kinds that accumulate in bf16 DST (8-tile subblocks) instead of fp32 (4-tile), comma separated;
+    # applies from 16384 rows (MM_CONFIGS "<kind>_bf16acc"). Off: with packed rows every pair runs at 32 x 512,
+    # and ff13s in bf16 drops MIRACL Pearson to 0.99945 (fp32: 0.99959), under the 0.9995 gate. FF1+FF3
+    # 32x512 77.75 (bf16) vs 78.93 M cycles. (FF2 on the resident path is matmul_add_norm, which ignores this.)
+    bf16_acc_kinds: str = ""
     # HiFi2 SDPA raised the MIRACL mean score error 0.23 -> 0.30 at no measurable speed gain.
     sdpa_fidelity: object = ttnn.MathFidelity.HiFi4
     # Fidelity of SDPA's compute config; None = sdpa_fidelity. ttnn's SDPA ignores

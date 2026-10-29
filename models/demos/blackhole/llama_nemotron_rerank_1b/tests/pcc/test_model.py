@@ -66,3 +66,32 @@ def test_unpadded_batch_runs_unmasked(device, hf_model, tokenizer, state_dict):
     assert max(abs(a - b) for a, b in zip(unmasked, masked)) < 0.1
     assert max(abs(a - b) for a, b in zip(unmasked, ref)) < MAX_ABS_ERR
     assert model.score(ids) == unmasked
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_packed_rows(device, hf_model, tokenizer, state_dict):
+    """Several pairs packed back to back into one row score as they do alone: the segment mask keeps each
+    pair to its own tokens, and RoPE only sees distances inside a pair."""
+    S = 512
+    ids = tokenize_pairs(tokenizer, [(QUERY, d) for d in DOCS])
+    ref = reference_scores(hf_model, ids)
+    model = NemotronReranker(device, RerankConfig(), state_dict, cache_dir=None)
+    alone = [model.score([x])[0] for x in ids]
+    # first-fit rows of <= 512 tokens, the pairs in input order
+    rows = [[]]
+    for x in ids:
+        if sum(len(y) for y in rows[-1]) + len(x) > S:
+            rows.append([])
+        rows[-1].append(x)
+    assert any(len(r) > 1 for r in rows), "no row holds two pairs"
+    host, lens = model.prepare_packed_inputs(rows, S)
+    assert model.needs_mask(lens, S)
+    dev = model.to_device(host)
+    packed = model.scores_from_output(model.forward(*dev), lens)
+    print(f"rows {[len(r) for r in rows]}\nref {ref}\nalone {alone}\npacked {packed}")
+    # Packed and alone are both bf16 approximations of HF (shapes and offsets differ), so each is checked
+    # against HF; packed must be no further from it than alone, within the model's own tolerance.
+    err_packed = max(abs(a - b) for a, b in zip(packed, ref))
+    err_alone = max(abs(a - b) for a, b in zip(alone, ref))
+    assert err_packed < MAX_ABS_ERR and err_packed < err_alone + 0.25
+    assert sorted(range(len(ref)), key=lambda i: -ref[i]) == sorted(range(len(packed)), key=lambda i: -packed[i])
