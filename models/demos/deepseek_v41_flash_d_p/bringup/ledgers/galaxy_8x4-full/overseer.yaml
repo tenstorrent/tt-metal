@@ -189,6 +189,13 @@ notes:
     Report what the 2x2 could not measure: DRAM per chip of the attention tables at the deploy context, sparse_sdpa kernel
     time bf16 vs bfp4_rows at chunk 5120 / 8x4 query counts, warm wall and device time per chunk (with DS41_ENGRAM_TABLE=resident
     for the wall).'
+- id: OV-19
+  tasks:
+  - FIX.9
+  status: open
+  t: '2026-10-29T02:24:27'
+  text: 'The overseer stopped attempt 1 (overseer): Placed before P.6, which is accepted but not yet committed (the overseer''s
+    ordering mistake / framework F213). Restarts after P.6''s gate commit; nothing to do differently.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -394,7 +401,7 @@ fixes:
   - L.s56320
   - L.smoke
   - K.1
-  status: held
+  status: placed
   t: '2026-10-28T18:47:47'
   text: 'OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses; FIX.7 GEMM_INPUTS=bfp8): the
     reference fp8-quantizes the shared expert''s x and h; on MOE_HEAD=fused (the default) they stay bf16, i.e. ABOVE the
@@ -412,6 +419,8 @@ fixes:
   - models/demos/moe_block
   - models/demos/deepseek_v41_flash_d_p
   - ttnn/ttnn/bringup
+  released: '2026-10-29T02:23:35'
+  placed: '2026-10-29T02:23:39'
 - id: FIX.10
   title: 'ENGRAM_TABLE=resident must coexist with the full model on the Galaxy host (runner thrashes: ~2 min a layer, SIGBUS)'
   gate:

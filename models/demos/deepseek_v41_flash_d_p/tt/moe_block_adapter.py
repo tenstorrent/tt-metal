@@ -86,10 +86,19 @@ def block_options():
 
 
 def block_dtypes():
-    """D5: the shared expert at LoFi (bfp8 weights, the block's default); routed bfp4 at LoFi, router bf16."""
+    """D5: the shared expert at LoFi (bfp8 weights, the block's default); routed bfp4 at LoFi, router bf16. The shared
+    expert's x / h: GEMM_INPUTS (FIX.9, DS41-132; owner 2026-10-28, F208) - bfloat8_b, the reference's fp8 act quant of
+    both (reference/ds41_ref.py _swiglu: _q8(x), _q8(h)); the router keeps bf16 x (the fused head typecasts a copy for
+    the engine). SE_PACK_PRECISE: the fused head packs bfp8 h in one rounding (bfp8_pack_precise)."""
     from models.demos.moe_block.moe_block import MoEDtypes
 
-    return MoEDtypes(shared_fidelity=ttnn.MathFidelity.LoFi)
+    from .common import gemm_dtype
+
+    return MoEDtypes(
+        shared_fidelity=ttnn.MathFidelity.LoFi,
+        shared_activations=gemm_dtype(),
+        shared_pack_precise=settings.get("SE_PACK_PRECISE") == "on",
+    )
 
 
 def expert_permutation(rows: int, cols: int, epc: int) -> torch.Tensor:

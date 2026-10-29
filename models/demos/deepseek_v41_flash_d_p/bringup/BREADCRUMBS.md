@@ -3762,3 +3762,69 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   "models/demos/deepseek_v41_flash_d_p/tt/perf_engram_async.py"`; gate `PYTHONPATH=$PWD python -m
   models.demos.common.bringup gate P.6 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml
   --check`; old path DS41_ENGRAM_ASYNC=off.
+
+## FIX.9 (overseer fix, attempt 3): the shared expert's x / h as bfp8 in the block MoE's fused head (DS41-132)
+- Why: OWNER DECISION 2026-10-28 (F208, FIX.7 GEMM_INPUTS=bfp8): the reference fp8-quantizes the shared expert's x and
+  h (reference/ds41_ref.py `_swiglu`: `_q8(x)`, `_q8(h)`); on MOE_HEAD=fused they stayed bf16 (se_engine3 hard-coded
+  2048 B tiles), above the reference. Attempt 2 left no changes in the tree (only ledger files).
+- Block (models/demos/moe_block, the option defaults to bf16 for every other user):
+  - tt/se_engine3.py `SeEngine3(x_dtype=, h_dtype=)` (bf16 / bfloat8_b; `TILE_BYTES`): x own, the x rounds (XIN), the
+    own-shard DRAM load, h own / h all and their CBs take the dtype's tile bytes (`SE_XTB` / `SE_HTB` defines in the
+    BRISC); the dispatch prep's source view (PU) reads x own in its format (`SE_PREP_TB`; units' offsets x tile bytes),
+    so the routed experts' dispatched rows are bfp8-rounded x (their own bfp8 x rounding is then exact). The non-RS
+    down path now reconfigures the packer for OUT (it relied on h being bf16). No down (`mrs`): h must stay bf16.
+  - tt/x_gather3.py: the x packets' addresses / payloads use `XTB` (the engine's x tile bytes); the port CB keeps its
+    2048 B slots (RS, latent, logits unchanged), so a bfp8 packet carries the same tiles in 1088 B each.
+  - tt/fused_head.py `HeadSE3(activations=)`, `run(x, w, xq=)`: the router keeps x (bf16), the engine and the gather
+    take xq; xq is appended last to the prepared program's io (the weights' positions unchanged) and in its key.
+  - moe_block.py: `MoEDtypes.shared_activations` = x and h inside the shared expert. FusedHead allocates a persistent
+    bfp8 `xq` and typecasts x into it each call (`ttnn.typecast(output_tensor=)`; one op, no host). Ops head
+    (SharedExpert): x cast for gate / up, gate / up write bf16 (they wrote shared_activations before: identical at
+    the bf16 default), the activation's output cast for down.
+- Model: tt/moe_block_adapter.py `block_dtypes()` sets `shared_activations=gemm_dtype()` (GEMM_INPUTS; bf16 = the old
+  path); tt/settings.py GEMM_INPUTS text, tt/MOE_BLOCK.md D5, known_issues DS41-132 updated.
+- Why a typecast copy, not rounding where the SE reads x: the router reads x from DRAM in bf16 (the reference's
+  router is bf16), and the engine's own-shard load and the gather move tiles as stored, so rounding in the engine
+  would need an extra unpack / pack pass of every x tile on every engine core; the typecast is 7 us a layer.
+- Measured, 8x4, chunk 5120, real weights (tt/perf_se_activations.py, random x, every 7th token vs float64 with the
+  checkpoint's exact fp8 weights), DS41_GEMM_INPUTS=bf16 -> bfp8:
+  - engine x / h BFLOAT16 -> BFLOAT8_B, arena 1142 -> 985 KB; head twice: 0 values differ (both).
+  - shared expert vs native (x, h unrounded): L00 rel 0.01158 -> 0.01704 (bias -0.0085 -> +0.0074, worst row 0.0145
+    -> 0.0206); L24 0.01232 -> 0.01812 (bias -0.0085 -> +0.0077). vs q8 (fp8 act quant of x and h, per 32): L00
+    0.04388 -> 0.04688, L24 0.04637 -> 0.04940 (bfp8 rounds differently from e4m3; the positive bias is the bfp8
+    packer's ties-away rounding, DS41-77).
+  - head alone (rt profiler, 10 calls): section 454.0 -> 462.2 us a call (L00; L24 454.7 -> 464.1): the program
+    ~446 -> ~451 us, + typecast ~7 us, + the x copy 10 us both; synced wall 0.958 -> 0.973 ms.
+- In the model (test_profile.py, DS41_ENGRAM_TABLE=resident, rung last, 40 layers, same session; bf16 side =
+  DS41_GEMM_INPUTS=bf16, which also turns FIX.7's attention-side casts off): fused head (the "(other)" program in
+  L*.experts) 38.35 -> 38.53 ms a chunk (median 0.951 -> 0.966 ms a layer), typecast 0.29 ms a chunk, experts section
+  94.90 -> 95.32 ms; device total 224.30 -> 225.95 ms (P.6's run of the same code before this change: 220.83, run to
+  run noise ~2 % in untouched sections, e.g. attention 78.35 / 79.74 / 80.00). host_transfers_per_layer 0,
+  profiled_new_programs 0. Warm wall (BRINGUP_PROFILE_WALL=1): 429.4 ms (spread 48.2, loadavg 15.9) -> 435.3 ms
+  (spread 47.1, loadavg 21.0): within the spread. Files generated/bringup_adhoc/FIX.9_{wall_bf16,wall_bfp8,profile,
+  profile_bf16}*.json.
+- Accuracy, W.1 seed rung (unit passed; before = FIX.8's record, the last on this code minus the change): err_layer
+  L00 0.0241 -> 0.0243, L01 0.0369 -> 0.0359, L02 0.0568 -> 0.0557, L03 0.0777 -> 0.0762, L14 0.0331 -> 0.0329, L20
+  0.0309 -> 0.0306, L21 0.0462 -> 0.0457, L24 0.0318 -> 0.0314 (limit 0.0336).
+- Re-run: `DS41_GEMM_INPUTS=bf16 PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tt/perf_se_activations.py` (and without the env for bfp8); gate
+  `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.9 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`; old path
+  DS41_GEMM_INPUTS=bf16.
+- First full gate (code above, no precise packing): every unit PASS but K.1 test_adapter_acks: chunk 0 ack slot 0
+  [0, 2536), last-window 128 rows, window_kv layer 20 nope PCC 0.98862 < limit 0.98957 (DS41-125's deep-layer check);
+  the chain stopped there (runner_contract / runner_smoke not run). Diagnosis (temporary prints in the contract's
+  caches.pcc_failures and an env switch for the SE dtype, both removed; caches.py restored byte for byte), the same
+  test, every window_kv check of layers 14 / 20 / 21 / 24, SE bf16 (FIX.7 kept) / SE bfp8 / SE bfp8 + precise:
+  mean 1 - PCC 0.00772 / 0.00751 / 0.00779, min margin to the limit +0.00323 / -0.00095 / +0.00174; L20 chunk-0
+  window 0.99280 / 0.98862 / 0.99131, L24 0.99051 / 0.98717 / 0.99039; bfp8 is better on 5 of the 7 windows a layer.
+  So the 128-row windows move by +-0.003 with any rounding change (routing flips at deep layers, DS41-90): the
+  failing window is noise at the limit, not a loss of accuracy, and no variant is better on average.
+- Then shipped: SE_PACK_PRECISE (tt/settings.py, default on; MoEDtypes.shared_pack_precise -> FusedHead / HeadSE3 ->
+  SeEngine3(pack_precise=) -> ComputeConfigDescriptor.bfp8_pack_precise, plus a `#define SE_PACK_PRECISE` because the
+  compute binary's cache key leaves the flag out, DS41-137). Why, on its own merit: one rounding of h from fp32 (as
+  ttnn.typecast packs x, as the reference casts h once) instead of two (ties away twice); same format, same speed.
+  Measured on the same inputs: SE vs native L00 rel 0.01704 -> 0.01647, bias +0.0074 -> +0.0063 (vs q8 0.04688 ->
+  0.04662); head 462.2 -> 463.9-464.7 us a call (noise). The contract window passing with it (0.99131) is partly luck,
+  per the means above: an owner / overseer reading this should treat that check as noise-limited at layer 20.
+- Re-run of the contract diagnosis: not kept (it edits the frozen helper); use the numbers above.
