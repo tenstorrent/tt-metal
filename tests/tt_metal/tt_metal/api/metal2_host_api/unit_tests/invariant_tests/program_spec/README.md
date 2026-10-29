@@ -21,13 +21,9 @@ struct WorkUnitSpec {
     // - Gen1: the data-movement kernels use distinct config_1xx->processor values and the same
     //   config_1xx->noc_mode. Those in DM_DEDICATED_NOC mode also use distinct config_1xx->noc values,
     //   unless both set config_1xx->dedicated_noc_sharing to SHARED_DISJOINT_TRAFFIC.
-    // - For each DataflowBufferSpec these kernels bind, exactly one of them binds it as PRODUCER and
-    //   exactly one binds it as CONSUMER. (The producer and consumer may be the same kernel.)
     // - For each ScratchpadSpec, at most one of these kernels binds it,
     //   unless its advanced_options.allow_instance_multi_binding is enabled. On Gen2,
     //   all kernels sharing a scratchpad on a node must be DM kernels.
-    // - These kernels bind at most 32 distinct DataflowBufferSpecs on Wormhole, 64 on Blackhole, or 32 on
-    //   Quasar. Subject to additional constraints during build.
     Group<KernelSpecName> kernels;
 
     // Invariant:
@@ -59,6 +55,12 @@ struct ProgramSpec {
     //   side of a DataflowBufferSpec get the same cores, and DM0 and DM1 are never used.
     //
     // DataflowBufferSpec endpoints (across all kernels that bind a given DataflowBufferSpec):
+    // - On the effective placement, each node with an endpoint has exactly one producer instance and
+    //   one consumer instance; nodes with neither endpoint are permitted. With Gen1
+    //   allow_instance_multi_binding, each role may have more than one instance.
+    // - Each node in the effective placements reserves at most 32 DFBs on Wormhole, 64 on Blackhole,
+    //   or 32 on Quasar, including nodes outside all WorkUnitSpecs. Build-time resource limits also apply.
+    // - Aliased DFBs have identical effective placements.
     // - All PRODUCER bindings share access_pattern, and their kernels share num_threads and kind
     //   (compute or data movement). The same holds for all CONSUMER bindings.
     // - Gen1: all data-movement PRODUCER kernels share config_1xx->processor. The same holds for
