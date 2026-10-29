@@ -26,6 +26,7 @@ import torch
 from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt import hostopt
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, PAD_HEADS
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import pos_buckets  # noqa: F401 (re-exported)
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import CONFIG_PATH, clamp_text
@@ -338,6 +339,7 @@ class SpecRunner:
             self.m.pool.ensure(full + self.n, lookahead=self.n + 16)
 
     def _round(self, X, base, force=None):
+        hostopt.round_hook(self)
         self._ensure(base)
         self._use(base)
         self.dec.set_force(-1 if force is None else force)
@@ -809,6 +811,7 @@ class SpecRunner:
         """X [B,n] (first token + drafts), base [B] = position of the first token. Generates up to ``max_new`` tokens per user (counting the first token).
         -> (gen: list of token lists per user (the first token included), stats dict). ``active``: [B] bool, users that count (padding users are ignored).
         """
+        hostopt.begin_run(self)
         B, n, k = self.B, self.n, self.k
         base = base.clone()
         X = X.clone()
@@ -823,6 +826,7 @@ class SpecRunner:
         while not bool(done.all()):
             t = time.perf_counter()
             a, mm, d = self._round(X, base)
+            hostopt.rec(self, k, X, a, mm, d, self.conf)
             walls.append((time.perf_counter() - t) * 1e3)
             if len(walls) <= int(os.environ.get("DSV41_SPEC_DBG", "0")):
                 for b_ in range(min(B, 2)):
@@ -859,6 +863,7 @@ class SpecRunner:
                 if len(gen[b]) >= max_new or int(base[b]) > top:
                     done[b] = True
             # finished users keep running inside the batch: keep their positions fixed (their rows rewrite the same cache slots)
+        hostopt.flush(gen, self.m_hist, walls)
         mt = torch.tensor(ms)
         stats = {
             "rounds": len(walls),
@@ -971,6 +976,7 @@ class AdaptiveSpec:
 
     # ---- the loop -----------------------------------------------------------------------------------------------------------------------
     def run(self, X, base, max_new, eos=None, active=None, policy=None):
+        hostopt.begin_run(self)
         B = self.B
         if policy is not None:
             self.policy = policy
@@ -1023,6 +1029,7 @@ class AdaptiveSpec:
                 )
             t = time.perf_counter()
             a, mm, d = r._round(X5[:, :n].contiguous(), base)
+            hostopt.rec(r, k, X5[:, :n], a, mm, d, r.conf)
             if len(walls) % 10 == 0:
                 self.log(f"spec adapt: round {len(walls)} k={k} done {int(done.sum())}/{B}")
             w = (time.perf_counter() - t) * 1e3
@@ -1030,7 +1037,8 @@ class AdaptiveSpec:
             ks_used.append(k)
             e0 = len(emitted)
             tk = "probe" if probing else k
-            self.times[tk] = 0.8 * self.times[tk] + 0.2 * w if tk in self.times else w
+            if os.environ.get("DSV41_SPEC_FREEZE_TIMES") != "1":  # test fixture: the table (DSV41_SPEC_TIMES) is not updated by the measured rounds, so the scheduler's k choices depend on the confidences only (comparable streams between runs)
+                self.times[tk] = 0.8 * self.times[tk] + 0.2 * w if tk in self.times else w
             if r.dec.top2 is None:  # (DSV41_SPEC_TOP2=0: no near-tie evidence)
                 gp = torch.full((B, n), float("nan"))
             else:
@@ -1080,6 +1088,7 @@ class AdaptiveSpec:
             st_["ks"][k] = st_["ks"].get(k, 0) + 1
         self.policy = base_policy
         self.cal_records = cal
+        hostopt.flush(gen, self.m_hist, walls)
         mt = torch.tensor(ms)
         tot_ms = sum(walls)
         nk = {k: ks_used.count(k) for k in ([0] if self.plain_ok else []) + list(self.ks)}

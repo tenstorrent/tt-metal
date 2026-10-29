@@ -259,6 +259,7 @@ def install():
     from models.demos.blackhole.deepseek_v41_flash.tt import spec_model as sm
     from models.demos.blackhole.deepseek_v41_flash.tt.decoder import DSV41Decoder
     from models.demos.blackhole.deepseek_v41_flash.tt.engram import HostEngramRows
+    from models.demos.blackhole.deepseek_v41_flash.tt import hostopt
     from models.demos.blackhole.deepseek_v41_flash.tt.engram_ragged import RaggedNgramHash
     from models.demos.blackhole.deepseek_v41_flash.tt.spec_decoder import SpecDecoder
 
@@ -350,6 +351,7 @@ def install():
             tid = self.tr[self.cur_bucket]["tid"] if self.cur_bucket in self.tr else None
             _STATE["prof_rounds"].append({"k": self.k, "nround": nr, "trace_id": None if tid is None else int(tid), "bucket": self.cur_bucket})
         cur["round"] = (t1 - t0) * 1e3
+        cur["hmode"] = hostopt.CUR_MODE
         cur["gap_before"] = gap
         cur["bucket"] = self.cur_bucket
         cur["amax_base"] = int(base.max())
@@ -373,6 +375,7 @@ def install():
             _STATE["mode"] = "gs" if os.environ.get("DSV41_ROUND_TL_SAMPLE_WIN") else "g"
             _STATE["label"] = f"{cls.__name__} B={getattr(self, 'B', '?')} policy={k.get('policy') or getattr(self, 'policy', '-')} sample_win={os.environ.get('DSV41_ROUND_TL_SAMPLE_WIN', '-')}"
             _STATE["nr_pass"] = 0
+            _STATE["gen"].manual_seed(1234)  # (sampled windows: every pass draws the same uniforms: passes with different DSV41_HOSTOPT_* switches are comparable)
             try:
                 return orig(self, X, base, max_new, *a, **k)
             finally:
