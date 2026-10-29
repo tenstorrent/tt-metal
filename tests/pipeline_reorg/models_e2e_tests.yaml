@@ -1883,7 +1883,8 @@
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
@@ -1906,7 +1907,8 @@
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     # Keep five seeds and every frame. Appearance metrics use the original clips;
     # temporal metrics use lossless 960x544 copies, scored concurrently after pytest.
@@ -1941,7 +1943,8 @@
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
@@ -1965,7 +1968,8 @@
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/models/huggingface
+    export HF_HOME=/mnt/weka/model-weights/video/huggingface
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
