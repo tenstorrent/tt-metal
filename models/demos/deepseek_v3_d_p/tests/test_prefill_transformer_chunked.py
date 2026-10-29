@@ -2670,6 +2670,7 @@ def glm_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_is
 # ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
 # modes and silently double a CI job. Matches the padded test's convention.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 # None = take the band from the mode (TRACED_PERF_MARGIN / UNTRACED_PERF_MARGIN, resolved by
 # kimi_chunked_perf_gate). The two bands differ by more than 3x, so no single literal serves both.
 @pytest.mark.parametrize("perf_margin", [None], ids=["margin_auto"])
@@ -2731,6 +2732,7 @@ def test_kimi_prefill_transformer_chunked_perf(
     num_links,
     perf_margin,
     use_trace,
+    determinism_check,
     preload_isl,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
@@ -2759,6 +2761,7 @@ def test_kimi_prefill_transformer_chunked_perf(
         preload_isl=preload_isl,
         check_pcc=False,  # timing only — accuracy lives in test_kimi_prefill_transformer_chunked
         use_trace=use_trace,
+        determinism_check=determinism_check,
         tp_shard_kv=True,
     )
 
@@ -3007,6 +3010,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 # DSA cross-layer indexer reuse per chunk. Requires the GLM TTNN weight cache (set the variant's cache env).
 # notrace/traced, not trace: "notrace" CONTAINS "trace", so `-k trace` would select both modes.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize(
     "num_iters",
     [1, 2, 10, 20, 25, 600],
@@ -3078,6 +3082,7 @@ def test_glm_prefill_transformer_chunked_no_pcc(
     num_links,
     preload_isl,
     use_trace,
+    determinism_check,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
@@ -3104,6 +3109,7 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         perf_margin=resolved_perf_margin,
         preload_isl=preload_isl,
         use_trace=use_trace,
+        determinism_check=determinism_check,
         kv_cache_format=GLM_KV_CACHE_FORMAT,
     )
 
