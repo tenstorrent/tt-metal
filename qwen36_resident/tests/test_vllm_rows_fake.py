@@ -9,7 +9,8 @@ would get wrong silently:
   its table and compares them with the slot's history (a wrong block table or a shared block shows up here);
 - a launch without preserve clobbers the conv history of its inactive rows; a live slot whose history was clobbered
   fails its next step (the adapter must keep live slots active, or set preserve);
-- the PP prefill holds one prompt; a resumed span must continue exactly where the last one stopped.
+- the PP prefill holds one prompt; a resumed span must continue exactly where the last one stopped;
+- the adapter sees each fake through Contract: the contract's public names only, read-only (MODEL_API, PP_API).
 Each row's next token is a function of its whole history (and, sampled, of its seed and position), so a slot mix-up
 anywhere changes the tokens the driver checks against its own reference.
 
@@ -37,12 +38,12 @@ raises = pytest.raises  # allow-pytest.raises: run with --noconftest, there is n
 V = 61  # vocab (= hidden: the fake embedding is the identity, so x0 decodes back to its token)
 
 
-def ref_next(seq, sampled=None):
+def ref_next(seq, sampled=None, vocab=V):
     """the token after seq: greedy, or (temperature > 0) mixed with the row's seed and position"""
-    h = (sum((i * 7 + 3) * int(t) for i, t in enumerate(seq)) + 11 * len(seq)) % V
+    h = (sum((i * 7 + 3) * int(t) for i, t in enumerate(seq)) + 11 * len(seq)) % vocab
     if sampled is not None:
         seed, pos = sampled
-        h = (h + 13 * int(seed) + 5 * int(pos)) % V
+        h = (h + 13 * int(seed) + 5 * int(pos)) % vocab
     return h
 
 
@@ -54,14 +55,14 @@ class FakeTok:
 class FakeModel:
     """a rows-mode ResidentModel: launches of ROWS slots, paged KV pool, hub feed when `sample`"""
 
-    def __init__(self, n_slots, sample):
-        self.S, self.sample = n_slots, sample
+    def __init__(self, n_slots, sample, vocab=V):
+        self.S, self.sample, self.V = n_slots, sample, vocab
         self.hist = [None] * n_slots  # token history per slot (None: never prefilled)
         self.conv_ok = [False] * n_slots
         self.pool = {}  # (physical block, offset) -> (slot, token)
         self.tables = [[0] for _ in range(n_slots)]
         self.tok = [None] * (n_slots // ROWS)
-        self.lg = torch.zeros(n_slots, 1, V)
+        self.lg = torch.zeros(n_slots, 1, vocab)
         self.out = torch.zeros(n_slots, 4, dtype=torch.int64)  # per slot its launch row's out word
         self.params = [(0.0, 1, 1.0, 0)] * n_slots
         self.steps = 0
@@ -69,7 +70,7 @@ class FakeModel:
     def token_state_rows(self, rows, preserve=False):
         """one launch's token state: rows {u: (x0, position)} active, the others inactive (x0 0, position 0)"""
         assert rows, "a launch needs at least one active user"
-        x0, pos, active = torch.zeros(ROWS, V), [0] * ROWS, [False] * ROWS
+        x0, pos, active = torch.zeros(ROWS, self.V), [0] * ROWS, [False] * ROWS
         for u, (x, p) in rows.items():
             x0[u], pos[u], active[u] = x, int(p), True
         return FakeTok(x0, pos, active, preserve)
@@ -114,12 +115,12 @@ class FakeModel:
                     assert got == (r, seq[q]), f"slot {r}: KV at position {q} is {got}, want {(r, seq[q])}"
                 self.hist[r] = seq
                 temp, _, _, seed = self.params[r]
-                nxt = ref_next(seq, (seed, p) if temp > 0 else None)
+                nxt = ref_next(seq, (seed, p) if temp > 0 else None, self.V)
                 self.lg[r] = 0
-                self.lg[r, 0, ref_next(seq)] = 1.0  # logits: the greedy token
+                self.lg[r, 0, ref_next(seq, None, self.V)] = 100.0  # logits: the greedy token, sharply (host sampling)
                 if self.sample:
                     self.out[r] = torch.tensor([nxt, p + 1, 1, 0])
-                    t.x0[u] = torch.nn.functional.one_hot(torch.tensor(nxt), V).float()  # the hub's feed
+                    t.x0[u] = torch.nn.functional.one_hot(torch.tensor(nxt), self.V).float()  # the hub's feed
                     t.pos[u] = p + 1
         self.steps += 1
 
@@ -127,9 +128,9 @@ class FakeModel:
         """[8 * len(launches), 1, vocab] in the order given"""
         return torch.cat([self.lg[k * ROWS : (k + 1) * ROWS] for k in launches]).clone()
 
-    def out_rows(self, k):
-        """launch k's out tensor (8 rows x 4 words), as the engine's host read of it"""
-        return self.out[k * ROWS : (k + 1) * ROWS].clone()
+    def out_tensor(self, k):
+        """launch k's out tensor (8 rows x (token, position + 1, active, 0)); a fake's is already on the host"""
+        return self.out[k * ROWS : (k + 1) * ROWS]
 
     def set_sampling(self, rows):
         assert len(rows) == self.S
@@ -137,12 +138,12 @@ class FakeModel:
 
 
 class FakePP:
-    """the PP prefill: one prompt; spans must continue where the last stopped"""
+    """the PP prefill: one prompt; spans must continue where the last stopped. Counts the resumed spans with model
+    launches since the previous span (the interleave whose device safety split_prefill_gate.py checks)"""
 
-    chunks = (128, 256, 512, 1024)
-
-    def __init__(self, unit):
+    def __init__(self, unit, model):
         self.unit, self.ids, self.done = unit, None, False
+        self.model, self.spans, self.interleaved, self.mark = model, 0, 0, None
 
     def reset(self):
         self.ids, self.done = [], False
@@ -154,6 +155,9 @@ class FakePP:
     def run_span(self, ids, first_chunk, n_tokens, drain=True, chunk=None):
         assert chunk == self.unit and self.ids is not None and not self.done
         assert first_chunk * chunk == len(self.ids), f"span from chunk {first_chunk}, the PP holds {len(self.ids)}"
+        self.spans += 1
+        self.interleaved += first_chunk > 0 and self.model.steps != self.mark
+        self.mark = self.model.steps
         self.ids += [int(t) for t in ids]
         assert len(self.ids) == n_tokens
         assert drain or len(ids) % chunk == 0
@@ -161,6 +165,8 @@ class FakePP:
 
     def handoff(self, model, n_tokens, block_table=None, slot=None):
         assert self.done and len(self.ids) == n_tokens, (self.done, len(self.ids), n_tokens)
+        assert isinstance(model, Contract) and model._obj is self.model, "handoff into another model"
+        model = self.model
         assert len(block_table) * BLOCK >= n_tokens
         model.hist[slot], model.conv_ok[slot] = list(self.ids), True
         model.tables[slot] = list(block_table)
@@ -168,11 +174,43 @@ class FakePP:
             model.pool[(block_table[q // BLOCK], q % BLOCK)] = (slot, self.ids[q])
 
 
-def make_adapter(max_seqs, unit, sample):
+MODEL_API = (
+    "sample",
+    "token_state_rows",
+    "set_page_table",
+    "clear_slot",
+    "step",
+    "logits",
+    "out_tensor",
+    "set_sampling",
+)
+PP_API = ("reset", "run", "run_span", "handoff")
+
+
+class Contract:
+    """what the adapter sees of a fake: the contract's public API only, read-only (the fake's bookkeeping - histories,
+    the KV pool, conv flags - is out of its reach, so the adapter cannot pass by reading or patching it)"""
+
+    def __init__(self, obj, api):
+        object.__setattr__(self, "_obj", obj)
+        object.__setattr__(self, "_api", frozenset(api))
+
+    def __getattr__(self, name):
+        if name not in self._api:
+            raise AttributeError(f"{type(self._obj).__name__}.{name} is not in the contract")
+        return getattr(self._obj, name)
+
+    def __setattr__(self, name, value):
+        raise AttributeError(f"the adapter set {name} on {type(self._obj).__name__}")
+
+
+def make_adapter(max_seqs, unit, sample, vocab=V, max_len=4096, cls=ResidentRowsAdapter):
+    """the adapter on contract views of a fresh FakeModel / FakePP; returns (adapter, the raw FakeModel)"""
     n_slots = -(-max_seqs // ROWS) * ROWS
-    model, pp = FakeModel(n_slots, sample), FakePP(unit)
-    engine = RowsEngine(model, pp, torch.eye(V), V, V, n_slots, unit)
-    return ResidentRowsAdapter(engine, V, 4096, max_seqs, unit), model
+    model = FakeModel(n_slots, sample, vocab)
+    pp = FakePP(unit, model)
+    engine = RowsEngine(Contract(model, MODEL_API), Contract(pp, PP_API), torch.eye(vocab), vocab, vocab, n_slots, unit)
+    return cls(engine, vocab, max_len, max_seqs, unit), model
 
 
 class Req:

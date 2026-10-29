@@ -388,7 +388,7 @@ class ResidentRowsAdapter:
 class RowsEngine:
     """The device calls of ResidentRowsAdapter on a rows-mode ResidentModel and the PP prefill (the contract of
     .omc/research/resident-multiuser-api.md, as built on qwen38-res-mu-wp7). `model` / `pp` may be fakes with the same
-    methods (tests); `mesh` None reads the out words through model.out_rows(k) instead of ttnn."""
+    methods (tests): a fake's out_tensor(k) is already a host tensor."""
 
     def __init__(self, model, pp, emb, vocab, vocab_chip, n_slots, chunk_unit, mesh=None):
         self.model, self.pp, self.emb = model, pp, emb
@@ -471,15 +471,16 @@ class RowsEngine:
         """enqueue the reads of the out words (token, position, active, 0 per row) of the slots' launches: (slots,
         {launch: host read}, events)"""
         ks = sorted({r // ROWS for r in slots})
-        if self.mesh is None:
-            return slots, {k: self.model.out_rows(k) for k in ks}, []
-        import ttnn
-
         reads, events = {}, []
-        chip0 = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 0))
         for k in ks:
-            view = ttnn.get_device_tensors(self.model.out_tensor(k))[0]
-            reads[k] = ttnn.from_device(view, blocking=not async_read)
+            out = self.model.out_tensor(k)
+            if isinstance(out, torch.Tensor):  # a fake model's host-side out words
+                reads[k] = out.clone()
+                continue
+            import ttnn
+
+            chip0 = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 0))
+            reads[k] = ttnn.from_device(ttnn.get_device_tensors(out)[0], blocking=not async_read)
             if async_read:
                 events.append(ttnn.record_event(self.mesh, 0, device_range=chip0))
         return slots, reads, events
