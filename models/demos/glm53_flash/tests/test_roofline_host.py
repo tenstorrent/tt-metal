@@ -202,7 +202,7 @@ def test_ranked_actions():
     ms = [a["ms"] for a in acts]
     assert ms == sorted(ms, reverse=True) and all(m >= 0 for m in ms)
     ids = [a["action_id"] for a in acts]
-    assert "E0" in ids and "A1" in ids and "H2" in ids
+    assert "E0" not in ids and "H1" in ids and "H2" in ids  # E0 (the stream op) is the default path now
     assert "E0" not in [a["action_id"] for a in ranked_actions(CFG, Layout(users_per_row=4, expert_path="stream"))]
     assert sum(ms) < step_table(CFG, Layout(users_per_row=4))["step_model_measured_ms"]
     acts256 = ranked_actions(CFG, Layout(users_per_row=32))
@@ -212,7 +212,8 @@ def test_ranked_actions():
 def test_layer_table_columns_and_counts():
     lay = Layout(users_per_row=4)
     composite = Layout(users_per_row=4, mhc_pre_block=False)
-    for name, n, n_comp in (("KDA+MoE", 54, 88), ("DSA+MoE", 97, 131), ("KDA+dense", 18, 52), ("head", 6, 6)):
+    # the MoE glue counted at its measured op counts (today_8x4_dsa3 / kda4: 11-op gathers, a 32-op reduce-scatter)
+    for name, n, n_comp in (("KDA+MoE", 79, 113), ("DSA+MoE", 122, 156), ("KDA+dense", 18, 52), ("head", 6, 6)):
         s = layer_summary(CFG, lay, name)
         assert s["ops"] == n, (name, s["ops"])  # the fused pre-block: 2 mHC rows per wrap instead of 9
         assert layer_summary(CFG, composite, name)["ops"] == n_comp, (name, "composite")
@@ -273,15 +274,15 @@ def test_spec_rows_and_plain_reduction():
     assert "kda.spec_backup" not in plain_keys and rl.step_table(CFG, Layout(users_per_row=4))[
         "step_floor_ms"
     ] == pytest.approx(
-        28.32, abs=0.05
-    )  # the fused pre-block default; 32.26 with the composite pre-block
+        28.97, abs=0.05
+    )  # the fused pre-block default; 32.91 with the composite pre-block (the measured MoE glue op counts)
     assert rl.step_table(CFG, Layout(users_per_row=4, mhc_pre_block=False))["step_floor_ms"] == pytest.approx(
-        32.26, abs=0.05
+        32.91, abs=0.05
     )
     # the stream-op cost model reproduces the measured stream row at the plain point (28 active: 341 + 8 + 2 us)
     plain_stream = {r.key: r for r in layer_rows(CFG, Layout(users_per_row=4, expert_path="stream"), "KDA+MoE")}
     model = rl.EXPERT_FIXED_US + 28.0 * 3.34 * 1e6 / (rl.EXPERT_GBS * 1e3) + 10.0
-    assert plain_stream["moe.experts"].measured_us == pytest.approx(351.0, abs=1.0)
+    assert plain_stream["moe.experts"].measured_us == pytest.approx(264.4, abs=1.0)
     assert model == pytest.approx(351.0, abs=2.0)
 
 

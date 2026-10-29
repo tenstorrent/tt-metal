@@ -142,9 +142,7 @@ class Layout:
     cols: int = 4
     users_per_row: int = 4
     moe: str = "hybrid"  # hybrid | ep
-    expert_path: str = (
-        "block"  # hybrid at T <= 32: block (sparse tuned block: the no-knob e2e path) | stream (GLM53_STREAM_EXPERTS=1)
-    )
+    expert_path: str = "stream"  # hybrid at T <= 32: stream (the expert_stream op: the regions-sourced streaming decode, today's default) | block (the sparse tuned block, the pre-E0 path)
     expert_w13_dtype: str = "bfp8"
     expert_w2_dtype: str = "bfp8"
     isl: int = 16  # context position of every user (index scoring and SDPA state terms)
@@ -354,7 +352,10 @@ def mhc_wrap_rows(cfg: GLM53FlashConfig, lay: Layout, wrap: str) -> list[OpRow]:
                 flops=2 * tp * nc * TILE,
                 fidelity="HiFi4",
                 measured={
-                    "32u": (101.0, "A1 chip test 2026-10-21 (203 -> 101 us per wrap); 22-layer chain 37.7 -> 33.3 ms"),
+                    "32u": (
+                        81.7,
+                        "today_8x4_dsa3 #393 / #445, kda4 #297 / #306: 81.5-81.8 us per wrap (A1 chip test 2026-10-21: 101)",
+                    ),
                     "256u": (101.0, "same (batch-independent)"),
                 },
                 action_id="D13",
@@ -498,7 +499,10 @@ def mhc_wrap_rows(cfg: GLM53FlashConfig, lay: Layout, wrap: str) -> list[OpRow]:
             kind="generic",
             dram_bytes=2 * x_bytes + h_bytes,
             flops=2 * tp * nc * 2,
-            measured={"32u": (34.3, "ep_b4 #271"), "256u": (34.0, "ep_b32 #268")},
+            measured={
+                "32u": (30.1, "today_8x4_dsa3 #444 30.5 / #515 29.7, kda4 #305 / #376 (ep_b4 #271: 34.3)"),
+                "256u": (34.0, "ep_b32 #268"),
+            },
             action_id="P1",
             action="tune the generic op's access pattern (125 GB/s today: resident operands, 8 tiles in flight per core) "
             "or keep the streams L1-resident between wraps (D13)",
@@ -521,7 +525,10 @@ def kda_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
     state_bytes = hl * k * k * BYTES["fp32"]  # 1 MB per user per chip
     conv_bytes = (cfg.kda_conv_kernel - 1) * qkv_n * BYTES["bf16"]
     m = "ATTN_KDA"
-    kda_meas = {"32u": (74.9, "ep_b4 #267 (gap 34.2 before it)"), "256u": (259.7, "ep_b32 #264 (gap 34.3)")}
+    kda_meas = {
+        "32u": (74.1, "today_8x4_kda4 #301 (gap 5.4 before it; ep_b4 #267: 74.9, gap 34.2)"),
+        "256u": (259.7, "ep_b32 #264 (gap 34.3)"),
+    }
     if t not in (4, 32):  # two-point fit of the measured op: 48.6 us fixed + 6.6 us per user
         kda_meas = {lay.point: (48.6 + 6.6 * t, "fit of ep_b4 / ep_b32: 48.6 + 6.6 us x users")}
     if lay.spec_k:
@@ -534,7 +541,7 @@ def kda_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             dram_bytes=_w(h, qkv_n, "bfp8") + _act(tp, h, qkv_n),
             flops=2 * tp * h * qkv_n,
             cores=96,
-            measured={"32u": (65.2, "ep_b4 #264, 393 GB/s"), "256u": (65.3, "ep_b32 #261")},
+            measured={"32u": (65.2, "today_8x4_kda4 #298 (ep_b4 #264: 65.2, 393 GB/s)"), "256u": (65.3, "ep_b32 #261")},
             action_id="-",
             action="keep (at the achievable DRAM rate); only bfp4 weights would cut it (accuracy-gated)",
             risk="-",
@@ -546,7 +553,7 @@ def kda_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             dram_bytes=_w(h, gate_mid, "bf16") + _act(tp, h, gate_mid),
             flops=2 * tp * h * gate_mid,
             cores=9,
-            measured={"32u": (14.1, "ep_b4 #265, 187 GB/s"), "256u": (14.0, "ep_b32 #262")},
+            measured={"32u": (13.9, "today_8x4_kda4 #299 (ep_b4 #265: 14.1, 187 GB/s)"), "256u": (14.0, "ep_b32 #262")},
             bound_hint="L1/NoC",
             action_id="K1",
             action="append the 288 gate columns to the qkv weight (one [4096, 6432] matmul at ~390 GB/s)",
@@ -561,7 +568,7 @@ def kda_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             flops=2 * tp * gate_mid * gate_out,
             fidelity="HiFi4",
             cores=65,
-            measured={"32u": (9.4, "ep_b4 #266"), "256u": (9.1, "ep_b32 #263")},
+            measured={"32u": (9.3, "today_8x4_kda4 #300 (ep_b4 #266: 9.4)"), "256u": (9.1, "ep_b32 #263")},
             action_id="K2",
             action="fold the block-diagonal [f_b | g_b] expansion into kda_decode (per-head [18 x 128] weights in L1)",
             risk="M",
@@ -577,7 +584,7 @@ def kda_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             fidelity="HiFi4",
             cores=80,
             measured=kda_meas,
-            gap_us=34.2,
+            gap_us=5.4,
             action_id="K3",
             action="cut the ~49 us fixed cost + 34 us pre-op gap (runtime-arg volume of 80 cores x 3 RISCs: common "
             "args + per-core index; kernel prologue); the per-user slope (6.6 us = 303 GB/s) is already at DRAM rate",
@@ -592,7 +599,7 @@ def kda_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             dram_bytes=_w(hl * k, h, "bfp8") + _act(tp, hl * k, h),
             flops=2 * tp * hl * k * h,
             cores=22,
-            measured={"32u": (27.1, "ep_b4 #268, 348 GB/s"), "256u": (26.1, "ep_b32 #265")},
+            measured={"32u": (25.9, "today_8x4_kda4 #302 (ep_b4 #268: 27.1, 348 GB/s)"), "256u": (26.1, "ep_b32 #265")},
         ),
         OpRow(
             "kda.all_reduce",
@@ -601,7 +608,10 @@ def kda_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             kind="ccl",
             n_ops=2,
             ccl=("all_reduce", lay.cols, tp * h * BYTES["bf16"]),
-            measured={"32u": (51.0, "ep_b4 #269-270 (RS 38.7 + AG 12.3)"), "256u": (51.7, "ep_b32 #266-267")},
+            measured={
+                "32u": (47.4, "today_8x4_kda4 #303-304 (RS 34.7 + AG 12.7; ep_b4 #269-270: 51.0)"),
+                "256u": (51.7, "ep_b32 #266-267"),
+            },
             action_id="C2",
             action="the MoE all-reduce on the same shape takes 30 us: the extra ~20 us is column skew / input placement "
             "(RS waits for the slowest column after kda_decode); B7 gather form measured 46 us (no gain) -> keep ccl; "
@@ -701,7 +711,10 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             dram_bytes=_w(h, stem_n, "bf16") + _act(tp, h, stem_n),
             flops=2 * tp * h * stem_n,
             cores=37,
-            measured={"32u": (48.3, "blk_l3_b4 #438, 405 GB/s"), "256u": (48.3, "same shape")},
+            measured={
+                "32u": (48.8, "today_8x4_dsa3 #394 (blk_l3_b4 #438: 48.3, 405 GB/s)"),
+                "256u": (48.3, "same shape"),
+            },
             action_id="D1",
             action="q_a part in bfp8 (kv_a stays bf16: it is the cached latent): -5.9 MB",
             risk="M (accuracy)",
@@ -736,7 +749,7 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
                 n_ops=29,
                 dram_bytes=tp * stem_n * 2 * 3 + t * (l + 6 * di) * 2 * 4,
                 measured={
-                    "32u": (100.3, "blk_l3_b4 #439-468 (20.4 us of gaps besides)"),
+                    "32u": (103.3, "today_8x4_dsa3 #395-424 without q_b (blk_l3_b4 #439-468: 100.3)"),
                     "256u": (100.3 + 12.0 * (scale - 1), "proj: the [B,P,D] pooling ops grow with B"),
                 },
                 gap_us=20.4,
@@ -774,7 +787,7 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
                 kind="layout",
                 n_ops=2,
                 dram_bytes=4 * tp * hl * dq * 2,
-                measured={"32u": (14.5, "blk_l3_b4 #469-470"), "256u": (14.5, "same shape")},
+                measured={"32u": (14.5, "today_8x4_dsa3 #425-426 (blk_l3_b4 #469-470)"), "256u": (14.5, "same shape")},
                 action_id="B5",
                 action="free head-major view (T <= 32: the packed tile sequence IS the head-major sequence)",
                 risk="L",
@@ -787,7 +800,10 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
                 dram_bytes=hl * _w(dq, l, "bfp8") + hl * _act(tp, dq, l),
                 flops=2 * tp * hl * dq * l,
                 cores=16,
-                measured={"32u": (20.0, "blk_l3_b4 #471, 144 GB/s"), "256u": (20.0, "same shape")},
+                measured={
+                    "32u": (19.8, "today_8x4_dsa3 #427 (blk_l3_b4 #471: 20.0, 144 GB/s)"),
+                    "256u": (20.0, "same shape"),
+                },
                 bound_hint="L1/NoC",
                 action_id="B5",
                 action="fold into q_b (W_qb1 = Wqb . Wkb1 per head): one matmul; or keep the bmm on 64 cores",
@@ -803,7 +819,10 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             dram_bytes=_w(lq, hi * di, "bf16") + _act(tp, lq, hi * di),
             flops=2 * tp * lq * hi * di,
             cores=64,
-            measured={"32u": (31.4, "blk_l3_b4 #472, 412 GB/s"), "256u": (31.4, "same shape")},
+            measured={
+                "32u": (31.7, "today_8x4_dsa3 #428 (blk_l3_b4 #472: 31.4, 412 GB/s)"),
+                "256u": (31.4, "same shape"),
+            },
             action_id="D2",
             action="bfp8 indexer query weight (-6 MB) if the selected-pool sets stay identical (A/B on the index)",
             risk="M (selection)",
@@ -834,7 +853,7 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             flops=2 * t * hi * pools * di,
             cores=min(120, 12 * max(1, t // 4)),
             measured={
-                "32u": (10.7, "blk_l3_b4 #476 (ISL 16: launch-bound)"),
+                "32u": (10.9, "today_8x4_dsa3 #432 (blk_l3_b4 #476: 10.7; ISL 16: launch-bound)"),
                 "256u": (12.0, "proj: cores scale with B"),
             },
             note="at 64 K: 4 MiB of pooled keys per user, ~90 GB/s (doc/mesh/sparse_1m.md): the long-context floor",
@@ -844,7 +863,7 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             m,
             "topk_rows generic op (512 pools of the scores)",
             dram_bytes=t * pools * 4 * 2,
-            measured={"32u": (4.7, "blk_l3_b4 #477"), "256u": (6.0, "proj")},
+            measured={"32u": (5.1, "today_8x4_dsa3 #433 (blk_l3_b4 #477: 4.7)"), "256u": (6.0, "proj")},
             bound_hint="launch/gap",
         ),
         OpRow(
@@ -854,7 +873,10 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             kind="state",
             dram_bytes=2 * t * sel * l * 2,
             measured={
-                "32u": (136.4, "blk_l3_b4 #478 (gap 14.7); README 61/183/339 us at 1/4/8 users: ~39 us per user"),
+                "32u": (
+                    136.5,
+                    "today_8x4_dsa3 #434 (gap 0.1 today; blk_l3_b4 #478: 136.4, gap 14.7); README 61/183/339 us at 1/4/8 users: ~39 us per user",
+                ),
                 "256u": (22.0 + 39.0 * t, "proj: linear in users (39 us/user + 22)"),
             },
             gap_us=14.7,
@@ -873,7 +895,7 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             kind="layout",
             n_ops=2,
             dram_bytes=4 * tp * hl * l * 2,
-            measured={"32u": (8.7, "blk_l3_b4 #479, #481"), "256u": (8.7, "same shape")},
+            measured={"32u": (8.8, "today_8x4_dsa3 #435, #437 (blk_l3_b4 #479, #481)"), "256u": (8.7, "same shape")},
             action_id="B5",
             action="free views with the packed [1,1,B,H*L] layout",
             risk="L",
@@ -888,7 +910,7 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             flops=2 * 2 * t * hl * sel_pad * l,
             cores=min(120, 12 * max(1, t // 4)),
             measured={
-                "32u": (72.9, "blk_l3_b4 #480"),
+                "32u": (72.5, "today_8x4_dsa3 #436 (blk_l3_b4 #480: 72.9)"),
                 "256u": (
                     max(72.9, dram_us(t * sel_pad * l * 2, lay.dram_gbs)),
                     "proj: max(73 us, DRAM floor of the B x 2.1 MB read)",
@@ -910,7 +932,10 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
                 dram_bytes=hl * _w(l, dv, "bfp8") + hl * _act(tp, l, dv),
                 flops=2 * tp * hl * l * dv,
                 cores=16,
-                measured={"32u": (19.2, "blk_l3_b4 #482, 150 GB/s"), "256u": (19.2, "same shape")},
+                measured={
+                    "32u": (18.9, "today_8x4_dsa3 #438 (blk_l3_b4 #482: 19.2, 150 GB/s)"),
+                    "256u": (19.2, "same shape"),
+                },
                 bound_hint="L1/NoC",
                 action_id="D4",
                 action="keep as a bmm on 64 cores (the o fold W_o2 [8192,4096] costs +18 MB = +45 us of DRAM floor for "
@@ -925,7 +950,10 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
                 kind="layout",
                 n_ops=2,
                 dram_bytes=4 * tp * hl * dv * 2,
-                measured={"32u": (11.5, "blk_l3_b4 #483-484"), "256u": (11.5, "same shape")},
+                measured={
+                    "32u": (11.0, "today_8x4_dsa3 #439-440 (blk_l3_b4 #483-484: 11.5)"),
+                    "256u": (11.5, "same shape"),
+                },
                 action_id="B5",
                 action="free view",
                 risk="L",
@@ -956,7 +984,10 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             kind="ccl",
             n_ops=2,
             ccl=("all_reduce", lay.cols, tp * h * BYTES["bf16"]),
-            measured={"32u": (39.5, "blk_l3_b4 #486-487 (RS 27.5 + AG 12.0)"), "256u": (39.5, "same shape")},
+            measured={
+                "32u": (55.2, "today_8x4_dsa3 #442-443 (RS 40.7 + AG 14.5; blk_l3_b4 #486-487: 39.5)"),
+                "256u": (39.5, "same shape"),
+            },
             action_id="C2",
             action="as the KDA all-reduce: column skew; keep ccl",
             risk="L",
@@ -1035,7 +1066,7 @@ def moe_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             flops=2 * tp * h * e,
             fidelity="HiFi4",
             cores=9,
-            measured={"32u": (17.8, "ep_b4 #288"), "256u": (17.8, "ep_b32 #285")},
+            measured={"32u": (17.6, "today_8x4_dsa3 #446 (ep_b4 #288: 17.8)"), "256u": (17.8, "ep_b32 #285")},
             action_id="R1",
             action="widen the grid (9 -> 36 cores, per_core_N 1 -> the 1D config's 280 GB/s -> ~12 us)",
             risk="L",
@@ -1048,7 +1079,7 @@ def moe_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             kind="generic",
             dram_bytes=tp * e * 4 + tp * k * 8,
             cores=32,
-            measured={"32u": (12.1, "ep_b4 #289"), "256u": (13.8, "ep_b32 #286")},
+            measured={"32u": (12.2, "today_8x4_dsa3 #447 (ep_b4 #289: 12.1)"), "256u": (13.8, "ep_b32 #286")},
             bound_hint="launch/gap",
         ),
     ]
@@ -1059,12 +1090,19 @@ def moe_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
         if t < TILE:
             gx = {
                 "32u": (
-                    95.0,
-                    "proj: blk_l4_b4 #383-387 all_broadcast 24.9 + untilize/concat/tilize glue 18 on 2 rows -> 8 rows",
+                    175.2,
+                    "today_8x4_dsa3 #448-458: all_broadcast 130.5 + 8 untilizes 28.2 + concat 2.6 + tilize 13.9 (kda4 #309-319 "
+                    "177.8; the 2-row projection was 95)",
                 ),
             }
-            gr = {"32u": (25.0, "proj: blk_l4_b4 #388-392 routing broadcast 5.8 + glue 22 on 2 rows")}
-            glue_ops = 8
+            gr = {
+                "32u": (
+                    67.4,
+                    "today_8x4_dsa3 #459-469: routing broadcast 18.1 + 8 untilizes 44.0 + concat 1.9 + tilize 3.4 (kda4 67.8; "
+                    "the 2-row projection was 25)",
+                )
+            }
+            glue_ops = 20  # 1 broadcast + 8 untilizes + concat + tilize per gather (11 ops)
         else:
             gx = {"256u": (101.7, "hyb_b32 #279 all_gather_async [32,4096] bf16 over 8 rows")}
             gr = {"256u": (15.3, "hyb_b32 #280 routing [32,288] fp32")}
@@ -1119,8 +1157,9 @@ def moe_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             if lay.expert_path == "stream":
                 ex_meas = {
                     "32u": (
-                        351.0,
-                        "expert_kernel_sweep.md: stream op 341 us at 28 active (8x4 slice, chip test) + selector matmul 8 + x copy 2",
+                        264.4,
+                        "today_8x4_dsa3 #470-473: selector matmul 8.1 + x copy 2.3 + stream op 171.7 + 82.3 (kda4 #331-334 266.9; "
+                        "the chip-test projection was 351)",
                     )
                 }
                 ex_ops = 4
@@ -1200,12 +1239,13 @@ def moe_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
                 f"reduce_scatter_rows of the expert partials [{tok_pad},4096] bf16 over the 8 rows"
                 + (" (T=4: 8 pads/slices + RS composite)" if t < TILE else ""),
                 kind="ccl",
-                n_ops=1 + (9 if t < TILE else 0),
+                n_ops=1 + (31 if t < TILE else 0),
                 ccl=("reduce_scatter", lay.rows, rs_in if t >= TILE else lay.rows * t * h * 2),
                 measured={
                     "32u": (
-                        162.0,
-                        "proj: hyb_b32 #287 RS 128.5 on the same [256,4096] shape + blk_l4_b4 #397-406 glue 34",
+                        269.4,
+                        "today_8x4_dsa3 #474-505: 22 slice/untilize/tilize 84.0 + 8 fillpads 44.0 + concat 14.1 + reduce_scatter "
+                        "126.9 (kda4 #335-366 248.5; the projection was 162)",
                     ),
                     "256u": (128.5, "hyb_b32 #287 ReduceScatterMinimalAsync"),
                 },
@@ -1306,7 +1346,7 @@ def moe_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             dram_bytes=_w(h, 2 * i_full // lay.cols, "bfp8") + _act(tp, h, 2 * i_full // lay.cols),
             flops=2 * tp * h * 2 * i_full // lay.cols,
             cores=16,
-            measured={"32u": (16.9, "ep_b4 #304"), "256u": (16.5, "ep_b32 #300")},
+            measured={"32u": (16.7, "today_8x4_dsa3 #507 (ep_b4 #304: 16.9)"), "256u": (16.5, "ep_b32 #300")},
             action_id="S1",
             action="fold the 2 slices + clamped_silu_glu into the matmul epilogue (gate/up column-interleaved blocks)",
             risk="L",
@@ -1332,14 +1372,14 @@ def moe_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             dram_bytes=_w(i_full // lay.cols, h, "bfp8") + _act(tp, i_full // lay.cols, h),
             flops=2 * tp * (i_full // lay.cols) * h,
             cores=22,
-            measured={"32u": (9.1, "ep_b4 #308"), "256u": (9.3, "ep_b32 #304")},
+            measured={"32u": (9.2, "today_8x4_dsa3 #511 (ep_b4 #308: 9.1)"), "256u": (9.3, "ep_b32 #304")},
         ),
         OpRow(
             "moe.add",
             "MOE",
             "add routed + shared partials",
             dram_bytes=3 * tp * h * 2,
-            measured={"32u": (3.6, "ep_b4 #309"), "256u": (3.5, "ep_b32 #305")},
+            measured={"32u": (3.4, "today_8x4_dsa3 #512 (ep_b4 #309: 3.6)"), "256u": (3.5, "ep_b32 #305")},
             bound_hint="launch/gap",
             action_id="S1",
             action="fold into the shared w2 matmul (fused add) or the all-reduce input",
@@ -1354,7 +1394,7 @@ def moe_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             n_ops=2,
             ccl=("all_reduce", lay.cols, tp * h * BYTES["bf16"]),
             measured={
-                "32u": (29.7, "ep_b4 #310-311 (RS 11.7 + AG 18.0)"),
+                "32u": (24.9, "today_8x4_dsa3 #513-514 (RS 12.9 + AG 12.0; ep_b4 #310-311: 29.7)"),
                 "256u": (28.7, "ep_b32 #306-307; hyb_b32 27.4"),
             },
         ),
@@ -1473,17 +1513,17 @@ def head_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
 def gaps_row(layer: str, n_ops: int, lay: Layout) -> OpRow:
     meas = {
         "KDA+MoE": (
-            85.0 if lay.moe == "hybrid" else 64.0,
-            "ledger section 3: 64 us (EP32) / 85 us (hybrid block) of in-trace gaps",
+            47.0 if lay.moe == "hybrid" else 64.0,
+            "today_8x4_kda4: 47 us over 80 ops (ledger section 3: 64 us EP32 / 85 us hybrid block)",
         ),
-        "DSA+MoE": (90.0, "ledger section 3: ~90 us (block, hybrid)"),
+        "DSA+MoE": (68.0, "today_8x4_dsa3: 68 us over 123 ops (ledger section 3: ~90 us on the block)"),
         "KDA+dense": (40.0, "proj: 0.46 us x ops + the 34 us kda_decode gap"),
         "head": (5.0, "proj"),
     }[layer]
     return OpRow(
         "layer.gaps",
         "TRACE",
-        f"in-trace op-to-op gaps ({n_ops} ops; the 34 us before kda_decode and 14.7 us before paged_pool_gather counted on those ops)",
+        f"in-trace op-to-op gaps ({n_ops} ops; today 5.4 us before kda_decode and 0.1 before paged_pool_gather, counted on those ops)",
         kind="gaps",
         n_ops=n_ops,
         measured={"32u": meas, "256u": meas},
@@ -1662,6 +1702,7 @@ def layer_summary(cfg: GLM53FlashConfig, lay: Layout, layer: str) -> dict:
 # e2e traced decode steps (ms) to compare the step model with (models/demos/glm53_flash/doc/mesh/README.md)
 MEASURED_STEPS_MS = {
     "32u": {
+        "hybrid 2026-10-29 (today's defaults: streaming decode E0, fused pre-block, distinct ids; f103)": 61.5,
         "hybrid 2026-10-26 (A3 sharded norm, B6 ranges, distinct ids)": 80.55,
         "hybrid 2026-10-21 (distinct ids)": 83.1,
         "hybrid 2026-10-21 (same token on every slot: 2 active experts)": 69.8,
@@ -1669,6 +1710,7 @@ MEASURED_STEPS_MS = {
         "EP32 rs-remap 2026-10-26 (distinct ids)": 67.68,
     },
     "256u": {
+        "hybrid 2026-10-29 (the 32-row dispatch expert path, e2e_8x4_B32_dispatch)": 100.9,
         "hybrid dense 2026-10-21 (distinct ids)": 115.0,
         "EP32 rs combine 2026-10-22 (distinct ids)": 123.4,
         "EP32 op combine 2026-10-21 (distinct ids)": 139.2,
