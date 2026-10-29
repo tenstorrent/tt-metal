@@ -1,0 +1,507 @@
+{
+ "unit": "E10.1 tower prefill (vision 1x2560, audio 1x256 / 1x768), batch 1",
+ "metric": "traced device latency per forward, ms (bench_vision.py / bench_audio.py)",
+ "regimes": {
+  "burst": "median of 5 windows of 10 (vision) / 20 (audio) replays after 3 s idle",
+  "sustained": ">= 30 s and >= 300 replays, windows of ~500 ms, median of the last third"
+ },
+ "before": "same-session control: EG2_VISION_MM_TUNED=0 EG2_AUDIO_MM_TUNED=0 EG2_VISION_PATCH_ONE_OP=0 EG2_VISION_PATCH_L1=0 EG2_AUDIO_SHIFT_IDX_ONCE=0 (the 7febde8744 tower calls)",
+ "precision": "sdpa_nofp32acc file: vision v_exp_bfp8w4, audio a_h2b8_qkvbf16_shift2_sharded (unchanged)",
+ "rows": [
+  {
+   "tower": "vision",
+   "compute_grid": [
+    12,
+    10
+   ],
+   "batch": 1,
+   "seq_len": 2560,
+   "inputs": [
+    "landscape"
+   ],
+   "commit": "a1501dbbb0",
+   "before": {
+    "burst_ms_median": 16.278755897656083,
+    "burst_ms_min": 16.271582897752523,
+    "burst_ms_max": 16.279609873890877,
+    "sustained_ms_median": 17.807338687200698,
+    "sustained_ms_min": 17.671972618348175,
+    "sustained_ms_max": 17.880838334320053
+   },
+   "after": {
+    "burst_ms_median": 15.132564632222056,
+    "burst_ms_min": 15.127846412360668,
+    "burst_ms_max": 15.136670507490635,
+    "sustained_ms_median": 16.16661497802638,
+    "sustained_ms_min": 16.092232880456482,
+    "sustained_ms_max": 16.294437912566696
+   },
+   "telemetry_before": {
+    "aiclk_mhz": {
+     "median": 1225.0,
+     "min": 1218.0,
+     "max": 1237.0
+    },
+    "power_w": {
+     "median": 127.5,
+     "min": 69.0,
+     "max": 187.0
+    },
+    "current_a": {
+     "median": 168.0,
+     "min": 91.0,
+     "max": 245.0
+    },
+    "vcore_v": {
+     "median": 0.762,
+     "min": 0.756,
+     "max": 0.771
+    },
+    "asic_temp_c": {
+     "median": 78.027,
+     "min": 77.642,
+     "max": 78.539
+    }
+   },
+   "telemetry_after": {
+    "aiclk_mhz": {
+     "median": 1256.0,
+     "min": 1243.0,
+     "max": 1268.0
+    },
+    "power_w": {
+     "median": 127.5,
+     "min": 84.0,
+     "max": 186.0
+    },
+    "current_a": {
+     "median": 166.5,
+     "min": 109.0,
+     "max": 242.0
+    },
+    "vcore_v": {
+     "median": 0.77,
+     "min": 0.764,
+     "max": 0.776
+    },
+    "asic_temp_c": {
+     "median": 78.796,
+     "min": 78.411,
+     "max": 79.565
+    }
+   },
+   "check_before": {
+    "soft_tokens": 264,
+    "soft_token_pcc": 0.9973022352749996,
+    "embedding_cos": 0.9997326135635376,
+    "token_cos_min": 0.9243194460868835,
+    "token_cos_mean": 0.9973540902137756
+   },
+   "check_after": {
+    "soft_tokens": 264,
+    "soft_token_pcc": 0.9977798128112547,
+    "embedding_cos": 0.9997466206550598,
+    "token_cos_min": 0.9268079996109009,
+    "token_cos_mean": 0.9978135824203491
+   },
+   "gate_pass_after": true,
+   "burst_change_pct": -7.041024956944419,
+   "sustained_change_pct": -9.21375022958154
+  },
+  {
+   "tower": "vision",
+   "compute_grid": [
+    13,
+    10
+   ],
+   "batch": 1,
+   "seq_len": 2560,
+   "inputs": [
+    "landscape"
+   ],
+   "commit": "a1501dbbb0",
+   "before": {
+    "burst_ms_median": 17.364235781133175,
+    "burst_ms_min": 17.36087277531624,
+    "burst_ms_max": 17.366993706673384,
+    "sustained_ms_median": null,
+    "sustained_ms_min": null,
+    "sustained_ms_max": null
+   },
+   "after": {
+    "burst_ms_median": 17.27618142031133,
+    "burst_ms_min": 17.2741973772645,
+    "burst_ms_max": 17.282229382544756,
+    "sustained_ms_median": null,
+    "sustained_ms_min": null,
+    "sustained_ms_max": null
+   },
+   "telemetry_before": null,
+   "telemetry_after": null,
+   "check_before": {
+    "soft_tokens": 264,
+    "soft_token_pcc": 0.9965770470030015,
+    "embedding_cos": 0.9997383952140808,
+    "token_cos_min": 0.7080175876617432,
+    "token_cos_mean": 0.9967785477638245
+   },
+   "check_after": {
+    "soft_tokens": 264,
+    "soft_token_pcc": 0.9965770470030015,
+    "embedding_cos": 0.9997383952140808,
+    "token_cos_min": 0.7080175876617432,
+    "token_cos_mean": 0.9967785477638245
+   },
+   "gate_pass_after": true,
+   "burst_change_pct": -0.5071018496392243
+  },
+  {
+   "tower": "audio",
+   "compute_grid": [
+    12,
+    10
+   ],
+   "batch": 1,
+   "seq_len": 256,
+   "inputs": [
+    "s10"
+   ],
+   "commit": "36bed7c5b2",
+   "before": {
+    "burst_ms_median": 7.584499008953571,
+    "burst_ms_min": 7.583010988309979,
+    "burst_ms_max": 7.585755060426891,
+    "sustained_ms_median": 7.581862486955343,
+    "sustained_ms_min": 7.580859149157098,
+    "sustained_ms_max": 7.583396883229867
+   },
+   "after": {
+    "burst_ms_median": 7.457033451646566,
+    "burst_ms_min": 7.45670145843178,
+    "burst_ms_max": 7.463072007521987,
+    "sustained_ms_median": 7.45686451876675,
+    "sustained_ms_min": 7.455599223221861,
+    "sustained_ms_max": 7.457813102084754
+   },
+   "telemetry_before": {
+    "aiclk_mhz": {
+     "median": 1350.0,
+     "min": 1343.0,
+     "max": 1350.0
+    },
+    "power_w": {
+     "median": 99.0,
+     "min": 77.0,
+     "max": 118.0
+    },
+    "current_a": {
+     "median": 123.0,
+     "min": 96.0,
+     "max": 147.0
+    },
+    "vcore_v": {
+     "median": 0.806,
+     "min": 0.804,
+     "max": 0.807
+    },
+    "asic_temp_c": {
+     "median": 71.49,
+     "min": 70.977,
+     "max": 72.002
+    }
+   },
+   "telemetry_after": {
+    "aiclk_mhz": {
+     "median": 1350.0,
+     "min": 1343.0,
+     "max": 1350.0
+    },
+    "power_w": {
+     "median": 90.0,
+     "min": 74.0,
+     "max": 116.0
+    },
+    "current_a": {
+     "median": 112.0,
+     "min": 93.0,
+     "max": 144.0
+    },
+    "vcore_v": {
+     "median": 0.805,
+     "min": 0.804,
+     "max": 0.807
+    },
+    "asic_temp_c": {
+     "median": 72.259,
+     "min": 71.746,
+     "max": 72.772
+    }
+   },
+   "check_before": {
+    "soft_tokens": 250,
+    "soft_token_pcc": 0.9984852955601339,
+    "embedding_cos": 0.9999221563339233,
+    "token_cos_min": 0.8376961946487427,
+    "token_cos_mean": 0.9984984993934631
+   },
+   "check_after": {
+    "soft_tokens": 250,
+    "soft_token_pcc": 0.999069844779011,
+    "embedding_cos": 0.999910831451416,
+    "token_cos_min": 0.8697146773338318,
+    "token_cos_mean": 0.9990842342376709
+   },
+   "gate_pass_after": true,
+   "burst_change_pct": -1.6806061568012676,
+   "sustained_change_pct": -1.6486446226590457
+  },
+  {
+   "tower": "audio",
+   "compute_grid": [
+    12,
+    10
+   ],
+   "batch": 1,
+   "seq_len": 768,
+   "inputs": [
+    "s30"
+   ],
+   "commit": "36bed7c5b2",
+   "before": {
+    "burst_ms_median": 12.191640585660934,
+    "burst_ms_min": 12.18827459961176,
+    "burst_ms_max": 12.193388142623007,
+    "sustained_ms_median": 12.19075679688192,
+    "sustained_ms_min": 12.184277733379021,
+    "sustained_ms_max": 12.195032419318833
+   },
+   "after": {
+    "burst_ms_median": 12.095134798437357,
+    "burst_ms_min": 12.094603292644024,
+    "burst_ms_max": 12.098410306498408,
+    "sustained_ms_median": 12.096610441360445,
+    "sustained_ms_min": 12.08983359503604,
+    "sustained_ms_max": 12.101670571913322
+   },
+   "telemetry_before": {
+    "aiclk_mhz": {
+     "median": 1350.0,
+     "min": 1343.0,
+     "max": 1350.0
+    },
+    "power_w": {
+     "median": 111.0,
+     "min": 74.0,
+     "max": 158.0
+    },
+    "current_a": {
+     "median": 139.0,
+     "min": 93.0,
+     "max": 197.0
+    },
+    "vcore_v": {
+     "median": 0.801,
+     "min": 0.796,
+     "max": 0.807
+    },
+    "asic_temp_c": {
+     "median": 75.72,
+     "min": 75.079,
+     "max": 76.232
+    }
+   },
+   "telemetry_after": {
+    "aiclk_mhz": {
+     "median": 1350.0,
+     "min": 1343.0,
+     "max": 1350.0
+    },
+    "power_w": {
+     "median": 108.0,
+     "min": 76.0,
+     "max": 158.0
+    },
+    "current_a": {
+     "median": 136.0,
+     "min": 96.0,
+     "max": 197.0
+    },
+    "vcore_v": {
+     "median": 0.801,
+     "min": 0.796,
+     "max": 0.807
+    },
+    "asic_temp_c": {
+     "median": 76.232,
+     "min": 75.848,
+     "max": 76.489
+    }
+   },
+   "check_before": {
+    "soft_tokens": 750,
+    "soft_token_pcc": 0.997668481407543,
+    "embedding_cos": 0.9999163150787354,
+    "token_cos_min": 0.6969078183174133,
+    "token_cos_mean": 0.997672438621521
+   },
+   "check_after": {
+    "soft_tokens": 750,
+    "soft_token_pcc": 0.9976706274225718,
+    "embedding_cos": 0.9999225735664368,
+    "token_cos_min": 0.6957047581672668,
+    "token_cos_mean": 0.9976726770401001
+   },
+   "gate_pass_after": true,
+   "burst_change_pct": -0.7915734272636143,
+   "sustained_change_pct": -0.7722765459938996
+  },
+  {
+   "tower": "audio",
+   "compute_grid": [
+    13,
+    10
+   ],
+   "batch": 1,
+   "seq_len": 256,
+   "inputs": [
+    "s10"
+   ],
+   "commit": "36bed7c5b2",
+   "before": {
+    "burst_ms_median": 7.310030795633793,
+    "burst_ms_min": 7.308561401441693,
+    "burst_ms_max": 7.311783405020833,
+    "sustained_ms_median": null,
+    "sustained_ms_min": null,
+    "sustained_ms_max": null
+   },
+   "after": {
+    "burst_ms_median": 7.303230254910886,
+    "burst_ms_min": 7.301393244415522,
+    "burst_ms_max": 7.3049872647970915,
+    "sustained_ms_median": null,
+    "sustained_ms_min": null,
+    "sustained_ms_max": null
+   },
+   "telemetry_before": null,
+   "telemetry_after": null,
+   "check_before": {
+    "soft_tokens": 250,
+    "soft_token_pcc": 0.9984852955601339,
+    "embedding_cos": 0.9999221563339233,
+    "token_cos_min": 0.8376961946487427,
+    "token_cos_mean": 0.9984984993934631
+   },
+   "check_after": {
+    "soft_tokens": 250,
+    "soft_token_pcc": 0.9984852955601339,
+    "embedding_cos": 0.9999221563339233,
+    "token_cos_min": 0.8376961946487427,
+    "token_cos_mean": 0.9984984993934631
+   },
+   "gate_pass_after": true,
+   "burst_change_pct": -0.09303026092541966
+  },
+  {
+   "tower": "audio",
+   "compute_grid": [
+    13,
+    10
+   ],
+   "batch": 1,
+   "seq_len": 768,
+   "inputs": [
+    "s30"
+   ],
+   "commit": "36bed7c5b2",
+   "before": {
+    "burst_ms_median": 11.951541737653315,
+    "burst_ms_min": 11.950728157535195,
+    "burst_ms_max": 11.951927095651627,
+    "sustained_ms_median": null,
+    "sustained_ms_min": null,
+    "sustained_ms_max": null
+   },
+   "after": {
+    "burst_ms_median": 11.900634202174842,
+    "burst_ms_min": 11.896916246041656,
+    "burst_ms_max": 11.900823842734098,
+    "sustained_ms_median": null,
+    "sustained_ms_min": null,
+    "sustained_ms_max": null
+   },
+   "telemetry_before": null,
+   "telemetry_after": null,
+   "check_before": {
+    "soft_tokens": 750,
+    "soft_token_pcc": 0.997668481407543,
+    "embedding_cos": 0.9999163150787354,
+    "token_cos_min": 0.6969078183174133,
+    "token_cos_mean": 0.997672438621521
+   },
+   "check_after": {
+    "soft_tokens": 750,
+    "soft_token_pcc": 0.997668481407543,
+    "embedding_cos": 0.9999163150787354,
+    "token_cos_min": 0.6969078183174133,
+    "token_cos_mean": 0.997672438621521
+   },
+   "gate_pass_after": true,
+   "burst_change_pct": -0.4259495268136737
+  }
+ ],
+ "commits": {
+  "harness": "36736a6ca8",
+  "code": "36bed7c5b2",
+  "fix": "a1501dbbb0",
+  "base": "7febde8744"
+ },
+ "gates": {
+  "12x10": {
+   "tests/pcc/vision": "91 passed",
+   "tests/pcc/audio": "117 passed",
+   "test_full_model+trace": "41 passed",
+   "demo": "2 passed",
+   "test_text_model[b1_s512]": "1 passed"
+  },
+  "13x10": {
+   "tests/pcc/vision": "91 passed",
+   "tests/pcc/audio": "117 passed",
+   "test_full_model+trace": "41 passed",
+   "demo": "2 passed",
+   "test_text_model[b1_s512]": "1 passed"
+  }
+ },
+ "config_proof": {
+  "12x10": "6 of 89 entries differ from 7febde8744",
+  "13x10": "0 of 89",
+  "tuned_off": "0 of 89 at both grids"
+ },
+ "trace_alloc_tracking": "pass (track2_v12, track_a12)",
+ "baseline_12x10": {
+  "vision_1x2560": {
+   "burst": 16.277,
+   "sustained": 17.513,
+   "aiclk": 1250
+  },
+  "audio_1x256": {
+   "burst": 7.585,
+   "sustained": 7.582
+  },
+  "audio_1x768": {
+   "burst": 12.192,
+   "sustained": 12.188
+  }
+ },
+ "baseline_13x10": {
+  "vision_1x2560": {
+   "burst": 17.364,
+   "sustained": 18.713,
+   "aiclk": 1243
+  },
+  "audio_1x768": {
+   "burst": 11.954,
+   "sustained": 11.95
+  }
+ }
+}
