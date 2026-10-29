@@ -77,7 +77,7 @@ struct SRAMArenaImpl {
         TT_FATAL(properties.per_bank_size > 0, "SRAMArena::allocate requires a non-zero per-bank size");
 
         auto num_banks = device.allocator()->get_num_banks(BufferType::L1);
-        auto total_size = properties.per_bank_size * num_banks;
+        const DeviceAddr total_size = DeviceAddr{properties.per_bank_size} * num_banks;
 
         auto buffer_ptr = distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = total_size},

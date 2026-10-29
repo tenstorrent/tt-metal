@@ -31,6 +31,7 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer_disjoint_slots.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
+    sram_arena/test_sram_arena.cpp
     test_kernel_thread_sync.cpp
     test_banked.cpp
     test_bit_utils.cpp
