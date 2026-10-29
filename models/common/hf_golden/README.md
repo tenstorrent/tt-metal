@@ -202,14 +202,20 @@ uv run ... --with tilelang==0.1.12 python generate_golden_deepseek_v4_1_flash.py
 **Muse-Spark-Open-816B-A42B:** Muse-Glimmer's attention, embedding and logits (plus a weightless o_norm before the
 output gate), fp32 residual gates instead of residual adds, and MoE on all 62 layers: 256 experts, top 8, run in a
 4096 latent with a norm after each expert. bf16 checkpoint (1.64 TB; gated, manual approval), ~27 GB per layer, so
-an H100 needs no expert offload. BOS prefix borrowed from Glimmer, not yet measured. The selftest runs on CPU (no
-remote code, no Triton):
+an H100 needs no expert offload. The selftest runs on CPU (no remote code, no Triton):
 
 ```
 uv run --no-project --python python_env/bin/python --with transformers==5.20.2 \
     python generate_golden_muse_spark_open.py --selftest
 uv run ... python generate_golden_muse_spark_open.py --isl 56320 --attn-chunk 1024
 ```
+
+BOS prefix (wikitext ppl at isl 10240 over the same 10040 tokens, logits x output_multiplier then softcap 20: 3.709
+BOS, 3.711 raw, 3.744 chat; trace_ppl.py applies neither, so score Muse with both). isl 56320 on one H100 from cached
+weights with `--prefill-chunk 5120 --attn-chunk 512`: 4.9 min (~4.5 s per layer), 79.4 GB GPU peak (weights-bound,
+right at the H100's limit: set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`), 72 GB on disk (48 GB trimmed to 30
+layers: 0-11, 20-25, 47-50, 54-61); its first 10240 rows equal the isl 10240 run bit for bit (375/375 tensors), ppl
+2.165 over all 56318 tokens.
 
 **Llama-3.1-8B-Instruct:** `<|begin_of_text|>` prefix, the BOS its tokenizer prepends (wikitext ppl at isl 10240
 over the same 10100 tokens: 8.358 BOS, 8.428 raw, 8.623 chat). isl 56320 on CPU (64-core EPYC 9354P) with
