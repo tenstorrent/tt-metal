@@ -116,6 +116,10 @@ def mixed_main_form(fidelity, kb, fp32_dest, in_format, in_format_b, out_format,
     block = (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
     if fidelity == MathFidelity.LoFi:
         return not full_sync and not fp32_dest and ct > 0 and (in_format, in_format_b, out_format, kb, ct, rt) in _LOFI_MAIN_CELLS
+    if fidelity == MathFidelity.HiFi3:
+        return (
+            not full_sync and fp32_dest and kb == 1 and ct == 1 and rt == 1 and in_format == DataFormat.Bfp8_b and in_format_b == DataFormat.Float32 and out_format == DataFormat.Float32
+        )
     if fidelity != MathFidelity.HiFi2:
         return False
     f32_in1 = in_format == DataFormat.Float32 and in_format_b in block
