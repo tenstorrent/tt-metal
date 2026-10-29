@@ -571,7 +571,7 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSizeCompileLimits) {
     // gets the running max wrong on device (not the OV matmul, which supports kt_dim 1).
     for (const auto chunk : {1u, 2u, 3u, 5u}) {
         SCOPED_TRACE(::testing::Message() << "chunk=" << chunk);
-        auto program = make_sdpa_chunk_compile_program({chunk, 1, 1, 2, 2, 0, 0, 0});
+        auto program = make_sdpa_chunk_compile_program(this->device(), {chunk, 1, 1, 2, 2, 0, 0, 0});
         if (chunk >= 2) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {
