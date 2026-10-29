@@ -17,6 +17,7 @@ from enum import Enum
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, ClassVar, List
+from uuid import uuid4
 
 import numpy as np
 import pytest
@@ -378,8 +379,20 @@ class TestConfig:
 
     @staticmethod
     def resolve_artefacts_path() -> Path:
-        """Use $RUNNER_TEMP/tt-llk-build in GHA, else tempfile.gettempdir()/tt-llk-build."""
+        """Resolve the build root, isolating hardware-free sessions from device builds."""
         runner_temp = os.environ.get("RUNNER_TEMP")
+        if os.environ.get("LLK_HARDWARE_FREE") == "1":
+            # Inherit one private tree across xdist workers, outside the normal build tree.
+            run_id = os.environ.get("LLK_HARDWARE_FREE_RUN_ID")
+            if not run_id:
+                run_id = uuid4().hex
+                os.environ["LLK_HARDWARE_FREE_RUN_ID"] = run_id
+            base = (
+                Path(runner_temp)
+                if runner_temp
+                else TestConfig.DEFAULT_ARTEFACTS_PATH.parent
+            )
+            return base / f"tt-llk-hardware-free-{run_id}"
         if runner_temp:
             return Path(runner_temp) / "tt-llk-build"
         return TestConfig.DEFAULT_ARTEFACTS_PATH

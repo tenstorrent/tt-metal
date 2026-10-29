@@ -750,6 +750,24 @@ class PACK_NUM_TILES(TemplateParameter):
 
 
 @dataclass
+class SDPA_BCAST_NUM_TILES(TemplateParameter):
+    """Outer-loop tile count of the SDPA bcast-col SrcB-reuse MOP (``sdpa_bcast_col_srcb_reuse_test.cpp``).
+
+    A template argument on both the math and the unpack LLK (``num_tiles``), so it cannot be a
+    runtime parameter: one ``_llk_unpack_A_`` call walks this many tiles and the math MOP writes
+    them to consecutive DEST tiles. Emits ``constexpr std::uint32_t SDPA_BCAST_NUM_TILES``.
+
+    The field carries the ``sdpa_bcast_`` prefix so it stays globally unique
+    (``test_perf_header_gate.py``); bare ``num_tiles`` belongs to ``PACK_NUM_TILES``.
+    """
+
+    sdpa_bcast_num_tiles: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SDPA_BCAST_NUM_TILES = {self.sdpa_bcast_num_tiles}u;"
+
+
+@dataclass
 class RMSNORM_DEST_REUSE(TemplateParameter):
     """Compile-time knobs for ``rmsnorm_bcast_scalar_dest_reuse_test.cpp``.
 
@@ -1597,6 +1615,19 @@ class LOOP_FACTOR(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t LOOP_FACTOR;", "I"
+
+
+@dataclass
+class GROUP_KT_DIM(RuntimeParameter):
+    """K tiles per quantization group (group-wise dequant matmul)."""
+
+    group_kt_dim: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t GROUP_KT_DIM = {self.group_kt_dim};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return f"std::uint32_t GROUP_KT_DIM;", "I"
 
 
 @dataclass

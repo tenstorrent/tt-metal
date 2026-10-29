@@ -878,6 +878,9 @@ ALWI void max_reduce_with_indices_init() {
  *
  * Only 32x32 tile dimensions are supported.
  * All tile indices must reference valid tiles within the DST register.
+ * Int32 assumes a native Int32 tile brought into DST by unpack-to-dest (a two's-complement word). A
+ * sign-magnitude DST, as produced by promoting an Int8 tile through the FPU with a 32-bit DST, is only
+ * correct for non-negative values.
  *
  * | Argument        | Description                                                              | Type      | Valid Range                                           | Required |
  * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
