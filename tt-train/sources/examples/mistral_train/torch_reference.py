@@ -46,6 +46,11 @@ def parse_args():
     p.add_argument("--rank", type=int, default=16)
     p.add_argument("--alpha", type=float, default=32.0)
     p.add_argument("--threads", type=int, default=16)
+    p.add_argument(
+        "--bf16-params",
+        action="store_true",
+        help="round the LoRA parameters and the Adam moments to bf16 after every step, as ttml stores them (control)",
+    )
     return p.parse_args()
 
 
@@ -163,9 +168,19 @@ def main():
         opt.zero_grad()
         loss.backward()
         opt.step()
+        if args.bf16_params:
+            with torch.no_grad():
+                for p_ in params:
+                    p_.copy_(bf16(p_))
+                    state = opt.state[p_]
+                    for key in ("exp_avg", "exp_avg_sq"):
+                        if key in state:
+                            state[key].copy_(bf16(state[key]))
         out.append({"step": entry["step"], "loss": loss.item(), "s": time.time() - t0})
         print(f"step {entry['step']:4d} loss {loss.item():.4f} ({time.time() - t0:.0f} s)", flush=True)
-        Path(args.out).write_text(json.dumps({"layers": args.layers, "steps": out}, indent=1))
+        Path(args.out).write_text(
+            json.dumps({"layers": args.layers, "bf16_params": args.bf16_params, "steps": out}, indent=1)
+        )
 
 
 if __name__ == "__main__":

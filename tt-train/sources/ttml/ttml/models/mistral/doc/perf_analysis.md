@@ -1,6 +1,8 @@
 # Mistral-Small-24B-Base-2501 LoRA training on one Blackhole chip: performance analysis
 
-Setup for every number unless stated: chip 0 of the QB2 box (110 cores, 31.83 GiB), seq 1024, batch 1, LoRA r16/a32 on all four block linears, AdamW, bf16, no recompute. MFU numerator: 96.37 TFLOP per 40-layer step (`doc/plan.md` §3; `useful_flops_per_step`), i.e. 2.3406 T per layer + 2.749 T fixed; denominator 148.5 TFLOP/s. The full model does not fit one chip (`doc/plan.md` §4), so MFU runs are at 8 of 40 layers and the 40-layer figures are projections from the depth fits below, labelled as such. Plan target: 1.62 s/step, 40.0 % MFU (±10 %), stretch 1.26 s / 51.6 % with a memory-bound LoRA path.
+Setup for every number unless stated: chip 0 of the QB2 box (110 cores, 31.83 GiB), seq 1024, batch 1, LoRA r16/a32 on all four block linears, AdamW, bf16, no recompute. MFU numerator: 96.37 TFLOP per 40-layer step (`doc/plan.md` §3; `useful_flops_per_step`), i.e. 2.3406 T per layer + 2.749 T fixed; denominator 148.5 TFLOP/s (110 cores x 1.35 TFLOP/s, the `ttml.common.performance` convention, i.e. the peak at the nominal 1350 MHz). The full model does not fit one chip (`doc/plan.md` §4), so MFU runs are at 8 of 40 layers and the 40-layer figures are projections from the depth fits below, labelled as such. Plan target: 1.62 s/step, 40.0 % MFU (±10 %) at the nominal clock, stretch 1.26 s / 51.6 % with a memory-bound LoRA path; see "Clock" below for the delivered clock and the target expressed at it.
+
+**Clock, and how to read the Tracy numbers.** The chip does not run at 1350 MHz under this load. From the raw cycle counters in the Tracy CSVs (`composite/evidence/clock_analysis.txt`, `sources/examples/mistral_train/clock_analysis.py`): step period in device cycles over the host step period gives **1187 / 1171 / 1146 / 1130 MHz at 1 / 2 / 4 / 8 layers**, and step cycles over the non-profiled wall-clock 1194 / 1185 / 1172 / 1160 MHz; the idle-dominated step 1 gives 1349.2-1349.9 MHz at every depth (the control: the counter runs at AICLK, and the chip is at 1350 MHz only when idle). `tt-smi -s` during an 8-layer run: `composite/evidence/clock_trace_8layers_tt-smi.txt` (summarised in the README). Tracy converts cycles to ns at the clock it read at device open (`CHIP_FREQ[MHz]: 1350` in every `profile_log_device.csv`), so **every Tracy "ms" in this document is a cycle count divided by 1.35 GHz**: it is the kernel's cost in cycles, and the per-cycle efficiency ("% of peak") it implies is the fraction of the *delivered* peak. Wall time = Tracy ms x 1350 / f_delivered. With f = 1.16 GHz (8 layers) that factor is 1.164.
 
 ## MFU history
 
@@ -23,7 +25,7 @@ Block = one decoder layer (homogeneous model). Runs: `python -m tracy -r -p --op
 
 Fit: **device ms = 48.83 + L x 40.245**; ops = 13 + 81 L. Every residual is within 0.6 % (tolerance 5 %). Projection to 40 layers: **1658.6 ms device, 3253 ops**.
 
-Validation against the non-profiled wall-clock: the gap (wall - device) is 14.0 / 22.0 / 34.7 / 63.6 ms at 1 / 2 / 4 / 8 layers = 13.6-14.7 % of the wall at every depth, fit **gap = 7.2 + L x 7.03 ms** (96-149 µs per op, falling with depth as the fixed part amortises). Projected 40 layers: device 1658.6 + gap 288 = **1947 ms**, the same as the wall fit. The gap is ~6x the 16 µs/op the plan assumed: it is the host/dispatch class and is a loop item (see below).
+Validation against the non-profiled wall-clock. Naively, wall - Tracy device = 14.0 / 22.0 / 34.7 / 63.6 ms at 1 / 2 / 4 / 8 layers (14-15 % of the wall, fit 7.2 + 7.03 L ms); the first draft of this document called that the host/dispatch gap. It is not: it is the clock conversion. In cycles (`clock_analysis.txt`, steady step 3): at 8 layers the step spans 501.75 M cycles, the kernels sum to 500.87 M (**device busy 99.8 % of the span**), and the next step's first kernel starts 1.65 ms later; the host enqueues the whole step in ~45 ms and then waits. At 1 / 2 / 4 layers the in-step idle is 0.5 / 1.1 / 0.2 % and the inter-step idle 1.5 / 1.6 / 2.2 ms. So wall = Tracy ms x 1350 / f_delivered + ~2-4 ms: at 8 layers 370.4 x 1.164 + 1.65 + 0.9 = 433.7 ms against 434.0 measured. Projected 40 layers: 1658.6 ms of cycle-time; at 1.16 GHz **1930 ms + ~3 ms host gap = ~1935 ms**, against 1947 from the wall fit (the delivered clock drifts down slightly with depth; 1.147 GHz would match exactly). The **host/dispatch class is ~2-4 ms per step, < 1 %**, far below the plan's 58 ms estimate, and is not a loop target.
 
 Per class, fitted and projected to 40 layers (`analyze_tracy.py` classes; the 5-op LoRA chain's scale and add are glue, its matmuls are math):
 
@@ -33,11 +35,12 @@ Per class, fitted and projected to 40 layers (`analyze_tracy.py` classes; the 5-
 | glue (LoRA scale and add, gradient accumulation, loss-grad scale) | 1.6 | 3.33 | 134.6 | 8.1 % |
 | layout (create/concat heads, transposes, concat) | 0.0 | 0.29 | 11.5 | 0.7 % |
 | wasted | 0 | 0 | 0 | the gating and the frozen-table path removed it before this baseline |
-| host/dispatch (wall - device) | 7.2 | 7.03 | 288 | 14.8 % of wall |
+| host/dispatch (in-step idle 0.2-1.1 % + 1.5-2.2 ms between steps) | ~2 | ~0 | ~3 | < 1 % |
+| delivered clock | | | | 1.13-1.19 GHz; wall = cycle-time x 1.16-1.19 |
 
 ## Ranked cost table, projected to 40 layers
 
-From `tracy_analysis.txt` (per-item fit over the four depths; ops per step at full depth) with the attribution from the one-step op sequence at 1 layer (`composite/evidence/op_sequence_1layer.txt`, op numbers `#` below refer to it). Multiplicity is already in the ops/step column (forward + backward mirror; no recompute). The Tracy CSV reports a stale `[1024,6144]` shape for every `BinaryNg` launch, so the glue rows are keyed by sequence position, not shape.
+From `tracy_analysis.txt` (`analyze_tracy.py --warmup 2 --steps 2 --full-depth 40 --top 45`; per-item fit over the four depths; ops per step at full depth) with the attribution from the one-step op sequence at 1 layer (`composite/evidence/op_sequence_1layer.txt`, op numbers `#` below refer to it). Multiplicity is already in the ops/step column (forward + backward mirror; no recompute). The Tracy CSV reports a stale `[1024,6144]` shape for every `BinaryNg` launch, so the glue rows are keyed by sequence position, not shape; the loop must recover the real shapes from the op sequence before costing the glue chain. All ms are cycle-time (cycles / 1.35 GHz, see "Clock"): multiply by 1.16-1.19 for wall time; every "TFLOP/s" and "% of peak" is per cycle, i.e. relative to the delivered peak (at 1.16 GHz the delivered peak is 127.6 TFLOP/s and the gate_up forward's 65 TFLOP/s-per-cycle is 56 TFLOP/s of wall-clock throughput, 38 % of the nominal 148.5). Ranks and ratios between kernels do not depend on the clock.
 
 | ms/step | ops/step | class | op | model code | note |
 |---|---|---|---|---|---|
@@ -82,7 +85,10 @@ Sum of the table ≈ the projected 1659 ms device.
 | SDPA per layer | 0.69 ms | 3.11 ms (fwd 0.88, bwd 2.23) |
 | memory-bound ops per layer (SwiGLU, norms, RoPE) | 1.9 ms | 3.4 ms (RMSNorm bwd 1.1 on 32 cores, SwiGLU bwd 1.15) |
 | fixed | 35.5 ms | 48.8 ms device (LM head forward 21.0 at 44 %, CE 11.2, loss-grad scale 1.4) |
-| dispatch | 58 ms (16 µs/op) | 288 ms (88 µs/op at full depth) |
-| **step** | **1620 ms / 40.0 %** | **1947 ms / 33.3 %** (projected), 434 ms at 8 layers measured |
+| dispatch | 58 ms (16 µs/op) | ~3 ms (device busy 99.8 % of the step; the host enqueues a step in ~45 ms) |
+| clock | 1350 MHz assumed | 1.13-1.19 GHz delivered: x 1.16-1.19 on every row above for wall time |
+| **step** | **1620 ms / 40.0 %** at 1350 MHz; 1885 ms / 34.4 % at the delivered 1.16 GHz | **1659 ms cycle-time** (= 1935-1947 ms wall) / 33.3 % MFU (projected); 434 ms wall at 8 layers measured |
 
-Ranked next items for the loop (class first, then cost, at 40 layers): host/dispatch gap 288 ms (fewer ops: the LoRA chain is 5 launches per adapter per pass, 40 of the 81 ops per layer are LoRA or glue); glue 135 ms (scale+add chain -> `LoraApply` from `umales/qwen38`, grad accumulation adds); gate_up forward matmul at 44 % (-170 ms if it reached its dX's 68 %); LM head forward, same class (-7 ms); RMSNorm backward on 32 cores (-25 ms); SDPA backward (2.23 ms vs 0.23 roofline); LoRA skinny matmuls (~210 ms vs 41 ms memory roofline); layout 11.5 ms.
+In cycle-time the baseline is 1659 ms of a 1620 ms target (2.4 % above, inside the ±10 % margin); the kernel work still ahead of the loop is the 1659 -> 1259 ms stretch (memory-bound LoRA) and the items below, and the wall-clock sits 1.16-1.19x above the cycle-time because of the delivered clock, which no kernel change moves (see the plan's §3 calibration note for the exit condition at the delivered clock).
+
+Ranked next items for the loop (class first, then cost, at 40 layers, cycle-time): glue 135 ms (the LoRA scale+add chain -> `LoraApply` from `umales/qwen38` folds the scale into an `addalpha` and removes 2 launches per adapter per pass; grad-accumulation adds); gate_up forward matmul at 44 % of the delivered peak vs its dX at 68 % (-170 ms if it reached the same efficiency; LM head forward is the same class, -7 ms); LoRA skinny matmuls (~210 ms vs 41 ms memory roofline, the plan's stretch item); RMSNorm backward on 32 cores (-25 ms); SDPA backward (2.23 ms vs 0.23 roofline per layer, 89 ms); layout 11.5 ms. Not a target: host/dispatch (~3 ms).

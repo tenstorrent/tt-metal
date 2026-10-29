@@ -53,6 +53,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--track-memory", action="store_true", help="print device memory after the first step")
     p.add_argument("--mem-probe", action="store_true", help="print allocated DRAM after the forward and after the step")
+    p.add_argument(
+        "--host-loss",
+        action="store_true",
+        help="also compute the loss on the host in fp32 from the device logits (unquantised; slow, for loss comparisons)",
+    )
     p.add_argument("--loss-log", default=None, help="write per-step losses and timings as JSON")
     p.add_argument("--data-log", default=None, help="write the token windows used per step (for the torch reference)")
     p.add_argument(
@@ -83,6 +88,15 @@ def load_tokens(model_dir: Path, data_path: Path, vocab_size: int) -> np.ndarray
         raise ValueError(f"token id {tokens.max()} exceeds vocab {vocab_size}")
     np.save(cache, tokens)
     return tokens
+
+
+def host_cross_entropy(logits, targets: np.ndarray) -> float:
+    """Mean next-token cross-entropy of the device logits, computed on the host in fp32 (no bf16 loss quantisation)."""
+    z = logits.to_numpy(ttnn.DataType.FLOAT32).reshape(-1, logits.shape()[-1]).astype(np.float32)
+    z = z - z.max(axis=1, keepdims=True)
+    lse = np.log(np.exp(z).sum(axis=1))
+    picked = z[np.arange(z.shape[0]), targets.reshape(-1).astype(np.int64)]
+    return float(np.mean(lse - picked))
 
 
 def dram_allocated_gib() -> float:
@@ -166,6 +180,7 @@ def main() -> None:
         y = ttml.autograd.Tensor.from_numpy(y_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
         optimizer.zero_grad()
         logits = model(x, None)
+        host_loss = host_cross_entropy(logits, y_np) if args.host_loss else None
         loss = ttml.ops.loss.cross_entropy_loss(logits, y, ttml.ops.ReduceType.MEAN)
         if args.mem_probe and step <= 2:
             print(f"step {step}: DRAM allocated after forward {dram_allocated_gib():.2f} GiB")
@@ -183,11 +198,17 @@ def main() -> None:
         if step > args.warmup_steps:
             steps_ms.append(ms)
         entry = {"step": step, "loss": loss_val, "ms": ms}
+        if host_loss is not None:
+            entry["host_loss"] = host_loss
         if args.data_log:
             entry["inputs"] = x_np.tolist()
             entry["targets"] = y_np.tolist()
         log.append(entry)
-        print(f"step {step:4d}/{args.steps}  loss {loss_val:.4f}  {ms:8.1f} ms")
+        print(
+            f"step {step:4d}/{args.steps}  loss {loss_val:.4f}"
+            + (f"  host fp32 loss {host_loss:.4f}" if host_loss is not None else "")
+            + f"  {ms:8.1f} ms"
+        )
         if args.track_memory and step == 1:
             MemoryUsageTracker.end_capture("FIRST_STEP")
             MemoryUsageTracker.print_memory_usage()

@@ -1,0 +1,24 @@
+depth 1: 4 steps in the CSV; steady steps from 3
+step | period cycles | host period ms | effective GHz | kernel cycles | span cycles | idle in span % | inter-step idle ms@eff
+   3 |     122355098 |        103.06 |        1.187 |         119984415 |   120551579 |           0.5 |     1.52
+mean effective clock 1187 MHz: Tracy's ns columns (converted at 1350 MHz) are 1.137x too short
+step period cycles / unprofiled wall 102.5 ms = 1.194 GHz
+control, step 1 (mostly idle: compiles and untilize): 1.3499 GHz
+depth 2: 4 steps in the CSV; steady steps from 3
+step | period cycles | host period ms | effective GHz | kernel cycles | span cycles | idle in span % | inter-step idle ms@eff
+   3 |     179370714 |        153.16 |        1.171 |         175587650 |   177504095 |           1.1 |     1.59
+mean effective clock 1171 MHz: Tracy's ns columns (converted at 1350 MHz) are 1.153x too short
+step period cycles / unprofiled wall 151.4 ms = 1.185 GHz
+control, step 1 (mostly idle: compiles and untilize): 1.3496 GHz
+depth 4: 4 steps in the CSV; steady steps from 3
+step | period cycles | host period ms | effective GHz | kernel cycles | span cycles | idle in span % | inter-step idle ms@eff
+   3 |     287694045 |        250.97 |        1.146 |         284621567 |   285212029 |           0.2 |     2.17
+mean effective clock 1146 MHz: Tracy's ns columns (converted at 1350 MHz) are 1.178x too short
+step period cycles / unprofiled wall 245.4 ms = 1.172 GHz
+control, step 1 (mostly idle: compiles and untilize): 1.3494 GHz
+depth 8: 4 steps in the CSV; steady steps from 3
+step | period cycles | host period ms | effective GHz | kernel cycles | span cycles | idle in span % | inter-step idle ms@eff
+   3 |     503610892 |        445.76 |        1.130 |         500865468 |   501750747 |           0.2 |     1.65
+mean effective clock 1130 MHz: Tracy's ns columns (converted at 1350 MHz) are 1.195x too short
+step period cycles / unprofiled wall 434.0 ms = 1.160 GHz
+control, step 1 (mostly idle: compiles and untilize): 1.3492 GHz
