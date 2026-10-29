@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared setup of the CPU model tests: the pinned Transformers ``Qwen4Exp`` oracle, the QSA test rotary tables and
-the MRoPE prompt builder."""
+"""Shared setup of the CPU model tests: the pinned Transformers ``Qwen4Exp`` oracle, the QSA test rotary tables, the
+MRoPE prompt builder and the Hugging Face hub snapshot layout."""
 
+import hashlib
 import importlib
 import os
 import sys
@@ -64,3 +65,15 @@ def mrope_prompt(*parts) -> list[int]:
         else:
             ids += list(part)
     return ids
+
+
+def link_into_hub_blobs(snapshot: Path) -> None:
+    """Lay ``snapshot`` (``<repo>/snapshots/<revision>``) out as the hub cache does: every file moves to
+    ``<repo>/blobs/<sha256>`` and leaves a relative link in its place."""
+
+    blobs = snapshot.parent.parent / "blobs"
+    blobs.mkdir(exist_ok=True)
+    for path in sorted(snapshot.iterdir()):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        os.replace(path, blobs / digest)
+        path.symlink_to(Path("../../blobs") / digest)

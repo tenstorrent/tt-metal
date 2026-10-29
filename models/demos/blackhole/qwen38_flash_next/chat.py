@@ -13,13 +13,14 @@ import hashlib
 import json
 import os
 import re
-import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 import torch
+
+from models.demos.blackhole.qwen38_flash_next.checkpoint import admit_checkpoint_file
 
 CHECKPOINT_REVISION = "f5d08274bafd880402bd16f5e3e6c514136ec06c"
 VOCAB_SIZE = 248_320
@@ -64,15 +65,6 @@ def _sha256(path: Path) -> str:
         while block := stream.read(4 * 1024 * 1024):
             digest.update(block)
     return digest.hexdigest()
-
-
-def _regular_file(path: Path) -> None:
-    try:
-        mode = path.lstat().st_mode
-    except OSError as error:
-        raise Qwen38ChatFormatError(f"required tokenizer artifact is unavailable: {path}") from error
-    if not stat.S_ISREG(mode) or path.is_symlink():
-        raise Qwen38ChatFormatError(f"tokenizer artifact must be a non-symlink regular file: {path}")
 
 
 def _normal_reasoning_effort(value: str) -> Literal["xhigh", "medium", "low"]:
@@ -185,10 +177,9 @@ class Qwen38OfficialChatTemplate:
         root = Path(checkpoint_root).resolve(strict=True)
         if not root.is_dir():
             raise Qwen38ChatFormatError(f"checkpoint root is not a directory: {root}")
+        artifacts = {name: admit_checkpoint_file(root / name) for name in PINNED_TOKENIZER_ARTIFACTS}
         for name, expected in PINNED_TOKENIZER_ARTIFACTS.items():
-            path = root / name
-            _regular_file(path)
-            actual = _sha256(path)
+            actual = _sha256(artifacts[name])
             if actual != expected:
                 raise Qwen38ChatFormatError(
                     f"pinned tokenizer artifact {name} has SHA-256 {actual}, expected {expected}"
@@ -214,7 +205,7 @@ class Qwen38OfficialChatTemplate:
             raise Qwen38ChatFormatError("tokenizer <|im_end|> ID differs from the pinned checkpoint")
         if tokenizer.eos_token_id != IM_END_ID or tokenizer.pad_token_id != END_OF_TEXT_ID:
             raise Qwen38ChatFormatError("tokenizer EOS/pad IDs differ from the pinned chat contract")
-        expected_template = (root / "chat_template.jinja").read_text(encoding="utf-8")
+        expected_template = artifacts["chat_template.jinja"].read_text(encoding="utf-8")
         if tokenizer.chat_template != expected_template:
             raise Qwen38ChatFormatError("loaded tokenizer did not select the pinned standalone chat template")
         self.checkpoint_root = root
