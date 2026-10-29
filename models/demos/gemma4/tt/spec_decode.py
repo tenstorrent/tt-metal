@@ -3180,7 +3180,7 @@ class SpeculativeDecoder:
         eager forward before (the pools are made by the first seed of serving_prepare)."""
         tid = self._srv_seed_traces.get(shape)
         if tid is not None:
-            if self._srv_pool_s is None:
+            if self._srv_pool_v is None or self._srv_pool_s is None:
                 raise RuntimeError(
                     "the hidden pools do not exist after serving_prepare: a reseed never allocates (the first eager "
                     "seed of serving_prepare makes them)"
