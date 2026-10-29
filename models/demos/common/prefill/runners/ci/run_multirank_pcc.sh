@@ -59,7 +59,7 @@ PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # Non-zero for a pipeline-parallel model: the rank count its binding fixes. Set in the case block.
 PP_RANKS=0
-# Non-zero for a 4x4 layout: the galaxy count, each probed for its tray-half chip map.
+# Non-zero for a 4x4 layout: the galaxy count, two 4x4 stages (tray halves) on each.
 PP_4X4_HOSTS=0
 # PCC verdicts, rank logs and any rank binding, kept for the run's artifact upload.
 EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${RUN_NAME}"
@@ -146,8 +146,7 @@ case "${MODEL}" in
       TABLE_WAIT_DEFAULT=7200
     fi
     if [ "${CONFIG}" = sc4_4x4 ]; then
-      # Two ranks per galaxy: a pre-generated binding from per-host probes, not tt-run discovery,
-      # which places one mesh per host.
+      # Two ranks per galaxy, bound by tt-run discovery against the 8-mesh 4x4 descriptor.
       PP_RANKS=8
       PP_4X4_HOSTS=4
       # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
@@ -347,40 +346,32 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
-  # Rank 2k is host k's top tray half and 2k+1 its bottom, chained along the hostfile's order, which
-  # must be the cabled host ring (c07u02, c07u08, c07u14, c07u20 on aisle C, 120c pod6): the mesh graph descriptor
-  # chains mesh k to k+1. Every host is probed, since each galaxy enumerates its halves differently.
+  # tt-run discovery binds two 4x4 meshes per host: it solves the 8-mesh descriptor against the
+  # live cabling, so it picks the host ring order (the hostfile's order does not matter) and gives
+  # each rank its tray half's chips. Mock-checked on pod2 and pod6 against
+  # assemble_pipeline_binding.py predict: same halves per host, even meshes on the top half.
   IFS=, read -r -a HOST_LIST <<< "${RESOLVED_HOSTS}"
   [ "${#HOST_LIST[@]}" -eq "${PP_4X4_HOSTS}" ] || {
-    echo "${MODEL}/${CONFIG} requires exactly ${PP_4X4_HOSTS} Galaxy hosts in ${TTRUN_DIR}/hostfile, in ring order; got '${RESOLVED_HOSTS}'" >&2; exit 2;
+    echo "${MODEL}/${CONFIG} requires exactly ${PP_4X4_HOSTS} cabled Galaxy hosts in ${TTRUN_DIR}/hostfile; got '${RESOLVED_HOSTS}'" >&2; exit 2;
   }
-  PROBE_HOSTS=$(printf '%s:1,' "${HOST_LIST[@]}")
-  HOSTS=$(printf '%s:2,' "${HOST_LIST[@]}")
-  PROBE_HOSTS=${PROBE_HOSTS%,}
-  HOSTS=${HOSTS%,}
-  EXPECTED_RANKS=${PP_RANKS}
-  PROBE_DIR="${MR_DIR}/probe"
-  mkdir -p "${PROBE_DIR}"
-  BINDING="${MR_DIR}/${MODEL}_${CONFIG}_binding.yaml"
-  # --map-by slot with one slot per host: MPI rank k runs on host k and names its probe after k.
-  "${MPIRUN}" -np "${PP_4X4_HOSTS}" --host "${PROBE_HOSTS}" --map-by slot --bind-to none --allow-run-as-root \
-    bash -lc "set -e; cd '${TT_METAL_HOME}'; \
-      [ -n \"\$(ls -A '${PP_CACHE_DIR}' 2>/dev/null)\" ] || { echo \"\$(hostname): no 4x4 weight cache at ${PP_CACHE_DIR} (or set PREFILL_TTNN_CACHE)\" >&2; exit 1; }; \
-      export PYTHONPATH='${TT_METAL_HOME}'; \
-      export TT_METAL_OPERATION_TIMEOUT_SECONDS=0; \
-      export TT_MESH_GRAPH_DESC_PATH='${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto'; \
-      exec python3 models/demos/deepseek_v3_d_p/utils/gen_pipeline_binding.py --layout 4x4 \
-        --out '${PROBE_DIR}'/host\${OMPI_COMM_WORLD_RANK}.yaml"
-  ASSEMBLE_ARGS=""
-  for i in "${!HOST_LIST[@]}"; do
-    ASSEMBLE_ARGS+=" --probe '${PROBE_DIR}/host${i}.yaml' --host '${HOST_LIST[$i]}'"
-  done
-  # On a worker, like the power probe: the controller is not guaranteed PyYAML.
-  "${MPIRUN}" -np 1 --host "${HOST_LIST[0]}:1" --bind-to none --allow-run-as-root \
-    bash -lc "cd '${TT_METAL_HOME}' && PYTHONPATH='${TT_METAL_HOME}' \
-      python3 models/demos/deepseek_v3_d_p/utils/assemble_pipeline_binding.py assemble ${ASSEMBLE_ARGS} --out '${BINDING}'"
-  TTRUN_ARGS=(--rank-binding "${BINDING}")
-  RUNNER_PLACEMENT="--host ${HOSTS} --map-by slot"
+  MGD="${MGD_DIR}/sc4_4x4_sp1_mgd.textproto"
+  [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
+  "${MPIRUN}" -np "${PP_4X4_HOSTS}" --host "$(printf '%s:1,' "${HOST_LIST[@]}" | sed 's/,$//')" --map-by slot \
+    --bind-to none --allow-run-as-root \
+    bash -lc "[ -n \"\$(ls -A '${PP_CACHE_DIR}' 2>/dev/null)\" ] || { echo \"\$(hostname): no 4x4 weight cache at ${PP_CACHE_DIR} (or set PREFILL_TTNN_CACHE)\" >&2; exit 1; }"
+  # The 4x4 stage settings an explicit binding would carry in its global_env. The window is left to
+  # RUNNER_OVERRIDES (the producer's), and the log level to the launch line.
+  TEMPLATE_4X4="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_sc4_8rank_4x4_sp1.yaml"
+  STAGE_ENV=$(awk '/^global_env:/ {g=1; next} g && /^[^ #]/ {g=0} g && /^  [A-Z_]+: / {
+      k=$1; sub(/:$/,"",k); v=$2; gsub(/"/,"",v)
+      if (k != "PREFILL_MAX_SEQ_LEN" && k != "LOGURU_LEVEL") printf "export %s=%s; ", k, v }' "${TEMPLATE_4X4}")
+  case "${STAGE_ENV}" in
+    *PREFILL_SP_AXIS=1*) ;;
+    *) echo "no 4x4 stage settings (PREFILL_SP_AXIS) in ${TEMPLATE_4X4}'s global_env" >&2; exit 2 ;;
+  esac
+  RUNNER_ENV+=" ${STAGE_ENV}"
+  TTRUN_ARGS=(--force-rediscovery --mesh-graph-descriptor "${MGD}" --hosts "${RESOLVED_HOSTS}")
+  RUNNER_PLACEMENT=""
   # Each producer rank reads its own stage's map (device_map_r<rank>.json); none can reach the others.
   RUNNER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
   PRODUCER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
@@ -462,16 +453,28 @@ done
 [ -f "${TABLE_PATH}" ] || { echo "KV table not published within ${TABLE_WAIT_SECS}s"; exit 1; }
 
 # A PP binding already fixed the rank count and host; only discovery has to parse them back out.
-if [ "${PP_RANKS}" -eq 0 ]; then
+if [ "${PP_RANKS}" -eq 0 ] || [ "${PP_4X4_HOSTS}" -ne 0 ]; then
   RANKFILE=$(ls -t "${TTRUN_CWD}"/generated/ttrun/*/rankfile 2>/dev/null | head -1)
   [ -f "${RANKFILE}" ] || { echo "tt-run rankfile not found under ${TTRUN_CWD}/generated/ttrun/*/rankfile"; exit 1; }
-  HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{printf "%s%s:1", (NR>1?",":""), $2}')
+  RANK_HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{print $2}')
+  # One --host entry per host with its rank count, in first-rank order.
+  HOSTS=$(printf '%s\n' "${RANK_HOSTS}" | awk 'NF && !($1 in n) {order[++k]=$1} NF {n[$1]++} END {for (i=1;i<=k;i++) printf "%s%s:%d", (i>1?",":""), order[i], n[order[i]]}')
   [ -n "${HOSTS}" ] || { echo "failed to parse producer host order from ${RANKFILE}"; exit 1; }
   echo "producer host order from tt-run discovery: ${HOSTS}"
-  EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
+  EXPECTED_RANKS=$(printf '%s\n' "${RANK_HOSTS}" | grep -c .)
+  if [ "${PP_RANKS}" -ne 0 ] && [ "${EXPECTED_RANKS}" -ne "${PP_RANKS}" ]; then
+    echo "tt-run discovery bound ${EXPECTED_RANKS} ranks; ${MODEL}/${CONFIG} needs ${PP_RANKS}"; exit 1
+  fi
+  # The binding tt-run solved, kept with the run's evidence.
+  BINDING="${RANKFILE%/*}/rank_bindings.yaml"
 fi
 
 PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
+# Producer rank r must share a host with runner rank r, which --map-by slot over HOSTS gives only
+# when each host's ranks are contiguous -- as tt-run binds a host's two 4x4 meshes.
+if [ "${PP_4X4_HOSTS}" -ne 0 ] && [ "$(printf '%s\n' "${RANK_HOSTS}" | uniq | wc -l)" -ne "${PP_4X4_HOSTS}" ]; then
+  echo "tt-run discovery interleaved hosts across ranks: ${RANK_HOSTS//$'\n'/ }"; exit 1
+fi
 if [ "${DFLASH}" = 1 ]; then
   mkdir -p "${TT_METAL_HOME}/generated/ttrun"
   cp "${RANKFILE}" "${TT_METAL_HOME}/generated/ttrun/producer_rankfile"
