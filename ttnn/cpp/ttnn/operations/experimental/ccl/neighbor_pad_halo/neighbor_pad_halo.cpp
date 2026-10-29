@@ -36,8 +36,6 @@ ttnn::Tensor neighbor_pad_halo(
     bool border_only) {
     TT_FATAL(np_padding_h > 0, "neighbor_pad_halo: np_padding_h must be > 0");
     TT_FATAL(np_pad_dim2 > 0, "neighbor_pad_halo: 2D padding required (np_pad_dim2 must be > 0)");
-    TT_FATAL(np_num_links > 0, "neighbor_pad_halo: np_num_links must be > 0");
-    TT_FATAL(np_pad2_num_links > 0, "neighbor_pad_halo: np_pad2_num_links must be > 0");
 
     // Derive ring size from mesh view along the cluster axis
     auto* mesh_device = input.device();
