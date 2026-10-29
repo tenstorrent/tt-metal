@@ -85,9 +85,9 @@ If you nonetheless hit a host-computed `base + offset` folded into an address ar
 
 ### What this procedure covers
 
-This recipe ports a factory to **`ProgramSpecFactoryConcept`** or **`CustomProgramSpecFactoryConcept`** — the two single-program Metal 2.0 concepts, one spec stamped across the mesh. The audit names which one ([selector](../shared/ttnn_factory.md#the-two-metal-20-factory-concepts)); you inherit it.
+This recipe ports a factory to one of three Metal 2.0 concepts. **`ProgramSpecFactoryConcept`** and **`CustomProgramSpecFactoryConcept`** stamp one spec across the mesh ([the two](../shared/ttnn_factory.md#the-two-metal-20-factory-concepts)). **`MeshWorkloadSpecFactoryConcept`** takes a spec per mesh coordinate or range ([per-coordinate programs](../shared/ttnn_factory.md#per-coordinate-programs-meshworkloadspecfactoryconcept)): everything below that builds *the* spec, you do once per ported-from program. The audit names the concept; you inherit it.
 
-**A brief naming any other target concept is outside this procedure — stop and report** ([§When the discipline doesn't fit](#when-the-discipline-doesnt-fit)). The case to expect is a mesh-workload concept for a genuine multi-program op: the audit can clear one the day TTNN support lands, but no port procedure exists for it until someone writes it. Stopping is the correct outcome; improvising a multi-program port out of this recipe is not.
+**A brief naming any other target concept is outside this procedure — stop and report** ([§When the discipline doesn't fit](#when-the-discipline-doesnt-fit)).
 
 ### Generated docs in the op directory
 
@@ -298,7 +298,7 @@ log_warning(tt::LogMetal, "METAL2_CHECKS_FORCED");
 
 Carry forward the audit's factory decision. This section is brief — the audit confirmed the concept and the recipe inherits the result; the recipe is *not* the place to re-derive the choice.
 
-- **Concept (inherited from audit)**: copy the concept name from the brief's TTNN factory analysis section (`ProgramSpecFactoryConcept` for every portable op today).
+- **Concept (inherited from audit)**: copy the concept name from the brief's TTNN factory analysis section.
 - **Custom `compute_program_hash`**: note whether the op has one — it stays intact; this is a heads-up, not a task.
 - **Implementation notes** (optional): anything specific to how this op will realize the concept that's worth surfacing before construction. Most ports don't need this.
 
@@ -313,6 +313,7 @@ The Metal 2.0 spec shape. Default: 1:1 with legacy.
 - **SemaphoreSpecs**: one per legacy `SemaphoreDescriptor`.
 - **TensorParameters**: one per distinct legacy `TensorAccessor` originating tensor. Note that multiple kernel-side accesses to the same tensor collapse to one `TensorParameter` with multiple `TensorBinding`s.
 - **WorkUnitSpecs**: one per distinct (set of kernels, target nodes) pairing. Most ops have one or two.
+- **Per-coordinate programs** (`MeshWorkloadSpecFactoryConcept` only): one entry per program the ported-from op built, over the same ranges, and the values that differ per coordinate, with `file:line`.
 - **Op-owned tensors** (rare — most ops have none): one per legacy device tensor the factory allocated beyond the op's declared io — the tensors the legacy `WorkloadDescriptor` carried as `WorkloadBuffer`s (sliding-window config / reader-index LUTs and the like; the audit's [TTNN porting shape](../audit/metal2_audit.md#ttnn-porting-shape) names them). They are carried in the artifact's `op_owned_tensors`, built as today and released into the artifact, then bound like io tensors — see the op-owned step under [§Construct paired spec + run-args](#construct-paired-spec--run-args).
 
 ### Preserved Multiplicity
@@ -686,7 +687,7 @@ For each resource type, construct the spec entry and its run-args entry as a pai
   **First exercise of this path** — no production op has run op-owned tensors yet (compile-coverage only). conv2d / halo / pool are its shakedown; surface any friction (release ergonomics, binding identity, cache-hit re-patching) rather than trusting it blindly.
 - **`WorkUnitSpec`.** Build with `kernels` (by `unique_id`) and `target_nodes`. No per-execution counterpart.
 
-After all resources are built, assemble the `ProgramSpec` (collecting `kernels`, `dataflow_buffers`, `semaphores`, `tensor_parameters`, `work_units`) and the `ProgramRunArgs` (collecting `kernel_run_args`, `tensor_args`). Return them wrapped as `ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)}` from the factory's `create_program_artifacts` method — see the [TTNN integration doc](../shared/ttnn_factory.md#the-base-concept-programspecfactoryconcept) for the method signature and the cache lifecycle the framework wraps around it. When the op has op-owned tensors, also `std::move` them into the artifact's `op_owned_tensors` field (built and bound during construction, per the op-owned step above); omit the field otherwise — it defaults empty. If the plan's target concept is `CustomProgramSpecFactoryConcept`, one more method remains — see [Translating `override_runtime_arguments`](#translating-override_runtime_arguments-custom-concept-only).
+After all resources are built, assemble the `ProgramSpec` (collecting `kernels`, `dataflow_buffers`, `semaphores`, `tensor_parameters`, `work_units`) and the `ProgramRunArgs` (collecting `kernel_run_args`, `tensor_args`). Return them wrapped as `ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)}` from the factory's `create_program_artifacts` method — see the [TTNN integration doc](../shared/ttnn_factory.md#the-base-concept-programspecfactoryconcept) for the method signature and the cache lifecycle the framework wraps around it. When the op has op-owned tensors, also `std::move` them into the artifact's `op_owned_tensors` field (built and bound during construction, per the op-owned step above); omit the field otherwise — it defaults empty. On `MeshWorkloadSpecFactoryConcept`, build a spec and run-args per ported-from program instead and return them as `MeshWorkloadArtifacts` from `create_mesh_workload_artifacts` ([per-coordinate programs](../shared/ttnn_factory.md#per-coordinate-programs-meshworkloadspecfactoryconcept)). If the ported-from factory has an `override_runtime_arguments`, one more method remains — see [Translating `override_runtime_arguments`](#translating-override_runtime_arguments).
 
 **Stop signals**: any urge to —
 
@@ -826,9 +827,9 @@ Nothing anywhere checks this: every level is legal on every kernel, no validator
 
 ---
 
-### Translating `override_runtime_arguments` (custom concept only)
+### Translating `override_runtime_arguments`
 
-*Skip this subsection entirely if the plan's target concept is `ProgramSpecFactoryConcept`. It applies only when the audit routed the op to **`CustomProgramSpecFactoryConcept`**, which it does for exactly one reason: the ported-from factory has an `override_runtime_arguments`.*
+*Skip this subsection unless the ported-from factory has an `override_runtime_arguments`. Such an op is on **`CustomProgramSpecFactoryConcept`**, or on **`MeshWorkloadSpecFactoryConcept`**, whose optional override takes a `range`; the steps are the same.*
 
 The ported-from override re-applies the op's per-dispatch state on every program-cache hit — every runtime arg **and** every tensor-backed address, because for such an op the descriptor framework does no address inference of its own. The Metal 2.0 override carries the identical responsibility. What changes is the form and the channel; see [the cache-hit contract](../shared/ttnn_factory.md#the-cache-hit-contract) for the shape, which this step assumes you have read.
 
@@ -844,11 +845,11 @@ The ported-from override re-applies the op's per-dispatch state on every program
 
 That third row is the one that changes shape. An address the ported-from override wrote as a number becomes a *binding*, because Metal 2.0 has no legitimate way to carry an address as a runtime-arg value — writing one there is the smuggling anti-pattern, and it is caught by the [anti-pattern self-audit](#anti-pattern-self-audit).
 
-**Step 2 — write the override, mirroring the inventory.** Same value, same node, same condition. Where the ported-from override computed a value only under some condition, keep the condition. Where it varied a value by device, use the `coord` parameter.
+**Step 2 — write the override, mirroring the inventory.** Same value, same node, same condition. Where the ported-from override computed a value only under some condition, keep the condition. Where it read its coordinate, read the same one: `range.start_coord()` on the mesh concept; on the custom concept, `coord`, which from a per-coordinate source is only the first.
 
 **Step 3 — check the set, both directions.** Every address the ported-from override refreshed has a `TensorArgument`; every runtime arg it refreshed has an entry; and **nothing else does.** Both directions are load-bearing:
 
-- **Missing** an address is the silent one. On this concept the framework refreshes *nothing* on your behalf, so an omitted binding stays frozen at its cache-miss address for the life of the cache entry — wrong numerics, only on cache hits, only once incoming tensors stop landing where the first call's did. In the normal case the ported-from override refreshed everything, so your `tensor_args` should name **every `TensorParameter` bound to an io tensor**; if it doesn't, be able to point at the ported-from statement that justifies each omission. Op-owned tensors are not among them — the override cannot reach them and they do not need refreshing.
+- **Missing** an address is the silent one. On this concept the framework refreshes *nothing* on your behalf, so an omitted binding stays frozen at its cache-miss address for the life of the cache entry — wrong numerics, only on cache hits, only once incoming tensors stop landing where the first call's did. In the normal case the ported-from override refreshed everything, so your `tensor_args` should name **every `TensorParameter` bound to an io tensor**; if it doesn't, be able to point at the ported-from statement that justifies each omission. From a `WorkloadDescriptor` source there is none to point at: the framework patched bindings there, so name them all ([why](../shared/ttnn_factory.md#the-override-owns-the-tensor-bindings-too)). Op-owned tensors are not among them — the override cannot reach them and they do not need refreshing.
 - **Adding** a refresh the ported-from override didn't do is equally a deviation, and a tempting one — it looks like a free bug fix. It changes cache-hit behavior, which the [porting invariant](#the-principle) says stays identical. If you believe an omission is a bug, that belief goes in the port report; it does not go in the diff.
 
 **Do not delete the ported-from override in place of translating it.** Deleting it drops the op back to `ProgramSpecFactoryConcept`, where the framework patches tensor bindings and nothing else — silently discarding every non-tensor refresh the op relied on. The concept is selected by the *presence* of a `ProgramRunArgs`-returning override, so a half-finished translation and a deliberate one are indistinguishable to the framework.
@@ -876,7 +877,7 @@ This builds Metal plus **all** TTNN test binaries — the umbrella `unit_tests_t
 The helper returns SUCCESS / FAILURE + key errors. On FAILURE, common causes:
 
 - `AllFactoriesValid` `static_assert` fires → a factory satisfies two concepts (likely a stale `cached_program_t` declaration alongside the new `create_program_artifacts`). Audit for missed deletions in the header.
-- Unresolved symbol for `override_runtime_arguments` → some code path still calls it. On a **`ProgramSpecFactoryConcept`** port that should not happen; re-audit. On a **`CustomProgramSpecFactoryConcept`** port the method is supposed to exist — this means its signature doesn't match what the adapter calls, most often a return type that isn't `ProgramRunArgs` (see [Translating `override_runtime_arguments`](#translating-override_runtime_arguments-custom-concept-only)).
+- Unresolved symbol for `override_runtime_arguments` → some code path still calls it. On a **`ProgramSpecFactoryConcept`** port that should not happen; re-audit. On a **`CustomProgramSpecFactoryConcept`** port the method is supposed to exist — this means its signature doesn't match what the adapter calls, most often a return type that isn't `ProgramRunArgs` (see [Translating `override_runtime_arguments`](#translating-override_runtime_arguments)).
 - Error referencing `metal_v2_artifacts.hpp` (or other framework header) not found → the framework dependency is not on this branch. Stop and report; the framework PR was a precondition for the audit (which should have failed pre-port).
 - `kernel_args_generated.h` mentions a name that doesn't exist → host added a named CTA / RTA without the kernel referencing it (or vice versa). Reconcile.
 - Linker error `undefined reference to 'dfb::...'` inside a kernel TU → the kernel `#include`s the wrong generated header. `dfb::*` lives in `kernel_bindings_generated.h`, `args::*` in `kernel_args_generated.h` — both are injected by the framework, so a ported kernel must **not** `#include` them itself (for the headers a port *does* add, see the [kernel-side whitelist](#kernel-side-whitelist)).
@@ -1154,6 +1155,7 @@ Anything the inventory step noticed but didn't classify — unreferenced kernel 
 - SemaphoreSpecs: ...
 - TensorParameters: ...
 - WorkUnitSpecs: ...
+- Per-coordinate programs (MeshWorkloadSpecFactoryConcept only): ...
 
 ## Preserved Multiplicity
 
