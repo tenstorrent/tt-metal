@@ -1554,9 +1554,10 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule host_schedule(const SDPAT
     return ttml::metal::ops::sdpa_fw::device::schedule_for(config.program_config, shape, chunks, grid.x * grid.y);
 }
 
-// The terms of the split-vs-unsplit error bounds, from the split schedule: the most partials a merger folds
-// in, and how many more K/V steps the unsplit run's longest item takes than the longest merger piece (each
-// step of the running sum passes the FPU once, so the two runs' sums carry different truncation counts).
+// The terms of the split-vs-unsplit error bounds, from the split schedule: for the cut item whose merged
+// sum is furthest from the unsplit one, the partials its merger folds in and how many more K/V steps the
+// unsplit run of that item takes than the merger's own piece (each step of the running sum passes the FPU
+// once, so the two runs' sums carry different truncation counts). Zero when nothing is cut.
 struct FoldErrorTerms {
     uint32_t partials = 0;
     uint32_t extra_unsplit_steps = 0;
@@ -1566,21 +1567,18 @@ FoldErrorTerms fold_error_terms(
     const SDPATestConfig& split_config, const ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule& split_schedule) {
     using namespace ttml::metal::ops::sdpa_fw::device;
     const auto [shape, chunks] = host_shape_and_chunks(split_config);
-    uint32_t unsplit_steps = 0;
-    for (uint32_t item = 0; item < num_work_items(shape, chunks); ++item) {
-        unsplit_steps = std::max(unsplit_steps, num_kv_steps(shape, chunks, item));
-    }
     FoldErrorTerms terms;
-    uint32_t piece_steps = 0;
     for (const auto& units : split_schedule.per_core) {
         for (const auto& unit : units) {
-            if (unit.role == UnitRole::Merger) {
-                terms.partials = std::max(terms.partials, unit.num_partials);
-                piece_steps = std::max(piece_steps, unit.step_end - unit.step_begin);
+            if (unit.role != UnitRole::Merger) {
+                continue;
+            }
+            const uint32_t extra = num_kv_steps(shape, chunks, unit.item) - (unit.step_end - unit.step_begin);
+            if (unit.num_partials + extra > terms.partials + terms.extra_unsplit_steps) {
+                terms = FoldErrorTerms{.partials = unit.num_partials, .extra_unsplit_steps = extra};
             }
         }
     }
-    terms.extra_unsplit_steps = unsplit_steps - std::min(unsplit_steps, piece_steps);
     return terms;
 }
 
@@ -1695,6 +1693,7 @@ void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sw
     SDPATestConfig default_config = base;
     default_config.program_config = {};
     default_config.test_name = base.test_name + "_default";
+    const auto default_schedule = host_schedule(default_config);
     {
         SCOPED_TRACE(default_config.test_name);
         run_sdpa_test(default_config, &default_output);
@@ -1711,19 +1710,22 @@ void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sw
             knobs.max_pieces,
             knobs.num_cores);
         SCOPED_TRACE(config.test_name);
+        const auto row_schedule = host_schedule(config);
         if (knobs.max_pieces > 1U) {
             // A row that asks for pieces is there to run split units; one that schedules none would pass
             // for the wrong reason on any grid.
-            ASSERT_GT(host_schedule(config).num_slots, 0U) << config.test_name << " schedules no split units";
+            ASSERT_GT(row_schedule.num_slots, 0U) << config.test_name << " schedules no split units";
         }
         xt::xarray<float> output;
         run_sdpa_test(config, &output);
         const float mean_abs_gap = xt::mean(xt::abs(output - default_output))();
-        if (knobs.max_pieces > 1U) {
-            // A row that cuts differs from the default by the folds' truncation, relative to the output
-            // (expect_split_matches_unsplit's mean bound), on top of whatever the default's own cuts add.
-            const FoldErrorTerms row_terms = fold_error_terms(config, host_schedule(config));
-            const FoldErrorTerms default_terms = fold_error_terms(default_config, host_schedule(default_config));
+        // The bound follows what the schedules do, not the knob: a row with the default max_pieces cuts too
+        // when its items are heavier than a core's fair share.
+        if (row_schedule.num_slots > 0U || default_schedule.num_slots > 0U) {
+            // A run that cuts differs from the other by the folds' truncation, relative to the output
+            // (expect_split_matches_unsplit's mean bound), on top of whatever the other's own cuts add.
+            const FoldErrorTerms row_terms = fold_error_terms(config, row_schedule);
+            const FoldErrorTerms default_terms = fold_error_terms(default_config, default_schedule);
             const float unshared_steps = static_cast<float>(
                 row_terms.partials + row_terms.extra_unsplit_steps + default_terms.partials +
                 default_terms.extra_unsplit_steps);
