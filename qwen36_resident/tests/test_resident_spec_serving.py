@@ -185,3 +185,52 @@ def test_the_served_pp_chunks(env, want):
         assert "ValueError" in p.stderr and "RESIDENT_PREFILL_CHUNKS" in p.stderr, p.stdout + p.stderr[-2000:]
     else:
         assert f"CHUNKS {want}" in p.stdout, p.stdout + p.stderr[-2000:]
+
+
+def test_mtp_is_served_synchronously():
+    """launched with --async-scheduling, the MTP class is served synchronously (vLLM's batch queue would hold the
+    prefill's first token behind the first block step); RESIDENT_MTP_ASYNC=1 keeps async (A/B, a fresh import)"""
+    import os
+    import subprocess
+
+    from qwen36_resident.tests.test_vllm_rows_engine import vllm_config
+
+    cfg = vllm_config(1, True, True, cls=G.Qwen36ResidentMTPForCausalLM)
+    assert not cfg.scheduler_config.async_scheduling
+    wt = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    code = (
+        "from qwen36_resident import generator_vllm as G\n"
+        "print('ASYNC', G.Qwen36ResidentMTPForCausalLM.model_capabilities['supports_async_decode'],"
+        " G.Qwen36ResidentDFlashForCausalLM.model_capabilities['supports_async_decode'])"
+    )
+    p = subprocess.run(
+        [sys.executable, "-c", code], env=dict(os.environ, RESIDENT_MTP_ASYNC="1"), capture_output=True, text=True,
+        timeout=600, cwd=wt,
+    )  # fmt: skip
+    assert "ASYNC True False" in p.stdout, p.stdout + p.stderr[-2000:]
+
+
+class _Recorder:
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        return lambda *a, **k: self.calls.append((name, a, k))
+
+
+@pytest.mark.parametrize("full", [False, True], ids=["skip", "full-reset"])
+def test_plain_prefill_restores_the_state_only_without_a_handoff(full):
+    """the plain single-user class uploads the initial recurrent state only for a one-token prompt (no prefill
+    handoff to overwrite it); RESIDENT_PREFILL_FULL_RESET=1 restores it before every prompt (A/B)"""
+    m = object.__new__(G.Qwen36ResidentForCausalLM)
+    m.model, m.pp, m.mrope = _Recorder(), _Recorder(), False
+    m._step = lambda tok, pos: torch.zeros(VOCAB)
+    with patch.object(G, "FULL_RESET", full):
+        for T in (5, 1):
+            m.model.calls.clear()
+            m.prefill_forward(torch.arange(T)[None], None, None, torch.tensor([T]))
+            resets = [k["state"] for name, a, k in m.model.calls if name == "reset"]
+            assert resets == [full or T <= 1], (T, m.model.calls)
+            handoffs = [c for c in m.pp.calls if c[0] == "handoff"]
+            m.pp.calls.clear()
+            assert bool(handoffs) == (T > 1)

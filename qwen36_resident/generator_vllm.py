@@ -40,6 +40,9 @@ from qwen36_resident.vllm_rows import CHUNK_UNIT, ResidentRowsAdapter, RowsEngin
 # the PP prefill's chunk sizes (RESIDENT_PREFILL_CHUNKS: the multi profile may drop 128, whose small-matmul weight copies
 # cost 3.21 GB/chip); the largest is the chunk unit a split prompt resumes at, and every one divides it
 PREFILL_CHUNKS = tuple(int(c) for c in os.environ.get("RESIDENT_PREFILL_CHUNKS", "128,256,512,1024").split(","))
+# 1: restore the decode model's initial recurrent state before every prompt, also when the prefill handoff overwrites
+# it (A/B of the skipped ~37 MB / chip upload, as qwen36_resident.dflash)
+FULL_RESET = os.environ.get("RESIDENT_PREFILL_FULL_RESET", "0") == "1"
 if max(PREFILL_CHUNKS) != CHUNK_UNIT or any(CHUNK_UNIT % c for c in PREFILL_CHUNKS):
     raise ValueError(f"RESIDENT_PREFILL_CHUNKS {PREFILL_CHUNKS}: the largest must be {CHUNK_UNIT}, every one divide it")
 greedy_only.install()
@@ -127,7 +130,10 @@ class Qwen36ResidentForCausalLM:
             raise RuntimeError("one user: a prompt is prefilled whole (serve with vllm-tt-plugin resident-mu)")
         T = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
         ids = tokens[0, :T]
-        self.model.reset()
+        # the initial recurrent state (a host upload of every GDN state and conv history) only where no handoff
+        # overwrites it: a prompt of one token. The handoff writes every GDN layer's state and the conv history the
+        # first step reads; reset never restores the KV caches (stale rows are masked)
+        self.model.reset(state=T <= 1 or FULL_RESET)
         self.pp.reset()
         if T > 1:
             self.pp.run(ids[: T - 1])
@@ -256,12 +262,15 @@ class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
     greedy_only = True
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": True,
         # decode returns the committed tokens
         "supports_sample_on_device": True,
         "supports_device_penalties": False,
         "output_tokens_per_step": MTP_BLOCK,
         "tt_adaptive_block_output": True,
+        # synchronous serving (the platform turns --async-scheduling off): with async scheduling vLLM's batch queue
+        # pops the prefill's first token only after the first block step has run (one MTP block of TTFT); the solo
+        # block step has no readback to overlap. RESIDENT_MTP_ASYNC=1: async as before (A/B)
+        "supports_async_decode": os.environ.get("RESIDENT_MTP_ASYNC", "0") == "1",
         # positions one block step may run ahead: the block, then MTP_DEPTH steps of up to 2 each
         "tt_block_kv_extent_tokens": MTP_BLOCK + 2 * MTP_DEPTH + 2,
     }
