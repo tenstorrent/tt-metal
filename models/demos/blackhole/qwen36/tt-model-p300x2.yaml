@@ -112,9 +112,11 @@ serve_profiles:
       TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentMTPForCausalLM"
   - name: multi-user
     description: Several concurrent requests on the rows-mode resident engine (paged KV pool shared by the users, chunked prefill, device sampling).
-    max_num_seqs: 8                      # TBD: 8 (lead) or 16 (two launches, lane serve's runs), from lane mu's grid
+    max_num_seqs: 16                     # two launches of 8 (lead's pick pending: 16 / 24,064 blocks or 8 / 24,640)
     env:
-      RESIDENT_MAX_TOKENS_ALL_USERS: "1576960"   # TBD: KV pool = 24,640 blocks x 64 (lane serve's OOM churn pending)
+      # KV pool = 24,064 blocks x 64 (lane mu: at 16 slots 24,640 OOMs at build, 24,074 leaves 0.649 GB/chip free; with
+      # 8 slots: 1576960 = 24,640 blocks). Lane serve's G=4 card churn (one ~250K request) at this size pending.
+      RESIDENT_MAX_TOKENS_ALL_USERS: "1540096"
       # the rows build's core split (lane mu, accuracy-gated; needs the GDN head collector fix c6436ac2bfc): 28 attention
       # workers, 4 GDN head groups; 8 users -8.6 % step time at <= 4K, -5.8 % at 32K, +2.5 % at 128K. The single-user
       # profiles keep the defaults (32 workers).
@@ -187,10 +189,27 @@ card:
     ```
 
     ### Users x context (`multi-user`)
-    | users | context per user | KV pool tokens |
-    |---|---|---|
-    | 1 | TBD | TBD |
-    | 8 | TBD | TBD |
+    The users share one KV pool of 1,540,096 tokens (24,064 blocks of 64 tokens; 8.7 KB per token per chip). A request can use up to `max_model_len` (262,144), and any mix of requests fits while their contexts add up to the pool. The table gives the context each user gets when all of them are equally long. Up to 8 users decode together in one launch. With 9 to 16 users a second launch runs as well: the aggregate stays at the 8-user level and each user's speed halves.
+
+    | users | context per user |
+    |---|---|
+    | 1-5 | 262,144 |
+    | 6 | 256,640 |
+    | 7 | 219,968 |
+    | 8 | 192,448 |
+    | 16 | 96,192 |
+
+    ### Rows decode, users x context (`multi-user`)
+    Decode speed from the device step time with every user at the given context (no host or HTTP overhead); each cell is t/s/u / aggregate t/s:
+
+    | users | context 128 | context 4K | context 32K | context 128K |
+    |---|---|---|---|---|
+    | 1 | 69 / 69 | 69 / 69 | 64 / 64 | 54 / 54 |
+    | 2 | 66 / 132 | 66 / 131 | 58 / 117 | 44 / 87 |
+    | 4 | 60 / 240 | 60 / 239 | 48 / 194 | 31 / 124 |
+    | 8 | 50 / 397 | 49 / 394 | 36 / 284 | 19 / 155 |
+
+    Which profile: for a single user, `single-user` is faster (about 86 t/s/u at short context against about 69 t/s/u for one user on `multi-user`, whose 8-row launch costs about 3 ms more per step). From 2 concurrent users on, `multi-user` gives more total throughput at every context: 1.3-1.5x at 2 users and 2.4-4.6x at 8 users (device step time, 128 to 128K context).
 
     ### Benchmarks (tt-inference-server `--workflow benchmarks`)
     | profile | users | ISL / OSL | t/s | t/s/u | TTFT |
@@ -206,7 +225,7 @@ card:
     |---|---|---|
     | 32K | ~120 | ~79 |
     | 64K | ~207 | TBD |
-    | 128K | ~106 | TBD |
+    | 128K | ~106 | ~66 |
     | 250K | ~160 | ~49 |
 
 verify:
