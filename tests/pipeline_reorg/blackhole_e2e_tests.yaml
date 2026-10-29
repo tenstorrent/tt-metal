@@ -180,6 +180,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_exchange_matches_single_sequence -k loudbox -vvv --tb=short || exit_code=$?
     # One K3 KDA capture serving two user slots (#59977): the only test that fails if a trace pins its slot.
     pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_slot_trace.py -k "sp2tp4" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py -k "loudbox and not perf" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "fabric2d-mesh-2x4-2link and layer0 and device" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
@@ -221,6 +222,7 @@
     KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP1" -vvv --tb=short || exit_code=$?
     KDA_PERF_SKU=bh_loudbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_tp_reduce_scatter_perf -k "linear" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_exchange_kimi_k3_perf -k loudbox -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf -k loudbox -vvv --tb=short || exit_code=$?
     # Mistral Small 4 MoE and MLA at the PP=4 stage shape (SP=8 x TP=1). This LoudBox job builds
     # with Tracy; both rows are gated against a LoudBox baseline.
     export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
@@ -257,6 +259,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP4xTP1" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_exchange_matches_single_sequence -k quietbox -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py -k "quietbox and not perf" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_quietbox_2:
@@ -286,6 +289,7 @@
     KDA_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP4xTP1" -vvv --tb=short || exit $?
     KDA_PERF_SKU=bh_quietbox pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_tp_reduce_scatter_perf -k "ring" -vvv --tb=short || exit $?
     pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_qkv_convolution_exchange.py::test_qkv_convolution_exchange_kimi_k3_perf -k quietbox -vvv --tb=short || exit $?
+    pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf -k quietbox -vvv --tb=short || exit $?
   skus:
     bh_quietbox_2:
       timeout: 10

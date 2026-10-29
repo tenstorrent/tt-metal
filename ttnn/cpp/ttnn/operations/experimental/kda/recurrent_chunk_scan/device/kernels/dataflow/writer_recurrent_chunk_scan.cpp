@@ -100,7 +100,15 @@ FORCE_INLINE void write_identity_slots(
 
 // The packed summary is [S, BH, K, K+V]: slot 0 holds head transforms and, with Tail, slot 1 holds tail transforms.
 // Each row holds [A | B]: A at column 0 and B at column Kt of a (Kt + VtFull)-tile row.
-template <uint32_t Kt, uint32_t Vt, uint32_t VtFull, uint32_t BatchHeads, bool Tail, bool Init>
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t VtFull,
+    uint32_t BatchHeads,
+    bool Tail,
+    bool Init,
+    bool EmitOutputs>
 FORCE_INLINE void write_summary(
     uint32_t head,
     uint32_t value_block,
@@ -108,7 +116,9 @@ FORCE_INLINE void write_summary(
     uint32_t split_group,
     uint32_t split_in_group,
     bool local_split,
-    bool has_valid_chunk) {
+    uint32_t num_chunks,
+    uint32_t valid_chunks,
+    uint32_t reset_chunk) {
     const auto packed = TensorAccessor(tensor::output);
     DataflowBuffer full_a(dfb::output);
     DataflowBuffer full_b(dfb::final_state);
@@ -124,11 +134,43 @@ FORCE_INLINE void write_summary(
     const uint32_t b_column = Kt + value_block * Vt;
 
     // Compute publishes nothing for a group without a valid chunk; neither of its slots has a valid segment.
+    const bool has_valid_chunk = valid_chunks != 0;
     const bool straddles = has_valid_chunk && local_split && split_in_group != 0 && group == split_group;
     const bool head_active = has_valid_chunk && (!local_split || group < split_group || straddles);
     const bool tail_active = has_valid_chunk && local_split && group >= split_group;
 
-    if (head_active) {
+    if constexpr (EmitOutputs) {
+        // Each chunk's [F(0) | F(I)] row pair as compute publishes it; the split head's rows follow the chunk before
+        // the restart, as compute publishes them there (a straddling group's reset chunk is its split chunk).
+        static_assert(Ct == 1, "one tile row per chunk");
+        const auto zero_accessor = TensorAccessor(tensor::base);
+        const auto identity_accessor = TensorAccessor(tensor::sensitivity);
+        DataflowBuffer chunk_pair(dfb::chunk_base);
+        const uint32_t entry_size = chunk_pair.get_entry_size();
+        for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
+            const uint32_t page = (head * num_chunks + chunk) * VtFull + value_block * Vt;
+            chunk_pair.wait_front(2 * Vt);
+            for (uint32_t t = 0; t < Vt; ++t) {
+                noc.async_write(
+                    chunk_pair, zero_accessor, entry_size, {.offset_bytes = t * entry_size}, {.page_id = page + t});
+                noc.async_write(
+                    chunk_pair,
+                    identity_accessor,
+                    entry_size,
+                    {.offset_bytes = (Vt + t) * entry_size},
+                    {.page_id = page + t});
+            }
+            noc.async_write_barrier();
+            chunk_pair.pop_front(2 * Vt);
+            if (straddles && chunk + 1 == reset_chunk) {
+                write_value_slice<Kt, Vt, row_stride, 1>(packed, split_head_a, noc, head_row_base, a_column);
+                write_value_slice<Kt, Vt, row_stride, 1>(packed, split_head_b, noc, head_row_base, b_column);
+            }
+        }
+    }
+
+    // The emitting writer has already drained a straddling group's split head between its chunks.
+    if (head_active && !(EmitOutputs && straddles)) {
         // Split-head buffers hold one tile-row each. Drain the same packets
         // compute publishes instead of waiting for a full matrix to fit.
         if (straddles) {
@@ -162,6 +204,16 @@ FORCE_INLINE void write_summary(
             DataflowBuffer scratch(dfb::identity_scratch);
             write_identity_slots<Kt, Vt, VtFull>(packed, scratch, noc, identity_rows, identity_slots, value_block);
         }
+    }
+
+    if (EmitOutputs && has_valid_chunk) {
+        // The last segment's transform in FP32, at this value block's columns of [BH, K, V].
+        DataflowBuffer final_a(dfb::final_a);
+        DataflowBuffer final_b(dfb::final_b);
+        const uint32_t state_row = head * Kt * VtFull;
+        write_value_slice<Kt, Vt, VtFull, Kt>(TensorAccessor(tensor::final_a), final_a, noc, state_row, a_column);
+        write_value_slice<Kt, Vt, VtFull, Kt>(
+            TensorAccessor(tensor::final_b), final_b, noc, state_row, value_block * Vt);
     }
 }
 
@@ -267,6 +319,7 @@ template <
     uint32_t summary,
     uint32_t tail,
     uint32_t init,
+    uint32_t emit_outputs,
     uint32_t late_on_writer,
     uint32_t has_actual_end>
 TT_KERNEL void writer(
@@ -291,14 +344,16 @@ TT_KERNEL void writer(
         valid_chunks = topology.valid_chunks(group, groups);
     }
     if constexpr (summary) {
-        write_summary<Kt, Vt, Vt_full, batch_heads, tail != 0, init != 0>(
+        write_summary<Ct, Kt, Vt, Vt_full, batch_heads, tail != 0, init != 0, emit_outputs != 0>(
             head,
             value_block,
             group,
             topology.split_group(groups),
             topology.split_in_group(groups),
             topology.has_valid_tail(),
-            valid_chunks != 0);
+            num_chunks,
+            valid_chunks,
+            topology.reset_chunk(group, groups));
     } else {
         if (valid_chunks == 0) {
             return;

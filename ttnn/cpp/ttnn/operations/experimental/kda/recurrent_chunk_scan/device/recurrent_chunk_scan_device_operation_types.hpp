@@ -29,6 +29,13 @@ struct RecurrentChunkScanParams {
     // identity (I, 0); otherwise such slots are unspecified.
     bool tail = false;
     bool init = true;
+    // SUMMARY with one group per head only: also write each chunk's zero-seeded output (F(0), [BH, NC, 32, V]) and
+    // its identity-seeded output (F(I), [BH, NC, 32, K]), and the final segment's transform (A, B: [BH, K, V] each),
+    // all FLOAT32. Once the entry state is known, a chunk's output is F(0) + (F(I) - F(0)) @ entry and the rank's
+    // final state is A @ entry + B.
+    bool emit_outputs = false;
+    // Memory of the emitted base and sensitivity (default: output_mem_config), e.g. sharded on their consumers.
+    std::optional<tt::tt_metal::MemoryConfig> emit_mem_config = std::nullopt;
     uint32_t sequence_parallel_axis;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;

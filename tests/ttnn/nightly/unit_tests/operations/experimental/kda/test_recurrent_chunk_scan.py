@@ -59,7 +59,7 @@ _REGRESSION_CASE = _PerformanceCase(
     num_chunks=4,
     key_dim=32,
     value_dim=64,
-    expected_duration_ns=13_299,
+    expected_duration_ns=10_530,
 )
 # TODO: Switch to Galaxy SP8xTP4's per-device shape (24 heads, 20 chunks) once the scan's time at that shape is
 # deterministic; on an 11x10 grid each head gets 2 value blocks and single calls vary by tens of percent.
@@ -69,7 +69,7 @@ _PRODUCTION_CASE = _PerformanceCase(
     num_chunks=20,
     key_dim=128,
     value_dim=128,
-    expected_duration_ns=368_665,
+    expected_duration_ns=365_935,
 )
 _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
 

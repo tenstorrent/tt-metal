@@ -15,14 +15,15 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KIMI_K3_CONVOLUTION_NRMSE,
+    KIMI_K3_OUTPUT_NRMSE,
     LayerNrmseThresholds,
     assert_matches_reference,
     check_kimi_k3_accuracy,
     collect_mesh_accuracy_and_determinism_results,
+    kda_device_params,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
     make_synthetic_kimi_k3_test_case,
@@ -71,11 +72,11 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
     "mesh_device,tensor_parallel_axis,device_params,sequence,num_heads",
     [
         # LoudBox and QuietBox run Galaxy's per-chip workload, 640 rows and 24 heads per chip, over an SP ring
-        # with one TP rank: the layouts their KDA layer perf gates time. FABRIC_1D_RING rings only mesh axis 0.
+        # with one TP rank: the layouts their KDA layer perf gates time. TorusY wraps mesh axis 0 into the ring.
         pytest.param(
             (8, 1),
             1,
-            fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING),
+            kda_device_params((8, 1)),
             PREFILL_CHUNK_TOKENS,
             _GALAXY_HEADS_PER_CHIP,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
@@ -84,7 +85,7 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
         pytest.param(
             (4, 1),
             1,
-            fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING),
+            kda_device_params((4, 1)),
             4 * PREFILL_CHUNK_TOKENS_PER_CHIP,
             _GALAXY_HEADS_PER_CHIP,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
@@ -93,7 +94,7 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(),
+            kda_device_params((8, 4)),
             PREFILL_CHUNK_TOKENS,
             None,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -175,7 +176,7 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             state_linf_threshold=None,
             pcc_threshold=_PCC_THRESHOLD,
             nrmse=LayerNrmseThresholds(
-                output=_INTERVAL_OUTPUT_NRMSE.get((layout, interval), 0.02),
+                output=_INTERVAL_OUTPUT_NRMSE.get((layout, interval), KIMI_K3_OUTPUT_NRMSE),
                 recurrent=0.05,
                 convolution=KIMI_K3_CONVOLUTION_NRMSE,
             ),
@@ -213,13 +214,13 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params,sequence",
     [
-        pytest.param((1, 8), 1, fabric_1d_device_params(), 128, id="SP1xTP8"),
-        pytest.param((2, 4), 1, fabric_1d_device_params(), 128, id="SP2xTP4"),
-        pytest.param((2, 4), 0, fabric_1d_device_params(), 128, id="SP4xTP2"),
+        pytest.param((1, 8), 1, kda_device_params((1, 8)), 128, id="SP1xTP8"),
+        pytest.param((2, 4), 1, kda_device_params((2, 4)), 128, id="SP2xTP4"),
+        pytest.param((2, 4), 0, kda_device_params((2, 4)), 128, id="SP4xTP2"),
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(),
+            kda_device_params((8, 4)),
             512,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4",
@@ -277,7 +278,9 @@ def test_kimi_k3_layer_1_real_weights_accuracy(
             tensor_parallel_axis,
             pcc_threshold=0.9995,
             valid_length=length,
-            nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.02, convolution=KIMI_K3_CONVOLUTION_NRMSE),
+            nrmse=LayerNrmseThresholds(
+                output=KIMI_K3_OUTPUT_NRMSE, recurrent=0.02, convolution=KIMI_K3_CONVOLUTION_NRMSE
+            ),
         )
         for tensor in (hidden_tt, end_tt, output, state.recurrent, state.convolution):
             ttnn.deallocate(tensor)

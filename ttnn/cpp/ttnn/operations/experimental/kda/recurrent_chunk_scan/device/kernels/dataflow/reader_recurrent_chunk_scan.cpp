@@ -75,6 +75,7 @@ template <
     uint32_t Vt_full,
     uint32_t mcast_shared,
     uint32_t summary,
+    uint32_t emit_outputs,
     uint32_t groups_per_head,
     uint32_t late_on_writer,
     uint32_t has_actual_end,
@@ -186,7 +187,7 @@ TT_KERNEL void reader(
             const auto for_each_shared_input = [&](auto&& input) {
                 input(kd_accessor, kd, head_chunk * chunk_key_tiles, chunk_key_tiles);
                 input(t_inv_accessor, t_inv, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
-                if constexpr (!summary) {
+                if constexpr (!summary || emit_outputs) {
                     input(TensorAccessor(tensor::q_decay), q_decay, head_chunk * chunk_key_tiles, chunk_key_tiles);
                     input(TensorAccessor(tensor::intra), intra, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
                 }
@@ -211,7 +212,7 @@ TT_KERNEL void reader(
                 // multicasts them.
                 static_assert(
                     !(summary && late_on_writer), "the summary keeps the state update's inputs on the reader");
-                constexpr uint32_t shared_inputs = 2 + (summary ? 0 : 2) + (late_on_writer ? 0 : 2);
+                constexpr uint32_t shared_inputs = 2 + (summary && !emit_outputs ? 0 : 2) + (late_on_writer ? 0 : 2);
                 // Every shared input is a default-pattern DFB, so kd's specialization holds all of them.
                 kda::SharedInput<decltype(kd)> inputs[shared_inputs];
                 uint32_t count = 0;

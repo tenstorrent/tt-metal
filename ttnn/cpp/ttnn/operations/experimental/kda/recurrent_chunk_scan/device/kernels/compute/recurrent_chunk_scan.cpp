@@ -18,8 +18,6 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
-enum class ElementwiseOperation { ADD, SUBTRACT };
-
 template <uint32_t Mt, uint32_t Kt, uint32_t Nt, typename DFBA, typename DFBB, typename DFBOut>
 FORCE_INLINE void matrix_multiply(DFBA& a, DFBB& b, DFBOut& output) {
     constexpr uint32_t subblock_columns = kda::MatmulSubblock<Mt, Nt>::columns;
@@ -52,10 +50,9 @@ FORCE_INLINE void matrix_multiply(DFBA& a, DFBB& b, DFBOut& output) {
     output.push_back(Mt * Nt);
 }
 
-// output = operand OP (a @ b), with the product kept in DST: each row group's matmul accumulates into DST and the
+// output = operand OP (a @ b), with the product kept in DST: each group's matmul accumulates into DST and the
 // destination-reuse binary op takes it from there, so the product never round-trips through a buffer. The operand
-// takes source A and the product source B, as in the two-operand op on a packed product. The carried state is
-// unchanged; the chunk output's last bits can differ.
+// takes source A and the product source B, so a subtraction is operand - product.
 // The operand's tile for output tile t is t % OperandTiles (the summary's two paths share one value row).
 template <
     EltwiseBinaryType Op,
@@ -71,11 +68,11 @@ FORCE_INLINE void matrix_multiply_then(DFBA& a, DFBB& b, DFBOperand& operand, DF
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     // Whole output rows per destination acquire when they fit, else column groups of one row (the summary's
-    // two-path rows are twice the state width).
+    // two-path rows are twice the state width). The host validates the same grouping rule.
     constexpr uint32_t group_columns = Nt <= dst_tiles ? Nt : dst_tiles;
     static_assert(Nt % group_columns == 0, "column groups must tile an output row");
     constexpr uint32_t group_rows = Nt <= dst_tiles ? (dst_tiles / Nt < Mt ? dst_tiles / Nt : Mt) : 1;
-    static_assert(Mt % group_rows == 0);
+    static_assert(Mt % group_rows == 0, "row groups must tile the output");
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t operand_id = operand.get_id();
@@ -126,10 +123,7 @@ FORCE_INLINE void matrix_multiply_then(DFBA& a, DFBB& b, DFBOperand& operand, DF
             tile_regs_wait();
             for (uint32_t row = 0; row < group_rows; ++row) {
                 for (uint32_t column = 0; column < group_columns; ++column) {
-                    pack_tile(
-                        row * group_columns + column,
-                        output_id,
-                        (first_row + row) * Nt + first_column + column);
+                    pack_tile(row * group_columns + column, output_id, (first_row + row) * Nt + first_column + column);
                 }
             }
             tile_regs_release();
@@ -138,15 +132,9 @@ FORCE_INLINE void matrix_multiply_then(DFBA& a, DFBB& b, DFBOperand& operand, DF
     output.push_back(Mt * Nt);
 }
 
-// Inputs remain resident; PacketTiles specifies output publication granularity.
-template <
-    ElementwiseOperation Operation,
-    uint32_t Count,
-    uint32_t PacketTiles,
-    typename DFBA,
-    typename DFBB,
-    typename DFBOut>
-FORCE_INLINE void elementwise(DFBA& a, DFBB& b, DFBOut& output) {
+// output = a + b. Inputs remain resident; PacketTiles specifies output publication granularity.
+template <uint32_t Count, uint32_t PacketTiles, typename DFBA, typename DFBB, typename DFBOut>
+FORCE_INLINE void elementwise_add(DFBA& a, DFBB& b, DFBOut& output) {
     static_assert(PacketTiles > 0 && Count % PacketTiles == 0);
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
@@ -154,22 +142,14 @@ FORCE_INLINE void elementwise(DFBA& a, DFBB& b, DFBOut& output) {
     const uint32_t b_id = b.get_id();
     const uint32_t output_id = output.get_id();
     reconfig_data_format(a_id, b_id);
-    if constexpr (Operation == ElementwiseOperation::ADD) {
-        add_init(a_id, b_id);
-    } else {
-        sub_init(a_id, b_id);
-    }
+    add_init(a_id, b_id);
     for (uint32_t packet = 0; packet < Count; packet += PacketTiles) {
         output.reserve_back(PacketTiles);
         for (uint32_t first = 0; first < PacketTiles; first += dst_tiles) {
             const uint32_t count = first + dst_tiles <= PacketTiles ? dst_tiles : PacketTiles - first;
             const uint32_t input_start = packet + first;
             tile_regs_acquire();
-            if constexpr (Operation == ElementwiseOperation::ADD) {
-                add_block(a_id, b_id, input_start, input_start, 0, count);
-            } else {
-                sub_block(a_id, b_id, input_start, input_start, 0, count);
-            }
+            add_block(a_id, b_id, input_start, input_start, 0, count);
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t tile = 0; tile < count; ++tile) {
@@ -283,7 +263,10 @@ FORCE_INLINE void multiply_by_decay(
 
 // The zero-seeded B and identity-seeded A + B recurrences advance together as one [Kt, 2 * Vt] state, so every
 // operation covers both; each tile's arithmetic is the same as advancing them apart.
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
+// With EmitOutputs each chunk's output is evaluated on both paths too, q_decay S + intra v_new, and published in
+// FP32 as F(0) (base) and F(I) (whose difference with F(0) is the sensitivity to the segment's entry state); the last
+// segment's A and B also leave in FP32.
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool EmitOutputs>
 FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
@@ -299,13 +282,17 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer summary_head_output(dfb::summary_head_output);
     DataflowBuffer summary_head_state(dfb::summary_head_state);
     DataflowBuffer transport_state(dfb::transport_state);
-    DataflowBuffer state_update(dfb::state_update);
     DataflowBuffer state_temporary(dfb::state_temporary);
+    DataflowBuffer q_decay(dfb::q_decay);
+    DataflowBuffer intra(dfb::intra);
+    DataflowBuffer query_projection(dfb::query_projection);
+    DataflowBuffer chunk_base(dfb::chunk_base);
 
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
     constexpr uint32_t pair_columns = 2 * Vt;
+    constexpr uint32_t chunk_pair_tiles = Ct * pair_columns;
     constexpr uint32_t key_pair_tiles = Kt * pair_columns;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
@@ -319,11 +306,16 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         t_inv.wait_front(chunk_chunk_tiles);
         k_decay_transposed.wait_front(key_chunk_tiles);
         final_decay.wait_front(Kt);
-        // The decayed state reads only the incoming state, so it is issued between kd S and the subtraction that
-        // waits on it. The operations and their operand order are those of compute_value_new and update_state.
+        // U = T_inv (v_beta - kd S), S' = dl S + k_dec_t U, and with EmitOutputs Y = q_decay S + intra U. The stages
+        // that read only the incoming state are issued first, so the correction's wait on the packed difference
+        // overlaps them.
         current.wait_front(key_pair_tiles);
         matrix_multiply_then<EltwiseBinaryType::ELWSUB, Ct, Kt, pair_columns, Vt>(
             kd, current, v_beta, value_new);  // v_beta - kd S
+        if constexpr (EmitOutputs) {
+            q_decay.wait_front(chunk_key_tiles);
+            matrix_multiply<Ct, Kt, pair_columns>(q_decay, current, query_projection);  // q_decay S
+        }
         multiply_by_decay(current, final_decay, state_temporary, Kt, pair_columns);
         value_new.wait_front(Ct * pair_columns);
         matrix_multiply<Ct, Ct, pair_columns>(t_inv, value_new, scratch);  // v_new
@@ -332,6 +324,16 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         state_temporary.wait_front(key_pair_tiles);
         matrix_multiply_then<EltwiseBinaryType::ELWADD, Kt, Ct, pair_columns, key_pair_tiles>(
             k_decay_transposed, scratch, state_temporary, last ? final_state : state_ring);  // dl S + k_dec_t v_new
+        if constexpr (EmitOutputs) {
+            intra.wait_front(chunk_chunk_tiles);
+            query_projection.wait_front(chunk_pair_tiles);
+            // q_decay S + intra v_new on both paths, [F(0) | F(I)], straight to the writer in FP32.
+            matrix_multiply_then<EltwiseBinaryType::ELWADD, Ct, Ct, pair_columns, chunk_pair_tiles>(
+                intra, scratch, query_projection, chunk_base);
+            query_projection.pop_front(chunk_pair_tiles);
+            intra.pop_front(chunk_chunk_tiles);
+            q_decay.pop_front(chunk_key_tiles);
+        }
         state_temporary.pop_front(key_pair_tiles);
         scratch.pop_front(Ct * pair_columns);
         current.pop_front(key_pair_tiles);
@@ -360,6 +362,13 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         Kt, ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>() / Vt);
     extract_paths<true, Kt, Vt, packet_rows>(final_state, output);
     extract_paths<false, Kt, Vt, packet_rows>(final_state, transport_state);
+    if constexpr (EmitOutputs) {
+        DataflowBuffer final_a(dfb::final_a);
+        DataflowBuffer final_b(dfb::final_b);
+        pack_reconfig_data_format(final_a.get_id());
+        extract_paths<true, Kt, Vt, packet_rows>(final_state, final_a);
+        extract_paths<false, Kt, Vt, packet_rows>(final_state, final_b);
+    }
     final_state.pop_front(key_pair_tiles);
 }
 
@@ -380,7 +389,6 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
     DataflowBuffer final_state(dfb::final_state);
     DataflowBuffer scratch(dfb::scratch);
-    DataflowBuffer state_update(dfb::state_update);
     DataflowBuffer state_temporary(dfb::state_temporary);
     DataflowBuffer tail_entry_states(dfb::tail_entry_states);
 
@@ -406,9 +414,9 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         }
         auto& destination = chunk == num_chunks - 1 ? final_state : state_ring;
 
-        // Each stage waits for the previous one's packed result. Every stage that reads only the incoming state
-        // runs first, and each dependent stage is issued after independent work, so the math thread rarely waits on
-        // a pack. The operations and their operand order are those of the straight-line recurrence.
+        // U = T_inv (v_beta - kd S), Y = q_decay S + intra U, S' = dl S + k_dec_t U. Each stage waits for the
+        // previous one's packed result: every stage that reads only the incoming state runs first, and each
+        // dependent stage is issued after independent work, so the math thread rarely waits on a pack.
         current_state.wait_front(key_value_tiles);
         kd.wait_front(chunk_key_tiles);
         v_beta.wait_front(chunk_value_tiles);
@@ -431,9 +439,10 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         t_inv.pop_front(chunk_chunk_tiles);
         output_intermediate.pop_front(chunk_value_tiles);
 
-        // The state update and the output's intra-chunk term both read v_new. The update and the decayed state are
-        // each packed to FP32 and then added: accumulating the matmul onto the decayed state in DST instead changes
-        // the result enough that Kimi-K3's chunked prefill drifts from the reference over consecutive calls.
+        // The state update and the output's intra-chunk term both read v_new. The update k_dec_t v_new is formed on
+        // its own in DST and the decayed state, packed in FP32, is added to it: the matmul must not accumulate onto
+        // the decayed state, which rounds the result enough that Kimi-K3's chunked prefill drifts from the reference
+        // over consecutive calls.
         k_decay_transposed.wait_front(key_chunk_tiles);
         state_temporary.wait_front(key_value_tiles);
         matrix_multiply_then<EltwiseBinaryType::ELWADD, Kt, Ct, Vt, key_value_tiles>(
@@ -450,14 +459,14 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         scratch.wait_front(chunk_value_tiles);
         query_projection.wait_front(chunk_value_tiles);
         pack_reconfig_data_format(output.get_id());
-        elementwise<ElementwiseOperation::ADD, chunk_value_tiles, chunk_value_tiles>(query_projection, scratch, output);
+        elementwise_add<chunk_value_tiles, chunk_value_tiles>(query_projection, scratch, output);
         query_projection.pop_front(chunk_value_tiles);
         scratch.pop_front(chunk_value_tiles);
         pack_reconfig_data_format(dfb::state_ring);
     }
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary, uint32_t emit_outputs>
 TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
 
@@ -473,7 +482,7 @@ TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
         return;
     }
     if constexpr (summary) {
-        compute_summary<Ct, Kt, Vt>(valid_chunks, reset_chunk);
+        compute_summary<Ct, Kt, Vt, emit_outputs != 0>(valid_chunks, reset_chunk);
     } else {
         compute_recurrent<Ct, Kt, Vt>(valid_chunks, reset_chunk);
     }

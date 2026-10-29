@@ -13,6 +13,7 @@ from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
+    kda_device_params,
     random_weights,
     reconstruct_convolution_at_sp_rank,
     reconstruct_sp_tp_tensor,
@@ -26,11 +27,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 pytestmark = [
     run_for_blackhole(),
     pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
-    pytest.mark.parametrize(
-        "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-        indirect=True,
-    ),
+    pytest.mark.parametrize("device_params", [kda_device_params((2, 4))], indirect=True),
 ]
 
 
