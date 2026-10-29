@@ -641,6 +641,18 @@ TABLE = {
         "(tt/model.py _ids_to_host). off = the top-k gathered over TP to [1, 1, S/SP, K] and partitioned again by "
         "the attention (the path before P.8). Same ids, same bytes",
     ),
+    "ATTN_SP32_PROJ": Setting(
+        "on",
+        ("on", "off"),
+        "P.9 (galaxy 8x4, owner decision 2026-10-29, option B of the SP=32 study; ROPE_IMPL=on only): on = the "
+        "attention projections run on the chip's own S/(SP TP) query rows with full weights (tt/attention.py "
+        "TtWindowAttention.sp32): wq_b, wo_a, wo_b replicated (bfp8, + ~80 MiB a layer a chip on 8x4); q_resid "
+        "mesh_partition'ed to the chip's rows, wq_b writes all heads of those rows (no head -> seq all_to_all before "
+        "sparse_sdpa), RoPE / inverse RoPE with the chip's cos / sin rows (RopeTable.rows(tp_split=True)), wo_a all "
+        "groups, wo_b full, then ONE all_to_all [rows, H] -> [S/SP, H/TP] (the residual layout) in place of the seq -> "
+        "head all_to_all + the wo_b TP reduce-scatter (no bf16 TP partial sum). off = heads split over TP with the two "
+        "head <-> seq all_to_all and the wo_b reduce-scatter (the path before P.9)",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8
