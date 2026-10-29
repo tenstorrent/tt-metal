@@ -25,6 +25,8 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 
 - TP-shape sweeps (narrow, `matmul_sweep1d.py --ref-grid 11x10 --in0-block-w 2,3,4 --subs 4x1,2x2 --grids 11x10,10x10`, run at the end of `O/iter7.sh`): `O/iter7_matmul_sweep1d_*.log`; ttnn's choice within 2 % of the best on every TP-local forward shape, qkv worse under every explicit config, dX shapes without a fitting config. No change.
 
+- Iteration 8 (frozen vocab-parallel embedding): `FrozenVocabParallelEmbedding` in `frozen_embedding.py`; chain `O/iter8.sh` -> `O/iter8.log` (gradient check `O/iter8_tp_grad_check_tp4.{log,npz}` PASS, `tp_measure.sh iter8_tp` after 600 s: `O/iter8_tp_mfu_tp4.log` 545.9 ms, tt-smi, profile `O/iter8_tp_tracy_tp4_4layers` -> `O/iter8_tp_analysis.txt`, `O/iter8_tp_ranked_ops.txt`). The single-chip harness does not exercise the vocab-parallel path (no mesh); the TP gradient check (loss identical to single chip) is its correctness evidence.
+
 ## Commits (local, never pushed)
 
 | iteration | commit | content |
@@ -42,7 +44,8 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 5b | `758a7300a8d` | batched mode for the composite TP adapters (qkv, out), `tp_rank_ops.py`, `EXTRA_ARGS` in `tp_measure.sh`, iteration-5b evidence |
 | 6 | `190f3aad6fd` | `rmsnorm_bw_allcore` metal op, `rmsnorm_allcore.py`, `RMSNormLayer.rmsnorm_op` hook, harness case, iteration-6 evidence |
 | 7 (rejected) | `d546567c67f` | evidence and write-up of the rejected qkv / out fused-path trial at TP; no code change |
-| TP sweeps | (this commit) | TP-local shape sweeps: no config win; logs and write-up |
+| TP sweeps | `d03dfffa23c` | TP-local shape sweeps: no config win; logs and write-up |
+| 8 | (this commit) | frozen vocab-parallel embedding table, resumed-loop state section, iteration-8 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run described in `perf_analysis.md`, "Iteration 1".
 - Review round 1 of the loop (`doc/optimization/review_round1.md`): required a TP=4 gradient-level check of the fused/transposed paths (`tp_gradient_check.py`: `O/tp_grad_check_single.{npz,log}`, `O/tp_grad_check_tp4_plain.{npz,log}`, `O/tp_grad_check_tp4_fused.{npz,log}`), the exit restated at the measured clock with the falling-clock anomaly classified, and arithmetic fixes in the gap decomposition; also taken: the 16-layer Tracy point the plan's rule asks for once 16 layers fit (`O/iter3_fused_tracy_16layers*`), the iteration-3 op sequence (`O/iter3_fused_op_sequence_1layer.txt`), the fused-LoRA isolation script and its after-fix log in evidence.

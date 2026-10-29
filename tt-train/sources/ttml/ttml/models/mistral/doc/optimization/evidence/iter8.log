@@ -1,0 +1,14 @@
+=== iter8 TP=4 gradient check 2026-10-29T19:29:16Z
+tp4 rc=0
+tp 4: transposed 3, fused 2
+saved 16 gradients, loss 12.8125
+  loss                                                    (1,)               1.000000 0.00e+00 ok
+PASS
+=== iter8_tp TP=4 MFU after 600s cool-down 2026-10-29T19:29:57Z
+rc=0
+40 of 40 layers, tp 4: 545.9 ms/step over 6 steps (best 542.9), 176.5 TFLOP/s, MFU 29.72%
+=== iter8_tp TP=4 Tracy 4 layers 2026-10-29T19:43:15Z
+rc=0
+4 of 40 layers, tp 4: 63.8 ms/step over 2 steps (best 62.2), 189.8 TFLOP/s, MFU 31.94%
+=== done 2026-10-29T19:44:49Z
+=== iter8 chain finished 2026-10-29T19:44:49Z

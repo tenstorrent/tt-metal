@@ -16,7 +16,7 @@ from __future__ import annotations
 import ttnn
 import ttml
 from ttml.autograd import Function
-from ttml.modules import Embedding
+from ttml.modules import Embedding, VocabParallelEmbedding
 
 __all__ = ["FrozenEmbedding", "embed_tokens"]
 
@@ -39,13 +39,45 @@ class FrozenEmbedding(Function):
         return None, None
 
 
-def embed_tokens(embedding, input_ids):
-    """``embedding(input_ids)``; on the no-untilize path when the table is a frozen plain ``Embedding``.
+class FrozenVocabParallelEmbedding(Function):
+    """The vocab-parallel lookup (ids masked to the rank's shard, out-of-range rows zeroed, all-reduce over the TP
+    axis) on a frozen table untilized once; no gradient to the ids or the table."""
 
-    A vocab- or feature-parallel embedding (tensor parallelism) masks ids and reduces across chips, so it keeps
-    its own forward; its table is then untilized by the ttml op every step (a known cost under TP).
+    @staticmethod
+    def forward(ctx, input_ids, weight, vocab_start, rows_per_rank, cluster_axis):
+        table = weight.get_value()
+        if table.layout == ttnn.TILE_LAYOUT:
+            table = ttnn.untilize(table)
+            weight.set_value(table)
+        ids = input_ids.get_value(ttml.autograd.PreferredPrecision.NATIVE)
+        local = ttnn.subtract(ttnn.typecast(ids, ttnn.DataType.INT32), vocab_start)
+        in_range = ttnn.multiply(ttnn.ge(local, 0), ttnn.lt(local, rows_per_rank))
+        local_ids = ttnn.typecast(ttnn.multiply(local, in_range), ttnn.DataType.UINT32)
+        batch, _, _, seq = [int(d) for d in ids.shape]
+        emb = ttnn.embedding(local_ids, table, layout=ttnn.TILE_LAYOUT)
+        emb = ttnn.reshape(emb, [batch, 1, seq, int(emb.shape[-1])])
+        mask = ttnn.transpose(ttnn.to_layout(ttnn.typecast(in_range, ttnn.DataType.FLOAT32), ttnn.Layout.TILE), 2, 3)
+        emb = ttnn.multiply(emb, mask)
+        return ttml.core.distributed.all_reduce(emb, cluster_axis=cluster_axis)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return None, None
+
+
+def embed_tokens(embedding, input_ids):
+    """``embedding(input_ids)``; on the no-untilize path when the table is frozen: a plain ``Embedding`` or a
+    ``VocabParallelEmbedding`` (iteration 8: its table was untilized by the ttml op on every step, 1.5 ms).
+    A feature-parallel embedding keeps its own forward.
     """
     weight = embedding.weight.tensor
-    if type(embedding) is not Embedding or weight.get_requires_grad():
+    if weight.get_requires_grad():
         return embedding(input_ids)
-    return FrozenEmbedding.apply(input_ids, weight)
+    if type(embedding) is Embedding:
+        return FrozenEmbedding.apply(input_ids, weight)
+    if type(embedding) is VocabParallelEmbedding:
+        embedding._check_tp_replicated(input_ids)
+        return FrozenVocabParallelEmbedding.apply(
+            input_ids, weight, embedding._vocab_start, embedding.num_embeddings_per_partition, embedding.cluster_axis
+        )
+    return embedding(input_ids)
