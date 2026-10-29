@@ -157,10 +157,10 @@ def expert_layout_from_env(env=None) -> tuple[bool, bool, str]:
 # the row all-gather and the row reduce-scatter are not tile-aligned and ttnn expands them into composites: the gather =
 # all_broadcast of the PADDED tile (256 KB per chip) + untilize / concat / tilize (5 ops, ~60 us each for x and the
 # routing), the reduce-scatter = 8 fill_pads + concat to [1, 1, 256, H] + the reduce-scatter + a slice (10 ops, 162 us).
-#   GLM53_HYBRID_GATHER=compact: the T real rows are gathered ROW_MAJOR (32 KB per chip for x, 2.3 KB for the routing:
+#   GLM53_HYBRID_GATHER=compact (the default; padded = the pre-2026-10-29 path): the T real rows are gathered ROW_MAJOR (32 KB per chip for x, 2.3 KB for the routing:
 #     untilize, the all_broadcast + concat composite on the compact pages, one tilize with zero padding), i.e. 4 ops and 8x
 #     fewer link bytes per gather; the expert op then sees bit-identical inputs.
-#   GLM53_HYBRID_COMBINE=allreduce: the expert op's [1, 1, rows*T, H] output (already compact: row r*T + t = this chip's
+#   GLM53_HYBRID_COMBINE=allreduce (the default; rs = the pre-2026-10-29 padded reduce-scatter): the expert op's [1, 1, rows*T, H] output (already compact: row r*T + t = this chip's
 #     contribution to user t of mesh row r) is summed over the rows by a reduce-scatter on the hidden dim (H / rows = 512
 #     columns, tile-aligned) + an all-gather of the chunks (two async ops on 256 KB), and every chip keeps its own T rows
 #     with one exact selector matmul (E_r [T, rows*T] x [rows*T, H], HiFi4 fp32 DST); 3 ops instead of 10, 8x fewer
@@ -178,7 +178,7 @@ HYBRID_COMBINE_MODES = ("rs", "allreduce", "allreduce_ccl")
 
 def hybrid_gather_mode(env=None) -> str:
     env = os.environ if env is None else env
-    mode = env.get(HYBRID_GATHER_ENV, "padded")
+    mode = env.get(HYBRID_GATHER_ENV, "compact")  # the default since 2026-10-29 (the H1 gate: pcc 0.9952, top-1 93.0 %)
     if mode not in HYBRID_GATHER_MODES:
         raise ValueError(f"{HYBRID_GATHER_ENV}={mode!r}: expected one of {HYBRID_GATHER_MODES}")
     return mode
@@ -186,7 +186,7 @@ def hybrid_gather_mode(env=None) -> str:
 
 def hybrid_combine_mode(env=None) -> str:
     env = os.environ if env is None else env
-    mode = env.get(HYBRID_COMBINE_ENV, "rs")
+    mode = env.get(HYBRID_COMBINE_ENV, "allreduce")  # the default since 2026-10-29 (the H2 gate with H1: 48.7 ms step)
     if mode not in HYBRID_COMBINE_MODES:
         raise ValueError(f"{HYBRID_COMBINE_ENV}={mode!r}: expected one of {HYBRID_COMBINE_MODES}")
     return mode

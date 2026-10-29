@@ -235,7 +235,13 @@ def test_routed_experts_precedence_source():
 
 # ------------------------------------------------------------------------------------ H1 / H2 knobs
 def test_hybrid_knob_plumbing():
-    assert M.hybrid_gather_mode({}) == "padded" and M.hybrid_combine_mode({}) == "rs"
+    assert (
+        M.hybrid_gather_mode({}) == "compact" and M.hybrid_combine_mode({}) == "allreduce"
+    )  # the defaults since 2026-10-29
+    assert (
+        M.hybrid_gather_mode({"GLM53_HYBRID_GATHER": "padded"}) == "padded"
+        and M.hybrid_combine_mode({"GLM53_HYBRID_COMBINE": "rs"}) == "rs"
+    )
     assert M.hybrid_gather_mode({"GLM53_HYBRID_GATHER": "compact"}) == "compact"
     for v in ("allreduce", "allreduce_ccl"):
         assert M.hybrid_combine_mode({"GLM53_HYBRID_COMBINE": v}) == v
@@ -252,7 +258,12 @@ def test_decode_glue_modes_gate():
     on = {"GLM53_HYBRID_GATHER": "compact", "GLM53_HYBRID_COMBINE": "allreduce"}
     assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env=on) == (True, "allreduce")
     assert M.decode_glue_modes(2, 4, has_idx=False, in_prefill=False, env=on) == (True, "allreduce")
-    assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env={}) == (False, "rs")  # defaults
+    assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env={}) == (True, "allreduce")  # the defaults
+    off = {"GLM53_HYBRID_GATHER": "padded", "GLM53_HYBRID_COMBINE": "rs"}
+    assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env=off) == (
+        False,
+        "rs",
+    )  # the pre-2026-10-29 path
     assert M.decode_glue_modes(8, 32, has_idx=False, in_prefill=False, env=on) == (False, "rs")  # tile-aligned T
     assert M.decode_glue_modes(8, 16, has_idx=False, in_prefill=True, env=on) == (False, "rs")  # a prefill slab
     assert M.decode_glue_modes(8, 4, has_idx=True, in_prefill=False, env=on) == (False, "rs")  # dispatch routing
@@ -260,7 +271,7 @@ def test_decode_glue_modes_gate():
     assert M.decode_glue_modes(
         8, 4, has_idx=False, in_prefill=False, env={"GLM53_HYBRID_COMBINE": "allreduce_ccl"}
     ) == (
-        False,
+        True,  # the compact gather is the default
         "allreduce_ccl",
     )
 
@@ -478,9 +489,9 @@ def test_roofline_rows_behind_the_status_table():
     cfg = rl.load_config()
     want = {
         4: {
-            "moe.gather_x": (95.0, 35.0),
-            "moe.gather_routing": (25.0, 15.0),
-            "moe.rs_rows": (162.0, 50.0),
+            "moe.gather_x": (175.2, 35.0),  # measured 2026-10-29 (today_8x4_dsa3 #448-458)
+            "moe.gather_routing": (67.4, 15.0),
+            "moe.rs_rows": (269.4, 50.0),
             "dsa.pool_gather": (136.4, 0.0),
         },
         32: {"moe.gather_x": (101.7, 101.7), "moe.rs_rows": (128.5, 128.5), "dsa.pool_gather": (1270.0, 0.0)},
@@ -492,5 +503,5 @@ def test_roofline_rows_behind_the_status_table():
             assert got[key].measured_us == pytest.approx(measured, rel=0.01), (upr, key)
             assert got[key].after_us == pytest.approx(after, abs=0.01), (upr, key)
         if upr == 4:
-            assert got["moe.gather_x"].n_ops == 5 and got["moe.rs_rows"].n_ops == 10
+            assert got["moe.gather_x"].n_ops == 11 and got["moe.rs_rows"].n_ops == 32  # the measured op counts
             assert got["kda.all_reduce" if "kda.all_reduce" in got else "dsa.all_reduce"].after_us == 30.0
