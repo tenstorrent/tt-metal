@@ -781,6 +781,9 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                         mux_virtual_core,
                         static_cast<uint8_t>(worker),
                         {flow_control_sem_id, teardown_sem_id},
+                        program,
+                        worker_sender_writer_kernel_id,
+                        core,
                         writer_rt_args);
                 } else {
                     detail::strided_fabric_mux_connection_rt_args(

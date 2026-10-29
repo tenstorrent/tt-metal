@@ -84,7 +84,7 @@ FabricMuxProgramLocalL1 reserve_fabric_mux_program_local_l1(
             .page_size = map_size_bytes,
         }}},
     });
-    return {.cb_index = cb_index, .l1_base_semaphore_id = semaphore_id};
+    return {.cb_index = cb_index, .semaphore_id = semaphore_id};
 }
 
 FabricMuxProgramLocalL1 reserve_fabric_mux_program_local_l1(
@@ -107,7 +107,7 @@ FabricMuxProgramLocalL1 reserve_fabric_mux_program_local_l1(
         mux_cores,
         tt::tt_metal::CircularBufferConfig(map_size_bytes, {{cb_index, tt::DataFormat::RawUInt32}})
             .set_page_size(cb_index, map_size_bytes));
-    return {.cb_index = cb_index, .l1_base_semaphore_id = semaphore_id};
+    return {.cb_index = cb_index, .semaphore_id = semaphore_id};
 }
 
 }  // namespace tt::tt_fabric::detail

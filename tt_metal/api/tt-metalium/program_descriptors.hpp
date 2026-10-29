@@ -130,6 +130,20 @@ struct CommonBufferBinding {
     Buffer* buffer = nullptr;
 };
 
+// Declares that per-core runtime arg `arg_idx` of kernels[kernel_index] on `core` holds the L1 address of one of the
+// program's circular buffers plus `offset`: the one with buffer index `cb_index` on `cb_core`, which need not be one
+// of the kernel's cores. The program writes that address into the arg when it places its circular buffers and again
+// at every enqueue, so the arg follows the circular buffer wherever the program places it, and a rewrite of the
+// runtime args cannot leave the descriptor's value in it.
+struct CircularBufferAddressBinding {
+    uint32_t kernel_index = 0;
+    CoreCoord core;
+    uint32_t arg_idx = 0;
+    CoreCoord cb_core;
+    uint8_t cb_index = 0;
+    uint32_t offset = 0;
+};
+
 struct KernelDescriptor {
     // TODO: investigate using SmallVector here, using std::vector for now to abide size constraint
     // in tt_stl/tt_stl/reflection.hpp:185:23
@@ -181,6 +195,8 @@ struct KernelDescriptor {
         void push_back(Buffer* b) { items_.emplace_back(b); }
         void push_back(const MeshTensor& t) { items_.emplace_back(t); }
         void reserve(size_t n) { items_.reserve(n); }
+        // Number of runtime args pushed so far: every entry is one arg.
+        size_t size() const { return items_.size(); }
         // Append a plain uint32_t range (e.g. from fused-op signaler helpers).
         void append(const std::vector<uint32_t>& v) {
             for (uint32_t x : v) {
@@ -229,6 +245,7 @@ struct ProgramDescriptor {
     std::optional<std::uint64_t> custom_program_hash;
     // Blaze-only internal runtime binary reload; std::nullopt when the program does not reload.
     std::optional<internal::ReloadTable> reload_table;
+    std::vector<CircularBufferAddressBinding> circular_buffer_address_bindings;
 
     std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
 };

@@ -471,7 +471,7 @@ void FabricMuxConfig::place_in_program_local_l1(
     const auto placement = detail::reserve_fabric_mux_program_local_l1(desc, mux_cores, map_size);
     in_program_local_l1_ = true;
     program_local_l1_cb_index_ = placement.cb_index;
-    l1_base_semaphore_id_ = placement.l1_base_semaphore_id;
+    l1_base_semaphore_id_ = placement.semaphore_id;
 }
 
 void FabricMuxConfig::place_in_program_local_l1(
@@ -480,7 +480,7 @@ void FabricMuxConfig::place_in_program_local_l1(
     const auto placement = detail::reserve_fabric_mux_program_local_l1(program, mux_cores, map_size);
     in_program_local_l1_ = true;
     program_local_l1_cb_index_ = placement.cb_index;
-    l1_base_semaphore_id_ = placement.l1_base_semaphore_id;
+    l1_base_semaphore_id_ = placement.semaphore_id;
 }
 
 bool FabricMuxConfig::is_in_program_local_l1() const { return in_program_local_l1_; }

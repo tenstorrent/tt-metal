@@ -41,6 +41,8 @@
 
 #include "multi_device_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/buffers/circular_buffer.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -168,6 +170,22 @@ TEST(DescriptorPatching, CPU_ResolvedBindings_EmptyAfterAddingCb_IsFalse) {
     ResolvedBindings b;
     b.cbs.push_back({});
     EXPECT_FALSE(b.empty());
+}
+
+TEST(DescriptorPatching, CPU_MergeProgramDescriptors_OffsetsCircularBufferAddressBindingKernels) {
+    ProgramDescriptor first;
+    first.kernels = {MakeBlankReaderKernel({0, 0})};
+    first.circular_buffer_address_bindings.push_back({.kernel_index = 0, .core = {0, 0}, .arg_idx = 1});
+    ProgramDescriptor second;
+    second.kernels = {MakeBlankReaderKernel({1, 0})};
+    second.circular_buffer_address_bindings.push_back({.kernel_index = 0, .core = {1, 0}, .arg_idx = 2});
+
+    const ProgramDescriptor merged = merge_program_descriptors({first, second});
+
+    ASSERT_EQ(merged.circular_buffer_address_bindings.size(), 2u);
+    EXPECT_EQ(merged.circular_buffer_address_bindings[0].kernel_index, 0u);
+    EXPECT_EQ(merged.circular_buffer_address_bindings[1].kernel_index, 1u);
+    EXPECT_EQ(merged.circular_buffer_address_bindings[1].arg_idx, 2u);
 }
 
 // ============================================================================
@@ -834,6 +852,66 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CommonScalarMatching
 
     Program program{desc};
     EXPECT_NO_THROW(resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get()}));
+}
+
+// Two circular buffers on core {0,0}; the kernel on core {1,0} holds the second one's address plus 0x40 in arg 1.
+ProgramDescriptor MakeCircularBufferAddressBindingDescriptor() {
+    constexpr CoreCoord cb_core = {0, 0};
+    constexpr CoreCoord kernel_core = {1, 0};
+    KernelDescriptor kd = MakeBlankReaderKernel(kernel_core);
+    kd.emplace_runtime_args(kernel_core, {7u, 0x40u, 9u});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+    for (const uint8_t cb_index : {0, 1}) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2048,
+            .core_ranges = CoreRangeSet{CoreRange{cb_core}},
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_index,
+                .data_format = tt::DataFormat::RawUInt32,
+                .page_size = 2048,
+            }}},
+        });
+    }
+    desc.circular_buffer_address_bindings.push_back(
+        {.kernel_index = 0, .core = kernel_core, .arg_idx = 1, .cb_core = cb_core, .cb_index = 1, .offset = 0x40});
+    return desc;
+}
+
+// The bound arg holds the circular buffer's address once the program is laid out, follows the circular buffer when
+// the program is laid out again, and is written again after the runtime args are rewritten.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_CircularBufferAddressBinding_FollowsCircularBuffer) {
+    const ProgramDescriptor desc = MakeCircularBufferAddressBindingDescriptor();
+    Program program{desc};
+    auto* mesh_device = get_mesh_device().get();
+    const auto bound_cb = program.impl().circular_buffers_on_core({0, 0}).at(1);
+    ASSERT_TRUE(bound_cb->buffer_indices().contains(1));
+    auto bound_arg = [&] { return GetRuntimeArgs(program, 0, {1, 0}); };
+
+    program.impl().compile_and_allocate(mesh_device, false);
+    const uint32_t first_address = bound_cb->address();
+    EXPECT_EQ(bound_arg()[0], 7u);
+    EXPECT_EQ(bound_arg()[1], first_address + 0x40);
+    EXPECT_EQ(bound_arg()[2], 9u);
+
+    // Growing the first circular buffer moves the bound one up.
+    UpdateCircularBufferTotalSize(program, program.impl().circular_buffers_on_core({0, 0}).at(0)->id(), 4096);
+    program.impl().compile_and_allocate(mesh_device, false);
+    EXPECT_EQ(bound_cb->address(), first_address + 2048);
+    EXPECT_EQ(bound_arg()[1], bound_cb->address() + 0x40);
+
+    // A cache hit's rewrite puts the descriptor's offset back; the next enqueue's layout check writes the address.
+    apply_descriptor_runtime_args(program, desc);
+    EXPECT_EQ(bound_arg()[1], 0x40u);
+    program.impl().compile_and_allocate(mesh_device, false);
+    EXPECT_EQ(bound_arg()[1], bound_cb->address() + 0x40);
+}
+
+TEST_F(DescriptorPatchingDeviceTest, Tensix_CircularBufferAddressBinding_NoSuchCircularBuffer_Throws) {
+    ProgramDescriptor desc = MakeCircularBufferAddressBindingDescriptor();
+    desc.circular_buffer_address_bindings[0].cb_index = 2;
+    EXPECT_ANY_THROW(Program{desc});
 }
 
 }  // namespace

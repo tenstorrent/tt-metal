@@ -412,23 +412,46 @@ public:
         // smaller mux.
         size_t usable_l1_end_address = 0);
 
+    // For a mux at fixed addresses. A mux in program-local L1 needs one of the overloads below.
     void append_client_connection_rt_args(
         const tt::tt_metal::CoreCoord& mux_virtual_core,
         uint8_t logical_channel_id,
         const ClientSemaphores& client_semaphores,
         std::vector<uint32_t>& worker_args) const;
 
+    // Same args, for a client kernel of `desc` / `program`: kernel `client_kernel` on `client_core`, whose runtime
+    // args on that core will hold worker_args from arg `worker_args_offset` on. For a mux in program-local L1, the
+    // program writes the map's L1 addresses into those args at every enqueue (see CircularBufferAddressBinding).
+    void append_client_connection_rt_args(
+        const tt::tt_metal::CoreCoord& mux_virtual_core,
+        uint8_t logical_channel_id,
+        const ClientSemaphores& client_semaphores,
+        tt::tt_metal::ProgramDescriptor& desc,
+        uint32_t client_kernel_index,
+        const tt::tt_metal::CoreCoord& client_core,
+        std::vector<uint32_t>& worker_args,
+        uint32_t worker_args_offset = 0) const;
+    void append_client_connection_rt_args(
+        const tt::tt_metal::CoreCoord& mux_virtual_core,
+        uint8_t logical_channel_id,
+        const ClientSemaphores& client_semaphores,
+        tt::tt_metal::Program& program,
+        tt::tt_metal::KernelHandle client_kernel,
+        const tt::tt_metal::CoreCoord& client_core,
+        std::vector<uint32_t>& worker_args,
+        uint32_t worker_args_offset = 0) const;
+
     // Exclusive end of the mux L1 map (for host-side L1 budgeting / placement).
     size_t get_memory_map_end_address() const;
 
     // Places the mux's L1 map in program-local L1, where the program's circular buffers go, instead of at the fixed
     // base_l1_address: adds a circular buffer on `mux_cores`, at the lowest index free on all of them, to hold the
-    // map, and a semaphore on `mux_cores` in which the mux publishes the map's address when it starts. A circular
-    // buffer added later on a mux core must use another index. Persistent L1 on those cores, such as
-    // a PrefetcherPipe ring, then stays below the map instead of under it. The config must be built with
-    // base_l1_address = 0. Clients need no change: append_client_connection_rt_args passes the semaphore, and
-    // FabricMuxV2Sender adds the published address before it opens. Call before add_fabric_mux_v2_to_program for
-    // any of `mux_cores`.
+    // map, and a semaphore on `mux_cores` in which the mux signals READY. A circular buffer added later on a mux core
+    // must use another index. Persistent L1 on those cores, such as a PrefetcherPipe ring, then stays below the map
+    // instead of under it. The config must be built with base_l1_address = 0. Clients' args come from the
+    // append_client_connection_rt_args overloads that take the program: the program writes the map's addresses into
+    // them, and FabricMuxV2Sender polls the semaphore for READY, which dispatch clears at every launch. Call before
+    // add_fabric_mux_v2_to_program for any of `mux_cores`.
     void place_in_program_local_l1(tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores);
     void place_in_program_local_l1(tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores);
 
@@ -466,6 +489,15 @@ private:
     void validate_logical_channel_id(uint8_t logical_channel_id) const;
     // Checks that this config can move to program-local L1 and returns the size of the circular buffer that holds it.
     uint32_t validate_program_local_l1_placement() const;
+    // Appends the client args, and calls bind(arg_offset, map_offset) for each arg that holds an L1 address in a map
+    // placed in program-local L1, where arg_offset is the arg's index in worker_args.
+    template <typename BindMapAddress>
+    void append_client_connection_rt_args_impl(
+        const tt::tt_metal::CoreCoord& mux_virtual_core,
+        uint8_t logical_channel_id,
+        const ClientSemaphores& client_semaphores,
+        std::vector<uint32_t>& worker_args,
+        const BindMapAddress& bind) const;
 
     struct MemoryRegion {
         size_t base_address = 0;
@@ -497,10 +529,12 @@ private:
 
     size_t memory_map_end_address_ = 0;
 
-    // Set by place_in_program_local_l1.
+    // Set by place_in_program_local_l1. The map's circular buffer is the one at program_local_l1_cb_index_ on
+    // program_local_l1_cb_core_, one of the mux cores.
     bool in_program_local_l1_ = false;
     uint8_t program_local_l1_cb_index_ = 0;
-    uint32_t l1_base_semaphore_id_ = 0;
+    tt::tt_metal::CoreCoord program_local_l1_cb_core_;
+    uint32_t status_semaphore_id_ = 0;
 };
 
 void add_fabric_mux_v2_to_program(

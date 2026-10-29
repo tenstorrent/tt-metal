@@ -586,6 +586,17 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             SetCommonRuntimeArgs(*this, kernel_handle, kernel_descriptor.common_runtime_args);
         }
     }
+
+    // Kernel handles are the descriptor's kernel indices, assigned in order above.
+    for (const auto& binding : descriptor.circular_buffer_address_bindings) {
+        TT_FATAL(
+            binding.kernel_index < descriptor.kernels.size(),
+            "Circular buffer address binding names kernel {}, but the descriptor has {} kernels",
+            binding.kernel_index,
+            descriptor.kernels.size());
+        internal_->add_circular_buffer_address_binding(
+            binding.kernel_index, binding.core, binding.arg_idx, binding.cb_core, binding.cb_index, binding.offset);
+    }
 }
 
 namespace {
@@ -2357,6 +2368,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
                 }
             }
         }
+        this->write_circular_buffer_address_args();
         return;
     }
 
@@ -2403,6 +2415,56 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         }
     }
     this->local_circular_buffer_allocation_needed_ = false;
+    this->write_circular_buffer_address_args();
+}
+
+void detail::ProgramImpl::add_circular_buffer_address_binding(
+    KernelHandle kernel,
+    const CoreCoord& core,
+    uint32_t arg_idx,
+    const CoreCoord& cb_core,
+    uint8_t cb_index,
+    uint32_t offset) {
+    std::shared_ptr<Kernel> bound_kernel = this->get_kernel(kernel);
+    TT_FATAL(
+        bound_kernel->is_on_logical_core(core),
+        "Circular buffer address binding: kernel {} is not placed on core {}",
+        bound_kernel->name(),
+        core.str());
+    std::shared_ptr<CircularBufferImpl> bound_circular_buffer;
+    for (const auto& circular_buffer : this->circular_buffers_on_core(cb_core)) {
+        if (circular_buffer->buffer_indices().contains(cb_index)) {
+            bound_circular_buffer = circular_buffer;
+            break;
+        }
+    }
+    TT_FATAL(
+        bound_circular_buffer != nullptr,
+        "Circular buffer address binding for kernel {} on core {}: no circular buffer with index {} on core {}",
+        bound_kernel->name(),
+        core.str(),
+        cb_index,
+        cb_core.str());
+    this->circular_buffer_address_args_.push_back(CircularBufferAddressArg{
+        .kernel = std::move(bound_kernel),
+        .core = core,
+        .arg_idx = arg_idx,
+        .circular_buffer = std::move(bound_circular_buffer),
+        .offset = offset});
+}
+
+void detail::ProgramImpl::write_circular_buffer_address_args() {
+    for (const auto& arg : this->circular_buffer_address_args_) {
+        RuntimeArgsData& runtime_args = arg.kernel->runtime_args_data(arg.core);
+        TT_FATAL(
+            arg.arg_idx < runtime_args.size(),
+            "Circular buffer address binding: kernel {} has {} runtime args on core {}, but arg {} is bound",
+            arg.kernel->name(),
+            runtime_args.size(),
+            arg.core.str(),
+            arg.arg_idx);
+        runtime_args[arg.arg_idx] = static_cast<uint32_t>(arg.circular_buffer->address()) + arg.offset;
+    }
 }
 
 namespace {
@@ -3366,6 +3428,8 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     // program. Validation still reads live device state. In the lockstep case,
     // one L1 frontier covers all static CB and DFB regions.
     if (not this->compile_and_allocate_needed_ and this->compile_and_allocate_device_ == device) {
+        // A cache hit may have rewritten the runtime args since the circular buffers were placed.
+        this->write_circular_buffer_address_args();
         const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
         if (this->simple_l1_validation_cached_ && !svc.has_any_claims() &&
             device->get_active_sub_device_manager_id() == this->simple_l1_validation_manager_id_ &&

@@ -109,6 +109,12 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
     for (size_t i = 1; i < descriptors.size(); ++i) {
         const auto& other = descriptors[i];
 
+        // Merge circular buffer address bindings; other's kernels land after result's.
+        for (auto binding : other.circular_buffer_address_bindings) {
+            binding.kernel_index += static_cast<uint32_t>(result.kernels.size());
+            result.circular_buffer_address_bindings.push_back(binding);
+        }
+
         // Merge kernels
         for (const auto& kernel : other.kernels) {
             result.kernels.push_back(kernel);

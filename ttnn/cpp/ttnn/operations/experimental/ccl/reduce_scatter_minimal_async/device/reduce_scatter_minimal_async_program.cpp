@@ -1104,6 +1104,9 @@ auto build_ring_reduce_scatter_program_impl(
                             .flow_control_sem_id = flow_control_sem_id,
                             .teardown_sem_id = teardown_sem_id,
                         },
+                        program,
+                        writer_kernel_id,
+                        core,
                         writer_rt_args);
                 }
                 if (!num_mux_cores_per_direction_per_link) {
@@ -1801,6 +1804,9 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
                             .flow_control_sem_id = flow_control_sem_id,
                             .teardown_sem_id = teardown_sem_id,
                         },
+                        desc,
+                        static_cast<uint32_t>(writer_kernel_index),
+                        core,
                         writer_rt_args);
                 }
                 if (!num_mux_cores_per_direction_per_link) {

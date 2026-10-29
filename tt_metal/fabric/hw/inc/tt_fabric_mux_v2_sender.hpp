@@ -49,9 +49,10 @@ static constexpr uint8_t kInvalidStatusReadTrid = 0xFF;
  *
  * Runtime args (FabricMuxV2Config::append_client_connection_rt_args):
  *   mux_x, mux_y, logical_channel_id, num_buffers, channel_buffer_size_bytes,
- *   channel_base, connection_info, handshake, flow_control_sem, teardown_sem, mux_status, l1_base_sem
- * For a mux in program-local L1, the four addresses are offsets from the address the mux publishes in semaphore
- * l1_base_sem when it starts; open() waits for it. Otherwise l1_base_sem is kFabricMuxV2NoL1BaseSemaphore.
+ *   channel_base, connection_info, handshake, flow_control_sem, teardown_sem, mux_status, status_sem
+ * For a mux in program-local L1, the program writes the map's addresses into channel_base, connection_info and
+ * handshake, and READY is polled in semaphore status_sem on the mux core instead of at mux_status. Otherwise
+ * status_sem is kFabricMuxV2NoStatusSemaphore.
  */
 template <bool EAGER_STAGING = false, uint8_t NUM_BUFFERS = 0>
 class FabricMuxV2Sender {
@@ -73,7 +74,11 @@ public:
         const uint32_t flow_control_sem_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t teardown_sem_id = get_arg_val<uint32_t>(arg_idx++);
         sender.mux_status_address = get_arg_val<uint32_t>(arg_idx++);
-        sender.l1_base_semaphore_id = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t status_sem_id = get_arg_val<uint32_t>(arg_idx++);
+        if (status_sem_id != kFabricMuxV2NoStatusSemaphore) {
+            // The mux is in the same program, so the semaphore has this address on its core too.
+            sender.mux_status_address = get_semaphore<ProgrammableCoreType::TENSIX>(status_sem_id);
+        }
 
         sender.num_buffers = USER_DEFINED_NUM_BUFFERS ? NUM_BUFFERS : static_cast<uint8_t>(num_buffers_rt);
         // Clients are always Tensix workers.
@@ -338,23 +343,7 @@ private:
         advance_local_cursor();
     }
 
-    // For a mux in program-local L1: wait for the mux to publish its map's address, and add it to the offsets.
-    void resolve_l1_base() {
-        if (l1_base_semaphore_id == kFabricMuxV2NoL1BaseSemaphore) {
-            return;
-        }
-        const uint32_t l1_base = poll_fabric_mux_l1_base(
-            mux_noc_x, mux_noc_y, l1_base_semaphore_id, reinterpret_cast<uint32_t>(teardown_ptr), noc_index);
-        channel_base_address += l1_base;
-        connection_info_address += l1_base;
-        connection_handshake_address += l1_base;
-        mux_status_address += l1_base;
-        // Resolved: a later open() reuses the addresses.
-        l1_base_semaphore_id = kFabricMuxV2NoL1BaseSemaphore;
-    }
-
     void open_blocking() {
-        resolve_l1_base();
         wait_until_ready_blocking();
         init_local_state();
         publish_worker_location_info();
@@ -363,7 +352,6 @@ private:
     }
 
     void open_staging(uint8_t status_trid) {
-        resolve_l1_base();
         init_local_state();
         publish_worker_location_info();
         status_read_trid = status_trid;
@@ -498,7 +486,6 @@ private:
     uint32_t connection_info_address = 0;
     uint32_t connection_handshake_address = 0;
     uint32_t mux_status_address = 0;
-    uint32_t l1_base_semaphore_id = kFabricMuxV2NoL1BaseSemaphore;
     uint32_t credit_stream_reg_write_addr = 0;
 
     // flow_control: manager-published read counter. teardown: close ack; also READY scratch.

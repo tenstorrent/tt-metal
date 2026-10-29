@@ -1040,6 +1040,9 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
                 mux_virtual_core,
                 static_cast<uint8_t>(worker),
                 {.flow_control_sem_id = flow_control_sem_id, .teardown_sem_id = teardown_sem_id},
+                desc,
+                sender_writer_kernel_ids[sender_stream],
+                core,
                 sender_writer_rt_args);
         } else if (is_fabric_2d) {
             // Open one routed connection for every physical first-hop direction used by this stream. Logical axes can

@@ -25,8 +25,9 @@ struct FabricMuxV2SharedControlBlock {
 
 static_assert(sizeof(FabricMuxV2SharedControlBlock) / sizeof(uint32_t) == 3);
 
-// Client runtime arg in place of the mux's base-address semaphore id when the mux's L1 map is at absolute
-// addresses, rather than in program-local L1 (FabricMuxV2Config::place_in_program_local_l1).
-constexpr uint32_t kFabricMuxV2NoL1BaseSemaphore = 0xFFFFFFFF;
+// Client runtime arg in place of the mux's status semaphore id when the mux's L1 map is at fixed addresses, rather
+// than in program-local L1 (FabricMuxV2Config::place_in_program_local_l1): the client then polls the status word in
+// the map.
+constexpr uint32_t kFabricMuxV2NoStatusSemaphore = 0xFFFFFFFF;
 
 }  // namespace tt::tt_fabric

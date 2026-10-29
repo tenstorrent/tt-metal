@@ -272,6 +272,16 @@ public:
     void prepare_ephemeral_allocation(const IDevice* device);
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
+    // Runtime arg `arg_idx` of `kernel` on `core` holds the L1 address of the circular buffer with buffer index
+    // `cb_index` on `cb_core`, plus `offset` (see CircularBufferAddressBinding). allocate_circular_buffers and
+    // compile_and_allocate write it, so it is current at every enqueue.
+    void add_circular_buffer_address_binding(
+        KernelHandle kernel,
+        const CoreCoord& core,
+        uint32_t arg_idx,
+        const CoreCoord& cb_core,
+        uint8_t cb_index,
+        uint32_t offset);
     void allocate_dataflow_buffers(const IDevice* device);
     // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
     // and patch the base address into the CRTA buffer
@@ -694,6 +704,15 @@ private:
 
     std::vector<std::shared_ptr<CircularBufferImpl>> circular_buffers_;
     std::unordered_map<CBHandle, std::shared_ptr<CircularBufferImpl>> circular_buffer_by_id_;
+    struct CircularBufferAddressArg {
+        std::shared_ptr<Kernel> kernel;
+        CoreCoord core;
+        uint32_t arg_idx = 0;
+        std::shared_ptr<CircularBufferImpl> circular_buffer;
+        uint32_t offset = 0;
+    };
+    std::vector<CircularBufferAddressArg> circular_buffer_address_args_;
+    void write_circular_buffer_address_args();
     // Tracks which circular buffer indices are being used
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;

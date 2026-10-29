@@ -860,11 +860,18 @@ void append_selective_reduce_combine_to_descriptor(
         mux_connection_args.push_back(link_sync_virtual_core.y);
 
         // This worker is logical channel link_worker_idx on each mux of its link. append_client_connection_rt_args
-        // serializes the 12 args FabricMuxV2Sender::build_from_args consumes.
+        // serializes the 12 args FabricMuxV2Sender::build_from_args consumes; mux_connection_args follow writer_rt.
         for (std::size_t d = 0; d < neighbors.size(); ++d) {
             const auto& mux_virtual_core = core_map_iter->at(neighbors[d]);
             mux_config.append_client_connection_rt_args(
-                mux_virtual_core, static_cast<uint8_t>(link_worker_idx), client_semaphores[d], mux_connection_args);
+                mux_virtual_core,
+                static_cast<uint8_t>(link_worker_idx),
+                client_semaphores[d],
+                desc,
+                writer_kernel_idx,
+                sender_core,
+                mux_connection_args,
+                static_cast<uint32_t>(writer_rt.size()));
         }
         writer_rt.append(mux_connection_args);
 

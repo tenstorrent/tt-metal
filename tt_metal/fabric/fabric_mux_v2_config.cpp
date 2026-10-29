@@ -19,6 +19,7 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_mux_program_local_l1.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_fabric {
 namespace {
@@ -65,8 +66,9 @@ struct FabricMuxV2ClientConnectionRtArgs {
     uint32_t flow_control_sem_id = 0;
     uint32_t teardown_sem_id = 0;
     uint32_t mux_status_address = 0;
-    // For a mux in program-local L1, the addresses above are offsets from the address the mux publishes here.
-    uint32_t l1_base_semaphore_id = kFabricMuxV2NoL1BaseSemaphore;
+    // For a mux in program-local L1, the semaphore the mux signals READY in; the client polls it instead of
+    // mux_status_address.
+    uint32_t status_semaphore_id = kFabricMuxV2NoStatusSemaphore;
 
     static constexpr size_t kWordCount = 12;
 
@@ -83,13 +85,21 @@ struct FabricMuxV2ClientConnectionRtArgs {
             flow_control_sem_id,
             teardown_sem_id,
             mux_status_address,
-            l1_base_semaphore_id,
+            status_semaphore_id,
         };
     }
 };
 
 static_assert(
     sizeof(FabricMuxV2ClientConnectionRtArgs) == FabricMuxV2ClientConnectionRtArgs::kWordCount * sizeof(uint32_t));
+
+// Args that hold L1 addresses in the mux's map, by index in the serialized args. mux_status_address is not one: a
+// client of a mux in program-local L1 polls the status semaphore instead.
+constexpr std::array<uint32_t, 3> kClientMapAddressArgs = {
+    offsetof(FabricMuxV2ClientConnectionRtArgs, channel_base_address) / sizeof(uint32_t),
+    offsetof(FabricMuxV2ClientConnectionRtArgs, connection_info_address) / sizeof(uint32_t),
+    offsetof(FabricMuxV2ClientConnectionRtArgs, connection_handshake_address) / sizeof(uint32_t),
+};
 
 void validate_forwarder_service_burst_size(uint32_t service_burst_size) {
     TT_FATAL(service_burst_size > 0, "FabricMuxV2 forwarder service burst size must be greater than zero");
@@ -210,11 +220,13 @@ FabricMuxV2Config::FabricMuxV2Config(
         physical_l1_end_address);
 }
 
-void FabricMuxV2Config::append_client_connection_rt_args(
+template <typename BindMapAddress>
+void FabricMuxV2Config::append_client_connection_rt_args_impl(
     const tt::tt_metal::CoreCoord& mux_virtual_core,
     uint8_t logical_channel_id,
     const ClientSemaphores& client_semaphores,
-    std::vector<uint32_t>& worker_args) const {
+    std::vector<uint32_t>& worker_args,
+    const BindMapAddress& bind) const {
     validate_logical_channel_id(logical_channel_id);
 
     FabricMuxV2ClientConnectionRtArgs connection_rt_args{};
@@ -234,11 +246,80 @@ void FabricMuxV2Config::append_client_connection_rt_args(
     connection_rt_args.teardown_sem_id = client_semaphores.teardown_sem_id;
     connection_rt_args.mux_status_address = to_uint32_checked(status_region_.get_address(), "mux_status_address");
     if (in_program_local_l1_) {
-        connection_rt_args.l1_base_semaphore_id = l1_base_semaphore_id_;
+        connection_rt_args.status_semaphore_id = status_semaphore_id_;
     }
 
     const auto serialized_rt_args = connection_rt_args.serialize();
+    const auto first_arg_offset = static_cast<uint32_t>(worker_args.size());
     worker_args.insert(worker_args.end(), serialized_rt_args.begin(), serialized_rt_args.end());
+    if (in_program_local_l1_) {
+        for (const uint32_t arg : kClientMapAddressArgs) {
+            bind(first_arg_offset + arg, serialized_rt_args[arg]);
+        }
+    }
+}
+
+void FabricMuxV2Config::append_client_connection_rt_args(
+    const tt::tt_metal::CoreCoord& mux_virtual_core,
+    uint8_t logical_channel_id,
+    const ClientSemaphores& client_semaphores,
+    std::vector<uint32_t>& worker_args) const {
+    TT_FATAL(
+        !in_program_local_l1_,
+        "The clients of a FabricMuxV2 in program-local L1 need the map's address: use the "
+        "append_client_connection_rt_args overload that takes the client's program");
+    append_client_connection_rt_args_impl(
+        mux_virtual_core, logical_channel_id, client_semaphores, worker_args, [](uint32_t, uint32_t) {});
+}
+
+void FabricMuxV2Config::append_client_connection_rt_args(
+    const tt::tt_metal::CoreCoord& mux_virtual_core,
+    uint8_t logical_channel_id,
+    const ClientSemaphores& client_semaphores,
+    tt::tt_metal::ProgramDescriptor& desc,
+    uint32_t client_kernel_index,
+    const tt::tt_metal::CoreCoord& client_core,
+    std::vector<uint32_t>& worker_args,
+    uint32_t worker_args_offset) const {
+    append_client_connection_rt_args_impl(
+        mux_virtual_core,
+        logical_channel_id,
+        client_semaphores,
+        worker_args,
+        [&](uint32_t arg_offset, uint32_t map_offset) {
+            desc.circular_buffer_address_bindings.push_back(tt::tt_metal::CircularBufferAddressBinding{
+                .kernel_index = client_kernel_index,
+                .core = client_core,
+                .arg_idx = worker_args_offset + arg_offset,
+                .cb_core = program_local_l1_cb_core_,
+                .cb_index = program_local_l1_cb_index_,
+                .offset = map_offset});
+        });
+}
+
+void FabricMuxV2Config::append_client_connection_rt_args(
+    const tt::tt_metal::CoreCoord& mux_virtual_core,
+    uint8_t logical_channel_id,
+    const ClientSemaphores& client_semaphores,
+    tt::tt_metal::Program& program,
+    tt::tt_metal::KernelHandle client_kernel,
+    const tt::tt_metal::CoreCoord& client_core,
+    std::vector<uint32_t>& worker_args,
+    uint32_t worker_args_offset) const {
+    append_client_connection_rt_args_impl(
+        mux_virtual_core,
+        logical_channel_id,
+        client_semaphores,
+        worker_args,
+        [&](uint32_t arg_offset, uint32_t map_offset) {
+            program.impl().add_circular_buffer_address_binding(
+                client_kernel,
+                client_core,
+                worker_args_offset + arg_offset,
+                program_local_l1_cb_core_,
+                program_local_l1_cb_index_,
+                map_offset);
+        });
 }
 
 std::unordered_map<std::string, uint32_t> FabricMuxV2Config::get_fabric_mux_v2_named_compile_time_args() const {
@@ -266,7 +347,7 @@ std::unordered_map<std::string, uint32_t> FabricMuxV2Config::get_fabric_mux_v2_n
         {"fabric_mux_v2_forwarder_service_burst_size", forwarder_service_burst_size_},
         {"fabric_mux_v2_in_program_local_l1", static_cast<uint32_t>(in_program_local_l1_)},
         {"fabric_mux_v2_program_local_l1_cb_index", program_local_l1_cb_index_},
-        {"fabric_mux_v2_l1_base_semaphore_id", l1_base_semaphore_id_}};
+        {"fabric_mux_v2_status_semaphore_id", status_semaphore_id_}};
 }
 
 uint32_t FabricMuxV2Config::validate_program_local_l1_placement() const {
@@ -285,7 +366,8 @@ void FabricMuxV2Config::place_in_program_local_l1(
     const auto placement = detail::reserve_fabric_mux_program_local_l1(desc, mux_cores, map_size);
     in_program_local_l1_ = true;
     program_local_l1_cb_index_ = placement.cb_index;
-    l1_base_semaphore_id_ = placement.l1_base_semaphore_id;
+    program_local_l1_cb_core_ = mux_cores.ranges().front().start_coord;
+    status_semaphore_id_ = placement.semaphore_id;
 }
 
 void FabricMuxV2Config::place_in_program_local_l1(
@@ -294,7 +376,8 @@ void FabricMuxV2Config::place_in_program_local_l1(
     const auto placement = detail::reserve_fabric_mux_program_local_l1(program, mux_cores, map_size);
     in_program_local_l1_ = true;
     program_local_l1_cb_index_ = placement.cb_index;
-    l1_base_semaphore_id_ = placement.l1_base_semaphore_id;
+    program_local_l1_cb_core_ = mux_cores.ranges().front().start_coord;
+    status_semaphore_id_ = placement.semaphore_id;
 }
 
 void add_fabric_mux_v2_to_program(
