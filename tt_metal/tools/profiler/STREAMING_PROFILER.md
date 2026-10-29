@@ -3,7 +3,7 @@
 Data is streamed off the device as it is produced, so capture runs continuously instead of stopping at
 a kernel or program boundary. Host callbacks receive every record and decide what to do with it (see
 [STREAMING_PROFILER_DETAILED.md](STREAMING_PROFILER_DETAILED.md)). A Tracy callback ships built in: set
-`TT_METAL_STREAMING_PROFILER_TRACY=1` and every record is pushed to the GUI.
+`TT_METAL_STREAMING_PROFILER_TRACY=1` and it pushes every zone, event and timestamped data record to the GUI.
 
 The three device-side primitives are below — device code, the host callback that receives it, and how
 it renders. All three GIFs come from one 50-iteration demo kernel; one GPU context per worker core,
@@ -31,8 +31,8 @@ register a callable taking the `Batch` of the record types you want:
 Callback zones = RegisterCallback([](const Batch<Zone>& batch) {
     for (const Zone& zone : batch.records<Zone>()) {
         fmt::print("{}: {} ns on chip {} core ({},{}) {} (op {})\n",
-            zone.site().name,  // "compute"
-            zone.duration().count(), zone.core().chip_id, zone.core().logical.x, zone.core().logical.y,
+            zone.metadata().name,  // "compute"
+            zone.payload().duration().count(), zone.core().chip_id, zone.core().logical.x, zone.core().logical.y,
             enchantum::to_string(zone.core().processor), zone.runtime_id());
     }
 }, "zone-sink");
@@ -58,14 +58,14 @@ for (uint32_t it = 0; it < N_ITERS; it++) {
 }
 ```
 
-Host callback — a `TimestampedData` record arrives assembled, its payload as a span of uint64 words:
+Host callback — a `TimestampedData` record arrives assembled, its values as a span of uint64 words:
 
 ```cpp
 Callback data = RegisterCallback([](const Batch<TimestampedData>& batch) {
     for (const TimestampedData& record : batch.records<TimestampedData>()) {
         fmt::print("{} @ {}: value={}\n",
-            record.site().name,  // "BYTES-MOVED"
-            record.time().time_since_epoch().count(), record.payload()[0]);
+            record.metadata().name,  // "BYTES-MOVED"
+            record.published_at().time().time_since_epoch().count(), record.payload()[0]);
     }
 }, "data-sink");
 ```
@@ -92,7 +92,7 @@ Host callback — an `Event` is a name and a time, nothing else:
 Callback events = RegisterCallback([](const Batch<Event>& batch) {
     for (const Event& event : batch.records<Event>()) {
         fmt::print("{} @ {} on core ({},{})\n",
-            event.site().name, event.time().time_since_epoch().count(),  // "LOOP-START" @ host time
+            event.metadata().name, event.published_at().time().time_since_epoch().count(),  // "LOOP-START" @ host time
             event.core().logical.x, event.core().logical.y);
     }
 }, "event-sink");
@@ -105,6 +105,62 @@ moment (phase boundary, retry, error path) on the timeline. Here one `LOOP-START
 iteration, next to that iteration's `BYTES-MOVED` on the same row. Same macro as the DRAM
 profiler's; there its argument is a runtime `uint16_t` id, here it is a compile-time name like
 the other two primitives, because the streaming wire resolves every marker's name from the ELF.
+
+## 4. Your own records — `DevicePublish`
+
+A kernel can publish a struct of its own, and a callback receives it as the same C++ type. Define the payload, and a
+metadata struct that names the call site, in a header that both the kernel and the host include:
+
+```cpp
+// tile_stats.hpp
+#pragma once
+#include <cstdint>
+#include <hostdevcommon/streaming_profiler_types.hpp>
+
+struct TileStats {  // the payload, sent with each record
+    uint32_t tiles, bytes;
+};
+struct Name {  // the metadata, fixed when the kernel compiles
+    tt::tt_metal::experimental::streaming_profiler::String name;  // "..."_s in a kernel, a std::string_view on the host
+};
+```
+
+Device:
+
+```cpp
+#include "api/debug/device_publish.h"
+#include "tile_stats.hpp"
+
+void kernel_main() {
+    for (uint32_t it = 0; it < N_ITERS; it++) {
+        do_compute();
+        DevicePublish<Name{"tile stats"_s}>(TileStats{it, it * 2048});
+    }
+}
+```
+
+Host callback — a `Record<Payload, Metadata>` holds the payload, which `r.payload()` reaches, and its call site's
+metadata:
+
+```cpp
+Callback stats = RegisterCallback([](const Batch<Record<TileStats, Name>>& batch) {
+    for (const auto& r : batch.records<Record<TileStats, Name>>()) {
+        fmt::print("{} @ {}: {} tiles, {} bytes\n",
+            r.metadata().name,  // "tile stats"
+            r.published_at().time().time_since_epoch().count(), r.payload().tiles, r.payload().bytes);
+    }
+}, "stats-sink");
+```
+
+A kernel can pass arguments one by one instead of a struct. `DevicePublish<Name{"tiles"_s}>(count, ratio)`, with a
+`uint32_t` count and a `float` ratio, reaches a callback as `Record<std::tuple<uint32_t, float>, Name>`, and a single
+argument as its own type, such as `Record<uint32_t, Name>`. Call sites that pass different numbers of arguments reach
+`Record<Variadic<T>, Name>`, whose payload is a span of them.
+
+Payload fields and arguments use fixed-width types such as `uint32_t` and `float`, and `Timestamp` for a time a kernel
+takes with `Timestamp::now()`. Text is `String`, and goes only in metadata: to send text chosen at runtime, branch over
+`DevicePublish` calls, one per text, and pass `kNoInline` so each branch costs only a call. The full rules are in
+`api/debug/device_publish.h`.
 
 ## Where to go next
 

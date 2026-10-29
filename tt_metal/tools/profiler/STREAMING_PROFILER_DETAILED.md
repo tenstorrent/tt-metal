@@ -42,7 +42,7 @@ harness and direct-push-plan notes.
   - [3.3 The DRISC hang-investigation harness (2026-08)](#33-the-drisc-hang-investigation-harness-2026-08)
 - [4. Zone primitives and the wire format](#4-zone-primitives-and-the-wire-format)
   - [4.1 Zones and point markers in the Tracy GUI](#41-zones-and-point-markers-in-the-tracy-gui)
-  - [4.2 The zone wire format, and what it measures like](#42-the-zone-wire-format-and-what-it-measures-like)
+  - [4.2 The record wire format, and what it measures like](#42-the-record-wire-format-and-what-it-measures-like)
 - [5. Dev tools: reading a `.tracy` without the GUI](#5-dev-tools-reading-a-tracy-without-the-gui)
 - [6. Findings and benchmarks](#6-findings-and-benchmarks)
   - [6.1 How to read this, and the name mapping](STREAMING_PROFILER_FINDINGS.md#61-how-to-read-this-and-the-name-mapping)
@@ -198,7 +198,7 @@ Everything except `TT_METAL_STREAMING_PROFILER` itself applies in mode 3 only.
 | variable | default | effect |
 |---|---|---|
 | `TT_METAL_STREAMING_PROFILER_SYNC_CHECK` | off | Measures the clock sync's chip-to-chip accuracy, logs it at each capture end and plots it in Tracy (§2.5). Takes a third idle eth core per chip and costs fabric bandwidth. |
-| `TT_METAL_STREAMING_PROFILER_INLINE_ENABLED` | on | Inlines the zone-marker emit path. `0` calls it out of line instead, so a kernel with too many zones to inline still fits the kernel-config ring. |
+| `TT_METAL_STREAMING_PROFILER_INLINE_ENABLED` | on | Inlines the record emit path (`publish_with`). `0` calls it out of line instead, so a kernel with too many records to inline still fits the kernel-config ring. |
 
 **Consumers, all off unless set**
 
@@ -244,58 +244,37 @@ payload included, so it stays valid after the call returns. Callbacks live on th
 
 ### 1.5 What you get
 
-Zones arrive **whole**, as one record with a start and a duration. On the wire every zone ships as one packet at scope
-close, carrying its end and duration.
-
-Every record is a self-contained value holding its device timestamps, their host times, its core and the runtime id of
-the program running on that core. An event takes 32 bytes and a zone or a timestamped data record takes 48. A
-timestamped data record's payload sits in a separate array. The site name resolves through the process-wide zone-name
-registry, which lives as long as the process:
+Every marker arrives as a self-contained `Record<Payload, Metadata>`; its call site's metadata and location live as long
+as the process. A `Timestamp` reads on steady_clock (`time()`), in host reference cycles (`host_cycles()`) or in the
+core's own clock cycles (`device_cycles()`).
 
 ```cpp
-class Record {  // what every kind carries
-    const MarkerSite& site() const;   // name and source location
-    Core core() const;          // chip, logical and physical (NoC 0) coordinates, processor
-    uint32_t runtime_id() const;  // host runtime ID of the program on the core, 0 = none yet
+template <typename Payload, typename Metadata>
+class Record {
+    const auto& payload() const;             // what the call passed: one value, a std::tuple, or Variadic's span
+    Core core() const;                       // chip, logical and physical (NoC 0) coordinates, processor
+    uint32_t runtime_id() const;             // host runtime ID of the program on the core, 0 = none yet
+    const SourceLocation& location() const;  // the call site's file, function and line
+    const Timestamp& published_at() const;   // when the core published the record
+    const auto& metadata() const;            // the call site's metadata
 };
-class Zone : public Record {  // a closed DeviceZoneScopedN scope, or a stall (site().name == STALL_ZONE_NAME)
-    uint64_t start_device_cycles() const;
-    uint64_t end_device_cycles() const;
-    int64_t start_host_cycles() const;  // host reference cycles (x86 time-stamp counter)
-    int64_t end_host_cycles() const;
-    std::chrono::nanoseconds duration() const;
-    std::chrono::steady_clock::time_point start_time() const;
-    std::chrono::steady_clock::time_point end_time() const;
-    double frequency_ghz() const;  // average device clock frequency over the zone
-};
-class PointRecord : public Record {  // a record that marks one instant
-    uint64_t device_cycles() const;
-    int64_t host_cycles() const;
-    std::chrono::steady_clock::time_point time() const;
-};
-class TimestampedData : public PointRecord {  // a DeviceTimestampedData marker
-    std::span<const uint64_t> payload() const;  // the 64-bit values the kernel recorded, in order
-};
-class Event : public PointRecord {};  // a DeviceRecordEvent marker
+using Zone = Record<Interval, ZoneMetadata>;  // a closed DeviceZoneScopedN scope, or a stall (name STALL_ZONE_NAME)
+using TimestampedData = Record<Variadic<uint64_t>, TimestampedDataMetadata>;  // a DeviceTimestampedData marker
+using Event = Record<void, EventMetadata>;                                      // a DeviceRecordEvent marker
 ```
 
-Ordering: cross-lane interleaving is arbitrary — key any state you keep by `core()`. A zone is
-delivered when it **ends**, so under nesting `start_device_cycles()` isn't monotonic within a lane;
-start and end together are complete information either way.
+A zone's `Interval` holds its `start` and `end` Timestamps, with `duration()` and `frequency_ghz()`. Kernels publish
+records of their own types with `DevicePublish` (`api/debug/device_publish.h`), and a callback reads them as
+`Record<TheirPayload, TheirMetadata>`, the same C++ types.
+
+Ordering: cross-lane interleaving is arbitrary — key any state you keep by `core()`, or walk `batch.visit()`, which
+gives each processor's records in the order it emitted them. A zone is delivered when it **ends**, so under nesting
+`zone.payload().start` isn't monotonic within a lane; start and end together are complete information either way.
 
 ### 1.6 The call pattern
 
 The ops-CSV consumer in `tt_metal/impl/streaming_profiler/ops_csv.{hpp,cpp}` is the full working
 reference.
-
-```cpp
-void MyConsumer::operator()(const Batch<Zone>& batch) {
-    for (const Zone& zone : batch.records<Zone>()) {
-        // zone.site().name, zone.core() (chip, coordinate, processor), zone.runtime_id(); device cycles in
-        // zone.start_device_cycles() / zone.end_device_cycles(), host time via zone.start_time() / zone.duration()
-    }
-}
-```
 
 ### 1.7 Try it end to end
 
@@ -314,7 +293,7 @@ The synthetic zone workload used throughout §6 is
 `tt_metal/programming_examples/profiler/test_streaming_profiler_zones` (built by `./build_metal.sh` with
 the programming examples). A clean run decodes exactly `iters × 6000 + 600` records on a 12×10 grid
 (10 zones × 600 lanes + 1 trailing per lane); a stalling run's record surplus equals the device L1 stall
-counter to the unit (§4.2).
+counter to the unit, since a stall is one zone record (§4.2).
 
 A built-in callback pushes zones to a Tracy timeline; enable it with
 `TT_METAL_STREAMING_PROFILER_TRACY=1`. What the three device primitives look like there is §4.1.
@@ -332,7 +311,7 @@ them.
 ### 2.1 The pipeline
 
 ```
-worker RISC ──2/3/5-word zone packets──▶ L1 SPSC marker ring, one per RISC (512 words), heads + tails in a
+worker RISC ──1+N-word record packets──▶ L1 SPSC marker ring, one per RISC (512 words), heads + tails in a
     │                                     per-core control vector.  A producer BLOCKS on a full ring: the
     │                                     pipeline is lossless end to end (the stall is itself a zone).
     ▼
@@ -362,7 +341,8 @@ consumers — every consumer thread copies frames out of the FIFO from its own c
     behind skips ahead to the first frame boundary an eighth of the FIFO past the point the device is overwriting,
     losing whole frames, and counts the bytes in `dropped_bytes()`. Every frame carries each lane's timer high word and
     runtime id in its control block, so decoding resumes exactly at the next frame. The only packets it drops are a
-    lane's ZONE_S packets before its next ZONE_ATOMIC, whose ends it can't work out.
+    lane's short records, whose times it can't work out until a medium record from a call site with a short form sets
+    the lane's cursor.
 ```
 
 ### 2.2 The relay
@@ -422,23 +402,22 @@ Host files live in `tt_metal/impl/streaming_profiler/`.
 - `receiver.{hpp,cpp}` — ingest as in §2.1, reading frames in place in the D2H FIFO. The ingest thread walks each
   frame's header in place, publishes how far it has walked and one frame boundary per `kMarkBytes`, and returns the
   socket's credits as the walk earns them. A consumer copies frames from its own cursor up to the walked mark
-  (`walk_frames`, `service.hpp`) and drops them as §2.1 describes. Decode lives in the consumers (`decode.hpp`, one
+  (`walk_frames`, `receiver.hpp`) and drops them as §2.1 describes. Decode lives in the consumers (`decode.hpp`, one
   `StreamDecoder` per consumer per stream): it recovers from a gap by reseeding lane state from the frame's control
-  words (the producer's per-RISC state slots, written after its tail so a frame never carries a value its words do not)
-  and re-anchoring at the next absolute zone. Decode is vectorized (AVX2 zone blocks, §N+54/§N+68) and memory-latency
-  bound (§N+55–§N+57).
-- `spsc_marker_decode.hpp` (the decode single source of truth), `spsc_packet.h` (plain-C packet
+  words (the producer's per-RISC state slots, written after its tail so a frame never carries a value its words do
+  not). Decode is vectorized (AVX2, §N+54/§N+68) and memory-latency bound (§N+55–§N+57).
+- `spsc_marker_decode.hpp` (the decode's vector kernels), `spsc_packet.h` (plain-C packet
   constants shared with the device's `ppfmt`), `hw/inc/hostdev/streaming_profiler_common.h` (span/frame
   geometry, pack-pad rule, `SPSC_SPAN_RAW_FLAG`).
 - Consumers: `service.{hpp,cpp}` (callbacks, one thread each, reading every attached receiver's FIFOs),
   `receiver.{hpp,cpp}` (the sync thread), `api.cpp` (the public `RegisterCallback`, the process-wide site table),
   `capture_context.hpp` (a capture's devices, their cores and clock offsets, and its links), `decode.{hpp,cpp}` (the
-  frame decoder), `ops_csv`, `zone_csv`, `tracy_consumer.{hpp,cpp}` (the Tracy sink: one context per core, every record
-  already on the host timeline and placed against one process-wide anchor).
-- Device producer: `kernel_profiler_streaming.hpp`, selected by `-DPROFILE_STREAMING`. Zone ids are 16-bit,
-  assigned per image as it loads (`hostdev/profiler_zone_id.h`, `llrt/zone_meta.cpp`) and resolved to names
-  from the image's ELF on the host; every RISC emits its own `STICKY_PROG` at launch so
-  `rec.prog` is exact on every lane (§N+60).
+  frame decoder, and a consumer's batches: their buffers, host times and records), `ops_csv`, `zone_csv`,
+  `tracy_consumer.{hpp,cpp}` (the Tracy sink: one context per core, every record already on the host timeline and
+  placed against one process-wide anchor).
+- Device producer: DevicePublish (`internal/debug/device_publish_impl.h`, `device_publish_encoding.h` and
+  `device_publish_ring.h`) and the markers on it (`kernel_profiler_streaming.hpp`), under `-DPROFILE_STREAMING`
+  (ids: §4.2). Every RISC emits its own `STICKY_PROG` at launch so `runtime_id()` is exact on every lane (§N+60).
 
 ### 2.4 Sizing and where the numbers come from
 
@@ -1105,8 +1084,8 @@ no repro, because it looks like progress.
 ## 4. Zone primitives and the wire format
 
 Three device-side primitives — `DeviceZoneScopedN`, `DeviceTimestampedData`, `DeviceRecordEvent` — and the
-variable-width packet family that carries them. §4.1 points at the illustrated intro to the three;
-§4.2 is the wire format and what it measures like. Consumers see complete
+record wire format that carries them and every other `DevicePublish` record. §4.1 points at the illustrated
+intro to the three; §4.2 is the wire format and what it measures like. Consumers see complete
 zones either way and none of §4.2 changes that contract.
 
 ### 4.1 Zones and point markers in the Tracy GUI
@@ -1115,101 +1094,99 @@ The three primitives are introduced, with a GIF of each in the Tracy GUI, in the
 [`STREAMING_PROFILER.md`](STREAMING_PROFILER.md) (zone scope, timestamped data, event). It is kept
 separate on purpose: it is the first thing to read, and it does not depend on anything below.
 
-### 4.2 The zone wire format, and what it measures like
+### 4.2 The record wire format, and what it measures like
 
-This documents the variable-width zone packet family the SPSC streaming profiler puts on the wire
-(producer: `kernel_profiler.hpp`; decoder: `spsc_marker_decode.hpp`; plain-C constants:
-`spsc_packet.h`). For how to consume the stream, see
-[§1](#1-overview-and-usage) — consumers see complete zones either way and none of
-this changes that contract. For what zones and point markers look like in the Tracy GUI,
-see [§4.1](#41-zones-and-point-markers-in-the-tracy-gui).
+This documents the wire format of the records the SPSC streaming profiler sends (producer:
+`internal/debug/device_publish_encoding.h` and `device_publish_ring.h`; a call site's forms: `hostdev/record_site.h`;
+decoder: `decode.{hpp,cpp}` and `spsc_marker_decode.hpp`; plain-C constants: `spsc_packet.h`). For how to consume
+the stream, see [§1](#1-overview-and-usage).
 
-#### Zone packets
+#### Record packets
 
-Every zone ships whole, in one packet, emitted at scope **close** — the RAII scope object carries the
-start timestamp (`start_hi`/`start_lo`, 8 B of member state), so the open touches nothing but the wall
-clock. Packets are sized by need. `word0 = type(5) | id27` in all of them; the id field carries the 16-bit
-zone id (`hostdev/profiler_zone_id.h`: a zone site's id is the address of a one-byte handle in the
-non-ALLOC `.tt_zone_ids` section, and the host gives each image the next block of the id space when it
-loads it, rebasing the `lui`/`addi` immediates through the image's relocations), ELF-name-resolved on the
-host.
+A zone's scope publishes its `Interval` when it closes, with the internal option `kPublishTimeIn<&Interval::end>`:
+only the start is sent, and the host fills in the end with the record's own time, so a callback reads it as a `Zone`. The RAII scope object holds the
+start timestamp (8 B of member state), so the open touches nothing but the wall clock and the close sends one packet.
 
-| type | name | words | payload after word0 | expresses |
+A record's packet is `PP_RECORD`, `word0 = type(5) << 27 | N << 20 | id`, N the body's words, so any packet is `1 + N`
+words and the decoder steps over one without knowing its call site. The id is the call site's 16-bit id, assigned as
+each image loads (`hostdev/profiler_zone_id.h`); word 0 costs one `lui`/`addi` pair.
+
+Every record takes one of its call site's forms, which N tells apart. A Timestamp field travels as its distance back
+from the record's own time, so a zone's start travels as its distance back from the zone's end, which is the zone's
+duration:
+
+| form | zone's N | words | zone's body after word0 | expresses |
 |---|---|---|---|---|
-| 3 | `ZONE_S` | 2 | `end_delta16 << 16 \| dur16` | end within 2^16 cycles (~48 µs @1.35 GHz) of the lane cursor and duration ≤ 2^16 cycles |
-| 2 | `ZONE_ATOMIC` ("M") | 3 | `end_lo32`, `dur32` | duration < 2^32 cycles (~3.2 s), any gap; **re-anchors the cursor** |
-| 4 | `ZONE_L` | 5 | `end_lo`, `end_hi`, `dur_lo`, `dur_hi` | anything — two full 64-bit values, self-contained |
+| short | 1 | 2 | `end_delta16 << 16 \| dur16` | end within 2^16 cycles (~48 µs @1.35 GHz) after the lane cursor, in its high word, and duration < 2^16 cycles |
+| medium | 2 | 3 | `end_lo32`, `dur32` | duration < 2^32 cycles (~3.2 s), any gap; **sets the cursor** |
+| full | 4 | 5 | `end_lo`, `end_hi`, `dur_lo`, `dur_hi` | anything: two full 64-bit values |
+
+Data whose Timestamps travel as distances has the medium and full forms, and in a kernel also the short form when it
+saves a word. Other data is always medium, `timer_lo` and then its values whole, a struct's payload its own bytes,
+which the decoder copies into the host's struct as they are. A struct whose layout the field codes can't describe
+sends its Timestamps whole, as raw times.
 
 ##### The lane cursor
 
-Producer and decoder each keep, per lane, a 64-bit **cursor = the end of the last S or M zone**. Zones
-are emitted at close, and closes happen in end order — the same per-lane monotonicity invariant the
-host's order-regression check relies on — so end-to-end deltas are unsigned. This is why the delta is
-**end-relative, never start-relative**: a closing *parent* zone's start lies before its already-closed
-children's ends, so start deltas go negative; ends never do. Start is always reconstructed as
-`end − duration`.
+Producer and decoder each keep, per lane, a 64-bit **cursor = the time of the last short or medium record of a call site
+with a short form**. A lane's records go out in time order (a zone's time is its end, and scopes close in end order),
+the same per-lane monotonicity the host's order-regression check relies on, so deltas from the cursor are unsigned. This
+is why a zone's time is its end, never its start: a closing *parent* zone's start lies before its already-closed
+children's ends, so start deltas go negative; ends never do. The start is `end − duration`.
 
-- Only S and M move the cursor, identically on both sides. The M packet's absolute `end_lo` is the
-  re-anchor (`cursor = sticky_hi << 32 | end_lo`).
-- L leaves the cursor alone on both sides, so producer and decoder still agree on it and the next S zone decodes
-  correctly.
-- The producer invalidates its cursor (`hi = ~0`) at `init_profiler()` and on the idle-launch rewind,
-  which makes the S class test fail arithmetically — the first zone after any launch is always an
-  absolute re-anchor, with no extra branch.
-- There is deliberately **no sticky-lo**: a separate re-anchor packet can never beat a 3-word M that
-  also carries a zone. `STICKY_TIMER` (the 27-bit high half, ~one per 3.2 s) applies to M/`PP_DATA`/
-  `PP_EVENT`, which carry absolute low words; S never needs one — the 64-bit cursor add crosses the
-  2^32 lo-wrap for free.
-
-The producer's class test is one OR-tree into one branch, laid out as the fall-through:
-`(((c_lo_d | lo_d) >> 16) | c_hi_d | hi_d) == 0`.
+- A full record leaves the cursor alone, so the next short record still decodes.
+- The producer drops its cursor (`hi = ~0`) at `init_profiler()` and on the idle-launch rewind, which makes the
+  short-form test fail arithmetically, so the first record after a launch is never short. The decoder has no cursor for
+  a lane until its first medium record, and after a gap in a lossy FIFO it can't place the lane's short records until
+  the next medium one.
+- There is deliberately **no sticky-lo**. `STICKY_TIMER` (the 27-bit high half, ~one per 3.2 s) applies to medium
+  records, which carry absolute low words; a short record shares its cursor's high word, so it never needs one.
 
 ##### The stall zone (PROFILER-STALL)
 
-Pinned to **M with a saturating duration**, written straight into the ring's stall reserve with no
-room check — a room check from inside the full-ring path recurses into another stall scope, which is
-exactly what the reserve exists to prevent. The stall open writes nothing (member state, like every
-zone), so the reserve covers only the close: **4 words** (3-word packet + 1 sticky). S buys zero
-reserve, since the reserve must cover the deterministic worst case, and L grows it to 5; a ≥2^32-cycle
-stall is a wedged relay rather than a measurement, so saturating the duration loses nothing real.
-
-##### ZONE_L and the >3.2 s fallback
-
-A zone whose duration overflows 32 bits ships as one self-contained ZONE_L, with no sticky packets and no cursor, and
-the decoder delivers it like any other zone, with its 64-bit duration.
+A zone's **medium record with a saturating duration**, at the stall's own call site, which has no short form and so
+leaves the cursor alone, written straight into the ring's stall reserve with no room check: a room check from inside
+the full-ring path recurses into another stall, which is exactly what the reserve exists to prevent. The reserve covers
+**4 words**: the timer's high word, word 0, the stall's end and its duration. A full record would grow it to 5, and a
+≥2^32-cycle stall is a wedged relay rather than a measurement, so saturating the duration loses nothing real. The
+record that waited reads its time first and its stall starts at that time (an out-of-line writer's starts where its
+wait begins), and the next record's room check writes the stall ahead of that next record, so a stall never sits inside
+the zone it interrupted.
 
 #### Measured behavior (Blackhole, 1.35 GHz)
 
-##### Which classes real workloads use
+##### Which forms real workloads use
 
-Records by class, measured with the receiver's (since removed) per-stream decode-path report:
+Records by form, measured with the receiver's (since removed) per-stream decode-path report:
 
-| workload | S | M |
+| workload | short | medium |
 |---|---|---|
-| dense synthetic (test_streaming_profiler_zones, 10 zones/iter) | ~100% | per-lane first-zone re-anchors, trailing zones |
+| dense synthetic (test_streaming_profiler_zones, 10 zones/iter) | ~100% | per-lane first medium records, trailing zones |
 | op-level model capture (FW/kernel-granularity zones) | 0% | 100% |
 
-Zones at FW/kernel granularity have end-to-end deltas — dispatch gaps and kernel durations — far
-beyond the 16-bit/48 µs S window. **S is a dense-instrumentation feature; op-level captures ride M
-entirely.** If S should ever matter for models, the lever is the delta width or denser in-kernel
+Firmware writes no short records (`kWritesShortRecords`, `internal/debug/device_publish_encoding.h`), and zones at
+kernel granularity have end-to-end deltas — dispatch gaps and kernel durations — far beyond the 16-bit/48 µs short window.
+**The short form is a dense-instrumentation feature; op-level captures ride medium records entirely.** If the short
+form should ever matter for models, the lever for kernel-level zones is the delta width or denser in-kernel
 instrumentation, not the duration field.
 
-##### Producer cost per class (`--empty` calibration, 1×1 grid, 500 iters, median dur+gap)
+##### Producer cost per marker (`--bench`, 1×1 grid, median of 3 runs less the `--bench 0` loop, BRISC / NCRISC)
 
-| class | cycles | ns | ring words |
-|---|---|---|---|
-| S | 50–51 | ~37 | 2 |
-| M | 45–47 | ~34 | 3 (+1 sticky, rare) |
-| L | 74 | ~55 | 5 |
+| marker | form | ring words | cycles, inline | cycles, noinline |
+|---|---|---|---|---|
+| `DeviceZoneScopedN` | short (`--benchdelay 20`) | 2 | 48 / 46 | 56 / 55 |
+| `DeviceZoneScopedN` | medium (`--benchdelay 70000`, a gap past 2^16 cycles) | 3 | 60 / 56 | 61 / 61 |
+| `DeviceRecordEvent` | medium | 2 | 30 / 27 | 38 / 37 |
+| `DeviceTimestampedData` | medium | 4 | 35 / 31 | 43 / 43 |
+| `DevicePublish` of a struct (kinds 7–9) | medium | 3–4 | 38 / 34–35 | 45–48 / 44–46 |
+| `DevicePublish` of a padded struct beside another value (kind 10) | medium | 5 | 38 / 34 | 50 / 47 |
 
-**ZONE_S is not a producer-cycle win**: its cursor bookkeeping (two RAM stores + a 64-bit delta + the
-class test) slightly outweighs the one saved L1 store. What S buys is **wire volume** — and volume is
-what the pipeline scales with: 2 words per zone instead of 3 is a third off a dense capture, and the
-profiler-stall onset knee moves with the volume, not with per-zone cycles.
+At 1.35 GHz a cycle is 0.74 ns. A full record, a zone of 2^32 cycles or more, is too rare to price this way.
 
-Accounting identities worth keeping for verification: a clean run decodes exactly
-`iters × 6000 + 600` records (10 zones × 600 lanes + 1 trailing per lane), and a stalling run's
-record surplus equals the device L1 stall counter to the unit, one atomic stall zone per stall.
+**The short form is a producer-cycle win as well as a volume one**: a short zone costs 10-12 cycles less than a
+medium one inline and 5-6 out of line, its cursor bookkeeping cheaper than the word it saves. Volume is still what the
+pipeline scales with: 2 words per zone instead of 3 is a third off a dense capture, and the profiler-stall onset knee
+moves with the volume, not with per-zone cycles.
 
 ##### Rendering long zones in Tracy
 
