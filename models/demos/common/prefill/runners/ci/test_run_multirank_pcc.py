@@ -195,7 +195,16 @@ else:
 
 class MultirankPccHarnessTests(unittest.TestCase):
     def run_harness(
-        self, model, *, verdict="pass", runner_rc=0, missing_cache=False, hosts=None, config=None, extra_env=None
+        self,
+        model,
+        *,
+        verdict="pass",
+        runner_rc=0,
+        missing_cache=False,
+        hosts=None,
+        config=None,
+        extra_env=None,
+        args=(),
     ):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -236,6 +245,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
             (cache / "mistral_small_4_bh_8dev/8x1").mkdir(parents=True)
             (cache / "kimi_k3_bh_16dev/4x4_sp1").mkdir(parents=True)
             (cache / "kimi_k3_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
+            (cache / "glm_5_3_bh_16dev/4x4_sp1").mkdir(parents=True)
+            (cache / "glm_5_3_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
         golden = root / "golden"
         (golden / "kv_cache").mkdir(parents=True)
         for layer in range(36):
@@ -274,6 +285,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         command = ["bash", str(harness), model]
         if config is not None:
             command.append(config)
+        command.extend(args)
         result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
         records = [json.loads(path.read_text()) for path in (root / "records").glob("*.json")]
         return result, records
@@ -530,7 +542,38 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("no 4x4 weight cache", result.stdout + result.stderr)
         self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
 
-    def test_only_kimi_k3_has_the_4x4_leg(self):
+    def test_glm53_4x4_binds_by_discovery_from_its_own_cache(self):
+        result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        launch = self.one_record(records, "runner_launch")["args"]
+        self.assertTrue(launch[launch.index("--mesh-graph-descriptor") + 1].endswith("ci/sc4_4x4_sp1_mgd.textproto"))
+        producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
+        self.assertEqual(producer_mpi[0]["args"][producer_mpi[0]["args"].index("-np") + 1], "8")
+        runner = self.one_record(records, "runner")["env"]
+        self.assertEqual(runner["PREFILL_SP_AXIS"], "1")
+        self.assertEqual(runner["PREFILL_MAX_SEQ_LEN"], "1049600")
+        self.assertTrue(runner["PREFILL_TTNN_CACHE"].endswith("cache"))
+        producer = self.one_record(records, "producer")["env"]
+        self.assertEqual(producer["PREFILL_SP"], "4")
+        self.assertEqual(producer["PREFILL_TP"], "4")
+        self.assertEqual((runner["PREFILL_CHUNK_SIZE"], producer["PREFILL_CHUNK_SIZE"]), ("2560", "2560"))
+        self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1044480 // 2560))
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_glm53_4x4_missing_cache_names_the_glm_dir(self):
+        result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no 4x4 weight cache at", result.stdout + result.stderr)
+        self.assertIn("glm_5_3_bh_16dev/4x4_sp1", result.stdout + result.stderr)
+        self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
+
+    def test_glm53_4x4_has_no_mtp_variant(self):
+        result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, args=["--variant", "mtp_kv_share"])
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("glm53/sc4_4x4 has no mtp_kv_share variant", result.stderr)
+        self.assertFalse(records)
+
+    def test_only_kimi_k3_and_glm53_have_the_4x4_leg(self):
         result, records = self.run_harness("kimi27", config="sc4_4x4")
         self.assertEqual(result.returncode, 2)
         self.assertIn("kimi27 does not support config 'sc4_4x4'", result.stderr)

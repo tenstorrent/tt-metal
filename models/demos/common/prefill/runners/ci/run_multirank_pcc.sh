@@ -18,10 +18,10 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
 # First entry is the default; membership is the validation. These models support sc1 only.
-# sc4_4x4 is Kimi-K3 as 8 stages of 4x4 (two per galaxy) instead of 4 of 8x4.
+# sc4_4x4 is the model as 8 stages of 4x4 (two per galaxy) instead of 4 of 8x4.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
-  kimi_k3)             MODEL_CONFIGS="sc4 sc1 sc4_4x4" ;;
+  kimi_k3|glm53)       MODEL_CONFIGS="sc4 sc1 sc4_4x4" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
@@ -114,6 +114,21 @@ case "${MODEL}" in
       PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k; \
           export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
       [ "${CONFIG}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
+    fi
+    if [ "${CONFIG}" = sc4_4x4 ]; then
+      # No 4x4 MTP cache exists, so only the base model runs on this layout.
+      [ "${MTP}" -eq 0 ] || { echo "${MODEL}/${CONFIG} has no ${VARIANT#_} variant" >&2; exit 2; }
+      # Two ranks per galaxy, bound by discovery as for Kimi-K3 below. The manifest's 1064960 window already
+      # suits a 4x4 stage: GLM TP-dedups its KV over all 16 chips, so the bank-aligned window is a
+      # multiple of 16 x 256 = 4096 tokens, as well as of the 2560 chunk below.
+      PP_RANKS=8
+      PP_4X4_HOSTS=4
+      GLM_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill}"
+      PP_CACHE_DIR="${GLM_CACHE}/glm_5_3_bh_16dev/4x4_sp1"
+      RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${GLM_CACHE}';"
+      PRODUCER_ENV+=" export PREFILL_SP=4; export PREFILL_TP=4;"
+      # The 4x4 bindings' chunk, as for Kimi-K3 below: 640 tokens per chip at SP=4, GLM's 8x4 load.
+      CHUNK_SIZE=2560
     fi
     ;;
   kimi_k3)
