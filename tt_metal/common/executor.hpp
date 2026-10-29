@@ -146,7 +146,9 @@ auto async(F&& func, Args&&... args) {
 
 // Runs every job and returns once all have finished, then rethrows the exception of the lowest-index job that threw.
 // Jobs after the first are queued on the executor, and the caller runs each job no worker has claimed. The caller
-// waits only on jobs a worker has already started, so it is safe to call from an executor worker.
+// waits only on jobs a worker has already started, so it is safe to call from an executor worker. Unlike
+// detail::async, it queues even when every worker is busy, and a queued job the caller runs stays queued as a no-op
+// until a worker takes it.
 inline void run_all(const std::vector<std::function<void()>>& jobs) {
     struct Task {
         std::atomic<bool> claimed{false};

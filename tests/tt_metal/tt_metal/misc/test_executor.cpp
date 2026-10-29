@@ -74,6 +74,7 @@ TEST(ExecutorTest, RunAllFromEveryWorkerDoesNotDeadlock) {
     std::atomic<size_t> started{0};
     std::atomic<size_t> inner_done{0};
     std::vector<std::future<void>> outer;
+    outer.reserve(workers);
     for (size_t i = 0; i < workers; ++i) {
         outer.push_back(detail::GetExecutor().async([&] {
             started.fetch_add(1);
