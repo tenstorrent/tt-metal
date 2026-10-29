@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""CPU tests of the device token mask in the fused MTP spec step (phase 3 stage P3a, work/research_1026/85; plan 80 tests H6, H9, H10):
+"""CPU tests of the device token mask in the fused MTP spec step (phase 3 stage P3a, design note 85; plan 80 tests H6, H9, H10):
 the permuted packing and its repack, the mask trace chain (run on torch stand-ins of the ttnn ops, so the unpack formula, the row
 slice and the bf16 arithmetic are checked), the engine on the fake device (S2 kept for a masked step, greedy as top_k 1, trace order,
 the mask trace only when a row is constrained, kill switch, the split begin / finish step, the reader never waits on an unfinished

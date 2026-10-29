@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Packed token masks of the fused MTP spec step (phase 3, work/research_1026/80 sections 3.1-3.2). Pure torch, no ttnn.
+"""Packed token masks of the fused MTP spec step (phase 3, design note 80 sections 3.1-3.2). Pure torch, no ttnn.
 
 One mask row per engine row r = u*T + j (user u, candidate column j). The host composes grammar, allowed_token_ids,
 bad_words and min_tokens into ONE row; the device edits the shard logits with it before the top-k trace.
@@ -13,11 +13,11 @@ past the real vocabulary.
 
 Masked logits are written as MASK_NEG (-2**99) on the device and on every host path (reference, walk, fallback). It is a
 power of two, so it is exact in bf16: the device ``where`` writes a scalar into a bf16 tensor by truncation and the host
-rounds to nearest, and the two agree bit for bit only for a bf16-exact value (work/research_1026/81 note A). It is finite
+rounds to nearest, and the two agree bit for bit only for a bf16-exact value (design note 81 note A). It is finite
 (no inf - inf in the stats trace and the accept body) and far below any real logit (adding it to a bf16 logit gives it
 back exactly).
 
-PERMUTED packing (work/research_1026/81, P0b): the device unpacks 0.335 ms with it (0.9 ms with the standard packing). In
+PERMUTED packing (design note 81, P0b): the device unpacks 0.335 ms with it (0.9 ms with the standard packing). In
 the permuted words of shard ``s``, bit ``k`` of word ``w`` is token ``s * 31040 + k * 970 + w`` (the standard packing has
 token ``s * 31040 + 32 * w + k``). The host repacks only the constrained rows (``repack_to_permuted``); the device input is
 a contiguous int32 ``[8, 32, 970]`` (shard, row, word) sharded on dim 0.
@@ -49,7 +49,7 @@ _BIT_IDX = np.arange(WORD_BITS)
 def repack_to_permuted(std):
     """STANDARD-packed rows ``[R, 7760]`` (int32; token ``v`` = bit ``v % 32`` of word ``v // 32``) as PERMUTED rows
     ``[R, 8, 970]`` (int32): in shard ``s``, bit ``k`` of word ``w`` is token ``s * 31040 + k * 970 + w``. Numpy unpackbits /
-    transpose / packbits (0.2 ms per row, work/research_1026/81)."""
+    transpose / packbits (0.2 ms per row, design note 81)."""
     a = np.ascontiguousarray(torch.as_tensor(std).to(torch.int32).numpy())
     R = int(a.shape[0])
     if int(a.shape[-1]) != MASK_WORDS:

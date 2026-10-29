@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""CPU tests of the top-p certificate (phase 2 step S3, work/research_1026/67 sections 5 and 8; tests H4, H5, H6 and the engine part of
+"""CPU tests of the top-p certificate (phase 2 step S3, design note 67 sections 5 and 8; tests H4, H5, H6 and the engine part of
 H12): no device.
 
 Part A, pure math (spec_fused_sampled): the certificate rule against a brute-force float64 full-vocabulary nucleus (H4), the

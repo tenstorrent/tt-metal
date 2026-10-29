@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Failure-rate probe of the top-p certificate (phase 2, step S8; work/research_1026/67 sections 5.1, 5.6). Debug only.
+"""Failure-rate probe of the top-p certificate (phase 2, step S8; design note 67 sections 5.1, 5.6). Debug only.
 
 With ``QWEN36_SPEC_STATS_SHADOW_EVERY=N`` (N > 0) every N-th fused sampled step without a logprobs or certificate row also replays the
 stats trace and reads the union + stats (the reads of a logprobs step). No row uses the result: the host only measures the candidate

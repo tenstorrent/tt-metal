@@ -7,7 +7,7 @@ the LAST line per pid (the counters are cumulative), sums the workers and prints
   - row fail rate       = failrow / rows          (a live sampled row-step with any failing examined position)
   - step fail rate      = failstep / steps        (a probe step with any failing row; overstates a lone special row)
 for q_T (the certificate at the row temperature) and q_1 (T = 1). Then the estimated tok/s of a normal row under failure policy (a)
-(work/research_1026/67 section 5.5): step = 48 + 45 f ms, 2.4 tokens per step, against 41.65 ms plain. f = the row fail rate.
+(design note 67 section 5.5): step = 48 + 45 f ms, 2.4 tokens per step, against 41.65 ms plain. f = the row fail rate.
 
 Usage: shadow_parse.py LOGFILE [LOGFILE ...]     (or "-" for stdin)
 """

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Device tests of the top-p certificate of the fused MTP step (work/research_1026/67 sections 5 and 8.2, step S3). One Galaxy slot (TP mesh,
+"""Device tests of the top-p certificate of the fused MTP step (design note 67 sections 5 and 8.2, step S3). One Galaxy slot (TP mesh,
 MESH_DEVICE=P150x8), one pytest node per process. They need the stats traces and the certificate accept trace (QWEN36_SPEC_DEVICE_TOPP
 default 1). They drive MTPSpecEngine.decode_forward directly (no plugin, no capability): a certificate row is a sampled row with
 ``top_k = 0`` and ``top_p < 1`` in ``spec_sampling``. Certificate steps run synchronously (defer_read=False).
@@ -19,7 +19,7 @@ D5   test_d5_forced_failure_redo_is_exact: p = 0.999 and T = 1.5 on rows 0..3 (t
      the host redo was called with a user subset in at least one step; step times of failing steps are logged. Also: a deferred step with a
      certificate row raises ValueError before anything is enqueued.
 
-Run (one node per process): work/scratch/phase2/run_s3_device.sh <name>   (see the report 74).
+Run (one node per process): pytest -o addopts= --import-mode=importlib -q models/demos/blackhole/qwen36/tests/test_spec_device_topp.py::<test> (needs a Galaxy slot; set P*_OUT_DIR to keep the JSON output)
 """
 
 import json
@@ -41,7 +41,17 @@ from models.demos.blackhole.qwen36.tt import spec_engine as SE
 from models.demos.blackhole.qwen36.tt.spec_engine import MTPSpecEngine
 from models.demos.blackhole.qwen36.tt.spec_fused_sampled import host_redo_walk
 
-OUT_DIR = os.environ.get("P2_OUT_DIR", "/home/ttuser/atupe/qwen-or/work/scratch/phase2")
+OUT_DIR = None  # set by the module fixture below: P2_OUT_DIR, else a pytest tmp dir
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _out_dir(tmp_path_factory):
+    global OUT_DIR
+    OUT_DIR = os.environ.get("P2_OUT_DIR") or str(tmp_path_factory.mktemp("p2_out"))
+    os.makedirs(OUT_DIR, exist_ok=True)
+    yield
+
+
 K = tc.K
 T = K + 1
 SWEEP_T = (0.3, 0.6, 1.0, 1.5)

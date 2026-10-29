@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Device test: a token mask and penalties in the SAME fused step (merged tree wt/p3-all; work/research_1026/86 section 7).
+"""Device test: a token mask and penalties in the SAME fused step (merged tree wt/p3-all; design note 86 section 7).
 
 test_mask_pen_same_step: ~100 sync fused steps, 8 users. User 0: structure mask (2-8 allowed tokens per column). User 1: presence 0.5 +
 repetition 1.1. User 2: both. Users 3-7: plain sampled (T 0.6, top_k 20, top_p 0.95). Gates:
@@ -11,7 +11,7 @@ repetition 1.1. User 2: both. Users 3-7: plain sampled (T 0.6, top_k 20, top_p 0
   G4 plain rows 3-7: same committed streams as a control run (special rows plain, same slots; bucket 8 in both, so the check applies);
   G5 trace order observed: main, mask, pen, topk (first replay of each in a step);
   G6 no program compiled after capture.
-Run (one node per process): work/scratch/phase3/run_all_device.sh <tag> test_spec_device_mask_pen.py::test_mask_pen_same_step
+Run (one node per process): pytest -o addopts= --import-mode=importlib -q models/demos/blackhole/qwen36/tests/test_spec_device_mask_pen.py::<test> (needs a Galaxy slot; set P*_OUT_DIR to keep the JSON output)
 """
 
 import os

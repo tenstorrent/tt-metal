@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Device tests of the token mask in the fused spec step (phase 3 stage P3a, work/research_1026/85; plan 80 section 7.2). One Galaxy
+"""Device tests of the token mask in the fused spec step (phase 3 stage P3a, design note 85; plan 80 section 7.2). One Galaxy
 slot (TP mesh, MESH_DEVICE=P150x8), ONE pytest node per process (run_p3_device.sh). PREPARED, NOT RUN when written.
 
 D1   test_d1_mask_trace_bitwise_all_buckets: the shard logits edited by the mask trace equal the host ``where(allowed, x, MASK_NEG)`` bit
@@ -18,12 +18,12 @@ D8m  test_d8m_fallback_with_mask: engine fallbacks (forced reasons) with a mask:
      trace rows with the mask.
 D9   test_d9_mask_timing: mask trace device time per bucket (gate 1.0 ms), H2D of the mask (gate 0.4 ms).
 D10  test_d10_cert_mask_logprobs_one_step: a certificate row, a masked row and a logprobs row in one sync step: allowed commits, masked payload.
-D5b  test_d5b_chain_soak_masked_row (stage P6, work/research_1026/92 section C): 1000 chained split steps, one masked row (toy grammar).
+D5b  test_d5b_chain_soak_masked_row (stage P6, design note 92 section C): 1000 chained split steps, one masked row (toy grammar).
 D5c  test_d5c_late_mask_in_chain: the finish delayed by a host sleep of 0 / 10 / 20 / 35 / 45 ms: same streams, late counter.
 D5d  test_d5d_preempt_while_pending: the masked row leaves / all masked rows leave / the bucket falls while the split step is pending.
 D9c  test_d9c_phase2_enqueue_latency: host time of the finish (phase 2 enqueue) per bucket.
 
-Run (one node per process): work/scratch/phase3/run_p3_device.sh <tag> <node name>
+Run (one node per process): pytest -o addopts= --import-mode=importlib -q models/demos/blackhole/qwen36/tests/test_spec_device_mask.py::<test> (needs a Galaxy slot; set P*_OUT_DIR to keep the JSON output)
 """
 
 import json
@@ -48,7 +48,17 @@ from models.demos.blackhole.qwen36.tt import spec_masks as SM
 from models.demos.blackhole.qwen36.tt.spec_fused_sampled import host_redo_walk, merge_redo
 from models.demos.blackhole.qwen36.tt.spec_logprobs import _stable_topm_row, candidates_from_union, stats_from_logits
 
-OUT_DIR = os.environ.get("P3_OUT_DIR", "/home/ttuser/atupe/qwen-or/work/scratch/phase3")
+OUT_DIR = None  # set by the module fixture below: P3_OUT_DIR, else a pytest tmp dir
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _out_dir(tmp_path_factory):
+    global OUT_DIR
+    OUT_DIR = os.environ.get("P3_OUT_DIR") or str(tmp_path_factory.mktemp("p3_out"))
+    os.makedirs(OUT_DIR, exist_ok=True)
+    yield
+
+
 M = 64
 STEPS = int(os.environ.get("P3_STEPS", "10"))
 CASES = ("dense", "two", "ones", "per_shard", "outside_top64", "structure", "tail")

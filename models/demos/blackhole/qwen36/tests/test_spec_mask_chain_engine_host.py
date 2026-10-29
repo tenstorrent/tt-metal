@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""CPU tests of the CHAINED split step (phase 3 stage P6, work/research_1026/92 section B3 T1): ``decode_forward_begin(chain_rows,
+"""CPU tests of the CHAINED split step (phase 3 stage P6, design note 92 section B3 T1): ``decode_forward_begin(chain_rows,
 chain_tip)`` enqueues the chain trace, the audit reads and the forward-only main trace; ``decode_forward_finish`` enqueues the mask,
 topk, accept, drafter and the reads. The call logs, equality with the one-call chained step, the begin / finish order rules, the reader
 thread, the late counter rebased to the previous step's end, ``FusedHandle.drafts()`` and the adapter readout, the chain breaks after

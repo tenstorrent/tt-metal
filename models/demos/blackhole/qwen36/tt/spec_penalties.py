@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Repetition / presence / frequency penalties inside the fused MTP spec step (phase 3 part 2, design PEN-1;
-work/research_1026/80 section 4 and 84).
+design note 80 section 4 and 84).
 
 State per device, per ENGINE row r = u * T + j (u = verify row, j = column, T = K + 1; the T rows of one user hold the same state):
   counts fp32 [1, 1, 32, V/TP]    how often each token of the vocabulary shard is in the request's OUTPUT (committed tokens only)
@@ -21,7 +21,7 @@ Two traces use it:
                not 0 is skipped: its device result is meaningless and the host redo walk commits other tokens (the engine adds those
                with add_committed_host).
 Exactness (accepted by the user on 2026-10-28): the fp32 chain rounds to bf16 once, so a penalized token can differ from the host
-reference by about half a bf16 ulp (measured max 0.567 ulp from fp32 cancellation, work/research_1026/81); tokens with no penalty
+reference by about half a bf16 ulp (measured max 0.567 ulp from fp32 cancellation, design note 81); tokens with no penalty
 are bit-identical.
 
 The bodies take ``ops`` (default: the ttnn module) so a host test can run the same op sequence on a torch emulation.

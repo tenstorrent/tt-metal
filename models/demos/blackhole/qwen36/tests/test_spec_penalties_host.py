@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""CPU tests of the device penalties inside the fused MTP step (phase 3 part 2, PEN-1; work/research_1026/80 section 4 and 84).
+"""CPU tests of the device penalties inside the fused MTP step (phase 3 part 2, PEN-1; design note 80 section 4 and 84).
 Tests H14, H15, H16 of the plan, model side:
 
 * the pen / update bodies of tt/spec_penalties.py run on a small torch emulation of the ttnn ops they use (``_Emu``), so the real op

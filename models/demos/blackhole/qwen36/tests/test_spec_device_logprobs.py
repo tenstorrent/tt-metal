@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Device tests of the logprob payload of the fused MTP step (work/research_1026/67 sections 4 and 8.2, step S4). One Galaxy slot
+"""Device tests of the logprob payload of the fused MTP step (design note 67 sections 4 and 8.2, step S4). One Galaxy slot
 (TP mesh, MESH_DEVICE=P150x8), one pytest node per process. They need the stats traces (QWEN36_SPEC_DEVICE_LOGPROBS default 1).
 They drive MTPSpecEngine.decode_forward directly (no plugin, no capability): ``spec_sampling["num_logprobs"]`` selects the rows.
 
@@ -18,7 +18,7 @@ D8   test_d8_fallback_payload[mixed_rope_delta|eager_drafter]: the engine fallba
 D9   test_d9_chain_soak: 1000 deferred chained steps, one logprobs row among 6 normal sampled rows, audits every 8 steps: no
      RuntimeError, no program compiled, miss / lower-bound counters reported (miss must be 0).
 
-Run (one node per process): work/scratch/phase2/run_s4_device.sh <name>   (see the report 72).
+Run (one node per process): pytest -o addopts= --import-mode=importlib -q models/demos/blackhole/qwen36/tests/test_spec_device_logprobs.py::<test> (needs a Galaxy slot; set P*_OUT_DIR to keep the JSON output)
 """
 
 import json
@@ -39,7 +39,17 @@ from models.demos.blackhole.qwen36.tests.test_spec_fused_sampled_engine import S
 from models.demos.blackhole.qwen36.tt.spec_engine import MTPSpecEngine
 from models.demos.blackhole.qwen36.tt.spec_logprobs import gather_logprobs_from_candidates
 
-OUT_DIR = os.environ.get("P2_OUT_DIR", "/home/ttuser/atupe/qwen-or/work/scratch/phase2")
+OUT_DIR = None  # set by the module fixture below: P2_OUT_DIR, else a pytest tmp dir
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _out_dir(tmp_path_factory):
+    global OUT_DIR
+    OUT_DIR = os.environ.get("P2_OUT_DIR") or str(tmp_path_factory.mktemp("p2_out"))
+    os.makedirs(OUT_DIR, exist_ok=True)
+    yield
+
+
 K = tc.K
 T = K + 1
 NLP_CYCLE = (5, 0, 20)  # per-row num_logprobs of the logprobs rows
