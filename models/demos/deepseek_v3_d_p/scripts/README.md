@@ -76,7 +76,7 @@ uses defaults. `launch.sh` re-emits them onto both run panes.
 |---|---|
 | `launch.sh` | Entry point — builds the 4-pane window above. |
 | `common.sh` | Shared config + helpers (`LOG_DIR`, `MODEL` → `PYTEST_TARGET` / `ENV_VARS`, `INNER_ITERS`, `scan_log_dir`). Sourced, not run. |
-| `stress.sh` | Outer loop: `tt-smi -glx_reset` then pytest, `tee` to `log_NN`. No timeout — stays alive on hang for debug. |
+| `stress.sh` | Outer loop: `tt-smi -glx_reset_auto` then pytest, `tee` to `log_NN`. No timeout — stays alive on hang for debug. |
 | `watch.sh` | Status table (PASS / HANG? / FAIL / RUN / STALE / PENDING), 15s. Each row splits its wall clock into `load` / `fwd`, and a row still in the weight load shows `loading layer N/M` where a forward row shows `forward_layer_N_end`. |
 | `watch_multiple_dirs.sh` | Same table for several runs at once: one `<log_name>` arg each, scan depth from `LOOP=`. |
 | `tail.sh` | `tail -10` of the newest `log_NN`, 30s. |

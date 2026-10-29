@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Outer loop: each iteration does `tt-smi -glx_reset` then a foreground pytest run
+# Outer loop: each iteration does `tt-smi -glx_reset_auto` then a foreground pytest run
 # (no timeout — stays alive on hang for manual debug). Per-run log: <log_dir>/log_NN.
 #
 # Usage: stress.sh [log_name] [loop_count]
@@ -49,7 +49,7 @@ for i in $(seq 1 "$LOOP"); do
   echo "############################################################"
 
   source "$TT_METAL_HOME/python_env/bin/activate"
-  tt-smi -glx_reset 2>&1 | tail -3
+  tt-smi -glx_reset_auto 2>&1 | tail -3
 
   cd "$TT_METAL_HOME"
   # A reused log dir must not carry an earlier hang's triage into this iteration.
