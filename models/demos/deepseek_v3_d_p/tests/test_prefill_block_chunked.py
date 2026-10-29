@@ -58,6 +58,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import (
     read_sharded_rows,
     unrotate_cache_layer,
 )
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import create_hf_model, extract_layer_state_dict
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CHUNK = PREFILL_CHUNK_TOKENS  # 5120 tokens per chunk
@@ -1161,6 +1162,142 @@ def test_kimi_prefill_block_chunked_padded(
         num_links,
         topology,
         tp_shard_kv=True,
+    )
+
+
+def _random_block_state_dict(variant, config, layer_idx):
+    torch.manual_seed(42)
+    hf = create_hf_model(variant, config, layer_idx + 1)
+    return extract_layer_state_dict(variant, hf.state_dict(), layer_idx, hf.layers[layer_idx])
+
+
+def run_chunked_block_random(variant, config, mesh_device, layer_idx, n_chunks, num_iterations, num_links, topology):
+    """Determinism-only chunked block: random weights and input, no golden, no TTNN cache, no PCC."""
+    assert num_iterations >= 2, "iter 0 is the baseline"
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+    assert tuple(mesh_shape) == (8, 4), f"this test targets mesh-8x4, got {mesh_shape}"
+    total_len = n_chunks * CHUNK
+    config.max_seq_len = SEQ_CACHE
+    has_indexer = resolve_has_indexer(config)
+
+    block = TtPrefillBlock(
+        mesh_device=mesh_device,
+        config=config,
+        model_cfg=variant.model_config,
+        state_dict=_random_block_state_dict(variant, config, layer_idx),
+        layer_idx=layer_idx,
+        seq_len=CHUNK,
+        max_seq_len=SEQ_CACHE,
+        dispatch_buffer_capacity_factor=8,
+        num_links=num_links,
+        topology=topology,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        weight_cache_path=None,
+        is_chunked=True,
+        slot_num=1,
+        layer_num=1,
+        routing_use_l1_small_for_semaphores=True,
+        tp_shard_kv=None if has_indexer else True,
+    )
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=SEQ_CACHE, chunk_size_global=CHUNK)
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM if has_indexer else MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=SEQ_CACHE,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+        num_users=1,
+        tp_axis=None if has_indexer else tp_axis,
+    )
+
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = -2
+    shard_dims[tp_axis] = -1
+    hidden = torch.randn(total_len, config.hidden_size, generator=torch.Generator().manual_seed(7)).to(torch.bfloat16)
+    out = torch.zeros(total_len, config.hidden_size, dtype=torch.float32)
+    mesh_device.enable_program_cache()
+
+    baseline, failures = None, []
+    for it in range(num_iterations):
+        for c in range(n_chunks):
+            tt_h = ttnn.from_torch(
+                hidden[c * CHUNK : (c + 1) * CHUNK].reshape(1, 1, CHUNK, -1),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=shard_dims),
+            )
+            tt_out, _ = block.forward(
+                tt_h,
+                indexed_rope,
+                tt_kvpe_cache,
+                cache_layer_idx=0,
+                actual_start=c * CHUNK,
+                actual_end=(c + 1) * CHUNK,
+                cache_user_id=0,
+            )
+            out[c * CHUNK : (c + 1) * CHUNK] = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
+            ).to(torch.float32)[0, 0]
+        ttnn.synchronize_device(mesh_device)
+        snapshot = {"output": out.clone(), "kvpe": gather_cache_natural(tt_kvpe_cache, mesh_device, not has_indexer)[0]}
+        logger.info(f"  pass {it + 1}/{num_iterations} done")
+        if it == 0:
+            for name, t in snapshot.items():
+                assert torch.isfinite(t).all() and t.any(), f"iter 0 {name} is degenerate; bit-identity is vacuous"
+            baseline = snapshot
+            continue
+        for name, base in baseline.items():
+            if not torch.equal(base, snapshot[name]):
+                failures.append(f"iter {it} {name}: {int((base != snapshot[name]).sum())} elements differ")
+
+    if failures:
+        pytest.fail("determinism (baseline=iter0) failed: " + "; ".join(failures))
+    logger.success(f"random chunked block layer {layer_idx} bit-identical across {num_iterations} iterations")
+
+
+@pytest.mark.parametrize("num_iterations", [2], ids=["iter2"])
+@pytest.mark.parametrize("n_chunks", [2], ids=["chunks2"])
+@pytest.mark.parametrize("layer_idx", [0, 1], ids=["dense_L0", "moe_L1"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(KimiK27Config), l1_small_size=KimiK27Adapter.l1_small_size
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.timeout(3600)
+def test_kimi_prefill_block_chunked_random(
+    variant, config_only, mesh_device, device_params, layer_idx, n_chunks, num_iterations, num_links
+):
+    run_chunked_block_random(
+        variant,
+        config_only,
+        mesh_device,
+        layer_idx,
+        n_chunks,
+        num_iterations,
+        num_links,
+        per_axis_topology(device_params["fabric_config"]),
     )
 
 
