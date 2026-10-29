@@ -156,14 +156,19 @@ def skipped_keys(keys: list[str], skip: str, only: str) -> set[str]:
     return set(keys) - picked if only else picked
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=TOOL_NAME)
+def main(argv: list[str] | None = None) -> int:
+    keys = "\n".join(f"  {s.key}" for s in build_steps(list(MODEL_ENV)))
+    ap = argparse.ArgumentParser(
+        description=TOOL_NAME,
+        epilog=f"step keys for --skip / --only, in run order:\n{keys}",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     ap.add_argument("--co", action="store_true", help="collect-only mockup: no device work")
     pick = ap.add_mutually_exclusive_group()
     pick.add_argument("--skip", default="", help="comma-separated step keys, e.g. soak:kimi_k2_7,didt")
     pick.add_argument("--only", default="", help="run exactly these step keys, e.g. reset,block:kimi_k2_7")
     ap.add_argument("--models", default=",".join(MODEL_ENV), help="comma-separated: " + ",".join(MODEL_ENV))
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     repo = Path(os.environ.get("TT_METAL_HOME") or Path(__file__).resolve().parents[4])
     commit = subprocess.run(
