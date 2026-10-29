@@ -13,7 +13,6 @@
 #include <map>
 #include <set>
 #include <string>
-#include <vector>
 
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
@@ -77,16 +76,18 @@ TEST(StreamAssignmentTest, CreditPlanKeepsEachVcsReasons) {
     // No reason has been added yet
     EXPECT_FALSE(plan.any_vc_uses_counters());
 
-    // Add reasons for VC1 and assert that only those two reasons are present
+    plan.add_counter_reason(0, L1CreditCounterReason::MULTI_TXQ);
     plan.add_counter_reason(1, L1CreditCounterReason::MULTI_TXQ);
     plan.add_counter_reason(1, L1CreditCounterReason::EXPRESS);
-    EXPECT_FALSE(plan.vc_uses_counters(0));
+    EXPECT_TRUE(plan.vc_uses_counters(0));
     EXPECT_TRUE(plan.vc_uses_counters(1));
     EXPECT_FALSE(plan.vc_uses_counters(2));
     EXPECT_TRUE(plan.any_vc_uses_counters());
-    EXPECT_EQ(
-        plan.get_l1_counters_reasons(1),
-        (std::vector<L1CreditCounterReason>{L1CreditCounterReason::MULTI_TXQ, L1CreditCounterReason::EXPRESS}));
+    EXPECT_TRUE(plan.has_counter_reason(0, L1CreditCounterReason::MULTI_TXQ));
+    EXPECT_FALSE(plan.has_counter_reason(0, L1CreditCounterReason::EXPRESS));
+    EXPECT_TRUE(plan.has_counter_reason(1, L1CreditCounterReason::MULTI_TXQ));
+    EXPECT_TRUE(plan.has_counter_reason(1, L1CreditCounterReason::EXPRESS));
+    EXPECT_FALSE(plan.has_counter_reason(1, L1CreditCounterReason::NO_COMPLETION_REGISTER));
 
     // Invalid VC index should throw
     EXPECT_ANY_THROW(plan.add_counter_reason(builder_config::MAX_NUM_VCS, L1CreditCounterReason::EXPRESS));
@@ -205,25 +206,29 @@ TEST(StreamAssignmentTest, EmittedNameSetIsExactlyTheKernelSet) {
 
 TEST(StreamAssignmentTest, BoundaryChipAgreementOnTheBoundaryOnlyChannel) {
     // A boundary fabric's five-wide VC0 maps channels 0..4 to ids 0..4 for every router, including
-    // narrower mesh routers. The host-only VC0-counter/VC1-register plan keeps a VC1 completed group
-    // present while testing these placement pins.
+    // narrower mesh routers. Multi-TXQ puts VC0 and VC1 on counters together, so neither VC takes an
+    // acked or completed group.
     CreditTransportPlan plan{};
-    plan.add_counter_reason(0, L1CreditCounterReason::MULTI_TXQ);  // VC0 credits on counters, VC1 left on registers
+    plan.add_counter_reason(0, L1CreditCounterReason::MULTI_TXQ);
+    plan.add_counter_reason(1, L1CreditCounterReason::MULTI_TXQ);
     const auto a = make_stream_assignment(stream_requirements(legacy_with_boundary_placement(), plan));
     EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 0, 4), 4u);
     EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 0, 3), 3u);
     // The flat base of VC1 follows the fabric max (5), not a narrower router's own count (4).
     EXPECT_EQ(a.sender_flat_base(1), 5u);
-    EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 1, 0), 19u);
+    // Above the pinned VC0 sender-free group (0..4): 2 receivers + 8 downstream, so VC1's sender-free
+    // group starts at 15.
+    EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 1, 0), 15u);
 }
 
 TEST(StreamAssignmentTest, FreeSlotsEmitPlacementWhileAckedEmitsActivity) {
     // A router with 4 VC0 senders in a 5-wide fabric: the free-slots table still carries a real id
     // at index 4 (placement is fabric-scoped, so a downstream lookup resolves it), while the acked
-    // table carries the sentinel there (activity is a transport-plan question, and VC0 is on
-    // counters here).
+    // table carries the sentinel there (activity is a transport-plan question, and multi-TXQ puts
+    // VC0 and VC1 on counters here).
     CreditTransportPlan plan{};
     plan.add_counter_reason(0, L1CreditCounterReason::MULTI_TXQ);
+    plan.add_counter_reason(1, L1CreditCounterReason::MULTI_TXQ);
     const auto a = make_stream_assignment(stream_requirements(legacy_with_boundary_placement(), plan));
     std::map<std::string, uint32_t> values;
     for (const auto& [name, value] : a.named_args()) {
@@ -232,7 +237,7 @@ TEST(StreamAssignmentTest, FreeSlotsEmitPlacementWhileAckedEmitsActivity) {
     EXPECT_EQ(values["SENDER_CHANNEL_4_FREE_SLOTS_STREAM_ID"], 4u);      // real id: placement, not activity
     EXPECT_EQ(values["TO_SENDER_4_PKTS_ACKED_ID"], k_unused_stream_id);  // sentinel: activity
     EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 0, 0));
-    EXPECT_TRUE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 1, 0));
+    EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 1, 0));
 }
 
 TEST(StreamAssignmentTest, InactiveConsumersEmitTheSentinel) {

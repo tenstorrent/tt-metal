@@ -15,23 +15,8 @@
 
 namespace tt::tt_fabric {
 
-namespace {
-
-void check_valid_vc(uint32_t vc) {
-    TT_FATAL(vc < builder_config::MAX_NUM_VCS, "Credit transport plan has no VC{}", vc);
-}
-
-}  // namespace
-
-const std::vector<L1CreditCounterReason>& CreditTransportPlan::get_l1_counters_reasons(uint32_t vc) const {
-    check_valid_vc(vc);
-    return per_vc_l1_counters_reasons_[vc];
-}
-
-void CreditTransportPlan::add_counter_reason(uint32_t vc, L1CreditCounterReason reason) {
-    check_valid_vc(vc);
-    per_vc_l1_counters_reasons_[vc].push_back(reason);
-}
+// CreditTransportPlan keeps each VC's reasons as the bits of a uint8_t.
+static_assert(enchantum::count<L1CreditCounterReason> <= 8, "L1CreditCounterReason has more values than bits");
 
 // ============================================================================
 // Requirement-driven assignment
