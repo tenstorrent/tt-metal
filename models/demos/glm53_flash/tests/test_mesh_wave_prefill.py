@@ -418,9 +418,10 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
         pad_token_id=cfg.pad_token_id,
         traced_prefill_lengths=(),  # the SP reference stays eager; the waves are traced (the model's per-row lengths)
         wave_rows=SERVED_W,
-        # the long profile pins r5's placement (the four long prompts on slot index 0 of rows 0-3: waves), not the
-        # SP-first diagonal the served adapter now takes (GLM53_VLLM_SP_FIRST=1), which would run them all SP
-        sp_first=not long,
+        # this test exercises the wave path, so every prompt takes the wave-affine placement (shared slot indices:
+        # case (a)'s wave of two, r5's four long prompts on slot index 0 of rows 0-3); the served adapter's SP-first
+        # placement for eager prompts (GLM53_VLLM_SP_FIRST=1) is covered by the host tests and the served smokes
+        sp_first=False,
     )
     a = GLM53FlashForCausalLM(model, g, pad_token_id=cfg.pad_token_id)
     assert (
