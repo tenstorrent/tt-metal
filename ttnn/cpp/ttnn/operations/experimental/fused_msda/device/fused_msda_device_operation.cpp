@@ -11,6 +11,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include "ttnn/operations/core/program_cache_l1.hpp"
+#include "ttnn/operations/experimental/fused_msda/device/kernels/msda_corner_word.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::fused_msda {
@@ -25,11 +26,11 @@ using tt::tt_metal::TensorMemoryLayout;
 // here rather than discovered as a stack smash on device.
 constexpr uint32_t MAX_LEVELS = 8;
 
-// Largest H_l or W_l the op supports, set by bf16's 8 significant bits: the
-// floored bilinear corner crosses from the SFPU geometry to the reader as bf16
-// and has to decode to the integer that was floored, exactly. See
-// device/kernels/compute/msda_geometry.hpp.
-constexpr uint32_t MAX_SPATIAL_EXTENT = 256;
+// Largest H_l or W_l the op accepts: the largest it is tested at. Neither path
+// needs it lower: the corner word's index field holds extents up to 361 (see
+// device/kernels/msda_corner_word.hpp), and an extent the tiled geometry cannot
+// carry as an exact bf16 matrix entry falls back to the per-point geometry.
+constexpr uint32_t MAX_SPATIAL_EXTENT = fused_msda_corner_word::MAX_EXTENT;
 
 void check_common_tensor(
     const Tensor& t,
@@ -88,17 +89,12 @@ MSDAShapes derive_shapes(
         const uint32_t h = hw[2 * l];
         const uint32_t w = hw[2 * l + 1];
         TT_FATAL(h > 0 && w > 0, "fused_msda: spatial_shapes[{}] must be positive, got ({}, {})", l, h, w);
-        // Past MAX_SPATIAL_EXTENT an in-bounds corner index would round to a
-        // different, still in-bounds pixel: a silently wrong sample, so refuse.
         TT_FATAL(
             h <= MAX_SPATIAL_EXTENT && w <= MAX_SPATIAL_EXTENT,
-            "fused_msda: spatial_shapes[{}] = ({}, {}) exceeds the {}-pixel per-axis limit. The sampling geometry "
-            "runs on the SFPU and hands the reader the floored corner as bf16, which is exact only for integers up "
-            "to {}",
+            "fused_msda: spatial_shapes[{}] = ({}, {}) exceeds the {}-pixel per-axis limit the op is tested at",
             l,
             h,
             w,
-            MAX_SPATIAL_EXTENT,
             MAX_SPATIAL_EXTENT);
         total_keys += h * w;
     }
@@ -278,7 +274,21 @@ void FusedMSDAOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attrs.output_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "fused_msda: output_memory_config memory_layout must be INTERLEAVED");
-    (void)derive_shapes(attrs, args);
+    const auto s = derive_shapes(attrs, args);
+    if (!attrs.num_valid_queries.empty()) {
+        TT_FATAL(
+            attrs.num_valid_queries.size() == s.batch,
+            "fused_msda: num_valid_queries needs one count per batch ({}), got {}",
+            s.batch,
+            attrs.num_valid_queries.size());
+        uint32_t total = 0;
+        for (const uint32_t n : attrs.num_valid_queries) {
+            TT_FATAL(
+                n <= s.num_queries, "fused_msda: num_valid_queries entry {} exceeds num_queries {}", n, s.num_queries);
+            total += n;
+        }
+        TT_FATAL(total > 0, "fused_msda: num_valid_queries leaves no query to compute");
+    }
 }
 
 void FusedMSDAOperation::validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& args) {
@@ -379,7 +389,8 @@ ttnn::Tensor fused_msda_from_offsets(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     ttnn::experimental::MSDAReferenceMode reference_mode,
     bool align_corners,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<std::vector<uint32_t>>& num_valid_queries) {
     auto attrs = OperationType::operation_attributes_t{
         .output_memory_config = memory_config.value_or(value.memory_config()),
         .spatial_shapes_hw = flatten_spatial_shapes(spatial_shapes),
@@ -391,6 +402,14 @@ ttnn::Tensor fused_msda_from_offsets(
         .from_offsets = true,
         .reference_mode = reference_mode,
     };
+    if (num_valid_queries.has_value()) {
+        // An empty list would read as "every query"; reject it instead of guessing.
+        TT_FATAL(
+            !num_valid_queries->empty(),
+            "fused_msda: num_valid_queries needs one count per batch, got an empty list; pass None to compute every "
+            "query");
+        attrs.num_valid_queries.assign(num_valid_queries->begin(), num_valid_queries->end());
+    }
     auto args = OperationType::tensor_args_t{
         .value = value,
         .attention_weights = attention_weights,

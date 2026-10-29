@@ -19,7 +19,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/indestructible.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>

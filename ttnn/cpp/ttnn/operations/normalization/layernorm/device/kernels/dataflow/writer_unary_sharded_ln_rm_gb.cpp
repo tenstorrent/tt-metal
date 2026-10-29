@@ -10,6 +10,7 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "ttnn/operations/kernel_helper_functions/local_l1_copy.hpp"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "api/dataflow/endpoints.h"
 #include "reshard_writer.hpp"
 #ifdef DO_COL_MASK
@@ -63,27 +64,32 @@ void kernel_main() {
 #endif
 
 #ifndef USE_WELFORD
+    // One DataflowBuffer per constant tile, for the whole kernel: on Quasar a DataflowBuffer drains when it goes
+    // out of scope (#60848), and the compute kernel pops these only at its end, after it has consumed the gamma
+    // and beta this kernel pushes below. Scoping them to the block below would block it there.
+    DataflowBuffer dfb_scaler_obj(dfb::scaler);
+    DataflowBuffer dfb_eps_obj(dfb::eps);
+    DataflowBuffer dfb_scaler_global_obj(dfb::scaler_global);
+#ifdef DO_COL_MASK
+    DataflowBuffer dfb_col_mask_obj(dfb::col_mask);
+#endif
     {
         const uint32_t scalar_w_bits = get_arg(args::scalar_w);
         const float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
         dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-            scalar_w_f);
+            dfb_scaler_obj, scalar_w_f);
 #ifdef SCALER_SELF_LOOP
-        {
-            // After the all-gather nothing consumes the per-core scaler: this kernel holds both ends of it.
-            // Pop the tile it just pushed so the buffer is left balanced.
-            DataflowBuffer dfb_scaler_obj(dfb::scaler);
-            dfb_scaler_obj.wait_front(1);
-            dfb_scaler_obj.pop_front(1);
-        }
+        // After the all-gather nothing consumes the per-core scaler: this kernel holds both ends of it.
+        // Pop the tile it just pushed so the buffer is left balanced.
+        dfb_scaler_obj.wait_front(1);
+        dfb_scaler_obj.pop_front(1);
 #endif
 
         const uint32_t eps = get_arg(args::eps);
-        DataflowBuffer dfb_eps_obj(dfb::eps);
         generate_bcast_col_scalar(dfb_eps_obj, eps);
 
 #ifdef DO_COL_MASK
-        generate_col_mask(dfb::col_mask, block_w, get_arg(args::logical_K), width_shard_tile_start_id);
+        generate_col_mask(dfb_col_mask_obj, block_w, get_arg(args::logical_K), width_shard_tile_start_id);
 #endif
 
         if constexpr (is_all_to_all_worker) {
@@ -91,7 +97,7 @@ void kernel_main() {
             const float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
             dataflow_kernel_lib::
                 prepare_reduce_scaler<dfb::scaler_global, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW>(
-                    scalar_c_f);
+                    dfb_scaler_global_obj, scalar_c_f);
         }
     }
 #endif
@@ -190,7 +196,8 @@ void kernel_main() {
     // The output tensor's shard sits at the same address on every core it is sharded across, so its
     // base address doubles as the destination address on each storage core. No data moves through a
     // buffer here: the writes go straight from this core's output buffer to the storage cores.
-    const uint32_t output_base_addr = TensorAccessor(tensor::dst).get_bank_base_address();
+    // Raw: same L1 address on the storage cores (no handle form yet).
+    const uint32_t output_base_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::dst));
     write_resharded_data(
         noc,
         dfb_out_obj,

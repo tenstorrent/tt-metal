@@ -8,14 +8,15 @@
 // Diverges from kernels_dfb/compute/eltwise_binary_sfpu_no_bcast_dfb.cpp as the native FPU kernel diverges
 // from its own: thread c of C processes its own share of num_tiles, and a borrowed shard's tiles past the
 // largest multiple of C come through the tail rings (TAIL_TILES). Which tiles a thread gets is the DFB's
-// assignment. Each tile takes two DST slots, the operands' copies. The factory runs at most
-// kNativeSfpuMaxTilesPerCycle tiles per batch. The native gate runs only bf16 multiply and divide on it.
+// assignment. Each tile takes two DST slots, the operands' copies, so a batch holds at most 4 tiles in a 16-bit DST
+// and 2 in a 32-bit DST. The native gate runs bf16 multiply and divide on it, and fp32 add, subtract, multiply and
+// divide.
 
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-// The SFPU binary op headers that are ported to Quasar, as in the kernels_dfb kernel. bf16 multiply and divide
+// The SFPU binary op headers that are ported to Quasar, as in the kernels_dfb kernel. The ops the native gate admits
 // use eltwise_binary_sfpu.h.
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/add_int_sfpu.h"
@@ -31,13 +32,14 @@
 #include "eltwise_utils_dfb.hpp"
 
 // The DataflowBuffer arguments are kernel_main's objects: an object built here would drain at every return.
+template <typename DFBPreLhs, typename DFBPostLhs, typename DFBPreRhs, typename DFBPostRhs, typename DFBOut>
 FORCE_INLINE void process_sfpu_tiles(
     uint32_t n,
-    DataflowBuffer& dfb_pre_lhs,
-    DataflowBuffer& dfb_post_lhs,
-    DataflowBuffer& dfb_pre_rhs,
-    DataflowBuffer& dfb_post_rhs,
-    DataflowBuffer& dfb_out ISCLOSE_RT_ARG_PARAMS) {
+    DFBPreLhs& dfb_pre_lhs,
+    DFBPostLhs& dfb_post_lhs,
+    DFBPreRhs& dfb_pre_rhs,
+    DFBPostRhs& dfb_post_rhs,
+    DFBOut& dfb_out ISCLOSE_RT_ARG_PARAMS) {
     const uint32_t dfb_post_lhs_id = dfb_post_lhs.get_id();
     const uint32_t dfb_post_rhs_id = dfb_post_rhs.get_id();
     const uint32_t dfb_out_id = dfb_out.get_id();
@@ -137,12 +139,12 @@ void kernel_main() {
 #if HAS_ACTIVATIONS(LHS)
     DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
 #else
-    DataflowBuffer& dfb_pre_lhs = dfb_post_lhs;
+    auto& dfb_pre_lhs = dfb_post_lhs;
 #endif
 #if HAS_ACTIVATIONS(RHS)
     DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
 #else
-    DataflowBuffer& dfb_pre_rhs = dfb_post_rhs;
+    auto& dfb_pre_rhs = dfb_post_rhs;
 #endif
 
     // Thread c of C consumes its own share, as in the native FPU kernel: the DFB hands consumer thread c the

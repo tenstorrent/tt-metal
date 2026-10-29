@@ -68,13 +68,9 @@ std::uint8_t my_relative_x_ __attribute__((used));
 std::uint8_t my_relative_y_ __attribute__((used));
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-#if defined(UCK_CHLKC_PACK)
-thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_PACK] __attribute__((used));
+thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_TRISC] __attribute__((used));
 thread_local std::uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used));
-thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_PACK_TC_SLOTS] __attribute__((used));
-#else
-thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
-#endif
+thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_TRISC_TC_SLOTS] __attribute__((used));
 #endif
 // Defined for all TRISC types (including math) so kernels that include dataflow_buffer headers link cleanly.
 // For math TRISC, setup_local_dfb_interfaces is not called, so this stays 0; dfb_ensure_ready
@@ -136,6 +132,8 @@ using namespace ckernel;
 #if defined(UCK_CHLKC_MATH)
 thread_local ckernel::math::DataFormatConfigSet data_format_config_set __attribute__((used)) =
     ckernel::math::DataFormatConfigSet::UNCONFIGURED;
+// Unpack-to-dest: set once math has seen the unpacker's first UNPACK_MATH post of the program.
+thread_local bool unpack_math_seeded __attribute__((used)) = false;
 #endif
 
 void init_sync_registers() {
