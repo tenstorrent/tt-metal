@@ -2661,12 +2661,14 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert eight.decide(good, batch, _PLAIN, 3, fresh=wave).reason == "enter"
     assert (
         eight.decide(measured8, batch, _PLAIN, 3, fresh=True) is None and eight.last_reason == "declined"
-    ), "all new: a measured record below break-even (0.83x) gets no trial either"
-    even = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.75)]  # measured at break-even: 1.00x
-    assert eight.decide(even, batch, _PLAIN, 3, fresh=True).reason == "trial"
+    ), "all new: a measured record below the entry bar (0.83x) gets no trial either"
+    even = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.9)]  # 1.09x: below the 1.10 bar
+    assert eight.decide(even, batch, _PLAIN, 3, fresh=True) is None and eight.last_reason == "declined"
     assert (
-        SpecPolicy(SpecPolicyConfig(trial_gain=1.2, retry_steps=0), 5).decide(even, batch, _PLAIN, 3, fresh=True)
-        is None
+        SpecPolicy(SpecPolicyConfig(min_gain=1.05, retry_steps=0, entry_horizon=128), 5)
+        .decide(even, batch, _PLAIN, 3)
+        .reason
+        == "enter"
     )
     assert rank_records(even, batch, _PLAIN)[0].measured and not rank_records(reseeding8, batch, _PLAIN)[0].measured
     with pytest.raises(ValueError, match="fresh rows .* outside the 8 rows"):  # allow-pytest.raises (pure)

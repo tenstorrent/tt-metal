@@ -92,11 +92,12 @@ cheapest candidate (entry plus step) replays once when the prior's gain
 estimate is at least ``GEMMA4_SPEC_TRIAL_GAIN`` (the reseed is the only
 extra cost; a prior below that is the random-prompt regime learned on this
 engine, and the request stays plain). A record serving has measured at the
-rung is trialed on its measured tokens per row, and only at break-even or
-better (``TRIAL_MEASURED_GAIN``, or ``trial_gain`` when that is higher):
-what its replays delivered is known, and a wave of new rows cannot argue
-with it (the 12B Galaxy at 32 users re-trialed the (8,3) at every arrival
-wave of random prompts, a 250 ms reseed each, and left it within seconds).
+rung gets no trial below the entry bar: its measured tokens per row say what
+its replays deliver, a wave of new rows cannot argue with it, and a trial
+that clears the bar is an entry anyway (the 12B Galaxy at 32 users
+re-trialed the (8,3) at every arrival wave of random prompts, a 250 ms
+reseed each, and left it within seconds; the measured 2.36 tokens a row
+realized 1.9-2.0 against a 1.9x step).
 A trial is never held: the next decision continues only on the entry gain,
 which the trial's own verify feeds through the blend above. A batch that
 just left a record waits ``retry_steps`` plain steps before any reseeding
@@ -221,9 +222,6 @@ ROW_MIN_OBSERVATIONS = 3
 EXIT_STEPS = 2
 #: A retry needs a gain estimate of at least this fraction of the entry gain.
 RETRY_MIN_GAIN_FRACTION = 0.25
-#: A new request's trial on a record serving has measured (``RecordCandidate.tokens_per_row``) needs its measured
-#: gain at least this high (``trial_gain`` when that is higher): a measured loss is not re-tried wave after wave.
-TRIAL_MEASURED_GAIN = 1.0
 
 
 def _env_float(env, name, default, *, low, high=None):
@@ -993,8 +991,8 @@ class SpecPolicy:
 
     def trial_choice(self, ranked, plain_ms=None, hypothetical=None, remaining=None):
         """A new request's one trial, or None: the cheapest candidate (entry plus step) when its gain estimate is
-        at least ``trial_gain`` (``TRIAL_MEASURED_GAIN`` at least for a record serving has measured: a measured loss
-        is not re-tried wave after wave), never while the batch cools after an exit, and, for a batch that is not
+        at least ``trial_gain`` (``min_gain`` for a record serving has measured: its measured tokens per row are
+        not argued with wave after wave), never while the batch cools after an exit, and, for a batch that is not
         all new, its hypothesis holds: ``hypothetical`` (the
         same candidates ranked with the new rows accepting every draft on a record serving has not measured at
         the rung; a measured record keeps its measured tokens per row) clears ``min_gain`` and its entry pays
@@ -1004,7 +1002,7 @@ class SpecPolicy:
         if self.cooling():
             return None
         cheapest = min(ranked, key=lambda c: (c.entry_ms + c.cost_ms, c.shape))
-        bar = max(self.config.trial_gain, TRIAL_MEASURED_GAIN) if cheapest.measured else self.config.trial_gain
+        bar = max(self.config.trial_gain, self.config.min_gain) if cheapest.measured else self.config.trial_gain
         if cheapest.gain < bar:
             return None
         if hypothetical is not None:
