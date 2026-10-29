@@ -9,13 +9,15 @@ Each shape: build inputs (B rows of S tokens), compile, capture a trace with the
 attention mask applied, as for any batch whose rows hold packed or padded pairs
 (``--no-mask``: the unmasked trace TracedReranker uses only when every row is one
 pair of exactly S tokens), then replay it
-``--iters`` times. Reported: the median replay latency over the second half (host-synchronized,
-inputs already on device), sequences/s and tokens/s, and the trace output
+``--iters`` times back to back. Reported over the second half of the replays, after the board has
+settled its clock under the load: average and p95 replay latency (host-synchronized, inputs already
+on device), sequences/s and tokens/s at the average, and the trace output
 checked against an untraced forward. ``--signpost`` wraps one replay in
 tracy signposts for op-level profiling.
 """
 
 import argparse
+import math
 import statistics
 import time
 
@@ -61,19 +63,21 @@ def bench_shape(model, device, B, S, iters, do_signpost, masked):
     ttnn.release_trace(device, tid)
     for t in dev_in:
         ttnn.deallocate(t)
-    # Sustained: the board settles its clock under load, so the median skips the first half.
-    med = statistics.median(times[len(times) // 2 :])
+    # Sustained: the board settles its clock under load, so the statistics skip the first half.
+    steady = sorted(times[len(times) // 2 :])
+    avg = statistics.fmean(steady)
+    p95 = steady[math.ceil(0.95 * len(steady)) - 1]
     print(
-        f"B={B:<3} S={S:<5} {'masked  ' if masked else 'unmasked'} {med:8.2f} ms  "
-        f"{B / med * 1e3:8.1f} seq/s  {B * S / med * 1e3:10.0f} tok/s  trace-vs-eager {maxdiff:.2e}"
+        f"B={B:<3} S={S:<5} {'masked  ' if masked else 'unmasked'} avg {avg:8.2f} ms  p95 {p95:8.2f} ms  "
+        f"{B / avg * 1e3:8.1f} seq/s  {B * S / avg * 1e3:10.0f} tok/s  trace-vs-eager {maxdiff:.2e}"
     )
-    return med
+    return avg
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--shapes", nargs="+", default=["1x128", "1x512", "8x512", "32x512"])
-    ap.add_argument("--iters", type=int, default=30, help="replays; the second half gives the sustained median")
+    ap.add_argument("--iters", type=int, default=100, help="replays; statistics over the second half")
     ap.add_argument("--signpost", action="store_true")
     ap.add_argument("--no-mask", action="store_true", help="run SDPA without the attention mask")
     ap.add_argument("--cfg", nargs="*", default=[], help="RerankConfig overrides, key=value")

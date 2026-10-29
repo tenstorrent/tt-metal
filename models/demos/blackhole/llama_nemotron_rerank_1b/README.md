@@ -96,24 +96,31 @@ and nDCG@10 within 0.015 of HF.
 
 ## Performance (one P150)
 
-Traced forward, inputs on device. Each time is the median of the second half of 30 back-to-back replays:
-under continuous load the board holds its 150 W limit by lowering the clock from 1.35 GHz to about 0.95 GHz,
-so this is the latency under continuous load. Every time is one batch of B rows of S tokens with the
+Traced forward, inputs on device, one process per shape (`demo/bench.py`). Average and p95 are over the last
+50 of 100 back-to-back replays: under continuous load the board lowers its clock to stay under its 200 A
+core-current limit (see "Clock under load" below), so these are the latencies under continuous load. (An
+earlier version of this table took the median of the last 15 of 30 replays, which for most shapes ended
+before the clock had settled: 8 x 512 read 41.3 ms, 1 x 2048 27.7 ms.) Every time is one batch of B rows of S tokens with the
 attention mask applied (`demo/bench.py`), as for any batch whose rows hold packed pairs or padding. The
 time does not depend on how many of a row's tokens are real; packing (see "Packed rows") reduces the
 number of rows a request needs, which the MIRACL table there shows.
 
-| batch x tokens | after bring-up | now | speed of light (kernel cycles) |
-|---|---|---|---|
-| 1 x 128 | 12.8 ms | 6.41 ms | |
-| 1 x 256 | | 6.70 ms | |
-| 1 x 512 | 15.6 ms | 8.02 ms | 32.7 % |
-| 1 x 1024 | | 16.7 ms | |
-| 8 x 512 | 76.2 ms | 41.3 ms | 56.2 % |
-| 32 x 512 | 329 ms | 191 ms | **69.5 %** (160.5 M cycles) |
-| 1 x 2048 | 46.5 ms | 27.7 ms | 47.1 % |
-| 1 x 4096 | | 77.2 ms | |
-| 1 x 8192 | 362 ms | 221 ms | 50.4 % |
+| batch x tokens | after bring-up | now, average | now, p95 | speed of light (kernel cycles) |
+|---|---|---|---|---|
+| 1 x 128 | 12.8 ms | 6.44 ms | 6.46 ms | |
+| 1 x 256 | | 6.73 ms | 6.74 ms | |
+| 1 x 512 | 15.6 ms | 8.12 ms | 8.27 ms | 32.7 % |
+| 1 x 1024 | | 18.8 ms | 19.9 ms | |
+| 8 x 512 | 76.2 ms | 52.8 ms | 53.0 ms | 56.2 % |
+| 10 x 512 | | 80.3 ms | 80.9 ms | |
+| 32 x 512 | 329 ms | 191 ms | 194 ms | **69.5 %** (160.5 M cycles) |
+| 1 x 2048 | 46.5 ms | 36.1 ms | 36.4 ms | 47.1 % |
+| 1 x 4096 | | 79.9 ms | 80.9 ms | |
+| 1 x 8192 | 362 ms | 225 ms | 227 ms | 50.4 % |
+
+10 x 512 runs stock ttnn SDPA (`sdpa_mask_cache` covers batch 8 and 32) and the matmul block configs tuned for
+4096 rows, so it costs more per row than 8 or 32. One of three 32 x 512 runs hit the board's harder limiter
+("Clock under load"): average 296 ms, p95 405 ms; the other two settled at 186-193 ms per replay.
 
 A batch where every row is exactly one pair of S tokens skips the mask (`demo/bench.py --no-mask`; 32 x 512
 190 ms, 71.3 %); real traffic rarely has such a batch. FF1 + FF3 accumulates in fp32: with bf16 accumulation
