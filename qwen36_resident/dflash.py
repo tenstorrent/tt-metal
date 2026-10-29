@@ -22,6 +22,9 @@ from models.demos.blackhole.qwen36.tt.dflash2_tp import DFlash2DrafterTP
 from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
 from qwen36_resident import weights as Q
 
+# 1: restore the initial recurrent state before every prompt, also when the prefill handoff overwrites it (A/B)
+FULL_RESET = os.environ.get("RESIDENT_PREFILL_FULL_RESET", "0") == "1"
+
 
 def ccl_topology():
     """Ring on the boxes whose chips form one (ModelArgs.ccl_topology), else Linear"""
@@ -213,21 +216,26 @@ class ResidentDFlash:
 
     def _prompt(self, ids, draft_context=True):
         """the prompt through verify steps (R tokens each, all accepted): returns the first generated token"""
-        self.m.reset()
+
+        def mark(name):
+            if self.prompt_times is not None:
+                ttnn.synchronize_device(self.mesh)
+                self.prompt_times.append((name, time.perf_counter()))
+
+        P, R = len(ids), self.R
+        prefill = self.pp is not None and self.use_prefill and P > 1 and draft_context
+        mark("begin")
+        # the initial recurrent state (a ~37 MB / chip host upload, ~80 ms) only where no handoff overwrites it: the
+        # handoff writes every GDN layer's state into slot 0 and the conv history rows the first step reads (the ring's
+        # first block), and reset never restores the KV caches (stale rows are masked)
+        self.m.reset(state=not prefill or FULL_RESET)
         self.ring = self.slot = 0
         self.prev = None
-        P, R = len(ids), self.R
         start = 0
-        if self.pp is not None and self.use_prefill and P > 1 and draft_context:
+        if prefill:
             # the prefill and its handoff (GDN states into the committed base, conv histories at ring 0, KV) of all but
             # the last token, and the drafter's context from the prefill's taps
             start = P - 1
-
-            def mark(name):
-                if self.prompt_times is not None:
-                    ttnn.synchronize_device(self.mesh)
-                    self.prompt_times.append((name, time.perf_counter()))
-
             mark("start")
             self.pp.reset()
             self.pp.run(torch.tensor(ids[:start]))
