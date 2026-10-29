@@ -100,7 +100,7 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
 
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_to_all_async must be allocated in buffers on device");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_to_all_async must be allocated in buffers on device");
 
     auto* mesh_device = input_tensor.device();
     const uint32_t num_links =

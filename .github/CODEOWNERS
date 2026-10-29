@@ -128,6 +128,7 @@ tt_metal/**/CMakeLists.txt @tenstorrent/metalium-developers-infra
 tt_metal/ @tenstorrent/metalium-developers-infra # nothing should be caught by this, if so, someone added a path somewhere
 tests/tt_metal/tt_metal/test_kernels/ @abhullar-tt @jbaumanTT @kstevensTT
 tt_metal/api/ @tenstorrent/metalium-api-owners
+tt_metal/api/tt-metalium/experimental/blaze/ @esmalTT @cfjchu @azaytsev-epam @tenstorrent/metalium-runtime # blaze experimental APIs
 tt_metal/api/tt-metalium/experimental/disaggregation/ @SeanNijjar @ubcheema # disaggregation experimental APIs
 tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT # fabric experimental APIs
 tt_metal/api/tt-metalium/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
@@ -194,6 +195,7 @@ tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp @mo-tenstorre
 tt_metal/impl/dispatch/realtime_profiler_tracy_handler.* @mo-tenstorrent @yusufbashiTT @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/impl/emulation/ @xanderchin @arminaleTT @vtangTT @sgholamiTT
 tt_metal/impl/event @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
+tt_metal/impl/experimental/blaze/ @esmalTT @cfjchu @azaytsev-epam @tenstorrent/metalium-runtime # blaze experimental impl
 tt_metal/impl/experimental/disaggregation/ @SeanNijjar @ubcheema # disaggregation experimental impl
 tt_metal/impl/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
 tt_metal/impl/experimental/noc_estimator/**/CMakeLists.txt @nstamatovicTT @atatuzunerTT @tenstorrent/metalium-developers-infra
@@ -287,9 +289,9 @@ tests/pipeline_reorg/llk_perf_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvl
 tt_metal/tt-llk/tt_llk_blackhole/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01
 tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
 tt_metal/tt-llk/tt_llk_blackhole/llk_lib/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
-tt_metal/tt-llk/tt_llk_quasar/ @amahmudTT @amokanTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01
-tt_metal/tt-llk/tt_llk_quasar/common/inc/experimental/ @amahmudTT @amokanTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
-tt_metal/tt-llk/tt_llk_quasar/llk_lib/experimental/ @amahmudTT @amokanTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
+tt_metal/tt-llk/tt_llk_quasar/ @amahmudTT @amokanTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT
+tt_metal/tt-llk/tt_llk_quasar/common/inc/experimental/ @amahmudTT @amokanTT @atatuzunerTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT
+tt_metal/tt-llk/tt_llk_quasar/llk_lib/experimental/ @amahmudTT @amokanTT @atatuzunerTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT
 tt_metal/tt-llk/tt_llk_wormhole_b0/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01
 tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/sfpu/experimental/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
 tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/experimental/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT

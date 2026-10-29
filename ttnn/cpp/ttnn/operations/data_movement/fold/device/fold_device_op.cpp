@@ -48,7 +48,7 @@ void validate_fold(const std::vector<Tensor>& input_tensors, uint32_t stride_h, 
     const auto& logical_shape = input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Fold: Expect input tensor to be allocated on a device buffer.");
+    TT_FATAL(input_tensor.is_allocated(), "Fold: Expect input tensor to be allocated on a device buffer.");
     // Row-major fold copies raw bytes, so its output must be declared with the input's dtype.
     const auto dtype = input_tensor.dtype();
     TT_FATAL(

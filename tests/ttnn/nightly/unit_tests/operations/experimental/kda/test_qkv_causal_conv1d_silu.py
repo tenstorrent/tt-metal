@@ -51,8 +51,8 @@ _PRODUCTION_PERF_MARGIN = 0.05
 
 _PRODUCTION_CASES = (
     _BenchmarkCase("single-block", widths=(512, 512, 512), channel_chunk_size=1536, expected_duration_ns=63_900),
-    _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=39_500),
-    _BenchmarkCase("asymmetric-split", widths=(512, 256, 128), channel_chunk_size=896, expected_duration_ns=43_300),
+    _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=36_400),
+    _BenchmarkCase("asymmetric-split", widths=(512, 256, 128), channel_chunk_size=896, expected_duration_ns=39_800),
 )
 
 
@@ -493,7 +493,7 @@ _K3_ROWS = 640
 _K3_WIDTHS = (3072, 3072, 3072)
 _K3_TRAILING_COLUMNS = 128 + 3072 + 32
 _K3_CHANNEL_CHUNK_SIZE = 64
-_K3_EXPECTED_DURATION_NS = 61_130
+_K3_EXPECTED_DURATION_NS = 54_100
 
 
 @pytest.mark.requires_host_iommu

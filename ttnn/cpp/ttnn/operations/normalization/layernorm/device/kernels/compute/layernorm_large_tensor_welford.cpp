@@ -813,10 +813,10 @@ void kernel_main() {
                 if constexpr (welford_fp32_alias && !fuse_pre_add) {
                     dfb_x_welford_obj_eltwise.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 }
-                if constexpr (!(do_gamma || do_beta)) {
+                if constexpr (do_gamma == 0 && do_beta == 0) {
                     dfb_xmm = dfb_out;
                 }
-                DataflowBuffer dfb_normalized(dfb_xmm);
+                DataflowBuffer dfb_normalized(static_cast<uint16_t>(dfb_xmm));
                 dfb_normalized.reserve_back(static_cast<uint16_t>(block.full_block_size()));
                 pack_reconfig_data_format(dfb_xmm);
                 constexpr uint32_t data_dst = 0;
