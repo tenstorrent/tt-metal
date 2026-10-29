@@ -8,7 +8,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_metal/llrt/tt_target_device.hpp>
 
-#include <umd/device/cluster.hpp>
+#include <tt-umd/cluster.hpp>
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>

@@ -15,6 +15,7 @@ import torch
 from loguru import logger
 
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
+from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from ...utils.video import export_video_audio
 from .pipeline_ltx import DEFAULT_NEGATIVE_PROMPT, LTXPipeline, latent_grid
 
@@ -22,6 +23,7 @@ from .pipeline_ltx import DEFAULT_NEGATIVE_PROMPT, LTXPipeline, latent_grid
 class LTXOneStagePipeline(LTXPipeline):
     """One-stage AV pipeline: full MultiModalGuider guidance on the base 22B checkpoint."""
 
+    @cap_torch_threads_to_half_the_cpus()
     def warmup_buffers(
         self,
         *,
@@ -65,6 +67,7 @@ class LTXOneStagePipeline(LTXPipeline):
         self._prepare_transformer(0)
         logger.info(f"warmup (AV) done in {time.time() - t0:.1f}s")
 
+    @cap_torch_threads_to_half_the_cpus()
     def generate(
         self,
         prompt: str,

@@ -411,3 +411,20 @@ def test_forced_codegen_refuses_non_default_tile(device, expect_error, tile):
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     with expect_error(RuntimeError, "does not support"):
         _force_codegen(xt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+# Hand-added: rank > 4 inputs whose height is not a tile multiple. The ND wrapper squeezes them to 4D
+# and reshapes the output back; codegen's unpadding path returns a compact tensor (padded == logical)
+# where native keeps the tile padding, so the reshape back has to work for both.
+_RANK5_UNPADDED_SHAPES = [[1, 2, 8, 1, 768], [1, 2, 8, 16, 768]]
+
+
+@pytest.mark.parametrize("shape", _RANK5_UNPADDED_SHAPES, ids=["height_1", "height_16"])
+def test_untilize_codegen_rank5_unpadded_height(device, shape):
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG}
+    for out in (_force_codegen(xt, **kwargs), ttnn.untilize(xt, **kwargs)):
+        assert out.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert list(out.shape) == shape
+        assert_equal(x, ttnn.to_torch(out))

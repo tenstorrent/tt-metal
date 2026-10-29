@@ -12,6 +12,7 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.hpp"
+#include "test_utils/relative_l2.hpp"
 
 class SwiGLUForwardTest : public ::testing::Test {
 protected:
@@ -123,13 +124,7 @@ void CompareKernelVsReference(
     // Relative L2 is scale-invariant and reflects the total numerical deviation of
     // the tensor, giving consistent results across all shapes. A threshold of 0.01
     // is standard for BF16 vs FP32 reference comparisons.
-    auto diff = result_kernel_xtensor - result_reference;
-
-    // Compute L2 norms.
-    float diff_l2 = std::sqrt(xt::sum(xt::square(diff))());
-    float ref_l2 = std::sqrt(xt::sum(xt::square(result_reference))());
-    const float eps = 1e-12f;
-    float rel_l2 = diff_l2 / (ref_l2 + eps);
+    const float rel_l2 = test_utils::relative_l2(result_kernel_xtensor, result_reference);
 
     // Check the error bound.
     const float tolerance = 1e-2f;
@@ -179,13 +174,6 @@ static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& input
         w3_data, [low, high]() { return std::uniform_real_distribution<float>(low, high); }, /* seed */ rng());
 
     CompareKernelVsReference(input_data, w1_data, w2_data, w3_data);
-}
-
-float relative_l2(const xt::xarray<float>& a, const xt::xarray<float>& b) {
-    auto diff = a - b;
-    float diff_l2 = std::sqrt(xt::sum(xt::square(diff))());
-    float ref_l2 = std::sqrt(xt::sum(xt::square(b))());
-    return diff_l2 / (ref_l2 + 1e-12f);
 }
 
 std::pair<xt::xarray<float>, xt::xarray<float>> swiglu_elemwise_bw_reference(
@@ -316,13 +304,14 @@ void CompareSwiGLUBackwardAgainstReference(const std::vector<uint32_t>& input_sh
     auto dL_dgate_kernel = core::to_xtensor(elemwise_result.dL_dgate);
 
     const float tol = 1e-2f;
-    EXPECT_LT(relative_l2(out_kernel, ref.out), tol) << "forward mismatch";
-    EXPECT_LT(relative_l2(dL_dlinear1_kernel, ref.dL_dlinear1), tol) << "swiglu_elemwise_bw dL_dlinear1 mismatch";
-    EXPECT_LT(relative_l2(dL_dgate_kernel, ref.dL_dgate), tol) << "swiglu_elemwise_bw dL_dgate mismatch";
-    EXPECT_LT(relative_l2(dx_kernel, ref.dL_dx), tol) << "dL/dx mismatch";
-    EXPECT_LT(relative_l2(dw1_kernel, ref.dL_dw1), tol) << "dL/dW1 mismatch";
-    EXPECT_LT(relative_l2(dw2_kernel, ref.dL_dw2), tol) << "dL/dW2 mismatch";
-    EXPECT_LT(relative_l2(dw3_kernel, ref.dL_dw3), tol) << "dL/dW3 mismatch";
+    EXPECT_LT(test_utils::relative_l2(out_kernel, ref.out), tol) << "forward mismatch";
+    EXPECT_LT(test_utils::relative_l2(dL_dlinear1_kernel, ref.dL_dlinear1), tol)
+        << "swiglu_elemwise_bw dL_dlinear1 mismatch";
+    EXPECT_LT(test_utils::relative_l2(dL_dgate_kernel, ref.dL_dgate), tol) << "swiglu_elemwise_bw dL_dgate mismatch";
+    EXPECT_LT(test_utils::relative_l2(dx_kernel, ref.dL_dx), tol) << "dL/dx mismatch";
+    EXPECT_LT(test_utils::relative_l2(dw1_kernel, ref.dL_dw1), tol) << "dL/dW1 mismatch";
+    EXPECT_LT(test_utils::relative_l2(dw2_kernel, ref.dL_dw2), tol) << "dL/dW2 mismatch";
+    EXPECT_LT(test_utils::relative_l2(dw3_kernel, ref.dL_dw3), tol) << "dL/dW3 mismatch";
 }
 
 }  // namespace

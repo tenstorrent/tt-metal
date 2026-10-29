@@ -194,13 +194,13 @@ def test_msa_sp_cache_read_high_bw_pcc(
                 kv,
                 shard(noise_k, True),
                 shard(noise_v, True),
-                slot_idx=0,
+                slot_id=0,
                 layer_idx=other,
                 kv_actual=c * chunk,
                 sp_axis=sp_axis,
             )
             write_index_k_chunk(
-                kv, shard(noise_ik, False), slot_idx=0, layer_idx=other, kv_actual=c * chunk, sp_axis=sp_axis
+                kv, shard(noise_ik, False), slot_id=0, layer_idx=other, kv_actual=c * chunk, sp_axis=sp_axis
             )
     for c in range(n_chunks):
         sl = slice(c * chunk, (c + 1) * chunk)
@@ -208,13 +208,13 @@ def test_msa_sp_cache_read_high_bw_pcc(
             kv,
             shard(k[:, :, sl, :], True),
             shard(v[:, :, sl, :], True),
-            slot_idx=0,
+            slot_id=0,
             layer_idx=slot,
             kv_actual=c * chunk,
             sp_axis=sp_axis,
         )
         write_index_k_chunk(
-            kv, shard(ik[:, :, sl, :], False), slot_idx=0, layer_idx=slot, kv_actual=c * chunk, sp_axis=sp_axis
+            kv, shard(ik[:, :, sl, :], False), slot_id=0, layer_idx=slot, kv_actual=c * chunk, sp_axis=sp_axis
         )
 
     if cache_dtype == ttnn.bfloat16:
@@ -243,7 +243,7 @@ def test_msa_sp_cache_read_high_bw_pcc(
             shard(q, True),
             shard(iq, True),
             kv,
-            slot=slot,
+            cache_row=slot,
             chunk_local=chunk_local,
             **common,
         )

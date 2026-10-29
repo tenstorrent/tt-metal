@@ -204,7 +204,7 @@ ProgramDescriptor SliceWriteRMInterleavedProgramFactory::create_descriptor(
     const auto& stride = operation_attributes.step;
 
     ProgramDescriptor desc;
-    tt::tt_metal::IDevice* device = input.device();
+    auto* device = input.device();
     const auto& input_padded_shape = input.padded_shape();
 
     uint32_t num_unpadded_sticks = input.physical_volume() / input.padded_shape()[-1];

@@ -5,7 +5,7 @@
 #include "moreh_matmul.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "ttnn/operations/moreh/moreh_dot/moreh_dot.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul {
@@ -37,7 +37,19 @@ Tensor moreh_matmul(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     if (operations::moreh::moreh_matmul::is_dot_forward(input, other, transpose_input, transpose_other)) {
-        return ttnn::moreh_dot(input, other, output, input.dtype(), memory_config, compute_kernel_config);
+        return ttnn::matmul(
+            input,
+            other,
+            /*transpose_a=*/false,
+            /*transpose_b=*/true,
+            output.has_value() ? output->memory_config() : memory_config.value_or(input.memory_config()),
+            /*dtype=*/input.dtype(),
+            /*program_config=*/std::nullopt,
+            /*activation=*/std::nullopt,
+            compute_kernel_config,
+            /*core_grid=*/std::nullopt,
+            /*output_tile=*/std::nullopt,
+            /*optional_output_tensor=*/output);
     }
     return ttnn::prim::moreh_matmul(
         input, other, transpose_input, transpose_other, output, bias, memory_config, compute_kernel_config);

@@ -33,9 +33,9 @@
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "rtoptions.hpp"
 #include "watcher_device_reader.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
@@ -628,7 +628,7 @@ void WatcherServer::Impl::poll_watcher_data() {
     } else {
         disabled_features = "None";
     }
-    log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
+    log_debug(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
 
     while (true) {
         // Need to hold the lock here as well to prevent kernel_names_ being modified from the main thread while being
@@ -676,7 +676,7 @@ void WatcherServer::Impl::poll_watcher_data() {
         }
     }
 
-    log_info(LogLLRuntime, "Watcher thread stopped watching...");
+    log_debug(LogLLRuntime, "Watcher thread stopped watching...");
     server_running_ = false;
     stop_server_ = false;
 }

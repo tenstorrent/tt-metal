@@ -9,6 +9,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/scratchpad.h"
+#include "internal/local_mem/address_access.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -22,16 +23,16 @@ inline __attribute__((always_inline)) void fill_dfb_with_padding_value(
     Scratchpad<uint8_t>& pad, const uint32_t padding_value_as_u32) {
     constexpr uint32_t num_elts =
         num_bytes / padding_value_num_bytes;  // constexpr so that this division happens once on host
-    uint32_t dfb_write_addr = pad.get_base_address();
+    tt_l1_ptr uint8_t* dfb_write_ptr = &pad[0];
 
     if constexpr (padding_value_num_bytes == 4) {
-        u32_l1_ptr dfb_write_addr_as_u32 = reinterpret_cast<u32_l1_ptr>(dfb_write_addr);
+        u32_l1_ptr dfb_write_addr_as_u32 = reinterpret_cast<u32_l1_ptr>(dfb_write_ptr);
         for (uint32_t i = 0; i < num_elts; i++) {
             dfb_write_addr_as_u32[i] = padding_value_as_u32;
         }
     } else if constexpr (padding_value_num_bytes == 2) {
         uint16_t padding_value_as_u16 = static_cast<uint16_t>(padding_value_as_u32);
-        u16_l1_ptr dfb_write_addr_as_u16 = reinterpret_cast<u16_l1_ptr>(dfb_write_addr);
+        u16_l1_ptr dfb_write_addr_as_u16 = reinterpret_cast<u16_l1_ptr>(dfb_write_ptr);
         for (uint32_t i = 0; i < num_elts; i++) {
             dfb_write_addr_as_u16[i] = padding_value_as_u16;
         }
@@ -56,20 +57,20 @@ void kernel_main() {
     uint32_t output_shard_base_addr = dfb_output_shard.get_write_ptr();
 
     fill_dfb_with_padding_value<padding_value_num_bytes, padded_stick_bytes>(pad, padding_value_as_u32);
-    uint32_t padding_value_base_addr = pad.get_base_address();
 
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // Quasar DM: the fill above is CPU stores that land in L1D/L2; the NoC below sources the scratchpad from
     // TL1 directly. Flush the filled stick so the NoC copies see the pad value. No-op on WH/BH. Matches
     // fill_rm_interleaved.cpp (#51763).
-    flush_l2_cache_range(static_cast<uintptr_t>(padding_value_base_addr), static_cast<size_t>(padded_stick_bytes));
+    flush_l2_cache_range(
+        static_cast<uintptr_t>(local_mem::detail::AddressAccess::address(pad.local_mem())),
+        static_cast<size_t>(padded_stick_bytes));
 #endif
 
-    CoreLocalMem<uint32_t> pad_src(padding_value_base_addr);
     uint32_t output_stick_addr = output_shard_base_addr;
     for (uint32_t h = 0; h < padded_shard_height; h++) {
         noc.async_write(
-            pad_src,
+            pad,
             UnicastEndpoint{},
             padded_stick_bytes,
             {.offset_bytes = 0},

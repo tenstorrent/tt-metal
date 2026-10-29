@@ -469,6 +469,80 @@ TEST_F(FactoryDescriptorControlPlaneFixture, StrictIntermeshAllowsAnUnusedHoleWh
     }
 }
 
+// A RELAXED connection the factory never cabled (#56762): the diagonal mesh 0 <-> mesh 2 of the ring-cabled pod
+// is logical-only, nothing is filed for it, and the missing_links captures' four missing cables are filed as before.
+TEST_F(FactoryDescriptorControlPlaneFixture, RelaxedConnectionWithNoFactoryCableIsLogicalOnly) {
+    const auto& control_plane =
+        open_control_plane(tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    ASSERT_TRUE(control_plane.has_factory_descriptor());
+    const auto* link_health = control_plane.get_link_health();
+    ASSERT_NE(link_health, nullptr);
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    EXPECT_TRUE(mesh_graph.is_inter_mesh_policy_relaxed());
+
+    const MeshId diagonal_a{0};
+    const MeshId diagonal_b{2};
+    ASSERT_EQ(intermesh_request(mesh_graph, diagonal_a, diagonal_b), 4u);
+    const auto on_diagonal = [&](MeshId a, MeshId b) {
+        return (a == diagonal_a && b == diagonal_b) || (a == diagonal_b && b == diagonal_a);
+    };
+
+    const auto& downed = link_health->get_downed_links();
+    const auto& unused = link_health->get_unused_downed_links();
+
+    // Nothing is filed for the diagonal.
+    for (const auto& link : downed) {
+        EXPECT_FALSE(link.is_intermesh() && on_diagonal(link.src_mesh(), link.dst_mesh()))
+            << "downed " << link.src_node << " chan " << static_cast<int>(link.src_chan);
+    }
+    for (const auto& link : unused) {
+        EXPECT_FALSE(link.is_intermesh() && on_diagonal(link.src_mesh(), link.dst_mesh()))
+            << "unused " << link.src_node << " chan " << static_cast<int>(link.src_chan);
+    }
+    EXPECT_TRUE(link_health->get_downed_intermesh_links(diagonal_a, diagonal_b).empty());
+    EXPECT_TRUE(link_health->get_downed_intermesh_links(diagonal_b, diagonal_a).empty());
+    EXPECT_TRUE(link_health->get_exit_nodes_with_downed_links(diagonal_a, diagonal_b).empty());
+
+    // The captures' four missing factory cables are the only records, one per direction each.
+    EXPECT_EQ(downed.size() + unused.size(), 8u);
+    // Subtorus, not routed by the mesh graph.
+    EXPECT_TRUE(has_cable(control_plane, unused, 0, 0, 8, 0));
+    // Torus: mesh graph 2, factory 4, live 3.
+    EXPECT_TRUE(has_cable(control_plane, unused, 15, 4, 23, 4));
+    // Mesh: mesh graph 2, factory 2, live 1.
+    EXPECT_TRUE(has_cable(control_plane, downed, 0, 6, 4, 0));
+    // Intermesh: 16 factory, 15 live; downed only when the count on its boundary needs all 16.
+    const auto* inter = find_cable(control_plane, downed, 5, 9, 29, 9);
+    const bool inter_downed = inter != nullptr;
+    if (!inter_downed) {
+        inter = find_cable(control_plane, unused, 5, 9, 29, 9);
+    }
+    ASSERT_NE(inter, nullptr);
+    EXPECT_FALSE(on_diagonal(inter->src_mesh(), inter->dst_mesh()));
+    const std::size_t inter_request = intermesh_request(mesh_graph, inter->src_mesh(), inter->dst_mesh());
+    EXPECT_EQ(inter_downed, inter_request > 15) << "request " << inter_request;
+    EXPECT_TRUE(has_cable(control_plane, inter_downed ? downed : unused, 29, 9, 5, 9));
+    EXPECT_EQ(control_plane.fsd_rerouting_active(), !downed.empty());
+
+    // Pairing: nothing across the diagonal, min(request, live) on every ring boundary (a rank sees its own mesh).
+    const auto holds_missing_cable = [&](MeshId a, MeshId b) {
+        return (a == inter->src_mesh() && b == inter->dst_mesh()) || (a == inter->dst_mesh() && b == inter->src_mesh());
+    };
+    for (const auto local : control_plane.get_local_mesh_id_bindings()) {
+        for (const auto peer : mesh_graph.get_mesh_ids()) {
+            const std::size_t request = peer == local ? 0 : intermesh_request(mesh_graph, local, peer);
+            if (request == 0) {
+                continue;
+            }
+            std::size_t expected = 0;
+            if (!on_diagonal(local, peer)) {
+                expected = std::min<std::size_t>(request, holds_missing_cable(local, peer) ? 15 : 16);
+            }
+            EXPECT_EQ(assigned_toward(control_plane, local, peer), expected) << local << " -> " << peer;
+        }
+    }
+}
+
 // This pod's mesh graph is RELAXED. STRICT system health is not allowed with that, even though a STRICT
 // mesh graph may still run under relaxed system health.
 TEST_F(FactoryDescriptorControlPlaneFixture, StrictSystemHealthRejectsARelaxedMeshGraph) {

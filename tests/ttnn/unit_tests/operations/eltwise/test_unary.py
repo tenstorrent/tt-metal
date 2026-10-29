@@ -14,7 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_w
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range_dtype,
 )
-from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
+from tt_py_test_utils_common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
 
 def create_full_range_tensor(input_shapes, dtype):
@@ -546,6 +546,45 @@ def test_unary_log_operations_ttnn(
         assert_with_ulp(expected_result=golden_tensor, actual_result=tt_result, ulp_threshold=2)
 
 
+@pytest.mark.parametrize(
+    "log_function",
+    [ttnn.log, ttnn.log2, ttnn.log10],
+    ids=["log", "log2", "log10"],
+)
+def test_unary_log_subnormal_fast_mode(device, log_function):
+    # A positive float32 subnormal must give -inf in fast mode, as it does in
+    # accurate mode: the kernel flushes subnormals to +0.0 before reading the
+    # exponent. The fast path used to skip that flush, so the exponent field (0)
+    # was decremented and wrapped to 255 on top of a non-zero mantissa, which is
+    # a NaN pattern, and that NaN was then multiplied into the result.
+    # float32 only. A bfloat16 subnormal reaches the kernel with its exponent-0
+    # pattern intact, and the unfixed fast path mishandles it just the same, but
+    # on Wormhole the NaN its SFPMAD produces for a positive subnormal carries the
+    # product's sign (0xff800001 on the float32 rows), and convert<vFloat16b>
+    # (SFPSTOCHRND) in calculate_log turns a NaN into the infinity of its sign, so
+    # the bfloat16 row reads -inf and passes with or without the fix. (Blackhole's
+    # SFPMAD returns the canonical +NaN, so there a bfloat16 row would fail, but
+    # the test has to detect the bug on both.) -0.0 is covered for both dtypes by
+    # test_log_signed_zero. 1e-40 and 2**-130 are both float32 subnormals.
+    x_torch = torch.tensor([[1e-40, 2.0**-130, 1.0]], dtype=torch.float32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    accurate = ttnn.to_torch(log_function(x_tt, fast_and_approximate_mode=False))
+    fast = ttnn.to_torch(log_function(x_tt, fast_and_approximate_mode=True))
+    fast_sub, accurate_sub = fast[0, :2], accurate[0, :2]
+
+    assert torch.isneginf(fast_sub).all(), (
+        f"fast {log_function.__name__} of a positive subnormal returned {fast_sub.tolist()!r}, expected -inf; "
+        f"accurate mode returned {accurate_sub.tolist()!r}. The subnormal flush in "
+        "calculate_log_body must run in fast mode too."
+    )
+    assert torch.equal(fast_sub, accurate_sub), (
+        f"fast {log_function.__name__} of a positive subnormal returned {fast_sub.tolist()!r}, "
+        f"accurate mode returned {accurate_sub.tolist()!r}."
+    )
+    assert fast[0, 2].item() == 0.0, f"fast {log_function.__name__}(1.0) returned {fast[0, 2].item()!r}, expected 0.0."
+
+
 @pytest.mark.parametrize("h", [0])
 @pytest.mark.parametrize("w", [1])
 def test_01_volume_sin(device, h, w):
@@ -1057,6 +1096,50 @@ def test_unary_rejects_unsupported_integer_dtype(ttnn_op, ttnn_dtype, extra_kwar
     input_tensor = ttnn.from_torch(input_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "does not support integer input dtype"):
         ttnn_op(input_tensor, **extra_kwargs)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op, extra_kwargs",
+    [
+        (ttnn.abs, {}),
+        (ttnn.neg, {}),
+        (ttnn.sign, {}),
+        (ttnn.relu, {}),
+        (ttnn.square, {}),
+        (ttnn.sqrt, {}),
+        (ttnn.sigmoid, {}),
+        (ttnn.exp, {}),
+        (ttnn.floor, {}),
+        (ttnn.eqz, {}),
+        (ttnn.bitwise_not, {}),
+        (ttnn.leaky_relu, {"negative_slope": 0.1}),
+        (ttnn.fill, {"fill_value": 7}),
+    ],
+)
+def test_unary_rejects_int8_input(ttnn_op, extra_kwargs, device, expect_error):
+    input_data = torch.zeros((1, 1, 32, 32), dtype=torch.int8)
+    input_tensor = ttnn.from_torch(input_data, dtype=ttnn.int8, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not support integer input dtype"):
+        ttnn_op(input_tensor, **extra_kwargs)
+
+
+@pytest.mark.parametrize(
+    "ttnn_fn, golden_fn",
+    [
+        (ttnn.identity, lambda x: x),
+        (lambda t: ttnn.typecast(t, ttnn.int32), lambda x: x.to(torch.int32)),
+        (lambda t: ttnn.typecast(t, ttnn.float32), lambda x: x.to(torch.float32)),
+        (lambda t: ttnn.typecast(t, ttnn.bfloat16), lambda x: x.to(torch.bfloat16)),
+        (lambda t: ttnn.bitcast(t, ttnn.uint8), lambda x: x.view(torch.uint8)),
+    ],
+    ids=["identity", "typecast_int32", "typecast_float32", "typecast_bfloat16", "bitcast_uint8"],
+)
+def test_unary_int8_copy_ops(ttnn_fn, golden_fn, device):
+    torch_input = torch.arange(-128, 128, dtype=torch.int16).to(torch.int8).repeat(4).reshape(1, 1, 32, 32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int8, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = golden_fn(torch_input)
+    output = ttnn.to_torch(ttnn_fn(input_tensor))
+    assert torch.equal(output.to(expected.dtype), expected)
 
 
 @pytest.mark.parametrize("scalar", [1.5, 2.0])

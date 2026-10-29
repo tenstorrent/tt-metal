@@ -16,8 +16,8 @@
 #include <fmt/core.h>
 
 #include <tt-metalium/experimental/dispatch_telemetry.hpp>
-#include <umd/device/pcie/pci_device.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
 
 namespace {
 
