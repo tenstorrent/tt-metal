@@ -571,6 +571,19 @@ TABLE = {
         "every metric within 1.3 %. Host 8 ms pack + 7 ms tiling vs bf16's ~40 ms. Default bfp8 (owner 2026-10-28; "
         "the Galaxy 40-layer ladder + K.1 is the confirmation)",
     ),
+    "ENGRAM_ASYNC": Setting(
+        "on",
+        ("on", "off"),
+        "P.6 (owner 2026-10-28): when begin_chunk does the engram layers' host work (hash, lookup, pack, upload). on = "
+        "begin_chunk allocates each engram layer's device rows on the main thread (same allocation order as off), "
+        "computes the new tails (3 ids) and returns; one worker thread then fills them, layer 1 first (hash, lookup + "
+        "pack, wrap into host shards, the upload: copy_host_to_device_tensor, GIL released) while the main thread "
+        "dispatches embed, layer 0, ...; take_engram_rows(i) waits for layer i's job just before its engram op. The write "
+        "goes into CQ 0 (the harness and tt-d-gen open one CQ; MeshDevice has no Python CQ count), which is in order, "
+        "so it lands before layer i's ops, enqueued after the wait. Same bytes as off "
+        "(tests/test_engram_bfp8.py, test_engram_table_modes.py; tt/perf_engram_async.py compares the device bytes). "
+        "off = today's path: both layers' hash + lookup + pack + upload on the main thread before embed",
+    ),
     "ENGRAM_GATHER_THREADS": Setting(
         8,
         None,

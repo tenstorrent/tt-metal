@@ -767,6 +767,70 @@ tasks:
     - L.s56320
     - L.smoke
     - K.1
+- id: FIX.9
+  title: 'DS41-132: the shared expert''s x / h as bfp8 inside the block MoE''s fused head (GEMM_INPUTS reaches MOE_HEAD=fused)'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - W.1
+  - M.1
+  - L.s10240
+  - L.last
+  - L.s56320
+  - L.smoke
+  - K.1
+  gate:
+    cmd: BRINGUP_TASK=W.1 BRINGUP_RUNG=seed scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=M.1 BRINGUP_RUNG=s10240 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.s10240 BRINGUP_RUNG=s10240 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.last BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.s56320 BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.smoke scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_smoke.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      host_transfers_per_layer: == 0
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      smoke_device_ok: == 1
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  - models/demos/moe_block
+  - models/demos/deepseek_v41_flash_d_p
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses; FIX.7 GEMM_INPUTS=bfp8):
+      the reference fp8-quantizes the shared expert''s x and h; on MOE_HEAD=fused (the default) they stay bf16, i.e. ABOVE
+      the reference (known_issues DS41-132). Cause: models/demos/moe_block/tt/se_engine3.py hard-codes 2048-byte bf16 tiles
+      (xown, xin, hown, hall); MoEDtypes.shared_activations (moe_block.py:118, :1406) only reaches the ops head. Fix: a bfp8
+      option for x and h in se_engine3 (tile sizes from the dtype, not literals), set by MoEDtypes.shared_activations, which
+      GEMM_INPUTS sets for DS41. x is shared with the router, which takes bf16 in the reference: the router keeps bf16 x,
+      only the shared expert''s matmul input is bfp8 (round where the SE reads it, or a second bfp8 copy: pick the cheaper,
+      measure). h (SwiGLU output) is written bfp8 for the down matmul. Keep MOE_HEAD=ops, the 2x2 seed box and other moe_block
+      users working (the option defaults to bf16 for them). Do not touch tt/compressor.py, tt/attention.py, tt/sparse_attention.py
+      (the 2x2''s 4-bit KV work) or tt/engram*.py. Report: per-step accuracy before/after (shared expert, block out), the
+      head''s device time and the warm wall per chunk.'
+    gate_tasks:
+    - W.1
+    - M.1
+    - L.s10240
+    - L.last
+    - L.s56320
+    - L.smoke
+    - K.1
 - id: P.6
   title: 'ENGRAM_ASYNC: engram rows looked up and uploaded off the critical path (layer 14 behind layers 1-13)'
   step: perf
@@ -824,15 +888,14 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - ttnn/ttnn/bringup
   brief:
-    details: 'Owner focus (2026-10-28): reduce HOST time per chunk; clean wins are accepted by the overseer. DS41-135
-      (FIX.8): with CKV_FORMAT=bfp4_rows (default) ttnn.bringup.ckv_bfp4 costs ~1.33 ms host a call, 4 calls a chunk
-      (~5.3 ms), because ckv_bfp4.py program() rebuilds its ProgramDescriptor and generic_op hashes / dispatches a fresh
-      one every call (row0 and buffer addresses change). Make it a prepared program (ttnn/ttnn/bringup/prepared_program,
-      as P.1 GENERIC_OP_PREPARED and P.2 TAIL_A2A_PREPARED did: build once per (n, table), patch row0 / addresses per
-      call) or a C++ op if that is simpler. Bytes identical to today (ckv_bfp4 tests/unit, test_sparse_sdpa_row_bfp4.py).
-      Behind the setting CKV_BFP4_PREPARED in tt/settings.py (default on, ''off'' = the old path). Do not touch
-      tt/engram*.py. Report the host ms saved per chunk (cProfile of warm chunks and the warm wall before/after,
-      DS41_ENGRAM_TABLE=resident) and the device time.'
+    details: 'Owner focus (2026-10-28): reduce HOST time per chunk; clean wins are accepted by the overseer. DS41-135 (FIX.8):
+      with CKV_FORMAT=bfp4_rows (default) ttnn.bringup.ckv_bfp4 costs ~1.33 ms host a call, 4 calls a chunk (~5.3 ms), because
+      ckv_bfp4.py program() rebuilds its ProgramDescriptor and generic_op hashes / dispatches a fresh one every call (row0
+      and buffer addresses change). Make it a prepared program (ttnn/ttnn/bringup/prepared_program, as P.1 GENERIC_OP_PREPARED
+      and P.2 TAIL_A2A_PREPARED did: build once per (n, table), patch row0 / addresses per call) or a C++ op if that is simpler.
+      Bytes identical to today (ckv_bfp4 tests/unit, test_sparse_sdpa_row_bfp4.py). Behind the setting CKV_BFP4_PREPARED in
+      tt/settings.py (default on, ''off'' = the old path). Do not touch tt/engram*.py. Report the host ms saved per chunk
+      (cProfile of warm chunks and the warm wall before/after, DS41_ENGRAM_TABLE=resident) and the device time.'
   ab:
     env:
       DS41_CKV_BFP4_PREPARED: 'off'

@@ -103,6 +103,7 @@ def test_trace_ceiling(mesh_device):
     for _ in range(3):
         t0 = time.time()
         begin_chunk(model, tokens, start)
+        model.wait_engram()  # ENGRAM_ASYNC=on (P.6): the worker's jobs done before the sync
         ttnn.synchronize_device(mesh_device)
         bc.append((time.time() - t0) * 1e3)
     rows = dict(model._engram_dev)  # the chunk's engram rows, kept for every run (and the trace)
