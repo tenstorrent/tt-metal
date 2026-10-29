@@ -43,6 +43,13 @@
 // position: cos then sin of its ROT / 2 rotation angles as bf16, kRopeEntry bytes), out, sampling
 // parameters, then the peer's tok (verify kinds).
 //
+// Taps (DFlash2 drafter context, compile-time args 22 n_taps <= 5, 23 .. 27 the tap rounds, 28 hidden tiles): after a
+// tap round
+// (round 2 l + 1 holds x after decoder layer l) the hub writes this chip's hidden columns [chip H / n, (chip + 1) H /
+// n) of every row of x into the tap's DRAM tensor (runtime args after the feed's: n_taps addresses), a [rows, H / n]
+// bf16 TILE tensor padded to 32 rows: row u of the batch x 32 tile t goes to row u of 32x32 tile t (rows >= batch
+// are never written). Published mode only; the writes go out after the round's multicast.
+//
 // Compile-time arg 21 sample (feed kind 0): the records are the streamers' top-k lists and the candidate slots
 // the chips' (sampling::kListBytes each); the token is drawn from them with the sampling parameters (DRAM, 16 words,
 // the first 4 used, see sampling.hpp) instead of taken as the argmax.
@@ -92,6 +99,29 @@ constexpr uint32_t rows = feed_kind > 0 ? 2 : 1;  // greedy tokens per launch
 constexpr bool sample = get_compile_time_arg_val(21) != 0;
 static_assert(!sample || (feed && feed_kind == 0), "sampling feeds batch 1");
 constexpr uint32_t cand_bytes = sample ? sampling::kListBytes : 16;
+constexpr uint32_t n_taps = get_compile_time_arg_val(22);
+static_assert(n_taps <= 5 && (n_taps == 0 || published), "taps are written from the summed x");
+constexpr uint32_t tap_rounds[5] = {
+    get_compile_time_arg_val(23),
+    get_compile_time_arg_val(24),
+    get_compile_time_arg_val(25),
+    get_compile_time_arg_val(26),
+    get_compile_time_arg_val(27)};
+constexpr uint32_t hidden_tiles = get_compile_time_arg_val(28);
+constexpr uint32_t kTapTile = 2048;                          // a bf16 32x32 tile of a tap tensor
+constexpr uint32_t kRowsTile = vector_bytes / hidden_tiles;  // a batch x 32 bf16 tile of x
+constexpr uint32_t kTapTiles = hidden_tiles / num_chips;     // this chip's hidden tiles
+
+// this chip's columns of x (batch x 32 tiles at `x`) into the tap tensor at `addr` (rows of 32x32 tiles)
+void write_tap(uint32_t x, uint32_t addr) {
+    const InterleavedAddrGen<true> tap{.bank_base_address = addr, .page_size = kTapTile};
+    constexpr uint32_t face_rows = kRowsTile / 2;  // one face of a batch x 32 tile: batch rows of 32 B
+    for (uint32_t t = 0; t < kTapTiles; t++) {
+        const uint32_t src = x + (chip * kTapTiles + t) * kRowsTile;
+        noc_async_write(src, tap.get_noc_addr(t, 0), face_rows);
+        noc_async_write(src + face_rows, tap.get_noc_addr(t, 512), face_rows);
+    }
+}
 constexpr uint32_t packets_per_vector = (vector_bytes + packet_bytes - 1) / packet_bytes;
 constexpr uint32_t kRopeEntry = 128;  // compact rope table page: cos[32] | sin[32] bf16
 static_assert(rope_bytes == 3 * 2048, "the token state's rope tiles: cos, sin, -sin");
@@ -250,6 +280,10 @@ void kernel_main() {
             peer_tok_addr = get_arg_val<uint32_t>(arg_idx++);
         }
     }
+    uint32_t tap_addr[n_taps > 0 ? n_taps : 1] = {};
+    for (uint32_t i = 0; i < n_taps; i++) {
+        tap_addr[i] = get_arg_val<uint32_t>(arg_idx++);
+    }
     const uint32_t flag_addr = get_semaphore(sem_flag);
     auto fabric =
         FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
@@ -389,6 +423,11 @@ void kernel_main() {
             noc_async_write_barrier();
         }
         if constexpr (published) {
+            for (uint32_t i = 0; i < n_taps; i++) {
+                if (l == tap_rounds[i]) {
+                    write_tap(src, tap_addr[i]);
+                }
+            }
             noc_async_write_barrier();
             cb_pop_front(2, vector_bytes / 2048);
         }

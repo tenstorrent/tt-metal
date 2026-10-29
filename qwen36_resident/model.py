@@ -88,6 +88,7 @@ KV_BLOCK = 8  # KV position tiles per streamed block of an attention worker
 HEAD_FP32_CBS = (5, 6, 7, 15, 30, 31)
 TOK_X0 = 64
 TOK_SLOT = 4  # token state word: the GDN state slot of row 0 (verify)
+TOK_SLOT_ROWS = 15  # the same for a verify of R > 2 rows (words 1 .. R hold their positions)
 TOP_K = 32  # sampling::kTopK: the candidates of on-device sampling, the largest top-k it serves
 KV_ROW = (HD // TILE) * TILE_BYTES[ttnn.bfloat8_b]
 
@@ -229,9 +230,10 @@ def random_weights(d, gdn_copies, attn_copies, mlp_copies, seed=0):
     return w
 
 
-def torch_step(x0, d, w, st, layers, interval, lm_head=False, attn_out=None):
+def torch_step(x0, d, w, st, layers, interval, lm_head=False, attn_out=None, xs=None):
     """One decode step at st.pos (fp32 reference, bf16 at the device's rounding points); updates st in place
-    (states, histories, KV rows at pos) and returns x (and the per-chip logits with lm_head)."""
+    (states, histories, KV rows at pos) and returns x (and the per-chip logits with lm_head). xs (a list) gets
+    x after every layer."""
     pos = st.pos
     cos, sin = rope_tables(pos)
     x = x0.clone()
@@ -298,6 +300,8 @@ def torch_step(x0, d, w, st, layers, interval, lm_head=False, attn_out=None):
             bf16(torch.nn.functional.silu(h @ cm["G"]) * (h @ cm["U"])) @ cm["D"] + (x if chip == 0 else 0)
             for chip, cm in enumerate(m)
         )
+        if xs is not None:
+            xs.append(x)
     st.pos += 1
     if lm_head:
         h = bf16(rmsnorm(x))
@@ -445,6 +449,7 @@ class ResidentModel:
         fc=None,
         tok=None,
         feed_peer=None,
+        taps=None,
     ):
         """st: the decode state (State), or one State per user for a batch of len(st) users. More than 8 users
         run as sub-batches of 8, one launch each (the launches share the weights and buffers, each has its
@@ -456,14 +461,24 @@ class ResidentModel:
         its K slice [2 HIDDEN / n, HIDDEN] of the fc that makes x0 from the token state's two vectors per row
         (see streamer_common.hpp). tok: the token state tensor (default: a new one, see tok_tensor).
         verify with embed: the hub feeds the MTP draft loop (mlp_hub.cpp kinds 1 and 2), writing the next
-        token state of feed_peer's model (the draft model for the main one and back)"""
+        token state of feed_peer's model (the draft model for the main one and back).
+        verify = R (an int, 4 or 8): a step runs R rows of the user at p .. p + R - 1 (DFlash2: a token and R - 1
+        drafts); GDN states in R slots, the conv history a ring of single-row slots (streamer_common.hpp), the next
+        step continues from row a at ring + 1 + a, slot (slot + a) % R (token_state).
+        taps: [(layer, tensor)] (up to 5): after each step the tensor (bf16 TILE, [R, HIDDEN / n] per chip, rows padded
+        to 32) holds this chip's columns of every row's x after decoder layer `layer` (the DFlash2 drafter's context
+        taps, mlp_hub.cpp)"""
         self.mesh, self.d, self.layers, self.interval, self.lm_head = mesh, d, layers, interval, lm_head
-        self.verify = verify
+        R = 0 if not verify else (2 if verify is True else int(verify))
+        assert R in (0, 2, 4, 8), "verify runs 2, 4 or 8 rows"
+        self.verify, self.R = bool(verify), R
+        self.taps = list(taps or [])
+        assert len(self.taps) <= 5
         self.fc = fc is not None
         self.sample = embed is not None and not verify  # the hub draws the fed token (sampling.hpp)
         if verify:
             assert isinstance(st, State)
-            st = [st, st]
+            st = [st] * R
         sts_all = list(st) if isinstance(st, (list, tuple)) else [st]
         n_sub = -(-len(sts_all) // 8)
         assert len(sts_all) % n_sub == 0
@@ -651,8 +666,8 @@ class ResidentModel:
 
         # (each further sub-batch has its own logits, an L1 tensor)
         extra = (n_sub - 1) * B * 2 * nv_max * TILE if lm_head else 0
-        # verify: two more conv history outputs and the row selections
-        extra += (2 * blk_tiles * 64 * B + 3 * 2048) if verify else 0
+        # verify: two more conv history outputs and the row selections (R > 2 rows: 9 row selections)
+        extra += (2 * blk_tiles * 64 * B + 3 * 2048) if R == 2 else (9 * 2048 if verify else 0)
         ring_bytes = ((L1_WEIGHT_BUDGET - act_bytes(B) + act_bytes(1) - extra) // lcm) * lcm
         self.ring_bytes = ring_bytes
 
@@ -725,18 +740,22 @@ class ResidentModel:
         self.rpb = rpb
         kv_stride = rpb * KV_ROW
 
+        # (the rows of a verify step of R > 2 rows share one user's KV cache: one user's, not R)
+        kv_users = 1 if R > 2 else B
         self._kv_mc = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(dram_grid, [B * attn_copies * rpb * TILE, HD], ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(dram_grid, [kv_users * attn_copies * rpb * TILE, HD], ttnn.ShardOrientation.ROW_MAJOR),
         )
 
         def cache(which, sts_=sts):
             if sts_[0].K is None:
                 # no host images: zero-filled on device (stale rows are only ever read masked, but must be finite)
-                return device_zeros(mesh, [banks * B * attn_copies * rpb * TILE, HD], ttnn.bfloat8_b, self._kv_mc)
+                return device_zeros(
+                    mesh, [banks * kv_users * attn_copies * rpb * TILE, HD], ttnn.bfloat8_b, self._kv_mc
+                )
             return ttnn.from_torch(
-                self._kv_host(sts_, which),
+                self._kv_host(sts_[:kv_users], which),
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh,
@@ -919,10 +938,10 @@ class ResidentModel:
                 aliased(19, 24, CONV_K * blk_tiles),
                 aliased(20, 25, (CONV_K - 1) * blk_tiles),
                 T(21, self.o_in_t),
-                cb(30, grid, (3 if self.verify else 1) * blk_tiles * B // TILE),
+                cb(30, grid, (3 if R == 2 else 1) * blk_tiles * B // TILE),
             ]
             if self.verify:
-                cbs.append(cb(36, grid, 3))
+                cbs.append(cb(36, grid, 3 if R == 2 else 9))
             # hub: slots (2 parities x chips) and their sum x (32x32 views), fabric packet headers (2 parities x
             # packets x 2 directions) and a word
             hub_headers = 4 * -(-HIDDEN * 2 * B // packet_bytes)
@@ -1182,6 +1201,9 @@ class ResidentModel:
                 hub_ct += [int(self.feed), sts[0].max_pos, self.tok_words * 4, self.rope_off, 3 * 2048]
                 feed_kind = (2 if self.fc else 1) if self.feed and verify else 0
                 hub_ct += [feed_kind, TOK_X0 + (1 if self.fc else 2) * d.Ht * 64 * B, HIDDEN * 2, int(self.sample)]
+                # taps: the hub round holding x after the tap's decoder layer
+                rounds_of = [2 * l + 1 + int(self.fc) for l, _ in self.taps]
+                hub_ct += [len(self.taps)] + (rounds_of + [0xFFFFFFFF] * 5)[:5] + [d.Ht]
                 if self.feed:
                     hub_args += [
                         sub["argmax"].buffer_address(),
@@ -1195,6 +1217,7 @@ class ResidentModel:
                     ]
                     if feed_kind:
                         hub_args.append(self.feed_peer.buffer_address())
+                hub_args += [t.buffer_address() for _, t in self.taps]
                 hub_rt = ttnn.RuntimeArgs()
                 hub_rt[hub.x][hub.y] = hub_args
 
@@ -1341,6 +1364,7 @@ class ResidentModel:
                     io.append(self.feed_peer)
             if timeline:
                 io.append(self.ts_t)
+            io += [t for _, t in self.taps]
             return mesh_pd, io
 
         built = [build(sub) for sub in subs]
@@ -1367,7 +1391,9 @@ class ResidentModel:
         """host tensor of the token state: x0 [HIDDEN] at pos, or per user x0 [users, HIDDEN] at positions pos
         (a list); ring is the conv ring step (default: the position, batch 1). With sub-batches, one host
         tensor per sub-batch. Verify: rows [t, draft] at [p, p + 1]; after a step at ring k and slot s the
-        next one continues from row 0 at ring k + 1, slot s, or from row 1 at ring k + 2, slot s ^ 1."""
+        next one continues from row 0 at ring k + 1, slot s, or from row 1 at ring k + 2, slot s ^ 1.
+        Verify of R > 2 rows: rows [t, d_1 .. d_R-1] at [p .. p + R - 1]; the next step continues from row a
+        (a drafts accepted) at ring k + 1 + a, slot (s + a) % R."""
         if self.n_sub > 1:
             x0 = x0.reshape(self.users, HIDDEN)
             B = self.batch
@@ -1386,7 +1412,7 @@ class ResidentModel:
         for i, v in enumerate([ring] + pos):
             words[2 * i], words[2 * i + 1] = v & 0xFFFF, v >> 16
         if self.verify:
-            words[2 * TOK_SLOT] = slot
+            words[2 * (TOK_SLOT if self.R == 2 else TOK_SLOT_ROWS)] = slot
         for i, v in (extra or {}).items():  # further head words (the MTP feed's, see mlp_hub.cpp)
             words[2 * i], words[2 * i + 1] = v & 0xFFFF, v >> 16
         words[TOK_X0 // 2 : TOK_X0 // 2 + x0.numel()] = bf16_bits(tiny_order(x0))
@@ -1429,6 +1455,8 @@ class ResidentModel:
         32 batch x 32 tiles; the ring slot of age a (0 = oldest) at ring step s is (s * uses + a) % 3 (see
         conv_step in streamer_common.hpp; ring: by default the position at batch 1, else 0)"""
         sts = sts if isinstance(sts, (list, tuple)) else [sts]
+        if self.R > 2:
+            return self._hist_host_rows(sts[0], ring or 0)
         B = len(sts)
         if ring is None:
             ring = sts[0].pos if B == 1 else 0
@@ -1454,6 +1482,22 @@ class ResidentModel:
                 for age in range(CONV_K - 1):
                     slot = (ring * uses + age) % 3
                     hist[:, rep_rows * copies + c, slot * blk + at] = h[:, age, src]
+        return hist.reshape(n * S * copies, -1)
+
+    def _hist_host_rows(self, st, ring):
+        """verify of R > 2 rows: st's conv histories as a ring of 16 single-row slots, 16 / R blocks of R-row tiles
+        (streamer_common.hpp): history row j (the input at pos - 3 + j) in slot (ring + j) % 16, row s % R of
+        block s // R"""
+        n, S, copies, R = self.d.n, self._S, self._gdn_copies, self.R
+        blk = self._blk * TILE * R
+        rows, cols, src = self.hist_index()
+        hist = torch.zeros(n, S * copies, 16 // R * blk)
+        rep_rows = rows.repeat_interleave(TILE)
+        for c in range(min(len(st.hist), copies)):
+            h = torch.stack(st.hist[c])  # [n, 3, conv_ch]
+            for j in range(CONV_K - 1):
+                slot = (ring + j) % 16
+                hist[:, rep_rows * copies + c, (slot // R) * blk + tiny_index(cols, slot % R, R)] = h[:, j, src]
         return hist.reshape(n * S * copies, -1)
 
     def _state_host(self, sts):
@@ -1487,10 +1531,10 @@ class ResidentModel:
                         t[chip, b, u, c, : sel.shape[0] * TILE] = sel.reshape(-1, HD)
         return t.reshape(n * banks * B * copies * rpb * TILE, HD)
 
-    def load_hist(self, st):
-        """write st's conv histories (at st.pos) as the decode's"""
+    def load_hist(self, st, ring=None):
+        """write st's conv histories (at st.pos; verify of R > 2 rows: at ring step `ring`) as the decode's"""
         host = ttnn.from_torch(
-            self._hist_host(st), dtype=ttnn.bfloat16, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0)
+            self._hist_host(st, ring), dtype=ttnn.bfloat16, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0)
         )
         ttnn.copy_host_to_device_tensor(host, self.hist_t)
 

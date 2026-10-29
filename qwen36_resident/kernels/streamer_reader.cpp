@@ -144,7 +144,26 @@ void kernel_main() {
         cb_push_back(cb_fold, 1);
         cb_push_back(cb_eye, 1);
     }
-    if constexpr (verify) {
+    if constexpr (verify_rows) {
+        // the conv's row selections (see streamer_common.hpp), bf16 32x32 over view rows (row R is verify row
+        // R % batch): S_j takes y row r - 3 + j; H_j,b takes history row r + j from block b of the two read
+        cb_reserve_back(cb_shift, 9);
+        volatile tt_l1_ptr uint16_t* sel = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_shift));
+        const uint32_t o = ring % batch;  // row of history row 0 in the first block
+        for (uint32_t i = 0; i < 1024; i++) {
+            const uint32_t face = i / 256, row = (face / 2) * 16 + (i % 256) / 16, col = (face % 2) * 16 + i % 16;
+            const bool same = row / batch == col / batch;
+            const uint32_t r = row % batch, c = col % batch;
+            for (uint32_t j = 0; j < 3; j++) {
+                sel[j * 1024 + i] = same && r + j >= 3 && c == r + j - 3 ? 0x3f80 : 0;
+                const uint32_t h = o + r + j;  // history row r + j, as a row of the two blocks
+                sel[(3 + 2 * j) * 1024 + i] = same && r + j < 3 && h < batch && c == h ? 0x3f80 : 0;
+                sel[(4 + 2 * j) * 1024 + i] = same && r + j < 3 && h >= batch && c == h - batch ? 0x3f80 : 0;
+            }
+        }
+        cb_push_back(cb_shift, 9);
+    }
+    if constexpr (verify_pair) {
         // the conv's row selections (see streamer_common.hpp), bf16 32x32: [0] keeps the even rows, [1] moves
         // row R - 1 to odd row R, [2] moves row R + 1 to even row R
         cb_reserve_back(cb_shift, 3);
@@ -191,7 +210,15 @@ void kernel_main() {
                     noc_async_read(
                         taps.get_noc_addr(row, j * kBlkBytes), get_write_ptr(cb_conv_w) + j * kBlkBytes, conv_bytes);
                 }
-                for (uint32_t j = 0; j < 3; j++) {
+                // verify_rows: the two blocks holding ring slots step .. step + 2
+                const uint32_t b0 = (step % kRingSlots) / batch;
+                for (uint32_t j = 0; verify_rows && j < 2; j++) {
+                    noc_async_read(
+                        hist.get_noc_addr(row, ((b0 + j) % kHistSlots) * kBlkBytes),
+                        get_write_ptr(cb_conv_hist) + j * kBlkBytes,
+                        conv_bytes);
+                }
+                for (uint32_t j = 0; !verify_rows && j < 3; j++) {
                     noc_async_read(
                         hist.get_noc_addr(row, ((step + j) % kHistSlots) * kBlkBytes),
                         get_write_ptr(cb_conv_hist) + j * kBlkBytes,

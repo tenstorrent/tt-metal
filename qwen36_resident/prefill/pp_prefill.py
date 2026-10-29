@@ -1067,7 +1067,9 @@ class PPPrefill:
                     per = [(hh * 16, 16) for hh in range(d.nv)] if verify else [(0, pages)]
                     for c in range(n):
                         for off, cnt in per:
-                            dst_page = g_i * pages + off if len(per) == 1 else (g_i * d.nv + off // 16) * 2 * 16
+                            dst_page = (
+                                g_i * pages + off if len(per) == 1 else (g_i * d.nv + off // 16) * model.batch * 16
+                            )
                             rows[p].append(
                                 torch.tensor(
                                     [
@@ -1196,6 +1198,8 @@ class PPPrefill:
         hist = cat[[p for p, _ in order], [k for _, k in order]]  # [G, 3, CONV_CH], GDN copy order
         packed = hist[:, :, local[:, hsrc]].permute(2, 0, 1, 3)  # [chips, G, age, K * 32]
         verify = getattr(model, "verify", False)
+        if getattr(model, "R", 0) > 2:
+            raise NotImplementedError("conv history handoff into a verify model of R > 2 rows (its single-row ring)")
         if verify:
             # pair slots at ring step 0 (see streamer_common.hpp): slot j holds ages (j, j + 1) as the rows of
             # each conv tile (row 1 of slot 2 unused), in the 2 x 32 tile order (per face, row 0 then row 1)
