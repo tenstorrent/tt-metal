@@ -26,6 +26,9 @@
 #     guaranteed to be split across engine steps. Must equal the
 #     --max-num-batched-tokens passed in additional-server-args.
 #   chunked-prefill-test-timeout: per-step timeout for that step (minutes, default 15).
+#   prefix-caching-test: enables the prefix-caching gate (cache-hit resume of a ~24K-token
+#     document). It reads the resume's usage.prompt_tokens_details.cached_tokens when the
+#     server reports it (--enable-prompt-tokens-details), else the /metrics counters.
 #   server-default-top-k: top_k for requests that do not set one, passed to the server
 #     as --override-generation-config. Set it to the device sampler's top-k limit (32)
 #     when the entry samples on device, the model's default temperature is above 0,
@@ -511,13 +514,14 @@
   mesh-device: "(4, 8)"
   arch: arch-blackhole
   tt-config: '{"trace_mode": "decode_only", "trace_region_size": 1000000000, "l1_small_size": 65536, "dispatch_core_axis": "col", "sample_on_device_mode": "decode_only", "prefill_gather_ms": 200, "prefill_gather_quiet_ms": 25}'
-  additional-server-args: "--data_parallel_size 4 --max_num_seqs 4 --block_size 64 --max_model_len 1048576 --max_num_batched_tokens 4096 --enable_chunked_prefill --enable-prefix-caching --trust-remote-code --reasoning-parser mimo --enable-auto-tool-choice --tool-call-parser mimo"
+  additional-server-args: "--data_parallel_size 4 --max_num_seqs 4 --block_size 64 --max_model_len 1048576 --max_num_batched_tokens 4096 --enable_chunked_prefill --enable-prefix-caching --trust-remote-code --reasoning-parser mimo --enable-auto-tool-choice --tool-call-parser mimo --enable-prompt-tokens-details"
   # VLLM_ENGINE_READY_TIMEOUT_S: the first-use start (TT cache build) runs for hours.
   extra-env: "VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 MIMO_KV_GB_PER_CHIP=6.7 VLLM_ENGINE_READY_TIMEOUT_S=14400"
   coherence-test: true
-  # No prefix-caching-test yet: the plugin's lane coordinator builds its lanes with
-  # log_stats=False, so vllm:prefix_cache_* stay 0 and the gate cannot see the hits
-  # (run 40908073239: both answers right, counters 0 of 0).
+  # The plugin's lane coordinator builds its lanes with log_stats=False, so
+  # vllm:prefix_cache_* never move (run 40908073239: 0 of 0); the gate reads the
+  # resume's own cached_tokens instead (--enable-prompt-tokens-details).
+  prefix-caching-test: true
   chunked-prefill-budget: 4096
   multimodal: false
   skus:
