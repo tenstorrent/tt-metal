@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import os
 import time
 from collections import defaultdict
@@ -3261,14 +3262,18 @@ class ChunkedPrefillPageTableGuardMixin:
 
     # GEMMA4_TRACE_GUARD_DUMP=1 names the trigger of a fire: one WARNING line per fire listing the allocator blocks
     # that exist at the fire and did not at the baseline (the allocated entries of the DRAM and L1 block tables,
-    # snapshotted at every baseline the guard takes or keeps), each with the ttnn tensors the generator or a model
-    # holds at that address (one attribute walk, three container levels deep, keyed by buffer address and by id),
-    # plus the tensors held now that were not held at the baseline. Without a block table the line carries the
-    # allocator statistics instead (allocated and largest free bytes per bank, baseline -> now). Off (the default):
-    # nothing is read, snapshotted or walked.
-    #   Gemma4: trace guard dump (re-capture N/MAX): K new block(s), +B B per bank: TYPE SIZEB@ADDR owner=PATH DTYPE
-    #   [SHAPE]; ... | new tensors held: PATH DTYPE [SHAPE], ... | no block table: TYPE allocated A -> B, largest
-    #   free C -> D
+    # snapshotted at every baseline the guard takes or keeps), split into the blocks below the largest free gap
+    # (the ones the guard counts) and above it (kernel binaries and other top-down allocations, never counted), as
+    # a histogram per (type, size, region) and per block with the ttnn tensors the generator or a model holds at
+    # that address (one walk through attributes, containers and the objects on the way -- the sampler and its
+    # state, a layer's attention, the drafter decoder -- keyed by buffer address and by id), plus the tensors held
+    # now that were not held at the baseline. Without a block table the line carries the allocator statistics
+    # instead (allocated and largest free bytes per bank, baseline -> now). Off (the default): nothing is read,
+    # snapshotted or walked.
+    #   Gemma4: trace guard dump (re-capture N/MAX): K new block(s), +B B per bank; counted below the largest free
+    #   gap: J block(s), +C B; histogram: TYPE SIZEB xN below|above, ...; blocks: TYPE SIZEB@ADDR below|above
+    #   owner=PATH DTYPE [SHAPE]; ..., ... | new tensors held: PATH DTYPE [SHAPE], ... | no block table: TYPE
+    #   allocated A -> B, largest free C -> D
     _G4_GUARD_DUMP_ENTRIES = 32
 
     @staticmethod
@@ -3310,34 +3315,54 @@ class ChunkedPrefillPageTableGuardMixin:
             for name in ("total_bytes_allocated_per_bank", "largest_contiguous_bytes_free_per_bank")
         )
 
-    def _g4_guard_tensors(self, budget=20000):
+    def _g4_guard_tensors(self, budget=60000, max_depth=8):
         """``{id(tensor): (path, tensor)}`` of every ttnn tensor the generator or its models hold, reached through
-        their attributes and up to three container levels (dicts, lists, tuples); ``budget`` bounds the walk."""
-        found = {}
+        attributes and containers (dicts, lists, tuples, sets, and the ``__dict__`` of any object on the way: the
+        sampler, its penalties and seed state, a layer's attention and config, the drafter decoder); ``budget``
+        bounds the walk, ``max_depth`` the nesting. Host torch tensors, callables, modules and classes are leaves."""
+        found, seen, stack = {}, set(), []
         roots = [("generator", self)] + [(f"model[{i}]", m) for i, m in enumerate(getattr(self, "model", None) or [])]
-        stack = []
         for name, root in roots:
-            for attr, value in list(getattr(root, "__dict__", {}).items()):
-                stack.append((f"{name}.{attr}", value, 0))
-        seen = set()
+            stack.append((name, root, 0))
         while stack and budget > 0:
             path, value, depth = stack.pop()
             budget -= 1
             if callable(getattr(value, "buffer_address", None)):
                 found.setdefault(id(value), (path, value))
                 continue
-            if depth >= 3 or id(value) in seen:
+            if depth >= max_depth or id(value) in seen:
+                continue
+            if isinstance(value, (str, bytes, int, float, bool, type, torch.Tensor)) or value is None:
+                continue
+            if inspect.isroutine(value) or inspect.ismodule(value):
                 continue
             seen.add(id(value))
             if isinstance(value, dict):
                 items = [(f"{path}[{key!r}]", item) for key, item in value.items()]
-            elif isinstance(value, (list, tuple)):
+            elif isinstance(value, (list, tuple, set, frozenset)):
                 items = [(f"{path}[{i}]", item) for i, item in enumerate(value)]
             else:
-                continue
+                attrs = getattr(value, "__dict__", None)
+                if not isinstance(attrs, dict):
+                    continue
+                items = [(f"{path}.{key}", item) for key, item in attrs.items()]
             for item_path, item in items:
                 stack.append((item_path, item, depth + 1))
         return found
+
+    @staticmethod
+    def _g4_guard_gap(view):
+        """The address the largest free block of a memory view starts at (the gap ``_g4_dram_bottom_up_bytes``
+        counts below), or None without a block table / free block."""
+        try:
+            table = list(view.block_table)
+        except Exception:  # noqa: BLE001
+            return None
+        gap_start, gap_size = None, -1
+        for b in table:
+            if str(b.get("allocated", "")).lower() in ("no", "false", "0") and int(b.get("size", 0)) > gap_size:
+                gap_start, gap_size = int(b.get("address", 0)), int(b.get("size", 0))
+        return gap_start
 
     def _g4_guard_snapshot(self) -> None:
         """GEMMA4_TRACE_GUARD_DUMP=1: the allocated blocks, allocator statistics and held tensors at a baseline."""
@@ -3362,6 +3387,11 @@ class ChunkedPrefillPageTableGuardMixin:
             shape = "-"
         return f"{path} {dtype} {shape}"
 
+    @staticmethod
+    def _g4_guard_capped(items, cap):
+        extra = len(items) - cap
+        return items[:cap] + ([f"and {extra} more"] if extra > 0 else [])
+
     def _g4_guard_dump(self, n, limit) -> None:
         """One WARNING line naming what grew since the baseline (``GEMMA4_TRACE_GUARD_DUMP=1``, after a fire)."""
         state = getattr(self, "_g4_guard_baseline_state", None) or {"blocks": {}, "stats": {}, "tensors": set()}
@@ -3373,7 +3403,8 @@ class ChunkedPrefillPageTableGuardMixin:
                 by_address.setdefault(int(tensor.buffer_address()), []).append((path, tensor))
             except Exception:  # noqa: BLE001 - a tensor whose address cannot be read is listed by id only
                 continue
-        entries, no_table, count, total = [], [], 0, 0
+        entries, no_table, histogram = [], [], {}
+        count = total = counted = counted_bytes = 0
         for name, view in views.items():
             blocks = self._g4_guard_blocks(view)
             before = state["blocks"].get(name)
@@ -3381,23 +3412,32 @@ class ChunkedPrefillPageTableGuardMixin:
                 was, now = state["stats"].get(name, (0, 0)), self._g4_guard_stats(view)
                 no_table.append(f"{name} allocated {was[0]} -> {now[0]}, largest free {was[1]} -> {now[1]}")
                 continue
+            gap = self._g4_guard_gap(view)
             for address, size in sorted(blocks - before, key=lambda block: (-block[1], block[0])):
+                region = "below" if gap is None or address < gap else "above"
                 count += 1
                 total += size
+                if region == "below":
+                    counted += 1
+                    counted_bytes += size
+                histogram[(name, size, region)] = histogram.get((name, size, region), 0) + 1
                 owners = by_address.get(address)
                 owner = "; ".join(self._g4_guard_describe(p, t) for p, t in owners) if owners else "?"
-                entries.append(f"{name} {size}B@{address} owner={owner}")
+                entries.append(f"{name} {size}B@{address} {region} owner={owner}")
         held = sorted(self._g4_guard_describe(p, t) for i, (p, t) in tensors.items() if i not in state["tensors"])
         cap = self._G4_GUARD_DUMP_ENTRIES
-        for items in (entries, held):
-            if len(items) > cap:
-                del items[cap:]
-                items.append(f"and {len(items) - cap} more")
+        bars = [
+            f"{name} {size}B x{times} {region}"
+            for (name, size, region), times in sorted(histogram.items(), key=lambda kv: (kv[0][0], -kv[0][1], kv[0][2]))
+        ]
         line = (
-            f"Gemma4: trace guard dump (re-capture {n}/{limit}): {count} new block(s), +{total} B per bank: "
-            + (", ".join(entries) if entries else "none")
+            f"Gemma4: trace guard dump (re-capture {n}/{limit}): {count} new block(s), +{total} B per bank; "
+            f"counted below the largest free gap: {counted} block(s), +{counted_bytes} B; histogram: "
+            + (", ".join(bars) if bars else "none")
+            + "; blocks: "
+            + (", ".join(self._g4_guard_capped(entries, cap)) if entries else "none")
             + " | new tensors held: "
-            + (", ".join(held) if held else "none")
+            + (", ".join(self._g4_guard_capped(held, cap)) if held else "none")
         )
         if no_table:
             line += " | no block table: " + "; ".join(no_table)

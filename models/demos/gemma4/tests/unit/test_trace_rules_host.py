@@ -72,16 +72,31 @@ def test_no_growth_no_recapture(monkeypatch):
     output = SimpleNamespace(buffer_address=lambda: 900, dtype="DataType.BFLOAT16", shape=(1, 1, 32, 8))
     g.trace_output_decode["k"] = [output]
     g.model[0].stray = SimpleNamespace(buffer_address=lambda: 123456, dtype="DataType.INT32", shape=(32, 4096))
+    # the walk descends into objects (the sampler's state, a layer's attention), not only containers
+    g.model[0].sampling.tt_sampling = SimpleNamespace(
+        k_tensor=SimpleNamespace(buffer_address=lambda: 777, dtype="DataType.UINT32", shape=(32,)), rng=lambda: None
+    )
     logged = []
     monkeypatch.setattr(generator_module.logger, "warning", lambda message, *a, **k: logged.append(message.format(*a)))
     g._g4_alloc_check_pending = True
     assert g._g4_trace_guard_should_recapture("k")  # above the lowest level seen: a post-capture allocation
     assert logged[-1] == (
-        "Gemma4: trace guard dump (re-capture 1/8): 1 new block(s), +50 B per bank: "
-        "DRAM 50B@900 owner=generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8] | new tensors held: "
-        "generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8], model[0].stray INT32 [32,4096]"
+        "Gemma4: trace guard dump (re-capture 1/8): 1 new block(s), +50 B per bank; counted below the largest free "
+        "gap: 1 block(s), +50 B; histogram: DRAM 50B x1 below; blocks: DRAM 50B@900 below "
+        "owner=generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8] | new tensors held: "
+        "generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8], model[0].sampling.tt_sampling.k_tensor UINT32 "
+        "[32], model[0].stray INT32 [32,4096]"
     )
     assert logged[-2].startswith("Gemma4: device allocations grew after the decode-trace capture")
+    # a block above the largest free gap (a kernel binary, top-down) is listed but not counted
+    grown.block_table.append({"address": str((1 << 20) - 4096 - 2048), "size": "2048", "allocated": "yes"})
+    grown.block_table[2]["size"] = str((1 << 20) - 950 - 4096 - 2048)
+    g._g4_guard_dump(1, 8)
+    assert logged[-1].startswith(
+        "Gemma4: trace guard dump (re-capture 1/8): 2 new block(s), +2098 B per bank; counted below the largest free "
+        "gap: 1 block(s), +50 B; histogram: DRAM 2048B x1 above, DRAM 50B x1 below; blocks: DRAM 2048B@1042432 "
+        "above owner=?, DRAM 50B@900 below owner=generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8] | "
+    )
     # without a block table the line carries the allocator statistics instead; off, nothing is snapshotted
     bare = SimpleNamespace(total_bytes_allocated_per_bank=975, largest_contiguous_bytes_free_per_bank=7, block_table=[])
     monkeypatch.setattr(ttnn, "get_memory_view", lambda mesh, bt: bare)
@@ -92,10 +107,18 @@ def test_no_growth_no_recapture(monkeypatch):
     }
     g._g4_guard_dump(2, 8)
     assert logged[-1] == (
-        "Gemma4: trace guard dump (re-capture 2/8): 0 new block(s), +0 B per bank: none | new tensors held: "
-        "generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8], model[0].stray INT32 [32,4096] | no block table: "
+        "Gemma4: trace guard dump (re-capture 2/8): 0 new block(s), +0 B per bank; counted below the largest free "
+        "gap: 0 block(s), +0 B; histogram: none; blocks: none | new tensors held: "
+        "generator.trace_output_decode['k'][0] BFLOAT16 [1,1,32,8], model[0].sampling.tt_sampling.k_tensor UINT32 "
+        "[32], model[0].stray INT32 [32,4096] | no block table: "
         "DRAM allocated 900 -> 975, largest free 9 -> 7; L1 allocated 10 -> 975, largest free 1 -> 7"
     )
+    # long lists are capped at 32 entries and say how many more there are
+    g.trace_output_decode["many"] = [
+        SimpleNamespace(buffer_address=lambda i=i: 5000 + i, dtype="DataType.INT32", shape=(1,)) for i in range(40)
+    ]
+    g._g4_guard_dump(3, 8)
+    assert logged[-1].count("generator.trace_output_decode['many']") == 31 and "and 11 more" in logged[-1]
     monkeypatch.setenv("GEMMA4_TRACE_GUARD_DUMP", "0")
     del g._g4_guard_baseline_state
     g._g4_note_decode_trace_captured("k")
