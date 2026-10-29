@@ -74,3 +74,84 @@ def rope_inplace(x, c, s, users, rows_layout=False):
     prog.custom_program_hash = _hash(0xA70, users, XS, tuple(_acc(x)), tuple(_acc(c)), tuple(_acc(s)))
     ttnn.generic_op([c, s, x], prog)
     return x
+
+
+def _crs(cores):
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for cx, cy in cores])
+
+
+def rope_concat(o, c, s, users, nh):
+    """Post-SDPA glue (DSV41_ATTN_POSTFUSE): o = SDPA output [1,32,T,512] bf16 ROW_MAJOR (page = h*T + t, ``users`` = T <= 32), c / s = the
+    [1,T,1,512] bf16 TILE cos / negated-sin tables -> [1,1,32,nh*512] bf16 TILE DRAM (row t = user t, columns h*512 + d), the dims 448..511 of
+    every head rotated exactly like ``rope_inplace`` (x @ R).  Replaces permute + tilize + rope_inplace + to_memory_config + nlp_concat_heads_decode
+    + to_memory_config.  Rows >= T of the output tiles are not written."""
+    assert (
+        o.dtype == ttnn.bfloat16
+        and o.layout == ttnn.ROW_MAJOR_LAYOUT
+        and c.dtype == ttnn.bfloat16
+        and s.dtype == ttnn.bfloat16
+    )
+    T = users
+    assert 1 <= T <= 32
+    mesh = o.device()
+    ROW = int(o.shape[-1]) * 2
+    assert int(o.shape[-1]) == 512 and int(o.shape[-2]) == T
+    grid = mesh.compute_with_storage_grid_size()
+    allc = [(cx, cy) for cy in range(grid.y) for cx in range(grid.x)]
+    rc = allc[: 2 * T]
+    npass = min(nh * T, len(allc) - 2 * T)
+    pc = allc[2 * T : 2 * T + npass]
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32, nh * 512]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+    )
+    bf = ttnn.bfloat16
+    X, R, SC, XS, O, P = range(6)
+    rset, pset = _crs(rc), _crs(pc)
+    cbs = [
+        _cb(rset, X, 1, 2048, bf),
+        _cb(rset, R, 1, 2048, bf),
+        _cb(rset, SC, 1, 256, bf),
+        _cb(rset, XS, 1, 1024, bf),
+        _cb(rset, O, 1, 2048, bf),
+        _cb(pset, P, 1, 1024, bf),
+    ]
+    rt = ttnn.RuntimeArgs()
+    for w, (cx, cy) in enumerate(rc):
+        rt[cx][cy] = [w]
+    prt = ttnn.RuntimeArgs()
+    units, base, rem, u0 = nh * T, (nh * T) // npass, (nh * T) % npass, 0
+    for i, (cx, cy) in enumerate(pc):
+        cnt = base + (1 if i < rem else 0)
+        prt[cx][cy] = [u0, cnt]
+        u0 += cnt
+    reader = _kernel(
+        "post_reader.cpp",
+        rset,
+        [X, R, SC, XS, T, nh, 16, ROW] + _acc(o) + _acc(c) + _acc(s),
+        rt,
+        ttnn.ReaderConfigDescriptor(),
+        [o.buffer_address(), c.buffer_address(), s.buffer_address()],
+    )
+    writer = _kernel(
+        "post_writer.cpp", rset, [O, nh] + _acc(out), rt, ttnn.WriterConfigDescriptor(), [out.buffer_address()]
+    )
+    compute = _kernel(
+        "post_compute.cpp",
+        rset,
+        [X, R, O],
+        ttnn.RuntimeArgs(),
+        ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
+        [],
+    )
+    passk = _kernel(
+        "post_pass.cpp",
+        pset,
+        [P, T, ROW] + _acc(o) + _acc(out),
+        prt,
+        ttnn.ReaderConfigDescriptor(),
+        [o.buffer_address(), out.buffer_address()],
+    )
+    prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute, passk], semaphores=[], cbs=cbs)
+    prog.custom_program_hash = _hash(0xA71, T, nh, tuple(_acc(o)), tuple(_acc(c)), tuple(_acc(s)), tuple(_acc(out)))
+    ttnn.generic_op([o, c, s, out], prog)
+    return out

@@ -466,9 +466,14 @@ class DSV41Attention:
             part = self._lin(self._lin(c, self.wo_a, "OA"), self.wo_b, "OB")
             out = self.mesh_config.allreduce(part, self.ccl, axis=1)
             return ttnn.reshape(out, (1, 1, self.T, DIM))
-        o = self._rope_inv(o, st)
-        c = ttnn.experimental.nlp_concat_heads_decode(o, num_heads=NH)  # [1,1,32,9*512], L1 width sharded
-        c = ttnn.to_memory_config(c, ttnn.DRAM_MEMORY_CONFIG)  # wo_a is 2x faster from interleaved DRAM
+        if (
+            o.layout == ttnn.ROW_MAJOR_LAYOUT
+        ):  # DSV41_ATTN_POSTFUSE: the raw SDPA output [1,32,T,512] -> inverse RoPE + head concat in one program
+            c = AF.rope_concat(o, st["Ch"], st["nSh"], self.T, NH)
+        else:
+            o = self._rope_inv(o, st)
+            c = ttnn.experimental.nlp_concat_heads_decode(o, num_heads=NH)  # [1,1,32,9*512], L1 width sharded
+            c = ttnn.to_memory_config(c, ttnn.DRAM_MEMORY_CONFIG)  # wo_a is 2x faster from interleaved DRAM
         part = self._lin(self._lin(c, self.wo_a, "OA"), self.wo_b, "OB")
         out = self.mesh_config.allreduce(part, self.ccl, axis=1)
         return ttnn.reshape(

@@ -18,6 +18,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt import attn_fused as AF
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import (
     HEAD_DIM,
@@ -85,7 +86,9 @@ class _PagedMixin:
         q32 = ttnn.reshape(q, (1, T, PAD_HEADS, HEAD_DIM), (1, T, PAD_HEADS, HEAD_DIM))
         # untilize FIRST, then regroup the row-major rows (a tile permute + untilize of [1,T,32,512] is 4 ops / 44 us at T=1; for T=1 the regroup is a view)
         q32 = ttnn.to_layout(q32, ttnn.ROW_MAJOR_LAYOUT)
-        qh = ttnn.reshape(q32, (1, PAD_HEADS, 1, HEAD_DIM)) if T == 1 else ttnn.permute(q32, (0, 2, 1, 3))  # [1,32,T,512] RM (heads x users)
+        qh = (
+            ttnn.reshape(q32, (1, PAD_HEADS, 1, HEAD_DIM)) if T == 1 else ttnn.permute(q32, (0, 2, 1, 3))
+        )  # [1,32,T,512] RM (heads x users)
         o = ttnn.transformer.sparse_sdpa(
             qh,
             self.kv.pool,
@@ -103,7 +106,11 @@ class _PagedMixin:
         )
         ttnn.deallocate(qh)
         ttnn.deallocate(idx)
-        if T == 1:  # [1,32,1,512] RM -> [1,1,32,512] RM is a view; tilize the 16 tiles instead of 512 tiles of 97 % padding
+        if T <= 32 and AF.flag("DSV41_ATTN_POSTFUSE"):
+            return o  # [1,32,T,512] ROW_MAJOR as the SDPA wrote it: _finish rotates + concatenates it in one program (AF.rope_concat)
+        if (
+            T == 1
+        ):  # [1,32,1,512] RM -> [1,1,32,512] RM is a view; tilize the 16 tiles instead of 512 tiles of 97 % padding
             o = ttnn.to_layout(ttnn.reshape(o, (1, 1, PAD_HEADS, HEAD_DIM)), ttnn.TILE_LAYOUT)
         else:
             o = ttnn.to_layout(ttnn.permute(o, (0, 2, 1, 3)), ttnn.TILE_LAYOUT)  # [1,T,32,512]
