@@ -923,3 +923,34 @@ guards around the CUR walls ~412-438); the A/B decides.
   packed once instead of on all SP / 32 chips); the attention table appends the gathered records directly. Same for the
   window KV once it is bfp8 blocks (after the 2x2's integration). Bit-identical table bytes to today's path; A/B as
   usual; matters more after P.10 (32-way compressor gathers).
+
+## 2026-10-29 14:00 HAND-OFF (context ~82 %): SP=32 attention done; next FIX.12 -> P.4 -> P.5 -> P.11; 2x2 low-bit phase 2
+Node bh-glx-110-c10u02 (slurm 158554; user dlukic may run device jobs over SSH - check `ps -u dlukic` first), branch
+dnijemcevic/model_bringup (pushed at each milestone; owner: push after milestones with a hand-off, work autonomously).
+DONE today (29 Oct): FIX.9 shared expert bfp8 (d1571ee35ac); fresh profile CUR (wall 412-438, device 217-282;
+https://claude.ai/artifact/EeioFZEY2jHgdzPRYXbaxc); P.7 ckv_bfp4 prepared (56f7215d253, owner accepted); P.8 indexer
+top-k local (7987b98645e); P.9 B wq_b/wo_a/wo_b on 160 rows (6af7399b689, owner accepted); FIX.11 = no code (records
+208dff73851: DS41-140, the galaxy goldens lack official_floor.json); P.10 A rest of attention on 160 rows (f90a9721496,
+overseer accepted on the P.9 precedent: wall 384.7 on / 395.5 off, device 206.0 vs 209.9, ops -144, final PCC 0.707).
+Merged the 2x2's lowbit phase 1 (7f55821f579): default-on bit-identical one-read ROW_BFP4 + faster SFPU round; bfp8
+window / bfp4 index forks opt-in. ttnn rebuild started (tmux build, /scratch/dnijemcevic/rebuild.log).
+QUEUE (orchestrator stopped after P.10): FIX.12 (verify the 2x2 speedups at full size: gate = P.10's units; measure
+sparse_sdpa / attention / wall) -> P.4 (persistent CCL buffers, re-check vs the new layout) -> P.5 (RoPE one program,
+re-check) -> P.11 CKV_PACK_BEFORE_GATHER (in tasks.yaml after P.5). Launch: /scratch/dnijemcevic/run_ds41_p5.sh
+(--until P.5) once the rebuild prints "import exit 0", then a launcher with --until P.11. Perf picks stop for the A/B
+decision: accept clean wins and work-removing picks with identical accuracy (memory ds41-clean-win-delegation); others
+to the owner. FIX.13 (later): the 2x2's low-bit phase 2 = window KV bfloat8_b blocks + index K/Q bfloat4_b (OWNER
+DECIDED 13:00), when the 2x2 pushes "READY FOR GALAXY" on dnijemcevic/model_bringup_lowbit (it wires it in after P.10,
+now pushed); integrate like FIX.8 (merge, rebuild, full gate, measure ring traffic / memory / host time).
+FRAMEWORK TO DO (overseer, no device, between agent steps; selftest + BREADCRUMBS each): F215 component / swap tests
+without official_floor.json must FAIL loudly, not fall back to one bf16 rounding (noise_floor.arith; F138); F216 an
+`overseer close-fix` for a records-only fix job (FIX.11 stays TODO in state; nothing depends on it); F214 (pending)
+lost accept: partly explained (the accept is consumed at commit). CPU job (in a device-idle gap, nice 19):
+testing/official_floor.py for the galaxy goldens, then rerun test_c_swa_attention / test_c_enc_source_attention.
+OWNER RULES added today: the bf16 served copies are TEMPORARY (serving moves to low-bit after the reference precision
+is proven); deployment box = 8x4. Lessons: never `pkill/pgrep -f` with a pattern that appears in the command itself
+(killed my shell twice); never commit while an agent step runs (pre-commit stashes unstaged files); resume clears
+PAUSE (use --until).
+Pages: precision table https://claude.ai/artifact/QP9f8tn3xDrojyyk8fMLUs ; 4-bit explainer
+https://claude.ai/artifact/Egi6v1myQkWQvFWvQRtJ3k (v7; update its read path / round / numbers after FIX.12, and add a
+line that DRAM holds row records, tiles only in L1).
