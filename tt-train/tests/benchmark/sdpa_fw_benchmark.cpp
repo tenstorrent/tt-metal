@@ -84,6 +84,16 @@ const std::vector<Scenario> kScenarios = {
     {"gpt2s_h12d64_s16k", 1U, 12U, 12U, 16384U, 64U, ttml::metal::AttentionMaskType::Causal},
 };
 
+// Why a config was refused: a TT_FATAL's what() is "TT_FATAL @ file:line: condition", then "info:" and the
+// message on the next line, then a backtrace; the message is the line that names the knob and its limit.
+std::string reason_of(const std::exception& e) {
+    const std::string_view what = e.what();
+    const std::string_view info_tag = "info:\n";
+    std::size_t from = what.find(info_tag);
+    from = from == std::string_view::npos ? 0U : from + info_tag.size();
+    return std::string(what.substr(from, what.find('\n', from) - from));
+}
+
 // The chunking main ran: one query tile-row per item, four K/V tiles per step, no head stacking, no cuts.
 const ttml::metal::SDPAForwardProgramConfig kMainConfig{
     .q_chunk_size = 32U, .k_chunk_size = 128U, .heads_per_item = 1U, .max_pieces = 1U};
@@ -200,8 +210,7 @@ void run_scenario(
         try {
             rows.push_back(measure(label, cfg));
         } catch (const std::exception& e) {
-            std::string_view what = e.what();  // first line only: TT_FATAL messages carry a backtrace
-            rows.push_back(Row{.label = label, .skipped = std::string(what.substr(0, what.find('\n')))});
+            rows.push_back(Row{.label = label, .skipped = reason_of(e)});
         }
     }
 
