@@ -22,7 +22,7 @@ struct SelectFinalCarryOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-Tensor select_final_carry(
+std::vector<Tensor> select_final_carry(
     const Tensor& rank_final,
     const Tensor& prefix_final,
     const tt::tt_metal::MemoryConfig&,
@@ -31,6 +31,9 @@ Tensor select_final_carry(
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology);
+    tt::tt_fabric::Topology topology,
+    bool prefix_on_last_rank = false,
+    const std::optional<std::vector<tt::tt_metal::CoreCoord>>& cores = std::nullopt,
+    const std::optional<std::array<uint32_t, 2>>& semaphore_addresses = std::nullopt);
 
 }  // namespace ttnn::experimental::prim

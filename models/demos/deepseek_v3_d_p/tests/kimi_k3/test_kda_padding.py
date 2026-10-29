@@ -12,6 +12,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     LayerNrmseThresholds,
     assert_matches_reference,
     build_layer,
+    kda_device_params,
     mla_row_permutation,
     random_weights,
     reconstruct_convolution_at_sp_rank,
@@ -27,9 +28,14 @@ pytestmark = run_for_blackhole()
 
 
 @pytest.mark.parametrize(
-    "mesh_device,sp_axis,tp_axis", [((1, 8), 0, 1), ((2, 4), 0, 1), ((2, 4), 1, 0)], indirect=["mesh_device"]
+    "mesh_device,sp_axis,tp_axis,device_params",
+    [
+        ((1, 8), 0, 1, kda_device_params((1, 8))),
+        ((2, 4), 0, 1, kda_device_params((2, 4))),
+        ((2, 4), 1, 0, kda_device_params((2, 4))),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis, tp_axis, device_params):
     sp = tuple(mesh_device.shape)[sp_axis]
     local_rows = 256
