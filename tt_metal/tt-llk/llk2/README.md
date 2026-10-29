@@ -78,3 +78,18 @@ pytest --run-simulator --timeout=600 -n 24
 ```
 
 Drop `--run-simulator` and the two exports to run on a Blackhole device.
+
+### Compiler
+
+llk2 targets Ivan's SFPI build `0b10-ivan` (`riscv-tt-elf-g++ 15.1.0`), which has no release or pin yet, so
+`setup_testing_env.sh` still installs the pinned one. Build it and replace `tt-llk/tests/sfpi` (`compiler/` and
+`include/`) by hand:
+
+- gcc: `ivan/sfpi-gcc` branch `ivan/llk-0b10` (fb73b6473), from `ivan/sfpi` branch `ivan/tensix-intrinsics` (b540459),
+  both on git.beeblebrox.me.
+- binutils: upstream `tenstorrent/sfpi-binutils` f261c43; the submodule in `ivan/sfpi` (11ae21d1) is too old for the
+  gcc branch.
+- `include/`: upstream `tenstorrent/sfpi` 8075f72 headers plus Ivan's changes to `lltt.h`, `sfpi_classes.h` and
+  `tensix_builtins.h` (`git diff 3ecfc38 b540459 -- include` in `ivan/sfpi`).
+
+llk2 itself builds with both this and the pinned compiler.
