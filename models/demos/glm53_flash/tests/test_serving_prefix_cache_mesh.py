@@ -141,6 +141,10 @@ class _Served:
 
 
 def _assert_agree(name: str, got: list[torch.Tensor], ref: list[torch.Tensor], pcc_min: float = PCC_MIN):
+    """Step k's logits of two greedy decodes agree (pcc, the same token or a reference near-tie). Each path feeds its
+    OWN greedy token, so after a near-tie the two sequences legitimately differ and the later steps are not
+    comparable (the 2026-10-29 served-waves run: a reference gap of exactly 0.000 at step 1, pcc 0.37 at step 2):
+    the comparison stops there."""
     for k, (g, r) in enumerate(zip(got, ref)):
         pcc = _pcc(g, r)
         tg, tr = int(g.argmax()), int(r.argmax())
@@ -151,6 +155,9 @@ def _assert_agree(name: str, got: list[torch.Tensor], ref: list[torch.Tensor], p
         assert (
             tg == tr or gap < NEAR_TIE
         ), f"{name} step {k}: token {tg} != {tr} and the reference gap {gap:.3f} is no near-tie"
+        if tg != tr:
+            logger.info(f"{name}: the sequences diverged at a near-tie (step {k}); the later steps are not comparable")
+            return
 
 
 def _slot_state(a, logical: int, n_rows: int) -> dict[str, torch.Tensor]:
