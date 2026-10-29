@@ -1264,8 +1264,11 @@ class PPPrefill:
         rt, first = ttnn.RuntimeArgs(), 0
         for i, c in enumerate(coords):
             cnt = G // cores + (i < G % cores)
-            rt[c.x][c.y] = [compact_t.buffer_address(), target["hist"].buffer_address(), first, cnt] + pairs
-            rt[c.x][c.y] += [row] if rows_mode else []
+            rt[c.x][c.y] = (
+                [compact_t.buffer_address(), target["hist"].buffer_address(), first, cnt]
+                + pairs
+                + ([row] if rows_mode else [])
+            )
             first += cnt
         program = ttnn.ProgramDescriptor(
             kernels=[

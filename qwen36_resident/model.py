@@ -1525,8 +1525,17 @@ class ResidentModel:
         state_pd = ttnn.MeshProgramDescriptor()
         for chip in range(n):
             rt = ttnn.RuntimeArgs()
-            rt[core.x][core.y] = [jobs_t.buffer_address(), G * d.nv, chip, ttnn.get_global_semaphore_address(sem), 0]
-            rt[core.x][core.y] += [0, 0]  # no fabric connections: every job is chip-local
+            # (then no fabric connections: every job is chip-local)
+            rt[core.x][core.y] = [
+                jobs_t.buffer_address(),
+                G * d.nv,
+                chip,
+                ttnn.get_global_semaphore_address(sem),
+                0,
+            ] + [
+                0,
+                0,
+            ]
             kern = ttnn.KernelDescriptor(
                 kernel_source=pdir + "handoff.cpp",
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -1545,8 +1554,8 @@ class ResidentModel:
         # conv history: zeros into row u of every (streamer, copy) row (prefill/kernels/hist_scatter.cpp)
         tiles = (cols[::TILE] // TILE).tolist()
         rt = ttnn.RuntimeArgs()
-        rt[core.x][core.y] = [zh.buffer_address(), sub["hist"].buffer_address(), 0, G]
-        rt[core.x][core.y] += [v for i in range(K) for v in (int(rows[i]), tiles[i])] + [u]
+        pairs = [v for i in range(K) for v in (int(rows[i]), tiles[i])]
+        rt[core.x][core.y] = [zh.buffer_address(), sub["hist"].buffer_address(), 0, G] + pairs + [u]
         hist_kern = ttnn.KernelDescriptor(
             kernel_source=pdir + "hist_scatter.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,

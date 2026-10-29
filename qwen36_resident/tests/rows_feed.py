@@ -119,9 +119,8 @@ def main():
         got, last = fed_run()
         fed = [[t if act else 0 for t, _, act in step] for step in got]
         same = sum(f == r for f, r in zip(fed, ref))
-        inactive_ok = all(
-            not step[u][2] and step[u][1] == start[u] for step in got for u in range(USERS) if not active[u]
-        )
+        # (an inactive row's position is what the host wrote for it: token_state writes 0)
+        inactive_ok = all(step[u] == (0, 0, False) for step in got for u in range(USERS) if not active[u])
         pos_ok = all(got[-1][u][1] == start[u] + a.steps for u in range(USERS) if active[u])
         print(
             f"greedy fed vs host-driven: {same}/{a.steps} steps identical for all users; inactive rows untouched "
