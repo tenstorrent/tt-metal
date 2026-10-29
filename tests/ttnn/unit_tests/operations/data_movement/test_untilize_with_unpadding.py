@@ -130,6 +130,11 @@ def test_untilize_with_unpadding_reuses_cache_when_only_width_l1_heuristic_chang
         # 2 cores
         ([1, 1, 128, 64], [0, 0, 127, 63], (64, 64), 2),
         ([1, 1, 128, 64], [0, 0, 100, 50], (64, 64), 2),
+        # Output width 16 with a tile-aligned height: with sharded output, this takes the sharded
+        # factory's W==16 fast path, which copies the two left faces of each tile straight into the
+        # output shard instead of untilizing the whole tile.
+        ([1, 1, 256, 32], [0, 0, 255, 15], (64, 32), 4),  # 2 tiles per core: fewer than one batch of 8 tiles
+        ([1, 1, 1280, 32], [0, 0, 1279, 15], (320, 32), 4),  # 10 tiles per core: one batch of 8 tiles and 2 more
     ],
 )
 @pytest.mark.parametrize("output_sharded", [True, False])
@@ -210,39 +215,6 @@ def test_untilize_with_unpadding_height_sharded_narrow_width_regression(device, 
     result = ttnn.to_torch(tt_out)
 
     assert_equal(result, torch_input)
-
-
-@pytest.mark.parametrize(
-    "height, num_cores",
-    [
-        (256, 4),  # 2 tiles per core: fewer than one batch of 8 tiles
-        (1280, 4),  # 10 tiles per core: one batch of 8 tiles and 2 more
-    ],
-)
-def test_untilize_with_unpadding_height_sharded_to_height_sharded_width_16(device, height, num_cores):
-    """HEIGHT_SHARDED input -> HEIGHT_SHARDED output of width 16 with a tile-aligned height.
-
-    This shape takes the sharded factory's width-16 path, which copies the two left faces of each
-    tile straight into the output shard instead of untilizing the whole tile.
-    """
-    torch.manual_seed(0)
-    width = 16
-    torch_input = torch.rand((1, 1, height, width), dtype=torch.bfloat16)
-
-    shard_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))})
-    # The tiled input is padded to one tile in width.
-    shard_spec = ttnn.ShardSpec(shard_core_grid, (height // num_cores, 32), ttnn.ShardOrientation.ROW_MAJOR)
-    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-
-    tile_tensor = ttnn.from_torch(
-        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
-    )
-    untilized = ttnn.untilize_with_unpadding(
-        tile_tensor, output_tensor_end=[0, 0, height - 1, width - 1], memory_config=memory_config
-    )
-    assert untilized.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-    assert_equal(ttnn.to_torch(untilized), torch_input)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
@@ -988,6 +960,20 @@ def test_untilize_with_unpadding_sharded_multi_batch_unpadding_regression(
         ((1, 1, 96, 7392), (1, 1, 90, 7392)),
         ((1, 1, 160, 6304), (1, 1, 150, 6301)),
         ((2, 1, 64, 7328), (2, 1, 60, 7328)),
+        # Crops that remove one or more whole tile rows of the padded height. The work split of the
+        # block-interleaved factory walks the input padded height, so a tile row that starts at or
+        # past the end of the output has none of its rows in the output, and the rows before it must
+        # still come out intact.
+        # The tile row at row 32 starts exactly at the end of the 32-row output.
+        ((1, 1, 64, 2048), (1, 1, 32, 2048)),
+        # The same tile row in each of two batch slices.
+        ((2, 1, 64, 2048), (2, 1, 32, 2048)),
+        # The tile row at row 32 starts exactly at the output end; the one at row 64 starts past it.
+        ((1, 1, 96, 2048), (1, 1, 32, 2048)),
+        # The tile row at row 32 starts past the end of the 30-row output.
+        ((1, 1, 64, 2048), (1, 1, 30, 2048)),
+        # Height and width cropped together, so some sub-blocks also lie entirely in the width padding.
+        ((2, 1, 96, 2048), (2, 1, 32, 1000)),
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -1027,47 +1013,6 @@ def test_untilize_with_unpadding_block_per_node_cb_size(
             assert (
                 device.num_program_cache_entries() == entries
             ), "untilize_with_unpadding must reuse the cached program on a cache hit"
-
-
-@pytest.mark.parametrize(
-    "padded_shape, output_shape",
-    [
-        # The tile row at row 32 starts exactly at the end of the 32-row output.
-        ((1, 1, 64, 2048), (1, 1, 32, 2048)),
-        # The same tile row in each of two batch slices.
-        ((2, 1, 64, 2048), (2, 1, 32, 2048)),
-        # The tile row at row 32 starts exactly at the output end; the one at row 64 starts past it.
-        ((1, 1, 96, 2048), (1, 1, 32, 2048)),
-        # The tile row at row 32 starts past the end of the 30-row output.
-        ((1, 1, 64, 2048), (1, 1, 30, 2048)),
-        # Height and width cropped together, so some sub-blocks also lie entirely in the width padding.
-        ((2, 1, 96, 2048), (2, 1, 32, 1000)),
-    ],
-)
-def test_untilize_with_unpadding_block_crops_whole_tile_rows(device, padded_shape, output_shape):
-    """Untilize a wide tensor while cropping away one or more whole tile rows of its padded height.
-
-    The inputs are 64 tiles wide so that they take the block-interleaved factory, whose work split
-    walks the input padded height. In every case at least one tile row starts at or past the end of
-    the output, so none of its rows belong to the output, and the rows before it must still come out
-    intact.
-    """
-    torch.manual_seed(0)
-    torch_input = torch.rand(padded_shape, dtype=torch.bfloat16)
-    tt_input = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    output_end = [d - 1 for d in output_shape]
-    tt_output = ttnn.untilize_with_unpadding(tt_input, output_tensor_end=output_end, use_multicore=True)
-
-    assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
-    torch_golden = torch_input[: output_shape[0], : output_shape[1], : output_shape[2], : output_shape[3]]
-    assert_equal(torch_golden, ttnn.to_torch(tt_output))
 
 
 @pytest.mark.parametrize(
