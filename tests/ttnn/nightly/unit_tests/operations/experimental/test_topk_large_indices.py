@@ -1494,3 +1494,46 @@ def test_topk_large_indices_metadata_matches_scalar_split_rows(device, valid_end
         )
     )
     assert not differ, f"metadata top-k differs from scalar on {len(differ)} rows ({len(set_differ)} as sets)"
+
+
+@pytest.mark.parametrize("grid", ["default", "topk108"], ids=["grid_default", "grid_topk108"])
+@pytest.mark.parametrize("base", [0, 640], ids=["rows0", "rows640"])
+@pytest.mark.parametrize("valid_end", [256, 896, 2048, 5120], ids=["end256", "end896", "end2048", "end5120"])
+def test_topk_large_indices_metadata_matches_scalar_causal(device, valid_end, base, grid):
+    """As test_topk_large_indices_metadata_matches_scalar_split_rows, with GLM-5.3 indexer-shaped logits: query row
+    r sits at position base + r and scores only keys <= its position (the rest -inf, as the causal score writes).
+    grid "topk108" is the sparse-MLA overlap's top-k sub-grid on a 12x10 device (rows 1-9)."""
+    k, n, num_rows = 2048, 5120, 160
+    g = torch.Generator().manual_seed(896)
+    hi16 = torch.stack([torch.randperm(n, generator=g) for _ in range(num_rows)]).numpy().astype(np.uint32) + 0x3F80
+    torch_input = torch.from_numpy((hi16 << 16).view(np.float32).copy())
+    future = torch.arange(n)[None, :] > (base + torch.arange(num_rows))[:, None]
+    torch_input = torch_input.masked_fill(future, float("-inf")).to(torch.bfloat16)
+    valid = -(-valid_end // 32) * 32
+    kwargs = {}
+    if grid == "topk108":
+        g_size = device.compute_with_storage_grid_size()
+        if (g_size.x, g_size.y) != (12, 10):
+            pytest.skip(f"the top-k overlap sub-grid is defined on a 12x10 grid, got {g_size.x}x{g_size.y}")
+        kwargs["sub_core_grids"] = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(11, 9))])
+
+    scalar = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid, **kwargs)
+    metadata = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device),
+        k=k,
+        valid_length_tensor=_make_valid_length_metadata(device, 0),
+        valid_length_offset=n,
+        valid_end_tensor=_make_valid_length_metadata(device, valid_end),
+        **kwargs,
+    )
+    s = ttnn.to_torch(scalar, dtype=torch.uint32).to(torch.int64).reshape(num_rows, k)
+    m = ttnn.to_torch(metadata, dtype=torch.uint32).to(torch.int64).reshape(num_rows, k)
+    differ = [r for r in range(num_rows) if not torch.equal(s[r], m[r])]
+    set_differ = [r for r in differ if not torch.equal(s[r].sort().values, m[r].sort().values)]
+    msg = f"end={valid_end} base={base} grid={grid}: {len(differ)} of {num_rows} rows differ, {len(set_differ)} as sets"
+    if differ:
+        r = differ[0]
+        pos = (s[r] != m[r]).nonzero().flatten()[:4].tolist()
+        msg += f"; first row {r} at slots {pos}: scalar {s[r, pos].tolist()} metadata {m[r, pos].tolist()}"
+    logger.info(msg)
+    assert not differ, msg
