@@ -4,6 +4,8 @@
  "compute_grid": [12, 10],
  "precision_config": "sdpa_nofp32acc (doc/datatype_sweep/selected_precision_config.json, unchanged)",
  "regime": "headline sustained (contract); burst also reported",
+ "input_valid_fraction": 0.75,
+ "input_padding": "harness input 3/4 valid (prefill_refs.logical_len), padded into the bucket; part of the gain from 2048 is the padding-aware block map. All-valid A/B (E9.5 commit 1, partial: burst 128-8192, sustained 128-2048): README 'All-valid input A/B', records tt-ops e9/05-memory/run_ab/allvalid_{new,ctl}",
  "before_definition": "same-session control on the same commit with EG2_SDPA_TUNED=0 (stage-3 SDPA calls; band block map from 4096, no padding map; CPU identity test)",
  "runs": {
   "sweep_new": "EMBEDDING_GEMMA2_PREFILL_ALL=1, defaults (tt-ops/runs/embeddinggemma-2/e9/04-attention/run_ab/sweep_new)",

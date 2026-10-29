@@ -27,6 +27,45 @@ defaults. Both `EMBEDDING_GEMMA2_PREFILL_ALL=1` (gate, burst, host, sustained wi
 | 32768 | 493.570 | 471.979 | -4.37 % | 548.900 (1143) | 526.523 (1143) | **-4.08 %** | 0.99714 / 0.99965 (0.99709 / 0.99965) pass |
 | 65536 | 1537.284 | 1473.386 | -4.16 % | 1634.119 (1100) | 1577.429 (1087) | **-3.47 %** | 0.99723 / 0.99959 (0.99729 / 0.99958) pass |
 
+**Input padding.** The harness input is 3/4 valid: logical length is 3/4 of the bucket
+(`prefill_refs.logical_len`), so a quarter of the keys are padding. From 2048 up, part of the gain above
+comes from the padding-aware sliding block map, which skips key blocks that hold only padding. An all-valid
+input does not get that part. `perf_summary.json` records `input_valid_fraction` 0.75.
+
+**Run order and clocks.** Control and candidate ran one after the other, not interleaved: `sweep_new` first,
+then `sweep_ctl`. The sustained AICLK differs between the two runs at 8192 (ctl 1306 / new 1293 MHz), 16384
+(1231 / 1237) and 65536 (1100 / 1087). The clocks are equal at the other buckets (1350 up to 2048, 1343 at
+4096, 1143 at 32768).
+
+### All-valid input A/B (E9.5 commit 1) [M, partial]
+
+Settings: `EMBEDDING_GEMMA2_PREFILL_FULL_INPUT=1` (logical length = bucket, `valid_fraction` 1.0) with
+`EG2_SDPA_TUNED=0` (before) vs defaults (after). 12 x 10, burst + sustained + telemetry, same tree
+(`195b2ce22a` + the harness switch). The run order was `allvalid_new_short`, then `allvalid_ctl_short`, back to
+back. Records are in `tt-ops/runs/embeddinggemma-2/e9/05-memory/run_ab/allvalid_{new,ctl}/prefill.jsonl`, and the
+script is `e9/05-memory/scripts/allvalid_ab.sh`.
+
+**Partial.** The chain was stopped at the person's request (2026-10-29, after 16:08). The control's last
+record was the 2048 sustained window at 16:08:35, and the run was killed during 4096 sustained:
+- Measured: burst for 128-8192, and sustained for both arms at 128-2048.
+- Not measured: sustained for the control at 4096 and 8192, and every bucket from 16384 to 65536.
+
+| bucket | burst before | burst after | change | (3/4-valid change) | sustained before (AICLK) | sustained after (AICLK) | change |
+|---|---|---|---|---|---|---|---|
+| 128 | 4.852 | 4.840 | -0.25 % | -0.24 % | 4.848 (1350) | 4.837 (1350) | -0.24 % |
+| 256 | 5.867 | 5.516 | -5.99 % | -5.97 % | 5.864 (1350) | 5.512 (1350) | -6.00 % |
+| 512 | 7.215 | 7.134 | -1.13 % | -1.13 % | 7.212 (1350) | 7.129 (1350) | -1.14 % |
+| 1024 | 11.524 | 11.280 | -2.11 % | -2.15 % | 11.520 (1350) | 11.277 (1350) | -2.11 % |
+| 2048 | 23.807 | 19.346 | -18.74 % | -19.24 % | 23.802 (1350) | 19.348 (1350) | -18.71 % |
+| 4096 | 41.619 | 40.474 | -2.75 % | -4.82 % | not measured | 40.570 (1343) | - |
+| 8192 | 94.953 | 90.039 | -5.18 % | -7.45 % | not measured | 93.174 (1284) | - |
+| 16384-65536 | not measured | | | | | | |
+
+Up to 1024 the all-valid result equals the 3/4-valid result, because there is no block map there. At 2048,
+4096 and 8192 the all-valid gain is smaller by 0.5, 2.1 and 2.3 points. That difference is the padding-aware
+map's share at the harness fill. It agrees with the bound in "Open / not done" (0.3 % at 2048, 2.0-2.1 % at
+4096-16384).
+
 No bucket regresses. Burst and sustained agree within 0.4 % up to 4096; from 8192 the sustained clock is
 power-limited (1087-1306 MHz) and moves by up to 13 MHz between the two runs. The control reproduces the
 E9.4 commit-1 numbers (128 / 256 / 1024 / 4096 burst 4.853 / 5.866 / 11.529 / 41.636 ms here vs 4.853 /

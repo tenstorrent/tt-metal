@@ -48,6 +48,22 @@ decision 2026-10-29); the batched suite cases still run in the gates.
 | 14:46-14:48 | `sweep_r4_long_{16384,32768}` | `EG2_SDPA_TUNED=0 sweep.sh r4_long <S> <S>` (full q 192) | q 192 illegal (1698176 B static CBs); q 160 -0.95 / -2.72 % (repeat of `r3_long`) |
 | (CPU) | - | `$A/scripts/build_summary.py`, `sdpa_table.py`, `search_table_compact.py`, `prefill_op_table` | `perf_summary.json`, tables |
 
+## E9.5 commit 1: E9.4 review remediation (2026-10-29)
+
+| time | run | command | result |
+|---|---|---|---|
+| 15:56 | (CPU) `e95c1_blockmap_clean` | `pytest tests/perf/test_band_block_map.py` (new test: `band_block_map` vs brute-force block visibility from the dense `band_mask`; S 2048 q 96 / k 128, S 4096 q 160, non-dividing k, small radii) | 9 passed |
+| 15:56 | (CPU) `e95c1_blockmap_planted` | same test, with an off-by-one planted in `band_block_map` (`q1 = q0 + q_chunk`), then reverted | 6 failed, 3 passed |
+| 15:57 | (CPU) `e95c1_sdpa_identity_planted` | `pytest tests/perf/test_tuned_config_identity.py`, with a 13 x 10 entry `(512, 2048): (128, 128, None)` planted in `SDPA_TUNED` | `test_sdpa_13x10_identical_to_tuned_off` failed (`['hd512@b1_s2048']`), 13 passed |
+| 15:57 | (CPU) `e95c1_sdpa_identity_removed` | identity + block-map tests after the plant was removed | 23 passed |
+| 15:56 | `aborted/allvalid_new_short` | first start of the all-valid chain, killed: the block-map plant was edited in while that process might still import `tt/masks.py`, so it was rerun | discarded |
+| 15:57-16:09 | `allvalid_{new,ctl}_short` | `e9/05-memory/scripts/allvalid_ab.sh` (`EMBEDDING_GEMMA2_PREFILL_FULL_INPUT=1`, `EG2_SDPA_TUNED=1` / `0`, burst + sustained, 12 x 10) | new: 14 passed; ctl: stopped by request during 4096 sustained. README "All-valid input A/B" (partial) |
+| 16:1x | (CPU) `e95c1_cpu_final` | identity + block-map tests on the committed tree | 23 passed |
+
+Paths: logs in `e9/04-attention/logs/e95c1_*` (CPU) and `e9/05-memory/logs/allvalid_*` (device).
+Harness: `tests/perf/prefill.py` now has `EMBEDDING_GEMMA2_PREFILL_FULL_INPUT=1` and adds `valid_fraction` to
+every record.
+
 ## Anomaly ledger
 
 | observation | evidence | control | resolution |
@@ -70,6 +86,6 @@ decision 2026-10-29); the batched suite cases still run in the gates.
 | precision held | no dtype / fidelity / exp change; k-chunk changes alter accumulation order (PCC vs control 0.996-0.999), gates pass |
 | PCC gates 10 / 10, thresholds and tests unchanged | README |
 | trace allocation tracking on replay | `gate_track` |
-| failed candidates with exact errors | `search_tables.md` (42) |
+| failed candidates with exact errors | `search_tables.md` (44) |
 | K/V norm / L1 hazard soak | `soak_1x{2048,4096}_12x10` |
 | gaps | full-layer padding skip blocked by the kernel's chain rule (inferred, not measured); independent review pending |

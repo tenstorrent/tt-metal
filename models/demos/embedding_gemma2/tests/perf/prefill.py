@@ -60,7 +60,10 @@ Other env: EMBEDDING_GEMMA2_PREFILL_BUCKETS (comma list, overrides the bucket se
 EMBEDDING_GEMMA2_PREFILL_REFS (reference cache, default generated/embedding_gemma2_prefill/refs),
 EMBEDDING_GEMMA2_PREFILL_TRACE_MB (trace region, default 128), EMBEDDING_GEMMA2_SUSTAINED_S (30),
 EMBEDDING_GEMMA2_PREFILL_SUSTAINED_REPLAYS (300), EMBEDDING_GEMMA2_PREFILL_BURST_IDLE_S (3),
-EMBEDDING_GEMMA2_PREFILL_DUMP (dir: the gate phase saves the replay outputs per bucket, +0 min).
+EMBEDDING_GEMMA2_PREFILL_DUMP (dir: the gate phase saves the replay outputs per bucket, +0 min),
+EMBEDDING_GEMMA2_PREFILL_FULL_INPUT=1 (all-valid input: logical length = the bucket, no key padding; for
+A/Bs of padding-dependent paths such as the E9.4 padding-aware block map; burst / host / sustained only,
+the HF gate needs the contract input). Every record carries `logical_len` and `valid_fraction`.
 Model switches (EG2_*, e.g. the E9.2 topology A/B switches in tt/masks.py, tt/per_layer_input.py,
 tt/pooler.py) are recorded in run_info `model_env`.
 Profiling (one warmed eager forward per bucket between signposts) is perf.py::test_tracy_forward.
@@ -140,6 +143,14 @@ BUCKETS = (
     else (CONTRACT_BUCKETS if SEL["shapes"] else QUICK_BUCKETS)
 )
 assert all(b in CONTRACT_BUCKETS for b in BUCKETS), f"buckets must be contract buckets: {BUCKETS}"
+# all-valid input (module doc); the contract input is 3/4 valid (prefill_refs.logical_len)
+FULL_INPUT = _flag("EMBEDDING_GEMMA2_PREFILL_FULL_INPUT")
+assert not (FULL_INPUT and SEL["hf_check"]), "the HF gate runs on the contract input: drop FULL_INPUT or HF_CHECK"
+
+
+def input_len(bucket: int) -> int:
+    """Logical length of the harness input in `bucket`: the contract's 3/4, or the bucket (FULL_INPUT)."""
+    return bucket if FULL_INPUT else logical_len(bucket)
 
 
 def session_key(bucket: int) -> int:
@@ -190,6 +201,7 @@ def prefill_run_info():
         "model_id": MODEL_ID,
         "precision_file": str(default_precision_path()),
         "selection": {"all": PREFILL_ALL, **SEL, "buckets": list(BUCKETS), "phases": list(PHASES)},
+        "input": "all-valid (FULL_INPUT)" if FULL_INPUT else "contract: 3/4 valid, padded into the bucket",
         "device_params": {**DEVICE_PARAMS, "trace_region_size": TRACE_MB * 1024 * 1024},
         "compute_grid_request": list(GRID),
         "grid_env": os.environ.get(GRID_ENV, ""),
@@ -231,10 +243,10 @@ class Session:
             _DEVICE_GRID = [g.x, g.y]
             t0 = time.perf_counter()
             self.enc = TextEncoder.from_pretrained(self.device, str(self.snapshot), max_seq_len=key)
-            self.raw = {b: make_batch(self.snapshot, [logical_len(b)]) for b in buckets}
+            self.raw = {b: make_batch(self.snapshot, [input_len(b)]) for b in buckets}
             self.hosts = {b: self.enc.prepare_inputs(*self.raw[b]) for b in buckets}
             for b, h in self.hosts.items():
-                assert (h.batch, h.seq_len, h.logical_seq_len) == (1, b, logical_len(b))
+                assert (h.batch, h.seq_len, h.logical_seq_len) == (1, b, input_len(b))
             self.eager = {}
             if SEL["hf_check"]:  # eager on the same real input, before any capture
                 for b in buckets:
@@ -250,7 +262,7 @@ class Session:
         """Copy the real input into the trace inputs and replay once; returns (embedding, last hidden)."""
         last, emb = self.enc.replay(self.hosts[b])
         e = self.enc.read_embedding(emb, 1)
-        h = self.enc.read_last_hidden(last, 1, logical_len(b))
+        h = self.enc.read_last_hidden(last, 1, input_len(b))
         return e, h
 
     def execute(self, b):
@@ -315,7 +327,8 @@ def _window(s: Session, b: int, n: int) -> float:
 
 
 def _base(b):
-    return {"shape": f"b1_s{b}", "batch": 1, "seq": b, "logical_len": logical_len(b), "path": "masked"}
+    L = input_len(b)
+    return {"shape": f"b1_s{b}", "batch": 1, "seq": b, "logical_len": L, "valid_fraction": L / b, "path": "masked"}
 
 
 def phase_gate(s: Session, b: int):
@@ -414,7 +427,7 @@ def phase_host(s: Session, b: int):
         "host_prep": timed(lambda: enc.prepare_inputs(*s.raw[b]), HOST_N),
         "h2d": timed(h2d, HOST_N),
         "d2h_embedding": timed(lambda: enc.read_embedding(tr.embedding, 1), HOST_N),
-        "d2h_last_hidden": timed(lambda: enc.read_last_hidden(tr.last_hidden, 1, logical_len(b)), min(HOST_N, n)),
+        "d2h_last_hidden": timed(lambda: enc.read_last_hidden(tr.last_hidden, 1, input_len(b)), min(HOST_N, n)),
         "round_trip": timed(round_trip, n),
         "replay_sync": timed(lambda: (s.execute(b), s.sync()), n),
     }
