@@ -593,7 +593,7 @@ class MiniMaxH3Attention(Module):
                 program_config=self._sdpa_program_config(q_BHNE.shape[2], ring=True),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
-                multi_device_global_semaphore=self.ccl_manager.get_ring_sdpa_ping_pong_semaphore(self.sp_mesh_axis),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
                 num_links=self.ccl_manager.num_links,
                 cluster_axis=self.sp_mesh_axis,
                 mesh_device=self.mesh_device,

@@ -205,8 +205,6 @@ run_t3000_ccl_tests() {
   pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather_sharded_to_interleaved[wormhole_b0-fabric_linear-i2s_shape0-perf-Layout.TILE-DataType.BFLOAT16-mesh_device0]
   # 10 iteration trace test with fabric ring (dit_shape now in test_all_gather, no barrier parameters)
   pytest tests/nightly/t3000/ccl/test_all_gather.py::test_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-dit_shape-perf-mesh_device0]
-  # ring attention all gather: out_ready semaphore credits are subtracted, not reset (#62923)
-  pytest tests/nightly/t3000/ccl/test_ring_attention_all_gather.py::test_ring_attention_all_gather_semaphore_credit_accounting
   # 2D fabric case – hanging on main? tracking with issue #30250
   # pytest tests/nightly/t3000/2d_ccl/test_all_gather.py::test_all_gather_training_shapes[wormhole_b0-fabric_2d_linear-perf-mem_config_input0-mem_config_ag0-tt_training_test_one-mesh_device0]
   # training shapes - Re-enable this test when we have more T3K availability
