@@ -223,7 +223,7 @@ Metadata (`prefill_chunk`), little-endian uint32: at F = 1 today's 12 B `(slot_i
 record; at F > 1 tt-d-gen's `PrefillBatchMetadata`, 8 + 12 * F B: `{num_chunks, 0}` then F records, those
 past `num_chunks` set to `(0xFFFFFFFF, 0, 0)`. `num_chunks` (1..F) is the forward's non-empty chunk count; the
 runtime gets F chunks, the ones past `num_chunks` empty. The H2D producer must use the same F (tt-d-gen's
-`max_chunks_per_batch`); `prefill_producer.py` pushes one chunk per forward.
+`max_chunks_per_batch`), as `prefill_producer.py` and `migration_driver.py` do.
 `[actual_start, actual_end)` keeps its single-chunk meaning; `actual_start == actual_end` is an empty chunk
 (no attention, no KV write, slot ignored). The SHUTDOWN / WARMUP sentinels fill every word with -1 / -2. Order
 contract, validated on the first rank (`prefill_chunk.validate_chunks`):

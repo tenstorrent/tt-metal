@@ -612,7 +612,8 @@ class TtPrefillRuntime:
 
     def msa_layer_ids(self) -> set[int]:
         """Global ids of the MSA (block-sparse) layers — the only layers that write an index_k (layers 3-59 on
-        M3). Read through the same helper as ``Layer``, so the table can't disagree with the model."""
+        M3, every layer when sparse_attention_freq is all 1). Read through the same helper as ``Layer``, so the table can't disagree with the model.
+        """
         ids = {i for i, f in enumerate(sparse_attention_freq(self.hf_config) or []) if f}
         if not ids:
             logger.warning(
