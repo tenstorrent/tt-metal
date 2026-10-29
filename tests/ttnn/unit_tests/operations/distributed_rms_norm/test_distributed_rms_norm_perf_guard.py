@@ -11,7 +11,9 @@ decode and 2048x1280 perf cases. 1 x 4 ring, Ring, 2 links, bf16, HiFi4 + fp32 a
 
 Prints, per config and knob set: traced slowest / fastest chip (op) and traced slowest chip with the exchange stubbed.
 "Phase 0" knobs: DRMS_COMBINE_LAG=1 DRMS_LOOKAHEAD=1 DRMS_NOC_SWAP=0 (the reader prologue position is not a knob).
-Env: DRMS_GUARD_CASES (comma-separated case ids), DRMS_PT_UNTRACED / DRMS_PT_TRACED as the traced driver.
+Env: DRMS_GUARD_CASES (comma-separated case ids), DRMS_PT_UNTRACED / DRMS_PT_TRACED as the traced driver;
+DRMS_GUARD_TOPO (Ring | Linear), DRMS_GUARD_LINKS (2 | 1), DRMS_GUARD_AXIS (1: 1 x 4 mesh | 0: 4 x 1 mesh) —
+Refinement 3's guard set spans Linear / Ring x 1 / 2 links x cluster_axis 0 / 1.
 """
 
 import importlib.util as _ilu
@@ -68,6 +70,10 @@ if _sel:
     CASES = [c for c in CASES if c[0] in _sel]
 
 pytestmark = pytest.mark.skipif(os.environ.get("UP_FRONT_COLLECT") == "1", reason="run with --no-precompile")
+TOPO = getattr(ttnn.Topology, os.environ.get("DRMS_GUARD_TOPO", "Ring"))
+LINKS = int(os.environ.get("DRMS_GUARD_LINKS", "2"))
+AXIS = int(os.environ.get("DRMS_GUARD_AXIS", "1"))
+MESH = (1, 4) if AXIS == 1 else (4, 1)
 
 
 @pytest.mark.parametrize(
@@ -81,42 +87,43 @@ pytestmark = pytest.mark.skipif(os.environ.get("UP_FRONT_COLLECT") == "1", reaso
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["mesh1x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], ids=[f"mesh{MESH[0]}x{MESH[1]}"], indirect=True)
 def test_perf_guard(mesh_device, monkeypatch):
     mesh = mesh_device
     G = 4
     rows = []
     for cid, (M, W), ml, gl, opt in CASES:
         shape = (1, 1, M, W)
-        x = _acc._stacked((1, G), shape, torch.bfloat16)
+        x = _acc._stacked(MESH, shape, torch.bfloat16)
         mc = ttnn.DRAM_MEMORY_CONFIG
         if ml != ML.INTERLEAVED:
             mc = auto_shard_config(list(shape), ml, layout=TILE, dtype=ttnn.bfloat16, device=mesh)
         tx = _acc._to_mesh(x, mesh, dtype=ttnn.bfloat16, layout=TILE, memory_config=mc)
         gamma = tg = None
         if gl is not None:
-            gamma = _acc._stacked((1, G), (1, 1, 1, W), torch.bfloat16)
+            gamma = _acc._stacked(MESH, (1, 1, 1, W), torch.bfloat16)
             tg = _acc._gamma_to_mesh(gamma, mesh, dtype=ttnn.bfloat16, layout=gl)
-        expected = _acc._reference(x, gamma, 1, 1e-5)
+        expected = _acc._reference(x, gamma, AXIS, 1e-5)
         out_mc = mc if ml != ML.INTERLEAVED else None
         run = lambda: distributed_rms_norm(
             tx,
-            cluster_axis=1,
+            cluster_axis=AXIS,
             gamma=tg,
             epsilon=1e-5,
-            topology=ttnn.Topology.Ring,
-            num_links=2,
+            topology=TOPO,
+            num_links=LINKS,
             memory_config=out_mc,
         )
         with monkeypatch.context() as mp:
             if opt is not None:
                 real = pd.first_fit
                 mp.setattr(pd, "first_fit", lambda base, sz, budget: (0, replace(real(base, sz, budget)[1], **opt)))
-            print(f"\nPLAN {cid} {plan_summary(tx, cluster_axis=1, gamma=tg, num_links=2)}")
+            print(f"\nPLAN {cid} {plan_summary(tx, cluster_axis=AXIS, gamma=tg, num_links=LINKS)}")
             # correctness of the current defaults
             out = run()
             pcc = min(
-                _acc._pcc(ttnn.to_torch(d).float(), expected[0, c]) for c, d in enumerate(ttnn.get_device_tensors(out))
+                _acc._pcc(ttnn.to_torch(d).float(), expected[divmod(i, MESH[1])])
+                for i, d in enumerate(ttnn.get_device_tensors(out))
             )
             assert pcc > 0.999, (cid, pcc)
             res = {}

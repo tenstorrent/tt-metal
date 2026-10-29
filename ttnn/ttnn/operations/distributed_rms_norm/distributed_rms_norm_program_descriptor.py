@@ -72,9 +72,13 @@ NOC_SWAP_COLUMNS = 3  # westmost logical worker columns (next to DRAM column 0) 
 COMBINE_LAG = 0  # waves between a wave's landing / square and its on-chip combine + publish (1: Phase 0 order — the
 #                  contribution of wave w waited for wave w+1's reads)
 FOLD_AHEAD_ALL = 1 << 16  # "every owned fold first" (any value >= num_waves)
-FOLD_AHEAD = 1  # waves an owner's fold (cross-device finalize) may run ahead of its own scaling
-#                  pass: >= num_waves = every owned fold before any scaling (Phase 0 order); 0 = fold of wave w right
-#                  before the scaling of wave w (the owner's earlier waves are stored before its last records land)
+FOLD_AHEAD = 1  # waves an owner's fold (cross-device finalize) may run ahead of its own scaling pass, combine
+#                  regimes (G_w > 1): >= num_waves = every owned fold before any scaling (Phase 0 order); 0 = fold of
+#                  wave w right before the scaling of wave w. 1 lets an owner store its earlier waves before its last
+#                  records land (2048x1280 33.4 / 32.5 / 32.2 -> 30.8 / 30.8 / 30.7 us; 0: last-launched chip +2.6 us)
+FOLD_AHEAD_SOLO = FOLD_AHEAD_ALL  # G_w == 1 (D1 / D1-HS): the core owns every wave and its inv comes back through
+#                  its own reader, so interleaving folds with scales only adds a round trip per wave (D1-HS 1 vs all:
+#                  +0.35 us Ring, +0.6 us Linear)
 
 # ---- Exchange constants ----
 RECORD_BYTES = 32 * 4  # one fp32 per row of a tile-row
@@ -876,12 +880,13 @@ def combine_lag() -> int:
     return int(v) if v else COMBINE_LAG
 
 
-def fold_ahead() -> int:
-    """FOLD_AHEAD clamped to 16 bits, overridable for measurement only (DRMS_FOLD_AHEAD; unset in production)."""
+def fold_ahead(plan) -> int:
+    """FOLD_AHEAD (combine regimes) / FOLD_AHEAD_SOLO (G_w == 1), clamped to 16 bits, overridable for measurement
+    only (DRMS_FOLD_AHEAD; unset in production)."""
     import os
 
     v = os.environ.get("DRMS_FOLD_AHEAD", "")
-    return min(int(v) if v else FOLD_AHEAD, FOLD_AHEAD_ALL)
+    return min(int(v) if v else (FOLD_AHEAD if plan.G_w > 1 else FOLD_AHEAD_SOLO), FOLD_AHEAD_ALL)
 
 
 def read_lookahead_waves() -> int:
@@ -1231,7 +1236,7 @@ def create_mesh_program_descriptor(
         plan.SQ,  # 18 tile-rows per square -> collapse round
         int(plan.reread),  # 19 x re-read
         combine_lag(),  # 20 service / chip-sum lag in waves (= the reader's)
-        fold_ahead(),  # 21 waves an owner's fold runs ahead of its scaling
+        fold_ahead(plan),  # 21 waves an owner's fold runs ahead of its scaling
     ]
     gamma_is_tile = gamma is not None and gamma.layout == ttnn.TILE_LAYOUT
     writer_ct = [
@@ -1469,7 +1474,7 @@ def create_mesh_program_descriptor(
                     read_lookahead_waves(),
                     combine_lag(),
                     noc_swap_columns(),
-                    fold_ahead(),
+                    fold_ahead(plan),
                 )
             )
             program.custom_program_hash = int.from_bytes(hashlib.sha1(key.encode()).digest()[:8], "little") >> 1
