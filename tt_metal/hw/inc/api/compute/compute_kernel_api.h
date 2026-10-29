@@ -475,6 +475,10 @@ ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
  *
  * Note: This version of the function is for int32 datatype
  *
+ * On Wormhole, this operation records replay slots 0-2 and relies on the
+ * ADDR_MOD_6 programmed by *abs_tile_init*. Callers sharing the replay buffer
+ * with other SFPU operations must reinitialize it as needed.
+ *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
