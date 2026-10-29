@@ -22,6 +22,8 @@ enum class ReciprocalApproxMode { Default, Precise, Approximate };
  * e.g. recip_tile_init<ReciprocalDestAcc::FP32>(); use the same mode for recip_tile.
  * approximation defaults to the kernel's APPROX setting; override it for callers that need a more
  * accurate reciprocal without changing the approximation of other operations in the kernel.
+ * On Wormhole, precise BF16 reciprocal is correctly rounded only with the seed loaded here;
+ * other SFPU inits may overwrite it, so call recip_tile_init again before recip_tile after them.
  * The former legacy_compat Boolean template argument is no longer accepted.
  */
 template <
@@ -29,11 +31,17 @@ template <
     ReciprocalApproxMode approximation = ReciprocalApproxMode::Default>
 ALWI void recip_tile_init() {
     [[maybe_unused]] constexpr bool is_fp32_dest_acc_en = dest_acc == ReciprocalDestAcc::FP32;
+    MATH(constexpr bool approximate = approximation == ReciprocalApproxMode::Default
+                                          ? APPROX
+                                          : approximation == ReciprocalApproxMode::Approximate;)
+#ifdef ARCH_WORMHOLE
+    // Match the explicit BF16 rounding in calculate_reciprocal. Other users
+    // of the shared reciprocal helper retain its default minimax constants.
     MATH(SFPU_UNARY_INIT_FN(
-        reciprocal,
-        sfpu::recip_init,
-        (approximation == ReciprocalApproxMode::Default ? APPROX : approximation == ReciprocalApproxMode::Approximate,
-         is_fp32_dest_acc_en)));
+        reciprocal, sfpu::recip_init, (approximate, is_fp32_dest_acc_en, !approximate && !is_fp32_dest_acc_en)));
+#else
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (approximate, is_fp32_dest_acc_en)));
+#endif
 }
 // clang-format off
 /**

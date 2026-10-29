@@ -35,13 +35,13 @@ from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.packing import (
     MINIMAX_H3_AUDIO_CHANNELS,
     MINIMAX_H3_FPS,
-    align_num_frames,
     audio_latent_num_frames,
     packed_sequence_length,
     padded_sequence_length,
     resolve_canvas_size,
     video_latent_num_frames,
 )
+from ....pipelines.minimax_h3.policy import align_num_frames
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local_device_to_torch
 from ....utils.test import skip_if_unsupported_num_links
@@ -206,6 +206,7 @@ def _prepare_tt_inputs(
     rope_freq_dim: int,
     rope_theta: float,
     B: int = 1,
+    prompt_cap: int | None = None,
 ) -> SimpleNamespace:
     """Build packed metadata, rope tables, random host inputs and the TT forward kwargs -- inputs only, no model, no asserts."""
     sp_factor = tuple(mesh_device.shape)[sp_axis]
@@ -286,7 +287,7 @@ def _prepare_tt_inputs(
             return t
         return torch.cat([t, torch.zeros(t.shape[0], cap - t.shape[1], t.shape[2], dtype=t.dtype)], dim=1)
 
-    l_cap, v_cap, a_cap = rup(num_text), rup(num_video), rup(num_audio)
+    l_cap, v_cap, a_cap = prompt_cap or rup(num_text), rup(num_video), rup(num_audio)
     video_cond = [b["input"] for b in cond_blocks if b["modality"] == "video"]
     audio_cond = [b["input"] for b in cond_blocks if b["modality"] == "audio"]
     cv_total = sum(b["rows"] for b in cond_blocks if b["modality"] == "video")
@@ -322,24 +323,15 @@ def _prepare_tt_inputs(
     a_out = torch.full((a_cap,), audio_start, dtype=torch.int64)
     a_out[:num_audio] = torch.arange(audio_start, audio_start + num_audio)
 
-    prompt_windows = None
-    if l_cap != num_text:
-        prompt_windows = from_torch(
-            torch.tensor([0, num_text, l_cap], dtype=torch.int32),
-            device=mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.Layout.ROW_MAJOR,
-            mesh_axes=[None],
-        )
-
     def cond_arena(inputs: list[torch.Tensor], cap: int) -> ttnn.Tensor | None:
         if not inputs:
             return None
         return bf16_tensor(pad_stream(torch.cat(inputs, dim=1), cap).unsqueeze(0), device=mesh_device)
 
     tt_static = dict(
-        prompt_1BLP=bf16_tensor(pad_stream(prompt_input, l_cap).unsqueeze(0), device=mesh_device),
-        prompt_windows=prompt_windows,
+        prompt_1BLP=bf16_tensor(pad_stream(prompt_input, rup(num_text)).unsqueeze(0), device=mesh_device),
+        prompt_len=num_text,
+        prompt_cap=l_cap,
         condition_video_1BKC=cond_arena(video_cond, kv_cap),
         condition_audio_1BKC=cond_arena(audio_cond, ka_cap),
     )
@@ -380,20 +372,22 @@ def _prepare_tt_inputs(
 
 @GALAXY_RING
 @pytest.mark.parametrize(
-    ("num_text", "num_audio", "num_video", "grid", "cond_spec", "weights"),
+    ("num_text", "num_audio", "num_video", "grid", "cond_spec", "weights", "prompt_cap"),
     [
-        pytest.param(512, 256, 1280, (8, 8), (), "random", id="small_s2048"),
+        pytest.param(512, 256, 1280, (8, 8), (), "random", None, id="small_s2048"),
+        # the transformer pads the prompt to its cap and fences the pad rows off with windows
+        pytest.param(500, 256, 1280, (8, 8), (), "random", 1024, id="small_s2048_prompt_cap"),
         pytest.param(
-            512, 256, 1344, (8, 8), (), "random", id="unaligned_s2112"
+            512, 256, 1344, (8, 8), (), "random", None, id="unaligned_s2112"
         ),  # multiple of TILE, not SP*TILE: tail padding
         pytest.param(
-            512, 414, 37296, (24, 42), (), "random", id="prod_768p_5s"
+            512, 414, 37296, (24, 42), (), "random", None, id="prod_768p_5s"
         ),  # 37296 == 16 mod 32: ROW_MAJOR assembly
         # skipped unless MINIMAX_H3_MODEL_PATH is set
-        pytest.param(512, 414, 37296, (24, 42), (), "checkpoint", id="prod_768p_5s_real_weights"),
-        pytest.param(512, 414, 37296, (24, 42), (("video", 1008, (24, 42)),), "random", id="prod_768p_5s_fl2va"),
+        pytest.param(512, 414, 37296, (24, 42), (), "checkpoint", None, id="prod_768p_5s_real_weights"),
+        pytest.param(512, 414, 37296, (24, 42), (("video", 1008, (24, 42)),), "random", None, id="prod_768p_5s_fl2va"),
         pytest.param(
-            512, 414, 37296, (24, 42), (("video", 2016, (24, 42)),), "random", id="prod_768p_5s_fl2va_first_last"
+            512, 414, 37296, (24, 42), (("video", 2016, (24, 42)),), "random", None, id="prod_768p_5s_fl2va_first_last"
         ),
         # production residues at reduced lengths; image ref on its OWN 64x64 grid, standalone audio block LAST
         pytest.param(
@@ -403,6 +397,7 @@ def _prepare_tt_inputs(
             (24, 42),
             (("video", 4096, (64, 64)), ("video", 1008, (24, 42)), ("audio", 414, None)),
             "random",
+            None,
             id="ref2va_interleaved_audio_last",
         ),
     ],
@@ -418,6 +413,7 @@ def test_minimax_h3_transformer(
     grid: tuple[int, int],
     cond_spec: tuple[tuple[str, int, tuple[int, int] | None], ...],
     weights: str,
+    prompt_cap: int | None,
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
@@ -488,6 +484,7 @@ def test_minimax_h3_transformer(
         head_dim=ATTENTION_HEAD_DIM,
         rope_freq_dim=ROPE_FREQ_DIM,
         rope_theta=ROPE_THETA,
+        prompt_cap=prompt_cap,
     )
 
     logger.info("Running torch model")
@@ -785,43 +782,48 @@ def test_minimax_h3_attention(
         cfg_parallel=None,
     )
 
-    tt_model = MiniMaxH3Attention(
-        hidden_size=HIDDEN_SIZE,
-        num_heads=NUM_ATTENTION_HEADS,
-        head_dim=ATTENTION_HEAD_DIM,
-        rotary_dim=rotary_dim,
-        qk_norm_eps=QK_NORM_EPS,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        is_fsdp=is_fsdp,
-    )
-    tt_model.load_torch_state_dict(torch_model.state_dict())
-
     tt_spatial = bf16_tensor_2dshard(
         spatial_input.unsqueeze(0), device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3}
     )
     tt_rope_cos, tt_rope_sin = upload_rope(tt_rope_cos_t, tt_rope_sin_t, mesh_device=mesh_device, sp_axis=sp_axis)
     logger.info(f"tt_spatial {tt_spatial.shape}, tt_rope_cos {tt_rope_cos.shape}")
 
-    logger.info("Running TT model")
-    tt_out = tt_model(
-        tt_spatial,
-        logical_n=logical_length_tensor(mesh_device, seq_len),
-        rope_cos=tt_rope_cos,
-        rope_sin=tt_rope_sin,
-    )
-
     concat_dims = [None, None]
     concat_dims[sp_axis] = 2
     concat_dims[tp_axis] = 3
-    tt_out = ttnn.to_torch(
-        tt_out,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
-    )
-    tt_out = tt_out[:, :, :seq_len, :]
 
+    def run(kv_gather_capacity):
+        tt_model = MiniMaxH3Attention(
+            hidden_size=HIDDEN_SIZE,
+            num_heads=NUM_ATTENTION_HEADS,
+            head_dim=ATTENTION_HEAD_DIM,
+            rotary_dim=rotary_dim,
+            qk_norm_eps=QK_NORM_EPS,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            kv_gather_capacity=kv_gather_capacity,
+        )
+        tt_model.load_torch_state_dict(torch_model.state_dict())
+        tt_out = tt_model(
+            tt_spatial,
+            logical_n=logical_length_tensor(mesh_device, seq_len),
+            rope_cos=tt_rope_cos,
+            rope_sin=tt_rope_sin,
+        )
+        tt_out = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
+        )
+        return tt_out[:, :, :seq_len, :]
+
+    logger.info("Running TT model")
+    tt_out = run(None)
     assert_quality(torch_out, tt_out, pcc=MIN_PCC)
+
+    # An oversized K/V gather buffer, as bucketed rungs share, must not change a single bit.
+    assert torch.equal(run(4 * seq_len), tt_out), "kv_gather_capacity changed the attention output"
 
 
 # ---- one transformer block ----

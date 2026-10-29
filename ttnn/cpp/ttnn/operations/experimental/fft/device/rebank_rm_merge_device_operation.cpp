@@ -45,7 +45,7 @@ RebankRmMergeDeviceOperation::spec_return_value_t RebankRmMergeDeviceOperation::
     const uint32_t cpm = attrs.chunks_per_merge;
 
     // Output: (B, N1*cpm) where B = rows/cpm.
-    const ttnn::Shape out_shape{ttnn::SmallVector<uint32_t>{rows / cpm, N1 * cpm}};
+    const ttnn::Shape out_shape{ttsl::SmallVector<uint32_t>{rows / cpm, N1 * cpm}};
 
     TensorLayout layout(in.dtype(), PageConfig(in.layout()), in.memory_config());
     return tt::tt_metal::TensorSpec(out_shape, std::move(layout));
@@ -56,7 +56,7 @@ RebankRmMergeDeviceOperation::tensor_return_value_t RebankRmMergeDeviceOperation
     return create_device_tensor(compute_output_specs(attrs, args), args.input.device());
 }
 
-tt::stl::hash::hash_t RebankRmMergeDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RebankRmMergeDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     return tt::tt_metal::operation::hash_operation<RebankRmMergeDeviceOperation>(
         attrs.chunks_per_merge, args.input.dtype(), args.input.memory_config(), args.input.padded_shape());

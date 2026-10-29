@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
-from models.common.modules.lazy_weight import LazyWeight
+from models.common.lazy_weight import LazyWeight
 from models.common.utility_functions import comp_allclose, comp_pcc
 
 SEQUENCE_LENGTHS = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
@@ -82,5 +82,5 @@ def to_torch(tt_tensor: ttnn.Tensor, expected_shape: tuple[int, ...]) -> torch.T
 def assert_pcc(reference: torch.Tensor, candidate: torch.Tensor, threshold: float) -> None:
     passing, pcc_message = comp_pcc(reference, candidate, threshold)
     allclose, allclose_message = comp_allclose(reference, candidate)
-    logger.info(f"PCC {pcc_message} (threshold {threshold})")
+    logger.info(f"PCC {pcc_message} (threshold {threshold}); {allclose_message}")
     assert passing, f"PCC check failed: {pcc_message}; {allclose_message}; allclose={allclose}"

@@ -19,7 +19,7 @@ struct MatmulMultiCoreReuseProgramConfig {
     std::size_t out_subblock_w{};
     std::size_t per_core_M{};
     std::size_t per_core_N{};
-    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCastProgramConfig {
@@ -34,7 +34,7 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool transpose_mcast{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool fuse_batch = true;
-    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 // 1D mcast matmul program config.
@@ -62,13 +62,13 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool mcast_in0{};
     bool gather_in0{};
-    CoreRangeSet hop_cores;
+    tt::tt_metal::CoreRangeSet hop_cores;
     std::size_t num_global_cb_receivers{};
     bool untilize_out{};
-    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
-    // Select ring-rotated FIFO delivery for gather_in0 with a DRAM-sender GCB. The feeding prefetcher
-    // request MUST supply a per-receiver rotation. GCB-backed mcast_in0 instead consumes natural FIFO
-    // order and requires this flag to remain false.
+    std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
+    // Select ring-rotated FIFO delivery for gather_in0 over Tensor prefetcher PrefetcherPipes. The
+    // feeding prefetcher request MUST supply a per-receiver rotation. mcast_in0 instead consumes natural
+    // FIFO order and requires this flag to remain false.
     bool stream_in1 = false;
 };
 
@@ -77,7 +77,16 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::size_t per_core_M{};
     std::size_t per_core_N{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
+    // Cores per DRAM bank. 1: the single-reader program. 2 or 3 (Blackhole only): the single-reader
+    // program with that many readers per bank (shard width divisible by N), unless
+    // use_multicore_pipeline selects the multi-core pipeline.
     std::size_t num_workers_per_dram_bank = 1;
+    // Explicit opt-in to the multi-core pipeline. false (the default) keeps the behaviour above for
+    // every value of num_workers_per_dram_bank. true: when num_workers_per_dram_bank >= 2 and the call
+    // qualifies (dram_sharded_helpers::use_dram_sharded_multicore), num_workers_per_dram_bank cores per
+    // bank run the multi-core pipeline; a call that does not qualify keeps the behaviour above and its
+    // validation (num_workers_per_dram_bank > 1 is then Blackhole only).
+    bool use_multicore_pipeline = false;
 };
 
 struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {
@@ -88,7 +97,7 @@ struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {
 };
 
 struct MatmulMultiCoreProgramConfig {
-    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 using MatmulProgramConfig = std::variant<
@@ -106,7 +115,8 @@ using MatmulProgramConfig = std::variant<
 // config.allowed_worker_cores.value() unconditionally.
 inline void normalize_program_config(MatmulProgramConfig& config, const tt::tt_metal::CoreCoord& device_grid) {
     auto make_crs = [](const tt::tt_metal::CoreCoord& grid) {
-        return CoreRangeSet(CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1)));
+        return tt::tt_metal::CoreRangeSet(
+            tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1)));
     };
     std::visit(
         [&](auto& c) {

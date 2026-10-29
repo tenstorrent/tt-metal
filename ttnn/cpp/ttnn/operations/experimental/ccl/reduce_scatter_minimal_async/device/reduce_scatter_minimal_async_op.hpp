@@ -62,40 +62,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset);
 
-void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
-    tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
-    uint32_t num_links,
-    uint32_t num_directions_per_link,
-    uint32_t num_workers_per_direction,
-    uint32_t num_mux_cores_per_direction_per_link,
-    uint32_t num_cores_per_link,
-    uint32_t normalized_dim,
-    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
-    const Tensor& input,
-    const Tensor& intermed,
-    const Tensor& output);
-
-void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
-    tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
-    uint32_t num_links,
-    uint32_t num_directions_per_link,
-    uint32_t num_workers_per_direction,
-    uint32_t num_mux_cores_per_direction_per_link,
-    uint32_t num_cores_per_link,
-    uint32_t normalized_dim,
-    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
-    const Tensor& input,
-    const Tensor& intermed,
-    const Tensor& output);
-
 ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,

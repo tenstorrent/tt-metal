@@ -256,16 +256,19 @@ def create_tt_model(
             max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
         )
 
-    model = TtTransformer(
-        args=tt_model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        paged_attention_config=paged_attention_config,
-        mode="prefill",
-        enable_prefetcher_performance_mode=True,
-    )
+    # A placeholder state_dict holds no weight data, so as_tensor must raise on an unloadable cache
+    # file rather than rebuild it from the placeholder.
+    with ttnn.as_tensor_cache_repair(not getattr(state_dict, "is_placeholder", False)):
+        model = TtTransformer(
+            args=tt_model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=tt_model_args.weight_cache_path(dtype),
+            paged_attention_config=paged_attention_config,
+            mode="prefill",
+            enable_prefetcher_performance_mode=True,
+        )
 
     if use_paged_kv_cache:
         tt_kv_cache = [l.attention.layer_past for l in model.layers]
@@ -1405,6 +1408,7 @@ def test_demo_text(
                 # Save logits only for PCC check when tracing is disabled
                 tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
                 decode_async_read = not token_accuracy
+                reload_decode_inputs = iteration == 0 or not is_enable_trace or device_sampling_params is None
                 decode_output = generator.decode_forward(
                     out_tok,
                     current_pos,
@@ -1414,12 +1418,15 @@ def test_demo_text(
                     read_from_device=True,
                     async_read=decode_async_read,
                     sampling_params=device_sampling_params,
-                    reset_inputs=iteration == 0,
                     tt_out_logits_saved=tt_out_logits_saved,
                     is_cur_pos_sharded=is_cur_pos_sharded,
                     is_page_table_sharded=is_page_table_sharded,
                     prompt_tokens=input_tokens_prefill_pt,
                     output_tokens=prefilled_token,
+                    reload_inputs=reload_decode_inputs,
+                    reload_page_table=False,
+                    reload_sampling_params=(device_sampling_params is not None and reload_decode_inputs),
+                    reset_sampling_state=(device_sampling_params is not None and iteration == 0),
                 )
                 if decode_async_read:
                     tt_out_tok, read_event = decode_output

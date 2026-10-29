@@ -11,10 +11,10 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include <cmath>
 #include <utility>
@@ -205,7 +205,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
     // Last dimension in output i.e. the dim left after reduction
     const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
 
-    const tt::tt_metal::distributed::MeshDevice& device = output.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = output.device();
 
     // The argmax output (and the intermediate index DFB) is raw 4-byte index storage. Quasar validates
     // DFB data formats against the arch and rejects UInt32 (it supports Int32 / RawUInt32), so map the
@@ -266,17 +266,17 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
         {});
 
     // Page sizes for input and output tensors based on the ROW_MAJOR layout
-    const auto src_page_size = round_up_to_mul32(red_dim_units * input_unit_size);
-    const auto dst_page_size = round_up_to_mul32(output_last_dim * output_unit_size);
+    const auto src_page_size = tt::round_up(red_dim_units * input_unit_size, 32u);
+    const auto dst_page_size = tt::round_up(output_last_dim * output_unit_size, 32u);
 
     // DFBs are declared in the order the pre-Metal-2.0 factory declared its circular buffers. The
     // allocator walks this list in order and gives each DFB one L1 address across every node it
     // spans, so preserving the order preserves the resulting addresses.
     const auto inner_dim_units = output_last_dim;
-    const auto out_idxs_page_size = round_up_to_mul32(output_last_dim * output_unit_size) * num_total_cores;
-    const auto out_vals_page_size = round_up_to_mul32(output_last_dim * input_unit_size) * num_total_cores;
-    const auto src_dfb_entry_size0 = round_up_to_mul32(red_dim_units0 * input_unit_size);
-    const auto src_dfb_entry_size1 = num_cores1 > 0 ? round_up_to_mul32(red_dim_units1 * input_unit_size) : 0u;
+    const auto out_idxs_page_size = tt::round_up(output_last_dim * output_unit_size, 32u) * num_total_cores;
+    const auto out_vals_page_size = tt::round_up(output_last_dim * input_unit_size, 32u) * num_total_cores;
+    const auto src_dfb_entry_size0 = tt::round_up(red_dim_units0 * input_unit_size, 32u);
+    const auto src_dfb_entry_size1 = num_cores1 > 0 ? tt::round_up(red_dim_units1 * input_unit_size, 32u) : 0u;
 
     // Only src is duplicated. Charge it against the region the DFBs actually get, with each one
     // rounded to the DRAM alignment.
@@ -391,10 +391,18 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
     // Common compile time args for all cores.
     // Names are the reader kernel's own variable names; refer to the kernel code for what each means.
     //
-    // start_core_*/end_core_* carry the NOC1 multicast convention: a NOC1 multicast rectangle is
-    // addressed end-corner first, so the kernel's "start" arguments receive the group's *end*
-    // coordinate and its "end" arguments receive the *start* one. The swap is deliberate; the
-    // kernel feeds these straight to set_multicast().
+    // start_core_*/end_core_* carry the multicast rectangle corners. WH/BH NOC1 addresses a multicast
+    // rectangle end-corner-first, so the "start" arg gets the group's *end* coord and the "end" arg its
+    // *start* (the deliberate swap). Quasar is single-NOC / non-torus: a descending [max..min] rectangle
+    // degenerates and the multicast SENDER blocks forever (waypoint NMLW) — so normalize to ascending
+    // [min..max] there (porting recipe §11; same class as the fused-conv / craq-sim mcast-corner fixes).
+    // Only matters when num_cores > 1 (the kernel guards the mcast on that), which is exactly the case
+    // that hung argmax on the emulator while the single-core path passed.
+    const bool mcast_ascending = device.arch() == tt::ARCH::QUASAR;
+    const uint32_t s0x = static_cast<uint32_t>(start_core0.x), e0x = static_cast<uint32_t>(end_core0.x);
+    const uint32_t s0y = static_cast<uint32_t>(start_core0.y), e0y = static_cast<uint32_t>(end_core0.y);
+    const uint32_t s1x = static_cast<uint32_t>(start_core1.x), e1x = static_cast<uint32_t>(end_core1.x);
+    const uint32_t s1y = static_cast<uint32_t>(start_core1.y), e1y = static_cast<uint32_t>(end_core1.y);
     const KernelSpec::CompileTimeArgs reader_compile_args = {
         // The reader sizes its transfers from the src_read_size runtime argument, so it never reads
         // src_page_size. Emitted anyway, unchanged from the pre-Metal-2.0 argument list.
@@ -410,14 +418,14 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
         {"reduce_core_id", reduce_core_id},
         {"reduce_core_x", static_cast<uint32_t>(reduce_core.x)},
         {"reduce_core_y", static_cast<uint32_t>(reduce_core.y)},
-        {"start_core_x0", static_cast<uint32_t>(end_core0.x)},
-        {"start_core_y0", static_cast<uint32_t>(end_core0.y)},
-        {"end_core_x0", static_cast<uint32_t>(start_core0.x)},
-        {"end_core_y0", static_cast<uint32_t>(start_core0.y)},
-        {"start_core_x1", static_cast<uint32_t>(end_core1.x)},
-        {"start_core_y1", static_cast<uint32_t>(end_core1.y)},
-        {"end_core_x1", static_cast<uint32_t>(start_core1.x)},
-        {"end_core_y1", static_cast<uint32_t>(start_core1.y)},
+        {"start_core_x0", mcast_ascending ? std::min(s0x, e0x) : e0x},
+        {"start_core_y0", mcast_ascending ? std::min(s0y, e0y) : e0y},
+        {"end_core_x0", mcast_ascending ? std::max(s0x, e0x) : s0x},
+        {"end_core_y0", mcast_ascending ? std::max(s0y, e0y) : s0y},
+        {"start_core_x1", mcast_ascending ? std::min(s1x, e1x) : e1x},
+        {"start_core_y1", mcast_ascending ? std::min(s1y, e1y) : e1y},
+        {"end_core_x1", mcast_ascending ? std::max(s1x, e1x) : s1x},
+        {"end_core_y1", mcast_ascending ? std::max(s1y, e1y) : s1y},
         {"num_cores0", static_cast<uint32_t>(num_cores_range0)},
         {"num_cores1", static_cast<uint32_t>(num_cores_range1)},
     };

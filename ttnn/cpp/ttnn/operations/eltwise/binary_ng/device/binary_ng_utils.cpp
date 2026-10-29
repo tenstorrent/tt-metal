@@ -10,6 +10,7 @@
 #include <fmt/core.h>
 #include <fmt/format.h>
 #include <enchantum/enchantum.hpp>
+#include <cstdint>
 
 namespace ttnn::operations::binary_ng {
 
@@ -419,6 +420,8 @@ OpConfig::OpConfig(
             postprocess = unary::UnaryOpType::SQRT;
             break;
         case BinaryOpType::ISCLOSE: binary_op = SfpuBinaryOp::ISCLOSE; break;
+        // situ_glu(gate=lhs, up=rhs) with Kimi K3's betas compiled into the LLK; see api/compute/situ_glu.h.
+        case BinaryOpType::SITU_GLU: binary_op = SfpuBinaryOp::SITU_GLU; break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -592,6 +595,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"where_tile_init();", fmt::format("where_tile<DataFormat::{}>", data_format)};
         }
         case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
+        case SITU_GLU: return {"situ_glu_tile_init();", "situ_glu_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -684,31 +688,45 @@ std::map<std::string, std::string> make_dataflow_defines(
 
     if (b_dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<float>";
         defines["FILL_WITH_VALUE_FLOAT_B"] = "fill_with_val<1024, float>";
     } else if (b_dtype == DataType::INT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<int32_t>";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, int32_t>";
     } else if (b_dtype == DataType::UINT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, uint32_t>";
     } else if (b_dtype == DataType::BFLOAT8_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp8";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp8";
+        // Block float is not a flat row-major element type. These kernels pass
+        // (ptr, width[, rows]); keep the bf16 row-major helpers so the call compiles.
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp8";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     } else if (b_dtype == DataType::BFLOAT4_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp4";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp4";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp4";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfloat16";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
@@ -718,22 +736,22 @@ std::map<std::string, std::string> make_dataflow_defines(
 
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
 
-uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataType dtype, const bool is_quant_op) {
+std::uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataType dtype, const bool is_quant_op) {
     return std::visit(
-        [&](auto v) -> uint32_t {
+        [&](auto v) -> std::uint32_t {
             // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
             if ((dtype == DataType::FLOAT32) || is_quant_op) {
-                return std::bit_cast<uint32_t>(static_cast<float>(v));
+                return std::bit_cast<std::uint32_t>(static_cast<float>(v));
             }
             if (dtype == DataType::INT32) {
-                return std::bit_cast<uint32_t>(static_cast<int32_t>(v));
+                return std::bit_cast<std::uint32_t>(static_cast<std::int32_t>(v));
             }
             if (dtype == DataType::UINT32) {
-                return static_cast<uint32_t>(v);
+                return static_cast<std::uint32_t>(v);
             }
             if (dtype == DataType::UINT16) {
-                auto val = static_cast<uint16_t>(static_cast<float>(v));
-                return (static_cast<uint32_t>(val) << 16) | val;
+                auto val = static_cast<std::uint16_t>(static_cast<float>(v));
+                return (static_cast<std::uint32_t>(val) << 16) | val;
             }
             auto scalar_bf16 = bfloat16(static_cast<float>(v));
             return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
@@ -758,8 +776,8 @@ tt::tt_metal::ShardSpec adjust_to_shape(
 
     // Calculate volume of all dimensions EXCEPT the last (width)
     // This is the "collapsed height" for sharding purposes
-    uint32_t from_volume_except_width = 1;
-    uint32_t to_volume_except_width = 1;
+    std::uint32_t from_volume_except_width = 1;
+    std::uint32_t to_volume_except_width = 1;
 
     const auto from_rank = static_cast<int>(from_shape.rank());
     const auto to_rank = static_cast<int>(to_shape.rank());
@@ -773,8 +791,8 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     }
 
     // Get width dimensions
-    uint32_t from_width = from_shape[-1];
-    uint32_t to_width = to_shape[-1];
+    std::uint32_t from_width = from_shape[-1];
+    std::uint32_t to_width = to_shape[-1];
 
     // Adjust shard shape based on full volume ratios
     TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
@@ -799,7 +817,7 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
 
     TT_FATAL(rank >= 2, "Rank must be at least 2");
     // Compute product of all dimensions except the last
-    uint64_t volume_except_last = 1;
+    std::uint64_t volume_except_last = 1;
     for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
         volume_except_last *= shape[i];
     }
@@ -824,12 +842,42 @@ bool sharded_layout_matches(const MemoryConfig& input, const MemoryConfig& outpu
            input.memory_layout() == output.memory_layout();
 }
 
+static bool has_empty_shards(const tt::tt_metal::TensorSpec& t, const MemoryConfig& c) {
+    if (not c.shard_spec().has_value()) {
+        return false;
+    }
+    const auto& shape = t.padded_shape();
+    const auto& spec = *c.shard_spec();
+    std::uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(shape.rank()) - 1; ++i) {
+        volume_except_last *= shape[i];
+    }
+    const std::uint64_t shards_h = (volume_except_last + spec.shape[0] - 1) / spec.shape[0];
+    const std::uint64_t shards_w = (shape[-1] + spec.shape[1] - 1) / spec.shape[1];
+    std::uint64_t num_shards = shards_h * shards_w;
+    if (c.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        num_shards = shards_h;
+    } else if (c.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        num_shards = shards_w;
+    }
+    return num_shards < spec.grid.num_cores();
+}
+
 // the check is based on user facing information, input tensors and output memory config
 // more info may be checked in other places, such as actual output is uneven or not
 // this function is called in both earlier and later stages of the program execution
 bool is_native_L1_sharding(
-    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c) {
+    const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec* b, const MemoryConfig& c) {
     if (!c.is_sharded()) {
+        return false;
+    }
+
+    // The native path sizes per-core work from the legacy 2D shard specs, which an ND_SHARDED config lacks.
+    auto lacks_2d_shard_spec = [](const MemoryConfig& config) {
+        return config.is_sharded() && !config.shard_spec().has_value();
+    };
+    if (lacks_2d_shard_spec(c) || lacks_2d_shard_spec(a.memory_config()) ||
+        (b != nullptr && lacks_2d_shard_spec(b->memory_config()))) {
         return false;
     }
 
@@ -846,11 +894,11 @@ bool is_native_L1_sharding(
     const bool c_shard_matches_a = sharded_layout_matches(a.memory_config(), c);
 
     // Scalar value path (b is not a tensor)
-    if (!b.has_value() && a.memory_config().is_sharded()) {
+    if (b == nullptr && a.memory_config().is_sharded()) {
         return a_is_l1 && c_is_l1 && c_shard_matches_a && !is_uneven(a);
     }
 
-    if (!b.has_value()) {
+    if (b == nullptr) {
         return false;
     }
 
@@ -910,7 +958,7 @@ bool is_native_L1_sharding(
         if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
             return true;
         }
-        if (c.is_sharded() && c.buffer_type() == BufferType::L1) {
+        if (c.is_sharded() && c.buffer_type() == BufferType::L1 && !has_empty_shards(a, c)) {
             return true;
         }
     }
@@ -929,7 +977,7 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
     const int rank_a = shape_a.rank();
     const int rank_b = shape_b.rank();
     const int larger_rank = std::max(rank_a, rank_b);
-    ttsl::SmallVector<uint32_t> output_shape(larger_rank, 1);
+    ttsl::SmallVector<std::uint32_t> output_shape(larger_rank, 1);
     for (int i = -1; i >= -larger_rank; --i) {
         auto dim_a = (i >= -rank_a) ? shape_a[i] : 1;
         auto dim_b = (i >= -rank_b) ? shape_b[i] : 1;
@@ -943,6 +991,10 @@ ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::S
 }
 
 MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b) {
+    // An ND_SHARDED config has no 2D shard spec to adjust; its nd_shard_spec applies to any shape as is.
+    if (!input_tensor_a.memory_config().shard_spec().has_value()) {
+        return input_tensor_a.memory_config();
+    }
     // Compute adjusted shard spec for output shape
     const auto& padded_a_shape = input_tensor_a.padded_shape();
     const auto& logical_out_shape =

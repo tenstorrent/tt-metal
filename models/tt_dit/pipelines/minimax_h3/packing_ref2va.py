@@ -21,10 +21,10 @@ audio/video rotary clock. Reordering the same references is a different request.
 Two properties separate this from ``fl2va``:
 
 * **A reference never binds the target geometry.** An image is resized by
-  ``reference_resize_mode``; a video onto the 768 px canvas of its own aspect ratio. Each
-  keeps its own aspect-normalized spatial grid. One 2048x2048 reference contributes 4096
-  vision tokens to the text stream *and* 4096 video condition rows, so a ref2va packed
-  sequence runs 1.2x-3.0x t2va's.
+  ``reference_resize_mode``; a video likewise under ``match``, else onto the 768 px canvas
+  of its own aspect ratio. Each keeps its own aspect-normalized spatial grid. One 2048x2048
+  reference contributes 4096 vision tokens to the text stream *and* 4096 video condition
+  rows, so a ref2va packed sequence runs 1.2x-3.0x t2va's.
 * **A video reference packs its soundtrack rows immediately before its own video rows**,
   sharing one rotary origin, as the generated audio and video do.
 
@@ -171,6 +171,29 @@ def reference_kind(index: int, entry: Any) -> str:
             "MiniMaxH3Reference(image=...), (video=...) or (audio=...)."
         )
     return entry.kind
+
+
+def check_reference_kinds(kinds: list[str]) -> None:
+    """Enforce the per-request reference limits; audio alone leaves the picture nothing to condition on."""
+    if not kinds:
+        raise ValueError("ref2va needs at least one reference; use a t2va call for text-only requests")
+    for kind, limit in (
+        ("image", MINIMAX_H3_MAX_REFERENCE_IMAGES),
+        ("video", MINIMAX_H3_MAX_REFERENCE_VIDEOS),
+        ("audio", MINIMAX_H3_MAX_REFERENCE_AUDIOS),
+    ):
+        if kinds.count(kind) > limit:
+            raise ValueError(f"H3 accepts at most {limit} {kind} references, got {kinds.count(kind)}")
+    if len(kinds) > MINIMAX_H3_MAX_REFERENCES:
+        raise ValueError(f"H3 accepts at most {MINIMAX_H3_MAX_REFERENCES} references in total, got {len(kinds)}")
+    if set(kinds) == {"audio"}:
+        raise ValueError("an audio reference must be paired with at least one image or video reference")
+
+
+def check_reference_aspect_ratio(name: str, width: int, height: int) -> None:
+    """A reference image or video must be within 1:4 and 4:1."""
+    if width > 4 * height or height > 4 * width:
+        raise ValueError(f"{name} must be within 1:4 and 4:1, got {width}x{height}")
 
 
 def _temporal_position_span(num_latent_frames: int) -> float:
@@ -351,15 +374,16 @@ def resolve_reference_image_size(
     mode: str = "match",
     target_width: int | None = None,
     target_height: int | None = None,
+    allow_align_above_area: bool = False,
 ) -> tuple[int, int]:
     """``(height, width)`` a reference image is encoded at, axes rounded to a multiple of 32.
 
-    ``match`` area-matches the target canvas; ``max`` caps the short edge at 2048; ``diffusers`` sets it to 2048.
+    ``match`` area-matches the target canvas, never exceeding its area unless ``allow_align_above_area``;
+    ``max`` caps the short edge at 2048; ``diffusers`` sets it to 2048.
     """
     if width <= 0 or height <= 0:
         raise ValueError(f"a reference image must have a positive size, got {width}x{height}")
-    if width > 4 * height or height > 4 * width:
-        raise ValueError(f"a reference image must be within 1:4 and 4:1, got {width}x{height}")
+    check_reference_aspect_ratio("a reference image", width, height)
 
     if mode == "match":
         if target_width is None or target_height is None:
@@ -373,10 +397,16 @@ def resolve_reference_image_size(
         raise ValueError(f"reference_resize_mode must be 'match', 'max', or 'diffusers', got {mode!r}")
 
     multiple = MINIMAX_H3_CANVAS_MULTIPLE
-    return (
-        max(multiple, round(height * scale / multiple) * multiple),
-        max(multiple, round(width * scale / multiple) * multiple),
-    )
+    h = max(multiple, round(height * scale / multiple) * multiple)
+    w = max(multiple, round(width * scale / multiple) * multiple)
+    # Flooring both axes (not just one) keeps squares square. The reference envelope, the vision patch
+    # ladder's top rung and the ref2va arena caps assume <= 4,032 patches per block; with
+    # allow_align_above_area a block reaches 4,176, and those must be raised to 236,736 patches and
+    # 62,699 presentation tokens.
+    if mode == "match" and not allow_align_above_area and h * w > target_width * target_height:
+        h = max(multiple, math.floor(height * scale / multiple) * multiple)
+        w = max(multiple, math.floor(width * scale / multiple) * multiple)
+    return h, w
 
 
 def reference_media_to_uint8(media) -> np.ndarray:
@@ -430,19 +460,33 @@ def resample_reference_frames(frames: np.ndarray, fps: float) -> np.ndarray:
     return np.repeat(frames, np.diff(slots, append=math.floor(frames.shape[0] * scale + 0.5)), axis=0)
 
 
-def prepare_reference_frames(frames: np.ndarray, num_frames: int) -> np.ndarray:
-    """Put a reference video on the canvas its OWN aspect ratio resolves to, capped at ``num_frames``.
+def prepare_reference_frames(
+    frames: np.ndarray,
+    num_frames: int,
+    *,
+    mode: str = "match",
+    target_width: int | None = None,
+    target_height: int | None = None,
+) -> np.ndarray:
+    """Put a reference video on its encode size, capped at ``num_frames``.
 
-    Frames already at that canvas flow through untouched, with no resampling pass
-    and no copy, and that is the parity-exact route: the reference rescaled with
-    ``ffmpeg``'s own LANCZOS scaler while decoding, so only frames decoded at the
-    canvas reproduce its pixels bit for bit. Any other size is resized frame by
-    frame with PIL.
+    ``match`` sizes it like a ``match`` image, area-matched to the target canvas at
+    its own aspect. Any other mode puts it on the canvas its OWN aspect ratio
+    resolves to, as the reference does. Frames already at that size flow through
+    untouched, with no resampling pass and no copy, and that is the parity-exact
+    route: the reference rescaled with ``ffmpeg``'s own LANCZOS scaler while
+    decoding, so only frames decoded at the canvas reproduce its pixels bit for bit.
+    Any other size is resized frame by frame with PIL.
     """
     if frames.ndim != 4 or frames.shape[3] != 3:
         raise ValueError(f"a reference video must be (num_frames, height, width, 3) RGB, got {tuple(frames.shape)}")
     frames = frames[:num_frames]
-    height, width = resolve_canvas_size(frames.shape[2], frames.shape[1])
+    if mode == "match":
+        height, width = resolve_reference_image_size(
+            frames.shape[2], frames.shape[1], mode=mode, target_width=target_width, target_height=target_height
+        )
+    else:
+        height, width = resolve_canvas_size(frames.shape[2], frames.shape[1])
     if frames.shape[1:3] == (height, width):
         return frames
     return np.stack(

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
 
 
 class KdaStateCache:
@@ -59,6 +60,10 @@ class KdaStateCache:
         self._zeros: dict[int, KdaState] = {
             idx: layer.allocate_state(batch_size=1) for idx, layer in self._layers.items()
         }
+        # The engine-owned contract copy (`KdaStates`), bound by the runtime before the first forward.
+        # While bound, every commit also lands in it, so a migration reader sees each layer's state
+        # as of the last committed chunk. Tests that build the transformer directly never bind one.
+        self._slabs: KdaStates | None = None
 
     @property
     def num_slots(self) -> int:
@@ -67,6 +72,35 @@ class KdaStateCache:
     @property
     def layer_ids(self) -> tuple[int, ...]:
         return tuple(sorted(self._layers))
+
+    @property
+    def slabs(self) -> KdaStates | None:
+        return self._slabs
+
+    def bind_slabs(self, slabs: KdaStates) -> None:
+        """Attach the contract copy every commit exports into.
+
+        Must happen before the first forward that is captured: the slab addresses get baked into the
+        trace along with the carries'. Rebinding to a different object is refused for the same reason.
+        """
+        if self._slabs is not None and self._slabs is not slabs:
+            raise RuntimeError("KDA state slabs are already bound; a capture may depend on their addresses")
+        if tuple(slabs.layer_ids) != self.layer_ids:
+            raise ValueError(f"slab layers {slabs.layer_ids} != this rank's KDA layers {self.layer_ids}")
+        if slabs.num_slots != self._num_slots:
+            raise ValueError(f"slabs hold {slabs.num_slots} slots but the carries hold {self._num_slots}")
+        for layer_idx, state in self._states[0].items():
+            if tuple(state.recurrent.shape) != slabs.geometry.recurrent_shape:
+                raise ValueError(
+                    f"layer {layer_idx} recurrent carry {tuple(state.recurrent.shape)} != "
+                    f"contract geometry {slabs.geometry.recurrent_shape}"
+                )
+            if tuple(state.convolution.shape) != slabs.geometry.convolution_shape:
+                raise ValueError(
+                    f"layer {layer_idx} convolution carry {tuple(state.convolution.shape)} != "
+                    f"contract geometry {slabs.geometry.convolution_shape}"
+                )
+        self._slabs = slabs
 
     def read(self, layer_idx: int, slot: int = 0) -> KdaState:
         """This layer's live carry. BORROWED — `ttKDA.forward` only reads it, and so must callers."""
@@ -81,6 +115,10 @@ class KdaStateCache:
         current = self._states[slot][layer_idx]
         ttnn.copy(new_state.recurrent, current.recurrent)
         ttnn.copy(new_state.convolution, current.convolution)
+        if self._slabs is not None:
+            # Same captured region, so the slab advances with the carry on every replay, and it
+            # lands before any later MLA layer acks this chunk.
+            self._slabs.export_layer(current, slot, layer_idx)
         ttnn.deallocate(new_state.recurrent)
         ttnn.deallocate(new_state.convolution)
 
@@ -95,6 +133,14 @@ class KdaStateCache:
         for layer_idx, state in self._states[slot].items():
             ttnn.copy(zeros[layer_idx].recurrent, state.recurrent)
             ttnn.copy(zeros[layer_idx].convolution, state.convolution)
+            if self._slabs is not None:
+                self._slabs.export_layer(zeros[layer_idx], slot, layer_idx)
+
+    def import_layer(self, layer_idx: int, slot: int = 0) -> None:
+        """Overwrite one carry from the contract copy (a migrated-in state). Outside any capture."""
+        if self._slabs is None:
+            raise RuntimeError("no KDA state slabs bound; nothing to import from")
+        self._slabs.import_layer(self._states[slot][layer_idx], slot, layer_idx)
 
     def deallocate(self) -> None:
         for slot_states in self._states:

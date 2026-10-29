@@ -1,33 +1,36 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Standalone repro for the Quasar sharded-RMSNorm mcast tile-counter fault, seen in llama32_1b decode.
+"""Regression test for the Quasar sharded-RMSNorm tile-counter fault (#57771), seen in llama32_1b decode.
 
 The first decode-layer sharded RMSNorm runs a WIDTH-sharded LayerNorm: the reduction dim (dim=2048) is
-split into 32 shards across an 8x4 core grid (shard [32, 64]), so RMSNorm's sum-of-squares must be summed
-ACROSS cores via an all-to-all MCAST reduction. On the Quasar simulator that mcast write does not post the
-receiver cores' DFB counters, so:
+split into 32 shards across an 8x4 core grid (shard [32, 64]), with the all-to-all mcast reduction on.
+On Quasar it faulted:
 
     [ttsim-qsr] ERROR: UndefinedBehavior: qsr_tile_counter_check_error:
         tile counter occupancy=65534 exceeds capacity=2 (posted=0 acked=2)
 
-occupancy=65534 = 0xFFFE = -2 (16-bit underflow): a consumer popped 2 tiles the mcast producer never
-posted. It is independent of the DFB implicit-sync config (fails with it on or off) -- a deeper Quasar
-mcast-DFB-credit bug (possibly the known Quasar mcast-coordinate class, WH/BH NOC-swap on single-NOC
-Quasar). The same mechanism underlies the sharded matmuls' in0/in1 mcast, so this is the first hit of
-"sharded mcast ops broken on Quasar".
+Root cause (craq-sim, 2026-09-24/25): the compute kernel (kernels/compute/layernorm_sharded.cpp, RMSNORM
+build) pops the input DFB -- dfb_in0 borrows the already-resident input shard -- during the x - E[x] pass
+without ever pushing it. WH/BH tolerate an ack with no post; Quasar's hardware tile counters do not
+(occupancy 0xFFFE = -2: two pops, zero posts). The mcast reduction is not at fault: its ex_global counter
+was balanced. Fix: post the resident tiles once (reserve_back / push_back / wait_front) before the pass,
+plus a guarded pack_init after every packer output switch (Quasar bakes the pack destination at
+pack_init). A second, independent fault -- the packer firmware clearing the intra-tensix remapper pairs
+while the unpacker still pops -- is fixed in firmware by #57984.
 
 This reproduces just the sharded RMSNorm with the model's exact program config (rmsnorm_1d.py
 _create_sharded_norm_program_config: block_w=2, subblock_w=2, block_h=1, grid 8x4). fp32_dest_acc_en is
-False here to isolate the mcast fault from the separate bf16->Tf32 unpack gap (that is
-test_quasar_fp32_acc_tf32_unpack.py).
+False here to keep it separate from the bf16->Tf32 unpack gap in craq-sim (that is
+test_quasar_fp32_acc_tf32_unpack.py, tenstorrent/craq-sim#403).
 
-NOT marked xfail -- the craq-sim tooling drives off a real FAIL. On Quasar this FAILS at the mcast
-tile-counter check; on WH/BH it passes.
+NOT marked xfail -- the craq-sim tooling drives off a real FAIL. Needs the full 8x4 worker grid and skips
+on smaller grids (TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE is ignored on Quasar fast dispatch, so it cannot
+shrink this test).
 
 Run (Quasar sim):
     MESH_DEVICE=<qsr> TT_METAL_SIMULATOR=~/sim/libttsim.so \
-        pytest tests/ttnn/unit_tests/operations/test_quasar_sharded_rmsnorm_mcast_fault.py
+        pytest models/experimental/llama32_1b_quasar/tests/debug_ops/test_quasar_sharded_rmsnorm_mcast_fault.py
 """
 
 import pytest
@@ -77,8 +80,9 @@ def _i2s(x, memcfg):
 
 
 def test_sharded_rms_norm_mcast(mesh_device):
-    """WIDTH-sharded ttnn.rms_norm (8x4 grid) -- reproduces the all-to-all mcast reduction that trips the
-    Quasar tile-counter check (posted=0 acked=2). FAILS on Quasar, passes on WH/BH."""
+    """WIDTH-sharded ttnn.rms_norm on an 8x4 grid: the RMSNORM layernorm_sharded.cpp path whose in0
+    pop-without-push tripped Quasar's tile counters (posted=0 acked=2). Passes on WH/BH and, with the
+    kernel fix, on Quasar."""
     grid = mesh_device.compute_with_storage_grid_size()
     if grid.x < GRID_X or grid.y < GRID_Y:
         pytest.skip(f"needs an {GRID_X}x{GRID_Y} grid; device has {grid.x}x{grid.y}")
@@ -108,7 +112,7 @@ def test_sharded_rms_norm_mcast(mesh_device):
         block_w=block_w,
         inplace=False,
     )
-    # fp32_dest_acc_en=False to isolate the mcast tile-counter fault from the bf16->Tf32 unpack gap.
+    # fp32_dest_acc_en=False to keep this test separate from the craq-sim bf16->Tf32 unpack gap.
     compute_cfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,

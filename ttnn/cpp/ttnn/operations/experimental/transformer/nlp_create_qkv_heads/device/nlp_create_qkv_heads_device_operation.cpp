@@ -47,7 +47,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
         input_tensor.storage_type() == StorageType::DEVICE,
         "Operands to TM need to be on device! {}",
         input_tensor.storage_type());
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
@@ -123,8 +123,9 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.num_kv_heads,
             num_cores);
         TT_FATAL(
-            operation_attributes.num_q_heads >= operation_attributes.num_kv_heads,
-            "Number of Q heads ({}) must be >= number of KV heads ({})",
+            operation_attributes.num_kv_heads > 0 &&
+                operation_attributes.num_q_heads >= operation_attributes.num_kv_heads,
+            "Number of Q heads ({}) must be >= number of KV heads ({}), which must be greater than 0",
             operation_attributes.num_q_heads,
             operation_attributes.num_kv_heads);
         TT_FATAL(
@@ -179,7 +180,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
         const auto input_shape_kv = input_tensor_kv.padded_shape();
 
         TT_FATAL(input_tensor_kv.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
-        TT_FATAL(input_tensor_kv.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+        TT_FATAL(input_tensor_kv.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
         TT_FATAL(input_tensor_kv.dtype() == input_tensor.dtype(), "KV tensor dtype must be same as Q tensor dtype!");
         TT_FATAL(
             input_tensor_kv.layout() == Layout::TILE,

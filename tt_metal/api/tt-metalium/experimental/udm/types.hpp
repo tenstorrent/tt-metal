@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 #include <unordered_map>
 #include <tt-metalium/core_coord.hpp>

@@ -411,7 +411,6 @@ void TestContext::compile_programs() {
     }
 
     if (show_workers_) {
-        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         for (const auto& [coord, test_device] : test_devices_) {
             const auto& node_id = test_device.get_node_id();
             const auto& senders = test_device.get_senders();
@@ -422,14 +421,16 @@ void TestContext::compile_programs() {
 
             std::string eth_info;
             for (const auto& [core, sender] : senders) {
-                for (const auto& [cfg, key] : sender.get_configs()) {
-                    auto eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(node_id, key.direction);
-                    auto ch = key.link_idx < eth_chans.size() ? std::to_string(eth_chans.at(key.link_idx)) : "?";
-                    if (!eth_info.empty()) {
-                        eth_info += ", ";
+                for (const auto& [cfg, keys] : sender.get_configs()) {
+                    for (const auto& key : keys) {
+                        if (!eth_info.empty()) {
+                            eth_info += ", ";
+                        }
+                        eth_info +=
+                            std::string(enchantum::to_string(key.direction)) + "[" + std::to_string(key.link_idx) +
+                            "]=ch" + std::to_string(static_cast<uint32_t>(key.eth_chan)) + "->D" +
+                            (cfg.dst_node_ids.empty() ? std::string("?") : std::to_string(cfg.dst_node_ids[0].chip_id));
                     }
-                    eth_info += std::string(enchantum::to_string(key.direction)) + "[" + std::to_string(key.link_idx) +
-                                "]=ch" + ch;
                 }
             }
 
@@ -661,6 +662,12 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
                 .mesh_shape = this->fixture_->get_mesh_shape(),
                 .topology = this->fixture_->get_topology()};
+            if (pattern.ntype->type == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
+                traffic_parameters.scatter_chunk_sizes = scatter_chunk_sizes(
+                    pattern.ntype->options_or_default<ScatterWriteOptions>(),
+                    pattern.size.value(),
+                    fixture_->get_l1_alignment());
+            }
 
             TestTrafficConfig traffic_config = {
                 .parameters = traffic_parameters,
@@ -682,7 +689,6 @@ void TestContext::process_traffic_config(TestConfig& config) {
             if (dest.hops.has_value()) {
                 traffic_config.hops = dest.hops;
             }
-
             this->add_traffic_config(traffic_config);
         }
     }
@@ -735,7 +741,7 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .link_id = traffic_config.link_id,
         .vc_id = traffic_config.vc_id,
         .chip_send_type = traffic_config.parameters.chip_send_type,
-        .noc_send_type = traffic_config.parameters.noc_send_type,
+        .noc_send_type = traffic_config.parameters.noc_send_type.type,
         .num_packets = traffic_config.parameters.num_packets,
         .payload_size_bytes = traffic_config.parameters.payload_size_bytes,
     });

@@ -18,11 +18,11 @@ using namespace ckernel;
 // Second matmul of a fused chain.  in0 is *not* unpacked from L1 — it is moved
 // straight out of DEST into SrcB with MOVD2B.  Only SrcA (the weights) is unpacked.
 //
-// Source (in0) tile layout in DEST — what `custom_mm<split_acc, dense_packing>`
+// Source (in0) tile layout in DEST — what `custom_mm<DenseSplitAcc>`
 // produces after its finalization step, for an in0 tile of shape [r, 32]:
 //     cols  0..15  ->  rows  base + 0  .. base + (r-1)
 //     cols 16..31  ->  rows  base + 16 .. base + 16 + (r-1)
-//     next tile at base + src_tile_stride   (32 with dense_packing, else 64)
+//     next tile at base + src_tile_stride   (32 for a Dense layout, else 64)
 //
 // Output (accumulator) tile layout in DEST — the dense 2x8-row layout shared
 // with the SDPA custom matmuls:

@@ -1,0 +1,113 @@
+# Synthetic PGD for unit-testing build_pgd_host_group_variants host-edge splits.
+#
+# Four quadrant-trays (TRAY_1..TRAY_4), each a 2x2 of asic locations 1..4, are tiled 2x2 into one
+# "galaxy_hosts" host -> a [4,4] physical grid. Each tray's asic ORDER is mirrored by tile position so that a
+# chosen asic lands at a known physical spot:
+#   asic 1 -> the four galaxy CORNERS  (wraps in BOTH dims  -> 2x2 split)
+#   asic 4 -> the four galaxy CENTERS  (interior            -> single, no split)
+#   asic 2 -> top edge, off-center      (col-wrap, uneven counts possible)
+#
+# Physical [4,4] grid this produces (value = asic location):
+#   tray1(0,0)=a1 tray1(0,1)=a2 | tray2(0,2)=a2 tray2(0,3)=a1
+#   tray1(1,0)=a3 tray1(1,1)=a4 | tray2(1,2)=a4 tray2(1,3)=a3
+#   ---------------------------------------------------------
+#   tray3(2,0)=a3 tray3(2,1)=a4 | tray4(2,2)=a4 tray4(2,3)=a3
+#   tray3(3,0)=a1 tray3(3,1)=a2 | tray4(3,2)=a2 tray4(3,3)=a1
+
+# --- Quadrant trays (2x2, 4 asics), asic order mirrored per tile position ---
+groupings {
+  name: "qtray1"
+  custom_type: "QTRAY_1"
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 tray_id: TRAY_1 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_3 tray_id: TRAY_1 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_4 tray_id: TRAY_1 } }
+  ]
+  row_major_mesh { dims: [2, 2] }
+}
+groupings {
+  name: "qtray2"
+  custom_type: "QTRAY_2"
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_2 tray_id: TRAY_2 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_2 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_4 tray_id: TRAY_2 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_3 tray_id: TRAY_2 } }
+  ]
+  row_major_mesh { dims: [2, 2] }
+}
+groupings {
+  name: "qtray3"
+  custom_type: "QTRAY_3"
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_3 tray_id: TRAY_3 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_4 tray_id: TRAY_3 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_3 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_2 tray_id: TRAY_3 } }
+  ]
+  row_major_mesh { dims: [2, 2] }
+}
+groupings {
+  name: "qtray4"
+  custom_type: "QTRAY_4"
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_4 tray_id: TRAY_4 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_3 tray_id: TRAY_4 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_2 tray_id: TRAY_4 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_4 } }
+  ]
+  row_major_mesh { dims: [2, 2] }
+}
+
+# --- Host: 2x2 tile of the four quadrant-trays -> physical [4,4] ---
+groupings {
+  name: "galaxy_hosts"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 grouping_ref { custom_type: "QTRAY_1" } },
+    { id: 1 grouping_ref { custom_type: "QTRAY_2" } },
+    { id: 2 grouping_ref { custom_type: "QTRAY_3" } },
+    { id: 3 grouping_ref { custom_type: "QTRAY_4" } }
+  ]
+  row_major_mesh { dims: [2, 2] }
+}
+
+# --- Meshes for testing (direct asic locations) ---
+# asic 1 on all four trays -> the four corners -> 2x2 split.
+groupings {
+  name: "corners_2x2"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_2 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_3 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_4 } }
+  ]
+  row_major_mesh { dims: [2, 2] }
+}
+# asic 4 on all four trays -> the four centers -> single host (no split).
+groupings {
+  name: "centers_2x2"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_4 tray_id: TRAY_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_4 tray_id: TRAY_2 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_4 tray_id: TRAY_3 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_4 tray_id: TRAY_4 } }
+  ]
+  row_major_mesh { dims: [2, 2] }
+}
+# Three chips in the top row: a1@t1 -> phys(0,0), a2@t1 -> phys(0,1), a1@t2 -> phys(0,3). Occupied cols
+# {0,1,3} wrap the column seam (contain 0 and 3 with a gap) but the single row 0 does NOT wrap -> a col-only
+# split with UNEVEN group sizes (cols {0,1} = 2 chips vs col {3} = 1 chip).
+groupings {
+  name: "uneven_3"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 tray_id: TRAY_1 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_2 } }
+  ]
+  row_major_mesh { dims: [1, 3] }
+}

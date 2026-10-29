@@ -11,15 +11,15 @@ MODEL=KIMI_K2_7 TRACE_ID=notrace ITERS_ID=iters20 TT_METAL_HOME=/data/$USER/tt-m
 `./launch.sh [loop_count] [log_name]` — both optional (20, and
 `LOG_<date>_<host>_<model>_<commit>_loop_<n>`). Logs go to `/data/$USER/<log_name>/log_NN`.
 
-One detached session `stress_$HOSTNAME` (`SESSION=` to rename), one window, 2×2:
+One detached session `stress_$HOSTNAME` (`SESSION=` to rename), one window, three panes:
 
 ```
 ┌──────────────────────┬──────────────────────┐
-│ 0  stress.sh         │ 2  watch.sh          │
-│    the pytest loop   │    status table      │
-├──────────────────────┼──────────────────────┤
-│ 1  tail.sh           │ 3  host_stats.sh     │
-│    newest log_NN     │    host CPU / DRAM   │
+│ 0  watch.sh          │ 1  stress.sh         │
+│    status table      │    the pytest loop   │
+│                      ├──────────────────────┤
+│                      │ 2  host_stats.sh     │
+│                      │    host CPU / DRAM   │
 └──────────────────────┴──────────────────────┘
 ```
 
@@ -60,9 +60,13 @@ Also: `TT_METAL_HOME` (default `/data/$USER/tt-metal`) selects the repo under te
 differ. `STALE_SECS` (240) is the idle time before a running iteration is flagged STALE, `LOGURU_LEVEL`
 (INFO) the log level, `PREFLIGHT=0` skips the collect check.
 
+`TRIAGE=1` arms hang detection: after `HANG_SECS` (120) with no dispatch progress, tt-triage writes
+`<log dir>/crash_triage_NN.csv`, the hung pytest is killed, the iteration shows as `HANG`, and the loop
+continues with the next iteration's galaxy reset.
+
 Set these on the `launch.sh` command line, not via `export`. Panes inherit the *tmux server's*
 environment, so with a server already running an exported var never reaches them and the run silently
-uses defaults. `launch.sh` re-emits them onto all three run panes.
+uses defaults. `launch.sh` re-emits them onto both run panes.
 
 ## Files
 
@@ -74,7 +78,7 @@ uses defaults. `launch.sh` re-emits them onto all three run panes.
 | `watch.sh` | Status table (PASS / HANG? / FAIL / RUN / STALE / PENDING), 15s. Each row splits its wall clock into `load` / `fwd`, and a row still in the weight load shows `loading layer N/M` where a forward row shows `forward_layer_N_end`. |
 | `watch_multiple_dirs.sh` | Same table for several runs at once: one `<log_name>` arg each, scan depth from `LOOP=`. |
 | `tail.sh` | `tail -10` of the newest `log_NN`, 30s. |
-| `host_stats.sh` | Host CPU / DRAM / swap, **1 GB hugepage pool, and the live pytest process's memlock/pin/fd limits**, 5s. Snapshots a TSV row to `<log dir>/host_stats.tsv` every 60s (`SNAP_SECS=`). Reads `/proc` + sysfs. |
+| `host_stats.sh` | Host CPU / DRAM / swap, NIC and weka traffic, **1 GB hugepage pool, and the live pytest process's memlock/pin/fd limits**, 5s. Snapshots a TSV row to `<log dir>/host_stats.tsv` every 60s (`SNAP_SECS=`). Reads `/proc` + sysfs. |
 | `parse_iteration_times.py` | Per-iteration timing (min / avg / max) from any log with `Starting iteration:`. |
 
 Args are `<log_name> [loop_count]` throughout, so any pane can be run standalone against a live run

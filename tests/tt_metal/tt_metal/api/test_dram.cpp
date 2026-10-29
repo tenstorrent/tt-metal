@@ -34,7 +34,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 
@@ -289,6 +290,9 @@ TEST_F(MeshDispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
 }
 
 TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
@@ -302,7 +306,7 @@ TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
     };
 
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         for (auto active_eth_core : device->get_active_ethernet_cores(true)) {
             log_info(tt::LogTest, "Active Eth Loopback. Logical core {}", active_eth_core.str());
             dram_test_config.core_range = {active_eth_core, active_eth_core};
@@ -339,7 +343,7 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
     };
 
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         for (auto idle_eth_core : device->get_inactive_ethernet_cores()) {
             log_info(tt::LogTest, "Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
             dram_test_config.core_range = {idle_eth_core, idle_eth_core};

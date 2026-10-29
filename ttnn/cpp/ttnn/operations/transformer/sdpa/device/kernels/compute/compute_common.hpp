@@ -12,6 +12,7 @@
 #include "api/debug/assert.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/binary_max_min.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
@@ -71,6 +72,62 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
     cb_in0.pop_front(num_tiles);
     cb_in0.reserve_back(num_tiles);
     cb_in0.push_back(num_tiles);
+}
+
+#ifdef TRISC_MATH
+inline void sdpa_max_sfpi(const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+#pragma GCC unroll 8
+    for (int d = 0; d < 8; d++) {
+        sfpi::vFloat a = sfpi::dst_reg[in0 * dst_tile_size_sfpi];
+        const sfpi::vFloat b = sfpi::dst_reg[in1 * dst_tile_size_sfpi];
+        v_if(b > a) { a = b; }
+        v_endif;
+        sfpi::dst_reg[out * dst_tile_size_sfpi] = a;
+        sfpi::dst_reg++;
+    }
+}
+#endif
+
+// max_block without SFPLOADMACRO, whose state races the pack thread's exp when a merge follows the K loop.
+void max_block_sfpi(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in0(in0);
+    CircularBuffer cb_in1(in1);
+    CircularBuffer cb_out(out_cb);
+    copy_init(in0);
+    add_binary_tile_init();
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
+    cb_out.reserve_back(num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        copy_tile(in0, i, 0);
+        copy_tile(in1, i, 1);
+        MATH((_llk_math_eltwise_binary_sfpu_params_(sdpa_max_sfpi, 0, 1, 0, VectorMode::RC)));
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, out_cb, i);
+        tile_regs_release();
+    }
+    cb_out.push_back(num_tiles);
+}
+
+// Pushes num_tiles zero tiles to out_cb, made as x - x from the front tile of like_cb (which stays).
+void zero_block(uint32_t like_cb, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_like(like_cb);
+    CircularBuffer cb_out(out_cb);
+    sub_init(like_cb, like_cb);
+    cb_like.wait_front(1);
+    cb_out.reserve_back(num_tiles);
+    tile_regs_acquire();
+    sub_tiles(like_cb, like_cb, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        pack_tile(0, out_cb);
+    }
+    tile_regs_release();
+    cb_out.push_back(num_tiles);
 }
 
 /**
@@ -894,11 +951,18 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     // whose polynomial implementation loads the constants it consumes into LREGs in the tile body; it
     // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
     // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
+    // That holds for exp_tile_first_column only. The regular exp_tile (the commented-out call in the
+    // loop) takes its constants from the programmable registers exp_tile_init sets (vConstFloatPrgm0..1
+    // on a bf16 DEST, 0..2 on a Blackhole fp32 DEST; see the note on exp_tile), and exp_tile_init
+    // overwrites the reciprocal constant set here. Restoring that call needs exp_tile_init and
+    // sfpu_reciprocal_init re-run inside the loop, each directly before its tile call.
     MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
+        // Restoring this exp_tile call needs exp_tile_init and sfpu_reciprocal_init re-run per iteration;
+        // see the sfpu_reciprocal_init comment above the loop.
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument
@@ -1550,7 +1614,8 @@ template <
     uint32_t chunked_q_local_padded_Nt = 0,
     uint32_t chunked_chunk_size_t = 0,
     bool use_windowed_narrowing = false,
-    uint32_t cb_windowed_k_range = 0>
+    uint32_t cb_windowed_k_range = 0,
+    bool padded_q_slots_enabled = true>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1609,7 +1674,9 @@ void sdpa_inner_loop(
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
     const bool is_last_ring_iter = true,
-    const ChunkedContext& chunked = {}) {
+    const ChunkedContext& chunked = {},
+    // RING only: padded multicast slots the reader runs after this core's Q chunks; their K/V are drained.
+    [[maybe_unused]] const uint32_t padded_q_slots = 0) {
     // Parameter-stable CB locals. Aliases (cb_sum_A/B, cb_max_A/B, cb_out_im_A/B) are
     // std::swap-mutated below, so they use inline CircularBuffer(alias).method() at the call
     // sites instead. cb_out is constructed conditionally near its consumer (cur.out target).
@@ -1623,6 +1690,15 @@ void sdpa_inner_loop(
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
+    // RING: absolute K-tile index of a local K chunk's start. Chunked: non-monotonic local->abs map.
+    auto ring_kv_global_start_tile = [&](uint32_t k_chunk) -> uint32_t {
+        if constexpr (chunked_enabled) {
+            return kv_global_tile_for_local<true, 0, chunked_chunk_size_t, chunked_q_local_padded_Nt>(
+                ring_id, k_chunk * Sk_chunk_t);
+        } else {
+            return local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+        }
+    };
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
         uint32_t q_start_tile = 0;    // First tile of Q chunk (tile units, both STANDARD and RING)
@@ -1698,14 +1774,7 @@ void sdpa_inner_loop(
             uint32_t kv_global_start_tile = 0;  // RING only: abs K-tile index of this k_chunk's start
             if constexpr (sdpa_type == RING) {
                 const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
-                // Global index into the padded KV tensor. Chunked: non-monotonic local→abs map.
-                if constexpr (chunked_enabled) {
-                    kv_global_start_tile =
-                        kv_global_tile_for_local<true, 0, chunked_chunk_size_t, chunked_q_local_padded_Nt>(
-                            ring_id, k_chunk * Sk_chunk_t);
-                } else {
-                    kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
-                }
+                kv_global_start_tile = ring_kv_global_start_tile(k_chunk);
                 if (!kv_chunk_is_joint && (kv_global_start_tile >= logical_nt)) {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
                     continue;
@@ -2087,6 +2156,28 @@ void sdpa_inner_loop(
     }
 
     if constexpr (sdpa_type == RING) {
+        // Padded multicast slots: the reader pushes every K/V entry it receives so this core's CBs advance with
+        // the injector's. Drain them with the same skips as a real Q chunk, before the phase-alignment dummy.
+        // Compiled only when the factory can schedule padded slots, so configs without them keep their text size.
+        if constexpr (padded_q_slots_enabled) {
+            for (uint32_t slot = 0; slot < padded_q_slots; ++slot) {
+                const uint32_t q_flat = padded_slot_flat_q<false>({}, iter_q_start, q_per_core, q_per_core + slot, 1);
+                const uint32_t q_chunk = remap_q_index(q_flat, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
+                if (is_balanced && (q_chunk < q_num_chunks / 2)) {
+                    continue;
+                }
+                for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
+                    if (k_chunk < num_local_k_chunks && ring_kv_global_start_tile(k_chunk) >= logical_nt) {
+                        continue;
+                    }
+                    KV_chunks_processed_in_iter++;
+                    cb_k_in_obj.wait_front(k_chunk_tiles);
+                    cb_v_in_obj.wait_front(v_chunk_tiles);
+                    cb_k_in_obj.pop_front(k_chunk_tiles);
+                    cb_v_in_obj.pop_front(v_chunk_tiles);
+                }
+            }
+        }
         if (KV_chunks_processed_in_iter % 2 == 0) {
             cb_k_in_obj.wait_front(k_chunk_tiles);
             cb_v_in_obj.wait_front(v_chunk_tiles);
@@ -2374,7 +2465,8 @@ template <
     bool lightweight_mask_enabled = false,
     bool chunked_enabled = false,
     uint32_t chunked_q_local_padded_Nt = 0,
-    uint32_t chunked_chunk_size_t = 0>
+    uint32_t chunked_chunk_size_t = 0,
+    bool padded_q_slots_enabled = true>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
@@ -2428,7 +2520,8 @@ void sdpa_ring(
     const bool skip_first_half_q,
     const bool is_last_ring_iter,
     const bool use_zigzag_balancing = false,
-    const ChunkedContext& chunked = {}) {
+    const ChunkedContext& chunked = {},
+    const uint32_t padded_q_slots = 0) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2450,7 +2543,10 @@ void sdpa_ring(
         lightweight_mask_enabled,
         chunked_enabled,
         chunked_q_local_padded_Nt,
-        chunked_chunk_size_t>(
+        chunked_chunk_size_t,
+        false,  // use_windowed_narrowing (not used)
+        0,      // cb_windowed_k_range (not used)
+        padded_q_slots_enabled>(
         0,  // Skt (not used)
         qk_in0_block_w,
         qk_subblock_w,
@@ -2508,5 +2604,6 @@ void sdpa_ring(
         skip_first_half_q,
         use_zigzag_balancing,
         is_last_ring_iter,
-        chunked);
+        chunked,
+        padded_q_slots);
 }

@@ -306,11 +306,26 @@ def test_multimodal_demo_text(
             next_token_tensor = next_tokens.reshape(max_batch_size, 1)
             if device_sampling_params is not None:
                 tok, _ = generator.decode_forward(
-                    next_token_tensor, position_id, enable_trace=enable_trace, sampling_params=device_sampling_params
+                    next_token_tensor,
+                    position_id,
+                    enable_trace=enable_trace,
+                    sampling_params=device_sampling_params,
+                    reload_inputs=gen_idx == 0 or not enable_trace,
+                    reload_page_table=False,
+                    reload_sampling_params=True,
+                    reset_sampling_state=gen_idx == 0,
                 )
                 next_tokens = tok.long().reshape(-1)[:max_batch_size]
             else:
-                logits, _ = generator.decode_forward(next_token_tensor, position_id, enable_trace=enable_trace)
+                logits, _ = generator.decode_forward(
+                    next_token_tensor,
+                    position_id,
+                    enable_trace=enable_trace,
+                    reload_inputs=True,
+                    reload_page_table=False,
+                    reload_sampling_params=False,
+                    reset_sampling_state=False,
+                )
                 next_tokens, _ = sampler(logits)
             tokens[torch.arange(max_batch_size), position_id + 1] = next_tokens
             if tokenizer.eos_token_id is not None and any(t == tokenizer.eos_token_id for t in next_tokens):

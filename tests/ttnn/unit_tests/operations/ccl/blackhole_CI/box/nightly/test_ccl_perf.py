@@ -5,11 +5,11 @@
 import pytest
 import ttnn
 from loguru import logger
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.perf.device_perf_utils import run_device_perf_detailed
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from tt_py_test_utils_common.perf.device_perf_utils import run_device_perf_detailed
 
 THRESHOLD = 0.4
-from models.common.utility_functions import skip_for_n_dev, skip_for_wormhole_b0, skip_for_n_or_less_dev
+from tt_py_test_utils_common.utility_functions import skip_for_n_dev, skip_for_wormhole_b0, skip_for_n_or_less_dev
 
 
 @skip_for_wormhole_b0()

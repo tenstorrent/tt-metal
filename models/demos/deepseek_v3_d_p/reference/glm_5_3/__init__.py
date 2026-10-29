@@ -2,11 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.3 CPU reference helpers.
-
-Only the multi-token-prediction reference lives here; the decoder layer, DSA MLA and MoE are reused
-from ``reference.glm_5_1``.
-"""
+"""GLM-5.3 CPU reference helpers."""
 
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.mtp import (
     fused_mtp_reference,

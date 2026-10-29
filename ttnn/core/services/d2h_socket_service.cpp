@@ -5,6 +5,8 @@
 #include "ttnn/services/d2h_socket_service.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <optional>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -34,9 +36,10 @@
 
 #include "socket_service_common.hpp"
 #include "tensor/tensor_ops.hpp"
-#include "tt_metal/distributed/d2h_stream_service_descriptor.hpp"
-#include "tt_metal/distributed/hd_socket_descriptor.hpp"
-#include "tt_metal/distributed/shm_resource_tracker.hpp"
+#include <tt-metalium/experimental/sockets/d2h_stream_service_descriptor.hpp>
+#include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+#include <internal/mesh_device.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
 
@@ -74,6 +77,13 @@ constexpr uint32_t kD2HNocBurstBytes = 16u * 1024;
 constexpr uint32_t kD2HTargetReadBursts = 8;  // default socket-page target ~= 8 bursts (128 KB)
 constexpr uint32_t kD2HSlotCap = 64;          // upper bound on data-CB slots
 constexpr uint32_t kD2HMinDataSlots = 2;      // double-buffering floor (reader/writer overlap)
+constexpr uint32_t kMetadataRingMinSlots = 4;
+constexpr uint32_t kTeardownBarrierMs = 5000;
+// Service-core control words, one per L1-aligned slot so kernels can read them over the NoC: [0] terminate,
+// [1] abandon data the host never read.
+constexpr uint32_t kTerminationWords = 2;
+// Metadata ring header, same spacing: [0] records sent (writer kernel), [1] records claimed (ack op).
+constexpr uint32_t kRingHeaderWords = 2;
 
 // The data CB (program allocator, bottom-up) and the service-core scratch
 // (ServiceCoreManager, top-down) share the unreserved L1 with no cross-allocator
@@ -151,6 +161,9 @@ struct D2HMetadataArgs {
     bool enabled = false;
     uint32_t metadata_size_bytes = 0;
     uint32_t metadata_l1_addr = 0;
+    uint32_t ring_slots = 1;
+    uint32_t slot_stride = 0;
+    uint32_t data_offset = 0;
 };
 
 // The writer half owns the D2H socket and runs on RISCV_1's default NOC.
@@ -212,8 +225,11 @@ uint64_t service_core_cb_l1_budget(uint64_t free_l1_bytes) {
 //   [1]  num_socket_pages
 //   [2]  data_cbuf_index
 //   [3]  metadata_enabled                (uint32 0/1)
-//   [4]  metadata_l1_addr
+//   [4]  metadata_l1_addr                (region base: header word, then the record ring)
 //   [5]  metadata_size_bytes             (uint32, actual meaningful bytes; 0 if disabled)
+//   [6]  metadata_ring_slots
+//   [7]  metadata_slot_stride            (bytes per ring slot)
+//   [8]  metadata_data_offset            (bytes from the region base to slot 0)
 // Writer RT-arg layout:
 //   [0]  socket_config_addr
 //   [1]  termination_semaphore_addr
@@ -283,6 +299,9 @@ Program build_persistent_d2h_program(
         static_cast<uint32_t>(metadata.enabled ? 1u : 0u),
         metadata.metadata_l1_addr,
         metadata.metadata_size_bytes,
+        metadata.ring_slots,
+        metadata.slot_stride,
+        metadata.data_offset,
     };
 
     auto writer_kernel = CreateKernel(
@@ -379,9 +398,9 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         }
     }
 
-    auto& svc = tt::tt_metal::internal::service_core_manager();
+    auto& svc = tt::tt_metal::internal::service_core_manager(*mesh_device_);
     for (const auto& coord : coords) {
-        auto* d = mesh_device_->get_device(coord);
+        auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
         auto claimable = svc.get_claimable_cores(d);
         TT_FATAL(!claimable.empty(), "D2HStreamService: no claimable service core on device at coord {}", coord);
         const CoreCoord chosen = claimable.front();
@@ -405,7 +424,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
     // Derive the chunk plan BEFORE constructing sockets, so socket_page_size is known in time
     // to set on the sockets. L1 layout is uniform across coords, so a representative service
     // core suffices.
-    auto* rep_device = mesh_device_->get_device(coords.front());
+    auto* rep_device = tt::tt_metal::internal::get_device(*mesh_device_, coords.front());
     const uint64_t service_core_free_l1 = svc.bytes_available(rep_device, service_cores_.at(coords.front()));
     const uint64_t usable_cb_l1 = service_core_cb_l1_budget(service_core_free_l1);
 
@@ -473,16 +492,18 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
     }
 
     std::vector<uint32_t> zero_word{0};
+    const uint32_t termination_bytes = kTerminationWords * hal::get_l1_alignment();
+    std::vector<uint32_t> zero_termination(termination_bytes / sizeof(uint32_t), 0);
     for (const auto& coord : coords) {
-        auto* d = mesh_device_->get_device(coord);
+        auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
         const CoreCoord chosen = service_cores_.at(coord);
-        const DeviceAddr sem_addr = svc.allocate_l1(d, chosen, sizeof(uint32_t));
+        const DeviceAddr sem_addr = svc.allocate_l1(d, chosen, termination_bytes);
         termination_addrs_.emplace(coord, sem_addr);
-        tt::tt_metal::detail::WriteToDeviceL1(d, chosen, static_cast<uint32_t>(sem_addr), zero_word);
+        tt::tt_metal::detail::WriteToDeviceL1(d, chosen, static_cast<uint32_t>(sem_addr), zero_termination);
     }
 
     for (const auto& coord : coords) {
-        auto* d = mesh_device_->get_device(coord);
+        auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
         const CoreCoord chosen = service_cores_.at(coord);
         const DeviceAddr addr = svc.allocate_l1(d, chosen, sizeof(uint32_t));
         write_ack_addrs_.emplace(coord, addr);
@@ -523,14 +544,32 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
 
     if (cfg_.metadata_size_bytes > 0) {
         const uint32_t l1_align = hal::get_l1_alignment();
-        const DeviceAddr aligned_metadata_size =
-            tt::align(static_cast<DeviceAddr>(cfg_.metadata_size_bytes), static_cast<DeviceAddr>(l1_align));
+        metadata_slot_stride_ = static_cast<uint32_t>(
+            tt::align(static_cast<DeviceAddr>(cfg_.metadata_size_bytes), static_cast<DeviceAddr>(l1_align)));
+        if (cfg_.metadata_ring) {
+            // The data CB is sized from service-core L1 before the ring is placed; only the metadata-only CB is
+            // small enough to leave the ring room.
+            TT_FATAL(
+                !tensor_enabled(),
+                "D2HStreamService: metadata_ring requires a metadata-only service (global_spec=None)");
+            // Sized so the ack op waits only once the socket FIFO and the ring are both full. A power of two, so
+            // slot k % slots stays consistent when the 32-bit record counters wrap.
+            const uint32_t fifo_pages = std::max<uint32_t>(1u, cfg_.fifo_size_bytes / socket_page_size_);
+            metadata_ring_slots_ = std::bit_ceil(std::max<uint32_t>(kMetadataRingMinSlots, fifo_pages + slot_count_));
+            metadata_data_offset_ = kRingHeaderWords * l1_align;
+        } else {
+            metadata_ring_slots_ = 1;
+            metadata_data_offset_ = 0;
+        }
+        const DeviceAddr region_bytes =
+            static_cast<DeviceAddr>(metadata_data_offset_) +
+            static_cast<DeviceAddr>(metadata_ring_slots_) * static_cast<DeviceAddr>(metadata_slot_stride_);
         for (const auto& coord : coords) {
-            auto* d = mesh_device_->get_device(coord);
+            auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
             const CoreCoord chosen = service_cores_.at(coord);
-            const DeviceAddr addr = svc.allocate_l1(d, chosen, aligned_metadata_size);
+            const DeviceAddr addr = svc.allocate_l1(d, chosen, region_bytes);
             metadata_input_addrs_.emplace(coord, addr);
-            std::vector<uint8_t> zero_meta(aligned_metadata_size, 0);
+            std::vector<uint8_t> zero_meta(region_bytes, 0);
             tt::tt_metal::detail::WriteToDeviceL1(d, chosen, static_cast<uint32_t>(addr), zero_meta, CoreType::WORKER);
         }
         metadata_scratch_.assign(socket_page_size_, std::byte{0});
@@ -552,7 +591,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         worker_sync.num_workers = num_workers_;
         if (cfg_.worker_cores.has_value()) {
             const auto& worker_range = cfg_.worker_cores.value();
-            auto* d = mesh_device_->get_device(core.device_coord);
+            auto* d = tt::tt_metal::internal::get_device(*mesh_device_, core.device_coord);
             const auto start_phys = d->worker_core_from_logical_core(worker_range.start_coord);
             const auto end_phys = d->worker_core_from_logical_core(worker_range.end_coord);
             worker_sync.enabled = true;
@@ -566,6 +605,9 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
             metadata.enabled = true;
             metadata.metadata_size_bytes = cfg_.metadata_size_bytes;
             metadata.metadata_l1_addr = static_cast<uint32_t>(metadata_input_addrs_.at(core.device_coord));
+            metadata.ring_slots = metadata_ring_slots_;
+            metadata.slot_stride = metadata_slot_stride_;
+            metadata.data_offset = metadata_data_offset_;
         }
 
         auto program = build_persistent_d2h_program(
@@ -634,28 +676,32 @@ D2HStreamService::~D2HStreamService() {
         }
 
         if (device_live) {
-            barrier();
+            // Unread data must not hang teardown, and the kernels must stop before anything below is freed.
+            try {
+                barrier(kTeardownBarrierMs);
+            } catch (const std::exception& e) {
+                log_warning(tt::LogOp, "D2HStreamService: abandoning data the host never read: {}", e.what());
+                signal_abandon();
+            }
             signal_termination();
             distributed::Finish(mesh_device_->mesh_command_queue());
         }
 
-        auto& svc = tt::tt_metal::internal::service_core_manager();
         if (device_live) {
+            auto& svc = tt::tt_metal::internal::service_core_manager(*mesh_device_);
             for (const auto& [coord, core] : service_cores_) {
-                auto* d = mesh_device_->get_device(coord);
+                auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
                 svc.wait_done(d, core);
             }
-        }
 
-        if (device_live) {
             for (const auto& [coord, addr] : termination_addrs_) {
-                auto* d = mesh_device_->get_device(coord);
+                auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
                 svc.deallocate_l1(d, service_cores_.at(coord), addr);
             }
             termination_addrs_.clear();
 
             for (const auto& [coord, addr] : write_ack_addrs_) {
-                auto* d = mesh_device_->get_device(coord);
+                auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
                 svc.deallocate_l1(d, service_cores_.at(coord), addr);
             }
             write_ack_addrs_.clear();
@@ -664,7 +710,7 @@ D2HStreamService::~D2HStreamService() {
             metadata_worker_l1_addr_ = 0;
 
             for (const auto& [coord, addr] : metadata_input_addrs_) {
-                auto* d = mesh_device_->get_device(coord);
+                auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
                 svc.deallocate_l1(d, service_cores_.at(coord), addr);
             }
             metadata_input_addrs_.clear();
@@ -672,7 +718,7 @@ D2HStreamService::~D2HStreamService() {
             sockets_.clear();
 
             for (const auto& [coord, core] : service_cores_) {
-                auto* d = mesh_device_->get_device(coord);
+                auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
                 svc.release(d, {core});
             }
 
@@ -866,7 +912,7 @@ void D2HStreamService::notify_backing_ready() {
         "Config::worker_cores is set");
     TT_FATAL(mesh_device_ != nullptr, "D2HStreamService::notify_backing_ready: mesh device unavailable");
     for (const auto& [coord, addr] : write_ack_addrs_) {
-        auto* d = mesh_device_->get_device(coord);
+        auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
         const CoreCoord chosen = service_cores_.at(coord);
         std::vector<uint32_t> cur(1);
         tt::tt_metal::detail::ReadFromDeviceL1(d, chosen, static_cast<uint32_t>(addr), sizeof(uint32_t), cur);
@@ -875,22 +921,34 @@ void D2HStreamService::notify_backing_ready() {
     }
 }
 
-void D2HStreamService::barrier() {
+void D2HStreamService::barrier() { barrier(std::nullopt); }
+
+void D2HStreamService::barrier(std::optional<uint32_t> timeout_ms) {
     for (auto& s : sockets_) {
-        s->barrier();
+        s->barrier(timeout_ms);
     }
 }
 
-void D2HStreamService::signal_termination() {
+void D2HStreamService::signal_termination() { write_termination_word(0); }
+
+void D2HStreamService::signal_abandon() { write_termination_word(1); }
+
+void D2HStreamService::write_termination_word(uint32_t word) {
     if (mesh_device_ == nullptr) {
         return;
     }
     std::vector<uint32_t> one_word{1};
     for (const auto& [coord, addr] : termination_addrs_) {
-        auto* d = mesh_device_->get_device(coord);
+        auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
         const CoreCoord chosen = service_cores_.at(coord);
-        tt::tt_metal::detail::WriteToDeviceL1(d, chosen, static_cast<uint32_t>(addr), one_word);
+        tt::tt_metal::detail::WriteToDeviceL1(
+            d, chosen, static_cast<uint32_t>(addr + word * hal::get_l1_alignment()), one_word);
     }
+}
+
+DeviceAddr D2HStreamService::get_termination_addr(const distributed::MeshCoordinate& coord) const {
+    require_d2h_owner(is_owner_, "D2HStreamService::get_termination_addr");
+    return termination_addrs_.at(coord);
 }
 
 std::vector<distributed::D2HSocket*> D2HStreamService::get_sockets() const {
@@ -983,6 +1041,24 @@ std::size_t D2HStreamService::payload_size_bytes() const {
 std::size_t D2HStreamService::metadata_size_bytes() const { return cfg_.metadata_size_bytes; }
 
 uint32_t D2HStreamService::get_slot_count() const { return slot_count_; }
+
+uint32_t D2HStreamService::get_metadata_ring_slots() const {
+    require_d2h_owner(is_owner_, "D2HStreamService::get_metadata_ring_slots");
+    TT_FATAL(metadata_ring_slots_ > 0, "D2HStreamService::get_metadata_ring_slots: metadata was not configured.");
+    return metadata_ring_slots_;
+}
+
+uint32_t D2HStreamService::get_metadata_slot_stride() const {
+    require_d2h_owner(is_owner_, "D2HStreamService::get_metadata_slot_stride");
+    TT_FATAL(metadata_ring_slots_ > 0, "D2HStreamService::get_metadata_slot_stride: metadata was not configured.");
+    return metadata_slot_stride_;
+}
+
+uint32_t D2HStreamService::get_metadata_data_offset() const {
+    require_d2h_owner(is_owner_, "D2HStreamService::get_metadata_data_offset");
+    TT_FATAL(metadata_ring_slots_ > 0, "D2HStreamService::get_metadata_data_offset: metadata was not configured.");
+    return metadata_data_offset_;
+}
 
 std::string D2HStreamService::export_descriptor(const std::string& service_id) {
     TT_FATAL(is_owner_, "D2HStreamService::export_descriptor: only owner-side services can be exported");
@@ -1204,8 +1280,7 @@ void D2HStreamService::read_metadata(ttsl::Span<std::byte> metadata) {
 
 void D2HStreamService::read_metadata_from_sockets(ttsl::Span<std::byte> metadata) {
     TT_FATAL(
-        !sockets_.empty(),
-        "D2HStreamService::read_metadata_from_sockets: expected at least one socket for metadata");
+        !sockets_.empty(), "D2HStreamService::read_metadata_from_sockets: expected at least one socket for metadata");
     sockets_.front()->read(metadata_scratch_.data(), /*num_pages=*/1);
     std::memcpy(metadata.data(), metadata_scratch_.data(), metadata.size());
     for (size_t s = 1; s < sockets_.size(); ++s) {

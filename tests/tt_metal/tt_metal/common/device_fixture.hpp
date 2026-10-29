@@ -219,6 +219,7 @@ protected:
         if (this->arch_ != tt::ARCH::QUASAR) {
             GTEST_SKIP() << "Not a Quasar device";
         }
+        this->DetectDispatchMode();
         this->create_devices();
         init_max_dfbs();
     }

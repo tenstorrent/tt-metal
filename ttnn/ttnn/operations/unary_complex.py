@@ -75,7 +75,8 @@ ttnn.attach_golden_function(ttnn.conj, golden_function=_golden_function)
 def _golden_function(input_tensor_a, *args, **kwargs):
     import torch
 
-    return torch.polar(input_tensor_a)
+    # The ComplexTensor stores radius in its real component and angle in its imaginary component.
+    return torch.polar(input_tensor_a.real, input_tensor_a.imag)
 
 
 ttnn.attach_golden_function(ttnn.polar, golden_function=_golden_function)

@@ -24,7 +24,7 @@ from typing import Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext
-from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
+from models.demos.deepseek_v3_d_p.tt.kv_ack import send_layer_ack, zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
@@ -192,6 +192,7 @@ class TtKimiK3Block(LightweightModule):
         actual_end: Optional[int] = None,
         actual_isl: Optional[int] = None,
         padding_side: str = "right",
+        attn_input_tap=None,
     ) -> None:
         """One layer, folded into `residual`. Returns nothing — the stream holds the state.
 
@@ -200,6 +201,8 @@ class TtKimiK3Block(LightweightModule):
         is done as early as it was before.
         """
         hidden = residual.open(self.local_idx)
+        if attn_input_tap is not None:
+            attn_input_tap(self.local_idx, hidden)
         normed = self.attn_norm(hidden)
         seq_len_local = normed.shape[2]
 
@@ -219,6 +222,17 @@ class TtKimiK3Block(LightweightModule):
                 seq_len_local=seq_len_local,
                 actual_end=actual_end,
                 metadata=ctx.metadata,
+                d2h_service=d2h_service,
+                metadata_msg=metadata_msg,
+                on_layer_complete=on_layer_complete,
+                trace_controller=getattr(self, "_trace_controller", None),
+                tp_axis=self.attention.mla.tp_shard_kv_axis,
+            )
+        elif d2h_service is not None or on_layer_complete is not None:
+            assert d2h_service is None or metadata_msg is not None, "metadata_msg required when d2h_service is set"
+            send_layer_ack(
+                mesh_device=self.mesh_device,
+                global_layer_idx=self.layer_idx,
                 d2h_service=d2h_service,
                 metadata_msg=metadata_msg,
                 on_layer_complete=on_layer_complete,

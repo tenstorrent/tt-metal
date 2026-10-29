@@ -89,7 +89,7 @@ def test_attention_unmasked(device, config, reference, tt_attention, batch, seql
 
 
 @pytest.mark.parametrize("batch, seqlen", DENSE_SHAPES)
-def test_attention_with_ragged_padding(device, config, reference, tt_attention, batch, seqlen):
+def test_attention_with_ragged_padding(device, config, tt_config, reference, tt_attention, batch, seqlen):
     """The same module with 25% of each row padded, compared on the kept positions.
 
     Finiteness is asserted too: the mask carries dtype-min, and saturation is how that would
@@ -102,7 +102,7 @@ def test_attention_with_ragged_padding(device, config, reference, tt_attention, 
     out = tt_attention(
         to_device(to_block_layout(x), device),
         rotary_tables(device, config, seqlen),
-        additive_attention_mask(mask, device),
+        additive_attention_mask(mask, device, mask_dtype=tt_config.attention_mask_dtype),
     )
 
     with torch.no_grad():
@@ -113,13 +113,15 @@ def test_attention_with_ragged_padding(device, config, reference, tt_attention, 
 
 
 @pytest.mark.parametrize("seqlen", [37, 128])
-def test_an_all_ones_mask_is_a_no_op(device, config, tt_attention, seqlen):
+def test_an_all_ones_mask_is_a_no_op(device, config, tt_config, tt_attention, seqlen):
     """Masking nothing must change nothing, which is what pins the mask's tile padding.
 
     The mask is (B, 1, S, S) in TILE layout, so S rounds up to a multiple of 32 and the pad
     columns take whatever the conversion fills them with. 0 is additively neutral, meaning
     "attend here", so SDPA would count them in the softmax denominator: at S=37 that took the
-    output norm to 0.69x. Gated on equality rather than PCC, which barely moves.
+    output norm to 0.69x. Gated on equality rather than PCC, which barely moves. The model skips
+    an all-ones mask, but a padded batch's mask has the same padding, so this runs the model's
+    mask dtype.
     """
     batch = 2
     x = to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device)
@@ -127,7 +129,13 @@ def test_an_all_ones_mask_is_a_no_op(device, config, tt_attention, seqlen):
 
     unmasked = from_block_layout(tt_attention(x, rot_mats))
     masked = from_block_layout(
-        tt_attention(x, rot_mats, additive_attention_mask(keep_mask(batch, seqlen, seqlen), device))
+        tt_attention(
+            x,
+            rot_mats,
+            additive_attention_mask(
+                keep_mask(batch, seqlen, seqlen), device, mask_dtype=tt_config.attention_mask_dtype
+            ),
+        )
     )
 
     assert torch.equal(masked, unmasked), (
@@ -147,7 +155,7 @@ def test_rotary_at_position_zero_is_the_identity(device, config, state_dict, tt_
     x = torch.randn(1, heads, ttnn.TILE_SIZE, head_dim)
     cos, sin = rotary_tables(device, config, ttnn.TILE_SIZE)
 
-    rotated = ttnn.to_torch(attention._rotate(to_device(x, device), cos, sin)).float()
+    rotated = ttnn.to_torch(attention._rotate(to_device(x, device), cos, sin, ttnn.DRAM_MEMORY_CONFIG)).float()
 
     assert_with_pcc(x[:, :, 0], rotated[:, :, 0], 0.9999)
 

@@ -6,6 +6,7 @@
 import pytest
 import torch
 import torch.nn.functional as F
+from loguru import logger
 from ttnn.device import is_blackhole as ttnn_is_blackhole
 
 import ttnn
@@ -19,7 +20,13 @@ from models.demos.wormhole.bge_m3.demo.m3_scores import (
 MODEL_NAME = "BAAI/bge-m3"
 MAX_MODEL_LEN = 512
 
-# Example queries/documents and fixed tensors for score checks (Wormhole-tuned reference values).
+# Example queries/documents and fixed reference values for the score checks.
+# lexical_score_reference and colbert_score_reference are the upstream FlagEmbedding BGE-M3
+# README values (fp16 GPU run, verbatim). similarity_reference and corner_case_token_weight come
+# from the float32 torch reference (tests/pcc/test_reference_vllm.py at the time); sentences_2[1]
+# reads "Definition" where the README has "Defination", so row 1 of the similarity matrix differs
+# from the README. None of these is a device capture. Do not fix a failure below by editing them:
+# they are ground truth, not a record of past TT output. The tolerances are the lever.
 sentences_1 = ["What is BGE M3?", "Definition of BM25"]
 sentences_2 = [
     "BGE M3 is an embedding model supporting dense retrieval, " "lexical matching and multi-vector interaction.",
@@ -44,13 +51,39 @@ def _vllm_dense_similarity_allclose_kwargs(device) -> dict[str, float]:
 
 
 def _vllm_score_rel_tolerance(device) -> float:
-    """Sparse / ColBERT scalar scores vs fixed reference: pytest.approx(..., rel=...)."""
-    return 0.025 if ttnn_is_blackhole(device) else 0.01
+    """Sparse / ColBERT scalar scores vs fixed reference: pytest.approx(..., rel=...).
+
+    Wormhole: 0.02. The heads run at bfloat8_b against fp16 references. Measured deviations
+    were 1.006 %-1.588 % on 2026-08-18 (#53042, run 31794258337) and 1.31 %-1.36 % since the
+    accurate SDPA exponential (#57180) and the exact SDPA reciprocal (#56292) landed: lexical
+    0.1928863525390625 vs 0.19554901123046875, ColBERT 0.4559256434440613 vs 0.462, identical
+    on three nightly runs. The previous 0.01 was tuned to the legacy kernels' one-sided bias
+    and left no margin. These tests pad the prompts to 32 tokens at batch 2, so on Wormhole
+    they take the accurate-exponential SDPA branch with fp32 dest; a change to that padding or
+    to _sdpa_exp_approx moves these scalars again.
+    """
+    return 0.025 if ttnn_is_blackhole(device) else 0.02
 
 
 def _vllm_corner_sparse_weight_rel(device) -> float:
-    """Single-token sparse weight under BF8; noisier than batched paths."""
-    return 0.04 if ttnn_is_blackhole(device) else 0.03
+    """Single-token sparse weight under BF8; noisier than batched paths.
+
+    The device emits this scalar with bf16 precision: one ulp at 0.26 is 2^-9 = 0.00195,
+    0.73 % of the reference. On Wormhole the "Hi" weight measured 0.2578125 (-3.48 %) with the
+    exact SDPA reciprocal from #56292 and 0.27734375 (+3.83 %) with the approximate
+    exponential, so a 4 % band would sit within one ulp of both edges. 0.06 leaves at least
+    two ulps on either side. Blackhole keeps 0.04.
+    """
+    return 0.04 if ttnn_is_blackhole(device) else 0.06
+
+
+def _log_score(label: str, measured: float, reference: float) -> None:
+    """Log the measured value against its reference so passing runs leave a margin trail in CI."""
+    if reference == 0.0:
+        margin = f"abs diff {abs(measured - reference):.3e}"
+    else:
+        margin = f"{(measured - reference) / reference * 100:+.3f} % vs reference"
+    logger.info(f"{label}: measured {measured!r} vs reference {reference!r} -> {margin}")
 
 
 def _require_single_device(device) -> None:
@@ -146,6 +179,9 @@ def test_bge_m3_vllm_dense_embedding(device, model_name, sequence_length, model_
         outputs["sentences_1"]["dense_vecs_norm"],
         outputs["sentences_2"]["dense_vecs_norm"],
     )
+    for i in range(similarity.shape[0]):
+        for k in range(similarity.shape[1]):
+            _log_score(f"dense similarity[{i}][{k}]", float(similarity[i, k]), float(similarity_reference[i, k]))
     assert torch.allclose(similarity, similarity_reference, **_vllm_dense_similarity_allclose_kwargs(device))
 
 
@@ -163,9 +199,11 @@ def test_bge_m3_vllm_sparse_embedding(device, model_name, sequence_length, model
 
     rel = _vllm_score_rel_tolerance(device)
     lexical_score_1_0_x_2_0 = float(sparse_cross_scores[0, 0])
+    _log_score("lexical cross score", lexical_score_1_0_x_2_0, lexical_score_reference[0])
     assert lexical_score_1_0_x_2_0 == pytest.approx(lexical_score_reference[0], rel=rel)
 
     lexical_score_1_0_x_1_1 = float(sparse_self_scores[0, 0])
+    _log_score("lexical self score", lexical_score_1_0_x_1_1, lexical_score_reference[1])
     # The reference is exactly 0, so a relative bound gives no tolerance.
     assert lexical_score_1_0_x_1_1 == pytest.approx(lexical_score_reference[1], rel=rel, abs=1e-3)
 
@@ -174,6 +212,7 @@ def test_bge_m3_vllm_sparse_embedding(device, model_name, sequence_length, model
 def test_bge_m3_vllm_sparse_embedding_corner_case(device, model_name, sequence_length, model_location_generator):
     outputs = _load_reference_outputs(device, model_name, sequence_length, model_location_generator)
     corner_sparse_weight = float(outputs["corner_case"]["sparse_vecs"][0, corner_case_token_id])
+    _log_score("corner-case sparse weight", corner_sparse_weight, corner_case_token_weight)
     assert corner_sparse_weight == pytest.approx(
         corner_case_token_weight,
         rel=_vllm_corner_sparse_weight_rel(device),
@@ -191,9 +230,11 @@ def test_bge_m3_vllm_multi_vector(device, model_name, sequence_length, model_loc
 
     rel = _vllm_score_rel_tolerance(device)
     colbert_score_1_0_x_2_0 = float(colbert_scores[0, 0])
+    _log_score("colbert score [0][0]", colbert_score_1_0_x_2_0, colbert_score_reference[0])
     assert colbert_score_1_0_x_2_0 == pytest.approx(colbert_score_reference[0], rel=rel)
 
     colbert_score_1_0_x_2_1 = float(colbert_scores[0, 1])
+    _log_score("colbert score [0][1]", colbert_score_1_0_x_2_1, colbert_score_reference[1])
     assert colbert_score_1_0_x_2_1 == pytest.approx(colbert_score_reference[1], rel=rel)
 
 

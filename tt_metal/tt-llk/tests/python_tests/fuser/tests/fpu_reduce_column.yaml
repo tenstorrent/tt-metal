@@ -24,7 +24,7 @@ operations:
         reduce_dim: "REDUCE_COL"
         reduce_pool: "SUM"
         unpacker: "ReduceUnpacker"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
         enforce_fp32_accumulation: true
     pack:
       - output: "reduce_col_out"

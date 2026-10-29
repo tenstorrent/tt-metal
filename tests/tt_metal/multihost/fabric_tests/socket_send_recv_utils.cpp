@@ -17,6 +17,7 @@
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 

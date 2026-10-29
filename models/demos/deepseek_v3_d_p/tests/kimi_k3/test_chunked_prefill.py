@@ -37,7 +37,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config, kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, TRACE_100K, resolve_checkpoint, resolve_trace
@@ -51,13 +51,14 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import load_attn_res_weights
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry, KdaStates, allocate_native_state
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
-from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
+from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_natural, unrotate_cache_layer
 
 CHUNK = 5120
 # 11 chunks is 56320 tokens — the "55k" leg, and past the 10-chunk mark the memory gate wants.
@@ -123,6 +124,7 @@ def _dram_bytes(mesh_device):
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
 def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layers):
+    tp_shard_kv = True
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_1M if num_layers >= DEEP_TRACE_FROM else TRACE_100K)
     if checkpoint is None or trace is None:
@@ -176,6 +178,7 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
         max_seq_len=TOTAL_LEN,
         is_chunked=True,
         weight_cache_path=cache,
+        tp_shard_kv=tp_shard_kv,
     )
 
     # One slot per MLA layer, spanning the whole sequence: chunk N+1's attention reads the KV that
@@ -190,7 +193,20 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             sp_axis=SP_AXIS,
             num_layers=model.schedule.num_mla_layers,
             num_users=1,
+            tp_axis=TP_AXIS if tp_shard_kv else None,
         )
+
+    # The migration copy of the carries: the runner binds the engine-owned slabs at compile(), and from
+    # then on every commit also lands there. Bound here the same way, so this test also proves that
+    # what a migration reader sees after every chunk is exactly the carry the next chunk continues from.
+    slabs = None
+    if model.kda_states is not None:
+        geometry = KdaContractGeometry.from_kda_config(
+            kimi_k3_kda_config(), mesh_shape=tuple(mesh_device.shape), sp_axis=SP_AXIS, tp_axis=TP_AXIS
+        )
+        slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=model.kda_states.layer_ids, num_slots=1)
+        model.kda_states.bind_slabs(slabs)
+        slab_scratch = allocate_native_state(mesh_device, geometry)
 
     # Only the 100k trace snapshots the carry; at depth 24 the oracle is the per-layer output and the
     # cumulative KV instead, and the carry is covered by the depth-5 case.
@@ -284,6 +300,22 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
             got_carry = _compose_carry(mesh_device, model.kda_states.read(0, 0).recurrent)
             carry_pcc = float(str(comp_pcc(want_carry, got_carry, CARRY_PCC)[1]).split()[-1])
 
+        # The slab copy of every KDA layer must be the carry, bit for bit, on every chip.
+        if slabs is not None:
+            for layer_idx in slabs.layer_ids:
+                slabs.import_layer(slab_scratch, 0, layer_idx)
+                carry = model.kda_states.read(layer_idx, 0)
+                for name in ("recurrent", "convolution"):
+                    want = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(getattr(carry, name))]
+                    got = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(getattr(slab_scratch, name))]
+                    for dev, (w, g) in enumerate(zip(want, got)):
+                        if not torch.equal(
+                            w.view(torch.int32 if w.dtype == torch.float32 else torch.int16),
+                            g.view(torch.int32 if g.dtype == torch.float32 else torch.int16),
+                        ):
+                            failures.append(f"chunk {chunk} layer {layer_idx} {name} slab != carry on device {dev}")
+                            break
+
         footprints.append(_dram_bytes(mesh_device))
         logger.info(
             f"  chunk {chunk:2d} [{start:6d}:{start + CHUNK:6d}]  worst-layer {output_pcc:.6f} "
@@ -316,8 +348,8 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
     # attention depends on all of it. The device cache is indexed by rank-local MLA slot and the
     # golden by model layer — the schedule owns that mapping.
     if kvpe is not None:
-        cache = gather_cache_tp0(kvpe.storage, mesh_device)
-        positions = blockcyclic_positions(tuple(mesh_device.shape)[SP_AXIS], CHUNK, TOTAL_LEN)
+        cache, stripes = gather_cache_natural(kvpe.storage, mesh_device, tp_shard_kv)
+        positions = blockcyclic_positions(stripes, CHUNK, TOTAL_LEN)
         for slot, model_layer in enumerate(model.schedule.mla_layer_ids[: model.schedule.num_mla_layers]):
             if not trace.has_kv_cache(model_layer):
                 continue
@@ -340,5 +372,9 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
         f"  DRAM after chunk 1: {min(steady) / 2**20:.1f} MiB, "
         f"drift over {NUM_CHUNKS - 1} chunks: {growth / 2**20:.1f} MiB"
     )
+    if slabs is not None:
+        ttnn.deallocate(slab_scratch.recurrent)
+        ttnn.deallocate(slab_scratch.convolution)
+        slabs.deallocate()
     assert growth == 0, f"device DRAM grew {growth} bytes across chunks 1..{NUM_CHUNKS - 1}: {footprints}"
     assert not failures, "chunked prefill diverged from the model: " + "; ".join(failures)

@@ -97,7 +97,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     TensorMemoryLayout output_memory_layout = operation_attributes.output_mem_config.memory_layout();
 
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to untilize need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands to untilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
     // Input must be in valid tile layout
@@ -391,9 +391,7 @@ UntilizeDeviceOperation::create_op_performance_model(
     const auto& output_tensor = output;
     uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
-    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
-    uint32_t num_tiles =
-        std::ceil(static_cast<float>(input_tensor.physical_volume()) / static_cast<float>(single_tile_size));
+    const uint32_t num_tiles = input_tensor.physical_volume() / (tile_width * tile_height);
     int compute_cycles = 0;
     const int max_tiles_per_row = 8;
     const int latency_untilize = 390;      // measured latency for untilize_block

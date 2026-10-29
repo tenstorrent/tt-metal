@@ -20,7 +20,7 @@ from ttml.datasets.hf_dataloader import InMemoryDataloader, sft_collate_fn
 
 
 class _FakeTensor:
-    """Minimal stand-in for ttml.autograd.Tensor used in dataloader tests."""
+    """Minimal stand-in for ttml.autograd.Tensor used in dataloader and trainer tests."""
 
     def __init__(self, arr):
         self._arr = np.asarray(arr, dtype=np.float32)
@@ -37,6 +37,9 @@ class _FakeTensor:
         return _FakeTensor(self._arr * v)
 
     __rmul__ = __mul__
+
+    def backward(self, retain_graph):
+        pass
 
 
 @pytest.fixture(autouse=True)
@@ -269,3 +272,73 @@ def test_sft_config_custom_values():
     cfg = SFTConfig(max_grad_norm=1.0, log_interval=10)
     assert cfg.max_grad_norm == 1.0
     assert cfg.log_interval == 10
+
+
+# ---------------------------------------------------------------------------
+# SFTTrainer LR schedule
+# ---------------------------------------------------------------------------
+
+
+def _stepped_lrs(monkeypatch, start_step=0, lr=1.0, **lr_kwargs):
+    """LRs a 4-step SFTTrainer run steps its optimizer with, from start_step on (as after load_checkpoint)."""
+    from ttml.modules import AbstractModuleBase
+    from ttml.trainers import SFTConfig, SFTTrainer
+
+    class NoParamsModel(AbstractModuleBase):
+        def forward(self, input_ids, attention_mask):
+            return None
+
+    class MockOptimizer(ttml.optimizers.OptimizerBase):
+        """One param group; records the LR of every step()."""
+
+        def __init__(self):
+            super().__init__(ttml.NamedParameters())
+            self.lr, self.stepped_lrs = lr, []
+
+        def zero_grad(self):
+            pass
+
+        def step(self):
+            self.stepped_lrs.append(self.lr)
+
+        def get_group_lrs(self):
+            return [self.lr]
+
+        def set_group_lrs(self, lrs):
+            (self.lr,) = lrs
+
+    monkeypatch.setattr(SFTTrainer, "_build_loss_fn", lambda self: None)  # needs a device mesh; unused here
+    monkeypatch.setattr("ttml.trainers.sft_trainer.profiler_marker", lambda *args, **kwargs: None)
+    optimizer = MockOptimizer()
+    trainer = SFTTrainer(
+        NoParamsModel(),
+        [Batch(input_ids=None, labels=None, loss_mask=None)],
+        None,
+        SFTConfig(max_steps=4, eval_interval=0, save_interval=0, disable_progress_bar=True),
+        optimizer=optimizer,
+        compute_loss_func=lambda logits, batch: _FakeTensor(1.0),
+        loss_composer=object(),
+        **lr_kwargs,
+    )
+    trainer.step = start_step
+    trainer.train()
+    return optimizer.stepped_lrs
+
+
+def test_sft_trainer_lr_lambda_per_step_and_on_resume(monkeypatch):
+    """Each step trains with lr_lambda(step), also after a resume, and never calls it with max_steps."""
+    factors = [0.25, 0.5, 0.75, 1.0]  # defined on [0, max_steps) only
+    lr_lambda = lambda step: factors[step]
+    assert _stepped_lrs(monkeypatch, lr_lambda=lr_lambda) == factors
+    assert _stepped_lrs(monkeypatch, start_step=2, lr_lambda=lr_lambda) == factors[2:]
+    assert _stepped_lrs(monkeypatch, start_step=4, lr_lambda=lr_lambda) == []
+
+
+def test_sft_trainer_deprecated_lr_schedule(monkeypatch, expect_error):
+    """The deprecated lr_schedule gives the same LRs, warns, and can't be combined with lr_lambda."""
+    factors = [0.25, 0.5, 0.75, 1.0]
+    absolute_lrs = [0.5 * f for f in factors]
+    with pytest.warns(DeprecationWarning, match="lr_schedule"):
+        assert _stepped_lrs(monkeypatch, lr=0.5, lr_schedule=lambda step: absolute_lrs[step]) == absolute_lrs
+    with expect_error(ValueError, "not both"):
+        _stepped_lrs(monkeypatch, lr_lambda=lambda step: 1.0, lr_schedule=lambda step: 1.0)

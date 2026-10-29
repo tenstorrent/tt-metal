@@ -1,0 +1,1718 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+VibeVoice Language Model (Qwen2-1.5B backbone) — TTNN port.
+
+Implements a Qwen2-compatible Transformer (28 layers, hidden 1536, 12 heads, 2 KV heads)
+using ttnn ops directly. Designed for prefill (inputs_embeds path) and greedy decode.
+
+Host-side:
+  load_vibevoice_lm_weights() → load + remap weights
+  preprocess_lm_weights()     → convert to device tensors
+
+Device forward:
+  TTVibeVoiceLM.prefill()  → [B, S, vocab] logits  (or hidden states)
+  TTVibeVoiceLM.decode()   → [B, 1, vocab] logits
+"""
+
+import math
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import torch
+import ttnn
+
+from models.common.tensor_utils import get_rot_transformation_mat
+from models.experimental.vibevoice.common.weight_cache import WeightCache
+from models.experimental.vibevoice.tt.vibevoice_config import DecoderConfig
+
+_HIFI4 = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=False,
+)
+
+# Prefill (full 256-token chunk, M=256=8 tiles) 2D-mcast block-sharded matmul configs.  The prefill
+# path otherwise runs every LM matmul on auto, which picks in0_block_w=1 / out_subblock 1x1 for these
+# compute-bound M=256 shapes.  A block-sharded config with a proper K-stream + subblock is
+# BYTE-IDENTICAL — fp32_dest_acc keeps the full-K reduction in fp32, so the tiling change doesn't touch
+# the math.  Gated strictly on S==256 (per_core_M=1 needs exactly 8 M-tiles); the partial tail chunk
+# and single-shot S<256 fall back to auto.
+_PREFILL_S = 256
+
+
+def _mm2d_prefill(gx, gy, ibw, sw, pN):
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=ibw,
+        out_subblock_h=1,
+        out_subblock_w=sw,
+        per_core_M=1,
+        per_core_N=pN,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+
+
+_PREFILL_WQKV_PROGCFG = _mm2d_prefill(8, 8, 6, 2, 8)  # 256x1536x2048
+_PREFILL_WO_PROGCFG = _mm2d_prefill(6, 8, 6, 2, 8)  # 256x1536x1536
+_PREFILL_GATEUP_PROGCFG = _mm2d_prefill(10, 8, 12, 2, 28)  # 256x1536x8960
+_PREFILL_DOWN_PROGCFG = _mm2d_prefill(8, 8, 14, 2, 6)  # 256x8960x1536
+
+# Fused wq|wk|wv decode projection: ONE wqkv (1536x2048) matmul + nlp_create_qkv_heads(qkv) instead
+# of separate wq (1536x1536) + wkv (1536x512).  Byte-identical: the fused output [q|k|v] equals the
+# column concat of the separate matmuls (block matmul; fp32-dest reduction is blocking-invariant),
+# and nlp_create_qkv_heads splits it into the same q/k/v.  Saves one launch + one bias-add per layer
+# on the latency-bound qkv matmuls.  N=2048=64 tiles / 8x4=32 cores.
+_QKV_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+    in0_block_w=8,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=2,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+
+# bfloat8_b for the SwiGLU FFN weights (gate/up 1536x8960, down 8960x1536) — the large,
+# DRAM-bound decode matmuls, where bf8b halves the weight read. Attention (wqkv/wo) stays bf16
+# (small, latency-bound weights). Not bit-exact vs bf16.
+_FFN_WEIGHT_DTYPE = ttnn.bfloat8_b
+
+# Without program_config, SDPA decode uses the full device grid; on Blackhole that
+# can exceed the 64-core/head tree-reduction cap (MAX_TREE_REDUCTION_ROUNDS=6).
+_SDPA_DECODE_CFG = ttnn.SDPAProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+    q_chunk_size=0,
+    k_chunk_size=0,
+    exp_approx_mode=False,
+)
+
+# Decode-only program config for the wq/wo 1536x1536 projections (single-token step, Mt=1):
+# 1D mcast_in0 with a width-sharded L1 output.  per_core_M=1 makes it valid only for S==1 decode;
+# prefill (S>1, Mt>1) keeps the auto config.
+_QO_DECODE_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
+    in0_block_w=4,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=1,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+# Width-sharded L1 output; the shard spec is derived from the program config.  Downstream ops
+# that need interleaved input reshard automatically.
+_QO_DECODE_OUT_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+
+# B=2 variant of _QO_DECODE_PROGCFG for the CFG batch-2 fused decode (pos+neg rows folded
+# into M).  per_core_M=2 so it is valid for M=2.  Byte-identical per row to the per_core_M=1
+# B=1 config (row 0 maxabsdiff==0), i.e. the K-reduction order is preserved — long-form-safe.
+#
+# Bit-exactness boundary: in0_block_w in {4,8,12,16} are all byte-identical to each other, but
+# ib>=24 diverges.  K is 48 tiles, so ib>=24 leaves <=2 K-blocks and the inter-block accumulation
+# path changes — do NOT raise this past 16.
+_QO_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
+    in0_block_w=8,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=2,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+
+# Decode-only FFN program configs (S==1).
+#
+# These extend the CFG batch-2 weight-read-once pattern to the FFN.  The batch-2 LM fusion batched
+# the wq/wo matmuls (per_core_M=2) but left the FFN on auto, which reads each FFN weight matrix
+# once per CFG row.  per_core_M=2 folds both rows into M so each weight is read once.
+#
+# down-proj in0_block_w=4 (K=8960=280 tiles) is byte-identical to ib2 for both B1 (per_core_M=1)
+# and B2 (per_core_M=2): in0_block_w only sets the K-tile streaming granularity; the fp32-dest
+# accumulation order is unchanged, so the bf16 output is identical (data-independent) — the same
+# long-form-safe guarantee ib2 had vs auto.
+#
+# per_core_M makes these valid only for S==1 decode; prefill (S>1) keeps auto.
+_FFN_DOWN_DECODE_PROGCFG_B1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 3),
+    in0_block_w=4,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=1,
+    per_core_N=2,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+# B=2 down-proj (K=8960, latency-bound on K-streaming, not weight-read).  Spread N over 6x8=48 cores
+# (per_core_N=1, 48 == Nt) and widen the K-streaming to in0_block_w=14 (280/14 == 20 K-blocks).
+# Byte-identical to auto and every other in0_block_w — it only sets the K-tile streaming
+# granularity and each core reduces the full K into an fp32 dest, so the accumulation order (and
+# bf16 output) is unchanged.
+_FFN_DOWN_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+    in0_block_w=14,
+    out_subblock_h=1,
+    out_subblock_w=1,
+    per_core_M=2,
+    per_core_N=1,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+# gate/up (1536x8960): N=8960=280 tiles, so per_core_N=4 over an 11x8=88 grid (352>=280).  Only the
+# B=2 batched case beats auto, so B=1 gate/up keeps auto.  in0_block_w=4 (12 K-blocks) is
+# byte-identical to auto and every other in0_block_w (K-stream granularity only, fp32 dest).
+_FFN_GATEUP_DECODE_PROGCFG_B2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(11, 8),
+    in0_block_w=4,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=2,
+    per_core_N=4,
+    fuse_batch=True,
+    fused_activation=None,
+    mcast_in0=True,
+)
+
+
+# ──────────────────────────────────────────────────────────────
+# Host-side weight preparation
+# ──────────────────────────────────────────────────────────────
+
+
+def load_vibevoice_lm_weights(model_path: str) -> Dict[str, torch.Tensor]:
+    """Load and remap VibeVoice LM weights to tt-friendly naming (host only)."""
+    from models.experimental.vibevoice.tt.load_weights import (
+        load_vibevoice_state_dict,
+        split_submodule_weights,
+        remap_lm_keys_to_tt_transformers,
+    )
+
+    state_dict = load_vibevoice_state_dict(model_path)
+    sub = split_submodule_weights(state_dict)
+    return remap_lm_keys_to_tt_transformers(sub["lm"])
+
+
+# ──────────────────────────────────────────────────────────────
+# Weight containers
+# ──────────────────────────────────────────────────────────────
+
+
+@dataclass
+class LayerWeights:
+    # Fully-fused wq|wk|wv projection (was separate wq + fused wkv).  Byte-identical: the fused
+    # output [q|k|v] is the column concat of the separate matmuls (fp32-dest reduction is
+    # blocking-invariant) and nlp_create_qkv_heads splits it into the same q/k/v.
+    wqkv: ttnn.Tensor  # TILE [1,1,hidden,(n_heads+2*n_kv)*head_dim]
+    wo: ttnn.Tensor  # TILE [1,1,n_heads*head_dim,hidden]
+    w1: ttnn.Tensor  # [ffn_dim, hidden]  gate
+    w2: ttnn.Tensor  # [hidden, ffn_dim]  down
+    w3: ttnn.Tensor  # [ffn_dim, hidden]  up
+    attn_norm_w: ttnn.Tensor  # [1,1,1,hidden]
+    ffn_norm_w: ttnn.Tensor  # [1,1,1,hidden]
+    qkv_bias: Optional[ttnn.Tensor] = None  # fused q|k|v bias on the out dim (Qwen2)
+
+
+@dataclass
+class LMWeights:
+    tok_embeddings: ttnn.Tensor  # [1, 1, hidden, vocab] TILE — kept for compatibility
+    tok_embeddings_embed: ttnn.Tensor  # [vocab, hidden] ROW_MAJOR — for ttnn.embedding
+    norm_w: ttnn.Tensor  # [1,1,1,hidden]
+    lm_head_w: ttnn.Tensor  # [hidden, vocab] transposed for linear
+    layers: List[LayerWeights]
+    config: DecoderConfig
+
+
+def _tile(build, device, wc: WeightCache, key: str, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+    """Convert a 2D [out, in] weight to TTNN TILE layout, transposed for x@W semantics.
+
+    ``build`` is a thunk returning the host torch weight; it is only evaluated on a
+    cache miss (a hit loads the pre-tiled flatbuffer straight to device).
+    """
+    # ttnn.linear computes x @ W (no implicit transpose), so store as [in, out]
+    return wc.as_tensor(
+        key,
+        lambda: build().to(torch.bfloat16).t().unsqueeze(0).unsqueeze(0),
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _norm_weight(build, device, wc: WeightCache, key: str) -> ttnn.Tensor:
+    """Convert a 1D norm weight to [1,1,dim//32,32] ROW_MAJOR for ttnn.rms_norm.
+
+    ``build`` is a thunk returning the host torch weight (evaluated only on a miss).
+    """
+
+    def _mk():
+        t = build().to(torch.bfloat16)
+        dim = t.shape[0]
+        return t.view(1, 1, dim // 32, 32)
+
+    return wc.as_tensor(
+        key,
+        _mk,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def preprocess_lm_weights(
+    state_dict: Dict[str, torch.Tensor],
+    device,
+    config: DecoderConfig,
+    weight_cache: Optional[WeightCache] = None,
+) -> LMWeights:
+    """Convert remapped LM state dict to device tensors.
+
+    state_dict is keyed using tt_transformers names:
+      tok_embeddings.weight, norm.weight
+      layers.N.attention.wq.weight, .wk.weight, .wv.weight, .wo.weight
+      layers.N.attention.wq.bias, .wk.bias, .wv.bias  (optional in Qwen2)
+      layers.N.feed_forward.w1.weight, .w2.weight, .w3.weight
+      layers.N.attention_norm.weight, .ffn_norm.weight
+    """
+    wc = weight_cache if weight_cache is not None else WeightCache(None, enabled=False)
+
+    tok_emb_tt = _tile(lambda: state_dict["tok_embeddings.weight"], device, wc, "tok_embeddings")
+    # ROW_MAJOR [vocab, hidden] for ttnn.embedding lookup
+    tok_emb_embed = wc.as_tensor(
+        "tok_embeddings_embed",
+        lambda: state_dict["tok_embeddings.weight"].to(torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    norm_tt = _norm_weight(lambda: state_dict["norm.weight"], device, wc, "norm")
+
+    # lm_head — Qwen2 uses tied weights (same as tok_embeddings) but may have separate key
+    _lm_head_key = "lm_head.weight" if "lm_head.weight" in state_dict else "tok_embeddings.weight"
+    lm_head_tt = _tile(lambda: state_dict[_lm_head_key], device, wc, "lm_head")
+
+    # Adjacent-pair head_dim reorder for the fused RoPE kernel (see the RoPE section below).  Only
+    # the ROTATED projections move — wq, wk and their biases — so wv/wo and the residual stream are
+    # untouched.
+    _perm = _interleave_perm(config.head_dim)
+
+    def _rope_perm(key: str, t: torch.Tensor) -> torch.Tensor:
+        if not key.endswith(("attention.wq", "attention.wk")):
+            return t
+        return _permute_head_dim(t, config.head_dim, _perm)
+
+    layers: List[LayerWeights] = []
+    for i in range(config.num_hidden_layers):
+        prefix = f"layers.{i}"
+        lk = f"layers.{i}"  # cache-key prefix (thunks below evaluate immediately, so `prefix` is bound correctly)
+
+        def _w(key: str, ckey: str, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+            return _tile(
+                lambda: _rope_perm(key, state_dict[f"{prefix}.{key}.weight"]), device, wc, f"{lk}.{ckey}", dtype=dtype
+            )
+
+        def _bias_host(key: str) -> torch.Tensor:
+            return _rope_perm(key, state_dict[f"{prefix}.{key}.bias"]).to(torch.bfloat16).view(1, 1, 1, -1)
+
+        def _b(key: str, ckey: str) -> Optional[ttnn.Tensor]:
+            if f"{prefix}.{key}.bias" not in state_dict:
+                return None
+            return wc.as_tensor(
+                f"{lk}.{ckey}",
+                lambda: _bias_host(key),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        # Fully-fused wq|wk|wv on the out dim, built once at load (host torch.cat).  Only wq/wk are
+        # RoPE-permuted (wv raw).  Byte-identical to separate wq + wkv matmuls — the fused output
+        # [q|k|v] is their column concat, and nlp_create_qkv_heads splits it identically.
+        wqkv_tt = _tile(
+            lambda: torch.cat(
+                [
+                    _rope_perm("attention.wq", state_dict[f"{prefix}.attention.wq.weight"]),
+                    _rope_perm("attention.wk", state_dict[f"{prefix}.attention.wk.weight"]),
+                    state_dict[f"{prefix}.attention.wv.weight"],
+                ],
+                dim=0,
+            ),
+            device,
+            wc,
+            f"{lk}.wqkv",
+        )
+        _has_qkv_bias = all(f"{prefix}.attention.{p}.bias" in state_dict for p in ("wq", "wk", "wv"))
+        qkv_bias_tt = (
+            wc.as_tensor(
+                f"{lk}.qkv_bias",
+                lambda: torch.cat(
+                    [_bias_host("attention.wq"), _bias_host("attention.wk"), _bias_host("attention.wv")], dim=3
+                ),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if _has_qkv_bias
+            else None
+        )
+
+        lw = LayerWeights(
+            wqkv=wqkv_tt,
+            wo=_w("attention.wo", "wo"),
+            w1=_w("feed_forward.w1", "w1", dtype=_FFN_WEIGHT_DTYPE),
+            w2=_w("feed_forward.w2", "w2", dtype=_FFN_WEIGHT_DTYPE),
+            w3=_w("feed_forward.w3", "w3", dtype=_FFN_WEIGHT_DTYPE),
+            attn_norm_w=_norm_weight(
+                lambda: state_dict[f"{prefix}.attention_norm.weight"], device, wc, f"{lk}.attn_norm"
+            ),
+            ffn_norm_w=_norm_weight(lambda: state_dict[f"{prefix}.ffn_norm.weight"], device, wc, f"{lk}.ffn_norm"),
+            qkv_bias=qkv_bias_tt,
+        )
+        layers.append(lw)
+
+    return LMWeights(
+        tok_embeddings=tok_emb_tt,
+        tok_embeddings_embed=tok_emb_embed,
+        norm_w=norm_tt,
+        lm_head_w=lm_head_tt,
+        layers=layers,
+        config=config,
+    )
+
+
+# ──────────────────────────────────────────────────────────────
+# RoPE helpers (host precomputation, device application)
+# ──────────────────────────────────────────────────────────────
+
+# RoPE is the FUSED one throughout: ttnn.experimental.rotary_embedding_llama in the hot batch-2
+# decode (replacing a 9-op fp32 chain), with the cos/sin tables built and read entirely on device.
+# The kernel pairs ADJACENT head_dim elements while VibeVoice/HF pair (i, i + hd/2), so the bridge
+# is a relabelling of head_dim: permuting the ROTATED projections' out dim (wq, wk and their biases)
+# by _interleave_perm at load makes q/k emerge already adjacent-paired, and permuting the cos/sin
+# tables the same way makes RoPE commute with it.  Attention only ever contracts q against k — both
+# permuted identically — and v/wo are untouched, so every model output is unchanged.  Prefill keeps
+# its fp32 mul/add — the adjacent-pair rotate is a signed permutation, hence bit-exact for a given
+# table.  The decode paths take the kernel's bf16 RoPE, which leaves greedy tokens unchanged but is
+# not bit-exact.
+#
+# NOTE: the load-time wq/wk permute is why resolve_weight_cache (common/weight_cache.py) pins the
+# ``rope1`` cache-key segment — a cache written without the permute must never be reused here.
+
+
+def _interleave_perm(head_dim: int) -> np.ndarray:
+    """head_dim index map from VibeVoice's half-split order to the fused kernel's adjacent-pair
+    order: out[2i] = in[i], out[2i+1] = in[i + hd/2]."""
+    p = np.empty(head_dim, dtype=np.int64)
+    p[0::2] = np.arange(head_dim // 2)
+    p[1::2] = np.arange(head_dim // 2, head_dim)
+    return p
+
+
+def _permute_head_dim(t: torch.Tensor, head_dim: int, perm: np.ndarray) -> torch.Tensor:
+    """Reorder head_dim WITHIN each head of a projection weight [n*hd, in] or bias [n*hd]."""
+    return t.reshape(-1, head_dim, *t.shape[1:])[:, perm].reshape(t.shape)
+
+
+def _build_rope_tables_dev(
+    seq_len: int,
+    head_dim: int,
+    device,
+    rope_theta: float,
+) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    """Build the adjacent-pair RoPE tables ON DEVICE (PART 1).
+
+    ttnn.arange + a broadcast multiply + ttnn.cos/sin do the whole [seq_len, head_dim] table on
+    device: 2.1 ms vs 160.8 ms for the numpy build, max |err| 1.2e-07 vs numpy (60 differing
+    elements out of 16.8M after the bf16 rounding the fused kernel needs).  Only inv_freq's
+    ``head_dim`` constants stay on host — deriving them on device from exp/pow carries ~5e-7
+    relative error, which ``pos``·inv_freq amplifies to a 3.9e-3 absolute angle error at
+    pos≈65k, i.e. a full bf16 ulp (measured: 690k differing elements).
+
+    Returns (cos_tt, sin_tt, cos_emb, sin_emb): fp32 [1,1,seq_len,head_dim] TILE for the fp32
+    applies to slice, plus bf16 [seq_len,head_dim] ROW_MAJOR for the per-position ttnn.embedding
+    row gather (PART 2).
+    """
+    half = head_dim // 2
+    inv_freq = (1.0 / (rope_theta ** (np.arange(0, half, dtype=np.float32) * 2.0 / head_dim))).astype(np.float32)
+    # Adjacent-pair order repeats each frequency twice (half-split concat([f, f]) reordered).
+    inv_tt = ttnn.as_tensor(
+        torch.from_numpy(np.repeat(inv_freq, 2)).reshape(1, head_dim),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    pos = ttnn.arange(0, seq_len, 1, dtype=ttnn.float32, device=device)
+    pos = ttnn.reshape(ttnn.to_layout(pos, ttnn.TILE_LAYOUT), [seq_len, 1])
+    ang = ttnn.multiply(pos, inv_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [seq_len, head_dim]
+    cos_2d = ttnn.cos(ang, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    sin_2d = ttnn.sin(ang, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(ang)
+    ttnn.deallocate(pos)
+    ttnn.deallocate(inv_tt)
+    cos_emb = ttnn.to_layout(ttnn.typecast(cos_2d, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
+    sin_emb = ttnn.to_layout(ttnn.typecast(sin_2d, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
+    cos_tt = ttnn.reshape(cos_2d, [1, 1, seq_len, head_dim])
+    sin_tt = ttnn.reshape(sin_2d, [1, 1, seq_len, head_dim])
+    return cos_tt, sin_tt, cos_emb, sin_emb
+
+
+def _apply_rope_interleaved_ttnn(
+    x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, trans_mat: ttnn.Tensor
+) -> ttnn.Tensor:
+    """Adjacent-pair RoPE in float32 — for equal cos/sin values, byte-identical to the half-split
+    fp32 rotate (``x*cos + rotate_half(x)*sin``) on the permuted layout.
+
+    The adjacent-pair rotate [-x1, x0, -x3, x2, …] is a signed permutation, so ``x @ trans_mat``
+    reproduces it exactly for the bf16-valued q/k the projections emit (verified bit-exact at every
+    decode and prefill shape); the surrounding fp32 mul/add matches the half-split chain op for op.
+    Used by prefill, which therefore keeps its fp32 RoPE numerics.
+    """
+    # Leading BF16->FP32 widen and trailing FP32->BF16 narrow are folded away (byte-identical):
+    # mul(bf16, fp32)->fp32 upcasts losslessly, the matmul against the signed-permutation trans_mat
+    # reproduces the rotate exactly for bf16-valued x (dtype=fp32 out), and add(dtype=bf16) packs with
+    # the same round-to-nearest-even the dropped typecast applied.
+    return ttnn.add(
+        ttnn.mul(x, cos, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32),
+        ttnn.mul(
+            ttnn.matmul(
+                x, trans_mat, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32
+            ),
+            sin,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+    )
+
+
+def _reshape_tt(x: ttnn.Tensor, shape: list) -> ttnn.Tensor:
+    """Reshape landing in TILE layout.
+
+    For a TILE input (every attention head-split / head-merge), ttnn.reshape reshapes it
+    directly — byte-identical to the ROW_MAJOR round-trip (reshape is value-preserving;
+    verified maxabsdiff==0 across the decode + prefill shapes) and ~3x cheaper on the
+    decode path (drops the per-reshape untilize + tilize, ~1.6 ms / B=2 LM forward).
+    A non-TILE input (the ROW_MAJOR embedding output) keeps the round-trip that also
+    lands the result in TILE.
+    """
+    if x.layout == ttnn.TILE_LAYOUT:
+        r = ttnn.reshape(x, shape)
+        if r.layout != ttnn.TILE_LAYOUT:
+            r = ttnn.to_layout(r, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return r
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    x = ttnn.reshape(x, shape)
+    return ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+# ──────────────────────────────────────────────────────────────
+# KV cache
+# ──────────────────────────────────────────────────────────────
+
+
+@dataclass
+class KVCache:
+    """Fixed-size KV cache for TTVibeVoiceLM.
+
+    Each layer keeps a preallocated DRAM tensor ``[B, n_kv_heads, max_seq, head_dim]``
+    (TILE, bf16).  Prefill writes its slice with ``ttnn.fill_cache`` (offset 0) and
+    decode writes one token per step with ``ttnn.update_cache`` at the absolute
+    position.  ``ttnn.transformer.scaled_dot_product_attention_decode`` reads the
+    valid prefix bounded by ``cur_pos`` — so the tensor shape stays static (trace-
+    friendly) and per-step cost is O(1) in emitted-token count.  This is what lets
+    the model scale to 64k context / ~40k generated tokens without the old
+    concat-grown cache (O(S) realloc/step) or the fp32 GQA materialization.
+    """
+
+    keys: List[Optional[ttnn.Tensor]]  # per-layer, [B, n_kv_heads, max_seq, head_dim]
+    values: List[Optional[ttnn.Tensor]]  # per-layer
+    max_seq: int = 0
+    # batch==2 is the shared CFG cache (row0=pos, row1=neg) that lets the decode frame run ONE
+    # batched attention instead of one per CFG row.  ``scratch_idx`` is a position past max_seq
+    # that ``cur_pos`` never reaches: a batch-2 write always writes BOTH rows, so callers that
+    # only mean to update one row aim the other row's write here (see _attention_layer's eager
+    # branch and the generator's _boot).
+    batch: int = 1
+    scratch_idx: int = -1
+
+
+def _round_up(x: int, m: int) -> int:
+    return ((x + m - 1) // m) * m
+
+
+def _max_pow2_divisor(n: int) -> int:
+    """Largest power-of-two dividing n (matches ttnn sdpa_decode get_chunk_size)."""
+    if n <= 0:
+        return 1
+    i = 1
+    while i < n and n % (1 << (i + 1)) == 0:
+        i += 1
+    return 1 << i
+
+
+def _k_chunk_from_cache_seq(cache_seq: int) -> int:
+    """Auto k_chunk_size for fused SDPA-decode given fixed cache length S."""
+    return min(512, _max_pow2_divisor(cache_seq))
+
+
+def _fused_sdpa_decode_safe(valid_len: int, k_chunk: int) -> bool:
+    """Return True when ``scaled_dot_product_attention_decode`` is safe on Blackhole."""
+    if k_chunk >= 512:
+        return True
+    n_chunks = valid_len // k_chunk
+    rem = valid_len % k_chunk
+    if n_chunks < 2:
+        return True
+    return n_chunks == 2 and rem == 0
+
+
+def create_kv_cache(n_layers: int) -> KVCache:
+    """Empty cache (tensors allocated lazily by TTVibeVoiceLM.alloc_kv_cache)."""
+    return KVCache(keys=[None] * n_layers, values=[None] * n_layers, max_seq=0)
+
+
+# ──────────────────────────────────────────────────────────────
+# Main TT LM class
+# ──────────────────────────────────────────────────────────────
+
+
+class TTVibeVoiceLM:
+    """TTNN Qwen2-1.5B language model for VibeVoice.
+
+    forward() methods operate exclusively on ttnn.Tensor.
+    """
+
+    # KV-cache seq length is rounded up to this multiple so fused SDPA-decode's auto
+    # k_chunk_size (largest pow2 divisor of S, cap 512) avoids known kernel hangs.
+    # 256-aligned caches pick k_chunk=256, and a valid_len of 513 then lays out as 2x256+1, which
+    # hangs on Blackhole.  1024-aligned caches pick k_chunk=512, so 513 lays out as 1x512+1, which
+    # is safe.
+    _KV_ALIGN = 1024
+
+    def __init__(self, weights: LMWeights, device):
+        self.w = weights
+        self.device = device
+        self.cfg = weights.config
+        self.scale = 1.0 / math.sqrt(self.cfg.head_dim)
+        # Precompute full RoPE tables on device once (sliced per call via ttnn.slice)
+        max_len = self.cfg.max_position_embeddings
+        # Causal-mask state for the fp32 prefill path (see _causal_mask).  The host builds only
+        # the [S, S] triangular block, keyed by chunk length; the widened per-chunk mask lives in
+        # a single slot so device DRAM stays flat across a chunked prefill.
+        self._tri_cache: Dict[int, ttnn.Tensor] = {}
+        self._mask_key: Optional[Tuple[int, int]] = None
+        self._mask_tt: Optional[ttnn.Tensor] = None
+
+        # ── Trace-safe decode state (Phase C) ──────────────────────────────
+        # PART 1 on device: adjacent-pair tables built by ttnn arange/mul/cos/sin, so no host RoPE
+        # rows exist at all — PART 2 gathers the per-position row on device from the device position
+        # (which can then self-advance with plus_one inside a trace).
+        self._cos_tt, self._sin_tt, self._cos_emb, self._sin_emb = _build_rope_tables_dev(
+            max_len, self.cfg.head_dim, device, self.cfg.rope_theta
+        )
+        # Height-sharded L1 memcfg for the paged_update_cache input [1,1,n_kv,hd]
+        # (heads tile-padded to 32, one batch row => one core).  paged_update_cache
+        # takes a device-tensor write index so the KV write position varies per replay.
+        _grid = device.compute_with_storage_grid_size()
+        _shard_grid = ttnn.num_cores_to_corerangeset(1, _grid, True)
+        self._kv_update_shard_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_shard_grid, [32, self.cfg.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        # Same layout over 2 cores (one per CFG row) for the shared batch-2 KV cache: every
+        # batch-2 paged_update_cache / rotary_embedding_llama input is height-sharded on B cores.
+        _shard_grid_b2 = ttnn.num_cores_to_corerangeset(2, _grid, True)
+        self._kv_update_shard_mc_b2 = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_shard_grid_b2, [32, self.cfg.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        # PART 3 resources.  rotary_embedding_llama's decode mode wants [1,B,heads,hd]
+        # height-sharded L1 with a TILE_HEIGHT-tall shard — which _kv_update_shard_mc already
+        # is, so the rotated K feeds paged_update_cache with no extra conversion.  The kernel's
+        # ±1 matrix is tile-local (32×32, bf16); the fp32 applies use the full head_dim one.
+        self._rope_trans_bf16 = ttnn.as_tensor(
+            get_rot_transformation_mat(dhead=32),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(_shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
+        # Batch-2 variant: the ±1 matrix must be REPLICATED per core (llama's
+        # RotarySetup does `.repeat(1, 1, batch, 1)`), not split across them — a single
+        # tile height-sharded over 2 cores leaves core 1 reading garbage.
+        self._rope_trans_bf16_b2 = ttnn.as_tensor(
+            get_rot_transformation_mat(dhead=32).repeat(1, 1, 2, 1),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(_shard_grid_b2, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
+        self._rope_trans_f32 = ttnn.as_tensor(
+            get_rot_transformation_mat(dhead=self.cfg.head_dim),
+            device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def alloc_kv_cache(self, max_seq: int, dtype: ttnn.DataType = ttnn.bfloat16, batch: int = 1) -> KVCache:
+        """Preallocate a fixed-size KV cache sized to ``max_seq`` (rounded up).
+
+        Shape per layer: ``[batch, n_kv_heads, max_seq_aligned, head_dim]`` TILE/DRAM.
+
+        ``batch=2`` allocates the SHARED CFG cache (row0=pos, row1=neg) used by the batched
+        decode attention.  It carries one extra tile-row block past ``max_seq`` as a scratch
+        slot: paged_update_cache writes every batch row, so a caller that means to update one
+        row aims the other row's write at ``scratch_idx``, which ``cur_pos`` never reaches.
+        """
+        cfg = self.cfg
+        max_seq_aligned = _round_up(max(max_seq, self._KV_ALIGN), self._KV_ALIGN)
+        n_kv = cfg.num_key_value_heads
+        head_dim = cfg.head_dim
+        # The scratch slot gets a whole _KV_ALIGN block, NOT one tile row: fused SDPA-decode
+        # derives its auto k_chunk_size from the cache's S dim, so S must stay _KV_ALIGN-aligned
+        # or k_chunk collapses to 32 and long contexts hit the documented Blackhole hang
+        # (see _KV_ALIGN / _fused_sdpa_decode_safe).
+        alloc_seq = max_seq_aligned + (self._KV_ALIGN if batch > 1 else 0)
+        scratch_idx = max_seq_aligned if batch > 1 else -1
+        keys: List[ttnn.Tensor] = []
+        values: List[ttnn.Tensor] = []
+        for _ in range(cfg.num_hidden_layers):
+            keys.append(
+                ttnn.zeros(
+                    [batch, n_kv, alloc_seq, head_dim],
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+            values.append(
+                ttnn.zeros(
+                    [batch, n_kv, alloc_seq, head_dim],
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+        return KVCache(keys=keys, values=values, max_seq=max_seq_aligned, batch=batch, scratch_idx=scratch_idx)
+
+    def _embed(self, input_ids) -> ttnn.Tensor:
+        """Device embedding lookup via ttnn.embedding. Returns [B, 1, S, hidden] TILE.
+
+        input_ids: torch.Tensor, numpy array, or any array-like [B, S] of token ids.
+        """
+        ids_np = np.asarray(input_ids, dtype=np.int32)
+        B, S = ids_np.shape
+        ids_tt = ttnn.as_tensor(
+            ids_np,
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # ttnn.embedding: [B, S] uint32 + [vocab, hidden] ROW_MAJOR → [B, S, hidden]
+        emb = ttnn.embedding(ids_tt, self.w.tok_embeddings_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Reshape [B, S, hidden] → [B, 1, S, hidden] and convert to TILE
+        return _reshape_tt(emb, [B, 1, S, self.cfg.hidden_size])
+
+    def _causal_mask(self, S: int, S_total: int) -> ttnn.Tensor:
+        """Additive causal mask [1, 1, S, S_total] for a prefill chunk at ``start_pos = S_total - S``.
+
+        Only the trailing S columns are triangular: every column left of them is the chunk's
+        strict past, so it is 0.0 for all S rows.  The host therefore builds one [S, S] block —
+        the same block for every chunk of the same length — and the zero prefix is prepended on
+        device.  Byte-identical to the per-chunk ``np.triu((S, S_total), k=S_total - S + 1)``
+        upload it replaces (verified maxabsdiff 0.0, matching -inf counts, S_total up to 23040).
+
+        Chunked prefill walks S_total monotonically and all 28 layers of a chunk share one key, so
+        the widened mask is held in a single slot rather than a per-key dict: device DRAM stays at
+        one mask instead of growing by [S, S_total] fp32 for all ~90 chunks.
+        """
+        if self._mask_key == (S, S_total):
+            return self._mask_tt
+
+        tri = self._tri_cache.get(S)
+        if tri is None:
+            tri = ttnn.as_tensor(
+                np.triu(np.full((S, S), float("-inf"), dtype=np.float32), k=1)[np.newaxis, np.newaxis, :, :],
+                device=self.device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._tri_cache[S] = tri
+
+        if S_total == S:
+            mask = tri  # no prefix to prepend (single-shot prefill)
+        else:
+            zeros = ttnn.zeros(
+                [1, 1, S, S_total - S],
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            mask = ttnn.concat([zeros, tri], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(zeros)
+
+        self._release_causal_mask()  # the previous chunk's layers are all done with it
+        self._mask_key, self._mask_tt = (S, S_total), mask
+        return mask
+
+    def _release_causal_mask(self) -> None:
+        """Free the widened mask slot.  A slot whose key had ``S_total == S`` aliases a cached
+        [S, S] block, which is kept (256 KB total) for the next prefill."""
+        if self._mask_tt is not None and self._mask_key[0] != self._mask_key[1]:
+            ttnn.deallocate(self._mask_tt)
+        self._mask_key = self._mask_tt = None
+
+    def _decode_attn_row0_on_b2(
+        self,
+        q: ttnn.Tensor,  # [1, n_heads, 1, hd]  post-RoPE
+        k: ttnn.Tensor,  # [1, n_kv, 1, hd]     post-RoPE
+        v: ttnn.Tensor,  # [1, n_kv, 1, hd]
+        kv_cache: KVCache,  # shared batch-2 cache
+        layer_idx: int,
+        start_pos: int,
+        S: int,
+    ) -> ttnn.Tensor:
+        """Eager B=1 decode of the POSITIVE row against the shared batch-2 CFG cache.
+
+        Used for text / segment-boundary tokens, which the traced speech frame does not cover.
+        A batch-2 cache update writes every batch row, so this duplicates the token into both
+        rows and points row1's write at ``scratch_idx`` (a slot no ``cur_pos`` ever reaches) to
+        leave the negative row's history intact.  Row1 reads position 0 only, so its attention is
+        one token wide, and its output is discarded.  Row0 is bit-identical to the B=1 result.
+        """
+        cfg = self.cfg
+        head_dim, n_heads = cfg.head_dim, cfg.num_attention_heads
+
+        def _write_idxs(values):
+            return ttnn.from_torch(
+                torch.tensor(values, dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        widx = _write_idxs([start_pos, kv_cache.scratch_idx])
+        k_dec = self._to_sdpa_b2(ttnn.concat([k, k], dim=0))
+        v_dec = self._to_sdpa_b2(ttnn.concat([v, v], dim=0))
+        ttnn.experimental.paged_update_cache(kv_cache.keys[layer_idx], k_dec, update_idxs_tensor=widx, page_table=None)
+        ttnn.experimental.paged_update_cache(
+            kv_cache.values[layer_idx], v_dec, update_idxs_tensor=widx, page_table=None
+        )
+        q_dec = ttnn.permute(q, (0, 2, 1, 3))  # [1, 1, n_heads, hd]
+        q_b2 = ttnn.concat([q_dec, q_dec], dim=1)  # [1, 2, n_heads, hd]
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            q_b2,
+            kv_cache.keys[layer_idx],
+            kv_cache.values[layer_idx],
+            cur_pos=[start_pos, 0],
+            scale=self.scale,
+            program_config=_SDPA_DECODE_CFG,
+            compute_kernel_config=_HIFI4,
+        )  # [1, 2, n_heads, hd]
+        attn0 = ttnn.slice(attn, [0, 0, 0, 0], [1, 1, n_heads, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return _reshape_tt(attn0, [1, 1, S, n_heads * head_dim])
+
+    def _attention_layer(
+        self,
+        x: ttnn.Tensor,
+        layer_w: LayerWeights,
+        cos_sin_tt: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]],
+        kv_cache: Optional[KVCache],
+        layer_idx: int,
+        start_pos: int = 0,
+    ) -> ttnn.Tensor:
+        """Single Qwen2 attention block — all ops on device.
+
+        x: [B, 1, S, hidden]
+        Returns: [B, 1, S, hidden]
+        """
+        cfg = self.cfg
+        B = x.shape[0]
+        S = x.shape[2]
+        head_dim = cfg.head_dim
+        n_heads = cfg.num_attention_heads
+        n_kv = cfg.num_key_value_heads
+
+        # Fused wqkv projection (generic path: prefill S>1 and eager S==1).  Full 256-chunk prefill gets
+        # the tuned block-sharded config (byte-identical); eager/partial fall to auto.
+        qkv = ttnn.linear(
+            x,
+            layer_w.wqkv,
+            compute_kernel_config=_HIFI4,
+            program_config=_PREFILL_WQKV_PROGCFG if S == _PREFILL_S else None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if layer_w.qkv_bias is not None:
+            qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=n_heads,
+            num_kv_heads=n_kv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [B, n_heads/n_kv, S, hd]
+
+        # Apply RoPE on device (validated fp32 path).
+        # cos_sin_tt is the already-sliced [1,1,S,hd] window when hoisted by forward();
+        # fall back to slicing the full table if a caller still passes the raw cache.
+        if cos_sin_tt is not None:
+            cos_tt, sin_tt = cos_sin_tt
+            if cos_tt.shape[2] != S:
+                cos_tt = ttnn.slice(
+                    cos_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                sin_tt = ttnn.slice(
+                    sin_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+            q = _apply_rope_interleaved_ttnn(q, cos_tt, sin_tt, self._rope_trans_f32)
+            k = _apply_rope_interleaved_ttnn(k, cos_tt, sin_tt, self._rope_trans_f32)
+
+        if S > 1:
+            # ── Prefill: fp32 manual attention reading the fixed-cache prefix ──
+            # The chunk's K/V is written into the preallocated cache at its (tile-
+            # aligned) offset, then we read the whole [0:start_pos+S] prefix and run
+            # the reference-parity fp32 path (GQA materialize + fp32 matmul/softmax).
+            # This keeps prefill numerics identical to the reference; bf16 flash-SDPA
+            # prefill instead compounds error across the 28 layers.  Prefill is
+            # one-time, so the fp32 cost is acceptable.
+            if kv_cache is not None and kv_cache.keys[layer_idx] is not None:
+                # Write this chunk's K/V into the fixed cache and attend over the prefix.
+                ttnn.fill_cache(kv_cache.keys[layer_idx], k, 0, update_idx=start_pos)
+                ttnn.fill_cache(kv_cache.values[layer_idx], v, 0, update_idx=start_pos)
+                S_total = start_pos + S
+                k_src, v_src = kv_cache.keys[layer_idx], kv_cache.values[layer_idx]
+            else:
+                # No allocated cache (single-shot prefill, e.g. PCC tests): attend within
+                # this forward only.  start_pos is 0 in this case.
+                S_total = S
+                k_src, v_src = k, v
+
+            # GQA without materializing the KV heads.  Instead of replicating each of the n_kv KV heads
+            # `repeat` times into a [B, n_heads, S_total, hd] tensor (n_kv slices + an n_heads-way concat,
+            # per k and v), bound the cache prefix to [B, n_kv, S_total, hd] and fold q's n_heads into the
+            # seq axis as (n_kv groups × repeat): reshape q to [B, n_kv, repeat*S, hd] so the QKᵀ/PV
+            # matmuls batch over the n_kv groups and read each KV head exactly once.  Scores are reshaped
+            # back to [B, n_heads, S, S_total] so the causal mask / softmax are untouched, and q/k/v stay
+            # bf16 into the fp32-accumulating HiFi4 matmuls.  Byte-identical to the materialized path: the
+            # QKᵀ/PV reductions are over hd regardless of head batching.  For a tile-aligned S the
+            # head↔seq reshapes are free views (head-major tiles are contiguous); a non-32-aligned tail
+            # chunk falls back to a value-preserving re-tile (still exact, not a view).
+            repeat = n_heads // n_kv
+            k_g = ttnn.slice(k_src, [0, 0, 0, 0], [B, n_kv, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            v_g = ttnn.slice(v_src, [0, 0, 0, 0], [B, n_kv, S_total, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            q_g = ttnn.reshape(q, [B, n_kv, repeat * S, head_dim])  # fold repeat heads onto seq, per group
+            k_t = ttnn.permute(k_g, (0, 1, 3, 2))  # [B, n_kv, hd, S_total]
+            scores = ttnn.matmul(
+                q_g, k_t, compute_kernel_config=_HIFI4, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            scores = ttnn.reshape(scores, [B, n_heads, S, S_total])  # back to per-head for mask/softmax
+            scores = ttnn.mul(scores, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            scores = ttnn.add(scores, self._causal_mask(S, S_total), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            attn_g = ttnn.reshape(attn, [B, n_kv, repeat * S, S_total])
+            out = ttnn.matmul(
+                attn_g, v_g, compute_kernel_config=_HIFI4, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            out = ttnn.reshape(out, [B, n_heads, S, head_dim])
+            out = ttnn.typecast(out, ttnn.bfloat16)
+            # [B, n_heads, S, hd] → [B, 1, S, n_heads*hd]; byte-identical to permute+reshape.
+            out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            # ── Decode: write one token at start_pos, then fused flash-decode over the
+            # cache prefix.  GQA handled natively (no KV-head materialization, no fp32
+            # blow-up); reads only the valid prefix bounded by ``cur_pos``.  ~flat in
+            # emitted-token count → scales to 64k ctx / ~40k tokens, and is trace-ready.
+            #
+            # Precision note: the op is bf16-only (rejects fp32).  Being bf16 vs the fp32
+            # CPU reference, it flips a few *greedy near-ties* among the constrained tokens.
+            # For this generative TTS that is a different-but-valid generation, not degraded
+            # audio — validated by a forced-token audio-parity check.  A grouped fp32 manual
+            # decode matches tokens exactly but is much slower, so it is not used.
+            assert kv_cache is not None and kv_cache.keys[layer_idx] is not None, "decode needs an allocated KV cache"
+            if kv_cache.batch == 2 and B == 1:
+                # Eager B=1 decode (text / segment-boundary tokens) against the SHARED batch-2 CFG
+                # cache.  Row0 is the positive row, so duplicate this token into both rows and aim
+                # row1's write at the scratch slot — a batch-2 cache write always writes every row,
+                # and the neg row must not be touched here.  The read positions are [start_pos, 0]
+                # so row1's attention is trivial; its output is sliced away.  Row0's values are
+                # exactly the B=1 values (per-batch independence).
+                out = self._decode_attn_row0_on_b2(q, k, v, kv_cache, layer_idx, start_pos, S)
+                cache_seq = valid_len = k_chunk = None  # handled inside
+            else:
+                ttnn.update_cache(kv_cache.keys[layer_idx], k, start_pos)  # k: [1, n_kv, 1, hd]
+                ttnn.update_cache(kv_cache.values[layer_idx], v, start_pos)
+                cache_seq = kv_cache.max_seq or kv_cache.keys[layer_idx].shape[2]
+                valid_len = start_pos + S
+                k_chunk = _k_chunk_from_cache_seq(cache_seq)
+
+            if valid_len is None:
+                pass  # batch-2 row0 path already produced `out`
+            elif _fused_sdpa_decode_safe(valid_len, k_chunk):
+                q_dec = ttnn.permute(q, (0, 2, 1, 3))  # [1, B, n_heads, hd] for sdpa_decode
+                attn = ttnn.transformer.scaled_dot_product_attention_decode(
+                    q_dec,
+                    kv_cache.keys[layer_idx],
+                    kv_cache.values[layer_idx],
+                    cur_pos=[start_pos],
+                    scale=self.scale,
+                    program_config=_SDPA_DECODE_CFG,
+                    compute_kernel_config=_HIFI4,
+                )  # [1, B, n_heads, hd]
+                out = _reshape_tt(attn, [B, 1, S, n_heads * head_dim])
+            else:
+                # Fallback: fp32 manual GQA decode over cache prefix (slower but no hang).
+                k_all = ttnn.slice(
+                    kv_cache.keys[layer_idx],
+                    [0, 0, 0, 0],
+                    [B, n_kv, valid_len, head_dim],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                v_all = ttnn.slice(
+                    kv_cache.values[layer_idx],
+                    [0, 0, 0, 0],
+                    [B, n_kv, valid_len, head_dim],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                repeat = n_heads // n_kv
+                k_slices, v_slices = [], []
+                for kv_idx in range(n_kv):
+                    kh = ttnn.slice(
+                        k_all,
+                        [0, kv_idx, 0, 0],
+                        [B, kv_idx + 1, valid_len, head_dim],
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    vh = ttnn.slice(
+                        v_all,
+                        [0, kv_idx, 0, 0],
+                        [B, kv_idx + 1, valid_len, head_dim],
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    for _ in range(repeat):
+                        k_slices.append(kh)
+                        v_slices.append(vh)
+                k_rep = ttnn.concat(k_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                v_rep = ttnn.concat(v_slices, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                q_f32 = ttnn.typecast(q, ttnn.float32)
+                k_f32 = ttnn.typecast(k_rep, ttnn.float32)
+                v_f32 = ttnn.typecast(v_rep, ttnn.float32)
+                k_t = ttnn.permute(k_f32, (0, 1, 3, 2))
+                scores = ttnn.matmul(q_f32, k_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                scores = ttnn.mul(scores, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                attn = ttnn.softmax(scores, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                out = ttnn.matmul(attn, v_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                out = ttnn.typecast(out, ttnn.bfloat16)
+                out = _reshape_tt(out, [B, 1, S, n_heads * head_dim])
+
+        # Output projection (1536x1536; same decode fast-path as wq).
+        out = ttnn.linear(
+            out,
+            layer_w.wo,
+            compute_kernel_config=_HIFI4,
+            program_config=(_QO_DECODE_PROGCFG if S == 1 else (_PREFILL_WO_PROGCFG if S == _PREFILL_S else None)),
+            memory_config=_QO_DECODE_OUT_MEMCFG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return out
+
+    def _ffn_layer(self, x: ttnn.Tensor, layer_w: LayerWeights) -> ttnn.Tensor:
+        """SwiGLU FFN: gate_proj(x) * silu(gate_proj(x)) → down_proj.
+
+        Decode (S==1) uses byte-identical program configs that batch the CFG rows so the FFN
+        weights are read once (see _FFN_*_DECODE_PROGCFG_*); prefill (S>1) keeps auto.
+        """
+        B, S = x.shape[0], x.shape[2]
+        if S == 1 and B == 2:  # cfg-batch-2 deploy decode
+            gate_pc, down_pc = _FFN_GATEUP_DECODE_PROGCFG_B2, _FFN_DOWN_DECODE_PROGCFG_B2
+        elif S == 1 and B == 1:  # eager / B=1 traced decode (gate/up: no win over auto)
+            gate_pc, down_pc = None, _FFN_DOWN_DECODE_PROGCFG_B1
+        elif S == _PREFILL_S:  # prefill full 256-chunk → tuned block-sharded (byte-identical)
+            gate_pc, down_pc = _PREFILL_GATEUP_PROGCFG, _PREFILL_DOWN_PROGCFG
+        else:  # prefill partial tail chunk (S<256) → auto
+            gate_pc, down_pc = None, None
+        # L1-island for gate/up matmul outputs + silu:
+        # - Decode B==2: explicit progcfg + L1, byte-identical.
+        # - Prefill S>1: auto + L1 interleaved is byte-identical.
+        #   Prefill down must keep a DRAM in0 — auto with an L1 in0 re-picks the K-reduction
+        #   (NOT byte-identical) — so silu→mul stays in DRAM below.
+        # - Decode B==1: auto + L1 gate is byte-identical in isolation, but the full chain is not
+        #   faster, so it stays in DRAM.
+        gateup_mc = ttnn.L1_MEMORY_CONFIG if ((S == 1 and B == 2) or S > 1) else ttnn.DRAM_MEMORY_CONFIG
+        gate = ttnn.linear(x, layer_w.w1, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=gateup_mc)
+        up = ttnn.linear(x, layer_w.w3, compute_kernel_config=_HIFI4, program_config=gate_pc, memory_config=gateup_mc)
+        # Place the SwiGLU product (down_proj's in0) in L1 for decode: down_proj is the biggest LM
+        # matmul (K=8960) and reads in0 faster from L1.  Placement only — same in0_block_w
+        # K-reduction, so byte-identical.  Prefill (S>1) keeps DRAM.
+        hidden_mc = ttnn.L1_MEMORY_CONFIG if S == 1 else ttnn.DRAM_MEMORY_CONFIG
+        # silu folded into the product as an in0 activation, dropping the standalone unary op.
+        # Byte-identical to `mul(silu(gate), up)` — the fused form still rounds the activation to
+        # the operand dtype before the multiply.  Barely matters here (the SFPU work moves rather
+        # than disappears); the diffusion-head sibling in ttnn_diffusion_head.py is the one that pays.
+        hidden = ttnn.mul(gate, up, memory_config=hidden_mc, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        out = ttnn.linear(
+            hidden,
+            layer_w.w2,
+            compute_kernel_config=_HIFI4,
+            program_config=down_pc,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return out
+
+    def _transformer_layer(
+        self,
+        x: ttnn.Tensor,
+        layer_idx: int,
+        cos_sin_tt: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]],
+        kv_cache: Optional[KVCache],
+        start_pos: int = 0,
+    ) -> ttnn.Tensor:
+        """Full transformer layer with pre-norm residuals."""
+        lw = self.w.layers[layer_idx]
+
+        # Pre-norm + attention.  Decode (S==1): emit attn-norm into L1 so the fused wqkv
+        # reads in0 from L1 (byte-identical memory placement).
+        S = x.shape[2]
+        x_norm = ttnn.rms_norm(
+            x,
+            weight=lw.attn_norm_w,
+            epsilon=self.cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.L1_MEMORY_CONFIG if S == 1 else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        attn_out = self._attention_layer(x_norm, lw, cos_sin_tt, kv_cache, layer_idx, start_pos)
+        x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Pre-norm + FFN
+        x_norm = ttnn.rms_norm(
+            x,
+            weight=lw.ffn_norm_w,
+            epsilon=self.cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ffn_out = self._ffn_layer(x_norm, lw)
+        x = ttnn.add(x, ffn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return x
+
+    def forward(
+        self,
+        inputs_embeds: ttnn.Tensor,
+        start_pos: int = 0,
+        kv_cache: Optional[KVCache] = None,
+        return_last_hidden: bool = False,
+        compute_logits: bool = True,
+    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
+        """Run transformer forward pass.
+
+        Args:
+            inputs_embeds: [B, 1, S, hidden] bfloat16 TILE on device
+            start_pos: position offset for RoPE (for decode mode)
+            kv_cache: optional KVCache for decode
+            return_last_hidden: if True, return (last_hidden, logits) else (logits, None)
+
+        Returns:
+            (logits [B, 1, S, vocab], last_hidden or None)
+        """
+        S = inputs_embeds.shape[2]
+        B = inputs_embeds.shape[0]
+        cfg = self.cfg
+
+        # Hoist RoPE cos/sin slice once per forward (same window for all 28 layers).
+        # Avoids 2×num_layers redundant Slice ops on the decode/prefill path.
+        head_dim = cfg.head_dim
+        cos_row = ttnn.slice(
+            self._cos_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        sin_row = ttnn.slice(
+            self._sin_tt, [0, 0, start_pos, 0], [1, 1, start_pos + S, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        cos_sin_tt = (cos_row, sin_row)
+
+        x = inputs_embeds
+        if x.dtype == ttnn.float32:
+            x = ttnn.typecast(x, ttnn.bfloat16)
+        for layer_idx in range(cfg.num_hidden_layers):
+            x = self._transformer_layer(x, layer_idx, cos_sin_tt, kv_cache, start_pos)
+
+        # Final norm
+        x = ttnn.rms_norm(
+            x,
+            weight=self.w.norm_w,
+            epsilon=cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        last_hidden = ttnn.typecast(x, ttnn.float32) if return_last_hidden else None
+
+        # Non-final prefill chunks: their logits are discarded by the sampler, so skip the
+        # vocab-151936 matmul entirely.
+        if not compute_logits:
+            return None, last_hidden
+
+        # Only the LAST position's logits are consumed (greedy argmax of the next token),
+        # so for prefill (S>1) run lm_head on just the last row — bit-exact, and cuts the
+        # S×1536×151936 matmul's M from S to 1.  last_hidden stays full-S.
+        x_head = (
+            x
+            if S == 1
+            else ttnn.slice(x, [0, 0, S - 1, 0], [B, 1, S, x.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )
+
+        # LM head projection → logits
+        logits = ttnn.linear(
+            x_head,
+            self.w.lm_head_w,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        return logits, last_hidden
+
+    # ── Trace-safe decode (Phase C) ────────────────────────────────────────
+    # Mirrors the eager S==1 decode but is fully driven by device tensors so the
+    # 28-layer step can be captured once and replayed: KV write position and the
+    # SDPA read bound come from ``cur_pos`` (a device int32 tensor) via
+    # paged_update_cache / sdpa cur_pos_tensor, and RoPE comes from a host-written
+    # per-position [1,1,1,hd] row.  Numerically equivalent to the eager fused path.
+    def _attention_decode_traced(
+        self,
+        x: ttnn.Tensor,
+        layer_w: LayerWeights,
+        cos_row: ttnn.Tensor,
+        sin_row: ttnn.Tensor,
+        cur_pos: ttnn.Tensor,
+        kv_cache: KVCache,
+        layer_idx: int,
+    ) -> ttnn.Tensor:
+        cfg = self.cfg
+        B, S = 1, 1
+        head_dim = cfg.head_dim
+        n_heads = cfg.num_attention_heads
+        n_kv = cfg.num_key_value_heads
+
+        # Fused wqkv projection (B=1 traced decode / boot) → auto progcfg; byte-identical.
+        qkv = ttnn.linear(
+            x,
+            layer_w.wqkv,
+            compute_kernel_config=_HIFI4,
+            program_config=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if layer_w.qkv_bias is not None:
+            qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=n_heads,
+            num_kv_heads=n_kv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, n_heads/n_kv, 1, hd]
+
+        # RoPE via the per-position row (broadcasts over the head dim).  cos_row/sin_row are the
+        # height-sharded bf16 rows, and the rotate also delivers the [1,B,heads,hd] layout used
+        # below — the q permute and the KV write's [1,B,n_kv,hd] shard are absorbed into it.
+        q_dec = self._rope_decode_fused(q, cos_row, sin_row)
+        k_1bkd = self._rope_decode_fused(k, cos_row, sin_row)
+        v_1bkd = ttnn.to_memory_config(ttnn.permute(v, (0, 2, 1, 3)), self._kv_update_shard_mc)
+        ttnn.experimental.paged_update_cache(
+            kv_cache.keys[layer_idx], k_1bkd, update_idxs_tensor=cur_pos, page_table=None
+        )
+        ttnn.experimental.paged_update_cache(
+            kv_cache.values[layer_idx], v_1bkd, update_idxs_tensor=cur_pos, page_table=None
+        )
+
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            q_dec,
+            kv_cache.keys[layer_idx],
+            kv_cache.values[layer_idx],
+            cur_pos_tensor=cur_pos,
+            scale=self.scale,
+            program_config=_SDPA_DECODE_CFG,
+            compute_kernel_config=_HIFI4,
+        )  # [1, B, n_heads, hd]
+        out = _reshape_tt(attn, [B, 1, S, n_heads * head_dim])
+        out = ttnn.linear(
+            out,
+            layer_w.wo,
+            compute_kernel_config=_HIFI4,
+            program_config=_QO_DECODE_PROGCFG,
+            memory_config=_QO_DECODE_OUT_MEMCFG,
+        )
+        return out
+
+    def _transformer_layer_traced(
+        self,
+        x: ttnn.Tensor,
+        layer_idx: int,
+        cos_row: ttnn.Tensor,
+        sin_row: ttnn.Tensor,
+        cur_pos: ttnn.Tensor,
+        kv_cache: KVCache,
+    ) -> ttnn.Tensor:
+        lw = self.w.layers[layer_idx]
+        x_norm = ttnn.rms_norm(
+            x,
+            weight=lw.attn_norm_w,
+            epsilon=self.cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        attn_out = self._attention_decode_traced(x_norm, lw, cos_row, sin_row, cur_pos, kv_cache, layer_idx)
+        x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_norm = ttnn.rms_norm(
+            x,
+            weight=lw.ffn_norm_w,
+            epsilon=self.cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ffn_out = self._ffn_layer(x_norm, lw)
+        x = ttnn.add(x, ffn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return x
+
+    def build_lm_head_subset(self, token_ids) -> ttnn.Tensor:
+        """Return a [1,1,hidden,N] tiled lm_head weight holding ONLY the columns for ``token_ids``
+        (in the given order).  For a constrained greedy decode where only a handful of tokens are
+        selectable, projecting hidden by this subset and argmax over the N logits is IDENTICAL to
+        argmax over the full vocab with all other tokens masked to -inf — but replaces the
+        [hidden x 151936] matmul + full-vocab mask-add + full-vocab argmax with a [hidden x N]
+        matmul + N-wide argmax.  Pass token_ids sorted ascending so argmax tie-breaking matches the
+        full-vocab argmax exactly."""
+        full = ttnn.to_torch(self.w.lm_head_w).to(torch.float32)  # [1,1,hidden,vocab]
+        sub = full[:, :, :, list(token_ids)].contiguous()  # [1,1,hidden,N]
+        return ttnn.as_tensor(
+            sub, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    def forward_decode_traced_embeds(
+        self,
+        inputs_embeds: ttnn.Tensor,
+        cur_pos: ttnn.Tensor,
+        kv_cache: KVCache,
+        return_last_hidden: bool = False,
+        need_logits: bool = True,
+        lm_head_w: Optional[ttnn.Tensor] = None,
+    ) -> Tuple[Optional[ttnn.Tensor], Optional[ttnn.Tensor]]:
+        """Capturable single-token decode over an already-embedded input [1,1,1,hidden].
+
+        The RoPE rows come from ``cur_pos`` on device, so the whole step — RoPE-row selection
+        included — is driven by the device position tensor (llama pattern) and nothing is written
+        from host per step.
+
+        ``need_logits=False`` skips the lm_head projection entirely (used by the negative-CFG
+        forward, whose logits are discarded — bit-exact, saves the full lm_head).  ``lm_head_w``
+        (a [1,1,hidden,N] column subset) projects only the selectable tokens for a constrained
+        decode — argmax over its N logits == argmax over the full vocab masked to the same tokens."""
+        cfg = self.cfg
+        x = inputs_embeds
+        if x.dtype == ttnn.float32:
+            x = ttnn.typecast(x, ttnn.bfloat16)
+        # PART 2 on device: cos/sin gathered from cur_pos via the device table.
+        cos_row, sin_row = self._rope_rows_sharded(cur_pos)
+        for layer_idx in range(cfg.num_hidden_layers):
+            x = self._transformer_layer_traced(x, layer_idx, cos_row, sin_row, cur_pos, kv_cache)
+        x = ttnn.rms_norm(
+            x,
+            weight=self.w.norm_w,
+            epsilon=cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        last_hidden = ttnn.typecast(x, ttnn.float32) if return_last_hidden else None
+        logits = None
+        if need_logits:
+            head_w = lm_head_w if lm_head_w is not None else self.w.lm_head_w
+            logits = ttnn.linear(x, head_w, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return logits, last_hidden
+
+    def _rope_rows_from_pos(self, cur_pos: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Gather the bf16 RoPE cos/sin rows for a DEVICE position (llama-style, on-device).
+
+        cur_pos: [1] int32 device tensor.  Returns cos/sin [1,1,1,hd] bf16.  Uses ttnn.embedding
+        (bf16-only) so the position can be a device tensor advanced by plus_one — no host RoPE
+        write.  Numerically = the fp32 sinusoid table rounded to bf16 (~0.9999 PCC vs fp32 rows).
+        """
+        hd = self.cfg.head_dim
+        idx = ttnn.reshape(ttnn.typecast(cur_pos, ttnn.uint32), [1, 1])
+        cos = ttnn.embedding(idx, self._cos_emb, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sin = ttnn.embedding(idx, self._sin_emb, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.reshape(cos, [1, 1, 1, hd]), ttnn.reshape(sin, [1, 1, 1, hd])
+
+    def _rope_rows_sharded(self, cur_pos: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """PART 2 on device: gather this position's adjacent-pair cos/sin row and land it in the
+        height-sharded L1 layout the fused kernel needs.  Called ONCE per decode step (not per
+        layer) — the 28 layers all rotate against the same row."""
+        cos, sin = self._rope_rows_from_pos(cur_pos)
+        return (
+            ttnn.to_memory_config(cos, self._kv_update_shard_mc),
+            ttnn.to_memory_config(sin, self._kv_update_shard_mc),
+        )
+
+    def _rope_rows_sharded_b2(self, cur_pos_b2: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """_rope_rows_sharded for BOTH CFG rows in one gather.
+
+        cur_pos_b2: [2] int32 device tensor.  Returns cos/sin ``[1, 2, 1, hd]`` height-sharded on
+        2 cores — the layout rotary_embedding_llama's decode mode wants for a B=2 input.  The
+        embedding gathers both rows into one ``[1, 1, 2, hd]`` tile; ``transpose(1, 2)`` (llama's
+        RotarySetup does the same) moves the batch onto its own dim so each row lands on its own
+        core.  Byte-identical to two per-row gathers (verified maxabsdiff==0).
+        """
+        hd = self.cfg.head_dim
+        idx = ttnn.reshape(ttnn.typecast(cur_pos_b2, ttnn.uint32), [1, 2])
+        cos = ttnn.embedding(idx, self._cos_emb, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sin = ttnn.embedding(idx, self._sin_emb, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        cos = ttnn.transpose(ttnn.reshape(cos, [1, 1, 2, hd]), 1, 2)  # [1, 2, 1(pad 32), hd]
+        sin = ttnn.transpose(ttnn.reshape(sin, [1, 1, 2, hd]), 1, 2)
+        return (
+            ttnn.to_memory_config(cos, self._kv_update_shard_mc_b2),
+            ttnn.to_memory_config(sin, self._kv_update_shard_mc_b2),
+        )
+
+    def _to_sdpa_b2(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        """[2, n, 1, hd] (nlp_create_qkv_heads / RoPE output) → [1, 2, n, hd] height-sharded L1.
+
+        Both steps are exact: the permute is pure data movement and ``[2,1,n,hd] → [1,2,n,hd]``
+        only relabels the two outer singleton dims, so the padded tile layout is untouched.
+        """
+        t = ttnn.permute(t, (0, 2, 1, 3))  # [2, 1, n, hd]
+        t = ttnn.reshape(t, [1, 2, t.shape[2], t.shape[3]])
+        return ttnn.to_memory_config(t, self._kv_update_shard_mc_b2)
+
+    def _qkv_split_b2(self, qkv: ttnn.Tensor):
+        """[2,1,1,(n_heads+2*n_kv)*hd] fused projection → q/k/v as [1,2,n,hd] height-sharded L1.
+
+        The layout ``nlp_create_qkv_heads`` + ``_to_sdpa_b2`` produce together, but without the
+        2-core head-split op: each CFG row's ``n*hd`` slice IS its ``n`` heads of ``hd`` laid out
+        contiguously, so ``[2,1,1,n*hd] → [1,2,n,hd]`` is the same relabeling (verified
+        maxabsdiff==0 against the op).
+        """
+        cfg = self.cfg
+        hd, nh, nkv = cfg.head_dim, cfg.num_attention_heads, cfg.num_key_value_heads
+        qd, kd = nh * hd, nkv * hd
+        out = []
+        for lo, n in ((0, nh), (qd, nkv), (qd + kd, nkv)):
+            t = ttnn.slice(qkv, [0, 0, 0, lo], [2, 1, 1, lo + n * hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out.append(ttnn.to_memory_config(ttnn.reshape(t, [1, 2, n, hd]), self._kv_update_shard_mc_b2))
+        return out[0], out[1], out[2]
+
+    def _rope_decode_fused(self, t: ttnn.Tensor, cos_sh: ttnn.Tensor, sin_sh: ttnn.Tensor) -> ttnn.Tensor:
+        """PART 3 on device: adjacent-pair RoPE on a decode q or k via the fused kernel.
+
+        Takes [1, n, 1, hd] and returns [1, 1, n, hd] height-sharded L1 — exactly what sdpa-decode
+        (q) and paged_update_cache (k) consume next, so the permute the fp32 path did afterwards is
+        absorbed here and no conversion is added.
+        """
+        t = ttnn.to_memory_config(ttnn.permute(t, (0, 2, 1, 3)), self._kv_update_shard_mc)
+        return ttnn.experimental.rotary_embedding_llama(t, cos_sh, sin_sh, self._rope_trans_bf16, is_decode_mode=True)
+
+    # ── CFG batch-2 fused decode (pos row0 + neg row1 in one B=2 forward) ─────────
+    # The two CFG forwards (pos-LM, neg-LM) are weight-DRAM-bound at M=1, so batching
+    # their inputs into [2,1,1,H] reads each layer's weights ONCE for both rows.
+    #
+    # ATTENTION is batched too when the caller passes a SHARED batch-2 KVCache
+    # (``KVCache.batch == 2``, row0=pos row1=neg): one RoPE / KV write / sdpa per layer
+    # instead of one per CFG row.  Byte-identical — attention is per-batch independent,
+    # the per-row positions still come from one [2] cur_pos tensor, and the layout moves
+    # ([2,n,1,hd] → [1,2,n,hd]) only relabel singleton dims.
+    #
+    # With two SEPARATE [1,..] caches (the eager / PCC-test callers) the per-row loop is
+    # kept — also byte-identical, just more ops per layer.
+    def _attention_decode_traced_b2(
+        self,
+        x: ttnn.Tensor,  # [2,1,1,H]  row0=pos, row1=neg
+        layer_w: LayerWeights,
+        rope_rows,  # per-row [1,1,1,hd] [(cos0,sin0),(cos1,sin1)], or ONE (cos,sin) [1,2,1,hd]
+        cur_positions,  # [cur_pos0, cur_pos1] per-row [1] int32, or ONE [2] int32 (shared cache)
+        kv_caches,  # [kv0, kv1] separate [1,..] caches, or ONE shared batch-2 KVCache
+        layer_idx: int,
+    ) -> ttnn.Tensor:
+        cfg = self.cfg
+        head_dim = cfg.head_dim
+        n_heads = cfg.num_attention_heads
+        n_kv = cfg.num_key_value_heads
+
+        # Batched weight-bound projection — fused wqkv read once for both CFG rows, split below
+        # by nlp_create_qkv_heads or, on the batched path, by slicing straight into the attention
+        # layout.  Byte-identical vs separate wq + wkv (same column values, same split); saves one
+        # launch + one bias-add/layer.
+        qkv = ttnn.linear(
+            x,
+            layer_w.wqkv,
+            compute_kernel_config=_HIFI4,
+            program_config=_QKV_DECODE_PROGCFG_B2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if layer_w.qkv_bias is not None:
+            qkv = ttnn.add(qkv, layer_w.qkv_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if isinstance(kv_caches, KVCache):
+            # ── Shared batch-2 cache: ONE attention for both CFG rows ──────────────────
+            # nlp_create_qkv_heads runs on 2 cores (it shards over batch) and its output is then
+            # permuted into the [1,2,n,hd] the batched attention wants.  Slicing the projection and
+            # reshaping straight into that layout does the same rearrangement in ops that spread
+            # over the whole grid.  Exact: both are pure relabelings of the same contiguous
+            # [q|k|v] row.
+            q_s, k_s, v_dec = self._qkv_split_b2(qkv)
+            cos_sh, sin_sh = rope_rows
+            q_dec = ttnn.experimental.rotary_embedding_llama(
+                q_s, cos_sh, sin_sh, self._rope_trans_bf16_b2, is_decode_mode=True
+            )
+            k_dec = ttnn.experimental.rotary_embedding_llama(
+                k_s, cos_sh, sin_sh, self._rope_trans_bf16_b2, is_decode_mode=True
+            )
+            ttnn.experimental.paged_update_cache(
+                kv_caches.keys[layer_idx], k_dec, update_idxs_tensor=cur_positions, page_table=None
+            )
+            ttnn.experimental.paged_update_cache(
+                kv_caches.values[layer_idx], v_dec, update_idxs_tensor=cur_positions, page_table=None
+            )
+            attn = ttnn.transformer.scaled_dot_product_attention_decode(
+                q_dec,
+                kv_caches.keys[layer_idx],
+                kv_caches.values[layer_idx],
+                cur_pos_tensor=cur_positions,
+                scale=self.scale,
+                program_config=_SDPA_DECODE_CFG,
+                compute_kernel_config=_HIFI4,
+            )  # [1, 2, n_heads, hd]
+            # L1: wo's in0 (1536x1536, 28 calls/frame) — the placement the per-row path got from
+            # its row concat, which the batched path no longer needs.
+            attn = ttnn.to_memory_config(_reshape_tt(attn, [2, 1, 1, n_heads * head_dim]), ttnn.L1_MEMORY_CONFIG)
+            return ttnn.linear(
+                attn,
+                layer_w.wo,
+                compute_kernel_config=_HIFI4,
+                program_config=_QO_DECODE_PROGCFG_B2,
+                memory_config=_QO_DECODE_OUT_MEMCFG,
+            )
+
+        # ── Two SEPARATE [1,..] caches: split the rows and run the B=1 attention twice ──
+        # The head-split op is only needed here; the batched path above slices the projection
+        # straight into the attention layout.
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=n_heads,
+            num_kv_heads=n_kv,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [2, n_heads/n_kv, 1, hd]
+        vp = ttnn.permute(v, (0, 2, 1, 3))  # [2,1,n_kv,hd]
+
+        # Per-row attention on the two separate caches — identical ops to the B=1 path.
+        attn_rows = []
+        for b in range(2):
+            cur_pos = cur_positions[b]
+            kv_cache = kv_caches[b]
+            cos_row, sin_row = rope_rows[b]
+            qb = ttnn.slice(q, [b, 0, 0, 0], [b + 1, n_heads, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            kb = ttnn.slice(k, [b, 0, 0, 0], [b + 1, n_kv, 1, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            q_dec = self._rope_decode_fused(qb, cos_row, sin_row)
+            k_1bkd = self._rope_decode_fused(kb, cos_row, sin_row)
+            v_1bkd = ttnn.to_memory_config(
+                ttnn.slice(vp, [b, 0, 0, 0], [b + 1, 1, n_kv, head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                self._kv_update_shard_mc,
+            )
+            ttnn.experimental.paged_update_cache(
+                kv_cache.keys[layer_idx], k_1bkd, update_idxs_tensor=cur_pos, page_table=None
+            )
+            ttnn.experimental.paged_update_cache(
+                kv_cache.values[layer_idx], v_1bkd, update_idxs_tensor=cur_pos, page_table=None
+            )
+            attn = ttnn.transformer.scaled_dot_product_attention_decode(
+                q_dec,
+                kv_cache.keys[layer_idx],
+                kv_cache.values[layer_idx],
+                cur_pos_tensor=cur_pos,
+                scale=self.scale,
+                program_config=_SDPA_DECODE_CFG,
+                compute_kernel_config=_HIFI4,
+            )
+            attn_rows.append(_reshape_tt(attn, [1, 1, 1, n_heads * head_dim]))
+
+        # L1: this concat is wo's in0 (1536x1536).  Placement only, byte-identical.
+        attn = ttnn.concat(attn_rows, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)  # [2,1,1,n_heads*hd]
+        out = ttnn.linear(
+            attn,
+            layer_w.wo,
+            compute_kernel_config=_HIFI4,
+            program_config=_QO_DECODE_PROGCFG_B2,
+            memory_config=_QO_DECODE_OUT_MEMCFG,
+        )
+        return out  # [2,1,1,H]
+
+    def _transformer_layer_traced_b2(self, x, layer_idx, rope_rows, cur_positions, kv_caches) -> ttnn.Tensor:
+        lw = self.w.layers[layer_idx]
+        x_norm = ttnn.rms_norm(
+            x,
+            weight=lw.attn_norm_w,
+            epsilon=self.cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        attn_out = self._attention_decode_traced_b2(x_norm, lw, rope_rows, cur_positions, kv_caches, layer_idx)
+        x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_norm = ttnn.rms_norm(
+            x,
+            weight=lw.ffn_norm_w,
+            epsilon=self.cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            # L1: this is the in0 of _ffn_layer's gate/up pair (1536x8960).  Placement only,
+            # byte-identical.  Decode-only path, so prefill's deliberate DRAM in0 (see _ffn_layer)
+            # is untouched.
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ffn_out = self._ffn_layer(x_norm, lw)  # batched [2,..] — auto matmuls, batch-independent
+        x = ttnn.add(x, ffn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return x
+
+    def forward_decode_traced_embeds_b2(
+        self,
+        embeds_b2: ttnn.Tensor,  # [2,1,1,H]  row0=pos input, row1=neg input
+        cur_positions,  # [cur_pos0, cur_pos1]
+        kv_caches,  # [kv0, kv1]
+        lm_head_w: Optional[ttnn.Tensor] = None,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Fused batch-2 decode: row0 = pos-LM (input+pos+kv0), row1 = neg-LM (input+pos+kv1).
+
+        Returns (row0_logits, hidden_b2[2,1,1,H] fp32).  The lm_head is projected on ROW0 ONLY
+        (pos-LM produces the token; neg logits are discarded, exactly like the B=1 need_logits=False
+        neg forward).  hidden_b2[0] == the B=1 pos last_hidden, hidden_b2[1] == the B=1 neg
+        last_hidden, both byte-identical (per-row batch independence)."""
+        cfg = self.cfg
+        x = embeds_b2
+        if x.dtype == ttnn.float32:
+            x = ttnn.typecast(x, ttnn.bfloat16)
+        # PART 2 on device, once per step (the rows are layer-invariant): both CFG rows' cos/sin
+        # gathered from their device positions.  Shared batch-2 cache → ONE gather landing both
+        # rows on their own core.
+        rope_rows = (
+            self._rope_rows_sharded_b2(cur_positions)
+            if isinstance(kv_caches, KVCache)
+            else [self._rope_rows_sharded(p) for p in cur_positions]
+        )
+        for layer_idx in range(cfg.num_hidden_layers):
+            x = self._transformer_layer_traced_b2(x, layer_idx, rope_rows, cur_positions, kv_caches)
+        x = ttnn.rms_norm(
+            x,
+            weight=self.w.norm_w,
+            epsilon=cfg.rms_norm_eps,
+            compute_kernel_config=_HIFI4,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        hidden_b2 = ttnn.typecast(x, ttnn.float32)  # [2,1,1,H]
+        x0 = ttnn.slice(x, [0, 0, 0, 0], [1, 1, 1, cfg.hidden_size], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        head_w = lm_head_w if lm_head_w is not None else self.w.lm_head_w
+        logits0 = ttnn.linear(x0, head_w, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return logits0, hidden_b2
+
+    def prefill(
+        self,
+        input_ids: torch.Tensor,
+        kv_cache: Optional[KVCache] = None,
+        return_last_hidden: bool = False,
+    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
+        """Prefill: embed input_ids and run forward pass."""
+        inputs_embeds = self._embed(input_ids)
+        return self.prefill_embeds(inputs_embeds, kv_cache=kv_cache, return_last_hidden=return_last_hidden)
+
+    def prefill_embeds(
+        self,
+        inputs_embeds: ttnn.Tensor,
+        kv_cache: Optional[KVCache] = None,
+        chunk_size: int = 256,
+        return_last_hidden: bool = False,
+    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
+        """Chunked prefill (fp32 manual attention, reference-parity precision).
+
+        Each chunk's K/V is written into the fixed cache at its (tile-aligned, multiple
+        of ``chunk_size``) offset and the chunk attends to the whole prefix read back
+        from the cache — bounding the fp32 score matrix to ``[n_heads, chunk, S_total]``.
+        ``chunk_size`` must be a multiple of 32 (fill_cache offset alignment).
+        """
+        S = inputs_embeds.shape[2]
+        if S <= chunk_size:
+            return self.forward(
+                inputs_embeds,
+                start_pos=0,
+                kv_cache=kv_cache,
+                return_last_hidden=return_last_hidden,
+            )
+
+        logits = None
+        last_hidden = None
+        hidden_dim = inputs_embeds.shape[-1]
+        for start in range(0, S, chunk_size):
+            end = min(start + chunk_size, S)
+            chunk = ttnn.slice(
+                inputs_embeds,
+                [0, 0, start, 0],
+                [1, 1, end, hidden_dim],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            logits, last_hidden = self.forward(
+                chunk,
+                start_pos=start,
+                kv_cache=kv_cache,
+                return_last_hidden=return_last_hidden,
+                compute_logits=(end >= S),  # only the final chunk's logits are consumed
+            )
+        self._release_causal_mask()  # decode never reads it; don't hold [S, S_total] fp32 for the run
+        return logits, last_hidden
+
+    def decode_step(
+        self,
+        input_id: torch.Tensor,
+        start_pos: int,
+        kv_cache: KVCache,
+        return_last_hidden: bool = False,
+    ):
+        """Single decode step.
+
+        Returns logits [B, 1, 1, vocab], or (logits, last_hidden) when return_last_hidden=True.
+        """
+        inputs_embeds = self._embed(input_id)
+        logits, last_hidden = self.forward(
+            inputs_embeds,
+            start_pos=start_pos,
+            kv_cache=kv_cache,
+            return_last_hidden=return_last_hidden,
+        )
+        if return_last_hidden:
+            return logits, last_hidden
+        return logits

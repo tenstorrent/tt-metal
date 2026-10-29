@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 
 // Mirrored by test_quasar_fds.cpp.
@@ -26,10 +27,11 @@ constexpr uint32_t kBadBusyIdleMap = 0x5A5A000B;
 void kernel_main() {
     constexpr uint32_t l1_address = get_named_compile_time_arg_val("l1_address");
     constexpr uint32_t group_id = get_named_compile_time_arg_val("group_id");
-    constexpr uint32_t worker_mask = get_named_compile_time_arg_val("worker_mask");
+    constexpr uint32_t worker_mask = overlay::fds_signalling::all_worker_lanes_mask;
     constexpr uint32_t num_workers = get_named_compile_time_arg_val("num_workers");
     constexpr uint32_t silence_iterations = get_named_compile_time_arg_val("silence_iterations");
     constexpr uint32_t poll_iterations = get_named_compile_time_arg_val("poll_iterations");
+    constexpr bool group_status_is_live = get_named_compile_time_arg_val("group_status_is_live");
     static_assert(group_id < kReadyTokenA, "payload group ids must stay below the ready tokens");
 
     fds_kernel::status_ptr status = fds_kernel::begin_dispatch(l1_address, kNumSlots);
@@ -40,6 +42,7 @@ void kernel_main() {
     if (!fds_kernel::workers_are_ready(status, l1_address, kNumSlots, worker_mask, num_workers, poll_iterations)) {
         return;
     }
+    fds_kernel::refresh_dispatch_group_status(group_id);
 
     overlay::FdsDispatch::fds_clear_go();
     overlay::FdsDispatch::fds_go(group_id);
@@ -72,12 +75,13 @@ void kernel_main() {
         }
     }
 
-    if (result == kComplete) {
-        // With the dones still held, group 0 must read as the exact complement of the busy lanes:
-        // the idle map is a live decode, not a constant that happens to be all-ones when idle.
+    if (group_status_is_live && result == kComplete) {
+        // Where status is live, group 0 must read as the exact complement of the busy lanes while
+        // the dones are held: the idle map is a live decode, not a constant that happens to be
+        // all-ones when idle.
         const uint32_t busy_lanes = overlay::FdsDispatch::fds_read_group_status(group_id);
         const uint32_t idle_lanes = overlay::FdsDispatch::fds_read_group_status(0);
-        if ((busy_lanes ^ idle_lanes) != 0xFFFFFFFF) {
+        if ((busy_lanes ^ idle_lanes) != overlay::fds_signalling::all_worker_lanes_mask) {
             status[kSlotIdleStatus] = idle_lanes;
             result = kBadBusyIdleMap;
         }
@@ -89,6 +93,7 @@ void kernel_main() {
         fds_epoch::clear_dispatch_inputs(worker_mask);
         bool fell = false;
         for (uint32_t i = 0; i < poll_iterations && !fell; i++) {
+            fds_kernel::refresh_dispatch_group_status(group_id);
             fell = (overlay::FdsDispatch::fds_read_group_status(group_id) & worker_mask) == 0 &&
                    overlay::FdsDispatch::fds_read_group_count(group_id) == 0;
         }
@@ -104,12 +109,12 @@ void kernel_main() {
         }
     }
 
-    if (result == kComplete) {
-        // With every input register clear, group 0's status is the map of quiet lanes: all of
-        // them, tied-off lanes included.
+    if (group_status_is_live && result == kComplete) {
+        // Where status is live and every input register is clear, group 0's status is the map of
+        // quiet lanes: all of them, tied-off lanes included.
         const uint32_t idle_status = overlay::FdsDispatch::fds_read_group_status(0);
         status[kSlotIdleStatus] = idle_status;
-        if (idle_status != 0xFFFFFFFF) {
+        if (idle_status != overlay::fds_signalling::all_worker_lanes_mask) {
             result = kBadIdleMap;
         }
     }

@@ -36,13 +36,16 @@ void kernel_main() {
     // never unpacks.
     compute_kernel_hw_startup(dfb::out, dfb::out);
 
-    for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; ++tile_id) {
-        dfb.reserve_back(1);
+    // One reserve/push per share (1 on a plain ring, more when a side is BLOCKED). Nothing is
+    // packed: the host pre-fills the ring.
+    const uint32_t share = dfb.get_producer_share();
+    for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id += share) {
+        dfb.reserve_back(share);
         // TEN-4746: a real packer op must sit between reserve_back's WAIT_FREE and push_back's
         // PUSH_TILES. The host pre-fills the ring, so a no-write dummy pack supplies that op
         // without modifying the payload.
         ckernel::dummy_pack(dfb::out);
-        dfb.push_back(1);
+        dfb.push_back(share);
     }
     dfb.finish();
 }
