@@ -76,6 +76,7 @@ CB_SUMSQ_PARTIAL = 3
 CB_INV_RMS = 4
 CB_GAMMA_TILES = 6
 CB_X_GAMMA = 7
+CB_X_REREAD = 8
 CB_PARTIAL_COL = 9
 CB_GATHER = 10
 CB_RMS_ROOT = 11
@@ -183,6 +184,10 @@ class LocalPlan:
     out_resident: bool = False  # output CB backed on the output shard (input's own placement)
     combine_depth: int = COMBINE_DEPTH  # cb_partial_col depth in waves (1: the lean rung of the L1 ladder)
     sq_rows: int = 0  # tile-rows per square -> collapse round (0: the whole wave; 1: the lean rung)
+    # x re-read (Refinement 1a, interleaved only, the last rung): x is never resident — Phase A streams it per
+    # square -> collapse round through cb_x_tiles (x_depth rounds deep), Phase B's writer re-reads it per
+    # (wave, chunk, tile-row) into cb_x_reread. x is read twice from DRAM, only on this rung.
+    reread: bool = False
 
     def __post_init__(self):
         if self.PW <= 0:
@@ -295,7 +300,10 @@ def cb_table(plan: LocalPlan, sz: Sizes):
         (CB_STATS, T_s, sz.G * p.q),
         (CB_RECORD_SCRATCH, RECORD_BYTES, (sz.G + 1) * p.q),
     ]
-    if not p.sharded:
+    if p.reread:
+        t.append((CB_X_TILES, sz.T_in, p.x_depth * p.SQ * p.WS))
+        t.append((CB_X_REREAD, sz.T_in, STREAM_DEPTH * p.C))
+    elif not p.sharded:
         t.append((CB_X_TILES, sz.T_in, p.x_depth * p.R_pass * p.WS))
     if not p.out_resident:
         t.append((CB_OUTPUT, sz.T_out, STREAM_DEPTH * p.C))
@@ -305,6 +313,8 @@ def cb_table(plan: LocalPlan, sz: Sizes):
     if sz.has_gamma:
         t.append((CB_GAMMA_TILES, sz.T_g, STREAM_DEPTH * p.C if p.gamma_stream else p.Wp))
         xg = {GAMMA_BLOCK: p.R_pass * p.WS, GAMMA_WAVE: p.q_w * p.WS, GAMMA_CHUNK: p.q_w * p.C}[p.gamma_mode]
+        if p.reread:
+            xg = p.C  # x·γ of one tile-row chunk
         t.append((CB_X_GAMMA, sz.T_i, xg))
     if p.masked:
         t.append((CB_SUMSQ_LAST, sz.T_i, p.SQ))
@@ -354,6 +364,33 @@ def blocking_options(num_waves: int, has_gamma: bool, sharded: bool, combine: bo
                         )
 
 
+def reread_options(num_waves: int, has_gamma: bool):
+    """The x re-read rung (Refinement 1a, interleaved only), tried after every other rung: x streamed one tile-row per
+    square -> collapse round (x_depth rows deep, double-buffered first) and re-read per tile-row chunk for the scaling
+    pass, so the x footprint no longer scales with the wave. cb_partial_col keeps COMBINE_DEPTH (the streamed reader
+    pushes wave w+1 before it services wave w: a single-wave cb_partial_col would deadlock)."""
+    pws = []
+    for P in range(1, num_waves + 1):
+        pw = math.ceil(num_waves / P)
+        if pw not in pws:
+            pws.append(pw)
+    modes = [(GAMMA_CHUNK, False), (GAMMA_CHUNK, True)] if has_gamma else [(GAMMA_BLOCK, False)]
+    for pw in pws:
+        for cap in _caps():
+            for gm, gs in modes:
+                for xd in (2, 1):
+                    yield dict(
+                        PW=pw,
+                        cap=cap,
+                        gamma_mode=gm,
+                        gamma_stream=gs,
+                        x_depth=xd,
+                        combine_depth=COMBINE_DEPTH,
+                        sq_rows=1,
+                        reread=True,
+                    )
+
+
 def rewave(base: LocalPlan, waves_max: int) -> LocalPlan:
     nw, q_w, owners, q = wave_params(base.rows_max, base.G_w, waves_max)
     return replace(base, num_waves=nw, q_w=q_w, owners=owners, q=q, PW=nw)
@@ -367,16 +404,20 @@ def first_fit(base: LocalPlan, sz: Sizes, budget: int):
     more = rewave(base, WAVES_MAX_PASSES)
     if more.num_waves > base.num_waves:
         bases.append(more)
-    for b in bases:
-        for opt in blocking_options(b.num_waves, sz.has_gamma, b.sharded, b.G_w > 1):
-            rank += 1
-            p = replace(b, **opt)
-            if b is not base and p.PW >= p.num_waves:
-                continue  # beyond the Phase 0 wave count only the pass regime is used
-            if p.regions * gather_field_bits(p.G_w) > 32 and p.G_w > 1:
-                continue  # SEM_GATHER holds one field per owned wave of a pass
-            if footprint(sz, p) <= budget:
-                return rank, p
+    ladders = [blocking_options]
+    if not base.sharded:
+        ladders.append(lambda nw, g, sh, cmb: reread_options(nw, g))  # last resort: x re-read (Refinement 1a)
+    for ladder in ladders:
+        for b in bases:
+            for opt in ladder(b.num_waves, sz.has_gamma, b.sharded, b.G_w > 1):
+                rank += 1
+                p = replace(b, **opt)
+                if b is not base and p.PW >= p.num_waves:
+                    continue  # beyond the Phase 0 wave count only the pass regime is used
+                if p.regions * gather_field_bits(p.G_w) > 32 and p.G_w > 1:
+                    continue  # SEM_GATHER holds one field per owned wave of a pass
+                if footprint(sz, p) <= budget:
+                    return rank, p
     return None
 
 
@@ -849,6 +890,7 @@ def plan_summary(input_tensor, *, cluster_axis, num_links, gamma=None, fp32_dest
         or p.gamma_mode == GAMMA_CHUNK
         or p.sq_rows
         or p.combine_depth != COMBINE_DEPTH
+        or p.reread
     ):
         out.update(
             passes=p.passes,
@@ -860,6 +902,8 @@ def plan_summary(input_tensor, *, cluster_axis, num_links, gamma=None, fp32_dest
             combine_depth=p.combine_depth,
             sq_rows=p.SQ,
         )
+        if p.reread:
+            out.update(reread=True)
     return out
 
 
@@ -988,6 +1032,7 @@ def create_mesh_program_descriptor(
     # ---- CBs (worker cores): cb_table() is the single source of the allocated CBs and of footprint() ----
     fmt = {
         CB_X_TILES: input_tensor.dtype,
+        CB_X_REREAD: input_tensor.dtype,
         CB_REDUCE_SCALER: SCALER_FORMAT,
         CB_STATS: STATS_FORMAT,
         CB_RECORD_SCRATCH: STATS_FORMAT,
@@ -1032,8 +1077,9 @@ def create_mesh_program_descriptor(
         plan.PW,  # 23 waves per pass
         plan.regions,  # 24 cb_gather regions (owned waves per pass)
         SEM_PASS,  # 25
+        int(plan.reread),  # 26 x re-read (streamed Phase A)
     ]
-    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())  # 26..
+    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())  # 27..
     compute_ct = [
         int(gamma is not None),  # 0
         int(plan.sharded),  # 1
@@ -1054,6 +1100,7 @@ def create_mesh_program_descriptor(
         plan.PW,  # 16
         int(plan.gamma_stream),  # 17
         plan.SQ,  # 18 tile-rows per square -> collapse round
+        int(plan.reread),  # 19 x re-read
     ]
     gamma_is_tile = gamma is not None and gamma.layout == ttnn.TILE_LAYOUT
     writer_ct = [
@@ -1071,13 +1118,15 @@ def create_mesh_program_descriptor(
         sz.T_g,  # 11
         plan.Wp,  # 12
         int(plan.gamma_stream),  # 13
+        int(plan.reread),  # 14 x re-read (the writer supplies cb_x_reread)
     ]
-    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())  # 14..
+    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())  # 15..
     writer_ct.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
         if gamma is not None
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
+    writer_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())  # x re-read
     port_ct = [G, plan.num_waves, int(ttnn.get_tt_fabric_max_payload_size_bytes()), MAX_HEADERS, SEM_OWN_STATS_BASE]
 
     compute_cfg = ttnn.ComputeConfigDescriptor(
@@ -1145,7 +1194,7 @@ def create_mesh_program_descriptor(
                 rt += src_dir
                 reader_rt[c.x][c.y] = rt
                 compute_rt[c.x][c.y] = [m.rows, m.V, m.index, masked_core, inv_w_bits, eps_bits]
-                writer_rt[c.x][c.y] = [out_addr, gamma_addr, m.start_row, m.rows, m.w0, m.V]
+                writer_rt[c.x][c.y] = [out_addr, gamma_addr, m.start_row, m.rows, m.w0, m.V, in_addr]
 
             # ---- port args ----
             port_rt = ttnn.RuntimeArgs()
@@ -1280,6 +1329,7 @@ def create_mesh_program_descriptor(
                     plan.x_depth,
                     plan.combine_depth,
                     plan.SQ,
+                    plan.reread,
                     scratch_cbs,
                     res.landing_addr,
                 )

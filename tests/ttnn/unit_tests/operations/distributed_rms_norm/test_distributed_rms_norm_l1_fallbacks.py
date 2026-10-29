@@ -156,6 +156,36 @@ RUNGS = [
         ttnn.TILE_LAYOUT,
         dict(gamma_mode=_C, gamma_stream=True, cap=16),
     ),
+    # Refinement 1a: x re-read (interleaved only) — Phase A streams x per square -> collapse round, the writer
+    # re-reads it per (wave, chunk, tile-row) for the scaling pass
+    (
+        "reread-chunk",
+        ML.INTERLEAVED,
+        (1, 1, 640, 1792),
+        ttnn.TILE_LAYOUT,
+        dict(reread=True, gamma_mode=_C, sq_rows=1, x_depth=2),
+    ),
+    (
+        "reread-sq2-depth1",
+        ML.INTERLEAVED,
+        (1, 1, 640, 1792),
+        ttnn.TILE_LAYOUT,
+        dict(reread=True, gamma_mode=_C, sq_rows=2, x_depth=1),
+    ),
+    (
+        "reread-stream-rm-wpad-passes",
+        ML.INTERLEAVED,
+        (1, 1, 100, 1000),
+        ttnn.ROW_MAJOR_LAYOUT,
+        dict(reread=True, PW=1, gamma_mode=_C, gamma_stream=True, cap=4, sq_rows=1, x_depth=2),
+    ),
+    (
+        "reread-nogamma-passes",
+        ML.INTERLEAVED,
+        (1, 1, 2048, 1280),
+        None,
+        dict(reread=True, PW=2, sq_rows=1, x_depth=2),
+    ),
 ]
 
 

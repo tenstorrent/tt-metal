@@ -176,7 +176,10 @@ void kernel_main() {
     constexpr uint32_t REGIONS = get_compile_time_arg_val(24);
     constexpr uint32_t SEM_PASS = get_compile_time_arg_val(25);
     constexpr uint32_t NP = (NW + PW - 1) / PW;
-    constexpr auto input_args = TensorAccessorArgs<26>();
+    // x re-read (L1 fallback, interleaved only): x is never resident — Phase A streams it one tile-row at a time
+    // through cb_x_tiles (square + collapse), Phase B's writer re-reads it (cb_x_reread)
+    constexpr bool REREAD = get_compile_time_arg_val(26) != 0;
+    constexpr auto input_args = TensorAccessorArgs<27>();
 
     size_t a = 0;
     const uint32_t in_addr = get_arg_val<uint32_t>(a++);
@@ -285,7 +288,7 @@ void kernel_main() {
     };
     // reserve + start the x reads of the pass block [w_begin, w_end)
     auto load_pass = [&](uint32_t w_begin, uint32_t w_end) {
-        if constexpr (!SHARDED) {
+        if constexpr (!SHARDED && !REREAD) {
             const uint32_t row0 = w_begin * Q_W;
             const uint32_t row_end = (w_end * Q_W < rows) ? w_end * Q_W : rows;
             const uint32_t rows_p = row_end > row0 ? row_end - row0 : 0;
@@ -330,8 +333,42 @@ void kernel_main() {
         }
     }
 
+    // x re-read: the wave's tile-rows streamed one at a time (cb_x_tiles holds a few rows; compute pops each row
+    // after its square + collapse). Pad tiles [V, WS) and the W-pad columns are zeroed per row as in the resident path.
+    [[maybe_unused]] auto stream_wave = [&](uint32_t w) {
+        if constexpr (!SHARDED && REREAD) {
+            DRMS_ZONE("rd_stream");
+            const uint32_t r0 = w * Q_W;
+            const uint32_t n = n_wave(w);
+            for (uint32_t r = r0; r < r0 + n; ++r) {
+                cb_reserve_back(cb_x_tiles, WS);
+                const uint32_t l1 = get_write_ptr(cb_x_tiles);
+                if (V < WS) {
+                    noc.async_write_zeros(x_cb, (WS - V) * T_IN, {.offset_bytes = V * T_IN});
+                }
+                const uint32_t page0 = (start_row + r) * WT + w0;
+                for (uint32_t t = 0; t < V; ++t) {
+                    noc_async_read_tile(page0 + t, input_accessor, l1 + t * T_IN);
+                }
+                noc_async_read_barrier();
+                if (V < WS) {
+                    noc.write_zeros_l1_barrier();
+                }
+                if constexpr (W_VALID_LAST < 32) {
+                    if (holds_pad) {
+                        constexpr uint32_t es = DTYPE_KIND == 0 ? 4 : (DTYPE_KIND == 1 ? 2 : 1);
+                        zero_tile_w_padding<es>(noc, x_cb, (V - 1) * T_IN, W_VALID_LAST);
+                    }
+                }
+                cb_push_back(cb_x_tiles, WS);
+            }
+        }
+    };
+
     auto land_wave = [&](uint32_t w) {
-        if constexpr (!SHARDED) {
+        if constexpr (REREAD) {
+            stream_wave(w);
+        } else if constexpr (!SHARDED) {
             DRMS_ZONE("rd_land");
             noc_async_read_barrier_with_trid(trid(w));
             const uint32_t n = n_wave(w);
@@ -582,7 +619,9 @@ void kernel_main() {
         for (uint32_t w = w_begin; w <= w_end; ++w) {
             if (w < w_end) {
                 land_wave(w);
-                issue_ahead(w + 1 + LOOKAHEAD);
+                if constexpr (!REREAD) {
+                    issue_ahead(w + 1 + LOOKAHEAD);
+                }
             }
             if (w > w_begin) {
                 service(w - 1);

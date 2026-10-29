@@ -12,6 +12,8 @@
 //     DRAM / L1, or a sharded output with a placement other than the input's: resharding — its pages live on their
 //     shard cores); output with the input's own shard placement: the output CB is backed on the output shard
 //     (compute packs in place) — nothing to write.
+//   x re-read (L1 fallback REREAD, interleaved input): x is not resident through Phase B — the writer re-reads it
+//     one (wave, chunk, tile-row) item ahead of the matching store into cb_x_reread (the chunk's valid tiles).
 
 #include <stdint.h>
 
@@ -27,6 +29,7 @@
 
 namespace {
 constexpr uint32_t cb_gamma_tiles = 6;
+constexpr uint32_t cb_x_reread = 8;
 constexpr uint32_t cb_output = 16;
 constexpr uint32_t FACE_DIM = 16;
 }  // namespace
@@ -47,8 +50,10 @@ void kernel_main() {
     constexpr uint32_t WP = get_compile_time_arg_val(12);
     // γ streams one C-tile chunk per (wave with rows, chunk) instead of the resident slice (L1 fallback)
     constexpr bool GAMMA_STREAM = get_compile_time_arg_val(13) != 0;
-    constexpr auto output_args = TensorAccessorArgs<14>();
+    constexpr bool REREAD = get_compile_time_arg_val(14) != 0;
+    constexpr auto output_args = TensorAccessorArgs<15>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     [[maybe_unused]] const uint32_t gamma_addr = get_arg_val<uint32_t>(1);
@@ -56,6 +61,7 @@ void kernel_main() {
     const uint32_t rows = get_arg_val<uint32_t>(3);
     const uint32_t w0 = get_arg_val<uint32_t>(4);
     const uint32_t V = get_arg_val<uint32_t>(5);
+    [[maybe_unused]] const uint32_t in_addr = get_arg_val<uint32_t>(6);
 
     auto n_wave = [&](uint32_t w) -> uint32_t {
         const uint32_t r0 = w * Q_W;
@@ -129,6 +135,39 @@ void kernel_main() {
         return false;
     };
 
+    // x re-read: one (wave with rows, chunk, tile-row) item per call, in the compute's consumption order
+    uint32_t xw = 0, xc = 0, xr = 0;  // next x item
+    [[maybe_unused]] auto push_x_item = [&]() {
+        if constexpr (REREAD) {
+            while (xw < NW && n_wave(xw) == 0) {
+                ++xw;
+            }
+            if (xw >= NW) {
+                return;
+            }
+            DRMS_ZONE("wr_reread");
+            const auto input_accessor = TensorAccessor(input_args, in_addr);
+            const uint32_t cw = chunk_width(xc);
+            const uint32_t nv = chunk_valid(xc);
+            cb_reserve_back(cb_x_reread, cw);
+            const uint32_t l1 = get_write_ptr(cb_x_reread);
+            const uint32_t t_in = get_tile_size(cb_x_reread);
+            const uint32_t page0 = (start_row + xw * Q_W + xr) * WT + w0 + xc * C;
+            for (uint32_t i = 0; i < nv; ++i) {
+                noc_async_read_tile(page0 + i, input_accessor, l1 + i * t_in);
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_x_reread, cw);
+            if (++xr == n_wave(xw)) {
+                xr = 0;
+                if (++xc == NCH) {
+                    xc = 0;
+                    ++xw;
+                }
+            }
+        }
+    };
+
     // ---------------- store_wave ----------------
     if constexpr (OUT_SHARDED) {
         // output shard-backed (compute packs in place): only the streamed γ remains to supply
@@ -138,6 +177,7 @@ void kernel_main() {
         // interleaved or resharded output (TensorAccessor: a sharded output's pages live on their shard cores)
         const auto output_accessor = TensorAccessor(output_args, out_addr);
         push_gamma_chunk();  // one chunk ahead: chunk i+1's γ read overlaps chunk i's stores
+        push_x_item();       // one item ahead (x re-read)
         for (uint32_t w = 0; w < NW; ++w) {
             const uint32_t r0 = w * Q_W;
             const uint32_t n = n_wave(w);
@@ -147,6 +187,7 @@ void kernel_main() {
                 const uint32_t cw = chunk_width(c);  // a shard-backed slice's last chunk is narrower
                 const uint32_t nv = chunk_valid(c);
                 for (uint32_t r = 0; r < n; ++r) {
+                    push_x_item();
                     {
                         DRMS_ZONE("wr_wait_out");
                         cb_wait_front(cb_output, cw);
