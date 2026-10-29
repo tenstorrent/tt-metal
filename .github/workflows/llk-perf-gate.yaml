@@ -394,30 +394,6 @@ jobs:
             mv stage2.tmp stage2.md
           fi
           cat stage2.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Add stage 2 to the gate comment
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        if: ${{ needs.placement-plan.outputs.pr != '' }}
-        env:
-          ARCH: ${{ matrix.arch }}
-          PR_NUMBER: ${{ needs.placement-plan.outputs.pr }}
-        with:
-          script: |
-            const fs = require('fs');
-            const marker = `<!-- llk-perf-gate:${process.env.ARCH} -->`;
-            const split = '<!-- llk-perf-gate-stage2 -->';
-            const { owner, repo } = context.repo;
-            const issue_number = Number(process.env.PR_NUMBER);
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner, repo, issue_number, per_page: 100,
-            });
-            const mine = comments.find((c) => c.user.type === 'Bot' && c.body.startsWith(marker));
-            const stage2 = fs.readFileSync('stage2.md', 'utf8');
-            if (!mine) {
-              await github.rest.issues.createComment({ owner, repo, issue_number, body: `${marker}\n${split}\n${stage2}` });
-              return;
-            }
-            const body = `${mine.body.split(split)[0].trimEnd()}\n\n${split}\n${stage2}`;
-            await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         if: always()
         with:
