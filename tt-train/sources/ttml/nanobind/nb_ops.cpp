@@ -771,7 +771,8 @@ void py_module(nb::module_& m) {
             nb::arg("dL_dout"),
             nb::arg("compute_dgamma") = true,
             nb::arg("gate") = nb::none(),
-            "Backward of rmsnorm_fw -> [dL/dinput, dL/dgamma [1,1,1,V] or None, dL/dgate or None].");
+            nb::arg("compute_da") = true,
+            "Backward of rmsnorm_fw -> [dL/dinput or None, dL/dgamma [1,1,1,V] or None, dL/dgate or None].");
     }
 }
 

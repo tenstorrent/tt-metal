@@ -42,6 +42,15 @@ constexpr bool gated = true;
 constexpr bool gated = false;
 #endif
 
+#ifdef COMPUTE_DA
+constexpr bool compute_da = true;
+#else
+constexpr bool compute_da = false;
+#endif
+
+// The mask, the scaler and the matmul reduce tile are only used for dL_da; gamma and the zero tile also for dL_dgate.
+constexpr bool reads_gamma = compute_da || gated;
+
 #if defined(GATED) && !defined(EVERYTHING_FITS_IN_L1)
 #error "Gated mode needs EVERYTHING_FITS_IN_L1, like the compute kernel: streaming would read the gate twice."
 #endif
@@ -59,16 +68,20 @@ void kernel_main() {
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
     constexpr uint16_t minus_inf = 0xFF80;  // (bfloat16)-inf -> uint16_t
-    // Generate mask tile.
-    if constexpr (do_mask_w) {
-        generate_mask_tile(cb_mask_w_idx, one, zero, mask_w);
+    if constexpr (compute_da) {
+        // Generate mask tile.
+        if constexpr (do_mask_w) {
+            generate_mask_tile(cb_mask_w_idx, one, zero, mask_w);
+        }
+        // Generate tile with scalar.
+        generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
+        // Generate tile for matmul row reduce.
+        generate_matmul_row_reduce_tile(cb_mat_mul_reduce);
     }
-    // Generate tile with scalar.
-    generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
-    // Generate tile for matmul row reduce.
-    generate_matmul_row_reduce_tile(cb_mat_mul_reduce);
-    // Generate tile with zeros.
-    generate_tile_with_bfloat16_value(cb_zero_idx, zero);
+    if constexpr (reads_gamma) {
+        // Generate tile with zeros.
+        generate_tile_with_bfloat16_value(cb_zero_idx, zero);
+    }
 
     // The input may be fp32; every other tensor read here is bf16.
     const uint32_t input_tile_bytes = get_tile_size(cb_input_idx);
@@ -84,7 +97,8 @@ void kernel_main() {
     const auto dL_out_address_generator = TensorAccessor(dL_out_args, dL_out_address);
     const auto gate_address_generator = TensorAccessor(gate_args, gate_address);
 
-    // Read input tensors row by row, reading each row's data twice due to compute requirements
+    // Read input tensors row by row. Without everything in L1, dL_da reads each row twice: once for the scale, once for
+    // the gradients.
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
         // Read RMS(a) once per row - shape [B,1,S,1], one scalar per row
@@ -114,13 +128,17 @@ void kernel_main() {
         for (uint32_t c = 0; c < Wt; c += block_size) {
             read_row_blocks(c);
 #ifndef EVERYTHING_FITS_IN_L1
-            // If not everything fits in L1, we need to reread gamma for each row.
-            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes, block_size);
-            // Barrier called by read_tiles_by_row with UseBarrier=true above
+            if constexpr (reads_gamma) {
+                // If not everything fits in L1, we need to reread gamma for each row.
+                read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes, block_size);
+                // Barrier called by read_tiles_by_row with UseBarrier=true above
+            } else {
+                noc_async_read_barrier();
+            }
             push_row_blocks();
 #else
             // If everything fits in L1, we can read gamma only once.
-            if (r == start_row) {
+            if (reads_gamma && r == start_row) {
                 read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes, block_size);
                 // Barrier called by read_tiles_by_row with UseBarrier=true above
             } else {
@@ -131,12 +149,14 @@ void kernel_main() {
         }
 
 #ifndef EVERYTHING_FITS_IN_L1
-        // Second pass: read row data again for second compute phase
-        for (uint32_t c = 0; c < Wt; c += block_size) {
-            read_row_blocks(c);
-            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes, block_size);
-            // Barrier called by read_tiles_by_row with UseBarrier=true above
-            push_row_blocks();
+        if constexpr (compute_da) {
+            // Second pass: read row data again for second compute phase
+            for (uint32_t c = 0; c < Wt; c += block_size) {
+                read_row_blocks(c);
+                read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes, block_size);
+                // Barrier called by read_tiles_by_row with UseBarrier=true above
+                push_row_blocks();
+            }
         }
 #endif
     }

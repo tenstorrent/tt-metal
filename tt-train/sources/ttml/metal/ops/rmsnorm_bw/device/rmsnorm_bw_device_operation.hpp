@@ -39,6 +39,7 @@ ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation::tensor_ret
     const ttnn::Tensor& dL_dout_tensor,
     const std::optional<ttnn::Tensor>& gate,
     bool compute_dgamma = true,
+    bool compute_da = true,
     const std::optional<ttnn::Tensor>& preallocated_da = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_dgamma_components = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_dgate = std::nullopt);
