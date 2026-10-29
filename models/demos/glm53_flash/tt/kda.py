@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """KDA (Kimi Delta Attention) layer for GLM-5.3-Flash on one device.
 
-Prefill reuses ``models.demos.deepseek_v3_d_p.tt.kda.ttKDA`` (chunked delta-rule kernels, proven
+Prefill runs ``models.demos.glm53_flash.tt.ttkda.ttKDA`` (the vendored deepseek_v3_d_p/tt/kda driver) (chunked delta-rule kernels, proven
 against the Kimi-K3 torch reference, which ``reference/check_kda_reference.py`` shows is the same
 function as HF's ``Glm5NextTextLinearAttention`` with GLM weights at PCC 0.99999).
 
@@ -53,9 +53,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.reference.kda import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_state_dict
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.demos.glm53_flash.custom_ops.kda_decode.op import (
     GATES_MODES,
     PLACEMENTS,
@@ -66,6 +63,9 @@ from models.demos.glm53_flash.custom_ops.kda_decode.op import (
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, from_torch_host_layout, interleave_blocks, single_chip
+from models.demos.glm53_flash.tt.ttkda.config import KDAProgramConfig, KDARecurrenceProgramConfig
+from models.demos.glm53_flash.tt.ttkda.kda import KdaState, ttKDA
+from models.demos.glm53_flash.tt.ttkda.weights import KDAWeights, load_kda_weights
 
 L2_NORM_EPS = 1e-6  # FLA l2norm: x / sqrt(sum(x^2) + 1e-6)
 # decode path: "composite" (GLM53_KDA_FUSED=0) | "block" (GLM53_KDA_FUSED=1: one kda_decode program for the whole block)

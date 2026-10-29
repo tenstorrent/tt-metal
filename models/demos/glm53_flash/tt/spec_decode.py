@@ -89,12 +89,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.custom_ops.kda_decode.op import GATE_WORDS
 from models.demos.glm53_flash.tt.dsa import TtDSA, TtLatentCache, _meta_mapper, _meta_upload
 from models.demos.glm53_flash.tt.functional_decoder import FunctionalDecoder
 from models.demos.glm53_flash.tt.mesh import GLMMesh
 from models.demos.glm53_flash.tt.mtp import TtMTPBlock
+from models.demos.glm53_flash.tt.ttkda.kda import KdaState
 
 if TYPE_CHECKING:  # no import cycle at runtime (mesh_model does not import this module)
     from models.demos.glm53_flash.tt.mesh_model import GLM53MeshModel

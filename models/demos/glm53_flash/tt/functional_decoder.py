@@ -72,7 +72,6 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.decoder_layer import LayerState, TtDecoderLayer, WaveInfo
 from models.demos.glm53_flash.tt.dsa import (
@@ -82,6 +81,7 @@ from models.demos.glm53_flash.tt.dsa import (
     sparse_decode_enabled,
 )
 from models.demos.glm53_flash.tt.mesh import GLMMesh
+from models.demos.glm53_flash.tt.ttkda.kda import KdaState
 
 MEM_LOG_LAYERS_ENV = "GLM53_MEM_LOG_LAYERS"  # "1": log the DRAM allocator after every layer's prefill chunk
 

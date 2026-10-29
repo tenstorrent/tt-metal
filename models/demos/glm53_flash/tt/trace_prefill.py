@@ -44,10 +44,10 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.tt.indexer import ring_selector
 from models.demos.glm53_flash.tt.mesh import GLMMesh
 from models.demos.glm53_flash.tt.moe import pad_row_mask_host, wave_row_mask_host
+from models.demos.glm53_flash.tt.ttkda.kda import KdaState
 
 TILE = 32
 DENSE_ROWS = 2048  # TtDSA.sparse_row_start: rows at positions < 2048 attend densely (the traced range, Phase A)

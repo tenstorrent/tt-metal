@@ -28,10 +28,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.glm53_flash.tests.utils import pcc
 from models.demos.glm53_flash.tt.kda import device_scalar_u32
+from models.demos.glm53_flash.tt.ttkda.config import KDARecurrenceProgramConfig
+from models.demos.glm53_flash.tt.ttkda.recurrence import KDARecurrence
 
 H, K, V = 16, 128, 128  # TP4 per-chip head geometry of GLM-5.3-Flash KDA (64 heads over 4 columns)
 GATE_LOWER_BOUND = -5.0  # g = -5 sigmoid(.) per key channel (GLM gate_lower_bound)

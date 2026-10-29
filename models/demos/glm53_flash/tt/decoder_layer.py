@@ -25,12 +25,12 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.dsa import TtDSA, TtLatentCache, sparse_decode_enabled
 from models.demos.glm53_flash.tt.kda import TtKDA
 from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
 from models.demos.glm53_flash.tt.mhc import build_mhc
+from models.demos.glm53_flash.tt.ttkda.kda import KdaState
 
 _DUMPED: set = set()
 
