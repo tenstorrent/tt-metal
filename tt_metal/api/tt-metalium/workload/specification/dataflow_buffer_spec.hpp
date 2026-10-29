@@ -32,25 +32,25 @@
 // KernelSpec, not here. (The endpoint configuration encodes producer/consumer
 // kernel identity, number of kernel threads, and multi-threaded access patterns.)
 //
-// INVARIANT: At the node level, a DFB instance has exactly one producer kernel
-//   instance and exactly one consumer kernel instance. You must respect this
-//   invariant across the DataflowBufferSpec's endpoint bindings.
+// INVARIANT: On its effective placement, a DFB instance with an endpoint has exactly one producer
+//   kernel instance and exactly one consumer kernel instance. Nodes with neither endpoint are permitted.
+//   You must respect this invariant across the DataflowBufferSpec's endpoint bindings.
 //   This is a per-node rule, not a per-spec one: you MAY bind more than one
 //   KernelSpec to a producer (or consumer) endpoint, because their non-overlapping
 //   node sets each still contribute exactly one instance per node. Such multiple
 //   bindings on one endpoint are legal provided they have:
-//     - non-overlapping node coverage, AND
+//     - non-overlapping node coverage within the DFB's effective placement, AND
 //     - the same kernel kind (compute or data movement), AND
 //     - identical binding-site parameters (access_pattern, num_threads)
 //   (Exception: DFBAdvancedOptions::allow_instance_multi_binding, 1st-gen (1xx) only.)
 //
 // INSTANCING: Like KernelSpec, a DataflowBufferSpec is a *per-node template*.
-//   One independent DFB instance is allocated per node where its endpoint
-//   kernels run, in that node's local SRAM. That instance serves the same-node
+//   One independent DFB instance is allocated per node in its effective placement,
+//   in that node's local SRAM. That instance serves the same-node
 //   producer and consumer kernel instances.
 //
-// PLACEMENT: Derived — the DFB's effective node set is the union of its bound
-//   kernels' WorkUnitSpec target_nodes.
+// PLACEMENT: The DFB's effective node set is advanced_options.override_placement when set,
+//   or the union of its bound kernels' WorkUnitSpec target_nodes otherwise.
 //
 // HW RESOURCES: 1st-gen architectures (1xx; Wormhole and Blackhole) support a fixed
 //   number of DFBs per node. On 2nd-gen (2xx), the DFB-per-node-limit depends on the
@@ -72,6 +72,8 @@ using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 //------------------------------------------------
 
 struct DataflowBufferSpec {
+    // Invariant: borrowed_from and advanced_options.override_placement cannot both be set.
+
     // DFB identifier: used to reference this DFB within the ProgramSpec
     DFBSpecName unique_id;
 
