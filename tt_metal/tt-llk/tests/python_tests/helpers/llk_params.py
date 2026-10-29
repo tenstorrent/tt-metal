@@ -739,6 +739,7 @@ class BriscCmd(Enum):
 
 format_tile_sizes = {
     DataFormat.Bfp8_b: 1088,
+    DataFormat.Bfp8: 1088,
     DataFormat.Bfp4_b: 576,
     DataFormat.Bfp2_b: 320,
     DataFormat.Float16: 2048,

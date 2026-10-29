@@ -108,8 +108,9 @@ def test_pack(
     loop_factor: int = 1,
     pack_block: bool = False,
     block_tiles: int | None = None,
+    allow_int32_mix: bool = False,
 ):
-    if (formats.input_format == DataFormat.Int32) ^ (
+    if not allow_int32_mix and (formats.input_format == DataFormat.Int32) ^ (
         formats.output_format == DataFormat.Int32
     ):
         pytest.skip(
