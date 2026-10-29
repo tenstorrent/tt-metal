@@ -95,6 +95,10 @@ void kernel_main() {
     // reader takes the same arg.
     constexpr uint32_t plan_rec_base = get_named_compile_time_arg_val("plan_rec_base");
     constexpr uint32_t num_q_passes = get_named_compile_time_arg_val("num_q_passes");
+    // Pair steps: one step over two consecutive pieces of a head (halves the per-step fixed cost); needs the K/V CB
+    // depth to keep a pair from wrapping the CB end.
+    constexpr bool pair_steps = get_named_compile_time_arg_val("pair_steps") == 1;
+    constexpr uint32_t kv_cb_pages = get_named_compile_time_arg_val("kv_cb_pages");
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
@@ -103,6 +107,8 @@ void kernel_main() {
     CircularBuffer(cb_identity_scale_in).wait_front(1);
 
     const uint32_t q_per_core = global_q_end - global_q_start;
+    // The K/V CBs' read position in entries, carried across ring iterations and passes (the CBs are never reset).
+    uint32_t kv_pos = 0;
     for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
         const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
         const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
@@ -181,7 +187,9 @@ void kernel_main() {
                 resident_slots,
                 plan_block_words,
                 plan_rec_base,
-                num_q_passes>(
+                num_q_passes,
+                pair_steps,
+                kv_cb_pages>(
                 pass_q_start,
                 pass_q_end,
                 num_q_chunks,
@@ -194,6 +202,7 @@ void kernel_main() {
                 local_n_mask_chunk_id,
                 global_n_padded_tiles,
                 initialized_slots,
+                kv_pos,
                 is_last_ring_iter,
                 is_first_active_iter);
         }

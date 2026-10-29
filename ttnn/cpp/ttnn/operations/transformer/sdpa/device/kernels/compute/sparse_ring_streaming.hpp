@@ -282,6 +282,7 @@ struct ResidentStepState {
     uint32_t pv_stride = 0;        // P@V MOP row stride in effect (0: the subtract MOP is)
     bool mm_fmt = false;           // unpacker srcA format: V (true) or the intermediate (false)
     bool v_waited = false;
+    uint32_t v_wait_tiles = 0;  // the step's V entries (one piece, or a pair with pair_steps)
     uint32_t s6_next = 0;  // next member whose P@V is pending
 };
 
@@ -411,7 +412,7 @@ static __attribute__((noinline, noclone)) void res_s5_flush(
     while (st.s6_next < st.n_done && (final || static_cast<uint32_t>(st.cbatch[st.s6_next]) + 1u < st.batch_idx)) {
         const uint32_t g = st.s6_next;
         if (!st.v_waited) {
-            CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
+            CircularBuffer(cb_v_in).wait_front(st.v_wait_tiles);
             st.v_waited = true;
         }
         if (g == 0 || st.cbatch[g] != st.cbatch[g - 1]) {
@@ -483,7 +484,8 @@ template <
     uint32_t cb_pooled_bias,
     uint32_t v_cb_physical_width_t,
     uint32_t qk_cap,
-    uint32_t stats_cap>
+    uint32_t stats_cap,
+    uint32_t kStepPieces>
 static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     const uint8_t* slots,
     const uint32_t n_slots,
@@ -491,10 +493,14 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     const uint8_t* run_ws,
     const uint8_t* n_runs,
     const uint32_t initialized_mask,
-    const bool apply_col_bias) {
+    const bool apply_col_bias,
+    const uint32_t n_entries) {
     constexpr uint32_t kDst = compute_kernel_lib::DEST_AUTO_LIMIT;
     constexpr uint32_t kBlockTiles = get_named_compile_time_arg_val("block_tiles");
-    constexpr uint32_t kMaxRuns = Sk_chunk_t / kBlockTiles;
+    // A step covers n_entries (1, or 2 with kStepPieces == 2: pair steps) consecutive K/V entries of the CB. Run
+    // columns are step columns: column c is tile c % Sk_chunk_t of entry c / Sk_chunk_t (runs never cross an entry),
+    // so K^T tiles are addressed per entry and V rows, whose entries are contiguous rows of vDHt tiles, linearly.
+    constexpr uint32_t kMaxRuns = (Sk_chunk_t / kBlockTiles) * kStepPieces;
     constexpr uint32_t kMaxMembers = 32;
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t kt_entry_tiles = DHt * Sk_chunk_t;
@@ -532,7 +538,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         for (uint32_t s = 0; s < n_runs[g]; ++s) {
             w += run_wd(g, s);
         }
-        ASSERT(n_runs[g] >= 1 && w >= 1 && w <= Sk_chunk_t);
+        ASSERT(n_runs[g] >= 1 && w >= 1 && w <= Sk_chunk_t * n_entries);
         W[g] = static_cast<uint8_t>(w);
         off[g] = static_cast<uint16_t>(total);
         total += Sq_chunk_t * w;
@@ -543,12 +549,14 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     const auto sidx = [&](uint32_t g, uint32_t r, uint32_t c) -> uint32_t { return off[g] + r * W[g] + c; };
 
     // ---- S1: Q@K^T into the compact scratch. Units: (member, run, column batch of cw <= qk_cw_cap). ----
+    ASSERT(n_entries >= 1 && n_entries <= kStepPieces && (!apply_col_bias || n_entries == 1));
     CircularBuffer(cb_qkt_im).reserve_back(qk_cap);
-    CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
+    CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles * n_entries);
     CircularBuffer(cb_q_in).wait_front(q_wait_tiles);
     sdpa_maybe_pack_reconfig_data_format<cb_out, cb_qkt_im>();
     sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
     ResidentStepState<kDst, kMaxMembers> st{};
+    st.v_wait_tiles = v_entry_tiles * n_entries;
     st.slots = slots;
     st.run_cols = run_cols;
     st.run_ws = run_ws;
@@ -576,7 +584,8 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                         mm_cw = cw;
                     }
                     uint32_t in0 = slots[g] * q_chunk_tiles;
-                    uint32_t in1 = run_col(g, s) + q0;
+                    const uint32_t c1 = run_col(g, s) + q0;
+                    uint32_t in1 = (c1 / Sk_chunk_t) * kt_entry_tiles + c1 % Sk_chunk_t;
                     for (uint32_t d = 0; d < DHt; ++d) {
                         sdpa_matmul_block_no_mop(cb_q_in, cb_kt_in, in0, in1, st.uu_tiles, true, cw, Sq_chunk_t, DHt);
                         in0++;
@@ -1021,7 +1030,9 @@ template <
     uint32_t resident_slots,
     uint32_t plan_block_words,
     uint32_t plan_rec_base,
-    uint32_t num_q_passes>
+    uint32_t num_q_passes,
+    bool pair_steps,
+    uint32_t kv_cb_pages>
 void sdpa_ring_resident(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1035,6 +1046,7 @@ void sdpa_ring_resident(
     const uint32_t local_n_mask_chunk_id,
     const uint32_t global_n_padded_tiles,
     uint32_t& initialized_slots,
+    uint32_t& kv_pos,
     const bool is_last_ring_iter,
     const bool is_first_active_iter) {
     // PACK_DONE capacity 15: the compact step's interleaved S5/S6 posts one token per S5 batch (see the step).
@@ -1083,8 +1095,15 @@ void sdpa_ring_resident(
     // compact members as fit in kQkCap.
     constexpr uint32_t kGroupCap = resident_slots < 4 ? resident_slots : 4;
     constexpr uint32_t kQkTiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t kQkCap =
-        kQkTiles > kGroupCap * Sq_chunk_t * Sk_chunk_t ? kQkTiles : kGroupCap * Sq_chunk_t * Sk_chunk_t;
+    // Pair steps: a step covers two consecutive pieces of a head, so it holds two pieces' widths per member (the
+    // factory doubles the scratch the same way) and the run tables have room for both pieces' runs.
+    constexpr uint32_t kStepPieces = pair_steps ? 2 : 1;
+    constexpr uint32_t kRunStride = kBlocksPerPiece * kStepPieces;  // run-table entries per member
+    static_assert(kRunStride <= 255, "run tables are byte-indexed");
+    static_assert(!pair_steps || kv_cb_pages >= 2, "a pair needs two K/V entries in the CB");
+    constexpr uint32_t kQkCap = kQkTiles > kGroupCap * Sq_chunk_t * Sk_chunk_t * kStepPieces
+                                    ? kQkTiles
+                                    : kGroupCap * Sq_chunk_t * Sk_chunk_t * kStepPieces;
     constexpr uint32_t kStatsCap = resident_slots * Sq_chunk_t;
     constexpr uint32_t kOutCap = resident_slots * out_tiles;
 #ifdef TRISC_PACK
@@ -1164,9 +1183,10 @@ void sdpa_ring_resident(
         CircularBuffer(cb_prev_out).wait_front(kOutCap);
     }
 
-    // One piece (or pooled entry) for a group of resident chunks (every chunk of the head that keeps a block, up to
-    // the scratch capacity): run_cols[g * kBlocksPerPiece + s] is the K^T column tile where run s of member
-    // g starts, run_ws[...] its width in tiles (adjacent kept blocks merged), n_runs[g] the run count.
+    // One piece, a pair of pieces, or a pooled entry for a group of resident chunks (every chunk of the head that
+    // keeps a block, up to the scratch capacity): run_cols[g * kRunStride + s] is the step column where run s of
+    // member g starts, run_ws[...] its width in tiles (adjacent kept blocks merged), n_runs[g] the run count.
+    uint32_t step_entries = 1;  // K/V entries of the steps run_groups issues next (2 for a pair)
     const auto run_step = [&](const uint8_t* slots,
                               const uint32_t n_slots,
                               const uint8_t* run_cols,
@@ -1175,7 +1195,7 @@ void sdpa_ring_resident(
                               const bool apply_col_bias) {
         // The step's first wait, taken before the zone opens (it returns at once inside): RING_STEP then measures
         // compute only, and a late K/V entry shows as a gap between steps instead of as step time.
-        CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
+        CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles * step_entries);
         MaybeDeviceZoneScopedN(kRingStepProfiling, "RING_STEP");
         sdpa_resident_piece_step_compact<
             Sq_chunk_t,
@@ -1199,7 +1219,8 @@ void sdpa_ring_resident(
             cb_pooled_bias,
             v_cb_physical_width_t,
             kQkCap,
-            kStatsCap>(slots, n_slots, run_cols, run_ws, n_runs, initialized, apply_col_bias);
+            kStatsCap,
+            kStepPieces>(slots, n_slots, run_cols, run_ws, n_runs, initialized, apply_col_bias, step_entries);
         for (uint32_t g = 0; g < n_slots; ++g) {
             initialized |= 1u << slots[g];
         }
@@ -1213,104 +1234,148 @@ void sdpa_ring_resident(
                                 const uint8_t* mnruns,
                                 const uint32_t n,
                                 const bool apply_col_bias) {
-        res_run_groups<resident_slots, kBlocksPerPiece, Sq_chunk_t, kQkCap>(
+        res_run_groups<resident_slots, kRunStride, Sq_chunk_t, kQkCap>(
             run_step, members, widths, mruns, mrunws, mnruns, n, apply_col_bias);
     };
-    // One K/V entry, after its last step (or untouched: streamed for another chain member only).
+    // One K/V entry, after its last step (or untouched: streamed for another chain member only). kv_pos is the K/V
+    // CBs' read position in entries, carried across ring iterations and passes: a pair must not wrap the CB end,
+    // since the step addresses its second entry right after the first.
     const auto pop_kv = [&]() {
         CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
         sdpa_cb_pop_front_out_of_line(cb_kt_in, kt_entry_tiles);
         CircularBuffer(cb_v_in).wait_front(v_entry_tiles);
         sdpa_cb_pop_front_out_of_line(cb_v_in, v_entry_tiles);
+        kv_pos = kv_pos + 1 == kv_cb_pages ? 0 : kv_pos + 1;
     };
 
-    // Local pieces of shard ring_id. Heads are interleaved per k in head order, exactly as the reader streams them.
-    for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
-        if (!kv_chunk_starts_before_logical_end<false, false, local_padded_Nt, chunk_size_t, kv_region_Nt>(
-                ring_id, k * Sk_chunk_t, logical_nt)) {
-            continue;
-        }
-        // Tail of this piece (logical_n boundary or padded local shard tail): only full blocks are ever kept, so no
-        // kept block reaches into it and the steps need no in-entry masking. Checked below.
-        [[maybe_unused]] uint32_t active_Sk_param = Sk_chunk_t;
-        bool narrowed = false;
+    // Tail of piece k (logical_n boundary or padded local shard tail): only full blocks are ever kept, so no kept
+    // block reaches into it and the steps need no in-entry masking (checked in step_pieces).
+    const auto active_sk = [&](uint32_t k) -> uint32_t {
         if constexpr (global_n_mask_enabled) {
             if (ring_iter_needs_global_n_mask && k == global_n_mask_chunk_id) {
-                active_Sk_param = Sk_chunk_t - global_n_padded_tiles;
-                narrowed = true;
+                return Sk_chunk_t - global_n_padded_tiles;
             }
         }
         if constexpr (local_n_mask_enabled) {
-            if (!narrowed && local_n_needs_masking && k == local_n_mask_chunk_id) {
-                active_Sk_param = Sk_chunk_t - local_n_padded_tiles;
+            if (local_n_needs_masking && k == local_n_mask_chunk_id) {
+                return Sk_chunk_t - local_n_padded_tiles;
             }
         }
-        (void)narrowed;
-        // One pass per head whose chain streamed this piece; a head's streamed set is in its chunks' plan words.
-        uint32_t heads_done = 0;  // bitmask over resident chunk indices already covered by an earlier head
-        for (uint32_t i0 = 0; i0 < n_res; ++i0) {
-            if ((heads_done >> i0) & 1u) {
+        return Sk_chunk_t;
+    };
+    // One step group over np (1, or 2 for a pair) consecutive K/V entries holding pieces ks[0..np) of one head
+    // (head_mask: its resident chunks): every chunk of the head that keeps a block of them, with its run table over
+    // the step's columns (piece p's tile t is column p * Sk_chunk_t + t; adjacent kept blocks of one piece merged
+    // into one run, never across pieces), stepped up to the scratch capacity; then the entries popped.
+    const auto step_pieces = [&](uint32_t head_mask, const uint8_t* ks, uint32_t np) {
+        uint8_t group[resident_slots];
+        uint8_t gwidth[resident_slots];
+        uint8_t runs[resident_slots * kRunStride];
+        uint8_t runws[resident_slots * kRunStride];
+        uint8_t n_runs[resident_slots];
+        uint32_t n_group = 0;
+        uint32_t group_mask = 0;
+        for (uint32_t i = 0; i < n_res; ++i) {
+            if (((head_mask >> i) & 1u) == 0) {
                 continue;
             }
-            uint32_t head_mask = 0;
-            for (uint32_t i = i0; i < n_res; ++i) {
-                if (res_head[i] == res_head[i0]) {
-                    head_mask |= 1u << i;
-                }
-            }
-            heads_done |= head_mask;
-            if (!bit(union_lo[i0], union_hi[i0], k)) {
-                continue;  // nobody on this head's chain needs the piece: nothing was pushed
-            }
-            // The piece's group: every chunk of the head that keeps a block of it, with its run table (adjacent
-            // kept blocks merged into one run; the whole group is stepped up to the scratch capacity).
-            uint8_t group[resident_slots];
-            uint8_t gwidth[resident_slots];
-            uint8_t runs[resident_slots * kBlocksPerPiece];
-            uint8_t runws[resident_slots * kBlocksPerPiece];
-            uint8_t n_runs[resident_slots];
-            uint32_t n_group = 0;
-            uint32_t group_mask = 0;
-            for (uint32_t i = i0; i < n_res; ++i) {
-                if (((head_mask >> i) & 1u) == 0) {
-                    continue;
-                }
-                uint32_t cnt = 0;
-                uint32_t width = 0;
+            uint32_t cnt = 0;
+            uint32_t width = 0;
+            for (uint32_t p = 0; p < np; ++p) {
+                [[maybe_unused]] const uint32_t sk = active_sk(ks[p]);
                 bool prev_kept = false;
                 for (uint32_t j = 0; j < kBlocksPerPiece; ++j) {
-                    const bool kept = block_kept(i, k * kBlocksPerPiece + j);
+                    const bool kept = block_kept(i, ks[p] * kBlocksPerPiece + j);
                     if (kept) {
                         // Kept blocks are full blocks: never in the padded tail of the piece.
-                        ASSERT((j + 1) * kBlockTiles <= active_Sk_param);
+                        ASSERT((j + 1) * kBlockTiles <= sk);
                         if (prev_kept) {
-                            runws[n_group * kBlocksPerPiece + cnt - 1] += kBlockTiles;
+                            runws[n_group * kRunStride + cnt - 1] += kBlockTiles;
                         } else {
-                            runs[n_group * kBlocksPerPiece + cnt] = static_cast<uint8_t>(j * kBlockTiles);
-                            runws[n_group * kBlocksPerPiece + cnt] = kBlockTiles;
+                            runs[n_group * kRunStride + cnt] = static_cast<uint8_t>(p * Sk_chunk_t + j * kBlockTiles);
+                            runws[n_group * kRunStride + cnt] = kBlockTiles;
                             ++cnt;
                         }
                         width += kBlockTiles;
                     }
                     prev_kept = kept;
                 }
-                if (cnt == 0) {
+            }
+            if (cnt == 0) {
+                continue;
+            }
+            group[n_group] = static_cast<uint8_t>(i);
+            gwidth[n_group] = static_cast<uint8_t>(width);
+            n_runs[n_group] = static_cast<uint8_t>(cnt);
+            ++n_group;
+            group_mask |= 1u << i;
+        }
+        if (n_group > 0) {
+            // Block 0 of piece 0 is forced kept for every chunk, so piece 0 creates every slot of the head before any
+            // other piece touches one, and no later step meets an uninitialized slot.
+            ASSERT(ks[0] != 0 || group_mask == head_mask);
+            ASSERT(ks[0] == 0 || (initialized & group_mask) == group_mask);
+            step_entries = np;
+            run_groups(group, gwidth, runs, runws, n_runs, n_group, false);
+            step_entries = 1;
+        }
+        for (uint32_t p = 0; p < np; ++p) {
+            pop_kv();
+        }
+    };
+    const auto piece_live = [&](uint32_t k) -> bool {
+        return kv_chunk_starts_before_logical_end<false, false, local_padded_Nt, chunk_size_t, kv_region_Nt>(
+            ring_id, k * Sk_chunk_t, logical_nt);
+    };
+
+    // Local pieces of shard ring_id. Heads are interleaved per k in head order, exactly as the reader streams them.
+    bool one_head = true;
+    for (uint32_t i = 1; i < n_res; ++i) {
+        one_head = one_head && res_head[i] == res_head[0];
+    }
+    if (pair_steps && one_head && n_res > 0) {
+        // One head, so the reader's entries are this head's streamed pieces in k order. Step them two at a time when
+        // neither is a masked tail piece and the pair does not wrap the K/V CB end; otherwise one at a time.
+        constexpr uint32_t kMaxPieces = 64;  // the union words' range
+        uint8_t ks[kMaxPieces];              // bytes: the compute threads' stack shares 4 KB with their globals
+        uint32_t n_ks = 0;
+        for (uint32_t k = 0; k < num_local_k_chunks && n_ks < kMaxPieces; ++k) {
+            if (piece_live(k) && bit(union_lo[0], union_hi[0], k)) {
+                ks[n_ks++] = static_cast<uint8_t>(k);
+            }
+        }
+        const uint32_t all = n_res >= 32 ? 0xFFFFFFFFu : (1u << n_res) - 1u;
+        for (uint32_t idx = 0; idx < n_ks;) {
+            const bool pair = idx + 1 < n_ks && active_sk(ks[idx]) == Sk_chunk_t &&
+                              active_sk(ks[idx + 1]) == Sk_chunk_t && kv_pos + 2 <= kv_cb_pages;
+            const uint32_t np = pair ? 2u : 1u;
+            step_pieces(all, ks + idx, np);
+            idx += np;
+        }
+    } else {
+        for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
+            if (!piece_live(k)) {
+                continue;
+            }
+            // One pass per head whose chain streamed this piece; a head's streamed set is in its chunks' plan words.
+            uint32_t heads_done = 0;  // bitmask over resident chunk indices already covered by an earlier head
+            for (uint32_t i0 = 0; i0 < n_res; ++i0) {
+                if ((heads_done >> i0) & 1u) {
                     continue;
                 }
-                group[n_group] = static_cast<uint8_t>(i);
-                gwidth[n_group] = static_cast<uint8_t>(width);
-                n_runs[n_group] = static_cast<uint8_t>(cnt);
-                ++n_group;
-                group_mask |= 1u << i;
+                uint32_t head_mask = 0;
+                for (uint32_t i = i0; i < n_res; ++i) {
+                    if (res_head[i] == res_head[i0]) {
+                        head_mask |= 1u << i;
+                    }
+                }
+                heads_done |= head_mask;
+                if (!bit(union_lo[i0], union_hi[i0], k)) {
+                    continue;  // nobody on this head's chain needs the piece: nothing was pushed
+                }
+                const uint8_t k8 = static_cast<uint8_t>(k);
+                step_pieces(head_mask, &k8, 1);
             }
-            if (n_group > 0) {
-                // Block 0 of piece 0 is forced kept for every chunk, so piece 0 creates every slot of the head
-                // before any other piece touches one, and no later step meets an uninitialized slot.
-                ASSERT(k != 0 || group_mask == head_mask);
-                ASSERT(k == 0 || (initialized & group_mask) == group_mask);
-                run_groups(group, gwidth, runs, runws, n_runs, n_group, false);
-            }
-            pop_kv();
         }
     }
 
@@ -1334,8 +1399,8 @@ void sdpa_ring_resident(
                 heads_done |= head_mask;
                 uint8_t pgroup[resident_slots];
                 uint8_t pwidth[resident_slots];
-                uint8_t pcols[resident_slots * kBlocksPerPiece];
-                uint8_t pws[resident_slots * kBlocksPerPiece];
+                uint8_t pcols[resident_slots * kRunStride];
+                uint8_t pws[resident_slots * kRunStride];
                 uint8_t pruns[resident_slots];
                 uint32_t n_p = 0;
                 for (uint32_t i = i0; i < n_res; ++i) {
@@ -1343,7 +1408,7 @@ void sdpa_ring_resident(
                         continue;
                     }
                     pgroup[n_p] = static_cast<uint8_t>(i);
-                    pcols[n_p * kBlocksPerPiece] = 0;  // one run from column 0
+                    pcols[n_p * kRunStride] = 0;  // one run from column 0
                     pruns[n_p] = 1;
                     ++n_p;
                 }
@@ -1351,7 +1416,7 @@ void sdpa_ring_resident(
                     const uint32_t active_width = (pc + 1 == pooled_chunks) ? pooled_last_tiles : Sk_chunk_t;
                     for (uint32_t g = 0; g < n_p; ++g) {
                         pwidth[g] = static_cast<uint8_t>(active_width);
-                        pws[g * kBlocksPerPiece] = static_cast<uint8_t>(active_width);
+                        pws[g * kRunStride] = static_cast<uint8_t>(active_width);
                     }
                     run_groups(pgroup, pwidth, pcols, pws, pruns, n_p, true);
                     pop_kv();
