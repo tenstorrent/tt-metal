@@ -163,7 +163,7 @@ void recip_init() {
     // Common SFPU init inlined (SFPU config register + counter reset), then the op-specific
     // reciprocal setup below -- one self-contained init, matching exp_init. SDPA runs reciprocal in its
     // softmax after matmul/exp, so the general SFPU state is re-established here, not just reset.
-    // Reciprocal uses only ADDR_MOD_7 on Wormhole, at its zero-advance invariant (no op-specific ADDR_MOD_6).
+    // Reciprocal uses ADDR_MOD_7 on Wormhole at its zero-advance invariant.
     sfpu::_init_sfpu_config_reg();
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE, round_to_bf16>();

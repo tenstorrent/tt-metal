@@ -15,7 +15,6 @@
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
-
 // Replay-buffer slots for the per-iteration register-only compute bodies of
 // the quant / requant / dequant kernels. The body is recorded once by each
 // op's {quant,requant,dequant}_init and then replayed by every
@@ -84,21 +83,6 @@ constexpr std::uint32_t DEQUANT_REPLAY_LEN_SIGN_MAGN = 3;
 // sibling value INT32_2S_COMP_TO_INT_SIGN_MAGN has a known HW bug
 // (sign-mag -0 -> mostneg int32) and is not used in any tt-llk kernel.
 constexpr auto INT_REPR_SWAP_CAST = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
-
-// Configure ADDR_MOD_6 with dest auto-increment of one SFPU dst row
-// (sfpi::SFP_DESTREG_STRIDE == 2 dst-address units) so the per-iteration
-// SFPSTORE walks dst_reg through the face's 4-row x 8-col blocks. Replaces
-// sfpi::dst_reg++ in the kernel bodies and lets each loop be purely TTI-issued.
-// Called once by each _init_{quant,requant,dequant}_int32_ since quant_int32
-// isn't in the LLK init's "configure ADDR_MOD_6 with dest+=2" allow-list.
-inline void _quant_kernels_configure_dest_incr_addrmod_() {
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = sfpi::SFP_DESTREG_STRIDE},
-    }
-        .set(ADDR_MOD_6);
-}
 
 // Int8 L1 pack path:
 // FP32_TO_INT8 rounding cannot be used here since it produces a sign-magnitude result
@@ -178,8 +162,7 @@ void quant_init(const uint zero_point) {
         "quant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
     // One-time setup for calculate_quant_int32:
     //   1. load the fp32 zero-point constant into LREG2;
-    //   2. program ADDR_MOD_6 with dest+=2 for the per-iteration SFPSTORE;
-    //   3. record the register-only compute body into the SFPU replay buffer
+    //   2. record the register-only compute body into the SFPU replay buffer
     //      under QUANT_REPLAY_SLOT (NoExec - we don't want to issue SFPMAD/
     //      STOCH_RND against undefined LREG0/LREG1 contents at record time).
     // Subsequent _quant_int32_ calls replay the recorded body, shrinking the
@@ -189,7 +172,6 @@ void quant_init(const uint zero_point) {
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
         _sfpu_load_imm32_(p_sfpu::LREG3, INT8_SIGN_MASK);
         _int8_bias_zero_point_();  // fold +128 into the fp32 zero-point in LREG2
-        _quant_kernels_configure_dest_incr_addrmod_();
         // Record the int8 body (MAD + offset-128 pack)
         lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT);
         {
@@ -199,7 +181,6 @@ void quant_init(const uint zero_point) {
         }
         return;
     }
-    _quant_kernels_configure_dest_incr_addrmod_();
 
     constexpr std::uint32_t REPLAY_LEN = SIGN_MAGNITUDE_FORMAT ? QUANT_REPLAY_LEN_SIGN_MAGN : QUANT_REPLAY_LEN_2S_COMP;
 
@@ -260,16 +241,14 @@ void requant_init(const uint zero_point) {
         OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8 || OUTPUT_FORMAT == DataFormat::Int8,
         "requant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
     // One-time setup for requant_int32; see quant_init for the
-    // record/replay rationale. Loads the zero point into LREG2, programs
-    // ADDR_MOD_6 with dest+=2, then records the register-only compute into
-    // REQUANT_REPLAY_SLOT (NoExec).
+    // record/replay rationale. Loads the zero point into LREG2, then records
+    // the register-only compute into REQUANT_REPLAY_SLOT (NoExec).
     _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
     if constexpr (INT8_INPUT || OUTPUT_FORMAT == DataFormat::Int8) {
         _sfpu_load_imm32_(p_sfpu::LREG3, INT8_SIGN_MASK);
     }
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
         _int8_bias_zero_point_();  // fold +128 into the fp32 zero-point in LREG2
-        _quant_kernels_configure_dest_incr_addrmod_();
         // Record the int8 body. Int8 input is unbiased (byte ^ 0x80) inline by the kernel
         // before the replay, so its body is just CAST + MAD + offset-128 pack (6). Int32
         // input runs the 2's-complement -> sign-magnitude fixup inside the recorded body (8).
@@ -289,7 +268,6 @@ void requant_init(const uint zero_point) {
         }
         return;
     }
-    _quant_kernels_configure_dest_incr_addrmod_();
 
     constexpr std::uint32_t REPLAY_LEN =
         INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_IN
@@ -364,7 +342,6 @@ void dequant_init(const uint zero_point) {
     if constexpr (INT8_INPUT) {
         _sfpu_load_imm32_(p_sfpu::LREG3, INT8_SIGN_MASK);
     }
-    _quant_kernels_configure_dest_incr_addrmod_();
 
     constexpr std::uint32_t REPLAY_LEN =
         (SIGN_MAGNITUDE_FORMAT || INT8_INPUT) ? DEQUANT_REPLAY_LEN_SIGN_MAGN : DEQUANT_REPLAY_LEN_2S_COMP;

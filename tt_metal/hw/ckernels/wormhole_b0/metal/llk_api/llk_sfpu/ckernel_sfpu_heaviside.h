@@ -13,25 +13,15 @@
 
 namespace ckernel {
 namespace sfpu {
-
 inline void heaviside_init() {
     // The row's last SFPSTORE steps dest by one SFPU row (SFP_DESTREG_STRIDE counter rows, the step
-    // sfpi's dst_reg++ takes), so the body needs no TTINCRWC. Same ADDR_MOD_6 value as typecast_init
-    // and the comp *_init.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = sfpi::SFP_DESTREG_STRIDE}}.set(ADDR_MOD_6);
+    // sfpi's dst_reg++ takes), so the body needs no TTINCRWC. That is ADDR_MOD_6's invariant value.
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
 // Addressing: the body names ADDR_MOD_3 and ADDR_MOD_2, which reach physical slots 7 and 6 because
 // _llk_math_eltwise_sfpu_start_ sets the addr_mod base to 4 (math::set_addr_mod_base). Slot 7 is
-// {dest.incr = 0} from _llk_math_eltwise_unary_sfpu_init_once_; slot 6 is {dest.incr = 2} from
-// heaviside_init above, and nothing may rewrite it between that init and this call. One caller that
-// does: on WH with MM_THROTTLE set (throttle_level / TT_MM_THROTTLE_PERF, more than 48 cores),
-// matmul_init / matmul_block_init program ADDR_MOD_6 with dest.clr, and minimal_matmul and
-// conv_bmm_tilize run SFPU_OP_INIT_ACTIVATION only once before those inits. A heaviside fused there
-// would clear the dest counter on every row and keep rewriting the tile's first row. typecast,
-// square, unary max/min, signbit and the comp ops share that exposure on main; no in-tree caller
-// fuses any of them there.
+// {dest.incr = 0} and slot 6 is {dest.incr = 2}: the invariants hw_configure sets and every op leaves in place.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_heaviside(std::uint32_t value) {
     // heaviside(v) = `value` at v == 0 (either zero), 0.0 for a set sign bit, 1.0 otherwise.

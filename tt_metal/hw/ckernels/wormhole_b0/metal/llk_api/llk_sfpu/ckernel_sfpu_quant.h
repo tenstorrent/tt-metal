@@ -15,7 +15,6 @@
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
-
 // Replay-buffer slots for the per-iteration register-only compute bodies of
 // the quant / requant / dequant kernels. The body is recorded once by each
 // op's _init_{quant,requant,dequant}_int32_ and then replayed by every
@@ -82,37 +81,6 @@ constexpr std::uint32_t INT8_SIGN_MASK = 0x00000080u;
 // host by folding -128 into the zero point (dequant) or by an extra -128 * scale
 // term in the zero-point constant (requant).
 inline void _int8_input_unbias_() { TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0); }
-
-// Configure the SFPU "dest += 2" addr_mod slot. With math::set_addr_mod_base()
-// active, the SFPU addr_mod field "2" indexes real config slot ADDR_MOD_6,
-// so writing this slot is what the per-iteration SFPSTOREs below pick up
-// via ADDR_MOD_2. The addr-mod base is flipped on by every binary-SFPU
-// dispatch: _llk_math_eltwise_binary_sfpu_params_ (in
-// llk_math_eltwise_binary_sfpu_params.h) calls _llk_math_eltwise_sfpu_start_
-// (in llk_math_eltwise_sfpu_common.h), which in turn calls
-// math::set_addr_mod_base() before invoking the kernel body.
-//
-// The matching "no increment" slot used for the SFPLOADs (real ADDR_MOD_7,
-// addressed as ADDR_MOD_3 from the SFPU instructions) is already programmed
-// to {0,0,0} by eltwise_binary_sfpu_configure_addrmod() in the LLK init, so
-// it doesn't need to be set here.
-//
-// quant_int32 isn't in the LLK init's "configure ADDR_MOD_6 with dest+=2"
-// allow-list (that list covers mul_int32 / max / min / cmp ops), so we have
-// to program it ourselves. The dest auto-increment of one SFPU dst row
-// (sfpi::SFP_DESTREG_STRIDE == 2 dst-address units) is what walks dst_reg
-// through the face's 4-row x 8-col blocks. Called once by each
-// _init_{quant,requant,dequant}_int32_ since the addrmod state is per-tensix
-// and only needs to be set up once. Replaces sfpi::dst_reg++ in the kernel
-// bodies and lets each loop be purely TTI-issued.
-inline void _quant_kernels_configure_dest_incr_addrmod_() {
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = sfpi::SFP_DESTREG_STRIDE},
-    }
-        .set(ADDR_MOD_6);
-}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
@@ -309,7 +277,6 @@ void quant_init(const uint zero_point) {
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
         _sfpu_load_imm32_(p_sfpu::LREG4, INT8_SIGN_MASK);
         _int8_bias_zero_point_();  // fold +128 into the fp32 zero-point in LREG2
-        _quant_kernels_configure_dest_incr_addrmod_();
         // Record the int8 body (MAD + offset-128 pack)
         lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT);
         {
@@ -320,7 +287,6 @@ void quant_init(const uint zero_point) {
         }
         return;
     }
-    _quant_kernels_configure_dest_incr_addrmod_();
 
     lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN);
     {
@@ -371,7 +337,6 @@ void requant_init(const uint zero_point) {
     }
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
         _int8_bias_zero_point_();  // fold +128 into the fp32 zero-point in LREG2
-        _quant_kernels_configure_dest_incr_addrmod_();
         // Record the int8 body (CAST + MAD + offset-128 pack)
         lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN_INT8_OUT);
         {
@@ -383,7 +348,6 @@ void requant_init(const uint zero_point) {
         }
         return;
     }
-    _quant_kernels_configure_dest_incr_addrmod_();
 
     lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN);
     {
@@ -431,7 +395,6 @@ void dequant_init(const uint zero_point) {
     if constexpr (INT8_INPUT) {
         _sfpu_load_imm32_(p_sfpu::LREG4, INT8_SIGN_MASK);
     }
-    _quant_kernels_configure_dest_incr_addrmod_();
 
     lltt::record<lltt::NoExec>(DEQUANT_REPLAY_SLOT, DEQUANT_REPLAY_LEN);
     {

@@ -701,7 +701,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
         // Comparison-to-zero ops pair the generic per-op init with the matching metal
         // *_init from llk_sfpu/ckernel_sfpu_comp.h, mirroring production SFPU_UNARY_INIT
         // (eqz_tile_init -> equal_zero_init, etc.). All six of those *_init are byte-identical
-        // (program ADDR_MOD_6 + reset the dest RWC counter), so one representative init covers
+        // (reset the dest RWC counter), so one representative init covers
         // the whole group; OPERATION is still forwarded so the per-op init tag stays correct.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(sfpu::equal_zero_init);
     }
@@ -1715,11 +1715,7 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     }
     else if constexpr (BINOP == BinaryOp::MAX)
     {
-        // binary_max_min uses SFPLOADMACRO templates programmed by its init.
-        // The SfpuType must be max/min (not a generic placeholder): the LLK init
-        // selects a max/min-specific address-mod setup (ADDR_MOD_6 with dest incr=2)
-        // that the kernel's load/swap/store sequence depends on. Using add1 skips
-        // that setup and leaves the output tile holding in0. Mirrors binary_max_tile_init.
+        // binary_max_min uses SFPLOADMACRO templates programmed by its init. Mirrors binary_max_tile_init.
         SFPU_BINARY_INIT_FN(max, binary_max_min_init, (true /* IS_MAX */));
     }
     else if constexpr (BINOP == BinaryOp::MIN)
@@ -1792,12 +1788,11 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     }
     else if constexpr (BINOP == BinaryOp::MUL_INT32)
     {
-        // mul_int32 is on the LLK init's ADDR_MOD_6 dest+=2 allow-list, so drive its
-        // addrmod through SfpuType::mul_int32; the init loads the 11-bit chunk masks
+        // The init loads the 11-bit chunk masks
         // and the 2**23 fp32-to-int bias constants into vConst registers.
         SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROXIMATION_MODE));
     }
-    // Integer relational eq/ne: no extra init function, just the eq_int/ne_int addrmod.
+    // Integer relational eq/ne: no extra init function.
     else if constexpr (BINOP == BinaryOp::EQ_INT)
     {
         SFPU_BINARY_INIT(eq_int);
