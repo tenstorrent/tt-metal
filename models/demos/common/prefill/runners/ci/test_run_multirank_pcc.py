@@ -73,13 +73,6 @@ elif name.startswith("mpirun"):
     os.environ["TEST_MPI_HOST"] = args[args.index("--host") + 1] if "--host" in args else ""
     os.environ["OMPI_COMM_WORLD_RANK"] = "0"
     os.environ["TEST_MPI_NP"] = args[args.index("-np") + 1] if "-np" in args else "1"
-    if "bash" in args and "gen_pipeline_binding.py --layout 4x4" in args[args.index("bash") + 2]:
-        # A per-host probe runs once per MPI rank, each writing its own file.
-        for mpi_rank in range(int(os.environ["TEST_MPI_NP"])):
-            os.environ["OMPI_COMM_WORLD_RANK"] = str(mpi_rank)
-            if shell_command():
-                sys.exit(1)
-        sys.exit(0)
     if "bash" in args:
         sys.exit(shell_command())
     index = next(i for i, arg in enumerate(args) if arg.endswith("python3"))
@@ -223,10 +216,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
         perf_gate = metal / "models/demos/common/prefill/runners/ci/perf_gate.py"
         perf_gate.parent.mkdir(parents=True)
         shutil.copyfile(HARNESS.with_name("perf_gate.py"), perf_gate)
-        # The 4x4 leg runs the real assembler (through the stub's python passthrough) on these.
+        # The 4x4 leg reads its stage settings from the template and hands tt-run the descriptor.
         for path in (
-            "models/demos/deepseek_v3_d_p/utils/assemble_pipeline_binding.py",
-            "models/demos/deepseek_v3_d_p/utils/gen_pipeline_binding.py",
             "models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_sc4_8rank_4x4_sp1.yaml",
             "models/demos/common/prefill/runners/topology_configuration/ci/sc4_4x4_sp1_mgd.textproto",
         ):
