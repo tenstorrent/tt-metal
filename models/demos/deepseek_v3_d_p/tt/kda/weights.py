@@ -80,6 +80,10 @@ class KDAWeights:
     convolution_taps: tuple[ttnn.Tensor, ...]
     tensor_parallel_size: int
     tensor_parallel_axis: int
+    # With output_gate_split, the input projection keeps only each TP rank's first output_gate_split output-gate
+    # columns, and output_gate_projection holds the rest (the output gate the layer computes beside the SP relay).
+    output_gate_projection: ttnn.Tensor | None = None
+    output_gate_split: int | None = None
 
     @classmethod
     def check_cache_complete(
@@ -192,6 +196,42 @@ def _group_projection_rows_by_tp_rank(
             rank_weights.append(weight[start : start + shard_width])
         grouped.append(torch.cat(rank_weights, dim=0))
     return torch.cat(grouped, dim=0)
+
+
+def output_gate_columns(config: KDAConfig, tensor_parallel_size: int) -> tuple[int, int]:
+    """[start, end) of the output gate's columns in each TP rank's block of the fused input projection: after the rank's
+    Q, K and V columns and the decay's low-rank activations."""
+    start = (config.q_dim + config.k_dim + config.v_dim) // tensor_parallel_size + config.head_k_dim
+    return start, start + config.v_dim // tensor_parallel_size
+
+
+def split_output_gate(
+    input_projection: ttnn.Tensor, config: KDAConfig, tensor_parallel_size: int, kept: int
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Split the fused input projection, on each device's TP block, into the projection without the output-gate
+    columns past the first ``kept`` and the output gate of those columns; frees the fused tensor.
+
+    The cut is on whole tiles of the stored (quantized) projection, so the cache keeps one fused tensor whatever the
+    split. Concatenating widens bfloat8_b to bfloat16; casting back requantizes every tile from values its own block
+    exponents represent exactly, so both pieces hold the fused tensor's tiles bit for bit (test_weights checks it).
+    """
+    start, end = output_gate_columns(config, tensor_parallel_size)
+    if not 0 <= kept <= end - start or kept % ttnn.TILE_SIZE:
+        raise ValueError(
+            f"output_gate_split must be tile-aligned within the {end - start} output-gate columns, got {kept}"
+        )
+    hidden, width = tuple(input_projection.shape)[-2:]
+    gate = ttnn.slice(input_projection, [0, start + kept], [hidden, end])
+    leading = ttnn.slice(input_projection, [0, 0], [hidden, start + kept])
+    trailing = ttnn.slice(input_projection, [0, end], [hidden, width])
+    joined = ttnn.concat([leading, trailing], dim=-1)
+    kept_projection = (
+        joined if joined.dtype == input_projection.dtype else ttnn.typecast(joined, input_projection.dtype)
+    )
+    for tensor in (leading, trailing, joined, input_projection):
+        if tensor is not kept_projection and tensor.is_allocated():
+            ttnn.deallocate(tensor)
+    return kept_projection, gate
 
 
 def _prepare_kda_host_weights(
@@ -468,8 +508,13 @@ def load_kda_weights(
     cache_name_prefix: str = "kda",
     tensor_parallel_axis: int = 1,
     projection_dtype: ttnn.DataType = ttnn.bfloat16,
+    output_gate_split: int | None = None,
 ) -> KDAWeights:
-    """Prepare KDA weights and materialize them on the target device."""
+    """Prepare KDA weights and materialize them on the target device.
+
+    With ``output_gate_split`` the input projection keeps only each TP rank's first ``output_gate_split`` output-gate
+    columns and the rest become ``output_gate_projection`` (split_output_gate), cut from the stored fused projection.
+    """
     if state_dict is not None and not state_dict:
         raise ValueError("state_dict must be non-empty when provided; use None for cache-only loading")
     mesh_shape, tensor_parallel_size = _validated_parallel_geometry(device, config, tensor_parallel_axis)
@@ -506,9 +551,14 @@ def load_kda_weights(
             materialized["decay_bias_flat"],
             materialized["decay_scale_flat"],
         )
+    if output_gate_split is not None:
+        materialized["input_projection"], materialized["output_gate_projection"] = split_output_gate(
+            materialized["input_projection"], config, tensor_parallel_size, output_gate_split
+        )
     return KDAWeights(
         **materialized,
         convolution_taps=convolution_taps,
         tensor_parallel_size=tensor_parallel_size,
         tensor_parallel_axis=tensor_parallel_axis,
+        output_gate_split=output_gate_split,
     )
