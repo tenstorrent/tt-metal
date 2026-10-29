@@ -1724,28 +1724,18 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
 
 
-# Accurate (APPROX_MODE=false) exp on a bf16 Dest with CLAMP_NEGATIVE=false. The approximate
-# path's clamp is the one InputClamping::None switches off; the accurate bf16 kernel forms
-# 2^int(x/ln2) from the bit pattern of x/ln2 + 127, which is only meaningful for a
-# non-negative value, so it must keep its own lower clamp whatever the flag says. Without
-# it, inputs below ~-88 (where exp is 0 in bf16) come out as positive garbage, up to ~1e21.
+# Accurate exp on a bf16 Dest with CLAMP_NEGATIVE=false: the kernel's integer trick needs a
+# non-negative xlog2, so its lower clamp must stay whatever the flag says.
 def test_exponential_accurate_unclamped_large_negative():
     torch.manual_seed(0)
     input_dimensions = [32, 32]
 
     num_elements = input_dimensions[0] * input_dimensions[1]
     src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 10.0 - 5.0
-    # exp(x) for every one of these is far below the smallest bf16 subnormal, so the
-    # only correct bf16 output is 0.0. The kernel records its body on the first 32-lane
-    # iteration and replays it for the other 31. src_A is written in face layout, so
-    # element i sits in Dest row i // 16, column i % 16, and one SFPLOAD reads four
-    # Dest rows (SFPLOAD_WINDOW = 64 consecutive elements) of a single column parity:
-    # even columns at an even Dest address, odd columns at +2. The kernel steps Dest by 2
-    # per iteration, so the iterations alternate parities. A sentinel pair (one even
-    # column, one odd) every SFPLOAD_WINDOW // len(large_negative) elements puts
-    # len(large_negative) even-column and as many odd-column sentinels in every window,
-    # so every iteration -- the recorded one and each replay, of either parity -- sees
-    # a negative xlog2, and both parities cycle through all the values.
+    # exp(x) of every one of these is below the smallest bf16 subnormal, so the only correct
+    # bf16 output is 0.0. One SFPLOAD covers 64 consecutive elements of one column parity and
+    # the iterations alternate parities, so an (even, odd) sentinel pair every
+    # SFPLOAD_WINDOW // len(large_negative) elements puts every value in every iteration.
     large_negative = [-10000.0, -1000.0, -226.0, -200.0, -176.0, -150.0, -120.0, -100.0]
     SFPLOAD_WINDOW = 64
     sentinel_stride = SFPLOAD_WINDOW // len(large_negative)
@@ -1775,3 +1765,26 @@ def test_exponential_accurate_unclamped_large_negative():
     assert torch.all(
         is_close
     ), f"Test failed: {(~is_close).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
+
+
+# ExpWithBase outside the nightly sweep: the only op that drives calculate_exponential with
+# SCALE_EN, so this is what builds the runtime-scale path on the PR gate; the scale's mantissa
+# bits (EXP_WITH_BASE_SCALE) catch a kernel that drops the low bits of the scale.
+@pytest.mark.parametrize(
+    "formats",
+    [
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    ],
+    ids=["bf16", "fp32"],
+)
+def test_exp_with_base_runtime_scale(formats):
+    dest_acc = DestAccumulation.No
+    _skip_bh_unless_fp32(formats, dest_acc)
+    eltwise_unary_sfpu(
+        formats=formats,
+        dest_acc=dest_acc,
+        approx_mode=ApproximationMode.No,
+        mathop=MathOperation.ExpWithBase,
+        input_dimensions=[32, 32],
+    )

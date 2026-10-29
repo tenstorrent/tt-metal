@@ -23,9 +23,9 @@ sfpu_domains.
 
 import struct
 
-# exp_with_base(x) = exp(EXP_WITH_BASE_SCALE * x), base e^0.5: EXP_WITH_BASE_SCALE_BF16
-# (and its fp32 form for exp_init) in sfpu_operations.h.
-EXP_WITH_BASE_SCALE = 0.5
+# exp_with_base(x) = exp(EXP_WITH_BASE_SCALE * x): the exact value of the bf16 scale
+# EXP_WITH_BASE_SCALE_BF16 (0x3F31) in sfpu_operations.h.
+EXP_WITH_BASE_SCALE = 0.69140625
 
 # Comparison ops (UnaryGt/Lt/Ge/Le/Eq/Ne) compare x against this.
 UNARY_COMP_THRESHOLD = 0.5

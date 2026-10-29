@@ -121,21 +121,18 @@
 namespace ckernel::sfpu
 {
 
-// exp_with_base's scale, 0.5 (base b = e^0.5). bf16 for the calculate call's runtime scale
-// argument; the same bits shifted into fp32 for exp_init, which bakes the scale into the
-// approximate clamp path's constants. Mirrored as EXP_WITH_BASE_SCALE in
-// sfpu_dispatch_constants.py, which the golden reads.
-constexpr std::uint32_t EXP_WITH_BASE_SCALE_BF16 = 0x3F00u;
+// exp_with_base's scale, bf16 0x3F31 = 0.69140625 (base b = e^0.69140625), mirrored as
+// EXP_WITH_BASE_SCALE in sfpu_dispatch_constants.py. Its mantissa bits are set, so a kernel
+// that drops the low bits of the scale is caught; the fp32 form is for exp_init's constants.
+constexpr std::uint32_t EXP_WITH_BASE_SCALE_BF16 = 0x3F31u;
 constexpr std::uint32_t EXP_WITH_BASE_SCALE_FP32 = EXP_WITH_BASE_SCALE_BF16 << 16;
 
 // The approximate clamp path of calculate_exponential is hand-unrolled for 8 rows and
 // ignores ITERATIONS (tt-llk#1486), so its callers run it per face over all four faces.
 constexpr int EXP_APPROX_CLAMP_ITERATIONS = 8;
 
-// The scale the way production hands it to calculate_exponential: exp_tile's uint16_t
-// scale argument is a kernel runtime value (a runtime arg or an L1 read), not a constant.
-// Read through volatile so the compiler cannot fold it into an instruction immediate and
-// every SCALE_EN path is instantiated with a genuinely runtime scale.
+// The scale as production hands it to calculate_exponential, a runtime value (exp_tile's
+// uint16_t argument): volatile keeps the compiler from folding it into an immediate.
 inline std::uint32_t exp_with_base_runtime_scale()
 {
     volatile std::uint32_t scale = EXP_WITH_BASE_SCALE_BF16;
@@ -926,9 +923,8 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     // exp_with_base, approximate clamp path: run as Exp's is, EXP_APPROX_CLAMP_ITERATIONS
     // per face over all four faces. Through one ITERATIONS call it processed 8 of a
     // tile's 32 rows and left the other 24 holding their input. This path takes its scale
-    // from exp_init's constants (above), not from the call: calculate_exponential ignores
-    // the runtime scale on the approximate clamp path because exp_init bakes it into the
-    // constants. The call still passes it, as every SCALE_EN call does.
+    // from exp_init's constants (above), not from the call, which passes it as every
+    // SCALE_EN call does.
     else if constexpr (OPERATION == SfpuType::exp_with_base && APPROX_MODE && CLAMP_NEGATIVE)
     {
         const std::uint32_t exp_base_scale_factor = exp_with_base_runtime_scale();
@@ -942,13 +938,8 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             exp_base_scale_factor);
     }
     // exp_with_base = b^x = exp(x * ln b): the only op that drives calculate_exponential
-    // with SCALE_EN=true. The bf16 scale EXP_WITH_BASE_SCALE_BF16 == 0.5 selects base
-    // b = e^0.5, so the golden is exp(0.5*x); 0.5 is exact in bf16 so no scale-rounding
-    // error is added.
-    //
-    // The scale is passed as a runtime value, as exp_tile passes its uint16_t scale
-    // argument: every SCALE_EN path, including the bf16-accurate TTI kernel, must accept
-    // a scale the compiler cannot fold into an instruction immediate.
+    // with SCALE_EN=true; the golden is exp(EXP_WITH_BASE_SCALE * x). The scale is passed
+    // as a runtime value, as exp_tile passes its uint16_t argument.
     else if constexpr (OPERATION == SfpuType::exp_with_base)
     {
         const std::uint32_t exp_base_scale_factor = exp_with_base_runtime_scale();
