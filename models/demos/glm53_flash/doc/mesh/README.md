@@ -1608,8 +1608,10 @@ planner refuses, naming the cause, only when every index of its row is shared. T
 without the image (TTFT 2 s against 13.6 s on the 4-slot profile): the rows-independent branch's SP step ran the text
 prefill (`_prefill_one`) and never the multimodal one. Fixed (1cb68898184): the SP step runs `_prefill_one_mm` when
 the request carries media, and its plan is never traced (the eager chunk's streams take the scattered features).
-Pinned in the generator host suite (an `sp_required` SP step plans eager; the same slot as text plans traced); r3 is the
-served check (stage e on the catalogued 1 M profile).
+Pinned in the generator host suite (an `sp_required` SP step plans eager; the same slot as text plans traced). Served
+check r3 (19:16, stage e on the catalogued 1 M profile, 32 slots): PASS, image TTFT 5.4 s and the 4-frame video 5.7 s,
+both answers name the red circle, the blue square, the green triangle and the word HELLO (the 4-slot profile's 13.6 s
+TTFT included the tower's cold build; here the tower is resident).
 
 ### 2026-10-29 18:30: served parity, measured
 
