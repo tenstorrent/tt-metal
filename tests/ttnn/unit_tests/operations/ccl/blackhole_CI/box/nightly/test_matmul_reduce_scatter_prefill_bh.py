@@ -51,11 +51,11 @@ def random_stacked(mesh_shape, shape, seed, scale=1.0):
     return (torch.randn((*mesh_shape, *shape), dtype=torch.float32) * scale).to(torch.bfloat16)
 
 
-def to_mesh(stacked, mesh_device, dtype, on_device=True):
+def to_mesh(stacked, mesh_device, dtype, on_device=True, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     """on_device=False: the same multi-device tensor on the host (for copy_host_to_device_tensor)."""
     rows, cols = stacked.shape[0], stacked.shape[1]
     full = torch.cat([torch.cat(list(stacked[r]), dim=1) for r in range(rows)], dim=0)
-    placement = dict(device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) if on_device else {}
+    placement = dict(device=mesh_device, memory_config=memory_config) if on_device else {}
     return ttnn.from_torch(
         full,
         dtype=dtype,
@@ -109,12 +109,14 @@ def run_case(
     num_links=None,
     output_tensor=False,
     calls=1,
+    a_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    w_memory_config=ttnn.DRAM_MEMORY_CONFIG,
 ):
     mesh_shape = tuple(mesh_device.shape)
     a = random_stacked(mesh_shape, a_shape, seed=0)
     w = quantize_like_device(random_stacked(mesh_shape, w_shape, seed=1, scale=w_shape[0] ** -0.5), weight_dtype)
-    ta = to_mesh(a, mesh_device, dtype)
-    tw = to_mesh(w, mesh_device, weight_dtype)
+    ta = to_mesh(a, mesh_device, dtype, memory_config=a_memory_config)
+    tw = to_mesh(w, mesh_device, weight_dtype, memory_config=w_memory_config)
     expected = reference(a, w, cluster_axis, scatter_dim)
     kwargs = dict(
         cluster_axis=cluster_axis,
@@ -169,6 +171,39 @@ def test_ring_model_shapes(mesh_device, case):
         dtype=dtype,
         weight_dtype=weight_dtype,
         num_links=2,
+    )
+
+
+# Operands in L1 interleaved (GLM-5.3 prefill feeds q_a_proj and the indexer projections from an L1 attention norm):
+# the q_a_proj shape, the narrow-N indexer wk, and a chunked plan.
+L1_INPUT_CASES = {
+    "glm5_q_a_proj": ((1, 1, 640, 1536), (1536, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b),
+    "glm5_indexer_wk_narrow_n": MODEL_CASES["glm5_indexer_wk_narrow_n"],
+    "chunked_n": MODEL_CASES["chunked_n"],
+}
+L1 = ttnn.L1_MEMORY_CONFIG
+DRAM = ttnn.DRAM_MEMORY_CONFIG
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("case", L1_INPUT_CASES.values(), ids=L1_INPUT_CASES.keys())
+@pytest.mark.parametrize("a_mem, w_mem", [(L1, DRAM), (DRAM, L1), (L1, L1)], ids=["l1_a", "l1_w", "l1_a_w"])
+def test_l1_operands(mesh_device, case, a_mem, w_mem):
+    a_shape, w_shape, scatter_dim, dtype, weight_dtype = case
+    run_case(
+        mesh_device,
+        a_shape,
+        w_shape,
+        cluster_axis=1,
+        scatter_dim=scatter_dim,
+        topology=ttnn.Topology.Ring,
+        dtype=dtype,
+        weight_dtype=weight_dtype,
+        num_links=2,
+        a_memory_config=a_mem,
+        w_memory_config=w_mem,
     )
 
 

@@ -17,8 +17,8 @@ namespace ttnn::experimental {
 // Fused multi-device matmul + reduce-scatter (SUM) over one mesh axis: every device holds a K-slice A[g] (..., M, K)
 // and W[g] (K, N); the output is the sum over the group, scattered along scatter_dim.
 //
-//   input_tensor           A, rank 2-4 with leading dims 1, bfloat16 / bfloat8_b, TILE, DRAM interleaved
-//   weight                 W (K, N), bfloat16 / bfloat8_b / bfloat4_b, TILE, DRAM interleaved
+//   input_tensor           A, rank 2-4 with leading dims 1, bfloat16 / bfloat8_b, TILE, DRAM or L1 interleaved
+//   weight                 W (K, N), bfloat16 / bfloat8_b / bfloat4_b, TILE, DRAM or L1 interleaved
 //   cluster_axis           mesh axis of the group (0 or 1)
 //   scatter_dim            -1 / -2 (or the matching non-negative dim)
 //   topology               Linear or Ring (a 2-device ring is the line)

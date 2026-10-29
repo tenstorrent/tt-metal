@@ -26,11 +26,13 @@ bool is_one_of(DataType dtype, std::initializer_list<DataType> allowed) {
     return std::find(allowed.begin(), allowed.end(), dtype) != allowed.end();
 }
 
-void check_dram_interleaved_tile(const Tensor& t, std::string_view what) {
+// DRAM or L1: the reader's TensorAccessor addresses either bank kind
+void check_interleaved_tile(const Tensor& t, std::string_view what) {
     const MemoryConfig& mc = t.memory_config();
     TT_FATAL(
-        mc.buffer_type() == BufferType::DRAM && mc.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "matmul_reduce_scatter_prefill: {} must be DRAM interleaved",
+        (mc.buffer_type() == BufferType::DRAM || mc.buffer_type() == BufferType::L1) &&
+            mc.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "matmul_reduce_scatter_prefill: {} must be DRAM or L1 interleaved",
         what);
     TT_FATAL(t.layout() == Layout::TILE, "matmul_reduce_scatter_prefill: {} must be TILE layout", what);
 }
@@ -128,8 +130,8 @@ void check_operands(
         a_shape);
     TT_FATAL(w_shape.rank() == 2, "matmul_reduce_scatter_prefill: W must be (K, N), got {}", w_shape);
     TT_FATAL(a_shape[-1] == w_shape[0], "matmul_reduce_scatter_prefill: K mismatch, A {} vs W {}", a_shape, w_shape);
-    check_dram_interleaved_tile(input_tensor, "input_tensor");
-    check_dram_interleaved_tile(weight, "weight");
+    check_interleaved_tile(input_tensor, "input_tensor");
+    check_interleaved_tile(weight, "weight");
     TT_FATAL(
         !memory_config.has_value() || memory_config->memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "matmul_reduce_scatter_prefill: a sharded output memory_config is not supported");
