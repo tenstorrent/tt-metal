@@ -55,6 +55,37 @@ class TTFFN:
         return ttnn.linear(y, p.linear2.weight, bias=p.linear2.bias)
 
 
+def largest_divisor(n, limit):
+    """The largest divisor of ``n`` that is at most ``limit``."""
+    return max(d for d in range(1, min(n, limit) + 1) if n % d == 0)
+
+
+def dst_tiles(fp32_dest_acc_en):
+    """The tiles a matmul's output subblock may hold: the destination register's half that one
+    subblock gets holds 8 tiles, 4 when they are fp32."""
+    return 4 if fp32_dest_acc_en else 8
+
+
+def grid_shard_tiles(device, rows):
+    """Tile rows per core for ``rows`` rows height-sharded over ``device``'s whole grid."""
+    grid = device.compute_with_storage_grid_size()
+    return math.ceil(math.ceil(rows / ttnn.TILE_SIZE) / (grid.x * grid.y))
+
+
+def grid_height_sharded(device, shard_tiles, channels):
+    """L1 height sharding over ``device``'s whole grid, ``shard_tiles`` tile rows of ``channels``
+    per core in row-major core order. Every per-core tensor of the backbone takes this layout, and
+    the code compares layouts to skip a reshard, so they all come from here."""
+    grid = device.compute_with_storage_grid_size()
+    return ttnn.create_sharded_memory_config(
+        shape=(shard_tiles * ttnn.TILE_SIZE, channels),
+        core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
 def is_pointwise(conv):
     """Whether ``conv``, anything with a conv's geometry, is a 1x1 conv without padding or groups: a
     matmul over channels of its input, subsampled at its stride."""
@@ -204,6 +235,8 @@ class TTConv2D:
             self.linear_bias = None if self.bias is None else ttnn.to_device(self.bias, self.device)
             self.linear_program_config = self._linear_program_config(grid, fp32_dest_acc_en)
             if l1_output:
+                # bfloat8_b is counted as 2 bytes too, which only overstates its shard.
+                self.output_element_bytes = 4 if output_dtype == ttnn.float32 else 2
                 self._l1_output_config(grid, fp32_dest_acc_en)
 
     # A pointwise linear's output shard per core above this stays in DRAM: layer3's 1024-channel
@@ -213,18 +246,15 @@ class TTConv2D:
     def _l1_output_config(self, grid, fp32_dest_acc_en):
         """Rows over every core, each core's output rows kept in its own L1 as a height shard, when
         that shard fits L1_OUTPUT_MAX_SHARD_BYTES."""
-        num_cores = grid.x * grid.y
-        rows_t = math.ceil(self.batch_size * self.output_height * self.output_width / ttnn.TILE_SIZE)
-        per_core_m = math.ceil(rows_t / num_cores)
-        if per_core_m * ttnn.TILE_SIZE * self.out_channels * 2 > self.L1_OUTPUT_MAX_SHARD_BYTES:
+        per_core_m = grid_shard_tiles(self.device, self.batch_size * self.output_height * self.output_width)
+        if per_core_m * ttnn.TILE_SIZE * self.out_channels * self.output_element_bytes > self.L1_OUTPUT_MAX_SHARD_BYTES:
             return
         in_t, out_t = self.in_channels // ttnn.TILE_SIZE, self.out_channels // ttnn.TILE_SIZE
-        max_subblock = 4 if fp32_dest_acc_en else 8
         self.linear_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(grid.x, grid.y),
-            in0_block_w=max(w for w in range(1, 5) if in_t % w == 0),
+            in0_block_w=largest_divisor(in_t, 4),
             out_subblock_h=1,
-            out_subblock_w=max(w for w in range(1, max_subblock + 1) if out_t % w == 0),
+            out_subblock_w=largest_divisor(out_t, dst_tiles(fp32_dest_acc_en)),
             out_block_h=1,
             out_block_w=out_t,
             per_core_M=per_core_m,
@@ -233,13 +263,7 @@ class TTConv2D:
             fused_activation=None if self.linear_activation is None else ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             mcast_in0=False,
         )
-        self.linear_output_memory_config = ttnn.create_sharded_memory_config(
-            shape=(per_core_m * ttnn.TILE_SIZE, self.out_channels),
-            core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
+        self.linear_output_memory_config = grid_height_sharded(self.device, per_core_m, self.out_channels)
         self.output_in_l1 = True
 
     # A widening linear whose activation gives each grid row fewer tile rows than this keeps
@@ -256,15 +280,12 @@ class TTConv2D:
         if rows_t < num_cores:
             return None
         in_t, out_t = self.in_channels // ttnn.TILE_SIZE, self.out_channels // ttnn.TILE_SIZE
-        max_subblock = 4 if fp32_dest_acc_en else 8
+        max_subblock = dst_tiles(fp32_dest_acc_en)
         relu = None if self.linear_activation is None else ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
 
-        def largest_divisor(n, limit):
-            return max(d for d in range(1, limit + 1) if n % d == 0)
-
         if out_t <= in_t and out_t <= 8:
-            per_core_m = math.ceil(rows_t / num_cores)
-            # Blocks of 4 rows on layer1/layer2's tall activations, one row on layer3's.
+            per_core_m = grid_shard_tiles(self.device, self.batch_size * self.output_height * self.output_width)
+            # Blocks of 4 tile rows where each core holds at least 16, one row otherwise.
             block_h = 4 if per_core_m >= 16 else 1
             per_core_m = math.ceil(per_core_m / block_h) * block_h
             return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
