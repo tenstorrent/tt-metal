@@ -30,7 +30,10 @@ steps:
       golden's chunk 1 and recomputes the fp32 step with those bf16 points emulated: equal to the official output bit
       for bit (equal fraction 1.000000) at L2 (ratio 2), L14 (ratio 2) and L20 (ratio 1); official vs the plain fp32
       step rel 0.0373 / 0.0366 / 0.0371. DS41-38.
-  indexer: {inputs: [bf16, bf16, fixed]}                  # attn_norm, q_resid, compressed; output int32 top-k
+  # compressed: the index keys, fp4 (e2m1, power-of-two scale per 32) values, nudged inside their cell; nudge_inner:
+  # the step's own fp4 quantizer of the query (ds41_ref.py _q4) nudged too (F224, DS41-150: INDEX_K_FORMAT /
+  # INDEX_Q_FORMAT=bfp4 are judged against the reference's own 4-bit rounding of both)
+  indexer: {inputs: [bf16, bf16, fp4e8/32], nudge_inner: true}  # attn_norm, q_resid, compressed; output int32 top-k
   # compressed: fp4 (e2m1, e4m3 scale per 16) values; nudged inside their fp4 cell so the limit counts the reference's
   # own 4-bit rounding of the cache (F223, owner 2026-10-28: CKV_FORMAT=bfp4_rows is judged against it)
   attention: {inputs: [bf16, fixed, fp4/16, fixed], out: bf16}  # q_resid, kv, (compressed), (topk: int); wo_b -> bf16

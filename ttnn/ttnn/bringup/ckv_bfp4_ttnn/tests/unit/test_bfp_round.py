@@ -73,3 +73,35 @@ def test_bfp_round_refusals(device, expect_error):
         ttnn.bringup.bfp_round(t, out=tab, row0=16)
     with expect_error(AssertionError, "64"):
         ttnn.bringup.bfp_round(t, out=tab, row0=64)
+
+
+@pytest.mark.parametrize("dt", ["bfloat4_b", "bfloat8_b"])
+@pytest.mark.parametrize("n", [512, 13824])
+def test_bfp_round_prepared(device, dt, n):
+    """prepared=True: one program per (mesh, tiles, dtype, memory configs), page0 a value slot, every address patched.
+    New outputs and in-place writes at other row0 / tables equal the plain generic_op path byte for byte, rows outside
+    each call's range untouched, and the program is prepared once (the same program writes both)."""
+    mod = importlib.import_module("ttnn.bringup.ckv_bfp4_ttnn.ckv_bfp4")
+    dtype = getattr(ttnn, dt)
+    rows = 3 * n
+    tables = {
+        p: [
+            ttnn.from_torch(torch.full((1, 1, rows, 128), 0.75), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+            for _ in range(2)
+        ]
+        for p in (False, True)
+    }
+    before = len(mod._PREPARED)
+    for i, (k, row0) in enumerate([(0, 0), (0, n), (1, 2 * n), (0, 2 * n), (1, 0)]):
+        x = _inputs((1, 1, n, 128), 7 * n + i)
+        t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        new = {p: ttnn.bringup.bfp_round(t, dtype, prepared=p) for p in (False, True)}
+        assert torch.equal(ttnn.to_torch(new[False]), ttnn.to_torch(new[True])), f"call {i}: new outputs differ"
+        assert torch.equal(ttnn.to_torch(new[True]).float(), ref.round_values(x, MBITS[dt])), f"call {i}: values"
+        for p in (False, True):
+            ttnn.bringup.bfp_round(t, out=tables[p][k], row0=row0, prepared=p)
+        a, b = (ttnn.to_torch(tables[p][k]).float().reshape(rows, 128) for p in (False, True))
+        assert torch.equal(a, b), f"call {i}: prepared table != generic_op table"
+        assert torch.equal(b[row0 : row0 + n], ref.round_values(x, MBITS[dt]).reshape(n, 128)), f"call {i}: rows"
+    assert len(mod._PREPARED) == before + 1, "the program was not prepared exactly once"
+    assert list(mod._PREPARED.values())[-1][1] is not None, "the program could not be prepared (patch count)"

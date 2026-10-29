@@ -102,3 +102,32 @@ owner / server change it.
 ## 7. What one card / the 2x2 cannot show
 The ring's key traffic (SP 8 on the 8x4), memory at 1M tokens, host time per call (the Python descriptor ops rebuild
 their programs each call, DS41-135), and end-to-end accuracy (phase 2: component / swap tests and the ladder).
+
+## 8. Phase 2: wired into the model (2x2, 2026-10-29; OWNER DECISION 13:00, waivers accepted 16:50)
+Settings (tt/settings.py, all default on; `bf16` = the path before): WINDOW_KV_FORMAT=bfp8_blocks (the [carry 128 |
+chunk S] window region as bfloat8_b blocks, tt/attention.WindowTables.window_blocks, one buffer every layer writes in
+turn; window-only layers read it as ROW_BFP8, compressed layers as kv_window), INDEX_K_FORMAT=bfp4 (the tiled key slab
+rounded by bfp_round, the ring's key buffer bfloat4_b), INDEX_Q_FORMAT=bfp4 (the roped query rounded). Served caches stay
+bf16 (contract unchanged). bfp_round got prepared=True (P.7's pattern, CKV_BFP4_PREPARED=on): without it the chunk
+wall was +4.6 ms (host time). official_taps.yaml: the indexer's keys fp4e8/32 + nudge_inner (F224).
+
+2x2 rung last (55296, 8 layers), on vs off (bf16):
+| | off | on |
+|---|---|---|
+| chunk wall (quick A/B, median of 10) | 77.1 ms | 76.4 ms |
+| device total (rt profiler) | 55.94 ms | 56.03 ms |
+| sparse_sdpa, window-only / compressed layers | 0.33 / 0.71-0.73 ms | 0.24 / 0.67-0.69 ms |
+| new writes (window blocks 2 x 8 layers, bfp_round 2 x 4 index layers) | - | 0.42 + 0.23 ms |
+| layer err, worst vs limit | L20 0.032 / 0.051 | L20 0.034 / 0.051 |
+| L14 / L21 / L03 layer err (limits 0.138 / 0.131 / 0.159) | 0.069 / 0.061 / 0.078 | 0.085 / 0.081 / 0.087 |
+| top-k state L02 / L14 / L20 / L24 (limits 0.210 / 0.165 / 0.238 / 0.399) | 0.022 / 0.011 / 0.009 / 0.026 | 0.169 / 0.185 / 0.200 / 0.361 |
+| candidates L20 (limit 0.130) | 0.006 | 0.122 |
+| pcc_chunk_out | 0.99957 | 0.99955 |
+
+Waived (owner, spec tests.waivers): `state.topk_idx` (L14 0.185 > 0.165; F226 adds state waivers) and the indexer step
+(component L24 0.156 > 0.143): the reference's own fp4 selection error. Component tests: attention 8 golden checks pass
+(0.020-0.055 vs 0.09-0.50); indexer 4 pass (waived). Swap tests: 7 pass, 5 fail identically with the formats off
+(swa, swa_engram, dec_reindex, dec_reuse, enc_reuse: swap_attention_out 0.014-0.037 vs limits 0.005-0.010): the swap
+limits lost the reference's own fp8 arithmetic when FIX.6 (4a5dec521ff) made the goldens native (their noise floor is
+the input nudge only, the component limits also take official_floor.json); dec_reuse's error itself is the 4-bit
+compressed KV (FIX.8: 0.037, CKV_FORMAT=bf16 0.015). P.9 / P.10 off: the same numbers. Not changed here (owner).
