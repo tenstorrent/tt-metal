@@ -255,7 +255,7 @@ protected:
             GTEST_SKIP() << "Tile counters are only used on Quasar";
         }
         // Must be set before parent SetUp: the TRISC HW fault ISR (handle_interrupt in
-        // risc_common.h, compiled as part of trisc.cc firmware) calls ASSERT on a
+        // trisc.cc firmware) calls ASSERT on a
         // TILE_COUNTERS fault, which writes to the watcher mailbox and hangs. Disabling
         // assert here makes ASSERT a no-op so the ISR clears the interrupt and returns,
         // allowing the test to verify that watcher logs the TC mismatch correctly.
