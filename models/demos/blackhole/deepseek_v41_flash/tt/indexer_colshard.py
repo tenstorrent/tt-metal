@@ -97,7 +97,7 @@ def cs_cand(sc, lids, colid, cols):
     return vals, gids
 
 
-def cs_final(pos, cand):
+def cs_final(pos, cand, max_id=0):
     """pos uint32 RM [R,1,1,K] (merge top-K positions into the W gathered candidates), cand uint32 RM [R,1,1,W] (their global ids) -> ids uint32 RM [R,1,1,K], ascending (sentinel last)."""
     R, K, W = int(pos.shape[0]), int(pos.shape[-1]), int(cand.shape[-1])
     mesh = pos.device()
@@ -106,12 +106,14 @@ def cs_final(pos, cand):
         ttnn.Shape([R, 1, 1, K]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
     )
     u32 = ttnn.uint32
+    nw = (max_id + 32) // 32 if (max_id and os.environ.get("DSV41_IDX_CS_SORT", "bitmap") == "bitmap") else 0
+    cnt_bytes = max(256 * 4, (nw + (nw + 31) // 32) * 4)
     _cs_prog(
         "cs_final.cpp",
         mesh,
         R,
-        [(1, K * 4, u32), (1, W * 4, u32), (1, K * 4, u32), (1, K * 4, u32), (1, 256 * 4, u32)],
-        [K, W],
+        [(1, K * 4, u32), (1, W * 4, u32), (1, K * 4, u32), (1, K * 4, u32), (1, cnt_bytes, u32)],
+        [K, W, nw],
         [pos, cand, out],
         [pos.buffer_address(), cand.buffer_address(), out.buffer_address()],
         [pos, cand, out],
@@ -133,7 +135,7 @@ def cs_merge_fast(ix, consts, sr, R, n, vl):
     W = int(cv.shape[-1])
     pos = ttnn.experimental.topk_large_indices(ttnn.reshape(cv, [1, 1, R, W]), k=k)
     pos = ttnn.reshape(pos if pos.dtype == ttnn.uint32 else ttnn.typecast(pos, ttnn.uint32), [R, 1, 1, k])
-    return cs_final(pos, ci)
+    return cs_final(pos, ci, int(ix.n_alloc) * cols)
 
 
 def cs_select(ix, consts, scores, R, n, nv, vl, want_vals=False):

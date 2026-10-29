@@ -264,7 +264,7 @@ def test_cs_breakdown(mesh_device):
             pos = ttnn.reshape(
                 ttnn.experimental.topk_large_indices(ttnn.reshape(cv, [1, 1, R, W]), k=TOPK), [R, 1, 1, TOPK]
             )
-            ids = cs_final(pos, ci)
+            ids = cs_final(pos, ci, n_alloc)
             ttnn.synchronize_device(md)
             st = {
                 "replicated topk (whole row)": lambda: ttnn.experimental.topk_large_indices(
@@ -279,7 +279,8 @@ def test_cs_breakdown(mesh_device):
                 "merge topk (8 x 512)": lambda: ttnn.experimental.topk_large_indices(
                     ttnn.reshape(cv, [1, 1, R, W]), k=TOPK
                 ),
-                "cs_final kernel": lambda: cs_final(pos, ci),
+                "cs_final bitmap": lambda: cs_final(pos, ci, n_alloc),
+                "cs_final radix": lambda: cs_final(pos, ci),
             }
             out = []
             for name, fn in st.items():
