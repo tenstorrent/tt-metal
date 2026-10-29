@@ -75,10 +75,10 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
 // has been enqueued: a neighbour writes into it only after this chip's fence_ready, and this chip's program finishes
 // only after every arrival has landed.
 //
-// Per call by design: the op holds no L1 between calls. Costs:
-//   - host time on every eager call: creating + freeing a height-sharded L1 tensor over the full grid (~21 us on a
-//     QuietBox 2; a hot call 17 -> 34-36 us host, invisible end to end once the device time exceeds that). Traced
-//     replays pay nothing.
+// Per call by design: the op holds no L1 between calls. The layout of a size (tensor spec, sharded page mapping over
+// the full grid, topology) is built on its first call and kept per mesh and size, host-side only and never released,
+// so a later call only allocates the buffer and wraps it. Costs:
+//   - host time on every eager call: allocating and freeing that buffer. Traced replays pay nothing.
 //   - traces: the staging is freed during capture, so an L1 buffer allocated after capture can land on it and is
 //     overwritten by every replay (tt-metal's general rule: buffers allocated while a trace exists are unsafe unless
 //     released before it runs).
