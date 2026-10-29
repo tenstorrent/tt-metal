@@ -1224,15 +1224,17 @@ static void run_quasar_tilize_untilize_test(
         for (std::uint32_t i = 0; i < src_vec.size(); i++) {
             src_vec[i] = (static_cast<std::uint32_t>((2 * i) + 1) << 16) | static_cast<std::uint32_t>(2 * i);
         }
-    } else if (is_tilize && input_data_format == tt::DataFormat::Float32) {
+    } else if (input_data_format == tt::DataFormat::Float32) {
         src_vec.resize(src_dram_buffer_size / sizeof(std::uint32_t));
         for (std::uint32_t i = 0; i < src_vec.size(); i++) {
             src_vec[i] = std::bit_cast<std::uint32_t>(static_cast<float>(i));
         }
-    } else if (is_tilize && input_data_format == tt::DataFormat::Int32) {
+    } else if (input_data_format == tt::DataFormat::Int32) {
         src_vec.resize(src_dram_buffer_size / sizeof(std::uint32_t));
         for (std::uint32_t i = 0; i < src_vec.size(); i++) {
-            src_vec[i] = i;
+            // Unique per datum with the upper halfword set too (bit 31 stays clear), so a DEST path that dropped the
+            // high bits would fail the bit-exact compare.
+            src_vec[i] = i * 0x00010001u;
         }
     } else {
         src_vec = create_arange_vector_of_bfloat16(src_dram_buffer_size, false);
@@ -1613,6 +1615,83 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) 
                 /*fp32_dest_acc_en=*/true,
                 tt::DataFormat::Int8,
                 /*output_data_format=*/tt::DataFormat::Int32);
+        }
+    }
+}
+
+// Pack untilize with the input unpacked straight into DEST (UnpackToDestEn): the FLOAT32 / INT32 untilize path on
+// Quasar (#62275), plus Float16_b into a 16-bit DEST as in the tilize-to-dest sweep. Each block row is one DEST
+// section on all three threads; {2, 10} splits a row into 2-tile blocks.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeToDest) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            for (tt::DataFormat input_data_format :
+                 {tt::DataFormat::Float32, tt::DataFormat::Int32, tt::DataFormat::Float16_b}) {
+                const bool fp32_dest_acc_en = input_data_format != tt::DataFormat::Float16_b;
+                run_quasar_tilize_untilize_test(
+                    this->device(),
+                    cfg[0],
+                    cfg[1],
+                    QuasarTestMode::UNTILIZE,
+                    dst_full_sync_en,
+                    fp32_dest_acc_en,
+                    input_data_format,
+                    input_data_format,
+                    /*tile_shape_in_faces=*/{2, 2},
+                    /*face_r_dim=*/tt::constants::FACE_HEIGHT,
+                    /*tilize_cross_tile_rows=*/false,
+                    /*unpack_to_dest=*/true);
+            }
+        }
+    }
+}
+
+// Tilize-to-dest then pack-untilize-to-dest on the same device, as the fp32 tilize -> untilize round trip runs them:
+// checks the untilize leg right after a tilize program has run on the core (unpacker counter leftovers).
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputeTilizeThenPackUntilizeToDest) {
+    for (bool dst_full_sync_en : {false, true}) {
+        for (tt::DataFormat input_data_format : {tt::DataFormat::Float32, tt::DataFormat::Int32}) {
+            for (QuasarTestMode mode : {QuasarTestMode::TILIZE, QuasarTestMode::UNTILIZE}) {
+                run_quasar_tilize_untilize_test(
+                    this->device(),
+                    /*num_tiles_r=*/2,
+                    /*num_tiles_c=*/4,
+                    mode,
+                    dst_full_sync_en,
+                    /*fp32_dest_acc_en=*/true,
+                    input_data_format,
+                    input_data_format,
+                    /*tile_shape_in_faces=*/{2, 2},
+                    /*face_r_dim=*/tt::constants::FACE_HEIGHT,
+                    /*tilize_cross_tile_rows=*/false,
+                    /*unpack_to_dest=*/true);
+            }
+        }
+    }
+}
+
+// Regular unpack-to-dest (copy_tile in tile_regs_acquire / commit) then pack_untilize_dest on the tiles it placed,
+// for 32-bit inputs (dst_untilize.cpp with UnpackToDestEn).
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstToDest) {
+    std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
+    for (auto& cfg : test_configs) {
+        for (bool dst_full_sync_en : {true, false}) {
+            for (tt::DataFormat input_data_format : {tt::DataFormat::Float32, tt::DataFormat::Int32}) {
+                run_quasar_tilize_untilize_test(
+                    this->device(),
+                    cfg[0],
+                    cfg[1],
+                    QuasarTestMode::UNTILIZE_DST,
+                    dst_full_sync_en,
+                    /*fp32_dest_acc_en=*/true,
+                    input_data_format,
+                    input_data_format,
+                    /*tile_shape_in_faces=*/{2, 2},
+                    /*face_r_dim=*/tt::constants::FACE_HEIGHT,
+                    /*tilize_cross_tile_rows=*/false,
+                    /*unpack_to_dest=*/true);
+            }
         }
     }
 }
