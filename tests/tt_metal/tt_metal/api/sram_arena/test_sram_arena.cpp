@@ -18,7 +18,7 @@ namespace {
 
 class SRAMArenaAllocationTest : public test_helpers::MockMeshDeviceFixture<tt::ARCH::WORMHOLE_B0> {};
 
-TEST_F(SRAMArenaAllocationTest, LockstepRejectsSizeThatOverflows32Bits) {
+TEST_F(SRAMArenaAllocationTest, CPU_LockstepRejectsSizeThatOverflows32Bits) {
     // Oversized lockstep reservations must fail even when their 32-bit total wraps to zero.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     ASSERT_EQ(fixture_device.allocator()->get_num_banks(BufferType::L1), 72u);

@@ -22,7 +22,7 @@ using test_helpers::MakeBorrowedDFBProgramSpec;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::ProgramSpecTestQuasar;
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaDFBUndeclaredName) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBUndeclaredName) {
     // A DFB’s SRAM arena name must resolve to a declared `SRAMArenaParameter`.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     auto spec = MakeBorrowedDFBProgramSpec("tensor", BufferType::L1, alignment, 2, false);
@@ -45,7 +45,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaDFBUndeclaredName) {
             ::testing::HasSubstr("DFB 'dfb' allocates from unknown SRAMArenaParameter 'missing'.")));
 }
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadUndeclaredName) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadUndeclaredName) {
     // A scratchpad’s SRAM arena name must resolve to a declared `SRAMArenaParameter`.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     auto spec = MakeMinimalValidProgramSpec();

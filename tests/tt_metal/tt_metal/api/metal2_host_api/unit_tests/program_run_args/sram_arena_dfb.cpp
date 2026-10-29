@@ -57,7 +57,7 @@ dfb::detail::DataflowBufferImpl& ArenaDFB(Program& program) {
     return *program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("fifo"));
 }
 
-TEST_F(SRAMArenaDFBTest, WaitsForAllocationArgument) {
+TEST_F(SRAMArenaDFBTest, CPU_WaitsForAllocationArgument) {
     // An arena-allocated DFB has no storage address before its allocation argument is supplied.
     ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/1024);
     Program program = MakeProgramFromSpec(fixture_device(), spec);
@@ -65,7 +65,7 @@ TEST_F(SRAMArenaDFBTest, WaitsForAllocationArgument) {
     EXPECT_EQ(ArenaDFB(program).borrowed_addr_, 0u);
 }
 
-TEST_F(SRAMArenaDFBTest, BindsAtDeclaredOffset) {
+TEST_F(SRAMArenaDFBTest, CPU_BindsAtDeclaredOffset) {
     // Supplying an allocation places the DFB at its exact base plus the declared offset.
     SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
     ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/1024);
@@ -76,7 +76,7 @@ TEST_F(SRAMArenaDFBTest, BindsAtDeclaredOffset) {
     EXPECT_EQ(ArenaDFB(program).borrowed_addr_, ArenaBase(arena) + 1024);
 }
 
-TEST_F(SRAMArenaDFBTest, FullResetRebindsEveryNode) {
+TEST_F(SRAMArenaDFBTest, CPU_FullResetRebindsEveryNode) {
     // A full argument reset changes the DFB address on every occupied node.
     SRAMArena first = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
     SRAMArena second = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
@@ -91,7 +91,7 @@ TEST_F(SRAMArenaDFBTest, FullResetRebindsEveryNode) {
     EXPECT_EQ(ArenaDFB(program).core_lookup_.at(NodeCoord{1, 0}).second, ArenaBase(second) + 1024);
 }
 
-TEST_F(SRAMArenaDFBTest, PartialUpdateRebindsEveryNode) {
+TEST_F(SRAMArenaDFBTest, CPU_PartialUpdateRebindsEveryNode) {
     // An allocation-only update changes the DFB address on every occupied node.
     SRAMArena first = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
     SRAMArena second = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
@@ -106,7 +106,7 @@ TEST_F(SRAMArenaDFBTest, PartialUpdateRebindsEveryNode) {
     EXPECT_EQ(ArenaDFB(program).core_lookup_.at(NodeCoord{1, 0}).second, ArenaBase(second) + 1024);
 }
 
-TEST_F(SRAMArenaDFBTest, PartialUpdateRetainsOmittedAllocation) {
+TEST_F(SRAMArenaDFBTest, CPU_PartialUpdateRetainsOmittedAllocation) {
     // An update without an allocation argument preserves the DFB address.
     SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
     ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/1024);
@@ -118,7 +118,7 @@ TEST_F(SRAMArenaDFBTest, PartialUpdateRetainsOmittedAllocation) {
     EXPECT_EQ(ArenaDFB(program).borrowed_addr_, ArenaBase(arena) + 1024);
 }
 
-TEST_F(SRAMArenaDFBTest, LocalReallocationPreservesBorrowedAddress) {
+TEST_F(SRAMArenaDFBTest, CPU_LocalReallocationPreservesBorrowedAddress) {
     // Repeating program-local allocation preserves the arena-allocated DFB address on every node.
     SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
     ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/1024);
@@ -133,7 +133,7 @@ TEST_F(SRAMArenaDFBTest, LocalReallocationPreservesBorrowedAddress) {
     EXPECT_EQ(ArenaDFB(program).core_lookup_.at(NodeCoord{1, 0}).second, ArenaBase(arena) + 1024);
 }
 
-TEST_F(SRAMArenaDFBTest, FullResetRequiresAllocationArgument) {
+TEST_F(SRAMArenaDFBTest, CPU_FullResetRequiresAllocationArgument) {
     // A full reset must supply the allocation even when the DFB already has an address.
     SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
     ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/1024);
@@ -146,7 +146,7 @@ TEST_F(SRAMArenaDFBTest, FullResetRequiresAllocationArgument) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no SRAMArenaArgument")));
 }
 
-TEST_F(SRAMArenaDFBTest, FullResizeFitsExactlyAfterOffset) {
+TEST_F(SRAMArenaDFBTest, CPU_FullResizeFitsExactlyAfterOffset) {
     // A full argument set accepts a DFB whose offset and resized storage exactly fill the reservation.
     SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
     ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/1024);
@@ -159,7 +159,7 @@ TEST_F(SRAMArenaDFBTest, FullResizeFitsExactlyAfterOffset) {
     EXPECT_EQ(ArenaDFB(program).borrowed_addr_, ArenaBase(arena) + 1024);
 }
 
-TEST_F(SRAMArenaDFBTest, PartialResizeDoesNotRequireAllocationArgument) {
+TEST_F(SRAMArenaDFBTest, CPU_PartialResizeDoesNotRequireAllocationArgument) {
     // A partial resize can fill the remaining reservation without supplying the allocation again.
     SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
     ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/1024);
@@ -174,7 +174,7 @@ TEST_F(SRAMArenaDFBTest, PartialResizeDoesNotRequireAllocationArgument) {
     EXPECT_EQ(ArenaDFB(program).borrowed_addr_, ArenaBase(arena) + 1024);
 }
 
-TEST_F(SRAMArenaDFBTest, FullResizeRejectsStorageBeyondOffsetLimit) {
+TEST_F(SRAMArenaDFBTest, CPU_FullResizeRejectsStorageBeyondOffsetLimit) {
     // A DFB that fits only when its offset is ignored must be rejected by a full argument set.
     SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
     ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/1024);
@@ -185,7 +185,7 @@ TEST_F(SRAMArenaDFBTest, FullResizeRejectsStorageBeyondOffsetLimit) {
     EXPECT_THROW(SetProgramRunArgs(program, args), std::runtime_error);
 }
 
-TEST_F(SRAMArenaDFBTest, PartialResizeRejectsStorageBeyondOffsetLimit) {
+TEST_F(SRAMArenaDFBTest, CPU_PartialResizeRejectsStorageBeyondOffsetLimit) {
     // Omitting the allocation does not bypass the offset-inclusive resize bound.
     SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
     ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/1024);
@@ -198,7 +198,7 @@ TEST_F(SRAMArenaDFBTest, PartialResizeRejectsStorageBeyondOffsetLimit) {
     EXPECT_THROW(UpdateProgramRunArgs(program, update), std::runtime_error);
 }
 
-TEST_F(SRAMArenaDFBTest, EntrySizeOverrideChecksReservationBound) {
+TEST_F(SRAMArenaDFBTest, CPU_EntrySizeOverrideChecksReservationBound) {
     // An entry-size override must fit with the current entry count and allocation offset.
     SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
     ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/1024);
@@ -211,7 +211,7 @@ TEST_F(SRAMArenaDFBTest, EntrySizeOverrideChecksReservationBound) {
     EXPECT_THROW(UpdateProgramRunArgs(program, update), std::runtime_error);
 }
 
-TEST_F(SRAMArenaDFBTest, CombinedSizeOverridesUseResultingSize) {
+TEST_F(SRAMArenaDFBTest, CPU_CombinedSizeOverridesUseResultingSize) {
     // Entry size and count overrides are checked together against the available storage.
     SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
     ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/1024);
@@ -224,7 +224,7 @@ TEST_F(SRAMArenaDFBTest, CombinedSizeOverridesUseResultingSize) {
     EXPECT_EQ(ArenaDFB(program).config.num_entries, 2u);
 }
 
-TEST_F(SRAMArenaDFBTest, LaterResizeUsesCurrentEntryCount) {
+TEST_F(SRAMArenaDFBTest, CPU_LaterResizeUsesCurrentEntryCount) {
     // An omitted entry count retains its previous override during a later resize.
     SRAMArena arena = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
     ProgramSpec spec = ArenaDFBSpec(/*entry_size=*/512, /*num_entries=*/4, /*offset=*/1024);

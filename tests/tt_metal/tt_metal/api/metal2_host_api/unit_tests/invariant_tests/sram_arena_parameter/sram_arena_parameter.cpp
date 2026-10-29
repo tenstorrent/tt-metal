@@ -21,7 +21,7 @@ namespace {
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::ProgramSpecTestQuasar;
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaParameterValidLockstep) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterValidLockstep) {
     // A positive per-bank size is accepted.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     auto spec = MakeMinimalValidProgramSpec();
@@ -33,7 +33,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaParameterValidLockstep) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaParameterValidRangeLockstep) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterValidRangeLockstep) {
     // A positive per-bank size and nonempty node set are accepted.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     auto spec = MakeMinimalValidProgramSpec();
@@ -49,7 +49,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaParameterValidRangeLockstep) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaParameterZeroLockstepSize) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterZeroLockstepSize) {
     // A lockstep allocation parameter cannot declare zero bytes per bank.
     auto spec = MakeMinimalValidProgramSpec();
     spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
@@ -63,7 +63,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaParameterZeroLockstepSize) {
             "SRAMArenaParameter 'arena' has per_bank_size = 0; per_bank_size must be greater than zero.")));
 }
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaParameterZeroRangeLockstepSize) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterZeroRangeLockstepSize) {
     // A range-lockstep allocation parameter cannot declare zero bytes per bank.
     auto spec = MakeMinimalValidProgramSpec();
     spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
@@ -81,7 +81,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaParameterZeroRangeLockstepSize) {
             "SRAMArenaParameter 'arena' has per_bank_size = 0; per_bank_size must be greater than zero.")));
 }
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaParameterEmptyRangeLockstepNodes) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterEmptyRangeLockstepNodes) {
     // A range-lockstep allocation parameter must cover at least one node.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     auto spec = MakeMinimalValidProgramSpec();

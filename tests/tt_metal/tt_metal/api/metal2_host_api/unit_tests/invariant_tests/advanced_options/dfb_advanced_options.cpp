@@ -69,7 +69,7 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayWithBorrowedFromFails) {
     EXPECT_SPEC_REJECTED(spec, "sets both prefetcher_pipe_relays and borrowed_from");
 }
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaDFBWithBorrowedTensorFails) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBWithBorrowedTensorFails) {
     // A DFB cannot combine a tensor view with an arena allocation override, even at offset zero.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     ProgramSpec spec = test_helpers::MakeBorrowedDFBProgramSpec();
