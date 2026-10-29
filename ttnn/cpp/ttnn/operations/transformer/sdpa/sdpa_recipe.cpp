@@ -1,0 +1,639 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#include "sdpa_recipe.hpp"
+#include "sdpa_recipe_blocking.hpp"
+
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cmath>
+#include <cstdlib>
+#include <iterator>
+#include <set>
+
+#include <tt-metalium/allocator.hpp>
+#include <internal/kernel_build_options.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/generic/generic_op.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::operations::transformer::sdpa::detail {
+using namespace tt::tt_metal;
+
+RecipeSelection select_recipe(ttnn::transformer::SDPAPrecision precision, DataType kv_type) {
+    using ttnn::transformer::SDPAPrecision;
+    Recipe recipe;
+    switch (precision) {
+        case SDPAPrecision::STANDARD: recipe = Recipe::B; break;
+        case SDPAPrecision::BALANCED: recipe = Recipe::C; break;
+        case SDPAPrecision::ACCURATE: recipe = Recipe::D; break;
+        case SDPAPrecision::FAST: recipe = Recipe::E; break;
+        default: TT_THROW("Unknown SDPA precision recipe");
+    }
+    const auto storage = kv_type == DataType::BFLOAT4_B   ? KVStorage::BFP4
+                         : kv_type == DataType::BFLOAT8_B ? KVStorage::BFP8
+                                                          : KVStorage::BF16;
+    return {recipe, storage};
+}
+
+DataType recipe_kv_dtype(KVStorage storage) {
+    return storage == KVStorage::BF16   ? DataType::BFLOAT16
+           : storage == KVStorage::BFP8 ? DataType::BFLOAT8_B
+                                        : DataType::BFLOAT4_B;
+}
+
+uint32_t recipe_dense_q_tiles(const std::optional<SDPAProgramConfig>& program_config) {
+    const uint32_t q_chunk = program_config ? program_config->q_chunk_size : 256;
+    // Any tile-aligned Q chunk up to the recurrent-state arrays (32 tile rows); L1 fit is checked separately.
+    TT_FATAL(
+        q_chunk % 32 == 0 && q_chunk >= 32 && q_chunk <= 32 * 32,
+        "Named SDPA recipes support tile-aligned Q chunks from 32 to 1024 rows, got {}",
+        q_chunk);
+    return q_chunk / 32;
+}
+
+uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_config) {
+    const uint32_t k_chunk = program_config ? program_config->k_chunk_size : 512;
+    TT_FATAL(
+        k_chunk % 32 == 0 && k_chunk >= 32, "Named SDPA recipes support tile-aligned K chunks, got {}", k_chunk);
+    return k_chunk / 32;
+}
+
+uint32_t recipe_compute_q_tiles(const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, bool masked) {
+    const bool unfused_standard =
+        policy.selection.recipe == Recipe::B && (masked || recipe_subblock_width(k_tiles) < 2);
+    return unfused_standard && q_tiles % 2 != 0 ? q_tiles + 1 : q_tiles;
+}
+
+uint64_t recipe_cb_bytes(const ProgramDescriptor& program) {
+    uint64_t bytes = 0;
+    for (const auto& cb : program.cbs) {
+        bytes += cb.total_size;
+    }
+    return bytes;
+}
+
+uint64_t recipe_free_l1(IDevice& device) {
+    const auto lowest = device.lowest_occupied_compute_l1_address();
+    const uint64_t top = lowest.has_value() ? static_cast<uint64_t>(*lowest) : device.l1_size_per_core();
+    return top - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+}
+
+bool recipe_fused_cb(const CBDescriptor& cb) {
+    const uint8_t index = cb.format_descriptors.front().buffer_index;
+    return index == 29 || index == 30 || index == 31;
+}
+
+uint32_t recipe_subblock_width(uint32_t tiles) { return tiles % 4 == 0 ? 4 : tiles % 2 == 0 ? 2 : 1; }
+
+std::optional<KernelBuildOptLevel> recipe_opt_level(KernelBuildOptLevel level) {
+    // The JIT build enables the watcher from RunTimeOptions (tt_metal internal), which takes it from this variable.
+    const char* watcher = std::getenv("TT_METAL_WATCHER");
+    if (watcher != nullptr && watcher[0] != '\0') {
+        return std::nullopt;
+    }
+    return level;
+}
+
+void set_named_arg(NamedCompileTimeArgs& args, std::string_view name, uint32_t value) {
+    const auto it = std::ranges::find_if(args, [&](const auto& arg) { return arg.first == name; });
+    if (it != args.end()) {
+        it->second = value;
+    } else {
+        args.emplace_back(std::string(name), value);
+    }
+}
+
+uint32_t named_arg(const NamedCompileTimeArgs& args, std::string_view name) {
+    const auto it = std::ranges::find_if(args, [&](const auto& arg) { return arg.first == name; });
+    TT_FATAL(it != args.end(), "SDPA recipe kernel has no named compile-time argument {}", name);
+    return it->second;
+}
+
+NamedCompileTimeArgs recipe_named_args(const NamedCompileTimeArgs& args) {
+    NamedCompileTimeArgs recipe_args;
+    std::ranges::copy_if(
+        args, std::back_inserter(recipe_args), [](const auto& arg) { return arg.first.starts_with("recipe_"); });
+    return recipe_args;
+}
+
+uint64_t recipe_drop_fused(ProgramDescriptor::CBDescriptors& cbs, NamedCompileTimeArgs& args, uint32_t q_tiles) {
+    if (q_tiles % 2 != 0 && named_arg(args, "recipe_lofi") == 0) {
+        return 0;
+    }
+    uint64_t freed = 0;
+    for (const auto& cb : cbs) {
+        freed += recipe_fused_cb(cb) ? cb.total_size : 0;
+    }
+    cbs.erase(std::remove_if(cbs.begin(), cbs.end(), recipe_fused_cb), cbs.end());
+    set_named_arg(args, "recipe_fused", 0);
+    return freed;
+}
+
+namespace {
+// Legacy SDPA's granularity rule: the largest value <= limit that divides the tile count.
+uint32_t recipe_granularity(uint32_t tiles, uint32_t limit) {
+    uint32_t g = std::min(tiles, limit);
+    while (g > 1 && tiles % g != 0) {
+        --g;
+    }
+    return g;
+}
+}  // namespace
+
+ProgramDescriptor recipe_compute_program(
+    const PrecisionPolicy& policy,
+    const CoreRangeSet& grid,
+    uint32_t k_chunks,
+    uint32_t q_tiles,
+    uint32_t k_tiles,
+    uint32_t d_tiles) {
+    TT_FATAL(q_tiles >= 1 && k_tiles >= 1 && d_tiles >= 1, "SDPA recipes require tile-aligned chunks and head dims");
+    const bool fp32 = policy.fp32_destination;
+    // STANDARD and FAST keep a reference-max state in Float32 L1 (O in CB 9, l in CB 13).
+    const bool ref_max = !fp32;
+    const auto state_format = fp32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const uint32_t state_bytes = fp32 ? 4096 : 2048;
+    const auto kv_format = datatype_to_dataformat_converter(recipe_kv_dtype(policy.selection.kv_storage));
+    const uint32_t kv_bytes = tt::tile_size(kv_format);
+    // STANDARD and FAST (the reference-max recipes) run every K chunk after a Q chunk's first on the
+    // fused chunk (recipe_fused_chunk.hpp). It needs QK subblocks at least two tiles wide: the one-wide LoFi
+    // matmul reuses its other operand, which the m_ref inner step does not support.
+    const bool fused = (policy.selection.recipe == Recipe::B || policy.selection.recipe == Recipe::E) &&
+                       recipe_subblock_width(k_tiles) >= 2;
+    ProgramDescriptor program;
+    auto add_cb = [&](uint8_t index, uint32_t count, uint32_t page, tt::DataFormat format) {
+        CBDescriptor cb{
+            .total_size = count * page,
+            .core_ranges = grid,
+            .format_descriptors = {{.buffer_index = index, .data_format = format, .page_size = page}}};
+        if (index == 6 && fp32) {
+            cb.format_descriptors.push_back({.buffer_index = 7, .data_format = format, .page_size = page});
+        }
+        program.cbs.push_back(std::move(cb));
+    };
+    // Q double-buffered; K/V one slot for FP32, two for BF16. Q-row buffers scale with the Q chunk.
+    add_cb(0, 2 * q_tiles * d_tiles, 2048, tt::DataFormat::Float16_b);
+    add_cb(1, k_tiles * d_tiles * (fp32 ? 1 : 2), kv_bytes, kv_format);
+    add_cb(2, k_tiles * d_tiles * (fp32 ? 1 : 2), kv_bytes, kv_format);
+    add_cb(3, 1, 2048, tt::DataFormat::Float16_b);
+    add_cb(4, 1, 2048, tt::DataFormat::Float16_b);
+    add_cb(5, 1, state_bytes, state_format);
+    add_cb(6, q_tiles * k_tiles, state_bytes, state_format);
+    if (ref_max) {
+        // CB 8: one BF16 tile, the denominator rounded for the normalization matmul.
+        // CB 9: per Q row, the numerator plane, then a rescaled group's chunk PV.
+        // CB 12: this chunk's BF16 row sums. CB 13: the denominator.
+        add_cb(8, 1, 2048, tt::DataFormat::Float16_b);
+        add_cb(9, q_tiles * d_tiles * 2, 4096, tt::DataFormat::Float32);
+        add_cb(12, q_tiles, 2048, tt::DataFormat::Float16_b);
+        add_cb(13, q_tiles, 4096, tt::DataFormat::Float32);
+    } else {
+        for (uint8_t index : {8, 9}) {
+            add_cb(index, q_tiles * d_tiles, state_bytes, state_format);
+        }
+        for (uint8_t index : {12, 13}) {
+            add_cb(index, q_tiles, state_bytes, state_format);
+        }
+    }
+    // CBs 10/11: the row maxima, FP32 for the FP32-state recipes (BF16 maxima of FP32 scores leave the exp's range at
+    // large logits; recipe_streaming.hpp, sdpa_max_word).
+    for (uint8_t index : {10, 11}) {
+        add_cb(index, q_tiles, state_bytes, state_format);
+    }
+    add_cb(14, q_tiles, state_bytes, state_format);
+    if (fused) {
+        // CB 31: a check unit's saturation verdict tile in the fused chunks.
+        add_cb(31, 1, 2048, tt::DataFormat::Float16_b);
+        // CB 30: per Q tile row, QK-subblock-width partial row sums of the fused chunks.
+        add_cb(30, q_tiles * recipe_subblock_width(k_tiles), 2048, tt::DataFormat::Float16_b);
+        // CB 29: QK-subblock-width copies of -e0 in K's format (the fused chunks subtract m_ref in the QK).
+        add_cb(29, recipe_subblock_width(k_tiles), kv_bytes, kv_format);
+    }
+    add_cb(16, (fp32 ? 2 : 4) * d_tiles, 2048, tt::DataFormat::Float16_b);
+    ComputeConfigDescriptor compute_config{
+        .math_fidelity = policy.pv_fidelity,
+        .fp32_dest_acc_en = fp32,
+        .dst_full_sync_en = false,
+        .math_approx_mode = true};
+    if (fp32) {
+        compute_config.unpack_to_dest_mode.resize(64, UnpackToDestMode::Default);
+        for (uint32_t cb : {5, 7, 8, 9, 12, 13, 14}) {
+            compute_config.unpack_to_dest_mode[cb] = UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
+    KernelDescriptor compute{
+        .kernel_source = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_recipe.cpp",
+        .core_ranges = grid,
+        .named_compile_time_args =
+            {{"k_chunks", k_chunks},
+             {"scale", std::bit_cast<uint32_t>(1.0f / std::sqrt(static_cast<float>(d_tiles * 32)))},
+             {"q_tiles", q_tiles},
+             {"k_tiles", k_tiles},
+             {"d_tiles", d_tiles},
+             // The recipe selection (recipe_config.hpp). Callers set the feature arguments they use.
+             {"recipe_fp32", fp32 ? 1u : 0u},
+             {"recipe_accurate", policy.selection.recipe == Recipe::D ? 1u : 0u},
+             {"recipe_lofi", policy.selection.recipe == Recipe::E ? 1u : 0u},
+             {"recipe_fused", fused ? 1u : 0u},
+             {"recipe_mask", 0},
+             {"recipe_ring", 0},
+             {"recipe_ring_stream_state", 0},
+             {"recipe_k_primary_rows", 0},
+             {"recipe_k_joint_rows", 0},
+             {"recipe_qk_w", recipe_subblock_width(k_tiles)},
+             {"recipe_pv_w", recipe_subblock_width(d_tiles)}},
+        .defines =
+            {{"EXP_APPROX_MODE", "1"},
+             {"STATS_GRANULARITY", std::to_string(recipe_granularity(q_tiles, fp32 ? 4 : 8))},
+             {"SUB_EXP_GRANULARITY", std::to_string(recipe_granularity(k_tiles, fp32 ? 4 : 8))},
+             {"MUL_BCAST_GRANULARITY", std::to_string(recipe_granularity(q_tiles * k_tiles, fp32 ? 4 : 8))},
+             {"DHT_GRANULARITY", std::to_string(recipe_granularity(d_tiles, 8))},
+             {"REDUCE_GRANULARITY", std::to_string(recipe_granularity(q_tiles, fp32 ? 2 : 4))}},
+        .config = compute_config};
+    // The recipes record their exp programs in the replay buffer once and replay them per tile from other
+    // functions; the SFPI compiler's replay optimization would overwrite them (tenstorrent/tt-metal#58433).
+    // Internal-only, temporary workaround (tt_metal/api/internal): drop this define once the compiler fix lands.
+    compute.defines.emplace_back(tt::tt_metal::internal::DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE, "1");
+    if (policy.selection.recipe == Recipe::D) {
+        // The dense ACCURATE kernel builds at -O2 (the ring factories choose their own level).
+        compute.opt_level = recipe_opt_level(KernelBuildOptLevel::O2);
+    }
+    program.kernels.push_back(std::move(compute));
+    return program;
+}
+
+void require_recipe_sfploadmacro() {
+    // The JIT build reads this option from RunTimeOptions (get_disable_sfploadmacro, tt_metal internal), which
+    // takes it from this variable alone, enabled by a leading '1'.
+    const char* disabled = std::getenv("TT_METAL_DISABLE_SFPLOADMACRO");
+    TT_FATAL(
+        disabled == nullptr || disabled[0] != '1',
+        "SDPA precision recipes require SFPLOADMACRO (TT_METAL_DISABLE_SFPLOADMACRO is set)");
+}
+
+PrecisionPolicy resolve_recipe_policy(
+    const Tensor& q,
+    const Tensor& k,
+    ttnn::transformer::SDPAPrecision precision,
+    std::optional<float> scale,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<SDPAProgramConfig>& program_config) {
+    TT_FATAL(q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
+    require_recipe_sfploadmacro();
+    const float head_dim = static_cast<float>(q.logical_shape()[-1]);
+    TT_FATAL(
+        !scale || *scale == 1.0f / std::sqrt(head_dim),
+        "SDPA recipes currently require the default 1/sqrt(head_dim) scale represented as FP32");
+    TT_FATAL(q.device()->arch() == tt::ARCH::BLACKHOLE, "SDPA precision recipes support Blackhole only");
+    // A recipe fixes every compute-config field, so an explicit config would be silently ignored.
+    TT_FATAL(!compute_kernel_config, "Specify either an SDPA precision recipe or a compute kernel config, not both");
+    TT_FATAL(
+        !program_config || program_config->exp_approx_mode.value_or(true),
+        "exp_approx_mode=False conflicts with SDPA precision recipes, which fix their own exp");
+    return resolve_precision_policy(select_recipe(precision, k.dtype()));
+}
+
+// Reject a recipe CB layout that cannot fit the device's unreserved L1 (a fused layout first falls back to the
+// unfused kernel). This is the final guard, against all L1 above the allocator base; the blocking chooser budgets
+// the stricter recipe_free_l1 (below live L1 buffers).
+static void check_recipe_l1_fit(ProgramDescriptor& program, IDevice& device, uint32_t q_chunk, uint32_t k_chunk) {
+    uint64_t bytes = recipe_cb_bytes(program);
+    const uint64_t available =
+        device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    if (bytes > available) {
+        bytes -= recipe_drop_fused(program.cbs, program.kernels.front().named_compile_time_args, q_chunk / 32);
+    }
+    TT_FATAL(
+        bytes <= available,
+        "SDPA recipe needs {} bytes of L1 per core at Q{}/K{}, but only {} are available; use a smaller Q or K chunk",
+        bytes,
+        q_chunk,
+        k_chunk,
+        available);
+}
+
+void validate_ring_recipe_inputs(
+    RecipeOp op,
+    ttnn::transformer::SDPAPrecision precision,
+    const Tensor& q,
+    const Tensor& k,
+    const Tensor& v,
+    const Tensor& gathered_k,
+    const Tensor& gathered_v,
+    const std::optional<Tensor>& joint_q,
+    const std::optional<Tensor>& joint_k,
+    const std::optional<Tensor>& joint_v,
+    uint32_t q_chunk_size,
+    uint32_t k_chunk_size,
+    std::optional<float> scale) {
+    const char* name = op == RecipeOp::ExpRing ? "exp ring" : "ring";
+    const auto kv_dtype = k.dtype();
+    resolve_precision_policy(select_recipe(precision, kv_dtype));
+    require_recipe_sfploadmacro();
+    TT_FATAL(q.device()->arch() == tt::ARCH::BLACKHOLE, "Named {} recipes require Blackhole", name);
+    TT_FATAL(q.dtype() == DataType::BFLOAT16, "Named {} recipes require BF16 Q, got {}", name, q.dtype());
+    TT_FATAL(
+        kv_dtype == DataType::BFLOAT16 || kv_dtype == DataType::BFLOAT8_B || kv_dtype == DataType::BFLOAT4_B,
+        "Named {} recipes require BF16, BFP8 or BFP4 KV, got {}",
+        name,
+        kv_dtype);
+    TT_FATAL(
+        v.dtype() == kv_dtype && gathered_k.dtype() == kv_dtype && gathered_v.dtype() == kv_dtype,
+        "Named {} recipe K/V and persistent buffers must share one KV type",
+        name);
+    if (joint_q) {
+        TT_FATAL(
+            joint_q->dtype() == DataType::BFLOAT16 && joint_k->dtype() == kv_dtype && joint_v->dtype() == kv_dtype,
+            "Named {} recipe joint types must match their primary Q/K/V types",
+            name);
+    }
+    // Supported geometry lives in recipe_geometry_rejection (shared with the blocking chooser); L1 fit is checked
+    // when the program is built.
+    const uint32_t head_dim = q.logical_shape()[3];
+    validate_recipe_geometry(op, q_chunk_size, k_chunk_size, head_dim);
+    TT_FATAL(
+        !scale || *scale == 1.0f / std::sqrt(static_cast<float>(head_dim)),
+        "Named {} recipes require the default 1/sqrt(head_dim) scale",
+        name);
+}
+
+void validate_recipe_mask(const Tensor& q, const Tensor& k, const Tensor& mask, const PrecisionPolicy& policy) {
+    const auto& qs = q.logical_shape();
+    TT_FATAL(mask.storage_type() == StorageType::DEVICE, "SDPA recipe attn_mask must be on device");
+    TT_FATAL(mask.device() == q.device(), "SDPA recipe attn_mask must be on the same device as Q");
+    TT_FATAL(mask.layout() == Layout::TILE, "SDPA recipe attn_mask must be tilized");
+    TT_FATAL(mask.tensor_spec().tile() == Tile({32, 32}), "SDPA recipe attn_mask requires 32x32 tiles");
+    TT_FATAL(
+        mask.memory_config() == DRAM_MEMORY_CONFIG, "SDPA recipe attn_mask must be interleaved DRAM");
+    TT_FATAL(
+        mask.dtype() == DataType::BFLOAT16 || mask.dtype() == DataType::BFLOAT8_B ||
+            mask.dtype() == DataType::BFLOAT4_B || (mask.dtype() == DataType::FLOAT32 && policy.fp32_destination),
+        "SDPA recipe attn_mask must be BF16, BFP8 or BFP4 (FP32 for FP32-state recipes)");
+    const auto& ms = mask.logical_shape();
+    TT_FATAL(ms.rank() == 4, "SDPA recipe attn_mask must be rank four");
+    TT_FATAL(
+        (ms[0] == 1 || ms[0] == qs[0]) && (ms[1] == 1 || ms[1] == qs[1]) && ms[2] == qs[2] &&
+            ms[3] == k.logical_shape()[2],
+        "SDPA recipe attn_mask must be [1|B, 1|H, Sq, Sk], got {} for Q {} and K {}",
+        ms,
+        qs,
+        k.logical_shape());
+    const auto& mp = mask.padded_shape();
+    TT_FATAL(
+        mp[0] == ms[0] && mp[1] == ms[1] && mp[2] == ((ms[2] + 31) / 32) * 32 &&
+            mp[3] == ((ms[3] + 31) / 32) * 32,
+        "SDPA recipe attn_mask only supports minimal tile padding");
+}
+
+// CB 15 is free in the dense recipe layout (0-14 and 16 are recipe-owned; ring uses 17/18).
+constexpr uint8_t kRecipeMaskCb = 15;
+
+static std::vector<Tensor> run_recipe_segments(
+    const std::vector<std::array<Tensor, 3>>& segments,
+    const PrecisionPolicy& policy,
+    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<Tensor>& attn_mask = std::nullopt) {
+    const auto& [q, k, v] = segments.front();
+    std::vector<Tensor> io;
+    for (const auto& segment : segments) {
+        io.insert(io.end(), segment.begin(), segment.end());
+    }
+    for (const auto& input : io) {
+        TT_FATAL(input.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
+        TT_FATAL(input.device() == q.device(), "SDPA recipe inputs must belong to the same device");
+        TT_FATAL(input.layout() == Layout::TILE, "SDPA recipes require tiled inputs");
+        TT_FATAL(input.memory_config() == DRAM_MEMORY_CONFIG, "SDPA recipes require interleaved DRAM inputs");
+        TT_FATAL(input.logical_shape().rank() == 4, "SDPA recipes require rank-four inputs");
+        const auto& shape = input.logical_shape();
+        const auto& padded = input.padded_shape();
+        TT_FATAL(
+            shape[0] == padded[0] && shape[1] == padded[1] && shape[3] == padded[3] &&
+                padded[2] == ((shape[2] + 31) / 32) * 32,
+            "SDPA recipes only support minimal sequence-axis tile padding");
+        TT_FATAL(input.tensor_spec().tile() == Tile({32, 32}), "SDPA recipes require standard 32x32 tiles");
+    }
+    const auto& qs = q.logical_shape();
+    const DataType kv_type = recipe_kv_dtype(policy.selection.kv_storage);
+    uint32_t q_length = 0, k_length = 0;
+    for (const auto& [sq, sk, sv] : segments) {
+        const auto& qshape = sq.logical_shape();
+        const auto& kshape = sk.logical_shape();
+        TT_FATAL(
+            qshape[0] > 0 && qshape[0] == qs[0] && qshape[1] > 0 && qshape[1] == qs[1] && qshape[3] == qs[3],
+            "SDPA recipe segments require Q [B,H,Q,D] with matching positive batch/head counts");
+        TT_FATAL(
+            kshape == sv.logical_shape() && kshape[0] == qs[0] && kshape[1] > 0 && kshape[1] == k.logical_shape()[1] &&
+                qs[1] % kshape[1] == 0 && kshape[3] == qs[3],
+            "SDPA recipes require matching K/V [B,Hkv,K,D] and Q heads divisible by KV heads");
+        TT_FATAL(qshape[2] > 0 && kshape[2] > 0, "SDPA recipe segments require positive sequence lengths");
+        TT_FATAL(
+            sq.dtype() == DataType::BFLOAT16 && sk.dtype() == kv_type && sv.dtype() == kv_type,
+            "SDPA input types do not match the selected recipe");
+        q_length += sq.padded_shape()[2];
+        k_length += sk.padded_shape()[2];
+    }
+    // The mask itself was validated (validate_recipe_mask) before its pre-scale.
+    TT_FATAL(!attn_mask || segments.size() == 1, "SDPA recipe masks are supported on the dense (non-joint) path only");
+    const uint32_t joint_q_rows = segments.size() == 2 ? segments[1][0].logical_shape()[2] : 0;
+    const uint32_t joint_k_rows = segments.size() == 2 ? segments[1][1].logical_shape()[2] : 0;
+    const auto hardware = q.device()->compute_with_storage_grid_size();
+    const auto grid_size = program_config ? program_config->compute_with_storage_grid_size : hardware;
+    TT_FATAL(
+        grid_size.x > 0 && grid_size.y > 0 && grid_size.x <= hardware.x && grid_size.y <= hardware.y,
+        "SDPA recipe compute grid must fit the device");
+    const uint32_t q_tiles = recipe_dense_q_tiles(program_config);
+    const uint32_t q_chunk = q_tiles * 32;
+    const uint32_t k_tiles = recipe_dense_k_tiles(program_config);
+    const uint32_t k_chunk = k_tiles * 32;
+    TT_FATAL(qs[3] % 32 == 0 && qs[3] > 0, "SDPA recipes support tile-aligned head dims, got {}", qs[3]);
+    const uint32_t d_tiles = qs[3] / 32;
+    if (program_config) {
+        TT_FATAL(!program_config->sub_core_grids.has_value(), "SDPA recipes do not yet support sub_core_grids");
+        TT_FATAL(program_config->max_cores_per_head_batch > 0, "SDPA max_cores_per_head_batch must be positive");
+    }
+    const uint32_t jobs_per_head = (q_length + q_chunk - 1) / q_chunk;
+    const uint32_t k_chunks = (k_length + k_chunk - 1) / k_chunk;
+    TT_FATAL(
+        qs[1] <= grid_size.x * grid_size.y && qs[0] <= grid_size.x * grid_size.y / qs[1],
+        "SDPA recipes require at least one compute core per batch/query head");
+    const uint32_t batch_heads = qs[0] * qs[1];
+    const uint32_t chain = std::min<uint32_t>(
+        {jobs_per_head,
+         static_cast<uint32_t>(grid_size.x * grid_size.y / batch_heads),
+         program_config ? program_config->max_cores_per_head_batch : 16u});
+    const uint32_t cores = chain * batch_heads;
+    std::vector<CoreCoord> coordinates;
+    coordinates.reserve(cores);
+    std::set<CoreRange> ranges;
+    for (uint32_t i = 0; i < cores; ++i) {
+        const CoreCoord core(i % grid_size.x, i / grid_size.x);
+        coordinates.push_back(core);
+        ranges.emplace(core, core);
+    }
+    const CoreRangeSet grid(ranges);
+    std::vector<Tensor> outputs;
+    outputs.reserve(segments.size());
+    for (const auto& segment : segments) {
+        outputs.push_back(create_device_tensor(segment[0].tensor_spec(), q.device()));
+    }
+    const auto& output = outputs.front();
+    const uint32_t compute_q_tiles = recipe_compute_q_tiles(policy, q_tiles, k_tiles, attn_mask.has_value());
+    auto program = recipe_compute_program(policy, grid, k_chunks, compute_q_tiles, k_tiles, d_tiles);
+    if (attn_mask) {
+        // The fused chunks run without an attn_mask (recipe_config.hpp: fused_active), so a masked build drops their
+        // CBs and clears recipe_fused.
+        recipe_drop_fused(program.cbs, program.kernels.front().named_compile_time_args, compute_q_tiles);
+    }
+    const uint32_t mask_group_rows = recipe_mask_group_rows(policy);
+    if (attn_mask) {
+        // The reader streams mask tiles one Q tile row (k_tiles tiles) at a time in whole row groups
+        // (an odd paired chunk's last group is padded with a zero row), and compute pops one group at a
+        // time, so group reads never wrap. Double-buffer the group when L1 allows, else single.
+        const auto mask_format = datatype_to_dataformat_converter(attn_mask->dtype());
+        const uint32_t mask_page = attn_mask->buffer()->page_size();
+        const uint32_t group_bytes = mask_group_rows * k_tiles * mask_page;
+        const uint64_t used = recipe_cb_bytes(program);
+        const uint64_t available = q.device()->l1_size_per_core() -
+                                   q.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        const uint32_t groups = used + 2 * group_bytes <= available ? 2 : 1;
+        program.cbs.push_back(CBDescriptor{
+            .total_size = groups * group_bytes,
+            .core_ranges = grid,
+            .format_descriptors = {{.buffer_index = kRecipeMaskCb, .data_format = mask_format, .page_size = mask_page}}});
+        set_named_arg(program.kernels.front().named_compile_time_args, "recipe_mask", 1);
+        if (mask_format == tt::DataFormat::Float32) {
+            // Unpack the FP32 mask straight to DST so the L1 add sees the exact FP32 values.
+            auto& config = std::get<ComputeConfigDescriptor>(program.kernels.front().config);
+            config.unpack_to_dest_mode[kRecipeMaskCb] = UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
+    check_recipe_l1_fit(program, *q.device(), q_chunk, k_chunk);
+    if (k_length % k_chunk != 0 || k.logical_shape()[2] % 32 != 0 || joint_k_rows % 32 != 0) {
+        auto& compute_args = program.kernels.front().named_compile_time_args;
+        set_named_arg(compute_args, "recipe_k_primary_rows", k.logical_shape()[2]);
+        set_named_arg(compute_args, "recipe_k_joint_rows", joint_k_rows);
+    }
+    for (uint32_t i = 0; i < 3; ++i) {
+        program.semaphores.push_back({.id = i, .core_ranges = grid, .initial_value = i == 2 ? 1u : 0u});
+    }
+    const std::string prefix = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";
+    KernelDescriptor reader{
+        .kernel_source = prefix + "dataflow/reader_recipe.cpp",
+        .core_ranges = grid,
+        .compile_time_args =
+            {q_tiles, k_chunks, jobs_per_head, q.logical_shape()[2], joint_q_rows, k.logical_shape()[2], joint_k_rows},
+        .named_compile_time_args =
+            {{"joint", segments.size() == 2 ? 1u : 0u},
+             {"k_chunk_tiles", k_tiles},
+             {"d_tiles", d_tiles},
+             {"q_pad_tiles", compute_q_tiles - q_tiles},
+             {"q_per_kv_head", qs[1] / k.logical_shape()[1]},
+             {"mask", 0},
+             {"mask_cb", kRecipeMaskCb},
+             {"mask_group_rows", mask_group_rows},
+             {"mask_q_tiles", 0},
+             {"mask_k_tiles", 0},
+             {"mask_heads", qs[1]},
+             {"mask_bcast_batch", 0},
+             {"mask_bcast_heads", 0}},
+        .config = ReaderConfigDescriptor{}};
+    for (const auto& tensor : io) {
+        TensorAccessorArgs(tensor.buffer()).append_to(reader.compile_time_args);
+    }
+    if (attn_mask) {
+        const auto& ms = attn_mask->logical_shape();
+        set_named_arg(reader.named_compile_time_args, "mask", 1);
+        set_named_arg(reader.named_compile_time_args, "mask_q_tiles", (ms[2] + 31) / 32);
+        set_named_arg(reader.named_compile_time_args, "mask_k_tiles", (ms[3] + 31) / 32);
+        set_named_arg(reader.named_compile_time_args, "mask_bcast_batch", ms[0] == 1 ? 1 : 0);
+        set_named_arg(reader.named_compile_time_args, "mask_bcast_heads", ms[1] == 1 ? 1 : 0);
+        TensorAccessorArgs(attn_mask->buffer()).append_to(reader.compile_time_args);
+    }
+    KernelDescriptor writer{
+        .kernel_source = prefix + "dataflow/writer_recipe.cpp",
+        .core_ranges = grid,
+        .compile_time_args = {q_tiles, q.logical_shape()[2], joint_q_rows},
+        .named_compile_time_args =
+            {{"joint", segments.size() == 2 ? 1u : 0u},
+             {"d_tiles", d_tiles},
+             {"q_pad_tiles", compute_q_tiles - q_tiles}},
+        .config = WriterConfigDescriptor{}};
+    for (const auto& tensor : outputs) {
+        TensorAccessorArgs(tensor.buffer()).append_to(writer.compile_time_args);
+    }
+    auto compute = std::move(program.kernels.front());
+    for (uint32_t i = 0; i < cores; ++i) {
+        const auto core = coordinates[i];
+        const uint32_t head = i / chain, rank = i % chain;
+        const uint32_t count = jobs_per_head / chain + (rank < jobs_per_head % chain);
+        const uint32_t offset =
+            head * jobs_per_head + rank * (jobs_per_head / chain) + std::min(rank, jobs_per_head % chain);
+        const auto prev = rank ? q.device()->worker_core_from_logical_core(coordinates[i - 1]) : CoreCoord(0, 0);
+        const auto next =
+            rank + 1 < chain ? q.device()->worker_core_from_logical_core(coordinates[i + 1]) : CoreCoord(0, 0);
+        const uint32_t next_count = rank + 1 < chain ? jobs_per_head / chain + (rank + 1 < jobs_per_head % chain) : 0;
+        reader.runtime_args.emplace_back(
+            core,
+            KernelDescriptor::CoreRuntimeArgs{
+                q.buffer()->address(),
+                k.buffer()->address(),
+                v.buffer()->address(),
+                offset,
+                count,
+                rank,
+                chain,
+                prev.x,
+                prev.y,
+                next.x,
+                next.y,
+                next_count});
+        writer.runtime_args.emplace_back(
+            core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), offset, count});
+        if (attn_mask) {
+            reader.runtime_args.back().second.push_back(attn_mask->buffer()->address());
+        }
+        if (segments.size() == 2) {
+            for (const auto& tensor : segments[1]) {
+                reader.runtime_args.back().second.push_back(tensor.buffer()->address());
+            }
+            writer.runtime_args.back().second.push_back(outputs[1].buffer()->address());
+        }
+        compute.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{count});
+    }
+    program.kernels = {std::move(reader), std::move(writer), std::move(compute)};
+    if (attn_mask) {
+        io.push_back(*attn_mask);
+    }
+    io.insert(io.end(), outputs.begin(), outputs.end());
+    ttnn::generic_op(io, program);
+    return outputs;
+}
+
+Tensor run_recipe(
+    const Tensor& q,
+    const Tensor& k,
+    const Tensor& v,
+    const PrecisionPolicy& policy,
+    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<Tensor>& attn_mask) {
+    return run_recipe_segments({{q, k, v}}, policy, program_config, attn_mask).front();
+}
+
+std::tuple<Tensor, Tensor> run_joint_recipe(
+    const Tensor& q,
+    const Tensor& k,
+    const Tensor& v,
+    const Tensor& joint_q,
+    const Tensor& joint_k,
+    const Tensor& joint_v,
+    const PrecisionPolicy& policy,
+    const std::optional<SDPAProgramConfig>& program_config) {
+    auto outputs = run_recipe_segments({{q, k, v}, {joint_q, joint_k, joint_v}}, policy, program_config);
+    return {outputs[0], outputs[1]};
+}
+
+}  // namespace ttnn::operations::transformer::sdpa::detail

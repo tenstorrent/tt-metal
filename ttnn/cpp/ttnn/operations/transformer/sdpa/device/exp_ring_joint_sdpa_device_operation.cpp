@@ -17,10 +17,20 @@
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_recipe_blocking.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
+
+ExpRingJointSDPADeviceOperation::program_factory_t ExpRingJointSDPADeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
+    if (args.precision.has_value()) {
+        return ExpRingJointSDPARecipeMeshWorkloadFactory{};
+    }
+    return ExpRingJointSDPAMeshWorkloadFactory{};
+}
 
 void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
@@ -46,14 +56,32 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
-    // Validate all tensors have the same dtype
     const auto dtype = input_tensor_q.dtype();
-    for (const auto& tensor : sdpa_input_tensors) {
-        TT_FATAL(
-            tensor.dtype() == dtype,
-            "All tensors must have the same dtype. Expected {}, got {}",
-            dtype,
-            tensor.dtype());
+    if (args.precision) {
+        namespace recipes = ttnn::operations::transformer::sdpa::detail;
+        recipes::validate_ring_recipe_inputs(
+            recipes::RecipeOp::ExpRing,
+            *args.precision,
+            input_tensor_q,
+            tensor_args.input_k,
+            tensor_args.input_v,
+            tensor_args.gathered_k,
+            tensor_args.gathered_v,
+            tensor_args.joint_q,
+            tensor_args.joint_k,
+            tensor_args.joint_v,
+            args.get_q_chunk_size(),
+            args.get_k_chunk_size(),
+            args.scale);
+    } else {
+        // Validate all tensors have the same dtype
+        for (const auto& tensor : sdpa_input_tensors) {
+            TT_FATAL(
+                tensor.dtype() == dtype,
+                "All tensors must have the same dtype. Expected {}, got {}",
+                dtype,
+                tensor.dtype());
+        }
     }
 
     // Get shapes
@@ -471,7 +499,8 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel,
-    const std::optional<ttnn::Tensor>& logical_n_tensor) {
+    const std::optional<ttnn::Tensor>& logical_n_tensor,
+    std::optional<ttnn::transformer::SDPAPrecision> precision) {
     using OperationType = ttnn::prim::ExpRingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -508,6 +537,7 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
         cluster_axis,
         num_workers_per_link,
         num_buffers_per_channel);
+    operation_attributes.precision = precision;
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

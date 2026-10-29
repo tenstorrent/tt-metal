@@ -17,6 +17,10 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 
+namespace ttnn::transformer {
+enum class SDPAPrecision : uint8_t;
+}
+
 namespace ttnn::prim {
 
 struct ExpRingJointSDPAParams {
@@ -36,6 +40,8 @@ struct ExpRingJointSDPAParams {
     uint32_t cluster_axis;
     uint32_t num_workers_per_link = 1;
     uint32_t num_buffers_per_channel = 8;
+    // Opt-in named numerical recipe; nullopt preserves the legacy exp-ring compute exactly.
+    std::optional<ttnn::transformer::SDPAPrecision> precision = std::nullopt;
 
     ExpRingJointSDPAParams(
         std::string joint_strategy,
@@ -82,7 +88,8 @@ struct ExpRingJointSDPAParams {
         "num_links",
         "topology",
         "cluster_axis",
-        "num_buffers_per_channel");
+        "num_buffers_per_channel",
+        "precision");
     auto attribute_values() const {
         return std::forward_as_tuple(
             joint_strategy,
@@ -95,7 +102,8 @@ struct ExpRingJointSDPAParams {
             num_links,
             topology,
             cluster_axis,
-            num_buffers_per_channel);
+            num_buffers_per_channel,
+            precision);
     }
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
