@@ -1688,6 +1688,10 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     spec._srv_per_layer, spec._srv_uploaded, spec._srv_last, spec._srv_seeded = None, {}, None, {}
     spec._srv_phase_ms, spec._srv_replay_blocking = {}, False  # the replay's sub-phases, the attribution knob off
     spec._srv_seed_traces, spec._srv_traced_seed = {}, True  # no seed trace captured: the reseed stays eager
+    spec._srv_sharded_draft_argmax, spec._srv_draft_consts = (
+        False,
+        {},
+    )  # the gathered drafter argmax (the sharded one is device-tested)
     spec._srv_check_steps, spec._srv_checked, spec._srv_check_last = 1, {}, []  # GEMMA4_SPEC_VERIFY_CHECK=1
     spec._srv_measuring = False
     spec._srv_pool_v = spec._srv_pool_s = spec._srv_logits = spec._srv_backbone = None
@@ -1701,7 +1705,7 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     # argmax (their outputs are op outputs like any other), so the assembly of the record's outputs is the real one
     spec._shared_kv = object()
     spec.assistant = SimpleNamespace(
-        step=lambda tok, h, kv, d_ptl, d_pu, d_pi: (
+        step=lambda tok, h, kv, d_ptl, d_pu, d_pi, gather_logits=True: (
             op(torch.zeros(1, 1, tok.host.shape[-1], vocab), fake.bfloat16),
             op(h.host.clone(), fake.bfloat16),
         )
