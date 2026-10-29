@@ -123,10 +123,13 @@ build() {
       say "  pytest exit $?"
       set -e
     )
-    say "  math ELFs: $(find "$(art "$tag")" -name 'trisc1.elf' 2>/dev/null | wc -l)"
+    say "  ELFs: $(find "$(art "$tag")" -name '*.elf' 2>/dev/null | wc -l)"
 }
 
 # --- disassemble -------------------------------------------------------------
+# Every ELF is dumped, not only the math one. A kernel the toolchain leaves
+# alone is as much of an answer as one it changes, and the build names each
+# variant by a hash of its source and flags, so the two trees agree on names.
 dump() {
     local tests=$1 tag=$2
     local objdump; objdump=$(find "$tests/sfpi" -name '*objdump' -type f | head -1)
@@ -141,7 +144,7 @@ dump() {
           | sed -e '1,/Disassembly of section/d' -e 's/^[[:space:]]*[0-9a-f]*:[[:space:]]*//' \
           > "$out/$variant.asm"
         n=$((n+1))
-    done < <(find "$(art "$tag")" -name 'trisc1.elf' | sort)
+    done < <(find "$(art "$tag")" -name '*.elf' | sort)
     say "  dumped $n ELFs for $tag (objdump: $objdump)"
 }
 
