@@ -253,6 +253,10 @@ def _classify(was: Held, now: Held) -> Kind | None:
         return Kind.REMOVED if now.row is None else Kind.UNGATED
     if not was.gated and now.gated:
         return Kind.GATED
+    if was.row is None:
+        # Nothing held the variant before, so a new row holds it to more, never less:
+        # its bounds and non-finite count are what it starts from.
+        return None if now.row is None else Kind.ADDED
     if was.gated and now.gated:
         before, after = was.row.contract.max_ulp, now.row.contract.max_ulp
         if after > before:
@@ -399,6 +403,9 @@ def _segment_changes(
         else:
             found.append([held, low, high])
     changes = [(kind, (low, high), t0, t1) for (kind, t0, t1), low, high in found]
+    if was.row is None:
+        # A variant nothing held before: its segments read as added or gated above.
+        return changes
     if not was.gated and not now.gated and _widened(was.declared, now.declared):
         # Off a whole-cell gate the functional drivers compare on the declared bounds.
         changes.append((Kind.TOLERANCE_WIDENED, None, was.describe(), now.describe()))
@@ -484,8 +491,9 @@ def _section(
     return [f"**{heading}**", "", *table]
 
 
-def render_budget_diff(changes: list[Change]) -> str:
-    """The diff report: what loosens first, the rest collapsed."""
+def render_budget_diff(changes: list[Change], allowed: bool = False) -> str:
+    """The diff report: what loosens first, the rest collapsed. *allowed* is
+    ``--allow-raises``: the loosened cells are a raise the guard admitted."""
     if not changes:
         return "### SFPU ULP budgets\n\nNo budget changed.\n"
     header = ("cell", "change", "before", "after")
@@ -510,14 +518,21 @@ def render_budget_diff(changes: list[Change]) -> str:
         ),
         *(
             [
-                "A gate may only be loosened in a pull request that changes nothing but "
-                f"the tables and carries the `{RAISE_LABEL}` label, each row re-measured "
-                "in the same change; otherwise the budget is being fitted to a failure, "
-                "and the kernel or the golden is what moved.",
+                f"**Allowed:** a budget raise PR, labelled `{RAISE_LABEL}`.",
                 "",
             ]
-            if loosened
-            else []
+            if loosened and allowed
+            else (
+                [
+                    "A gate may only be loosened in a pull request that changes nothing but "
+                    f"the tables and carries the `{RAISE_LABEL}` label, with each raised row "
+                    "re-measured; otherwise the budget is being fitted to a failure, and the "
+                    "kernel or the golden is what moved.",
+                    "",
+                ]
+                if loosened
+                else []
+            )
         ),
         *_section(
             f"{len(other)} other budget change(s)", header, lines(other), collapsed=True
@@ -749,6 +764,15 @@ def _check_records_arch(
         )
 
 
+def _load(side: str, path: Path) -> Table:
+    """*path*'s table, a refusal naming the *side* that failed: a change to the schema
+    can leave the base revision unreadable by the head's code."""
+    try:
+        return load_table(path)
+    except (ValueError, OSError) as refused:
+        raise ValueError(f"the {side} table {path}: {refused}") from refused
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -777,8 +801,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "diff":
             arch = _tables_arch(args.arch, args.head, args.base)
-            changes = compare(load_table(args.base), load_table(args.head), arch)
-            report = render_budget_diff(changes)
+            changes = compare(_load("base", args.base), _load("head", args.head), arch)
+            report = render_budget_diff(changes, allowed=args.allow_raises)
             loosened = any(c.kind.loosens for c in changes)
             status = 1 if loosened and not args.allow_raises else 0
         else:
