@@ -14,13 +14,14 @@
 
 namespace ckernel {
 
-// On Quasar the L1 format is the output of the last pack init (pack_init / compute_kernel_hw_startup), and MX output
-// formats are not supported.
+// On Quasar the L1 format is the output of the last pack init (pack_init / compute_kernel_hw_startup); unlike WH/BH,
+// pack_reconfig_data_format does not change it. MX output formats are not supported.
 ALWI void pack_rows_to_addr_init(uint32_t num_rows) { PACK((llk_pack_rows_init(num_rows))); }
 
 // NOTE: this raw path bypasses the CB/DFB write pointer, because it packs to an arbitrary L1 address.
 // On WH/BH it also bypasses the llk_pack_rows wrapper's dst_index bound check, so callers are responsible
-// for keeping idst within DEST capacity.
+// for keeping idst within DEST capacity. On Quasar these packs name no DFB: when the rows patch a reserved
+// CB, call dummy_pack(cb) before cb_push_back.
 
 ALWI void pack_rows_to_addr(uint32_t idst, uint32_t l1_addr) {
 #ifndef ARCH_QUASAR

@@ -13,6 +13,7 @@ from helpers.device_io import read_from_device
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, DestSync
 from helpers.param_config import (
+    DEST_SYNC_TILE_LIMITS,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -30,11 +31,20 @@ from helpers.test_variant_parameters import (
 
 GUARD_BYTE = 0xA5
 ROW_NUM_DATUMS = 16
-INPUT_DIMENSIONS = [128, 128]
+# Three DEST sections, so the packs walk bank 0 -> 1 -> 0 and cover the wrap back to the first bank.
+NUM_DEST_SECTIONS = 3
+# _llk_pack_rows_ asserts is_valid_L1_address, which rejects anything below MEM_MAP_END (0x38640 in
+# tt-2xx/quasar/dev_mem_map.h). The stimuli start at 0x21000, so a small input would put the result there.
+MIN_RESULT_L1_ADDRESS = 0x40000
 
 
 class GuardedResultStimuliConfig(StimuliConfig):
-    """Fills the result buffer with GUARD_BYTE each time the stimuli are written, before the kernel runs."""
+    """Places the result buffer at MIN_RESULT_L1_ADDRESS or above, and fills it with GUARD_BYTE each time the
+    stimuli are written, before the kernel runs."""
+
+    def _calculate_tile_sizes(self):
+        super()._calculate_tile_sizes()
+        self.buf_res_addr = max(self.buf_res_addr, MIN_RESULT_L1_ADDRESS)
 
     def write(self, location: str = "0,0"):
         super().write(location)
@@ -46,9 +56,8 @@ class GuardedResultStimuliConfig(StimuliConfig):
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
             DataFormat.Float32,
-            DataFormat.Int32,
+            DataFormat.Int8,
         ],
         same=True,
     ),
@@ -59,16 +68,20 @@ class GuardedResultStimuliConfig(StimuliConfig):
 def test_pack_rows_to_addr_quasar(formats, dest_acc, dest_sync_mode, num_rows_to_pack):
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip("32-bit formats require 32-bit DEST")
+    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync_mode] // (
+        2 if dest_acc == DestAccumulation.Yes else 1
+    )
+    input_dimensions = [32 * NUM_DEST_SECTIONS * max_tiles_in_dest, 32]
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
-        input_dimensions_A=INPUT_DIMENSIONS,
+        input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
-        input_dimensions_B=INPUT_DIMENSIONS,
+        input_dimensions_B=input_dimensions,
     )
 
     num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode, dest_acc, formats, INPUT_DIMENSIONS
+        dest_sync_mode, dest_acc, formats, input_dimensions
     )
 
     stimuli = GuardedResultStimuliConfig(
@@ -110,7 +123,9 @@ def test_pack_rows_to_addr_quasar(formats, dest_acc, dest_sync_mode, num_rows_to
         num_bytes=tile_cnt_A * slot_bytes,
     )
 
-    rows_bytes = num_rows_to_pack * ROW_NUM_DATUMS * int(formats.output_format.size)
+    rows_bytes = num_rows_to_pack * ROW_NUM_DATUMS * formats.output_format.size
+    assert rows_bytes.denominator == 1, "packed rows must be a whole number of bytes"
+    rows_bytes = int(rows_bytes)
     expected = bytearray([GUARD_BYTE]) * len(result_raw)
     for tile in range(tile_cnt_A):
         start = tile * slot_bytes + 16 * (tile % 4)

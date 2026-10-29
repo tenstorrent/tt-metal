@@ -124,11 +124,7 @@ inline DataFormat _get_buf_desc_l1_format_(const std::uint32_t buf_desc_id)
 /**
  * @brief Points a buffer table entry at a new L1 base from the issuing thread's instruction stream.
  *
- * The in-stream counterpart of @ref _configure_buf_desc_table_, for retargeting an entry between execute calls. A
- * PACR/UNPACR copies its descriptor as it leaves the issue buffer, and RMWCIB (issued by cfg_rmw) writes as it
- * leaves, so instructions issued earlier keep the old base and instructions issued later see the new one, without a
- * stall. This ordering holds only within the issuing thread: a TRISC MMIO write to the same entry
- * (@ref _configure_buf_desc_table_) is not ordered against in-flight instructions.
+ * The in-stream counterpart of @ref _configure_buf_desc_table_, for retargeting an entry between execute calls.
  *
  * @param buf_desc_id: Buffer descriptor id into the buffer descriptor table
  * @param base_l1_16B: New L1 base address, in 16B units

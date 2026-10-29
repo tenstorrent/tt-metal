@@ -131,8 +131,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
     }
 
-    const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-        ckernel::DEFAULT_TENSOR_SHAPE, 0 /*l1_base_addr, set per call*/, formats.pack_dst);
+    // The L1 base is set on every _llk_pack_rows_ call.
+    const auto bfd_pack =
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(ckernel::DEFAULT_TENSOR_SHAPE, 0 /*l1_base_addr*/, formats.pack_dst);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_rows_init_(bfd_pack, NUM_ROWS_TO_PACK);
 
