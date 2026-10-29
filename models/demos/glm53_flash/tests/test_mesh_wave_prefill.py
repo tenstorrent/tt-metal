@@ -687,26 +687,27 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
             )
         logger.info("served waves: PASS (e) four staggered prompts on rows 0-3")
 
+    # (logical slots 4-7 below: the (2,4) block has 8)
     # (f) a member whose first chunk is vLLM's budget remainder on the alignment grid (256 tokens: the catalog's
     # prefill_chunk_alignment; a KV-block end short of the grid, r3's '(2, 0, 224)', is refused by the planner), continued
     # at 256 mod 2048 beside another prompt: every wave of B crosses a 2048 boundary and the dense rows P
     pa, pb = _served_ids(4000, 30, vocab), _served_ids(4500, 31, vocab)
-    step_prefill([(14, pa[:2048], 0), (15, pb[:256], 0)])
-    first_a = step_prefill([(14, pa, 2048), (15, pb[:2304], 256)])
-    step_prefill([(15, pb[:4352], 2304)])
-    first_b = step_prefill([(15, pb, 4352)])
-    outs = decode_jointly({14: first_a[14], 15: first_b[15]}, {14: 4000, 15: 4500})
-    gots = {14: [first_a[14]] + outs[14], 15: [first_b[15]] + outs[15]}
-    a.release_request(14)
-    a.release_request(15)
+    step_prefill([(4, pa[:2048], 0), (5, pb[:256], 0)])
+    first_a = step_prefill([(4, pa, 2048), (5, pb[:2304], 256)])
+    step_prefill([(5, pb[:4352], 2304)])
+    first_b = step_prefill([(5, pb, 4352)])
+    outs = decode_jointly({4: first_a[4], 5: first_b[5]}, {4: 4000, 5: 4500})
+    gots = {4: [first_a[4]] + outs[4], 5: [first_b[5]] + outs[5]}
+    a.release_request(4)
+    a.release_request(5)
     ref_a, ref_b = reference(pa), reference(pb)
-    _assert_agree("(f) A (2048 + 1952) vs SP", gots[14], ref_a, pcc_min=PCC_BAR_SP)
+    _assert_agree("(f) A (2048 + 1952) vs SP", gots[4], ref_a, pcc_min=PCC_BAR_SP)
     _assert_agree(
-        "(f) B (256 + 2048 + 2048 + 148: continuations at 256 mod 2048) vs SP", gots[15], ref_b, pcc_min=PCC_BAR_SP
+        "(f) B (256 + 2048 + 2048 + 148: continuations at 256 mod 2048) vs SP", gots[5], ref_b, pcc_min=PCC_BAR_SP
     )
     logger.info(
-        f"(f) budget-remainder first chunk: first tokens {int(first_a[14].argmax())} / {int(first_b[15].argmax())} "
-        f"(SP {int(ref_a[0].argmax())} / {int(ref_b[0].argmax())}), pcc {pcc(first_a[14], ref_a[0]):.5f} / {pcc(first_b[15], ref_b[0]):.5f}"
+        f"(f) budget-remainder first chunk: first tokens {int(first_a[4].argmax())} / {int(first_b[5].argmax())} "
+        f"(SP {int(ref_a[0].argmax())} / {int(ref_b[0].argmax())}), pcc {pcc(first_a[4], ref_a[0]):.5f} / {pcc(first_b[5], ref_b[0]):.5f}"
     )
     logger.info("served waves: PASS (f) continuations at 256 mod 2048")
 
@@ -718,17 +719,17 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
             for st in (dec.kda_batched.recurrent, dec.kda_batched.convolution):
                 ttnn.multiply(st, float("nan"), output_tensor=st)
     ph0, ph1 = _served_ids(1500, 32, vocab), _served_ids(1600, 33, vocab)
-    first_h = step_prefill([(16, ph0, 0), (17, ph1, 0)])  # an eager wave of two from "zeros" on the poisoned slots
-    outs = decode_jointly(first_h, {16: 1500, 17: 1600})
-    gots = {l: [first_h[l]] + outs[l] for l in (16, 17)}
-    a.release_request(16)
-    a.release_request(17)
+    first_h = step_prefill([(6, ph0, 0), (7, ph1, 0)])  # an eager wave of two from "zeros" on the poisoned slots
+    outs = decode_jointly(first_h, {6: 1500, 7: 1600})
+    gots = {l: [first_h[l]] + outs[l] for l in (6, 7)}
+    a.release_request(6)
+    a.release_request(7)
     ref_h0, ref_h1 = reference(ph0), reference(ph1)
-    assert all(torch.isfinite(first_h[l]).all() for l in (16, 17)), "a poisoned carry reached a new prompt's wave"
-    _assert_agree("(h) A after a NaN-poisoned carry vs SP", gots[16], ref_h0, pcc_min=PCC_BAR_SP)
-    _assert_agree("(h) B after a NaN-poisoned carry vs SP", gots[17], ref_h1, pcc_min=PCC_BAR_SP)
+    assert all(torch.isfinite(first_h[l]).all() for l in (6, 7)), "a poisoned carry reached a new prompt's wave"
+    _assert_agree("(h) A after a NaN-poisoned carry vs SP", gots[6], ref_h0, pcc_min=PCC_BAR_SP)
+    _assert_agree("(h) B after a NaN-poisoned carry vs SP", gots[7], ref_h1, pcc_min=PCC_BAR_SP)
     logger.info(
-        f"(h) poisoned carry: first tokens {int(first_h[16].argmax())} / {int(first_h[17].argmax())} "
+        f"(h) poisoned carry: first tokens {int(first_h[6].argmax())} / {int(first_h[7].argmax())} "
         f"(SP {int(ref_h0[0].argmax())} / {int(ref_h1[0].argmax())})"
     )
     logger.info("served waves: PASS (h) a NaN-poisoned carry never reaches a new prompt")
