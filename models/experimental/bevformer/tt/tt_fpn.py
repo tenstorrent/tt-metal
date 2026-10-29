@@ -9,7 +9,7 @@ convs, when the reference FPN has them, run on the last (coarsest) output.
 """
 
 import ttnn
-from models.experimental.bevformer.tt.tt_common import TTConv2D, signpost, use_signpost
+from models.experimental.bevformer.tt.tt_common import TTConv2D, signpost
 
 
 class TTConvModule:
@@ -126,8 +126,7 @@ class TTFPN:
             )
 
     def __call__(self, input_tensor):
-        if use_signpost:
-            signpost(header="TTNN FPN Forward Start")
+        signpost(header="TTNN FPN Forward Start")
         laterals = []
         for i, lateral_conv in enumerate(self.lateral_convs):
             output = lateral_conv(input_tensor[i])
@@ -171,6 +170,5 @@ class TTFPN:
             if i > used_backbone_levels and self.relu_before_extra_convs:
                 extra_source = ttnn.relu(extra_source)
             outs.append(self.fpn_convs[i](extra_source))
-        if use_signpost:
-            signpost(header="TTNN FPN Forward End")
+        signpost(header="TTNN FPN Forward End")
         return tuple(outs)

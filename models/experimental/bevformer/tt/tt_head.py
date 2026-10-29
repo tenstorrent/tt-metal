@@ -18,7 +18,7 @@ the center channels, scaled to metres.
 
 import ttnn
 from models.experimental.bevformer.model_config import BOX_PRED_PIECES, SCORE_DTYPE
-from models.experimental.bevformer.tt.tt_common import layer_norm, signpost, use_signpost
+from models.experimental.bevformer.tt.tt_common import layer_norm, signpost
 from models.experimental.bevformer.tt.tt_decoder import TTDetectionTransformerDecoder
 
 
@@ -44,8 +44,7 @@ class TTBEVFormerHead:
         (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``BOX_DTYPE``):
         ``model_config.py``'s box code layout with cx, cy and cz in metres.
         """
-        if use_signpost:
-            signpost(header="TTNN Head Forward Start")
+        signpost(header="TTNN Head Forward Start")
         p = self.params
         bs = bev_embed.shape[0]
         query, query_pos, reference_points = p.query, p.query_pos, p.reference_points
@@ -54,25 +53,18 @@ class TTBEVFormerHead:
                 ttnn.repeat(t, (bs, 1, 1)) for t in (query, query_pos, reference_points)
             )
 
-        if use_signpost:
-            signpost(header="Head Decoder Start")
+        signpost(header="Head Decoder Start")
         hs, refined_points, box_codes = self.decoder(query, bev_embed, query_pos, reference_points, p.reg_branches)
-        if use_signpost:
-            signpost(header="Head Decoder End")
-        if use_signpost:
-            signpost(header="Head ClsBranches Start")
+        signpost(header="Head Decoder End")
+        signpost(header="Head ClsBranches Start")
         all_cls_scores = ttnn.stack(
             [self._cls_branch(hs[lvl], branch) for lvl, branch in enumerate(p.cls_branches)], dim=0
         )
-        if use_signpost:
-            signpost(header="Head ClsBranches End")
-        if use_signpost:
-            signpost(header="Head BoxPreds Start")
+        signpost(header="Head ClsBranches End")
+        signpost(header="Head BoxPreds Start")
 
         sources = {"centers": ttnn.add(ttnn.multiply(refined_points, p.pc_size), p.pc_min), "codes": box_codes}
         all_bbox_preds = ttnn.concat([sources[source][..., channels] for source, channels in BOX_PRED_PIECES], dim=-1)
-        if use_signpost:
-            signpost(header="Head BoxPreds End")
-        if use_signpost:
-            signpost(header="TTNN Head Forward End")
+        signpost(header="Head BoxPreds End")
+        signpost(header="TTNN Head Forward End")
         return all_cls_scores, all_bbox_preds

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 
-from .tt_common import signpost, use_signpost
+from .tt_common import signpost
 from .tt_ms_deformable_attention import TTMSDeformableAttention
 from ..model_config import DeformableAttentionConfig
 
@@ -282,8 +282,7 @@ class TTSpatialCrossAttention:
         Returns:
             Output features [B, num_queries, embed_dims].
         """
-        if use_signpost:
-            signpost(header="TTNN SCA Forward Start")
+        signpost(header="TTNN SCA Forward Start")
 
         assert value is not None, "value is required"
 
@@ -416,8 +415,7 @@ class TTSpatialCrossAttention:
         # Residual connection
         output = ttnn.add(slots, inp_residual)
 
-        if use_signpost:
-            signpost(header="TTNN SCA Forward End")
+        signpost(header="TTNN SCA Forward End")
 
         return output
 

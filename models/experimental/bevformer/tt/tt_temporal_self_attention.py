@@ -18,7 +18,7 @@ import warnings
 # Enable/disable logging output
 ENABLE_LOGGING = False
 
-from .tt_common import signpost, use_signpost
+from .tt_common import signpost
 from .tt_ms_deformable_attention import TTMSDeformableAttention, multi_scale_deformable_attn_fused
 from ..model_config import DeformableAttentionConfig
 
@@ -139,8 +139,7 @@ class TTTemporalSelfAttention:
         With ``batch_first`` False, ``query``, ``value``, ``query_pos``, ``identity`` and the output
         are sequence-first instead.
         """
-        if use_signpost:
-            signpost(header="TTNN TSA Forward Start")
+        signpost(header="TTNN TSA Forward Start")
 
         if not self.batch_first:
             # The features to batch-first; the reference points and the shift are batch-first already.
@@ -225,8 +224,7 @@ class TTTemporalSelfAttention:
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
 
-        if use_signpost:
-            signpost(header="TTNN TSA Forward End")
+        signpost(header="TTNN TSA Forward End")
 
         return output
 

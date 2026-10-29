@@ -8,7 +8,7 @@ Each BatchNorm is already folded into the conv before it.
 """
 
 import ttnn
-from models.experimental.bevformer.tt.tt_common import TTConv2D, signpost, use_signpost
+from models.experimental.bevformer.tt.tt_common import TTConv2D, signpost
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import TTModulatedDeformConv2dDevice
 
 
@@ -359,10 +359,8 @@ class TTResNet:
         return TTBottleneck.dram_convs(layer["dram_activation"], layer["dram_input"] and j == 0)
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="TTNN ResNet Forward Start")
-        if use_signpost:
-            signpost(header="ResNet Stem Start")
+        signpost(header="TTNN ResNet Forward Start")
+        signpost(header="ResNet Stem Start")
         x, out_h, out_w = self.conv1(x)
         pool = self.maxpool_args
         x = ttnn.max_pool2d(
@@ -378,18 +376,14 @@ class TTResNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ceil_mode=False,
         )
-        if use_signpost:
-            signpost(header="ResNet Stem End")
+        signpost(header="ResNet Stem End")
 
         outs = []
         for i, res_layer in enumerate(self.res_layers):
-            if use_signpost:
-                signpost(header=f"ResNet Layer{i + 1} Start")
+            signpost(header=f"ResNet Layer{i + 1} Start")
             x = res_layer(x)
-            if use_signpost:
-                signpost(header=f"ResNet Layer{i + 1} End")
+            signpost(header=f"ResNet Layer{i + 1} End")
             if i in self.out_indices:
                 outs.append(x)
-        if use_signpost:
-            signpost(header="TTNN ResNet Forward End")
+        signpost(header="TTNN ResNet Forward End")
         return tuple(outs)
