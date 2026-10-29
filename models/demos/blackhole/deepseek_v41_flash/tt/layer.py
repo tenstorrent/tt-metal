@@ -273,7 +273,7 @@ class DSV41Layer:
             )
         else:
             x2, (ffn_pre, ffn_post, ffn_comb) = self.mhc_attn.expand_mixes(
-                P2(a), xp, attn_post, attn_comb, None, self.mhc_ffn
+                P2(a), xp, attn_post, attn_comb, None, self.mhc_ffn, pool=(self.mhc_pool_tag, "attn")
             )
         mark("mhc_attn_expand+ffn_mixes")
         if fuse_pre:

@@ -308,7 +308,7 @@ class DSV41MHC:
             return mhc_expand2(y, residual, post, comb, y2, lite=lite)
         return mhc_expand(y, residual, post, comb, y2)
 
-    def expand_mixes(self, y, residual, post, comb, y2, nxt):
+    def expand_mixes(self, y, residual, post, comb, y2, nxt, pool=None):
         """expand(y, residual, post, comb, y2) fused with ``nxt.mixes`` of the new streams (nxt: the DSV41MHC of the sub-block that
         consumes them) -> (new streams, (pre, post, comb) of nxt).  Falls back to the two separate calls."""
         T = residual.shape[0]
@@ -317,5 +317,5 @@ class DSV41MHC:
             plan = proj_plan(T, self.dim, self.device)
             x_new, part = mhc_expand_proj(y, residual, post, comb, y2, nxt._wt(plan), nxt.mix_col, plan)
             return x_new, mhc_post2(part, nxt.consts9, plan, nxt._w.iters, nxt._w.eps, nxt.sq_eps, nxt.post_fidelity)
-        x_new = self.expand(y, residual, post, comb, y2)
+        x_new = self.expand(y, residual, post, comb, y2, pool=pool)
         return x_new, nxt.mixes(x_new)
