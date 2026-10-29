@@ -421,6 +421,7 @@ def test_solo_prefill_then_ordinary_step_bootstraps_and_answers_from_the_replay(
     _dflash_the_first_request_speculates_from_the_optimistic_prior_and_the_counts_feed_its_ewma(adapter, monkeypatch)
     _mtp_the_first_proposal_speculates_from_the_optimistic_prior_and_high_acceptance_keeps_k5(adapter, monkeypatch)
     _mtp_acceptance_statistics_come_from_the_accepted_counts_of_the_verified_drafts(adapter, monkeypatch)
+    _mtp_a_new_request_under_a_pessimistic_prior_gets_one_trial_whose_verify_counts_at_once(adapter, monkeypatch)
     _mtp_a_draftless_verify_and_an_ordinary_step_observe_nothing(adapter, monkeypatch)
 
 
@@ -3382,8 +3383,29 @@ def _dflash_after_n_plain_steps_the_next_request_bootstraps_and_its_first_propos
 def _dflash_a_new_request_skips_the_bootstrap_when_the_prior_says_the_replay_would_not_pay(
     adapter, monkeypatch, expect_error=None
 ):
+    # 1.43 expected tokens at 1.38x the plain step: 1.03x, below the entry margin but above the trial gain: the
+    # bootstrap is the request's one trial, logged as such, and one rejection ends the session
     costed = _costed(adapter, monkeypatch)
-    _inform_prior(costed, [0.3] * 5)  # 1.43 expected tokens at 1.38x the plain step: 1.03x, below the margin
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
+    _inform_prior(costed, [0.3] * 5)
+    _prefill(costed, prompt_len=2, key=10)
+    assert _ordinary(costed, [3], [2], [10], result="device") != "device"
+    assert len(_names(costed, "bootstrap")) == 1
+    proposal = _propose(costed, [[9] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5] and costed._spec_policy.trial
+    lines = [m for m in messages if m.startswith("Gemma4DFlash adaptive K:")]
+    assert "(trial; was none)" in lines[0] and "gain 1.03x" in lines[0]
+    drafts = proposal.draft_token_ids[0, :5].tolist()
+    out = _verify(costed, [[9] + drafts], [list(range(3, 9))], [5], keys=[10])
+    ids = out.argmax_ids[0].tolist()
+    proposal = _propose(costed, [[ids[0]] + [-1] * 5], [[4] + [-1] * 5], counts=[1])
+    assert proposal.num_valid.tolist() == [0] and not costed._spec_active and costed._spec_policy.declined == 1
+    # below the trial gain (1.11 expected tokens at 2.06x: 0.54x) the bootstrap is skipped: the taps are
+    # dropped and the request runs plain from its first step
+    costed = _with_costs(_costed(adapter, monkeypatch), step_ms=70.0)
+    _inform_prior(costed, [0.1] * 5)
     _prefill(costed, prompt_len=2, key=10)
     taps = list(costed._spec_pending[0])
     assert _ordinary(costed, [3], [2], [10], result="device") == "device"
@@ -3394,13 +3416,14 @@ def _dflash_a_new_request_skips_the_bootstrap_when_the_prior_says_the_replay_wou
 
 
 def _dflash_the_cost_table_is_consumed_as_measured(adapter, monkeypatch, expect_error=None):
-    """The same prior starts a session at the CI leg's replay cost and not at a dearer one."""
-    for step_ms, bootstraps in ((46.9, True), (70.0, False)):
+    """The same prior starts a session at the CI leg's replay cost (1.43x: the entry band), still starts one at a
+    dearer one as the request's trial (0.96x: above the trial gain) and not at all below the trial gain."""
+    for step_ms, cond, bootstraps in ((46.9, 0.5, True), (70.0, 0.5, True), (70.0, 0.1, False)):
         model = _with_costs(build_model(adapter, monkeypatch), step_ms=step_ms)
-        _inform_prior(model, [0.5] * 5)  # 1.97 expected tokens: 1.43x at 46.9 ms, 0.96x at 70 ms
+        _inform_prior(model, [cond] * 5)  # 1.97 expected tokens: 1.43x at 46.9 ms, 0.96x at 70 ms; 1.11: 0.54x
         _prefill(model, prompt_len=2, key=10)
         out = _ordinary(model, [3], [2], [10], result="device")
-        assert (len(_names(model, "bootstrap")) == 1) is bootstraps, step_ms
+        assert (len(_names(model, "bootstrap")) == 1) is bootstraps, (step_ms, cond)
         assert (out == "device") is not bootstraps
 
 
@@ -3423,8 +3446,8 @@ def _dflash_the_session_summary_reports_the_accepted_drafts_ewma(adapter, monkey
 
 def _dflash_the_composed_vision_rail_shares_the_policy(adapter, monkeypatch, expect_error=None):
     vision = build_model(adapter, monkeypatch, cls=adapter.Gemma4DFlashContractVisionForConditionalGeneration)
-    _with_costs(vision)
-    _inform_prior(vision, [0.3] * 5)
+    _with_costs(vision, step_ms=70.0)
+    _inform_prior(vision, [0.1] * 5)  # 1.11 expected tokens at 2.06x: 0.54x, below the trial gain
     _prefill(vision, prompt_len=2, key=10)
     assert _ordinary(vision, [3], [2], [10], result="device") == "device" and _names(vision, "bootstrap") == []
 
@@ -3537,6 +3560,45 @@ def _mtp_the_first_proposal_speculates_from_the_optimistic_prior_and_high_accept
     assert stats.cond == [1.0] * 5 and stats.ewma_accepted == 5.0 and stats.spec_steps == 2
 
 
+def _mtp_a_new_request_under_a_pessimistic_prior_gets_one_trial_whose_verify_counts_at_once(
+    adapter, monkeypatch, assistant_dir=None, expect_error=None
+):
+    """Prior 0.3 at every position, the records costed as a one-row step on the device ((1,5) at 34 ms against a
+    20 ms plain step: 1.43 expected tokens = 0.84x, below the entry band, above the trial gain), so the first
+    proposal replays the cheapest record (entry plus step: (1,5) at 170 + 34) as the trial. Five accepted drafts
+    blend 0.25 x 1.0 + 0.75 x 0.37 = 0.53 into every position (2.07 tokens, 1.22x: the entry band) and the
+    request speculates on; a rejection blends to 0.20 (1.29 tokens, 0.76x) and the request runs plain, no retry
+    until the cadence allows."""
+    reseeds = {(1, 5): 170.0, (5, 5): 200.0, (8, 3): 250.0, (16, 1): 300.0}
+    steps = {(1, 5): 34.0, (5, 5): 40.0, (8, 3): 45.0, (16, 1): 50.0}
+    outcomes = {}
+    for name, rounds in (("accepted", [5, 5]), ("rejected", [0, 0, 0])):
+        model = _mtp_adaptive(adapter, monkeypatch)
+        mh.install_decoder(model, step_ms=steps, plain_ms=mh.PLAIN_MS)
+        model._spec_costs.update({("reseed", shape): CostLine.flat(ms) for shape, ms in reseeds.items()})
+        messages = []
+        monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+        monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
+        _inform_prior(model, [0.3] * 5)
+        offered = _mtp_rounds(model, rounds)
+        policy = model._spec_policy
+        outcomes[name] = (
+            offered,
+            [m for m in messages if m.startswith("Gemma4MTP adaptive K:")],
+            policy.last_reason,
+            policy.trial,
+            model._mtp_sessions[0].stats.effective_cond(5),
+        )
+        assert model._mtp_sessions[0].trialed
+    offered, lines, reason, trial, cond = outcomes["accepted"]
+    assert offered == [5, 5, 5] and "(trial; was none)" in lines[0] and "gain 0.84x" in lines[0]
+    assert len(lines) == 1 and reason == "gain" and not trial, "the draft length did not change: no second line"
+    assert cond == pytest.approx([0.4 * 1.0 + 0.6 * 0.433] * 5, abs=1e-3), "two own observations: 0.4 own, 0.6 prior"
+    offered, lines, reason, trial, cond = outcomes["rejected"]
+    assert offered == [5, 0, 0, 0] and "(trial; was none)" in lines[0] and reason == "declined" and not trial
+    assert "-> plain step (declined; was K=5)" in lines[1] and "per-position 0.20/0.30/0.30/0.30/0.30" in lines[1]
+
+
 def _mtp_acceptance_statistics_come_from_the_accepted_counts_of_the_verified_drafts(
     adapter, monkeypatch, assistant_dir=None, expect_error=None
 ):
@@ -3546,8 +3608,9 @@ def _mtp_acceptance_statistics_come_from_the_accepted_counts_of_the_verified_dra
     assert stats.cond == pytest.approx([1.0, 1.0, 0.9, 1.0, 1.0]) and stats.observed == [1, 1, 1, 0, 0]
     assert stats.ewma_accepted == 2.0
     assert adaptive._spec_policy.prior.cond == pytest.approx([1.0, 1.0, 0.9, 1.0, 1.0]), "the batch prior learns too"
-    # fewer than ROW_MIN_OBSERVATIONS of its own: the row reads the prior, the unobserved tail capped by draft 3
-    assert stats.effective_cond(5) == pytest.approx([1.0, 1.0, 0.9, 0.9, 0.9])
+    # one own observation at draft 3 (a rejection) counts 1 / (1 + 3) against the prior's 0.9: 0.675, and the
+    # unobserved tail is capped by it
+    assert stats.effective_cond(5) == pytest.approx([1.0, 1.0, 0.675, 0.675, 0.675])
     assert adaptive._mtp_sessions[0].retained.verified == 0, "the new proposal is not verified yet"
 
 
@@ -3654,8 +3717,10 @@ def _mtp_a_batch_may_replay_a_smaller_record_than_its_rows_select(
 def _mtp_the_reseed_cost_of_entering_speculation_is_part_of_the_candidates_cost(
     adapter, monkeypatch, assistant_dir=None, expect_error=None
 ):
-    """The reseed is the entry cost: the saving over the entry horizon must cover it before a row enters."""
-    mtp = mh.build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_RETRY_STEPS": "0"})
+    """The reseed is the entry cost: the saving over the entry horizon must cover it before a row enters. The
+    new request's trial is off here (GEMMA4_SPEC_TRIAL_GAIN above any gain): with it, a fresh request replays the
+    cheapest record once whatever the horizon says, the reseed charged all the same."""
+    mtp = mh.build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_RETRY_STEPS": "0", "GEMMA4_SPEC_TRIAL_GAIN": "9"})
     mh.install_decoder(mtp, step_ms=MTP_STEP_MS)
     mtp._spec_costs.update({("reseed", shape): 2000.0 for shape in mh.DEFAULT_SHAPES})
     # At 0.8 every record clears 1.10x ((8,3): 2.95 tokens at 1.75x = 1.69x), but the saving over the 64-step
@@ -3666,6 +3731,7 @@ def _mtp_the_reseed_cost_of_entering_speculation_is_part_of_the_candidates_cost(
     mh._ordinary(mtp, [3], [2], [10], result=_tensor([150]))
     proposal = mh._propose(mtp, [[150] + [-1] * 5], [[3] + [-1] * 5])
     assert proposal.num_valid.tolist() == [0] and mh._steps(mtp) == []
+    assert mtp._mtp_sessions[0].trialed is False and mtp._spec_policy.last_reason == "declined"
     for shape in mh.DEFAULT_SHAPES:
         mtp._spec_costs[("reseed", shape)] = 0.0
     mh._ordinary(mtp, [150], [3], [10], result=_tensor([151]))

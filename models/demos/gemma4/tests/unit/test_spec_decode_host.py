@@ -2175,6 +2175,7 @@ from models.demos.gemma4.tt.spec_policy import (  # noqa: E402
     SPEC_RETRY_OVERHEAD_ENV,
     SPEC_RETRY_STEPS_ENV,
     SPEC_STATS_STEPS_ENV,
+    SPEC_TRIAL_GAIN_ENV,
     AcceptanceStats,
     Calibration,
     CostLine,
@@ -2236,6 +2237,8 @@ def _policy_policy_config_reads_every_knob_from_the_env(expect_error=None):
     assert SpecPolicyConfig.from_env(env) == SpecPolicyConfig(False, 1.25, 0.9, 16, 4, 0.05, 0, 0.5, (22.5,), 64, 3, 0)
     assert SpecPolicyConfig.from_env({SPEC_PLAIN_STEP_MS_ENV: " "}).plain_step_ms is None
     assert SpecPolicyConfig.from_env({SPEC_PLAIN_STEP_MS_ENV: "31,83"}).plain_step_ms == (31.0, 83.0)
+    assert SpecPolicyConfig.from_env({}).trial_gain == 0.6 and SpecPolicyConfig.from_env(env).trial_gain == 0.6
+    assert SpecPolicyConfig.from_env({SPEC_TRIAL_GAIN_ENV: "0.8"}).trial_gain == 0.8
 
 
 _BAD_POLICY_KNOBS = [
@@ -2246,6 +2249,7 @@ _BAD_POLICY_KNOBS = [
     (SPEC_PROBE_STEPS_ENV, "2.5", "must be an integer"),
     (SPEC_EWMA_ENV, "1.5", r"must be in \[0.0, 1.0\]"),
     (SPEC_PLAIN_STEP_MS_ENV, "-3", "must be positive"),
+    (SPEC_TRIAL_GAIN_ENV, "-0.1", "must be at least 0.0"),
 ]
 
 
@@ -2288,6 +2292,26 @@ def _policy_a_new_row_starts_from_the_batch_prior_and_the_prior_learns_from_ever
     assert second.cond == [0.5, 1.0, 1.0, 1.0, 1.0] and second.observed == [0] * 5 and second.ewma_accepted is None
     policy.observe(second, accepted=5, verified=5)
     assert first.cond[0] == 0.5 and second.cond[0] == 0.75 and policy.prior.cond[0] == 0.75
+    # a row's own observations count at once: at a position with n < ROW_MIN_OBSERVATIONS of its own it reads
+    # n / (n + 3) of its own mean outcome and the rest of the prior (one verify at 5 accepted moves it most of
+    # the way), from three on its own EWMA as before; a request that stays plain observes nothing
+    informed = SpecPolicy(SpecPolicyConfig(ewma=0.5), 5)
+    informed.prior.cond, informed.prior.informed = [0.2] * 5, [True] * 5
+    row = informed.new_row()
+    assert row.effective_cond(5) == pytest.approx([0.2] * 5) and row.own_sum == [0.0] * 5
+    informed.observe(row, accepted=5, verified=5)
+    assert informed.prior.cond[0] == pytest.approx(0.6) and row.cond[0] == pytest.approx(0.6)
+    assert row.effective_cond(5) == pytest.approx([0.7] * 5), "0.25 x own 1.0 + 0.75 x prior 0.6"
+    assert row.expected_tokens(5) == pytest.approx(1 + 0.7 + 0.49 + 0.343 + 0.2401 + 0.16807)
+    informed.observe(row, accepted=0, verified=5)
+    assert row.effective_cond(2) == pytest.approx(
+        [0.38, 0.7]
+    ), "n=2 at draft 1: 0.4 x 0.5 + 0.6 x 0.3; draft 2 unreached"
+    informed.observe(row, accepted=0, verified=5)
+    assert row.observed[0] == 3 and row.cond[0] == pytest.approx(0.15)
+    assert row.effective_cond(1) == pytest.approx([0.15]), "three own observations: the row's own EWMA, as before"
+    untouched = informed.new_row()
+    assert untouched.effective_cond(1) == pytest.approx([informed.prior.cond[0]]) and untouched.spec_steps == 0
 
 
 def _policy_rank_records_scores_expected_tokens_per_cost_relative_to_the_plain_step(expect_error=None):
@@ -2479,6 +2503,19 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert all(hopeless.decide([RecordCandidate((16, 1), 1024, 120.0)], [row], _PLAIN, 5) is None for _ in range(10))
     never = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0), 5)
     assert all(never.decide(_cands(_COSTS), [row], _PLAIN, 5) is None for _ in range(20))
+    # a new request's trial: declined otherwise, a fresh step replays the cheapest record (entry plus step) once
+    # when the prior's gain clears trial_gain, whatever the retry cadence says; never held, reason "trial"
+    fresh = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
+    trial = fresh.decide(_cands(_COSTS), [row], _PLAIN, 5, fresh=True)
+    assert (trial.shape, trial.reason, trial.gain) == ((16, 1), "trial", pytest.approx(1.4 * 20 / 30)) and fresh.trial
+    assert fresh.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "a trial below the entry gain is not held"
+    assert fresh.would_speculate(_cands(_COSTS), [row], _PLAIN, fresh=True)
+    assert not fresh.would_speculate(_cands(_COSTS), [row], _PLAIN)
+    dear = [RecordCandidate((16, 1), 2048, 50.0)]  # 1.4 tokens at 2.5x plain: 0.56x, below the trial gain
+    assert fresh.decide(dear, [row], _PLAIN, 5, fresh=True) is None and fresh.last_reason == "declined"
+    assert SpecPolicy(SpecPolicyConfig(trial_gain=0.5), 5).decide(dear, [row], _PLAIN, 5, fresh=True).reason == "trial"
+    with_entry = [RecordCandidate((1, 5), 2048, 50.0, 170.0), RecordCandidate((16, 1), 2048, 30.0, 300.0)]
+    assert fresh.decide(with_entry, [row], _PLAIN, 5, fresh=True).shape == (1, 5), "cheapest entry plus step"
     # the calibration probe: a speculating batch serves one plain step once calib_probe_steps passed without
     # a clean plain sample and the probe's cost (the reseed to resume, the tokens forgone) is amortized
     probing = SpecPolicy(SpecPolicyConfig(calib_probe_steps=3, retry_overhead=2.0, probe_steps=0), 5)

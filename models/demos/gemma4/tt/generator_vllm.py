@@ -5711,7 +5711,8 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
             return True
         policy = self._spec_policy
         plain_ms, _bucket = self._spec_plain_ms_for(1, position)
-        if policy.would_speculate([candidate], [policy.prior], plain_ms, policy.request_steps):
+        # The bootstrap is the request's one trial: a decline ends this rail's session for good.
+        if policy.would_speculate([candidate], [policy.prior], plain_ms, policy.request_steps, fresh=True):
             return True
         self._spec_policy_note("Gemma4DFlash", None, policy.last_k, 1, str(candidate.shape), [policy.prior], plain_ms)
         return False
@@ -5730,7 +5731,8 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         remaining = None
         if policy.request_steps is not None:
             remaining = max(1, int(round(policy.request_steps)) - int(self._dflash_steps))
-        choice = policy.decide([candidate], stats, plain_ms, int(self._SPEC_CONTRACT_K), remaining)
+        fresh = self._dflash_stats is not None and self._dflash_stats.spec_steps == 0  # no verify yet: the trial
+        choice = policy.decide([candidate], stats, plain_ms, int(self._SPEC_CONTRACT_K), remaining, fresh=fresh)
         self._spec_policy_note("Gemma4DFlash", choice, previous, 1, str(candidate.shape), stats, plain_ms)
         return choice is not None
 
@@ -6455,6 +6457,9 @@ SPEC_DRAFT_LEN_ENV = "GEMMA4_SPEC_DRAFT_LEN"
 #   GEMMA4_SPEC_EXIT_GAIN=0.95    hold the record while its gain stays above this; leave after two steps below
 #   GEMMA4_SPEC_RETRY_STEPS=8     the fewest plain steps before a retry (the cheapest record, with reseed)...
 #   GEMMA4_SPEC_RETRY_OVERHEAD=0.03  ...whose cost over those plain steps is at most this fraction of them
+#   GEMMA4_SPEC_TRIAL_GAIN=0.6    a new request's first proposal replays the cheapest record once (its trial, no
+#                                 hold) when the prior's gain is at least this, whatever the retry cadence says;
+#                                 below it the request runs plain until the retry
 #   GEMMA4_SPEC_PROBE_STEPS=32    after this many steps below the cap, one step at the next larger draft length (0 = off)
 #   GEMMA4_SPEC_EWMA=0.1          the acceptance EWMA weight of one verify
 #   GEMMA4_SPEC_PLAIN_STEP_MS     the plain decode step cost (``ms`` flat, or ``ms_at_0,ms_at_top``); unset = timed
@@ -6611,6 +6616,7 @@ class MTPSession:
     committed: int = 0
     dropped: int = 0
     stats: object = None
+    trialed: bool = False  # the request had its one trial (or entered on its own): no second trial
 
 
 class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
@@ -7459,7 +7465,11 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         continue from the last replay while others would reseed, the record
         over the continuing rows alone is a candidate too: the rows left out
         take one token per step from the plain decode the verify runs beside
-        the replay, which the candidate's cost carries. Without the cost
+        the replay, which the candidate's cost carries. A joining row that
+        has no verify of its own yet and no trial behind it makes the step
+        ``fresh``: declined otherwise, the policy replays the cheapest
+        record once as the request's trial (``GEMMA4_SPEC_TRIAL_GAIN``).
+        Without the cost
         table (the fixed policy, or warmup measured nothing) the default
         serves for every row; a candidate whose rung has no measured cost is
         skipped, and when that leaves none the default serves too.
@@ -7506,10 +7516,17 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             return default, None
         previous = policy.last_k
         stats = [session.stats for _r, session, *_ in drafting]
-        choice = policy.decide(candidates, stats, plain_ms, cap, remaining)
+        fresh_rows = [
+            session
+            for i, (_r, session, *_) in enumerate(drafting)
+            if i not in continuing and session.stats.spec_steps == 0 and not session.trialed
+        ]
+        choice = policy.decide(candidates, stats, plain_ms, cap, remaining, fresh=bool(fresh_rows))
         self._spec_policy_note("Gemma4MTP", choice, previous, n, str(default), stats, plain_ms)
         if choice is None:
             return None, None
+        for session in fresh_rows:
+            session.trialed = True  # one trial per request, whatever reason the step replays for
         return choice.shape, choice.members
 
     def _mtp_check_result(self, result, shape, live):

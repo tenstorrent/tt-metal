@@ -30,10 +30,15 @@ accept walk commits a prefix, so the probability that draft ``j`` commits is
     T_r(K) = 1 + sum_{j=1..K} p_r(j)
 
 tokens for the row in expectation (the ``1`` is the bonus or correction
-token). A row rests on the batch prior, the same EWMAs over every row's
-observations, until it has ``ROW_MIN_OBSERVATIONS`` of its own at a
-position; the prior starts optimistic (every ``c = 1``) so the first steps
-of a server speculate at the largest record and learn from there. A position
+token). A row blends its own observations with the batch prior, the same
+EWMAs over every row's observations: at a position it has ``n`` own
+observations of, fewer than ``ROW_MIN_OBSERVATIONS``, it reads
+``n / (n + ROW_MIN_OBSERVATIONS)`` of its own mean outcome and the rest of
+the prior (one verify at 3-5 accepted moves a row most of the way), and
+from ``ROW_MIN_OBSERVATIONS`` on its own EWMA; the prior starts optimistic
+(every ``c = 1``) so the first steps of a server speculate at the largest
+record and learn from there. A request that stays plain verifies nothing
+and so contributes nothing to the prior. A position
 nobody has observed yet is taken to be no easier than the position before
 it: ``c_eff[j] = min(c[j], c_eff[j-1])``.
 
@@ -81,7 +86,14 @@ the statistics already rule out is not worth a replay). On the MTP rail a
 declined row reseeds and resumes within the request; on the dFlash rail a
 plain step gives the drafter no residual tap, so a decline ends the
 request's session and the retry lands on the first step of a later request
-(``note_plain_steps`` counts the plain steps in between). While speculating
+(``note_plain_steps`` counts the plain steps in between). Independently of
+that cadence, a new request gets one *trial* at its first proposal: the
+cheapest candidate (entry plus step) replays once when the prior's gain
+estimate is at least ``GEMMA4_SPEC_TRIAL_GAIN`` (the reseed is the only
+extra cost; a prior below that is the random-prompt regime learned on this
+engine, and the request stays plain). A trial is never held: the next
+decision continues only on the entry gain, which the trial's own verify
+feeds through the blend above. While speculating
 below the rows-based cap, after ``GEMMA4_SPEC_PROBE_STEPS`` consecutive such
 steps one step is replayed at the next larger draft length (no reseed), so
 deeper positions are re-observed (``0`` disables the probe).
@@ -158,6 +170,8 @@ SPEC_RETRY_STEPS_ENV = "GEMMA4_SPEC_RETRY_STEPS"
 SPEC_RETRY_STEPS_DEFAULT = "8"
 SPEC_RETRY_OVERHEAD_ENV = "GEMMA4_SPEC_RETRY_OVERHEAD"
 SPEC_RETRY_OVERHEAD_DEFAULT = "0.03"
+SPEC_TRIAL_GAIN_ENV = "GEMMA4_SPEC_TRIAL_GAIN"
+SPEC_TRIAL_GAIN_DEFAULT = "0.6"
 SPEC_PROBE_STEPS_ENV = "GEMMA4_SPEC_PROBE_STEPS"
 SPEC_PROBE_STEPS_DEFAULT = "32"
 SPEC_EWMA_ENV = "GEMMA4_SPEC_EWMA"
@@ -183,6 +197,7 @@ SPEC_POLICY_ENV = (
     SPEC_STATS_STEPS_ENV,
     SPEC_CALIB_MIN_ENV,
     SPEC_CALIB_PROBE_STEPS_ENV,
+    SPEC_TRIAL_GAIN_ENV,
 )
 #: The EWMA weight of the request-length estimate (steps per request) the entry horizon is capped by.
 CALIB_EWMA = 0.25
@@ -258,6 +273,7 @@ class SpecPolicyConfig:
     stats_steps: int = 256
     calib_min: int = 8
     calib_probe_steps: int = 256
+    trial_gain: float = 0.6
 
     @classmethod
     def from_env(cls, env=None):
@@ -280,6 +296,7 @@ class SpecPolicyConfig:
             stats_steps=_env_int(env, SPEC_STATS_STEPS_ENV, SPEC_STATS_STEPS_DEFAULT, low=1),
             calib_min=_env_int(env, SPEC_CALIB_MIN_ENV, SPEC_CALIB_MIN_DEFAULT, low=1),
             calib_probe_steps=_env_int(env, SPEC_CALIB_PROBE_STEPS_ENV, SPEC_CALIB_PROBE_STEPS_DEFAULT, low=0),
+            trial_gain=_env_float(env, SPEC_TRIAL_GAIN_ENV, SPEC_TRIAL_GAIN_DEFAULT, low=0.0),
         )
 
 
@@ -331,15 +348,29 @@ class AcceptanceStats:
 
     ``cond[j]`` estimates the acceptance of draft ``j + 1`` given the drafts
     before it were accepted; ``observed[j]`` counts its updates on this
-    object and ``informed[j]`` says whether the value rests on any
-    observation at all (its own, or the prior's when it was opened as a
-    child); a row reads the ``prior`` it was opened from at a position it
-    has fewer than ``min_obs`` observations of; ``ewma_accepted`` tracks
-    the accepted drafts per speculative step and ``spec_steps`` the steps
+    object, ``own_sum[j]`` the accepted outcomes among them, and
+    ``informed[j]`` says whether the value rests on any observation at all
+    (its own, or the prior's when it was opened as a child). At a position a
+    row has ``n < min_obs`` own observations of, it reads
+    ``n / (n + min_obs)`` of its own mean outcome and the rest of the
+    ``prior`` it was opened from (nothing but the prior at ``n = 0``); from
+    ``min_obs`` on it reads its own EWMA. ``ewma_accepted`` tracks the
+    accepted drafts per speculative step and ``spec_steps`` the steps
     observed.
     """
 
-    __slots__ = ("k_max", "alpha", "cond", "observed", "informed", "prior", "min_obs", "ewma_accepted", "spec_steps")
+    __slots__ = (
+        "k_max",
+        "alpha",
+        "cond",
+        "observed",
+        "own_sum",
+        "informed",
+        "prior",
+        "min_obs",
+        "ewma_accepted",
+        "spec_steps",
+    )
 
     def __init__(self, k_max, alpha, cond=None, informed=None, prior=None, min_obs=ROW_MIN_OBSERVATIONS):
         self.k_max = int(k_max)
@@ -358,6 +389,7 @@ class AcceptanceStats:
             raise ValueError(f"AcceptanceStats informed flags have {len(informed)} positions, expected {self.k_max}")
         self.cond = [float(c) for c in cond]
         self.observed = [0] * self.k_max
+        self.own_sum = [0.0] * self.k_max
         self.informed = [bool(f) for f in informed]
         self.prior = prior
         self.min_obs = int(min_obs)
@@ -379,6 +411,7 @@ class AcceptanceStats:
             outcome = 1.0 if j < accepted else 0.0
             self.cond[j] += self.alpha * (outcome - self.cond[j])
             self.observed[j] += 1
+            self.own_sum[j] += outcome
             self.informed[j] = True
         if self.ewma_accepted is None:
             self.ewma_accepted = float(accepted)
@@ -387,10 +420,15 @@ class AcceptanceStats:
         self.spec_steps += 1
 
     def _source(self, j):
-        """``(cond, informed)`` at position ``j``: the row's own once it has ``min_obs`` observations, else the prior's."""
-        if self.prior is not None and self.observed[j] < self.min_obs:
+        """``(cond, informed)`` at position ``j``: the row's own EWMA once it has ``min_obs`` observations, else
+        its own mean outcome weighted ``n / (n + min_obs)`` against the prior's value."""
+        n = self.observed[j]
+        if self.prior is None or n >= self.min_obs:
+            return self.cond[j], self.informed[j]
+        if n == 0:
             return self.prior.cond[j], self.prior.informed[j]
-        return self.cond[j], self.informed[j]
+        weight = n / (n + self.min_obs)
+        return weight * (self.own_sum[j] / n) + (1.0 - weight) * self.prior.cond[j], True
 
     def effective_cond(self, k):
         """``[c_eff(1), ..., c_eff(k)]``: the conditionals, an uninformed position capped by the one before it."""
@@ -806,8 +844,8 @@ class SpecPolicy:
     consecutive speculative steps below the rows-based cap (the probe), and
     ``last_k`` is the draft length of the previous decision (0 for a plain
     step, None before the first), and ``trial`` says that decision was a
-    retry: one observation, continued only when its gain clears the entry
-    threshold, never held.
+    retry or a new request's trial: one observation, continued only when its
+    gain clears the entry threshold, never held.
     """
 
     def __init__(self, config, k_max):
@@ -885,6 +923,14 @@ class SpecPolicy:
             return None
         return dataclasses.replace(cheapest, reason="retry")
 
+    def trial_choice(self, ranked):
+        """A new request's one trial, or None: the cheapest candidate (entry plus step) when its gain estimate
+        is at least ``trial_gain``; independent of the retry cadence, the reseed is its only extra cost."""
+        cheapest = min(ranked, key=lambda c: (c.entry_ms + c.cost_ms, c.shape))
+        if cheapest.gain < self.config.trial_gain:
+            return None
+        return dataclasses.replace(cheapest, reason="trial")
+
     def plain_probe_due(self, choice, plain_ms):
         """Whether a speculating batch should serve one plain step to refresh the plain estimate: at least
         ``calib_probe_steps`` steps since the last clean plain sample, and the probe's cost (the reseed the
@@ -898,15 +944,18 @@ class SpecPolicy:
         forgone = max(0.0, choice.tokens_per_row - 1.0) * float(plain_ms)
         return choice.entry_ms + forgone <= cfg.retry_overhead * since * float(plain_ms)
 
-    def would_speculate(self, candidates, rows, plain_ms, remaining=None):
-        """Whether ``decide`` would replay a record now, without changing any counter (the dFlash bootstrap gate)."""
+    def would_speculate(self, candidates, rows, plain_ms, remaining=None, fresh=False):
+        """Whether ``decide`` would replay a record now, without changing any counter (the dFlash bootstrap gate);
+        ``fresh`` says the rows include a new request that has had no trial yet."""
         ranked = rank_records(candidates, rows, plain_ms)
         if self.admissible(ranked, plain_ms, remaining) is not None:
             return True
         held = self.holdable(ranked)
         if self.speculating and not self.trial and held is not None and held.gain >= self.config.exit_gain:
             return True
-        return self.retry_choice(ranked, plain_ms) is not None
+        if self.retry_choice(ranked, plain_ms) is not None:
+            return True
+        return fresh and self.trial_choice(ranked) is not None
 
     def admissible(self, ranked, plain_ms, remaining=None):
         """The best candidate that clears the entry gain and whose entry (if any) pays over the horizon."""
@@ -923,12 +972,15 @@ class SpecPolicy:
                 return choice
         return None
 
-    def decide(self, candidates, rows, plain_ms, k_cap, remaining=None):
+    def decide(self, candidates, rows, plain_ms, k_cap, remaining=None, fresh=False):
         """The record for a step of ``rows`` (their statistics) among ``candidates``, or None for plain.
 
         ``k_cap`` is the largest draft length the step may use (the rows-based
         cap); a choice below it counts toward the probe. ``remaining`` caps the
         entry horizon by the steps the entering rows are expected to live.
+        ``fresh`` says the rows include a new request that has had no trial
+        yet: declined otherwise, the step is its trial when the prior's gain
+        clears ``trial_gain`` (reason "trial", never held).
         """
         cfg = self.config
         candidates = list(candidates)
@@ -956,6 +1008,8 @@ class SpecPolicy:
                     reason = "exit"
         else:
             choice = self.retry_choice(ranked, plain_ms)
+            if choice is None and fresh:
+                choice = self.trial_choice(ranked)
         if choice is not None and choice.reason in ("gain", "hold") and self.plain_probe_due(choice, plain_ms):
             choice, reason = None, "calibrate"
         if choice is None:
@@ -968,7 +1022,7 @@ class SpecPolicy:
             return None
         self.last_reason = choice.reason
         self.declined = 0
-        self.trial = choice.reason == "retry"
+        self.trial = choice.reason in ("retry", "trial")
         if int(choice.shape[1]) < int(k_cap) and choice.entry_ms <= 0.0:
             self.below_cap += 1
             if cfg.probe_steps > 0 and self.below_cap >= cfg.probe_steps:
