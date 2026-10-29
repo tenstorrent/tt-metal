@@ -54,35 +54,82 @@ from dataclasses import dataclass, field
 # derives from it.
 SPEC_SLOTS = int(os.environ.get("MIMO_SPEC_SLOTS", "4"))
 assert SPEC_SLOTS in (4, 8), f"MIMO_SPEC_SLOTS={SPEC_SLOTS}: 4 or 8"
+
+
+@dataclass(frozen=True)
+class SpecLayout:
+    """The draft groups of a verify pass of ``slots`` slots: ``groups`` requests, each in a draft group of
+    ``group_slots`` consecutive slots (its last committed token and up to ``max_drafts`` drafts) with its own drafter
+    state."""
+
+    slots: int
+    groups: int
+
+    def __post_init__(self):
+        assert self.groups == 1 or (
+            self.groups in (2, 4) and self.slots == 8
+        ), f"{self.groups} draft groups: 1, or 2 / 4 with MIMO_SPEC_SLOTS=8"
+
+    @property
+    def group_slots(self):
+        return self.slots // self.groups
+
+    @property
+    def max_drafts(self):
+        return self.group_slots - 1
+
+
 # Requests a pass drafts for: 1, 2 or 4 (MIMO_SPEC_GROUPS with MIMO_SPEC_SLOTS=8: a lane's requests, each in a draft
 # group of GROUP_SLOTS consecutive slots with its own drafter state; 2: c=8 over 4 lanes with 3 drafts each, 4: c=16
-# with 1 draft each, which one MTP layer drafts through the planned program, planned_drafts).
-DRAFT_GROUPS = int(os.environ.get("MIMO_SPEC_GROUPS", "1"))
-assert DRAFT_GROUPS == 1 or (
-    DRAFT_GROUPS in (2, 4) and SPEC_SLOTS == 8
-), f"MIMO_SPEC_GROUPS={DRAFT_GROUPS}: 1, or 2 / 4 with MIMO_SPEC_SLOTS=8"
-GROUP_SLOTS = SPEC_SLOTS // DRAFT_GROUPS
-MAX_DRAFTS = GROUP_SLOTS - 1  # drafts per request: its last committed token and drafts fill one draft group
+# with 1 draft each, which one MTP layer drafts through the planned program, planned_drafts). A list (2,4: adaptive
+# draft length) keeps a layout of each: a lane's step takes the one with the most drafts whose groups hold its requests
+# (layout_for), K = 3 for up to two requests and K = 1 for three or four.
+LAYOUTS = tuple(
+    SpecLayout(SPEC_SLOTS, g) for g in sorted({int(g) for g in os.environ.get("MIMO_SPEC_GROUPS", "1").split(",")})
+)
+LAYOUT = LAYOUTS[0]  # the most drafts
+ADAPTIVE = len(LAYOUTS) > 1
+DRAFT_GROUPS = LAYOUT.groups
+GROUP_SLOTS = LAYOUT.group_slots
+MAX_DRAFTS = LAYOUT.max_drafts  # drafts per request: its last committed token and drafts fill one draft group
+# The accept step serves every layout: its control and output pages hold MAX_DRAFTS drafts (reference/sample_verify.py).
 
 
-def planned_drafts(layers):
+def layout_for(requests):
+    """The layout a lane step of ``requests`` decode requests drafts in (the most drafts that hold them all), or None
+    when no layout's groups hold them (the step drafts for none)."""
+    return next((layout for layout in LAYOUTS if layout.groups >= requests), None)
+
+
+def k_by_rows(max_rows):
+    """The plugin's per-lane draft cap (SpecPlan.k_by_rows, (max_rows, k) entries) for lanes of up to ``max_rows``
+    requests: each layout's drafts up to its groups. The plugin wants every request count covered, so the last entry
+    reaches ``max_rows``; past the layouts' groups the device drafts for none, and the step verifies none."""
+    entries = [(layout.groups, layout.max_drafts) for layout in LAYOUTS]
+    entries[-1] = (max(entries[-1][0], int(max_rows)), entries[-1][1])
+    return tuple(entries)
+
+
+def planned_drafts(layers, layout=LAYOUT):
     """Whether the MTP drafter runs its planned program (per-group commit descriptions, the plan step, the hidden
     gather: tt/mtp.py ``planned``) with ``layers`` MTP layers drafting: every layer (``layers`` > 1, one per draft), or
-    one layer drafting one token per request (MAX_DRAFTS == 1, groups of 2 slots), which is every-layer drafting with
-    one layer (no re-prefill). Otherwise one layer runs the one-layer program (fill, then continuation steps), which
-    drafts for one request per lane."""
-    return layers > 1 or MAX_DRAFTS == 1
+    one layer drafting one token per request (``layout.max_drafts`` == 1, groups of 2 slots), which is every-layer
+    drafting with one layer (no re-prefill). Otherwise one layer runs the one-layer program (fill, then continuation
+    steps), which drafts for one request per lane."""
+    return layers > 1 or layout.max_drafts == 1
 
 
 @dataclass
 class VerifyPass:
     """One decode step of a lane: per slot the token, position (-1 idle) and the batch row whose page tables it reads
-    (None idle), and the (row, column) whose argmax each used slot answers."""
+    (None idle), the (row, column) whose argmax each used slot answers, and the draft groups' slots it was planned in
+    (``group_slots``; the slot count: no draft groups)."""
 
     tokens: list = field(default_factory=lambda: [0] * SPEC_SLOTS)
     positions: list = field(default_factory=lambda: [-1] * SPEC_SLOTS)
     table_rows: list = field(default_factory=lambda: [None] * SPEC_SLOTS)
     answers: list = field(default_factory=list)  # (slot, row, column)
+    group_slots: int = GROUP_SLOTS
 
     @property
     def used(self):
@@ -114,12 +161,12 @@ def plan_verify_passes(rows, slots=SPEC_SLOTS, groups=None, group_slots=GROUP_SL
             options = range(slots // group_slots) if want is None else [want]
             p, g = next(((p, g) for p in passes for g in options if free(p, g)), (None, None))
             if p is None:
-                p, g = VerifyPass(), options[0]
+                p, g = VerifyPass(group_slots=group_slots), options[0]
                 passes.append(p)
             first = g * group_slots
         else:
             if not passes or passes[-1].used + width > slots or (aligned and passes[-1].used > 0):
-                passes.append(VerifyPass())
+                passes.append(VerifyPass(group_slots=group_slots))
             p = passes[-1]
             first = p.used
         for c in range(width):
@@ -150,15 +197,15 @@ class DraftSource:
     group: int = 0
 
 
-def draft_sources(passes, group_slots=GROUP_SLOTS):
-    """The DraftSources of a lane step: every row of a step that ran one pass, at most DRAFT_GROUPS of them (one per
-    draft group, plan_verify_passes); none otherwise."""
+def draft_sources(passes):
+    """The DraftSources of a lane step: every row of a step that ran one pass, at most one per draft group of the
+    pass's layout (plan_verify_passes); none otherwise."""
     if len(passes) != 1:
         return []
-    by_row = {}
+    by_row, group_slots = {}, passes[0].group_slots
     for s, row, c in passes[0].answers:
         by_row.setdefault(row, []).append((c, s))
-    if len(by_row) > DRAFT_GROUPS:
+    if len(by_row) > len(passes[0].positions) // group_slots:
         return []
     out = []
     for row, cells in by_row.items():

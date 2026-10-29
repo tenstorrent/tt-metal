@@ -165,14 +165,14 @@ def backfill_start(a, window=MTP_WINDOW):
     return max(0, a - window + 1) // BLOCK * BLOCK
 
 
-def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS, window=MTP_WINDOW):
+def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS, window=MTP_WINDOW, group_slots=GROUP_SLOTS):
     """The backfill's plan step (kernels/mtp_history.cpp mode 3): ``upload`` the backfill upload, ``history_page``
     the history page (``rows`` per slot), ``layers`` the MTP layers (SWA ``window``), ``stash`` the draft's stash
     page (every layer; None with one). Returns ({"hidden": history rows [BACKFILL_ROWS], "rope": RoPE indices
     [BACKFILL_ROWS], "tokens": per layer [BACKFILL_ROWS], "table": the fill's page table row [TABLE_WORDS] (the
     ring's blocks, then scratch blocks), "stash_rows": (stash slot, history entry) to copy}, the new stash page). Row
     r writes position S0 + r. An idle upload fills draft group 0's scratch blocks and leaves the stash; a drafting
-    one fills its group's ring and re-plans that group's stash slots only."""
+    one fills its group's ring and re-plans that group's stash slots only (draft groups of ``group_slots`` slots)."""
     assert window + SPEC_SLOTS - 1 <= rows and window + BLOCK <= BACKFILL_ROWS
     n = SPEC_SLOTS * rows
     out = {
@@ -209,7 +209,7 @@ def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS, window
     from .spec_chain import STASH_POSITIONS, STASH_TOKENS
 
     new = list(stash)
-    first, last = group * GROUP_SLOTS, (group + 1) * GROUP_SLOTS - 1
+    first, last = group * group_slots, (group + 1) * group_slots - 1
     for k in range(first, last + 1):
         new[STASH_POSITIONS + k], new[STASH_TOKENS + k] = -1, 0
     for k, q in ((last - 1, a - 2), (last, a - 1)):

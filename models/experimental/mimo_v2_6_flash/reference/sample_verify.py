@@ -45,7 +45,7 @@ Layouts (uint32 words):
 import math
 import struct
 
-from .spec_decode import GROUP_SLOTS, MAX_DRAFTS, SPEC_SLOTS
+from .spec_decode import MAX_DRAFTS, SPEC_SLOTS
 
 PARAM_WORDS = 8
 GROUP_WORDS = 16 if MAX_DRAFTS <= 5 else 32  # a control group: 6 + 2 * MAX_DRAFTS words
@@ -195,13 +195,13 @@ def unpack_out(words, groups=GROUPS):
 
 def pass_rows(vp):
     """The requests of a verify pass in the accept page's group order, [(group, row)]: in the order their rows first
-    appear, or with draft groups (GROUP_SLOTS < SPEC_SLOTS) each at its draft group's index, so that the chain step
-    finds draft group g's commit in accept group g."""
+    appear, or with draft groups (the pass's ``group_slots`` < its slots) each at its draft group's index, so that the
+    chain step finds draft group g's commit in accept group g."""
     rows = list(dict.fromkeys(row for _, row, _ in vp.answers))
-    if GROUP_SLOTS == SPEC_SLOTS:
+    if vp.group_slots == len(vp.positions):
         return list(enumerate(rows))
     first = {row: min(s for s, r, _ in vp.answers if r == row) for row in rows}
-    return [(first[row] // GROUP_SLOTS, row) for row in rows]
+    return [(first[row] // vp.group_slots, row) for row in rows]
 
 
 def pass_inputs(vp, spec_sampling):
