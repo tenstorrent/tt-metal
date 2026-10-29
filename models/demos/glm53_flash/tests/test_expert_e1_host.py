@@ -540,11 +540,12 @@ def test_e1_knobs_and_layout_rule():
     assert M.stream_experts_default(True, {"GLM53_STREAM_EXPERTS": "1"})
     assert M.prefill_experts_for(True, True, {"GLM53_PREFILL_EXPERTS": "regions"}) == "blocks"
     assert M.prefill_experts_for(False, True, {"GLM53_PREFILL_EXPERTS": "regions"}) == "regions"
-    assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env={}) == (False, "rs")
-    assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env={"GLM53_HYBRID_GATHER": "compact"}) == (
-        True,
-        "rs",
-    )
+    # the decode glue defaults since 2026-10-29 (H1 / H2: the compact gather + the all-reduce combine); the padded
+    # gather + reduce-scatter stays the explicit opt-out
+    assert M.decode_glue_modes(8, 4, has_idx=False, in_prefill=False, env={}) == (True, "allreduce")
+    assert M.decode_glue_modes(
+        8, 4, has_idx=False, in_prefill=False, env={"GLM53_HYBRID_GATHER": "padded", "GLM53_HYBRID_COMBINE": "rs"}
+    ) == (False, "rs")
     # TtMoE reads the composed rule in both places
     assert "expert_layout_from_env()" in inspect.getsource(M.TtMoE.__init__)
     assert "expert_layout_from_env()" in inspect.getsource(M.TtMoE.expert_cache_complete)
