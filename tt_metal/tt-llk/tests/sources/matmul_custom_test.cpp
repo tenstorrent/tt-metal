@@ -78,10 +78,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_matmul_init_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(
-        TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, params.CT_DIM, params.RT_DIM);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+
+    if constexpr (MATMUL_NO_MOP_PRESERVE_SRC_ZERO_FLAG)
+    {
+        // Leave the Src zero flag at keep, as a preceding copy_tile_init does. The init must restore the
+        // operand-driven value, or MVMUL keeps the denormal SrcB (in0) operands it should flush.
+        math::_configure_preserve_zero_flag_state_();
+    }
+
+    _llk_math_matmul_init_no_mop_<MATH_FIDELITY, THROTTLE_LEVEL>(
+        TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, params.CT_DIM, params.RT_DIM);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)
     {
