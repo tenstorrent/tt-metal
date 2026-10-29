@@ -10,7 +10,8 @@
 // Knobs (env, prefix MESH_FILL_): MESH=RxC (default: a unit mesh on device 0; 4x2 and 8x4 on a galaxy), CORES=WxH
 // (default: the whole compute grid), ITERS (2), OPS (125), NEST (4), READS (8), WRITES (2), SEMS (1), MCAST_EVERY (1),
 // MCAST_LINKED (4), DELAY_NOPS (0), PAGE_SIZE (2048), NUM_PAGES (1024), PROGRAMS (1: launches of the same program),
-// BLOCKING (1), SKIP_READ (0), TRISC (1: compute kernel with zones), WAIT_SPINS (200000).
+// BLOCKING (1), SKIP_READ (0), TRISC (1: compute kernel with zones), WAIT_SPINS (200000), BLOAT_BSS / BLOAT_DATA (words
+// added to the DM kernels' .bss / .data) and BLOAT_CODE (unrolled nops): kernel-size knobs, see the DM kernel.
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -65,6 +66,9 @@ int main() {
         const bool skip_read = env_u32("MESH_FILL_SKIP_READ", 0) != 0;
         const bool with_trisc = env_u32("MESH_FILL_TRISC", 1) != 0;
         const uint32_t wait_spins = env_u32("MESH_FILL_WAIT_SPINS", 200000);
+        const uint32_t bloat_bss = env_u32("MESH_FILL_BLOAT_BSS", 0);
+        const uint32_t bloat_data = env_u32("MESH_FILL_BLOAT_DATA", 0);
+        const uint32_t bloat_code = env_u32("MESH_FILL_BLOAT_CODE", 0);
 
         std::shared_ptr<distributed::MeshDevice> mesh_device =
             (mesh_rows && mesh_cols)
@@ -79,10 +83,10 @@ int main() {
         fmt::print(
             "noc_event_mesh_fill: mesh {}x{} ({} devices) cores {}x{} iters={} ops={} nest={} reads={} writes={} sems={} "
             "mcast_every={} mcast_linked={} delay_nops={} page_size={} num_pages={} programs={} blocking={} skip_read={} "
-            "trisc={}\n",
+            "trisc={} bloat_bss={} bloat_data={} bloat_code={}\n",
             mesh_device->num_rows(), mesh_device->num_cols(), mesh_device->num_devices(), grid_w, grid_h, iters, ops,
             nest, reads, writes, sems, mcast_every, mcast_linked, delay_nops, page_size, num_pages, programs, blocking,
-            skip_read, with_trisc);
+            skip_read, with_trisc, bloat_bss, bloat_data, bloat_code);
 
         // One DRAM page buffer per device (replicated), read by every core.
         const distributed::DeviceLocalBufferConfig local_config{.page_size = page_size, .buffer_type = BufferType::DRAM};
@@ -107,7 +111,10 @@ int main() {
             {"MCAST_LINKED", std::to_string(mcast_linked)},
             {"DELAY_NOPS", std::to_string(delay_nops)},
             {"ITERS", std::to_string(iters)},
-            {"WAIT_SPINS", std::to_string(wait_spins)}};
+            {"WAIT_SPINS", std::to_string(wait_spins)},
+            {"BLOAT_BSS_WORDS", std::to_string(bloat_bss)},
+            {"BLOAT_DATA_WORDS", std::to_string(bloat_data)},
+            {"BLOAT_CODE", std::to_string(bloat_code)}};
         std::vector<uint32_t> compile_args;
         TensorAccessorArgs(*dram_buffer->get_reference_buffer()).append_to(compile_args);
 

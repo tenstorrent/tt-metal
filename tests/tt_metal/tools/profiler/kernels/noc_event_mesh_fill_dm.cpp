@@ -82,8 +82,32 @@ FORCE_INLINE void micro_op(Ctx& c, const Accessor& dram) {
         micro_op(c, dram);                         \
     }
 
+// Kernel-size knobs: the blaze raw dumps (job 162153) show the first bad quick push issued at ring index 0, i.e. with
+// the RISC's profiler globals (firmware .bss) zeroed at a program boundary, on the cores running the largest kernels.
+// BLOAT_BSS_WORDS grows this kernel's .bss (touched so it is kept), BLOAT_CODE adds unrolled text.
+#if BLOAT_BSS_WORDS > 0
+static uint32_t bloat_bss[BLOAT_BSS_WORDS];
+#endif
+#if BLOAT_DATA_WORDS > 0
+static uint32_t bloat_data[BLOAT_DATA_WORDS] = {1};
+#endif
+
 void kernel_main() {
     Ctx c{};
+#if BLOAT_BSS_WORDS > 0
+    bloat_bss[get_arg_val<uint32_t>(3) % BLOAT_BSS_WORDS] = get_arg_val<uint32_t>(0);
+    asm volatile("" ::: "memory");
+#endif
+#if BLOAT_DATA_WORDS > 0
+    bloat_data[get_arg_val<uint32_t>(3) % BLOAT_DATA_WORDS] += get_arg_val<uint32_t>(1);
+    asm volatile("" ::: "memory");
+#endif
+#if BLOAT_CODE > 0
+#pragma GCC unroll 65534
+    for (uint32_t b = 0; b < BLOAT_CODE; b++) {
+        asm volatile("nop");
+    }
+#endif
     c.page_size = get_arg_val<uint32_t>(0);
     c.num_pages = get_arg_val<uint32_t>(1);
     const uint32_t dram_base = get_arg_val<uint32_t>(2);
