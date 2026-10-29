@@ -1037,6 +1037,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
 
     stop_requested_.store(false);
     host_worker_ = std::thread(&TensorPrefetcherManager::worker_loop, this);
+    ++run_id_;
     active_ = true;
     if (benchmark_enabled) {
         active_lifetime_timer_.emplace(std::string(kBenchmarkTimerName));
@@ -1391,25 +1392,10 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     return pages;
 }
 
-void TensorPrefetcherManager::queue(
-    const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes,
+std::vector<std::shared_ptr<const TensorPrefetcherManager::Request>> TensorPrefetcherManager::build_requests(
+    const RequestTarget& target,
     ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
-    const std::vector<experimental::TensorPrefetcherInput>& tensors,
-    MeshCommandQueue* trace_capture_cq) {
-    // target_for validates the list: banks in contiguous runs appearing once each, one to two DRAM
-    // senders per bank and in sender order, one shared geometry, and disjoint receivers.
-    const RequestTarget target = target_for(prefetcher_pipes);
-    auto lock = lock_api_function_();
-    TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
-    // Only reached with a non-null queue: the null case short-circuits, so the message may
-    // dereference it (TT_FATAL evaluates its arguments only when the condition fails).
-    TT_FATAL(
-        trace_capture_cq == nullptr || trace_capture_cq->device() == mesh_device_,
-        "QueueTensorPrefetcherRequest was given trace-capture command queue {} of mesh device {}, but this prefetcher "
-        "was started on mesh device {}. Pass a command queue of the prefetcher's own mesh device.",
-        trace_capture_cq->id(),
-        trace_capture_cq->device()->id(),
-        mesh_device_->id());
+    const std::vector<experimental::TensorPrefetcherInput>& tensors) {
     const std::vector<uint32_t> target_sender_indices = sender_indices_for_target(target);
     TT_FATAL(!tensors.empty(), "QueueTensorPrefetcherRequest requires at least one tensor");
     // A Queue call may span more tensors than fit in one socket page; serialize into one
@@ -1438,11 +1424,45 @@ void TensorPrefetcherManager::queue(
     }
 
     // Remember this target on every sender it maps to, so stop can drain it. The request has passed
-    // every other check by now, and a request only captured into a trace counts too: a replay sends it.
+    // every other check by now, and a request only captured into a trace or a command list counts too:
+    // a replay sends it.
     for (size_t m = 0; m < target_sender_indices.size(); ++m) {
         record_drain_target(
             target_sender_indices[m], target.config_page_addr_per_sender[m], target.config_page_alloc_per_sender[m]);
     }
+
+    std::vector<std::shared_ptr<const Request>> requests;
+    requests.reserve(pages.size());
+    for (auto& sender_pages : pages) {
+        Request req;
+        req.sender_pages = std::move(sender_pages);
+        req.target_devices = target_devices;
+        req.target_sender_indices = target_sender_indices;
+        requests.push_back(std::make_shared<const Request>(std::move(req)));
+    }
+    return requests;
+}
+
+void TensorPrefetcherManager::queue(
+    const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes,
+    ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
+    const std::vector<experimental::TensorPrefetcherInput>& tensors,
+    MeshCommandQueue* trace_capture_cq) {
+    // target_for validates the list: banks in contiguous runs appearing once each, one to two DRAM
+    // senders per bank and in sender order, one shared geometry, and disjoint receivers.
+    const RequestTarget target = target_for(prefetcher_pipes);
+    auto lock = lock_api_function_();
+    TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
+    // Only reached with a non-null queue: the null case short-circuits, so the message may
+    // dereference it (TT_FATAL evaluates its arguments only when the condition fails).
+    TT_FATAL(
+        trace_capture_cq == nullptr || trace_capture_cq->device() == mesh_device_,
+        "QueueTensorPrefetcherRequest was given trace-capture command queue {} of mesh device {}, but this prefetcher "
+        "was started on mesh device {}. Pass a command queue of the prefetcher's own mesh device.",
+        trace_capture_cq->id(),
+        trace_capture_cq->device()->id(),
+        mesh_device_->id());
+    std::vector<std::shared_ptr<const Request>> requests = build_requests(target, device_subset, tensors);
 
     // Engaged only when the caller named a queue that is mid trace-capture; that is what
     // routes the request into the trace below instead of out via the host worker.
@@ -1453,18 +1473,12 @@ void TensorPrefetcherManager::queue(
         // Push all pages of this call under one lock so they stay contiguous and ordered
         // (required for fifo_wr_ptr continuity across the split), whether captured or sent.
         std::lock_guard<std::mutex> lk(queue_mu_);
-        for (auto& sender_pages : pages) {
-            Request req;
-            req.sender_pages = std::move(sender_pages);
-            req.target_devices = target_devices;
-            req.target_sender_indices = target_sender_indices;
-            auto shared_req = std::make_shared<const Request>(std::move(req));
-            if (recording_trace_id.has_value()) {
-                trace_requests_[*recording_trace_id].push_back(std::move(shared_req));
-            } else {
-                pending_.push_back(std::move(shared_req));
-                has_pending_.store(true);
-            }
+        if (recording_trace_id.has_value()) {
+            auto& captured = trace_requests_[*recording_trace_id];
+            captured.insert(captured.end(), requests.begin(), requests.end());
+        } else {
+            pending_.insert(pending_.end(), requests.begin(), requests.end());
+            has_pending_.store(true);
         }
     }
     // Only the immediate path needs to wake the worker; captured requests wait for replay.
@@ -1548,6 +1562,44 @@ void TensorPrefetcherManager::validate_request_pages(const std::vector<std::vect
             page.size(),
             socket_page_bytes);
     }
+}
+
+void TensorPrefetcherManager::capture(
+    CapturedRequests& captured,
+    const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes,
+    ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
+    const std::vector<experimental::TensorPrefetcherInput>& tensors) {
+    const RequestTarget target = target_for(prefetcher_pipes);
+    auto lock = lock_api_function_();
+    TT_FATAL(active_, "CommandListBuilder::add_tensor_prefetcher_request called before StartTensorPrefetcher");
+    TT_FATAL(
+        captured.requests.empty() || captured.run_id == run_id_,
+        "CommandListBuilder::add_tensor_prefetcher_request: the builder holds requests from a Tensor prefetcher that "
+        "has since been stopped. Call clear() on the builder after StopTensorPrefetcher.");
+    std::vector<std::shared_ptr<const Request>> requests = build_requests(target, device_subset, tensors);
+    captured.run_id = run_id_;
+    captured.requests.insert(captured.requests.end(), requests.begin(), requests.end());
+}
+
+void TensorPrefetcherManager::replay_captured(const CapturedRequests& captured) {
+    if (captured.requests.empty()) {
+        return;
+    }
+    {
+        auto lock = lock_api_function_();
+        TT_FATAL(
+            active_ && captured.run_id == run_id_,
+            "This command list records Tensor prefetcher requests, but the Tensor prefetcher they were recorded for "
+            "is no longer running. Rebuild the command list after StartTensorPrefetcher.");
+    }
+    {
+        std::lock_guard<std::mutex> lk(queue_mu_);
+        // Copy the handles, not the requests, so they survive for the next replay. Pushed in capture order so
+        // fifo_wr_ptr continuity matches the original calls.
+        pending_.insert(pending_.end(), captured.requests.begin(), captured.requests.end());
+        has_pending_.store(true);
+    }
+    queue_cv_.notify_one();
 }
 
 void TensorPrefetcherManager::replay_trace(const MeshTraceId& trace_id) {
