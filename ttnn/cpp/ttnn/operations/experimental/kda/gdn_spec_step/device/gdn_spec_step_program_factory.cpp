@@ -111,6 +111,15 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     // gdn_decode_step's fast_mode / fp32_state arithmetic (see GdnSpecStepParams)
     const bool FAST = a.fast_mode;
     const bool FP32 = a.fp32_state && a.fast_mode;
+    // kernel_opts (bit-identical restructurings, fast_mode + fp32_state only; the device op masks them otherwise)
+    const bool FUSED_DECAY = FP32 && (a.kernel_opts & kGdnSpecOptFusedDecay) != 0;
+    // GATE_SCALARS: the writer computes the T gate pairs into one small `gsc` entry and the compute fills its scalar
+    // tiles in DST (no reader gate math, no 2*T broadcast-tile fills on a data-movement RISC)
+    const bool GSC = FP32 && (a.kernel_opts & kGdnSpecOptGateScalars) != 0;
+    // EARLY_SRC: the reader pushes src_in + the selectors before building the taps / weight row / masks
+    const bool EARLY_SRC = FP32 && (a.kernel_opts & kGdnSpecOptEarlySrc) != 0;
+    // HOIST_INV: the token-independent rsqrt(q stats + eps) * scale of the per-token qn once, before the token loop
+    const bool HOIST_INV = FP32 && (a.kernel_opts & kGdnSpecOptHoistInv) != 0;
 
     const auto grid = device.compute_with_storage_grid_size();
     const uint32_t num_cores_avail = grid.x * grid.y;
@@ -121,6 +130,21 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     const uint32_t KVs = Kt * Vs;
     const uint32_t Chs = 2 * Kt + Vs;  // chunks a block convolves: q, k and its own v chunks
     const bool VSPLIT = VB > 1;
+    // QKSHARE (kernel_opts bit 4, VB > 1): block s convolves only the q/k chunks [s*Qk, (s+1)*Qk), Qk = 2*Kt / VB (one
+    // contiguous range of q or of k), plus its own v chunks; the head's blocks swap their q/k conv tiles (exact fp32
+    // bytes) over the NoC into every block's qc / kc, now writer-produced DFBs. Each block reads, rebuilds, convolves
+    // and writes back (window) only its own ChA = Qk + Vs chunks.
+    const uint32_t Qk = (VSPLIT && (2 * Kt) % VB == 0) ? (2 * Kt) / VB : 0u;
+    const bool QKS = FP32 && Qk != 0 && Kt % Qk == 0 && (a.kernel_opts & kGdnSpecOptQkShare) != 0;
+    const uint32_t ChA = QKS ? Qk + Vs : Ch;   // chunks a block reads and rebuilds (src_in / taps / wc / wout)
+    const uint32_t ChC = QKS ? Qk + Vs : Chs;  // chunks a block convolves (shift / cv)
+    // A3_HALF (bit 5): the conv's SFPU tail on the tile half that holds the user's rows only (kernel-side decision)
+    const bool A3_HALF = FP32 && (a.kernel_opts & kGdnSpecOptA3Half) != 0;
+    // GSC_SPLIT (bit 6, GATE_SCALARS + VB > 1): the head's blocks split the T gate computations and swap the 64 B
+    // per-token slots
+    const bool GSC_SPLIT = GSC && VSPLIT && (a.kernel_opts & kGdnSpecOptGscSplit) != 0;
+    // VS_TAIL (bit 7, VB > 1): each block normalizes / gates only its own Vs output tiles
+    const bool VS_TAIL = FP32 && VSPLIT && (a.kernel_opts & kGdnSpecOptVsTail) != 0;
     // one (u, h, s) per core, item = (u*Nv + h)*VB + s: a head's blocks are consecutive cores (VB = 1: the original
     // one (u, h) per core, item = u*Nv + h)
     auto dist = kda_factory_detail::distribute_prep(grid, BH * VB, BH * VB);
@@ -150,8 +174,8 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
 
     // ---- dataflow buffers {name, entries, entry bytes, format}
     std::vector<Dfb> reader_out = {
-        {"src_in", 2 * Ch, t16, bf16},  // [win tiles 0..Ch-1 of user u (rows 0..Lw-1) | raw qkv tiles 0..Ch-1]
-        {"taps", Ch, t16, bf16},        // tile c: tap j in row j (rows >= K zero)
+        {"src_in", 2 * ChA, t16, bf16},  // [win tiles 0..Ch-1 of user u (rows 0..Lw-1) | raw qkv tiles 0..Ch-1]
+        {"taps", ChA, t16, bf16},        // tile c: tap j in row j (rows >= K zero)
         {"z_in", Vt, t16, bf16},
         {"sel", 3 + K, t16, bf16},  // WO_W, WO_N (window rebuild), SH_j (shifted conv operands), P (placement)
         {"mask_T", 1, t16, bf16},   // 1.0 at (u*T + t, 0) for t < T (row-batched l2norm mask)
@@ -159,18 +183,20 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         {"w_in", Vt, t16, bf16},    // norm weight in row 0
         {"scaler", 1, t32, fp32},
         {"eps_l2", 1, t16, bf16},
-        {"eps_norm", 1, t16, bf16},
+        {"eps_norm", 1, t16, bf16}};
+    if (!GSC) {
         // dtb_s / nea_s: all-equal fp32 scalar tiles (plain), or the reader's staging tiles for the gate scalars
-        // (FAST: reserved, never pushed; the compute does not wait on them)
-        {"dtb_s", 1, t32, fp32},
-        {"nea_s", 1, t32, fp32}};
+        // (FAST: reserved, never pushed; the compute does not wait on them). GSC: the writer reads the scalars.
+        reader_out.push_back({"dtb_s", 1, t32, fp32});
+        reader_out.push_back({"nea_s", 1, t32, fp32});
+    }
     std::vector<Dfb> reader_local = {{"ctrl_r", 1, ctrl_bytes, u32}};
-    if (FAST) {
+    if (FAST && !GSC) {  // GSC: nothing gate-related on the reader (see the writer's staging DFBs and gsc below)
         // the a|b tile(s) are only staging for the reader's gate math; beta_t / dec arrive from the reader
         reader_local.push_back({"ab_in", 1 + AB2, t16, bf16});
         reader_out.push_back({"beta_t", T, t32, fp32});  // tile t: sigmoid(b[u*T + t, h]) (all-equal)
         reader_out.push_back({"dec", T, t32, fp32});     // tile t: exp(nea[h] * softplus(a[u*T + t, h] + dtb[h]))
-    } else {
+    } else if (!FAST) {
         reader_out.push_back({"ab_in", 1 + AB2, t16, bf16});  // [a's tile | b's tile when it differs (AB2)]
         reader_out.push_back(
             {"rsel", T, t16, bf16});  // tile t: 1.0 at column u*T + t in every row (gate row extractor)
@@ -180,7 +206,7 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     reader_out.push_back({"state_in", KVs, t32, fp32});
     // per-block sizes (Vs, KVs, Chs) equal the full-head ones (Vt, KV, Ch) at VB = 1
     std::vector<Dfb> compute_local = {
-        {"wc", Ch, t16, bf16},         {"shift", Chs * K, t16, bf16}, {"cv", Chs, t32, fp32},
+        {"wc", ChA, t16, bf16},        {"shift", ChC * K, t16, bf16}, {"cv", ChC, t32, fp32},
         {"tmp", tmp_tiles, t32, fp32}, {"stats", 1, t32, fp32},       {"scratch", 1, t32, fp32},
         {"inv", 1, t32, fp32},         {"qc", Kt, t32, fp32},         {"kc", Kt, t32, fp32},
         {"vc", Vs, t32, fp32},         {"qn", Kt, t32, fp32},         {"kn", Kt, t32, fp32},
@@ -203,10 +229,25 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         // exact-fp32 copies for the SFPU state update: hd32 = the decayed state (SFPU add operand), hn32 = the new
         // state as the next token's decay operand (hn itself is the FPU matmul operand of o = qn @ S)
         compute_local.push_back({"hd32", KVs, t32, fp32});
-        compute_local.push_back({"hn32", KVs, t32, fp32});
+        if (!FUSED_DECAY) {
+            // FUSED_DECAY: the next token's decay reads the new state from DST in the state add's acquire
+            compute_local.push_back({"hn32", KVs, t32, fp32});
+        }
+    }
+    if (GSC) {
+        // beta_t[t] is filled in DST from the writer's bits and packed here (one token at a time); dec stays in DST
+        compute_local.push_back({"beta_t", 1, t32, fp32});
+    }
+    if (HOIST_INV) {
+        compute_local.push_back({"qsc", 1, t32, fp32});  // rsqrt(q stats + eps) * scale, live through the token loop
+    }
+    if (VSPLIT) {
+        // the token loop's Vs-tile intermediate (vm - vread): `tmp` (max(Kt, Vt) tiles) takes only Kt / Vt blocks, as
+        // in the VB = 1 kernel, since an indexed block must not straddle a DFB's ring end (see the compute header)
+        compute_local.push_back({"tmpv", Vs, t32, fp32});
     }
     std::vector<Dfb> compute_out = {
-        {"hnew", a.hnew_depth * KVs, t32, fp32}, {"out", Vs, tout, out_fmt}, {"wout", Ch, t16, bf16}};
+        {"hnew", a.hnew_depth * KVs, t32, fp32}, {"out", Vs, tout, out_fmt}, {"wout", ChA, t16, bf16}};
     std::vector<Dfb> writer_local = {{"ctrl_w", 1, ctrl_bytes, u32}, {"bounce", Ch, t16, bf16}};
     // VSPLIT: acc_mine = this block's last-token pre-norm output tiles (compute -> writer); acc_x = the head's full
     // pre-norm row, every block's tiles at offset s*Vs (writer -> compute, filled over the NoC by all VB blocks)
@@ -214,6 +255,31 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     if (VSPLIT) {
         compute_out.push_back({"acc_mine", Vs, t32, fp32});
         writer_out.push_back({"acc_x", Vt, t32, fp32});
+    }
+    if (QKS) {
+        // qc / kc arrive from the writer (every block's q/k conv tiles); this block's Qk tiles go out through qkm
+        compute_local.erase(
+            std::remove_if(
+                compute_local.begin(),
+                compute_local.end(),
+                [](const Dfb& d) { return d.name == "qc" || d.name == "kc"; }),
+            compute_local.end());
+        writer_out.push_back({"qc", Kt, t32, fp32});
+        writer_out.push_back({"kc", Kt, t32, fp32});
+        compute_out.push_back({"qkm", Qk, t32, fp32});
+    }
+    // gsc: beta[0..T) | dec[0..T) words; GSC_SPLIT: one 64 B slot per token (beta, dec in its first two words)
+    const uint32_t gsc_bytes =
+        GSC_SPLIT ? T * 64u : std::max<uint32_t>(64u, ((2 * T * 4 + 63) / 64) * 64);
+    if (GSC) {
+        // writer staging for its gate reads (never pushed): the a|b tile(s), tile 0 of dt_bias and of -exp(A)
+        writer_local.push_back({"ab_w", 1 + AB2, t16, bf16});
+        writer_local.push_back({"dtb_ws", 1, t32, fp32});
+        writer_local.push_back({"nea_ws", 1, t32, fp32});
+        writer_out.push_back({"gsc", 1, gsc_bytes, u32});
+        if (GSC_SPLIT) {
+            writer_local.push_back({"gss", 1, gsc_bytes, u32});  // this block's token slots, sent to every block
+        }
     }
 
     m2::Group<m2::DataflowBufferSpec> dfbs;
@@ -249,6 +315,15 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     };
     if (FAST) {
         reader.compiler_options.defines.emplace("GDN_FAST", "1");
+    }
+    if (GSC) {
+        reader.compiler_options.defines.emplace("GDN_GATE_SCALARS", "1");
+    }
+    if (EARLY_SRC) {
+        reader.compiler_options.defines.emplace("GDN_EARLY_SRC", "1");
+    }
+    if (QKS) {
+        reader.compiler_options.defines.emplace("GDN_QKSHARE", "1");
     }
     for (const auto& d : reader_out) {
         reader.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
@@ -322,13 +397,37 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     for (const auto& d : writer_out) {
         writer.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
     }
+    if (GSC) {
+        // the gate inputs; their geometry goes in as defines so the writer's named-argument signature is unchanged
+        writer.tensor_bindings.push_back(m2::TensorBinding{QKV, "qkv_w"});
+        writer.tensor_bindings.push_back(m2::TensorBinding{DTB, "dtb_w"});
+        writer.tensor_bindings.push_back(m2::TensorBinding{NEA, "nea_w"});
+        writer.compiler_options.defines.emplace("GDN_GATE_SCALARS", "1");
+        writer.compiler_options.defines.emplace("GDN_AB_PAGE", std::to_string(ab_page));
+        writer.compiler_options.defines.emplace("GDN_W_TILES", std::to_string(w_tiles));
+        writer.compiler_options.defines.emplace(
+            "GDN_DTB_FP32", in.dt_bias.dtype() == DataType::FLOAT32 ? "1" : "0");
+        writer.compiler_options.defines.emplace(
+            "GDN_NEA_FP32", in.neg_exp_A.dtype() == DataType::FLOAT32 ? "1" : "0");
+    }
     const m2::SemaphoreSpecName READY{"ready"};
     const m2::SemaphoreSpecName VALID{"valid"};
+    const m2::SemaphoreSpecName QKSEM{"qkv"};
+    const m2::SemaphoreSpecName GSSEM{"gsv"};
     if (VSPLIT) {
         writer.dfb_bindings.push_back(bind("acc_mine", EP::CONSUMER));
         writer.semaphore_bindings.push_back(m2::SemaphoreBinding{READY, "ready"});
         writer.semaphore_bindings.push_back(m2::SemaphoreBinding{VALID, "valid"});
         writer.compiler_options.defines.emplace("GDN_VSPLIT", "1");
+    }
+    if (QKS) {
+        writer.dfb_bindings.push_back(bind("qkm", EP::CONSUMER));
+        writer.semaphore_bindings.push_back(m2::SemaphoreBinding{QKSEM, "qkv"});
+        writer.compiler_options.defines.emplace("GDN_QKSHARE", "1");
+    }
+    if (GSC_SPLIT) {
+        writer.semaphore_bindings.push_back(m2::SemaphoreBinding{GSSEM, "gsv"});
+        writer.compiler_options.defines.emplace("GDN_GSC_SPLIT", "1");
     }
     for (const auto& d : writer_local) {
         writer.dfb_bindings.push_back(bind(d.name, EP::PRODUCER));
@@ -393,6 +492,30 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     if (VSPLIT) {
         // the acc_mine / acc_x DFBs only exist then; the kernel guards their references with #if GDN_VSPLIT
         compute.compiler_options.defines.emplace("GDN_VSPLIT", "1");
+    }
+    if (FUSED_DECAY) {
+        // no hn32 DFB then; the kernel guards its references with #if !GDN_FUSED_DECAY
+        compute.compiler_options.defines.emplace("GDN_FUSED_DECAY", "1");
+    }
+    if (GSC) {
+        // no dec DFB then (and beta_t is compute-local); the kernel guards their references with GDN_GATE_SCALARS
+        compute.compiler_options.defines.emplace("GDN_GATE_SCALARS", "1");
+    }
+    if (HOIST_INV) {
+        compute.compiler_options.defines.emplace("GDN_HOIST_INV", "1");
+    }
+    if (QKS) {
+        // qc / kc are writer-produced then and qkm exists; the kernel guards both with #if GDN_QKSHARE
+        compute.compiler_options.defines.emplace("GDN_QKSHARE", "1");
+    }
+    if (A3_HALF) {
+        compute.compiler_options.defines.emplace("GDN_A3_HALF", "1");
+    }
+    if (GSC_SPLIT) {
+        compute.compiler_options.defines.emplace("GDN_GSC_SPLIT", "1");  // gsc slot layout
+    }
+    if (VS_TAIL) {
+        compute.compiler_options.defines.emplace("GDN_VS_TAIL", "1");
     }
     for (const auto& d : reader_out) {
         compute.dfb_bindings.push_back(bind(d.name, EP::CONSUMER));
@@ -488,6 +611,12 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         spec.semaphores = {
             m2::SemaphoreSpec{.unique_id = READY, .target_nodes = cores},
             m2::SemaphoreSpec{.unique_id = VALID, .target_nodes = cores}};
+        if (QKS) {
+            spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = QKSEM, .target_nodes = cores});
+        }
+        if (GSC_SPLIT) {
+            spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = GSSEM, .target_nodes = cores});
+        }
     }
     run_args.kernel_run_args.push_back(std::move(reader_args));
     run_args.kernel_run_args.push_back(std::move(writer_args));

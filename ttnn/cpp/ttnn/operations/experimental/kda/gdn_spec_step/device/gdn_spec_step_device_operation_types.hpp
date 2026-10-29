@@ -51,6 +51,41 @@ struct GdnSpecStepParams {
     // takes the largest divisor of Vt <= value_blocks (<= 4) whose B*Nv*blocks cores fit the grid. 0 or 1 = one core
     // per (u, h) (the original program). Part of the program hash.
     uint32_t value_blocks = 1;
+    // kernel_opts (QWEN36_SPEC_STEP_OPT): bitmask of bit-identical kernel restructurings (0 = the original program,
+    // byte for byte). See GdnSpecStepKernelOpt; every bit keeps out, ring and window bit-identical to 0. Part of the
+    // program hash.
+    uint32_t kernel_opts = 0;
+};
+
+// gdn_spec_step kernel_opts bits (fast_mode + fp32_state only; ignored -- masked to 0 -- otherwise)
+enum GdnSpecStepKernelOpt : uint32_t {
+    // the next token's state decay (S * dec, exact fp32 SFPU) runs in the same DST acquire as this token's state add:
+    // no hn32 DFB, no hn32 pack / UnpackToDest reload per state tile and token
+    kGdnSpecOptFusedDecay = 1u << 0,
+    // the writer RISC computes the T beta / decay gate pairs (the reader's software-fp32 math, bit for bit) into one
+    // small entry; the compute fills its scalar tiles in DST from those bits (fill_tile_bitcast) instead of the
+    // reader filling 2*T broadcast tiles with 1024 RISC-V stores each, and the reader pushes the initial state as soon
+    // as it lands (the reader's gate block was the op's critical path: ~12.5 us per token)
+    kGdnSpecOptGateScalars = 1u << 1,
+    // the reader pushes src_in and the conv selectors before it builds the taps / norm weight row / row masks (needed
+    // from phase A3 on), so phase A starts earlier
+    kGdnSpecOptEarlySrc = 1u << 2,
+    // the token-independent half of the per-token q l2-norm scale, rsqrt(q stats + eps) * scale, once before the token
+    // loop; each token keeps only its row-mask multiply
+    kGdnSpecOptHoistInv = 1u << 3,
+    // value_blocks > 1 only: each of a head's VB blocks convolves 2*Kt/VB of the q/k chunks (instead of all 2*Kt) and
+    // the blocks swap the exact fp32 conv tiles over the NoC (the acc_x exchange's handshake); each block reads,
+    // rebuilds and writes back only its own chunks
+    kGdnSpecOptQkShare = 1u << 4,
+    // the conv's SFPU tail (tap sum + silu) on the tile half that holds the user's rows only (rows outside them are
+    // zero in every conv operand and the one-hot placement maps whatever finite values they hold to the same +0)
+    kGdnSpecOptA3Half = 1u << 5,
+    // gate scalars with value_blocks > 1: the head's blocks split the T gate computations and swap the results
+    kGdnSpecOptGscSplit = 1u << 6,
+    // value_blocks > 1: each block normalizes / gates only its own output columns (the row stats stay full-row)
+    kGdnSpecOptVsTail = 1u << 7,
+    kGdnSpecOptAll = kGdnSpecOptFusedDecay | kGdnSpecOptGateScalars | kGdnSpecOptEarlySrc | kGdnSpecOptHoistInv |
+                     kGdnSpecOptQkShare | kGdnSpecOptA3Half | kGdnSpecOptGscSplit | kGdnSpecOptVsTail,
 };
 
 struct GdnSpecStepInputs {

@@ -10,6 +10,14 @@
 #include <cstdint>
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
 
+// GDN_GATE_NOINLINE (the GATE_SCALARS writer): exp_acc / log1p_acc out of line -- the same float operations in the
+// same order (soft-float library calls on these RISC-Vs), one copy instead of one per call site (code size)
+#ifdef GDN_GATE_NOINLINE
+#define GDN_GATE_FN __attribute__((noinline))
+#else
+#define GDN_GATE_FN inline
+#endif
+
 namespace gdn_step_df {
 
 // Broadcast one fp32 value over a whole fp32 tile (slot reserved): plain unrolled stores (the lock flushes on release).
@@ -52,7 +60,7 @@ inline uint32_t bits_from_f(float f) {
     return v.u;
 }
 // exp(x): Cody-Waite range reduction + degree-7 Taylor on |r| <= ln2/2 (rel. err ~1e-7)
-inline float exp_acc(float x) {
+GDN_GATE_FN float exp_acc(float x) {
     if (x < -87.0f) {
         return 0.0f;
     }
@@ -73,7 +81,7 @@ inline float exp_acc(float x) {
     return f_from_bits(bits_from_f(p) + (static_cast<uint32_t>(n) << 23));
 }
 // log(1 + y), y >= 0
-inline float log1p_acc(float y) {
+GDN_GATE_FN float log1p_acc(float y) {
     if (y < 1e-4f) {
         return y * (1.0f - y * (0.5f - y * (1.0f / 3.0f)));
     }

@@ -484,7 +484,7 @@ def test_over_grid_rejected(device, geo, expect_error):
         )
 
 
-def _chained_t1(device, g, request, B, mi, hold=(), seed=77, T=8, mode=MODES[0], value_blocks=None):
+def _chained_t1(device, g, request, B, mi, hold=(), seed=77, T=8, mode=MODES[0], value_blocks=None, kernel_opts=None):
     """T-token verify == T chained T=1 steps of the same op (window shift register as the seed path builds it):
     ring block (t*BH + bh) after the T-token run torch.equal the chained state after token t; outputs and windows
     torch.equal. Held users: the T-token run leaves their ring blocks / windows untouched (check_case), and every
@@ -493,6 +493,8 @@ def _chained_t1(device, g, request, B, mi, hold=(), seed=77, T=8, mode=MODES[0],
     c8 = Case(device, g, B, T, seed=seed, mi=mi, hold=hold, par=0, mode=mode)
     out_ref, st_ref, Wn_ref = c8.reference()
     vb_kw = {} if value_blocks is None else dict(value_blocks=value_blocks)
+    if kernel_opts is not None:
+        vb_kw["kernel_opts"] = kernel_opts
     o8 = c8.run(**vb_kw)
     out8, ring8, win_prev8, win_next8 = c8.snapshot(o8)
     check_case(c8, out8, ring8, win_prev8, win_next8, out_ref, st_ref, Wn_ref, tag="T8 ")
@@ -846,4 +848,82 @@ def test_value_blocks_timing(device, request, B, T):
     print(
         f"gdn_spec_step (B={B}, T={T}) us/call: "
         + ", ".join(f"vb{vb}(eff {effs[vb]})={t:.1f}" for vb, t in times.items())
+    )
+
+
+# --------------------------------------------------------------------------- #
+# kernel_opts: bit-identical kernel restructurings of the fast_mode + fp32_state program (QWEN36_SPEC_STEP_OPT)
+# --------------------------------------------------------------------------- #
+# 1 fused next-token decay, 2 gate scalars, 4 early src, 8 hoisted q scale, 16 q/k share (value_blocks > 1),
+# 32 half-tile conv SFPU tail, 64 gate split (with 2, value_blocks > 1), 128 own-column tail (value_blocks > 1);
+# 250 = the recommended QWEN36_SPEC_STEP_OPT (all but 1 and 4). All eight bits at once (255) does not fit the 70656 B
+# kernel config buffer at value_blocks 2 (B = 8) or at T = 12.
+KERNEL_OPTS = [1, 2, 4, 8, 16, 32, 66, 128, 250]
+
+
+@pytest.mark.parametrize("opts", KERNEL_OPTS)
+@pytest.mark.parametrize("vb", [1, 2, 4])
+@pytest.mark.parametrize(
+    "B,T,hold,out_dtype",
+    [
+        (8, 4, (), ttnn.bfloat16),  # the qwen36 TP=8 B=8 verify bucket
+        (4, 8, (1,), ttnn.bfloat16),  # the 4-user bucket (K = 7)
+        (8, 1, (0, 5), ttnn.bfloat16),  # the seed shape
+        (1, 1, (), ttnn.float32),
+        (2, 12, (), ttnn.bfloat16),
+        (4, 4, (), ttnn.float32),
+    ],
+)
+def test_kernel_opts_bit_identical(device, geo, request, opts, vb, B, T, hold, out_dtype):
+    """kernel_opts = opts (at value_blocks vb) vs the original program (kernel_opts 0, value_blocks 1), fast_fp32 mode:
+    out, every ring block and both window halves torch.equal."""
+    skip_if_over_grid(device, geo, B)
+    if geo.Nv == 24 and T >= 12 and vb > 1 and opts & 16:
+        # measured: the (24, 8) two-tile a|b geometry at T = 12 with the q/k share is 48 B over the 70656 B kernel config
+        # buffer (TT_FATAL at program finalize); the qwen36 TP = 8 / TP = 4 geometries fit at every (B, T) tested
+        pytest.skip("Nv = 24, T = 12, value blocks + q/k share: program exceeds the kernel config buffer")
+    res = []
+    for kw in (dict(), dict(value_blocks=vb, kernel_opts=opts)):
+        c = Case(device, geo, B, T, seed=191 + B * 10 + T, hold=hold, par=1, out_dtype=out_dtype, mode=MODES[2])
+        o = c.run(**kw)
+        res.append(c.snapshot(o))
+    (out0, ring0, wp0, wn0), (out1, ring1, wp1, wn1) = res
+    for name, a, b in (("out", out0, out1), ("ring", ring0, ring1), ("win_prev", wp0, wp1), ("win_next", wn0, wn1)):
+        d = (a.float() - b.float()).abs().max().item()
+        assert torch.equal(a, b), f"kernel_opts={opts} value_blocks={vb}: {name} differs from the original (max|d|={d})"
+    eff = effective_value_blocks(device, geo, B, vb)
+    print(f"kernel_opts {opts} vb {vb} (eff {eff}) == original at (B={B}, T={T}, hold={hold}): torch.equal")
+
+
+@pytest.mark.parametrize("opts", [250])
+@pytest.mark.parametrize("vb", [1, 2, 4])
+def test_kernel_opts_t8_vs_chained_t1(device, geo, request, opts, vb):
+    """A T = 8 step with kernel_opts equals 8 chained T = 1 steps with kernel_opts (torch.equal), fast_fp32."""
+    _chained_t1(device, geo, request, 2, mi=[1, 3], hold=(1,), mode=MODES[2], value_blocks=vb, kernel_opts=opts)
+
+
+@pytest.mark.parametrize("B,T", [(8, 4), (4, 8), (8, 1)])
+def test_kernel_opts_timing(device, request, B, T):
+    """Wall time per call (synchronized, 50 calls after 5 warm-ups) of the qwen36 TP=8 fast_fp32 program: the
+    original vs value_blocks 4 (clamped to the grid) with kernel_opts 0 / 250. Report only."""
+    import time
+
+    g = GEOS[0]
+    skip_if_over_grid(device, g, B)
+    times = {}
+    for vb, opts in ((1, 0), (1, 250), (4, 0), (4, 250)):
+        c = Case(device, g, B, T, seed=7, out_dtype=ttnn.bfloat16, mode=MODES[2])
+        kw = dict(value_blocks=vb, kernel_opts=opts)
+        for _ in range(5):
+            ttnn.deallocate(c.run(**kw))
+        ttnn.synchronize_device(device)
+        t0 = time.perf_counter()
+        for _ in range(50):
+            ttnn.deallocate(c.run(**kw))
+        ttnn.synchronize_device(device)
+        times[(vb, opts)] = (time.perf_counter() - t0) / 50 * 1e6
+    effs = {vb: effective_value_blocks(device, g, B, vb) for vb, _ in times}
+    print(
+        f"gdn_spec_step (B={B}, T={T}) us/call: "
+        + ", ".join(f"vb{vb}(eff {effs[vb]})/opts{o}={t:.1f}" for (vb, o), t in times.items())
     )

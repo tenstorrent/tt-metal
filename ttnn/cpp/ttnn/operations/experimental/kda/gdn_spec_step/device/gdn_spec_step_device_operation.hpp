@@ -51,6 +51,7 @@ Tensor gdn_spec_step(
     bool fast_mode = false,
     bool fp32_state = false,
     uint32_t max_users = 0,
-    uint32_t value_blocks = 1);
+    uint32_t value_blocks = 1,
+    uint32_t kernel_opts = 0);
 
 }  // namespace ttnn::experimental::prim

@@ -16,6 +16,12 @@
 // VB > 1 (value blocks): core (u, h, s) reads only state column tiles [s*Vs, (s+1)*Vs) of each of the Kt tile rows of
 // the initial block (KVs = Kt*Vs tiles, row-major (i, j) at i*Vs + j); every other read is the full head's, as the
 // conv / l2norm / gate prefix runs in full on every block.
+// GDN_GATE_SCALARS (kernel_opts bit 1, fast_mode + fp32_state): the gate math moves to the writer RISC and the compute
+// builds the scalar tiles in DST (fill_tile_bitcast of the same fp32 bits), so this reader skips the a|b staging read,
+// the dt_bias / -exp(A) reads, the software gate math and the 2*T full-tile fills (1024 RISC-V stores each), and pushes
+// the initial state as soon as its read lands. GDN_EARLY_SRC (kernel_opts bit 2): src_in and the selector tiles are
+// pushed right after their reads / build, before the taps, the norm weight row and the row masks (which the compute
+// needs only from phase A3 on), so phase A starts earlier. Both move no value: every tile holds the same bytes.
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
@@ -24,7 +30,16 @@
 #ifndef GDN_FAST
 #define GDN_FAST 0
 #endif
-#if GDN_FAST
+#ifndef GDN_GATE_SCALARS
+#define GDN_GATE_SCALARS 0
+#endif
+#ifndef GDN_EARLY_SRC
+#define GDN_EARLY_SRC 0
+#endif
+#ifndef GDN_QKSHARE
+#define GDN_QKSHARE 0  // kernel_opts bit 4 (VB > 1): this block reads only its q/k share + its v chunks
+#endif
+#if GDN_FAST && !GDN_GATE_SCALARS
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_spec_step/device/kernels/dataflow/gdn_step_gate_math.hpp"
 #endif
 
@@ -72,11 +87,18 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     DataflowBuffer src_in(dfb::src_in);
     DataflowBuffer taps(dfb::taps);
     DataflowBuffer z_in(dfb::z_in);
+#if !GDN_GATE_SCALARS
     DataflowBuffer ab_in(dfb::ab_in);
+#endif
     DataflowBuffer sel(dfb::sel);
     DataflowBuffer mask_T(dfb::mask_T);
     DataflowBuffer e_t(dfb::e_t);
-#if GDN_FAST
+#if GDN_GATE_SCALARS
+    // the writer computes the gates; the compute builds beta_t / dec in DST
+    (void)b_idx;
+    (void)dtb_acc;
+    (void)nea_acc;
+#elif GDN_FAST
     DataflowBuffer beta_t(dfb::beta_t);
     DataflowBuffer dec(dfb::dec);
 #else
@@ -87,8 +109,10 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     DataflowBuffer scaler(dfb::scaler);
     DataflowBuffer eps_l2(dfb::eps_l2);
     DataflowBuffer eps_norm(dfb::eps_norm);
+#if !GDN_GATE_SCALARS
     DataflowBuffer dtb_s(dfb::dtb_s);
     DataflowBuffer nea_s(dfb::nea_s);
+#endif
     DataflowBuffer state_in(dfb::state_in);
     DataflowBuffer ctrl_r(dfb::ctrl_r);
     Noc noc;
@@ -103,6 +127,17 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     const uint32_t tr = (u * T) / 32;  // the user's rows live in qkv tile row tr ...
     const uint32_t r0 = (u * T) % 32;  // ... at rows r0 .. r0+T-1 of that tile row
     const uint32_t pg = tr * w_tiles;  // page of tile column 0 of that tile row
+    // QKSHARE: this block's ChA chunks, in block order: q/k chunks [s*Qk, (s+1)*Qk) (Qk = 2*Kt / VB), then its own v
+    // chunks [2*Kt + s*Vs, ..); otherwise ChA = Ch and the block order is the head order
+    constexpr uint32_t Qk = GDN_QKSHARE ? (2 * Kt) / VB : 0u;
+    constexpr uint32_t ChA = GDN_QKSHARE ? Qk + Vs : Ch;
+    auto blk_chunk = [&](uint32_t ci) -> uint32_t {
+        if constexpr (GDN_QKSHARE) {
+            return ci < Qk ? s * Qk + ci : 2 * Kt + s * Vs + (ci - Qk);
+        } else {
+            return ci;
+        }
+    };
     // tile column of this head's chunk c within a [.., C]-wide row: q(hk) | k(hk) | v(h)
     auto chunk_col = [&](uint32_t c) -> uint32_t {
         if (c < Kt) {
@@ -169,6 +204,10 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     // ---- phase 1 (small): z, the a|b tile(s), the gates -> compute starts silu(z) (and, plain mode, the T gate pairs)
     z_in.reserve_back(Vt);
     read_tiles_at(qkv_acc, z_in, noc, pg + z_tile0 + h * Vt, Vt, 0);
+#if GDN_GATE_SCALARS
+    noc.async_read_barrier();
+    z_in.push_back(Vt);
+#else
     // ab_in[0] = a's tile (ab_page + h/32); ab_in[1] = b's tile (ab_page + (Nv+h)/32) only when it differs (b_idx = 1;
     // AB2 = 0 -> one tile, one entry, exactly the 2*Nv <= 32 read). AB2 is the factory's compile-time arg (it also
     // sizes ab_in and g1), not re-derived here.
@@ -217,44 +256,10 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     // gathers b from ab_in[b_idx] = entry 0, so it is never indexed.
     ab_in.push_back(1 + AB2);
 #endif
+#endif  // GDN_GATE_SCALARS
 
     // ---- phase 2 (bulk): window + raw projection tiles, taps, weight row; the conv selectors built meanwhile
-    {
-        DeviceZoneScopedN("rd_bulk");
-        // src_in[c] = whole window tile of user u, chunk c (win[par]); src_in[Ch + c] = whole raw projection tile
-        src_in.reserve_back(2 * Ch);
-        for (uint32_t c = 0; c < Ch; ++c) {
-            const uint32_t col = chunk_col(c);
-            if (par) {
-                read_tiles_at(wb_acc, src_in, noc, u * Ct + col, 1, c);
-            } else {
-                read_tiles_at(wa_acc, src_in, noc, u * Ct + col, 1, c);
-            }
-            read_tiles_at(qkv_acc, src_in, noc, pg + col, 1, Ch + c);
-        }
-        // taps[c]: rows 0..K-1 (tap j in row j) of tile column chunk_col(c); the rest of the tile is zero
-        taps.reserve_back(Ch);
-        zero_reserved(taps, noc, Ch);
-        {
-            const uint32_t entry = taps.get_entry_size();
-            const uint32_t nbytes = K * 32;  // K face rows of bf16
-            for (uint32_t c = 0; c < Ch; ++c) {
-                const uint32_t page = chunk_col(c);
-                const uint32_t base = c * entry;
-                noc.async_read(taps_acc, taps, nbytes, {.page_id = page, .offset_bytes = 0}, {.offset_bytes = base});
-                noc.async_read(
-                    taps_acc,
-                    taps,
-                    nbytes,
-                    {.page_id = page, .offset_bytes = entry / 4},
-                    {.offset_bytes = base + entry / 4});
-            }
-        }
-        w_in.reserve_back(Vt);
-        zero_reserved(w_in, noc, Vt);
-        for (uint32_t t = 0; t < Vt; ++t) {
-            read_row0_at(w_acc, w_in, noc, t, t);  // the norm weight lives in row 0 (row-broadcast operand)
-        }
+    auto build_sel = [&]() {
         // sel[0] = WO_W: row i (i < K-1) picks window row mi+1+i of E_prev; sel[1] = WO_N: row i (K-1 <= i < Lw) picks
         // raw row r0 + i - (K-1); sel[2+j] = SH_j: row r0+t picks W row t+j (the tap-j operand of output token t);
         // sel[2+K] = P: diagonal one-hot on rows r0..r0+T-1 (the conv tile passes through a matmul as the plain op's
@@ -280,6 +285,52 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
             }
         }
         sel.push_back(3 + K);
+    };
+    {
+        DeviceZoneScopedN("rd_bulk");
+        // src_in[c] = whole window tile of user u, chunk c (win[par]); src_in[Ch + c] = whole raw projection tile
+        src_in.reserve_back(2 * ChA);
+        for (uint32_t c = 0; c < ChA; ++c) {
+            const uint32_t col = chunk_col(blk_chunk(c));
+            if (par) {
+                read_tiles_at(wb_acc, src_in, noc, u * Ct + col, 1, c);
+            } else {
+                read_tiles_at(wa_acc, src_in, noc, u * Ct + col, 1, c);
+            }
+            read_tiles_at(qkv_acc, src_in, noc, pg + col, 1, ChA + c);
+        }
+#if GDN_EARLY_SRC
+        // phase A1 / A2 need only src_in and the selectors: hand them over before the taps / weight row / masks
+        build_sel();
+        noc.async_read_barrier();
+        src_in.push_back(2 * ChA);
+#endif
+        // taps[c]: rows 0..K-1 (tap j in row j) of tile column chunk_col(c); the rest of the tile is zero
+        taps.reserve_back(ChA);
+        zero_reserved(taps, noc, ChA);
+        {
+            const uint32_t entry = taps.get_entry_size();
+            const uint32_t nbytes = K * 32;  // K face rows of bf16
+            for (uint32_t c = 0; c < ChA; ++c) {
+                const uint32_t page = chunk_col(blk_chunk(c));
+                const uint32_t base = c * entry;
+                noc.async_read(taps_acc, taps, nbytes, {.page_id = page, .offset_bytes = 0}, {.offset_bytes = base});
+                noc.async_read(
+                    taps_acc,
+                    taps,
+                    nbytes,
+                    {.page_id = page, .offset_bytes = entry / 4},
+                    {.offset_bytes = base + entry / 4});
+            }
+        }
+        w_in.reserve_back(Vt);
+        zero_reserved(w_in, noc, Vt);
+        for (uint32_t t = 0; t < Vt; ++t) {
+            read_row0_at(w_acc, w_in, noc, t, t);  // the norm weight lives in row 0 (row-broadcast operand)
+        }
+#if !GDN_EARLY_SRC
+        build_sel();
+#endif
         // mask_T: 1.0 at (r0 + t, 0) for t < T; e_t[t]: 1.0 at (r0 + t, 0)
         mask_T.reserve_back(1);
         zero_reserved(mask_T, noc, 1);
@@ -302,12 +353,23 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
         }
         e_t.push_back(T);
         noc.async_read_barrier();
-        src_in.push_back(2 * Ch);
-        taps.push_back(Ch);
+#if !GDN_EARLY_SRC
+        src_in.push_back(2 * ChA);
+#endif
+        taps.push_back(ChA);
         w_in.push_back(Vt);
     }
 
-#if GDN_FAST
+#if GDN_GATE_SCALARS
+    // ---- GATE_SCALARS: the gates are the writer's; the initial state goes out as soon as it lands
+    {
+        DeviceZoneScopedN("rd_state");
+        state_in.reserve_back(KVs);
+        read_state();
+        noc.async_read_barrier();
+        state_in.push_back(KVs);
+    }
+#elif GDN_FAST
     // ---- FAST tail: the compute is busy with phase A / B (about 25 us), so the reader's serial software gate math
     // runs now instead of ahead of the bulk reads. dt_bias / -exp(A) first (small, own barriers), then the 64 KiB
     // initial state read is issued, then the T gate pairs of user u are computed while that read is in flight; the

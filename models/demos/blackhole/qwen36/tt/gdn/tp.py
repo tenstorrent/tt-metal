@@ -65,14 +65,60 @@ def gdn_spec_step_value_blocks():
     """QWEN36_SPEC_STEP_VALUE_BLOCKS (default "1" = off): gdn_spec_step's value_blocks -- split each (user, value
     head)'s recurrent state columns over up to this many cores (tt-lab's 4-core GDN head split). The op takes the
     largest divisor of Dv/32 <= the value whose B*Nv*blocks cores fit the grid (TP = 8, Nv = 6, >= 96-core grid: 2
-    at the B = 8 bucket, 4 at B <= 4 and the seed of a B <= 4 batch) and stays bit-identical (out, ring, window) to
-    one core per (user, head). Values: 1, 2 or 4; 1 passes nothing to the op, so a ttnn build without the attribute
-    keeps working."""
+    at the B = 8 bucket, 4 at B <= 4) and stays bit-identical (out, ring, window) to one core per (user, head). Only
+    the T > 1 verify splits; the T = 1 seed keeps one core per (user, head) (faster there). Values: 1, 2 or 4; 1
+    passes nothing to the op, so a ttnn build without the attribute keeps working."""
     env = os.environ.get("QWEN36_SPEC_STEP_VALUE_BLOCKS", "1").strip() or "1"
     vb = int(env)
     if vb not in (1, 2, 4):
         raise ValueError(f"QWEN36_SPEC_STEP_VALUE_BLOCKS must be 1, 2 or 4, got {env!r}")
     return vb
+
+
+# gdn_spec_step kernel_opts bits (GdnSpecStepKernelOpt in gdn_spec_step_device_operation_types.hpp)
+SPEC_STEP_OPT_FUSED_DECAY = 1  # the next token's exact-fp32 state decay fused into this token's state add
+SPEC_STEP_OPT_GATE_SCALARS = 2  # gate math on the writer, scalar tiles filled in DST (no reader broadcast-tile fills)
+SPEC_STEP_OPT_EARLY_SRC = 4  # the reader hands the conv inputs to the compute before the taps / masks
+SPEC_STEP_OPT_HOIST_INV = 8  # rsqrt(q stats + eps) * scale once per op instead of once per token
+SPEC_STEP_OPT_QKSHARE = 16  # value_blocks > 1: the head's blocks split the q/k conv and swap the tiles over the NoC
+SPEC_STEP_OPT_A3_HALF = 32  # the conv's SFPU tail on the tile half that holds the user's rows
+SPEC_STEP_OPT_GSC_SPLIT = 64  # with 2 and value_blocks > 1: the head's blocks split the gate math and swap the results
+SPEC_STEP_OPT_VS_TAIL = 128  # value_blocks > 1: each block normalizes / gates only its own output columns
+SPEC_STEP_OPT_KNOWN = (
+    SPEC_STEP_OPT_FUSED_DECAY
+    | SPEC_STEP_OPT_GATE_SCALARS
+    | SPEC_STEP_OPT_EARLY_SRC
+    | SPEC_STEP_OPT_HOIST_INV
+    | SPEC_STEP_OPT_QKSHARE
+    | SPEC_STEP_OPT_A3_HALF
+    | SPEC_STEP_OPT_GSC_SPLIT
+    | SPEC_STEP_OPT_VS_TAIL
+)
+
+
+def gdn_spec_step_kernel_opts():
+    """QWEN36_SPEC_STEP_OPT (default "0" = off): gdn_spec_step's kernel_opts bitmask of bit-identical kernel
+    restructurings of the fast_mode + fp32_state program (out, ring and window stay torch.equal to 0):
+    1 = fused next-token decay (no hn32 buffer / reload per token); 2 = gate scalars (the writer computes the
+    beta / decay gates and the compute fills the scalar tiles in DST: the reader's 2*T broadcast-tile fills were the
+    op's critical path); 4 = early src (the conv inputs reach the compute before the taps / masks are built);
+    8 = hoisted q scale (rsqrt(q stats + eps) * scale once per op, not per token); 16 = q/k share (with
+    QWEN36_SPEC_STEP_VALUE_BLOCKS > 1: the head's value blocks split the q/k conv and swap the exact conv tiles over
+    the NoC); 32 = the conv's SFPU tail (tap sum + silu) on the tile half holding the user's rows; 64 = gate split
+    (with 2 and value blocks: the head's blocks split the gate math); 128 = each value block normalizes / gates only
+    its own output columns. Recommended: 250 (= 2|8|16|32|64|128) with QWEN36_SPEC_STEP_VALUE_BLOCKS=4 (fits the
+    70656 B kernel config buffer at TP = 8 / 4 for B 1..8, T 1..12); all eight bits at once (255) overflows it at
+    value_blocks 2 (B = 8), and 250 does at TP = 2 (Nv = 24) with T = 12 and value blocks.
+    0 passes nothing to the op, so a ttnn build without the attribute keeps working. Decimal or 0x-prefixed; unknown
+    bits are refused."""
+    env = os.environ.get("QWEN36_SPEC_STEP_OPT", "0").strip() or "0"
+    try:
+        opts = int(env, 0)
+    except ValueError:
+        raise ValueError(f"QWEN36_SPEC_STEP_OPT must be an integer bitmask, got {env!r}") from None
+    if opts < 0 or opts & ~SPEC_STEP_OPT_KNOWN:
+        raise ValueError(f"QWEN36_SPEC_STEP_OPT has unknown bits: {env!r} (known mask {SPEC_STEP_OPT_KNOWN:#x})")
+    return opts
 
 
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
@@ -3334,12 +3380,21 @@ class TPGatedDeltaNet:
         if _mu:
             extra["max_users"] = int(_mu)
         _vb = gdn_spec_step_value_blocks()
-        if _vb > 1:
+        if _vb > 1 and T > 1:
+            # the T = 1 seed keeps one core per (user, head): with a single token the column split only adds bulk-read
+            # contention and the exchanges (B = 8, device: 81 -> 90 us per layer); every T > 1 verify splits
             extra["value_blocks"] = _vb
             _log_spec_step_once(
                 ("value_blocks", _vb),
                 f"[gdn-spec-step] QWEN36_SPEC_STEP_VALUE_BLOCKS={_vb}: state columns split over up to {_vb} cores "
                 "per (user, head) (bit-identical; the op clamps to the grid per (B, T))",
+            )
+        _opts = gdn_spec_step_kernel_opts()
+        if _opts and self._decode_step_fp32_state:  # the restructurings exist for the fast_mode + fp32_state program
+            extra["kernel_opts"] = _opts
+            _log_spec_step_once(
+                ("kernel_opts", _opts),
+                f"[gdn-spec-step] QWEN36_SPEC_STEP_OPT={_opts:#x}: bit-identical kernel restructurings on",
             )
         return ttnn.experimental.kda.gdn_spec_step(
             qkvzab,
