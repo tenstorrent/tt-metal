@@ -24,6 +24,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/core_coord.hpp
     api/tt-metalium/device.hpp
     api/tt-metalium/device_types.hpp
+    api/tt-metalium/discovery/metal_device_properties.hpp
     api/tt-metalium/discovery/metal_env.hpp
     api/tt-metalium/dispatch_core_common.hpp
     api/tt-metalium/distributed.hpp
