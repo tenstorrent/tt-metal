@@ -30,7 +30,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.tt.vision.common import linear_compute_config, mesh_mapper
+from models.demos.minimax_m3.tt.vision.common import linear_compute_config, linear_program_config, mesh_mapper
 
 PATCH_SIZE = 14
 IN_CHANNELS = 3
@@ -114,5 +114,8 @@ class M3VLPatchEmbed(LightweightModule):
             x_flat,
             self.weight,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=linear_program_config(
+                self.device, x_flat.shape[-2], PATCH_FLAT_DIM, self.out_dim, self.compute_kernel_config
+            ),
             memory_config=memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
         )

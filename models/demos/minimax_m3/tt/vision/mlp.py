@@ -29,7 +29,12 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.tt.vision.common import as_linear_bias, as_linear_weight, linear_compute_config
+from models.demos.minimax_m3.tt.vision.common import (
+    as_linear_bias,
+    as_linear_weight,
+    linear_compute_config,
+    linear_program_config,
+)
 
 
 class M3VLMLP(LightweightModule):
@@ -100,12 +105,16 @@ class M3VLMLP(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor, memory_config: Optional["ttnn.MemoryConfig"] = None) -> ttnn.Tensor:
+        rows = x.shape[-2]
         # fc1: linear up
         hidden = ttnn.linear(
             x,
             self.fc1_weight,
             bias=self.fc1_bias,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=linear_program_config(
+                self.device, rows, self.hidden_size, self.intermediate_size, self.compute_kernel_config
+            ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # Accurate (erf) GELU.
@@ -116,6 +125,9 @@ class M3VLMLP(LightweightModule):
             self.fc2_weight,
             bias=self.fc2_bias,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=linear_program_config(
+                self.device, rows, self.intermediate_size, self.hidden_size, self.compute_kernel_config
+            ),
             memory_config=memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(hidden)
