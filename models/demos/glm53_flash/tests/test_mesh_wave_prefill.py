@@ -321,9 +321,45 @@ SERVED_CHUNK = 1024  # the SP device chunk: 512 local rows per rank on 2 rows (t
 # summaries with the exclusive scan's CBs at 1024 local rows x 2 ranks: the 2026-10-29 block runs; the 8x4's 16384
 # chunk = 2048 local rows is unaffected)
 SERVED_MAX_SEQ_LEN = 8192  # the prefix-bucket starts for the ladders
-SERVED_MAX_SEQ_LEN_LONG = (
-    32768  # the long profile: the served needle stage's spans (prompts of 18-21 K in 2048-row waves)
-)
+SERVED_MAX_SEQ_LEN_LONG = 32768  # the long profile: the served needle stage's spans (18-21 K prompts in 2048-row waves)
+# the long profile's shape (env, the served reproduction: GLM53_WAVE_TEST_MAX_SEQ_LEN=1048576 GLM53_WAVE_TEST_PROMPTS=
+# 65514,65514,65514,65514 at 45 layers = the needle stage's 64 K shape with the 131072 prefix bucket)
+LONG_MAX_SEQ_LEN = int(os.environ.get("GLM53_WAVE_TEST_MAX_SEQ_LEN", SERVED_MAX_SEQ_LEN_LONG))
+LONG_PROMPTS = tuple(int(v) for v in os.environ.get("GLM53_WAVE_TEST_PROMPTS", "18000,19000,20000,21000").split(","))
+LONG_STEP_CHUNK = int(os.environ.get("GLM53_WAVE_TEST_STEP_CHUNK", 16384))  # vLLM's per-request chunk (the model's max)
+LONG_STEP_BUDGET = int(os.environ.get("GLM53_WAVE_TEST_STEP_BUDGET", 2 * 16384))  # vLLM's max_num_batched_tokens
+
+
+def vllm_steps(
+    lengths: tuple[int, ...], chunk: int, budget: int, arrivals: tuple[int, ...]
+) -> list[list[tuple[int, int, int]]]:
+    """vLLM's chunked-prefill schedule: per step the running requests in arrival order each take min(remaining, chunk)
+    tokens while the step's token budget lasts; ``arrivals[i]`` = the step request i joins. Returns per step the
+    ``(request, start, end)`` chunks (the served r5 sequence: request 0's first chunk alone, then pairs; a partial
+    chunk is 32-aligned as served, so a budget remainder like r3's 224 tokens reaches the planner, a 22-token one does not).
+    """
+    done = [0] * len(lengths)
+    steps: list[list[tuple[int, int, int]]] = []
+    t = 0
+    while any(d < n for d, n in zip(done, lengths)):
+        left, step = budget, []
+        for i, n in enumerate(lengths):
+            if arrivals[i] > t or done[i] >= n or left <= 0:
+                continue
+            take = min(n - done[i], chunk, left)
+            if take < n - done[i]:  # a partial chunk is block-aligned (r3's 224-token remainder; never a 22-token one)
+                take -= take % 32
+            if take <= 0:
+                continue
+            step.append((i, done[i], done[i] + take))
+            done[i] += take
+            left -= take
+        assert step, "no request made progress"
+        steps.append(step)
+        t += 1
+    return steps
+
+
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 N_DECODE = 4  # decode steps compared after every prefill
 
@@ -358,7 +394,7 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
     long = profile == "long"
     if long and MESH[0] < 4:
         pytest.skip("the long profile (case g: four prompts advancing in pairs over 16 K spans) needs 4 mesh rows")
-    max_seq_len = SERVED_MAX_SEQ_LEN_LONG if long else SERVED_MAX_SEQ_LEN
+    max_seq_len = LONG_MAX_SEQ_LEN if long else SERVED_MAX_SEQ_LEN
     monkeypatch.setenv("GLM53_PARTITION_USERS", "1")
     monkeypatch.setenv("GLM53_PREFILL_PARTITION", "heads2users")
     # the adapter's launcher sets the prefix bucket (max(chunk, max_seq_len / 8 to the chunk)); a direct build must
@@ -435,18 +471,18 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
         return [logits] + outs
 
     if long:
-        # (g) the served needle stage's shape at 4 layers: four prompts of 18-21 K on rows 0-3 of slot index 0 advancing
-        # in PAIRS of 16 K step-chunks (vLLM's 32768 budget), so every wave pairs a member deep in its prompt with one
-        # near its start (spans of 16 K), 8-10 waves per prompt, the served prefix bucket (4096 here: rows past a
-        # member's end inside the bucket); each against its own SP path from scratch
-        pg = {20 + i: _served_ids(n, 40 + i, vocab) for i, n in enumerate((18000, 19000, 20000, 21000))}
-        K16 = 16384
-        plan = [
-            [(20, pg[20][:K16], 0), (21, pg[21][:K16], 0)],
-            [(20, pg[20], K16), (22, pg[22][:K16], 0)],
-            [(21, pg[21], K16), (23, pg[23][:K16], 0)],
-            [(22, pg[22], K16), (23, pg[23], K16)],
-        ]
+        # (g) the served needle stage's shape: four prompts (18-21 K by default, the served 65514 x 4 by env) on rows
+        # 0-3 of slot index 0 advancing the way vLLM schedules them (request 0's first chunk alone = an SP chunk, then
+        # PAIRS of 16 K step-chunks under the 32768 budget), so every wave pairs a member deep in its prompt with one
+        # near its start (spans of 16-48 K), the served prefix bucket (max_seq_len / 8: rows past a member's end inside
+        # the bucket); each against its own SP path from scratch
+        pg = {20 + i: _served_ids(n, 40 + i, vocab) for i, n in enumerate(LONG_PROMPTS)}
+        keys = sorted(pg)
+        steps = vllm_steps(LONG_PROMPTS, LONG_STEP_CHUNK, LONG_STEP_BUDGET, (0,) + (1,) * (len(keys) - 1))
+        logger.info(
+            f"(g) {len(steps)} vLLM steps: " + "; ".join(str([(keys[i], s0, e) for i, s0, e in st]) for st in steps)
+        )
+        plan = [[(keys[i], pg[keys[i]][:e], s0) for i, s0, e in st] for st in steps]
         firsts: dict[int, torch.Tensor] = {}
         for reqs in plan:
             out = step_prefill(reqs)
