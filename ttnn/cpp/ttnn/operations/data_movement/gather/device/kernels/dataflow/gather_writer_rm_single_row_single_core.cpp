@@ -51,6 +51,7 @@ void kernel_main() {
 
         input_cb.reserve_back(one_stick);
         tt::data_movement::common::noc_async_read_sharded(
+            noc,
             input_cb.get_write_ptr(),
             input_accessor,
             /*src_id=*/h,
@@ -61,6 +62,7 @@ void kernel_main() {
 
         output_cb.wait_front(one_stick);
         tt::data_movement::common::noc_async_write_sharded(
+            noc,
             output_cb.get_read_ptr(),
             output_accessor,
             /*dest_id=*/h,

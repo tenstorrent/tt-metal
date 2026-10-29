@@ -51,6 +51,7 @@ void kernel_main() {
 
         input_index_cb.reserve_back(one_stick);
         tt::data_movement::common::noc_async_read_sharded(
+            noc,
             input_index_cb.get_write_ptr(),
             input_index_accessor,
             /*src_id=*/h,
