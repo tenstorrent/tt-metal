@@ -22,7 +22,7 @@ namespace {
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::ProgramSpecTestQuasar;
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadExactFitAtZeroOffset) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExactFitAtZeroOffset) {
     // A scratchpad may occupy the allocation’s entire per-node extent.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     auto spec = MakeMinimalValidProgramSpec();
@@ -43,7 +43,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadExactFitAtZeroOffset) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadExactFitAtNonzeroOffset) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExactFitAtNonzeroOffset) {
     // An aligned offset is allowed, and the scratchpad may end exactly at the allocation boundary.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     auto spec = MakeMinimalValidProgramSpec();
@@ -64,7 +64,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadExactFitAtNonzeroOffset) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadExtraAllocationNodes) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExtraAllocationNodes) {
     // The allocation may cover more nodes than the scratchpad occupies.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     auto spec = MakeMinimalValidProgramSpec();
@@ -85,7 +85,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadExtraAllocationNodes) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadMissingOccupiedNode) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadMissingOccupiedNode) {
     // The allocation must cover every node occupied by the scratchpad.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     auto spec = MakeMinimalValidProgramSpec();
@@ -111,7 +111,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadMissingOccupiedNode) {
                                  "cover every occupied node.")));
 }
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadExceedsCapacity) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExceedsCapacity) {
     // The scratchpad’s per-node size cannot exceed the allocation’s per-node capacity.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     auto spec = MakeMinimalValidProgramSpec();
@@ -139,7 +139,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadExceedsCapacity) {
             2 * alignment - 1))));
 }
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadOffsetCausesOverrun) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadOffsetCausesOverrun) {
     // The capacity check includes the offset, even when the scratchpad’s size alone fits.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     auto spec = MakeMinimalValidProgramSpec();
@@ -167,7 +167,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadOffsetCausesOverrun) {
             3 * alignment - 1))));
 }
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadMisalignedOffset) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadMisalignedOffset) {
     // The allocation offset must satisfy L1 alignment, even when capacity is sufficient.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     ASSERT_GT(alignment, 1u);
@@ -192,7 +192,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadMisalignedOffset) {
             "ScratchpadSpec 'scratch' allocation offset 1 must be a multiple of L1 alignment {}.", alignment))));
 }
 
-TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadAllBankLockstep) {
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadAllBankLockstep) {
     // Scratchpad borrowing accepts the all-bank property alternative as well as range-lockstep.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     auto spec = MakeMinimalValidProgramSpec();
