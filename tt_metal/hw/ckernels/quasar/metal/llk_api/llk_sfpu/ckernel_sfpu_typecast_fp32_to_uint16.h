@@ -14,8 +14,9 @@ namespace sfpu {
 // A Float32 source forces 32-bit Dest, so the UInt16 result is a narrow datum living inside a
 // 32-bit Dest word. WH/BH reached that half-word by setting debug feature bit 11; Quasar has no
 // such bit, so every access below names its format explicitly instead of using sfpmem::DEFAULT,
-// which would make HW re-derive the format from ALU_FORMAT_SPEC_REG / ACC_CTRL_SFPU_Fp32. The
-// caller must configure the math thread with implied math format disabled for the same reason.
+// which would make HW re-derive the format from ALU_FORMAT_SPEC_REG / ACC_CTRL_SFPU_Fp32.
+// Implied math format must be disabled for the same reason (implied SrcA/SrcB formats are always disabled,
+// see _llk_math_srcAB_hw_configure_).
 inline void _calculate_typecast_fp32_to_uint16_rows() {
     TTI_SFPLOAD(
         p_sfpu::LREG0,
