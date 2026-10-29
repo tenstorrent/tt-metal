@@ -455,14 +455,14 @@ def run(
         stats.append(req.pop(g)[0]._replace(done=t_done))
         s, i = sess_of[g], local_of[g]
         n = sessions[s][i]
+        if ideal:
+            ideal.insert(s, n["hashes"])  # before seating waiters, which look it up
         if slot_cache:
             slot_cache.release(slot_of.pop(g), n["hashes"])
             while waiting and slot_cache.can_seat():
                 seat(*waiting.popleft())
         else:
             cache.insert(s, n["hashes"])
-        if ideal:
-            ideal.insert(s, n["hashes"])
         resp = t_done + n["out"] / decode_tps
         sess_done_t[s] = max(sess_done_t[s], resp)
         for c in children[g]:
@@ -765,6 +765,11 @@ def main():
     for align in split(a.align):
         if align not in ("chunk", "resume", "exact"):
             ap.error(f"bad --align {align!r}: choose chunk, resume or exact")
+    if any(d < 1 for d in split(a.inject_depth, int)):
+        ap.error(f"bad --inject-depth {a.inject_depth!r}: each must be at least 1")
+    for name in ("chunk_overhead_ms", "request_overhead_ms"):
+        if any(ms < 0 for ms in split(getattr(a, name), float)):
+            ap.error(f"bad --{name.replace('_', '-')} {getattr(a, name)!r}: must not be negative")
     G["sessions"] = load_sessions(a.traces)
     jobs = list(
         itertools.product(
