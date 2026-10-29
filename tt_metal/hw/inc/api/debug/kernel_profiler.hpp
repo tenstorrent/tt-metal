@@ -1162,11 +1162,17 @@ __attribute__((noinline)) void trace_only_init() {
 #define DeviceZoneScopedNIf(name, active) DeviceZoneScopedN(name)
 #endif
 
-// Only the streaming profiler carries per-site metadata; elsewhere the colour and verbosity are dropped.
+// Only the streaming profiler carries per-site metadata; elsewhere the colour and unit are dropped.
 #ifndef DeviceZoneScopedNC
 #define DeviceZoneScopedNC(name, color) DeviceZoneScopedN(name)
 #endif
 
-#ifndef DeviceZoneScopedNCV
-#define DeviceZoneScopedNCV(name, color, verbosity) DeviceZoneScopedN(name)
+#ifndef DeviceZoneScopedNCU
+#define DeviceZoneScopedNCU(name, color, unit) DeviceZoneScopedN(name)
 #endif
+
+// DeviceZoneScopedNCU's unit, named the same in every profiler mode so a kernel builds in all of them.
+#include "hostdev/debug_event_meta.h"
+namespace kernel_profiler {
+using ::tt::debug_event::TimeUnit;
+}  // namespace kernel_profiler

@@ -56,10 +56,14 @@ struct ZoneColorMeta {
     uint32_t color;  // 0xRRGGBB
 };
 
-struct ZoneVerbosityMeta {
+// How a consumer should present a zone's duration. The device and the host still count in cycles; this is only a
+// preference carried with the zone's metadata.
+enum class TimeUnit : uint8_t { Cycles, Nanoseconds, Microseconds, Milliseconds };
+
+struct ZoneUnitMeta {
     const char* name;
-    uint32_t color;     // 0xRRGGBB
-    uint8_t verbosity;  // carried to the host as is; the device does not filter on it
+    uint32_t color;  // 0xRRGGBB
+    TimeUnit unit;
 };
 
 // ---- Field walk, shared by the device marshaller and the host unmarshaller -----------------------------------------

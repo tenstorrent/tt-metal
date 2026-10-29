@@ -48,7 +48,7 @@ void kernel_main() {
         DeviceZoneScopedNC("colored", 0x42D4F4);
     }
     {
-        DeviceZoneScopedNCV("verbose", 0x42D4F4, 2);
+        DeviceZoneScopedNCU("unit", 0x42D4F4, kernel_profiler::TimeUnit::Microseconds);
     }
     {
         TT_DEBUG_SITE(site, NestedMeta{"nested", {0xA9A9A9, 2}, 3});

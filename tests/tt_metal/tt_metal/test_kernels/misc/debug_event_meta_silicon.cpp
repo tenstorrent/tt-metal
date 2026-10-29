@@ -36,7 +36,7 @@ void kernel_main() {
         DeviceZoneScopedNC("meta_colored", m::kColor);
     }
     {
-        DeviceZoneScopedNCV("meta_verbose", m::kColor, m::kVerbosity);
+        DeviceZoneScopedNCU("meta_unit", m::kColor, m::kUnit);
     }
     {
         TT_DEBUG_SITE(site, m::kNested);
