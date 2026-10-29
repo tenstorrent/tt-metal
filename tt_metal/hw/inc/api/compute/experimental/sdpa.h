@@ -37,6 +37,8 @@
 
 namespace ckernel {
 
+// Every op (MUL, ADD, SUB) accumulates both passes into dest, so the output tiles must be zero on entry: a freshly
+// released dest section, or sdpa_bcast_col_reuse_preamble<true>, which zeroes the whole dest half / all of dest.
 template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     std::uint32_t num_tiles,
@@ -45,7 +47,7 @@ ALWI void sdpa_bcast_col_reuse_tiles_init(std::uint32_t icb0) {
     UNPACK((llk_unpack_A_sdpa_init<num_tiles, BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
         false, false, icb0)));
     MATH((llk_math_sdpa_bcast_col_srcb_reuse_init_with_operands<eltwise_binary_type, num_tiles, MATH_FIDELITY, dense>(
-        icb0, icb0, false)));
+        icb0, icb0)));
 }
 
 template <bool clear_dest = false>
