@@ -18,10 +18,19 @@ one fp32 [S_l, 32] row and finished by the one TP all-reduce (``tt/v4/hyper_conn
 
 from __future__ import annotations
 
+import os
+
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.v4.hyper_connection import _TtHyperBase
+
+# DS41F-0119 (prefill bench 10-29: engram.dev = 129 ms of host issue per 8192 chunk): V41_PREFILL_ENGRAM_RM=1 uploads the
+# [S, 6144] bf16 rows ROW_MAJOR and tilizes them on device, instead of the host tilize of ~100 MB per layer per chunk;
+# bf16 tilize is a pure permutation, so the tensor is the same. V41_PREFILL_ENGRAM_RM_CHECK=N compares both on N uploads.
+ENGRAM_RM = os.environ.get("V41_PREFILL_ENGRAM_RM", "0") == "1"
+ENGRAM_RM_CHECK = [int(os.environ.get("V41_PREFILL_ENGRAM_RM_CHECK", "0"))]
 
 HC = 4
 ROW = 32
@@ -75,6 +84,38 @@ class V41PrefillEngram(_TtHyperBase):
         else:
             t = torch.zeros(1, 1, seq_pad, K, dtype=torch.bfloat16)
             t[0, 0, :S] = rows.to(torch.bfloat16)
+        if ENGRAM_RM:
+            rm = ttnn.from_torch(
+                t,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self._mesh_mapper(sp_dim=2),
+            )
+            out = ttnn.to_layout(rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(rm)
+            if ENGRAM_RM_CHECK[0] > 0:
+                ENGRAM_RM_CHECK[0] -= 1
+                ref = ttnn.from_torch(
+                    t,
+                    device=self.device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=self._mesh_mapper(sp_dim=2),
+                )
+                a = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(out)]
+                b = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(ref)]
+                same = all(
+                    x.shape == y.shape and torch.equal(x.view(torch.int16), y.view(torch.int16)) for x, y in zip(a, b)
+                )
+                ttnn.deallocate(ref)
+                logger.warning(
+                    f"[v41 engram L{self.layer}] ENGRAM_RM_CHECK: device-tilized rows {'BIT-IDENTICAL' if same else 'DIFFER'} to "
+                    f"the host-tilized upload on {len(a)} chips (shape {tuple(a[0].shape)})"
+                )
+            return out
         return ttnn.from_torch(
             t,
             device=self.device,
