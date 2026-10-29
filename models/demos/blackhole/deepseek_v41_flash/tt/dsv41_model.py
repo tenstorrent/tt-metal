@@ -660,6 +660,11 @@ class Model:
             idx.set_key_weights(iw["wk"], iw["k_norm"])
             idx.load_keys(torch.zeros(self.B, 0, 128))
             self.index_owner[L] = idx
+            if idx.cs:
+                self.log(
+                    f"DSV41_IDX_KEY_SHARD layer {L} (ratio {meta['ratio']}): decode index-key slab column-sharded, {idx.n_global} entries -> {idx.n_alloc} per column "
+                    f"(+ replicated head slab of {idx.n_head} entries for positions <= {idx.head_pos})"
+                )
         else:
             idx.k_cache = self.index_owner[meta["kv_source"]].k_cache
             idx.k_head = self.index_owner[meta["kv_source"]].k_head
