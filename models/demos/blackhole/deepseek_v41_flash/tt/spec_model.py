@@ -23,7 +23,7 @@ import os
 import time
 
 import torch
-from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
+from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import hostopt
@@ -285,13 +285,29 @@ class SpecRunner:
         """X [B, n] block tokens, base [B] position of column 0."""
         m, B, n = self.m, self.B, self.n
         rows_d = {}
-        if m.host_rows is not None and hostopt.on("ENGRAM") and self._fast_rows().usable():
+        if (
+            m.host_rows is not None
+            and hostopt.on("ENGRAM")
+            and not getattr(self, "_fast_off", False)
+            and self._fast_rows().usable()
+        ):
             # DSV41_HOSTOPT_ENGRAM=1: numpy hash + LUT dequant straight into one reused bf16 buffer (bit-identical, tests/test_hostopt_cpu.py)
-            fr = self._fast_rows()
-            cat = fr(self._fast_hash()(X, base, rows=self.phys))
-            pos = (base.reshape(B, 1) + torch.arange(n).reshape(1, n)).reshape(-1)
-            self.dec.upload_packed_inputs(self.dec.prepare_packed_cat(X.reshape(-1), cat, fr.order, pos))
-            return
+            try:
+                fr = self._fast_rows()
+                cat = fr(self._fast_hash()(X, base, rows=self.phys))
+                pos = (base.reshape(B, 1) + torch.arange(n).reshape(1, n)).reshape(-1)
+                prepared = self.dec.prepare_packed_cat(X.reshape(-1), cat, fr.order, pos)
+            except (
+                Exception
+            ) as e:  # the numpy twin must never take a serving round down: the shipped path below gives the same bits (the hash's cache writes are idempotent)
+                self._fast_off = True
+                print(
+                    f"HOSTOPT_ENGRAM: numpy path failed ({e!r}); falling back to the shipped hash / rows path for this runner",
+                    flush=True,
+                )
+            else:
+                self.dec.upload_packed_inputs(prepared)
+                return
         if m.host_rows is not None:
             hs = m.hasher(X, base, rows=self.phys)
             rows_d = {l: r.reshape(B * n, 1, -1) for l, r in m.host_rows.rows_all(hs, m.engram_ids).items()}
@@ -340,7 +356,9 @@ class SpecRunner:
         return [ttnn.from_device(devs[r * self.cols], blocking=False) for r in range(self.rows)]
 
     def _rb_finish(self, hs):
-        return self._rb_unpack(torch.cat([h.to_torch().reshape(1, -1) for h in hs]).long())  # (tensor method: ~0.05 ms per round cheaper than ttnn.to_torch's wrapper, same values)
+        return self._rb_unpack(
+            torch.cat([h.to_torch().reshape(1, -1) for h in hs]).long()
+        )  # (tensor method: ~0.05 ms per round cheaper than ttnn.to_torch's wrapper, same values)
 
     def _rb_unpack(self, v):
         U, n, rows = self.U, self.n, self.rows
@@ -912,7 +930,7 @@ class SpecRunner:
             fast_post = hostopt.on("POST") and self.dec.top2 is None
             if fast_post:
                 hostopt.post_round(self, a, mm, d, X, k, base, done, gen, emitted, ms, eos, max_new, top)
-            for b in (() if fast_post else range(B)):
+            for b in () if fast_post else range(B):
                 if done[b]:
                     continue
                 mb = int(mm[b])
@@ -1095,9 +1113,7 @@ class AdaptiveSpec:
                 1.0
                 if (k == 0 or stale)
                 else (
-                    self._E[k]
-                    if (hostopt.on("POST") and self._E is not None)
-                    else self.expected_tokens(conf, ~done)[k]
+                    self._E[k] if (hostopt.on("POST") and self._E is not None) else self.expected_tokens(conf, ~done)[k]
                 )
             )
             if len(walls) < 3:
@@ -1114,7 +1130,9 @@ class AdaptiveSpec:
             ks_used.append(k)
             e0 = len(emitted)
             tk = "probe" if probing else k
-            if os.environ.get("DSV41_SPEC_FREEZE_TIMES") != "1":  # test fixture: the table (DSV41_SPEC_TIMES) is not updated by the measured rounds, so the scheduler's k choices depend on the confidences only (comparable streams between runs)
+            if (
+                os.environ.get("DSV41_SPEC_FREEZE_TIMES") != "1"
+            ):  # test fixture: the table (DSV41_SPEC_TIMES) is not updated by the measured rounds, so the scheduler's k choices depend on the confidences only (comparable streams between runs)
                 self.times[tk] = 0.8 * self.times[tk] + 0.2 * w if tk in self.times else w
             if r.dec.top2 is None:  # (DSV41_SPEC_TOP2=0: no near-tie evidence)
                 gp = torch.full((B, n), float("nan"))
@@ -1131,10 +1149,27 @@ class AdaptiveSpec:
             fast_post = hostopt.on("POST") and r.dec.top2 is None
             if fast_post:
                 hostopt.post_round(
-                    self, a, mm, d, X5, BLOCK, base, done, gen, emitted, ms, eos, max_new, top,
-                    conf=conf, newconf=newconf, k=k, cal=cal if (k > 0 and not stale) else None, draft=r.draft,
+                    self,
+                    a,
+                    mm,
+                    d,
+                    X5,
+                    BLOCK,
+                    base,
+                    done,
+                    gen,
+                    emitted,
+                    ms,
+                    eos,
+                    max_new,
+                    top,
+                    conf=conf,
+                    newconf=newconf,
+                    k=k,
+                    cal=cal if (k > 0 and not stale) else None,
+                    draft=r.draft,
                 )
-            for b in (() if fast_post else range(B)):
+            for b in () if fast_post else range(B):
                 if done[b]:
                     continue
                 mb = int(mm[b])
@@ -1250,7 +1285,9 @@ def default_ks(U):
     return _dk(U, os.environ.get("DSV41_SPEC_ROWS") == "1")
 
 
-if os.environ.get("DSV41_ROUND_TL") == "1":  # round timeline instrumentation (tt/round_timeline.py); not imported, nothing wrapped when unset
+if (
+    os.environ.get("DSV41_ROUND_TL") == "1"
+):  # round timeline instrumentation (tt/round_timeline.py); not imported, nothing wrapped when unset
     from models.demos.blackhole.deepseek_v41_flash.tt import round_timeline
 
     round_timeline.install()

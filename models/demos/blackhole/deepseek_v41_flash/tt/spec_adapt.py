@@ -118,6 +118,17 @@ class AdaptiveVerify:
         cands = self.candidates(max_pos)
         if len(cands) == 1:
             return cands[0]
+        kf = os.environ.get("DSV41_VLLM_SPEC_KFILE")
+        if (
+            kf
+        ):  # test hook (identity A/B across server launches): a file holding k > 0 pins the verification length, 0 / missing / unreadable = the adaptive rule
+            try:
+                with open(kf) as f:
+                    kk = int(f.read().strip() or "0")
+                if kk in cands:
+                    return kk
+            except (OSError, ValueError):
+                pass
         if self.ad.policy.startswith("k"):
             return int(self.ad.policy[1:])
         if any(k not in self.ad.times for k in cands):

@@ -51,6 +51,7 @@ import time
 import torch
 from loguru import logger
 
+from models.demos.blackhole.deepseek_v41_flash.tt import hostopt
 from models.demos.blackhole.deepseek_v41_flash.tt import vllm_state as VS
 
 _PAD_TOKEN = 0
@@ -855,8 +856,11 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         **kwargs,
     ):
         """Prefill N new requests. tokens [N, L] right padded, prompt_lens [N], empty_slots [N] (logical slots; default: the lowest free ones).
+        (DSV41_HOSTOPT_WARM: the pinned round thread and its idle spinner are released for the duration of a prefill call; the next round re-arms them)
         Returns the first generated tokens [N] (int32, greedy on device) when ``sampling_params`` is given, else fp32 logits [N, 1, vocab] for host sampling.
         """
+        if hostopt.ACTIVE["WARM"]:
+            hostopt.warm_stop()
         if kwargs.get("page_tables_per_layer") is not None:
             raise ValueError("hybrid per-layer page tables are not used by DeepSeek-V4.1-Flash")
         N = int(tokens.shape[0])

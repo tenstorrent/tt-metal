@@ -23,6 +23,7 @@ Test / benchmark hooks (never needed in production):
 """
 
 import os
+import threading
 import time
 
 import numpy as np
@@ -42,13 +43,14 @@ def on(name):
     return ACTIVE[name]
 
 
-_WARM = {"proc": None, "mask": None, "cpu": None, "stopped": False}
+_WARM = {"proc": None, "mask": None, "cpu": None, "stopped": False, "tids": set()}
 
 
 def warm_start():
     """DSV41_HOSTOPT_WARM=1: keep the core of the round loop out of the deep idle state. The host thread sleeps ~50 ms of every ~55 ms round inside the device wait; on these hosts (AMD EPYC, acpi_idle C2:
     0.8 ms exit latency, the core's caches are lost) every host phase then runs cold (the same Engram hash takes 0.55 ms after a sleep, 0.29 ms after a busy wait, 0.13 ms back to back). A SCHED_IDLE busy
-    loop pinned to the same core (a separate process: no GIL, it never runs while the round thread is runnable) keeps the core out of C2. Numerically a no-op."""
+    loop pinned to the same core (a separate process: no GIL, it never runs while the round thread is runnable) keeps the core out of C2. Numerically a no-op.
+    """
     import signal
     import subprocess
 
@@ -58,10 +60,24 @@ def warm_start():
             os.sched_setaffinity(0, {_WARM["cpu"]})
             os.kill(p.pid, signal.SIGCONT)
             _WARM["stopped"] = False
+            _WARM["tids"] = {threading.get_ident()}
+        elif threading.get_ident() not in _WARM["tids"]:
+            # (server) a round thread other than the one that started the spinner: pin it to the same core too
+            os.sched_setaffinity(0, {_WARM["cpu"]})
+            _WARM["tids"].add(threading.get_ident())
+            print(
+                f"HOSTOPT_WARM: round thread {threading.current_thread().name} (ident {threading.get_ident()}) pinned to cpu {_WARM['cpu']}",
+                flush=True,
+            )
         return
     with open("/proc/thread-self/stat") as f:
         cpu = int(f.read().rsplit(")", 1)[1].split()[36])  # field 39: the core this thread runs on now
     _WARM["mask"], _WARM["cpu"] = os.sched_getaffinity(0), cpu
+    _WARM["tids"] = {threading.get_ident()}
+    print(
+        f"HOSTOPT_WARM: round thread {threading.current_thread().name} (ident {threading.get_ident()}, pid {os.getpid()}) pinned to cpu {cpu}",
+        flush=True,
+    )
     os.sched_setaffinity(0, {cpu})  # the calling thread only
     try:
         _WARM["proc"] = subprocess.Popen(
@@ -185,8 +201,12 @@ class FastNgramHash:
 # Engram: table gather + dequant
 # ---------------------------------------------------------------------------------------------------------------------------------------------------
 _LUT16 = None
-LUT16_MAX_T = int(os.environ.get("DSV41_HOSTOPT_LUT16_MAX_T", "20"))  # block tokens (B * n) up to which the 16-bit LUT path is used on a cold core (above: torch's multi-threaded conversion wins, see bench_rows.py)
-LUT16_MAX_T_WARM = int(os.environ.get("DSV41_HOSTOPT_LUT16_MAX_T_WARM", "48"))  # ... and with DSV41_HOSTOPT_WARM on (a warm core favours the LUT: 0.49 vs 0.81 ms at T=24, 0.71 vs 0.88 ms at T=32)
+LUT16_MAX_T = int(
+    os.environ.get("DSV41_HOSTOPT_LUT16_MAX_T", "20")
+)  # block tokens (B * n) up to which the 16-bit LUT path is used on a cold core (above: torch's multi-threaded conversion wins, see bench_rows.py)
+LUT16_MAX_T_WARM = int(
+    os.environ.get("DSV41_HOSTOPT_LUT16_MAX_T_WARM", "48")
+)  # ... and with DSV41_HOSTOPT_WARM on (a warm core favours the LUT: 0.49 vs 0.81 ms at T=24, 0.71 vs 0.88 ms at T=32)
 
 
 def _lut16():
@@ -195,7 +215,9 @@ def _lut16():
     global _LUT16
     if _LUT16 is None:
         b = torch.arange(256, dtype=torch.uint8)
-        prod = b.view(torch.float8_e8m0fnu).float().unsqueeze(1) * b.view(torch.float8_e4m3fn).float().unsqueeze(0)  # [scale, byte]
+        prod = b.view(torch.float8_e8m0fnu).float().unsqueeze(1) * b.view(torch.float8_e4m3fn).float().unsqueeze(
+            0
+        )  # [scale, byte]
         _LUT16 = prod.to(torch.bfloat16).contiguous().view(torch.int16).numpy().reshape(-1).view(np.uint16).copy()
     return _LUT16
 
@@ -203,7 +225,8 @@ def _lut16():
 class FastRows:
     """Rows of every Engram layer straight into one preallocated bf16 buffer [T, sum(Kin)] (layer-id order = the order ``prepare_packed_inputs`` concatenates).
     Needs the tables in RAM (``in_ram``): the NFS / memmap paths keep the shipped code. Two dequant paths (both bit-identical to the shipped one, checked by bench_rows.py / the round-by-round dumps):
-    small T (see LUT16_MAX_T): gather the fp8 rows + scales (numpy take into reused buffers), one 16-bit LUT lookup per element; larger T: torch index_select + float conversion into reused buffers (multi-threaded)."""
+    small T (see LUT16_MAX_T): gather the fp8 rows + scales (numpy take into reused buffers), one 16-bit LUT lookup per element; larger T: torch index_select + float conversion into reused buffers (multi-threaded).
+    """
 
     def __init__(self, host_rows, layer_ids):
         self.hr = host_rows
@@ -309,7 +332,11 @@ def post_round(
     a_l, mm_l, d_l = a.tolist(), mm.tolist(), d.tolist()
     done_l, base_l = done.tolist(), base.tolist()
     conf_l = conf.tolist() if cal is not None else None
-    base_n, X_n, done_n = base.numpy(), X.numpy(), done.numpy()  # views of the torch tensors: element writes without torch dispatch
+    base_n, X_n, done_n = (
+        base.numpy(),
+        X.numpy(),
+        done.numpy(),
+    )  # views of the torch tensors: element writes without torch dispatch
     conf_n, nc_n = (conf.numpy(), newconf.numpy()) if newconf is not None else (None, None)
     for b in range(B):
         if done_l[b]:
@@ -359,7 +386,9 @@ def flush(gen, m_hist, walls=None):
         import json
 
         with open(f"{DUMP}.{_NFLUSH[0]}.json", "w") as f:
-            json.dump({"rounds": _REC, "times": _TIMES, "gen": gen, "m_hist": m_hist, "walls": walls, "t0": _ST["t0"]}, f)
+            json.dump(
+                {"rounds": _REC, "times": _TIMES, "gen": gen, "m_hist": m_hist, "walls": walls, "t0": _ST["t0"]}, f
+            )
         _NFLUSH[0] += 1
         _REC.clear()
         _TIMES.clear()
