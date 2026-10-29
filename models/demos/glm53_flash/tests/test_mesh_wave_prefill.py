@@ -678,3 +678,26 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
         f"(SP {int(ref_a[0].argmax())} / {int(ref_b[0].argmax())}), pcc {pcc(first_a[14], ref_a[0]):.5f} / {pcc(first_b[15], ref_b[0]):.5f}"
     )
     logger.info("served waves: PASS (f) continuations at 256 mod 2048")
+
+    # (h) a poisoned carry: NaN written into every layer's batched KDA state (every slot, every row: what an idle
+    # row's non-finite scan did through the x * 0.0 carry blends, 2026-10-29 8x4 at 45 layers, rows 2-3) must reach
+    # neither a prompt that starts on a slot (zeros in, finite blends: ``FunctionalDecoder._finite``) nor the SP path
+    for dec in model.layers:
+        if dec.kda_batched is not None:
+            for st in (dec.kda_batched.recurrent, dec.kda_batched.convolution):
+                ttnn.multiply(st, float("nan"), output_tensor=st)
+    ph0, ph1 = _served_ids(1500, 32, vocab), _served_ids(1600, 33, vocab)
+    first_h = step_prefill([(16, ph0, 0), (17, ph1, 0)])  # an eager wave of two from "zeros" on the poisoned slots
+    outs = decode_jointly(first_h, {16: 1500, 17: 1600})
+    gots = {l: [first_h[l]] + outs[l] for l in (16, 17)}
+    a.release_request(16)
+    a.release_request(17)
+    ref_h0, ref_h1 = reference(ph0), reference(ph1)
+    assert all(torch.isfinite(first_h[l]).all() for l in (16, 17)), "a poisoned carry reached a new prompt's wave"
+    _assert_agree("(h) A after a NaN-poisoned carry vs SP", gots[16], ref_h0, pcc_min=PCC_BAR_SP)
+    _assert_agree("(h) B after a NaN-poisoned carry vs SP", gots[17], ref_h1, pcc_min=PCC_BAR_SP)
+    logger.info(
+        f"(h) poisoned carry: first tokens {int(first_h[16].argmax())} / {int(first_h[17].argmax())} "
+        f"(SP {int(ref_h0[0].argmax())} / {int(ref_h1[0].argmax())})"
+    )
+    logger.info("served waves: PASS (h) a NaN-poisoned carry never reaches a new prompt")

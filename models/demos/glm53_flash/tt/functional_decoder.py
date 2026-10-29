@@ -370,10 +370,12 @@ class FunctionalDecoder(LightweightModule):
             dst_view = ttnn.experimental.view(dst.recurrent, ttnn.Shape([B * H * K // TILE, 1, TILE, V]))
             new_view = ttnn.experimental.view(new.recurrent, ttnn.Shape([1, 1, H * K, V]))
             ttnn.experimental.paged_fill_cache(dst_view, new_view, slot.rec_page_table, batch_idx_tensor=slot.user_idx)
-            ttnn.multiply(dst.convolution, slot.conv_keep, output_tensor=dst.convolution)  # zero the slot's rows
+            conv_f = self._finite(dst.convolution)  # a poisoned slot would survive dst * 0.0 (NaN * 0.0 = NaN)
+            ttnn.multiply(conv_f, slot.conv_keep, output_tensor=dst.convolution)  # zero the slot's rows
             new_rows = ttnn.multiply(new.convolution, slot.conv_mask)  # [taps,1,W] x [taps,B,1] -> [taps,B,W]
             ttnn.add(dst.convolution, new_rows, output_tensor=dst.convolution)
             ttnn.deallocate(new_rows)
+            ttnn.deallocate(conv_f)
         ttnn.deallocate(new.recurrent)
         ttnn.deallocate(new.convolution)
 
@@ -580,6 +582,18 @@ class FunctionalDecoder(LightweightModule):
         t = torch.tensor(values, dtype=torch.float32).reshape(self.mesh.rows, *([1] * (rank - 1)))
         return self.mesh.upload(t, dtype, rows=0)
 
+    @staticmethod
+    def _finite(x: ttnn.Tensor) -> ttnn.Tensor:
+        """``x`` with every non-finite element replaced by 0.0 (a fresh tensor). The carry blends below multiply a
+        discarded operand by 0.0, which is exact for finite values only: NaN * 0.0 = NaN, so one non-finite carry (an
+        idle row's scan over pad rows, 2026-10-29 8x4 at 45 layers: rows 2-3 idle through three wave-steps) poisoned
+        the slot for good and every prompt that later started on it "from zeros" (NaN logits, token 0; r5's needles
+        on rows 2-3 and the harness replay of its schedule)."""
+        finite = ttnn.isfinite(x)
+        out = ttnn.where(finite, x, 0.0)
+        ttnn.deallocate(finite)
+        return out
+
     def _wave_state(self, user: int, wave: WaveInfo):
         """The KDA state a wave's chunk of slot ``user`` starts from on every row: the row's own carry (slot ``user``
         of ITS batched state) when the row continues a prompt (``start > 0``), zeros when it starts one (and on idle
@@ -598,10 +612,11 @@ class FunctionalDecoder(LightweightModule):
             fresh = [cur_rec, cur_conv]
         cont = tuple(1.0 if (v > 0 and s > 0) else 0.0 for s, v in zip(wave.starts, wave.valids))
         c32, c16 = self._row_flags(cont, ttnn.float32), self._row_flags(cont, ttnn.bfloat16, rank=3)
-        in_rec = ttnn.multiply(cur_rec, c32)  # a continuing row keeps its carry, the others start from zeros
-        in_conv = ttnn.multiply(cur_conv, c16)
+        rec_f, conv_f = self._finite(cur_rec), self._finite(cur_conv)  # a poisoned slot still starts from zeros
+        in_rec = ttnn.multiply(rec_f, c32)  # a continuing row keeps its carry, the others start from zeros
+        in_conv = ttnn.multiply(conv_f, c16)
         state = LayerState(kda=KdaState(recurrent=in_rec, convolution=in_conv))
-        return state, [in_rec, in_conv, c32, c16], (cur_rec, cur_conv, fresh)
+        return state, [in_rec, in_conv, c32, c16, rec_f, conv_f], (cur_rec, cur_conv, fresh)
 
     def _write_wave_kda_state(self, user: int, new: KdaState, current, wave: WaveInfo) -> None:
         """Write every member row's fresh carry into slot ``user`` of that row's batched state and an idle row's
@@ -612,13 +627,19 @@ class FunctionalDecoder(LightweightModule):
         keep = tuple(1.0 - m for m in member)
         m32, m16 = self._row_flags(member, ttnn.float32), self._row_flags(member, ttnn.bfloat16, rank=3)
         k32, k16 = self._row_flags(keep, ttnn.float32), self._row_flags(keep, ttnn.bfloat16, rank=3)
-        sel_rec = ttnn.multiply(new.recurrent, m32)
-        old_rec = ttnn.multiply(cur_rec, k32)
+        # an idle row's scan (pad rows) may be non-finite and a parked slot may hold a poisoned carry: neither may
+        # reach the blend's x * 0.0 terms
+        new_rec, new_conv = self._finite(new.recurrent), self._finite(new.convolution)
+        cur_rec_f, cur_conv_f = self._finite(cur_rec), self._finite(cur_conv)
+        sel_rec = ttnn.multiply(new_rec, m32)
+        old_rec = ttnn.multiply(cur_rec_f, k32)
         ttnn.add(sel_rec, old_rec, output_tensor=sel_rec)
-        sel_conv = ttnn.multiply(new.convolution, m16)
-        old_conv = ttnn.multiply(cur_conv, k16)
+        sel_conv = ttnn.multiply(new_conv, m16)
+        old_conv = ttnn.multiply(cur_conv_f, k16)
         ttnn.add(sel_conv, old_conv, output_tensor=sel_conv)
         for t in (old_rec, old_conv, m32, m16, k32, k16, new.recurrent, new.convolution, *fresh):
+            ttnn.deallocate(t)
+        for t in (new_rec, new_conv, cur_rec_f, cur_conv_f):
             ttnn.deallocate(t)
         self._write_user_kda_state(user, KdaState(recurrent=sel_rec, convolution=sel_conv))
 
@@ -631,16 +652,20 @@ class FunctionalDecoder(LightweightModule):
         attn = self._require_weights().attn
         if not attn.conv_tiled:
             raise NotImplementedError("traced waves need the block KDA decode (tiled conv history)")
-        ttnn.multiply(dst.recurrent, slot.rec_keep, output_tensor=dst.recurrent)
-        fresh = ttnn.multiply(new.recurrent, slot.rec_mask)  # [1,H,K,V] x [B,1,1,1] -> [B,H,K,V]
+        # the keep / mask products are exact for finite values only (``_finite``): the batched state and an idle
+        # row's scan are sanitized first
+        rec_f = self._finite(dst.recurrent)
+        ttnn.multiply(rec_f, slot.rec_keep, output_tensor=dst.recurrent)
+        new_rec = self._finite(new.recurrent)
+        fresh = ttnn.multiply(new_rec, slot.rec_mask)  # [1,H,K,V] x [B,1,1,1] -> [B,H,K,V]
         ttnn.add(dst.recurrent, fresh, output_tensor=dst.recurrent)
-        ttnn.deallocate(fresh)
-        ttnn.multiply(dst.convolution, slot.conv_keep, output_tensor=dst.convolution)
-        rows = ttnn.multiply(new.convolution, slot.conv_mask)  # [taps,1,W] x [taps,B,1] -> [taps,B,W]
+        conv_f = self._finite(dst.convolution)
+        ttnn.multiply(conv_f, slot.conv_keep, output_tensor=dst.convolution)
+        new_conv = self._finite(new.convolution)
+        rows = ttnn.multiply(new_conv, slot.conv_mask)  # [taps,1,W] x [taps,B,1] -> [taps,B,W]
         ttnn.add(dst.convolution, rows, output_tensor=dst.convolution)
-        ttnn.deallocate(rows)
-        ttnn.deallocate(new.recurrent)
-        ttnn.deallocate(new.convolution)
+        for t in (fresh, rows, rec_f, new_rec, conv_f, new_conv, new.recurrent, new.convolution):
+            ttnn.deallocate(t)
 
     def prefill_wave_traced(self, streams: ttnn.Tensor, *, wave: WaveInfo, slot, ring_sel, row_mask) -> ttnn.Tensor:
         """The trace-replayable wave (every member at start 0; ``slot``: ``trace_prefill.WaveSlot``): KDA from the
