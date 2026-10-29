@@ -31,6 +31,7 @@ import hashlib
 import json
 import math
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -112,6 +113,10 @@ def derive_report_name(nodeid: str) -> str:
     return f"{prefix}_{digest}"
 
 
+# Subdirectory of report_path holding the fixture's graph capture JSON and sidecars until they are imported.
+_CAPTURE_STAGING_DIR_NAME = "graph_capture"
+
+
 def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
     import ttnn
 
@@ -150,18 +155,26 @@ def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
                     world_size = int(ttnn.distributed_context_get_size())
                 else:
                     rank, world_size = 0, 1
+                # The capture JSON and its sidecars (python_io, comparison_records) are only inputs to
+                # import_report and can be gigabytes, so stage them in a directory that is removed after
+                # the import. It sits under report_path because rank 0 imports every rank's capture.
+                capture_dir = report_path / _CAPTURE_STAGING_DIR_NAME
+                capture_dir.mkdir(parents=True, exist_ok=True)
                 if world_size > 1:
-                    json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
+                    json_path = capture_dir / f"graph_capture_{rank+1}_of_{world_size}.json"
                 else:
-                    json_path = report_path / "graph_capture.json"
+                    json_path = capture_dir / "graph_capture.json"
                 ttnn.graph.end_graph_capture_to_file(str(json_path))
                 if ttnn.distributed_context_is_initialized():
                     ttnn.distributed_context_barrier()
                 if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
-                    import_report(report_path, report_path)
-                    (report_path / "graph_capture.json").unlink(missing_ok=True)
-                    for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
-                        p.unlink(missing_ok=True)
+                    try:
+                        import_report(capture_dir, report_path)
+                    finally:
+                        shutil.rmtree(capture_dir, ignore_errors=True)
+                        # The visualizer reads tensor lifetimes from db.sqlite; drop the JSON copy of them.
+                        for p in report_path.glob(f"graph_capture*{TENSOR_LIFETIME_SUFFIX}"):
+                            p.unlink(missing_ok=True)
                 if ttnn.distributed_context_is_initialized():
                     ttnn.distributed_context_barrier()
 
@@ -169,6 +182,8 @@ def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
                 ttnn.graph.disable_detailed_buffer_tracing()
         elif enable_comparison_mode and ttnn.graph.has_comparison_records():
             ttnn.graph.flush_comparison_records_to_db(report_path)
+            # The records are in db.sqlite now; the JSON copy written alongside it is not needed.
+            (report_path / COMPARISON_RECORDS_FALLBACK_NAME).unlink(missing_ok=True)
 
         if ttnn.distributed_context_is_initialized():
             rank = int(ttnn.distributed_context_get_rank())
@@ -269,6 +284,7 @@ DATABASE_SCHEMA_VERSION = "3.5"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
+TENSOR_LIFETIME_SUFFIX = ".tensor_lifetime.json"
 
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
@@ -2486,7 +2502,7 @@ def import_report(
                 total_stats["tensor_consumer_rows"] += stats.get("tensor_consumers", 0)
                 total_stats["tensor_producer_rows"] += stats.get("tensor_producers", 0)
                 if tl:
-                    tl_path = output_dir / (rpath.stem + ".tensor_lifetime.json")
+                    tl_path = output_dir / (rpath.stem + TENSOR_LIFETIME_SUFFIX)
                     with open(tl_path, "w") as f:
                         json.dump(tl, f, indent=2)
 

@@ -7003,6 +7003,108 @@ class TestReportNameDerivedFromTestId:
             assert (report_path / "db.sqlite").exists(), f"no db.sqlite written under {report_path}"
             assert ttnn.CONFIG.report_name is None, "fixture leaked its derived report_name into the config"
 
+    @staticmethod
+    def _graph_capture_leftovers(report_path):
+        return sorted(
+            p.relative_to(report_path).as_posix()
+            for p in report_path.rglob("*")
+            if p.name.startswith("graph_capture")
+            or graph_report._is_sidecar_path(p)
+            or p.name.endswith(graph_report.TENSOR_LIFETIME_SUFFIX)
+        )
+
+    @pytest.mark.parametrize("world_size", [1, 2], ids=["single_rank", "rank_0_of_2"])
+    def test_graph_capture_json_and_sidecars_are_removed(self, request, device, tmp_path, monkeypatch, world_size):
+        """The capture JSON, its sidecars and the tensor lifetime JSON copy are all covered by db.sqlite."""
+        if ttnn.graph.is_graph_capture_active():
+            pytest.skip("graph reporting is already on for this run, so the nested fixture would join that capture")
+        if world_size > 1:
+            # Rank 0 of a multi-host run: the capture, its sidecars and the tensor lifetime file carry a rank suffix.
+            monkeypatch.setattr(ttnn, "distributed_context_is_initialized", lambda: True)
+            monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: 0)
+            monkeypatch.setattr(ttnn, "distributed_context_get_size", lambda: world_size)
+            monkeypatch.setattr(ttnn, "distributed_context_barrier", lambda: None)
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+            "enable_logging", True
+        ), ttnn.manage_config("enable_graph_report", True), ttnn.manage_config(
+            "root_report_path", tmp_path
+        ), ttnn.manage_config(
+            "report_name", "sidecar_cleanup"
+        ), ttnn.manage_config(
+            "enable_graph_python_stack_traces", True  # import_report writes tensor lifetimes only with stack traces
+        ):
+            with contextlib.contextmanager(graph_report.run_pytest_graph_report_fixture)(request):
+                report_path = Path(ttnn.CONFIG.report_path)
+                ttnn.relu(
+                    ttnn.from_torch(torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+                )
+            assert (report_path / "db.sqlite").exists(), f"no db.sqlite written under {report_path}"
+            config_name = "config.json" if world_size == 1 else f"config_1_of_{world_size}.json"
+            assert (report_path / config_name).exists(), f"no {config_name} written under {report_path}"
+            leftovers = self._graph_capture_leftovers(report_path)
+            assert not leftovers, f"graph capture inputs left in the report: {leftovers}"
+
+    @pytest.mark.parametrize("failure", ["test_body", "import_report"])
+    def test_cleanup_after_a_failure_keeps_the_original_error(
+        self, request, device, tmp_path, monkeypatch, expect_error, failure
+    ):
+        """Cleanup tolerates files that were never written, and the error that stopped the run is the one raised."""
+        if ttnn.graph.is_graph_capture_active():
+            pytest.skip("graph reporting is already on for this run, so the nested fixture would join that capture")
+        if failure == "import_report":
+
+            def failing_import(report_path, output_dir, *args, **kwargs):
+                raise RuntimeError("boom")
+
+            monkeypatch.setattr(graph_report, "import_report", failing_import)
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+            "enable_logging", True
+        ), ttnn.manage_config("enable_graph_report", True), ttnn.manage_config(
+            "root_report_path", tmp_path
+        ), ttnn.manage_config(
+            "report_name", "sidecar_cleanup_failure"
+        ), ttnn.manage_config(
+            "enable_graph_python_stack_traces", True
+        ):
+            with expect_error(RuntimeError, "boom"):
+                with contextlib.contextmanager(graph_report.run_pytest_graph_report_fixture)(request):
+                    report_path = Path(ttnn.CONFIG.report_path)
+                    ttnn.relu(
+                        ttnn.from_torch(
+                            torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+                        )
+                    )
+                    if failure == "test_body":
+                        raise RuntimeError("boom")
+            leftovers = self._graph_capture_leftovers(report_path)
+            assert not leftovers, f"graph capture inputs left after a {failure} failure: {leftovers}"
+
+    def test_comparison_records_json_is_removed_in_comparison_only_mode(self, request, device, tmp_path):
+        """Without a graph report the records are flushed straight to db.sqlite; their JSON copy is not kept."""
+        if ttnn.graph.is_graph_capture_active():
+            pytest.skip("graph reporting is already on for this run, so the nested fixture would join that capture")
+        with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+            "enable_logging", True
+        ), ttnn.manage_config("enable_graph_report", False), ttnn.manage_config(
+            "enable_comparison_mode", True
+        ), ttnn.manage_config(
+            "root_report_path", tmp_path
+        ), ttnn.manage_config(
+            "report_name", "comparison_only_cleanup"
+        ):
+            with contextlib.contextmanager(graph_report.run_pytest_graph_report_fixture)(request):
+                report_path = Path(ttnn.CONFIG.report_path)
+                torch_input = torch.rand((32, 32), dtype=torch.bfloat16)
+                a = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+                b = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+                ttnn.add(a, b)
+                assert ttnn.graph.has_comparison_records(), "comparison mode recorded nothing to flush"
+            with sqlite3.connect(report_path / "db.sqlite") as conn:
+                (count,) = conn.execute("SELECT COUNT(*) FROM local_tensor_comparison_records").fetchone()
+            assert count > 0, "comparison records were not flushed to db.sqlite"
+            leftovers = self._graph_capture_leftovers(report_path)
+            assert not leftovers, f"comparison mode inputs left in the report: {leftovers}"
+
 
 class TestConfigHelpersUsedByTheReportFixture:
     """The derived report_name goes through manage_config, and configs written by ttnn spell an unset one as null."""
