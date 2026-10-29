@@ -36,6 +36,7 @@ from triage_hw_utils import device_has_firmware
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.tt_exalens_lib import parse_elf
 
 
 triage.progress_disabled = True  # Disable progress bars for tests
@@ -486,7 +487,31 @@ class TestTriage:
         self.assert_no_errors_or_none_in_result(result)
 
     def test_check_binary_integrity(self):
-        self.run_triage_script("check_binary_integrity.py")
+        self.run_triage_script("check_binary_integrity.py", argv=["--dump-mismatch"])
+
+    def test_check_binary_integrity_reports_mismatch(self):
+        # Corrupt 4 bytes of the first RISC's firmware in L1 and check that the report shows them
+        location = OnChipCoordinate.create("0,0", self.exalens_context.devices[0])
+        risc_location = location.noc_block.all_riscs[0].risc_location
+        dispatcher_data = self.run_triage_script("dispatcher_data.py", assert_failure_checks=False)
+        core_data = dispatcher_data.get_cached_core_data(risc_location)
+        text = parse_elf(core_data.firmware_path, self.exalens_context).get_section_by_name(".text")
+        address = text.address + 16
+        expected = bytes(text.data[16:20])
+        corrupted = bytes(b ^ 0xFF for b in expected)
+        l1 = dispatcher_data.l1_memory_access(location)
+        try:
+            l1.write(address, corrupted)
+            self.run_triage_script("check_binary_integrity.py", argv=["--dump-mismatch"], assert_failure_checks=False)
+        finally:
+            l1.write(address, expected)
+
+        errors = [check for check in triage.CHECKS if check.type is CheckType.ERROR]
+        assert len(errors) == 1, logged_errors()
+        assert errors[0].location == location and errors[0].risc_name == risc_location.risc_name
+        message = "".join(errors[0].message.split())
+        for info in (f"4/{len(text.data)}", f"{address:08x}", f"expected:{expected.hex()}", f"found:{corrupted.hex()}"):
+            assert info in message, errors[0].message
 
     def test_check_cb_inactive(self):
         self.run_triage_script("check_cb_inactive.py")
