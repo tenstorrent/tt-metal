@@ -994,7 +994,7 @@ class TTResNet:
         image = ttnn.slice(x, [0, 0, camera * rows, 0], [1, 1, (camera + 1) * rows, channels], memory_config=sharded)
         # The input is freed once the halo has read it, which leaves the pool room for its output.
         pooled = ttnn.max_pool2d(
-            input_tensor=image,
+            input_tensor=pool_rows(image),
             batch_size=1,
             input_h=height,
             input_w=width,
