@@ -3,11 +3,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Run sfpi_disasm.sh inside Ubuntu 22.04.
+# Run sfpi_disasm.sh inside Ubuntu 22.04 (see sfpi_disasm.Dockerfile).
 #
 # sfpi 7.9x links against glibc 2.34, which Ubuntu 20.04 does not have. The
 # container supplies it. Everything else stays on the host: --work holds the
 # trees, the toolchains and the dumps, so a second run costs only the compile.
+#
+# The work tree is mounted at its own path, not under a prefix. Every path the
+# inner script is given then means the same thing on both sides, and the work
+# survives the container.
 #
 # The host must already have a Python environment with the test requirements.
 # Its packages are used through PYTHONPATH, not through its bin/python, because
@@ -15,11 +19,12 @@
 #
 # Usage:
 #   sfpi_disasm_docker.sh --work <dir> --site-packages <dir> [--stub <dir>]
+#                         --script <sfpi_disasm.sh>
 #                         -- <sfpi_disasm.sh arguments>
 
 set -euo pipefail
 
-IMAGE="ubuntu:22.04"
+IMAGE="llk-disasm:22.04"
 WORK="" SITE="" STUB="" SCRIPT=""
 
 while [ $# -gt 0 ]; do
@@ -37,23 +42,26 @@ done
 [ -n "$WORK" ] && [ -n "$SITE" ] && [ -n "$SCRIPT" ] || {
     echo "usage: see the header" >&2; exit 2; }
 
-# One writable place for everything, so the container needs no host paths of
-# its own and leaves nothing behind.
+mkdir -p "$WORK"
 ROOT=$(cd "$(dirname "$WORK")" && pwd)
 
-PYPATH="/host$SITE"
-[ -n "$STUB" ] && PYPATH="/host$STUB:$PYPATH"
+PYPATH="$SITE"
+[ -n "$STUB" ] && PYPATH="$STUB:$PYPATH"
 
+# Write as the caller, so nothing the container leaves behind needs root to
+# clean up.
 docker run --rm \
-    -v "$ROOT:/host$ROOT" \
+    --user "$(id -u):$(id -g)" \
+    -v "$ROOT:$ROOT" \
     -e "PYTHONPATH=$PYPATH" \
     -e "PYTHONDONTWRITEBYTECODE=1" \
-    -w "/host$ROOT" \
+    -e "HOME=$ROOT" \
+    -w "$ROOT" \
     "$IMAGE" bash -c '
 set -e
-export DEBIAN_FRONTEND=noninteractive
-apt-get -qq update
-apt-get -qq install -y --no-install-recommends \
-    git curl ca-certificates xz-utils python3 python3-distutils >/dev/null
+command -v git >/dev/null || {
+    echo "[ERROR] the image has no git. Use one that does, or pre-build it." >&2
+    exit 1
+}
 exec "$@"
-' bash "/host$SCRIPT" --python /usr/bin/python3 "$@"
+' bash "$SCRIPT" --python /usr/bin/python3 "$@"
