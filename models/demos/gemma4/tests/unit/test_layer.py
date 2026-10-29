@@ -12,6 +12,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.config import MeshConfig, ModeConfig
+from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
+from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
@@ -20,6 +23,7 @@ from ...tests.test_factory import (
     TestFactory,
     build_hf_prefill_mask,
     compare_tensors,
+    find_layer_idx,
     get_pcc_threshold,
     parametrize_batch_seq,
     parametrize_mesh_with_fabric,
@@ -75,6 +79,12 @@ def _create_hf_reference_layer(hf_text_config, layer_idx):
             hf_layer.router.proj.weight.normal_(0, 1.0)
     hf_layer.eval()
     return hf_layer
+
+
+def _reduced_experts(mesh_device):
+    """A small expert set for speed that still shards whole experts over every chip (ep*tp)."""
+    n_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "shape") else 1
+    return max(4, n_devices)
 
 
 def _create_hf_text_config(num_experts=None, top_k=None):
@@ -146,7 +156,7 @@ def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device, reset_seeds,
     forward passes with the same input, and checks PCC >= 0.90.
     """
     # Create HF config and reference layer
-    hf_text_config = _create_hf_text_config(num_experts=4, top_k=2)
+    hf_text_config = _create_hf_text_config(num_experts=_reduced_experts(mesh_device), top_k=2)
     hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
 
     # Get HF state_dict and convert for TT
@@ -226,19 +236,29 @@ def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device, reset_seeds,
 
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
-def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
+@pytest.mark.parametrize("fused_norms", [False, True], ids=["norms_plain", "norms_fused"])
+def test_layer_forward_decode(layer_idx, fused_norms, mesh_device, reset_seeds, request, monkeypatch):
     """
     Full decoder layer decode test (seq_len=1, fully on device).
 
     Uses KV cache pre-filled with random data, then decodes one token.
     Compares against HF reference with same KV cache state.
+
+    ``norms_fused``: the dense layer tail as fused norm programs (GEMMA4_NORM_FUSED=2 + GEMMA4_LAYER_NORM_FUSED=1:
+    post-attention norm + residual, pre-FF norm, post-FF norm + residual * layer scalar) against the same HF
+    reference; dense variants only (the MoE layer's fused tail needs the whole-expert fused MoE path).
     """
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
     from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 
-    hf_text_config = _create_hf_text_config(num_experts=4, top_k=2)
+    hf_text_config = _create_hf_text_config(num_experts=_reduced_experts(mesh_device), top_k=2)
+    if fused_norms:
+        if getattr(hf_text_config, "enable_moe_block", False):
+            pytest.skip("fused layer norms variant covers the dense layer tail only")
+        monkeypatch.setenv("GEMMA4_NORM_FUSED", "2")
+        monkeypatch.setenv("GEMMA4_LAYER_NORM_FUSED", "1")
     hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
     hf_state = hf_layer.state_dict()
     tt_state = _hf_state_to_tt_state(hf_state, layer_idx)
@@ -356,6 +376,8 @@ def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
+    # the fused tail must be taken when requested (a silent fallback would make that variant a duplicate)
+    fused_engaged = tt_layer._fused_dense_layer_norms_ok(x_tt)
     tt_output = tt_layer(
         x_tt,
         rope_mats=(cos_tt, sin_tt),
@@ -374,3 +396,77 @@ def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
     # Relaxed threshold for decode: MoE router bf16 topk can pick different experts
     passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"Full layer decode (layer_idx={layer_idx}, tp={tp}) PCC too low: {pcc_msg}"
+    if fused_norms:
+        assert fused_engaged, "fused dense layer tail not engaged"
+
+
+# ===== merged from tests/unit/test_layer_fracture.py: Dense decoder layer under 2D weight fracture (galaxy one-instance): prefill PCC vs the HF layer plus
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)])
+@pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"], ids=["sliding", "global"])
+@pytest.mark.parametrize("seq_len", [128], ids=["seq128"])
+def test_layer_fracture_prefill(layer_type, seq_len, mesh_device, reset_seeds, request):
+    hf_text_config = TestFactory.create_hf_text_config()
+    try:
+        layer_idx = find_layer_idx(hf_text_config, layer_type)
+    except ValueError:
+        pytest.skip(f"No {layer_type} layer in this model")
+
+    hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
+    tt_state = _hf_state_to_tt_state(hf_layer.state_dict(), layer_idx)
+    model_args = Gemma4ModelArgs.from_hf_config(hf_text_config)
+    attn_cfg = Gemma4AttentionConfig(model_args, layer_idx)
+
+    rows, _cols = tuple(mesh_device.shape)
+    mesh_config = MeshConfig(
+        mesh_device.shape,
+        decode=ModeConfig(tp=rows),
+        tp_axis=0,
+        weight_fracture=True,
+    )
+    ccl_manager = CCLManager(mesh_device, num_links=1)
+
+    tt_layer = Gemma4DecoderLayer(
+        mesh_device=mesh_device,
+        hf_config=model_args,
+        state_dict=tt_state,
+        layer_idx=layer_idx,
+        ccl_manager=ccl_manager,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        mesh_config=mesh_config,
+        max_seq_len=seq_len,
+        max_local_batch_size=1,
+    )
+
+    x_torch = torch.randn(1, seq_len, model_args.hidden_size, dtype=torch.float32)
+    hf_rope = _create_hf_rope(hf_text_config, seq_len, layer_idx)
+    sliding = attn_cfg.sliding_window if attn_cfg.is_sliding else None
+    attn_mask = build_hf_prefill_mask(seq_len, sliding_window=sliding)
+    with torch.no_grad():
+        hf_output = hf_layer(x_torch, position_embeddings=hf_rope, attention_mask=attn_mask)
+
+    x_tt = ttnn.from_torch(
+        x_torch.unsqueeze(0).to(torch.bfloat16),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx)
+    tt_output = tt_layer(
+        x_tt,
+        rope_mats=(cos_tt, sin_tt),
+        position_idx=None,
+        page_table=None,
+        kv_cache=None,
+        is_decode=False,
+    )
+
+    device_tensors = ttnn.get_device_tensors(tt_output)
+    out0 = ttnn.to_torch(device_tensors[0])
+    out_last = ttnn.to_torch(device_tensors[-1])
+    assert torch.equal(out0, out_last), "fractured layer output not replicated across the mesh"
+
+    tt_output_torch = out0.squeeze(0).float()
+    passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=get_pcc_threshold(request))
+    assert passing, f"Fractured layer (layer_type={layer_type}, idx={layer_idx}) PCC too low: {pcc_msg}"

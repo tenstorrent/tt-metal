@@ -84,15 +84,15 @@ ttnn:
     bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox_civ2: 40
-    sim_wh_n150: 695
-    sim_bh_p150: 680
+    sim_wh_n150: 755
+    sim_bh_p150: 740
     sim_quasar: 45
   unit:
     wh_llmbox: 50
     wh_galaxy: 125
     bh_galaxy: 40
     bh_p100: 815
-    bh_p150b_civ2: 880
+    bh_p150b_civ2: 900  # data_movement leg 80 -> 100 min (#61862)
     wh_n150_civ2: 1050
     wh_n300_civ2: 1200
     bh_p150b_civ2_viommu: 125

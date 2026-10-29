@@ -29,6 +29,8 @@ import os
 
 import ttnn
 
+from ..compute_configs import precise_matmuls
+
 DEFAULT_FUSE_SHARED_RS = True
 
 # dispatch puts its senders in its sub-device's first row.
@@ -44,7 +46,11 @@ _MANAGERS = {}
 # here: the down projection's full-K in1 block alone is 24 x 18 tiles.
 CB_BUDGET_TILES = 384
 MAX_IN0_BLOCK_W = 16
-DEST_TILES = 8  # bf16 dest, half-sync: the default compute config of ttnn.linear for a bf16 output
+
+
+def dest_tiles(fp32_dest):
+    """DEST tiles at half-sync: 4 with fp32 accumulation (compute_configs.precise_matmuls), 8 with bf16."""
+    return 4 if fp32_dest else 8
 
 
 def _flag(var, default):
@@ -78,11 +84,13 @@ def _divisors_desc(n, cap=None):
     return [d for d in range(min(n, cap or n), 0, -1) if n % d == 0]
 
 
-def cb_tiles(in0_block_w, out_block_h, out_block_w, k_tiles):
+def cb_tiles(in0_block_w, out_block_h, out_block_w, k_tiles, fp32_dest):
     """Tiles the 2D mcast factory allocates per core for interleaved bf16 in/out: in0 and in1 blocks
-    (double-buffered when K takes more than one block) and one output block (interm0 shares it)."""
+    (double-buffered when K takes more than one block) and one output block. At fp32 accumulation the partials
+    block is its own buffer, two bf16 tiles per tile; at bf16 it shares the output block."""
     depth = 2 if k_tiles > in0_block_w else 1
-    return depth * (out_block_h + out_block_w) * in0_block_w + out_block_h * out_block_w
+    out_tiles = (3 if fp32_dest else 1) * out_block_h * out_block_w
+    return depth * (out_block_h + out_block_w) * in0_block_w + out_tiles
 
 
 def _block_cost(k_tiles, per_core_M, per_core_N, obh, obw, w):
@@ -94,7 +102,7 @@ def _block_cost(k_tiles, per_core_M, per_core_N, obh, obw, w):
 
 
 @functools.lru_cache(maxsize=None)
-def _matmul_2d_blocks(grid_x, grid_y, m_tiles, k_tiles, n_tiles, budget_tiles):
+def _matmul_2d_blocks(grid_x, grid_y, m_tiles, k_tiles, n_tiles, budget_tiles, fp32_dest):
     """(per_core_M, per_core_N, out_block_h, out_block_w, in0_block_w, out_subblock_h, out_subblock_w): the
     cheapest blocking by _block_cost whose CBs fit budget_tiles. Pure in its args, so cached: every sparse layer
     asks for the same few shapes on every forward."""
@@ -105,7 +113,7 @@ def _matmul_2d_blocks(grid_x, grid_y, m_tiles, k_tiles, n_tiles, budget_tiles):
             for obh in _divisors_desc(per_core_M):
                 for obw in _divisors_desc(per_core_N):
                     for w in _divisors_desc(k_tiles, MAX_IN0_BLOCK_W):
-                        if cb_tiles(w, obh, obw, k_tiles) > budget_tiles:
+                        if cb_tiles(w, obh, obw, k_tiles, fp32_dest) > budget_tiles:
                             continue
                         cost = _block_cost(k_tiles, per_core_M, per_core_N, obh, obw, w)
                         if best is None or cost < best[0]:
@@ -114,18 +122,20 @@ def _matmul_2d_blocks(grid_x, grid_y, m_tiles, k_tiles, n_tiles, budget_tiles):
     assert best is not None, f"no 2D matmul block fits {budget_tiles} tiles (M={m_tiles} K={k_tiles} N={n_tiles})"
     _, per_core_M, per_core_N, obh, obw, w = best
     sub = max(
-        ((h, sw) for h in _divisors_desc(obh) for sw in _divisors_desc(obw) if h * sw <= DEST_TILES),
+        ((h, sw) for h in _divisors_desc(obh) for sw in _divisors_desc(obw) if h * sw <= dest_tiles(fp32_dest)),
         key=lambda hw: (hw[0] * hw[1], hw[1]),
     )
     return per_core_M, per_core_N, obh, obw, w, sub[0], sub[1]
 
 
-def matmul_2d_config(grid, m_tiles, k_tiles, n_tiles, budget_tiles=CB_BUDGET_TILES):
+def matmul_2d_config(grid, m_tiles, k_tiles, n_tiles, budget_tiles=CB_BUDGET_TILES, fp32_dest=None):
     """2D mcast config over `grid` (M over rows, N over columns) whose CBs fit budget_tiles, the cheapest
     by _block_cost. per_core_M / per_core_N may round up past the minimum when that gives better blocks
-    (the launched grid is then smaller than `grid`)."""
+    (the launched grid is then smaller than `grid`). fp32_dest defaults to compute_configs.precise_matmuls()."""
+    if fp32_dest is None:
+        fp32_dest = precise_matmuls()
     per_core_M, per_core_N, obh, obw, w, sub_h, sub_w = _matmul_2d_blocks(
-        grid.x, grid.y, m_tiles, k_tiles, n_tiles, budget_tiles
+        grid.x, grid.y, m_tiles, k_tiles, n_tiles, budget_tiles, fp32_dest
     )
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,

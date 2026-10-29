@@ -794,6 +794,225 @@ class TestGraphReportFixtureMultiRankTeardown:
         ]
 
 
+class TestDeallocateTensorLookup:
+    """A top-level buffer_deallocate becomes a ttnn::deallocate operation whose input is the tensor living at the freed
+    address when it is freed; one inside an operation lifts that tensor into the operation's inputs."""
+
+    L1 = 1
+    DRAM = 0
+
+    @staticmethod
+    def _graph(events):
+        """Graph of these events, in order (a buffer_type or device_id of None is left out of the node, as older
+        captures did):
+        - ("tensor", tensor_id, address, buffer_type[, device_id])
+        - ("dealloc", address, buffer_type[, device_id])
+        - ("alloc", address, buffer_type, device_id): a buffer_allocate
+        - ("dealloc_of_last_alloc",): a buffer_deallocate with no params, connected to the latest buffer_allocate
+        - ("start", name) / ("end", name): a function_start / function_end with no input tensors
+        """
+        nodes = []
+        last_alloc = None
+        for i, event in enumerate(events, start=1):
+            kind, *fields = event
+            node = {"counter": i, "params": {}, "connections": []}
+            if kind in ("start", "end"):
+                node["node_type"] = "function_start" if kind == "start" else "function_end"
+                node["params"] = {"name": fields[0]}
+                if kind == "start":
+                    node["input_tensors"] = []
+            elif kind == "dealloc_of_last_alloc":
+                node["node_type"] = "buffer_deallocate"
+                node["connections"] = [last_alloc]
+            else:
+                if kind == "tensor":
+                    tensor_id, address, buffer_type, *device = fields
+                    node["params"] = {"tensor_id": str(tensor_id), "address": str(address), "storage_type": "DEVICE"}
+                else:
+                    address, buffer_type, *device = fields
+                    node["params"] = {"address": str(address)}
+                    if kind == "alloc":
+                        node["params"].update({"size": "2048", "page_size": "2048"})
+                        last_alloc = i
+                node["node_type"] = {
+                    "tensor": "tensor",
+                    "dealloc": "buffer_deallocate",
+                    "alloc": "buffer_allocate",
+                }[kind]
+                if buffer_type is not None:
+                    node["params"]["buffer_type"] = str(buffer_type)
+                if device and device[0] is not None:
+                    node["params"]["device_id"] = str(device[0])
+            nodes.append(node)
+        end = len(events) + 1
+        return [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, end]},
+            *nodes,
+            {"counter": end, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+    @classmethod
+    def _operation_inputs(cls, events, tmp_path):
+        """(name, input tensor) for each operation, in operation order; None for one with no input."""
+        conn, cursor = _import_to_db(_make_report(cls._graph(events)), tmp_path)
+        try:
+            cursor.execute(
+                """SELECT o.name, it.tensor_id FROM operations o
+                   LEFT JOIN input_tensors it ON it.operation_id = o.operation_id AND it.rank = o.rank
+                   ORDER BY o.operation_id"""
+            )
+            return cursor.fetchall()
+        finally:
+            conn.close()
+
+    @classmethod
+    def _deallocated_tensor_ids(cls, events, tmp_path):
+        """The input tensor of each ttnn::deallocate operation, in operation order (None for one with no input)."""
+        return [tensor_id for name, tensor_id in cls._operation_inputs(events, tmp_path) if name == "ttnn::deallocate"]
+
+    def test_reused_address_is_credited_to_the_tensor_living_there(self, tmp_path):
+        """Tensor 2 reuses tensor 1's freed address; freeing it again must not be credited to tensor 1."""
+        events = [
+            ("tensor", 1, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+            ("tensor", 2, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, 2]
+
+    def test_dram_and_l1_tensors_at_the_same_address_are_told_apart(self, tmp_path):
+        events = [
+            ("tensor", 1, 8192, self.L1),
+            ("tensor", 2, 8192, self.DRAM),
+            ("dealloc", 8192, self.L1),
+            ("dealloc", 8192, self.DRAM),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, 2]
+
+    def test_deallocate_without_buffer_type_takes_the_latest_tensor_at_the_address(self, tmp_path):
+        events = [
+            ("tensor", 1, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+            ("tensor", 2, 4096, self.L1),
+            ("dealloc", 4096, None),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, 2]
+
+    def test_tensor_without_buffer_type_still_matches_a_typed_deallocate(self, tmp_path):
+        """Captures that predate the tensor's buffer_type still credit the deallocation."""
+        events = [("tensor", 1, 4096, None), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1]
+
+    def test_freed_tensor_is_not_credited_with_a_later_free_at_its_address(self, tmp_path):
+        """A scratch buffer that reuses tensor 1's freed address is freed in turn: tensor 1 is already gone."""
+        events = [("tensor", 1, 4096, self.L1), ("dealloc", 4096, self.L1), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, None]
+
+    def test_same_address_on_two_devices_is_credited_per_device(self, tmp_path):
+        events = [
+            ("tensor", 1, 4096, self.L1, 0),
+            ("tensor", 2, 4096, self.L1, 1),
+            ("dealloc", 4096, self.L1, 1),
+            ("dealloc", 4096, self.L1, 0),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [2, 1]
+
+    def test_address_with_no_tensor_has_no_input(self, tmp_path):
+        """A scratch buffer that no tensor node ever named: the operation is kept, with no input tensor."""
+        events = [("tensor", 1, 4096, self.L1), ("dealloc", 12288, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [None]
+
+    def test_tensor_seen_at_a_live_slot_takes_over_the_deallocation(self, tmp_path):
+        """Tensor 2 shows up at tensor 1's address before any free there (a view, or a free the capture missed): the
+        free goes to tensor 2, the one living there now."""
+        events = [("tensor", 1, 4096, self.L1), ("tensor", 2, 4096, self.L1), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [2]
+
+    def test_typed_deallocate_does_not_credit_a_tensor_of_another_type(self, tmp_path):
+        events = [("tensor", 1, 4096, self.DRAM), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [None]
+
+    def test_deallocate_on_an_unknown_device_credits_no_tensor(self, tmp_path):
+        """Tensor and free nodes both carry device_id in captures that carry address; a free without one names no
+        device, so it is not matched to a tensor recorded on one."""
+        events = [("tensor", 1, 4096, self.L1, 0), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [None]
+
+    def test_deallocate_without_address_uses_its_allocation(self, tmp_path):
+        """A free with no params of its own takes address, buffer type and device from the buffer_allocate it is
+        connected to."""
+        events = [
+            ("tensor", 1, 8192, self.L1, 0),
+            ("tensor", 2, 8192, self.DRAM, 0),
+            ("alloc", 8192, self.DRAM, 0),
+            ("dealloc_of_last_alloc",),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [2]
+
+    def test_free_inside_an_operation_is_lifted_into_its_inputs(self, tmp_path):
+        """A free inside a function_start/function_end pair (Python-level ttnn.deallocate) takes the tensor living at
+        the address, as a top-level free does, and the operation gets it as its input; a later top-level free at the
+        same address finds nothing left there."""
+        events = [
+            ("tensor", 1, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+            ("tensor", 2, 4096, self.L1),
+            ("start", "ttnn.deallocate"),
+            ("dealloc", 4096, self.L1),
+            ("end", "ttnn.deallocate"),
+            ("dealloc", 4096, self.L1),
+        ]
+        assert self._operation_inputs(events, tmp_path) == [
+            ("ttnn::deallocate", 1),
+            ("ttnn.deallocate", 2),
+            ("ttnn::deallocate", None),
+        ]
+
+    def test_reused_address_gives_each_tensor_its_own_deallocate_operation(self):
+        """What the visualizer shows: each tensor's lifetime ends at the free of its own buffer."""
+        events = [
+            ("tensor", 1, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+            ("tensor", 2, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+        ]
+        conn = sqlite3.connect(":memory:")
+        try:
+            cursor = conn.cursor()
+            graph_report.create_database_schema(cursor)
+            graph_report.import_graph(cursor, self._graph(events), record_tensor_lifetime=True)
+            lifetimes = cursor.execute(
+                "SELECT tensor_id, deallocate_operation_id FROM tensor_lifetime ORDER BY tensor_id"
+            ).fetchall()
+            deallocations = [
+                operation_id
+                for (operation_id,) in cursor.execute(
+                    "SELECT operation_id FROM operations WHERE name = 'ttnn::deallocate' ORDER BY operation_id"
+                )
+            ]
+        finally:
+            conn.close()
+        assert lifetimes == [(1, deallocations[0]), (2, deallocations[1])]
+
+    def test_free_keeps_live_buffers_of_another_type_or_device_in_the_snapshot(self, tmp_path):
+        """The per-operation buffer snapshot drops only the freed buffer, not every buffer at its address."""
+        events = [
+            ("alloc", 4096, self.L1, 0),
+            ("alloc", 4096, self.DRAM, 0),
+            ("alloc", 4096, self.L1, 1),
+            ("dealloc", 4096, self.L1, 0),
+        ]
+        conn, cursor = _import_to_db(_make_report(self._graph(events)), tmp_path)
+        try:
+            live = cursor.execute(
+                "SELECT device_id, buffer_type FROM buffers WHERE operation_id = "
+                "(SELECT MAX(operation_id) FROM operations) ORDER BY device_id, buffer_type"
+            ).fetchall()
+        finally:
+            conn.close()
+        assert live == [(0, self.DRAM), (1, self.L1)]
+
+
 @pytest.fixture
 def single_relu_python_io():
     """python_io sidecar for single_relu_mock_graph with a minimal stack trace.
@@ -4855,8 +5074,6 @@ def test_resnet50_e2e_graph_capture(
     mesh_device, batch_size, input_loc, imagenet_label_dict, model_location_generator, tmp_path
 ):
     """Run ResNet50 inference, capture graph, import to DB, and validate structural properties."""
-    import shutil
-
     from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference
 
     report_path = tmp_path / "resnet50_report.json"
@@ -4875,8 +5092,6 @@ def test_resnet50_e2e_graph_capture(
     output_dir = tmp_path / "output"
     db_path = graph_report.import_report(report_path, output_dir)
     assert db_path.exists(), "Imported DB should be created"
-
-    shutil.copy2(db_path, "/tmp/db.sqlite")
 
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
