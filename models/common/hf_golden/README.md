@@ -20,6 +20,7 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_minimax_m3.py` | MiniMaxAI/MiniMax-M3 | transformers `minimax_m3_vl` |
 | `generate_golden_minimax_m3_1_flash.py` | MiniMaxAI/MiniMax-M3.1-Flash | M3's class, all layers sparse, MXFP8/NVFP4 dequantized |
 | `generate_golden_deepseek_v4_flash.py` | deepseek-ai/DeepSeek-V4-Flash | transformers `deepseek_v4`, FP8/FP4 dequantized |
+| `generate_golden_deepseek_v4_1_flash.py` | deepseek-ai/DeepSeek-V4.1-Flash-1017 | DeepSeek's reference `inference/model.py` (no transformers `deepseek_v41`), FP8/FP4 dequantized, Engram tables memory-mapped |
 | `generate_golden_deepseek_v4_pro_0813.py` | deepseek-ai/DeepSeek-V4-Pro-0813 | same class as Flash |
 | `generate_golden_glm_5_2.py` | zai-org/GLM-5.2 | transformers `glm_moe_dsa` |
 | `generate_golden_xing4_0_29b_a4b.py` | XingChen-AGI/Xing4.0-29B-A4B | repo remote code (MLA + mHC + MoE) |
@@ -38,9 +39,6 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_qwen3_8_27b.py` | Qwen/Qwen3.8-27B | transformers `qwen3_5` (Gated DeltaNet + gated GQA), torch GDN reference |
 | `generate_golden_mistral_medium_3_5.py` | mistralai/Mistral-Medium-3.5-128B | transformers `mistral3` (`ministral3` text model), FP8 weights dequantized |
 | `generate_golden_whole_model.py` | Qwen/Qwen3.8-27B, Mistral-Medium-3.5 (`isl10240`, older layout) | whole model, one forward (see below) |
-
-Not covered yet:
-- **DeepSeek-V4.1-Flash**: transformers has no implementation and the repo ships no modeling code.
 
 ```
 python generate_golden_<checkpoint>.py --isl 10240                          # the trace
@@ -165,6 +163,22 @@ raw, 7.15 chat; score PPL with the multiplier and softcap applied, or it reads i
 `--attn-chunk 4096`: 0.9 min from cached weights, 18 GB GPU peak, 41 GB on disk. Its K/V on
 sliding layers keep every position (make_cache: DynamicCache(config) would keep only the last 2047), and the first
 10240 positions of that trace are bit-identical to a bare isl 10240 run (hidden states and K/V, all 52 layers).
+
+**DeepSeek-V4.1-Flash-1017:** transformers has no `deepseek_v41` (huggingface/transformers#48755), so this runs
+DeepSeek's own reference implementation from the repo's `inference/` (pinned with the checkpoint) under the engine:
+`build()` wraps its `Transformer`, `stages()` drives its `Block`s, and its TileLang `kernel.py` is replaced by torch
+`sparse_attn` / `hc_split_sinkhorn` (checked against the kernels at startup when tilelang is installed) with the
+in-graph activation rounding off (the unquantized model, as V4-Flash). Cross-layer state (compressed KV, index keys,
+top-k, candidate blocks) passes through the reference's own `shared_attn`; the mHC pre mix is carried per layer. The
+two ~98 GB Engram tables are memory-mapped from their shards and only the hashed rows are read. Indexer scores, the
+sparse-attention gather and `hc_post` run in token chunks, so isl 56320 fits an H100 (~30 GB of weights per layer).
+The selftest compares against one whole, unchunked reference forward; it executes the downloaded reference code.
+
+```
+uv run --no-project --python python_env/bin/python --with sympy --with pillow \
+    python generate_golden_deepseek_v4_1_flash.py --selftest
+uv run ... --with tilelang==0.1.12 python generate_golden_deepseek_v4_1_flash.py --isl 56320
+```
 
 **Muse-Spark-Open-816B-A42B:** Muse-Glimmer's attention, embedding and logits (plus a weightless o_norm before the
 output gate), fp32 residual gates instead of residual adds, and MoE on all 62 layers: 256 experts, top 8, run in a
