@@ -122,3 +122,56 @@ def test_local_kda_prefill_one_prompt_per_row_vs_hf(mesh_device, weights):
     p_sp = pcc(out_sp, out[0:1])
     logger.info(f"  sequence-parallel vs local on prompt 0: pcc {p_sp:.6f} (worst local gate {worst:.6f})")
     assert p_sp > 0.999
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+def test_sp_prefill_padded_ragged_chunk_carry(mesh_device, weights):
+    """The served shape for the sequence-parallel KDA scan: a chunk whose valid end lies inside a bucket-padded chunk
+    (the 2026-10-29 APC smoke: 3968 valid rows in a 16384-row chunk on the 8x4, rows 2-7 entirely past the end; here
+    3968 of 16384 on the block: row 1 entirely past it) vs the same rows padded minimally: the valid outputs and the
+    carries (recurrent state, conv history) agree with HF and with each other (different chunk lengths group the
+    scan differently: bf16/fp32 rounding only)."""
+    snapshot, text, raw = weights
+    cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
+    hf = _hf_linear_attention(snapshot, text, raw)
+    attn = {k[len("self_attn.") :]: v for k, v in raw.items()}
+    mesh = GLMMesh.from_device(mesh_device)
+    rows = mesh.rows
+    tt = TtKDA(mesh_device, cfg, attn, layer_idx=LAYER, mesh=mesh)
+    n = 3968
+    torch.manual_seed(1)
+    x = (torch.randn(1, n, cfg.hidden_size) * 0.8).to(torch.bfloat16)
+    y_hf, layer = _hf_run(hf, text, x)
+
+    def run(T):
+        xp = torch.zeros(1, T, cfg.hidden_size, dtype=torch.bfloat16)
+        xp[:, :n] = x
+        x_dev = mesh.upload(xp, ttnn.bfloat16, rows=1)  # slab r = rows [r*T/rows, (r+1)*T/rows)
+        state = tt.allocate_state(1)
+        y, new_state = tt.prefill_forward(x_dev, state, tt.scalar(0), tt.scalar(n))
+        out = mesh.to_host(y, rows=1).float()[:, :n]
+        return out, _carries(mesh, new_state, cfg)[0]
+
+    unit = 32 * rows
+    y_min, (rec_min, conv_min) = run(-(-n // unit) * unit)
+    y_pad, (rec_pad, conv_pad) = run(16384)
+    conv_hf = layer.conv_states[0][:, :, -3:].transpose(1, 2)
+    p = {
+        "out min vs HF": pcc(y_hf, y_min),
+        "out padded vs HF": pcc(y_hf, y_pad),
+        "out padded vs min": pcc(y_min, y_pad),
+        "recurrent min vs HF": pcc(layer.recurrent_states[0], rec_min),
+        "recurrent padded vs HF": pcc(layer.recurrent_states[0], rec_pad),
+        "recurrent padded vs min": pcc(rec_min, rec_pad),
+        "conv min vs HF": pcc(conv_hf, conv_min),
+        "conv padded vs HF": pcc(conv_hf, conv_pad),
+    }
+    logger.info(
+        f"SP KDA layer {LAYER}, {n} valid rows in a {16384}-row chunk on {MESH}: "
+        + ", ".join(f"{k} {v:.6f}" for k, v in p.items())
+        + f"; padded vs min bit-identical: out {torch.equal(y_min, y_pad)} recurrent {torch.equal(rec_min, rec_pad)}"
+    )
+    assert min(p.values()) > 0.995, p
+    assert p["out padded vs min"] > 0.999 and p["recurrent padded vs min"] > 0.999, p
