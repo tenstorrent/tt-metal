@@ -17,6 +17,8 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 
 - Iteration 5 (batched TP grads): patch drafted from the iteration-4 TP profile ranking (`O/iter4_tp_ranked_chip0.txt`, ad-hoc per-op table of chips 0 and 2), chain `O/iter5.sh` -> `O/iter5.log` (harness `O/iter5_harness.log` 14 passed; gradient check `O/iter5_tp_grad_check_tp4_batched.{log,npz}` vs the existing single-chip reference, PASS; `tp_measure.sh iter5_tp` after 600 s: `O/iter5_tp_mfu_tp4.log` 556.9 ms, tt-smi, 4-layer TP profile `O/iter5_tp_tracy_tp4_4layers` -> `O/iter5_tp_analysis.txt`). The chain's trailing TP-shape sweeps were stopped after the first (`O/iter5_matmul_sweep1d_gateup_fwd_tp.log`: ttnn's own choice 1.67 ms vs best 1.66 at the TP-local gate_up shape, so no config win there) to free the device for iteration 6; the other TP shapes are still to be swept.
 
+- Iteration 5b (batched mode for the composite TP adapters): patch `lora.py` / `fused_lora.py`; measured in the shared chain `O/iter6.sh` -> `O/iter6.log` (harness `O/iter6_harness.log` 15 passed with 5b and 6 on; gradient check `O/iter6_tp_grad_check_tp4.{log,npz}` PASS, 4 partials per layer; `tp_measure.sh iter5b_tp` with `EXTRA_ARGS=--no-allcore-rmsnorm` (new hook in `tp_measure.sh`) after 600 s: `O/iter5b_tp_mfu_tp4.log` 563.2 ms, tt-smi, profile `O/iter5b_tp_tracy_tp4_4layers` -> `O/iter5b_tp_analysis.txt`, per-op `O/iter5b_tp_ranked_ops.txt` from the new `tp_rank_ops.py`; iteration 5's per-op table `O/iter5_tp_ranked_ops.txt`). The iteration-5 commit was amended twice to take the iteration-6 wiring back out of `train.py` / `tp_gradient_check.py` (it had been applied by the queued iteration-6 build script while the commit was being made); the second amend went through the index only (`git hash-object` + `update-index`, `--no-verify`) so the running chain's files were not touched.
+
 ## Commits (local, never pushed)
 
 | iteration | commit | content |
@@ -30,7 +32,8 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | review follow-up | `4229a061220` | TP=4 gradient check, 16-layer point, exit restated at the measured clock, arithmetic and attribution fixes |
 | review round 2 close | `5bfaf0a9775` | text corrections, phase closed |
 | 4 | `dc6ccf3db8e` | `write_tile_block` metal op, `FORWARD_PROGRAM_CONFIG` (swept gate_up config), sweep scripts, iteration-4 evidence, doc table fixes |
-| 5 | (this commit) | batched TP all-reduce of the partial LoRA gradients (`reduce_partial_lora_grads`), TP-shape sweep filters, iteration-5 evidence |
+| 5 | `7c19e385351` | batched TP all-reduce of the partial LoRA gradients (`reduce_partial_lora_grads`), TP-shape sweep filters, iteration-5 evidence |
+| 5b | (this commit) | batched mode for the composite TP adapters (qkv, out), `tp_rank_ops.py`, `EXTRA_ARGS` in `tp_measure.sh`, iteration-5b evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run described in `perf_analysis.md`, "Iteration 1".
 - Review round 1 of the loop (`doc/optimization/review_round1.md`): required a TP=4 gradient-level check of the fused/transposed paths (`tp_gradient_check.py`: `O/tp_grad_check_single.{npz,log}`, `O/tp_grad_check_tp4_plain.{npz,log}`, `O/tp_grad_check_tp4_fused.{npz,log}`), the exit restated at the measured clock with the falling-clock anomaly classified, and arithmetic fixes in the gap decomposition; also taken: the 16-layer Tracy point the plan's rule asks for once 16 layers fit (`O/iter3_fused_tracy_16layers*`), the iteration-3 op sequence (`O/iter3_fused_op_sequence_1layer.txt`), the fused-LoRA isolation script and its after-fix log in evidence.

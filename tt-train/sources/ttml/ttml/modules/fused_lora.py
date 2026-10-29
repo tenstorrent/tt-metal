@@ -150,7 +150,8 @@ def fuse_lora_into_frozen_weights(model, batched_tp_grads: bool = True) -> list[
     ``batched_tp_grads``: under TP, drop the per-layer all-reduces of the LoRA ``h`` / ``dh`` (``[T, r]``, four per
     layer, latency-bound at ~150 us each on the 1x4 ring) and leave the replicated adapter of each parallel layer
     (``A`` of a column-parallel, ``B`` of a row-parallel layer) with a partial gradient, which
-    :func:`reduce_partial_lora_grads` sums over the TP axis in two collectives per step. The training step must
+    :func:`reduce_partial_lora_grads` sums over the TP axis in two collectives per step. This marks every TP LoRA
+    wrapper, fused or on the composite adapter (the shapes not on the transposed path). The training step must
     call it after the backward and before the optimizer step."""
     from .lora import LoraColumnParallelLinear, LoraLinear, LoraRowParallelLinear
 
@@ -158,6 +159,10 @@ def fuse_lora_into_frozen_weights(model, batched_tp_grads: bool = True) -> list[
     for name, module in model.named_modules():
         if not isinstance(module, (LoraLinear, LoraColumnParallelLinear, LoraRowParallelLinear)):
             continue
+        if batched_tp_grads and isinstance(module, LoraColumnParallelLinear) and not module.gather_output:
+            module.tp_partial_grads = ("lora_A",)
+        elif batched_tp_grads and isinstance(module, LoraRowParallelLinear):
+            module.tp_partial_grads = ("lora_B",)
         if not getattr(module, "weight_transposed", False) or getattr(module, "lora_fused", False):
             continue
         if isinstance(module, LoraColumnParallelLinear) and module.gather_output:
@@ -173,10 +178,6 @@ def fuse_lora_into_frozen_weights(model, batched_tp_grads: bool = True) -> list[
         ttnn.deallocate(value)
         ttnn.deallocate(zeros)
         module.lora_fused = True
-        if batched_tp_grads and isinstance(module, LoraColumnParallelLinear):
-            module.tp_partial_grads = ("lora_A",)
-        elif batched_tp_grads and isinstance(module, LoraRowParallelLinear):
-            module.tp_partial_grads = ("lora_B",)
         converted.append(name)
     return converted
 

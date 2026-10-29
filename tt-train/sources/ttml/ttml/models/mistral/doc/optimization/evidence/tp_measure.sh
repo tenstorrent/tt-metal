@@ -22,8 +22,8 @@ except Exception: print('n/a')")"
 rm -f /dev/shm/sm_segment.* 2>/dev/null
 echo "=== $TAG TP=4 MFU after ${COOL}s cool-down $(date -u +%FT%TZ)"; sleep $COOL
 rm -f $O/${TAG}.flag; sample $O/${TAG}_mfu_tp4_tt-smi.txt $O/${TAG}.flag &
-timeout 3600 $PY $TRAIN --tp 4 --layers 0 --steps 8 --warmup-steps 2 --random-init --random-data --loss-log $O/${TAG}_mfu_tp4.json > $O/${TAG}_mfu_tp4.log 2>&1; echo "rc=$?"; touch $O/${TAG}.flag; wait; grep -E "layers," $O/${TAG}_mfu_tp4.log | tail -1
+timeout 3600 $PY $TRAIN ${EXTRA_ARGS:-} --tp 4 --layers 0 --steps 8 --warmup-steps 2 --random-init --random-data --loss-log $O/${TAG}_mfu_tp4.json > $O/${TAG}_mfu_tp4.log 2>&1; echo "rc=$?"; touch $O/${TAG}.flag; wait; grep -E "layers," $O/${TAG}_mfu_tp4.log | tail -1
 echo "=== $TAG TP=4 Tracy 4 layers $(date -u +%FT%TZ)"
 rm -rf $O/${TAG}_tracy_tp4_4layers; rm -f $O/${TAG}.flag; sample $O/${TAG}_tracy_tp4_4layers_tt-smi.txt $O/${TAG}.flag &
-timeout 3600 $PY -m tracy -r -p --op-support-count 60000 -o $O/${TAG}_tracy_tp4_4layers $TRAIN --tp 4 --layers 4 --steps 4 --warmup-steps 2 --random-init --random-data > $O/${TAG}_tracy_tp4_4layers.log 2>&1; echo "rc=$?"; touch $O/${TAG}.flag; wait; grep -E "layers," $O/${TAG}_tracy_tp4_4layers.log | tail -1
+timeout 3600 $PY -m tracy -r -p --op-support-count 60000 -o $O/${TAG}_tracy_tp4_4layers $TRAIN ${EXTRA_ARGS:-} --tp 4 --layers 4 --steps 4 --warmup-steps 2 --random-init --random-data > $O/${TAG}_tracy_tp4_4layers.log 2>&1; echo "rc=$?"; touch $O/${TAG}.flag; wait; grep -E "layers," $O/${TAG}_tracy_tp4_4layers.log | tail -1
 echo "=== done $(date -u +%FT%TZ)"

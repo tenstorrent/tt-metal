@@ -275,8 +275,14 @@ class LoraColumnParallelLinear(AbstractModuleBase):
             )
             return base + lora_update * self.scaling
         # lora_B is column-sharded: dA needs the all-reduced dh (see LoraApply).
+        # Batched mode (`fused_lora.reduce_partial_lora_grads`): dA stays the rank's partial, no per-layer all-reduce.
         return lora_apply(
-            base, lora_input, self.lora_A.tensor, self.lora_B.tensor, self.scaling, reduce_axis=self.cluster_axis
+            base,
+            lora_input,
+            self.lora_A.tensor,
+            self.lora_B.tensor,
+            self.scaling,
+            reduce_axis=None if getattr(self, "tp_partial_grads", None) else self.cluster_axis,
         )
 
 
@@ -346,18 +352,24 @@ class LoraRowParallelLinear(AbstractModuleBase):
                 out = ttml.ops.binary.add(out, self.bias.tensor)
             return out
         base = _base_linear(self, x, None)
-        base = ttml.ops.distributed.all_reduce(base, self.input_is_parallel, self.cluster_axis)
-        if self.bias is not None:
-            base = ttml.ops.binary.add(base, self.bias.tensor)
-        # lora_A is row-sharded (each device sees a slice of in_features), so
-        # an all_reduce is needed after lora_A to sum partial projections before
-        # the replicated lora_B can be applied.
         lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
-        # A is row-sharded, so h is a partial sum: all-reduce it before B (B is
-        # replicated and then sees the full h, so dB is already complete).
+        # lora_A is row-sharded (each device sees a slice of in_features), so h is a partial sum.
         h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
+        if getattr(self, "tp_partial_grads", None):
+            # Batched mode: the partial update s * h_r B^T joins the partial base before the one output all-reduce
+            # (linear in h); dh = s g B is full on every rank, dB_r = s g^T h_r is a partial that
+            # `fused_lora.reduce_partial_lora_grads` sums once per step.
+            out = _LoraUpdateAdd.apply(base, h, self.lora_B.tensor, self.scaling)
+            out = ttml.ops.distributed.all_reduce(out, self.input_is_parallel, self.cluster_axis)
+            if self.bias is not None:
+                out = ttml.ops.binary.add(out, self.bias.tensor)
+            return out
+        base = ttml.ops.distributed.all_reduce(base, self.input_is_parallel, self.cluster_axis)
+        if self.bias is not None:
+            base = ttml.ops.binary.add(base, self.bias.tensor)
+        # all-reduce h before B (B is replicated and then sees the full h, so dB is already complete).
         h = ttml.ops.distributed.all_reduce(h, self.input_is_parallel, self.cluster_axis)
         return _LoraUpdateAdd.apply(base, h, self.lora_B.tensor, self.scaling)
 

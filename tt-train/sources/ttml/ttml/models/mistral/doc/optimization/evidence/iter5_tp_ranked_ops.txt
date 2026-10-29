@@ -1,0 +1,20 @@
+chip 0: 2 steps, 59.79 ms kernels per profiled step; classes: math 41.84, other 8.26, glue 5.56, layout 4.14
+   ms/step   ops  op | in0 | in1 | cores
+     6.150     4  Matmul | 1x1x1024x5184 | 1x1x5184x16384 | 110
+     5.516     4  Matmul | 1x1x5184x16384 | 1x1x1024x16384 | 110
+     4.289    17  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+     3.692     4  Matmul | 1x1x1024x8256 | 1x1x8256x5120 | 88
+     3.042     1  Matmul | 1x1x1024x5120 | 1x1x5120x32768 | 110
+     2.934     8  RMSNormBackward | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
+     2.804     4  Matmul | 1x1x8256x5120 | 1x1x1024x5120 | 110
+     2.753     1  Matmul | 1x1x5120x32768 | 1x1x1024x32768 | 110
+chip 2: 2 steps, 55.89 ms kernels per profiled step; classes: math 41.57, glue 5.40, other 4.92, layout 3.99
+   ms/step   ops  op | in0 | in1 | cores
+     6.151     4  Matmul | 1x1x1024x5184 | 1x1x5184x16384 | 110
+     5.515     4  Matmul | 1x1x5184x16384 | 1x1x1024x16384 | 110
+     3.691     4  Matmul | 1x1x1024x8256 | 1x1x8256x5120 | 88
+     3.038     1  Matmul | 1x1x1024x5120 | 1x1x5120x32768 | 110
+     2.926     8  RMSNormBackward | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
+     2.802     4  Matmul | 1x1x8256x5120 | 1x1x1024x5120 | 110
+     2.755     1  Matmul | 1x1x5120x32768 | 1x1x1024x32768 | 110
+     1.933    17  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36

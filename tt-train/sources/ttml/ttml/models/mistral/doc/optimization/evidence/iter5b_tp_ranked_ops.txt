@@ -1,0 +1,16 @@
+chip 2: 2 steps, 57.34 ms kernels per profiled step; classes: math 41.65, other 6.09, glue 5.42, layout 4.18
+   ms/step   ops  op | in0 | in1 | cores
+     6.155     4  Matmul | 1x1x1024x5184 | 1x1x5184x16384 | 110
+     5.514     4  Matmul | 1x1x5184x16384 | 1x1x1024x16384 | 110
+     3.692     4  Matmul | 1x1x1024x8256 | 1x1x8256x5120 | 88
+     3.043     1  Matmul | 1x1x1024x5120 | 1x1x5120x32768 | 110
+     3.007    17  ReduceScatterMinimalAsync | 1x1x1024x5120 |  | 36
+     2.926     8  RMSNormBackward | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
+     2.803     4  Matmul | 1x1x8256x5120 | 1x1x1024x5120 | 110
+     2.754     1  Matmul | 1x1x5120x32768 | 1x1x1024x32768 | 110
+     1.997    17  AllGatherAsync | 1x1x1024x1280 |  | 20
+     1.827     4  SDPABackwardKV | 1x8x1024x128 | 1x8x1024x128 | 64
+     1.734    30  BinaryNg | 1x1x1024x5120 | 1x1x1024x5120 | 110
+     1.651     3  BinaryNg | 1x1x1024x32768 | 1x1x1024x32[1] | 110
+     1.526     1  UntilizeCodegen | 1x1x32768x5120 |  | 110
+     1.374     9  RMSNormForward | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
