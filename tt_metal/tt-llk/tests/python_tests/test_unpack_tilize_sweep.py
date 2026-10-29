@@ -33,7 +33,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
     generate_input_dim,
 )
-from helpers.tile_constants import DEFAULT_TILE_R_DIM, FACE_C_DIM
+from helpers.tile_constants import DEFAULT_TILE_R_DIM, FACE_C_DIM, MAX_FACE_R_DIM
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test, result_tensor
 
@@ -82,7 +82,8 @@ def _regular_path(src_A, input_dimensions, formats, num_faces, torch_format):
     )
 
 
-# narrow_tile=Yes covers [32, 16] tiles (2 vertical 16x16 faces, num_faces=2).
+# narrow_tile=Yes covers tiles one face wide: [32, 16] (2 vertical 16x16 faces, num_faces=2)
+# and [16, 16] (num_faces=1). A one-face tile is always narrow: its rows are 16 datums apart.
 # BH narrow_tile unimplemented for non-8-bit formats (tt-llk#1281).
 @parametrize(
     # Int32 is Int32→Int32 only (unpacker constraint); concatenated via same=True.
@@ -99,7 +100,7 @@ def _regular_path(src_A, input_dimensions, formats, num_faces, torch_format):
     transpose=[Transpose.No],
     narrow_tile=[NarrowTile.No, NarrowTile.Yes],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    num_faces=lambda narrow_tile: ([4, 2, 1] if narrow_tile == NarrowTile.No else [2]),
+    num_faces=lambda narrow_tile: ([4, 2] if narrow_tile == NarrowTile.No else [2, 1]),
     input_dimensions=lambda narrow_tile: (
         [[32, 32], [64, 64], [32, 64], [32, 128], [128, 32], [128, 256]]
         if narrow_tile == NarrowTile.No
@@ -154,8 +155,12 @@ def test_unpack_tilize_comprehensive(
         )
 
     is_narrow = narrow_tile == NarrowTile.Yes
-    # Narrow tile: 2 vertical 16x16 faces (num_faces=2).
-    tile_dimensions = [DEFAULT_TILE_R_DIM, FACE_C_DIM] if is_narrow else None
+    # Narrow tile: 2 vertical 16x16 faces (num_faces=2) or one 16x16 face (num_faces=1).
+    tile_dimensions = (
+        [DEFAULT_TILE_R_DIM if num_faces == 2 else MAX_FACE_R_DIM, FACE_C_DIM]
+        if is_narrow
+        else None
+    )
 
     stimuli_kwargs = {"tile_dimensions": tile_dimensions} if is_narrow else {}
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
