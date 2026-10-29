@@ -204,6 +204,11 @@ public:
             std::variant_size_v<program_factory_t> == 1,
         "DeviceOperation must implement select_program_factory when program_factory_t has more than one type.");
 
+    static_assert(
+        !HasDynamicAxes<DeviceOperation> || HasValidateOnProgramCacheHit<DeviceOperation>,
+        "A device operation that declares dynamic_axes must implement validate_on_program_cache_hit. "
+        "The miss validator is not a substitute on hits.");
+
     static program_factory_t select_program_factory(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         if constexpr (HasDirectDescriptor<DeviceOperation>) {
@@ -246,7 +251,37 @@ public:
         if constexpr (HasDynamicAxes<DeviceOperation>) {
             const std::vector<dynamic_length::DynamicAxis> axes = DeviceOperation::dynamic_axes(attrs, tensor_args);
             dynamic_length::validate_axes(axes, get_type_name(attrs));
+            // A scalar captured below capacity is replayed unchanged against later inputs. Tensor axes are exempt:
+            // the live word is refreshed in place between replays.
+            if (command_queue_is_tracing(tensor_args)) {
+                for (const auto& axis : axes) {
+                    if (axis.tensor != nullptr || axis.capacity == dynamic_length::DynamicAxis::kUnbounded) {
+                        continue;
+                    }
+                    TT_FATAL(
+                        axis.value == axis.capacity,
+                        "{}: {} ({}) must equal its capacity ({}) while a trace is being captured. A shorter scalar "
+                        "is replayed unchanged",
+                        get_type_name(attrs),
+                        axis.name,
+                        axis.value,
+                        axis.capacity);
+                }
+            }
         }
+    }
+
+    static bool command_queue_is_tracing(const tensor_args_t& tensor_args) {
+        bool tracing = false;
+        ttsl::reflection::visit_object_of_type<Tensor>(
+            [&](const Tensor& tensor) {
+                if (tracing || tensor.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+                    return;
+                }
+                tracing = tensor.device()->mesh_command_queue().trace_id().has_value();
+            },
+            tensor_args);
+        return tracing;
     }
 
     static spec_return_value_t compute_output_specs(

@@ -4,14 +4,12 @@
 
 #pragma once
 
-#include <concepts>
 #include <cstddef>
 #include <limits>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <variant>
-#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -36,31 +34,19 @@ struct DynamicAxis {
 
     std::string_view name;
     std::size_t capacity = kUnbounded;
-    // Host value. Ignored when `tensor` is set: the live value is only known on device, so neither capacity nor
-    // alignment is checked for it. Keeping it within both is the caller's contract (or the kernel's, if it clamps).
+    // Host value. Always checked against `capacity` and `alignment`, including when `tensor` is set: `split()`
+    // stores the capacity there, and a direct caller must not pass a larger placeholder. The word stored in
+    // `tensor` is not read on the host. Keeping that live value within capacity and alignment is the caller's
+    // contract (or the kernel's, if it clamps). A trace capture additionally requires a scalar axis's value to
+    // equal its capacity; see the mesh adapter.
     std::size_t value = 0;
     const Tensor* tensor = nullptr;
     std::size_t alignment = 1;
 };
 
-// Checks every host length against its capacity and alignment, and checks that a length tensor is a single
-// allocated UINT32/INT32 value on device (its value is not read). Throws naming `operation_name` and the first
-// offending axis.
+// Checks every host placeholder against its capacity and alignment, whether or not a length tensor is set, and
+// checks that a length tensor is a single allocated UINT32/INT32 value on device. The tensor's stored word is not
+// read. Throws naming `operation_name` and the first offending axis.
 void validate_axes(std::span<const DynamicAxis> axes, std::string_view operation_name);
 
 }  // namespace ttnn::dynamic_length
-
-namespace ttnn::device_operation {
-
-// Opt-in: the framework validates the declared axes on every launch, on program cache hits as well as misses,
-// because an op whose hash drops a length can be handed a cached program sized for a smaller capacity.
-template <typename device_operation_t>
-concept HasDynamicAxes = requires(
-    const typename device_operation_t::operation_attributes_t& attrs,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
-    {
-        device_operation_t::dynamic_axes(attrs, tensor_args)
-    } -> std::convertible_to<std::vector<dynamic_length::DynamicAxis>>;
-};
-
-}  // namespace ttnn::device_operation

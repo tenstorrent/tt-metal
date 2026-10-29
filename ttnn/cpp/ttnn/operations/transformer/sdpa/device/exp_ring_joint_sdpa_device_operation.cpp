@@ -32,6 +32,17 @@ std::vector<ttnn::dynamic_length::DynamicAxis> ExpRingJointSDPADeviceOperation::
     }};
 }
 
+void ExpRingJointSDPADeviceOperation::validate_on_program_cache_hit(
+    const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs&) {
+    // Shapes and dtypes are in the default program hash, so a hit already matches the program they selected.
+    // logical_n is not: dynamic_axes holds it to the gathered capacity, and shard 0 must stay non-empty.
+    TT_FATAL(
+        args.logical_n >= 1,
+        "Logical sequence length must be at least 1 (shard 0 must contain real tokens). Got logical sequence "
+        "length: {}",
+        args.logical_n);
+}
+
 void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;

@@ -18,6 +18,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/dynamic_length.hpp"
+#include "ttnn/operations/trace.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn_test_fixtures.hpp"
@@ -72,6 +73,11 @@ struct LengthOp {
 
     static void validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t&) {
         TT_FATAL(!attrs.misused, "LengthOp: misused");
+    }
+
+    // Explicit, so the adapter does not fall back to the miss validator. The misuse check is the same on a hit.
+    static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+        validate_on_program_cache_miss(attrs, tensor_args);
     }
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t& tensor_args) {
@@ -157,6 +163,30 @@ TEST_F(DynamicLengthLaunchTest, AcceptsDeviceLengthTensor) {
 TEST_F(DynamicLengthLaunchTest, RejectsMultiValuedLengthTensor) {
     const auto input = make_input();
     EXPECT_THROW(launch<LengthOp>({}, {.input = input, .length_tensor = make_length_tensor(2)}), std::exception);
+}
+
+// The host placeholder is bounded even when a tensor carries the live word.
+TEST_F(DynamicLengthLaunchTest, RejectsOversizedPlaceholderWithTensor) {
+    const auto input = make_input();
+    EXPECT_THROW(
+        launch<LengthOp>({.length = kCapacity + 1}, {.input = input, .length_tensor = make_length_tensor(1)}),
+        std::exception);
+}
+
+// A scalar captured below capacity would replay that length against any later input.
+TEST_F(DynamicLengthLaunchTest, TraceCaptureRequiresScalarAtCapacity) {
+    const auto input = make_input();
+    const auto trace_id = ttnn::operations::trace::begin_trace_capture(device_, ttnn::QueueId(0));
+    struct Release {
+        tt::tt_metal::distributed::MeshDevice* device;
+        ttnn::MeshTraceId id;
+        ~Release() {
+            ttnn::operations::trace::end_trace_capture(device, id, ttnn::QueueId(0));
+            ttnn::operations::trace::release_trace(device, id);
+        }
+    } release{device_, trace_id};
+    EXPECT_THROW(launch<LengthOp>({.length = 16}, {.input = input}), std::exception);
+    EXPECT_NO_THROW(launch<LengthOp>({.length = kCapacity}, {.input = input}));
 }
 
 }  // namespace

@@ -37,7 +37,8 @@ void validate_axes(std::span<const DynamicAxis> axes, std::string_view operation
                 operation_name,
                 axis.name,
                 t.logical_volume());
-            continue;
+            // The word stored in the tensor is not read. The host placeholder (`value`) is still bounded, so a
+            // direct caller cannot pair an oversized scalar with a tensor and have the factory size past capacity.
         }
         TT_FATAL(
             axis.value <= axis.capacity,
