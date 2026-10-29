@@ -172,13 +172,6 @@ def pytest_unconfigure(config):
         "phase_testloop_ms": _ms["testloop"],
         "phase_unconfigure_at_ms": now_ms - _LAUNCH_MS if anchored else -1,
     }
-    # With tests.plugins.device_reuse loaded, phase_device_opens counts every open call and
-    # these split them into real opens, reuses, and reopens because memory was still allocated.
-    reuse = sys.modules.get("tests.plugins.device_reuse")
-    if reuse is not None and not in_workers:
-        fields["phase_device_real_opens"] = reuse._stats["opens"]
-        fields["phase_device_reuses"] = reuse._stats["reuses"]
-        fields["phase_device_reopens_dirty"] = reuse._stats["reopens_dirty"]
     try:
         with open(_OUT, "w") as f:
             f.write(",".join(f'"{k}":{int(v)}' for k, v in fields.items()))

@@ -381,22 +381,23 @@ fi
 PRECOMPILE_PLUGIN_DIR="$REPO_DIR"
 
 # --- Warm process (scripts/safe_pytest_warm.py) ---
-# One long-lived process per checkout keeps torch/ttnn imported and the device open between calls
-# and runs each call's pytest session in-process; its docstring lists the state it resets between
-# sessions. While it is up it holds the device lock, and it lets go as soon as anyone else waits.
+# One long-lived process per checkout keeps torch/ttnn imported and the runtime initialized between
+# calls and runs each call's pytest session in-process; each session's fixtures still open and close
+# the device as usual. Its docstring lists the state it resets between sessions. While it is up it
+# holds the device lock (the runtime keeps the chip open), and it lets go as soon as anyone else waits.
 # WARM records the route a call took:
 #   attach   - a warm process for this checkout was up; the call ran there (no flock here)
 #   spawn    - this call took the lock, started the warm process and ran there
 #   fallback - the warm process refused or was gone; the call ran cold
 #   yield    - eligible, but a warm process just made way for another runner; ran cold so that
 #              runner is not starved by a new warm process (see WARM_YIELD below)
-#   off      - not eligible: simulator, --dev, --profile, SAFE_PYTEST_WARM=0, device reuse off
+#   off      - not eligible: simulator, --dev, --profile, SAFE_PYTEST_WARM=0
 # While a warm process serves a call it, not this script, sets and clears the dirty flag: it is
 # the one holding the lock.
 WARM=off
 WARM_ELIGIBLE=false
 if [[ "$SIM_MODE" == false && "$DEV_MODE" == false && "$PROFILE_MODE" == false \
-      && "${SAFE_PYTEST_WARM:-1}" != 0 && "${SAFE_PYTEST_REUSE_DEVICE:-1}" != 0 ]]; then
+      && "${SAFE_PYTEST_WARM:-1}" != 0 ]]; then
     WARM_ELIGIBLE=true
     WARM_PY="$REPO_DIR/scripts/safe_pytest_warm.py"
     WARM_KEY=$(printf %s "$REPO_DIR" | sha1sum | cut -c1-12)
@@ -742,14 +743,6 @@ if [[ -n "${TT_DEVICE_TIMING_LOG:-}" ]]; then
     export SAFE_PYTEST_PHASES_FILE="$PHASES_FILE"
     export PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}"
     PYTEST_CMD+=(-p tests.plugins.phase_timing)
-fi
-# Device reuse (tests/plugins/device_reuse.py): one device open for the whole session instead of
-# one per parametrized case. Hardware only; off under --profile (the device profiler reads its
-# data at device close) and with SAFE_PYTEST_REUSE_DEVICE=0.
-if [[ "$SIM_MODE" == false && "$PROFILE_MODE" == false && "${SAFE_PYTEST_REUSE_DEVICE:-1}" != 0 ]]; then
-    [[ ":${PYTHONPATH:-}:" == *":$REPO_DIR:"* ]] || export PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}"
-    PYTEST_CMD+=(-p tests.plugins.device_reuse)
-    echo "SAFE_PYTEST: device reuse on — one device open per session (SAFE_PYTEST_REUSE_DEVICE=0 to turn off)"
 fi
 # -x: stop on first failure (avoids running tests after a hang bricks the device)
 # --run-all: skip -x to get full pass/fail counts (for eval scoring)

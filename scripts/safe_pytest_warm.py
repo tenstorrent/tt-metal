@@ -4,16 +4,19 @@
 
 """Warm test process for scripts/run_safe_pytest.sh.
 
-One long-lived process per checkout keeps torch, ttnn and pytest imported and the device open
-(through tests/plugins/device_reuse.py) between run_safe_pytest.sh calls, and runs each call's
-pytest session in-process. It saves the per-call interpreter start, imports, device open and
-interpreter exit (~3 s of a ~4 s single-test call on wormhole).
+One long-lived process per checkout keeps torch, ttnn and pytest imported and the Metal runtime
+initialized between run_safe_pytest.sh calls, and runs each call's pytest session in-process. The
+device itself is opened and closed by each session's fixtures, as in a fresh process; only the
+runtime and chip setup underneath survive, so every open after the worker's first one is the cheap
+kind (~0.1 s instead of ~0.7 s on wormhole). It saves the per-call interpreter start, imports,
+most of the first device open, and interpreter exit.
 
 Subcommands (run_safe_pytest.sh drives them; see its "Warm process" section):
   worker --repo DIR --lock-fd N [--since-ms MS]
                                    the long-lived process. Started by a run_safe_pytest.sh call that
                                    holds the device lock (taken at epoch MS); it inherits that lock
-                                   fd and keeps the lock for as long as it keeps the device open.
+                                   fd and keeps the lock for as long as it lives (the runtime keeps
+                                   the chip open even while no device is).
   run    --repo DIR [--wait-start SECONDS PIDFILE] [--pid-out F] -- ARGS...
                                    run one pytest session (ARGS as for `pytest`) in DIR's worker,
                                    with this process's environment, cwd, stdout and stderr; F gets
@@ -21,38 +24,38 @@ Subcommands (run_safe_pytest.sh drives them; see its "Warm process" section):
                                    Exit code: pytest's, or 75 (not run: no worker, or it refused)
                                    or 70 (the worker died during the run).
   ping   --repo DIR                exit 0 if DIR's worker is up, else 75.
-  stop   --repo DIR [--pid P]      ask DIR's worker (only if its pid is P) to close the device
-                                   and exit.
+  stop   --repo DIR [--pid P]      ask DIR's worker (only if its pid is P) to exit.
 
 State carried from one call to the next, and how it is handled:
   - kernel binaries: the in-process JIT build cache keys a kernel by its source path, not its
     contents, so ttnn.device.ClearKernelCache() runs before every session; the on-disk cache then
     rebuilds exactly the kernels whose sources changed.
-  - programs: the program cache is emptied and re-enabled each time device_reuse hands the device
-    out (generic_op hashes kernel source paths too).
+  - programs and device memory: none carry over. The program cache belongs to a device, and each
+    session's fixtures close their devices, as in a fresh process.
   - Python modules: every module a session loaded that is not an installed library (the op under
     test, its tests, conftests, plugins) is dropped afterwards, so the next session imports the
-    files as they are on disk. Modules the worker loaded at start (ttnn itself, device_reuse) are
-    fingerprinted; if any of their files, or the built libraries, change, the worker refuses
-    and exits, and the call runs cold.
+    files as they are on disk. Modules the worker loaded at start (ttnn itself) are fingerprinted;
+    if any of their files, or the built libraries, change, the worker refuses and exits, and the
+    call runs cold.
   - environment: TT_*/TTNN_* variables are read once by the runtime, so a call whose values
     differ from the worker's is refused (runs cold). The JIT-server variables may differ.
   - RNG: torch, numpy and random generators are restored to their start state before each
     session, as a fresh interpreter would have them.
-  - device memory: device_reuse reopens the device if anything is still allocated on it.
-  - failures: after any session that does not pass (exit code != 0) the worker closes the device
-    and exits, so a hang or a broken device never carries over. It also exits after
+  - failures: after any session that does not pass (exit code != 0) the worker exits, so a hang
+    or a broken device never carries over. It also exits after
     SAFE_PYTEST_WARM_MAX_RUNS sessions, SAFE_PYTEST_WARM_MAX_AGE_S seconds, or past
     SAFE_PYTEST_WARM_MAX_RSS_GB of memory.
   - other users of the device: the worker holds the device lock while it is up. It watches the
     lock file with inotify, and its mtime against the time the spawning call took the lock (for
     runners that started waiting before the worker existed); as soon as anyone else opens it
     (every runner does, right before it waits on the lock; run_safe_pytest.sh again on each
-    20 s retry), the worker closes the device and exits, at once when idle or right after the
-    session in progress, and leaves a mark that keeps the next lock winner from starting a new
-    worker for 120 s. It also exits after SAFE_PYTEST_WARM_IDLE_S seconds without a call.
-  - device close: if closing the device logs Ethernet cores stuck outside base firmware, the
-    worker resets the device (tt-smi -r) before it lets go of the lock.
+    20 s retry), the worker exits, at once when idle or right after the session in progress, and
+    leaves a mark that keeps the next lock winner from starting a new worker for 120 s. It also
+    exits after SAFE_PYTEST_WARM_IDLE_S seconds without a call.
+  - Ethernet cores left outside base firmware at a device close are logged in the session's own
+    output, where run_safe_pytest.sh's stuck-Ethernet check sees them, as in a cold run.
+  - known gap: a passing session that leaves a device open (a test that opens one and never
+    closes it) is not detected; the next session's open of the same device would fail.
 """
 
 from __future__ import annotations
@@ -221,7 +224,6 @@ class Worker:
         # Watch before the slow imports: a runner that opens the lock file meanwhile is seen too.
         self.lock_watch = self._watch_lock_file()
 
-        os.environ["SAFE_PYTEST_KEEP_DEVICE_OPEN"] = "1"
         if self.repo not in sys.path:
             sys.path.insert(0, self.repo)
         os.chdir(self.repo)
@@ -233,10 +235,8 @@ class Worker:
         import torch
         import ttnn  # noqa: F401
 
-        import tests.plugins.device_reuse  # noqa: F401 - must outlive sessions: it holds the device
-
-        # Session plugins wrap these (device_reuse, phase_timing); put the originals back after each
-        # session so a wrapper from a purged plugin module never outlives its session.
+        # Session plugins wrap these (phase_timing); put the originals back after each session so a
+        # wrapper from a purged plugin module never outlives its session.
         self.patch_points = {}
         for module_name in ("ttnn", "ttnn.device", "ttnn.distributed.distributed"):
             module = sys.modules.get(module_name)
@@ -335,7 +335,6 @@ class Worker:
 
         os.environ.clear()
         os.environ.update(req["env"])
-        os.environ["SAFE_PYTEST_KEEP_DEVICE_OPEN"] = "1"
         sys.path[:] = self.sys_path0
         for entry in reversed([p for p in req["env"].get("PYTHONPATH", "").split(os.pathsep) if p]):
             if entry not in sys.path:
@@ -410,23 +409,8 @@ class Worker:
         watcher = threading.Thread(target=watch_caller, daemon=True)
         watcher.start()
         sys.argv = ["pytest", *req["args"]]
-        # device_reuse is already imported (it holds the device across sessions): hand pytest the
-        # module itself instead of `-p`, which would warn that it cannot assertion-rewrite it.
-        args, plugins, reuse = [], [], sys.modules["tests.plugins.device_reuse"]
-        it = iter(req["args"])
-        for arg in it:
-            if arg == "-p":
-                name = next(it, "")
-                if name == reuse.__name__:
-                    plugins.append(reuse)
-                else:
-                    args += ["-p", name]
-            elif arg == f"-p{reuse.__name__}":
-                plugins.append(reuse)
-            else:
-                args.append(arg)
         try:
-            code = int(pytest.main(args, plugins=plugins))
+            code = int(pytest.main(list(req["args"])))
         except SystemExit as e:
             code = e.code if isinstance(e.code, int) else 1
         except BaseException:  # noqa: BLE001 - report, then exit the worker below
@@ -595,58 +579,12 @@ class Worker:
             print(f"warm worker: session exit {code}, exiting", flush=True)
         return keep
 
-    def _closed_with_stuck_ethernet(self, log_offset: int | None) -> bool:
-        """Did closing the device just now log Ethernet cores that did not return to base
-        firmware? (run_safe_pytest.sh resets the device for that after a cold run.)"""
-        if log_offset is None:
-            return False
-        import re
-
-        try:
-            with open("/proc/self/fd/1", "rb") as f:
-                f.seek(log_offset)
-                text = f.read().decode(errors="replace")
-        except OSError:
-            return False
-        # Same patterns as run_safe_pytest.sh's ETH_STUCK check.
-        return bool(
-            re.search(
-                r"Skipping RISC reset on device \d+ during teardown|Timed out while waiting for active ethernet core",
-                text,
-            )
-        )
-
     def shutdown(self) -> None:
         import gc
-        import subprocess
 
-        sys.stdout.flush()
-        try:
-            log_offset = os.lseek(1, 0, os.SEEK_END)
-        except OSError:
-            log_offset = None
-        dr = sys.modules.get("tests.plugins.device_reuse")
-        if dr is not None:
-            dr.release()
-        sys.stdout.flush()
-        sys.stderr.flush()
-        try:
-            import ctypes
-
-            ctypes.CDLL(None).fflush(None)  # the runtime's C/C++ log output, before re-reading it
-        except (OSError, AttributeError):
-            pass
-        if self._closed_with_stuck_ethernet(log_offset):
-            # Still holding the lock: reset here, before anyone else gets the device.
-            print("warm worker: Ethernet cores stuck after closing the device; resetting", flush=True)
-            try:
-                ok = subprocess.run(["tt-smi", "-r"], timeout=300).returncode == 0
-            except (OSError, subprocess.TimeoutExpired):
-                ok = False
-            if not ok:
-                with open(DIRTY_FLAG, "a"):
-                    pass
-        os.close(self.lock_fd)
+        # The lock fd stays open on purpose: the runtime closes the chip during interpreter exit,
+        # after this, and the kernel drops the lock only once the process is gone, so no other
+        # runner can take the device while that teardown runs.
         # Let interpreter shutdown free what gc.freeze() pinned, or nanobind reports it as leaked.
         gc.unfreeze()
 
