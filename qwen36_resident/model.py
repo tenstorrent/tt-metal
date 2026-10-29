@@ -90,6 +90,8 @@ HEAD_FP32_CBS = (5, 6, 7, 15, 30, 31)
 CHUNK_FP32_CBS = (5, 6, 11, 16, 25, 28)
 # (GDN of a verify of R > 2 rows in the chunked / WY form, gdn_chunk_*.cpp; 0: the rows one after another)
 GDN_CHUNK = os.environ.get("RESIDENT_GDN_CHUNK", "1") == "1"
+# (attention of a verify of R > 2 rows in packed passes of several rows, attn_common.hpp; 0: a pass per row)
+ATTN_PACKED = os.environ.get("RESIDENT_ATTN_PACKED", "1") == "1"
 TOK_PREV = 14  # token state word: the previous verify step's accepted drafts (chunked GDN; none: 0xFFFFFFFF)
 TOK_X0 = 64
 TOK_SLOT = 4  # token state word: the GDN state slot of row 0 (verify)
@@ -732,7 +734,16 @@ class ResidentModel:
         Dt, heads_a = d.Dt, d.h
         q_t = l1(torch.zeros(WORKERS * TILE, Dt * TILE), work_grid, [TILE, Dt * TILE], tile=full)
         M_t = l1(torch.zeros((WORKERS + 1) * TILE, TILE), attn_grid, [TILE, TILE], tile=full)
-        m_slots_t = l1(torch.zeros(1, WORKERS * 128), lead_grid, [1, WORKERS * 128], layout=ttnn.ROW_MAJOR_LAYOUT)
+        # attention of a verify of R > 2 rows: passes of P rows (P * heads <= 32, P dividing R; attn_common.hpp)
+        self.attn_group = (
+            max(p for p in range(1, R + 1) if R % p == 0 and p * d.h <= TILE) if R > 2 and ATTN_PACKED else 1
+        )
+        packed = self.attn_group > 1
+        attn_users = B // self.attn_group
+        slot_words = 512 if packed and self.attn_group * d.h > 16 else 128  # a worker's row-max slot (bf16)
+        m_slots_t = l1(
+            torch.zeros(1, WORKERS * slot_words), lead_grid, [1, WORKERS * slot_words], layout=ttnn.ROW_MAJOR_LAYOUT
+        )
         one_t = l1(torch.ones(WORKERS * TILE, TILE), work_grid, [TILE, TILE], tile=full)
         mean_t = l1(torch.full((2 * TILE, TILE), 1.0 / HD), prep_grid, [TILE, TILE], tile=full)
         rows32 = lambda v: v[None].expand(TILE, -1)
@@ -772,6 +783,7 @@ class ResidentModel:
         self.K_t, self.V_t = settled(cache("K")), settled(cache("V"))
         # a chunk worker streams its KV tiles in blocks of kv_block (L1 independent of the context length)
         kv_block = min(KV_BLOCK, max(chunk_of(wi, max_tp, banks)[3] for wi in range(WORKERS - 1)) or 1)
+        kv_block = max(kv_block, 2 if packed else 1)  # (the tail core scores up to two tail tiles at once)
         nodes = list(range(WORKERS))
         groups_ = [nodes[i : i + FANIN] for i in range(0, WORKERS, FANIN)]
         slots_per_node = max(FANIN - 1, len(groups_))
@@ -1048,13 +1060,13 @@ class ResidentModel:
                 cb(26, chunk_grid, 1, *f32),
                 cb(7, work_grid, 1),
                 cb(8, work_grid, Dt + 1),
-                cb(10, work_grid, 1, ttnn.uint32, 256),
+                cb(10, work_grid, 1, ttnn.uint32, 1088 if packed else 256),
                 cb(23, attn_grid, slots_per_node * (Dt + 1)),
                 cb(25, attn_grid, Dt + 1),
                 # leader and tail core
                 cb(13, prep_grid, Dt),
                 cb(14, prep_grid, 2),
-                cb(17, prep_grid, 3 * B),
+                cb(17, prep_grid, 3 * B + (3 * attn_users + 3 if packed else 0)),
                 T(29, mean_t),
                 # leader
                 cb(2, lead_grid, 1, page=heads_a * Dt * 64 * B),
@@ -1067,15 +1079,15 @@ class ResidentModel:
                 cb(30, lead_grid, 1),
                 # tail core
                 cb(11, tail_grid, Dt),
-                cb(12, tail_grid, 2 * B),
+                cb(12, tail_grid, 4 if packed else 2 * B),
                 cb(16, tail_grid, Dt),
                 cb(18, tail_grid, Dt),
-                cb(19, tail_grid, Dt),
-                cb(20, tail_grid, Dt),
+                cb(19, tail_grid, (2 if packed else 1) * Dt),
+                cb(20, tail_grid, (2 if packed else 1) * Dt),
                 cb(21, tail_grid, Dt),
-                cb(22, tail_grid, B),
-                cb(28, tail_grid, 2 * Dt, ttnn.bfloat8_b, kv_page),
-                cb(31, tail_grid, 2 * Dt, ttnn.bfloat8_b, kv_page),
+                cb(22, tail_grid, 2 * attn_users if packed else B),
+                cb(28, tail_grid, (4 if packed else 2) * Dt, ttnn.bfloat8_b, kv_page),
+                cb(31, tail_grid, (4 if packed else 2) * Dt, ttnn.bfloat8_b, kv_page),
             ]
             # the hub needs free semaphore ids for its fabric connections: the head-group one only on the heads
             sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=all_grid, initial_value=0) for i in range(SEM_GROUP)]
@@ -1130,6 +1142,7 @@ class ResidentModel:
                 int(self.verify),
                 int(ATTN_RR),
                 int(ATTN_2NOC),
+                self.attn_group,
             ]
             group = d.nv // d.nk
             kv_addrs = [sub["K"].buffer_address(), sub["V"].buffer_address()]
