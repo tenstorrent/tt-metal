@@ -57,6 +57,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/small_vector.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-umd/types/arch.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -2461,6 +2462,120 @@ TEST_F(D2DStreamServiceTest, ThreeStageChainOwnIteration) {
     verify_three_stage_chain(stage0, stage1, stage2, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
 }
 
+// The same chain folded back on itself: stage1 sits at the end of the row, (0,0), with
+// stage0 at (0,2) and stage2 at (0,1). Both of stage1's routes leave east, so by default
+// the D2D0 receiver's credit-return connection (the first forwarding link toward stage0)
+// and the D2D1 sender's lane 0 (the first link toward stage2) would use the same ethernet
+// router. A router's worker channel serves one worker, so sharing one hangs the chain: the
+// second connection overwrites the first's worker record and the receiver never sees a
+// free slot (the 4-rank 4x4 prefill chain's hang, on three chips of one Galaxy).
+// D2DStreamService claims each service's routers per chip, so the receiver keeps its link
+// and the sender, created after it, runs on the rest.
+#define D2D_FOLDED_CHAIN_GUARD()                                                                         \
+    if (!service_cores_supported()) {                                                                    \
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";               \
+    }                                                                                                    \
+    const auto shape = this->mesh_device_->shape();                                                      \
+    if (shape.dims() != 2 || shape[1] < 3) {                                                             \
+        GTEST_SKIP() << "Need a 2D mesh with >= 3 devices in a row; got " << shape;                      \
+    }                                                                                                    \
+    const MeshCoordinate upstream_coord(0, 2);                                                           \
+    const MeshCoordinate middle_coord(0, 0);                                                             \
+    const MeshCoordinate downstream_coord(0, 1);                                                         \
+    auto stage0 = this->mesh_device_->create_submesh(MeshShape(1, 1), upstream_coord);                   \
+    auto stage1 = this->mesh_device_->create_submesh(MeshShape(1, 1), middle_coord);                     \
+    auto stage2 = this->mesh_device_->create_submesh(MeshShape(1, 1), downstream_coord);                 \
+    const auto shared_links =                                                                            \
+        folded_middle_shared_links(*this->mesh_device_, middle_coord, upstream_coord, downstream_coord); \
+    if (shared_links < 2) {                                                                              \
+        GTEST_SKIP() << "the folded chain needs >= 2 links from the middle chip toward the other two";   \
+    }                                                                                                    \
+    static_assert(true, "require a semicolon after the macro")
+
+// Precondition of the folded layout: both of the middle chip's routes leave through the
+// same routers (identical forwarding link sets, first link on one ethernet core). Returns
+// how many links that direction has.
+size_t folded_middle_shared_links(
+    const MeshDevice& mesh,
+    const MeshCoordinate& middle_coord,
+    const MeshCoordinate& upstream_coord,
+    const MeshCoordinate& downstream_coord) {
+    const auto middle = mesh.get_fabric_node_id(middle_coord);
+    const auto upstream = mesh.get_fabric_node_id(upstream_coord);
+    const auto downstream = mesh.get_fabric_node_id(downstream_coord);
+    const auto ack_links = tt::tt_fabric::get_forwarding_link_indices(mesh, middle, upstream);
+    const auto send_links = tt::tt_fabric::get_forwarding_link_indices(mesh, middle, downstream);
+    EXPECT_EQ(ack_links, send_links) << "the middle chip's routes no longer leave the same way; the test is void";
+    if (ack_links.empty() || ack_links != send_links) {
+        return 0;
+    }
+    const auto ack_eth = tt::tt_fabric::get_forwarding_eth_core(mesh, middle, upstream, ack_links.front());
+    const auto send_eth = tt::tt_fabric::get_forwarding_eth_core(mesh, middle, downstream, send_links.front());
+    log_info(
+        tt::LogTest,
+        "folded chain: middle {} has {} links toward both peers; the first is eth {} toward stage0 and eth {} "
+        "toward stage2",
+        middle_coord,
+        ack_links.size(),
+        ack_eth,
+        send_eth);
+    EXPECT_EQ(ack_eth, send_eth) << "the middle chip's first links no longer share a router; the test is void";
+    return ack_eth == send_eth ? ack_links.size() : 0;
+}
+
+// The folded chain streams end to end: the middle chip's receiver and sender on disjoint
+// routers. Before the per-chip link claims this hung with the middle receiver parked in
+// wait_for_empty_write_slot.
+TEST_F(D2DStreamServiceTest, ThreeStageChainFoldedOwn) {
+    if (!h2d_host_pinning_supported()) {
+        GTEST_SKIP() << "H2D front-end host-DMA pinning requires a DMA-translation IOMMU (not iommu=pt).";
+    }
+    D2D_FOLDED_CHAIN_GUARD();
+    verify_three_stage_chain(stage0, stage1, stage2, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
+}
+
+// Lane counts: in the folded layout the middle sender gives up the link the middle
+// receiver (created first) holds; stage0's sender, alone on its chip, keeps all of them.
+TEST_F(D2DStreamServiceTest, FoldedChainSenderSkipsReceiverLink) {
+    D2D_FOLDED_CHAIN_GUARD();
+    const ttnn::Shape global_shape({1, 1, 32, 64});
+    const MeshCoordinate local(0, 0);
+    auto cfg0 = make_config(stage0, global_shape);
+    const uint32_t max_lanes = cfg0.max_sender_lanes;
+    auto [sender0, receiver0] = D2DStreamService::create_pair(stage0, stage1, std::move(cfg0));
+    auto [sender1, receiver1] = D2DStreamService::create_pair(stage1, stage2, make_config(stage1, global_shape));
+    const auto stage0_links = tt::tt_fabric::get_forwarding_link_indices(
+        *this->mesh_device_,
+        this->mesh_device_->get_fabric_node_id(upstream_coord),
+        this->mesh_device_->get_fabric_node_id(middle_coord));
+    EXPECT_EQ(sender0->get_num_lanes(local), std::min<size_t>(max_lanes, stage0_links.size()));
+    EXPECT_EQ(sender1->get_num_lanes(local), std::min<size_t>(max_lanes, shared_links - 1));
+}
+
+// A chip's sender created before its receiver takes the links the receiver needs. Then
+// the receiver has no free router and creation fails, naming the order to use, instead
+// of hanging on device. Its claims, and the failed pair's, are released: rebuilding in
+// receiver-first order succeeds with the lane counts above.
+TEST_F(D2DStreamServiceTest, FoldedChainSenderFirstFailsCleanly) {
+    D2D_FOLDED_CHAIN_GUARD();
+    const ttnn::Shape global_shape({1, 1, 32, 64});
+    const MeshCoordinate local(0, 0);
+    {
+        auto [sender1, receiver1] = D2DStreamService::create_pair(stage1, stage2, make_config(stage1, global_shape));
+        if (sender1->get_num_lanes(local) < shared_links) {
+            GTEST_SKIP() << "the middle sender leaves a link free (" << shared_links
+                         << " links, max_sender_lanes below that); nothing to collide";
+        }
+        EXPECT_THROW(
+            (void)D2DStreamService::create_pair(stage0, stage1, make_config(stage0, global_shape)), std::exception);
+    }
+    auto [sender0, receiver0] = D2DStreamService::create_pair(stage0, stage1, make_config(stage0, global_shape));
+    auto [sender1, receiver1] = D2DStreamService::create_pair(stage1, stage2, make_config(stage1, global_shape));
+    EXPECT_EQ(
+        sender1->get_num_lanes(local),
+        std::min<size_t>(make_config(stage1, global_shape).max_sender_lanes, shared_links - 1));
+}
+
 // ---------------------------------------------------------------------------
 // Stage gate
 // ---------------------------------------------------------------------------
@@ -2475,6 +2590,83 @@ TEST_F(D2DStreamServiceTest, ThreeStageChainOwnIteration) {
     auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));      \
     auto receiver_mesh = this->mesh_device_->create_submesh(                                           \
         MeshShape(1, 1), (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0))
+
+// Lease groups (Config::fabric_link_group). Two lease-mode pairs between the same two chips:
+// each chip then hosts two services of one kind whose forwarding links are the same routers,
+// like a prefill stage's activation and index streams in one direction. In one group they
+// share the routers (each sender keeps every lane) and, granted turns one at a time, both
+// stream correctly.
+namespace {
+size_t pair_forwarding_links(const MeshDevice& sender_mesh, const MeshDevice& receiver_mesh) {
+    const MeshCoordinate local(0, 0);
+    return tt::tt_fabric::get_forwarding_link_indices(
+               sender_mesh, sender_mesh.get_fabric_node_id(local), receiver_mesh.get_fabric_node_id(local))
+        .size();
+}
+
+D2DStreamConfig make_lease_group_config(
+    const std::shared_ptr<MeshDevice>& sender_mesh, const ttnn::Shape& global_shape, const std::string& group) {
+    auto cfg = make_config(sender_mesh, global_shape, /*share_fabric_links=*/true);
+    cfg.fabric_link_group = group;
+    return cfg;
+}
+}  // namespace
+
+TEST_F(D2DStreamServiceTest, LeaseGroupPairsShareRouters) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    const ttnn::Shape global_shape({1, 1, 32, 64});
+    const MeshCoordinate local(0, 0);
+    const size_t links = pair_forwarding_links(*sender_mesh, *receiver_mesh);
+    auto [sender_a, receiver_a] = D2DStreamService::create_pair(
+        sender_mesh, receiver_mesh, make_lease_group_config(sender_mesh, global_shape, "lease-group-test"));
+    auto [sender_b, receiver_b] = D2DStreamService::create_pair(
+        sender_mesh, receiver_mesh, make_lease_group_config(sender_mesh, global_shape, "lease-group-test"));
+    const size_t max_lanes = make_config(sender_mesh, global_shape).max_sender_lanes;
+    EXPECT_EQ(sender_a->get_num_lanes(local), std::min(max_lanes, links));
+    EXPECT_EQ(sender_b->get_num_lanes(local), std::min(max_lanes, links));
+
+    // One transfer per pair, strictly in turn: grant, transfer, fence, then the other pair.
+    auto run_turn = [&](D2DStreamServiceSender* sender, D2DStreamServiceReceiver* receiver, uint32_t seed) {
+        receiver->release_fabric_links();
+        sender->release_fabric_links();
+        auto receiver_workload = make_receiver_worker_workload(receiver, receiver_mesh, /*num_iters=*/1);
+        auto sender_workload = make_sender_worker_workload(sender, sender_mesh, /*num_iters=*/1, /*fill_base=*/seed);
+        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
+        sender->wait_for_fabric_links();
+        receiver->wait_for_fabric_links();
+        Finish(sender_mesh->mesh_command_queue());
+        Finish(receiver_mesh->mesh_command_queue());
+        expect_receiver_backing_iota(receiver, receiver_mesh, seed);
+    };
+    run_turn(sender_a.get(), receiver_a.get(), 0x1111u);
+    run_turn(sender_b.get(), receiver_b.get(), 0x2222u);
+    run_turn(sender_a.get(), receiver_a.get(), 0x3333u);
+}
+
+// Without a group, the second pair's sender finds every router held. OWN mode: the claims do
+// not depend on the mode, and an OWN-mode pair tears down without ever being granted a turn.
+TEST_F(D2DStreamServiceTest, NoLeaseGroupSecondSenderHasNoRouter) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    const ttnn::Shape global_shape({1, 1, 32, 64});
+    const size_t links = pair_forwarding_links(*sender_mesh, *receiver_mesh);
+    const size_t max_lanes = make_config(sender_mesh, global_shape).max_sender_lanes;
+    if (links > max_lanes) {
+        GTEST_SKIP() << "the first sender leaves a link free (" << links << " links); nothing to collide";
+    }
+    auto [sender_a, receiver_a] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape));
+    EXPECT_THROW(
+        (void)D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape)),
+        std::exception);
+}
+
+TEST_F(D2DStreamServiceTest, LeaseGroupNeedsLeaseMode) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    auto cfg = make_config(sender_mesh, ttnn::Shape({1, 1, 32, 64}), /*share_fabric_links=*/false);
+    cfg.fabric_link_group = "own-mode-group";
+    EXPECT_THROW((void)D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg)), std::exception);
+}
 
 #define D2D_ROW_PAIR_GUARD()                                                                      \
     if (!service_cores_supported()) {                                                             \
