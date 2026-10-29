@@ -2177,7 +2177,7 @@
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
       export TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       export PREFILL_TORUS_XY_CERTIFIED=1
-      export TT_GLM53_MTP_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm53_mtp_multiturn_ref
+      export TT_GLM53_MTP_REF_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/glm53_mtp_multiturn_ref
       timeout -k 2m 75m mpirun --bind-to none --pernode --tag-output bash -lc '
         test -f "$GLM53_HF_MODEL/config.json" || { echo "MTP multi-turn: GLM53_HF_MODEL=$GLM53_HF_MODEL has no config.json on this worker; every selected case is pretrained, so all would skip and leave the job green"; exit 1; }
         export OMP_NUM_THREADS=$(nproc)
