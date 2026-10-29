@@ -28,16 +28,23 @@ from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.tests.v4 import test_transformer_chunked as chunked
-from models.demos.deepseek_v3_d_p.tests.v4.helpers import hidden_to_host, mesh_params, streams_to_host
+from models.demos.deepseek_v3_d_p.tests.v4.helpers import (
+    USER_ISOLATED,
+    USER_REQUESTS,
+    USER_SCHEDULE,
+    assert_same_on_device,
+    hidden_to_host,
+    mesh_params,
+    streams_to_host,
+)
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 
 CHUNK = PREFILL_CHUNK_TOKENS
 _NUM_USERS = 2
 _SEED = 7
-_REQUESTS = chunked._REQUESTS[_NUM_USERS]
-_SCHEDULE = chunked._SCHEDULE[_NUM_USERS]
-_ISOLATED = chunked._ISOLATED[_NUM_USERS]
+_REQUESTS = USER_REQUESTS[_NUM_USERS]
+_SCHEDULE = USER_SCHEDULE[_NUM_USERS]
+_ISOLATED = USER_ISOLATED[_NUM_USERS]
 _MAX_SEQ_LEN = max(n for _, n, _ in _REQUESTS) * CHUNK
 
 
@@ -158,13 +165,13 @@ def run_runtime_two_users(mesh_device, num_links, adapter_name, num_layers):
         for req, (slot, n_chunks, replays) in enumerate(_REQUESTS):
             label = f"{name} request {req} (slot {slot}, x{n_chunks} chunks)"
             if replays is not None:
-                chunked._assert_same_on_device(
+                assert_same_on_device(
                     f"{label} vs request {replays} on device",
                     (per_layer[replays], outs[replays]),
                     (per_layer[req], outs[req]),
                 )
             if req in isolated:
-                chunked._assert_same_on_device(
+                assert_same_on_device(
                     f"{label} interleaved vs alone on device", (per_layer[req], outs[req]), isolated[req]
                 )
     finally:
