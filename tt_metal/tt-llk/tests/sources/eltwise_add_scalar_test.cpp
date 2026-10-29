@@ -70,14 +70,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // compute_kernel_hw_startup
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src,
-        formats.unpack_B_src,
-        formats.unpack_A_dst,
-        formats.unpack_B_dst,
-        tensor_shape.face_r_dim,
-        tensor_shape.face_r_dim,
-        tensor_shape.total_num_faces(),
-        tensor_shape.total_num_faces());
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, tensor_shape, tensor_shape);
 
     _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
 

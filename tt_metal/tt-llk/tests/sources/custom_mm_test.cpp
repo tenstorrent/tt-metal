@@ -106,11 +106,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_A_src,
         formats.unpack_B_dst,
         formats.unpack_A_dst,
-        params.in1_face_r_dim,
-        params.in0_face_r_dim,
-        params.num_faces_B,
-        params.num_faces_A,
-        in1_tile_size,
+        ckernel::make_tensor_shape_from_legacy(params.in1_face_r_dim, params.num_faces_B),
+        ckernel::make_tensor_shape_from_legacy(params.in0_face_r_dim, params.num_faces_A),
+        in1_tile_size, ([LLK] Pass TensorShape to unpack hardware setup and reconfig (WH/BH))
         params.TILE_SIZE_UNPACK_A);
 
     if constexpr (num_calls > 1)

@@ -7,6 +7,7 @@
 #include "tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel.h"
 #include "max_util_pack_common.hpp"
 #include <api/debug/kernel_profiler.hpp>
+#include <cstdint>
 
 // Compute kernel for max-utilization workload.
 // Uses pre-loaded L1 buffers directly - completely decoupled from data movement.
@@ -26,26 +27,24 @@
 #ifdef TRISC_UNPACK
 template <bool super_sync>
 ALWI void max_util_unpack(
-    uint32_t num_loops,
-    uint32_t num_tiles,
-    uint32_t l1_buffer0_addr,
-    uint32_t l1_buffer1_addr,
-    volatile tt_l1_ptr uint32_t* l1_super_sync_addr_ptr,
-    uint32_t l1_fpu_timing_addr) {
+    std::uint32_t num_loops,
+    std::uint32_t num_tiles,
+    std::uint32_t l1_buffer0_addr,
+    std::uint32_t l1_buffer1_addr,
+    volatile tt_l1_ptr std::uint32_t* l1_super_sync_addr_ptr,
+    std::uint32_t l1_fpu_timing_addr) {
     // init
     constexpr bool is_fp32_dest_acc_en = false;
-    constexpr uint32_t face_r_dim = 16;
-    constexpr uint32_t num_faces_A = 4;
-    constexpr uint32_t num_faces_B = 4;
+    constexpr std::uint32_t face_r_dim = 16;
+    constexpr std::uint32_t num_faces_A = 4;
+    constexpr std::uint32_t num_faces_B = 4;
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        (uint32_t)DataFormat::Float16_b,
-        (uint32_t)DataFormat::Float16_b,
-        (uint32_t)DataFormat::Float16_b,
-        (uint32_t)DataFormat::Float16_b,
-        face_r_dim,
-        face_r_dim,
-        num_faces_A,
-        num_faces_B,
+        (std::uint32_t)DataFormat::Float16_b,
+        (std::uint32_t)DataFormat::Float16_b,
+        (std::uint32_t)DataFormat::Float16_b,
+        (std::uint32_t)DataFormat::Float16_b,
+        ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces_A),
+        ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces_B),
         128 /* tile size for float16_b >> 4 */,
         128 /* tile size for float16_b >> 4 */);
 
@@ -114,7 +113,7 @@ ALWI void max_util_unpack(
     tmp.program();
 
     // compute loop
-    volatile uint32_t* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
+    volatile std::uint32_t* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
     if constexpr (super_sync) {
         (*l1_super_sync_addr_ptr) = 1;
@@ -123,14 +122,14 @@ ALWI void max_util_unpack(
         } while ((*l1_super_sync_addr_ptr) != 0);
     }
 
-    volatile tt_l1_ptr uint32_t* timing = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_fpu_timing_addr);
-    const uint64_t t0 = ckernel::read_wall_clock();
+    volatile tt_l1_ptr std::uint32_t* timing = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(l1_fpu_timing_addr);
+    const std::uint64_t t0 = ckernel::read_wall_clock();
 
-    for (uint32_t i = 0; i < num_loops; i++) {
+    for (std::uint32_t i = 0; i < num_loops; i++) {
         DeviceZoneScopedN("MATH-BLOCK");
-        for (uint32_t j = 0; j < num_tiles; j++) {
-            uint32_t address_a = L1_ADDRESS(l1_buffer0_addr);
-            uint32_t address_b = L1_ADDRESS(l1_buffer1_addr + j * 2048);
+        for (std::uint32_t j = 0; j < num_tiles; j++) {
+            std::uint32_t address_a = L1_ADDRESS(l1_buffer0_addr);
+            std::uint32_t address_b = L1_ADDRESS(l1_buffer1_addr + j * 2048);
 
             // Wait for free context
             wait_for_next_context(2);
@@ -167,20 +166,21 @@ ALWI void max_util_unpack(
         }
     }
 
-    const uint64_t t1 = ckernel::read_wall_clock();
-    timing[0] = static_cast<uint32_t>(t0);
-    timing[1] = static_cast<uint32_t>(t0 >> 32);
-    timing[2] = static_cast<uint32_t>(t1);
-    timing[3] = static_cast<uint32_t>(t1 >> 32);
+    const std::uint64_t t1 = ckernel::read_wall_clock();
+    timing[0] = static_cast<std::uint32_t>(t0);
+    timing[1] = static_cast<std::uint32_t>(t0 >> 32);
+    timing[2] = static_cast<std::uint32_t>(t1);
+    timing[3] = static_cast<std::uint32_t>(t1 >> 32);
 }
 #endif
 
 #ifdef TRISC_MATH
-template <uint32_t cycles_to_wait>
-ALWI void max_util_math(uint32_t num_loops, uint32_t num_tiles) {
+template <std::uint32_t cycles_to_wait>
+ALWI void max_util_math(std::uint32_t num_loops, std::uint32_t num_tiles) {
     // init
     constexpr bool is_fp32_dest_acc_en = false;
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>((uint32_t)DataFormat::Float16_b, (uint32_t)DataFormat::Float16_b);
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(
+        (std::uint32_t)DataFormat::Float16_b, (std::uint32_t)DataFormat::Float16_b);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     addr_mod_t{
@@ -297,13 +297,13 @@ ALWI void max_util_math(uint32_t num_loops, uint32_t num_tiles) {
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     // compute loop
-    for (uint32_t i = 0; i < num_loops; i++) {
+    for (std::uint32_t i = 0; i < num_loops; i++) {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-        for (uint32_t j = 0; j < num_tiles; j++) {
+        for (std::uint32_t j = 0; j < num_tiles; j++) {
             ckernel_template::run();
             if constexpr (cycles_to_wait) {
 #pragma GCC unroll cycles_to_wait
-                for (uint32_t k = 0; k < cycles_to_wait; k++) {
+                for (std::uint32_t k = 0; k < cycles_to_wait; k++) {
                     TTI_NOP;
                 }
             }
@@ -314,17 +314,17 @@ ALWI void max_util_math(uint32_t num_loops, uint32_t num_tiles) {
 #endif
 
 void kernel_main() {
-    constexpr uint32_t l1_buffer0_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t l1_buffer1_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t l1_buffer2_addr = get_compile_time_arg_val(2);
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t num_loops = get_compile_time_arg_val(4);
-    constexpr uint32_t cycles_to_wait = get_compile_time_arg_val(5);
-    constexpr uint32_t super_sync = get_compile_time_arg_val(6);
-    constexpr uint32_t l1_super_sync_addr = get_compile_time_arg_val(7);
-    constexpr uint32_t l1_fpu_timing_addr = get_compile_time_arg_val(8);
-    volatile tt_l1_ptr uint32_t* l1_super_sync_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_super_sync_addr);
+    constexpr std::uint32_t l1_buffer0_addr = get_compile_time_arg_val(0);
+    constexpr std::uint32_t l1_buffer1_addr = get_compile_time_arg_val(1);
+    constexpr std::uint32_t l1_buffer2_addr = get_compile_time_arg_val(2);
+    constexpr std::uint32_t num_tiles = get_compile_time_arg_val(3);
+    constexpr std::uint32_t num_loops = get_compile_time_arg_val(4);
+    constexpr std::uint32_t cycles_to_wait = get_compile_time_arg_val(5);
+    constexpr std::uint32_t super_sync = get_compile_time_arg_val(6);
+    constexpr std::uint32_t l1_super_sync_addr = get_compile_time_arg_val(7);
+    constexpr std::uint32_t l1_fpu_timing_addr = get_compile_time_arg_val(8);
+    volatile tt_l1_ptr std::uint32_t* l1_super_sync_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(l1_super_sync_addr);
 
     // TRISC0: perform unpack A (float16_b) and unpack B (float16_b) to SRC_A and SRC_B
     UNPACK((max_util_unpack<super_sync>(

@@ -30,7 +30,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (!tilize_en)
     {
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces),
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces));
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             0 /* transpose_of_faces */,
             0 /* within_face_16x16_transpose */,
@@ -49,7 +54,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     else
     {
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, params.num_faces, params.num_faces);
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces),
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces));
         _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, FACE_R_DIM, false, params.num_faces);
 
         for (std::uint32_t i = 0; i < params.BLOCK_RT_DIM; i++)
