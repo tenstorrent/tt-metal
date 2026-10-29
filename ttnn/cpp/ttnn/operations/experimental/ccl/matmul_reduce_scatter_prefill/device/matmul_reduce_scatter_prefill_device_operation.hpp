@@ -45,7 +45,7 @@ void check_support(
     ttnn::ccl::Topology topology,
     const std::optional<int32_t>& num_links);
 
-// The operand checks the entry makes before it reads the mesh: ranks, K, DRAM-interleaved TILE operands and an
+// The operand checks the entry makes before it reads the mesh: ranks, K, DRAM- or L1-interleaved TILE operands and an
 // interleaved output memory config (TT_FATAL otherwise).
 void check_operands(
     const Tensor& input_tensor, const Tensor& weight, const std::optional<tt::tt_metal::MemoryConfig>& memory_config);
