@@ -46,15 +46,41 @@ def _explicit_height_shard_config(device, ncores, sh, sw, buffer_type=ttnn.Buffe
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type, spec)
 
 
+def _explicit_width_shard_config(device, ncores, sh, sw, buffer_type=ttnn.BufferType.L1):
+    compute_grid = device.compute_with_storage_grid_size()
+    if ncores > compute_grid.x * compute_grid.y:
+        pytest.skip(f"Device has {compute_grid.x * compute_grid.y} cores, test needs {ncores}")
+    spec = ttnn.ShardSpec(
+        ttnn.num_cores_to_corerangeset(ncores, compute_grid, True),
+        (sh, sw),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type, spec)
+
+
+def _explicit_block_shard_config(device, grid_h, grid_w, sh, sw, buffer_type=ttnn.BufferType.L1):
+    compute_grid = device.compute_with_storage_grid_size()
+    if grid_w > compute_grid.x or grid_h > compute_grid.y:
+        pytest.skip(f"needs a {grid_w}x{grid_h} compute grid, device has {compute_grid.x}x{compute_grid.y}")
+    spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_w - 1, grid_h - 1))}),
+        (sh, sw),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type, spec)
+
+
 def _run_quasar_slice(shape, begins, ends, step, imc, omc, device):
+    """omc=None exercises implicit output-config inheritance from the input."""
     torch.manual_seed(12345)
     x = torch.rand(shape, dtype=torch.bfloat16)
     ttnn_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=imc)
     result = ttnn.experimental.quasar.slice(ttnn_in, list(begins), list(ends), list(step), memory_config=omc)
 
+    expected_mc = omc if omc is not None else imc
     actual = result.memory_config()
-    assert actual.memory_layout == omc.memory_layout
-    if omc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+    assert actual.memory_layout == expected_mc.memory_layout
+    if expected_mc.is_sharded():
         assert actual.shard_spec is not None
 
     slices = tuple(slice(b, e, s) for b, e, s in zip(begins, ends, step))
@@ -99,6 +125,32 @@ def test_quasar_slice_row_major_height_sharded_nontile_aligned(shape, begins, en
     imc = _explicit_height_shard_config(device, *in_shard)
     omc = _explicit_height_shard_config(device, *out_shard) if out_shard is not None else L1_INTERLEAVED
     _run_quasar_slice(shape, begins, ends, step, imc, omc, device)
+
+
+# B/W-sharded RM buffers with a shard row that isn't a multiple of the buffer alignment (12 bf16 =
+# 24B). W stays tile-aligned and width-begin is 0, so only the shard-row check routes these through
+# L1 interleaved; natively the TensorAccessor strides pages by the aligned page size while
+# `noc_async_*_sharded` reuses that same value as the per-page payload. (Issue #63277)
+def test_quasar_slice_rm_width_sharded_subaligned_shard_row_in(device):
+    imc = _explicit_width_shard_config(device, 8, 64, 12)
+    _run_quasar_slice((1, 1, 64, 96), (0, 0, 0, 0), (1, 1, 32, 96), (1, 1, 1, 1), imc, L1_INTERLEAVED, device)
+
+
+def test_quasar_slice_rm_block_sharded_subaligned_shard_row_in(device):
+    imc = _explicit_block_shard_config(device, 2, 8, 32, 12)
+    _run_quasar_slice((1, 1, 64, 96), (0, 0, 0, 0), (1, 1, 32, 96), (1, 1, 1, 1), imc, L1_INTERLEAVED, device)
+
+
+def test_quasar_slice_rm_width_sharded_rescaled_subaligned_shard_row(device):
+    """The inherited 16-elem (32B) shard row is aligned, but rescaling it to the sliced width gives
+    div_up(96, 8) = 12 elems = 24B, so the guard must see the post-rescale spec."""
+    imc = _explicit_width_shard_config(device, 8, 64, 16)
+    _run_quasar_slice((1, 1, 64, 128), (0, 0, 0, 0), (1, 1, 64, 96), (1, 1, 1, 1), imc, None, device)
+
+
+def test_quasar_slice_rm_width_sharded_subaligned_shard_row_out(device):
+    omc = _explicit_width_shard_config(device, 8, 32, 12)
+    _run_quasar_slice((1, 1, 64, 96), (0, 0, 0, 0), (1, 1, 32, 96), (1, 1, 1, 1), L1_INTERLEAVED, omc, device)
 
 
 def test_quasar_slice_tile_tensor_args(device):
