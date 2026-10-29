@@ -295,7 +295,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
-    sub_bcast_cols_init_short(in0_cb, in1_cb);
+    sub_bcast_cols_init(in0_cb, in1_cb);
 
     // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
@@ -395,7 +395,7 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
 
     constexpr uint32_t num_tiles = rows * cols;
 
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
+    mul_bcast_cols_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(rows);
 
@@ -478,7 +478,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     constexpr uint32_t granularity = cols;
 #endif
 
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
+    mul_bcast_cols_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -519,7 +519,7 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
 #endif
 
     reconfig_data_format(in0_cb, in1_scalar_cb);
-    mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
+    mul_bcast_scalar_init(in0_cb, in1_scalar_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1_scalar.wait_front(1);
     uint32_t in0_index = 0;
@@ -552,7 +552,7 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
 
-    add_tiles_init(in0_cb, in1_cb);
+    add_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -583,7 +583,7 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
 
-    mul_bcast_cols_init_short(in0_cb, in1_cb);
+    mul_bcast_cols_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -609,7 +609,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
 
-    mul_tiles_init(in0_cb, in1_cb);
+    mul_init(in0_cb, in1_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -652,7 +652,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
     exp_tile_init<EXP_APPROX_MODE>();
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
@@ -685,7 +685,7 @@ void sub_exp_block_inplace_in0(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_ti
     CircularBuffer cb_in0(in0_cb);
     CircularBuffer cb_in1(in1_cb);
 
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
     exp_tile_init<EXP_APPROX_MODE>();
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
@@ -873,7 +873,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
     exp_tile_init<false>();
     // recip_tile_first_column() calls the scalar sfpu_reciprocal_iter path, so initialize exactly
     // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
@@ -883,11 +883,18 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     // whose polynomial implementation loads the constants it consumes into LREGs in the tile body; it
     // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
     // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
+    // That holds for exp_tile_first_column only. The regular exp_tile (the commented-out call in the
+    // loop) takes its constants from the programmable registers exp_tile_init sets (vConstFloatPrgm0..1
+    // on a bf16 DEST, 0..2 on a Blackhole fp32 DEST; see the note on exp_tile), and exp_tile_init
+    // overwrites the reciprocal constant set here. Restoring that call needs exp_tile_init and
+    // sfpu_reciprocal_init re-run inside the loop, each directly before its tile call.
     MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
+        // Restoring this exp_tile call needs exp_tile_init and sfpu_reciprocal_init re-run per iteration;
+        // see the sfpu_reciprocal_init comment above the loop.
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument
@@ -933,7 +940,7 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
     softplus_tile_init();
     constexpr uint32_t const_1_fp32 = 0x3F800000;
     constexpr uint32_t const_20_fp32 = 0x41A00000;
@@ -972,7 +979,7 @@ __attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb,
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
-    sub_tiles_init(in0_cb, in1_cb);
+    sub_init(in0_cb, in1_cb);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
@@ -1052,7 +1059,7 @@ ALWI void matmul_blocks(
                 cb_mask.wait_front(out_subblock_num_tiles);
                 cb_zero.wait_front(1);
                 reconfig_data_format(zero_cb, mask_cb);
-                add_tiles_init(zero_cb, mask_cb, true);
+                add_init(zero_cb, mask_cb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                     add_tiles(zero_cb, mask_cb, 0, i, i);
                 }

@@ -9,6 +9,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -67,7 +68,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input buffer should be allocated on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input buffer should be allocated on device!");
 
     const std::uint32_t input_element_size_bytes = detail::data_type_to_size.at(input_tensor.dtype());
     const std::uint32_t tile_bytes = tt::tile_size(cb_data_format);

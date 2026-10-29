@@ -5,6 +5,7 @@
 from types import MethodType, SimpleNamespace
 
 import pytest
+import torch
 
 import ttnn
 from models.tt_transformers.tt.common import Mode
@@ -15,8 +16,56 @@ from models.tt_transformers.tt.model_config import (
     compute_galaxy_width_shard_cores,
     compute_padded_vocab_size,
     create_galaxy_ff1_out_reduce_scatter_memcfg,
+    determine_device_name,
+    disables_batched_prefill,
     should_pad_sampling_logits_to_power_of_2,
 )
+
+
+@torch.no_grad()
+def test_native_phi3_reference_decoder_supplies_position_embeddings():
+    from transformers import DynamicCache, Phi3Config, Phi3ForCausalLM
+
+    config = Phi3Config(
+        vocab_size=128,
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=1,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        max_position_embeddings=256,
+        original_max_position_embeddings=256,
+        bos_token_id=1,
+        eos_token_id=2,
+        pad_token_id=0,
+    )
+    model = Phi3ForCausalLM(config).eval()
+    generator = torch.Generator().manual_seed(0)
+
+    args = SimpleNamespace(
+        reference_transformer=lambda wrap, load_checkpoint: model,
+        head_dim=config.hidden_size // config.num_attention_heads,
+        base_model_name="Phi-3-mini-128k-instruct",
+        use_hf_rope=False,
+    )
+
+    for batch_size, seq_len in ((32, 1), (1, 128)):
+        hidden_states = torch.randn(batch_size, seq_len, config.hidden_size, generator=generator)
+        position_ids = torch.arange(seq_len).unsqueeze(0).expand(batch_size, -1)
+        position_embeddings = model.model.rotary_emb(hidden_states, position_ids)
+        expected = model.model.layers[0](
+            hidden_states,
+            position_ids=position_ids,
+            position_embeddings=position_embeddings,
+            past_key_values=DynamicCache(),
+            use_cache=True,
+        )
+        expected = expected[0] if isinstance(expected, tuple) else expected
+
+        reference_decoder = ModelArgs.reference_decoder(args)
+        actual = reference_decoder(hidden_states, start_pos=0, freqs_cis_i=None)
+
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("seq_len", [128, 4096])
@@ -74,6 +123,20 @@ def test_compute_padded_vocab_size(vocab_size, num_devices, expected):
 def test_compute_padded_vocab_size_rejects_invalid_num_devices(expect_error):
     with expect_error(ValueError, "num_devices must be >= 1"):
         compute_padded_vocab_size(32000, 0)
+
+
+@pytest.mark.parametrize(
+    "optimizations",
+    [
+        "precision_cfg = {ff1_3: bfp8}",
+        "fidelity_cfg = {li_ff1_3: hifi4}",
+        "precision_cfg = {ff1_3: bfp8, wqkv: bf16}, fidelity_cfg = {li_ff1_3: hifi4}",
+    ],
+)
+def test_parse_optimizations_accepts_either_section(optimizations):
+    from models.tt_transformers.tt.model_config import parse_optimizations
+
+    assert callable(parse_optimizations(optimizations))
 
 
 @pytest.mark.parametrize(
@@ -160,6 +223,22 @@ def test_compute_galaxy_width_shard_cores_rejects_non_positive_width(expect_erro
 
 
 @pytest.mark.parametrize(
+    ("grid_x", "grid_y", "n_tiles"),
+    [
+        (11, 10, 48),  # Qwen2.5-1.5B dim on a p150b
+        (11, 10, 72),  # Gemma-2-2B dim on a p150b
+        (12, 10, 48),
+    ],
+)
+def test_find_grid_fits_the_blackhole_device_grid(monkeypatch, grid_x, grid_y, n_tiles):
+    monkeypatch.setattr("models.tt_transformers.tt.model_config.is_wormhole_b0", lambda: False)
+    args = SimpleNamespace(max_grid_size=ttnn.CoreGrid(x=grid_x, y=grid_y))
+    rows, cols = ModelArgs.find_grid(args, n_tiles)
+    assert rows <= grid_y and cols <= grid_x
+    assert n_tiles % (rows * cols) == 0
+
+
+@pytest.mark.parametrize(
     ("base_model_name", "padded_vocab_size", "sampling_splits", "expected"),
     [
         ("Llama-3.1-70B", 128256, 4, True),
@@ -174,6 +253,37 @@ def test_should_pad_sampling_logits_to_power_of_2(base_model_name, padded_vocab_
 def test_should_pad_sampling_logits_to_power_of_2_rejects_invalid_sampling_splits(expect_error):
     with expect_error(ValueError, "sampling_splits must be >= 1"):
         should_pad_sampling_logits_to_power_of_2("Llama-3.1-70B", 128256, 0)
+
+
+@pytest.mark.parametrize(
+    ("base_model_name", "device_name", "expected"),
+    [
+        ("Llama-3.1-8B", "P100", True),
+        ("Llama-3.1-8B", "P150", True),
+        ("Llama-3.1-8B", "P300", True),
+        ("Llama-3.1-8B", "P150x4", True),
+        ("Llama-3.1-8B", "P150x8", True),
+        ("Llama-3.1-8B", "N150", False),
+        ("Llama-3.1-8B", "T3K", False),
+        ("Qwen3-32B", "P150x4", True),
+        ("Qwen3-32B", "P150", False),
+    ],
+)
+def test_disables_batched_prefill(base_model_name, device_name, expected):
+    assert disables_batched_prefill(base_model_name, device_name) is expected
+
+
+@pytest.mark.parametrize(
+    "num_devices, expected",
+    [(1, "P150"), (2, "P300"), (4, "P150x4"), (8, "P150x8"), (32, "BHGLX")],
+)
+def test_quasar_takes_the_blackhole_device_names(num_devices, expected):
+    mesh_device = SimpleNamespace(
+        arch=lambda: ttnn.device.Arch.QUASAR,
+        get_num_devices=lambda: num_devices,
+        dram_grid_size=lambda: SimpleNamespace(x=2),
+    )
+    assert determine_device_name(mesh_device) == expected
 
 
 def _llama_model_args(device_name="P150"):
@@ -220,7 +330,11 @@ def test_llama31_8b_dram_reader_counts_remain_default_on_unvalidated_devices():
         ("N150", "Llama-3.1-8B", 512, 4),
         ("N150", "Llama-3.1-8B", 1024, 4),
         ("N150", "Llama-3.1-8B", 2048, 4),
+        ("N150", "Llama-Krikri-8B-Base", 512, 4),
         ("N150", "Llama-3.2-3B", 512, None),
+        ("P100", "Llama-3.1-8B", 480, None),
+        ("P100", "Llama-3.1-8B", 512, 4),
+        ("P100", "Llama-3.1-8B", 2048, 4),
         ("P150", "Llama-3.1-8B", 512, None),
         ("T3K", "Llama-3.1-8B", 512, None),
     ],
@@ -246,3 +360,9 @@ def test_llama8_n150_prefill_k_block_scope(device_name, model_name, seq_len, exp
     assert overrides == [expected_override]
     assert config.in0_block_w == (4 if expected_override else 8)
     assert (args.dim // ttnn.TILE_SIZE) % config.in0_block_w == 0
+
+
+@pytest.mark.parametrize("key", ["hidden_act", "hidden_activation"])
+def test_gelu_pytorch_tanh_maps_to_gelu_tanh(key):
+    activation = ModelArgs._get_hidden_activation_type(None, {key: "gelu_pytorch_tanh"})
+    assert activation.op_type == ttnn.UnaryOpType.GELU_TANH

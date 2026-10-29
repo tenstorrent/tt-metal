@@ -13,7 +13,12 @@ import math
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
-from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import (
+    is_blackhole,
+    is_watcher_enabled,
+    run_for_blackhole,
+    skip_for_blackhole,
+)
 
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
 # atol for the non-tile-aligned regressions, matching the tile-aligned specify_grid cases.
@@ -68,6 +73,21 @@ GROUP_NORM_DRAM_SHAPES = [
     (1, 512 // 4, 256, 256, 32 // 4, 2, 8, 8),
     # mochi
     # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
+]
+
+GROUP_NORM_DRAM_SANITY_SHAPES = [
+    shape
+    for shape in GROUP_NORM_DRAM_SHAPES
+    if shape[:4]
+    not in {
+        (1, 1536, 8, 8),
+        (1, 1152, 128, 128),
+        (1, 512, 64, 64),
+        (1, 512, 128, 128),
+        (1, 256, 256, 256),
+        (1, 256 // 4, 256, 256),
+        (1, 512 // 4, 256, 256),
+    }
 ]
 
 
@@ -289,7 +309,7 @@ def run_group_norm_DRAM(
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_DRAM_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_DRAM_SANITY_SHAPES)
 @pytest.mark.parametrize("statistics_mode", STATISTICS_MODES)
 def test_group_norm_DRAM(
     device,
@@ -668,7 +688,9 @@ def test_group_norm_non_tile_aligned_garbage_padding_DRAM(device):
         pytest.skip()
 
     torch.manual_seed(0)
-    N, C, HW, G, padded = 1, 1024, 200, 32, 224
+    # 256 channels, not the 1024 of the issue: the check is the padding rows (200 logical over 224 padded), and
+    # the channel count only scales the work (4 min on the simulator at 1024, #62486).
+    N, C, HW, G, padded = 1, 256, 200, 32, 224
 
     real = torch.rand((N, 1, HW, C), dtype=torch.bfloat16)
     ref = torch.nn.functional.group_norm(real.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW).float(), G)

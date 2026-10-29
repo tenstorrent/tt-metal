@@ -15,6 +15,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt_stl/fmt.hpp>
 #include "ttnn/operations/math.hpp"
 
 using uint32_t = std::uint32_t;

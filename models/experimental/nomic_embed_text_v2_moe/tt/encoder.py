@@ -15,6 +15,7 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.block import TtNomicBertBlock
+from models.experimental.nomic_embed_text_v2_moe.tt.experts import StackedBuffers
 
 
 class TtNomicBertEncoder(LightweightModule):
@@ -24,12 +25,18 @@ class TtNomicBertEncoder(LightweightModule):
     on S, which is the batch's longest sequence and so varies per call, and building them once
     per forward pass instead of once per block saves 11 repetitions of the same host work. The
     model keeps the tables across forwards (tt.common.RotaryTables).
+
+    The six MoE layers share one StackedBuffers, which the forward releases after the last block.
     """
 
     def __init__(self, device, config, tt_config, state_dict, state_dict_prefix="encoder."):
         super().__init__()
+        self.stacked_buffers = StackedBuffers()
         # The trailing dot is part of the prefix, as it is for every module here. Inserting the
         # separator instead would make "encoder." build "encoder..layers.0." and raise KeyError.
+        # The last block's output leaves the model and outlives the forward: in L1 it would sit
+        # under ops that plan L1 as free, so it goes to DRAM whatever its size.
+        last = config.num_hidden_layers - 1
         self.layers = [
             TtNomicBertBlock(
                 device,
@@ -38,6 +45,8 @@ class TtNomicBertEncoder(LightweightModule):
                 state_dict,
                 f"{state_dict_prefix}layers.{idx}.",
                 moe=config.is_moe_layer(idx),
+                buffers=self.stacked_buffers,
+                output_memory_config=ttnn.DRAM_MEMORY_CONFIG if idx == last else None,
             )
             for idx in range(config.num_hidden_layers)
         ]
@@ -58,11 +67,14 @@ class TtNomicBertEncoder(LightweightModule):
         Returns:
             ttnn.Tensor: (B, 1, S, H).
         """
-        for idx, layer in enumerate(self.layers):
-            next_hidden_states = layer(hidden_states, rot_mats, attn_mask)
-            # Every intermediate is freed as soon as the next block has consumed it, but not the
-            # caller's own input: the caller allocated it and may still need it.
-            if idx > 0:
-                ttnn.deallocate(hidden_states)
-            hidden_states = next_hidden_states
+        try:
+            for idx, layer in enumerate(self.layers):
+                next_hidden_states = layer(hidden_states, rot_mats, attn_mask)
+                # Every intermediate is freed as soon as the next block has consumed it, but not the
+                # caller's own input: the caller allocated it and may still need it.
+                if idx > 0:
+                    ttnn.deallocate(hidden_states)
+                hidden_states = next_hidden_states
+        finally:
+            self.stacked_buffers.release()
         return hidden_states

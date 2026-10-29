@@ -102,11 +102,18 @@ class MigrationDriver:
         self.client.connect_to(remote_endpoint_id=self.dest_endpoint_id, role=role, service_name=service_name)
         logger.success(f"[migration_driver] cross-endpoint pairing established with remote_ep={self.dest_endpoint_id}")
 
-    def run(self, stats, *, num_slots: int = None, slot_traces: dict = None, pools_by_trace: dict = None) -> list:
+    def run(
+        self, stats, *, num_slots: int = None, slot_traces: dict = None, pools_by_trace: dict = None, kv_table=None
+    ) -> list:
         if self.client is None:
             raise RuntimeError("[migration_driver] run() called before attach()")
+        if os.environ.get("PREFILL_DFLASH", "0") == "1" and (
+            kv_table is None
+            or not any(kv_table.config_name(i).startswith("dflash_") for i in range(kv_table.num_configs()))
+        ):
+            raise RuntimeError("DFlash migration requires the published KV table with drafter configs")
         triples = self._resolve_pairs(stats, num_slots=num_slots)
-        self._issue(triples)
+        self._issue(triples, kv_table=kv_table)
         self._write_handoff(triples, slot_traces, pools_by_trace)
         self._write_done_sentinel(triples)
         return triples
@@ -173,10 +180,18 @@ class MigrationDriver:
             )
         return triples
 
-    def _issue(self, triples: list) -> int:
+    def _issue(self, triples: list, *, kv_table=None) -> int:
         from models.demos.common.prefill.runners import prefill_producer as producer
 
-        layers = [int(l) for l in self.layers] if self.layers else range(self.num_layers)
+        # DFlash context caches occupy semantic rows after the target's layers.
+        # The published table, shared with decode, is authoritative for that extent;
+        # NUM_LAYERS alone omits every draft cache even when its configs are exported.
+        num_layers = self.num_layers
+        if kv_table is not None:
+            for config_id in range(kv_table.num_configs()):
+                if kv_table.config_name(config_id).startswith("dflash_"):
+                    num_layers = max(num_layers, int(kv_table.config(config_id).num_layers))
+        layers = [int(l) for l in self.layers] if self.layers else range(num_layers)
         if self.layers:
             logger.info(f"[migration_driver] migrating layer subset {self.layers}")
         migrated = 0
@@ -839,8 +854,14 @@ def main() -> None:
     payload_bytes = service.payload_size_bytes()
     logger.info(f"[migration_driver] attached; payload={payload_bytes}B")
 
+    from models.demos.common.prefill.runners.layer_completion_ring_reader import (
+        connect_layer_completion_channel,
+        start_layer_completion_drain,
+        wait_for_layer_completions,
+    )
+
     kv_table = producer._read_kv_chunk_table(timeout_s)
-    ack_channel = producer._connect_layer_ack_channel(timeout_s)
+    completion_channel = connect_layer_completion_channel(timeout_s)
 
     driver.attach()
 
@@ -860,13 +881,22 @@ def main() -> None:
         )
         return (time.perf_counter() - push_start) * 1000.0
 
-    stats = producer.run_schedule(cfg, push_fn=push_chunk)
-    service.barrier()
-    logger.info(
-        f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
-        f"requests={stats.completed}"
+    chunk_layers = producer._completion_layers_per_chunk(kv_table)
+    # Drains while the schedule runs; see prefill_producer.main.
+    drain = start_layer_completion_drain(
+        completion_channel, num_layers=producer._completion_layer_bound(chunk_layers), chunk_layers=chunk_layers
     )
-    producer._drain_layer_acks(ack_channel, producer.NUM_LAYERS * stats.total_pushes)
+    try:
+        stats = producer.run_schedule(cfg, push_fn=push_chunk)
+        service.barrier()
+        logger.info(
+            f"[migration_driver] prefill done wall={stats.wall_s:.1f}s pushes={stats.total_pushes} "
+            f"requests={stats.completed}"
+        )
+        wait_for_layer_completions(drain, chunk_layers * stats.total_pushes)
+    finally:
+        if drain is not None:
+            drain.stop()
 
     if world_size > 1:
         producer._mr_bcast_resident(mr_rank, stats.resident)
@@ -900,6 +930,7 @@ def main() -> None:
         triples = driver.run(
             stats,
             num_slots=kv_table.config().num_slots if kv_table is not None else None,
+            kv_table=kv_table,
             slot_traces=slot_traces,
             pools_by_trace=pools_by_trace,
         )

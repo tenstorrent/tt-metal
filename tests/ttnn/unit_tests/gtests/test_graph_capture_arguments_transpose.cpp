@@ -186,7 +186,7 @@ TEST_F(TestGraphCaptureArgumentsTranspose, PermuteImplicitOutputConfigPreservesN
         make_nd_sharded_tensor_spec(ttnn::Shape({1, 1, 64, 64}), ttnn::Shape({1, 1, 32, 32})), device_);
 
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
-    ttnn::permute(tt_input, ttnn::SmallVector<int64_t>({1, 0, 3, 2}));
+    ttnn::permute(tt_input, ttsl::SmallVector<int64_t>({1, 0, 3, 2}));
     auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
     auto operations = ttnn::graph::extract_arguments(trace);
 
@@ -208,7 +208,7 @@ TEST_F(TestGraphCaptureArgumentsTranspose, PermuteImplicitOutputConfigRecomputes
     auto tt_input = create_device_tensor(make_legacy_height_sharded_tensor_spec(ttnn::Shape({1, 1, 32, 64})), device_);
 
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
-    ttnn::permute(tt_input, ttnn::SmallVector<int64_t>({3, 2, 1, 0}));
+    ttnn::permute(tt_input, ttsl::SmallVector<int64_t>({3, 2, 1, 0}));
     auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
     auto operations = ttnn::graph::extract_arguments(trace);
 
@@ -226,7 +226,7 @@ TEST_F(TestGraphCaptureArgumentsTranspose, PermuteImplicitOutputConfigPreservesN
         make_nd_sharded_tensor_spec(ttnn::Shape({1, 2, 2, 32, 64}), ttnn::Shape({1, 1, 2, 32, 64})), device_);
 
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
-    ttnn::permute(tt_input, ttnn::SmallVector<int64_t>({0, 2, 1, 4, 3}));
+    ttnn::permute(tt_input, ttsl::SmallVector<int64_t>({0, 2, 1, 4, 3}));
     auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
     auto operations = ttnn::graph::extract_arguments(trace);
 

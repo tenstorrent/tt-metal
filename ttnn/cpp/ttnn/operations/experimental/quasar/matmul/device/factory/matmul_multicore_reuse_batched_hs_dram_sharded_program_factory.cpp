@@ -50,7 +50,7 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     const tt::tt_metal::distributed::MeshDevice& device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -275,7 +275,9 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     // CB 4 & 5: output and intermediate - on worker cores
     uint32_t output_cb_index = tt::CBIndex::c_4;
     uint32_t interm0_cb_index = tt::CBIndex::c_5;
-    if (interm0_data_format != output_data_format) {
+    const bool share_out_interm_buffer =
+        interm0_data_format == output_data_format && (!packer_l1_acc_en || out_shard_tiles == out_block_tiles);
+    if (!share_out_interm_buffer) {
         // Separate CBs for output and intermediate
         {
             CBDescriptor cb_desc;
@@ -408,6 +410,9 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
         in1_writer_compile_args.push_back(in3_block_tiles);
         tt::tt_metal::TensorAccessorArgs(*bias_tensor).append_to(in1_writer_compile_args);
     }
+    // in1 TensorAccessorArgs for the BankView reads, appended last: CTA 10 without bias, after the bias args
+    // with bias.
+    tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_writer_compile_args);
 
     uint32_t in0_num_subblocks = per_core_M / out_subblock_h;
     uint32_t in1_num_subblocks = per_core_N / out_subblock_w;

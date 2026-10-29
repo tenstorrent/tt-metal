@@ -4,13 +4,14 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
-#include <string_view>
 #include <filesystem>
 #include <memory>
 #include <map>
 #include <optional>
+#include <utility>
 #include <vector>
 #include <unordered_set>
 #include <unordered_map>
@@ -20,7 +21,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 // Forward declaration
 namespace tt::tt_fabric {

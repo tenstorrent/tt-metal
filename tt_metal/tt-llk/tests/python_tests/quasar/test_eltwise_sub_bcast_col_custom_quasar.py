@@ -31,7 +31,6 @@ from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     format_dict,
@@ -40,6 +39,7 @@ from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -47,7 +47,6 @@ from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     MATH_OP,
     NUM_BLOCKS,
     NUM_FACES,
@@ -97,21 +96,19 @@ def _block_shapes_fitting_dest(
 
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32], same=True
-    ),
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     dest_sync=[DestSync.Half, DestSync.Full],
-    tile_dimensions=TILE_DIMENSIONS,
-    block_shape=lambda dest_sync, dest_acc, tile_dimensions: _block_shapes_fitting_dest(
-        dest_sync, dest_acc, tile_dimensions
+    tile_dimensions=runtime(TILE_DIMENSIONS),
+    block_shape=runtime(
+        lambda dest_sync, dest_acc, tile_dimensions: _block_shapes_fitting_dest(
+            dest_sync, dest_acc, tile_dimensions
+        )
     ),
 )
 def test_eltwise_sub_bcast_col_custom_quasar(
     formats,
     dest_acc,
-    implied_math_format,
     dest_sync,
     tile_dimensions,
     block_shape,
@@ -202,7 +199,6 @@ def test_eltwise_sub_bcast_col_custom_quasar(
         templates=[
             MATH_OP(mathop=MathOperation.Elwsub),
             BROADCAST_TYPE(BroadcastType.Column),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DEST_SYNC(dest_sync),
         ],
         runtimes=[

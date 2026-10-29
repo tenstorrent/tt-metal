@@ -26,7 +26,7 @@ inline void Noc::async_write_zeros(
     // Caller's pre-zeroed prefix must cover at least this many bytes.
     const uint32_t max_chunk =
         (size_bytes > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE : size_bytes;
-    if constexpr (std::is_same_v<Scratch, DataflowBuffer>) {
+    if constexpr (is_dataflow_buffer_v<Scratch>) {
         // DFB exposes get_entry_size(); assert one reserved entry is big enough. Scratchpad also has
         // an extent, checked in the branch below. CircularBuffer, CoreLocalMem and
         // LocalTensorAccessor expose no size at all, so for those three scratch capacity stays the
@@ -37,12 +37,12 @@ inline void Noc::async_write_zeros(
     }
     uint32_t src_addr = get_src_ptr<AddressType::LOCAL_L1>(scratch, src_args_t<Scratch>{});
     // Addressed directly rather than through get_dst_ptr, so note the write here.
-    tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, ::TensorAccessor<DSpecT>>();
+    tt_buf_rw::note_if_bound<tt_buf_rw::kWrite, ::TensorAccessor<DSpecT>>();
     uint64_t dst = tensor_accessor::detail::transfer_noc_addr(accessor, args.page_id, args.offset_bytes, noc_id_);
     uint32_t remaining = size_bytes;
     while (remaining > 0) {
         uint32_t curr = (remaining > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE : remaining;
-        noc_async_write(src_addr, dst, curr, noc_id_);
+        noc_async_write_impl(src_addr, dst, curr, noc_id_);
         dst += curr;
         remaining -= curr;
     }

@@ -66,7 +66,7 @@ From the tt-isa-docs (`RMWCIB.md`, `BackendConfiguration.md` — fetch via the t
 1. **Build the word→field map** from `cfg_defines.h` (per arch) and cross-reference thread accesses. Threads by file: `llk_unpack*`/`cunpack_common`=UNPACK, `llk_math*`/`cmath_common`=MATH, `llk_pack*`/`cpack_common`=PACK. CFG defines:
    - WH: `tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h`
    - BH: `tt_metal/hw/inc/internal/tt-1xx/blackhole/cfg_defines.h`
-   - Quasar: `tt_metal/hw/inc/internal/tt-2xx/quasar/cfg_defines.h`
+   - Quasar: `tt_metal/tt-llk/tt_llk_quasar/common/inc/cfg_defines.h`
    Parse `#define <X>_ADDR32 <n>`, `<X>_MASK`, `<X>_SHAMT`; resolve `*_RMW` macros (first token is the `*_ADDR32`). **Enumerate EVERY config-write mechanism — not just the masked-RMW/`WRCFG` pair.** A "no other writer" / "SAFE by disjoint masks" conclusion is itself a **negative**, so it is only valid if the write-mechanism sweep is *complete* — a writer you didn't map is a race you didn't see (ground-or-abstain applies to this negative exactly as `race-audit-all` states it). Map every access:
    - `cfg[SYM]=` / RISC `sw` →WR_FULL (mask `0xffffffff`);  `=cfg[SYM]`→RD.
    - `cfg16[SYM]=` (via `get_cfg16_pointer()`)→a 16-bit HALF-WORD write — a MASKED co-writer of the 32-bit word (NOT a full-word clobberer), so a bare `cfg[` grep misses it (the `16` breaks the literal).

@@ -102,8 +102,8 @@ void kernel_main() {
     // by the compute kernel's packer and drained here.
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
-    Semaphore sender_sem(sem::in1_mcast_sender);
-    Semaphore receiver_sem(sem::in1_mcast_receiver);
+    Semaphore<> sender_sem(sem::in1_mcast_sender);
+    Semaphore<> receiver_sem(sem::in1_mcast_receiver);
 #ifdef FUSE_BIAS
     // bias is filled here from the sender's multicast and consumed by the compute kernel's bias add.
     DataflowBuffer dfb_in3(dfb::bias);
@@ -245,7 +245,13 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    dfb_out.wait_front(static_cast<uint16_t>(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h));
+    // Compute pushes out_block_num_tiles tiles for each of the num_blocks_h_dim * num_blocks_w_dim output
+    // blocks per batch, so this kernel pops the same number.
+    constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);
+    const uint16_t out_num_tiles =
+        static_cast<uint16_t>(batch * num_blocks_h_dim * num_blocks_w_dim * out_block_num_tiles);
+    dfb_out.wait_front(out_num_tiles);
+    // Pop the same number of tiles that were waited for.
+    dfb_out.pop_front(out_num_tiles);
 #endif
 }

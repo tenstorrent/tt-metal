@@ -560,6 +560,30 @@ TEST_F(MeshTraceTest2x4, NonConvexGridTrace) {
     mesh_device_->release_mesh_trace(trace_id);
 }
 
+TEST_F(MeshTraceTest2x4, SingleDeviceTraceReplay) {
+    // Leaves out all other devices, including remote chips (#60338)
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        1, mesh_device_->compute_with_storage_grid_size(), 0);
+
+    auto mesh_workload = std::make_shared<MeshWorkload>();
+    mesh_workload->add_program(MeshCoordinateRange({0, 0}, {0, 0}), std::move(*programs[0]));
+
+    // Compile workload first
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue());
+
+    auto trace_id = mesh_device_->begin_mesh_trace(mesh_device_->mesh_command_queue(0));
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload, false);
+    mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id);
+
+    for (int i = 0; i < 100; i++) {
+        mesh_device_->replay_mesh_trace(mesh_device_->mesh_command_queue(0), trace_id, false);
+    }
+    Finish(mesh_device_->mesh_command_queue());
+
+    mesh_device_->release_mesh_trace(trace_id);
+}
+
 // Sweep Tests on T3K and TG
 void run_heterogenous_trace_sweep(
     const std::shared_ptr<MeshDevice>& mesh_device,

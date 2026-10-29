@@ -12,17 +12,15 @@ from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     ReduceDimension,
     ReducePool,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import input_output_formats, parametrize, runtime
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
@@ -41,9 +39,9 @@ TILE_DIMENSIONS = [(32, 32), (16, 32), (8, 32), (4, 32)]
 
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float16]),
-    block_ct_dim=BLOCK_CT_DIMS,
-    tile_dimensions=TILE_DIMENSIONS,
+    formats=input_output_formats([DataFormat.Float16_b]),
+    block_ct_dim=runtime(BLOCK_CT_DIMS),
+    tile_dimensions=runtime(TILE_DIMENSIONS),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
 )
 def test_reduce_block_max_row_quasar(
@@ -83,7 +81,6 @@ def test_reduce_block_max_row_quasar(
         formats,
         templates=[
             UNPACKER_ENGINE_SEL(),
-            IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
             DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
@@ -109,7 +106,6 @@ def test_reduce_block_max_row_quasar(
         ),
         unpack_to_dest=False,
         dest_acc=DestAccumulation.No,
-        disable_format_inference=False,
     )
 
     res_from_L1 = configuration.run().result

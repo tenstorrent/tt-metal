@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include <core/xtensor_utils.hpp>
-#include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -18,32 +17,10 @@
 #include "modules/linear_module.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
+#include "test_utils/mesh_utils.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include "ttnn_fixed/distributed/tt_metal.hpp"
 
-namespace {
-
-auto check_board_is_n300() {
-    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == tt::BoardType::N300;
-}
-
-}  // namespace
-
-class LinearRegressionDDPTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        if (!check_board_is_n300()) {
-            GTEST_SKIP() << "Skipping N300 specific tests";
-        }
-
-        ttml::ttnn_fixed::distributed::enable_fabric(2U);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
-    }
-
-    void TearDown() override {
-        ttml::autograd::ctx().close_device();
-    }
-};
+class LinearRegressionDDPTest : public ttml::test_utils::Mesh1x2Fixture {};
 
 using ttml::autograd::TensorPtr;
 

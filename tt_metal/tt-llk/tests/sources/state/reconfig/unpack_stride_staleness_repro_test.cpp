@@ -10,9 +10,9 @@
 // stale for a following partial-face unpack (e.g. partial-face matmul, which reads them without setting
 // them). Both runs assert the srcA/srcB ch1 Z-stride equals the NEW format's canonical stride:
 //   run_idx 0 (control): configure DIRECTLY to fp32.
-//   run_idx 1 (the fix): configure fp16, then a format-only (IGNORE) reconfig to fp32.
+//   run_idx 1 (the fix): configure bf16, then a format-only (IGNORE) reconfig to fp32.
 // Before the fix, run_idx 1 fired the assert (stale 512 != expected 1024); it now passes.
-// FormatConfig: unpack_A slots = prev (fp16), pack slots = next (fp32).
+// FormatConfig: unpack_A slots = prev (bf16), pack slots = next (fp32).
 
 #include <cstdint>
 
@@ -32,8 +32,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    const std::uint32_t prev_src = (std::uint32_t)params.formats.unpack_A_src; // fp16
-    const std::uint32_t prev_dst = (std::uint32_t)params.formats.unpack_A_dst; // fp16
+    const std::uint32_t prev_src = (std::uint32_t)params.formats.unpack_A_src; // bf16
+    const std::uint32_t prev_dst = (std::uint32_t)params.formats.unpack_A_dst; // bf16
     const std::uint32_t next_src = (std::uint32_t)params.formats.pack_src;     // fp32
     const std::uint32_t next_dst = (std::uint32_t)params.formats.pack_dst;     // fp32
 
@@ -49,7 +49,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
-        // BUGGY PATH: configure to prev (fp16), then a format-only reconfig to next (fp32) with geometry OFF
+        // BUGGY PATH: configure to prev (bf16), then a format-only reconfig to next (fp32) with geometry OFF
         // -- exactly what reconfig_data_format<...>() does. The ch1 Z-stride is NOT re-committed.
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             prev_src, prev_src, prev_dst, prev_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces, SIZE, SIZE);
@@ -70,16 +70,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const std::uint32_t actual_a_z   = cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32];
     const std::uint32_t expected_a_z = canonical_unpA_z_stride(next_dst) << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT;
-    LLK_ASSERT(
-        actual_a_z == expected_a_z,
-        "BUG: srcA ch1 Z-stride is stale after a format-only reconfig (fp16->fp32); strides were not re-committed.");
+    LLK_ASSERT(actual_a_z == expected_a_z, "BUG: srcA ch1 Z-stride is stale after a format-only reconfig (bf16->fp32); strides were not re-committed.");
 
     const std::uint32_t actual_b_z   = cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32];
     const std::uint32_t expected_b_z = (datum_size_in_bytes(next_dst) * FACE_C_DIM * FACE_R_DIM)
                                        << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT;
-    LLK_ASSERT(
-        actual_b_z == expected_b_z,
-        "BUG: srcB ch1 Z-stride is stale after a format-only reconfig (fp16->fp32); strides were not re-committed.");
+    LLK_ASSERT(actual_b_z == expected_b_z, "BUG: srcB ch1 Z-stride is stale after a format-only reconfig (bf16->fp32); strides were not re-committed.");
 }
 
 #endif

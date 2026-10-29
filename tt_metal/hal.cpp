@@ -5,7 +5,7 @@
 #include <hal.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "common/tt_backend_api_types.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <cstdint>
 #include <string>
 

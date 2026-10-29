@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
@@ -84,7 +85,7 @@ StreamPlacements decide_device_placement(
     uint32_t num_links,
     const CoreRows& allowed_rows,
     std::size_t num_allowed) {
-    auto* dev = mesh->get_device(coord);
+    auto* dev = tt::tt_metal::internal::get_device(*mesh, coord);
     const auto self_node = mesh->get_fabric_node_id(coord);
 
     std::map<StreamId, WorkerCandidate> candidates;
@@ -99,7 +100,7 @@ StreamPlacements decide_device_placement(
             axis,
             coord);
         const auto nbr_node = mesh->get_fabric_node_id(*nbr);
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(self_node, nbr_node);
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, self_node, nbr_node);
         TT_FATAL(
             links.size() >= num_links,
             "dispatch_fabric2d {}: {} forwarding links toward {}, {} requested",
@@ -111,7 +112,7 @@ StreamPlacements decide_device_placement(
             // links[k], not k: the returned indices are the forwarding-capable subset of the
             // direction's channels, so an ordinal is not a link index.
             const uint32_t link_idx = links[k];
-            const auto eth_core = tt::tt_fabric::get_forwarding_eth_core(self_node, nbr_node, link_idx);
+            const auto eth_core = tt::tt_fabric::get_forwarding_eth_core(*mesh, self_node, nbr_node, link_idx);
             const auto closest =
                 tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(*dev, eth_core, SENDER_NOC);
             const StreamId stream = make_stream_id(k, delta == 1);

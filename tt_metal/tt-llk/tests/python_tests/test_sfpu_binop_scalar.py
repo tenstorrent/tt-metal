@@ -6,6 +6,7 @@ import struct
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ScalarBinopGolden, get_golden_generator
 from helpers.llk_params import (
@@ -15,6 +16,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.sfpu_accuracy_budget import assert_against_contract
 from helpers.sfpu_domains import (
     SPECIALS_READY_OPS,
     edge_spec,
@@ -29,7 +31,6 @@ from helpers.test_variant_parameters import (
     SFPU_BINOP_MODE,
     SFPU_UNARY_SCALAR,
 )
-from helpers.utils import passed_test
 
 
 def _bits(value: float) -> int:
@@ -46,6 +47,9 @@ def _bits(value: float) -> int:
 # one kernel parameter. Presubmit drives the ops at a single representative scalar and the
 # remaining values run nightly.
 _PRESUBMIT_SCALAR = 2.0
+
+#: The approximation mode this kernel compiles, and so the one its contract names.
+_APPROX_MODE = ApproximationMode.No
 _SCALARS = (0.0, 1.0, 2.0, -2.0, 8.0, 0.25)
 _NIGHTLY_SCALARS = tuple(s for s in _SCALARS if s != _PRESUBMIT_SCALAR)
 
@@ -108,7 +112,7 @@ def _run_sfpu_binop_scalar(
         templates=[
             SFPU_BINOP_MODE(mathop),
             SFPU_UNARY_SCALAR(scalar_bits),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(_APPROX_MODE),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -137,9 +141,17 @@ def _run_sfpu_binop_scalar(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    # The whole contract, step budget included, as the binary and ternary drivers gate:
+    # every Scalar* row was measured over this driver's own variants. The mode the
+    # kernel compiled: an unset query dimension would not match a row keyed on it.
+    assert_against_contract(
+        mathop,
+        formats,
+        dest_acc,
+        golden_tensor,
+        res_tensor,
+        approx_mode=_APPROX_MODE,
+    )
 
 
 _SCALAR_FORMATS = input_output_formats(
@@ -160,8 +172,7 @@ _SCALAR_OPS = [
 
 
 def _skip_unsupported(formats, dest_acc, mathop, scalar):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     if (
         formats.input_format == DataFormat.Float16_b
         and dest_acc == DestAccumulation.Yes
@@ -210,7 +221,7 @@ def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
 #
 # Still out of scope, and both need a per-op tolerance first -- the default bf16 tolerance is
 # only meaningful while the result stays in range: |scalar| > 8, and +/-tiny / +/-large on the
-# tensor operand. That is the pattern sfpu_accuracy_budget.yaml uses for pow and xlogy.
+# tensor operand. That is the pattern sfpu_accuracy_budget_*.yaml uses for pow and xlogy.
 @pytest.mark.nightly
 @parametrize(
     formats=_SCALAR_FORMATS,

@@ -237,12 +237,14 @@ class TtNomicBertAttention(LightweightModule):
         Returns:
             ttnn.Tensor: (B, A, S, D), rotated.
         """
-        batch, heads, seqlen, head_dim = x.shape
-        folded = ttnn.reshape(x, (1, batch * heads, seqlen, head_dim))
+        shape = x.shape
+        batch, heads, seqlen, head_dim = shape[0], shape[1], shape[2], shape[3]
+        # At B = 1 the fold is the identity; the two reshapes are skipped, about 1 us of host time each.
+        folded = x if batch == 1 else ttnn.reshape(x, (1, batch * heads, seqlen, head_dim))
         rotated = ttnn.experimental.rotary_embedding_hf(
             folded, cos, sin, is_decode_mode=False, memory_config=memory_config
         )
-        return ttnn.reshape(rotated, (batch, heads, seqlen, head_dim))
+        return rotated if batch == 1 else ttnn.reshape(rotated, (batch, heads, seqlen, head_dim))
 
     def forward(
         self,
@@ -264,7 +266,7 @@ class TtNomicBertAttention(LightweightModule):
         qkv = dense_linear(x, self.qkv_weight, self.qkv_bias, OpGroup.QKV, self.tt_config)
 
         compute_kernel_config = self.tt_config.compute_kernel_config(OpGroup.SDPA)
-        batch, _, seqlen, _ = x.shape
+        batch, seqlen = x.shape[0], x.shape[-2]
         program_config = sdpa_program_config(
             batch,
             seqlen,

@@ -7,8 +7,10 @@
 
 #include "api/compute/tilize.h"
 #include "api/compute/cb_api.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 
 // This is the go-to helper for all tilize usage in compute kernels.
 // Prefer this over raw tilize_init/tilize_block/tilize_uninit calls.
@@ -99,6 +101,7 @@ enum class RemapMode : uint8_t {
  *
  * ── Runtime Parameters ──────────────────────────────────────────────────────
  *
+ *   in_dfb / out_dfb  — The kernel's DataflowBuffers for input_dfb / output_dfb, by reference.
  *   num_blocks         — Number of tile-rows to process (height in tiles).
  *   total_input_pages  — Total input CB pages across all blocks (default: std::nullopt).
  *       omitted (symmetric): Input and output CBs both have tile-sized pages.
@@ -116,39 +119,43 @@ enum class RemapMode : uint8_t {
  *
  *   // Hardware init — must come first, pass the input and output DFBs
  *   compute_kernel_hw_startup(dfb_in, dfb_out);
+ *   // Construct each DataflowBuffer once, at kernel scope, and pass it by reference. The helper never
+ *   // constructs its own: on Quasar a DataflowBuffer drains when it goes out of scope.
+ *   DataflowBuffer in(dfb_in), out(dfb_out);
  *
  *   // 1. Basic tilize (most common — symmetric, both DFBs have tile-sized entries)
- *   compute_kernel_lib::tilize<block_width_tiles, dfb_in, dfb_out>(num_blocks);
+ *   compute_kernel_lib::tilize<block_width_tiles, dfb_in, dfb_out>(in, out, num_blocks);
  *
  *   // 2. Asymmetric — input DFB has row-sized entries, output DFB has tile-sized entries
- *   compute_kernel_lib::tilize<out_tiles_per_block, dfb_in, dfb_out>(num_blocks, total_rows);
+ *   compute_kernel_lib::tilize<out_tiles_per_block, dfb_in, dfb_out>(in, out, num_blocks, total_rows);
  *
  *   // 3. Asymmetric, single block — all rows tilized at once
- *   compute_kernel_lib::tilize<total_out_tiles, dfb_in, dfb_out>(1, total_rows);
+ *   compute_kernel_lib::tilize<total_out_tiles, dfb_in, dfb_out>(in, out, 1, total_rows);
  *
  *   // 4. Register reconfiguration (switching data formats mid-kernel)
  *   using namespace compute_kernel_lib::tilize_config;
  *   compute_kernel_lib::tilize<16, new_dfb, dfb_out,
  *          InitUninitMode::InitAndUninit,
  *          WaitMode::WaitBlock,
- *          ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(5);
+ *          ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(new_in, out, 5);
  *
  *   // 5. Caller-managed synchronization (data already in DFB)
  *   compute_kernel_lib::tilize<block_w, dfb_in, dfb_out,
  *          tilize_config::InitUninitMode::InitAndUninit,
- *          tilize_config::WaitMode::NoWait>(num_blocks);
+ *          tilize_config::WaitMode::NoWait>(in, out, num_blocks);
  *
  *   // 6. Multiple back-to-back tilize calls — skip redundant init/uninit between them
- *   compute_kernel_lib::tilize<w, dfb_in, dfb_out, tilize_config::InitUninitMode::InitOnly>(blocks);   // first
- *   compute_kernel_lib::tilize<w, dfb_in, dfb_out, tilize_config::InitUninitMode::Neither>(blocks);    // middle
- *   compute_kernel_lib::tilize<w, dfb_in, dfb_out, tilize_config::InitUninitMode::UninitOnly>(blocks); // last
+ *   compute_kernel_lib::tilize<w, dfb_in, dfb_out, tilize_config::InitUninitMode::InitOnly>(in, out, blocks);   //
+ * first compute_kernel_lib::tilize<w, dfb_in, dfb_out, tilize_config::InitUninitMode::Neither>(in, out, blocks);    //
+ * middle compute_kernel_lib::tilize<w, dfb_in, dfb_out, tilize_config::InitUninitMode::UninitOnly>(in, out, blocks); //
+ * last
  *
  *   // 7. Lossless fp32 tilize — exact fp32 preservation (no truncation to tf32)
  *   compute_kernel_lib::tilize<block_w, dfb_in, dfb_out,
  *          tilize_config::InitUninitMode::InitAndUninit,
  *          tilize_config::WaitMode::WaitBlock,
  *          tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
- *          tilize_config::Fp32Mode::Lossless>(num_blocks);
+ *          tilize_config::Fp32Mode::Lossless>(in, out, num_blocks);
  */
 template <
     uint32_t block_width_tiles,
@@ -159,8 +166,30 @@ template <
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
     tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast,
+    tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure,
+    typename InDFB,
+    typename OutDFB>
+ALWI void tilize(
+    InDFB& in_dfb, OutDFB& out_dfb, uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
+
+// The id-only form: builds the DataflowBuffers from the ids and runs the form above. See id_only_helpers.hpp.
+template <
+    uint32_t block_width_tiles,
+    uint32_t input_dfb,
+    uint32_t output_dfb,
+    tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
+    tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
+    tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
+        tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+    tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast,
     tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure>
-ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
+KERNEL_LIB_ID_ONLY_HELPER ALWI void tilize(
+    uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt) {
+    DataflowBuffer in_dfb(input_dfb);
+    DataflowBuffer out_dfb(output_dfb);
+    tilize<block_width_tiles, input_dfb, output_dfb, init_uninit_mode, wait_mode, reconfig_mode, fp32_mode, remap_mode>(
+        in_dfb, out_dfb, num_blocks, total_input_pages);
+}
 
 }  // namespace compute_kernel_lib
 

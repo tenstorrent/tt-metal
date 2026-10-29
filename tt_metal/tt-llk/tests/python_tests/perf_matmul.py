@@ -14,11 +14,9 @@ from helpers.llk_params import (
     Transpose,
 )
 from helpers.matmul_sweep import (
-    DEST_HALF_BFP_PACK_HANG_REASON,
     DEST_RT_CT_BLOCKS,
     PERF_RING_TILES,
     generate_tile_dims,
-    is_dest_half_bfp_pack_hang,
     mid_fill_rt_ct_pairs,
     unpack_matmul_fits_perf_ring,
 )
@@ -109,7 +107,6 @@ def matmul_combos(
         formats=input_output_formats(
             [
                 DataFormat.Float16_b,
-                DataFormat.Float16,
                 DataFormat.Float32,
                 DataFormat.Bfp8_b,
             ]
@@ -134,9 +131,6 @@ def test_perf_matmul(
 ):
 
     formats, dest_acc, dest_sync, (matrix_a, matrix_b) = combos
-
-    if is_dest_half_bfp_pack_hang(dest_sync, dest_acc, formats):
-        pytest.skip(DEST_HALF_BFP_PACK_HANG_REASON)
 
     run_types = [
         PerfRunType.L1_TO_L1,
