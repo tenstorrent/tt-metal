@@ -2784,16 +2784,20 @@ class SpeculativeDecoder:
                 got = f"{got} of length {len(page_tables_per_layer)}"
             raise ValueError(f"serving_refresh_page_tables expects one table per target layer ({n_layers}), got {got}")
         installed = []
+        converted = {}  # the layers of a KV group hand the same host table: converted once, kept shared
         for i, pt in enumerate(page_tables_per_layer):
             if pt is None:
                 installed.append(None)
                 continue
             if not hasattr(pt, "dim"):
                 raise TypeError(f"per-layer page table {i} must be a host torch tensor, got {type(pt).__name__}")
-            t = pt.unsqueeze(0) if pt.dim() == 1 else pt
-            if t.dim() != 2:
-                raise ValueError(f"per-layer page table {i} must be [rows, blocks], got shape {tuple(pt.shape)}")
-            installed.append(t.to(torch.int64))
+            t64 = converted.get(id(pt))
+            if t64 is None:
+                t = pt.unsqueeze(0) if pt.dim() == 1 else pt
+                if t.dim() != 2:
+                    raise ValueError(f"per-layer page table {i} must be [rows, blocks], got shape {tuple(pt.shape)}")
+                t64 = converted[id(pt)] = t.to(torch.int64)
+            installed.append(t64)
         slots = getattr(self, "_srv_slots", None)
         if slots is not None and len(slots) == len(installed):
             serving_check_group_tables(installed, slots)

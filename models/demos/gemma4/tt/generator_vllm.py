@@ -6910,6 +6910,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         self._mtp_row_needs_logits = {}
         self._mtp_step_tables = None  # (page_table, page_tables_per_layer, kv_cache) of the latest decode step
         self._mtp_installed_tables = None  # the per-layer record tables last handed to the decoder
+        self._mtp_installed_keys = None  # (storage, version, shape, dtype) of the tables they were cloned from
         self._mtp_decline_logged = None
         # Proposals the runner committed past before verifying them (contract s.4d: an ordinary decode
         # submitted before the proposal was published drops it rather than verifying it).
@@ -7059,7 +7060,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         try:
             _full, layers = self._mtp_step_page_tables()
             self._mtp_decoder.serving_refresh_page_tables(layers)
-            self._mtp_installed_tables = [None if table is None else table.clone() for table in layers]
+            self._mtp_remember_tables(layers)
             costs = {key: CostLine.of(value) for key, value in self._mtp_decoder.serving_measure_costs(top).items()}
             plain = self._spec_plain_step_cost(warmup_kwargs, zero_table, top)
         finally:
@@ -7140,6 +7141,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         self._mtp_last_replay = None
         self._mtp_step_tables = None
         self._mtp_installed_tables = None
+        self._mtp_installed_keys = None
         self._spec_costs = None
         self._spec_plain_cost = None
         try:
@@ -7522,17 +7524,60 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             flat[i] = full[r].to(torch.int32)
         return flat
 
+    @staticmethod
+    def _mtp_table_key(table):
+        """What identifies a host table's content without reading it: its storage, in-place version, shape and
+        dtype (a view shares its base's version counter, so a block appended in place changes the key)."""
+        if table is None:
+            return None
+        return (table.data_ptr(), int(table._version), tuple(table.shape), str(table.dtype))
+
+    def _mtp_remember_tables(self, layers):
+        """Keep what the decoder was handed: one clone per distinct table object (the layers of a KV group share
+        one host table) and each layer's key, so the next step's check is a key compare per layer and at most one
+        content compare per distinct object. Cloning every layer cost 48 x 512 KB a refresh at 32 rows."""
+        clones = {}
+        kept = []
+        for table in layers:
+            if table is None:
+                kept.append(None)
+                continue
+            clone = clones.get(id(table))
+            if clone is None:
+                clone = clones[id(table)] = table.clone()
+            kept.append(clone)
+        self._mtp_installed_tables = kept
+        self._mtp_installed_keys = [self._mtp_table_key(table) for table in layers]
+
     def _mtp_tables_changed(self, layers):
+        """Whether the step's per-layer tables differ from the ones last handed to the decoder: a layer whose
+        table is the same storage at the same version is unchanged without a read; a new object is compared
+        once per distinct (old, new) pair (every layer of a KV group shares one table, so 48 layers cost two or
+        three compares, not 48); when nothing changed the new objects' keys are kept for the next step."""
         previous = self._mtp_installed_tables
         if previous is None or len(previous) != len(layers):
             return True
-        for a, b in zip(previous, layers):
+        keys = self._mtp_installed_keys or []
+        new_keys = []
+        compared = {}
+        for i, (a, b) in enumerate(zip(previous, layers)):
             if a is None or b is None:
                 if (a is None) != (b is None):
                     return True
+                new_keys.append(None)
                 continue
-            if a.shape != b.shape or not torch.equal(a, b):
+            key = self._mtp_table_key(b)
+            new_keys.append(key)
+            if i < len(keys) and keys[i] == key:
+                continue
+            pair = (id(a), id(b))
+            same = compared.get(pair)
+            if same is None:
+                same = a.shape == b.shape and bool(torch.equal(a, b))
+                compared[pair] = same
+            if not same:
                 return True
+        self._mtp_installed_keys = new_keys
         return False
 
     def _mtp_decline_step(self, rows, k, live, reason, log=True):
@@ -7832,7 +7877,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         full, layers = self._spec_timed("tables", self._mtp_step_page_tables)
         if self._mtp_tables_changed(layers):
             self._spec_timed("refresh", decoder.serving_refresh_page_tables, layers)
-            self._mtp_installed_tables = [None if table is None else table.clone() for table in layers]
+            self._mtp_remember_tables(layers)
         # Both calls below rewrite the decoder's shared verify-logits buffer.
         self._mtp_replay_serial += 1
         serial = self._mtp_replay_serial

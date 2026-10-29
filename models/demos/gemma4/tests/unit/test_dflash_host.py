@@ -599,8 +599,30 @@ def test_propose_refreshes_the_verify_page_tables_when_the_block_table_changes(m
     mh._start_solo(mtp)
     assert _names(mtp, "refresh") == [("refresh", [[[10, 11, 0, 0]], [[10, 11, 0, 0]]])]
     mh._verify(mtp, [mh._block(150, [101, 102, 103, 104, 105])], [mh._positions(3, 6)], [5], [10])
-    mh._propose(mtp, [[150, 151, 152, 153, 154, 155]], [mh._positions(4, 6)], counts=[6])
+    # the change check reads no table whose storage and version the last install already saw, and compares a
+    # new object of the same content once per distinct object (both layers share the step's one table): an
+    # unchanged step costs a key check per layer, not a compare per layer
+    equal_calls = []
+    real_equal = torch.equal
+
+    def counted_equal(a, b):
+        equal_calls.append((tuple(a.shape), tuple(b.shape)))
+        return real_equal(a, b)
+
+    torch.equal = counted_equal
+    try:
+        mh._propose(mtp, [[150, 151, 152, 153, 154, 155]], [mh._positions(4, 6)], counts=[6])
+        assert len(equal_calls) <= 1, equal_calls  # the harness hands a new tensor object each step
+        _full, layers = mtp._mtp_step_page_tables()
+        assert not mtp._mtp_tables_changed(layers) and len(equal_calls) <= 1, "the same objects again: a key check"
+        layers[0][0, 2] = 12  # a block appended in place: the version moves, the content is read and differs
+        assert mtp._mtp_tables_changed(layers) and len(equal_calls) == 2
+        layers[0][0, 2] = 0
+    finally:
+        torch.equal = real_equal
     assert len(_names(mtp, "refresh")) == 1, "an unchanged table is not re-installed"
+    assert len({id(t) for t in mtp._mtp_installed_tables}) == 1 and len(mtp._mtp_installed_tables) == 2
+    assert mtp._mtp_installed_keys[0] == mtp._mtp_installed_keys[1] and mtp._mtp_installed_keys[0][2] == (1, 4)
     # The block table grew by one block: the full per-layer tables are re-installed and the
     # record's flat row follows.
     mh._verify(

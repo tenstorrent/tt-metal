@@ -1859,6 +1859,12 @@ def test_refresh_installs_one_host_table_per_layer_as_int64_rows():
     assert spec._srv_per_layer[0].dtype == torch.int64 and spec._srv_per_layer[0].shape == (2, 2)
     assert spec._srv_per_layer[1] is None
     assert spec._srv_per_layer[2].shape == (1, 2)  # a 1-D row is a one-row table
+    # the layers of a KV group hand the same host table: it is converted once and kept shared (the group check
+    # then compares identities; converting and comparing every layer cost ~10 ms a refresh at 32 rows x 4096)
+    shared = torch.tensor([[7, 8], [9, 10]], dtype=torch.int32)
+    spec.serving_refresh_page_tables([shared, shared, shared])
+    assert spec._srv_per_layer[0] is spec._srv_per_layer[1] is spec._srv_per_layer[2]
+    assert spec._srv_per_layer[0].dtype == torch.int64 and spec._srv_per_layer[0].tolist() == [[7, 8], [9, 10]]
     # tables that do not match the target are refused
     for tables, error, message in [
         ([torch.zeros(1, 2)] * 2, ValueError, "one table per target layer \\(3\\)"),
