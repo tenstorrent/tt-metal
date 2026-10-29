@@ -265,6 +265,18 @@ def test_decode_glue_modes_gate():
         "rs",
     )  # the pre-2026-10-29 path
     assert M.decode_glue_modes(8, 32, has_idx=False, in_prefill=False, env=on) == (False, "rs")  # tile-aligned T
+    assert M.decode_glue_modes(
+        8, 32, has_idx=False, in_prefill=False, env=dict(on, GLM53_HYBRID_GLUE_FULL_TILE="1")
+    ) == (
+        True,
+        "allreduce",
+    )  # the full tile opts in (the 32-row verify probe)
+    assert M.decode_glue_modes(
+        8, 64, has_idx=False, in_prefill=False, env=dict(on, GLM53_HYBRID_GLUE_FULL_TILE="1")
+    ) == (
+        False,
+        "rs",
+    )
     assert M.decode_glue_modes(8, 16, has_idx=False, in_prefill=True, env=on) == (False, "rs")  # a prefill slab
     assert M.decode_glue_modes(8, 4, has_idx=True, in_prefill=False, env=on) == (False, "rs")  # dispatch routing
     assert M.decode_glue_modes(1, 4, has_idx=False, in_prefill=False, env=on) == (False, "rs")  # one row

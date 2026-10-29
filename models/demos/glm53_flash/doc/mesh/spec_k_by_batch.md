@@ -20,7 +20,12 @@ User direction (2026-10-29): "you need to have different K value based on batch 
   (B (K + 1) <= 31) and the table (1, 3), (2, 3), (4, 3), (8, 1), (16, plain): at 8 per row K=1 (19.8) beats
   K=2 (13.3, a padded 24-row tile). B8_K3 would have given 19.9 tok/s per
   user (1274 aggregate, 3.2 accepted) and B16_K1 16.6 (2124 aggregate, 1.9 accepted) -- the prize for fixing the full
-  tile; B16_K1 (users 80-95 = row 5, token 4) is the fourth point with the same signature. Below the bound every row
+  tile; B16_K1 (users 80-95 = row 5, token 4) is the fourth point with the same signature. The per-row diagnostic
+  (`GLM53_SPEC_DEBUG_ROWS=1`): at 16 verify rows the margins are bit-identical across the 8 rows; at 32 they deviate
+  by 0.3-0.75 logits per row (candidate 0 included) and row 5 commits a token the plain path rejects by 1.3. The
+  32-row verify is the one shape `decode_glue_modes` sends through the padded gather + reduce-scatter (its
+  `T < 32` rule) instead of the row-identical compact gather + all-reduce; `GLM53_HYBRID_GLUE_FULL_TILE=1` is the
+  probe. Below the bound every row
   is lossless: B8_K1 (16 rows per mesh row) 19.8 tok/s per user, 1267 aggregate, 1.94 accepted -- so the defect is
   the 32-row tile, not row 5's chips; B8_K2 (the table's entry) is being measured.
 * The plugin contract already allows a per-row draft count below the width: `propose_draft_tokens` returns

@@ -192,12 +192,19 @@ def hybrid_combine_mode(env=None) -> str:
     return mode
 
 
+HYBRID_GLUE_FULL_TILE_ENV = "GLM53_HYBRID_GLUE_FULL_TILE"  # 1 = the compact gather + its combine at T = 32 rows too
+
+
 def decode_glue_modes(rows: int, T: int, *, has_idx: bool, in_prefill: bool, env=None) -> tuple[bool, str]:
     """(compact gather?, combine mode) of one ``TtRoutedExperts.forward`` call: the knobs apply to decode shapes
-    only -- a multi-row mesh, T < 32 users per row, no top-k lists (``idx``: the dispatch / regions prefill paths)
-    and not inside ``GLMMesh.prefill_scope``; everything else keeps today's padded gather and reduce-scatter
-    (``"rs"``). A pure function of the env and the static shape (trace-safe)."""
-    decode_shape = rows > 1 and not has_idx and T < TILE and not in_prefill
+    only -- a multi-row mesh, T < 32 users per row (T = 32 too under ``GLM53_HYBRID_GLUE_FULL_TILE=1``: the 32-row
+    speculative verify, whose padded gather + reduce-scatter path drifted per row on the 2026-10-29 sweep while the
+    16-row verify through the compact + all-reduce path was row-identical), no top-k lists (``idx``: the dispatch /
+    regions prefill paths) and not inside ``GLMMesh.prefill_scope``; everything else keeps today's padded gather and
+    reduce-scatter (``"rs"``). A pure function of the env and the static shape (trace-safe)."""
+    env_ = os.environ if env is None else env
+    t_max = TILE + 1 if env_.get(HYBRID_GLUE_FULL_TILE_ENV, "0") == "1" else TILE
+    decode_shape = rows > 1 and not has_idx and T < t_max and not in_prefill
     if not decode_shape:
         return False, "rs"
     return hybrid_gather_mode(env) == "compact", hybrid_combine_mode(env)
