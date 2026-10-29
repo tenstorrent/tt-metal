@@ -51,6 +51,7 @@ SCALE_BLOCK_TILES = 8
 MIN_SLICE_TILES = 4
 MAX_GROUP_CORES = 24
 WAVES_MAX = 8
+COMBINE_DEPTH = 2  # cb_partial_col depth in waves: compute collapses wave w+1 while the reader still sends wave w
 LANDING_MIN_WORDS = 1024  # landing scratch floor (4 KiB): most plans then share one allocation
 READ_LOOKAHEAD_WAVES = 1  # x-read waves in flight beyond the oldest unlanded one (wave-ordered DRAM traffic)
 
@@ -112,10 +113,24 @@ def tensor_tile_rows_of(shape) -> int:
 
 
 def l1_budget(device) -> int:
+    """Bytes a program's CBs may take per worker: CBs grow up from the bank base, L1 buffers are placed top-down, so
+    the budget is the gap below the lowest allocated L1 block (the largest free block may be a hole higher up)."""
     try:
-        return int(ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank)
+        view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
     except Exception:  # noqa: BLE001 — mesh devices without a memory view: Blackhole worker L1 minus reserves
         return 1300 * 1024
+    try:
+        blocks = [
+            (int(b["address"]), int(b["size"]), str(b["allocated"]).lower() in ("yes", "true", "1"))
+            for b in view.block_table
+        ]
+    except Exception:  # noqa: BLE001
+        blocks = []
+    if not blocks:
+        return int(view.largest_contiguous_bytes_free_per_bank)
+    base = min(a for a, _, _ in blocks)
+    allocated = [a for a, _, used in blocks if used]
+    return (min(allocated) - base) if allocated else int(view.total_bytes_per_bank)
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -162,6 +177,7 @@ class LocalPlan:
     gamma_stream: bool = False  # cb_gamma_tiles streams STREAM_DEPTH C-tile chunks instead of the resident slice
     x_depth: int = 1  # interleaved x CB depth in pass blocks (2: the next pass's reads overlap this pass)
     out_resident: bool = False  # output CB backed on the output shard (input's own placement)
+    combine_depth: int = COMBINE_DEPTH  # cb_partial_col depth in waves (1: the last rung of the L1 ladder)
 
     def __post_init__(self):
         if self.PW <= 0:
@@ -269,7 +285,7 @@ def cb_table(plan: LocalPlan, sz: Sizes):
     if not p.out_resident:
         t.append((CB_OUTPUT, sz.T_out, STREAM_DEPTH * p.C))
     if p.G_w > 1:  # the on-chip combine CBs exist only on D3 / D3-WS
-        t.append((CB_PARTIAL_COL, sz.T_i, 2 * p.q_w))
+        t.append((CB_PARTIAL_COL, sz.T_i, p.combine_depth * p.q_w))
         t.append((CB_GATHER, sz.T_i, p.regions * p.G_w * p.q))
     if sz.has_gamma:
         t.append((CB_GAMMA_TILES, sz.T_g, STREAM_DEPTH * p.C if p.gamma_stream else p.Wp))
@@ -294,11 +310,12 @@ def _caps():
     return out
 
 
-def blocking_options(num_waves: int, has_gamma: bool, sharded: bool):
+def blocking_options(num_waves: int, has_gamma: bool, sharded: bool, combine: bool = False):
     """The L1 fallback ladder, predicate-guarded first fit (Refinement 1). Phase 0's plan is the first option (one
     pass, full chunk cap, block γ) and its per-wave γ fallback the second, so every shape that fit keeps its plan:
       1. per-wave x·γ;  2. per-chunk x·γ (resident γ, then streamed γ);  3. chunk-cap halving;
-      4. passes (multi-block rows: waves per pass PW < num_waves; interleaved x_depth 2, then 1)."""
+      4. passes (multi-block rows: waves per pass PW < num_waves; interleaved x_depth 2, then 1);
+      5. (on-chip combine only) the whole ladder again with cb_partial_col single-buffered."""
     pws = []
     for P in range(1, num_waves + 1):
         pw = math.ceil(num_waves / P)
@@ -309,16 +326,17 @@ def blocking_options(num_waves: int, has_gamma: bool, sharded: bool):
         if has_gamma
         else [(GAMMA_BLOCK, False)]
     )
-    for pw in pws:
-        for cap in _caps():
-            for gm, gs in modes:
-                for xd in [1] if (sharded or pw >= num_waves) else [2, 1]:
-                    yield dict(PW=pw, cap=cap, gamma_mode=gm, gamma_stream=gs, x_depth=xd)
+    for depth in [COMBINE_DEPTH, 1] if combine and COMBINE_DEPTH > 1 else [COMBINE_DEPTH]:
+        for pw in pws:
+            for cap in _caps():
+                for gm, gs in modes:
+                    for xd in [1] if (sharded or pw >= num_waves) else [2, 1]:
+                        yield dict(PW=pw, cap=cap, gamma_mode=gm, gamma_stream=gs, x_depth=xd, combine_depth=depth)
 
 
 def first_fit(base: LocalPlan, sz: Sizes, budget: int):
     """(option rank, plan) of the first ladder option whose footprint fits, or None."""
-    for rank, opt in enumerate(blocking_options(base.num_waves, sz.has_gamma, base.sharded)):
+    for rank, opt in enumerate(blocking_options(base.num_waves, sz.has_gamma, base.sharded, base.G_w > 1)):
         p = replace(base, **opt)
         if footprint(sz, p) <= budget:
             return rank, p
@@ -457,6 +475,7 @@ def local_plan(input_tensor, workers, sz: Sizes, budget: int, out_resident=None)
             base_plan,
             PW=1,
             cap=1,
+            combine_depth=1,
             gamma_mode=GAMMA_CHUNK if sz.has_gamma else GAMMA_BLOCK,
             gamma_stream=sz.has_gamma,
         )
@@ -572,14 +591,25 @@ def get_resources(mesh, ports, G, num_waves, seg_stride):
     words = max(1, num_waves * G * seg_stride // 4)
     key = (id(mesh), tuple((c.x, c.y) for c in ports), G)
     res = _RESOURCES.get(key)
-    if res is None or res[1].words < words:
+    # grow on demand; shrink back once a much smaller plan runs (a prefill-sized scratch must not tax every later
+    # call's CB budget)
+    want = max(words, LANDING_MIN_WORDS)
+    if res is None or res[1].words < words or res[1].words > 4 * want:
         if res is not None:
             _RESOURCES.pop(key)
             del res  # free the smaller scratch before allocating its replacement (in-order queue: safe)
-        res = (mesh, Resources(mesh, ports, G, max(words, LANDING_MIN_WORDS)))
+        res = (mesh, Resources(mesh, ports, G, want))
         _RESOURCES[key] = res
     res[1].key = key
     return res[1]
+
+
+def evict_resources(mesh) -> bool:
+    """Drop every cached exchange resource of this mesh (freed now, re-created on demand). True if any existed."""
+    keys = [k for k, v in _RESOURCES.items() if v[0] is mesh]
+    for k in keys:
+        _RESOURCES.pop(k)
+    return bool(keys)
 
 
 def forget_resources(res):
@@ -784,17 +814,35 @@ def create_mesh_program_descriptor(
     pset = {(c.x, c.y) for c in port_list}
     workers = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in pset]
     out_resident = _out_resident(input_tensor, output_tensor)
-    plan = local_plan(input_tensor, workers, sz, l1_budget(mesh), out_resident)
+    # The plan sizes the landing scratch, and a grown scratch is an L1 buffer that lowers the CB budget: re-plan
+    # against the budget left once the plan's resources exist (converges at once: the scratch only grows).
+    budget = l1_budget(mesh)
+    evicted = False
+    for _ in range(4):
+        try:
+            plan = local_plan(input_tensor, workers, sz, budget, out_resident)
+        except NotImplementedError:
+            # Cached exchange scratch allocated while larger tensors were alive can sit low in L1 and cap the CB
+            # region; free it (it is re-created, top-down, on demand) and re-measure once before refusing.
+            if evicted or not evict_resources(mesh):
+                raise
+            evicted = True
+            budget = l1_budget(mesh)
+            continue
 
-    # ---- publishers -> links ----
-    P = plan.G_h * plan.owners  # publishers per wave
-    L = min(num_links, P)
-    n_pub = [len([k for k in range(P) if k % L == l]) for l in range(L)]
-    seg_bytes = [n_pub[l] * plan.q * RECORD_BYTES for l in range(L)]
-    seg_stride = _align_up(max(seg_bytes), SEG_ALIGN)
-    ports = {(d, l): port_list[2 * l + d] for l in range(L) for d in (FWD, BWD)}
-    used_ports = list(ports.values())
-    res = get_resources(mesh, used_ports, G, plan.num_waves, seg_stride)
+        # ---- publishers -> links ----
+        P = plan.G_h * plan.owners  # publishers per wave
+        L = min(num_links, P)
+        n_pub = [len([k for k in range(P) if k % L == l]) for l in range(L)]
+        seg_bytes = [n_pub[l] * plan.q * RECORD_BYTES for l in range(L)]
+        seg_stride = _align_up(max(seg_bytes), SEG_ALIGN)
+        ports = {(d, l): port_list[2 * l + d] for l in range(L) for d in (FWD, BWD)}
+        used_ports = list(ports.values())
+        res = get_resources(mesh, used_ports, G, plan.num_waves, seg_stride)
+        budget_now = l1_budget(mesh)
+        if footprint(sz, plan) <= budget_now:
+            break
+        budget = budget_now
     virt = lambda c: mesh.worker_core_from_logical_core(c)
     pack = lambda v: (v.x << 16) | v.y
 
@@ -1113,6 +1161,7 @@ def create_mesh_program_descriptor(
                     plan.PW,
                     plan.cap,
                     plan.x_depth,
+                    plan.combine_depth,
                     res.landing_addr,
                 )
             )
