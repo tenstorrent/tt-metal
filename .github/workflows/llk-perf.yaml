@@ -26,7 +26,7 @@ jobs:
     needs: [changes]
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
-      architecture: blackhole
+      architecture: all
       tests-yaml: ./tests/pipeline_reorg/llk_perf_merge_gate_tests.yaml
       compile-quasar: false
       speed-of-light: false
