@@ -131,6 +131,7 @@ constexpr uint32_t s3 = tt::CBIndex::c_31;
 tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const ChunkGdnParams& attrs, const ChunkGdnInputs& in, std::vector<Tensor>& outputs) {
     const uint32_t BH = attrs.BH;
+    const uint32_t h0 = attrs.head_offset;  // DRAM row of head 0; the map and the hand-off protocol index heads from 0
     const uint32_t NC = attrs.num_chunks;
     const uint32_t Ct = attrs.chunk_size / TILE_HEIGHT;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
@@ -470,6 +471,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         "chunk_gdn_fused: the producer map does not cover the {} items exactly once",
         BH * NC);
 
+    // The output row of head h: its row of the shared preallocated outputs (every wave of a batch writes its
+    // head range of the same [rows, ...] tensors), else row h of this program's own [BH, ...] outputs.
+    const auto out_row = [&](uint32_t h) { return in.o_out.has_value() ? h0 + h : h; };
     for (uint32_t h = 0; h < BH; h++) {
         // Multicast rectangle = the receivers' bounding box (a 1xNV row in placement 0, an rw x rh block
         // for the leftover heads of placements 1/2). Density is checked in LOGICAL coords (no
@@ -495,45 +499,60 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         }
 
         // Receiver (h, v): its V-slice index, s0 from DRAM, N_INIT (the distinct producers serving this
-        // head, each bumps `init` once), the kickoff hold and the map; the producers' coords are common.
+        // head, each bumps `init` once), the kickoff hold, the map and the DRAM row offset of its initial
+        // state; the producers' coords are common. The writer takes the DRAM row of its head.
         for (uint32_t v = 0; v < NV; v++) {
             const CoreCoord& rc = rcv_cores[h * NV + v];
-            receiver_reader.emplace_runtime_args(
-                rc, {h, v, NC, s0_buf, n_init[h], kReceiverKickoffWaitCycles, BH, map.NPH, map.NX, map.num, map.den});
+            std::vector<std::variant<uint32_t, Buffer*>> r_args = {
+                h, v, NC, s0_buf, n_init[h], kReceiverKickoffWaitCycles, BH, map.NPH, map.NX, map.num, map.den};
+            TT_FATAL(
+                r_args.size() == fused_rt::kReceiverHeadOffsetArg,
+                "chunk_gdn_fused: receiver head_offset arg slot moved ({} != {})",
+                r_args.size(),
+                fused_rt::kReceiverHeadOffsetArg);
+            r_args.push_back(h0);
+            receiver_reader.emplace_runtime_args(rc, r_args);
             scan_compute.emplace_runtime_args(rc, {NC});
-            scan_writer.emplace_runtime_args(rc, {h, v, NC, o_buf, fs_buf});
+            scan_writer.emplace_runtime_args(rc, {out_row(h), v, NC, o_buf, fs_buf});
         }
     }
     receiver_reader.common_runtime_args = producer_table;
 
     // Producer p: its map index and item count (the reader and writer walk the same list), the map, the gates'
-    // source (tokens, tile sizes), and for the writer the heads it serves; the receivers' coords are common.
+    // source (tokens, tile sizes), for the reader the DRAM row of head 0, and for the writer the heads it
+    // serves; the receivers' coords are common.
     const uint32_t T = in.g.logical_shape()[1];
     const uint32_t g_tile_bytes = in.g.buffer()->page_size();
     const uint32_t beta_tile_bytes = in.beta.buffer()->page_size();
     for (uint32_t p = 0; p < P; p++) {
         const CoreCoord& pc = prod_cores[p];
-        prep_reader.emplace_runtime_args(
-            pc,
-            {p,
-             n_items[p],
-             q_buf,
-             k_buf,
-             v_buf,
-             g_buf,
-             beta_buf,
-             NC,
-             attrs.HV,
-             attrs.Hk,
-             BH,
-             c_first[p] * kProducerKickoffStaggerCycles,
-             map.NPH,
-             map.NX,
-             map.num,
-             map.den,
-             T,
-             g_tile_bytes,
-             beta_tile_bytes});
+        std::vector<std::variant<uint32_t, Buffer*>> p_args = {
+            p,
+            n_items[p],
+            q_buf,
+            k_buf,
+            v_buf,
+            g_buf,
+            beta_buf,
+            NC,
+            attrs.HV,
+            attrs.Hk,
+            BH,
+            c_first[p] * kProducerKickoffStaggerCycles,
+            map.NPH,
+            map.NX,
+            map.num,
+            map.den,
+            T,
+            g_tile_bytes,
+            beta_tile_bytes};
+        TT_FATAL(
+            p_args.size() == fused_rt::kPrepReaderHeadOffsetArg,
+            "chunk_gdn_fused: prep reader head_offset arg slot moved ({} != {})",
+            p_args.size(),
+            fused_rt::kPrepReaderHeadOffsetArg);
+        p_args.push_back(h0);
+        prep_reader.emplace_runtime_args(pc, p_args);
         prep_compute.emplace_runtime_args(pc, {n_items[p]});
         std::vector<std::variant<uint32_t, Buffer*>> w_args = {
             p, n_items[p], BH, NC, map.NPH, map.NX, map.num, map.den};
@@ -544,11 +563,15 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     }
     fused_writer.common_runtime_args = head_table;
 
+    // Push order = the kernel indices of fused_rt (get_dynamic_runtime_args addresses them by index).
+    TT_FATAL(desc.kernels.size() == fused_rt::kPrepReaderKernel, "chunk_gdn_fused: kernel push order changed");
     desc.kernels.push_back(std::move(prep_reader));
     desc.kernels.push_back(std::move(prep_compute));
     desc.kernels.push_back(std::move(fused_writer));
+    TT_FATAL(desc.kernels.size() == fused_rt::kReceiverReaderKernel, "chunk_gdn_fused: kernel push order changed");
     desc.kernels.push_back(std::move(receiver_reader));
     desc.kernels.push_back(std::move(scan_compute));
+    TT_FATAL(desc.kernels.size() == fused_rt::kScanWriterKernel, "chunk_gdn_fused: kernel push order changed");
     desc.kernels.push_back(std::move(scan_writer));
     return desc;
 }

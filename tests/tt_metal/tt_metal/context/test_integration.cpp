@@ -29,7 +29,7 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 // Internal access
 #include "llrt/hal_types.hpp"

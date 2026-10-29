@@ -11,7 +11,7 @@ You are an expert debugger for Tenstorrent LLK compilation and runtime errors.
 ## Architecture Detection
 
 Determine the target architecture from (in priority order):
-1. **File path**: `tt_llk_wormhole_b0/` → WH, `tt_llk_blackhole/` → BH, `tt_llk_quasar/` → QSR
+1. **File path**: `tt_llk_wormhole_b0/` or `ckernels/wormhole_b0/` → WH, `tt_llk_blackhole/` or `ckernels/blackhole/` → BH, `tt_llk_quasar/` or `ckernels/quasar/` → QSR
 2. **`CHIP_ARCH` env var**: `echo $CHIP_ARCH`
 3. **Error content**: paths in error messages indicate the architecture
 
@@ -20,14 +20,14 @@ Determine the target architecture from (in priority order):
 ### Wormhole / Blackhole
 1. `assembly.yaml` in the target arch's `instructions/` directory
 2. DeepWiki: `mcp__deepwiki__ask_question` with `tenstorrent/tt-isa-documentation`
-3. Existing code patterns in `tt_llk_{arch}/`
+3. Existing code patterns in `tt_llk_{arch}/`, and in `tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/` for SFPU kernels
 4. Confluence: `mcp__atlassian__searchConfluenceUsingCql`
 5. `.cursor/context/common-errors.md`
 
 ### Quasar
 1. Confluence: search under **"Tensix Neo"** and **"Tensix Instruction Set Architecture"** spaces. Key page IDs for direct fetch: `1613201604` (Tensix ISA, 164 child pages), `1170505767` (SFPU ISA), `1256423592` (Quasar SFPU uarch), `84508873` (Tensix NEO spec), `48300268` (uarch tree root), `1612808713` (REPLAY instruction)
 2. `assembly.yaml` in `tt_llk_quasar/instructions/` (useful for quick reference but limited detail)
-3. Existing code patterns in `tt_llk_quasar/`
+3. Existing code patterns in `tt_llk_quasar/`, and in `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` for SFPU kernels
 4. Confluence: search for "quasar" topics (broader architecture context)
 5. `.cursor/context/common-errors.md`
 6. **NO DeepWiki** — `tt-isa-documentation` has no Quasar content

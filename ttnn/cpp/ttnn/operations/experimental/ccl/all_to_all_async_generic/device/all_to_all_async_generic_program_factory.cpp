@@ -727,7 +727,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
         /*mesh_device=*/*device,
         /*num_channels=*/static_cast<uint8_t>(mux_config_clients),
         /*num_buffers_per_channel=*/num_mux_buffers_per_channel,
-        /*channel_buffer_size_bytes=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
+        /*channel_buffer_size_bytes=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device),
         /*base_l1_address=*/mux_l1_base_address,
         /*usable_l1_end_address=*/mux_l1_small_floor_address);
     if (use_worker_mux) {
@@ -768,7 +768,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
             connection_node);
         auto& info = infos[static_cast<uint32_t>(*direction)];
         const auto valid_links =
-            tt::tt_fabric::get_forwarding_link_indices(sender_device_fabric_node_id, connection_node);
+            tt::tt_fabric::get_forwarding_link_indices(*device, sender_device_fabric_node_id, connection_node);
         TT_FATAL(
             !valid_links.empty(),
             "No Fabric2D forwarding links from all-to-all source {} to target {}",

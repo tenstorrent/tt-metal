@@ -23,6 +23,9 @@ Env:
                       on-device circular ring cache-read + host-readback PCC;
                       chunked runs cover every chunk)                                       [default 0]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                        [default bf4]
+  PREFILL_RESUME_AT   chunked only: after the main check, re-prefill slot 0 as [0, R) then one chunk
+                      from R, as a follow-up turn resuming mid-chunk does, and gate its PCC too.
+                      R must be tile-aligned and inside the prompt                          [default 0: off]
   GPT_OSS_WEIGHTS_FROM_CACHE  "1" -> pass an empty state_dict (load tilized weights from the TTNN cache)
   HF_MODEL            real gpt-oss weights dir (read by ModelArgs)
 
@@ -93,6 +96,9 @@ def main():
     token_ids = list(json.load(open(Path(golden_dir) / "metadata.json"))["token_ids"])
     n_tokens = len(token_ids)
     chunked = os.getenv("PREFILL_CHUNKED", "0") == "1"
+    resume_at = int(os.getenv("PREFILL_RESUME_AT", "0"))
+    if resume_at and not (chunked and 0 < resume_at < n_tokens and resume_at % ttnn.TILE_SIZE == 0):
+        raise ValueError(f"PREFILL_RESUME_AT={resume_at} needs chunked mode and a tile-aligned split inside the prompt")
     chunk_size = int(os.getenv("PREFILL_CHUNK_SIZE", "8192"))
     tps_iters = int(os.getenv("PREFILL_TPS_ITERS", "1"))
 
@@ -114,6 +120,7 @@ def main():
             flush=True,
         )
 
+    from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
     from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
     from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
@@ -170,16 +177,20 @@ def main():
         print(f"[prefill-pcc] compiling ({num_layers}L, SP={ROWS} × TP={COLS} + EP=32) ...", flush=True)
         runtime.compile()
 
-        padded = token_ids + [0] * (total - n_tokens)
+        # A resumed chunk starts mid-chunk, so its input window can run past `total`.
+        padded = token_ids + [0] * (total + chunk - n_tokens)
+
+        def prefill_span(slot, begin, end):
+            for a in range(begin, end, chunk):
+                # As the H2D connector does: a chunk starting mid-slab goes to the chips that write its rows.
+                inp = runtime.make_chunk_input(rotate_chunk_tokens(padded[a : a + chunk], a, ROWS))
+                runtime.prefill_chunk(inp, slot_id=slot, actual_start=a, actual_end=min(a + chunk, end))
 
         def run_once():
             # Every slot prefills the same prompt: each slot's cache must independently match the
             # golden, so cross-slot corruption in the packed batch math shows up as a PCC failure.
             for slot in range(num_users):
-                for c in range(n_chunks):
-                    a = c * chunk
-                    inp = runtime.make_chunk_input(padded[a : a + chunk])
-                    runtime.prefill_chunk(inp, slot_id=slot, actual_start=a, actual_end=min(a + chunk, n_tokens))
+                prefill_span(slot, 0, n_tokens)
             ttnn.synchronize_device(mesh)
 
         times = []
@@ -207,6 +218,16 @@ def main():
             if num_users > 1:
                 print(f"[prefill-pcc] slot {slot}: min KV PCC = {slot_pcc:.5f}", flush=True)
             min_pcc = min(min_pcc, slot_pcc)
+        if resume_at:
+            resume_end = min(n_tokens, resume_at + chunk)
+            prefill_span(0, 0, resume_at)
+            prefill_span(0, resume_at, resume_end)
+            ttnn.synchronize_device(mesh)
+            resume_pcc = runtime.kv_cache_pcc_check(
+                slot_id=0, n_chunks=math.ceil(resume_end / chunk), trace_dir=golden_dir, real_len=resume_end
+            )
+            print(f"[prefill-pcc] resumed at {resume_at} to {resume_end}: min KV PCC = {resume_pcc:.5f}", flush=True)
+            min_pcc = min(min_pcc, resume_pcc)
         print(f"[prefill-pcc] min KV PCC across {num_layers} layers = {min_pcc:.5f}", flush=True)
         # Gate on a PCC floor when GPT_OSS_KV_PCC_MIN is set (CI / regression); unset during bring-up
         # so the harness just reports the number. A failing gate exits non-zero.
