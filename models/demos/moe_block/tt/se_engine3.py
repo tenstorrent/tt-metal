@@ -37,6 +37,7 @@ NSEM_OWN = 2 + 2 * NWS
 # round), the leads' acks - 16 B apart; the semaphore ids are all taken by the kernel_lib families)
 RXR, RWR, RXS = 0, 16, 32  # (the router's ew words: RX / RW ready (a round), the x lead's set source)
 RGATE = 64  # (every engine core's partials written: the W streams' gate, SE_RTR_GATE)
+XRL = 96  # (a row lead's count of its row's own-x loads: the router's x read from x own, SE_RTRX_L1)
 XACK, WACK = 128, 144  # (more than two logits rounds: the receivers' "round consumed" counts on the x / W leads)
 XIN, WIN, HOWN, HALL, OUT, ACC = 0, 1, 2, 3, 4, 5  # CB ids
 NOUT = 2  # (down passes OUT holds)
@@ -136,6 +137,8 @@ void kernel_main() {
     const uint32_t xown = se_ra(a++), xin = se_ra(a++), hown = se_ra(a++);
     const uint32_t hall = se_ra(a++), lx = se_ra(a++), rx = se_ra(a++);
     const uint32_t rtr_x = se_ra(a++), rtr_xa = se_ra(a++);  // (the router's x; RX)
+    const uint32_t ft0 = a;  // (the x families: family 0 / 1 columns [S0] [S1], per column (nown, family-1 base slot))
+    a += S0 + S1 + 2 * GX;
     const uint32_t vx0 = a, sps = se_ra(vx0 + GX), g = se_ra(vx0 + GX + 1);
     const uint32_t ord0 = vx0 + GX + 2;  // (the row's NoC x; steps a shard, shards; the shard order: own, then arrival)
     auto step_of = [&](uint32_t j) { return se_ra(ord0 + j / sps) * sps + j % sps; };  // (position j)
@@ -161,12 +164,32 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_EW + RXS_ID);
         constexpr uint32_t NRD = SE_KTO / SE_KC;
         volatile tt_l1_ptr uint32_t* xack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_EW + XACK_ID);
+#ifdef SE_RTRX_L1
+        {  // (the row's x is the own shard the row's cores just loaded into x own: read from their L1, not the 2 MB again
+           // from DRAM beside the own-x loads and W_r^T - once every row core counted its load on my XRL word)
+            volatile tt_l1_ptr uint32_t* xrl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_EW + XRL_ID);
+            while (*xrl < GX) invalidate_l1_cache();
+            *xrl = 0;  // (re-armed: one count a row core a call, all in)
+        }
+#endif
         for (uint32_t rd = 0; rd < NRD; ++rd) {
             const uint32_t xa = rtr_xa + (rd & 1) * XS;  // (two buffers; past two rounds the row's acks first)
             if (NRD > 2 && rd >= 2) while (*xack < (rd - 1) * GX) invalidate_l1_cache();
             for (uint32_t r = 0; r < SE_MTR; ++r)
-                for (uint32_t k = 0; k < SE_KC; ++k)
+                for (uint32_t k = 0; k < SE_KC; ++k) {
+#ifdef SE_RTRX_L1
+                    // (K tile kt of the chip's slice: own-shard position kt / KB - its owner column and x-own slot as
+                    // x_gather3's dst_of; row r: chunk r / MT, local row r % MT)
+                    const uint32_t kt = rd * SE_KC + k, j = kt / KB, hh = j / 2;
+                    const uint32_t col = (j & 1) ? se_ra(ft0 + S0 + hh % S1) : se_ra(ft0 + hh % S0);
+                    const uint32_t nw = se_ra(ft0 + S0 + S1 + 2 * col), b1 = se_ra(ft0 + S0 + S1 + 2 * col + 1);
+                    const uint32_t slot = (j & 1) ? b1 + hh / S1 : hh / S0;
+                    const uint32_t xa_ = xown + ((((r / MT) * nw + slot) * MT + r % MT) * KB + kt % KB) * 2048;
+                    noc_async_read(get_noc_addr(se_ra(vx0 + col), ry, xa_), xa + (k * SE_MTR + r) * 2048, 2048);
+#else
                     noc_async_read(rxg.get_noc_addr(GROW(r / MT, cy * MT + r % MT) * SE_KTO + rd * SE_KC + k), xa + (k * SE_MTR + r) * 2048, 2048);
+#endif
+                }
             noc_async_read_barrier();
             noc_async_write_multicast_loopback_src(xa, get_noc_multicast_addr(lx, ry, rx, ry, xa), XS, GX);
             noc_async_writes_flushed();
@@ -246,6 +269,9 @@ void kernel_main() {
         const uint32_t np0 = ord0 + g, nports = se_ra(np0), xl_addr = se_ra(np0 + 1);
         for (uint32_t i = 0; i < nports; ++i)
             noc_semaphore_inc(get_noc_addr(se_ra(np0 + 2 + 2 * i), se_ra(np0 + 3 + 2 * i), xl_addr), 1);
+#if defined(SE_RTR) && defined(SE_RTRX_L1)
+        noc_semaphore_inc(get_noc_addr(se_ra(vx0), ry, SE_EW + XRL_ID), 1);  // (and on my row's lead: the router's x)
+#endif
         noc_async_atomic_barrier();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(se_ra(np0 + 2 + 2 * nports))) = 1;
     }
@@ -2376,6 +2402,11 @@ class SeEngine3:
         w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
         y_ct = list(ttnn.TensorAccessorArgs(y).get_compile_time_args())
         bl, nl = {}, {}  # (core (x, y) -> its full arg list)
+        nf_ = self.NSG // 2  # (the x families, for the router's x from x own: x_gather3.tables' columns and slots)
+        ftab = list(self.fam0) + list(self.fam1)
+        for c in range(GX):
+            n0_ = nf_ // self.S0 if c in self.fam0 else 0
+            ftab += [n0_ + (nf_ // self.S1 if c in self.fam1 else 0), n0_]
         for c in range(GX):
             i0 = self.fam0.index(c) if c in self.fam0 else GX
             i1 = self.fam1.index(c) if c in self.fam1 else GX
@@ -2397,6 +2428,7 @@ class SeEngine3:
                         virt(GX - 1, cy).x,
                     ]
                     + ([int(rtr["x"].buffer_address()), b + off["rx"]] if rtr is not None else [0, 0])
+                    + ftab
                     + [virt(cc, cy).x for cc in range(GX)]
                     + sor
                     + tail
@@ -2539,6 +2571,8 @@ class SeEngine3:
             nd += "#define SE_RDONE\n" if self.rtr_overlay else ""
 
             nd += f"#define RXS_ID {RXS}\n#define SE_KC {self.KC}\n"
+            if not self.xring:  # (x own holds every chunk's own shard: the router's x from it)
+                nd += f"#define SE_RTRX_L1\n#define XRL_ID {XRL}\n"
             nd += f"#define SE_RTR_BCT0 {len(bct + xa_ct + ([] if self.down else y_ct))}\n"
             nd += f"#define SE_EW {int(self.ewords.buffer_address())}u\n"
             nd += f"#define SE_RTR_CT0 {nct_len}\n"

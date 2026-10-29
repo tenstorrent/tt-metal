@@ -2583,3 +2583,36 @@ gather 11 -> 75 (link rate) | gate / up ends 85-95 (the matmul cores: router pha
 probes: no W DRAM reads 198 us, no x waits 197.8, no math 183.2, handshakes only (no payloads, math, waits) gate / up
 20 -> 38: the x / W payload rounds are what is left) | h exchange 15.7 | first RS packet ~14 us after it (the down's
 passes of a start entry) | RS ~63 us (floor) | fins + y writes ~10-15 (the cores with dispatch prep end last).
+
+### The router's x from x own, not DRAM (kept: GLM-5.3 ring 640 200.3 -> 197.8 us)
+- Why: at a call's start the DRAM serves the own-x loads (2 MB a chip), W_r^T (~1 MB), the weights' first window - and
+  the router's x again (the row leads read the chip's x shard, the same 2 MB the own-x loads just brought into x own).
+- Now (SE_RTRX_L1, every layout whose x own holds every chunk - not the DRAM fallback): every matmul core counts its
+  own-x load on its row lead's XRL word (router ewords, offset 96); the row lead, once all GX are in, reads the row's
+  x tiles from the owners' x own (owner column and slot as x_gather3's dst_of: the families' columns and per-column
+  slots passed in the BRISC args) into RX, then multicasts as before.
+- Measured: GLM-5.3 ring 640 200.3 -> 197.8, K3 ring 640 394.7 -> 388.3, DSv4.1 ring 640 194.5 -> 190.8, GLM-5.3 2x4
+  1280 338.4 -> 323.4 (with the x-first order), GLM-Flash 2x4 5120 (5 row chunks) 960 -> 949.3; PCC unchanged
+  everywhere (0.98657 / 0.99613 / 0.99084 / 0.98664 / 0.98687), 0 of 20 replays differ.
+
+### Tried, not kept: the gate / up start (W round 0 at ~27-31 us, the matmul cores free from ~21)
+- XRSTAT probe (timestamps: each x round pushed, each W round landed, each W round sent - BRISC / NCRISC): x rounds
+  0 / 1 at ~21-23 (behind the router's x), W rounds 0-2 land at 27-31: the holders send them at ~23-27 (the first
+  window's DRAM reads are issued only after the router's rounds) and, sent together, three multicasts down one
+  column slow each other (sent 23.1-23.5, landed 27.5-30.3).
+- (a) the partials' writes (RTROUT) polled from the W loop instead of before it: 199.6 (no gain); (b) + the first W
+  window issued before the router's rounds: the window's sends at ~23, landings unchanged, the router phase +2 us,
+  201.2; (c) + the column's W multicasts chained (round w sent once round w - 1 landed at its holder): rounds land
+  every ~2.5-3 us from 25 - a 52 KB block down a column of 10 at ~20 GB/s - 201.4. Reverted (patch in the
+  scratchpad).
+- Reading: from ~22 us gate / up runs 16 K steps at ~2.4-3 us each (the 2-pair columns: 2.4 us of HiFi2 math and a
+  52 KB W multicast a step), and its own shard's 4 steps are followed by a wait for the neighbours' shards (whole at
+  ~51-55 us, the gather row-major); the matmul cores' bound is ~22 + 16 x 2.5 = 62 + 22 ~ 84 us - GLM-5.3's 16 gate /
+  up pairs on 11 columns (5 columns of 2) - gate / up ends 85-95 now.
+
+### Tried, not kept (yet): the gather step-major + per-step readiness
+- The gather's packets step-major (a K step's rows, then the next step), the watcher counting (shard, step), XREADY
+  per step, the reader / sender closing a batch at a step's end (protocol model updated: 14 pass). Neutral (200.2 /
+  199.7 vs 200.3): the own shard went ~2 us slower (the four ports read one owner column at a time) and gate / up is
+  bound by the matmul cores' own rate (above), not the far shard's tail. Patch kept in the scratchpad - it pays only
+  once gate / up runs faster than ~2.5 us a step.
