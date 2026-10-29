@@ -264,11 +264,13 @@ inline uint8_t dfb_dm0_draining_harts(uint64_t all_dms) {
 }
 
 // Waits for all subordinates. Whenever a DM's run state changes, flushes each implicit-sync DFB side whose
-// issuing DMs are all draining (dataflow_buffer_finish.h).
+// issuing DMs are all draining and have written their exit records (dataflow_buffer_finish.h). Checks again
+// on every poll while a side is waiting only on records.
 inline void wait_subordinates_and_finish_dfbs(DfbImplicitSyncTxnMasks pending) {
     WAYPOINT("NTW");
     subordinate_sync->padding = 0;
     uint64_t seen_dms = RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
+    bool records_missing = false;
     while (true) {
         const uint64_t dms = subordinate_sync->allDMs;
         if (dms == RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE && subordinates_done()) {
@@ -277,14 +279,15 @@ inline void wait_subordinates_and_finish_dfbs(DfbImplicitSyncTxnMasks pending) {
         if ((pending.producer | pending.consumer) == 0) {
             continue;
         }
-        if (dms != seen_dms) {
+        if (dms != seen_dms || records_missing) {
             seen_dms = dms;
             const uint8_t ready = dfb_dm0_draining_harts(dms);
+            records_missing = false;
             if (pending.producer != 0) {
-                dfb_dm0_flush_ready_sides(pending.producer, ready, /*is_producer=*/true);
+                records_missing |= dfb_dm0_flush_ready_sides(pending.producer, ready, /*is_producer=*/true);
             }
             if (pending.consumer != 0) {
-                dfb_dm0_flush_ready_sides(pending.consumer, ready, /*is_producer=*/false);
+                records_missing |= dfb_dm0_flush_ready_sides(pending.consumer, ready, /*is_producer=*/false);
             }
         }
         // Polling flags other cores are about to write slows those cores down; pause briefly between polls.
@@ -324,6 +327,11 @@ extern "C" uint32_t _start1() {
         } while (READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR) != 0b1111);
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
+        volatile uint32_t* const exit_records =
+            dfb_l1_uncached_u32_ptr(reinterpret_cast<uintptr_t>(&g_dfb_exit_record[0][0]));
+        for (uint32_t i = 0; i < dfb::NUM_KERNEL_DM_HARTS * NUM_DFB_POOL_TXN_IDS; i++) {
+            exit_records[i] = DFB_EXIT_RECORD_NONE;
+        }
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
         zero_semaphore_regions();
