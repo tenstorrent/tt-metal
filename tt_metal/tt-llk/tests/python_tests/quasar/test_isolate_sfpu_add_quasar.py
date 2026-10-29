@@ -11,7 +11,7 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
-from helpers.llk_params import ImpliedMathFormat, MathOperation, format_dict
+from helpers.llk_params import MathOperation, format_dict
 from helpers.param_config import (
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
@@ -21,6 +21,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
+    StimuliSpec,
     apply_log_uniform_magnitudes,
     compute_safe_input_magnitude_range,
     format_elem_max,
@@ -29,7 +30,6 @@ from helpers.stimuli_generator import (
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
-    IMPLIED_MATH_FORMAT,
     NUM_FACES,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -52,25 +52,32 @@ SFPU_ADD_FORMATS = input_output_formats(
 ) + quasar_mx_smoke(DataFormat.MxFp8P, DataFormat.Float16_b)
 
 SFPU_ADD_COMBINATIONS = [
-    (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
+    (fmt, dest_acc, runtime(input_dimensions))
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
         SFPU_ADD_FORMATS
     )
-    for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+    for input_dimensions in [[32, 32], [64, 64]]
+]
+
+SFPU_ADD_INT_FORMATS = input_output_formats([DataFormat.Int32], same=True)
+
+SFPU_ADD_INT_COMBINATIONS = [
+    (fmt, dest_acc, runtime(input_dimensions))
+    for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
+        SFPU_ADD_INT_FORMATS
+    )
     for input_dimensions in [[32, 32], [64, 64]]
 ]
 
 
 @pytest.mark.quasar
-@parametrize(formats_dest_acc_implied_math_input_dims=SFPU_ADD_COMBINATIONS)
-def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
+@parametrize(formats_dest_acc_input_dims=SFPU_ADD_COMBINATIONS)
+def test_isolate_sfpu_add_quasar(formats_dest_acc_input_dims):
     """
     Test isolated SFPU add (binary): UNPACK2 (UNP_S) x2 -> SrcS -> SFPU -> PACK1 -> L1.
     No MATH kernel (stub only). Two input operands unpacked to SrcS, added, packed.
     """
-    (formats, dest_acc, implied_math_format, input_dimensions) = (
-        formats_dest_acc_implied_math_input_dims[0]
-    )
+    formats, dest_acc, input_dimensions = formats_dest_acc_input_dims[0]
 
     torch.manual_seed(42)
 
@@ -128,9 +135,7 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
     configuration = TestConfig(
         "sources/quasar/isolate_sfpu_add_quasar_test.cpp",
         formats,
-        templates=[
-            IMPLIED_MATH_FORMAT(implied_math_format),
-        ],
+        templates=[],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
@@ -150,7 +155,6 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
         ),
         unpack_to_srcs=True,
         dest_acc=dest_acc,
-        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result
@@ -158,4 +162,73 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
     assert len(res_from_L1) == len(golden_tensor)
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+
+
+@pytest.mark.quasar
+@parametrize(formats_dest_acc_input_dims=SFPU_ADD_INT_COMBINATIONS)
+def test_isolate_sfpu_add_int_quasar(formats_dest_acc_input_dims):
+    """Int32 out = in0 + in1 on the SrcS path, wrapping like 2's complement Int32."""
+    formats, dest_acc, input_dimensions = formats_dest_acc_input_dims[0]
+
+    torch.manual_seed(42)
+
+    # Full Int32 range with both signs, so both overflow wrap and sign handling are covered.
+    iinfo = torch.iinfo(format_dict[formats.input_format])
+    spec = StimuliSpec.uniform(low=float(iinfo.min), high=float(iinfo.max - 1))
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=spec,
+        spec_B=spec,
+    )
+
+    num_faces = 4
+
+    # SrcS path is untilized, so skip_tilize=True; A and B are concatenated and indexed by tile offset.
+    generate_golden = get_golden_generator(BinarySFPUGolden)
+    golden_tensor = generate_golden(
+        MathOperation.SfpuElwadd,
+        torch.cat([src_A, src_B]),
+        0,  # src1_idx: first tile of A
+        tile_cnt_A,  # src2_idx: first tile of B
+        0,  # dst_idx: write result starting at tile 0
+        tile_cnt_A * 32,  # num_iterations: 32 rows per tile
+        [input_dimensions[0] * 2, input_dimensions[1]],
+        formats.output_format,
+        skip_tilize=True,
+        input_format=formats.input_format,
+    )[: src_A.numel()]
+
+    configuration = TestConfig(
+        "sources/quasar/isolate_sfpu_add_quasar_test.cpp",
+        formats,
+        templates=[],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_FACES(num_faces),
+            TEST_FACE_DIMS(),
+            DEST_INDEX(),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_A,
+            tile_count_res=tile_cnt_A,
+            num_faces=num_faces,
+        ),
+        unpack_to_srcs=True,
+        dest_acc=dest_acc,
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(golden_tensor)
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

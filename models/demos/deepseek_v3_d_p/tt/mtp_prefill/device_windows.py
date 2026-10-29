@@ -278,6 +278,19 @@ class MTPUnionEmbedding:
 
         self._apply(_patch)
 
+    def drop_derived(self) -> None:
+        """Free every tensor built from the row blocks (patched union, ROW_MAJOR copy, lookahead rows),
+        returning the union to the row blocks alone."""
+        for name in ("_patched", "_rows", "_split_chip_lookahead_rows"):
+            t = getattr(self, name)
+            if t is not None:
+                ttnn.deallocate(t)
+                setattr(self, name, None)
+
+    @property
+    def has_derived(self) -> bool:
+        return any(getattr(self, n) is not None for n in ("_patched", "_rows", "_split_chip_lookahead_rows"))
+
     def deallocate(self) -> None:
         for t in self._parts:
             ttnn.deallocate(t)

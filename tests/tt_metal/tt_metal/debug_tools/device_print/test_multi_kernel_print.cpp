@@ -25,6 +25,7 @@
 #include "debug_tools_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tests/tt_metal/tt_metal/eth/eth_test_common.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -104,7 +105,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthKernelsSameProgram) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         const auto eth_cores = device->get_active_ethernet_cores(true);
         if (eth_cores.size() < 2) {
             log_info(
@@ -144,7 +145,7 @@ TEST_F(DevicePrintFixture, TwoActiveEthProgramsBackToBack) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         const auto eth_cores = device->get_active_ethernet_cores(true);
         if (eth_cores.empty()) {
             log_info(tt::LogTest, "Skipping device {} (no active ETH cores)", device->id());

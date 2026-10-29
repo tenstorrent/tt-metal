@@ -104,7 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             if constexpr (GMG_MODE == MODE_GATE && GMG_SIGMOID)
             {
-                // transpose_wh_tile: the 32x32 transpose is the unpacker's, both flags set.
+                // transpose_tile: the 32x32 transpose is the unpacker's, both flags set.
                 //
                 // acc_to_dest is true on the init and false on the call, which is the asymmetry
                 // transpose_init/transpose_tile ship and neither value is arbitrary. The init ignores
@@ -477,7 +477,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             if constexpr (GMG_MODE == MODE_GATE && GMG_SIGMOID)
             {
-                // The op's enable_sigmoid front-end: transpose_wh_tile then sigmoid_tile leave the
+                // The op's enable_sigmoid front-end: transpose_tile then sigmoid_tile leave the
                 // activated score in the score region, which the RELOAD binary below reads back through
                 // MOVD2A instead of taking SrcA from the unpacker. The transpose itself is the
                 // unpacker's; math only datacopies what it produced.

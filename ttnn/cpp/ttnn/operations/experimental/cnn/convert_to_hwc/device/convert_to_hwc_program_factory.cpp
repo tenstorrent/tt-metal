@@ -12,6 +12,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -210,7 +211,7 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     config.output_element_size_bytes = tt::datum_size(config.output_format);
 
     // DRAM/L1 configuration
-    TT_FATAL(input.buffer() != nullptr, "Input buffer must be allocated on device");
+    TT_FATAL(input.is_allocated(), "Input buffer must be allocated on device");
     config.is_input_in_dram = input.buffer()->core_type() == tt::CoreType::DRAM;
     config.remote_buffer_type = input.buffer()->buffer_type();
     config.remote_core_type = input.buffer()->core_type();
@@ -398,7 +399,7 @@ tt::tt_metal::ProgramDescriptor ConvertToHWCProgramFactory::create_descriptor(
 
     const auto& a = tensor_args.input;
     auto& output = tensor_return_value;
-    TT_FATAL(output.buffer() != nullptr, "Output buffer must be allocated on device");
+    TT_FATAL(output.is_allocated(), "Output buffer must be allocated on device");
 
     // Create configuration from input tensors
     auto config = ConvertToHwcConfig::create_from_tensors(a, output);
@@ -477,6 +478,11 @@ tt::tt_metal::ProgramDescriptor ConvertToHWCProgramFactory::create_descriptor(
         tiles_per_block_writer1,
         /*initial_write_stick_offset=*/tt::constants::TILE_WIDTH,
         num_blocks);
+
+    // Input TensorAccessorArgs at CTA 14 of both writers (after the 14 args from make_writer_compile_args); the
+    // reader uses them for its BankView DRAM reads. Real args for L1 inputs too, so the layout never changes.
+    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(writer_compile_time_args0);
+    tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(writer_compile_time_args1);
 
     auto compute_compile_time_args =
         make_compute_compile_args(tiling.total_tiles_per_block, config.gather_l1_output_shard_height, num_blocks);

@@ -6,6 +6,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -369,11 +370,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
 
     uint32_t num_blocks = K / in0_block_w;
 
-    // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
-    // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
-    // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
-    // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_mesh.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -413,7 +412,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
 
     operations::matmul::utilities::validate_block_sharded_output_batch(output_is_sharded, B, per_core_M, per_core_N);
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -744,6 +746,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     }
 
     if (output_is_sharded) {
+        // The in1 writer pops batch * out_shard_tiles tiles in one wait_front/pop_front call, which takes a uint16_t.
+        TT_FATAL(
+            B * out_shard_tiles <= std::numeric_limits<uint16_t>::max(),
+            "matmul_multicore_reuse_mcast_2d: a sharded output of {} tiles per core exceeds the maximum of {} "
+            "supported by this program factory",
+            B * out_shard_tiles,
+            std::numeric_limits<uint16_t>::max());
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
@@ -1132,13 +1141,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                 noc_varargs.insert(noc_varargs.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
                 noc_varargs.push_back(in0_mcast_receiver_grid_same_coord);
             }
-            const std::initializer_list<std::pair<std::string, uint32_t>> in0_sender_args = {
-                {"sender_id", sender_id},
-                {"in0_mcast_dest_noc_start_x", mcast_start_x},
-                {"in0_mcast_dest_noc_start_y", mcast_start_y},
-                {"in0_mcast_dest_noc_end_x", mcast_end_x},
-                {"in0_mcast_dest_noc_end_y", mcast_end_y},
-            };
+            const std::initializer_list<std::pair<std::string, tt::tt_metal::experimental::ArgValue>> in0_sender_args =
+                {
+                    {"sender_id", sender_id},
+                    {"in0_mcast_dest_noc_start_x", mcast_start_x},
+                    {"in0_mcast_dest_noc_start_y", mcast_start_y},
+                    {"in0_mcast_dest_noc_end_x", mcast_end_x},
+                    {"in0_mcast_dest_noc_end_y", mcast_end_y},
+                };
             if (in1_idx < num_blocks_x) {
                 AddRuntimeArgsForNode(in0_sender_run_args.runtime_arg_values, core, in0_sender_args);
                 in0_sender_run_args.advanced_options.runtime_varargs[core] = std::move(noc_varargs);
@@ -1163,9 +1173,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
 
             // in0 receiver
         } else {
-            const std::initializer_list<std::pair<std::string, uint32_t>> in0_receiver_args = {
-                {"in0_mcast_sender_noc_x", (std::uint32_t)in0_mcast_sender.x},
-                {"in0_mcast_sender_noc_y", (std::uint32_t)in0_mcast_sender.y}};
+            const std::initializer_list<std::pair<std::string, tt::tt_metal::experimental::ArgValue>>
+                in0_receiver_args = {
+                    {"in0_mcast_sender_noc_x", (std::uint32_t)in0_mcast_sender.x},
+                    {"in0_mcast_sender_noc_y", (std::uint32_t)in0_mcast_sender.y}};
             // left half
             if ((core.x - start_core_x) <= half_core || (!transpose_mcast and core.y == start_core_y)) {
                 AddRuntimeArgsForNode(in0_receiver_run_args.runtime_arg_values, core, in0_receiver_args);
@@ -1497,6 +1508,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                     {"in1_mcast_num_cores", num_blocks_y - 1},
                     {"KtNt", K * N},
                     {"batch", B},
+                    {"out_block_num_tiles", out_block_tiles},
                     {"bcast_B", (std::uint32_t)bcast_batch},
                     {"batchB", 0u},
                     {"sparsity_pagesize", 0u},
@@ -1624,6 +1636,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                         {"num_blocks_w_dim", out_num_blocks_x},
                         {"num_blocks_h_dim", out_num_blocks_y},
                         {"batch", B},
+                        {"out_block_num_tiles", out_block_tiles},
                         {"out_tensor_stride_w", 1u},
                         {"out_tensor_stride_h", N},
                         {"out_tensor_next_subblock_stride_w", out_subblock_w},
@@ -1732,7 +1745,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
     // When accumulating in fp32 with the K reduction split across blocks, the intermediate partials
-    // buffer holds Float32 and is reloaded into DEST between blocks by copy_block_matmul_partials.
+    // buffer holds Float32 and is reloaded into DEST between blocks by copy_block.
     // Unless the reload's view is marked UnpackToDest, that reload is routed through SrcA and rounded
     // to TF32 (10 mantissa bits), so the fp32 partial loses precision on every block boundary and
     // accuracy degrades as the number of K-blocks grows. The mode is set on the alias when bias

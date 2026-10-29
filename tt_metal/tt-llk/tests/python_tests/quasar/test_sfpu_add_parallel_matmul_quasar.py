@@ -24,7 +24,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -55,7 +54,6 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     ENABLE_2X_FORMAT,
     ENABLE_DIRECT_INDEXING,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
@@ -70,6 +68,8 @@ DIMENSION_PROFILES = (
     ([32, 32], [32, 32], [32, 32]),
     ([32, 256], [64, 64], [64, 128]),
 )
+# Perf uses the multi-tile profile; one tile is too short to time.
+PERF_DIMENSION_PROFILE = DIMENSION_PROFILES[1]
 
 # Caps each add operand at 45% of format max so |a|+|b| stays <= 90% with rounding headroom.
 ADD_RANGE_SAFETY_FACTOR = 0.45
@@ -120,37 +120,32 @@ def generate_parallel_matmul_add_combinations(
         formats_list
     ):
         dest_sync_modes = (DestSync.Half, DestSync.Full)
-        implied_math_modes = (
-            (ImpliedMathFormat.Yes,)
-            if is_perf
-            else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
+        dimension_profiles = (
+            (PERF_DIMENSION_PROFILE,) if is_perf else DIMENSION_PROFILES
         )
-        dimension_profiles = (DIMENSION_PROFILES[1],) if is_perf else DIMENSION_PROFILES
         for dest_sync in dest_sync_modes:
-            for implied_math_format in implied_math_modes:
-                for (
-                    ADD_INPUT_DIMENSIONS,
+            for (
+                ADD_INPUT_DIMENSIONS,
+                MATMUL_A_DIMENSIONS,
+                MATMUL_B_DIMENSIONS,
+            ) in dimension_profiles:
+                if not _matmul_output_fits_dest(
                     MATMUL_A_DIMENSIONS,
                     MATMUL_B_DIMENSIONS,
-                ) in dimension_profiles:
-                    if not _matmul_output_fits_dest(
-                        MATMUL_A_DIMENSIONS,
-                        MATMUL_B_DIMENSIONS,
+                    dest_acc,
+                    dest_sync,
+                ):
+                    continue
+                combinations.append(
+                    (
+                        fmt,
                         dest_acc,
                         dest_sync,
-                    ):
-                        continue
-                    combinations.append(
-                        (
-                            fmt,
-                            dest_acc,
-                            dest_sync,
-                            implied_math_format,
-                            runtime(ADD_INPUT_DIMENSIONS),
-                            runtime(MATMUL_A_DIMENSIONS),
-                            runtime(MATMUL_B_DIMENSIONS),
-                        )
+                        runtime(ADD_INPUT_DIMENSIONS),
+                        runtime(MATMUL_A_DIMENSIONS),
+                        runtime(MATMUL_B_DIMENSIONS),
                     )
+                )
     return _sample_perf_combinations(combinations) if is_perf else combinations
 
 
@@ -161,10 +156,10 @@ PARALLEL_MATMUL_ADD_COMBINATIONS = generate_parallel_matmul_add_combinations(
 
 @pytest.mark.quasar
 @parametrize(
-    format_dest_acc_sync_implied_math=PARALLEL_MATMUL_ADD_COMBINATIONS,
+    format_dest_acc_sync=PARALLEL_MATMUL_ADD_COMBINATIONS,
 )
 def test_sfpu_add_parallel_matmul_quasar(
-    format_dest_acc_sync_implied_math,
+    format_dest_acc_sync,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
     is_perf=False,
@@ -174,11 +169,10 @@ def test_sfpu_add_parallel_matmul_quasar(
         formats,
         dest_acc,
         dest_sync,
-        implied_math_format,
         ADD_INPUT_DIMENSIONS,
         MATMUL_A_DIMENSIONS,
         MATMUL_B_DIMENSIONS,
-    ) = format_dest_acc_sync_implied_math[0]
+    ) = format_dest_acc_sync[0]
 
     matmul_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -327,7 +321,6 @@ def test_sfpu_add_parallel_matmul_quasar(
         "formats": formats,
         "templates": [
             MATH_FIDELITY(MathFidelity.LoFi),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             ENABLE_2X_FORMAT(False),
             ENABLE_DIRECT_INDEXING(False),
             DEST_SYNC(dest_sync),
@@ -342,7 +335,6 @@ def test_sfpu_add_parallel_matmul_quasar(
         "variant_stimuli": stimuli,
         "unpack_to_srcs": True,
         "dest_acc": dest_acc,
-        "disable_format_inference": formats.input_format.is_mx_format(),
     }
     configuration = create_test_or_perf_config(
         is_perf=is_perf,

@@ -13,7 +13,7 @@ alive through replay and must not be shared by concurrently executing models.
 import copy
 
 import ttnn
-from models.common.modules.tt_ccl import TT_CCL
+from models.common.tt_ccl import TT_CCL
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start
 from models.demos.qwen38_27b_qb2.tt.decoder import DEFAULT_POLICY, Qwen38Decoder
 

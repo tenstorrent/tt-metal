@@ -308,8 +308,6 @@ def test_submodule_imported(submodule_name):
 class TestCppOptimizersWithPythonModules:
     """Test that C++ optimizers work with Python module parameter registration."""
 
-    # Re-enable this test once fixed. Ticket: https://github.com/tenstorrent/tt-metal/issues/40257
-    @pytest.mark.skip(reason="Failing because weights are not updated.")
     def test_sgd_optimizer_with_python_module(self):
         """Test SGD optimizer updates parameters registered via Python AbstractModuleBase."""
         from ttml.modules import AbstractModuleBase, Parameter
@@ -336,9 +334,11 @@ class TestCppOptimizersWithPythonModules:
         weight_key = [k for k in params.keys() if "weight" in k][0]
         weight_before = params[weight_key].to_numpy(ttnn.DataType.FLOAT32).copy()
 
-        # Create C++ SGD optimizer with the Python module's parameters
+        # Create C++ SGD optimizer with the Python module's parameters. The loss is a mean over 1024 elements, so the
+        # gradient is small: with lr=0.1 a step is below bf16 resolution for almost every weight, and most runs
+        # changed none.
         sgd_config = ttml.optimizers.SGDConfig.make(
-            lr=0.1, momentum=0.0, dampening=0.0, weight_decay=0.0, nesterov=False
+            lr=10.0, momentum=0.0, dampening=0.0, weight_decay=0.0, nesterov=False
         )
         optimizer = ttml.optimizers.SGD(params, sgd_config)
 
@@ -369,7 +369,6 @@ class TestCppOptimizersWithPythonModules:
 
         assert not np.allclose(weight_before, weight_after, atol=1e-6), "SGD optimizer should have updated the weights"
 
-    @pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
     def test_adamw_optimizer_with_python_module(self):
         """Test AdamW optimizer updates parameters registered via Python AbstractModuleBase."""
         from ttml.modules import AbstractModuleBase, Parameter
@@ -429,7 +428,6 @@ class TestCppOptimizersWithPythonModules:
                 initial_weights[key], weight_after, atol=1e-6
             ), f"AdamW optimizer should have updated {key}"
 
-    @pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
     def test_optimizer_with_nested_python_modules(self):
         """Test optimizer works with nested Python modules (submodules)."""
         from ttml.modules import AbstractModuleBase, Parameter
@@ -489,7 +487,7 @@ class TestCppOptimizersWithPythonModules:
             ), f"Optimizer should have updated nested parameter {key}"
 
     def test_optimizer_lr_adjustment(self):
-        """Test that optimizer learning rate can be adjusted via set_lr."""
+        """Test that optimizer learning rate can be adjusted via set_group_lrs."""
         from ttml.modules import AbstractModuleBase, Parameter
 
         class SimpleModule(AbstractModuleBase):
@@ -509,11 +507,11 @@ class TestCppOptimizersWithPythonModules:
         optimizer = ttml.optimizers.AdamW(params, adamw_config)
 
         # Verify initial LR
-        assert abs(optimizer.get_lr() - 0.001) < 1e-6, "Initial LR should be 0.001"
+        assert optimizer.get_group_lrs() == pytest.approx([0.001], abs=1e-6), "Initial LR should be 0.001"
 
-        # Adjust LR
-        optimizer.set_lr(0.01)
-        assert abs(optimizer.get_lr() - 0.01) < 1e-6, "LR should be updated to 0.01"
+        # Adjust LR (one param group: the optimizer is built without param groups)
+        optimizer.set_group_lrs([0.01])
+        assert optimizer.get_group_lrs() == pytest.approx([0.01], abs=1e-6), "LR should be updated to 0.01"
 
         # Verify optimizer still works after LR change
         model.train()
@@ -693,7 +691,6 @@ class TestModuleList:
         assert isinstance(sliced, ModuleList)
         assert len(sliced) == 3
 
-    @pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
     def test_module_list_with_optimizer(self):
         """Test that ModuleList parameters work with optimizer."""
         from ttml.modules import AbstractModuleBase, ModuleList, Parameter

@@ -34,8 +34,8 @@ inline void retarget_packer([[maybe_unused]] uint32_t ocb) {
 #endif
 }
 
-void copy_and_pack_block(
-    DFBBindingToken in_dfb, DFBBindingToken out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+template <typename InTok, typename OutTok>
+void copy_and_pack_block(InTok in_dfb, OutTok out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     DataflowBuffer dfb_out(out_dfb);
     reconfig_data_format_srca(in_dfb);
     pack_reconfig_data_format(out_dfb);
@@ -73,12 +73,18 @@ void copy_and_pack_block(
 // and added via row-broadcast before silu/mul: out = silu(gate + bias_gate) * (up + bias_up).
 //
 // N_block_tiles must be even (enforced host-side).
-void swiglu_block(
-    DFBBindingToken in_dfb,
+template <
+    typename InTok,
 #ifdef FUSE_BIAS
-    DFBBindingToken bias_dfb,
+    typename BiasTok,
 #endif
-    DFBBindingToken out_dfb,
+    typename OutTok>
+void swiglu_block(
+    InTok in_dfb,
+#ifdef FUSE_BIAS
+    BiasTok bias_dfb,
+#endif
+    OutTok out_dfb,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles) {
     DataflowBuffer dfb_out(out_dfb);
@@ -143,12 +149,8 @@ void swiglu_block(
  *   - true: Pushes tiles one row at a time (for intermediate output to next stage)
  *   - false: Pushes all tiles at end (for final output)
  */
-void add_bias_block(
-    DFBBindingToken in_dfb,
-    DFBBindingToken bias_dfb,
-    DFBBindingToken out_dfb,
-    uint32_t M_block_tiles,
-    uint32_t N_block_tiles) {
+template <typename InTok, typename BiasTok, typename OutTok>
+void add_bias_block(InTok in_dfb, BiasTok bias_dfb, OutTok out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     DataflowBuffer dfb_out(out_dfb);
     reconfig_data_format(in_dfb, bias_dfb);
     pack_reconfig_data_format(out_dfb);
@@ -175,15 +177,23 @@ void add_bias_block(
 }
 #endif  // FUSE_BIAS
 
-void add_bias_and_addcmul_block(
-    DFBBindingToken intermediate_dfb,
+template <
+    typename IntermediateTok,
 #ifdef FUSE_BIAS
-    DFBBindingToken bias_dfb,
+    typename BiasTok,
 #endif
-    DFBBindingToken ternary_a_dfb,
-    DFBBindingToken ternary_b_dfb,
+    typename TernaryATok,
+    typename TernaryBTok,
+    typename OutTok>
+void add_bias_and_addcmul_block(
+    IntermediateTok intermediate_dfb,
+#ifdef FUSE_BIAS
+    BiasTok bias_dfb,
+#endif
+    TernaryATok ternary_a_dfb,
+    TernaryBTok ternary_b_dfb,
     uint32_t scalar_value,
-    DFBBindingToken out_dfb,
+    OutTok out_dfb,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles,
     uint32_t broadcast_ternary_b) {
@@ -388,10 +398,11 @@ void add_bias_and_addcmul_block(
 }
 
 // Slightly modified from compute_common.hpp
+template <typename In0Tok, typename In1Tok, typename OutTok>
 void matmul_blocks(
-    const DFBBindingToken in0_dfb,
-    const DFBBindingToken in1_dfb,
-    const DFBBindingToken out_dfb,
+    const In0Tok in0_dfb,
+    const In1Tok in1_dfb,
+    const OutTok out_dfb,
     const uint32_t M_block_tiles,
     const uint32_t N_block_tiles,
     const uint32_t full_N_block_tiles,
@@ -451,12 +462,13 @@ void matmul_blocks(
 // subblock, and no epilogue pass re-reads the intermediate (which cost ~2100 cycles per output tile on the math
 // thread). The out tiles land row-major in a half-width block, as swiglu_block writes them. block_float_output selects
 // the cheaper sigmoid (swiglu_sfpu.hpp).
-template <bool block_float_output>
+#ifndef ARCH_QUASAR  // drives the SFPU from the pack thread with WH/BH-only instructions (TTI_SEMWAIT, SETC16)
+template <bool block_float_output, typename In0Tok, typename In1Tok, typename IntermTok, typename OutTok>
 void matmul_blocks_swiglu(
-    const DFBBindingToken in0_dfb,
-    const DFBBindingToken in1_dfb,
-    const DFBBindingToken interm_dfb,
-    const DFBBindingToken out_dfb,
+    const In0Tok in0_dfb,
+    const In1Tok in1_dfb,
+    const IntermTok interm_dfb,
+    const OutTok out_dfb,
     const uint32_t M_block_tiles,
     const uint32_t N_block_tiles,
     const uint32_t full_N_block_tiles,
@@ -531,6 +543,7 @@ void matmul_blocks_swiglu(
         in0_index_offset += subblock_h * K_block_tiles;
     }
 }
+#endif  // !ARCH_QUASAR
 
 void kernel_main() {
     constexpr auto K_num_blocks = get_arg(args::K_num_blocks);
@@ -625,6 +638,7 @@ void kernel_main() {
                 dfb_in0.wait_front(in0_block_num_tiles);
                 dfb_in1.wait_front(in1_block_num_tiles);
 
+#ifndef ARCH_QUASAR  // the host never selects swiglu_in_k_loop on Quasar (see matmul_blocks_swiglu)
                 if (swiglu_in_k_loop && k_block == K_num_blocks - 1) {
                     if (K_num_blocks > 1) {  // publish the partial sums of K blocks 0..K-2 for the add
                         dfb_intermediate.push_back(out_block_num_tiles);
@@ -650,7 +664,9 @@ void kernel_main() {
                     if (K_num_blocks > 1) {
                         dfb_intermediate.pop_front(out_block_num_tiles);
                     }
-                } else {
+                } else
+#endif  // !ARCH_QUASAR
+                {
                     matmul_blocks(
                         dfb::in0,
                         dfb::in1,

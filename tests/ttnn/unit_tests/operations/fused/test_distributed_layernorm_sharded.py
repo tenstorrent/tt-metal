@@ -17,7 +17,7 @@ import pytest
 import math
 from loguru import logger
 
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     skip_for_wormhole_b0,
 )
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
@@ -26,7 +26,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     to_poisoned_sharded,
 )
 
-from models.common.utility_functions import tt2torch_tensor
+from tt_py_test_utils_common.utility_functions import tt2torch_tensor
 
 PREFETCHER_NOC1_GRID = [
     (6, 6),

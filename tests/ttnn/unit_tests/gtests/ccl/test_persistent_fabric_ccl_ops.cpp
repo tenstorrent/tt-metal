@@ -30,7 +30,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 
 TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
