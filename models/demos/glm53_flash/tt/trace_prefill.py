@@ -229,6 +229,7 @@ class WaveSlot:
     rec_keep: ttnn.Tensor
     kda_zero: KdaState | None
     _taps: int = 3
+    has_dsa: bool = True  # without DSA layers an idle row has no cache to protect
     user: int = -1
     idle: tuple = ()
 
@@ -265,15 +266,18 @@ class WaveSlot:
             rec_keep=_upload(mesh, rk, ttnn.float32, ttnn.TILE_LAYOUT, rows_dim=0),
             kda_zero=kda_zero,
             _taps=taps,
+            has_dsa=bool(dsa),
             user=0,
             idle=(),
         )
 
     @staticmethod
-    def _chip_slots_host(partition: bool, upc: int, rows: int, cols: int, user: int, idle) -> torch.Tensor:
+    def _chip_slots_host(
+        partition: bool, upc: int, rows: int, cols: int, user: int, idle, has_dsa: bool = True
+    ) -> torch.Tensor:
         """[rows * cols] int32: the slot every chip's paged fills write for a wave into ``user``."""
         if not partition:
-            if idle:
+            if idle and has_dsa:
                 raise NotImplementedError("a traced wave with idle rows needs a partitioned cache (dummy rows)")
             return torch.full((rows * cols,), user, dtype=torch.int32)
         owner, slot = divmod(user, upc)
@@ -304,7 +308,7 @@ class WaveSlot:
         rows, cols = self.mesh.rows, self.mesh.cols
         _refresh(
             self.mesh,
-            self._chip_slots_host(self.partition, self.users_per_chip, rows, cols, user, idle),
+            self._chip_slots_host(self.partition, self.users_per_chip, rows, cols, user, idle, self.has_dsa),
             self.cache_idx,
             mapper=self.mesh.shard_2d(0, 0),
         )

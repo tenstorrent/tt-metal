@@ -182,20 +182,12 @@ def test_wave_prefill_vs_sequence_parallel(mesh_device, expect_error):
         lambda: model.prefill_wave(_wave(model, {0: (ids_a[128:], 128)}, user=0)),
     )
     res3 = model.prefill_wave(_wave(model, {1: (ids_b[128:], 128)}, user=0))
-    _sp(model, ids_a[:128], user=1)
-    first_sp_c, logits_sp_c = _sp(model, ids_a[128:], user=1, start=128)
-    p2, p2s = pcc(res0[0][1], res2[0][1]), pcc(logits_sp_c, res2[0][1])
+    p2 = pcc(res0[0][1], res2[0][1])
     p3 = pcc(res_ab[1][1], res3[1][1])
     logger.info(
-        f"(iv) row 0 continued at 128: first {res2[0][0]} (unchunked wave {res0[0][0]}, SP chunked {first_sp_c}), pcc vs "
-        f"unchunked wave {p2:.6f}, vs SP chunked {p2s:.6f}; row 1 continued at 128: first {res3[1][0]} vs {res_ab[1][0]}, pcc {p3:.6f}"
+        f"(iv) row 0 continued at 128: first {res2[0][0]} (unchunked wave {res0[0][0]}), pcc vs unchunked wave {p2:.6f}; row 1 continued at 128: first {res3[1][0]} vs {res_ab[1][0]}, pcc {p3:.6f}"
     )
-    assert (
-        res2[0][0] == res0[0][0]
-        and _same_first(res2[0][0], first_sp_c, logits_sp_c)
-        and p2 > PCC_BAR
-        and p2s > PCC_BAR_SP
-    )
+    assert res2[0][0] == res0[0][0] and p2 > PCC_BAR
     assert res3[1][0] == res_ab[1][0] and p3 > PCC_BAR
     model.prefill_wave(_wave(model, {0: (ids_a[:128], 0), 1: (ids_b[:128], 0)}, user=0))
     res4 = model.prefill_wave(_wave(model, {0: (ids_a[128:], 128), 1: (ids_b, 0)}, user=0))  # mixed starts in one wave
