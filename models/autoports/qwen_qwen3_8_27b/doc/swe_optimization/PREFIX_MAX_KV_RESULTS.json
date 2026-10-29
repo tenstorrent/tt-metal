@@ -1,0 +1,66 @@
+{
+  "scope": "Single matched unscored B32 serving mechanism comparison; not SWE speed/accuracy proof",
+  "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:41aa0687bc668186baf9c4ed7942e135b60cf8828d9bbd67418cf53993a3d612",
+  "metal": "502069d1858aeaba995d90653eb4999193e6b4c8",
+  "all212_outputs_exact": true,
+  "full_local_comparison_sha256": "47681cb072b3cd241adfcf80e4f5c5777726bb7a5739ac7b0000e941c53b32da",
+  "arms": {
+    "reference": {
+      "run": 40847922602,
+      "ids": 1368,
+      "physical_cache_bytes_per_device": 23646044160,
+      "requests": 212,
+      "prompt_tokens": 5310464,
+      "eligible_prefix_tokens": 3112960,
+      "cached_tokens": 1232896,
+      "eligible_reuse_fraction": 0.3960526315789474,
+      "HTTP_uncached_tokens": 4077568,
+      "whole_client_wall_seconds": 3255.6732227802277,
+      "observed_preemptions": 25,
+      "phase_eligible_reuse": {
+        "panel0-warm_after_gap": 0.75,
+        "panel0-after_churn": 0.6015625,
+        "panel1-warm_after_gap": 0.3611111111111111,
+        "panel1-after_churn": 0.15625
+      }
+    },
+    "control_max": {
+      "run": 40869213617,
+      "ids": 1379,
+      "physical_cache_bytes_per_device": 23836753920,
+      "requests": 212,
+      "prompt_tokens": 5310464,
+      "eligible_prefix_tokens": 3112960,
+      "cached_tokens": 1250816,
+      "eligible_reuse_fraction": 0.4018092105263158,
+      "HTTP_uncached_tokens": 4059648,
+      "whole_client_wall_seconds": 3228.810671567917,
+      "observed_preemptions": 24,
+      "phase_eligible_reuse": {
+        "panel0-warm_after_gap": 0.75,
+        "panel0-after_churn": 0.634765625,
+        "panel1-warm_after_gap": 0.36408730158730157,
+        "panel1-after_churn": 0.15380859375
+      }
+    },
+    "shared_max": {
+      "run": 40882793766,
+      "ids": 1470,
+      "physical_cache_bytes_per_device": 25409617920,
+      "requests": 212,
+      "prompt_tokens": 5310464,
+      "eligible_prefix_tokens": 3112960,
+      "cached_tokens": 1479168,
+      "eligible_reuse_fraction": 0.47516447368421055,
+      "HTTP_uncached_tokens": 3831296,
+      "whole_client_wall_seconds": 2950.155678987503,
+      "observed_preemptions": 17,
+      "phase_eligible_reuse": {
+        "panel0-warm_after_gap": 0.7741935483870968,
+        "panel0-after_churn": 0.8173828125,
+        "panel1-warm_after_gap": 0.4166666666666667,
+        "panel1-after_churn": 0.216796875
+      }
+    }
+  }
+}
