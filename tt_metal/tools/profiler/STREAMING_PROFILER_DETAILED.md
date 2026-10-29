@@ -258,7 +258,8 @@ class Record {
     const Timestamp& published_at() const;   // when the core published the record
     const auto& metadata() const;            // the call site's metadata
 };
-using Zone = Record<Interval, ZoneMetadata>;  // a closed DeviceZoneScopedN scope, or a stall (name STALL_ZONE_NAME)
+using Zone = Record<Interval, ZoneMetadata>;  // a closed DeviceZoneScopedN scope
+using Stall = Record<Interval, StallMetadata>;  // the time a core waited for the profiler to drain its records
 using TimestampedData = Record<Variadic<uint64_t>, TimestampedDataMetadata>;  // a DeviceTimestampedData marker
 using Event = Record<void, EventMetadata>;                                      // a DeviceRecordEvent marker
 ```
@@ -293,7 +294,7 @@ The synthetic zone workload used throughout §6 is
 `tt_metal/programming_examples/profiler/test_streaming_profiler_zones` (built by `./build_metal.sh` with
 the programming examples). A clean run decodes exactly `iters × 6000 + 600` records on a 12×10 grid
 (10 zones × 600 lanes + 1 trailing per lane); a stalling run's record surplus equals the device L1 stall
-counter to the unit, since a stall is one zone record (§4.2).
+counter to the unit, since a stall is one record (§4.2).
 
 A built-in callback pushes zones to a Tracy timeline; enable it with
 `TT_METAL_STREAMING_PROFILER_TRACY=1`. What the three device primitives look like there is §4.1.
@@ -313,7 +314,7 @@ them.
 ```
 worker RISC ──1+N-word record packets──▶ L1 SPSC marker ring, one per RISC (512 words), heads + tails in a
     │                                     per-core control vector.  A producer BLOCKS on a full ring: the
-    │                                     pipeline is lossless end to end (the stall is itself a zone).
+    │                                     pipeline is lossless end to end (the stall is itself a record).
     ▼
 DRISC relay — one per DRAM view (≤ 8), resident on the bank's spare DRISC from device open to teardown
     CV pass    read every core's tails and lane state (one 64 B block/core), decide the ship set (25 % lane fill / half-ring

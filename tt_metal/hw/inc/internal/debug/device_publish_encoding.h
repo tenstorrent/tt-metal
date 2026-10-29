@@ -1220,6 +1220,19 @@ static_assert(
     records::kLayout<records::PublishTimePayload<&streaming_profiler::Interval::end>, streaming_profiler::detail::TimestampWidth::Bits64>.packet_words == MIN_RESERVE_WORDS,
     "every room check reserves a zone record's longest packet");
 
+// Whether ppfmt's stall record, which write_pending_stall writes and the host describes stalls from, is the medium
+// record DevicePublish lays out for a zone, whose Interval's Timestamps lie back to back.
+constexpr bool stall_record_is_zone_medium_record() {
+    using Payload = records::PublishTimePayload<&streaming_profiler::Interval::end>;
+    constexpr auto layout = records::kLayout<Payload, streaming_profiler::detail::TimestampWidth::Bits32>;
+    return layout.packet_words == ppfmt::STALL_PACKET_WORDS && layout.slices.size() == 1 && layout.slices[0].to == 0 &&
+           8u * layout.slices[0].bytes == ppfmt::STALL_START_DELTA_BITS &&
+           records::kUnsentLeaf<Payload> == ppfmt::STALL_PUBLISH_TIME_FIELD &&
+           offsetof(streaming_profiler::Interval, end) ==
+               streaming_profiler::detail::code_bytes(streaming_profiler::detail::kTimestampCode);
+}
+static_assert(stall_record_is_zone_medium_record(), "the host describes stalls by ppfmt's stall record");
+
 }  // namespace kernel_profiler
 
 #endif

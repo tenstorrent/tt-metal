@@ -136,6 +136,8 @@ struct EventMetadata {
 struct TimestampedDataMetadata {
     String name;
 };
+/** @brief A stall's metadata, which has none. */
+struct StallMetadata {};
 
 namespace detail {
 // The metadata of a record sent without any, `DevicePublish<>(payload)`, which the host's Record<Payload, void>

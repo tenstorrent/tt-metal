@@ -70,9 +70,6 @@ struct Core {
     Processor processor = Processor::BRISC;
 };
 
-/** @brief Name of a stall zone. */
-inline constexpr std::string_view STALL_ZONE_NAME = "PROFILER-STALL";
-
 /**
  * @brief The payload of a record whose calls pass any number of arguments (including none), each a T:
  * `DevicePublish<M>(a, b, ...)`. payload() is their std::span<const T>.
@@ -95,17 +92,14 @@ template <RecordType... Ts>
     requires(sizeof...(Ts) > 0)
 class Batch;
 
-/**
- * @brief One closed DeviceZoneScopedN scope.
- *
- * A stall, the time a core spent waiting for the profiler to drain its records, is delivered as a Zone named
- * STALL_ZONE_NAME.
- */
+/** @brief One closed DeviceZoneScopedN scope. */
 using Zone = Record<Interval, ZoneMetadata>;
 /** @brief One DeviceTimestampedData marker and the values it recorded. */
 using TimestampedData = Record<Variadic<uint64_t>, TimestampedDataMetadata>;
 /** @brief One DeviceRecordEvent marker. */
 using Event = Record<void, EventMetadata>;
+/** @brief A stall: the time a core spent waiting for the profiler to drain its records. */
+using Stall = Record<Interval, StallMetadata>;
 
 // Implementation detail.
 namespace detail {

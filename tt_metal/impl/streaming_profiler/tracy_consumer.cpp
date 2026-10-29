@@ -21,6 +21,9 @@ namespace {
 
 constexpr size_t kSrclocTableInitial = 1024;
 
+// The name a stall gets on the timeline, where it is colored apart from the zones around it.
+constexpr std::string_view kStallName = "PROFILER-STALL";
+
 uint64_t srcloc_key(std::string_view name, uint32_t processor) {
     return (static_cast<uint64_t>(name.size()) << 32) | processor;
 }
@@ -52,12 +55,20 @@ TracyConsumer::TracyConsumer() : anchor_tracy_(tracy::Profiler::GetTime()), srcl
 
 void TracyConsumer::operator()(const Batch& batch) {
     using experimental::streaming_profiler::Event;
+    using experimental::streaming_profiler::Stall;
     using experimental::streaming_profiler::TimestampedData;
     using experimental::streaming_profiler::Zone;
-    for (const Zone& zone : batch.records<Zone>()) {
-        const auto& [start, end] = zone.payload();
-        push_zone(zone.core(), zone.metadata().name, start.host_cycles(), end.host_cycles());
-    }
+    // A row's zones and stalls go in the order its processor emitted them, so a stall sits between the zones around it.
+    batch.visit([&]<typename R>(const R& record) {
+        if constexpr (std::is_same_v<R, Zone> || std::is_same_v<R, Stall>) {
+            const auto& [start, end] = record.payload();
+            std::string_view name = kStallName;
+            if constexpr (std::is_same_v<R, Zone>) {
+                name = record.metadata().name;
+            }
+            push_zone(record.core(), name, start.host_cycles(), end.host_cycles());
+        }
+    });
     for (const TimestampedData& data : batch.records<TimestampedData>()) {
         push_marker(
             data.core(), data.metadata().name, data.published_at().host_cycles(), data.runtime_id(), data.payload());
@@ -129,8 +140,7 @@ const tracy::SourceLocationData* TracyConsumer::srcloc(std::string_view name, ui
 const tracy::SourceLocationData* TracyConsumer::srcloc_slow(std::string_view name, uint32_t processor) {
     const char* const name_ptr = name.data();  // NOLINT(bugprone-suspicious-stringview-data-usage)
     const uint64_t key = srcloc_key(name, processor);
-    const uint32_t color =
-        name == experimental::streaming_profiler::STALL_ZONE_NAME ? tracy::Color::Tomato3 : kProcessorColors[processor];
+    const uint32_t color = name == kStallName ? tracy::Color::Tomato3 : kProcessorColors[processor];
     auto [it, fresh] = srclocs_.try_emplace({std::string(name), color});
     if (fresh) {
         it->second = {it->first.first.c_str(), "kernel_profiler", "kernel_profiler", 0, color};

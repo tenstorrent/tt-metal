@@ -170,8 +170,13 @@ struct ppfmt {
         return (record_w0 >> PACKET_WORDS_SHIFT) & PACKET_WORDS_MASK;
     }
 
-    // A stall's record is a zone's 32-bit one: the stall's end as its publish Timestamp, then its start's delta back.
+    // A stall's record, which the producer writes (internal/debug/device_publish_ring.h; device_publish_encoding.h
+    // checks these against DevicePublish's layout of it) and the host describes from these (llrt/call_sites.cpp): a
+    // zone's 32-bit record, an Interval whose end is the record's publish Timestamp and whose start is a delta back
+    // from it.
     static constexpr std::uint32_t STALL_PACKET_WORDS = 3;
+    static constexpr std::uint32_t STALL_START_DELTA_BITS = 32;
+    static constexpr std::uint32_t STALL_PUBLISH_TIME_FIELD = 1;  // the end, which no width sends
     // The most words a record and the timer packet ahead of it can take: the ring, less a stall record and its timer
     // packet twice, one held in reserve and one kept free while the writer waits for room (device_publish_ring.h).
     static constexpr std::uint32_t MAX_RECORD_WORDS = PROFILER_L1_VECTOR_SIZE - 2 * (1 + STALL_PACKET_WORDS);

@@ -69,24 +69,30 @@ std::optional<std::vector<uint16_t>> host_codes(std::string_view name) {
     return found == host.codes.end() ? std::nullopt : std::optional(found->second);
 }
 
-// The stall call site, which kernel_profiler::write_pending_stall() writes without an entry in any ELF: a zone named
-// STALL_ZONE_NAME whose records all take the medium form, its end the record's time and its start a 32-bit distance
-// before its end.
+// The stall call site, kernel_profiler::write_pending_stall(), which every image shares and none describes, since it
+// writes its records without a DevicePublish call. They are ppfmt's stall record, which the producer checks against
+// DevicePublish's layout of it, of the types the host's Stall takes.
 CallSite make_stall_site() {
+    using ppfmt = kernel_profiler::ppfmt;
+    constexpr auto codes = api::detail::leaf_type_codes<api::Interval>;
+    // An Interval's Timestamps lie back to back, which the producer checks too.
+    constexpr uint32_t kTimestampBits = 8 * api::detail::code_bytes(api::detail::kTimestampCode);
+    // The start travels as a distance back from the end, which is the record's time and isn't sent.
+    std::vector<FieldBits> payload_bits(codes.size(), {0, ppfmt::STALL_START_DELTA_BITS});
+    payload_bits[ppfmt::STALL_PUBLISH_TIME_FIELD] = {};
     return {
-        .metadata_type = api::detail::type_name<api::ZoneMetadata>,
-        .metadata_codes = {api::detail::kStringCode},
-        .metadata_bits = {{0, 64}},
-        .metadata = {api::STALL_ZONE_NAME},
-        .payload_codes = {api::detail::kTimestampCode, api::detail::kTimestampCode},
+        .metadata_type = api::detail::type_name<api::StallMetadata>,
+        .payload_codes = {codes.begin(), codes.end()},
         .arguments =
-            {{.type = api::detail::type_name<api::Interval>, .first_field = 0, .field_bits = {{0, 64}, {64, 64}}}},
-        .argument_field_counts = {2},
-        .payload_publish_time_field = 1,
+            {{.type = api::detail::type_name<api::Interval>,
+              .first_field = 0,
+              .field_bits = {{0, kTimestampBits}, {kTimestampBits, kTimestampBits}}}},
+        .argument_field_counts = {uint32_t(codes.size())},
+        .payload_publish_time_field = ppfmt::STALL_PUBLISH_TIME_FIELD,
         .packet_layouts =
             {{.timestamp_width = api::detail::TimestampWidth::Bits32,
-              .packet_words = kernel_profiler::ppfmt::STALL_PACKET_WORDS,
-              .payload_bits = {{0, 32}, {0, 0}}}},
+              .packet_words = ppfmt::STALL_PACKET_WORDS,
+              .payload_bits = std::move(payload_bits)}},
         .timestamps_as_deltas = true};
 }
 

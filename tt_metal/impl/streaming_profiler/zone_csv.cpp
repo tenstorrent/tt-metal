@@ -72,22 +72,29 @@ ZoneCsvConsumer::Row ZoneCsvConsumer::row_for(const api::Core& core) {
 
 void ZoneCsvConsumer::operator()(const Batch& batch) {
     dropped_ += batch.dropped_bytes();
-    for (const api::Zone& z : batch.records<api::Zone>()) {
-        const api::Interval& interval = z.payload();
-        if (!header_written_) {
-            zone_cycles_ += interval.end.device_cycles() - interval.start.device_cycles();
-            zone_ns_ += interval.duration().count();
+    // A stall is a zone named PROFILER-STALL in the CSV, in the order its processor emitted it.
+    batch.visit([&]<typename R>(const R& z) {
+        if constexpr (std::is_same_v<R, api::Zone> || std::is_same_v<R, api::Stall>) {
+            std::string_view name = "PROFILER-STALL";
+            if constexpr (std::is_same_v<R, api::Zone>) {
+                name = z.metadata().name;
+            }
+            const api::Interval& interval = z.payload();
+            if (!header_written_) {
+                zone_cycles_ += interval.end.device_cycles() - interval.start.device_cycles();
+                zone_ns_ += interval.duration().count();
+            }
+            const uint32_t id = name_hash(name);
+            for (int end = 0; end < 2; end++) {
+                Row& r = rows_.emplace_back(row_for(z.core()));
+                r.timer_id = id;
+                r.timestamp = (end ? interval.end : interval.start).device_cycles();
+                r.runtime_id = z.runtime_id();
+                r.zone_name = name;
+                r.type = end ? "ZONE_END" : "ZONE_START";
+            }
         }
-        const uint32_t id = name_hash(z.metadata().name);
-        for (int end = 0; end < 2; end++) {
-            Row& r = rows_.emplace_back(row_for(z.core()));
-            r.timer_id = id;
-            r.timestamp = (end ? interval.end : interval.start).device_cycles();
-            r.runtime_id = z.runtime_id();
-            r.zone_name = z.metadata().name;
-            r.type = end ? "ZONE_END" : "ZONE_START";
-        }
-    }
+    });
     for (const api::TimestampedData& d : batch.records<api::TimestampedData>()) {
         const uint32_t legacy = sync_legacy_id(d.metadata().name);
         Row& r = rows_.emplace_back(row_for(d.core()));

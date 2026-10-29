@@ -266,11 +266,14 @@ constexpr bool kProfilerInlined = true;
 constexpr bool kProfilerInlined = false;
 #endif
 
-// The pending stall, straight into the reserve its wait left room for, as a medium record of the stall's call site,
-// which has no descriptor in any ELF (llrt/call_sites.cpp describes it): the end is the record's time and the start a
-// 32-bit distance back. A stall of 2^32 cycles or more saturates it, because the reserve has no room for a full record.
-// A 3.2 s wait is a wedged relay, not a measurement.
+// The pending stall, straight into the reserve its wait left room for, as ppfmt's stall record of the stall's call
+// site, which no ELF describes (llrt/call_sites.cpp describes it from ppfmt): the end is the record's time and the
+// start a 32-bit distance back. A stall of 2^32 cycles or more saturates it, because the reserve has no room for a full
+// record. A 3.2 s wait is a wedged relay, not a measurement.
 FORCE_INLINE void write_pending_stall(const PendingStall stall) {
+    static_assert(
+        ppfmt::STALL_PACKET_WORDS == 3 && ppfmt::STALL_START_DELTA_BITS == 32,
+        "a stall's body is its end's low word, then its start's 32-bit distance back");
     ring_write_sticky_timer(stall.end_hi);
     ring_write_words(ppfmt::record_w0(ppfmt::STALL_PACKET_WORDS) | TT_STALL_CALL_SITE_ID, stall.end_lo, stall.duration);
     g_stall.duration = 0;
