@@ -2530,6 +2530,22 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     short.note_request_steps(20)
     assert short.decide(entering, [row], _PLAIN, 3) is None, "the measured request length caps the horizon"
     assert not short.would_speculate(entering, [row], _PLAIN) and short.would_speculate(entering, [row], _PLAIN, 64)
+    # the shape's measured run length caps it too: steps served on the shape's records per reseed of the shape,
+    # from the second reseed on. Two reseeds and 20 steps (a run of 10: 157 ms of saving) refuse the 500 ms
+    # entry, 80 steps (a run of 40: 628 ms) take it; one reseed measures nothing
+    churn = SpecPolicy(SpecPolicyConfig(), 5)
+    churn.calibration.note_reseed((8, 3), 250.0, 250.0)
+    assert churn.calibration.run_length((8, 3)) is None and churn.decide(entering, [row], _PLAIN, 3).reason == "enter"
+    churn.calibration.note_reseed((8, 3), 250.0, 250.0)
+    for _ in range(20):
+        churn.calibration.note_step(("step", (8, 3), 2048), 60.0, 16, True, 57.0, 8)
+    assert churn.calibration.run_length((8, 3)) == 10.0
+    assert churn.decide(entering, [row], _PLAIN, 3) is None and not churn.would_speculate(entering, [row], _PLAIN)
+    assert churn.entry_pays(rank_records([RecordCandidate((8, 3), 2048, 35.0, 150.0)], [row], _PLAIN)[0], _PLAIN)
+    for _ in range(60):
+        churn.calibration.note_step(("step", (8, 3), 8192), 60.0, 16, False, 57.0, 8, cause="rows")
+    assert churn.calibration.run_length((8, 3)) == 40.0 and churn.decide(entering, [row], _PLAIN, 3).reason == "enter"
+    assert churn.calibration.run_length((16, 1)) is None, "another shape's reseeds are its own"
     # the measured tokens per row of a calibrated record replace the acceptance model
     measured = [RecordCandidate((8, 3), 2048, 35.0, 0.0, tokens_per_row=1.2)]
     assert rank_records(measured, [row], _PLAIN)[0].expected_tokens == pytest.approx(1.2)

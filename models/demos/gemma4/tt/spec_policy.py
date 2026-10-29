@@ -740,6 +740,19 @@ class Calibration:
         self.window_reseeds[0] += 1
         self.window_reseeds[1] += float(ms)
 
+    def run_length(self, shape):
+        """The measured steps one entry of ``shape`` serves before the batch leaves it: the steps served on the
+        shape's records (every rung) per reseed of the shape, once two reseeds were measured; else None. The
+        entry horizon is capped by it (``SpecPolicy.entry_pays``): a record the batch keeps leaving after ten
+        steps cannot amortize a 250 ms reseed over the configured 64 (the Galaxy c32 point: 4-9 reseeds per
+        256 steps at eight rows, every entry on a prior or a window mean a few verifies then undid)."""
+        shape = tuple(shape)
+        entries = self.reseeds.get(shape)
+        if entries is None or entries[0] < 2:
+            return None
+        steps = sum(stats.steps for mode, stats in self.modes.items() if mode[0] == "step" and mode[1] == shape)
+        return steps / entries[0]
+
     def note_phase(self, name, ms):
         for table in (self.phases, self.window_phases):
             entry = table.setdefault(name, [0, 0.0])
@@ -924,11 +937,17 @@ class SpecPolicy:
         return horizon
 
     def entry_pays(self, choice, plain_ms, remaining=None):
-        """Whether the saving of ``choice`` over the entry horizon covers its entry cost (true when there is none)."""
+        """Whether the saving of ``choice`` over the entry horizon covers its entry cost (true when there is none);
+        the horizon is capped by the shape's measured run length (``Calibration.run_length``): what an entry of
+        it served before the batch left, when serving measured two or more."""
         if choice.entry_ms <= 0.0:
             return True
         saving = choice.tokens_per_row * float(plain_ms) - choice.cost_ms
-        return self.entry_horizon(remaining) * saving >= choice.entry_ms
+        horizon = self.entry_horizon(remaining)
+        run = self.calibration.run_length(choice.shape)
+        if run is not None:
+            horizon = min(horizon, max(1, int(round(run))))
+        return horizon * saving >= choice.entry_ms
 
     def retry_choice(self, ranked, plain_ms):
         """The retry for a plain-serving batch, or None: the cheapest candidate (entry plus step) once at least
