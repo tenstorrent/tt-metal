@@ -256,7 +256,8 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",), reduce_dty
         reduce_dtype: The dtype the gradients are summed in, as ``ttml.core.distributed.synchronize_tensor`` takes
             it: ``ttnn.DataType.FLOAT32`` sums in fp32 and casts the mean back to the gradient's dtype. ``None`` takes
             the training config's ``precision.reduce_dtype``, which ``create_optimizer`` stores
-            (``AutoContext.get_gradient_reduce_dtype``); with no default set, it sums as before.
+            (``AutoContext.get_gradient_reduce_dtype``); with no default set either, it sums in each gradient's own
+            dtype.
     """
     _check_reduce_dtype(reduce_dtype)
     m = maybe_mesh()
