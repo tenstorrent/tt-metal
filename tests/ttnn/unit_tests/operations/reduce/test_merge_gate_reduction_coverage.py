@@ -9,6 +9,7 @@ Marks are added only after Sanity history and the promotion checklist.
 """
 
 import os
+import re
 
 import pytest
 
@@ -25,13 +26,17 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
 # ---------------------------------------------------------------------------
 
 
-def _captured_program_factories(fn):
-    """Program-factory type strings recorded while running `fn` with no device dispatch."""
+def _captured_graph(fn):
+    """Graph nodes recorded while running `fn` with no device dispatch."""
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
     try:
         fn()
     finally:
         captured = ttnn.graph.end_graph_capture()
+    return captured
+
+
+def _captured_program_factories(captured):
     return [
         node["params"]["program_factory_type"]
         for node in captured
@@ -41,6 +46,28 @@ def _captured_program_factories(fn):
 
 def _factory_names_contain(factories, token):
     return any(token in name for name in factories)
+
+
+def _core_count(core_range_set_str):
+    """Worker count encoded in a graph-capture `core_range_set` (`{[x1-y1 - x2-y2]}`)."""
+    total = 0
+    for x1, y1, x2, y2 in re.findall(r"\[(\d+)-(\d+) - (\d+)-(\d+)\]", core_range_set_str):
+        total += (int(x2) - int(x1) + 1) * (int(y2) - int(y1) + 1)
+    return total
+
+
+def _reduce_h_worker_counts(captured):
+    """Dataflow-buffer core counts for each ReduceMultiCoreHProgramFactory in `captured`."""
+    counts = []
+    in_reduce_h = False
+    for node in captured:
+        params = node.get("params", {})
+        if node.get("node_type") == "function_start" and "program_factory_type" in params:
+            in_reduce_h = "ReduceMultiCoreHProgramFactory" in params["program_factory_type"]
+            continue
+        if in_reduce_h and node.get("node_type") == "dataflow_buffer_allocate":
+            counts.append(_core_count(params["core_range_set"]))
+    return counts
 
 
 # ---------------------------------------------------------------------------
@@ -96,22 +123,32 @@ def test_int32_max_min_batch_dims_with_negatives(device, op_name, dim):
     assert_equal(expected, got)
 
 
-def test_bf16_uint16_reconfig_roundtrip_bit_exact(device):
-    """bf16 → uint16 → bf16 reconfig. A stuck UInt16 low-byte-zero flag turns 1→0.
+def test_bf16_sort_reconfig_indices_include_256(device):
+    """bf16 sort at W=512 switches value tiles and UInt16 index tiles.
 
-    0..255 are exact in bf16, so a numeric typecast must come back as the same integers.
-    256 and above are not a useful canary here: bf16 cannot represent 257, and 256's
-    uint16 encoding already has a zero low byte.
+    Typecast kernels keep DataFormatReconfig disabled, so a bf16↔uint16 roundtrip
+    does not exercise unpack-format reconfiguration. Sort does: values stay bf16
+    while indices are UInt16. W=512 is the smallest tile-aligned width whose
+    index permutation includes 256 (0x0100), the first nonzero UInt16 with a
+    zero low byte (#43882). -256..255 are 512 values and exact in bf16, so the
+    argsort is unique.
     """
-    values = torch.arange(256, dtype=torch.bfloat16).reshape(1, 1, 8, 32)
-    tt_bf16 = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_u16 = ttnn.typecast(tt_bf16, ttnn.uint16)
-    tt_back = ttnn.typecast(tt_u16, ttnn.bfloat16)
+    torch.manual_seed(2026)
+    width = 512
+    unique = torch.arange(-256, 256, dtype=torch.bfloat16)
+    row = unique[torch.randperm(width)]
+    values = row.reshape(1, 1, 1, width).expand(1, 1, 32, width).contiguous()
+    expected_values, expected_indices = torch.sort(values, dim=-1, descending=False)
+    assert 256 in expected_indices[0, 0, 0], "W=512 permutation must include index 256"
 
-    got_u16 = ttnn.to_torch(tt_u16).reshape(-1)[:256].to(torch.int64)
-    got_bf16 = ttnn.to_torch(tt_back).reshape(-1)[:256]
-    assert_equal(torch.arange(256, dtype=torch.int64), got_u16)
-    assert_equal(values.reshape(-1), got_bf16)
+    tt_input = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_values, tt_indices = ttnn.sort(tt_input, dim=-1, descending=False)
+    got_indices = ttnn.to_torch(tt_indices).to(torch.int64)
+    assert_equal(expected_values, ttnn.to_torch(tt_values))
+    assert_equal(expected_indices, got_indices)
+    assert torch.equal(
+        torch.sort(got_indices[0, 0, 0]).values, torch.arange(width, dtype=torch.int64)
+    ), "sorted UInt16 indices must be the complete 0..511 permutation"
 
 
 @pytest.mark.parametrize("op", [ttnn.sum, ttnn.mean], ids=["sum", "mean"])
@@ -165,8 +202,8 @@ _INTEGER_REDUCE_OPS = (
     [(ttnn.int32, torch.int32), (ttnn.uint32, torch.int64)],
     ids=["int32", "uint32"],
 )
-def test_integer_reduce_returns_result_or_raises(device, op_name, ttnn_op, torch_op, dtype, torch_dtype):
-    """INT32/UINT32 reduce must match torch or raise. A rejected dtype must not come back as zeros."""
+def test_integer_reduce_returns_result_or_raises(device, op_name, ttnn_op, torch_op, dtype, torch_dtype, expect_error):
+    """INT32/UINT32 reduce must match torch or raise the dtype-reject message."""
     torch.manual_seed(0)
     # Positive values so UINT32 and INT32 share the same host tensor.
     host = torch.randint(1, 1000, (1, 1, 32, 32), dtype=torch.int64)
@@ -179,19 +216,22 @@ def test_integer_reduce_returns_result_or_raises(device, op_name, ttnn_op, torch
         pytest.skip("UINT32 sum/max/min take the FPU path; ttsim crashes the worker on that unpack")
 
     tt_input = ttnn.from_torch(host, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-
-    try:
-        tt_out = ttnn_op(tt_input, dim=-1)
-    except RuntimeError:
+    if op_name == "mean":
+        with expect_error(RuntimeError, "does not support integer inputs"):
+            ttnn_op(tt_input, dim=-1)
+        return
+    if op_name in ("std", "var"):
+        with expect_error(RuntimeError, "Only FLOAT32, BFLOAT16, and BFLOAT8_B are supported for Std/Var reduction"):
+            ttnn_op(tt_input, dim=-1)
         return
 
+    tt_out = ttnn_op(tt_input, dim=-1)
     got = ttnn.to_torch(tt_out).to(torch.int64)
     expected = torch_op(torch_input, dim=-1).to(torch.int64)
     assert not (
         torch.all(got == 0) and not torch.all(expected == 0)
     ), f"{op_name} on {dtype} returned silent zeros; expected {expected.flatten()[:8].tolist()}"
-    # FPU UINT32 is "not silent zeros" only. INT32 sum/max/min and every op that
-    # returns a result must match torch.
+    # FPU UINT32 is "not silent zeros" only. INT32 sum/max/min must match torch.
     if uint32_fpu_reduce:
         return
     assert_equal(expected, got)
@@ -216,7 +256,9 @@ def test_topk_non_power_of_two_width_uses_multicore_factory(device):
     width = 4224
     torch_input = torch.randn(1, 1, 32, width, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    factories = _captured_program_factories(lambda: ttnn.topk(tt_input, 32, dim=-1, largest=True, sorted=True))
+    factories = _captured_program_factories(
+        _captured_graph(lambda: ttnn.topk(tt_input, 32, dim=-1, largest=True, sorted=True))
+    )
     assert factories, f"no program factory recorded for topk W={width}"
     assert _factory_names_contain(
         factories, "TopKMultiCore"
@@ -228,11 +270,15 @@ def test_row_major_mean_uses_multicore_factory(device):
     # 3136 rows is the EfficientNetB0 global-pool height; enough H-tiles to split across cores.
     torch_input = torch.rand((1, 1, 3136, 64), dtype=torch.float32)
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    factories = _captured_program_factories(lambda: ttnn.mean(tt_input, dim=-2, keepdim=False))
+    captured = _captured_graph(lambda: ttnn.mean(tt_input, dim=-2, keepdim=False))
+    factories = _captured_program_factories(captured)
     assert factories, "no program factory recorded for ROW_MAJOR mean"
     assert _factory_names_contain(
-        factories, "MultiCore"
-    ), f"expected a multi-core reduce factory for tall ROW_MAJOR mean, got {factories}"
+        factories, "ReduceMultiCoreHProgramFactory"
+    ), f"expected ReduceMultiCoreHProgramFactory for tall ROW_MAJOR mean, got {factories}"
+    worker_counts = _reduce_h_worker_counts(captured)
+    assert worker_counts, "ReduceMultiCoreHProgramFactory recorded no dataflow-buffer core ranges"
+    assert max(worker_counts) > 1, f"H-reduce used a single worker; core counts {worker_counts}"
 
 
 # ---------------------------------------------------------------------------
