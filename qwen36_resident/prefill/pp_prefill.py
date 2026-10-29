@@ -1013,12 +1013,26 @@ class PPPrefill:
         same chunk size. The chunk size must stay the same for the whole prompt. Between calls the pipeline holds
         the chunks in flight (x_last), the states and the KV scratch; nothing else may use the prefill."""
         T = token_ids.shape[0]
-        self._use(chunk or self.C)
-        n, C = self.n, self.C
+        C = chunk or self.C
+        if C not in self._geo:
+            raise ValueError(f"run_span: chunk {C} is not one of the prefill's chunk sizes {sorted(self._geo)}")
+        if n_tokens > self.max_len or first_chunk * C + T != n_tokens:
+            raise ValueError(
+                f"run_span: {T} tokens from chunk {first_chunk} (chunk {C}) do not end at n_tokens {n_tokens} "
+                f"(max_len {self.max_len})"
+            )
+        if not drain and T % C:
+            raise ValueError(f"run_span: only the draining call may end on a partial chunk ({T} tokens, chunk {C})")
+        if first_chunk == 0:
+            self._span_chunk = C
+        elif getattr(self, "_span_chunk", None) != C:
+            raise ValueError(
+                f"run_span: chunk {C} differs from the prompt's first span ({getattr(self, '_span_chunk', None)})"
+            )
+        self._use(C)
+        n = self.n
         chunks = (n_tokens + C - 1) // C
         new = (T + C - 1) // C
-        assert n_tokens <= self.max_len and first_chunk * C + T == n_tokens, (first_chunk, C, T, n_tokens)
-        assert drain or T == new * C, "only the draining call may end on a partial chunk"
         ids = torch.zeros(new * C, dtype=torch.int32)
         ids[:T] = token_ids.to(torch.int32)
         shard = ttnn.ShardTensorToMesh(self.mesh, dim=0)
