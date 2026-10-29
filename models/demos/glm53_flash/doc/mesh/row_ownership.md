@@ -127,7 +127,8 @@ Measured 2026-10-29 (45 layers, 8x4, 16 K needles): a lone 16 K SP chunk 7.7 s; 
 per row), so an eager wave pays only near full occupancy and `SlotTable.allocate(prefer_sp=True)` (an eager prompt: no
 traced wave holds it) takes a slot index live on NO row first (the lowest-load row), keeping up to `users_per_row`
 concurrent long prompts SP-eligible; short prompts keep the wave-affine order (one traced wave of `rows` members beats
-`rows` traced SP calls). r5's four 64 K needles in pairs of waves averaged 321 s of TTFT; as SP chunks ~70 s.
+`rows` traced SP calls). r5's four 64 K needles in pairs of waves averaged 321 s of TTFT; as SP chunks ~75 s (the harness
+measured 7.5 s per 16 K SP chunk at the 1 M profile, 45 layers: 16 chunk-steps for 4 x 65514 tokens in 120 s).
 
 ### 2.5 (e) SP with owner-row masks (the README's "next step") and owner-row attention
 
