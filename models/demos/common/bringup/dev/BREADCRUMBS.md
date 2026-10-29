@@ -2297,6 +2297,14 @@ before (the overseer's `git add -u`). Fix: core/gate.py GENERATED = `:(exclude,g
 diff and commit pathspecs (and unstaged), so no gate commit takes them. Selftest
 test_a_gate_commit_leaves_the_generated_dashboard_pages_out.
 
+## F211: commit-only ignores the records the framework writes under a task's paths (DeepSeek-V4.1 FIX.8, 2026-10-29)
+Problem: after F210's fix, `gate FIX.8 --commit-only` still refused: "the task's files changed since its gate passed:
+state.json (not named by the hook)". FIX.8's paths are the whole model dir, which holds its ledger; the refusal itself
+wrote state.json (and the dashboards, results) after hashing the task's files, so commit-only could never commit it
+(only `rerun --from`, ~1.5 device-hours). Fix: core/gate.py task_files_map and _hook_fixed drop files stamps.SKIP
+matches (state.json, results/, dashboards, overseer.yaml, approvals.yaml, records) - the same files that never void
+a stamp. Selftest test_commit_only_ignores_the_records_the_framework_writes_under_the_tasks_paths.
+
 ## F220: a model switch set in the environment is part of a unit's stamp (DeepSeek-V4.1 2x2 engram bfp8 A/B, 2026-10-28)
 
 `DS41_ENGRAM_ROWS=bfp8 verify --tasks L.s4096 L.last L.s55296` printed "reused: same code, kept PASS" for all three

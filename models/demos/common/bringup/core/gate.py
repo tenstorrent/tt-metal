@@ -934,8 +934,11 @@ TOO_LARGE = re.compile(r"(\S+) \((\d+) KB\) exceeds")  # scripts/check_file_size
 
 
 def task_files_map(repo: Path, task: dict) -> dict:
-    """{file: sha256} of the task's own files (its paths)."""
-    return {f: freeze.sha256_file(repo / f) for f in sorted(set(_files_under(repo, list(task.get("paths") or []))))}
+    """{file: sha256} of the task's own files (its paths), without the records the framework itself writes
+    (stamps.SKIP: state.json, results/, dashboards, overseer.yaml, ...). F211: FIX.8's paths held its ledger, so the
+    refusal's own state.json write made commit-only see "the task's files changed" and refuse for good."""
+    files = sorted(f for f in set(_files_under(repo, list(task.get("paths") or []))) if not stamps._SKIP.match(f))
+    return {f: freeze.sha256_file(repo / f) for f in files}
 
 
 def task_files_key(repo: Path, task: dict) -> str:
@@ -947,7 +950,7 @@ def task_files_key(repo: Path, task: dict) -> str:
 def _hook_fixed(pend: dict, now: dict) -> tuple[list, list]:
     """F154: the files changed since the gate passed, split into those the refusing hook named (a hook fix: commit
     without a re-run) and the rest (need the gate)."""
-    was = pend.get("files") or {}
+    was = {f: h for f, h in (pend.get("files") or {}).items() if not stamps._SKIP.match(f)}  # F211: records never count
     changed = sorted(f for f in set(was) | set(now) if was.get(f) != now.get(f))
     named = [f for f in changed if any(f in ln for ln in pend.get("hook") or [])]
     return named, [f for f in changed if f not in named]

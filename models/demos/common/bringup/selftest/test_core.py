@@ -380,6 +380,23 @@ def test_commit_only_names_a_file_too_large_and_stays_pending(sandbox):
     assert res.verdict == "COMMIT_PENDING" and any("too large for the repo" in ln for ln in res.lines)
 
 
+def test_commit_only_ignores_the_records_the_framework_writes_under_the_tasks_paths(sandbox):
+    """F211: a task whose paths hold its ledger (DeepSeek-V4.1 FIX.8: the whole model dir) is still committed by
+    commit-only after the refusal wrote state.json: the framework's own records are not the task's files."""
+    from models.demos.common.bringup.core.gate import commit_only
+
+    refusing_hook(sandbox, "some hook refuses")
+    (sandbox.repo / "src").mkdir()
+    (sandbox.repo / "src/impl.py").write_text("x = 1\n")
+    led = sandbox.tasks(task("A.1", record_cmd(pcc_out=0.995), metrics={"pcc_*": ">= 0.99"}, paths=["src", "bringup"]))
+    res = run_gate(sandbox.spec, led, "A.1", commit=True)
+    assert res.verdict == "COMMIT_PENDING"
+    (sandbox.repo / ".git/hooks/pre-commit").write_text("#!/bin/sh\nexit 0\n")  # the overseer's fix (outside the paths)
+    led.update("A.1", reason=["a later state.json write"])  # the framework writes its records after the refusal
+    res = commit_only(sandbox.spec, led, "A.1")
+    assert res.verdict == "PASS" and res.commit, res.lines
+
+
 def test_commit_only_refuses_when_the_tasks_files_changed(sandbox):
     """F149: commit-only commits what the gate tested; a task file changed since then needs the gate."""
     from models.demos.common.bringup.core.gate import commit_only
