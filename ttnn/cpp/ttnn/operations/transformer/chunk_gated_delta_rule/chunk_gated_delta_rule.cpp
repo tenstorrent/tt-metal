@@ -188,8 +188,14 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     // Otherwise head-split to [BH,T,V] as usual.
     ttnn::Tensor v = flat_v ? (v_in.dtype() != DataType::BFLOAT16 ? ttnn::typecast(v_in, DataType::BFLOAT16) : v_in)
                             : head_split_tile(v_in, B, T, HV, V);
-    ttnn::Tensor g = headvec_split_tile(g_in, B, T, HV);        // [B*HV, T] TILE
-    ttnn::Tensor beta = headvec_split_tile(beta_in, B, T, HV);  // [B*HV, T] TILE
+    // Flat q/k/v at chunk 32: the prep reader takes g / beta token-major [B,T,HV] as they are (it picks
+    // the head's column itself), so they skip the head-major relayout.
+    const bool flat_gates = flat_qk && flat_v && C == 32;
+    auto as_f32 = [&](const ttnn::Tensor& t) {
+        return t.dtype() != DataType::FLOAT32 ? ttnn::typecast(t, DataType::FLOAT32) : t;
+    };
+    ttnn::Tensor g = flat_gates ? as_f32(g_in) : headvec_split_tile(g_in, B, T, HV);           // [B*HV, T] TILE
+    ttnn::Tensor beta = flat_gates ? as_f32(beta_in) : headvec_split_tile(beta_in, B, T, HV);  // [B*HV, T] TILE
 
     // GQA expand q,k from H heads to HV heads (repeat_interleave along head-major dim 0).
     // OPT-A: for flat q/k the reader maps value-head hv -> key-head hk=hv/G at read time, so no expand.
@@ -233,8 +239,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     ttnn::Tensor k_c = flat_qk ? k : to_chunks_tile(k, K);
     ttnn::Tensor v_c = flat_v ? v : to_chunks_tile(v, V);
     // g, beta -> [BH, NC, C, 1] TILE (already TILE; reshape only).
-    ttnn::Tensor g_c = ttnn::reshape(g, ttnn::Shape({BH, NC, C, 1}));
-    ttnn::Tensor beta_c = ttnn::reshape(beta, ttnn::Shape({BH, NC, C, 1}));
+    ttnn::Tensor g_c = flat_gates ? g : ttnn::reshape(g, ttnn::Shape({BH, NC, C, 1}));
+    ttnn::Tensor beta_c = flat_gates ? beta : ttnn::reshape(beta, ttnn::Shape({BH, NC, C, 1}));
 
     // Constant tiles eye_C, tril_C, ones_C [1,1,C,C], masks [1,1,32,96]. Caller-supplied (built once
     // on the model/layer and passed in) so they're device-resident before trace capture and their

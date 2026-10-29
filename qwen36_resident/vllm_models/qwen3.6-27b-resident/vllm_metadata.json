@@ -1,0 +1,4 @@
+{
+  "arch": "Qwen3_5ForConditionalGeneration",
+  "main_class": "qwen36_resident.generator_vllm:Qwen36ResidentForCausalLM"
+}
