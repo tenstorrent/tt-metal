@@ -15,6 +15,8 @@ class MeshDevice;
 
 namespace experimental {
 
+// EXPERIMENTAL: these declarations may change or be removed without notice and carry no stability guarantee.
+//
 // Both overloads return the same view as MetalEnv::get_device_properties() of the MetalEnv the mesh was opened on, so
 // the result is valid while that MetalEnv is alive, which already outlives every MeshDevice bound to it.
 

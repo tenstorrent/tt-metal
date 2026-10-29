@@ -89,7 +89,7 @@ TEST(MeshDeviceProperties, CPU_ExplicitEnvMock) {
 }
 
 TEST(MeshDeviceProperties, CPU_LegacyMock) {
-    LegacyContextCleanup cleanup(/*disable_mock_mode=*/true);
+    LegacyContextCleanup cleanup(/*disable_mock=*/true);
     experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, /*num_chips=*/2);
 
     auto mesh = distributed::MeshDevice::create(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
