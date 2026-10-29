@@ -170,7 +170,7 @@ import os
 SPEC_ADAPTIVE_ENV = "GEMMA4_SPEC_ADAPTIVE"
 SPEC_ADAPTIVE_DEFAULT = "1"
 SPEC_MIN_GAIN_ENV = "GEMMA4_SPEC_MIN_GAIN"
-SPEC_MIN_GAIN_DEFAULT = "1.10"
+SPEC_MIN_GAIN_DEFAULT = "1.25"
 SPEC_EXIT_GAIN_ENV = "GEMMA4_SPEC_EXIT_GAIN"
 SPEC_EXIT_GAIN_DEFAULT = "0.95"
 SPEC_ENTRY_HORIZON_ENV = "GEMMA4_SPEC_ENTRY_HORIZON"
@@ -271,7 +271,7 @@ class SpecPolicyConfig:
     """The policy knobs (``from_env`` reads and validates them once, at adapter construction)."""
 
     adaptive: bool = True
-    min_gain: float = 1.10
+    min_gain: float = 1.25
     exit_gain: float = 0.95
     entry_horizon: int = 64
     retry_steps: int = 8

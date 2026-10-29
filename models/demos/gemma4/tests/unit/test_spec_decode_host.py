@@ -2273,7 +2273,7 @@ def _row(cond, alpha=0.2):
 def _policy_policy_config_defaults_are_on_with_the_documented_knobs(expect_error=None):
     assert SpecPolicyConfig.from_env({}) == SpecPolicyConfig(
         adaptive=True,
-        min_gain=1.10,
+        min_gain=1.25,
         exit_gain=0.95,
         entry_horizon=64,
         retry_steps=8,
@@ -2310,7 +2310,7 @@ def _policy_policy_config_reads_every_knob_from_the_env(expect_error=None):
 _BAD_POLICY_KNOBS = [
     (SPEC_ADAPTIVE_ENV, "maybe", "must be 1 or 0"),
     (SPEC_MIN_GAIN_ENV, "0.9", "must be at least 1.0"),
-    (SPEC_EXIT_GAIN_ENV, "1.5", r"must be in \[0.0, 1.1\]"),
+    (SPEC_EXIT_GAIN_ENV, "1.5", r"must be in \[0.0, 1.25\]"),
     (SPEC_RETRY_STEPS_ENV, "-1", "must be at least 0"),
     (SPEC_PROBE_STEPS_ENV, "2.5", "must be an integer"),
     (SPEC_EWMA_ENV, "1.5", r"must be in \[0.0, 1.0\]"),
@@ -2629,7 +2629,7 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     # tokens makes 1.74 tokens/row = 0.99x < min_gain (declined); three new rows make 2.39 = 1.36x (trial), and
     # the (8,3)'s 230 ms reseed must pay over the joining rows' horizon (not over 10 steps: 12.8 ms x 10)
     batch = [_row([0.3] * 5) for _ in range(8)]
-    eight = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
+    eight = SpecPolicy(SpecPolicyConfig(min_gain=1.10, retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
     only83 = [c for c in _cands(_COSTS, n=8) if c.shape == (8, 3)]
     assert rank_records(only83, batch, _PLAIN)[0].gain == pytest.approx(1.417 * 20 / 35, abs=1e-3)
     hyped = rank_records(only83, batch, _PLAIN, optimistic=(0,))
@@ -2645,7 +2645,7 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert eight.decide(both, batch, _PLAIN, 3, fresh=(0, 1, 2)) is None
     assert eight.decide(both, batch, _PLAIN, 3, fresh=(0, 1, 2, 3, 4)).shape == (16, 1)
     reseeding8 = [RecordCandidate((8, 3), 2048, 35.0, 230.0), RecordCandidate((16, 1), 2048, 30.0, 300.0)]
-    eight = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
+    eight = SpecPolicy(SpecPolicyConfig(min_gain=1.10, retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
     assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(0, 1, 2)).reason == "trial"
     assert eight.decide(reseeding8, batch, _PLAIN, 3, remaining=10, fresh=(0, 1, 2)) is None
     assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=True).reason == "trial", "a batch all new: the floor"
@@ -2698,7 +2698,7 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
 
 
 def _policy_below_the_cap_the_policy_probes_the_next_larger_draft_length_every_n_steps(expect_error=None):
-    policy = SpecPolicy(SpecPolicyConfig(probe_steps=3), 5)
+    policy = SpecPolicy(SpecPolicyConfig(min_gain=1.10, probe_steps=3), 5)
     rows = [_row([0.7] * 5) for _ in range(5)]
     out = [(c.shape, c.reason) for c in (policy.decide(_cands(_COSTS, n=5), rows, _PLAIN, 5) for _ in range(7))]
     assert out == [
@@ -2720,11 +2720,11 @@ def _policy_below_the_cap_the_policy_probes_the_next_larger_draft_length_every_n
         policy.decide(_cands(_COSTS, n=5), [_row([0.1] * 5) for _ in range(5)], _PLAIN, 5)
     assert policy.below_cap == 0 and policy.last_k == 0
     # entering (a reseed this step) is not a step below the cap: no probe starts from it
-    entering = SpecPolicy(SpecPolicyConfig(probe_steps=1), 5)
+    entering = SpecPolicy(SpecPolicyConfig(min_gain=1.10, probe_steps=1), 5)
     choice = entering.decide([RecordCandidate((8, 3), 2048, 35.0, 1.0)], rows, _PLAIN, 5)
     assert choice.reason == "enter" and entering.below_cap == 0
     # without a larger record the probe step keeps the choice
-    only = SpecPolicy(SpecPolicyConfig(probe_steps=1), 5)
+    only = SpecPolicy(SpecPolicyConfig(min_gain=1.10, probe_steps=1), 5)
     assert only.decide([RecordCandidate((16, 1), 2048, 30.0)], rows, _PLAIN, 5).reason == "gain"
 
 
