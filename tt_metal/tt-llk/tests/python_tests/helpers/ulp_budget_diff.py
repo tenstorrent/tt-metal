@@ -50,7 +50,7 @@ _MAX_ROWS = 40
 _INF = float("inf")
 
 
-def _resolve(
+def resolve(
     table: Table, op: MathOperation, query: BudgetKey, only=lambda row: True
 ) -> Row | None:
     """The row of *op* the registry would resolve *query* to, among those *only*
@@ -195,7 +195,7 @@ def _held(
     full: bool,
     arch: ChipArchitecture,
 ) -> Held:
-    row = _resolve(table, op, query)
+    row = resolve(table, op, query)
     gated = (
         row is not None
         and row.contract.metric is Metric.ULP
@@ -204,7 +204,7 @@ def _held(
     declared = (
         None
         if gated
-        else _resolve(table, op, query, only=lambda r: r.contract.declares_tolerance)
+        else resolve(table, op, query, only=lambda r: r.contract.declares_tolerance)
     )
     return Held(row, gated, declared, full)
 
@@ -634,7 +634,7 @@ def judge(
         cells.items(), key=lambda item: (item[0][0].name, item[0][1].sort_key)
     ):
         op, key = cell
-        row = _resolve(table, op, key)
+        row = resolve(table, op, key)
         if row is None:
             out.uncovered += 1
             continue

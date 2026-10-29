@@ -1,8 +1,9 @@
 name: "LLK SFPU ULP sweep"
 
 # Nightly, called from llk-e2e.yaml, whose Slack report covers it; dispatch it by hand to
-# sweep a branch before merging an SFPU kernel or SFPI change. On a Wormhole and on a
-# Blackhole card: every finite bf16/fp16 value (and a stride of fp32) through every
+# sweep every cell of a branch. PR Gate sweeps only the Wormhole cells a change can move
+# (llk-sfpu-ulp-pr-check.yaml); this run covers Blackhole, and what that one cannot see,
+# a change to the golden or the harness alone. On a Wormhole and on a Blackhole card: every finite bf16/fp16 value (and a stride of fp32) through every
 # enrolled unary op, held against that card's table under
 # tt_metal/tt-llk/tests/python_tests/helpers/ (sfpu_accuracy_budget_wh.yaml, _bh.yaml).
 # The job summary lists each failing (op, in, out, approx, dest_acc) and its value.
