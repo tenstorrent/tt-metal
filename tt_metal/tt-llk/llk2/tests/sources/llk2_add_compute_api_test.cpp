@@ -23,10 +23,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #define LLK2_DEST_FP32     is_fp32_dest_acc_en
 #define LLK2_MATH_FIDELITY static_cast<std::uint32_t>(MATH_FIDELITY)
-#include "compute_api/add.h"
 #include "compute_api/dest.h"
+#include "compute_api/eltwise_binary.h"
 #include "compute_api/pack.h"
-#include "compute_api/sub.h"
 
 constexpr DataFormat in0_format  = static_cast<DataFormat>(UNPACK_A_IN);
 constexpr DataFormat in1_format  = static_cast<DataFormat>(UNPACK_B_IN);

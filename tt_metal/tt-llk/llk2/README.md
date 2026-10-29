@@ -13,7 +13,7 @@ inc/common/                   arch-independent, always on the include path
     kernel_settings.h         Dest mode and math fidelity for the kernel
     tensor/tensor.h           TensorShape, TensorSpec, Tensor
     compute_api/              one op per file, on Tensors, taking the op's modifier struct (modifiers.h);
-                              eltwise_binary.h is what add.h and sub.h share; sync.h (owners: complete,
+                              eltwise_binary.h has add and sub; sync.h (owners: complete,
                               migrate), dest.h (Dest rings), dataflow.h (Tensors from dataflow buffers)
     resolver/                 plan structs (plan.h), the driver (resolver.h, a chain of one call) and the SFPU
                               activations' names (vec_function.h)
@@ -38,7 +38,7 @@ include path.
 | Op | Compute API | Blackhole Resolver | Blackhole llk-lib | Tests |
 |---|---|---|---|---|
 | `matmul` | `compute_api/matmul.h` | `resolver/matmul.h` | `llk_lib/unpack.h`, `llk_lib/matmul.h` | `test_llk2_matmul.py` |
-| `add`, `sub` (`Broadcast::Row`) | `compute_api/add.h`, `compute_api/sub.h` | `resolver/eltwise_binary.h` | `llk_lib/unpack.h`, `llk_lib/eltwise_binary.h` | `test_llk2_add.py` |
+| `add`, `sub` (`Broadcast::Row`) | `compute_api/eltwise_binary.h` | `resolver/eltwise_binary.h` | `llk_lib/unpack.h`, `llk_lib/eltwise_binary.h` | `test_llk2_add.py` |
 | `copy` | `compute_api/copy.h` | `resolver/copy.h` | `llk_lib/unpack.h` (incl. unpack to Dest), `llk_lib/copy.h` | `test_llk2_copy.py` |
 | `vec_silu`, `vec_tanh`, `vec_gelu`, `vec_gelu_tanh`, `vec_relu_max`, `vec_sigmoid`, `vec_hardsigmoid`, `vec_hardtanh`, `vec_selu`, `vec_softplus` | `compute_api/vec.h` | `resolver/vec.h` | `llk_lib/vec.h` | `test_llk2_vec.py` |
 | `pack` (`relu`, `l1_acc`) | `compute_api/pack.h` | `resolver/pack.h` | `llk_lib/pack.h` | `test_llk2_pack.py`, `test_llk2_matmul.py` |

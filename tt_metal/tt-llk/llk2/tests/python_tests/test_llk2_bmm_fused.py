@@ -5,7 +5,7 @@
 The kernel (kernels/bmm_large_block_zm_fused_bias_activation.cpp, built by llk2_bmm_fused_compute_api_test.cpp)
 walks OUT_BLOCKS output blocks of [RT, CT] tiles, each over K_BLOCKS blocks of KB tiles along K, accumulating by
 spill + reload or by packer L1 accumulation, then optionally adds a row-broadcast bias, runs an activation from the
-pack thread (as 1.0) or the math thread (SFPU_ACTIVATION_ON_MATH) and packs with ReLU. The host plays the reader kernels: it lays in0 / in1 out in the order the kernel
+pack thread (as 1.0) and packs with ReLU. The host plays the reader kernels: it lays in0 / in1 out in the order the kernel
 pops them (in1's blocks once per output block). Golden: matmul, + bias row, + activation, + ReLU, from the
 harness generators.
 """
@@ -72,7 +72,6 @@ class LLK2_BMM_FUSED(TemplateParameter):
     fuse_bias: bool
     pack_relu: bool
     activation: str
-    activation_thread: str
 
     def convert_to_cpp(self) -> str:
         """The kernel's tt-metal inputs: its positional args as constants (tests/helpers/tt_metal_kernel.h maps them to
@@ -85,7 +84,6 @@ class LLK2_BMM_FUSED(TemplateParameter):
                 ("FUSE_BIAS", self.fuse_bias),
                 ("PACK_RELU", self.pack_relu),
                 ("SFPU_ACTIVATION", function != "None"),
-                ("SFPU_ACTIVATION_ON_MATH", function != "None" and self.activation_thread == "math"),
             )
             if on
         ]
@@ -137,15 +135,14 @@ BLOCKINGS_PER_VARIANT = 2  # each variant runs on this many blockings
 
 
 def _cases():
-    """Every (l1_acc, bias, activation, activation thread, relu) variant per format, each on BLOCKINGS_PER_VARIANT
-    blockings, rotating through BLOCKINGS. Each activation runs from the pack thread (1.0) and the math thread."""
+    """Every (l1_acc, bias, activation, relu) variant per format, each on BLOCKINGS_PER_VARIANT blockings, rotating
+    through BLOCKINGS."""
     cases = []
     variants = [
-        (l1_acc, bias, act, thread, relu)
+        (l1_acc, bias, act, relu)
         for l1_acc in (False, True)
         for bias in (False, True)
         for act in ACTIVATIONS
-        for thread in (("pack",) if act == "none" else ("pack", "math"))
         for relu in (False, True)
     ]
     for f, fmt in enumerate(FORMATS):
@@ -161,7 +158,7 @@ def test_llk2_bmm_fused(case):
     (
         (formats, dest_acc, fidelity),
         (rt, ct, kb, k_blocks, out_blocks),
-        (l1_acc, bias, act, act_thread, relu),
+        (l1_acc, bias, act, relu),
     ) = unwrap_case(case)
     inter = (
         DataFormat.Float32 if dest_acc == DestAccumulation.Yes else DataFormat.Float16_b
@@ -256,7 +253,7 @@ def test_llk2_bmm_fused(case):
         templates=[
             MATH_FIDELITY(fidelity),
             DEST_SYNC(),
-            LLK2_BMM_FUSED(rt, ct, kb, k_blocks, out_blocks, l1_acc, bias, relu, act, act_thread),
+            LLK2_BMM_FUSED(rt, ct, kb, k_blocks, out_blocks, l1_acc, bias, relu, act),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(

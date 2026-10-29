@@ -29,6 +29,12 @@ inline constexpr Thread current_thread = Thread::None;
 #endif
 
 /// True when this build is for thread On: the per-thread calls configure and execute only then.
+///
+/// Every per-thread call has both of these, and they check different things:
+///   static_assert(On == Thread::Math, ...)   the call: this unit is driven from that thread (a kernel bug otherwise)
+///   if constexpr (runs_on<On>) { ... }        the build: every TRISC compiles the call, and only thread On's build
+///                                            keeps the body. Elsewhere the branch is discarded and never instantiated,
+///                                            so each TRISC's ELF carries only its own thread's code
 template <Thread On>
 inline constexpr bool runs_on = current_thread == On;
 

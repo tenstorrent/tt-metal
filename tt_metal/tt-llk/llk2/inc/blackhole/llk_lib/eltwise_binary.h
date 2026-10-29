@@ -171,7 +171,7 @@ inline __attribute__((always_inline)) void eltwise_binary_execute(std::uint32_t 
 {
     for (std::uint32_t tile = 0; tile < P.rt_dim * P.ct_dim; tile++)
     {
-        cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(dest_row + tile * dest_rows_per_tile(P));
+        set_math_dest_tile<P>(dest_row, tile);
         hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
     }
 }

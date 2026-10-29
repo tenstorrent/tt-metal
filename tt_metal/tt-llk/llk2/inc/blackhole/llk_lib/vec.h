@@ -262,7 +262,7 @@ inline __attribute__((always_inline)) void vec_execute(std::uint32_t dest_row, S
 
     for (std::uint32_t tile = 0; tile < P.tiles; tile++)
     {
-        cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(dest_row + tile * dest_rows_per_tile(P));
+        set_math_dest_tile<P>(dest_row, tile);
 #pragma GCC unroll 0
         for (std::uint32_t face = 0; face < P.num_faces; face++)
         {
