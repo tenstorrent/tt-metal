@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from gwdt_checks import (
+    LogFollower,
     Result,
     Status,
     check_smi,
@@ -19,7 +20,8 @@ from gwdt_checks import (
     collected_node_ids,
     didt_bad_devices,
     fabric_results,
-    progress,
+    read_tail,
+    stress_result,
 )
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -141,17 +143,19 @@ def collected_ids(ctx: Ctx, args: list[str], env: dict[str, str], log: Path) -> 
 
 
 def run_collect(ctx: Ctx, key: str, args: list[str], env: dict[str, str], expected: int) -> Result:
-    ids = collected_ids(ctx, args, env, step_dir(ctx, key) / "collect.log")
+    log = step_dir(ctx, key) / "collect.log"
+    ids = collected_ids(ctx, args, env, log)
     if len(ids) != expected:
-        return Result(Status.FAIL, f"{len(ids)} node ids collected, expected {expected}", ids)
+        return Result(Status.FAIL, f"{len(ids)} node ids collected, expected {expected}, log {log}", ids)
     return Result(Status.PASS, f"collected: {ids[0]}" if expected == 1 else f"collected {expected} node ids", ids)
 
 
 RESET_CMD = "tt-smi -glx_reset_auto"
 
 
-def reset(ctx: Ctx, log: Path) -> Result | None:
+def reset(ctx: Ctx, log: Path, state: State) -> Result | None:
     if sh(ctx, RESET_CMD, log, timeout=600) != 0:
+        state.log = str(log)
         return Result(Status.FAIL, f"reset failed: {RESET_CMD}")
     return None
 
@@ -175,7 +179,7 @@ def pytest_step(
         if ctx.mode_co:
             return run_collect(ctx, key, args, env_for(ctx), expected)
         d = step_dir(ctx, key)
-        if model and (failed := reset(ctx, d / "reset.log")):
+        if model and (failed := reset(ctx, d / "reset.log", state)):
             return failed
         log, csv = d / "log_01", d / "crash_triage_01.csv"
         state.log = str(log)
@@ -214,16 +218,25 @@ def stress_step(phase: str, model: str, loops: int, ids: dict[str, str], iters: 
         d = step_dir(ctx, key)
         env = {**ids, "MODEL": MODEL_ENV[model], "TRIAGE": "1", "PREFLIGHT": "0", "LOG_DIR": str(d)}
 
+        followers: dict[int, LogFollower] = {}
+        finished: dict[int, Result] = {}
+
         def tick():
-            state.loops = loop_results(d, loops)
-            live = [i for i in range(1, loops + 1) if (d / f"log_{i:02d}").is_file()]
-            if live:
-                log = d / f"log_{live[-1]:02d}"
-                text = log.read_text(errors="replace")
+            for i in range(1, loops + 1):
+                log = d / f"log_{i:02d}"
+                if i in finished or not log.is_file():
+                    continue
+                if "TEST_DONE_EXIT=" in read_tail(log, 4096):
+                    finished[i] = classify_loop(log, d / f"crash_triage_{i:02d}.csv")
+                    continue
+                f = followers.setdefault(i, LogFollower(log))
+                f.update()
                 state.log = str(log)
-                if "TEST_DONE_EXIT=" not in text:
-                    state.loops[live[-1] - 1] = Result(Status.RUN)
-                state.now = f"{phase} {live[-1]}/{loops}  " + progress(text, iters, time.time(), log.stat().st_mtime)
+                state.now = f"{phase} {i}/{loops}  " + f.line(iters, time.time())
+            state.loops = [
+                finished.get(i, Result(Status.RUN) if i in followers else Result(Status.PENDING))
+                for i in range(1, loops + 1)
+            ]
             outer_tick()
 
         outer_tick, ctx.tick = ctx.tick, tick
@@ -233,8 +246,7 @@ def stress_step(phase: str, model: str, loops: int, ids: dict[str, str], iters: 
             ctx.tick = outer_tick
         state.loops = loop_results(d, loops)
         state.now = ""
-        bad = next((r for r in state.loops if r.status != Status.PASS), None)
-        return bad or Result(Status.PASS, f"{loops}/{loops} loops passed")
+        return stress_result(state.loops, d / "stress.log")
 
     return Step(key, f"{phase} {MODEL_LABEL[model]}", phase, model, True, run, collect)
 
@@ -289,7 +301,7 @@ def reset_gate() -> Step:
     def run(ctx: Ctx, state: State) -> Result:
         if ctx.mode_co:
             return would_run(RESET_CMD)
-        return reset(ctx, step_dir(ctx, "reset") / "log_01") or Result(Status.PASS)
+        return reset(ctx, step_dir(ctx, "reset") / "log_01", state) or Result(Status.PASS)
 
     return Step("reset", "reset", "gate", None, True, run)
 
@@ -318,7 +330,7 @@ def fabric_step() -> Step:
 
     def run(ctx: Ctx, state: State) -> Result:
         r = inner.run(ctx, state)
-        if ctx.mode_co or r.status == Status.PASS:
+        if ctx.mode_co or r.status in (Status.PASS, Status.HANG):
             return r
         log = step_dir(ctx, "fabric") / "all_configs.log"
         sh(ctx, f"pytest -rA '{test}'", log)

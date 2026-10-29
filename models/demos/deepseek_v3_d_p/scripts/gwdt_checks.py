@@ -118,21 +118,42 @@ def sig_name(rc: int) -> str:
     return _SIGNALS.get(rc - 128, f"signal {rc - 128}")
 
 
+TAIL_BYTES = 8 << 20
+
+
+def read_tail(path: Path, nbytes: int = TAIL_BYTES) -> str:
+    with open(path, "rb") as f:
+        f.seek(max(0, f.seek(0, os.SEEK_END) - nbytes))
+        return f.read().decode(errors="replace")
+
+
 def classify_loop(log: Path, triage_csv: Path) -> Result:
+    """One stress.sh loop. Reads only the log tail: soak logs reach GBs."""
     if triage_csv.is_file() and triage_csv.stat().st_size > 0:
         return Result(Status.HANG, f"triage {triage_csv}")
-    text = log.read_text(errors="replace") if log.is_file() else ""
-    if classify_pytest(text, 1).status == Status.PASS:
-        return Result(Status.PASS, "1 passed")
+    text = read_tail(log) if log.is_file() else ""
+    verdict = classify_pytest(text, 1)
+    if verdict.status == Status.PASS:
+        return verdict
     rc = _first(r"TEST_DONE_EXIT=(\d+)\s*\Z", text) or _first(r"TEST_DONE_EXIT=(\d+)", text)
     if rc is not None and int(rc) >= 128:
         return Result(Status.FAIL, sig_name(int(rc)))
     why = (
         _first(r"\[determinism\] (.*DIFFERS.*)$", text)
+        or (verdict.reason if _summary_counts(text) else None)
         or _first(r"^E\s+(.*)$", text)
         or (sig_name(int(rc)) if rc is not None else "no result")
     )
     return Result(Status.FAIL, why)
+
+
+def stress_result(loops: list[Result], stress_log: Path) -> Result:
+    for i, r in enumerate(loops, 1):
+        if r.status == Status.PENDING:
+            return Result(Status.FAIL, f"stress.sh ended before loop {i}, see {stress_log}")
+        if r.status != Status.PASS:
+            return r
+    return Result(Status.PASS, f"{len(loops)}/{len(loops)} loops passed")
 
 
 def collected_node_ids(log_text: str) -> list[str]:
@@ -160,22 +181,42 @@ def dur(seconds: float) -> str:
     return f"{s}s"
 
 
-def _log_ts(pattern: str, text: str) -> float | None:
-    ts = _first(rf"^(\d{{4}}-\d{{2}}-\d{{2}} [\d:]{{8}})[^\n]*{pattern}", text)
-    return datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").timestamp() if ts else None
+_TS = r"^(\d{4}-\d{2}-\d{2} [\d:]{8})"
 
 
-def progress(log_text: str, iters: int, now: float, mtime: float) -> str:
-    done = len(re.findall(r"iter \d+ done \(\d+ chunks\)", log_text))
-    layer = re.findall(r"forward_layer_\d+_(?:start|end)", log_text)
-    loading = re.findall(r"Building layer (\d+/\d+)", log_text)
-    parts = [f"iter {done}/{iters}"]
-    if layer:
-        parts.append(layer[-1])
-    elif loading:
-        parts.append(f"loading layer {loading[-1]}")
-    start, fwd = _log_ts("Building TtPrefillTransformer", log_text), _log_ts("forward_layer_0_start", log_text)
-    if start is not None and fwd is not None:
-        parts.append(f"load {dur(fwd - start)}")
-    parts.append(f"idle {dur(now - mtime)}")
-    return "  ".join(parts)
+class LogFollower:
+    """Progress of a growing pytest log, read incrementally so a GB-scale soak log is scanned once."""
+
+    def __init__(self, path: Path):
+        self.path, self.offset, self.partial = path, 0, ""
+        self.iters, self.marker, self.start, self.fwd = 0, "", None, None
+
+    def update(self) -> None:
+        with open(self.path, "rb") as f:
+            f.seek(self.offset)
+            chunk = f.read()
+        self.offset += len(chunk)
+        *lines, self.partial = (self.partial + chunk.decode(errors="replace")).split("\n")
+        for line in lines:
+            if re.search(r"iter \d+ done \(\d+ chunks\)", line):
+                self.iters += 1
+            if m := re.search(r"forward_layer_\d+_(?:start|end)", line):
+                self.marker = m.group(0)
+            elif not self.fwd and (m := re.search(r"Building layer (\d+/\d+)", line)):
+                self.marker = f"loading layer {m.group(1)}"
+            if self.start is None and "Building TtPrefillTransformer" in line:
+                self.start = _ts(line)
+            if self.fwd is None and "forward_layer_0_start" in line:
+                self.fwd = _ts(line)
+
+    def line(self, iters: int, now: float) -> str:
+        parts = [f"iter {self.iters}/{iters}"] + ([self.marker] if self.marker else [])
+        if self.start is not None and self.fwd is not None:
+            parts.append(f"load {dur(self.fwd - self.start)}")
+        parts.append(f"idle {dur(now - self.path.stat().st_mtime)}")
+        return "  ".join(parts)
+
+
+def _ts(line: str) -> float | None:
+    m = re.match(_TS, line)
+    return datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").timestamp() if m else None
