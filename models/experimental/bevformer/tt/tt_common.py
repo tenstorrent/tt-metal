@@ -102,7 +102,8 @@ class TTConv2D:
     mismatched weights.
     With ``dram_activation``, a 1x1 conv runs as ``ttnn.linear`` instead, over its input
     subsampled at its stride, and takes any layout, sharding or dtype, ignoring ``input_dtype`` and
-    ``input_layout``; a call with ``subsampled`` passes the subsample (``subsample``) itself. Its
+    ``input_layout``; ``__call__(x, subsampled=True)`` takes ``x`` already at the conv's stride, as
+    ``subsample`` returns it. Its
     ``conv_pth`` is then a Linear's ``(in, out)`` weight and ``(1, out)`` bias, which
     ``model_preprocessing`` emits for such convs. A spatial conv keeps conv2d and runs in
     ``dram_conv_slices`` width slices, or height slices with ``dram_height_slices``.

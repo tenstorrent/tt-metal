@@ -66,8 +66,9 @@ def test_bottleneck_layer3(device, reset_seeds, reference_and_parameters):
     torch_input = torch.randn(NUM_CAMS, 512, IMAGE_HEIGHT // 8, IMAGE_WIDTH // 8)
     torch_output = reference_model.layer3[1].eval()(reference_model.layer3[0].eval()(torch_input))
 
-    # layer3's first two blocks, run as TTResNet runs layer3: the first on the whole batch, the
-    # second on a group of cameras at a time in L1.
+    # layer3's first two blocks, run as TTResNet runs layer3: the second on a group of cameras at a
+    # time in L1, the first too unless its group input does not fit (TTResLayer), when it runs on
+    # the whole batch.
     ttnn_model = TTResLayer(
         [parameters.conv_args.layer3[j] for j in range(2)],
         [parameters["res_model"]["layer3"][j] for j in range(2)],

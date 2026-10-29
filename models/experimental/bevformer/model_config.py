@@ -271,11 +271,11 @@ CODER_BISECTION_STEPS = 22
 # weights have no such channels and do not show it.
 FP32_ACC_STAGES = (2, 3)
 
-# Layers whose activations are kept in DRAM: all four. layer1, layer2 and layer4 do not fit in
-# L1 for base: layer1 and layer2 work on 6 x 232 x 400 x 256 tensors (285 MB in bfloat16), and layer4's
-# 2048-channel 1x1 convs overflow L1 when sharded. layer3 would fit at bfloat16 accumulation,
-# but with FP32_ACC_STAGES' fp32 accumulation its L1-sharded convs fail to allocate (their
-# circular buffers clash with L1 buffers).
+# Layers whose whole-batch blocks keep their activations in DRAM, and whose 1x1 convs take Linear
+# weights: all four. On the whole batch none fits L1 for base: layer1 and layer2 work on
+# 6 x 232 x 400 x 256 tensors (285 MB in bfloat16), layer4's 2048-channel 1x1 convs overflow L1
+# when sharded, and layer3's L1-sharded convs fail to allocate with FP32_ACC_STAGES' fp32
+# accumulation. CAMERA_GROUPS' layers keep a group's activations in L1 instead.
 DRAM_ACTIVATION_STAGES = tuple(sorted({0, 1, 3} | set(FP32_ACC_STAGES)))
 
 # The FPN levels C3 and C4 feed, which only base has: ResNet layers 1 and 2.
@@ -294,7 +294,8 @@ DRAM_CONV_SLICES = 8
 # Layers run on a group of cameras at a time with every activation in L1, by layer (0 is layer1): the
 # whole batch does not fit L1, so its blocks would move each tensor through DRAM, several times
 # over; a group's do fit. One camera for layer1 and layer2; three for layer3, whose DCN runs slower
-# per camera on fewer, and whose first block then runs on the whole batch (TTResLayer). layer4 runs
+# per camera on fewer. A strided first block whose group input would not fit runs on the whole
+# batch (TTResLayer), as base's and tiny's layer3 do. layer4 runs
 # whole: its DCN alone takes about 1.1 MB of L1 per core, which leaves no room for a group's
 # activations. A listed layer is also in DRAM_ACTIVATION_STAGES, whose weights it takes.
 CAMERA_GROUPS = {0: 1, 1: 1, 2: 3}
@@ -313,9 +314,9 @@ FPN_OUTPUT_CONV_DRAM_CONV_SLICES = dict(zip(_C3_C4_LEVELS, (4, 1)))
 # do not amortize it.
 DCN_SHARDED_INPUT_STAGES = (2,)
 
-# Height slices for the stem conv and the max pool after it, both on 6 x 928 x 1600 images in DRAM:
-# the fewest that fit L1. Height slices run faster than width slices on both, and the stem conv's
-# larger act_block_h pays off with them.
+# Height slices for the stem conv on base's 6 x 928 x 1600 images in DRAM, and for the max pool on
+# its output when layer1 runs on the whole batch: the fewest that fit L1. Height slices run faster
+# than width slices on both, and they leave room for STEM_ACT_BLOCK_H.
 STEM_CONV_HEIGHT_SLICES = 4
 STEM_MAXPOOL_HEIGHT_SLICES = 6
 
