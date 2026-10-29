@@ -7,10 +7,16 @@ layer3 and layer4, or ResNet50 without one, as ``model_config`` selects.
 Each BatchNorm is already folded into the conv before it.
 """
 
-import math
-
 import ttnn
-from models.experimental.bevformer.tt.tt_common import TTConv2D, is_pointwise, signpost
+from models.experimental.bevformer.tt.tt_common import (
+    TTConv2D,
+    dst_tiles,
+    grid_height_sharded,
+    grid_shard_tiles,
+    is_pointwise,
+    largest_divisor,
+    signpost,
+)
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import TTModulatedDeformConv2dDevice
 
 
@@ -61,17 +67,9 @@ class TTModulatedDeformConv2dPack:
         self.input_memory_config = None
         conv_offset_memory_config = ttnn.DRAM_MEMORY_CONFIG
         if sharded_input:
-            grid = device.compute_with_storage_grid_size()
             rows = offset_args.batch_size * offset_args.input_height * offset_args.input_width
-            shard_rows = math.ceil(rows / (grid.x * grid.y) / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-            self.input_memory_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}),
-                    [shard_rows, offset_args.in_channels],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
+            self.input_memory_config = grid_height_sharded(
+                device, grid_shard_tiles(device, rows), offset_args.in_channels
             )
             conv_offset_memory_config = self.input_memory_config
 
@@ -153,7 +151,6 @@ class TTResLayer:
         dram_activation=False,
         dram_input=False,
         dram_conv_slices=None,
-        conv2_dram_conv_slices=None,
         block_sharded=False,
         fp32_acc=False,
         dcn_sharded_input=False,
@@ -215,7 +212,6 @@ class TTResLayer:
                     dram_activation=dram_activation,
                     dram_input=dram_input and first,
                     dram_conv_slices=dram_conv_slices,
-                    conv2_dram_conv_slices=conv2_dram_conv_slices,
                     block_sharded=block_sharded,
                     fp32_acc=fp32_acc,
                     dcn_sharded_input=dcn_sharded_input,
@@ -233,10 +229,8 @@ class TTResLayer:
         CAMERA_INPUT_MAX_SHARD_BYTES per core, in bfloat16."""
         if tuple(conv1.stride) == (1, 1):
             return False
-        grid = device.compute_with_storage_grid_size()
-        rows = cameras * conv1.input_height * conv1.input_width
-        shard_rows = math.ceil(math.ceil(rows / ttnn.TILE_SIZE) / (grid.x * grid.y)) * ttnn.TILE_SIZE
-        return shard_rows * conv1.in_channels * 2 > cls.CAMERA_INPUT_MAX_SHARD_BYTES
+        shard_tiles = grid_shard_tiles(device, cameras * conv1.input_height * conv1.input_width)
+        return shard_tiles * ttnn.TILE_SIZE * conv1.in_channels * 2 > cls.CAMERA_INPUT_MAX_SHARD_BYTES
 
     @staticmethod
     def _strided_conv2(block_args):
@@ -429,10 +423,9 @@ class TTCameraBottleneck:
         self.in_channels = conv1_args.in_channels
         self.input_height, self.input_width = conv1_args.input_height, conv1_args.input_width
         self.height, self.width = conv2_geometry.input_height, conv2_geometry.input_width
-        grid = device.compute_with_storage_grid_size()
-        self.grid = grid
-        self.input_shard_tiles = self._shard_tiles(cameras * self.input_height * self.input_width)
-        self.shard_tiles = self._shard_tiles(cameras * self.height * self.width)
+        self.grid = device.compute_with_storage_grid_size()
+        self.input_shard_tiles = grid_shard_tiles(device, cameras * self.input_height * self.input_width)
+        self.shard_tiles = grid_shard_tiles(device, cameras * self.height * self.width)
         self.fp32_acc = fp32_acc
         math_fidelity = ttnn.MathFidelity.HiFi2 if ttnn.get_arch_name() == "blackhole" else ttnn.MathFidelity.LoFi
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -499,24 +492,12 @@ class TTCameraBottleneck:
     def conv2_act_block_h(self):
         """A non-DCN conv2's act_block_h: the tallest block up to CONV2_MAX_ACT_BLOCK_TILES that
         splits the shard evenly, which reads the shard in the fewest blocks."""
-        tiles = max(t for t in range(1, self.CONV2_MAX_ACT_BLOCK_TILES + 1) if self.shard_tiles % t == 0)
-        return tiles * ttnn.TILE_SIZE
-
-    def _shard_tiles(self, rows):
-        """Tile rows per core for ``rows`` rows height-sharded over the grid."""
-        return math.ceil(math.ceil(rows / ttnn.TILE_SIZE) / (self.grid.x * self.grid.y))
+        return largest_divisor(self.shard_tiles, self.CONV2_MAX_ACT_BLOCK_TILES) * ttnn.TILE_SIZE
 
     def _sharded(self, channels, shard_tiles=None):
         """The block's layout: the group's rows height-sharded over the grid, ``shard_tiles`` tile
         rows per core, the block's own by default."""
-        shard_tiles = self.shard_tiles if shard_tiles is None else shard_tiles
-        return ttnn.create_sharded_memory_config(
-            shape=(shard_tiles * ttnn.TILE_SIZE, channels),
-            core_grid=ttnn.CoreGrid(y=self.grid.y, x=self.grid.x),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
+        return grid_height_sharded(self.device, self.shard_tiles if shard_tiles is None else shard_tiles, channels)
 
     # Weight tiles a linear multicasts per inner block: every core holds that block, in0_block_w by
     # the whole output width, which for layer4's 2048-channel outputs would outgrow L1.
@@ -534,7 +515,7 @@ class TTCameraBottleneck:
         the widest blocks, up to LINEAR_MAX_IN0_BLOCK_W, whose weights fit
         LINEAR_WEIGHT_BLOCK_TILES, with the weights multicast."""
         in_t, out_t = conv.in_channels // ttnn.TILE_SIZE, conv.out_channels // ttnn.TILE_SIZE
-        max_subblock = 4 if self.fp32_acc else 8
+        max_subblock = dst_tiles(self.fp32_acc)
         in0_block_w = max(
             w
             for w in range(1, min(in_t, self.LINEAR_MAX_IN0_BLOCK_W) + 1)
@@ -548,8 +529,8 @@ class TTCameraBottleneck:
             and (in0_block_w == in_t or h * out_t * partial_tile_bytes <= self.LINEAR_PARTIALS_BYTES)
         )
         # The widest subblock that tiles the output block, then as tall as the rest of the limit allows.
-        subblock_w = max(w for w in range(1, max_subblock + 1) if out_t % w == 0)
-        subblock_h = max(h for h in range(1, max_subblock // subblock_w + 1) if out_block_h % h == 0)
+        subblock_w = largest_divisor(out_t, max_subblock)
+        subblock_h = largest_divisor(out_block_h, max_subblock // subblock_w)
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(self.grid.x, self.grid.y),
             in0_block_w=in0_block_w,
@@ -671,8 +652,7 @@ class TTBottleneck:
     ``input_dtype`` and ``input_layout`` describe the block input; the dtype and layout
     each conv sees follow from them. ``dram_activation`` keeps the activations of conv1,
     a non-DCN conv2, conv3 and the downsample in DRAM, slicing the spatial convs into
-    ``dram_conv_slices`` width slices, a non-DCN conv2 in ``conv2_dram_conv_slices`` when given;
-    a DCN conv2 is unaffected. ``dram_input`` only
+    ``dram_conv_slices`` width slices; a DCN conv2 is unaffected. ``dram_input`` only
     covers the convs that read the block input, for a block fed by a DRAM layer whose own
     activations fit in L1. ``block_sharded`` block-shards the downsample and a non-DCN conv2.
     ``fp32_acc`` turns on fp32 destination accumulation (``fp32_dest_acc_en``) for conv1, a
@@ -696,7 +676,6 @@ class TTBottleneck:
         dram_activation=False,
         dram_input=False,
         dram_conv_slices=None,
-        conv2_dram_conv_slices=None,
         block_sharded=False,
         fp32_acc=False,
         dcn_sharded_input=False,
@@ -755,7 +734,7 @@ class TTBottleneck:
                 act_block_h=conv2_act_block_h,
                 dealloc_act=True,
                 dram_activation="conv2" in dram_convs,
-                dram_conv_slices=conv2_dram_conv_slices or dram_conv_slices,
+                dram_conv_slices=dram_conv_slices,
                 input_dtype=conv2_dtype,
                 input_layout=ttnn.ROW_MAJOR_LAYOUT if self.row_major_conv2 else ttnn.TILE_LAYOUT,
                 output_layout=ttnn.ROW_MAJOR_LAYOUT if self.row_major_conv2 else ttnn.TILE_LAYOUT,
@@ -846,10 +825,11 @@ class TTResNet:
     ``out_indices`` and every ``*_stages`` argument index the four ResNet layers (0 is layer1).
     ``dram_activation_stages`` lists the layers
     whose activations are kept in DRAM, for layers whose convs do not fit in L1: their
-    spatial convs run in ``dram_conv_slices`` width slices, their non-DCN conv2s in
-    ``conv2_dram_conv_slices[i]`` where given, and their 1x1 convs as a DRAM matmul. A layer that follows one of them and is not listed itself reads its input from
-    DRAM the same way. ``block_sharded_stages`` lists the layers whose downsample and non-DCN
-    conv2s are block sharded, ``fp32_acc_stages`` the layers whose convs accumulate in an
+    spatial convs run in ``dram_conv_slices`` width slices and their 1x1 convs as a DRAM matmul.
+    A layer that follows one of them and is not listed itself reads its input from DRAM the same
+    way. ``camera_groups`` maps a layer to the cameras it runs at a time in L1 (TTResLayer).
+    ``block_sharded_stages`` lists the layers whose non-DCN conv2s, and conv2d downsamples, are
+    block sharded, ``fp32_acc_stages`` the layers whose convs accumulate in an
     fp32 destination register (see TTBottleneck), and ``dcn_sharded_input_stages`` the layers
     whose DCNs take a height-sharded L1 input (TTModulatedDeformConv2dPack). The stem conv and the
     max pool read their DRAM inputs in ``stem_conv_height_slices`` and ``stem_maxpool_height_slices``
@@ -919,7 +899,6 @@ class TTResNet:
         i,
         dram_activation_stages=(),
         dram_conv_slices=None,
-        conv2_dram_conv_slices=None,
         block_sharded_stages=(),
         fp32_acc_stages=(),
         dcn_sharded_input_stages=(),
@@ -936,7 +915,6 @@ class TTResNet:
             dram_activation=i in dram_activation_stages,
             dram_input=i not in dram_activation_stages and i - 1 in dram_activation_stages,
             dram_conv_slices=dram_conv_slices,
-            conv2_dram_conv_slices=(conv2_dram_conv_slices or {}).get(i),
             block_sharded=i in block_sharded_stages,
             fp32_acc=i in fp32_acc_stages,
             dcn_sharded_input=i in dcn_sharded_input_stages,
@@ -1003,15 +981,8 @@ class TTResNet:
         pool = self.maxpool_args
         channels = x.shape[-1]
         rows = height * width
-        grid = self.conv1.device.compute_with_storage_grid_size()
-        shard_rows = math.ceil(math.ceil(rows / ttnn.TILE_SIZE) / (grid.x * grid.y)) * ttnn.TILE_SIZE
-        sharded = ttnn.create_sharded_memory_config(
-            shape=(shard_rows, channels),
-            core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
+        device = self.conv1.device
+        sharded = grid_height_sharded(device, grid_shard_tiles(device, rows), channels)
         image = ttnn.slice(x, [0, 0, camera * rows, 0], [1, 1, (camera + 1) * rows, channels], memory_config=sharded)
         # The input is freed once the halo has read it, which leaves the pool room for its output.
         pooled = ttnn.max_pool2d(
