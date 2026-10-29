@@ -116,12 +116,17 @@ class KDAProgramConfig:
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     # Weight dtype of the input (q, k, v, f_a, f_b, g, b) and output projections.
     projection_dtype: ttnn.DataType = ttnn.bfloat16
-    # At most this many cores run projection matmuls at once. The projections take the widest full-height block of
-    # worker columns within it (the whole 12 x 10 Blackhole grid at 120, as main's tuned schedules).
-    max_matmul_cores: int = 120
+    # Blackhole di/dt: at most this many cores run projection matmuls at once. The projections take the widest
+    # full-height block of worker columns within it (11 x 10 of the 12 x 10 grid at 110).
+    max_matmul_cores: int = 110
     # K-block tiles of the projections (block_projection_program_config; at most, where L1 needs smaller blocks).
     input_projection_k_block: int = 4
     output_projection_k_block: int = 4
+    output_gate_k_block: int = 8
+    # With the SP relay the output gate's projection runs beside it, on the worker cores it leaves idle. Output-gate
+    # tile columns per core the input projection takes past its own width: they shorten the gate matmul beside the
+    # relay, whose window is on the critical path.
+    input_projection_extra_gate_tiles: int = 1
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -216,6 +221,10 @@ def block_projection_program_config(
 KIMI_K3_PROJECTION_DTYPE = ttnn.bfloat8_b
 
 
+# Rows per device of Kimi-K3's prefill chunk on Galaxy SP8xTP4 (T=5120).
+_GALAXY_ROWS_PER_DEVICE = 640
+
+
 def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
     """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
     # Fixed production/proxy geometries; native worker capacity is validated by
@@ -237,9 +246,12 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
-        # 8-tile K blocks for the bfloat8_b weights.
+        # Tuned at T=5120 on the 110-core matmul grid with bfloat8_b weights: 8-tile K blocks, and the input
+        # projection takes 5 gate tile columns per core past its width, 32 tiles per core (1 x 4 subblocks; 29 or
+        # 31 leave only 2 x 1), so the gate beside the relay gets 37 tiles on 8 columns. Shorter chunks take one.
         input_projection_k_block=8,
         output_projection_k_block=8,
+        input_projection_extra_gate_tiles=5 if active_seq_len_local == _GALAXY_ROWS_PER_DEVICE else 1,
     )
 
 

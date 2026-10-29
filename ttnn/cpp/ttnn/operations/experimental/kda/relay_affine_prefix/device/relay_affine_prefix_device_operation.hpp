@@ -25,7 +25,7 @@ struct RelayAffinePrefixOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-std::tuple<Tensor, Tensor> relay_affine_prefix(
+std::tuple<Tensor, Tensor, std::optional<Tensor>> relay_affine_prefix(
     const Tensor& packed,
     const Tensor& initial_state,
     const Tensor& actual_start,
@@ -38,6 +38,10 @@ std::tuple<Tensor, Tensor> relay_affine_prefix(
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
     uint32_t num_links,
-    const std::vector<tt::tt_metal::CoreCoord>& cores);
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    const std::optional<AffineRelayOutputGateParams>& output_gate,
+    const std::optional<Tensor>& gate_input,
+    const std::optional<Tensor>& gate_weight,
+    const std::optional<Tensor>& gate_copy_source);
 
 }  // namespace ttnn::experimental::prim

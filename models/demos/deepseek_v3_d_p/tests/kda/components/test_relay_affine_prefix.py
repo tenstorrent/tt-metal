@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """The SP relay must leave every rank the entry state the gather + chain gives it, and the final state on the first
-and last chronological ranks, call after call.
+and last chronological ranks; with an output gate beside it, and call after call.
 
 Galaxy runs the relay on its SP8 torus axis, as Kimi-K3 does, and on an unwrapped Fabric2D, where the last rank's hand-off
 to the first crosses the SP line. LoudBox SP8xTP1 and QuietBox SP4xTP1 run it on a TorusY ring with Galaxy's per-chip
@@ -20,6 +20,7 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
+from models.demos.deepseek_v3_d_p.tt.kda.config import block_projection_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import (
     AffineTransform,
     _RelayFinalCarry,
@@ -27,7 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.recurrence import (
     distributed_prefix,
     pack_transform,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix
+from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix, RelayOutputGate
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
@@ -171,8 +172,91 @@ def _relay(mesh_device, cores=None) -> RelayAffinePrefix:
 def test_relay_affine_prefix_matches_gather_and_chain(mesh_device, start):
     transforms = _Transforms(mesh_device, seed=start)
     actual_start = make_actual_start(mesh_device, start)
-    entry, final = _relay(mesh_device)(transforms.packed, transforms.initial_tt, actual_start)
+    entry, final, gate = _relay(mesh_device)(transforms.packed, transforms.initial_tt, actual_start)
+    assert gate is None
     transforms.assert_matches_gather_and_chain(entry, final, actual_start, start)
+
+
+@_MESH
+def test_relay_affine_prefix_with_output_gate(mesh_device):
+    """The output gate beside the relay, as the model lays it out: the relay on the right-hand worker columns, the
+    gate's matmul on the block from (0, 0), its first columns copied in by the relay columns' spare cores."""
+    torch.manual_seed(0)
+    start = 640
+    transforms = _Transforms(mesh_device, seed=start)
+    actual_start = make_actual_start(mesh_device, start)
+    grid = mesh_device.compute_with_storage_grid_size()
+    relay_columns = [ttnn.CoreCoord(x, y) for x in range(grid.x - 1, grid.x - 4, -1) for y in range(grid.y)]
+    relay = _relay(mesh_device, cores=relay_columns)
+    copy_cores = [core for core in relay_columns if core not in relay.cores]
+    replicate = lambda host: ttnn.from_torch(
+        host,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    x, w = replicate(torch.randn(1, _ROWS, 256)), replicate(torch.randn(256, 512) * 0.05)
+    copy_source, copy_source_column, copied_columns = replicate(torch.randn(1, _ROWS, 256)), 3, 2
+    # The gate's worker columns: those left of the relay's three, within the model's 110 matmul cores shared with the
+    # relay's head cores.
+    columns = min(grid.x - 3, (110 - _HEADS) // grid.y)
+    config = block_projection_program_config(columns, grid.y, _ROWS // 32, 512 // 32, 4)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True
+    )
+    output_gate = RelayOutputGate(
+        input=x,
+        weight=w,
+        program_config=config,
+        compute_config=compute_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        copy_source=copy_source,
+        copy_source_column=copy_source_column,
+        copied_columns=copied_columns,
+        copy_cores=copy_cores,
+    )
+    entry, final, gate = relay(transforms.packed, transforms.initial_tt, actual_start, output_gate=output_gate)
+    transforms.assert_matches_gather_and_chain(entry, final, actual_start, start)
+
+    composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    expected_projection = ttnn.to_torch(
+        ttnn.linear(x, w, program_config=config, compute_kernel_config=compute_config), mesh_composer=composer
+    )
+    copied = ttnn.to_torch(copy_source, mesh_composer=composer)[
+        ..., copy_source_column * 32 : (copy_source_column + copied_columns) * 32
+    ]
+    got = ttnn.to_torch(gate, mesh_composer=composer)
+    assert got.shape[-1] == copied_columns * 32 + 512
+    assert torch.equal(got[..., : copied_columns * 32], copied), "the copied columns differ from the copy source"
+    assert torch.equal(got[..., copied_columns * 32 :], expected_projection), "the gate differs from ttnn.linear"
+
+
+@_MESH
+def test_relay_affine_prefix_rejects_aliased_output_gate_operands(mesh_device, expect_error):
+    """A cached program refreshes each buffer argument through its own binding: a gate of X @ X would leave the
+    bindings ambiguous and the cached program on the first call's buffers, so the op rejects it."""
+    transforms = _Transforms(mesh_device, seed=0)
+    actual_start = make_actual_start(mesh_device, 0)
+    grid = mesh_device.compute_with_storage_grid_size()
+    relay_columns = [ttnn.CoreCoord(x, y) for x in range(grid.x - 1, grid.x - 4, -1) for y in range(grid.y)]
+    relay = _relay(mesh_device, cores=relay_columns)
+    x = ttnn.from_torch(
+        torch.zeros(_ROWS, _ROWS),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    output_gate = RelayOutputGate(
+        input=x,
+        weight=x,
+        program_config=block_projection_program_config(4, grid.y, _ROWS // 32, _ROWS // 32, 4),
+        compute_config=transforms.compute_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(RuntimeError, "output_gate_input and output_gate_weight must be different tensors"):
+        relay(transforms.packed, transforms.initial_tt, actual_start, output_gate=output_gate)
 
 
 @_MESH
@@ -187,11 +271,11 @@ def test_relay_affine_prefix_back_to_back(mesh_device):
     results = []
     for start in starts:
         actual_start = make_actual_start(mesh_device, start)
-        entry, final = relay(transforms.packed, transforms.initial_tt, actual_start)
+        entry, final, _ = relay(transforms.packed, transforms.initial_tt, actual_start)
         # Every rank enters the carry only after its relay call: a line barrier before the next call. Without a split
         # tail the carry takes the prefix's final state; rank_final only has to be a distinct tensor.
         rank_final = ttnn.clone(final)
-        carry = final_carry(rank_final, final, actual_start, None, _ROWS)
+        carry, _ = final_carry(rank_final, final, actual_start, None, _ROWS)
         ttnn.deallocate(rank_final)
         results.append((start, actual_start, entry, final, carry))
     for start, actual_start, entry, final, carry in results:
@@ -249,13 +333,13 @@ def test_relay_affine_prefix_kimi_k3_perf(mesh_device, reference_us):
         ttnn.synchronize_device(mesh_device)
         return outputs
 
-    entry, final = call()
+    entry, final, _ = call()
     transforms.assert_matches_gather_and_chain(entry, final, actual_start, _PERF_START)
     for tensor in (entry, final):
         ttnn.deallocate(tensor)
 
     def profiled_us() -> float:
-        (entry, final), programs = profile_realtime_program_merged(mesh_device, call)
+        (entry, final, _), programs = profile_realtime_program_merged(mesh_device, call)
         for tensor in (entry, final):
             ttnn.deallocate(tensor)
         matched = [

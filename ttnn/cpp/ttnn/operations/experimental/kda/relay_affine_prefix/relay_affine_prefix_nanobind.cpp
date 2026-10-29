@@ -25,6 +25,11 @@ void bind_relay_affine_prefix(nb::module_& mod) {
         barrier across the SP line, since a rank's landing buffers are copied out at the end of its call and
         its predecessor's next call overwrites them as soon as it starts.
 
+        With ``output_gate_program_config``, ``output_gate_input @ output_gate_weight`` runs in the same
+        dispatch as ``ttnn.linear`` runs it with that config, on its cores (``allowed_worker_cores``, or the
+        grid from (0, 0)); its first ``output_gate_copied_columns`` tile columns are copied from
+        ``output_gate_copy_source`` by ``output_gate_copy_cores``.
+
         Args:
             packed (ttnn.Tensor): BFLOAT16 TILE-layout interleaved ``[1, B*H, K, 2K]`` rows of this rank's
                 packed transition ``[A | B]``.
@@ -52,10 +57,26 @@ void bind_relay_affine_prefix(nb::module_& mod) {
                 Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): The hop's matmul fidelity;
                 its products accumulate in DST. Defaults to HiFi2 with FP32 destination accumulation.
+            output_gate_input (ttnn.Tensor, optional): Interleaved TILE ``[..., M, K']`` BFLOAT16 or BFLOAT8_B.
+            output_gate_weight (ttnn.Tensor, optional): Interleaved TILE ``[K', N]`` BFLOAT16 or BFLOAT8_B.
+            output_gate_program_config (ttnn.MatmulMultiCoreReuseMultiCastProgramConfig, optional): The
+                projection's schedule and cores; without it no output gate runs.
+            output_gate_compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): The projection's
+                fidelity; defaults to HiFi2.
+            output_gate_memory_config (ttnn.MemoryConfig, optional): Interleaved memory of the projection's
+                output. Defaults to DRAM.
+            output_gate_copy_source (ttnn.Tensor, optional): TILE tensor of the projection's dtype with ``M``
+                rows whose tile columns from ``output_gate_copy_source_column`` fill the output's first
+                ``output_gate_copied_columns`` tile columns.
+            output_gate_copy_source_column (int, optional): The first copied tile column of the source.
+            output_gate_copied_columns (int, optional): Copied tile columns; 0 copies nothing.
+            output_gate_copy_cores (list[ttnn.CoreCoord], optional): The cores that copy, splitting the rows.
 
         Returns:
-            tuple[ttnn.Tensor, ttnn.Tensor]: FLOAT32 TILE-layout ``[B*H, K, K]`` entry states and the final state in
-                DRAM (valid on the first and last chronological ranks).
+            tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor | None]: FLOAT32 TILE-layout ``[B*H, K, K]`` entry
+                states, the final state in DRAM (valid on the first and last chronological ranks) and the
+                output gate's BFLOAT16 ``[..., M, 32 * output_gate_copied_columns + N]`` output, or None
+                without an output gate.
 
         Note:
             ``K`` must be positive, tile aligned and at most the DST's tiles wide; the fabric payload must hold
@@ -75,7 +96,16 @@ void bind_relay_affine_prefix(nb::module_& mod) {
         nb::arg("cores"),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("entry_memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("output_gate_input") = nb::none(),
+        nb::arg("output_gate_weight") = nb::none(),
+        nb::arg("output_gate_program_config") = nb::none(),
+        nb::arg("output_gate_compute_kernel_config") = nb::none(),
+        nb::arg("output_gate_memory_config") = nb::none(),
+        nb::arg("output_gate_copy_source") = nb::none(),
+        nb::arg("output_gate_copy_source_column") = 0,
+        nb::arg("output_gate_copied_columns") = 0,
+        nb::arg("output_gate_copy_cores") = std::vector<tt::tt_metal::CoreCoord>{});
 }
 
 }  // namespace ttnn::operations::experimental::kda::relay_affine_prefix::detail

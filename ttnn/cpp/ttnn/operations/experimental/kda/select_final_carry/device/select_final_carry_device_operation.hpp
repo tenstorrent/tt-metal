@@ -22,6 +22,7 @@ struct SelectFinalCarryOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
+// The final carry, and with `projection` also projection_input @ projection_weight in the same dispatch.
 std::vector<Tensor> select_final_carry(
     const Tensor& rank_final,
     const Tensor& prefix_final,
@@ -34,6 +35,9 @@ std::vector<Tensor> select_final_carry(
     tt::tt_fabric::Topology topology,
     bool prefix_on_last_rank = false,
     const std::optional<std::vector<tt::tt_metal::CoreCoord>>& cores = std::nullopt,
-    const std::optional<std::array<uint32_t, 2>>& semaphore_addresses = std::nullopt);
+    const std::optional<std::array<uint32_t, 2>>& semaphore_addresses = std::nullopt,
+    const std::optional<FinalCarryProjectionParams>& projection = std::nullopt,
+    const std::optional<Tensor>& projection_input = std::nullopt,
+    const std::optional<Tensor>& projection_weight = std::nullopt);
 
 }  // namespace ttnn::experimental::prim
