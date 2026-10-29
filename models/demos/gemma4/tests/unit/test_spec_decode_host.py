@@ -2677,6 +2677,18 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     # a record the statistics rule out (gain below min_gain / 4) is never retried
     hopeless = SpecPolicy(SpecPolicyConfig(trial_steps=1, retry_steps=1, retry_overhead=1.0, probe_steps=0), 5)
     assert all(hopeless.decide([RecordCandidate((16, 1), 1024, 120.0)], [row], _PLAIN, 5) is None for _ in range(10))
+    # a record that could not clear the entry gain with every draft accepted is hopeless at its cost: never
+    # retried, trialed or held, whatever the rows accept (a (16,1) at 2.7x plain: 2 tokens a step = 0.75x at best)
+    never_pays = [RecordCandidate((16, 1), 1024, 2.7 * _PLAIN, 0.0, tokens_per_row=2.0)]
+    sure = _row([1.0] * 5)
+    eager = SpecPolicy(SpecPolicyConfig(trial_steps=1, retry_steps=1, retry_overhead=1.0, probe_steps=0), 5)
+    assert eager.viable(never_pays, _PLAIN) == [] and eager.viable(_cands(_COSTS), _PLAIN) == _cands(_COSTS)
+    assert all(eager.decide(never_pays, [sure], _PLAIN, 5, fresh=True) is None for _ in range(5))
+    assert eager.last_reason == "hopeless" and not eager.would_speculate(never_pays, [sure], _PLAIN, fresh=True)
+    eager.last_k = 1
+    assert eager.decide(never_pays, [sure], _PLAIN, 5) is None and eager.last_k == 0, "not held either"
+    within = [RecordCandidate((16, 1), 1024, 1.5 * _PLAIN, 0.0)]  # 2 tokens at 1.5x: 1.33x at best, viable
+    assert eager.viable(within, _PLAIN) == within and eager.decide(within, [sure], _PLAIN, 5, fresh=True) is not None
     never = SpecPolicy(SpecPolicyConfig(trial_steps=1, retry_steps=0, retry_overhead=1.0), 5)
     assert all(never.decide(_cands(_COSTS), [row], _PLAIN, 5) is None for _ in range(20))
     # a new request's trial: declined otherwise, a fresh step replays the cheapest record (entry plus step) once
@@ -2687,10 +2699,14 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert fresh.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "a trial below the entry gain is not held"
     assert fresh.would_speculate(_cands(_COSTS), [row], _PLAIN, fresh=True)
     assert not fresh.would_speculate(_cands(_COSTS), [row], _PLAIN)
-    dear = [RecordCandidate((16, 1), 2048, 50.0)]  # 1.4 tokens at 2.5x plain: 0.56x, below the trial gain
-    assert fresh.decide(dear, [row], _PLAIN, 5, fresh=True) is None and fresh.last_reason == "declined"
+    dear = [RecordCandidate((16, 1), 2048, 50.0)]  # 2 tokens at most at 2.5x plain: 0.8x, hopeless at its cost
+    assert fresh.decide(dear, [row], _PLAIN, 5, fresh=True) is None and fresh.last_reason == "hopeless"
+    pricey = [RecordCandidate((1, 5), 2048, 80.0)]  # 6 tokens at most at 4x plain (1.5x, viable); the row's 1.66: 0.41x
+    assert fresh.decide(pricey, [row], _PLAIN, 5, fresh=True) is None and fresh.last_reason == "declined"
     assert (
-        SpecPolicy(SpecPolicyConfig(trial_steps=1, trial_gain=0.5), 5).decide(dear, [row], _PLAIN, 5, fresh=True).reason
+        SpecPolicy(SpecPolicyConfig(trial_steps=1, trial_gain=0.4), 5)
+        .decide(pricey, [row], _PLAIN, 5, fresh=True)
+        .reason
         == "trial"
     )
     with_entry = [RecordCandidate((1, 5), 2048, 50.0, 170.0), RecordCandidate((16, 1), 2048, 30.0, 300.0)]

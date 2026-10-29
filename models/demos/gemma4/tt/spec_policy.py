@@ -1093,9 +1093,21 @@ class SpecPolicy:
         forgone = max(0.0, choice.tokens_per_row - 1.0) * float(plain_ms)
         return choice.entry_ms + forgone <= cfg.retry_overhead * since * float(plain_ms)
 
+    def viable(self, candidates, plain_ms):
+        """The candidates that could clear the entry gain if every draft were accepted: ``k + 1`` tokens a step at
+        the record's cost against the plain step. A record below that is hopeless at its cost, whatever the
+        acceptance, and is never entered, held, retried, trialed or probed: the 31B QB2's (16,1) record (2 tokens
+        a step at 2.7x the plain step, 0.75x at best) was retried and trialed at the overhead bound for the whole
+        16-row point and cost it 12 % (2026-10-29)."""
+        plain_ms = float(plain_ms)
+        return [c for c in candidates if (int(c.shape[1]) + 1) * plain_ms / float(c.cost_ms) >= self.config.min_gain]
+
     def would_speculate(self, candidates, rows, plain_ms, remaining=None, fresh=False):
         """Whether ``decide`` would replay a record now, without changing any counter (the dFlash bootstrap gate);
         ``fresh`` names the rows that are new requests without a trial yet (``True``: every row)."""
+        candidates = self.viable(candidates, plain_ms)
+        if not candidates:
+            return False
         ranked = rank_records(candidates, rows, plain_ms)
         if self.admissible(ranked, plain_ms, remaining) is not None:
             return True
@@ -1146,11 +1158,22 @@ class SpecPolicy:
         candidates = list(candidates)
         if not candidates:
             raise ValueError("decide needs at least one candidate record")
+        candidates = self.viable(candidates, plain_ms)
+        choice = None
+        reason = "declined"
+        if not candidates:
+            # every record is hopeless at its cost: the plain step, with none of the retry/trial bookkeeping a
+            # declined step keeps (nothing could ever be retried)
+            self.below_cap = 0
+            self.below_exit = 0
+            self.last_k = 0
+            self.trial = False
+            self.trial_age = 0
+            self.last_reason = "hopeless"
+            return None
         ranked = rank_records(candidates, rows, plain_ms)
         best = self.admissible(ranked, plain_ms, remaining)
         held = self.holdable(ranked)
-        choice = None
-        reason = "declined"
         if best is None and self.cooling() and self.admissible(ranked, plain_ms, remaining, cooling=False) is not None:
             reason = "cooldown"
         if best is not None:
