@@ -907,7 +907,11 @@ def test_hit_align_default_restores_only_at_chunk_aligned_snapshots(monkeypatch)
     assert apc.plan_snapshot(0, 0, chunk, "prefill") == 1  # the eager prefill's chunk-end snapshot
     for p in range(chunk + 300, chunk + 320):
         apc.record_decode(0, 0, p, 50 + p)
-    assert apc.plan_snapshot(0, 0, chunk + 320, "decode") == 0  # the 32-aligned decode crossing, unaligned to the chunk
+    # a decode crossing unaligned to the chunk is not saved (it could never be restored and, with one ring entry,
+    # would evict the chunk-end snapshot: served apc_r2 2026-10-29); a chunk-aligned crossing is entry 0
+    assert apc.plan_snapshot(0, 0, chunk + 320, "decode") is None
+    assert apc.plan_snapshot(0, 0, 2 * chunk, "decode") == 0 and apc.content(0, 0).snapshots == {chunk: 1, 2 * chunk: 0}
+    del apc.content(0, 0).snapshots[2 * chunk]
     apc.release(0, 0)
     turn = torch.cat([apc.content(0, 0).tokens[: chunk + 320].clone(), torch.full((40,), 9, dtype=torch.int32)])
     hit = apc.lookup(turn, [], chunk + 320)

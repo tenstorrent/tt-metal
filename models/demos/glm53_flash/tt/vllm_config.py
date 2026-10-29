@@ -1112,6 +1112,11 @@ class SlotPrefixCache:
             raise ValueError(f"snapshot kind {kind!r}")
         if self.entries == 0 or position <= 0 or position % TILE:
             return None
+        if kind == "decode" and self.hit_align > TILE and position % self.hit_align:
+            # a decode crossing the hit cannot restore from (``lookup`` aligns the restore point to ``hit_align``)
+            # would only evict a restorable snapshot (entry 0 is shared when the ring holds one entry) and cost a
+            # save per crossing (~one per step at 32 slots: served apc_r2, 2026-10-29: 11.8 vs 14.1 tok/s per user)
+            return None
         c = self.content(row, user)
         if position in c.snapshots:
             return None
