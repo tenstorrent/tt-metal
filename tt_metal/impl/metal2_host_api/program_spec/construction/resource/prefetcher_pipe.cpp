@@ -44,14 +44,16 @@ namespace tt::tt_metal::experimental {
 //
 // One Program slot per accessor group (a KernelAdvancedOptions::PrefetcherPipeBinding), reserved on the
 // kernel's nodes from spec geometry alone. The group's role (sender / receiver; validated exact
-// by ValidateProgramSpec) decides the slot's receiver cores and credit lanes P (the receiver
-// kernel's num_threads). A relay DFB whose prefetcher_pipe_relays equals the group's pipe set is
+// by ValidateProgramSpec on the nodes other than the binding's extra nodes) decides the slot's
+// receiver cores and credit lanes P (the receiver kernel's num_threads); the extra nodes are the
+// slot's extra cores. A relay DFB whose prefetcher_pipe_relays equals the group's pipe set is
 // registered against the slot (its base address is supplied when the pipe binds).
 //
 // Every parameter named by the group is recorded with the slot and the cores it owns inside the
-// kernel's nodes (its sender node or its receivers -- the group tiles the nodes, so this is one
-// pipe per node). SetProgramRunArgs later binds the supplied pipe object onto exactly those cores,
-// so a multi-pipe accessor resolves per node on the host and the kernel binary sees one slot.
+// kernel's nodes (its sender node or its receivers -- the group tiles the nodes other than the
+// extra nodes, so this is one pipe per node). SetProgramRunArgs later binds the supplied pipe object
+// onto exactly those cores, so a multi-pipe accessor resolves per node on the host and the kernel
+// binary sees one slot. The group's first pipe also owns the extra cores, which take its record.
 
 PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
     distributed::MeshDevice& mesh_device,
@@ -108,14 +110,15 @@ PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
                 const PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
                 group_receivers = group_receivers.merge(to_node_range_set(pipe->receivers));
             }
+            const NodeRangeSet role_nodes = prefetcher_pipe_role_nodes(nodes, binding);
             const bool is_sender_role =
-                !is_prefetcher_pipe_receiver_role(nodes, group_receivers) &&
-                is_prefetcher_pipe_sender_role(nodes, group_receivers, binding.pipe_parameter_names.size());
+                !is_prefetcher_pipe_receiver_role(role_nodes, group_receivers) &&
+                is_prefetcher_pipe_sender_role(role_nodes, group_receivers, binding.pipe_parameter_names.size());
 
-            const NodeRangeSet receiver_cores = is_sender_role ? NodeRangeSet() : nodes;
+            const NodeRangeSet receiver_cores = is_sender_role ? NodeRangeSet() : group_receivers;
             const uint32_t num_credit_lanes = is_sender_role ? 1u : kernel.num_threads;
             const uint8_t prefetcher_pipe_id = program_impl.reserve_prefetcher_pipe_slot(
-                nodes, receiver_cores, first->ring_size, first->entry_size, num_credit_lanes);
+                nodes, receiver_cores, binding.extra_nodes, first->ring_size, first->entry_size, num_credit_lanes);
             handles[&kernel].push_back(
                 {.accessor_name = binding.accessor_name, .prefetcher_pipe_id = prefetcher_pipe_id});
 
@@ -125,7 +128,8 @@ PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
                 const PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
                 placements.at(pipe_name).slots.push_back(
                     {.prefetcher_pipe_id = prefetcher_pipe_id,
-                     .cores = is_sender_role ? nodes : to_node_range_set(pipe->receivers),
+                     .cores = is_sender_role ? role_nodes : to_node_range_set(pipe->receivers),
+                     .binds_extra_cores = pipe_name == binding.pipe_parameter_names[0],
                      .sender_role = is_sender_role});
             }
 

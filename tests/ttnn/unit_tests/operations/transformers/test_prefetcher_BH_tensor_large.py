@@ -22,6 +22,7 @@ Every test delivers through DRAM-sender PrefetcherPipes
    spellings. See the comments on those tests for the capture-vs-replay semantics they cover.
 """
 
+import contextlib
 import math
 import time
 import zlib
@@ -30,7 +31,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from tt_py_test_utils_common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_for_slow_dispatch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
@@ -61,6 +62,11 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 @pytest.fixture(autouse=True)
 def _require_tensor_prefetcher(device):
     require_tensor_prefetcher(device)
+
+
+def _core_range(x, y):
+    """The one-core CoreRange at grid cell (x, y)."""
+    return ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y))
 
 
 def _bank_to_receivers(contiguous: bool, num_dram_banks: int, recv_per_bank: int, ring_cols: int):
@@ -743,11 +749,15 @@ def _streaming_gather_in0_setup(
     k_tiles=None,
     hop_cores=None,
     act_dtype=ttnn.bfloat16,
+    ring_xs=None,
+    ring_ys=None,
 ):
     """Weight, activation, program config and bank pairing for a gather-in0 matmul over a receiver ring.
 
     The ring is ``num_dram_banks`` columns by ``recv_per_bank`` rows, and ring position P sits at grid
-    cell (P % ring_cols, P // ring_cols) for either distribution. One K-block is one in0 shard wide
+    cell (P % ring_cols, P // ring_cols) for either distribution. ``ring_xs`` / ``ring_ys`` (ascending)
+    move ring column c to grid column ``ring_xs[c]`` and ring row r to grid row ``ring_ys[r]``, which
+    scatters the ring over a larger rectangle. One K-block is one in0 shard wide
     (``k_tiles_per_shard``) and one worker's output columns (``n_tiles_per_receiver``) across; that is
     one ``entry_size`` entry of the pipes. ``out_subblock_w`` defaults to one subblock across
     the worker's columns. ``k_tiles`` below ``k_tiles_per_shard * ring_size`` pads the last in0 shards,
@@ -760,9 +770,16 @@ def _streaming_gather_in0_setup(
     ring_size = num_dram_banks * recv_per_bank
     ring_cols = num_dram_banks
     ring_rows = recv_per_bank
-    receiver_cores = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
-    )
+    scattered = ring_xs is not None or ring_ys is not None
+    ring_xs = list(range(ring_cols)) if ring_xs is None else ring_xs
+    ring_ys = list(range(ring_rows)) if ring_ys is None else ring_ys
+    if scattered:
+        # One core per range, listed in ring order, which is also the row-major order the shards walk.
+        receiver_cores = ttnn.CoreRangeSet([_core_range(x, y) for y in ring_ys for x in ring_xs])
+    else:
+        receiver_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
+        )
 
     M = ttnn.TILE_SIZE
     K_padded = k_tiles_per_shard * ring_size * ttnn.TILE_SIZE
@@ -849,9 +866,11 @@ def _streaming_gather_in0_setup(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    bank_to_receivers = _bank_to_receivers(
-        distribution_strategy != ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, num_dram_banks, recv_per_bank, ring_cols
-    )
+    contiguous = distribution_strategy != ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D
+    bank_to_receivers = [
+        (bank, ttnn.CoreRangeSet([_core_range(ring_xs[r.start.x], ring_ys[r.start.y]) for r in receivers.ranges()]))
+        for bank, receivers in _bank_to_receivers(contiguous, num_dram_banks, recv_per_bank, ring_cols)
+    ]
     return {
         "single_sender": krow_major,
         "ring_size": ring_size,
@@ -1407,12 +1426,11 @@ def test_tensor_prefetcher_gather_in0_pipes(
     ), "second gather_in0 pipes invocation did not hit the program cache"
 
 
-def _hop_cores(device, num_hops):
-    """``num_hops`` single cores in the column right of the ring, one per row from the top."""
-    ring_cols = device.dram_grid_size().x
-    return ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(ring_cols, y), ttnn.CoreCoord(ring_cols, y)) for y in range(num_hops)}
-    )
+def _hop_cores(device, num_hops, x=None):
+    """``num_hops`` single cores in grid column ``x`` (by default the column right of the ring), one per
+    row from the top."""
+    x = device.dram_grid_size().x if x is None else x
+    return ttnn.CoreRangeSet({_core_range(x, y) for y in range(num_hops)})
 
 
 @pytest.mark.parametrize(
@@ -1467,6 +1485,168 @@ def test_tensor_prefetcher_gather_in0_pipes_ring_shapes(device, stream_in1, num_
         f"act_dtype={act_dtype}",
         runs=2,
     )
+
+
+def _scattered_ring(device, recv_per_bank):
+    """Grid columns and rows for a ring scattered over a larger rectangle: the middle grid column is
+    skipped, and the ring's rows are one grid row apart. Returns (ring_xs, ring_ys, gap_x)."""
+    ring_cols = device.dram_grid_size().x
+    gap_x = ring_cols // 2
+    return [x for x in range(ring_cols + 1) if x != gap_x], [2 * r for r in range(recv_per_bank)], gap_x
+
+
+@pytest.mark.parametrize(
+    "distribution_strategy",
+    [ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D],
+    ids=["strided", "contiguous"],
+)
+@pytest.mark.parametrize(
+    "stream_in1,num_hops", [(True, 0), (False, 0), (True, 2)], ids=["ring_order", "k_order", "hop2"]
+)
+def test_tensor_prefetcher_gather_in0_pipes_scattered_ring(device, stream_in1, num_hops, distribution_strategy):
+    """Gather-in0 over Tensor-prefetcher pipes on a ring scattered over a larger rectangle. The
+    workers' kernels run on the rectangle, and on the cores between the ring's columns and rows they
+    are idle. Hop cores in the skipped column run their own kernels, so the rectangle leaves them out.
+    """
+    recv_per_bank = 2
+    ring_xs, ring_ys, gap_x = _scattered_ring(device, recv_per_bank)
+    ring_size = device.dram_grid_size().x * recv_per_bank
+    setup = _streaming_gather_in0_setup(
+        device,
+        f"scattered_{stream_in1}_{num_hops}",
+        2,
+        2,
+        recv_per_bank,
+        ttnn.bfloat16,
+        distribution_strategy,
+        stream_in1=stream_in1,
+        hop_cores=_hop_cores(device, num_hops, x=gap_x) if num_hops else None,
+        ring_xs=ring_xs,
+        ring_ys=ring_ys,
+    )
+    ring_half_blocks = 4 if stream_in1 else 2 * ring_size + 3
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, setup["bank_to_receivers"], setup["entry_size"] * ring_half_blocks // 2
+    )
+
+    _prefetch_and_check_runs_over_pipes(
+        device,
+        setup,
+        pipes,
+        _hifi4_compute_kernel_config(device),
+        f"gather_in0_pipes_scattered_ring stream_in1={stream_in1} hops={num_hops} {distribution_strategy}",
+        runs=2,
+    )
+
+
+def _one_core_per_range(cells):
+    """The (x, y) cells as a CoreRangeSet of one core per range, row-major."""
+    return ttnn.CoreRangeSet([_core_range(x, y) for x, y in sorted(cells, key=lambda cell: (cell[1], cell[0]))])
+
+
+def _scattered_ring_sub_devices(device, shape, ring_xs, ring_ys, gap_x):
+    """Each sub-device's Tensix cores for ``shape``, the one holding the ring first. See
+    test_tensor_prefetcher_gather_in0_pipes_scattered_ring_sub_device_shapes."""
+    grid = device.compute_with_storage_grid_size()
+    cells = {(x, y) for y in range(grid.y) for x in range(grid.x)}
+    ring = {(x, y) for y in ring_ys for x in ring_xs}
+    if shape == "split":
+        return [
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gap_x - 1, grid.y - 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(gap_x + 1, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1)),
+                ]
+            )
+        ]
+    if shape == "hole":
+        hole_y = ring_ys[0] + 1
+        hole = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(gap_x - 1, hole_y), ttnn.CoreCoord(gap_x + 1, hole_y))])
+        grid_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+        return [grid_cores.subtract(hole), hole]
+    if shape == "ring_only":
+        return [_one_core_per_range(ring), _one_core_per_range(cells - ring)]
+    if shape == "checkerboard":
+        ours = ring | {(x, y) for x, y in cells if (x + y) % 2 == 0}
+        return [_one_core_per_range(ours), _one_core_per_range(cells - ours)]
+    assert shape == "per_core", shape
+    return [_one_core_per_range(cells)]
+
+
+@contextlib.contextmanager
+def _loaded_sub_device_manager(device, sub_device_cores):
+    """A sub-device manager with one sub-device per CoreRangeSet of ``sub_device_cores``, loaded while
+    the body runs."""
+    manager = device.create_sub_device_manager([ttnn.SubDevice([cores]) for cores in sub_device_cores], 0)
+    device.load_sub_device_manager(manager)
+    try:
+        yield
+    finally:
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+
+
+@skip_for_slow_dispatch("sub-device managers need fast dispatch")
+@pytest.mark.parametrize("shape", ["split", "hole", "ring_only", "checkerboard", "per_core"])
+def test_tensor_prefetcher_gather_in0_pipes_scattered_ring_sub_device_shapes(device, shape):
+    """A scattered ring on a sub-device that is not one rectangle. The workers' kernels run on boxes
+    around the ring that stay inside its sub-device: ``split`` is two rectangles, one each side of the
+    ring's skipped column, which no sub-device holds; ``hole`` gives a second sub-device the cores
+    around that column between the ring's rows; ``ring_only`` gives it every core but the ring's, and
+    ``checkerboard`` every other one. ``per_core`` is the whole grid written one core per range, so
+    the kernels still run on the ring's bounding box. A box outside the sub-device would put the matmul
+    on cores of no sub-device or of two, which dispatch refuses. The matmul names no sub-device; it runs
+    on the one holding its cores."""
+    recv_per_bank = 2
+    ring_xs, ring_ys, gap_x = _scattered_ring(device, recv_per_bank)
+    with _loaded_sub_device_manager(device, _scattered_ring_sub_devices(device, shape, ring_xs, ring_ys, gap_x)):
+        setup = _streaming_gather_in0_setup(
+            device,
+            f"scattered_sub_device_{shape}",
+            2,
+            2,
+            recv_per_bank,
+            ttnn.bfloat16,
+            ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+            ring_xs=ring_xs,
+            ring_ys=ring_ys,
+        )
+        _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], setup["entry_size"] * 2)
+        _prefetch_and_check_runs_over_pipes(
+            device,
+            setup,
+            pipes,
+            _hifi4_compute_kernel_config(device),
+            f"gather_in0_pipes_scattered_ring_sub_device_shapes {shape}",
+            runs=2,
+        )
+        del pipes, _space, setup
+
+
+@skip_for_slow_dispatch("sub-device managers need fast dispatch")
+def test_tensor_prefetcher_gather_in0_pipes_scattered_ring_sub_device_manager_switch(device):
+    """The same scattered-ring matmul with no sub-device manager loaded, where its kernels run on the
+    ring's bounding box, then under a manager that gives every core but the ring's to a second
+    sub-device. The second must not reuse the first's program, whose box would straddle the two."""
+    recv_per_bank = 2
+    ring_xs, ring_ys, gap_x = _scattered_ring(device, recv_per_bank)
+    setup = _streaming_gather_in0_setup(
+        device,
+        "scattered_sub_device_manager_switch",
+        2,
+        2,
+        recv_per_bank,
+        ttnn.bfloat16,
+        ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+        ring_xs=ring_xs,
+        ring_ys=ring_ys,
+    )
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], setup["entry_size"] * 2)
+    label = "gather_in0_pipes_scattered_ring_sub_device_manager_switch"
+    compute_kernel_config = _hifi4_compute_kernel_config(device)
+    _prefetch_and_check_runs_over_pipes(device, setup, pipes, compute_kernel_config, f"{label} no manager", runs=1)
+    with _loaded_sub_device_manager(device, _scattered_ring_sub_devices(device, "ring_only", ring_xs, ring_ys, gap_x)):
+        _prefetch_and_check_runs_over_pipes(device, setup, pipes, compute_kernel_config, f"{label} ring_only", runs=2)
 
 
 @pytest.mark.parametrize(
