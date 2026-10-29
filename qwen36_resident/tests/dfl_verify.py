@@ -151,12 +151,14 @@ class Verifier:
     """an R-row verify model with taps, driven from the host: step(tokens, p) runs rows tokens at p .. p + R - 1
     and commit(a) continues from row a"""
 
-    def __init__(self, mesh, d, w, layers, interval, R, max_pos, emb, taps=True):
+    def __init__(self, mesh, d, w, layers, interval, R, max_pos, emb, taps=True, **kw):
         n_attn = sum(is_attn(l, interval) for l in range(layers))
         self.R, self.emb, self.d, self.mesh = R, emb, d, mesh
         self.taps = tap_tensors(mesh, len(TAP_LAYERS), R) if taps else []
         st = State(d, layers - n_attn, n_attn, 0, max_pos, zero=True, kv=False)
-        self.m = ResidentModel(mesh, d, w, st, layers, interval, True, verify=R, taps=list(zip(TAP_LAYERS, self.taps)))
+        self.m = ResidentModel(
+            mesh, d, w, st, layers, interval, True, verify=R, taps=list(zip(TAP_LAYERS, self.taps)), **kw
+        )
         self.ring = self.slot = 0
         self.prev = None
 
@@ -189,16 +191,29 @@ def gap_info(want_row, got_top):
     return float(want_row.max() - want_row[got_top])
 
 
-def run_real(mesh, R, prompt_len, gen, prefix, taps_out, positions, save=None):
+def run_real(
+    mesh,
+    R,
+    prompt_len,
+    gen,
+    prefix,
+    taps_out,
+    positions,
+    save=None,
+    corpus=None,
+    keep_from=0,
+    max_pos=0,
+    rows_only=False,
+):
     ck = Q.Checkpoint(Q.checkpoint_dir())
     cfg = ck.config
     layers, interval, vocab = cfg["num_hidden_layers"], cfg["full_attention_interval"], cfg["vocab_size"]
     d = Dims(mesh.get_num_devices(), mesh.dram_grid_size().x, vocab=vocab)
     n_attn = sum(is_attn(l, interval) for l in range(layers))
     emb = Q.embedding(ck).float()
-    max_pos = max(positions + [prompt_len + gen]) + 64
+    max_pos = max(max_pos, max(positions + [prompt_len + gen]) + 64)
     w = Q.load(ck, d, layers, interval)
-    seq = torch.load(REF)["seqs"][0]["ids"].tolist()
+    seq = torch.load(corpus)["ids"].tolist() if corpus else torch.load(REF)["seqs"][0]["ids"].tolist()
     L = -(-(prompt_len + gen) // R) * R
     seq = (seq * (L // len(seq) + 1))[:L]
     out = dict(R=R, L=L)
@@ -214,7 +229,8 @@ def run_real(mesh, R, prompt_len, gen, prefix, taps_out, positions, save=None):
         plain.step(plain.token_state(emb[t], p))
         return plain.logits()[:, : d.vocab_chip].reshape(-1)[:vocab].clone()
 
-    want = torch.stack([plain_logits(seq[p], p) for p in range(L)])
+    # (positions below keep_from are run but not kept: the logits of long sequences do not fit the host)
+    want = torch.stack([lg for p in range(L) for lg in [plain_logits(seq[p], p)] if p >= keep_from])
     del plain
     gc.collect()
     ttnn.synchronize_device(mesh)
@@ -228,16 +244,25 @@ def run_real(mesh, R, prompt_len, gen, prefix, taps_out, positions, save=None):
     got, taps = [], []
     for p0 in range(0, L, R):
         ver.step(seq[p0 : p0 + R], p0)
-        got.append(ver.logits(vocab))
-        taps.append(ver.tap_rows())
+        if p0 + R > keep_from:
+            got.append(ver.logits(vocab)[max(0, keep_from - p0) :])
+        if taps_out:
+            taps.append(ver.tap_rows())
         ver.commit(R - 1)
-    got, taps = torch.cat(got), torch.cat(taps, dim=1)  # [L, vocab], [taps, L, H]
+    got = torch.cat(got)  # [L - keep_from, vocab]
+    taps = torch.cat(taps, dim=1) if taps_out else None  # [taps, L, H]
     diff = (got - want).abs().max(dim=1).values
     top_g, top_w = got.argmax(1), want.argmax(1)
     miss = [
-        dict(pos=p, verify=int(top_g[p]), plain=int(top_w[p]), plain_gap=gap_info(want[p], int(top_g[p])))
-        for p in range(L)
-        if top_g[p] != top_w[p]
+        dict(
+            pos=keep_from + i,
+            row=(keep_from + i) % R,
+            verify=int(top_g[i]),
+            plain=int(top_w[i]),
+            plain_gap=gap_info(want[i], int(top_g[i])),
+        )
+        for i in range(len(top_g))
+        if top_g[i] != top_w[i]
     ]
     out["rows"] = dict(
         positions=L,
@@ -248,9 +273,12 @@ def run_real(mesh, R, prompt_len, gen, prefix, taps_out, positions, save=None):
         logit_scale=float(want.abs().max()),
     )
     log(
-        f"rows: {L} positions, max |verify - plain| {diff.max():.4f} (median per row {diff.median():.4f}), "
-        f"top-1 agree {1 - len(miss) / L:.4f}, misses {miss}"
+        f"rows: {L} positions (compared from {keep_from}), max |verify - plain| {diff.max():.4f} (median per row "
+        f"{diff.median():.4f}), top-1 agree {1 - len(miss) / len(top_g):.4f}, misses {miss}"
     )
+    if rows_only:
+        ver.m.release_trace() if getattr(ver.m, "trace_id", None) is not None else None
+        return out
     if taps_out:
         torch.save(dict(ids=seq, taps=taps.bfloat16(), tap_layers=TAP_LAYERS), taps_out)
     if save:
@@ -342,6 +370,10 @@ def main():
     ap.add_argument("--prefix", type=int, default=48)
     ap.add_argument("--taps-out")
     ap.add_argument("--save", help="real: the teacher-forced logits and the committed GDN states (.pt)")
+    ap.add_argument("--corpus", help="real: a token-id corpus (.pt with ids) instead of the HF reference text")
+    ap.add_argument("--keep-from", type=int, default=0, help="real: compare the rows from this position on")
+    ap.add_argument("--max-pos", type=int, default=0)
+    ap.add_argument("--rows-only", action="store_true")
     ap.add_argument("--positions", default="128,2048,8192")
     ap.add_argument("--rows", default="8")
     ap.add_argument("--layers", type=int, default=4)
@@ -361,7 +393,22 @@ def main():
                 res.append(run_random(mesh, R, a.layers, a.interval, a.steps, a.start))
             else:
                 pos = [int(p) for p in a.positions.split(",")]
-                res.append(run_real(mesh, R, a.prompt, a.gen, a.prefix, a.taps_out, pos, a.save))
+                res.append(
+                    run_real(
+                        mesh,
+                        R,
+                        a.prompt,
+                        a.gen,
+                        a.prefix,
+                        a.taps_out,
+                        pos,
+                        a.save,
+                        a.corpus,
+                        a.keep_from,
+                        a.max_pos,
+                        a.rows_only,
+                    )
+                )
     finally:
         if a.out:
             json.dump(res, open(a.out, "w"), indent=1)
