@@ -71,7 +71,11 @@ def _slot_rows(mesh_device, pool: V41DecodePool, slot: int, length: int) -> dict
             out[f"kv[{src}]"] = _chip_rows(mesh_device, t, first, first + n, chip)
         for layer in pool.slots[src].layers:
             first = base + pool.ring_row(layer)
-            out[f"ring[{layer}]"] = _chip_rows(mesh_device, t, first, first + RING, chip)
+            # the ring in a canonical frame: position p sits at ring slot (step_join + p - start) % RING, and the
+            # two orders join at global steps 8 apart (every ring differed by the rotation), so the rows
+            # are rolled by -pool.step, the same for both orders' readouts after the same number of steps
+            rows = _chip_rows(mesh_device, t, first, first + RING, chip)
+            out[f"ring[{layer}]"] = torch.roll(rows, -(pool.step % RING), dims=0)
     for src, t in pool.index_k.items():
         n = length // cfg.compress_ratio(src)
         cap = pool.slots[src].cap + 32
@@ -297,6 +301,13 @@ def test_v41_defer_final(mesh_device, device_params, monkeypatch):
                 f" tokens equal {cmp['tokens_equal']}, slot mismatches {len(cmp['slot_mismatches'])}:"
                 f" {cmp['text_defer']!r}"
             )
+            if cmp["slot_mismatches"]:
+                logger.info(f"defer-final cohort {cohort} block {b} slot mismatches: {cmp['slot_mismatches']}")
+            if not cmp["tokens_equal"]:
+                logger.info(
+                    f"defer-final cohort {cohort} block {b} tokens: serial {serial['first'][b]} {serial['tokens'][b]}"
+                    f" / defer {deferred['first'][b]} {deferred['tokens'][b]}"
+                )
         result["cohorts"].append(rec)
         del serial, deferred
 
