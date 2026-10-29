@@ -71,7 +71,7 @@ namespace tt::tt_metal::experimental::streaming_profiler::detail {
 
 // A Metal process's call sites, by the ids its images gave them: this process's own (tt::llrt::process_call_sites()),
 // which its images add as they load, or, in the external process, a Metal process's that it receives from, which that
-// process sends. Each holds the stall site, which every image shares and none describes, at TT_ZONE_STALL_ID. A
+// process sends. Each holds the stall site, which every image shares and none describes, at TT_STALL_CALL_SITE_ID. A
 // site's strings are stored for the life of the process; the rest of it goes with its call sites.
 class CallSites {
 public:

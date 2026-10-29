@@ -296,7 +296,7 @@ RecordTypes::RecordTypes(std::vector<api::detail::RecordTypeDescriptor> record_t
 }
 
 RecordRoutes::RecordRoutes(const RecordTypes& types, const api::detail::CallSites& call_sites) :
-    types_(types), call_sites_(call_sites), routes_(TT_ZONE_ID_COUNT), short_run_types_(TT_ZONE_ID_COUNT) {}
+    types_(types), call_sites_(call_sites), routes_(TT_CALL_SITE_ID_COUNT), short_run_types_(TT_CALL_SITE_ID_COUNT) {}
 
 RecordRoutes::Route RecordRoutes::resolve(uint32_t id) {
     // An image's call sites are registered when it loads, before it can run, so a record of an unregistered one means a

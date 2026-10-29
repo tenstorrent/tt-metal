@@ -373,12 +373,12 @@ void load_call_sites(const std::string& elf_path, ll_api::ElfFile& elf) {
     {
         const std::lock_guard lock(images.mutex);
         TT_FATAL(
-            uint64_t{images.next_id} + count <= TT_ZONE_STALL_ID,
+            uint64_t{images.next_id} + count <= TT_STALL_CALL_SITE_ID,
             "streaming profiler: '{}' has {} call sites, and only {} of the process's {} call-site ids remain",
             elf_path,
             count,
-            TT_ZONE_STALL_ID - images.next_id,
-            TT_ZONE_STALL_ID);
+            TT_STALL_CALL_SITE_ID - images.next_id,
+            TT_STALL_CALL_SITE_ID);
         base = std::exchange(images.next_id, images.next_id + static_cast<uint32_t>(count));
     }
     elf.RebaseCallSiteIds(base);
@@ -435,9 +435,10 @@ struct CallSites::State {
 
 CallSites::CallSites() :
     state_(std::make_unique<State>()),
-    by_id_(std::make_unique<std::atomic<const llrt::CallSite*>[]>(TT_ZONE_ID_COUNT)),
-    metadata_(std::make_unique<std::atomic<const void*>[]>(TT_ZONE_ID_COUNT)) {
-    by_id_[TT_ZONE_STALL_ID].store(&state_->sites.emplace_back(llrt::make_stall_site()), std::memory_order_release);
+    by_id_(std::make_unique<std::atomic<const llrt::CallSite*>[]>(TT_CALL_SITE_ID_COUNT)),
+    metadata_(std::make_unique<std::atomic<const void*>[]>(TT_CALL_SITE_ID_COUNT)) {
+    by_id_[TT_STALL_CALL_SITE_ID].store(
+        &state_->sites.emplace_back(llrt::make_stall_site()), std::memory_order_release);
 }
 
 CallSites::~CallSites() {
