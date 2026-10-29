@@ -292,7 +292,7 @@ class TtDecoderLayer(LightweightModule):
         ``start + i`` (``start % 32 == 0``), T_pad % 32 == 0 and rows past ``seq_len`` are padding.
         KDA: ``state.kda`` is the carry after position ``start`` (zeros for a new prompt); DSA: the
         user's cache holds [0, start). Returns the new streams and the layer state after the chunk.
-        ``actual_start`` / ``actual_end`` override the KDA device scalars derived from ``start`` and
+        ``actual_start`` / ``actual_end`` override the KDA device scalars (chunk-relative: 0 and the valid rows) derived from
         ``seq_len`` (global positions, as ttKDA defines them). ``slot`` / ``ring_sel``: the DSA path's
         device-side user slot and ring-row selector (the traced prefill, ``TtDSA.prefill_forward``).
         ``wave`` (``WaveInfo``): every mesh row runs ITS OWN chunk of ``T = streams.shape[-2]`` rows (no slabs):
@@ -307,14 +307,22 @@ class TtDecoderLayer(LightweightModule):
                 if wave_mode:
                     start_t, end = wave.start_t, wave.end_t
                 else:
-                    start_t = actual_start if actual_start is not None else self.attn.chrono_scalar(start, "start")
+                    # CHUNK-RELATIVE bounds (start 0, end = the valid rows), never the absolute positions: ttKDA
+                    # places a sequence-parallel chunk block-cyclically by the ABSOLUTE start (first rank =
+                    # start / local_rows mod ranks, a split segment at start mod local_rows), which matches the
+                    # model's contiguous slab upload (rank r = chunk rows [r T/rows, (r+1) T/rows)) only when
+                    # start % T == 0. A chunk continued at 2176 in a 256-row chunk (or at 36736 in a 16384-row chunk:
+                    # vLLM's budget split) had its ranks' slabs scanned in the wrong order, the carries taken at
+                    # end % T (the 2026-10-29 APC state diff: KDA conv/recurrent wrong, every DSA row right). KDA
+                    # has no positional encoding: the state carries the history, the position enters nothing else.
+                    start_t = actual_start if actual_start is not None else self.attn.chrono_scalar(0, "start")
                     end = actual_end
-                # the exclusive global valid end, ALWAYS carried (a full first chunk included: end == T clips
-                # nothing): the conv kernel is a different program with and without the bound (has_actual_end
-                # is a compile-time define), and a chunk shape first seen without it after the captures compiled
-                # at request time under live traces (the 2026-10-28 served APC seal hit)
+                # the exclusive valid end, ALWAYS carried (a full first chunk included: end == T clips nothing): the
+                # conv kernel is a different program with and without the bound (has_actual_end is a compile-time
+                # define), and a chunk shape first seen without it after the captures compiled at request time under
+                # live traces (the 2026-10-28 served APC seal hit)
                 if end is None:
-                    end = self.attn.chrono_scalar(start + seq_len, "end")
+                    end = self.attn.chrono_scalar(seq_len, "end")
                 T_loc = h.shape[-2]
                 y, new_state.kda = self.attn.prefill_forward(
                     ttnn.reshape(h, [1, T_loc, self.hidden]), state.kda, start_t, end, local=wave_mode

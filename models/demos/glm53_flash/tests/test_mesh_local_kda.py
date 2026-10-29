@@ -179,8 +179,10 @@ def test_sp_prefill_padded_ragged_chunk_carry(mesh_device, weights):
     # The served chunk plans: a prompt continued in chunks whose START is not a multiple of the padded chunk length
     # (vLLM's budget split: [2048, 2176) then [2176, 2348) padded to 256; 2176 % 256 = 128) vs the plan whose starts
     # are multiples of their padded lengths (the adapter's own 1024 + 1024 + 300-in-512), both against HF on the whole
-    # prompt: the last chunk's outputs and the carries (the 2026-10-29 budget-split state diff: KDA conv taps and
-    # recurrent states wrong after the 2176-start chunk while every DSA row before 2176 matched).
+    # prompt: the last chunk's outputs and the carries. With ABSOLUTE bounds the 2176-start chunk had its ranks'
+    # slabs scanned in ttKDA's block-cyclic order (first rank 17 mod 2 = 1), the carries taken at 2348 mod 256 = 44
+    # (the 2026-10-29 budget-split state diff: KDA conv taps and recurrent states wrong, every DSA row before 2176
+    # right); chunk-relative bounds make every plan agree with HF.
     n2 = 2348
     torch.manual_seed(2)
     x2 = (torch.randn(1, n2, cfg.hidden_size) * 0.8).to(torch.bfloat16)
@@ -196,7 +198,9 @@ def test_sp_prefill_padded_ragged_chunk_carry(mesh_device, weights):
             xp = torch.zeros(1, Tp, cfg.hidden_size, dtype=torch.bfloat16)
             xp[:, : e - s0] = x2[:, s0:e]
             x_dev = mesh.upload(xp, ttnn.bfloat16, rows=1)
-            y, state = tt.prefill_forward(x_dev, state, tt.scalar(s0), tt.scalar(e))
+            # chunk-relative bounds (the model's contract): ttKDA's block-cyclic placement keyed on the absolute
+            # start only matches the contiguous slab upload for a start of 0 mod the padded length
+            y, state = tt.prefill_forward(x_dev, state, tt.scalar(0), tt.scalar(e - s0))
             outs.append(mesh.to_host(y, rows=1).float()[:, : e - s0])
         return torch.cat(outs, dim=1), _carries(mesh, state, cfg)[0]
 

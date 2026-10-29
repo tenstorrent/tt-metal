@@ -660,6 +660,10 @@ class TtKDA(LightweightModule):
         local: bool = False,
     ) -> tuple[ttnn.Tensor, KdaState]:
         """x: [1, T_phys, hidden] bf16 TILE (T_phys % 32 == 0; rows past ``actual_end`` are padding).
+        ``actual_start`` / ``actual_end`` are CHUNK-RELATIVE device scalars (0 and the valid row count): ttKDA keys
+        its sequence-parallel placement on them (block-cyclic by the absolute start), and the contiguous slab upload
+        this model makes (rank r holds rows [r T/rows, (r+1) T/rows) of the chunk) is that placement only for a
+        start of 0 mod T; the carried state supplies the history, so the absolute position is never needed.
         Returns y [1, T_phys, hidden] bf16 and the new state (the old one is only read).
         On a multi-row mesh ttKDA is sequence-parallel over the rows: ``x`` is this row's slab
         (row r holds rows [r*T/rows, (r+1)*T/rows) of the chunk, T = rows * T_phys_local) and the
