@@ -52,13 +52,13 @@ case "${MODEL:-}" in
   KIMI_K2_7)
     TEST_FUNC="test_kimi_prefill_transformer_chunked_perf"
     VARIANT_ID="kimi_k2_7"; LAYERS_ID="${LAYERS_ID:-L61}"; NODE_SUFFIX="-$MARGIN_ID-$DET_ID-$TRACE_ID"
-    ENV_VARS='KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320'
+    ENV_VARS="KIMI_K2_7_HF_MODEL=${KIMI_K2_7_HF_MODEL:-/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized} TT_KIMI_PREFILL_TTNN_CACHE=${TT_KIMI_PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill} PREFILL_TRACE_DIR=${PREFILL_TRACE_DIR:-/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320}"
     ;;
   GLM5_3)
     TEST_FUNC="test_glm_prefill_transformer_chunked_no_pcc"
     # The GLM test has no perf_margin param, so its node id has no margin token.
     VARIANT_ID="glm53"; LAYERS_ID="${LAYERS_ID:-L78}"; NODE_SUFFIX="-$DET_ID-$TRACE_ID"
-    ENV_VARS='GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4 TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k'
+    ENV_VARS="GLM53_HF_MODEL=${GLM53_HF_MODEL:-/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4} TT_GLM53_PREFILL_TTNN_CACHE=${TT_GLM53_PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill} PREFILL_TRACE_DIR=${PREFILL_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k}"
     ;;
   *)
     echo "ERROR: set MODEL to one of: KIMI_K2_7 | GLM5_3  (got '${MODEL:-<unset>}')" >&2
