@@ -122,19 +122,34 @@ HANG_APP_EXPECTED_RESULTS = {
 class AppOutput:
     RETAINED_LINES = 20000
 
-    def __init__(self, proc: subprocess.Popen):
+    def __init__(self, proc: subprocess.Popen, ready_line: str | None = None):
         self._lock = threading.Lock()
         self._chunks: deque[str] = deque(maxlen=self.RETAINED_LINES)
-        for stream in (proc.stdout, proc.stderr):
+        self._ready_line = ready_line
+        self.ready_line_seen = False
+        # Set when ready_line arrives or both streams close (the app exited), so the fixture can sleep on it.
+        self.stop_waiting = threading.Event()
+        streams = (proc.stdout, proc.stderr)
+        self._open_streams = len(streams)
+        for stream in streams:
             threading.Thread(target=self._drain, args=(stream,), daemon=True).start()
 
     def _drain(self, stream) -> None:
         try:
             for line in iter(stream.readline, b""):
+                text = line.decode("utf-8", errors="replace")
                 with self._lock:
-                    self._chunks.append(line.decode("utf-8", errors="replace"))
+                    self._chunks.append(text)
+                if self._ready_line is not None and self._ready_line in text:
+                    self.ready_line_seen = True
+                    self.stop_waiting.set()
         except (ValueError, OSError):
             pass  # the pipe was closed under us while the app was being torn down
+        finally:
+            with self._lock:
+                self._open_streams -= 1
+                if self._open_streams == 0:
+                    self.stop_waiting.set()
 
     def text(self) -> str:
         with self._lock:
@@ -236,7 +251,7 @@ def cause_hang_with_app(request):
         env={**os.environ, **app_configuration.get("env", {})},
     )
 
-    output = AppOutput(proc)
+    output = AppOutput(proc, "Device timeout detected as expected.")
     try:
         expected_results = app_configuration.get("expected_results", {})
         if on_simulator:
@@ -247,15 +262,13 @@ def cause_hang_with_app(request):
             # stay wedged.
             expect_running = app_configuration.get("expect_running", False)
             if auto_timeout:
-                # Wait for the application to detect its own hang
-                deadline = time.monotonic() + timeout
-                while "Device timeout detected as expected." not in output.text():
-                    if proc.poll() is not None or time.monotonic() > deadline:
-                        # Print process output for debugging
-                        print("The application did not hang as expected.")
-                        output.print()
-                        raise RuntimeError("The application did not hang as expected.")
-                    time.sleep(0.1)
+                # Sleep until the application reports its own hang, exits, or the timeout runs out
+                output.stop_waiting.wait(timeout)
+                if not output.ready_line_seen:
+                    # Print process output for debugging
+                    print("The application did not hang as expected.")
+                    output.print()
+                    raise RuntimeError("The application did not hang as expected.")
             elif expect_running:
                 # Wait for the application to hang itself
                 try:

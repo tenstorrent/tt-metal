@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <csignal>
+#include <iostream>
 #include <random>
 #include <sys/prctl.h>
 #include <tt-metalium/host_api.hpp>
@@ -229,8 +230,7 @@ int main() {
         }
         std::string error_msg = e.what();
         if (error_msg.find("device timeout") != std::string::npos || error_msg.find("Timeout (") != std::string::npos) {
-            printf("Device timeout detected as expected.\n");
-            fflush(stdout);  // test_triage.py waits for this line
+            std::cout << "Device timeout detected as expected." << std::endl;  // test_triage.py waits for this line
             if (std::getenv("TT_TRIAGE_HANG_APP_STAY_ALIVE")) {
                 // Stay alive so triage reads this process's Inspector RPC; test_hang_report.py needs the exit.
                 for (;;) {
