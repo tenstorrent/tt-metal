@@ -6535,7 +6535,7 @@ SPEC_DRAFT_LEN_ENV = "GEMMA4_SPEC_DRAFT_LEN"
 # Without a cost table (the decoder could not measure, and no plain cost is
 # given) the fixed policy serves and a warning says so.
 SPEC_K_BY_ROWS_ENV = "GEMMA4_SPEC_K_BY_ROWS"
-SPEC_K_BY_ROWS_DEFAULT = "5:5,8:3,16:1"
+SPEC_K_BY_ROWS_DEFAULT = "5:5"  # K=5 up to 5 live rows; above the table the step is the plain decode (K=0)
 SPEC_MAX_ROWS_ENV = "GEMMA4_SPEC_MAX_ROWS"
 SPEC_MAX_ISL_ENV = "GEMMA4_SPEC_MAX_ISL"
 SPEC_WIDTH_RUNGS_ENV = "GEMMA4_SPEC_WIDTH_RUNGS"

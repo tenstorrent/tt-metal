@@ -50,7 +50,7 @@ SPEC_ROW_TILE = 32
 # rows 32..63 the last reseed's target hidden (serving_seed_index).
 SPEC_POOL_ROWS = 2 * SPEC_ROW_TILE
 SPEC_K_BY_ROWS_ENV = "GEMMA4_SPEC_K_BY_ROWS"
-SPEC_K_BY_ROWS_DEFAULT = "5:5,8:3,16:1"
+SPEC_K_BY_ROWS_DEFAULT = "5:5"  # K=5 up to 5 live rows; above the table the step is the plain decode (K=0)
 # Additive mask value: -1e9, not -inf (flash kernels NaN on -inf).
 SPEC_MASK_NEG = -1e9
 # The in-trace mask builder works in key chunks of this width: its fp32

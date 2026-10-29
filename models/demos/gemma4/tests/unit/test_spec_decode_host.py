@@ -1280,10 +1280,14 @@ def test_unknown_native_stays_permissive(monkeypatch):
 # ===== Serving records (batched fused traces): the pure parts of the SpeculativeDecoder serving API.
 # Shape table -------------------------------------------------------------------------------------
 def test_default_k_by_rows_table_parses_to_the_catalog_entries():
-    assert parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT) == ((5, 5), (8, 3), (16, 1))
+    # The default stops at 5 live rows: the (8,3) and (16,1) records lost every measured batch point (the 12B and
+    # 31B Galaxy at 8 rows per engine: -3 % and -13 % against plain, random prompts), so above the table the step is
+    # the plain decode (K=0) and the batched records stay a catalog opt-in.
+    assert parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT) == ((5, 5),)
     assert parse_k_by_rows(" 5:5 , 8:3,16:1, ") == ((5, 5), (8, 3), (16, 1))
-    # the default capture shapes are one (1, k_max) record plus one per entry
-    table = parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT)
+    # the capture shapes are one (1, k_max) record plus one per entry
+    assert spec_capture_shapes(parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT), 5) == [(1, 5), (5, 5)]
+    table = parse_k_by_rows(" 5:5 , 8:3,16:1, ")
     assert spec_capture_shapes(table, 5) == [(1, 5), (5, 5), (8, 3), (16, 1)]
     # a table that already names (1, k_max) does not duplicate it
     assert spec_capture_shapes(((1, 5), (8, 3)), 5) == [(1, 5), (8, 3)]
