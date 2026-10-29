@@ -46,6 +46,12 @@ def _cb(core_set, idx, pages, page, dt):
     )
 
 
+def _v2():
+    # v2: face scatter of the staged row segments by L1->L1 NoC copies (2 x 32 B each) instead of RISC-V word loops.
+    # (32 B reads straight from DRAM do not work on Blackhole: a source at 32 mod 64 is read from the 64 B aligned address.)
+    return os.environ.get("DSV41_MOE_TAIL_V2", "0") == "1"
+
+
 def moe_tail(combine, scores, indices, mapping, col, n_cores=80):
     sh = [int(v) for v in combine.shape]
     K, T, H = sh[0], sh[-2], sh[-1]
@@ -68,7 +74,10 @@ def moe_tail(combine, scores, indices, mapping, col, n_cores=80):
     A, S, TMP, O = 0, 1, 2, 16
     bf = ttnn.bfloat16
     map_page = int(mapping.shape[-1]) * 2
-    tmp_bytes = K * T * tpc * 64 + 2 * T * 64 + 256 + map_page
+    v2 = _v2()
+    if v2:
+        assert mesh_cols & (mesh_cols - 1) == 0
+    tmp_bytes = (K * T * tpc * 64) + 2 * T * 64 + 256 + map_page
     cbs = [
         _cb(core_set, A, K * tpc, 2048, bf),
         _cb(core_set, S, K, 2048, bf),
@@ -86,7 +95,10 @@ def moe_tail(combine, scores, indices, mapping, col, n_cores=80):
             runtime_args=rt if name != "moe_tail_compute.cpp" else ttnn.RuntimeArgs(),
             common_runtime_args=common,
             config=cfg,
-            defines=([("TAIL_DBG", "1")] if os.environ.get("DSV41_TAIL_DBG") and name == "moe_tail_reader.cpp" else []),
+            defines=(
+                ([("TAIL_DBG", "1")] if os.environ.get("DSV41_TAIL_DBG") and name == "moe_tail_reader.cpp" else [])
+                + ([("TAIL_V2", "1")] if v2 and name == "moe_tail_reader.cpp" else [])
+            ),
         )
 
     reader = kern(
@@ -118,6 +130,7 @@ def moe_tail(combine, scores, indices, mapping, col, n_cores=80):
         hash(
             (
                 bool(os.environ.get("DSV41_TAIL_DBG")),
+                v2,
                 T,
                 K,
                 H,

@@ -46,6 +46,9 @@ void kernel_main() {
 
     // scratch layout in cb_tmp: [rowseg: K*T slabs of TPC*64B][scores T*32][indices T*32][mapping][col 64]
     constexpr uint32_t SEG = TPC * 64;
+#ifdef TAIL_V2
+    static_assert((mesh_cols & (mesh_cols - 1)) == 0, "mesh_cols must be a power of two");
+#endif
     constexpr uint32_t OFF_SC = K * T * SEG;
     constexpr uint32_t OFF_IDX = OFF_SC + T * STRIDE;
     constexpr uint32_t OFF_COL = OFF_IDX + T * STRIDE;
@@ -73,6 +76,23 @@ void kernel_main() {
     }
     noc.async_read_barrier();
 
+#ifdef TAIL_V2
+    {
+        // L1 -> L1 NoC copies (2 x 32 B per segment) instead of the RISC-V word loops
+        const uint32_t abase = act.get_write_ptr();
+        for (uint32_t k = 0; k < K; ++k) {
+            for (uint32_t t = 0; t < T; ++t) {
+                for (uint32_t jj = 0; jj < TPC; ++jj) {
+                    const uint32_t src = tbase + (k * T + t) * SEG + jj * 64;
+                    const uint32_t dst = abase + (jj * K + k) * 2048 + ((t >> 4) << 10) + ((t & 15) << 5);
+                    noc_async_read(get_noc_addr(src), dst, 32);
+                    noc_async_read(get_noc_addr(src + 32), dst + 512, 32);
+                }
+            }
+        }
+        noc_async_read_barrier();
+    }
+#else
     // activation tiles: tile (jj, k) at page jj*K + k; row t -> face (t>>4)*2 + {0,1}
     volatile tt_l1_ptr uint32_t* seg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tbase);
     volatile tt_l1_ptr uint32_t* ap = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act.get_write_ptr());
@@ -89,6 +109,7 @@ void kernel_main() {
             }
         }
     }
+#endif
 
     // score tiles: tile k, column 0 of row t
     volatile tt_l1_ptr uint16_t* sc16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tbase + OFF_SC);
@@ -99,7 +120,11 @@ void kernel_main() {
     for (uint32_t k = 0; k < K; ++k) {
         for (uint32_t t = 0; t < T; ++t) {
             const uint16_t e = ix16[t * (STRIDE / 2) + k];
+#ifdef TAIL_V2
+            const bool on = (mp16[e] & (mesh_cols - 1)) == my_col;
+#else
             const bool on = (mp16[e] % mesh_cols) == my_col;
+#endif
             const uint32_t pos = ((t >> 4) << 9) + ((t & 15) << 4);  // column 0 of row t (bf16 index)
             sp[k * 1024 + pos] = on ? sc16[t * (STRIDE / 2) + k] : (uint16_t)0;
         }
