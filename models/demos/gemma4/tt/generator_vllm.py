@@ -6593,8 +6593,8 @@ SPEC_K_BY_ROWS_DEFAULT = "5:5"  # K=5 up to 5 live rows; above the table the ste
 SPEC_MAX_ROWS_ENV = "GEMMA4_SPEC_MAX_ROWS"
 SPEC_MAX_ISL_ENV = "GEMMA4_SPEC_MAX_ISL"
 SPEC_WIDTH_RUNGS_ENV = "GEMMA4_SPEC_WIDTH_RUNGS"
-# The policy's INFO line on a record switch is rate-limited to one per this many seconds.
-SPEC_POLICY_LOG_INTERVAL_S = 1.0
+# The policy's INFO line on a record switch is rate-limited to one per this many seconds (0 = every switch).
+SPEC_POLICY_LOG_INTERVAL_S = float(os.environ.get("GEMMA4_SPEC_POLICY_LOG_INTERVAL_S", "1.0"))
 # The packed verify argmax reduces one 32-row tile: a record of ``rows``
 # requests at ``k`` drafts packs ``rows * (k + 1)`` verify rows into it.
 SPEC_PACKED_ROWS_LIMIT = 32
