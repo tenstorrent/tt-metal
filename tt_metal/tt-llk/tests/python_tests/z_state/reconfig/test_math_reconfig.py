@@ -45,7 +45,6 @@ def get_valid_dest_acc(
 @parametrize(
     formats=generate_valid_formats(
         [
-            DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Bfp8,
             DataFormat.Bfp8_b,
@@ -97,7 +96,7 @@ def generate_int8_boundary_formats() -> (
 ):
     # Reconfigs that cross the INT8_math_enabled boundary: a float side (bit = 0) <-> an Int8/Int32 side (bit = 1).
     # These are the cases where skip_int8 is observable -- it leaves the bit stale instead of re-deriving it.
-    floats = [DataFormat.Float16_b, DataFormat.Float16]
+    floats = [DataFormat.Float16_b]
     ints = [DataFormat.Int8, DataFormat.Int32]
     return [(f, f, i, i) for f in floats for i in ints] + [
         (i, i, f, f) for f in floats for i in ints

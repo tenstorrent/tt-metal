@@ -325,7 +325,7 @@ static Tensor apply_halo_padding(
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
     const auto compute_kernel_config = ttnn::init_device_compute_kernel_config(
-        tt::tt_metal::hal::get_arch(),
+        input_tensor.device()->arch(),
         std::nullopt,
         tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
@@ -441,6 +441,7 @@ Tensor fold(
 
     const Tensor& input_tensor = input_tensor_;
     TT_ASSERT(input_tensor.logical_shape().rank() == 4, "Fold op only supports 4D tensors");
+    TT_FATAL(stride_h > 0 && stride_w > 0, "Fold: stride_h and stride_w must be greater than 0");
 
     // use_transpose_as_fold takes a legacy composite path that bypasses prim::fold, so collapse_output cannot be
     // honoured there.

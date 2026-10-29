@@ -21,10 +21,10 @@
 
 // Fetch a KV chunk into L1 for forwarding. No DFB lifecycle — caller manages
 // reserve_back / push_back. Single read barrier at end for lower latency.
-template <uint32_t tile_bytes, bool transpose, typename ReaderType>
+template <uint32_t tile_bytes, bool transpose, typename ReaderType, typename DFB>
 FORCE_INLINE void read_chunk_for_forwarding(
     const ReaderType& reader,
-    const uint32_t dfb_id,
+    DFB& dfb,
     const uint32_t dst_addr,
     uint32_t start_tile_id,
     const uint32_t src_rows,
@@ -51,7 +51,7 @@ FORCE_INLINE void read_chunk_for_forwarding(
                 continue;
             }
             uint32_t tile_idx = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_zeros_async(noc, dfb_id, tile_bytes, tile_idx * tile_bytes);
+            fill_zeros_async(noc, dfb, tile_bytes, tile_idx * tile_bytes);
         }
     }
     // On WH/BH, async_write_zeros is implemented via noc_async_read from MEM_ZEROS_BASE,
@@ -265,10 +265,9 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
 
-#ifdef KV_CHAIN
+    DataflowBuffer dfb_q(dfb_q_in);
     DataflowBuffer dfb_k(dfb_k_in);
     DataflowBuffer dfb_v(dfb_v_in);
-#endif
 #ifdef READER_PRODUCES_MASK
     DataflowBuffer dfb_mask(dfb_mask_in);
 #endif
@@ -285,8 +284,9 @@ void kernel_main() {
     // Flexible-chunked: read the runtime chunk_start_idx tensor to derive the q-chunk offset. Bound only
     // in this mode (legacy chunked passes the scalar offset through a runtime arg instead).
 #ifdef FLEXIBLE_CHUNKED
+    DataflowBuffer dfb_chunk_compute(dfb_id_chunk_start_idx_compute);
+    DataflowBuffer dfb_chunk_writer(dfb_id_chunk_start_idx_writer);
     {
-        DataflowBuffer dfb_chunk_compute(dfb_id_chunk_start_idx_compute);
         dfb_chunk_compute.reserve_back(1);
         uint32_t chunk_start_write_ptr = dfb_chunk_compute.get_write_ptr();
         noc.async_read(chunk_start_idx_reader, CoreLocalMem<uint32_t>(chunk_start_write_ptr), 4, {.page_id = 0}, {});
@@ -294,7 +294,6 @@ void kernel_main() {
         uint32_t chunk_start_idx = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_start_write_ptr);
         dfb_chunk_compute.push_back(1);
 
-        DataflowBuffer dfb_chunk_writer(dfb_id_chunk_start_idx_writer);
         dfb_chunk_writer.reserve_back(1);
         uint32_t chunk_start_write_ptr_2 = dfb_chunk_writer.get_write_ptr();
         noc.async_read(chunk_start_idx_reader, CoreLocalMem<uint32_t>(chunk_start_write_ptr_2), 4, {.page_id = 0}, {});
@@ -314,6 +313,7 @@ void kernel_main() {
     // same landing spot before the full array overwrites it.
 #ifdef USE_WINDOWED_NARROWING
     Scratchpad<volatile uint32_t> cu_reader(scratch::windowed_cu_reader);
+    DataflowBuffer dfb_k_range(dfb_id_windowed_k_range);
     {
 #ifdef WINDOWED_Q_OFFSET_TENSOR
         {
@@ -380,16 +380,19 @@ void kernel_main() {
                     // shared header -- so the read is inlined against the page_table TensorBinding. The
                     // redundant page-size 3rd accessor arg is dropped (the binding supplies the aligned
                     // page size); page_table_stick_size remains the read size.
-                    const uint32_t page_table_addr = page_table_scratch.get_base_address();
                     const auto page_table_reader = TensorAccessor(tensor::page_table);
                     noc.async_read(
-                        page_table_reader,
-                        CoreLocalMem<uint32_t>(page_table_addr),
-                        page_table_stick_size,
-                        {.page_id = decoded.nb},
-                        {});
+                        page_table_reader, page_table_scratch, page_table_stick_size, {.page_id = decoded.nb}, {});
                     noc.async_read_barrier();
-                    page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_addr);
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+                    // The NoC wrote the page table to L1 behind the DM caches. Drop any lines left in L2 by an
+                    // earlier read of another batch's page table (or by an earlier program) so the CPU reads
+                    // below see the new one (as fill_cache does).
+                    invalidate_l2_cache_range(
+                        local_mem::detail::AddressAccess::address(page_table_scratch.local_mem()),
+                        page_table_stick_size);
+#endif
+                    page_table_ptr = &page_table_scratch[0];
                 }
 #endif
             }
@@ -413,7 +416,7 @@ void kernel_main() {
                 noc.async_read_barrier();
                 if constexpr (!use_streaming_compute) {
                     fill_attention_sink_tiles<attention_sink_tile_bytes>(
-                        dfb_attention_sink, sink_tiles, attention_sink_write_ptr);
+                        dfb_attn_sink, sink_tiles, attention_sink_write_ptr);
                 }
                 dfb_attn_sink.push_back(sink_tiles);
             }
@@ -433,21 +436,20 @@ void kernel_main() {
 #ifdef USE_WINDOWED_NARROWING
             {
                 // NoC-written, CPU-read: the lock drops stale cached lines on acquire (no-op off Quasar DM).
-                // The shared helper takes a raw pointer, read under this lock.
+                // The shared helper takes a raw element pointer, read under this lock.
                 auto cu_lock = cu_reader.scoped_lock(0, cu_window_seqlens_eles);
                 const auto range = windowed_k_chunk_range<WindowedMode::Bidirectional>(
                     q_chunk,
                     Sq_chunk_t,
                     valid_Sqt,
                     windowed_q_tok_offset,
-                    cu_reader.local_mem().get_unsafe_ptr(),
+                    &cu_reader[0],
                     cu_window_seqlens_eles,
                     Sk_chunk_t,
                     k_num_chunks,
                     tt::constants::TILE_HEIGHT);
                 windowed_k_lo = range.k_lo;
                 windowed_k_hi = range.k_hi;
-                DataflowBuffer dfb_k_range(dfb_id_windowed_k_range);
                 dfb_k_range.reserve_back(1);
                 volatile tt_l1_ptr uint32_t* k_range_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_k_range.get_write_ptr());
@@ -470,7 +472,7 @@ void kernel_main() {
             // When use_q_subblock_push is false, Q is read in full before the K loop (original behavior).
             if constexpr (!use_q_subblock_push) {
                 read_chunk_with_padding<q_tile_bytes>(
-                    q_reader, dfb_q_in, q_read_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
+                    q_reader, dfb_q, q_read_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
             }
 
             q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -548,7 +550,7 @@ void kernel_main() {
                         const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
                         read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
                             k_reader,
-                            dfb_k_in,
+                            dfb_k,
                             k_head,
                             k_chunk_start_row_num,
                             kv_row_tile_count,
@@ -567,7 +569,7 @@ void kernel_main() {
                             dfb_k_start_address = dfb_k.get_write_ptr();
                             read_chunk_for_forwarding<k_tile_bytes, true>(
                                 k_reader,
-                                dfb_k_in,
+                                dfb_k,
                                 dfb_k_start_address,
                                 k_start_tile_id,
                                 kv_row_tile_count,
@@ -579,7 +581,7 @@ void kernel_main() {
                         {
                             read_chunk_with_padding<k_tile_bytes>(
                                 k_reader,
-                                dfb_k_in,
+                                dfb_k,
                                 k_start_tile_id,
                                 kv_row_tile_count,
                                 DHt,
@@ -674,7 +676,7 @@ void kernel_main() {
                                     {});
                             } else {
                                 // reserve_back reset the write ptr to this row, so index by col.
-                                fill_neginf_tile<mask_tile_bytes>(dfb_mask_in, col);
+                                fill_neginf_tile<mask_tile_bytes>(dfb_mask, col);
                             }
                             mask_write_ptr += mask_tile_bytes;
                             if (++barrier_count == barrier_threshold) {
@@ -718,7 +720,7 @@ void kernel_main() {
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                             read_q_subblock<q_tile_bytes>(
                                 q_reader,
-                                dfb_q_in,
+                                dfb_q,
                                 q_read_tile_id,
                                 q_sub * qk_subblock_h,
                                 qk_subblock_h,
@@ -753,7 +755,7 @@ void kernel_main() {
                         constexpr uint32_t head_dim = (use_mla && !mla_kv_overlap) ? vDHt : DHt;
                         read_paged_chunk_with_padding<NVH, block_size_t, head_dim>(
                             v_reader,
-                            dfb_v_in,
+                            dfb_v,
                             v_head,
                             kv_chunk_start_row_num,
                             kv_row_tile_count,
@@ -772,7 +774,7 @@ void kernel_main() {
                             dfb_v_start_address = dfb_v.get_write_ptr();
                             read_chunk_for_forwarding<v_tile_bytes, false>(
                                 v_reader,
-                                dfb_v_in,
+                                dfb_v,
                                 dfb_v_start_address,
                                 v_start_tile_id,
                                 kv_row_tile_count,
@@ -785,7 +787,7 @@ void kernel_main() {
                         {
                             read_chunk_with_padding<v_tile_bytes>(
                                 v_reader,
-                                dfb_v_in,
+                                dfb_v,
                                 v_start_tile_id,
                                 kv_row_tile_count,
                                 vDHt,

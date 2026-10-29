@@ -14,7 +14,7 @@ struct RecvAsyncDeviceOperation {
     using tensor_args_t = Tensor;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
-    using program_factory_t = std::variant<RecvAsyncMeshWorkloadFactory>;
+    using program_factory_t = std::variant<RecvAsyncProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 

@@ -12,7 +12,6 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>  // q.device()->get_view().shape() for block-cyclic sp derivation
 
 #include "kernels/indexer_score_work_split.hpp"  // banded grid mapping (banded_core_count)
@@ -64,7 +63,7 @@ void validate_static(const operation_attributes_t& attrs, const tensor_args_t& t
     for (const auto& [tp, name, allow_sharded] :
          {std::tuple{&q, "q", false}, std::tuple{&k, "k", true}, std::tuple{&w, "weights", false}}) {
         TT_FATAL(tp->storage_type() == StorageType::DEVICE, "indexer_score {} must be on device", name);
-        TT_FATAL(tp->buffer() != nullptr, "indexer_score {} must have an allocated buffer", name);
+        TT_FATAL(tp->is_allocated(), "indexer_score {} must have an allocated buffer", name);
         if (!allow_sharded) {
             TT_FATAL(!tp->is_sharded(), "indexer_score {} must use interleaved memory", name);
         }
@@ -235,7 +234,7 @@ void validate_fused_runtime_values(const operation_attributes_t& attrs, const te
     TT_FATAL(t.k_local.has_value(), "indexer_score fused: k_local (all-gather input) is required");
     const auto& k_local = *t.k_local;
     TT_FATAL(
-        k_local.storage_type() == StorageType::DEVICE && k_local.buffer() != nullptr,
+        k_local.storage_type() == StorageType::DEVICE && k_local.is_allocated(),
         "indexer_score fused: k_local must be allocated on device");
     const auto& kl_mem = k_local.memory_config();
     const bool nd_sharded_dram =
@@ -271,7 +270,7 @@ void validate_fused_runtime_values(const operation_attributes_t& attrs, const te
 // address space and resolve the address against the wrong accessor.
 void validate_scalar_metadata_tensor(const Tensor& m, const Tensor& q, std::string_view name) {
     TT_FATAL(
-        m.storage_type() == StorageType::DEVICE && m.buffer() != nullptr,
+        m.storage_type() == StorageType::DEVICE && m.is_allocated(),
         "indexer_score: {} must be allocated on device",
         name);
     TT_FATAL(m.device() == q.device(), "indexer_score: {} must be on the same mesh device as q", name);
@@ -488,7 +487,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
 
     // Blackhole-only: the compute kernel relies on BH fast-untilize + custom BH LLK paths. Enforce in C++
     // so a Wormhole caller fails cleanly instead of hanging at launch.
-    const tt::ARCH arch = tt::tt_metal::hal::get_arch();
+    const tt::ARCH arch = q.device()->arch();
     TT_FATAL(arch == tt::ARCH::BLACKHOLE, "indexer_score is only supported on Blackhole, got {}", arch);
 
     // The custom blocked bcast-col LLK + half-sync 8-head subblock are validated only for bf16 DEST in

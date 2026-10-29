@@ -25,16 +25,19 @@ parts because a Metal 2.0 TensorParameter relaxation requires it to be exactly e
 and cannot relax any component of it.
 
 For sharded tensors, the cache key uses the squeezed shard shape in pages and the resolved
-core list from the BufferDistributionSpec, which is passed to TensorAccessor compile-time
-args. Since neither of these can be determined from the shard spec, the tensor and shard
-shapes are squeezed together and for GRID_2D the bank list is trimmed from the unsqueezed
-shape. This gives different geometries for the same shard spec but with different shapes.
+core list from each TensorSpec's BufferDistributionSpec (compute_buffer_sharding_args). The
+tensor bindings bake that geometry into TensorAccessor compile-time args, and the relaxed
+TensorParameter match compares it exactly. Since neither of these can be determined from the
+shard spec, the tensor and shard shapes are squeezed together and for GRID_2D the bank list is
+trimmed from the unsqueezed shape. This gives different geometries for the same shard spec but
+with different shapes.
 
-On a program-cache HIT the descriptor is NOT rebuilt; override_runtime_arguments()
-re-derives ALL per-dispatch state for the current tensors from the same shared
-per-core builder create_descriptor() uses — every per-core work-split arg (tile
-counts, start ids), packed scalars, buffer-address rt-arg slots, AND every
-tensor-backed circular-buffer base address (by CBIndex: c_0=input, c_2=output).
+On a program-cache HIT the program is NOT rebuilt; override_runtime_arguments()
+returns ALL per-dispatch state for the current tensors, built by the same run-args
+builder create_program_artifacts() uses — every per-core work-split arg (tile counts,
+start ids) and packed scalars, plus both tensor arguments. The tensor arguments carry
+the reader/writer TensorAccessor base addresses and shape, and the base addresses of
+the sharded path's borrowed input/output dataflow buffers.
 
 For TILE layout, volume is NOT hashed, so differently-shaped calls share one
 cache entry and override_runtime_arguments re-applies the new shape's work split
@@ -49,6 +52,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 
 
@@ -132,8 +136,8 @@ def test_unary_cache_reuse_different_volumes(device):
     ],
 )
 def test_unary_cache_reuse_different_logical_ranks(device, first_shape, second_shape):
-    """TILE layout: inputs of different rank share one cache entry. The hit must be accepted and must
-    re-derive the work split and tensor arguments for the second tensor."""
+    """TILE layout: inputs of different rank share one cache entry. The hit must be accepted
+    (relax_logical_rank) and must re-derive the work split and tensor arguments for the second tensor."""
     device.cache_entries_counter.reset()
 
     for shape in (first_shape, second_shape):
@@ -385,12 +389,12 @@ def test_unary_sharded_cache_correctness_different_grids(device):
 def test_unary_sharded_mixed_inplace_outofplace(device, first_inplace):
     """REGRESSION (the exact SDXL failure): sharded unary reused across a MIX of in-place
     (output_tensor aliases the input) and out-of-place calls sharing ONE cache entry (same shape/
-    config). For sharded ops the input/output addresses ride on tensor-backed CB base addresses,
-    re-patched only by resolved_bindings.cbs — get_dynamic returns rt-args and cannot touch CBs.
+    config). Under the legacy descriptor path, sharded input/output addresses rode on tensor-backed
+    CB base addresses, re-patched only by resolved_bindings.cbs — get_dynamic returned rt-args and
+    could not touch CBs. (They are now borrowed DFBs refreshed from the override's tensor arguments.)
     Combined with first-occurrence alias resolution, a program built under one aliasing pattern and
-    reused under another mis-resolves the output CB to the wrong slot with nothing to correct it →
-    PCC ~0 (SDXL in-place silu). With the parity check built in, this ALSO trips the framework's
-    fast-path-vs-rebuild assertion at the exact stale CB. Both orders must stay correct."""
+    reused under another mis-resolved the output CB to the wrong slot with nothing to correct it →
+    PCC ~0 (SDXL in-place silu). Both orders must stay correct."""
     device.cache_entries_counter.reset()
     shape = (256, 256)
     mem = ttnn.create_sharded_memory_config(
@@ -433,11 +437,13 @@ def test_unary_sharded_mixed_inplace_outofplace(device, first_inplace):
 # =============================================================================
 
 
+# Both shapes are above the small-tensor worker grid (get_worker_grid), so they share the full grid and the cache entry,
+# while their work splits differ: 441 tiles against 1024 tiles over every core.
 @pytest.mark.parametrize(
     "shape_first, shape_second",
     [
-        ([1, 1, 32, 64], [1, 1, 128, 256]),  # grow volume
-        ([1, 1, 128, 256], [1, 1, 32, 64]),  # shrink volume
+        ([1, 1, 672, 672], [1, 1, 1024, 1024]),  # grow volume
+        ([1, 1, 1024, 1024], [1, 1, 672, 672]),  # shrink volume
     ],
 )
 def test_unary_inplace_cache_reuse_different_shapes(device, shape_first, shape_second):
@@ -476,9 +482,9 @@ def test_unary_cache_mixed_inplace_outofplace_interleaved(device, first_inplace)
     single cache entry (TILE volume excluded from the hash). The legacy resolve_bindings maps an
     aliased buffer to its FIRST occurrence, so a program built under one aliasing pattern and reused
     under another would patch the writer's output address from the wrong tensor slot.
-    override_runtime_arguments re-derives every rt-arg address (reader[0]=input, writer[0]=output) for
-    the actual current tensors, so it MUST survive both orders — proving the rt-arg axis is re-applied,
-    not just that a cache hit occurred."""
+    override_runtime_arguments re-supplies both tensor arguments (reader tensor::src=input, writer
+    tensor::dst=output) for the actual current tensors, so it MUST survive both orders — proving the
+    address axis is re-applied, not just that a cache hit occurred."""
     device.cache_entries_counter.reset()
     shape = [1, 1, 32, 64]
     keep_alive = []  # hold refs so successive calls see fresh (different) buffer addresses
@@ -504,8 +510,8 @@ def test_unary_cache_mixed_inplace_outofplace_interleaved(device, first_inplace)
 def test_unary_inplace_cache_hit_interleaved_readdresses(device):
     """MIGRATION GUARD (stale buffer address on hit, interleaved): repeated in-place relu at the SAME
     shape/config but with freshly-allocated operands kept alive, so each cache HIT sees a DIFFERENT
-    buffer address. override_runtime_arguments must re-apply the reader/writer buffer-address rt-arg
-    slots on every hit (no rebuild) or the result reads/writes a stale address."""
+    buffer address. override_runtime_arguments must re-supply the reader/writer tensor arguments on
+    every hit (no rebuild) or the result reads/writes a stale address."""
     device.cache_entries_counter.reset()
     shape = [1, 1, 64, 64]
     keep_alive = []  # hold refs so each iteration's tensors get fresh (different) addresses
@@ -678,5 +684,42 @@ def test_unary_sharded_input_on_interleaved_path_cache_reuse(device, shard_shape
         with device.cache_entries_counter.measure():
             tt_out = ttnn.relu(tt_a)
         assert_equal(torch.relu(a), ttnn.to_torch(tt_out))
+
+    assert device.cache_entries_counter.total == 1
+
+
+# =============================================================================
+# Small-tensor worker grid (get_worker_grid)
+# =============================================================================
+
+
+# On Wormhole part of the grid only drops the cores the whole grid would leave idle: a DRAM tensor with a page per
+# worker runs on the whole grid and shares the cache entry of a tensor with 4 pages per worker. On N150 and N300 light
+# ops had run it on 16 cores and moderate and mid ops on 32 (4 and 2 pages per core), at up to twice the kernel time.
+@run_for_wormhole_b0("only Wormhole runs small tensors on at most a page per core")
+# The ULP thresholds are the largest errors measured on N300 for these inputs, over bf16 and fp32.
+@pytest.mark.parametrize(
+    "op, torch_op, ulp_threshold",
+    [
+        (ttnn.relu, torch.relu, 0),
+        (ttnn.exp, torch.exp, 1),
+        (ttnn.cos, torch.cos, 2),
+        (ttnn.silu, torch.nn.functional.silu, 3),
+    ],
+    ids=["relu", "exp", "cos", "silu"],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+def test_unary_small_tensor_grid_page_per_worker_takes_whole_grid(device, op, torch_op, ulp_threshold, dtype):
+    device.cache_entries_counter.reset()
+    grid = device.compute_with_storage_grid_size()
+    torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[dtype]
+
+    for pages_per_worker in (4, 1):
+        torch.manual_seed(pages_per_worker)
+        a = torch.rand([1, 1, pages_per_worker * grid.y * 32, grid.x * 32], dtype=torch_dtype) + 0.5
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        with device.cache_entries_counter.measure():
+            tt_out = op(tt_a)
+        assert_with_ulp(expected_result=torch_op(a), actual_result=ttnn.to_torch(tt_out), ulp_threshold=ulp_threshold)
 
     assert device.cache_entries_counter.total == 1

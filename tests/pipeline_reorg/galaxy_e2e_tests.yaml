@@ -67,6 +67,33 @@
   team: scaleout
   budget_type: e2e
 
+# Channel trimming capture -> replay on the same four 2x2 meshes, one process per mesh. Each rank must capture and
+# replay its own profile, and inter-mesh traffic crosses from VC0 to VC1 on every inter-mesh router. Same two MGDs
+# as the multi-mesh sanity entries above.
+- id: galaxy-fabric-2x2-channel-trimming-nonz
+  name: Galaxy Fabric 2x2 multi-mesh channel trimming (inter-mesh over N/S/E/W)
+  cmd: |
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_channel_trimming.yaml
+  skus:
+    bh_galaxy:
+      timeout: 10
+      mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_2x2_ring_4stage_ring_mesh_graph_descriptor.textproto
+  owner_id: U0BRTUH9VE0 # Amogh Rajagopal
+  team: scaleout
+  budget_type: e2e
+
+- id: galaxy-fabric-2x2-channel-trimming-z
+  name: Galaxy Fabric 2x2 multi-mesh channel trimming (inter-mesh over Z)
+  cmd: |
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor {mgd} --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_channel_trimming.yaml
+  skus:
+    bh_galaxy:
+      timeout: 10
+      mgd: tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_2x2_z_ring_4stage_ring_mesh_graph_descriptor.textproto
+  owner_id: U0BRTUH9VE0 # Amogh Rajagopal
+  team: scaleout
+  budget_type: e2e
+
 - id: galaxy-fabric-multi-mesh-4x4-2x4s
   name: Galaxy Fabric Multi-Mesh 4x4 and 2x4s stability tests
   cmd: |

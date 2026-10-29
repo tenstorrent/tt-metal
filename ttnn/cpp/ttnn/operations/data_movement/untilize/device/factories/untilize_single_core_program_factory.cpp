@@ -53,7 +53,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
@@ -151,9 +151,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeSingleCoreProgramFactory::creat
         compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
     }
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = std::filesystem::path{COMPUTE_SRC},

@@ -37,7 +37,7 @@
 #   BUILD_DIR         build tree                    (default: $TT_METAL_HOME/build_emule)
 #   EMULE_SKIP_BUILD  =1 to reuse an existing build (skip configure + compile)
 #
-# Prerequisites: clang-20 + libstdc++ (gcc-13+), CMake >= 3.24, Ninja, ccache,
+# Prerequisites: clang-20 + libstdc++ (gcc-13+), CMake >= 3.25, Ninja, ccache,
 # and network access to clone tt-emule when TT_EMULE_PATH is not supplied. The
 # tt-mlir CI docker image (ghcr.io/tenstorrent/tt-mlir/tt-mlir-ci-ubuntu-24-04)
 # ships all of these.

@@ -47,6 +47,7 @@
 #include "dispatch/dispatch_query_manager.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -61,10 +62,10 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <umd/device/coordinates/coordinate_manager.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/coordinates/coordinate_manager.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <impl/debug/watcher_server.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/dispatch/dispatch_telemetry.hpp>
@@ -422,9 +423,16 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
         uint64_t go_message_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
-        uint32_t zero = 0;
-        cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
+        // Every go message in every row, so no slot holds a stale go.
+        const std::vector<uint32_t> go_messages_done(
+            hal.get_dev_size(programmable_core_type, HalL1MemAddrType::GO_MSG) / sizeof(uint32_t), 0);
+        cluster.write_core(
+            go_messages_done.data(),
+            go_messages_done.size() * sizeof(uint32_t),
+            tt_cxy_pair(id_, virtual_core),
+            go_message_addr);
         cluster.l1_barrier(id_);
+        uint32_t zero = 0;
         uint64_t go_message_index_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };
@@ -487,8 +495,7 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
     if (context_->get_dispatch_query_manager().fds_signalling_enabled()) {
         TT_FATAL(active_eth_cores.empty(), "FDS worker signalling does not support ACTIVE_ETH cores");
     }
-    const uint32_t default_sub_device_worker_count =
-        compute_grid_size.x * compute_grid_size.y + static_cast<uint32_t>(active_eth_cores.size());
+    const uint32_t default_sub_device_worker_count = compute_grid_size.x * compute_grid_size.y;
     std::vector<uint32_t> workers_per_sub_device(num_sub_devices(), default_sub_device_worker_count);
     for (auto& command_queue : command_queues_) {
         command_queue->set_dispatch_sems(num_sub_devices(), workers_per_sub_device);
@@ -892,7 +899,7 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
 }
 
 HWCommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
-    detail::DispatchStateCheck(using_fast_dispatch_);
+    MetalContext::instance(this->get_context_id()).device_manager()->check_dispatch_mode(using_fast_dispatch_);
     TT_FATAL(using_fast_dispatch_, "Fast dispatch must be enabled to use command_queue");
     auto actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
     TT_FATAL(actual_cq_id < command_queues_.size(), "cq_id {} is out of range", actual_cq_id);

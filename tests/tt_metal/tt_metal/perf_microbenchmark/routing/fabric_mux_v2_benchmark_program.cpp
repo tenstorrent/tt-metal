@@ -26,6 +26,7 @@
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_fabric::bench {
 
@@ -253,14 +254,18 @@ uint32_t high_u32(uint64_t value) { return static_cast<uint32_t>(value >> 32); }
 
 class StandaloneMuxV2DrainerLayout {
 public:
-    StandaloneMuxV2DrainerLayout(uint8_t num_buffers, size_t buffer_size_bytes, size_t base_l1_address) :
+    StandaloneMuxV2DrainerLayout(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
+        uint8_t num_buffers,
+        size_t buffer_size_bytes,
+        size_t base_l1_address) :
         num_buffers_(num_buffers), buffer_size_bytes_(buffer_size_bytes) {
         TT_FATAL(num_buffers_ > 0, "StandaloneMuxV2DrainerLayout requires at least one buffer");
         TT_FATAL(buffer_size_bytes_ > 0, "StandaloneMuxV2DrainerLayout requires a non-zero buffer size");
         TT_FATAL(
-            buffer_size_bytes_ <= tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
+            buffer_size_bytes_ <= tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(mesh_device),
             "StandaloneMuxV2DrainerLayout buffer size must be <= {}, got {}",
-            tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
+            tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(mesh_device),
             buffer_size_bytes_);
 
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -538,7 +543,7 @@ void FabricMuxV2BenchmarkContext::initialize() {
     TT_FATAL(mesh_device_ != nullptr, "Failed to create full mesh device for mux-v2 standalone benchmark");
 
     device_ = nullptr;
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         if (device != nullptr && device->id() == 0) {
             device_ = device;
             break;
@@ -633,6 +638,7 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
         l1_unreserved_base_address);
 
     StandaloneMuxV2DrainerLayout drainer_layout(
+        *mesh_device,
         static_cast<uint8_t>(benchmark_case.num_drainer_buffers),
         channel_buffer_size_bytes,
         l1_unreserved_base_address);

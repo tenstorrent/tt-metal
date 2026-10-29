@@ -5,12 +5,14 @@
 #include "tt_memory.h"
 
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <exception>
 #include <span>
+#include <string>
 
 #include "tt_elffile.hpp"
-#include "tt_metal/impl/context/metal_context.hpp"
 
 namespace ll_api {
 
@@ -32,19 +34,15 @@ memory memory::from_elf(ElfFile& elf, const std::string& path, Loading loading) 
     if (loading == Loading::CONTIGUOUS_XIP) {
         elf.MakeExecuteInPlace();
 
-        // debug: dump disassembly after XIP transform
-        // this output is used for tt-triage
-        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_disable_xip_dump()) {
-            // Write the modified ELF out
-            std::string out_elf_path = std::string(path) + ".xip.elf";
-            try {
-                elf.WriteImage(out_elf_path);
-            } catch (const std::exception& e) {
-                log_warning(
-                    tt::LogLLRuntime, "Failed to write XIP ELF for disassembly ({}): {}", out_elf_path, e.what());
-            } catch (...) {
-                log_warning(tt::LogLLRuntime, "Failed to write XIP ELF for disassembly: {}", out_elf_path);
-            }
+        // Dump the post-XIP-transform ELF next to the original; tt-triage reads it to verify binary integrity
+        // and for disassembly.
+        std::string out_elf_path = std::string(path) + ".xip.elf";
+        try {
+            elf.WriteImage(out_elf_path);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogLLRuntime, "Failed to write XIP ELF for disassembly ({}): {}", out_elf_path, e.what());
+        } catch (...) {
+            log_warning(tt::LogLLRuntime, "Failed to write XIP ELF for disassembly: {}", out_elf_path);
         }
     }
 

@@ -1289,3 +1289,54 @@ TEST(OverlappedAllocators, CPU_NonzeroAllocOffset) {
         AllocatorID{0});
     EXPECT_EQ(alloc0_addr3, alloc0_addr2 + alloc_size_4K);
 }
+
+// The L1_SMALL out-of-memory hint has to name l1_small_size in both exhausted-region cases and stay
+// out of every other buffer type's message.
+TEST(OverlappedAllocators, CPU_L1SmallOutOfMemoryHintWhenRegionIsZero) {
+    const uint32_t alignment = get_dram_alignment_from_hal();
+    BankManager bank_manager(BufferType::L1_SMALL, std::vector<int64_t>{0}, /*size_bytes=*/0, alignment, alignment);
+    EXPECT_THAT(
+        [&]() {
+            bank_manager.allocate_buffer(
+                alignment, alignment, /*bottom_up=*/true, CoreRangeSet(std::vector<CoreRange>{}), std::nullopt);
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Out of Memory: Not enough space to allocate"),
+            ::testing::HasSubstr("The L1_SMALL region is 0 B"),
+            ::testing::HasSubstr("set l1_small_size"))));
+}
+
+TEST(OverlappedAllocators, CPU_L1SmallOutOfMemoryHintWhenRegionIsTooSmall) {
+    const uint32_t alignment = get_dram_alignment_from_hal();
+    const uint64_t region_size = 1024;
+    BankManager bank_manager(BufferType::L1_SMALL, std::vector<int64_t>{0}, region_size, alignment, alignment);
+    EXPECT_THAT(
+        [&]() {
+            bank_manager.allocate_buffer(
+                4 * region_size,
+                4 * region_size,
+                /*bottom_up=*/true,
+                CoreRangeSet(std::vector<CoreRange>{}),
+                std::nullopt);
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("bank size is 1024 B"), ::testing::HasSubstr("increase l1_small_size"))));
+}
+
+TEST(OverlappedAllocators, CPU_NonL1SmallOutOfMemoryHasNoL1SmallHint) {
+    const uint64_t region_size = 1024;
+    auto bank_manager = get_bank_manager_with_allocator_dependencies(
+        region_size, get_dram_alignment_from_hal(), BankManager::AllocatorDependencies());
+    EXPECT_THAT(
+        [&]() {
+            bank_manager.allocate_buffer(
+                4 * region_size,
+                4 * region_size,
+                /*bottom_up=*/true,
+                CoreRangeSet(std::vector<CoreRange>{}),
+                std::nullopt);
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Out of Memory: Not enough space to allocate 4096 B DRAM"),
+            ::testing::Not(::testing::HasSubstr("l1_small_size")))));
+}

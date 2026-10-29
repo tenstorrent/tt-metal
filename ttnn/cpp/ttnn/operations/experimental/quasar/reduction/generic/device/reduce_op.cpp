@@ -116,7 +116,7 @@ Tensor reduce(
     // input or output — falls back to the standard tilize + tile-reduce path.
     //
     // MAX/MIN are excluded because the RM compute kernel accumulates partial reductions via
-    // Accumulate::at across chunks, and the cross-chunk fold uses SUM semantics. Wiring MAX
+    // Accumulate across chunks, and the cross-chunk fold uses SUM semantics. Wiring MAX
     // accumulation through that pipeline is doable but not yet done; for now they tilize.
     //
     // The path is opt-in via use_row_major_support: when false (the default), eligibility is forced
