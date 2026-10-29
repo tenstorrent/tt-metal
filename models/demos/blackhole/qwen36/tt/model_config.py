@@ -282,6 +282,18 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_qkvz_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=84 if tp8 else 44, grid_w=self.decode_grid_w
         )
+        # QWEN36_NORM_IN_SHARD=1 (default 0: registers nothing): RES40-in0 variants of the in-projections that read the
+        # decode rms_norm output (gate/up, attn qkv, GDN qkvz); see tp_common.NORM_IN_SHARD_ENV.
+        tpc.register_norm_in_shard_variant(
+            self.mlp_w1_decode_1d_progcfg,
+            M,
+            self.dim,
+            self.hidden_dim // tp,
+            fused_activation=ttnn.UnaryOpType.SILU,
+        )
+        tpc.register_norm_in_shard_variant(self.mlp_w3_decode_1d_progcfg, M, self.dim, self.hidden_dim // tp)
+        tpc.register_norm_in_shard_variant(self.attn_qkv_decode_1d_progcfg, M, self.dim, self.attn_qkv_fused_dim_tp)
+        tpc.register_norm_in_shard_variant(self.gdn_qkvz_decode_1d_progcfg, M, self.dim, self.gdn_qkvzab_dim_tp)
         # Output projections (attn wo, GDN o_proj): already interleaved+auto (no weight relayout, not in
         # the prefill AGMM fusion), so this just swaps ttnn-auto for a tuned ~32-core 1D decode grid.
         # attn_wo: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~24us, +25%

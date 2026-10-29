@@ -332,22 +332,31 @@ class Qwen36MLP:
             # 1D mcast decode matmuls on a small explicit grid, silu fused in the w1 progcfg.
             # mcast_in0 needs interleaved in0, but ff-norm hands us a width-shard -> interleave first.
             # weight_prefetch.linear == ttnn.linear unless QWEN36_WEIGHT_PREFETCH registered the weight.
-            x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            pc1, pc3 = args.mlp_w1_decode_1d_progcfg, args.mlp_w3_decode_1d_progcfg
+            # QWEN36_NORM_IN_SHARD=1: read the RES40 ff-norm output as a sharded in0 (no interleave copy).
+            sh1 = tpc.norm_in_shard_progcfg(x, w.w1, pc1)
+            sh3 = tpc.norm_in_shard_progcfg(x, w.w3, pc3)
+            _in_shard = sh1 is not None and sh3 is not None
+            if _in_shard:
+                x_il, pc1, pc3 = x, sh1, sh3
+            else:
+                x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
             w1_out = weight_prefetch.linear(
                 x_il,
                 w.w1,
-                args.mlp_w1_decode_1d_progcfg,
+                pc1,
                 compute_kernel_config=ckc,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             w3_out = weight_prefetch.linear(
                 x_il,
                 w.w3,
-                args.mlp_w3_decode_1d_progcfg,
+                pc3,
                 compute_kernel_config=ckc,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            ttnn.deallocate(x_il)
+            if not _in_shard:
+                ttnn.deallocate(x_il)
             _silu_fused = True
         elif x.shape[-2] > ttnn.TILE_SIZE:
             # Prefill (M>1 tile, compute-bound): FPU-tuned 2D config (grid width -> 1x4 subblock,
@@ -416,6 +425,9 @@ class Qwen36MLP:
             if (x.shape[-2] <= ttnn.TILE_SIZE or (_prefill_tuned and tpc.prefill_l1_rows_ok(x.shape[-2])))
             else mc
         )
+        if w2_pc is not None and w2_pc is args.mlp_w2_decode_1d_progcfg:
+            # QWEN36_DECODE_RES_DIRECT=2: down-proj straight into RES40 (unchanged with the flag at 0 / 1).
+            w2_pc, mc_w2_out = tpc.decode_out_proj_placement(decode_ar, w.w2, w2_pc, mc_w2_out)
         partial = weight_prefetch.linear(hidden, w.w2, w2_pc, compute_kernel_config=ckc, memory_config=mc_w2_out)
         ttnn.deallocate(hidden)
 

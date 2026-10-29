@@ -292,7 +292,17 @@ class TPAttention:
         # gate lives across SDPA (post-concat) -> always DRAM.
         _qkv3_mc = ttnn.L1_MEMORY_CONFIG if (sh[2] > tpc.TILE_SIZE or decode_qkv3_l1) else ttnn.DRAM_MEMORY_CONFIG
         qkv3 = ttnn.slice(qkv, (0, 0, 0, 0), (sh[0], sh[1], sh[2], qkv3_dim), memory_config=_qkv3_mc)
-        gate = ttnn.slice(qkv, (0, 0, 0, qkv3_dim), (sh[0], sh[1], sh[2], qkv3_dim + gate_dim))
+        if decode_qkv3_l1 and sh[2] <= tpc.TILE_SIZE and os.environ.get("QWEN36_ATTN_GATE_L1", "0") == "1":
+            # QWEN36_ATTN_GATE_L1=1 (glue-norm-head; default 0): lean decode keeps the gate block in L1 too, so the
+            # fused sigmoid-mul after SDPA reads L1 (B x gate_dim bf16, <= 64 KB per device).
+            gate = ttnn.slice(
+                qkv,
+                (0, 0, 0, qkv3_dim),
+                (sh[0], sh[1], sh[2], qkv3_dim + gate_dim),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        else:
+            gate = ttnn.slice(qkv, (0, 0, 0, qkv3_dim), (sh[0], sh[1], sh[2], qkv3_dim + gate_dim))
         ttnn.deallocate(qkv)
         return qkv3, gate, None
 
@@ -329,18 +339,16 @@ class TPAttention:
             self.args.dim,
         )
 
-    def _wo_proj(self, x, weight):
+    def _wo_proj(self, x, weight, decode_ar=None):
         """Row-parallel output projection: DRAM-sharded decode/prefill matmul (K=attn_out_dim_tp),
-        matching the in-proj. Falls back to plain interleaved when no sharded memcfg."""
+        matching the in-proj. Falls back to plain interleaved when no sharded memcfg.
+        decode_ar: the DecodeResidualAllReduce that consumes the partial (QWEN36_DECODE_RES_DIRECT placement)."""
         if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
             # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
-            return tpc.matmul_1d_decode(
-                x,
-                weight,
-                self.args.attn_wo_decode_1d_progcfg,
-                self.wo_cfg,
-                out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            pc, out_mc = tpc.decode_out_proj_placement(
+                decode_ar, weight, self.args.attn_wo_decode_1d_progcfg, ttnn.DRAM_MEMORY_CONFIG
             )
+            return tpc.matmul_1d_decode(x, weight, pc, self.wo_cfg, out_memory_config=out_mc)
         if not self._wo_sharded:
             if x.shape[-2] > tpc.TILE_SIZE:
                 # Prefill: FPU-tuned 2D config beats ttnn-auto's 1x1 stall; L1 output (gated stays DRAM)
@@ -1183,7 +1191,7 @@ class TPAttention:
         else:
             gated_flat = ttnn.reshape(gated, (1, B, NH * HD))
             ttnn.deallocate(gated)
-        wo_partial = self._wo_proj(gated_flat, tw["wo"])
+        wo_partial = self._wo_proj(gated_flat, tw["wo"], decode_ar=decode_ar)
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         if decode_ar is not None:
@@ -1401,7 +1409,7 @@ class TPAttention:
         ttnn.deallocate(attn_flat)
         ttnn.deallocate(gate)  # gate_flat is a view of it
 
-        wo_partial = self._wo_proj(gated_flat, tw["wo"])
+        wo_partial = self._wo_proj(gated_flat, tw["wo"], decode_ar=decode_ar)
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         if decode_ar is not None:
@@ -1526,7 +1534,7 @@ class TPAttention:
         ttnn.deallocate(attn_flat)
         ttnn.deallocate(gate)  # gate_flat is a view of it
 
-        wo_partial = self._wo_proj(gated_flat, tw["wo"])
+        wo_partial = self._wo_proj(gated_flat, tw["wo"], decode_ar=decode_ar)
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         if decode_ar is not None:

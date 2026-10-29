@@ -322,6 +322,9 @@ class TTSampling(LightweightModule):
         # the worker sub-core grids so they stay inside the worker sub-device. Left None elsewhere so no
         # other arch's behaviour changes.
         self._force_argmax_sub_core_grids = self.sub_core_grids if getattr(args, "use_unfused_ccl", False) else None
+        # Optional model-supplied greedy path for the force-argmax branch: hook(x, tt_out_tok) -> tokens, or None to
+        # keep the all-gather + argmax below. None (the default) leaves every model unchanged.
+        self.force_argmax_hook = None
 
         # sampling_dp > 1 when multiple mesh groups each sample users independently
         # (e.g. GPT-OSS on [4,8]: 4 rows × 32 users; Llama Galaxy on [8,4]: 4 cols × 8 users)
@@ -1077,6 +1080,15 @@ class TTSampling(LightweightModule):
 
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
+            if (
+                self.force_argmax_hook is not None
+                and not self.log_probs_calculator.enable_log_probs
+                and self._force_argmax_sub_core_grids is None
+            ):
+                hooked = self.force_argmax_hook(x, tt_out_tok)
+                if hooked is not None:
+                    self.tt_log_probs = None
+                    return hooked, self.tt_log_probs
             # Logprobs consume the vocabulary shards before argmax's gather/slice,
             # masked below. Keep token selection identical when reporting toggles.
             logits_for_log_probs = x

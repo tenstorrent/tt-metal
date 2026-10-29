@@ -387,6 +387,24 @@ class Qwen36Model:
                 logger.warning("QWEN36_LMHEAD_DSHARD ignored: the LM head is not vocab-sharded")
 
         self.vocab_size = args.vocab_size
+        # QWEN36_SAMPLER_SHARD_ARGMAX (glue-norm-head G5c; default 0 = unchanged): the on-device sampler's
+        # force-argmax (all-greedy) branch takes the per-shard argmax + 2-tile token combine of the device decode loop
+        # (shard_argmax_max_rows + _dl_greedy_token_row_batched; lowest-global-index tie-break == torch.argmax) instead
+        # of all-gathering the full vocab, untilizing it and running one wide argmax. Mixed batches keep top-k.
+        self._sampler_sas_dl = None
+        if os.environ.get("QWEN36_SAMPLER_SHARD_ARGMAX", "0") == "1":
+            if self.sampling is not None and self._lmhead_vocab_sharded:
+                self._sampler_sas_dl = self._vfy_new_dl(self.sampling.tt_sampling.max_batch_size)
+                self.sampling.tt_sampling.force_argmax_hook = self._sampler_shard_argmax
+            else:
+                logger.warning(
+                    "QWEN36_SAMPLER_SHARD_ARGMAX ignored: needs the on-device sampler and a vocab-sharded LM head"
+                )
+        # QWEN36_SAMPLER_PAD_VIEW (glue-norm-head G5b; default 0 = ttnn.pad with zero rows): the on-device-sampler
+        # decode logits [1,1,B,V/TP] are widened to the sampler's 32 rows by a view onto their own tile padding
+        # instead of a padded copy. Rows >= B then carry the padding rows of the norm / LM head (not zeros, possibly
+        # non-finite); the sampler is row-wise and those rows only reach token lanes >= B, which no active user reads.
+        self._sampler_pad_view = os.environ.get("QWEN36_SAMPLER_PAD_VIEW", "0") == "1"
         # True: return pre-gather vocab-sharded logits for per-shard argmax + host combine.
         self._ondev_argmax = False
         self._paged_kv_caches = None
@@ -1077,6 +1095,37 @@ class Qwen36Model:
         token = ttnn.min(ttnn.add(idx_i32, offset), dim=3, keepdim=True)  # [1,1,1,1] int32
         token = ttnn.add(ttnn.typecast(token, ttnn.uint32), dl.zeros_u32)  # widen to [1,1,1,32] uint32 TILE
         return ttnn.to_layout(token, ttnn.ROW_MAJOR_LAYOUT)
+
+    def _sampler_shard_argmax(self, x, tt_out_tok):
+        """TTSampling.force_argmax_hook (QWEN36_SAMPLER_SHARD_ARGMAX=1): greedy tokens of the vocab-sharded logits
+        x [1,1,rows,vocab/TP] from per-shard argmax + max (shard_argmax_max_rows) and the batched 2-tile combine
+        (_dl_greedy_token_row_batched), written into tt_out_tok ([1,1,1,32] uint32 ROW_MAJOR, the token feedback
+        buffer) when given, else returned as [1,1,rows] (ttnn.argmax keepdim=False layout). Lane u = row u, so the
+        result is the full-gather argmax of every row. None (the sampler keeps its own path) for any other shape."""
+        dl = self._sampler_sas_dl
+        if (
+            dl is None
+            or len(x.shape) != 4
+            or x.shape[-2] != dl.batch
+            or dl.batch != self._DL_LANES
+            or x.shape[-1] * self.num_devices != self.vocab_size
+        ):
+            return None
+        if tt_out_tok is not None and (
+            list(tt_out_tok.shape) != [1, 1, 1, self._DL_LANES]
+            or tt_out_tok.dtype != ttnn.uint32
+            or tt_out_tok.layout != ttnn.ROW_MAJOR_LAYOUT
+        ):
+            return None
+        idx, val = self.shard_argmax_max_rows(x, dl.batch)
+        token_row = self._dl_greedy_token_row_batched(idx, val, dl)
+        ttnn.deallocate(idx)
+        ttnn.deallocate(val)
+        if tt_out_tok is None:
+            return ttnn.reshape(token_row, (1, 1, dl.batch))
+        ttnn.copy(token_row, tt_out_tok)
+        ttnn.deallocate(token_row)
+        return tt_out_tok
 
     def _dl_greedy_token_row_batched(self, idx, val, dl):
         """Batched _dl_greedy_token_row: global greedy token of each of the dl.batch users from the per-shard
@@ -7341,7 +7390,17 @@ class Qwen36Model:
             sampler_batch = self.sampling.tt_sampling.max_batch_size
             B = logits.shape[2]
             if B < sampler_batch:
-                logits = ttnn.pad(logits, [(0, 0), (0, 0), (0, sampler_batch - B), (0, 0)], value=0.0)
+                if (
+                    self._sampler_pad_view
+                    and logits.layout == ttnn.TILE_LAYOUT
+                    and len(logits.shape) == 4
+                    and logits.padded_shape[-2] == sampler_batch
+                ):
+                    logits = ttnn.reshape(
+                        logits, ttnn.Shape([1, 1, sampler_batch, logits.shape[-1]]), logits.padded_shape
+                    )
+                else:
+                    logits = ttnn.pad(logits, [(0, 0), (0, 0), (0, sampler_batch - B), (0, 0)], value=0.0)
             # Bare tensor (not a tuple): the traced path passes this straight to capture_trace().
             return logits
         logits = self._forward_decode(tokens_in, cos, sin, current_pos, page_table)

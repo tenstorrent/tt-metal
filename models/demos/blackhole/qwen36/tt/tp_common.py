@@ -918,9 +918,83 @@ def create_matmul_1d_decode_progcfg(
     )
 
 
+# QWEN36_NORM_IN_SHARD (glue-norm-head G2a; default 0 = unchanged). A 1D decode in-projection (MLP gate/up, attention
+# qkv, GDN qkvz) whose activation is the RES40 rms_norm output reads it as a sharded in0 directly instead of
+# interleaving it first: the variant progcfg runs on the 10x4 RES40 grid (the 40 in0 senders are exactly the RES40
+# shard cores) with in0_block_w = 4 (the 4-tile shard width). NOT guaranteed byte-identical (more K blocks, so the
+# interm accumulation may round differently) and in0_block_w drops from 16 / 8: ship only on a microbench + accuracy
+# win. A weight registered with QWEN36_WEIGHT_PREFETCH for its default progcfg keeps the old path.
+NORM_IN_SHARD_ENV = "QWEN36_NORM_IN_SHARD"
+_NORM_IN_SHARD_GRID = (10, 4)  # == _DAR_GRID (defined with the decode all-reduce below)
+_NORM_IN_SHARD_VARIANTS = {}  # id(default progcfg) -> (default progcfg, RES40-in0 variant)
+
+
+def norm_in_shard_enabled():
+    return os.environ.get(NORM_IN_SHARD_ENV, "0") == "1"
+
+
+def register_norm_in_shard_variant(default_progcfg, m, k, n, fused_activation=None):
+    """QWEN36_NORM_IN_SHARD=1: register the RES40-in0 variant of a 1D decode progcfg ([m, k] x [k, n]). No-op (and
+    nothing registered) with the flag at 0, or when k is not tile-shardable over the RES40 grid."""
+    if not norm_in_shard_enabled():
+        return
+    ncores = _NORM_IN_SHARD_GRID[0] * _NORM_IN_SHARD_GRID[1]
+    if k % (ncores * TILE_SIZE):
+        return
+    shard_tiles = k // (ncores * TILE_SIZE)
+    variant = create_matmul_1d_decode_progcfg(
+        m,
+        k,
+        n,
+        num_cores=ncores,
+        fused_activation=fused_activation,
+        grid_w=_NORM_IN_SHARD_GRID[0],
+        max_in0_block_w=shard_tiles,
+    )
+    _NORM_IN_SHARD_VARIANTS[id(default_progcfg)] = (default_progcfg, variant)
+
+
+def _res40_memcfg(width):
+    grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_NORM_IN_SHARD_GRID[0] - 1, _NORM_IN_SHARD_GRID[1] - 1)
+            )
+        }
+    )
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [TILE_SIZE, width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def norm_in_shard_progcfg(x, weight, decode_1d_progcfg):
+    """The registered RES40-in0 variant of decode_1d_progcfg when x is a RES40 activation (QWEN36_NORM_IN_SHARD=1),
+    else None (always None with the flag at 0: nothing is registered)."""
+    entry = _NORM_IN_SHARD_VARIANTS.get(id(decode_1d_progcfg))
+    if entry is None or entry[0] is not decode_1d_progcfg:
+        return None
+    if not x.is_sharded() or x.shape[-2] > TILE_SIZE:
+        return None
+    ncores = _NORM_IN_SHARD_GRID[0] * _NORM_IN_SHARD_GRID[1]
+    k = x.shape[-1]
+    if k % (ncores * TILE_SIZE) or x.memory_config() != _res40_memcfg(k // ncores):
+        return None
+    if weight_prefetch.lookup(weight, decode_1d_progcfg) is not None:
+        return None
+    return entry[1]
+
+
 def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG):
     """Small-grid 1D (mcast_in0) decode matmul on an interleaved weight; interleaves the K-sharded
-    activation first since mcast_in0 needs the full K per core. See test_mlp_matmul_sweep."""
+    activation first since mcast_in0 needs the full K per core. See test_mlp_matmul_sweep.
+    QWEN36_NORM_IN_SHARD=1: a RES40 activation is read sharded in place (norm_in_shard_progcfg)."""
+    pc_sh = norm_in_shard_progcfg(x, weight, decode_1d_progcfg)
+    if pc_sh is not None:
+        return ttnn.linear(
+            x, weight, program_config=pc_sh, compute_kernel_config=compute_cfg, memory_config=out_memory_config
+        )
     x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
     # QWEN36_WEIGHT_PREFETCH: a weight registered for this progcfg streams through the Tensor prefetcher; else plain.
     out = weight_prefetch.linear(
@@ -1412,6 +1486,38 @@ DECODE_AR_FUSE_LIVE_ROWS_ENV = "QWEN36_DECODE_AR_FUSE_LIVE_ROWS"
 DECODE_AR_LIVE_ROWS_ENV = "QWEN36_DECODE_AR_LIVE_ROWS"
 DECODE_AR_LIVE_ROWS_MAX = TILE_SIZE // 2  # rows that fit faces 0/1 of a 32x32 tile (the op's own eligibility bound)
 
+# QWEN36_DECODE_RES_DIRECT (glue-norm-head G1; default 0 = the old path, unchanged). Where the decode out-projections
+# (MLP down, attention wo, GDN out; proj_1d_decode only) write the partial that DecodeResidualAllReduce.all_reduce
+# consumes:
+#   0  attention wo / GDN out -> DRAM interleaved, MLP down -> L1 interleaved; all_reduce reshards to RES40.
+#   1  attention wo / GDN out -> L1 interleaved (no DRAM write + read-back); all_reduce still reshards to RES40.
+#   2  all three write RES40 directly: the 1D matmul runs on the 10x4 RES40 grid (per_core_N = dim/32/40, same
+#      in0_block_w, so the K order and every output tile are unchanged) with memory_config=res_mem, and all_reduce
+#      skips its reshard. Halves the out-projections' working cores (80 -> 40): ship only on a microbench win.
+#      A weight registered with QWEN36_WEIGHT_PREFETCH for its 1D progcfg keeps that progcfg (mode 1 placement).
+DECODE_RES_DIRECT_ENV = "QWEN36_DECODE_RES_DIRECT"
+
+
+def decode_res_direct_mode():
+    """QWEN36_DECODE_RES_DIRECT as an int in {0, 1, 2} (default 0)."""
+    v = os.environ.get(DECODE_RES_DIRECT_ENV, "0")
+    if v not in ("0", "1", "2"):
+        raise ValueError(f"{DECODE_RES_DIRECT_ENV} must be 0, 1 or 2, got {v!r}")
+    return int(v)
+
+
+def decode_out_proj_placement(decode_ar, weight, decode_1d_progcfg, default_memory_config):
+    """(program_config, memory_config) for a decode out-projection whose partial feeds decode_ar.all_reduce, per
+    QWEN36_DECODE_RES_DIRECT. Returns the inputs unchanged with the flag at 0 or without a decode_ar."""
+    mode = decode_res_direct_mode() if decode_ar is not None else 0
+    if mode == 0:
+        return decode_1d_progcfg, default_memory_config
+    if mode == 2 and weight_prefetch.lookup(weight, decode_1d_progcfg) is None:
+        pc = decode_ar.res_out_progcfg(weight.shape[-2], weight.shape[-1])
+        if pc is not None:
+            return pc, decode_ar.res_mem
+    return decode_1d_progcfg, ttnn.L1_MEMORY_CONFIG
+
 
 def decode_ar_live_rows_enabled():
     """QWEN36_DECODE_AR_LIVE_ROWS (default "0" = off): <= 16-row decode all-reduces send only each tile's live half."""
@@ -1419,6 +1525,7 @@ def decode_ar_live_rows_enabled():
 
 
 _DAR_GRID = (10, 4)  # RES40 core grid (x, y)
+assert _DAR_GRID == _NORM_IN_SHARD_GRID
 _DAR_UNSET = object()
 
 
@@ -1504,6 +1611,21 @@ class DecodeResidualAllReduce:
 
         self.buffer = alloc(ttnn.bfloat16)
         self.buffer_fp32 = alloc(ttnn.float32) if gdn_fp32 else None
+        self._res_out_pcs = {}  # QWEN36_DECODE_RES_DIRECT=2: res_out_progcfg per (k, n)
+
+    def res_out_progcfg(self, k, n):
+        """QWEN36_DECODE_RES_DIRECT=2: 1D mcast_in0 decode progcfg ([TILE_SIZE, k] x [k, n]) whose output tiles land
+        exactly on the RES40 shards: (10, 4) grid, per_core_N = n/32/40, in0_block_w = the same largest divisor of
+        k_tiles <= 8 as the default out-projection progcfgs (identical K order, so identical bytes). None when n is
+        not the residual width."""
+        key = (int(k), int(n))
+        if key not in self._res_out_pcs:
+            ncores = _DAR_GRID[0] * _DAR_GRID[1]
+            ok = n == self.dim and n % (ncores * TILE_SIZE) == 0
+            self._res_out_pcs[key] = (
+                create_matmul_1d_decode_progcfg(TILE_SIZE, k, n, num_cores=ncores, grid_w=_DAR_GRID[0]) if ok else None
+            )
+        return self._res_out_pcs[key]
 
     def enter(self, x):
         """Model entry: hidden-fractured embedding [1,1,B,dim/tp] -> replicated [1,1,B,dim] in RES40."""
@@ -1604,9 +1726,12 @@ class DecodeResidualAllReduce:
         shape = list(partial.shape)
         if shape[0] != 1 or shape[1] != 1:
             partial = ttnn.reshape(partial, (1, 1, shape[-4] * shape[-3] * shape[-2], shape[-1]))
-        packed = ttnn.to_memory_config(partial, self.res_mem)
-        if packed is not partial:
-            ttnn.deallocate(partial)
+        if partial.memory_config() == self.res_mem:
+            packed = partial  # QWEN36_DECODE_RES_DIRECT=2: the out-projection already wrote RES40
+        else:
+            packed = ttnn.to_memory_config(partial, self.res_mem)
+            if packed is not partial:
+                ttnn.deallocate(partial)
         if packed.dtype != dtype:
             cast = ttnn.typecast(packed, dtype)
             ttnn.deallocate(packed)
