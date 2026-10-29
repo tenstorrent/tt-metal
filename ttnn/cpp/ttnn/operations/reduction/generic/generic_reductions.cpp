@@ -286,20 +286,20 @@ static Tensor reduce_impl(
                             : (rank < 4) ? ttnn::unsqueeze_to_4D(input_tensor_arg)
                                          : input_tensor_arg;
 
+        // In the chain, pack FP32 except on the last stage where we pack bf16.
+        std::optional<tt::tt_metal::DataType> chain_output_dtype;
+        if (chain_active) {
+            chain_output_dtype = is_last_in_chain ? tt::tt_metal::DataType::BFLOAT16 : tt::tt_metal::DataType::FLOAT32;
+        }
+
         if constexpr (reduce_type == reduction_common::ReduceType::Sum) {
-            // In the chain, pack FP32 except on the last stage where we pack bf16.
-            std::optional<tt::tt_metal::DataType> sum_output_dtype;
-            if (chain_active) {
-                sum_output_dtype =
-                    is_last_in_chain ? tt::tt_metal::DataType::BFLOAT16 : tt::tt_metal::DataType::FLOAT32;
-            }
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::SUM,
                 reduce_op_dim,
                 scalar,
                 memory_config,
-                sum_output_dtype,
+                chain_output_dtype,
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
@@ -312,7 +312,7 @@ static Tensor reduce_impl(
                 reduce_op_dim,
                 scalar / reduced_volume,
                 memory_config,
-                std::nullopt,
+                chain_output_dtype,
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
@@ -618,7 +618,10 @@ Tensor reduce(
     // Reducing a size-1 axis is the identity, so drop it rather than pay a launch or a transpose round-trip
     // for it. Full reductions keep every axis, which leaves their precision chain unchanged.
     ttsl::SmallVector<int> non_unit_dims;
-    std::copy_if(dim.begin(), dim.end(), std::back_inserter(non_unit_dims), [&](int d) { return arg_shape[d] != 1; });
+    if (rank > 0) {
+        std::copy_if(
+            dim.begin(), dim.end(), std::back_inserter(non_unit_dims), [&](int d) { return arg_shape[d] != 1; });
+    }
     if (!non_unit_dims.empty() && non_unit_dims.size() < dim.size() && static_cast<int>(dim.size()) < rank) {
         Tensor output_tensor = reduce<reduce_type>(
             input_tensor_arg,

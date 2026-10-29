@@ -292,6 +292,15 @@ def test_sum_nc_int32_fp32(device, shape, dim, dtype):
         assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=2)
 
 
+@pytest.mark.parametrize("op", [ttnn.sum, ttnn.mean])
+def test_reduce_rank0_dim(device, op):
+    torch_input = torch.tensor(3.0, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(op(input_tensor, dim=0))
+
+    assert torch.equal(output_tensor, torch_input)
+
+
 @pytest.mark.parametrize("shape, dim", [((2, 1, 64, 64), [0, 1]), ((2, 1, 64, 64), [1, 2]), ((1, 3, 1, 64), [0, 2])])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_sum_size_one_dims(device, shape, dim, keepdim):

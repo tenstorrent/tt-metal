@@ -276,7 +276,9 @@ def test_mean_nc(device, shape, dim, dtype, keepdim, scalar):
     # Reference from the device-rounded input so bf8_b's block rounding is not counted as op error.
     torch_output = torch.mean(ttnn.to_torch(input_tensor).float(), dim=dim, keepdim=keepdim) * scalar
 
-    output_tensor = ttnn.to_torch(ttnn.mean(input_tensor, dim=dim, keepdim=keepdim, scalar=scalar))
+    output = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim, scalar=scalar)
+    assert output.dtype == dtype
+    output_tensor = ttnn.to_torch(output)
 
     if dtype == ttnn.float32:
         assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=8)
