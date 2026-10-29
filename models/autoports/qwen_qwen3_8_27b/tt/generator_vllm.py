@@ -85,7 +85,7 @@ class Qwen38ForCausalLM:
         from .serving_state import ServingStatePool
         from .vllm_cache_specs import (selected_block_size, physical_cache_budget,
             physical_bytes_per_block, validate_budget_geometry, bounded_token_budget, MambaSpec,
-            shared_recurrent_snapshots)
+            shared_recurrent_snapshots, union_state_backing)
         block_sizes={group.kv_cache_spec.block_size for group in config.kv_cache_groups}
         if block_sizes != {selected_block_size()}:
             raise ValueError('Allocated cache groups must agree with selected checkpoint block size')
@@ -123,7 +123,8 @@ class Qwen38ForCausalLM:
                 if layer.layer_type=='linear_attention'},
             sharing_groups=[sorted(int(name.split('layers.')[1].split('.')[0])
                 for name in group.layer_names) for group in config.kv_cache_groups
-                if isinstance(group.kv_cache_spec,MambaSpec)] if shared_recurrent_snapshots() else None)
+                if isinstance(group.kv_cache_spec,MambaSpec)] if shared_recurrent_snapshots() else None,
+            union_block_size=self.scheduler_block_size if union_state_backing() else None)
         memory=ttnn.get_memory_view(self.mesh,ttnn.BufferType.DRAM)
         self.allocation_evidence=dict(
             scheduler_blocks=config.num_blocks,scheduler_block_size=self.scheduler_block_size,
@@ -132,6 +133,7 @@ class Qwen38ForCausalLM:
             recurrent_snapshot_bytes_per_device=self.state_pool.allocated_bytes_per_device,
             recurrent_unique_snapshot_pools=self.state_pool.unique_pool_count,
             shared_recurrent_snapshots=shared_recurrent_snapshots(),
+            union_state_backing=union_state_backing(),
             attention_bytes_per_device=sum(2*int(state.key.shape[0])*8*1088
                 for state in states if hasattr(state,'key')),
             active_recurrent_bytes_per_device=len(self.state_pool.pools)*self.batch_size*801792,
@@ -156,7 +158,10 @@ class Qwen38ForCausalLM:
                                       memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 states.append(PagedState(allocate(), allocate()))
         self.kv_cache = states
-        width = ((self.context_length + 255) // 256) * 8
+        # Scheduler blocks need not divide the context (1536); cover whole blocks.
+        block = getattr(self,'scheduler_block_size',None) or 256
+        covered = ((self.context_length + block - 1)//block)*block
+        width = ((max(self.context_length, covered) + 255) // 256) * 8
         physical_prefill_chunk_size=512 if self.batch_size>16 else 4096
         if getattr(self,'cache_groups',None):
             # Hybrid cache groups are set before this allocation; state_pool is
@@ -233,6 +238,8 @@ class Qwen38ForCausalLM:
             raise ValueError('Hybrid serving requires per-layer scheduler tables')
         index=next(i for i,layer in zip(self.model.layer_indices,self.model.layers)
                    if layer.layer_type=='full_attention')
+        # Union backing: former snapshot blocks are zeroed before attention reads them.
+        self.state_pool.claim_for_attention(per_layer[index])
         return per_layer[index]
 
     def _snapshot_ids(self, tables, row, end):

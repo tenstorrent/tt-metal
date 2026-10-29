@@ -6,6 +6,7 @@ block identities and lifetime; a saved row is immutable until that block is reus
 No saved row aliases live request state, and restore never mutates the pool.
 """
 import math
+import os
 import operator
 from pathlib import Path
 
@@ -14,6 +15,62 @@ import ttnn
 from .optimized_decoder import LinearState
 
 _KERNEL = str(Path(__file__).with_name('kernels') / 'serving_state_copy.cpp')
+_UNION_KERNEL = str(Path(__file__).with_name('kernels') / 'serving_state_union_copy.cpp')
+ATTENTION_TILE_BYTES = 1088  # BFP8 32x32 tile
+RECURRENT_ROW_BYTES = 12*128*128*4
+CONV_ROW_BYTES = 3*2560*2
+STATE_ROW_BYTES = RECURRENT_ROW_BYTES + CONV_ROW_BYTES
+
+
+def union_backing():
+    value = os.environ.get('QWEN38_UNION_STATE_BACKING', '0')
+    if value not in ('0', '1'):
+        raise ValueError('QWEN38_UNION_STATE_BACKING must be 0 or 1')
+    return value == '1'
+
+
+def _row_geometry(tensor):
+    if tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
+        return int(tensor.shape[-1])*2, math.prod(tuple(tensor.shape)[1:-1])
+    return 4096, math.prod(tuple(tensor.padded_shape)[1:])//1024  # exact FP32 tiles
+
+
+def copy_union_row(mesh, live, key, value, ids, layer_row, region_base, restore, tiles_per_block):
+    """Exact byte copy between a live row and one block's K/V byte stream (union backing).
+
+    ids[layer_row] = (source, destination): (slot, block) to save, (block, slot) to restore.
+    """
+    if live.is_sharded() or key.is_sharded() or value.is_sharded():
+        raise ValueError('Union state backing requires interleaved DRAM')
+    if key.dtype != ttnn.bfloat8_b or value.dtype != ttnn.bfloat8_b or tuple(key.shape) != tuple(value.shape):
+        raise ValueError('Union state backing requires matching BFP8 K/V pages')
+    page_bytes, pages_per_row = _row_geometry(live)
+    tiles_total = math.prod(tuple(key.padded_shape))//1024
+    if tiles_total % tiles_per_block:
+        raise ValueError('Attention pages are not whole union blocks')
+    if region_base + pages_per_row*page_bytes > 2*tiles_per_block*ATTENTION_TILE_BYTES:
+        raise ValueError('State row does not fit inside one block of attention K/V pages')
+    count = min(8,pages_per_row)
+    grid = mesh.compute_with_storage_grid_size()
+    coords = [ttnn.CoreCoord(i//grid.y,i%grid.y) for i in range(count)]
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(core,core) for core in coords])
+    compile_args = [page_bytes,pages_per_row,count,int(live.shape[0]),tiles_total//tiles_per_block,
+                    tiles_per_block,ATTENTION_TILE_BYTES,int(region_base),int(bool(restore))]
+    for tensor in (live,key,value,ids):
+        compile_args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+    runtime = ttnn.RuntimeArgs()
+    for ordinal,core in enumerate(coords):
+        runtime[core.x][core.y] = [live.buffer_address(),key.buffer_address(),value.buffer_address(),
+            ids.buffer_address(),layer_row,ordinal]
+    descriptor = ttnn.ProgramDescriptor(kernels=[ttnn.KernelDescriptor(
+        kernel_source=_UNION_KERNEL,core_ranges=cores,compile_time_args=compile_args,
+        runtime_args=runtime,config=ttnn.ReaderConfigDescriptor())],cbs=[
+            ttnn.CBDescriptor(total_size=page_bytes,core_ranges=cores,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0,data_format=live.dtype,page_size=page_bytes)]),
+            ttnn.CBDescriptor(total_size=32,core_ranges=cores,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=1,data_format=ttnn.uint32,page_size=32)])
+        ],semaphores=[])
+    ttnn.generic_op([live,key,value,ids],descriptor)
 
 
 def copy_state_row(mesh, source, destination, ids, layer_row):
@@ -22,12 +79,7 @@ def copy_state_row(mesh, source, destination, ids, layer_row):
         raise ValueError('Snapshot copies require distinct live and pool allocations')
     if source.is_sharded() or destination.is_sharded():
         raise ValueError('Snapshot storage must be interleaved DRAM')
-    if source.layout == ttnn.ROW_MAJOR_LAYOUT:
-        page_bytes = int(source.shape[-1])*2
-        pages_per_row = math.prod(tuple(source.shape)[1:-1])
-    else:
-        page_bytes = 4096  # exact FP32 tile, including every mantissa bit
-        pages_per_row = math.prod(tuple(source.padded_shape)[1:])//1024
+    page_bytes, pages_per_row = _row_geometry(source)
     count = min(8,pages_per_row)
     grid = mesh.compute_with_storage_grid_size()
     if count > grid.x*grid.y:
@@ -53,8 +105,17 @@ def copy_state_row(mesh, source, destination, ids, layer_row):
 
 
 class ServingStatePool:
-    def __init__(self, model, active_states, num_blocks_by_layer, sharing_groups=None):
+    def __init__(self, model, active_states, num_blocks_by_layer, sharing_groups=None,
+                 union_block_size=None):
+        """union_block_size: back snapshot rows by the same block's attention K/V pages.
+
+        Requires shared groups; recurrent ordinal k lives in the k-th attention layer's
+        pages of the block. A block written as state is scrubbed (state bytes zeroed)
+        before any attention table references it again.
+        """
         self.mesh = model.mesh
+        self.union = union_block_size is not None
+        self.state_blocks = set()
         self.active = {}
         self.pools = {}
         self.num_blocks = {}
@@ -99,7 +160,8 @@ class ServingStatePool:
                     layout=source.layout,device=self.mesh,memory_config=ttnn.DRAM_MEMORY_CONFIG)
             pool_key = self.shared_ordinal.get(original_idx, original_idx)
             if pool_key not in unique_pools:
-                unique_pools[pool_key] = LinearState(pool_tensor(active.conv),pool_tensor(active.recurrent))
+                unique_pools[pool_key] = (None if self.union else
+                    LinearState(pool_tensor(active.conv),pool_tensor(active.recurrent)))
             self.pools[original_idx] = unique_pools[pool_key]
         if not self.active:
             raise ValueError('A recurrent state pool needs at least one linear layer')
@@ -110,9 +172,70 @@ class ServingStatePool:
             device=self.mesh,memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh))
         self.unique_pool_count = len(unique_pools)
-        self.allocated_bytes_per_device = sum(
-            int(pool.conv.shape[0]) * (3*2560*2 + 12*128*128*4)
-            for pool in unique_pools.values())
+        self.allocated_bytes_per_device = 0 if self.union else sum(
+            int(pool.conv.shape[0]) * STATE_ROW_BYTES for pool in unique_pools.values())
+        if self.union:
+            self._init_union(model, active_states, union_block_size)
+
+    def _init_union(self, model, active_states, block_size):
+        if not self.sharing_groups:
+            raise ValueError('Union state backing requires shared recurrent snapshot groups')
+        attention = [state for layer, state in zip(model.layers, active_states)
+                     if layer.layer_type == 'full_attention']
+        if len(attention) != len(self.sharing_groups[0]):
+            raise ValueError('Union backing needs one attention layer per recurrent group ordinal')
+        if block_size % 32 or block_size//32*8*ATTENTION_TILE_BYTES*2 < STATE_ROW_BYTES:
+            raise ValueError(f'Union backing needs >= {STATE_ROW_BYTES} K/V bytes per layer-block; '
+                             f'block {block_size} is too small (minimum 1474 tokens, use 1536)')
+        self.tiles_per_block = block_size//32*8
+        for state in attention:
+            tiles = math.prod(tuple(state.key.padded_shape))//1024
+            if tiles != self.tiles_per_block*next(iter(self.num_blocks.values())):
+                raise ValueError('Attention pages and scheduler blocks disagree for union backing')
+        self.union_targets = {i: attention[self.shared_ordinal[i]] for i in self.layer_indices}
+        self.ordinal_targets = attention
+        first = next(iter(self.active.values()))
+        self.zero_state = LinearState(
+            ttnn.zeros([1,*tuple(first.conv.shape)[1:]],dtype=first.conv.dtype,layout=first.conv.layout,
+                       device=self.mesh,memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.zeros([1,*tuple(first.recurrent.shape)[1:]],dtype=first.recurrent.dtype,
+                       layout=first.recurrent.layout,device=self.mesh,memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        self.counters['scrubbed_blocks'] = 0
+
+    def _union_copy(self, live, target, row, restore):
+        copy_union_row(self.mesh, live.recurrent, target.key, target.value, self.ids, row, 0,
+                       restore, self.tiles_per_block)
+        copy_union_row(self.mesh, live.conv, target.key, target.value, self.ids, row,
+                       RECURRENT_ROW_BYTES, restore, self.tiles_per_block)
+
+    def _upload_ids(self):
+        host = ttnn.from_torch(self.host_ids,dtype=ttnn.uint32,layout=ttnn.ROW_MAJOR_LAYOUT,
+                              mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh))
+        ttnn.copy_host_to_device_tensor(host,self.ids)
+        self.counters['metadata_uploads']+=1
+
+    def scrub_blocks(self, blocks):
+        """Zero the state bytes of blocks before attention reads them (BFP8 must stay finite)."""
+        if not self.union:
+            return
+        for block in sorted({int(b) for b in blocks}):
+            self.host_ids.zero_()
+            self.host_ids[:len(self.ordinal_targets),1] = block
+            self._upload_ids()
+            for row, target in enumerate(self.ordinal_targets):
+                self._union_copy(self.zero_state, target, row, False)
+            self.state_blocks.discard(block)
+            self.pool_owners.pop(block, None)
+            self.counters['scrubbed_blocks'] += 1
+
+    def claim_for_attention(self, table):
+        """Scrub every former state block that this attention page table references."""
+        if not self.union or not self.state_blocks:
+            return
+        referenced = set(torch.unique(torch.as_tensor(table)).tolist())
+        stale = referenced & self.state_blocks
+        if stale:
+            self.scrub_blocks(stale)
 
     def _copy_tensor(self, source, destination, layer_row):
         copy_state_row(self.mesh, source, destination, self.ids, layer_row)
@@ -143,10 +266,13 @@ class ServingStatePool:
         for row,i in enumerate(self.layer_indices):
             self.host_ids[row,0] = ids[i] if restore else slot
             self.host_ids[row,1] = slot if restore else ids[i]
-        host = ttnn.from_torch(self.host_ids,dtype=ttnn.uint32,layout=ttnn.ROW_MAJOR_LAYOUT,
-                              mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh))
-        ttnn.copy_host_to_device_tensor(host,self.ids)
-        self.counters['metadata_uploads']+=1
+        self._upload_ids()
+        if self.union:
+            for row,i in enumerate(self.layer_indices):
+                self._union_copy(self.active[i], self.union_targets[i], row, restore)
+            if not restore:
+                self.state_blocks.update(ids.values())
+            return
         for row,i in enumerate(self.layer_indices):
             source,destination=(self.pools[i],self.active[i]) if restore else (self.active[i],self.pools[i])
             self._copy_tensor(source.conv,destination.conv,row)
@@ -160,7 +286,18 @@ class ServingStatePool:
         """
         if self.prepared:
             return
-        if self.sharing_groups:
+        if self.union:
+            # Warm on the real attention pages: null block 0 holds each live slot-0
+            # row and is restored from it, then scrubbed back to zero bytes.
+            for row,i in enumerate(self.layer_indices):
+                self.host_ids[row,0] = 0
+                self.host_ids[row,1] = 0
+            self._upload_ids()
+            for row,i in enumerate(self.layer_indices):
+                self._union_copy(self.active[i], self.union_targets[i], row, False)
+                self._union_copy(self.active[i], self.union_targets[i], row, True)
+            self.scrub_blocks([0])
+        elif self.sharing_groups:
             # Null row is only scratch here. Restore each layer before a later
             # group overwrites its aliased row; nonzero layer-distinct states
             # must survive warmup exactly. All commands use the same CQ.

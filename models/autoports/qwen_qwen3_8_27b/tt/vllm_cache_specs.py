@@ -34,9 +34,27 @@ def shared_recurrent_snapshots():
 
 def selected_block_size():
     block = int(os.environ.get('QWEN38_CACHE_BLOCK_SIZE', BLOCK_SIZE))
-    if block not in (256, 512, 1024, 2048, 4096):
-        raise ValueError('Qwen checkpoint block size must be256/512/1024/2048/4096')
+    if block not in (256, 512, 1024, 1536, 2048, 4096):
+        raise ValueError('Qwen checkpoint block size must be256/512/1024/1536/2048/4096')
     return block
+
+
+def union_state_backing():
+    """Back recurrent snapshot rows by the same block ID's attention K/V pages.
+
+    vLLM gives each block ID to exactly one group at a time, so a block's
+    attention bytes are free whenever it holds a snapshot. Needs shared
+    snapshots and blocks whose per-layer K+V pages hold one state row.
+    """
+    value = os.environ.get('QWEN38_UNION_STATE_BACKING', '0')
+    if value not in ('0', '1'):
+        raise ValueError('QWEN38_UNION_STATE_BACKING must be0 or1')
+    if value == '1':
+        if not shared_recurrent_snapshots():
+            raise ValueError('Union state backing requires QWEN38_SHARED_RECURRENT_SNAPSHOTS=1')
+        if selected_block_size() * ATTENTION_BYTES_PER_TOKEN // ATTENTION_LAYERS < STATE_BYTES_PER_LAYER:
+            raise ValueError('Union state backing requires blocks of at least 1536 tokens')
+    return value == '1'
 
 
 def physical_cache_budget():
@@ -53,6 +71,8 @@ def physical_cache_budget():
 
 def physical_bytes_per_block(block):
     """Selected BFP8 attention plus BF16/FP32 snapshots; excludes active state/scratch."""
+    if union_state_backing():
+        return block * ATTENTION_BYTES_PER_TOKEN
     pools = RECURRENT_LAYERS // RECURRENT_GROUPS if shared_recurrent_snapshots() else RECURRENT_LAYERS
     return block * ATTENTION_BYTES_PER_TOKEN + pools * STATE_BYTES_PER_LAYER
 
