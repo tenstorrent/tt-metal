@@ -344,6 +344,9 @@ class RunTimeOptions {
     // presence-based override to force-disable fabric 2-ERISC regardless of defaults
     bool disable_fabric_2_erisc_mode = false;
 
+    // Carry inter-mesh fabric traffic on VC0, with no VC1 (TT_METAL_FABRIC_DISABLE_INTERMESH_VC)
+    bool disable_fabric_intermesh_vc = false;
+
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
     bool enable_2_erisc_mode = true;
 
@@ -872,6 +875,9 @@ public:
 
     // Presence-based override to force-disable fabric 2-ERISC
     bool get_disable_fabric_2_erisc_mode() const { return disable_fabric_2_erisc_mode; }
+
+    // Inter-mesh fabric traffic on VC0, with no VC1
+    bool get_disable_fabric_intermesh_vc() const { return disable_fabric_intermesh_vc; }
 
     // Feature flag to enable 2-erisc mode on Blackhole
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }

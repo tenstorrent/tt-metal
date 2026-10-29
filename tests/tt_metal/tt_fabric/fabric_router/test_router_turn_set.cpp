@@ -196,8 +196,8 @@ TEST_F(RouterTurnSetTest, BoundaryTemplate_FansOutToEveryMeshDirectionOnVC1) {
 }
 
 TEST_F(RouterTurnSetTest, BoundaryTemplate_Requires2DAndVC1) {
-    // Its entire shape is the from-boundary VC1 fanout, so without VC1 or on 1D the boundary
-    // router cannot be constructed.
+    // Its entire shape is the from-boundary fanout, so without VC1 (and without inter-mesh traffic
+    // on VC0) or on 1D the boundary router cannot be constructed.
     EXPECT_ANY_THROW(turn_set_for_router(
         Topology::Mesh,
         RoutingDirection::Z,

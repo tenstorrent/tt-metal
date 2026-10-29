@@ -189,6 +189,9 @@ void SetFabricConfig(
 
 FabricConfig GetFabricConfig();
 
+// True when TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1: inter-mesh traffic is on VC0, with no VC1.
+bool IsIntermeshVCDisabled();
+
 namespace experimental {
 
 // How many ethernet links the weakest hop along one row or column can open. Planes held back for

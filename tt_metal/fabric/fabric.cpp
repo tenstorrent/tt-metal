@@ -559,6 +559,10 @@ tt::tt_fabric::Topology get_fabric_topology(const tt::tt_metal::distributed::Mes
 
 FabricConfig GetFabricConfig() { return tt::tt_metal::MetalContext::instance().get_fabric_config(); }
 
+bool IsIntermeshVCDisabled() {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_disable_fabric_intermesh_vc();
+}
+
 void SetFabricConfig(
     FabricConfig fabric_config,
     FabricReliabilityMode reliability_mode,

@@ -889,6 +889,15 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) uint8_t forward_2d_disp
     constexpr auto dirs = Routing2DCodec::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
     constexpr bool stateful_api = use_2d_single_live_stateful_noc<DOWNSTREAM_EDM_SIZE>();
     const uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+    // The arms below skip a direction this router was built without, so a packet asking for one is
+    // dropped and its receiver hangs. Routes never ask for one (for example E/W after a
+    // VC0 landing with the intermesh VC disabled); with the watcher on, a wrong route stops here instead.
+    constexpr uint8_t DEAD_ARMS = static_cast<uint8_t>(
+        (((LIVE >> 0) & 1) ? 0 : Routing2DCodec::action_bit(dirs[0])) |
+        (((LIVE >> 1) & 1) ? 0 : Routing2DCodec::action_bit(dirs[1])) |
+        (((LIVE >> 2) & 1) ? 0 : Routing2DCodec::action_bit(dirs[2])) |
+        (((LIVE >> 3) & 1) ? 0 : Routing2DCodec::action_bit(dirs[3])));
+    ASSERT((action & DEAD_ARMS) == 0);
     uint8_t forwarded_slot_mask = 0;
     if constexpr ((LIVE >> 0) & 1) {
         if (action & Routing2DCodec::action_bit(dirs[0])) {
