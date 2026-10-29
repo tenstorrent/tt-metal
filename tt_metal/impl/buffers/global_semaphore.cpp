@@ -137,7 +137,7 @@ void GlobalSemaphoreImpl::setup_buffer(
         },
         &device,
         address);
-    Inspector::global_semaphore_created(buffer_.get(), cores_);
+    Inspector::global_semaphore_created(buffer_.get(), buffer_->address(), cores_, device);
 
     if (initial_value.has_value()) {
         this->reset_semaphore_value(initial_value.value());

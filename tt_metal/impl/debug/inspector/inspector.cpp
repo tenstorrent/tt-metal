@@ -441,28 +441,6 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
     }
 }
 
-void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, const CoreRangeSet& cores) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        return;
-    }
-    try {
-        inspector::GlobalSemaphoreData semaphore_data;
-        semaphore_data.address = buffer->address();
-        semaphore_data.cores = cores;
-        for (const auto* device : buffer->device()->impl().get_devices()) {
-            semaphore_data.chip_ids.push_back(device->id());
-        }
-        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
-        data->global_semaphores_data.insert_or_assign(buffer, std::move(semaphore_data));
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log global semaphore created: {}", e.what());
-    }
-}
-
 void Inspector::global_semaphore_created(
     const void* key, uint64_t address, const CoreRangeSet& cores, const distributed::MeshDevice& device) noexcept {
     if (!is_enabled()) {

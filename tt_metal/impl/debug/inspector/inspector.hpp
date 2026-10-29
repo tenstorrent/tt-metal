@@ -63,8 +63,7 @@ public:
 
     static void mesh_socket_created(const distributed::MeshSocket* socket) noexcept;
 
-    static void global_semaphore_created(const distributed::MeshBuffer* buffer, const CoreRangeSet& cores) noexcept;
-    // Pool-backed semaphores have no MeshBuffer; `key` identifies the semaphore until it is destroyed.
+    // `key` identifies the semaphore: its MeshBuffer, or its pool slot lease.
     static void global_semaphore_created(
         const void* key, uint64_t address, const CoreRangeSet& cores, const distributed::MeshDevice& device) noexcept;
     static void global_semaphore_reset(const void* key, uint32_t value) noexcept;
