@@ -41,17 +41,11 @@ class KimiK27Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 384
     NUM_EXPERTS_PER_TOKEN = 8
-    # Pages one of combine_fabric2d's forwarding channels holds. The region is split by movement class,
-    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
-    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
-    # length. The depth dispatch settled on for this model; at ring8 / 5k it costs +6% on the hot-expert
-    # case against the 67 it replaces, traded for the 6.6 MB it gives back.
+    # Pages per combine_fabric2d forwarding channel, trading DRAM against throughput:
+    # +6% on hot_expert at ring8 / 5k against 67 pages, for 6.6 MB a chip.
     COMBINE_FWD_VC_PAGES = 48
-    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
-    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
-    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
-    # length. Measured 8x4 at ring8 / 5k over 24..96 pages: the shallowest depth inside 5% of the dense
-    # region on both traffic shapes, at +1.3% balanced and +3.5% hot_expert.
+    # Pages per dispatch_fabric2d forwarding channel. Shallowest depth inside 5% at
+    # ring8 / 5k: +1.3% balanced, +3.5% hot_expert.
     DISPATCH_FWD_VC_PAGES = 48
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1

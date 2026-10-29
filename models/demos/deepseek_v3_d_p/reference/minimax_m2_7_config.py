@@ -22,20 +22,12 @@ class MiniMaxM27Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
-    # Pages one of combine_fabric2d's forwarding channels holds. The region is split by movement class,
-    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
-    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
-    # length. Swept on its own axis at ring8 / 5k, where the hot-expert case reads 1145, 1052, 958, 913,
-    # 909, 909, 911 us over 32, 48, 64, 80, 96, 112, 134 pages: flat from 80 up and falling away below it,
-    # so 80 is the knee and 64 already costs 5%. Dispatch's 32 would be another 7 MB and a quarter of the
-    # throughput. The balanced case holds across the whole range -- it never fills a channel -- so only
-    # the hot-expert one constrains this.
+    # Pages per combine_fabric2d forwarding channel, trading DRAM against throughput. Swept at ring8 / 5k:
+    # hot_expert reads 1145, 1052, 958, 913, 909, 909, 911 us over 32, 48, 64, 80, 96, 112, 134 pages, flat
+    # from 80 up, and 64 already costs 5%. Balanced never fills a channel, so only hot_expert constrains it.
     COMBINE_FWD_VC_PAGES = 80
-    # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
-    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
-    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
-    # length. Measured 8x4 at ring8 / 5k over 24..96 pages: the shallowest depth inside 5% of the dense
-    # region on both traffic shapes, at -1.3% balanced and +0.2% hot_expert.
+    # Pages per dispatch_fabric2d forwarding channel. Shallowest depth inside 5% at
+    # ring8 / 5k: -1.3% balanced, +0.2% hot_expert.
     DISPATCH_FWD_VC_PAGES = 32
     NUM_SHARED_EXPERTS = 0  # shared_intermediate_size = 0
     # MiniMax routes with a single expert group -> gate collapses to plain top-k.
