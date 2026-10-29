@@ -72,6 +72,9 @@ def main():
     parser.add_argument("--lanes", default="1,4", help="busy-lane counts to run")
     parser.add_argument("--modes", default="eager,traced")
     parser.add_argument("--trace-region-mb", type=int, default=1000)
+    parser.add_argument(
+        "--trace-region-size", type=int, default=None, help="bytes, overrides --trace-region-mb (vLLM's spec: 1e9)"
+    )
     parser.add_argument("--users", type=int, default=1, help="requests per busy lane (at most --per-lane)")
     parser.add_argument("--offset", type=int, default=0, help="the first step is --budget - offset tokens")
     args = parser.parse_args()
@@ -108,7 +111,9 @@ def main():
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(
-        ttnn.MeshShape(4, 8), l1_small_size=65536, trace_region_size=args.trace_region_mb << 20
+        ttnn.MeshShape(4, 8),
+        l1_small_size=65536,
+        trace_region_size=args.trace_region_size or args.trace_region_mb << 20,
     )
     try:
         t0 = time.time()
