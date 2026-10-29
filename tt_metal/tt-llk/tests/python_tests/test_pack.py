@@ -183,14 +183,18 @@ def test_pack(
         data_formats.pack_src,
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
+    if block_tiles is None:
+        num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+            dest_sync,
+            dest_acc,
+            formats,
+            input_dimensions,
+            TILE_DIMENSIONS,
+            BlocksCalculationAlgorithm.Standard,
+        )
+    else:
+        # sized below from block_tiles: the tile count need not divide into a DEST section
+        num_blocks, num_tiles_in_block = 0, 0
 
     if block_tiles is not None:
         # A block of block_tiles tiles from dest index dest_index, the call a kernel makes with a tile index (welford groupnorm packs two tiles from index 1).
