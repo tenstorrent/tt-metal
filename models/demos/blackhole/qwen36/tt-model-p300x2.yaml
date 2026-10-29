@@ -115,6 +115,11 @@ serve_profiles:
     max_num_seqs: 8                      # TBD: 8 (lead) or 16 (two launches, lane serve's runs), from lane mu's grid
     env:
       RESIDENT_MAX_TOKENS_ALL_USERS: "1576960"   # TBD: KV pool = 24,640 blocks x 64 (lane serve's OOM churn pending)
+      # the rows build's core split (lane mu, accuracy-gated; needs the GDN head collector fix c6436ac2bfc): 28 attention
+      # workers, 4 GDN head groups; 8 users -8.6 % step time at <= 4K, -5.8 % at 32K, +2.5 % at 128K. The single-user
+      # profiles keep the defaults (32 workers).
+      RESIDENT_ATTN_WORKERS: "28"
+      RESIDENT_HEAD_GROUPS: "4"
     additional_config:
       tt:                                # deep-merged over serve.additional_config.tt
         prefill_chunk_tokens: 1024       # the TT chunk core: chunked prefill between decode steps
