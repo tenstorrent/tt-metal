@@ -103,16 +103,17 @@ int generate_unique_mesh_id() {
 std::shared_ptr<ThreadPool> create_default_thread_pool(
     ContextId context_id,
     const std::vector<Device*>& physical_devices,
-    std::chrono::microseconds spin = std::chrono::microseconds(0)) {
+    std::chrono::microseconds spin_window = std::chrono::microseconds(0)) {
     // Bind the thread-pool to the physical devices being used.
     if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool(context_id);
     }
-    return create_device_bound_thread_pool(context_id, physical_devices, spin);
+    return create_device_bound_thread_pool(context_id, physical_devices, spin_window);
 }
 
-// Dispatch fan-outs come back to back (each enqueue fans out to every device), so its workers stay awake between
-// them instead of being woken each time. The reader pool parks: its CPUs are then free for the threads it serves.
+// Dispatch fan-outs come back to back (each enqueue fans out to every device), so the dispatch pool gets a spin
+// window: its workers keep polling between fan-outs instead of being woken each time. The reader pool has none, so
+// its CPUs are free for the threads it serves.
 constexpr auto DISPATCH_POOL_SPIN = std::chrono::microseconds(250);
 
 // Helper function to verify all devices in the MeshDevice have the same value
