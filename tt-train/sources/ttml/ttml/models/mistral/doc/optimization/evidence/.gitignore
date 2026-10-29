@@ -7,3 +7,8 @@ watcher_1layer_watcher.log
 tracy_*layers/reports/*/ops_perf_results*.csv
 done.flag
 iter*_tracy_*layers/
+*.flag
+iter*_tracy_tp4_*/
+baseline_tracy_*/
+*_tracy_tp4_*/
+*.tracy

@@ -16,6 +16,90 @@ from .linear import LinearLayer, ColumnParallelLinear, RowParallelLinear
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Parameter
 from _ttml.modules import RunMode
+from ..autograd.function import Function
+
+
+def lora_matmul_config():
+    """Compute config matching ttml's linear (HiFi4, fp32 accumulation)."""
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False, packer_l1_acc=True
+    )
+
+
+class LoraApply(Function):
+    """``base + scaling * (x @ A^T) @ (B * mask)^T`` with a TP-correct backward.
+
+    One A matmul, one B matmul and one ``addalpha`` per pass; the naive
+    ``base + linear(linear(x, A), B) * scaling`` spends a scale pass and an add
+    pass over the full ``[T, out]`` update, and a scale pass over its gradient.
+    Here the scale rides inside ``addalpha`` forward and on the small ``[T, r]``
+    / ``[out, r]`` tensors backward.
+
+    ``mask`` (optional 0/1 of B's shape) keeps B block-structured when several
+    adapters are packed into one B; it is applied to B forward and to dB backward.
+
+    ``reduce_axis``: when B is column-sharded over a mesh axis (a column-parallel
+    layer), each chip's ``dh = scaling * g_c @ B_c`` is only that chip's share of
+    the output columns. ``dx = dh_c @ A`` must stay partial (the input's own
+    broadcast all-reduces it), but ``dA = dh^T @ x`` needs the full ``dh``, so it
+    is all-reduced over ``reduce_axis`` first (``[T, r]``, a few KB). Without
+    this every chip trains a different A and the replicated copies drift apart.
+    """
+
+    @staticmethod
+    def forward(ctx, base, x, lora_A, lora_B, mask, scaling, reduce_axis):
+        cfg = lora_matmul_config()
+        x_val, a_val = x.get_value(), lora_A.get_value()
+        b_val = lora_B.get_value() if mask is None else ttnn.multiply(lora_B.get_value(), mask)
+        h = ttnn.matmul(x_val, a_val, transpose_b=True, compute_kernel_config=cfg)
+        update = ttnn.matmul(h, b_val, transpose_b=True, compute_kernel_config=cfg)
+        ctx.save_for_backward(x_val, a_val, b_val, h)
+        ctx.mask, ctx.scaling, ctx.reduce_axis = mask, scaling, reduce_axis
+        return ttnn.addalpha(base.get_value(), update, scaling)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x_val, a_val, b_val, h = ctx.saved_tensors
+        ctx.save_for_backward()
+        cfg = lora_matmul_config()
+        s = ctx.scaling
+        grad_h = ttnn.multiply(ttnn.matmul(grad_output, b_val, compute_kernel_config=cfg), s)
+        grad_b = ttnn.multiply(ttnn.matmul(grad_output, h, transpose_a=True, compute_kernel_config=cfg), s)
+        if ctx.mask is not None:
+            grad_b = ttnn.multiply(grad_b, ctx.mask)
+        grad_x = ttnn.matmul(grad_h, a_val, compute_kernel_config=cfg)
+        if ctx.reduce_axis is not None:
+            grad_h = ttml.core.distributed.all_reduce(grad_h, ctx.reduce_axis)
+        grad_a = ttnn.matmul(grad_h, x_val, transpose_a=True, compute_kernel_config=cfg)
+        return grad_output, grad_x, grad_a, grad_b
+
+
+class _LoraUpdateAdd(Function):
+    """``base + scaling * (h @ B^T)``: the B half of :class:`LoraApply`, for a precomputed (all-reduced) ``h``."""
+
+    @staticmethod
+    def forward(ctx, base, h, lora_B, scaling):
+        h_val, b_val = h.get_value(), lora_B.get_value()
+        ctx.save_for_backward(h_val, b_val)
+        ctx.scaling = scaling
+        update = ttnn.matmul(h_val, b_val, transpose_b=True, compute_kernel_config=lora_matmul_config())
+        return ttnn.addalpha(base.get_value(), update, scaling)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        h_val, b_val = ctx.saved_tensors
+        ctx.save_for_backward()
+        cfg = lora_matmul_config()
+        grad_h = ttnn.multiply(ttnn.matmul(grad_output, b_val, compute_kernel_config=cfg), ctx.scaling)
+        grad_b = ttnn.multiply(
+            ttnn.matmul(grad_output, h_val, transpose_a=True, compute_kernel_config=cfg), ctx.scaling
+        )
+        return grad_output, grad_h, grad_b
+
+
+def lora_apply(base, x, lora_A, lora_B, scaling, *, mask=None, reduce_axis=None):
+    """``base + scaling * linear(linear(x, lora_A), lora_B)`` in three ops, TP-correct (see :class:`LoraApply`)."""
+    return LoraApply.apply(base, x, lora_A, lora_B, mask, scaling, reduce_axis)
 
 
 @dataclass
@@ -101,9 +185,7 @@ class LoraLinear(AbstractModuleBase):
         lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
-        h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
-        lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
-        return base + lora_update * self.scaling
+        return lora_apply(base, lora_input, self.lora_A.tensor, self.lora_B.tensor, self.scaling)
 
 
 class LoraColumnParallelLinear(AbstractModuleBase):
@@ -151,13 +233,17 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
-        h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
-        lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.gather_output:
+            h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
+            lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
             lora_update = ttml.ops.distributed.all_gather(
                 lora_update, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED
             )
-        return base + lora_update * self.scaling
+            return base + lora_update * self.scaling
+        # lora_B is column-sharded: dA needs the all-reduced dh (see LoraApply).
+        return lora_apply(
+            base, lora_input, self.lora_A.tensor, self.lora_B.tensor, self.scaling, reduce_axis=self.cluster_axis
+        )
 
 
 class LoraRowParallelLinear(AbstractModuleBase):
@@ -204,10 +290,11 @@ class LoraRowParallelLinear(AbstractModuleBase):
         lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
+        # A is row-sharded, so h is a partial sum: all-reduce it before B (B is
+        # replicated and then sees the full h, so dB is already complete).
         h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
         h = ttml.ops.distributed.all_reduce(h, self.input_is_parallel, self.cluster_axis)
-        lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
-        return base + lora_update * self.scaling
+        return _LoraUpdateAdd.apply(base, h, self.lora_B.tensor, self.scaling)
 
 
 _LORA_MODULE_MAP: dict[type, type] = {
@@ -215,6 +302,17 @@ _LORA_MODULE_MAP: dict[type, type] = {
     RowParallelLinear: LoraRowParallelLinear,
     LinearLayer: LoraLinear,
 }
+
+
+def register_lora_module(base_cls: type, lora_cls: type) -> None:
+    """Let :class:`LoraModel` wrap ``base_cls`` layers with ``lora_cls``.
+
+    ``lora_cls(base_layer, config)`` must freeze the base weights and expose the
+    adapters as ``lora_*`` parameters, like the built-in wrappers above. Model
+    packages use this for layer types of their own (e.g. a fused multi-projection
+    linear) without ``LoraModel`` having to know them.
+    """
+    _LORA_MODULE_MAP[base_cls] = lora_cls
 
 
 class LoraModel(AbstractModuleBase):

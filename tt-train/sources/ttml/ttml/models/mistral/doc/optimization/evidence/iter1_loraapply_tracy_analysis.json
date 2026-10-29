@@ -1,0 +1,1704 @@
+{
+ "runs": {
+  "1": {
+   "steps_found": 4,
+   "steps_used": 2,
+   "ops_per_step": 94.0,
+   "device_ms_per_step": 86.5468265,
+   "per_step_ms": [
+    86.842763,
+    86.25089
+   ],
+   "by_code": {
+    "EmbeddingsDeviceOperation": [
+     76.07249999999999,
+     1.0
+    ],
+    "RMSNormForwardDeviceOperation": [
+     458.64849999999996,
+     3.0
+    ],
+    "MatmulDeviceOperation": [
+     65020.96049999999,
+     34.0
+    ],
+    "BinaryNgDeviceOperation": [
+     3238.9100000000008,
+     21.0
+    ],
+    "NlpCreateHeadsDeviceOperation": [
+     54.4155,
+     1.0
+    ],
+    "RotaryEmbeddingLlamaDeviceOperation": [
+     182.1765,
+     4.0
+    ],
+    "SDPAForwardDeviceOperation": [
+     883.6225,
+     1.0
+    ],
+    "NLPConcatHeadsDeviceOperation": [
+     96.591,
+     4.0
+    ],
+    "SwigluPackedFwDeviceOperation": [
+     406.65,
+     1.0
+    ],
+    "CrossEntropyForwardDeviceOperation": [
+     3907.166,
+     1.0
+    ],
+    "MorehMeanOperation": [
+     27.253,
+     4.0
+    ],
+    "FullDeviceOperation": [
+     2.6624999999999996,
+     1.0
+    ],
+    "CrossEntropyBackwardDeviceOperation": [
+     7361.2970000000005,
+     1.0
+    ],
+    "RMSNormBackwardDeviceOperation": [
+     1098.522,
+     3.0
+    ],
+    "SwigluPackedBwDeviceOperation": [
+     1154.681,
+     1.0
+    ],
+    "TransposeDeviceOperation": [
+     78.2055,
+     2.0
+    ],
+    "SDPABackwardQDeviceOperation": [
+     866.7445,
+     1.0
+    ],
+    "SDPABackwardKVDeviceOperation": [
+     1359.2755,
+     1.0
+    ],
+    "ConcatDeviceOperation": [
+     66.57050000000001,
+     1.0
+    ],
+    "AdamWDeviceOperation": [
+     206.40199999999996,
+     8.0
+    ]
+   },
+   "by_class": {
+    "math": 82982.21850000002,
+    "glue": 3268.8255000000004,
+    "layout": 295.7825
+   },
+   "by_item": {
+    "EmbeddingsDeviceOperation | 1x1x1x1024 | 1x1x131072x5120 | 32": [
+     76.07249999999999,
+     1.0
+    ],
+    "RMSNormForwardDeviceOperation | 1x1x1024x5120 | 1x1x32[1]x5120 | 32": [
+     458.64849999999996,
+     3.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x6144x5120 | 88": [
+     646.9945,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x32[16]x5120 | 33": [
+     156.82750000000001,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x6144x32[16] | 88": [
+     56.088499999999996,
+     1.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x6144 | 1x1x1024x6144 | 110": [
+     1015.394,
+     4.0
+    ],
+    "NlpCreateHeadsDeviceOperation | 1x1x1024x6144 |  | 110": [
+     54.4155,
+     1.0
+    ],
+    "RotaryEmbeddingLlamaDeviceOperation | 1x32x1024x128 | 1x1x1024x128 | 110": [
+     148.2195,
+     2.0
+    ],
+    "RotaryEmbeddingLlamaDeviceOperation | 1x8x1024x128 | 1x1x1024x128 | 110": [
+     33.957,
+     2.0
+    ],
+    "SDPAForwardDeviceOperation | 1x32x1024x128 | 1x8x1024x128 | 110": [
+     883.6225,
+     1.0
+    ],
+    "NLPConcatHeadsDeviceOperation | 1x32x1024x128 |  | 110": [
+     75.64,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x4096 | 1x1x5120x4096 | 88": [
+     466.1815,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x4096 | 1x1x32[16]x4096 | 33": [
+     63.0085,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x5120x32[16] | 88": [
+     98.21900000000001,
+     2.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x5120 | 1x1x1024x5120 | 110": [
+     804.6795000000001,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x65536x5120 | 110": [
+     10497.7955,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x65536x32[16] | 110": [
+     823.5535,
+     1.0
+    ],
+    "SwigluPackedFwDeviceOperation | 1x1x1024x65536 |  | 110": [
+     406.65,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32768 | 1x1x5120x32768 | 88": [
+     3446.4585,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32768 | 1x1x32[16]x32768 | 33": [
+     496.147,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x131072x5120 | 110": [
+     20815.826,
+     1.0
+    ],
+    "CrossEntropyForwardDeviceOperation | 1x1x1024x131072 | 1x1x1x1024 | 32": [
+     3907.166,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x1024x32[1] |  | 32": [
+     6.197,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x1024x32[1] |  | 1": [
+     13.511,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x32[1]x32[1] |  | 1": [
+     3.758,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x32[1]x32[1] | 1x1x32[1]x32[1] | 1": [
+     3.787,
+     1.0
+    ],
+    "FullDeviceOperation |  |  | 1": [
+     2.6624999999999996,
+     1.0
+    ],
+    "CrossEntropyBackwardDeviceOperation | 1x1x1024x131072 | 1x1x1x1024 | 32": [
+     7361.2970000000005,
+     1.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x131072 | 1x1x32[1]x32[1] | 110": [
+     1370.4585,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x131072 | 1x1x131072x5120 | 88": [
+     13638.106,
+     1.0
+    ],
+    "RMSNormBackwardDeviceOperation | 1x1x1024x5120 | 1x1x32[1]x5120 | 32": [
+     1098.522,
+     3.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32[16] | 33": [
+     151.06400000000002,
+     2.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x32[16] |  | 110": [
+     48.37800000000001,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x1024x32[16] | 88": [
+     97.9635,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x32768 | 110": [
+     420.3145,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x32768 | 110": [
+     184.9375,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32768 | 110": [
+     3041.81,
+     1.0
+    ],
+    "SwigluPackedBwDeviceOperation | 1x1x1024x65536 | 1x1x1024x32768 | 110": [
+     1154.681,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x65536x32[16] | 33": [
+     990.7605,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x1024x32[16] | 110": [
+     569.4604999999999,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88": [
+     97.667,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x5120 | 88": [
+     58.808499999999995,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x65536x5120 | 88": [
+     6896.221,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x4096 | 88": [
+     37.7265,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x4096 | 66": [
+     22.9545,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x4096 | 88": [
+     426.88800000000003,
+     1.0
+    ],
+    "TransposeDeviceOperation | 1x1x1024x4096 |  | 110": [
+     38.813500000000005,
+     1.0
+    ],
+    "TransposeDeviceOperation | 1x32x128x1024 |  | 110": [
+     39.391999999999996,
+     1.0
+    ],
+    "SDPABackwardQDeviceOperation | 1x32x1024x128 | 1x32x1024x128 | 110": [
+     866.7445,
+     1.0
+    ],
+    "SDPABackwardKVDeviceOperation | 1x32x1024x128 | 1x32x1024x128 | 110": [
+     1359.2755,
+     1.0
+    ],
+    "NLPConcatHeadsDeviceOperation | 1x8x1024x128 |  | 110": [
+     20.951,
+     2.0
+    ],
+    "ConcatDeviceOperation | 1x1x1024x4096 | 1x1x1024x1024 | 110": [
+     66.57050000000001,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x6144x32[16] | 33": [
+     90.32300000000001,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x1024x32[16] | 99": [
+     56.522,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x6144x5120 | 88": [
+     672.3335,
+     1.0
+    ],
+    "AdamWDeviceOperation | 1x1x32[16]x32768 | 1x1x32[16]x32768 | 110": [
+     47.2085,
+     1.0
+    ],
+    "AdamWDeviceOperation | 1x1x5120x32[16] | 1x1x5120x32[16] | 110": [
+     25.194499999999998,
+     2.0
+    ],
+    "AdamWDeviceOperation | 1x1x32[16]x5120 | 1x1x32[16]x5120 | 110": [
+     25.049500000000002,
+     2.0
+    ],
+    "AdamWDeviceOperation | 1x1x65536x32[16] | 1x1x65536x32[16] | 110": [
+     83.782,
+     1.0
+    ],
+    "AdamWDeviceOperation | 1x1x32[16]x4096 | 1x1x32[16]x4096 | 110": [
+     11.743,
+     1.0
+    ],
+    "AdamWDeviceOperation | 1x1x6144x32[16] | 1x1x6144x32[16] | 110": [
+     13.424499999999998,
+     1.0
+    ]
+   }
+  },
+  "2": {
+   "steps_found": 4,
+   "steps_used": 2,
+   "ops_per_step": 175.0,
+   "device_ms_per_step": 125.9709025,
+   "per_step_ms": [
+    127.631883,
+    124.309922
+   ],
+   "by_code": {
+    "EmbeddingsDeviceOperation": [
+     75.1815,
+     1.0
+    ],
+    "RMSNormForwardDeviceOperation": [
+     764.6935,
+     5.0
+    ],
+    "MatmulDeviceOperation": [
+     96417.56800000003,
+     66.0
+    ],
+    "BinaryNgDeviceOperation": [
+     4997.819999999999,
+     41.0
+    ],
+    "NlpCreateHeadsDeviceOperation": [
+     103.5135,
+     2.0
+    ],
+    "RotaryEmbeddingLlamaDeviceOperation": [
+     358.56450000000007,
+     8.0
+    ],
+    "SDPAForwardDeviceOperation": [
+     1765.4215000000002,
+     2.0
+    ],
+    "NLPConcatHeadsDeviceOperation": [
+     189.75549999999998,
+     8.0
+    ],
+    "SwigluPackedFwDeviceOperation": [
+     809.3245,
+     2.0
+    ],
+    "CrossEntropyForwardDeviceOperation": [
+     3902.8445,
+     1.0
+    ],
+    "MorehMeanOperation": [
+     27.1775,
+     4.0
+    ],
+    "FullDeviceOperation": [
+     2.6635,
+     1.0
+    ],
+    "CrossEntropyBackwardDeviceOperation": [
+     7313.7425,
+     1.0
+    ],
+    "RMSNormBackwardDeviceOperation": [
+     1834.781,
+     5.0
+    ],
+    "SwigluPackedBwDeviceOperation": [
+     2259.7465,
+     2.0
+    ],
+    "TransposeDeviceOperation": [
+     156.528,
+     4.0
+    ],
+    "SDPABackwardQDeviceOperation": [
+     1733.693,
+     2.0
+    ],
+    "SDPABackwardKVDeviceOperation": [
+     2718.145,
+     2.0
+    ],
+    "ConcatDeviceOperation": [
+     128.0155,
+     2.0
+    ],
+    "AdamWDeviceOperation": [
+     411.72299999999996,
+     16.0
+    ]
+   },
+   "by_class": {
+    "math": 120365.42900000002,
+    "glue": 5027.660999999998,
+    "layout": 577.8124999999999
+   },
+   "by_item": {
+    "EmbeddingsDeviceOperation | 1x1x1x1024 | 1x1x131072x5120 | 32": [
+     75.1815,
+     1.0
+    ],
+    "RMSNormForwardDeviceOperation | 1x1x1024x5120 | 1x1x32[1]x5120 | 32": [
+     764.6935,
+     5.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x6144x5120 | 88": [
+     1292.6795,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x32[16]x5120 | 33": [
+     309.944,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x6144x32[16] | 88": [
+     110.18900000000001,
+     2.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x6144 | 1x1x1024x6144 | 110": [
+     1971.9064999999998,
+     8.0
+    ],
+    "NlpCreateHeadsDeviceOperation | 1x1x1024x6144 |  | 110": [
+     103.5135,
+     2.0
+    ],
+    "RotaryEmbeddingLlamaDeviceOperation | 1x32x1024x128 | 1x1x1024x128 | 110": [
+     291.895,
+     4.0
+    ],
+    "RotaryEmbeddingLlamaDeviceOperation | 1x8x1024x128 | 1x1x1024x128 | 110": [
+     66.6695,
+     4.0
+    ],
+    "SDPAForwardDeviceOperation | 1x32x1024x128 | 1x8x1024x128 | 110": [
+     1765.4215000000002,
+     2.0
+    ],
+    "NLPConcatHeadsDeviceOperation | 1x32x1024x128 |  | 110": [
+     147.8195,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x4096 | 1x1x5120x4096 | 88": [
+     931.1505,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x4096 | 1x1x32[16]x4096 | 33": [
+     125.583,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x5120x32[16] | 88": [
+     193.926,
+     4.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x5120 | 1x1x1024x5120 | 110": [
+     1584.137,
+     16.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x65536x5120 | 110": [
+     21395.034,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x65536x32[16] | 110": [
+     1647.6225,
+     2.0
+    ],
+    "SwigluPackedFwDeviceOperation | 1x1x1024x65536 |  | 110": [
+     809.3245,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32768 | 1x1x5120x32768 | 88": [
+     6893.1669999999995,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32768 | 1x1x32[16]x32768 | 33": [
+     959.0145,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x131072x5120 | 110": [
+     21417.3595,
+     1.0
+    ],
+    "CrossEntropyForwardDeviceOperation | 1x1x1024x131072 | 1x1x1x1024 | 32": [
+     3902.8445,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x1024x32[1] |  | 32": [
+     6.1515,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x1024x32[1] |  | 1": [
+     13.488,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x32[1]x32[1] |  | 1": [
+     3.7485,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x32[1]x32[1] | 1x1x32[1]x32[1] | 1": [
+     3.7895,
+     1.0
+    ],
+    "FullDeviceOperation |  |  | 1": [
+     2.6635,
+     1.0
+    ],
+    "CrossEntropyBackwardDeviceOperation | 1x1x1024x131072 | 1x1x1x1024 | 32": [
+     7313.7425,
+     1.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x131072 | 1x1x32[1]x32[1] | 110": [
+     1346.8485,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x131072 | 1x1x131072x5120 | 88": [
+     13639.0805,
+     1.0
+    ],
+    "RMSNormBackwardDeviceOperation | 1x1x1024x5120 | 1x1x32[1]x5120 | 32": [
+     1834.781,
+     5.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32[16] | 33": [
+     300.934,
+     4.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x32[16] |  | 110": [
+     94.928,
+     16.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x1024x32[16] | 88": [
+     194.72949999999997,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x32768 | 110": [
+     840.2239999999999,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x32768 | 110": [
+     366.0815,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32768 | 110": [
+     6076.061,
+     2.0
+    ],
+    "SwigluPackedBwDeviceOperation | 1x1x1024x65536 | 1x1x1024x32768 | 110": [
+     2259.7465,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x65536x32[16] | 33": [
+     1928.154,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x1024x32[16] | 110": [
+     1138.29,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88": [
+     191.57,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x5120 | 88": [
+     116.8685,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x65536x5120 | 88": [
+     13735.979000000001,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x4096 | 88": [
+     75.8375,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x4096 | 66": [
+     45.754999999999995,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x4096 | 88": [
+     853.4085,
+     2.0
+    ],
+    "TransposeDeviceOperation | 1x1x1024x4096 |  | 110": [
+     77.08,
+     2.0
+    ],
+    "TransposeDeviceOperation | 1x32x128x1024 |  | 110": [
+     79.448,
+     2.0
+    ],
+    "SDPABackwardQDeviceOperation | 1x32x1024x128 | 1x32x1024x128 | 110": [
+     1733.693,
+     2.0
+    ],
+    "SDPABackwardKVDeviceOperation | 1x32x1024x128 | 1x32x1024x128 | 110": [
+     2718.145,
+     2.0
+    ],
+    "NLPConcatHeadsDeviceOperation | 1x8x1024x128 |  | 110": [
+     41.936,
+     4.0
+    ],
+    "ConcatDeviceOperation | 1x1x1024x4096 | 1x1x1024x1024 | 110": [
+     128.0155,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x6144x32[16] | 33": [
+     179.7745,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x1024x32[16] | 99": [
+     113.1485,
+     2.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x6144x5120 | 88": [
+     1346.0025,
+     2.0
+    ],
+    "AdamWDeviceOperation | 1x1x65536x32[16] | 1x1x65536x32[16] | 110": [
+     168.466,
+     2.0
+    ],
+    "AdamWDeviceOperation | 1x1x5120x32[16] | 1x1x5120x32[16] | 110": [
+     50.169000000000004,
+     4.0
+    ],
+    "AdamWDeviceOperation | 1x1x32[16]x4096 | 1x1x32[16]x4096 | 110": [
+     23.149,
+     2.0
+    ],
+    "AdamWDeviceOperation | 1x1x32[16]x5120 | 1x1x32[16]x5120 | 110": [
+     50.176,
+     4.0
+    ],
+    "AdamWDeviceOperation | 1x1x6144x32[16] | 1x1x6144x32[16] | 110": [
+     26.491500000000002,
+     2.0
+    ],
+    "AdamWDeviceOperation | 1x1x32[16]x32768 | 1x1x32[16]x32768 | 110": [
+     93.2715,
+     2.0
+    ]
+   }
+  },
+  "4": {
+   "steps_found": 4,
+   "steps_used": 2,
+   "ops_per_step": 337.0,
+   "device_ms_per_step": 202.4440335,
+   "per_step_ms": [
+    202.25297899999998,
+    202.635088
+   ],
+   "by_code": {
+    "EmbeddingsDeviceOperation": [
+     77.999,
+     1.0
+    ],
+    "RMSNormForwardDeviceOperation": [
+     1375.0255,
+     9.0
+    ],
+    "MatmulDeviceOperation": [
+     156701.94949999993,
+     130.0
+    ],
+    "BinaryNgDeviceOperation": [
+     8528.697500000002,
+     81.0
+    ],
+    "NlpCreateHeadsDeviceOperation": [
+     203.48599999999996,
+     4.0
+    ],
+    "RotaryEmbeddingLlamaDeviceOperation": [
+     715.3865,
+     16.0
+    ],
+    "SDPAForwardDeviceOperation": [
+     3530.4959999999996,
+     4.0
+    ],
+    "NLPConcatHeadsDeviceOperation": [
+     376.376,
+     16.0
+    ],
+    "SwigluPackedFwDeviceOperation": [
+     1617.8995,
+     4.0
+    ],
+    "CrossEntropyForwardDeviceOperation": [
+     3900.366,
+     1.0
+    ],
+    "MorehMeanOperation": [
+     27.086499999999997,
+     4.0
+    ],
+    "FullDeviceOperation": [
+     2.662,
+     1.0
+    ],
+    "CrossEntropyBackwardDeviceOperation": [
+     7306.625,
+     1.0
+    ],
+    "RMSNormBackwardDeviceOperation": [
+     3297.9620000000004,
+     9.0
+    ],
+    "SwigluPackedBwDeviceOperation": [
+     4497.6435,
+     4.0
+    ],
+    "TransposeDeviceOperation": [
+     309.89599999999996,
+     8.0
+    ],
+    "SDPABackwardQDeviceOperation": [
+     3465.052,
+     4.0
+    ],
+    "SDPABackwardKVDeviceOperation": [
+     5437.3060000000005,
+     4.0
+    ],
+    "ConcatDeviceOperation": [
+     250.97799999999998,
+     4.0
+    ],
+    "AdamWDeviceOperation": [
+     821.1409999999998,
+     32.0
+    ]
+   },
+   "by_class": {
+    "math": 192744.85149999996,
+    "glue": 8558.446000000002,
+    "layout": 1140.7359999999999
+   },
+   "by_item": {
+    "EmbeddingsDeviceOperation | 1x1x1x1024 | 1x1x131072x5120 | 32": [
+     77.999,
+     1.0
+    ],
+    "RMSNormForwardDeviceOperation | 1x1x1024x5120 | 1x1x32[1]x5120 | 32": [
+     1375.0255,
+     9.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x6144x5120 | 88": [
+     2587.452,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x32[16]x5120 | 33": [
+     620.738,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x6144x32[16] | 88": [
+     220.067,
+     4.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x6144 | 1x1x1024x6144 | 110": [
+     3871.7700000000004,
+     16.0
+    ],
+    "NlpCreateHeadsDeviceOperation | 1x1x1024x6144 |  | 110": [
+     203.48599999999996,
+     4.0
+    ],
+    "RotaryEmbeddingLlamaDeviceOperation | 1x32x1024x128 | 1x1x1024x128 | 110": [
+     583.1435,
+     8.0
+    ],
+    "RotaryEmbeddingLlamaDeviceOperation | 1x8x1024x128 | 1x1x1024x128 | 110": [
+     132.24299999999997,
+     8.0
+    ],
+    "SDPAForwardDeviceOperation | 1x32x1024x128 | 1x8x1024x128 | 110": [
+     3530.4959999999996,
+     4.0
+    ],
+    "NLPConcatHeadsDeviceOperation | 1x32x1024x128 |  | 110": [
+     291.81149999999997,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x4096 | 1x1x5120x4096 | 88": [
+     1861.5009999999997,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x4096 | 1x1x32[16]x4096 | 33": [
+     250.4015,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x5120x32[16] | 88": [
+     392.03,
+     8.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x5120 | 1x1x1024x5120 | 110": [
+     3138.9489999999996,
+     32.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x65536x5120 | 110": [
+     42385.3075,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x65536x32[16] | 110": [
+     3292.19,
+     4.0
+    ],
+    "SwigluPackedFwDeviceOperation | 1x1x1024x65536 |  | 110": [
+     1617.8995,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32768 | 1x1x5120x32768 | 88": [
+     13786.8475,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32768 | 1x1x32[16]x32768 | 33": [
+     1896.716,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x131072x5120 | 110": [
+     20826.504,
+     1.0
+    ],
+    "CrossEntropyForwardDeviceOperation | 1x1x1024x131072 | 1x1x1x1024 | 32": [
+     3900.366,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x1024x32[1] |  | 32": [
+     6.096,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x1024x32[1] |  | 1": [
+     13.4515,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x32[1]x32[1] |  | 1": [
+     3.7439999999999998,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x32[1]x32[1] | 1x1x32[1]x32[1] | 1": [
+     3.795,
+     1.0
+    ],
+    "FullDeviceOperation |  |  | 1": [
+     2.662,
+     1.0
+    ],
+    "CrossEntropyBackwardDeviceOperation | 1x1x1024x131072 | 1x1x1x1024 | 32": [
+     7306.625,
+     1.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x131072 | 1x1x32[1]x32[1] | 110": [
+     1330.087,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x131072 | 1x1x131072x5120 | 88": [
+     13639.608,
+     1.0
+    ],
+    "RMSNormBackwardDeviceOperation | 1x1x1024x5120 | 1x1x32[1]x5120 | 32": [
+     3297.9620000000004,
+     9.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32[16] | 33": [
+     602.7019999999999,
+     8.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x32[16] |  | 110": [
+     187.8915,
+     32.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x1024x32[16] | 88": [
+     389.08700000000005,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x32768 | 110": [
+     1690.3755,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x32768 | 110": [
+     733.6395000000001,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32768 | 110": [
+     12159.053499999998,
+     4.0
+    ],
+    "SwigluPackedBwDeviceOperation | 1x1x1024x65536 | 1x1x1024x32768 | 110": [
+     4497.6435,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x65536x32[16] | 33": [
+     3833.1450000000004,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x1024x32[16] | 110": [
+     2275.4024999999997,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88": [
+     385.1905,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x5120 | 88": [
+     235.16299999999998,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x65536x5120 | 88": [
+     27408.2755,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x4096 | 88": [
+     150.879,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x4096 | 66": [
+     91.62199999999999,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x4096 | 88": [
+     1706.299,
+     4.0
+    ],
+    "TransposeDeviceOperation | 1x1x1024x4096 |  | 110": [
+     154.31099999999998,
+     4.0
+    ],
+    "TransposeDeviceOperation | 1x32x128x1024 |  | 110": [
+     155.58499999999998,
+     4.0
+    ],
+    "SDPABackwardQDeviceOperation | 1x32x1024x128 | 1x32x1024x128 | 110": [
+     3465.052,
+     4.0
+    ],
+    "SDPABackwardKVDeviceOperation | 1x32x1024x128 | 1x32x1024x128 | 110": [
+     5437.3060000000005,
+     4.0
+    ],
+    "NLPConcatHeadsDeviceOperation | 1x8x1024x128 |  | 110": [
+     84.56450000000001,
+     8.0
+    ],
+    "ConcatDeviceOperation | 1x1x1024x4096 | 1x1x1024x1024 | 110": [
+     250.97799999999998,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x6144x32[16] | 33": [
+     361.7635,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x1024x32[16] | 99": [
+     225.9525,
+     4.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x6144x5120 | 88": [
+     2694.0370000000003,
+     4.0
+    ],
+    "AdamWDeviceOperation | 1x1x65536x32[16] | 1x1x65536x32[16] | 110": [
+     336.4365,
+     4.0
+    ],
+    "AdamWDeviceOperation | 1x1x5120x32[16] | 1x1x5120x32[16] | 110": [
+     100.69300000000001,
+     8.0
+    ],
+    "AdamWDeviceOperation | 1x1x32[16]x5120 | 1x1x32[16]x5120 | 110": [
+     99.5,
+     8.0
+    ],
+    "AdamWDeviceOperation | 1x1x6144x32[16] | 1x1x6144x32[16] | 110": [
+     53.119,
+     4.0
+    ],
+    "AdamWDeviceOperation | 1x1x32[16]x4096 | 1x1x32[16]x4096 | 110": [
+     46.102999999999994,
+     4.0
+    ],
+    "AdamWDeviceOperation | 1x1x32[16]x32768 | 1x1x32[16]x32768 | 110": [
+     185.28949999999998,
+     4.0
+    ]
+   }
+  },
+  "8": {
+   "steps_found": 4,
+   "steps_used": 2,
+   "ops_per_step": 661.0,
+   "device_ms_per_step": 357.1193795,
+   "per_step_ms": [
+    357.75643199999996,
+    356.482327
+   ],
+   "by_code": {
+    "EmbeddingsDeviceOperation": [
+     75.13900000000001,
+     1.0
+    ],
+    "RMSNormForwardDeviceOperation": [
+     2598.505,
+     17.0
+    ],
+    "MatmulDeviceOperation": [
+     278872.30749999994,
+     258.0
+    ],
+    "BinaryNgDeviceOperation": [
+     15733.583499999997,
+     161.0
+    ],
+    "NlpCreateHeadsDeviceOperation": [
+     407.35900000000004,
+     8.0
+    ],
+    "RotaryEmbeddingLlamaDeviceOperation": [
+     1424.094,
+     32.0
+    ],
+    "SDPAForwardDeviceOperation": [
+     7063.2645,
+     8.0
+    ],
+    "NLPConcatHeadsDeviceOperation": [
+     754.5730000000001,
+     32.0
+    ],
+    "SwigluPackedFwDeviceOperation": [
+     3236.59,
+     8.0
+    ],
+    "CrossEntropyForwardDeviceOperation": [
+     3901.7725,
+     1.0
+    ],
+    "MorehMeanOperation": [
+     27.143500000000003,
+     4.0
+    ],
+    "FullDeviceOperation": [
+     2.661,
+     1.0
+    ],
+    "CrossEntropyBackwardDeviceOperation": [
+     7308.817,
+     1.0
+    ],
+    "RMSNormBackwardDeviceOperation": [
+     6230.7645,
+     17.0
+    ],
+    "SwigluPackedBwDeviceOperation": [
+     8948.905499999999,
+     8.0
+    ],
+    "TransposeDeviceOperation": [
+     615.5430000000001,
+     16.0
+    ],
+    "SDPABackwardQDeviceOperation": [
+     6921.868,
+     8.0
+    ],
+    "SDPABackwardKVDeviceOperation": [
+     10856.471500000001,
+     8.0
+    ],
+    "ConcatDeviceOperation": [
+     504.37299999999993,
+     8.0
+    ],
+    "AdamWDeviceOperation": [
+     1635.6444999999999,
+     64.0
+    ]
+   },
+   "by_class": {
+    "math": 339074.1435,
+    "glue": 15763.387999999999,
+    "layout": 2281.8480000000004
+   },
+   "by_item": {
+    "EmbeddingsDeviceOperation | 1x1x1x1024 | 1x1x131072x5120 | 32": [
+     75.13900000000001,
+     1.0
+    ],
+    "RMSNormForwardDeviceOperation | 1x1x1024x5120 | 1x1x32[1]x5120 | 32": [
+     2598.505,
+     17.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x6144x5120 | 88": [
+     5171.815,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x32[16]x5120 | 33": [
+     1239.1720000000003,
+     16.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x6144x32[16] | 88": [
+     438.0575,
+     8.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x6144 | 1x1x1024x6144 | 110": [
+     7757.040000000001,
+     32.0
+    ],
+    "NlpCreateHeadsDeviceOperation | 1x1x1024x6144 |  | 110": [
+     407.35900000000004,
+     8.0
+    ],
+    "RotaryEmbeddingLlamaDeviceOperation | 1x32x1024x128 | 1x1x1024x128 | 110": [
+     1159.905,
+     16.0
+    ],
+    "RotaryEmbeddingLlamaDeviceOperation | 1x8x1024x128 | 1x1x1024x128 | 110": [
+     264.18899999999996,
+     16.0
+    ],
+    "SDPAForwardDeviceOperation | 1x32x1024x128 | 1x8x1024x128 | 110": [
+     7063.2645,
+     8.0
+    ],
+    "NLPConcatHeadsDeviceOperation | 1x32x1024x128 |  | 110": [
+     585.7295000000001,
+     16.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x4096 | 1x1x5120x4096 | 88": [
+     3720.2654999999995,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x4096 | 1x1x32[16]x4096 | 33": [
+     501.50199999999995,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x5120x32[16] | 88": [
+     786.41,
+     16.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x5120 | 1x1x1024x5120 | 110": [
+     6258.901499999999,
+     64.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x65536x5120 | 110": [
+     84855.23649999998,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x65536x32[16] | 110": [
+     6594.7609999999995,
+     8.0
+    ],
+    "SwigluPackedFwDeviceOperation | 1x1x1024x65536 |  | 110": [
+     3236.59,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32768 | 1x1x5120x32768 | 88": [
+     27567.573999999997,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32768 | 1x1x32[16]x32768 | 33": [
+     3858.1235000000006,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x131072x5120 | 110": [
+     20715.8525,
+     1.0
+    ],
+    "CrossEntropyForwardDeviceOperation | 1x1x1024x131072 | 1x1x1x1024 | 32": [
+     3901.7725,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x1024x32[1] |  | 32": [
+     6.1325,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x1024x32[1] |  | 1": [
+     13.472000000000001,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x32[1]x32[1] |  | 1": [
+     3.742,
+     1.0
+    ],
+    "MorehMeanOperation | 1x1x32[1]x32[1] | 1x1x32[1]x32[1] | 1": [
+     3.7969999999999997,
+     1.0
+    ],
+    "FullDeviceOperation |  |  | 1": [
+     2.661,
+     1.0
+    ],
+    "CrossEntropyBackwardDeviceOperation | 1x1x1024x131072 | 1x1x1x1024 | 32": [
+     7308.817,
+     1.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x131072 | 1x1x32[1]x32[1] | 110": [
+     1338.9675000000002,
+     1.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x131072 | 1x1x131072x5120 | 88": [
+     13639.561,
+     1.0
+    ],
+    "RMSNormBackwardDeviceOperation | 1x1x1024x5120 | 1x1x32[1]x5120 | 32": [
+     6230.7645,
+     17.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32[16] | 33": [
+     1205.616,
+     16.0
+    ],
+    "BinaryNgDeviceOperation | 1x1x1024x32[16] |  | 110": [
+     378.67449999999985,
+     64.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x1024x32[16] | 88": [
+     779.8595000000001,
+     16.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x32768 | 110": [
+     3362.1575,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x32768 | 110": [
+     1471.0115,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32768 | 110": [
+     24316.61,
+     8.0
+    ],
+    "SwigluPackedBwDeviceOperation | 1x1x1024x65536 | 1x1x1024x32768 | 110": [
+     8948.905499999999,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x65536x32[16] | 33": [
+     7644.363500000001,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x1024x32[16] | 110": [
+     4559.4365,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88": [
+     763.1139999999997,
+     16.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x5120 | 88": [
+     464.88,
+     16.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x65536x5120 | 88": [
+     54755.69900000001,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x4096 | 88": [
+     303.08599999999996,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x4096 | 66": [
+     183.6715,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x4096 | 88": [
+     3415.4980000000005,
+     8.0
+    ],
+    "TransposeDeviceOperation | 1x1x1024x4096 |  | 110": [
+     304.549,
+     8.0
+    ],
+    "TransposeDeviceOperation | 1x32x128x1024 |  | 110": [
+     310.99399999999997,
+     8.0
+    ],
+    "SDPABackwardQDeviceOperation | 1x32x1024x128 | 1x32x1024x128 | 110": [
+     6921.868,
+     8.0
+    ],
+    "SDPABackwardKVDeviceOperation | 1x32x1024x128 | 1x32x1024x128 | 110": [
+     10856.471500000001,
+     8.0
+    ],
+    "NLPConcatHeadsDeviceOperation | 1x8x1024x128 |  | 110": [
+     168.84349999999998,
+     16.0
+    ],
+    "ConcatDeviceOperation | 1x1x1024x4096 | 1x1x1024x1024 | 110": [
+     504.37299999999993,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x6144x32[16] | 33": [
+     723.174,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x1024x32[16] | 99": [
+     451.05049999999994,
+     8.0
+    ],
+    "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x6144x5120 | 88": [
+     5384.749500000001,
+     8.0
+    ],
+    "AdamWDeviceOperation | 1x1x32[16]x5120 | 1x1x32[16]x5120 | 110": [
+     201.46950000000004,
+     16.0
+    ],
+    "AdamWDeviceOperation | 1x1x65536x32[16] | 1x1x65536x32[16] | 110": [
+     666.909,
+     8.0
+    ],
+    "AdamWDeviceOperation | 1x1x5120x32[16] | 1x1x5120x32[16] | 110": [
+     199.7165,
+     16.0
+    ],
+    "AdamWDeviceOperation | 1x1x6144x32[16] | 1x1x6144x32[16] | 110": [
+     106.8525,
+     8.0
+    ],
+    "AdamWDeviceOperation | 1x1x32[16]x4096 | 1x1x32[16]x4096 | 110": [
+     91.23,
+     8.0
+    ],
+    "AdamWDeviceOperation | 1x1x32[16]x32768 | 1x1x32[16]x32768 | 110": [
+     369.4669999999999,
+     8.0
+    ]
+   }
+  }
+ },
+ "fit": {
+  "fixed": 48.248696065217445,
+  "per_layer": 38.605757182608684,
+  "projection": 1592.4789833695647,
+  "full_depth": 40
+ },
+ "class_projection": {
+  "glue": 72.89560947826087,
+  "layout": 11.360804021739133,
+  "math": 1508.222569869565
+ },
+ "ranked": [
+  [
+   424.24874386956503,
+   "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x65536x5120 | 110",
+   40.0,
+   10.60594208260869,
+   0.011060565217412943
+  ],
+  [
+   273.5371018913043,
+   "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x65536x5120 | 88",
+   40.0,
+   6.836911952173913,
+   0.060623804347827104
+  ],
+  [
+   137.8354617173913,
+   "MatmulDeviceOperation | 1x1x1024x32768 | 1x1x5120x32768 | 88",
+   40.0,
+   3.4458468956521737,
+   0.0015858913043480527
+  ],
+  [
+   121.58233480434784,
+   "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32768 | 110",
+   40.0,
+   3.0395572739130436,
+   4.384782608646276e-05
+  ],
+  [
+   54.272473456521766,
+   "SDPABackwardKVDeviceOperation | 1x32x1024x128 | 1x32x1024x128 | 110",
+   40.0,
+   1.3566806608695658,
+   0.005247021739127611
+  ],
+  [
+   44.5975299347826,
+   "SwigluPackedBwDeviceOperation | 1x1x1024x65536 | 1x1x1024x32768 | 110",
+   40.0,
+   1.1139940913043476,
+   0.037766282608696855
+  ],
+  [
+   38.570270500000014,
+   "BinaryNgDeviceOperation | 1x1x1024x6144 | 1x1x1024x6144 | 110",
+   160.0,
+   0.9632067000000002,
+   0.04200249999999972
+  ],
+  [
+   38.08132910869567,
+   "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x65536x32[16] | 33",
+   40.0,
+   0.9512337478260873,
+   0.03197919565217333
+  ],
+  [
+   35.314153739130425,
+   "SDPAForwardDeviceOperation | 1x32x1024x128 | 1x8x1024x128 | 110",
+   40.0,
+   0.8828538652173912,
+   -8.695652167212131e-07
+  ],
+  [
+   34.60049434782607,
+   "SDPABackwardQDeviceOperation | 1x32x1024x128 | 1x32x1024x128 | 110",
+   40.0,
+   0.864928413043478,
+   0.0033578260869577825
+  ],
+  [
+   32.97550728260869,
+   "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x65536x32[16] | 110",
+   40.0,
+   0.8244407043478258,
+   -0.0021208913043468947
+  ],
+  [
+   31.19009489130434,
+   "BinaryNgDeviceOperation | 1x1x1024x5120 | 1x1x1024x5120 | 110",
+   320.0,
+   0.7791290521739128,
+   0.024932804347826742
+  ],
+  [
+   29.68636319565218,
+   "RMSNormBackwardDeviceOperation | 1x1x1024x5120 | 1x1x32[1]x5120 | 32",
+   81.0,
+   0.7329891260869567,
+   0.3667981521739123
+  ],
+  [
+   26.927494565217398,
+   "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x6144x5120 | 88",
+   40.0,
+   0.6731921086956524,
+   -0.00018978260869628727
+  ],
+  [
+   25.858819152173904,
+   "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x6144x5120 | 88",
+   40.0,
+   0.6464574869565215,
+   0.0005196739130441941
+  ],
+  [
+   22.799322347826088,
+   "MatmulDeviceOperation | 1x1x1024x65536 | 1x1x1024x32[16] | 110",
+   40.0,
+   0.5700324130434783,
+   -0.0019741739130441083
+  ],
+  [
+   19.238465608695655,
+   "MatmulDeviceOperation | 1x1x1024x32768 | 1x1x32[16]x32768 | 33",
+   40.0,
+   0.480992147826087,
+   -0.0012203043478262732
+  ],
+  [
+   19.08422708695654,
+   "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x131072x5120 | 110",
+   1.0,
+   -0.05130092173912999,
+   21.136263956521738
+  ],
+  [
+   18.59628517391304,
+   "MatmulDeviceOperation | 1x1x1024x4096 | 1x1x5120x4096 | 88",
+   40.0,
+   0.464869256521739,
+   0.0015149130434786162
+  ],
+  [
+   17.077740630434786,
+   "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x4096 | 88",
+   40.0,
+   0.4269577173913044,
+   -0.0005680652173913892
+  ],
+  [
+   16.81651504347826,
+   "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x32768 | 110",
+   40.0,
+   0.42036543913043484,
+   0.0018974782608691676
+  ],
+  [
+   16.175700043478262,
+   "SwigluPackedFwDeviceOperation | 1x1x1024x65536 |  | 110",
+   40.0,
+   0.4043609391304348,
+   0.0012624782608694485
+  ],
+  [
+   13.645208978260882,
+   "MatmulDeviceOperation | 1x1x1024x131072 | 1x1x131072x5120 | 88",
+   1.0,
+   0.0001688304347829256,
+   13.638455760869565
+  ],
+  [
+   12.379620869565217,
+   "RMSNormForwardDeviceOperation | 1x1x1024x5120 | 1x1x32[1]x5120 | 32",
+   81.0,
+   0.30566628260869566,
+   0.15296956521739147
+  ],
+  [
+   7.35385889130435,
+   "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x32768 | 110",
+   40.0,
+   0.18386045217391309,
+   -0.0005591956521739938
+  ],
+  [
+   7.129092500000004,
+   "CrossEntropyBackwardDeviceOperation | 1x1x1024x131072 | 1x1x1x1024 | 32",
+   1.0,
+   -0.005338699999999888,
+   7.3426405
+  ],
+  [
+   6.19000291304348,
+   "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x32[16]x5120 | 33",
+   80.0,
+   0.15471262173913047,
+   0.0014980434782607688
+  ],
+  [
+   6.027774956521739,
+   "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32[16] | 33",
+   80.0,
+   0.15069506086956522,
+   -2.747826086957339e-05
+  ],
+  [
+   5.787177934782608,
+   "RotaryEmbeddingLlamaDeviceOperation | 1x32x1024x128 | 1x1x1024x128 | 110",
+   80.0,
+   0.1445899913043478,
+   0.0035782826086957487
+  ],
+  [
+   3.9368871304347826,
+   "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x5120x32[16] | 88",
+   80.0,
+   0.09846181739130434,
+   -0.0015855652173912826
+  ],
+  [
+   3.8977339130434796,
+   "MatmulDeviceOperation | 1x1x1024x5120 | 1x1x1024x32[16] | 88",
+   80.0,
+   0.09744342173913048,
+   -2.9565217392613086e-06
+  ],
+  [
+   3.881527130434772,
+   "CrossEntropyForwardDeviceOperation | 1x1x1024x131072 | 1x1x1x1024 | 32",
+   1.0,
+   -0.0005933826086959471,
+   3.90526243478261
+  ],
+  [
+   3.808746717391303,
+   "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88",
+   80.0,
+   0.09515479565217387,
+   0.0025548913043479393
+  ],
+  [
+   3.6182007391304345,
+   "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x6144x32[16] | 33",
+   40.0,
+   0.0904673652173913,
+   -0.000493869565217353
+  ],
+  [
+   3.3314825000000003,
+   "AdamWDeviceOperation | 1x1x65536x32[16] | 1x1x65536x32[16] | 110",
+   40.0,
+   0.0832437,
+   0.0017344999999999722
+  ],
+  [
+   2.917539891304349,
+   "NLPConcatHeadsDeviceOperation | 1x32x1024x128 |  | 110",
+   80.0,
+   0.07289075217391308,
+   0.0019098043478259497
+  ],
+  [
+   2.5060833260869564,
+   "ConcatDeviceOperation | 1x1x1024x4096 | 1x1x1024x1024 | 110",
+   40.0,
+   0.06258204347826087,
+   0.0028015869565217455
+  ],
+  [
+   2.5058745,
+   "MatmulDeviceOperation | 1x1x1024x4096 | 1x1x32[16]x4096 | 33",
+   40.0,
+   0.0626414,
+   0.0002184999999999826
+  ],
+  [
+   2.3224229347826086,
+   "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x5120 | 88",
+   80.0,
+   0.05802739130434782,
+   0.0013272826086956624
+  ],
+  [
+   2.254286369565216,
+   "MatmulDeviceOperation | 1x1x1024x6144 | 1x1x1024x32[16] | 99",
+   40.0,
+   0.05634808260869563,
+   0.0003630652173913784
+  ],
+  [
+   2.185271065217391,
+   "MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x6144x32[16] | 88",
+   40.0,
+   0.05459780869565216,
+   0.001358717391304387
+  ],
+  [
+   2.022164108695652,
+   "NlpCreateHeadsDeviceOperation | 1x1x1024x6144 |  | 110",
+   40.0,
+   0.05048194782608696,
+   0.0028861956521738785
+  ],
+  [
+   1.8886899130434782,
+   "BinaryNgDeviceOperation | 1x1x1024x32[16] |  | 110",
+   320.0,
+   0.047206121739130434,
+   0.0004450434782608259
+  ],
+  [
+   1.842580869565217,
+   "AdamWDeviceOperation | 1x1x32[16]x32768 | 1x1x32[16]x32768 | 110",
+   40.0,
+   0.04603508260869564,
+   0.0011775652173913187
+  ],
+  [
+   1.5500288260869564,
+   "TransposeDeviceOperation | 1x32x128x1024 |  | 110",
+   40.0,
+   0.038722043478260866,
+   0.0011470869565217423
+  ]
+ ]
+}

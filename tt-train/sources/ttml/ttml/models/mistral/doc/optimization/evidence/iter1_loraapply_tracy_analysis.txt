@@ -1,0 +1,65 @@
+depth | steps used | ops/step | device ms/step | per-step ms
+    1 |    2 |       94 |     86.55 | 86.84, 86.25
+    2 |    2 |      175 |    125.97 | 127.63, 124.31
+    4 |    2 |      337 |    202.44 | 202.25, 202.64
+    8 |    2 |      661 |    357.12 | 357.76, 356.48
+
+fit: device ms = 48.25 + L x 38.606
+  L= 1: measured 86.55, fit 86.85, residual -0.31 ms (-0.4 %)
+  L= 2: measured 125.97, fit 125.46, residual +0.51 ms (+0.4 %)
+  L= 4: measured 202.44, fit 202.67, residual -0.23 ms (-0.1 %)
+  L= 8: measured 357.12, fit 357.09, residual +0.02 ms (+0.0 %)
+projection to 40 layers: 1592.5 ms device per step
+ops per step: 13 + L x 81.0 -> 3253 at full depth
+
+class | fixed ms | per-layer ms | projected ms at full depth | share
+glue    |     1.46 |        1.786 |       72.9 |   4.6 %
+layout  |     0.01 |        0.284 |       11.4 |   0.7 %
+math    |    46.78 |       36.536 |     1508.2 |  94.7 %
+
+ranked cost table, projected to 40 layers (ms/step | ops/step | class | op | in0 | in1 | cores)
+  424.25 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x5120 | 1x1x65536x5120 | 110
+  273.54 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x65536 | 1x1x65536x5120 | 88
+  137.84 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x32768 | 1x1x5120x32768 | 88
+  121.58 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32768 | 110
+   54.27 |    40.0 | math   | SDPABackwardKVDeviceOperation | 1x32x1024x128 | 1x32x1024x128 | 110
+   44.60 |    40.0 | math   | SwigluPackedBwDeviceOperation | 1x1x1024x65536 | 1x1x1024x32768 | 110
+   38.57 |   160.0 | glue   | BinaryNgDeviceOperation | 1x1x1024x6144 | 1x1x1024x6144 | 110
+   38.08 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x65536 | 1x1x65536x32[16] | 33
+   35.31 |    40.0 | math   | SDPAForwardDeviceOperation | 1x32x1024x128 | 1x8x1024x128 | 110
+   34.60 |    40.0 | math   | SDPABackwardQDeviceOperation | 1x32x1024x128 | 1x32x1024x128 | 110
+   32.98 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x65536x32[16] | 110
+   31.19 |   320.0 | glue   | BinaryNgDeviceOperation | 1x1x1024x5120 | 1x1x1024x5120 | 110
+   29.69 |    81.0 | math   | RMSNormBackwardDeviceOperation | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
+   26.93 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x6144 | 1x1x6144x5120 | 88
+   25.86 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x5120 | 1x1x6144x5120 | 88
+   22.80 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x65536 | 1x1x1024x32[16] | 110
+   19.24 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x32768 | 1x1x32[16]x32768 | 33
+   19.08 |     1.0 | math   | MatmulDeviceOperation | 1x1x1024x5120 | 1x1x131072x5120 | 110
+   18.60 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x4096 | 1x1x5120x4096 | 88
+   17.08 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x4096 | 88
+   16.82 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x32768 | 110
+   16.18 |    40.0 | math   | SwigluPackedFwDeviceOperation | 1x1x1024x65536 |  | 110
+   13.65 |     1.0 | math   | MatmulDeviceOperation | 1x1x1024x131072 | 1x1x131072x5120 | 88
+   12.38 |    81.0 | math   | RMSNormForwardDeviceOperation | 1x1x1024x5120 | 1x1x32[1]x5120 | 32
+    7.35 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x32768 | 110
+    7.13 |     1.0 | math   | CrossEntropyBackwardDeviceOperation | 1x1x1024x131072 | 1x1x1x1024 | 32
+    6.19 |    80.0 | math   | MatmulDeviceOperation | 1x1x1024x5120 | 1x1x32[16]x5120 | 33
+    6.03 |    80.0 | math   | MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32[16] | 33
+    5.79 |    80.0 | math   | RotaryEmbeddingLlamaDeviceOperation | 1x32x1024x128 | 1x1x1024x128 | 110
+    3.94 |    80.0 | math   | MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x5120x32[16] | 88
+    3.90 |    80.0 | math   | MatmulDeviceOperation | 1x1x1024x5120 | 1x1x1024x32[16] | 88
+    3.88 |     1.0 | math   | CrossEntropyForwardDeviceOperation | 1x1x1024x131072 | 1x1x1x1024 | 32
+    3.81 |    80.0 | math   | MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x5120 | 88
+    3.62 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x6144 | 1x1x6144x32[16] | 33
+    3.33 |    40.0 | math   | AdamWDeviceOperation | 1x1x65536x32[16] | 1x1x65536x32[16] | 110
+    2.92 |    80.0 | layout | NLPConcatHeadsDeviceOperation | 1x32x1024x128 |  | 110
+    2.51 |    40.0 | layout | ConcatDeviceOperation | 1x1x1024x4096 | 1x1x1024x1024 | 110
+    2.51 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x4096 | 1x1x32[16]x4096 | 33
+    2.32 |    80.0 | math   | MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x5120 | 88
+    2.25 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x6144 | 1x1x1024x32[16] | 99
+    2.19 |    40.0 | math   | MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x6144x32[16] | 88
+    2.02 |    40.0 | layout | NlpCreateHeadsDeviceOperation | 1x1x1024x6144 |  | 110
+    1.89 |   320.0 | glue   | BinaryNgDeviceOperation | 1x1x1024x32[16] |  | 110
+    1.84 |    40.0 | math   | AdamWDeviceOperation | 1x1x32[16]x32768 | 1x1x32[16]x32768 | 110
+    1.55 |    40.0 | layout | TransposeDeviceOperation | 1x32x128x1024 |  | 110

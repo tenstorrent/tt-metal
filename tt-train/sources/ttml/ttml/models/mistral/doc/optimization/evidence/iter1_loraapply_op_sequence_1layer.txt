@@ -1,0 +1,95 @@
+iteration 1, one steady-state step, 1 layer: # | us | cores | class | op | in0 | in1 | out
+  0 |     71.5 |  32 | math   | Embeddings                   | 1x1x1x1024             | 1x1x131072x5120        | 1x1x1024x5120
+  1 |    152.6 |  32 | math   | RMSNormForward               | 1x1x1024x5120          | 1x1x32[1]x5120         | 1x1x1024x5120
+  2 |    646.8 |  88 | math   | Matmul                       | 1x1x1024x5120          | 1x1x6144x5120          | 1x1x1024x6144
+  3 |     78.2 |  33 | math   | Matmul                       | 1x1x1024x5120          | 1x1x32[16]x5120        | 1x1x1024x32[16]
+  4 |     55.8 |  88 | math   | Matmul                       | 1x1x1024x32[16]        | 1x1x6144x32[16]        | 1x1x1024x6144
+  5 |     87.8 | 110 | glue   | BinaryNg                     | 1x1x1024x6144          | 1x1x1024x6144          | 1x1x1024x6144
+  6 |     53.2 | 110 | layout | NlpCreateHeads               | 1x1x1024x6144          |                        | 1x32x1024x128
+  7 |     76.0 | 110 | math   | RotaryEmbeddingLlama         | 1x32x1024x128          | 1x1x1024x128           | 1x32x1024x128
+  8 |     17.4 | 110 | math   | RotaryEmbeddingLlama         | 1x8x1024x128           | 1x1x1024x128           | 1x8x1024x128
+  9 |    883.2 | 110 | math   | SDPAForward                  | 1x32x1024x128          | 1x8x1024x128           | 1x32x1024x128
+ 10 |     37.2 | 110 | layout | NLPConcatHeads               | 1x32x1024x128          |                        | 1x1x1024x4096
+ 11 |    466.4 |  88 | math   | Matmul                       | 1x1x1024x4096          | 1x1x5120x4096          | 1x1x1024x5120
+ 12 |     62.9 |  33 | math   | Matmul                       | 1x1x1024x4096          | 1x1x32[16]x4096        | 1x1x1024x32[16]
+ 13 |     47.7 |  88 | math   | Matmul                       | 1x1x1024x32[16]        | 1x1x5120x32[16]        | 1x1x1024x5120
+ 14 |     62.0 | 110 | glue   | BinaryNg                     | 1x1x1024x6144          | 1x1x1024x6144          | 1x1x1024x6144
+ 15 |     63.2 | 110 | glue   | BinaryNg                     | 1x1x1024x5120          | 1x1x1024x5120          | 1x1x1024x5120
+ 16 |    152.5 |  32 | math   | RMSNormForward               | 1x1x1024x5120          | 1x1x32[1]x5120         | 1x1x1024x5120
+ 17 |  10421.1 | 110 | math   | Matmul                       | 1x1x1024x5120          | 1x1x65536x5120         | 1x1x1024x65536
+ 18 |     78.6 |  33 | math   | Matmul                       | 1x1x1024x5120          | 1x1x32[16]x5120        | 1x1x1024x32[16]
+ 19 |    825.0 | 110 | math   | Matmul                       | 1x1x1024x32[16]        | 1x1x65536x32[16]       | 1x1x1024x65536
+ 20 |    783.0 | 110 | glue   | BinaryNg                     | 1x1x1024x6144          | 1x1x1024x6144          | 1x1x1024x6144
+ 21 |    404.8 | 110 | math   | SwigluPackedFw               | 1x1x1024x65536         |                        | 1x1x1024x32768
+ 22 |   3443.7 |  88 | math   | Matmul                       | 1x1x1024x32768         | 1x1x5120x32768         | 1x1x1024x5120
+ 23 |    495.9 |  33 | math   | Matmul                       | 1x1x1024x32768         | 1x1x32[16]x32768       | 1x1x1024x32[16]
+ 24 |     50.6 |  88 | math   | Matmul                       | 1x1x1024x32[16]        | 1x1x5120x32[16]        | 1x1x1024x5120
+ 25 |     62.4 | 110 | glue   | BinaryNg                     | 1x1x1024x6144          | 1x1x1024x6144          | 1x1x1024x6144
+ 26 |     61.8 | 110 | glue   | BinaryNg                     | 1x1x1024x5120          | 1x1x1024x5120          | 1x1x1024x5120
+ 27 |    153.5 |  32 | math   | RMSNormForward               | 1x1x1024x5120          | 1x1x32[1]x5120         | 1x1x1024x5120
+ 28 |  20663.5 | 110 | math   | Matmul                       | 1x1x1024x5120          | 1x1x131072x5120        | 1x1x1024x131072
+ 29 |   3905.1 |  32 | math   | CrossEntropyForward          | 1x1x1024x131072        | 1x1x1x1024             | 1x1x1024x32[1]
+ 30 |      6.2 |  32 | glue   | MorehMeanOperation           | 1x1x1024x32[1]         |                        | 1x1x1024x32[1]
+ 31 |     13.7 |   1 | glue   | MorehMeanOperation           | 1x1x1024x32[1]         |                        | 1x1x32[1]x32[1]
+ 32 |      3.8 |   1 | glue   | MorehMeanOperation           | 1x1x32[1]x32[1]        |                        | 1x1x32[1]x32[1]
+ 33 |      3.8 |   1 | glue   | MorehMeanOperation           | 1x1x32[1]x32[1]        | 1x1x32[1]x32[1]        | 1x1x32[1]x32[1]
+ 34 |      2.7 |   1 | glue   | Full                         |                        |                        | 1x1x32[1]x32[1]
+ 35 |   7355.9 |  32 | math   | CrossEntropyBackward         | 1x1x1024x131072        | 1x1x1x1024             | 1x1x1024x131072
+ 36 |   1361.2 | 110 | glue   | BinaryNg                     | 1x1x1024x131072        | 1x1x32[1]x32[1]        | 1x1x1024x131072
+ 37 |  13637.6 |  88 | math   | Matmul                       | 1x1x1024x131072        | 1x1x131072x5120        | 1x1x1024x5120
+ 38 |    366.7 |  32 | math   | RMSNormBackward              | 1x1x1024x5120          | 1x1x32[1]x5120         | 1x1x1024x5120
+ 39 |     75.6 |  33 | math   | Matmul                       | 1x1x1024x5120          | 1x1x5120x32[16]        | 1x1x1024x32[16]
+ 40 |      3.3 | 110 | glue   | BinaryNg                     | 1x1x1024x32[16]        |                        | 1x1x1024x32[16]
+ 41 |     48.7 |  88 | math   | Matmul                       | 1x1x1024x5120          | 1x1x1024x32[16]        | 1x1x5120x32[16]
+ 42 |      4.0 | 110 | glue   | BinaryNg                     | 1x1x1024x32[16]        |                        | 1x1x1024x32[16]
+ 43 |    420.0 | 110 | math   | Matmul                       | 1x1x1024x32[16]        | 1x1x32[16]x32768       | 1x1x1024x32768
+ 44 |    183.8 | 110 | math   | Matmul                       | 1x1x1024x32[16]        | 1x1x1024x32768         | 1x1x32[16]x32768
+ 45 |   3040.3 | 110 | math   | Matmul                       | 1x1x1024x5120          | 1x1x5120x32768         | 1x1x1024x32768
+ 46 |    374.4 | 110 | glue   | BinaryNg                     | 1x1x1024x5120          | 1x1x1024x5120          | 1x1x1024x5120
+ 47 |   1149.5 | 110 | math   | SwigluPackedBw               | 1x1x1024x65536         | 1x1x1024x32768         | 1x1x1024x65536
+ 48 |    987.1 |  33 | math   | Matmul                       | 1x1x1024x65536         | 1x1x65536x32[16]       | 1x1x1024x32[16]
+ 49 |      3.3 | 110 | glue   | BinaryNg                     | 1x1x1024x32[16]        |                        | 1x1x1024x32[16]
+ 50 |    571.7 | 110 | math   | Matmul                       | 1x1x1024x65536         | 1x1x1024x32[16]        | 1x1x65536x32[16]
+ 51 |     23.1 | 110 | glue   | BinaryNg                     | 1x1x1024x32[16]        |                        | 1x1x1024x32[16]
+ 52 |     47.2 |  88 | math   | Matmul                       | 1x1x1024x32[16]        | 1x1x32[16]x5120        | 1x1x1024x5120
+ 53 |     29.4 |  88 | math   | Matmul                       | 1x1x1024x32[16]        | 1x1x1024x5120          | 1x1x32[16]x5120
+ 54 |   6895.9 |  88 | math   | Matmul                       | 1x1x1024x65536         | 1x1x65536x5120         | 1x1x1024x5120
+ 55 |     61.1 | 110 | glue   | BinaryNg                     | 1x1x1024x5120          | 1x1x1024x5120          | 1x1x1024x5120
+ 56 |    365.4 |  32 | math   | RMSNormBackward              | 1x1x1024x5120          | 1x1x32[1]x5120         | 1x1x1024x5120
+ 57 |     61.9 | 110 | glue   | BinaryNg                     | 1x1x1024x5120          | 1x1x1024x5120          | 1x1x1024x5120
+ 58 |     75.8 |  33 | math   | Matmul                       | 1x1x1024x5120          | 1x1x5120x32[16]        | 1x1x1024x32[16]
+ 59 |      3.3 | 110 | glue   | BinaryNg                     | 1x1x1024x32[16]        |                        | 1x1x1024x32[16]
+ 60 |     49.1 |  88 | math   | Matmul                       | 1x1x1024x5120          | 1x1x1024x32[16]        | 1x1x5120x32[16]
+ 61 |      3.9 | 110 | glue   | BinaryNg                     | 1x1x1024x32[16]        |                        | 1x1x1024x32[16]
+ 62 |     37.6 |  88 | math   | Matmul                       | 1x1x1024x32[16]        | 1x1x32[16]x4096        | 1x1x1024x4096
+ 63 |     22.9 |  66 | math   | Matmul                       | 1x1x1024x32[16]        | 1x1x1024x4096          | 1x1x32[16]x4096
+ 64 |    427.5 |  88 | math   | Matmul                       | 1x1x1024x5120          | 1x1x5120x4096          | 1x1x1024x4096
+ 65 |     48.9 | 110 | glue   | BinaryNg                     | 1x1x1024x5120          | 1x1x1024x5120          | 1x1x1024x5120
+ 66 |     39.0 | 110 | layout | Transpose                    | 1x1x1024x4096          |                        | 1x1x4096x1024
+ 67 |     38.7 | 110 | layout | Transpose                    | 1x32x128x1024          |                        | 1x32x1024x128
+ 68 |    866.7 | 110 | math   | SDPABackwardQ                | 1x32x1024x128          | 1x32x1024x128          | 1x32x1024x128
+ 69 |   1361.2 | 110 | math   | SDPABackwardKV               | 1x32x1024x128          | 1x32x1024x128          | 1x8x1024x128
+ 70 |     16.5 | 110 | math   | RotaryEmbeddingLlama         | 1x8x1024x128           | 1x1x1024x128           | 1x8x1024x128
+ 71 |     73.0 | 110 | math   | RotaryEmbeddingLlama         | 1x32x1024x128          | 1x1x1024x128           | 1x32x1024x128
+ 72 |     37.8 | 110 | layout | NLPConcatHeads               | 1x32x1024x128          |                        | 1x1x1024x4096
+ 73 |     10.5 | 110 | layout | NLPConcatHeads               | 1x8x1024x128           |                        | 1x1x1024x1024
+ 74 |     10.7 | 110 | layout | NLPConcatHeads               | 1x8x1024x128           |                        | 1x1x1024x1024
+ 75 |     65.3 | 110 | layout | Concat                       | 1x1x1024x4096          | 1x1x1024x1024          | 1x1x1024x6144
+ 76 |     90.9 |  33 | math   | Matmul                       | 1x1x1024x6144          | 1x1x6144x32[16]        | 1x1x1024x32[16]
+ 77 |      3.3 | 110 | glue   | BinaryNg                     | 1x1x1024x32[16]        |                        | 1x1x1024x32[16]
+ 78 |     56.4 |  99 | math   | Matmul                       | 1x1x1024x6144          | 1x1x1024x32[16]        | 1x1x6144x32[16]
+ 79 |      4.0 | 110 | glue   | BinaryNg                     | 1x1x1024x32[16]        |                        | 1x1x1024x32[16]
+ 80 |     49.4 |  88 | math   | Matmul                       | 1x1x1024x32[16]        | 1x1x32[16]x5120        | 1x1x1024x5120
+ 81 |     29.5 |  88 | math   | Matmul                       | 1x1x1024x32[16]        | 1x1x1024x5120          | 1x1x32[16]x5120
+ 82 |    672.8 |  88 | math   | Matmul                       | 1x1x1024x6144          | 1x1x6144x5120          | 1x1x1024x5120
+ 83 |     61.8 | 110 | glue   | BinaryNg                     | 1x1x1024x5120          | 1x1x1024x5120          | 1x1x1024x5120
+ 84 |    366.8 |  32 | math   | RMSNormBackward              | 1x1x1024x5120          | 1x1x32[1]x5120         | 1x1x1024x5120
+ 85 |     61.3 | 110 | glue   | BinaryNg                     | 1x1x1024x5120          | 1x1x1024x5120          | 1x1x1024x5120
+ 86 |     47.0 | 110 | math   | AdamW                        | 1x1x32[16]x32768       | 1x1x32[16]x32768       | 1x1x32[16]x32768
+ 87 |     12.6 | 110 | math   | AdamW                        | 1x1x5120x32[16]        | 1x1x5120x32[16]        | 1x1x5120x32[16]
+ 88 |     12.5 | 110 | math   | AdamW                        | 1x1x32[16]x5120        | 1x1x32[16]x5120        | 1x1x32[16]x5120
+ 89 |     12.5 | 110 | math   | AdamW                        | 1x1x32[16]x5120        | 1x1x32[16]x5120        | 1x1x32[16]x5120
+ 90 |     83.4 | 110 | math   | AdamW                        | 1x1x65536x32[16]       | 1x1x65536x32[16]       | 1x1x65536x32[16]
+ 91 |     11.8 | 110 | math   | AdamW                        | 1x1x32[16]x4096        | 1x1x32[16]x4096        | 1x1x32[16]x4096
+ 92 |     13.4 | 110 | math   | AdamW                        | 1x1x6144x32[16]        | 1x1x6144x32[16]        | 1x1x6144x32[16]
+ 93 |     12.5 | 110 | math   | AdamW                        | 1x1x5120x32[16]        | 1x1x5120x32[16]        | 1x1x5120x32[16]
