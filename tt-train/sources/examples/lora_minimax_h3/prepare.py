@@ -168,6 +168,13 @@ def main(argv: list[str] | None = None) -> int:
     (cache / "tokens").mkdir(exist_ok=True)
     manifest_path = cache / "manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+    if manifest:
+        log.warning(
+            "reusing the existing cache %s: entries are rebuilt only when their caption changes. If you changed "
+            "source images or preprocessing settings (--short-edge, --resample, --tokenizer, --max-tokens, --limit), "
+            "delete the cache folder and rerun prepare.py, encode_vae.py and encode_text.py",
+            cache,
+        )
     (cache / "meta.json").write_text(
         json.dumps(
             {
