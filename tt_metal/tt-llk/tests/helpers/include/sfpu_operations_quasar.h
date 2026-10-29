@@ -1168,7 +1168,8 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::logsigmoid)
     {
-        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_logsigmoid, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_logsigmoid, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::rpow)
     {
