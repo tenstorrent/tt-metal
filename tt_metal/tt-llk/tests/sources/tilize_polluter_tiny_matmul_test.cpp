@@ -64,10 +64,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats_array[run].unpack_B_src,
         formats_array[run].unpack_A_dst,
         formats_array[run].unpack_B_dst,
-        POLLUTER_FACE_R_DIM,
-        POLLUTER_FACE_R_DIM,
-        POLLUTER_NUM_FACES,
-        POLLUTER_NUM_FACES);
+        ckernel::make_tensor_shape_from_legacy(POLLUTER_FACE_R_DIM, POLLUTER_NUM_FACES),
+        ckernel::make_tensor_shape_from_legacy(POLLUTER_FACE_R_DIM, POLLUTER_NUM_FACES));
     _llk_unpack_tilize_init_wrapper_(
         formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1 /* ct_dim */, POLLUTER_FACE_R_DIM, false /* narrow_tile */, pol_tilize_nf);
     // Read the regular operand B buffer (full 32x32 tile) as raw row-major input.
@@ -98,10 +96,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats_array[run].unpack_B_src,
         formats_array[run].unpack_A_dst,
         formats_array[run].unpack_B_dst,
-        params.in1_tile_r_dim < FACE_R_DIM ? params.in1_tile_r_dim : FACE_R_DIM,
-        params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM,
-        params.num_faces_B, // in1
-        params.num_faces_A, // in0
+        ckernel::make_tensor_shape_from_legacy(params.in1_tile_r_dim < FACE_R_DIM ? params.in1_tile_r_dim : FACE_R_DIM, params.num_faces_B),
+        ckernel::make_tensor_shape_from_legacy(params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM, params.num_faces_A), // in0
         params.TILE_SIZE_UNPACK_B,
         params.TILE_SIZE_UNPACK_A);
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();

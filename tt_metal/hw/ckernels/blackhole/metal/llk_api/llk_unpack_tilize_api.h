@@ -184,7 +184,6 @@ inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
-    const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
     const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly<UnpackerProgramType::ProgramByFace>(
@@ -192,10 +191,8 @@ inline void llk_unpack_tilizeA_B_init(
         unpack_dst_format[operandA_id],
         unpack_src_format[operandB_id],
         unpack_dst_format[operandB_id],
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        num_faces,
-        get_operand_num_faces(operandB_id)));
+        get_operand_tensor_shape(operandA_id),
+        get_operand_tensor_shape(operandB_id)));
 
     _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
         unpack_src_format[operandA_id],
@@ -249,10 +246,8 @@ inline void llk_unpack_tilizeA_B(
         unpack_dst_format[operandA_id],
         unpack_src_format[operandB_id],
         unpack_dst_format[operandB_id],
-        face_r_dim,
-        get_operand_face_r_dim(operandB_id),
-        num_faces,
-        get_operand_num_faces(operandB_id)));
+        get_operand_tensor_shape(operandA_id),
+        get_operand_tensor_shape(operandB_id)));
 
     WAYPOINT("UPTW");
 

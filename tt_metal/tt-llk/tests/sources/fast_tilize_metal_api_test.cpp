@@ -67,7 +67,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // compute_kernel_hw_startup: llk_unpack_hw_configure
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
+        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
 
     std::uint32_t unit_dims[MAX_UNITS];
     std::uint32_t units_per_row = decompose_row(BLOCK_CT_DIM, unit_dims);

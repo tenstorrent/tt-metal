@@ -36,10 +36,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_B_src,
         formats.unpack_A_dst,
         formats.unpack_B_dst,
-        params.TEST_FACE_R_DIM,
-        params.TEST_FACE_R_DIM,
-        params.num_faces,
-        params.num_faces);
+        ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces),
+        ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces));
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
     const ckernel::TensorShape tensor_shape =
         ckernel::make_tensor_shape(params.TEST_FACE_R_DIM, params.TEST_FACE_C_DIM, params.num_faces_r_dim_A, params.num_faces_c_dim_A);

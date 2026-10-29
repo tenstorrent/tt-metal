@@ -119,10 +119,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_B_src,
         formats.unpack_A_dst,
         formats.unpack_B_dst,
-        params.in0_face_r_dim /* unpA_face_r_dim */,
-        params.in0_face_r_dim /* unpB_face_r_dim */,
-        num_faces /* unpA_num_faces */,
-        num_faces /* unpB_num_faces */);
+        ckernel::make_tensor_shape_from_legacy(params.in0_face_r_dim, num_faces),
+        ckernel::make_tensor_shape_from_legacy(params.in0_face_r_dim, num_faces));
 
     // Step 1: seed the two column sources into DEST. Plain unpack_A -> SrcA, math datacopy A2D.
     // P1 goes to DEST[SRC_INDEX] (the preamble MOVD2Bs its rows 0-7 into SrcB rows 0-7) and P2 to

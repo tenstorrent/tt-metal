@@ -59,10 +59,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats_array[run].unpack_B_src,
         formats_array[run].unpack_A_dst,
         formats_array[run].unpack_B_dst,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        4 /* num_faces */,
-        4 /* num_faces */);
+        ckernel::DEFAULT_TENSOR_SHAPE,
+        ckernel::DEFAULT_TENSOR_SHAPE);
 
     _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1 /* ct_dim */, FACE_R_DIM, false /* narrow_tile */);
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
@@ -117,10 +115,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats_array[run].unpack_B_src,
         formats_array[run].unpack_A_dst,
         formats_array[run].unpack_B_dst,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        4 /* num_faces */,
-        4 /* num_faces */);
+        ckernel::DEFAULT_TENSOR_SHAPE,
+        ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_unpack_AB_init_<>(DEFAULT_TENSOR_SHAPE);
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
