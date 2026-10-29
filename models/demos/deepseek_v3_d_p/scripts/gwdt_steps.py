@@ -20,6 +20,7 @@ from gwdt_checks import (
     collected_node_ids,
     didt_bad_devices,
     fabric_results,
+    missing_node_ids,
     read_tail,
     stress_result,
 )
@@ -57,6 +58,7 @@ class Ctx:
     mode_co: bool
     tick: Callable[[], None] = lambda: None
     blocked_models: dict[str, str] = field(default_factory=dict)
+    collected: list[str] | None = None
 
 
 @dataclass
@@ -67,7 +69,7 @@ class Step:
     model: str | None
     blocking: bool
     run: Callable[[Ctx, State], Result]
-    collect: Callable[[Ctx], tuple[list[str], dict[str, str], int]] | None = None
+    collect: Callable[[Ctx], list[str]] | None = None
     state: State = field(default_factory=State)
 
 
@@ -137,17 +139,25 @@ def would_run(cmd: str) -> Result:
     return Result(Status.PASS, f"would run: {cmd}")
 
 
-def collected_ids(ctx: Ctx, args: list[str], env: dict[str, str], log: Path) -> list[str]:
-    sh(ctx, "pytest --collect-only -q " + " ".join(f"'{a}'" for a in args), log, env, timeout=600)
+# Each pytest start costs ~30 s here (venv imports over NFS, cluster open/close in the DeepSeek conftest), and
+# pytest-benchmark adds a `git describe` over thousands of loose refs; so all steps collect in one call, without it.
+COLLECT_CMD = "pytest --collect-only -q -p no:benchmark "
+
+
+def collected_ids(ctx: Ctx, ids: list[str], log: Path) -> list[str]:
+    sh(ctx, COLLECT_CMD + " ".join(f"'{i}'" for i in ids), log, timeout=600)
     return collected_node_ids(log.read_text(errors="replace"))
 
 
-def run_collect(ctx: Ctx, key: str, args: list[str], env: dict[str, str], expected: int) -> Result:
-    log = step_dir(ctx, key) / "collect.log"
-    ids = collected_ids(ctx, args, env, log)
-    if len(ids) != expected:
-        return Result(Status.FAIL, f"{len(ids)} node ids collected, expected {expected}, log {log}", ids)
-    return Result(Status.PASS, f"collected: {ids[0]}" if expected == 1 else f"collected {expected} node ids", ids)
+def run_collect(ctx: Ctx, key: str, ids: list[str]) -> Result:
+    """--co result for one step: from the collect gate's single pytest call when it ran, else its own."""
+    log = step_dir(ctx, "collect") / "collect.log" if ctx.collected is not None else step_dir(ctx, key) / "collect.log"
+    collected = ctx.collected if ctx.collected is not None else collected_ids(ctx, ids, log)
+    if missing := missing_node_ids(ids, collected):
+        return Result(Status.FAIL, f"{len(missing)}/{len(ids)} node ids do not collect, log {log}", missing)
+    return Result(
+        Status.PASS, f"collected: {ids[0].split('::')[-1]}" if len(ids) == 1 else f"collected {len(ids)} node ids"
+    )
 
 
 RESET_CMD = "tt-smi -glx_reset_auto"
@@ -165,34 +175,28 @@ def pytest_step(
     title: str,
     group: str,
     model: str | None,
-    args: list[str],
-    expected: int,
+    ids: list[str],
+    opts: list[str] = [],
     details: Callable[[str], list[str]] = lambda log: [],
 ) -> Step:
-    def env_for(ctx: Ctx) -> dict[str, str]:
-        return common_sh(ctx.repo, model)[0] if model else {}
-
-    def collect(ctx: Ctx) -> tuple[list[str], dict[str, str], int]:
-        return args, env_for(ctx), expected
-
     def run(ctx: Ctx, state: State) -> Result:
         if ctx.mode_co:
-            return run_collect(ctx, key, args, env_for(ctx), expected)
+            return run_collect(ctx, key, ids)
         d = step_dir(ctx, key)
         if model and (failed := reset(ctx, d / "reset.log", state)):
             return failed
         log, csv = d / "log_01", d / "crash_triage_01.csv"
         state.log = str(log)
-        cmd = "pytest -vs -rA " + " ".join(f"'{a}'" for a in args)
-        sh(ctx, cmd, log, {**env_for(ctx), **triage_env(ctx.repo, csv)})
+        cmd = "pytest -vs -rA " + " ".join(f"'{a}'" for a in ids + opts)
+        sh(ctx, cmd, log, {**(common_sh(ctx.repo, model)[0] if model else {}), **triage_env(ctx.repo, csv)})
         if csv.is_file() and csv.stat().st_size > 0:
             return Result(Status.HANG, f"triage {csv}")
         text = log.read_text(errors="replace")
-        r = classify_pytest(text, expected)
+        r = classify_pytest(text, len(ids))
         r.details = details(text)
         return r
 
-    return Step(key, title, group, model, True, run, collect)
+    return Step(key, title, group, model, True, run, lambda ctx: ids)
 
 
 def loop_results(d: Path, loops: int) -> list[Result]:
@@ -208,13 +212,12 @@ def stress_step(phase: str, model: str, loops: int, ids: dict[str, str], iters: 
     key = f"{phase}:{model}"
     ids = {**ids, "TRACE_ID": "traced", "DET_ID": "with_determinism"}
 
-    def collect(ctx: Ctx) -> tuple[list[str], dict[str, str], int]:
-        env, target = common_sh(ctx.repo, model, ids)
-        return [target], env, 1
+    def collect(ctx: Ctx) -> list[str]:
+        return [common_sh(ctx.repo, model, ids)[1]]
 
     def run(ctx: Ctx, state: State) -> Result:
         if ctx.mode_co:
-            return run_collect(ctx, key, *collect(ctx))
+            return run_collect(ctx, key, collect(ctx))
         d = step_dir(ctx, key)
         env = {**ids, "MODEL": MODEL_ENV[model], "TRIAGE": "1", "PREFLIGHT": "0", "LOG_DIR": str(d)}
 
@@ -283,16 +286,27 @@ def paths_step(models: list[str]) -> Step:
 def collect_step(steps: list[Step]) -> Step:
     def run(ctx: Ctx, state: State) -> Result:
         targets = [s for s in steps if s.collect and s.model not in ctx.blocked_models]
-        if ctx.mode_co:
-            return Result(Status.PASS, f"{len(targets)} node ids, collected per step below")
-        bad = []
-        for s in targets:
-            r = run_collect(ctx, s.key, *s.collect(ctx))
-            if r.status != Status.PASS:
-                bad.append(f"{s.key}: {r.reason}")
+        wanted = {s.key: s.collect(ctx) for s in targets}
+        log = step_dir(ctx, "collect") / "collect.log"
+        state.log = str(log)
+        ctx.collected = collected_ids(ctx, [i for ids in wanted.values() for i in ids], log)
+        missing = {key: m for key, ids in wanted.items() if (m := missing_node_ids(ids, ctx.collected))}
+        if missing:
+            # One unknown id aborts the whole call and lists nothing, so find the culprits one step at a time.
+            ctx.collected = None
+            missing = {
+                key: m
+                for key in missing
+                if (
+                    m := missing_node_ids(
+                        wanted[key], collected_ids(ctx, wanted[key], step_dir(ctx, key) / "collect.log")
+                    )
+                )
+            }
+        bad = [f"{key}: {', '.join(m)}" for key, m in missing.items()]
         if bad:
-            return Result(Status.FAIL, f"{len(bad)}/{len(targets)} node ids do not collect", bad)
-        return Result(Status.PASS, f"{len(targets)}/{len(targets)} node ids")
+            return Result(Status.FAIL, f"{len(bad)}/{len(targets)} steps have node ids that do not collect", bad)
+        return Result(Status.PASS, f"{len(targets)}/{len(targets)} steps, {sum(map(len, wanted.values()))} node ids")
 
     return Step("collect", "collect", "gate", None, True, run)
 
@@ -326,7 +340,7 @@ def smi_step() -> Step:
 
 def fabric_step() -> Step:
     test = f"{TESTS}/utils/test_fabric_availability.py"
-    inner = pytest_step("fabric", "fabric", "gate", None, [test, "-k", "FABRIC_2D_TORUS_XY"], 1)
+    inner = pytest_step("fabric", "fabric", "gate", None, [f"{test}::test_fabric_opens[FABRIC_2D_TORUS_XY]"])
 
     def run(ctx: Ctx, state: State) -> Result:
         r = inner.run(ctx, state)
@@ -346,21 +360,14 @@ def memory_step() -> Step:
 
 
 def didt_step() -> Step:
-    args = [
-        "tests/didt/test_minimal_matmul.py",
-        "-k",
-        "galaxy and bf16_HiFi2",
-        "--didt-workload-iterations=1000",
-        "--determinism-check-interval=50",
-        "--timeout",
-        "1200",
-    ]
+    ids = ["tests/didt/test_minimal_matmul.py::test_minimal_matmul[blackhole-bf16_HiFi2-galaxy]"]
+    opts = ["--didt-workload-iterations=1000", "--determinism-check-interval=50", "--timeout", "1200"]
 
     def bad_devices(log: str) -> list[str]:
         bad = didt_bad_devices(log)
         return [f"device {d}: {k} non-deterministic outputs" for d, k in sorted(bad.items())]
 
-    return pytest_step("didt", "didt", "gate", None, args, 1, bad_devices)
+    return pytest_step("didt", "didt", "gate", None, ids, opts, bad_devices)
 
 
 def build_steps(models: list[str]) -> list[Step]:
@@ -372,11 +379,9 @@ def build_steps(models: list[str]) -> list[Step]:
                 "block",
                 "kimi_k2_7",
                 [
-                    f"{TESTS}/test_prefill_block_chunked.py::test_kimi_prefill_block_chunked",
-                    "-k",
-                    "torus-xy-8x4 and chunks2 and with_determinism and iter2 and not iter25 and not iter2000",
+                    f"{TESTS}/test_prefill_block_chunked.py::test_kimi_prefill_block_chunked"
+                    "[blackhole-kimi_k2_7-torus-xy-8x4-moe-gate_host-chunks2-iter2-with_determinism]"
                 ],
-                1,
             ),
             pytest_step(
                 "block-random:kimi_k2_7",
@@ -384,13 +389,10 @@ def build_steps(models: list[str]) -> list[Step]:
                 "block-random",
                 "kimi_k2_7",
                 [
-                    f"{TESTS}/test_prefill_transformer.py::test_kimi_prefill_transformer",
-                    "-k",
-                    "torus-xy-8x4 and 5_layers and e384_device and 5k and not 25k and iter2 and not iter25 "
-                    "and not iter2000 and smoke and with_determinism and non_balanced and right_pad "
-                    "and json_prompts and random",
+                    f"{TESTS}/test_prefill_transformer.py::test_kimi_prefill_transformer[blackhole-kimi_k2_7-torus-xy-8x4"
+                    "-iter2-with_determinism-e384_device_fp32-5_layers-isl_5k-non_balanced-smoke-json_prompts-random"
+                    "-kv_cache-right_pad]"
                 ],
-                1,
             ),
         ],
         "glm53": [
@@ -400,11 +402,10 @@ def build_steps(models: list[str]) -> list[Step]:
                 "block",
                 "glm53",
                 [
-                    f"{TESTS}/test_prefill_block.py::test_glm_prefill_block",
-                    "-k",
-                    "seq5120 and torus-xy-8x4 and glm53 and iter2 and with_determinism",
+                    f"{TESTS}/test_prefill_block.py::test_glm_prefill_block"
+                    f"[blackhole-glm53-with_determinism-iter2-{layer}-seq5120-torus-xy-8x4]"
+                    for layer in ("dense", "moe")
                 ],
-                2,
             )
         ],
     }

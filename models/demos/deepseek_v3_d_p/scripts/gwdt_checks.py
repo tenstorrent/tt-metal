@@ -162,6 +162,11 @@ def collected_node_ids(log_text: str) -> list[str]:
     return tree or re.findall(r"^(\S+::\S+)$", log_text, re.MULTILINE)
 
 
+def missing_node_ids(wanted: list[str], collected: list[str]) -> list[str]:
+    names = {c.split("::")[-1] for c in collected}
+    return [w for w in wanted if w.split("::")[-1] not in names]
+
+
 def didt_bad_devices(log_text: str) -> dict[int, int]:
     found = re.findall(r"non-deterministic outputs on device (\d+) is (\d+)", log_text)
     return {int(d): int(k) for d, k in found if int(k) > 0}
