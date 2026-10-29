@@ -684,6 +684,17 @@ public:
             default: return "";
         }
     }
+    // Matches the cores the watcher server delays; ETH kernels are only built with the delay when this is true.
+    bool get_watcher_debug_delay_targets_eth() const {
+        for (auto feature :
+             {RunTimeDebugFeatureReadDebugDelay, RunTimeDebugFeatureWriteDebugDelay, RunTimeDebugFeatureAtomicDebugDelay}) {
+            const auto& cores = get_feature_cores(feature);
+            if (auto it = cores.find(CoreType::ETH); it != cores.end() && !it->second.empty()) {
+                return true;
+            }
+        }
+        return false;
+    }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
             "{}_{}_{}_{}_{}_{}_{}_{}",
@@ -698,6 +709,10 @@ public:
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
+        }
+        // Appended only when it changes what gets built, so other cache keys stay unchanged.
+        if (get_watcher_debug_delay() && get_watcher_debug_delay_targets_eth()) {
+            compile_hash_str += "_delay_eth";
         }
         if (get_brisc_firmware_variant() == BriscFirmwareVariant::Blaze) {
             compile_hash_str += "_blaze_runtime_reload_";
