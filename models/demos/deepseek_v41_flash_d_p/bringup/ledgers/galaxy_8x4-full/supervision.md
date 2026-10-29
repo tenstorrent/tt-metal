@@ -870,3 +870,14 @@ guards around the CUR walls ~412-438); the A/B decides.
   chunk (8 TP all-gathers + 8 mesh_partitions; the study's ~46 assumed one index list per layer, ChunkMemo already
   builds one per index source); kept top-k 1.31 -> 0.33 MB a source layer. Component / swap tests keep local=False
   (hooks.py outside the paths). NOW: P.9 B ATTN_SP32_PROJ.
+- 12:15 P.9 ATTN_SP32_PROJ ACCEPTED by the owner, committed 6af7399b689 (not a clean win by the rule: 18/102 metrics >2 %
+  worse, all within limits, max margin share 0.85 vs 0.82; final PCC 0.545 -> 0.659). Agent profile at 51.2k: device
+  221.8 -> 209.9 ms, attention 78.9 -> 67.7; op calls 2373 -> 2333; attention collectives a chunk 240 -> 160; the
+  full-weight M=160 matmuls cost 0.217 -> 0.555 ms a layer (weight-read bound; wo_b config tuned 0.285 -> 0.158), so the
+  device gain is ~half the study's estimate; wall 393.1 on / 397.7 off (quick A/B; agent runs ~-30 ms). DS41-138
+  (all_to_all_async_generic in/out dim semantics). Orchestrator stopped (--until P.9).
+  FOUND by the P.9 agent: the seed's component tests test_c_swa_attention (L00 0.017 vs limit 0.0033 vs golden) and
+  test_c_enc_source_attention (L02 0.060 vs 0.050) FAIL on the 8x4 with P.9 on AND off; not in any Galaxy gate (W.1 /
+  M.1 / ladder / K.1 are). Diagnostic now (tmux ctdiag, /scratch/dnijemcevic/ctdiag/run.sh, ~25 min): GEMM_INPUTS=bf16
+  and CKV_FORMAT=bf16 one at a time, to tell a limit that misses the reference's own fp8 / fp4 rounding (framework,
+  as F223) from a real accuracy loss. P.10 waits for it.
