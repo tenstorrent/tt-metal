@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """CPU tests (no device) of tt/spec_logprobs.py and of the phase 2 additions to tt/spec_fused_sampled.py
-(work/research_1026/67 plan, tests H1-H4, H6 and the S1.3 uniform rule; H5 is in test_spec_fused_sampled_host.py).
+(design note 67 plan, tests H1-H4, H6 and the S1.3 uniform rule; H5 is in test_spec_fused_sampled_host.py).
 
 Run: pytest -o addopts="" -q models/demos/blackhole/qwen36/tests/test_spec_logprobs_host.py"""
 

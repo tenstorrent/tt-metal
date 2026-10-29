@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host helpers for device-side logprobs of the fused MTP step (work/research_1026/67, step S1.1). Pure torch, no ttnn.
+"""Host helpers for device-side logprobs of the fused MTP step (design note 67, step S1.1). Pure torch, no ttnn.
 
 The device gives, per verify row, the union of the per-shard top-64 raw logits (spec_fused_sampled.union_topk_stable)
 and the sums L_raw = sum exp(x - M), L_T = sum exp((x - M) / T) over the whole vocabulary, where M is the row's global

@@ -132,7 +132,7 @@ def spec_fused_sampled_enabled():
 
 def spec_device_logprobs_enabled():
     """QWEN36_SPEC_DEVICE_LOGPROBS (default "1"): the engine builds the stats trace (fp32 sums over the vocabulary per verify
-    row; work/research_1026/67) that device logprobs need. Model-side kill switch; it also decides the model capability supports_spec_device_logprobs.
+    row; design note 67) that device logprobs need. Model-side kill switch; it also decides the model capability supports_spec_device_logprobs.
     Needs the verify topk trace and the sampled accept (QWEN36_SPEC_FUSED=1, QWEN36_SPEC_FUSED_SAMPLED)."""
     return os.environ.get("QWEN36_SPEC_DEVICE_LOGPROBS", "1") != "0"
 
@@ -144,7 +144,7 @@ def spec_device_topp_enabled():
 
 
 def spec_device_mask_enabled():
-    """QWEN36_SPEC_DEVICE_MASK (default "1"): the engine builds the mask traces (work/research_1026/80 section 3.2, 85): per verify
+    """QWEN36_SPEC_DEVICE_MASK (default "1"): the engine builds the mask traces (design note 80 section 3.2, 85): per verify
     bucket a small trace that unpacks a packed token mask and edits the shard logits in place before the topk trace, so grammar /
     allowed_token_ids / bad_words / min_tokens rows run inside the fused sampled step. Model-side kill switch; it also decides the
     model capability supports_spec_device_mask (human-approved 2026-10-28). Needs the sampled accept, the stats trace and its

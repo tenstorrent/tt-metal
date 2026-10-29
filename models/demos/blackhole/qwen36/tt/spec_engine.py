@@ -144,9 +144,9 @@ MAX_SPEC_ROWS = ttnn.TILE_SIZE
 _WARM_PROMPT_LENS = (100, 128, 200, 256, 400, 512, 900, 1024, 1900, 2048, 2148, 2248, 2448, 2948, 3948, 4096)
 # Runner contract: token id for unused tail columns of a returned block.
 PLACEHOLDER_TOKEN_ID = -1
-# Phase 3 (work/research_1026/85): a split step whose second half is enqueued later than this after its first half counts in
+# Phase 3 (design note 85): a split step whose second half is enqueued later than this after its first half counts in
 # ``mask_late_finish`` (the forward takes about 31 ms: the mask is "late" when the device may have gone idle). A counter only.
-# A CHAINED split step (work/research_1026/92): the forward starts when the previous step ends, so the time runs from
+# A CHAINED split step (design note 92): the forward starts when the previous step ends, so the time runs from
 # max(first half enqueued, previous step done); with the previous step's end time unknown the step is not counted.
 MASK_LATE_MS = 31.0
 # "topk" (QWEN36_VERIFY_DEVICE_TOPK): the exact per-position top-M candidates instead of the full logits, with the
@@ -185,7 +185,7 @@ class VerifyResult:
     accepted_counts: torch.Tensor | None = None
     # decode_forward(defer_read=True): the FusedHandle of the enqueued step (no host tensors above; see MTPSpecEngine._decode_forward_deferred)
     handle: object = None
-    # phase 2 (work/research_1026/67): the logprob payload (spec_logprobs.DeviceCandidates, runner slots) of a sync "fused_sample"
+    # phase 2 (design note 67): the logprob payload (spec_logprobs.DeviceCandidates, runner slots) of a sync "fused_sample"
     # step whose spec_sampling asked for logprobs (num_logprobs >= 0 on some row); None otherwise
     candidates: object = None
 
@@ -990,7 +990,7 @@ class MTPSpecEngine:
         # that carried a certificate row and of those whose certificate failed
         self._fs_trace_c = None
         self.cert_steps = self.cert_failed_steps = 0
-        # phase 3 (work/research_1026/85): packed token masks inside the fused sampled step: the permuted staging ring of the device
+        # phase 3 (design note 85): packed token masks inside the fused sampled step: the permuted staging ring of the device
         # input, the counters (steps with a mask trace, constrained engine rows, split steps finished late), the split-step state
         self._mask_ring = PermMaskStagingRing()
         self.mask_steps = self.mask_rows = self.mask_late_finish = self.mask_fallback_rows = self.mask_chain_steps = 0
@@ -1954,7 +1954,7 @@ class MTPSpecEngine:
         self._prepare_pen_trace()
 
     def _prepare_mask_trace(self):
-        """Phase 3 (work/research_1026/85): warm the model's mask traces (a packed token mask edits the shard logits in place before the
+        """Phase 3 (design note 85): warm the model's mask traces (a packed token mask edits the shard logits in place before the
         topk trace). Needs the certificate variant of the sampled accept (it carries the tie-overflow guard of a masked row) and the
         model API; off with QWEN36_SPEC_DEVICE_MASK=0. A build error is raised (no silent downgrade): the serving flag stays off until
         a model passes."""
@@ -1981,7 +1981,7 @@ class MTPSpecEngine:
         )
 
     def _prepare_pen_trace(self):
-        """Phase 3 part 2 (work/research_1026/80 section 4, tt/spec_penalties.py): allocate the penalty state and warm the pen traces'
+        """Phase 3 part 2 (design note 80 section 4, tt/spec_penalties.py): allocate the penalty state and warm the pen traces'
         bodies over this engine's verify buffers and accept result buffer. The model captures the per-bucket pen traces with its verify
         traces and ``_capture_pen_update`` the update trace. Off with QWEN36_SPEC_DEVICE_PENALTIES=0, without the sampled accept or the
         verify topk trace, or for a model without the pen API. A build error is raised (no silent downgrade)."""
@@ -2039,7 +2039,7 @@ class MTPSpecEngine:
         ttnn.synchronize_device(self.mesh)
 
     def _prepare_stats_trace(self):
-        """Phase 2 (work/research_1026/67): warm the model's stats traces (fp32 sums over the vocabulary of each verify row, for
+        """Phase 2 (design note 67): warm the model's stats traces (fp32 sums over the vocabulary of each verify row, for
         device logprobs / the top-p certificate) over this engine's samp_in. The model captures them with its verify traces.
         Off with QWEN36_SPEC_DEVICE_LOGPROBS=0 and QWEN36_SPEC_DEVICE_TOPP=0, or for a model without the stats API. A build error
         is raised (no silent downgrade): the serving flag stays off until a model passes."""
@@ -3986,7 +3986,7 @@ class MTPSpecEngine:
         chain_tip=None,
         finishing_slots=None,
     ):
-        """First half of a split fused step (phase 3 stage P3a, work/research_1026/85): the same arguments as ``decode_forward``
+        """First half of a split fused step (phase 3 stage P3a, design note 85): the same arguments as ``decode_forward``
         (``spec_mode`` must be "fused_sample"; ``spec_sampling`` is required and has NO ``mask`` key). ``chain_rows`` / ``chain_tip``
         (phase 3 stage P6, part of ``supports_spec_device_mask``; need ``defer_read=True``) have the meaning they have in
         ``decode_forward``: the begin then enqueues the chain trace, the audit reads and the forward-only main trace, so the forward

@@ -2477,7 +2477,7 @@ class Qwen36Model:
         return g_vals, g_idx
 
     def _forward_verify_stats_body(self, bk=None, x=None, uv=None):
-        """Fourth verify trace (QWEN36_SPEC_DEVICE_LOGPROBS / QWEN36_SPEC_DEVICE_TOPP, work/research_1026/67 section 3): per engine
+        """Fourth verify trace (QWEN36_SPEC_DEVICE_LOGPROBS / QWEN36_SPEC_DEVICE_TOPP, design note 67 section 3): per engine
         row r, over the WHOLE vocabulary (TP shards x vocab/TP),
             L_raw[r] = sum exp(x - M_r)            (raw logsumexp = M_r + log L_raw)
             L_T[r]   = sum exp((x - M_r) / T_r)    (top-p normaliser of the row's temperature)
@@ -2703,7 +2703,7 @@ class Qwen36Model:
         self._vfy_stats_ready = False
 
     def _forward_verify_mask_body(self, bk=None, x=None):
-        """Fifth verify trace (QWEN36_SPEC_DEVICE_MASK, work/research_1026/80 section 3.2 and 81, 85): edit the shard logits IN PLACE
+        """Fifth verify trace (QWEN36_SPEC_DEVICE_MASK, design note 80 section 3.2 and 81, 85): edit the shard logits IN PLACE
         with a packed token mask, between the main trace and the topk trace. ``_vfy_mask_in`` int32 ROW_MAJOR [1,32,970] per
         device (row r = engine row r; the host sends the PERMUTED words: bit k of word w of shard s is token s*31040 + k*970 + w).
         Chain (P0b "W", bitwise equal to the host ``x + where(allowed, 0, MASK_NEG)`` in bf16): slice the rows of the bucket,
@@ -3536,7 +3536,7 @@ class Qwen36Model:
         main trace plus the optional logits / topk traces with ``blocking=False``. No synchronize and no readback.
         ``execute_topk`` (QWEN36_SPEC_FUSED stage S2): enqueue the topk trace but do not read it back (the handle says
         read_topk=False); the fused sampled accept trace consumes ``_vfy_topk_vals_out`` / ``_vfy_topk_ids_out`` on the device.
-        ``execute_stats`` (phase 2, work/research_1026/67): also enqueue the stats trace right after the topk trace (needs a topk
+        ``execute_stats`` (phase 2, design note 67): also enqueue the stats trace right after the topk trace (needs a topk
         replay in the same call and prepare_verify_stats before capture); results stay on the device (fetch_verify_stats).
         ``execute_pen`` (phase 3 part 2, tt/spec_penalties.py): enqueue the pen trace right after the main trace, before the topk
         trace, so the topk / stats / accept traces see the penalized shard logits (needs a topk replay in the same call and
@@ -3553,7 +3553,7 @@ class Qwen36Model:
         is the same B-row host state; the b-row traces use rows 0..b-1 of it and hand their outputs to the shared B-row buffers. The
         caller keeps every live row below b (the engine parks the others).
 
-        ``execute_mask`` / ``mask_host`` (phase 3, QWEN36_SPEC_DEVICE_MASK, work/research_1026/85): write the packed token mask
+        ``execute_mask`` / ``mask_host`` (phase 3, QWEN36_SPEC_DEVICE_MASK, design note 85): write the packed token mask
         ``mask_host`` (int32 [num_devices, 32, 970], the permuted words) into the mask input and replay the mask trace between the
         main trace and the topk trace (order: main, mask, topk, stats). Needs a topk replay (or ``forward_only``) and a captured mask
         trace. ``forward_only`` (the split step, ``verify_enqueue_post``): stage everything and enqueue the MAIN trace only (no

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""CPU tests of the device logprob payload in the spec engine (phase 2 step S4, work/research_1026/67 section 4, tests H8 to H12 of
+"""CPU tests of the device logprob payload in the spec engine (phase 2 step S4, design note 67 section 4, tests H8 to H12 of
 the model side): fake device, fake stats trace, call log (the rigs of test_spec_fused_engine_host.py and test_spec_async_engine_host.py).
 
 The fake stats trace computes the two fp32 sums of the stats buffer (rows 0..31 L_raw, rows 32..63 L_T) from the logits the fake

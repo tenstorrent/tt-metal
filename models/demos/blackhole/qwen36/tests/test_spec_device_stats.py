@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Device tests of the verify STATS trace (work/research_1026/67 sections 3 and 8.2; QWEN36_SPEC_DEVICE_LOGPROBS /
+"""Device tests of the verify STATS trace (design note 67 sections 3 and 8.2; QWEN36_SPEC_DEVICE_LOGPROBS /
 QWEN36_SPEC_DEVICE_TOPP, default on). One Galaxy slot (TP mesh, MESH_DEVICE=P150x8), one pytest node per process.
 
 D1 + D7  test_d1_d7_stats_numerics_all_buckets: on real sampled fused steps, for the row buckets 1 / 2 / 4 / 8, the stats
@@ -14,7 +14,7 @@ D6       test_d6_trace_memory_and_streams[on|off]: trace-region bytes after ever
 D10      test_d10_stats_timing: device time of the stats trace per bucket (replays), the topk trace for scale, and the median
          sampled fused step wall time with and without the stats replay.
 
-Run (one node per process; see work/scratch/phase2/run_dev.sh):
+Run (one node per process): pytest -o addopts= --import-mode=importlib -q models/demos/blackhole/qwen36/tests/test_spec_device_stats.py::<test> (needs a Galaxy slot; set P*_OUT_DIR to keep the JSON output)
   pytest models/demos/blackhole/qwen36/tests/test_spec_device_stats.py::test_d1_d7_stats_numerics_all_buckets
 """
 
@@ -35,7 +35,17 @@ from models.demos.blackhole.qwen36.tests.test_spec_fused_engine import _admit_al
 from models.demos.blackhole.qwen36.tests.test_spec_fused_sampled_engine import SampledDriver
 from models.demos.blackhole.qwen36.tt.spec_logprobs import _stable_topm_row, candidates_from_union, stats_from_logits
 
-OUT_DIR = os.environ.get("P2_OUT_DIR", "/home/ttuser/atupe/qwen-or/work/scratch/phase2")
+OUT_DIR = None  # set by the module fixture below: P2_OUT_DIR, else a pytest tmp dir
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _out_dir(tmp_path_factory):
+    global OUT_DIR
+    OUT_DIR = os.environ.get("P2_OUT_DIR") or str(tmp_path_factory.mktemp("p2_out"))
+    os.makedirs(OUT_DIR, exist_ok=True)
+    yield
+
+
 TEMPS = (0.3, 0.6, 1.0, 1.5)
 STEPS_PER_CASE = int(os.environ.get("P2_STEPS", "14"))
 M = 64

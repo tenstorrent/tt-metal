@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Device tests of the penalties inside the fused MTP step (phase 3 part 2, PEN-1; work/research_1026/80 section 4 and 84).
+"""Device tests of the penalties inside the fused MTP step (phase 3 part 2, PEN-1; design note 80 section 4 and 84).
 One TP mesh (MESH_DEVICE=P150x8), ONE pytest node per process (run_p8_device.sh). They need the pen traces and the update trace
 (QWEN36_SPEC_FUSED=1, QWEN36_SPEC_DEVICE_PENALTIES default 1). They drive MTPSpecEngine.decode_forward directly (no plugin): a penalty
 row is a SAMPLED row in ``spec_sampling`` (a greedy request as temperature 1, top_k 1, top_p 0) plus ``spec_sampling["penalties"]``.
@@ -24,7 +24,7 @@ D14  test_d14_no_compile_and_trace_memory: a run with penalties, joins, a finish
      set_program_cache_misses_allowed(False): the program cache does not grow; the pen update trace grows the trace region by less than 4 MiB
      and the whole trace region stays below 90 percent of its size; every bucket has a pen trace.
 
-Run (one node per process): work/scratch/phase3/run_p8_device.sh <name> [VAR=val ...]
+Run (one node per process): pytest -o addopts= --import-mode=importlib -q models/demos/blackhole/qwen36/tests/test_spec_device_penalties.py::<test> (needs a Galaxy slot; set P*_OUT_DIR to keep the JSON output)
 """
 
 import math

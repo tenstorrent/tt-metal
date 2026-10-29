@@ -142,7 +142,7 @@ def fused_drafter_reference(committed, counts, aux, pt, *, B, K):
 
 
 def certificate_cut(zc, full_norm, top_p, eps=CERT_EPS):
-    """Top-p certificate of a full-vocabulary row (work/research_1026/67 section 5.1). ``zc`` = sum over the first M candidates
+    """Top-p certificate of a full-vocabulary row (design note 67 section 5.1). ``zc`` = sum over the first M candidates
     of exp(v_i - v_0) (v = logit / T), ``full_norm`` = the same sum over the whole vocabulary (L_T of the stats trace), ``top_p``.
     q = zc / max(full_norm, zc) in (0, 1]. When q >= p + eps every position past the candidates is dropped by the nucleus rule
     and, inside the candidates, position i is dropped iff S_i / zc <= 1 - p / q (S_i = candidate mass from i on). Returns
@@ -547,7 +547,7 @@ class FusedSampledDevice(FusedGreedyDevice):
 
     def body(self, cert=False):
         """The trace-capturable sequence. No host round trip, no data-dependent shape, outputs written with ttnn.copy.
-        ``cert=True`` (phase 2, work/research_1026/67 section 5.2): the certificate variant. A sampled row with top_k = 0 keeps all
+        ``cert=True`` (phase 2, design note 67 section 5.2): the certificate variant. A sampled row with top_k = 0 keeps all
         M candidates, takes L_T from ``stats_in`` and cuts the nucleus at 1 - p / q (q = Zc / max(L_T, Zc)); the overflow word gets
         bit 2 (OVF_CERT) when q - p < CERT_EPS in an examined column. Every other op and every non-certificate row is the plain
         body's (a certificate mask of 0 adds exactly 0): the plain body is NOT changed, ``cert=False`` records the same ops as before.

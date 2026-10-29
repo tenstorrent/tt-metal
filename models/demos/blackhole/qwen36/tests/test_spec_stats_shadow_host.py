@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""CPU tests of the top-p certificate failure-rate probe (phase 2 step S8, work/research_1026/67 section 5.6): no device.
+"""CPU tests of the top-p certificate failure-rate probe (phase 2 step S8, design note 67 section 5.6): no device.
 
 Part A, pure math and counters (tt/spec_shadow.py): the candidate mass fraction q against a float64 full-vocabulary reference (peaked and
 flat rows), the histogram / fail counters, the examined-position mask, the temperature split, the log line and its round trip through
