@@ -315,7 +315,8 @@ Program& persistent_run_on_mesh_device(
 
 // Enqueue a blank kernel with a CB on `cores` and hand back its workload. While the workload is
 // alive its Program keeps that program-local L1 placed, as an op held in the program cache does.
-distributed::MeshWorkload run_program_with_cb(distributed::MeshDevice& mesh_device, const CoreRangeSet& cores) {
+distributed::MeshWorkload run_program_with_cb(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreRangeSet& cores) {
     Program program = CreateProgram();
     CreateKernel(
         program,
@@ -325,14 +326,28 @@ distributed::MeshWorkload run_program_with_cb(distributed::MeshDevice& mesh_devi
     CreateCircularBuffer(
         program, cores, CircularBufferConfig(2048, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, 2048));
     distributed::MeshWorkload workload;
-    workload.add_program(persistent_unit_mesh_device_range(), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device.mesh_command_queue());
+    persistent_run_on_mesh_device(mesh_device, std::move(program), workload);
     return workload;
 }
 
 bool ranges_overlap(uint64_t a_begin, uint64_t a_end, uint64_t b_begin, uint64_t b_end) {
     return a_begin < b_end && b_begin < a_end;
+}
+
+// Allocate an L1 buffer while `space` is alive and expect the allocator to have placed it clear of
+// the space's ring and config page.
+void expect_l1_buffer_placed_clear_of(distributed::MeshDevice& mesh_device, const m2::PrefetcherPipeSpace& space) {
+    constexpr uint32_t buffer_size = 2048;
+    auto buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = buffer_size},
+        distributed::DeviceLocalBufferConfig{.page_size = buffer_size, .buffer_type = BufferType::L1},
+        &mesh_device);
+    const uint64_t buffer_begin = buffer->address();
+    const uint64_t buffer_end = buffer_begin + buffer_size;
+    EXPECT_FALSE(
+        ranges_overlap(buffer_begin, buffer_end, space.buffer_address(), space.buffer_address() + space.ring_size()));
+    EXPECT_FALSE(ranges_overlap(
+        buffer_begin, buffer_end, space.config_address(), space.config_address() + space.config_page_size()));
 }
 
 // Overlap producer/consumer across two programs (cross-program shape). Prefer a single Program
@@ -1145,16 +1160,7 @@ TEST_F(PrefetcherPipeFixture, AllocatorSpaceTakesItsL1FromTheAllocator) {
         EXPECT_TRUE(mesh_device->allocator_impl()->persistent_l1().occupied_ranges().empty());
 
         // The allocator places a later L1 buffer around the space.
-        auto buffer = distributed::MeshBuffer::create(
-            distributed::ReplicatedBufferConfig{.size = 2048},
-            distributed::DeviceLocalBufferConfig{.page_size = 2048, .buffer_type = BufferType::L1},
-            mesh_device.get());
-        const uint64_t buffer_begin = buffer->address();
-        const uint64_t buffer_end = buffer_begin + 2048;
-        EXPECT_FALSE(ranges_overlap(
-            buffer_begin, buffer_end, space.buffer_address(), space.buffer_address() + space.ring_size()));
-        EXPECT_FALSE(ranges_overlap(
-            buffer_begin, buffer_end, space.config_address(), space.config_address() + space.config_page_size()));
+        expect_l1_buffer_placed_clear_of(*mesh_device, space);
     }
 
     // Destroying the space handed its L1 back, so an identical space lands where it was.
@@ -1175,7 +1181,7 @@ TEST_F(PrefetcherPipeFixture, AllocatorSpaceCanBeCreatedAfterProgramLocalL1) {
     constexpr uint32_t num_entries = 4;
     const CoreCoord sender(0, 0);
     const CoreRangeSet receivers(CoreRange({1, 0}, {2, 0}));
-    const distributed::MeshWorkload cached_workload = run_program_with_cb(*mesh_device, receivers);
+    const distributed::MeshWorkload cached_workload = run_program_with_cb(mesh_device, receivers);
 
     // The live program's CB seals the persistent arena on the receivers.
     auto config = one_pipe_space_config(sender, receivers, entry_size * num_entries);
@@ -1224,18 +1230,7 @@ TEST_F(PrefetcherPipeFixture, SpacesCreatedTogetherShareL1) {
 
     // The L1 stays allocated until the last space of the batch is gone.
     spaces.erase(spaces.begin());
-    const m2::PrefetcherPipeSpace& survivor = spaces.front();
-    auto buffer = distributed::MeshBuffer::create(
-        distributed::ReplicatedBufferConfig{.size = 2048},
-        distributed::DeviceLocalBufferConfig{.page_size = 2048, .buffer_type = BufferType::L1},
-        mesh_device.get());
-    EXPECT_FALSE(ranges_overlap(
-        buffer->address(),
-        buffer->address() + 2048,
-        std::min(survivor.buffer_address(), survivor.config_address()),
-        std::max(
-            survivor.buffer_address() + survivor.ring_size(),
-            survivor.config_address() + survivor.config_page_size())));
+    expect_l1_buffer_placed_clear_of(*mesh_device, spaces.front());
 }
 
 // ============================================================================
@@ -1917,21 +1912,20 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
                 /*is_metal2_kernel=*/true,
                 handles);
             bool saw_binding = false;
-            kernel->process_dataflow_buffer_binding_handles(
-                [&](const std::string& name,
-                    uint16_t logical_id,
-                    bool is_relay,
-                    uint8_t prefetcher_pipe_id,
-                    const std::optional<LLKMetadata>& llk_metadata,
-                    uint8_t /*pap*/,
-                    uint8_t /*cap*/) {
-                    EXPECT_EQ(name, "relay_dfb");
-                    EXPECT_EQ(logical_id, expected_slot);
-                    EXPECT_TRUE(is_relay);
-                    EXPECT_EQ(prefetcher_pipe_id, 0u);
-                    EXPECT_FALSE(llk_metadata.has_value());
-                    saw_binding = true;
-                });
+            kernel->process_dataflow_buffer_binding_handles([&](const std::string& name,
+                                                                uint16_t logical_id,
+                                                                bool is_relay,
+                                                                uint8_t prefetcher_pipe_id,
+                                                                const std::optional<LLKMetadata>& llk_metadata,
+                                                                uint8_t /*pap*/,
+                                                                uint8_t /*cap*/) {
+                EXPECT_EQ(name, "relay_dfb");
+                EXPECT_EQ(logical_id, expected_slot);
+                EXPECT_TRUE(is_relay);
+                EXPECT_EQ(prefetcher_pipe_id, 0u);
+                EXPECT_FALSE(llk_metadata.has_value());
+                saw_binding = true;
+            });
             EXPECT_TRUE(saw_binding);
         }
     }

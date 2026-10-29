@@ -5,6 +5,8 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <memory>
 #include <span>
 #include <unordered_map>
@@ -15,6 +17,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -27,6 +30,9 @@ class MeshDevice;
 }  // namespace distributed
 
 namespace experimental {
+
+// Per-core config pages, keyed by logical worker core.
+using PrefetcherPipeConfigPages = std::unordered_map<CoreCoord, std::vector<uint32_t>>;
 
 // The data ring and config pages of the spaces one CreatePrefetcherPipeSpaces call made: one
 // allocation of each over the union of their reservation cores, so every one of those spaces sees
@@ -48,9 +54,15 @@ public:
     PrefetcherPipeSpaceL1& operator=(PrefetcherPipeSpaceL1&&) = delete;
     ~PrefetcherPipeSpaceL1();
 
-    PrefetcherPipeL1Source source() const { return source_; }
     uint32_t data_address() const { return data_address_; }
     uint32_t config_address() const { return config_address_; }
+
+    // Allocator source: write config pages at config_address() through the command queue, as one
+    // write of the config buffer limited to `cores`. `pages_on(coord)` holds the page of every core
+    // in `cores` for the device at `coord`; devices handed the same pages share one host image.
+    void enqueue_config_pages(
+        const CoreRangeSet& cores,
+        const std::function<const PrefetcherPipeConfigPages&(const distributed::MeshCoordinate&)>& pages_on) const;
 
 private:
     void allocate_from_arena(const CoreRangeSet& cores, uint32_t ring_size, uint32_t config_page_size);
@@ -58,7 +70,6 @@ private:
     void release() noexcept;
 
     distributed::MeshDevice* device_ = nullptr;
-    PrefetcherPipeL1Source source_ = PrefetcherPipeL1Source::Default;
     // PersistentArena source.
     uint64_t data_allocation_id_ = 0;
     uint64_t config_allocation_id_ = 0;
@@ -141,15 +152,12 @@ public:
     void claim(const CoreRangeSet& cores, PrefetcherPipeImpl& owner);
     void unclaim(const CoreRangeSet& cores, PrefetcherPipeImpl& owner) noexcept;
 
-    // Write `page` at config_address() on every core in `cores` of every device. See
-    // write_core_page() for how it reaches the device.
-    void write_page(const CoreRangeSet& cores, const std::vector<uint32_t>& page) const;
-    // Write per-core pages, grouping cores with identical bytes into one write_page() each.
-    void write_pages(const std::unordered_map<CoreCoord, std::vector<uint32_t>>& pages) const;
-    // Write `page` at config_address() on worker `core` of `target_device` only. Through the
-    // command queue for an Allocator space under fast dispatch, where earlier work may still be
-    // using that L1; directly from the host otherwise.
-    void write_core_page(IDevice* target_device, const CoreCoord& core, const std::vector<uint32_t>& page) const;
+    // Write per-core pages at config_address() on every device. A PersistentArena space writes
+    // them from the host, multicasting identical pages to rectangles. An Allocator space writes
+    // them through the command queue, because earlier work may still be using that L1.
+    void write_pages(const PrefetcherPipeConfigPages& pages) const;
+    // Allocator spaces: write each device's own pages, as write_pages() does.
+    void write_device_pages(const std::map<distributed::MeshCoordinate, PrefetcherPipeConfigPages>& pages) const;
     // Call after carving DRAM-sender pipes. Their DRISC senders are not ordered with the command
     // queue, so keep them from writing ring data or credits into receiver L1 before the queue has
     // written the receivers' pages.
@@ -161,7 +169,9 @@ private:
     // except that its sender is reserved, which the two forms check at different points.
     void validate_dram_pipe_geometry(CoreCoord sender, const CoreRangeSet& receivers) const;
     const PrefetcherPipeSpaceL1& l1() const;
-    bool writes_through_command_queue() const;
+    // PersistentArena spaces: write `page` at config_address() on every core in `cores` of every
+    // device, one NOC multicast per rectangle and a unicast for single-core rectangles.
+    void write_page(const CoreRangeSet& cores, const std::vector<uint32_t>& page) const;
 
     const distributed::MeshDevice* device_ = nullptr;
     PrefetcherPipeSpaceConfig config_;

@@ -150,9 +150,8 @@ enum class PrefetcherPipeL1Source : uint8_t {
     PersistentArena,
     // Lockstep L1 buffers from the device's L1 allocator. A space can be created or destroyed at
     // any time; enqueueing a Program whose CBs or DFBs overlap a live space fails. The range is
-    // taken on every worker core, not only the space's. Under fast dispatch, config pages are
-    // written through the calling thread's command queue, so they land after the work already
-    // enqueued on it.
+    // taken on every worker core, not only the space's. Config pages are written through the
+    // calling thread's command queue, so they land after the work already enqueued on it.
     Allocator,
 };
 
