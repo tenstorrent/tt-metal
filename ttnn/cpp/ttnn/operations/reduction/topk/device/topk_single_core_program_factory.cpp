@@ -46,9 +46,10 @@ ttnn::device_operation::ProgramArtifacts TopKDeviceOperation::TopKSingleCoreProg
     if (output_ind_cb_data_format == tt::DataFormat::Int32) {
         output_ind_cb_data_format = tt::DataFormat::UInt32;
     }
-    // Quasar has no UInt16 data format. Int16 has the same 2-byte tile layout, and the sort only moves the
-    // index datums alongside the values (it never compares or computes on them), so the 16-bit index buffers
-    // run as Int16 there and the writer copies the raw tile bytes into the UINT16 output unchanged.
+    // tt-metal does not yet support UInt16 dataflow buffers on Quasar. Int16 has the same 2-byte tile layout,
+    // and the sort only moves the index datums alongside the values (it never compares or computes on them),
+    // so the 16-bit index buffers run as Int16 there and the writer copies the raw tile bytes into the UINT16
+    // output unchanged.
     if (tensor_args.input.device()->arch() == tt::ARCH::QUASAR && output_ind_cb_data_format == tt::DataFormat::UInt16) {
         output_ind_cb_data_format = tt::DataFormat::Int16;
     }

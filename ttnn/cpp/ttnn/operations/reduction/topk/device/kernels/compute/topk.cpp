@@ -77,6 +77,7 @@ FORCE_INLINE void transpose_and_pack(InputDfb& input_dfb, DestDfb& dest_dfb, con
 FORCE_INLINE void pack_results(const uint32_t dfb0, const uint32_t dfb1, const uint32_t base_offset) {
     // Pack first tile (values) to cb0
     pack_reconfig_data_format(dfb0);
+    // On Quasar, only pack_init switches the pack target (#58488).
 #ifdef ARCH_QUASAR
     pack_init(dfb0);
 #endif
@@ -85,6 +86,7 @@ FORCE_INLINE void pack_results(const uint32_t dfb0, const uint32_t dfb1, const u
     // Pack second tile (indices) to cb1, reconfig only if different buffer
     if (dfb0 != dfb1) {
         pack_reconfig_data_format(dfb1);
+        // On Quasar, only pack_init switches the pack target (#58488).
 #ifdef ARCH_QUASAR
         pack_init(dfb1);
 #endif
@@ -177,11 +179,11 @@ void kernel_main() {
     ckernel::topk_tile_init<false, rank_stamped>();
     constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(largest != 0);
 
-    // One DataflowBuffer per buffer, alive for the whole kernel; the helpers above that wait, pop, reserve,
-    // or push take it by reference. On Quasar a DataflowBuffer drains its buffer when it is destroyed (it
-    // waits until every pushed tile has been popped), so one constructed inside a helper or a loop body
-    // would wait on a buffer that still holds tiles, and for the buffers this kernel both pushes to and
-    // pops from, that wait never ends.
+    // Construct the DataflowBuffer objects once, here, so that they live for the whole kernel; the helpers
+    // above that wait, pop, reserve, or push take them by reference. On Quasar a DataflowBuffer destructor
+    // waits until every pushed tile has been popped, so one constructed inside a helper or a loop body would
+    // wait on a buffer that still holds tiles, and for the buffers this kernel both pushes to and pops from,
+    // that wait would never end.
     DataflowBuffer input_val_dfb(input_val_dfb_index);
     DataflowBuffer input_ind_dfb(input_ind_dfb_index);
     DataflowBuffer transposed_val_dfb(transposed_val_dfb_index);
@@ -292,6 +294,7 @@ void kernel_main() {
                 tile_regs_wait();
                 // Pack transposed values
                 pack_reconfig_data_format(transposed_val_dfb_index);
+                // On Quasar, only pack_init switches the pack target (#58488).
 #ifdef ARCH_QUASAR
                 pack_init(transposed_val_dfb_index);
 #endif
@@ -299,6 +302,7 @@ void kernel_main() {
 
                 // Pack transposed indices
                 pack_reconfig_data_format(transposed_ind_dfb_index);
+                // On Quasar, only pack_init switches the pack target (#58488).
 #ifdef ARCH_QUASAR
                 pack_init(transposed_ind_dfb_index);
 #endif

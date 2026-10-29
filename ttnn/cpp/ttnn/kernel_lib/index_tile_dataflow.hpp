@@ -20,8 +20,8 @@
 namespace dataflow_kernel_lib {
 
 namespace detail {
-// Stores all 1024 entries of the index tile at width position wt with the RISC. Ptr is a pointer to
-// the index type, or a CoreLocalMem of it.
+// Writes all 1024 entries of the index tile at width position wt to SRAM with ordinary RISC-V stores
+// (no NoC). Ptr is a pointer to the index type, or a CoreLocalMem of it.
 template <typename Ptr>
 FORCE_INLINE void store_index_tile(Ptr ptr, const uint32_t wt) {
     constexpr uint32_t tile_faces = 2;
@@ -53,17 +53,17 @@ FORCE_INLINE void store_index_tile(Ptr ptr, const uint32_t wt) {
  * bottom-right. The index depends only on the column, so all 16 rows of a face are identical
  * and the two lower faces repeat the two upper ones. Only 32 of the 1024 entries are distinct.
  *
- * Rather than store all 1024 entries with the RISC, seed two rows of each upper face and let the
- * NoC replicate them. Per tile that is 32 stores of a 32-bit word holding two indices, and 15 NoC
- * read commands, against 1024 16-bit stores. This is the same construction the DeepSeek gate
- * writers already use
+ * Rather than write all 1024 entries to SRAM with ordinary RISC-V stores, seed two rows of each
+ * upper face and let the NoC replicate them. Per tile that is 32 stores of a 32-bit word holding two
+ * indices, and 15 NoC read commands, against 1024 16-bit stores. This is the same construction the
+ * DeepSeek gate writers already use
  * (experimental/reduction/deepseek_grouped_gate, experimental/deepseek_prefill/moe_grouped_topk).
- * The NoC replication is used only for 16-bit indices on WH/BH. 32-bit indices, and every index
- * tile on Quasar, store all 1024 entries with the RISC.
+ * The NoC replication is used only for 16-bit indices on WH/BH. For 32-bit indices, and for every
+ * index tile on Quasar, ordinary RISC-V stores write all 1024 entries to SRAM.
  *
  * T selects the index width, which must match the top-k LLK's dest mode: uint16_t for a 16-bit
- * index tile (UInt16 with LO16 dest on WH/BH; Int16 with UINT16 dest on Quasar, which has no UInt16
- * data format), uint32_t for a 32-bit index tile (INT32 dest).
+ * index tile (UInt16 with LO16 dest on WH/BH; Int16 with UINT16 dest on Quasar, where tt-metal does
+ * not yet support UInt16 dataflow buffers), uint32_t for a 32-bit index tile (INT32 dest).
  *
  * @param dfb The kernel's dataflow buffer to write the generated index tile to. Construct it once at
  *            kernel scope and pass it by reference: on Quasar a DataflowBuffer drains when it goes out
@@ -77,9 +77,10 @@ FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
     dfb.reserve_back(one_tile);
 
 #ifdef ARCH_QUASAR
-    // The NoC replication below orders its seed stores with ckernel::load_blocking, which Quasar does
-    // not provide. Store all 1024 entries with the RISC instead, under a write lock so that the stores
-    // are ordered before the push.
+    // The NoC replication below uses ckernel::load_blocking to wait until the seed rows are in SRAM
+    // before the NoC reads them, and Quasar does not provide load_blocking. Write all 1024 entries to
+    // SRAM with ordinary RISC-V stores instead. Hold a scoped write lock while writing: releasing it
+    // flushes the reserved tile's address range from data cache, so consumer sees written data in SRAM.
     {
         auto lock = dfb.scoped_write_lock(one_tile);
         detail::store_index_tile(lock.template get_ptr<volatile T>(), wt);
