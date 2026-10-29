@@ -192,3 +192,23 @@ def test_an_all_zero_state_gets_a_zero_limit_not_an_absurd_one():
     assert E.err_limit({"k": old}, "k") == 0.0
     t = torch.randn(4, 64)
     assert 0 < E.err_limit({"k": D._float_entry(t.to(torch.bfloat16).float(), t)}, "k") < 0.02
+
+
+def test_a_state_over_its_limit_passes_only_with_its_owner_waiver_and_is_reported(monkeypatch, capsys):
+    """F226: an owner waiver state.<name> passes that state over its limit, printed WAIVED and recorded
+    <metric>_waived = 1 (the gate reports it WAIVED); other states, and the state without a waiver, still fail."""
+    from models.demos.common.bringup.testing import ladder as L
+
+    rec = {}
+    monkeypatch.setattr(metrics, "record", lambda k, v, **kw: rec.__setitem__(k, v))
+    d = {"state_topk_idx_L14": {"overlap": 0.92, "overlap_res": 0.999}, "state_kv_L14": {"rel": 0.01, "rel_res": 1e-3}}
+    lim = E.limit(d, "state_topk_idx_L14", "err_state_topk_idx_L14")
+    failed = []
+    assert not L._state_check(d, "state_topk_idx_L14", "topk_idx", lim + 0.02, failed, None) and len(failed) == 1
+    failed = []
+    w = {"state.topk_idx": "owner: 4-bit index"}
+    assert L._state_check(d, "state_topk_idx_L14", "topk_idx", lim + 0.02, failed, w) and not failed
+    assert rec["err_state_topk_idx_L14_waived"] == 1 and "WAIVED" in capsys.readouterr().out
+    failed = []
+    assert not L._state_check(d, "state_kv_L14", "kv", 0.5, failed, w) and len(failed) == 1  # another state: fails
+    assert "err_state_kv_L14_waived" not in rec

@@ -2413,3 +2413,14 @@ test_core.py::test_an_owner_unit_waiver_passes_only_the_named_contract_failures;
 of both tests. Selftest suite: 651 pass, 2 failing before and after (test_e2e_runtime
 test_no_runner_contract_test_takes_a_fixed_threshold: xing40 server_rules.py:393; test_fork_cases
 test_a_volatile_cache_key_does_not_change_a_calls_signature: timeout > 300 s) - to look at.
+
+## F226: owner waivers for end-to-end states (DeepSeek-V4.1 2x2 lowbit, owner 2026-10-29)
+
+A step's owner waiver (F85, spec tests.waivers) covers its component and swap checks, but the ladder's and the
+profile's state checks (err_state_<name>_L<i> vs calib x the reference's drift) had no waiver path: an accepted format
+change that moves a state past its limit (the 4-bit index keys / query: the top-k state of L14 0.185 vs 0.165) could
+only fail the gate or loosen the limit. Fix: `ladder.check_states(..., waivers)` (callers pass spec tests.waivers):
+a state over its limit with a waiver `state.<name>` is printed WAIVED with the reason and recorded
+`<metric>_waived = 1`, which core/gate.py already reports as WAIVED; every other state, and the same state without a
+waiver, still fails. Limits unchanged. Selftest: test_e2e_limits.py::
+test_a_state_over_its_limit_passes_only_with_its_owner_waiver_and_is_reported.

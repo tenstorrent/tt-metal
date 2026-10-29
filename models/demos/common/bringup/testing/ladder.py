@@ -162,7 +162,7 @@ def run_ladder(s, rung_name: str, mesh) -> dict:
         print(f"final hidden pcc {p:.6f} rel {e:.6f} top1 {top1:.4f} top5 {top5:.4f}")
         E.check(drift, "top5", "top5_overlap", top5, out["failed"])
 
-    check_states(state, g, layers, rung["seq"], drift, out["failed"])
+    check_states(state, g, layers, rung["seq"], drift, out["failed"], s.get("tests.waivers"))
     return out
 
 
@@ -172,11 +172,27 @@ def rel(got: torch.Tensor, want: torch.Tensor) -> float:
     return float((got.double().reshape(w.shape) - w).norm() / w.norm().clamp_min(1e-300))
 
 
-def check_states(state, g: Golden, layers: list[int], seq: int, drift: dict, failed: list[str]) -> None:
+def _state_check(drift: dict, key: str, name: str, value: float, failed: list[str], waivers: dict | None) -> bool:
+    """E.check of err_<key>; over its limit with an owner waiver ``state.<name>`` (F226): WAIVED, not failed."""
+    n = len(failed)
+    if E.check(drift, key, f"err_{key}", value, failed):
+        return True
+    why = str((waivers or {}).get(f"state.{name}") or "").strip()
+    if not why:
+        return False
+    print(f"WAIVED {failed.pop(n)}; owner waiver: {why}")
+    metrics.record(f"err_{key}_waived", 1)
+    return True
+
+
+def check_states(
+    state, g: Golden, layers: list[int], seq: int, drift: dict, failed: list[str], waivers: dict | None = None
+) -> None:
     """Every layer's state after the rung vs the golden, each with its drift limit (F128), over the positions the
     device computed (the drift entry's region, F134), gated as err_state_<name>_L<i>: float states by rel L2 (F135;
     PCC recorded), integer states (top-k index lists) by the missed fraction 1 - overlap (F99, F138; overlap recorded),
-    never the PCC of the ids."""
+    never the PCC of the ids. F226: an owner waiver ``state.<name>`` in spec tests.waivers (``waivers``) passes a
+    state over its limit: printed WAIVED with the reason and recorded <metric>_waived = 1, never hidden."""
     from models.demos.common.bringup.reference.drift import narrow
 
     worst, worst_err, worst_ov = 1.0, 0.0, 1.0
@@ -192,13 +208,13 @@ def check_states(state, g: Golden, layers: list[int], seq: int, drift: dict, fai
                 metrics.record(f"pcc_{key}", p)
                 metrics.record(f"err_{key}", e)
                 worst, worst_err = min(worst, p), max(worst_err, e)
-                E.check(drift, key, f"err_{key}", e, failed)
+                _state_check(drift, key, name, e, failed, waivers)
             else:  # the missed fraction, as per step (F81): every state gates as err_state_* (F138)
                 ov = index_overlap(o, want)
                 metrics.record(f"overlap_{key}", ov)
                 metrics.record(f"err_{key}", 1.0 - ov)
                 worst_ov, worst_err = min(worst_ov, ov), max(worst_err, 1.0 - ov)
-                E.check(drift, key, f"err_{key}", 1.0 - ov, failed)
+                _state_check(drift, key, name, 1.0 - ov, failed, waivers)
     metrics.record("pcc_state_min", worst)
     metrics.record("err_state_max", worst_err)
     metrics.record("overlap_state_min", worst_ov)
