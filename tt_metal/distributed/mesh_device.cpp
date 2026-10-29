@@ -111,9 +111,9 @@ std::shared_ptr<ThreadPool> create_default_thread_pool(
     return create_device_bound_thread_pool(context_id, physical_devices, spin_window);
 }
 
-// Dispatch fan-outs come back to back (each enqueue fans out to every device), so the dispatch pool gets a spin
-// window: its workers keep polling between fan-outs instead of being woken each time. The reader pool has none, so
-// its CPUs are free for the threads it serves.
+// Covers the p90 host gap between fan-outs in GLM-5.2 and Kimi K2.7 prefill (144 us), so workers are still polling
+// when the next fan-out comes instead of paying a wake (~14 us for 32 workers). Past that, the wake is a small share
+// of the gap, and a longer window only costs every worker more idle CPU time.
 constexpr auto DISPATCH_POOL_SPIN = std::chrono::microseconds(250);
 
 // Helper function to verify all devices in the MeshDevice have the same value
