@@ -195,7 +195,10 @@ jobs:
           env-from-image: ${{ inputs.prebuilt-image != '' }}
           enable-watcher: true
       - name: ${{ matrix.test-group.name }}
-        timeout-minutes: ${{ matrix.test-group.timeout }}
+        # A dispatch with /mnt/MLPerf writable (mlperf-write-access: first use, which downloads or converts
+        # weights into the shared cache) takes the SKU's `first-use-timeout` instead, when the entry sets one.
+        # Scheduled and read-only runs always take `timeout`, the value charged to the time budget.
+        timeout-minutes: ${{ (!inputs.mlperf-read-only && matrix.test-group.first-use-timeout) || matrix.test-group.timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log

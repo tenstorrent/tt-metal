@@ -109,8 +109,11 @@ def reference_prefill(ref_layer, layer_idx, x):
     with torch.no_grad():
         y = ref_layer(x, torch.arange(x.shape[0]), hist)
     if path:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        torch.save(dict(y=y, k=hist.k, v=hist.v, pos=hist.pos, checkpoint=checkpoint), path)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            torch.save(dict(y=y, k=hist.k, v=hist.v, pos=hist.pos, checkpoint=checkpoint), path)
+        except OSError as e:  # a read-only cache (CI mounts /mnt/MLPerf read-only) is still read above
+            logger.warning(f"could not save the reference to {path}: {e}")
     return y, hist
 
 

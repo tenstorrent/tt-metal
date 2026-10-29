@@ -8,6 +8,8 @@
 #   skus: A mapping of SKU names to their configuration:
 #     timeout: Job timeout in minutes.
 #     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
+#     first-use-timeout: (optional) Job timeout in minutes on a dispatch with mlperf-write-access, which may
+#       download or convert weights into /mnt/MLPerf on first use. Not charged to the time budget.
 #     release_ready: Whether this SKU leg is included in package-and-release (default false).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
@@ -1029,6 +1031,52 @@
       tier: 1
       release_ready: false
   owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+  budget_type: e2e
+
+# ── MiMo ───────────────────────────────────────────────────────────
+
+# MiMo-V2.6-Flash (models/experimental/mimo_v2_6_flash): the full 48-layer model on BH Galaxy as TP=8 x DP=4.
+# Weights as in the unit entry: the XiaomiMiMo/MiMo-V2.6-Flash-MOPD hub snapshot and the TT cache of the vLLM
+# Model Tests MiMo entry (model_bfp4experts, ~186 GB). MIMO_GOLDEN holds the fp32 reference activations of
+# reference/make_golden.py (~140 MB). First use: dispatch with mlperf-write-access; that run generates the golden
+# file on the host (~25 min, 48 layers streamed one at a time) and converts any weights not cached yet, under
+# first-use-timeout. Read-only runs fail when the golden file is missing instead of skipping test_model_tp8_dp4.
+- name: MiMo-V2.6-Flash e2e tests (Galaxy)
+  cmd: |
+    export HF_MODEL=XiaomiMiMo/MiMo-V2.6-Flash-MOPD TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/XiaomiMiMo--MiMo-V2.6-Flash-MOPD
+    HUB=/mnt/MLPerf/huggingface/hub/models--XiaomiMiMo--MiMo-V2.6-Flash-MOPD
+    export MIMO_MODEL_PATH="$HUB/snapshots/$(cat "$HUB/refs/main")"
+    export MIMO_TT_CACHE=$TT_CACHE_PATH MIMO_GOLDEN=$TT_CACHE_PATH/golden/$(basename "$MIMO_MODEL_PATH")/golden_48l.pt
+    test -f "$MIMO_MODEL_PATH/config.json" || { echo "::error::no MiMo checkpoint at $MIMO_MODEL_PATH (stage it with mlperf-write-access)"; exit 1; }
+    # A cold TT cache converts the weights inside the first test (~90 min), so a first-use run lifts the pytest timeout.
+    PYTEST_TIMEOUT=1200
+    [ "${MLPERF_READ_ONLY:-true}" = "false" ] && PYTEST_TIMEOUT=10800
+    if [ "${MLPERF_READ_ONLY:-true}" = "false" ] && [ ! -f "$MIMO_GOLDEN" ]; then
+      mkdir -p "$(dirname "$MIMO_GOLDEN")"
+      python -m models.experimental.mimo_v2_6_flash.reference.make_golden --out "$MIMO_GOLDEN.partial"
+      mv "$MIMO_GOLDEN.partial" "$MIMO_GOLDEN"
+    fi
+    test -f "$MIMO_GOLDEN" || { echo "::error::no MiMo golden file at $MIMO_GOLDEN (generate it with mlperf-write-access)"; exit 1; }
+    T=models/experimental/mimo_v2_6_flash/tests
+    # MIMO_MOE_DEDUP=0: with the deduplicated MoE decode stream (default since #62390) the four replicas'
+    # greedy continuations of the shared prompt can differ ("replicas disagree on the shared prompt");
+    # the per-pair stream is the path this test has been validated on.
+    MIMO_MOE_DEDUP=0 pytest --timeout $PYTEST_TIMEOUT $T/test_model_tp8_dp4.py
+    # pair_split only: the users layout (kv_pair_split=False) diverges at greedy decode token 2 on mimo-v2.6/dev
+    # as well; vLLM serves the pair-split layout. Re-enable [users] once that is fixed.
+    pytest --timeout $PYTEST_TIMEOUT $T/test_model_chunked_tp8_dp4.py -k pair_split
+  model: mimo-v2.6-flash
+  model_family: MiMo
+  skus:
+    bh_galaxy:
+      # Measured locally with warm caches: ~1.5 min per test, most of it loading the TT cache. The margin covers
+      # reading ~186 GB per test from /mnt/MLPerf and the kernel compiles.
+      timeout: 30
+      first-use-timeout: 240
+      tier: 1
+      release_ready: false
+  owner_id: U0APWUMQBJ9 # Divy Wadhwani
   team: models
   budget_type: e2e
 
