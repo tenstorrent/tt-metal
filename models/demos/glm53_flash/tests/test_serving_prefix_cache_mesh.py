@@ -302,7 +302,9 @@ def test_served_vllm_cached_prefix_miss_with_budget_split(mesh_device, monkeypat
         pytest.skip(f"the user partition needs users_per_row {B} % cols {MESH[1]} == 0")
     monkeypatch.setenv("GLM53_PARTITION_USERS", "1")
     monkeypatch.setenv("GLM53_PREFILL_PARTITION", "heads2users")
-    monkeypatch.setenv("GLM53_VLLM_WARMUP_PREFILL", "128,2048")
+    # the ladder walks a 4096-token prompt too: the prompts here are 2348 tokens, their prefix copies / continued
+    # chunks beyond 2048 must be warm under the seal (the served ladder reaches 32768)
+    monkeypatch.setenv("GLM53_VLLM_WARMUP_PREFILL", "128,2048,4096")
     monkeypatch.setenv("GLM53_VLLM_APC_TAIL_SPLIT", "0")
     monkeypatch.setenv(APC_ALLOC_CHECK_ENV, "1")
     layers = _layer_range()
