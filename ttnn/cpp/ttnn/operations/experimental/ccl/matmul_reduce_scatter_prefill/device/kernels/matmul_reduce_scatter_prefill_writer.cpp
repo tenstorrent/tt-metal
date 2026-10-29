@@ -4,7 +4,7 @@
 // matmul_reduce_scatter_prefill — matmul-core writer (BRISC, NoC1): handoff_or_store_block per finished entry, in
 // order.
 //
-// cb_finished is the first staging CB (same L1 address on every core and chip); entry e of this core sits in
+// cb_finished is backed by the staging tensor (same L1 address on every core and chip); entry e of this core sits in
 // slot e mod depth_handoff. An entry is one wave of a block: its rows x cols tiles are dense at the front of the slot.
 // start / relay: one mailbox increment to the port (direction, link of this core); the slot is popped (FIFO) once that
 // port acks (program-local consumed_fwd / consumed_bwd). fin: the valid tiles go to the output with one write barrier.

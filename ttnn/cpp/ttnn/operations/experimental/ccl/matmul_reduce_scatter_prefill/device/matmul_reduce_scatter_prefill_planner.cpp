@@ -31,7 +31,7 @@ struct GeometryMiss : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-// bf16 tile: finished / arrival / zero slots of the staging CBs
+// bf16 tile: finished / arrival / zero slots of the staging tensor
 constexpr uint64_t kStageTileBytes = tt::tile_size(tt::DataFormat::Float16_b);
 // fp32 tile: cb::PARTIAL_HOLD's page
 constexpr uint64_t kHoldTileBytes = tt::tile_size(tt::DataFormat::Float32);

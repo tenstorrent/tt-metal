@@ -64,8 +64,9 @@ void kernel_main() {
     constexpr uint32_t num_chunks = get_compile_time_arg_val(ct::NUM_CHUNKS);
     constexpr uint32_t zone_sets = get_compile_time_arg_val(ct::ZONE_SETS);
 
-    // downstream zone of this direction: this core's own arrival CB, at the same address on the downstream chip's cores
-    const uint32_t zone_base = get_write_ptr(get_arg_val<uint32_t>(rt::ZONE_CB));
+    // downstream zone of this direction (staging + offset)
+    const uint32_t zone_base =
+        get_common_arg_val<uint32_t>(common::STAGING_ADDR) + get_arg_val<uint32_t>(rt::ZONE_OFFSET);
     const uint32_t arrival_addr = get_arg_val<uint32_t>(rt::ARRIVAL_ADDR);  // global arr_d on the downstream cores
     const uint32_t ready_addr = get_common_arg_val<uint32_t>(common::READY_ADDR);
     const uint32_t send_ready = get_arg_val<uint32_t>(rt::SEND_READY);

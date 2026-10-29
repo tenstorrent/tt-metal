@@ -9,7 +9,7 @@
 // program factory index every slot through these names.
 //
 // Per-core runtime args carry what differs by core (block origins, port coordinates, schedule words); common runtime
-// args carry what is the same on every core of a kernel (tensor / mailbox addresses, global semaphore
+// args carry what is the same on every core of a kernel (tensor / staging / mailbox addresses, global semaphore
 // addresses, chunk-credit counts). A per-core list has its fixed slots (COUNT of them) first, then a variable tail
 // whose start each kernel takes from that COUNT.
 namespace matmul_reduce_scatter_prefill {
@@ -19,11 +19,9 @@ namespace cb {
 constexpr uint32_t ACT_K_WINDOW = 0;     // A K-block windows (resident: the whole core_m x Kt slice)
 constexpr uint32_t WEIGHT_K_WINDOW = 1;  // W K-block windows (resident: the whole Kt x core_n slice)
 constexpr uint32_t PARTIAL_HOLD = 2;     // fp32 matmul partial slots
-// The staging CBs: created first, on the matmul and port cores, so each sits at the same L1 address on every core
-// of every chip (a port core's own write pointer is the address on the matmul cores and on the neighbouring chips).
-constexpr uint32_t FINISHED = 3;         // finished sub-blocks the port readers pick up
-constexpr uint32_t ARRIVALS_FWD = 4;     // forward arrival zone slots (written by the upstream chip over fabric)
-constexpr uint32_t ARRIVALS_BWD = 5;     // backward arrival zone slots
+constexpr uint32_t FINISHED = 3;         // finished sub-blocks, staging offset 0 (tensor-backed)
+constexpr uint32_t ARRIVALS_FWD = 4;     // forward arrival zone slots (tensor-backed, staging + zone_fwd_off)
+constexpr uint32_t ARRIVALS_BWD = 5;     // backward arrival zone slots (tensor-backed, staging + zone_bwd_off)
 constexpr uint32_t PORT_CHUNKS = 6;      // port cores: gathered chunks waiting for the fabric sender
 constexpr uint32_t ZERO = 7;             // one bf16 zero tile (the writer fills it once)
 }  // namespace cb
@@ -194,7 +192,7 @@ enum : uint32_t {
 };
 }  // namespace port_ct
 namespace port_reader_common {
-enum : uint32_t { MAILBOX_BASE, COUNT };
+enum : uint32_t { FINISHED_BASE, MAILBOX_BASE, COUNT };
 }  // namespace port_reader_common
 // Per-core; tail from COUNT: num_waves wave-tile counts, NUM_CORES core words (x | y << 8 | half << 16 | k << 20),
 // NUM_UNITS unit words (entry | half_mask << 8 | h1_first << 10 | slot0 << 16 | slot1 << 24).
@@ -202,14 +200,14 @@ namespace port_reader_rt {
 enum : uint32_t { CONSUMED_ID, NUM_CORES, NUM_UNITS, COUNT };
 }  // namespace port_reader_rt
 namespace port_sender_common {
-enum : uint32_t { READY_ADDR, CREDIT_ADDR, COUNT };
+enum : uint32_t { STAGING_ADDR, READY_ADDR, CREDIT_ADDR, COUNT };
 }  // namespace port_sender_common
-// Per-core; ZONE_CB is this direction's arrival CB (its write pointer here is the downstream zone's address),
-// ARRIVAL_ADDR is the global arrival semaphore of this direction. Tail from COUNT: wave tiles, core words, unit
-// words, then the fabric connection args.
+// Per-core; ZONE_OFFSET is added to STAGING_ADDR (the downstream zone of this direction), ARRIVAL_ADDR is the global
+// arrival semaphore of this direction. Tail from COUNT: wave tiles, core words, unit words, then the fabric
+// connection args.
 namespace port_sender_rt {
 enum : uint32_t {
-    ZONE_CB,
+    ZONE_OFFSET,
     ARRIVAL_ADDR,
     SEND_READY,
     READY_X,

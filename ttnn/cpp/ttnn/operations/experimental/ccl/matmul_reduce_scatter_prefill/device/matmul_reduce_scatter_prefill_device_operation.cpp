@@ -170,6 +170,14 @@ void MatmulReduceScatterPrefillDeviceOperation::validate_on_program_cache_miss(
         std::nullopt);
     check_operands(t.input_tensor, t.weight, attrs.output_memory_config);
     check_group(t.input_tensor, t.weight, static_cast<int32_t>(attrs.cluster_axis), attrs.scatter_dim);
+    const uint32_t staging_tiles = detail::staging_tiles(attrs.plan());
+    const auto& staging_shard = t.staging.memory_config().shard_spec();
+    TT_FATAL(
+        t.staging.memory_config().buffer_type() == BufferType::L1 && staging_shard.has_value() &&
+            staging_shard->shape[0] == staging_tiles * tt::constants::TILE_HEIGHT,
+        "matmul_reduce_scatter_prefill: the staging tensor must be L1 sharded with {} tiles per core "
+        "(allocate_staging)",
+        staging_tiles);
     validate_output(attrs, t);
 }
 
@@ -212,13 +220,15 @@ Tensor matmul_reduce_scatter_prefill(
     const Tensor& input_tensor,
     const Tensor& weight,
     const std::optional<Tensor>& output_tensor,
+    const Tensor& staging,
     const ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::MatmulReduceScatterPrefillParams&
         params) {
     using OperationType =
         ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::MatmulReduceScatterPrefillDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         params,
-        OperationType::tensor_args_t{.input_tensor = input_tensor, .weight = weight, .output_tensor = output_tensor});
+        OperationType::tensor_args_t{
+            .input_tensor = input_tensor, .weight = weight, .output_tensor = output_tensor, .staging = staging});
 }
 
 }  // namespace ttnn::prim

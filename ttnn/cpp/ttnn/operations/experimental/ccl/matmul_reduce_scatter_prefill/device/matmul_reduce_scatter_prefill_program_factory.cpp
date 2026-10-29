@@ -57,6 +57,12 @@ std::string mrs_kernel_path(const char* name) { return std::string(kMrsKernelDir
 // bf16 tile: finished sub-blocks, arrival zones, port chunks, the zero tile and the output.
 uint32_t mrs_stage_tile_bytes() { return tt::tile_size(tt::DataFormat::Float16_b); }
 
+// Offset of a direction's arrival zone inside a core's staging slice (cb::FINISHED's slots come first).
+uint32_t mrs_zone_offset(const detail::Plan& plan, uint32_t dir) {
+    const uint32_t slot_bytes = plan.P * mrs_stage_tile_bytes();
+    return (detail::kDepthHandoff + (dir == kBwd ? plan.zone_sets * plan.sched.slots[kFwd] : 0u)) * slot_bytes;
+}
+
 using SlotValue = std::variant<uint32_t, Buffer*>;
 
 // A fixed slot list filled by name, as the descriptor's runtime-arg list (Buffer* entries stay bindings).
@@ -340,6 +346,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     const Tensor& w = tensor_args.weight;
     distributed::MeshDevice* mesh = a.device();
     MeshResources& res = mesh_resources(mesh);
+    const Tensor& staging = tensor_args.staging;
 
     const detail::Plan& plan = attrs.plan();
     const detail::GridChoice& gd = plan.grid;
@@ -476,6 +483,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     const std::array<uint32_t, 2> ring_slots{zone_sets * plan.sched.slots[kFwd], zone_sets * plan.sched.slots[kBwd]};
 
     const uint32_t tile_bytes = mrs_stage_tile_bytes();
+    const std::array<uint32_t, 2> zone_off{mrs_zone_offset(plan, kFwd), mrs_zone_offset(plan, kBwd)};
     // Persistent global semaphores (the mesh's lifetime): stable for every cache entry.
     const auto sem_addr = [&](MeshSem s) {
         return static_cast<uint32_t>(ttnn::global_semaphore::get_global_semaphore_address(res.sems[s]));
@@ -822,7 +830,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
             }
 
             std::vector<uint32_t> ps_rt(args::port_sender_rt::COUNT);
-            ps_rt[args::port_sender_rt::ZONE_CB] = d == kFwd ? args::cb::ARRIVALS_FWD : args::cb::ARRIVALS_BWD;
+            ps_rt[args::port_sender_rt::ZONE_OFFSET] = zone_off[d];
             ps_rt[args::port_sender_rt::ARRIVAL_ADDR] = arr_addr[d];
             ps_rt[args::port_sender_rt::SEND_READY] = send_ready ? 1 : 0;
             ps_rt[args::port_sender_rt::READY_X] = static_cast<uint32_t>(rv.x);
@@ -853,10 +861,12 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     port_sender.core_ranges = used_port_crs;
 
     std::vector<SlotValue> port_reader_common(args::port_reader_common::COUNT, 0u);
+    port_reader_common[args::port_reader_common::FINISHED_BASE] = staging.buffer();
     port_reader_common[args::port_reader_common::MAILBOX_BASE] = res.mailbox.buffer();
     port_reader.emplace_common_runtime_args(mrs_rt_list(port_reader_common));
 
     std::vector<SlotValue> port_sender_common(args::port_sender_common::COUNT, 0u);
+    port_sender_common[args::port_sender_common::STAGING_ADDR] = staging.buffer();
     port_sender_common[args::port_sender_common::READY_ADDR] = ready_addr;
     port_sender_common[args::port_sender_common::CREDIT_ADDR] = credit_addr;
     port_sender.emplace_common_runtime_args(mrs_rt_list(port_sender_common));
@@ -871,18 +881,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         "matmul_reduce_scatter_prefill: kernel order is out of sync with matmul_reduce_scatter_prefill_args.hpp");
 
     // ---- circular buffers ----
-    // Staging first: plain CBs placed from the L1 base in creation order, so each lands at the same address on every
-    // core it covers and, the plan and sizes being the same on every chip, on every chip. The neighbours' fabric
-    // writes and the port readers' reads rely on that; no kernel is given the address. Covering the port cores lets
-    // a port kernel read it from its own CB. Being program CBs, staging holds no L1 between calls and never passes
-    // through the allocator (so a traced call leaves nothing behind for a later L1 tensor to land on).
-    const CoreRangeSet staging_crs = mm_crs.merge(used_port_crs);
-    const auto stage_cb = [&](uint32_t index, uint32_t pages) {
-        desc.cbs.push_back(mrs_plain_cb(index, pages, tile_bytes, tt::DataFormat::Float16_b, staging_crs));
-    };
-    stage_cb(args::cb::FINISHED, detail::kDepthHandoff * P);
-    stage_cb(args::cb::ARRIVALS_FWD, ring_slots[kFwd] * P);
-    stage_cb(args::cb::ARRIVALS_BWD, ring_slots[kBwd] * P);
+    const uint32_t finished_bytes = detail::kDepthHandoff * P * tile_bytes;
     desc.cbs.push_back(
         mrs_plain_cb(args::cb::ACT_K_WINDOW, a_pages, tA, datatype_to_dataformat_converter(a.dtype()), mm_crs));
     desc.cbs.push_back(
@@ -893,6 +892,11 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         tt::tile_size(tt::DataFormat::Float32),
         tt::DataFormat::Float32,
         mm_crs));
+    desc.cbs.push_back(cb_descriptor_from_sharded_tensor(args::cb::FINISHED, staging, 0, finished_bytes, mm_crs));
+    desc.cbs.push_back(cb_descriptor_from_sharded_tensor(
+        args::cb::ARRIVALS_FWD, staging, zone_off[kFwd], ring_slots[kFwd] * P * tile_bytes, mm_crs));
+    desc.cbs.push_back(cb_descriptor_from_sharded_tensor(
+        args::cb::ARRIVALS_BWD, staging, zone_off[kBwd], ring_slots[kBwd] * P * tile_bytes, mm_crs));
     desc.cbs.push_back(mrs_plain_cb(
         args::cb::PORT_CHUNKS,
         2 * detail::kPortGroup * chunk_tiles,
@@ -911,12 +915,31 @@ MatmulReduceScatterPrefillMeshWorkloadFactory::create_mesh_workload(
     Tensor& output) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
+    const detail::Plan& plan = attrs.plan();
     for (const auto& coord : tensor_coords.coords()) {
         Program program{MatmulReduceScatterPrefillProgramFactory::create_descriptor(attrs, tensor_args, output, coord)};
         shared_variables_t sv{
             .reader = GetCommonRuntimeArgs(program, args::kernel_index::READER),
             .writer = GetCommonRuntimeArgs(program, args::kernel_index::WRITER),
+            .port_reader = GetCommonRuntimeArgs(program, args::kernel_index::PORT_READER),
+            .port_sender = GetCommonRuntimeArgs(program, args::kernel_index::PORT_SENDER),
         };
+        uint32_t found = 0;
+        for (const auto& circular_buffer : program.circular_buffers()) {
+            const auto& indices = circular_buffer->buffer_indices();
+            const uint32_t slot = indices.contains(args::cb::FINISHED)       ? 0
+                                  : indices.contains(args::cb::ARRIVALS_FWD) ? 1
+                                  : indices.contains(args::cb::ARRIVALS_BWD) ? 2
+                                                                             : 3;
+            if (slot == 3) {
+                continue;
+            }
+            sv.staging_cbs[slot] = circular_buffer->id();
+            sv.staging_offsets[slot] = slot == 0 ? 0 : mrs_zone_offset(plan, slot == 1 ? kFwd : kBwd);
+            ++found;
+        }
+        TT_FATAL(
+            found == 3, "matmul_reduce_scatter_prefill: expected 3 staging-backed circular buffers, found {}", found);
         const ttnn::MeshCoordinateRange range(coord);
         workload.add_program(range, std::move(program));
         shared.emplace(range, sv);
@@ -930,16 +953,32 @@ void MatmulReduceScatterPrefillMeshWorkloadFactory::override_runtime_arguments(
     const MatmulReduceScatterPrefillInputs& tensor_args,
     Tensor& output) {
     // The key (attributes, plan inputs included, and the tensor specs) pins every compile-time arg and every per-core
-    // slot, so a hit writes only the call's tensors: A, W and the output. Staging is the program's own circular
-    // buffers, and the global semaphores and the mailbox are created once per mesh (ensure_mesh_resources) and live as
-    // long as the mesh and its program cache, so create_descriptor's values stay right.
+    // slot, so a hit computes the call's values once and writes only what can move between calls into each program:
+    // - A, W and the output: every call;
+    // - the staging tensor and the three CBs it backs: only when it moved (every call allocates its own staging, which
+    //   usually lands at the same address). Re-pointing a CB marks its dispatch config changed, so an unchanged CB
+    //   keeps its cached config;
+    // - the global semaphores and the mailbox: never. They are created once per mesh (ensure_mesh_resources) and live
+    //   as long as the mesh and its program cache, so create_descriptor's values stay right.
+    //   port_sender_rt::ARRIVAL_ADDR (per core) is the same kind of address.
     const auto a_addr = static_cast<uint32_t>(tensor_args.input_tensor.buffer()->address());
     const auto w_addr = static_cast<uint32_t>(tensor_args.weight.buffer()->address());
     const auto out_addr = static_cast<uint32_t>(output.buffer()->address());
-    for (const auto& [range, sv] : cached.shared_variables) {
+    const Buffer& staging = *tensor_args.staging.buffer();
+    const auto staging_addr = static_cast<uint32_t>(staging.address());
+    for (auto& [range, program] : cached.workload.get_programs()) {
+        const shared_variables_t& sv = cached.shared_variables.at(range);
         sv.reader.get()[args::reader_common::A_ADDR] = a_addr;
         sv.reader.get()[args::reader_common::W_ADDR] = w_addr;
         sv.writer.get()[args::writer_common::OUT_ADDR] = out_addr;
+        if (sv.port_reader.get()[args::port_reader_common::FINISHED_BASE] == staging_addr) {
+            continue;
+        }
+        sv.port_reader.get()[args::port_reader_common::FINISHED_BASE] = staging_addr;
+        sv.port_sender.get()[args::port_sender_common::STAGING_ADDR] = staging_addr;
+        for (size_t i = 0; i < sv.staging_cbs.size(); ++i) {
+            UpdateDynamicCircularBufferAddress(program, sv.staging_cbs[i], staging, sv.staging_offsets[i]);
+        }
     }
 }
 
@@ -969,6 +1008,23 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
         it = resources.emplace(mesh->id(), MeshResources{.sems = std::move(sems), .mailbox = std::move(mailbox)}).first;
     }
     return it->second;
+}
+
+Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles) {
+    const CoreCoord g = mesh->compute_with_storage_grid_size();
+    const CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(g.x - 1, g.y - 1)));
+    const auto n = static_cast<uint32_t>(g.x * g.y);
+    const MemoryConfig cfg(
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec(
+            grid,
+            {staging_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            ShardOrientation::ROW_MAJOR));
+    const TensorSpec spec(
+        ttnn::Shape({n * staging_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), cfg));
+    return create_device_tensor(spec, mesh);
 }
 
 MeshResources& mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh) {
