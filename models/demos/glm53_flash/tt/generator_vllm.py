@@ -708,6 +708,7 @@ class GLM53FlashForCausalLM:
                     raise NotImplementedError(f"{RESIDENT_ENV}=1 needs a mesh model with {name} (GLM53MeshModel)")
         self._perf_steps = 0
         self._perf_s = 0.0
+        self._perf_chain = 0  # resident chain steps (reload_inputs=False) among the counted steps
         self._perf_log_every = max(1, int(os.environ.get("GLM53_VLLM_PERF_LOG_EVERY", "32")))
         # slot-level prefix cache: the resident-content records + the KDA snapshot policy (None = APC off); the
         # model's snapshot store (``allocate_kda_snapshots``) must exist when entries > 0
@@ -1992,6 +1993,7 @@ class GLM53FlashForCausalLM:
                     positions, page_table if reload_page_table else None, sampling_params
                 )
                 pos_feed = None
+                self._perf_chain += 1
                 t0 = time.perf_counter()
             if self.spec is None:
                 if enable_trace:
@@ -2592,7 +2594,9 @@ class GLM53FlashForCausalLM:
             ms = 1000 * self._perf_s / self._perf_steps
             logger.info(
                 f"[glm53-vllm-perf] decode step {ms:.1f} ms = {1000 / ms:.2f} tok/s per user, "
-                f"{live * 1000 / ms:.1f} tok/s aggregate over {live} live users ({self._perf_steps} steps, host wall incl. readback)"
+                f"{live * 1000 / ms:.1f} tok/s aggregate over {live} live users ({self._perf_steps} steps, host wall incl. readback"
+                + (f"; {self._perf_chain} resident chain steps" if self.resident else "")
+                + ")"
             )
             if self.spec is not None:
                 logger.info(
