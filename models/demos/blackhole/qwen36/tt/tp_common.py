@@ -1410,6 +1410,15 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
 #   FUSE_RESIDUAL=1 + LIVE_ROWS=1        untested together: an all_reduce that fuses an armed residual keeps the
 #                                        full-tile path (no live_rows_packing) unless
 #                                        QWEN36_DECODE_AR_FUSE_LIVE_ROWS=1 (default 0; for the both-on op test only).
+#   QWEN36_DECODE_AR_ONESHOT=0 (default) all_reduce_async broadcasts every device's whole partial to every peer.
+#   QWEN36_DECODE_AR_ONESHOT=1           every bf16 all-reduce passes one_shot=True: a reduce-scatter + all-gather in
+#                                        one op (each device unicasts each peer's 1/tp slice of its partial straight
+#                                        into that peer's buffer, the slice owner reduces it with the default kernel
+#                                        and slot order, then multicasts the reduced slice to every peer). The result
+#                                        is byte-identical; the busiest fabric link carries ~2.5x fewer packets. Needs
+#                                        a 1D fabric and tp dividing the 40 RES40 cores; takes precedence over
+#                                        LIVE_ROWS (no live-rows packing on a one-shot all-reduce). fp32 GDN partials
+#                                        (QWEN36_DECODE_AR_GDN_FP32=1) keep the default op.
 #
 # Prefill never reads these flags: it keeps the fractured residual and produces only KV / GDN state,
 # so the residual format is private to each forward. Dispatch inside the layer / final norm is on
@@ -1420,6 +1429,7 @@ DECODE_AR_GDN_FP32_ENV = "QWEN36_DECODE_AR_GDN_FP32"
 DECODE_AR_FUSE_ENV = "QWEN36_DECODE_AR_FUSE_RESIDUAL"
 DECODE_AR_FUSE_LIVE_ROWS_ENV = "QWEN36_DECODE_AR_FUSE_LIVE_ROWS"
 DECODE_AR_LIVE_ROWS_ENV = "QWEN36_DECODE_AR_LIVE_ROWS"
+DECODE_AR_ONESHOT_ENV = "QWEN36_DECODE_AR_ONESHOT"
 DECODE_AR_LIVE_ROWS_MAX = TILE_SIZE // 2  # rows that fit faces 0/1 of a 32x32 tile (the op's own eligibility bound)
 
 
@@ -1439,8 +1449,20 @@ class DecodeResidualAllReduce:
     persistent all-reduce buffer is allocated exactly once, at construction (never inside a trace).
     """
 
+    # QWEN36_DECODE_AR_ONESHOT, set per instance in __init__; the class default keeps instances built without
+    # __init__ (host-test fakes) on the default all-reduce.
+    one_shot = False
+
     def __init__(
-        self, mesh_device, args, tt_ccl, gdn_fp32=False, fuse_residual=False, live_rows=False, fuse_live_rows=False
+        self,
+        mesh_device,
+        args,
+        tt_ccl,
+        gdn_fp32=False,
+        fuse_residual=False,
+        live_rows=False,
+        fuse_live_rows=False,
+        one_shot=False,
     ):
         self.mesh = mesh_device
         self.tt_ccl = tt_ccl
@@ -1467,6 +1489,11 @@ class DecodeResidualAllReduce:
             )
 
         ncores = _DAR_GRID[0] * _DAR_GRID[1]
+        # QWEN36_DECODE_AR_ONESHOT: the op splits the RES40 cores into tp equal slices (one owner device each).
+        self.one_shot = bool(one_shot)
+        if self.one_shot and ncores % self.tp:
+            logger.warning(f"{DECODE_AR_ONESHOT_ENV}=1 ignored: tp={self.tp} does not divide the {ncores} RES40 cores")
+            self.one_shot = False
         grid = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_DAR_GRID[0] - 1, _DAR_GRID[1] - 1))}
         )
@@ -1625,7 +1652,9 @@ class DecodeResidualAllReduce:
         residual = self._take_armed(packed, dtype)
         if residual is not None:
             extra["residual_tensor"] = residual
-        if self.live_rows and self.live_rows_eligible(packed) and (residual is None or self.fuse_live_rows):
+        if self.one_shot and dtype == ttnn.bfloat16:
+            extra["one_shot"] = True
+        elif self.live_rows and self.live_rows_eligible(packed) and (residual is None or self.fuse_live_rows):
             extra["live_rows_packing"] = True
         out = ttnn.experimental.all_reduce_async(
             packed,
@@ -1691,11 +1720,13 @@ def get_decode_allreduce(args, tt_ccl):
                 fuse_residual=os.environ.get(DECODE_AR_FUSE_ENV, "0") == "1",
                 live_rows=decode_ar_live_rows_enabled(),
                 fuse_live_rows=os.environ.get(DECODE_AR_FUSE_LIVE_ROWS_ENV, "0") == "1",
+                one_shot=os.environ.get(DECODE_AR_ONESHOT_ENV, "0") == "1",
             )
             logger.info(
                 f"{DECODE_AR_ENV}=1: decode uses the replicated 40-core L1 residual + all_reduce_async "
                 f"(gdn_fp32={inst.gdn_fp32}, fuse_residual={inst.fuse_residual}, num_links={inst.num_links}, "
                 f"topology={inst.topology}, live_rows={inst.live_rows})"
+                + (f" one_shot={inst.one_shot}" if inst.one_shot else "")
             )
     tt_ccl._qwen36_decode_ar = inst
     return inst

@@ -13,6 +13,8 @@
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 
 namespace ttnn::experimental::prim {
@@ -71,6 +73,43 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
         "has {}",
         output_shard_shape_volume * args.ring_size,
         buffer_shard_shape_volume);
+
+    if (args.one_shot) {
+        TT_FATAL(
+            tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+            "all_reduce_async one_shot routes by hop count and needs a 1D (line or ring) fabric");
+        TT_FATAL(args.ring_size >= 2, "all_reduce_async one_shot needs at least 2 devices, got {}", args.ring_size);
+        TT_FATAL(!args.use_noc1_only, "all_reduce_async one_shot does not support use_noc1_only");
+        const auto& in_spec = input_tensor.memory_config().shard_spec();
+        const auto& out_spec = args.output_mem_config.shard_spec();
+        TT_FATAL(
+            in_spec.has_value() && out_spec.has_value() && in_spec->orientation == ShardOrientation::ROW_MAJOR &&
+                out_spec->orientation == ShardOrientation::ROW_MAJOR,
+            "all_reduce_async one_shot needs ROW_MAJOR input and output shard specs");
+        TT_FATAL(
+            in_spec->shape[0] == tt::constants::TILE_HEIGHT && out_spec->shape[0] == tt::constants::TILE_HEIGHT &&
+                input_tensor.padded_shape().volume() / input_tensor.padded_shape()[-1] == tt::constants::TILE_HEIGHT,
+            "all_reduce_async one_shot needs a single 32-row tile row (shard height {} / {}, padded shape {})",
+            in_spec->shape[0],
+            out_spec->shape[0],
+            input_tensor.padded_shape());
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE && input_tensor.tensor_spec().tile().get_height() ==
+                                                         tt::constants::TILE_HEIGHT,
+            "all_reduce_async one_shot needs a TILE input with 32x32 tiles");
+        const uint32_t num_out_cores = out_spec->grid.num_cores();
+        TT_FATAL(
+            num_out_cores % args.ring_size == 0,
+            "all_reduce_async one_shot splits the output cores into {} equal slices; {} output cores do not divide",
+            args.ring_size,
+            num_out_cores);
+        TT_FATAL(
+            num_out_cores * out_spec->shape[1] == input_tensor.padded_shape()[-1],
+            "all_reduce_async one_shot needs every output core to hold data ({} cores x {} != width {})",
+            num_out_cores,
+            out_spec->shape[1],
+            input_tensor.padded_shape()[-1]);
+    }
 
     if (tensor_args.residual_tensor.has_value()) {
         const auto& residual = tensor_args.residual_tensor.value();
@@ -294,7 +333,8 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
     bool use_optimal_ccl_for_llama,
     bool fp32_dest_acc,
     const std::optional<Tensor>& residual_tensor,
-    bool live_rows_packing) {
+    bool live_rows_packing,
+    bool one_shot) {
     using OperationType = ttnn::experimental::prim::AllReduceAsyncDeviceOperation;
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
@@ -314,7 +354,8 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
         cluster_axis,
         &mesh_device,
         fp32_dest_acc,
-        live_rows_packing);
+        live_rows_packing,
+        one_shot);
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor, .buffer_tensor = buffer_tensor, .residual_tensor = residual_tensor};
 

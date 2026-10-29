@@ -63,6 +63,7 @@ ttnn::Tensor all_reduce_async(
     bool use_optimal_ccl_for_llama,
     bool fp32_dest_acc = false,
     const std::optional<ttnn::Tensor>& residual_tensor = std::nullopt,
-    bool live_rows_packing = false);
+    bool live_rows_packing = false,
+    bool one_shot = false);
 
 }  // namespace ttnn::experimental
