@@ -33,7 +33,7 @@
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
 
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "debug/inspector/data.hpp"
 #include "debug/watcher_server.hpp"
 #include "debug/noc_debugging.hpp"
@@ -48,8 +48,8 @@
 #include <system_mesh.hpp>
 
 #include <tt_metal.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
 
 #include <dispatch/dispatch_query_manager.hpp>
@@ -109,11 +109,6 @@ ContextId extract_context_id(const IDevice* device) {
     }
     const auto mesh_device = const_cast<IDevice*>(device)->get_mesh_device();  // get_mesh_device is not const
     TT_ASSERT(mesh_device != nullptr, "Device is neither a Device nor part of a MeshDevice");
-    return mesh_device->impl().get_context_id();
-}
-
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device) {
-    TT_ASSERT(mesh_device != nullptr, "MeshDevice is nullptr");
     return mesh_device->impl().get_context_id();
 }
 

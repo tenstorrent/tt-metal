@@ -67,6 +67,7 @@ enum watcher_features_t {
     SanitizeNOCInlineWriteFromState,
     SanitizeNOCInlineWriteWithState,
     SanitizeNOCInvalidTxnId,
+    SanitizeNOCReadToRegAddr,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -147,6 +148,10 @@ void RunTestOnCore(
     // Invalid txn-id sanitization is exercised via the Metal 2.0 Noc API on TENSIX only.
     if (feature == SanitizeNOCInvalidTxnId && is_eth_core) {
         GTEST_SKIP() << "Invalid txn-id sanitize test is TENSIX-only";
+    }
+    // A read that lands in a local register is rejected on Quasar.
+    if (feature == SanitizeNOCReadToRegAddr && (!is_quasar || is_eth_core)) {
+        GTEST_SKIP() << "Read-into-register sanitize test is Quasar DM-only";
     }
 
     // TENSIX cores use the Metal 2.0 variant; ETH cores stay on the legacy kernel/API.
@@ -499,6 +504,11 @@ void RunTestOnCore(
             use_inline_dw_write_with_state = true;
             break;
         case SanitizeNOCInvalidTxnId: invalid_txn_id = k_invalid_txn_id; break;
+        case SanitizeNOCReadToRegAddr:
+            // The kernel's first NOC read lands buffer_size bytes at buffer_addr: point it at a local register.
+            buffer_addr = hal.get_noc_encoding_reg();  // the NOC node-id register
+            buffer_size = 4;
+            break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -853,6 +863,25 @@ void RunTestOnCore(
                 k_invalid_txn_id,
                 k_max_user_txn_id);
         } break;
+        case SanitizeNOCReadToRegAddr: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read {} "
+                "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC read lands "
+                "in a local register; on Quasar the NIU can strand the response and stall L1 writes, reads must land "
+                "in L1).",
+                device->id(),
+                core_name,
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                noc,
+                buffer_size,
+                buffer_addr,
+                input_core_virtual_coords,
+                input_buffer_addr);
+        } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -1147,6 +1176,16 @@ TEST_F(MeshWatcherFixture, QuasarTestWatcherSanitizeMultiDMRace) {
                 false,
                 false /*is_idle_eth_core*/,
                 true /*multi_dm_race*/);
+        },
+        this->devices_[0]);
+}
+
+// Quasar-only: a NOC read must land in L1, never in a local register.
+TEST_F(MeshWatcherFixture, QuasarTestWatcherSanitizeNOCReadToRegAddr) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCReadToRegAddr);
         },
         this->devices_[0]);
 }

@@ -902,14 +902,15 @@ void call_unary_sfpu_operation_quasar(
         if constexpr (TYPECAST_IN_FORMAT == DataFormat::Float32 && TYPECAST_OUT_FORMAT == DataFormat::UInt16)
         {
             // Dedicated TTI kernel: names the FP32 load and UInt16 store formats explicitly
-            // rather than letting HW imply them, so it needs implied math format disabled.
+            // rather than letting HW imply them (implied SrcA/SrcB formats are always disabled,
+            // see _llk_math_srcAB_hw_configure_).
             // Walks Dest through ADDR_MOD_7 + _incr_counters_ instead of ADDR_MOD_6.
             SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_typecast_fp32_to_uint16_, (ITERATIONS), dst_index, VectorMode::RC);
         }
         else
         {
-            // Same functor typecast_tile uses. Int32 → Float16_b is dispatched inside
-            // calculate_typecast to _calculate_typecast_int32_to_fp16b_.
+            // Same functor typecast_tile uses. UInt16 → Float32 is dispatched inside
+            // calculate_typecast to _calculate_typecast_uint16_to_fp32_.
             SFPU_UNARY_CALL(
                 DST_SYNC, is_fp32_dest_acc_en, calculate_typecast, (TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS), dst_index, VectorMode::RC);
         }
