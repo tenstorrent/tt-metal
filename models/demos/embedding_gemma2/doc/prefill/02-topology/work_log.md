@@ -119,3 +119,30 @@ Analysis (CPU): `python3 $T/scripts/ab_table.py $T/run_ab <labels> --json $T/ana
 - Gaps: no after Tracy profile (after op counts are from code, labelled [I]); no independent review
   yet; rms_norm L2 fp32 adaptation not tried; b32 x 128 has no HF accuracy check.
 - Stage closure stopped at the person's 15:00 PDT deadline.
+
+## E9.3 commit 1: stage-2 carry-over (2026-10-29, run folder `e9/03-matmul/`, below `$U`)
+
+Verdict row E9.2 left four items; all four are closed here **[M]** unless a line says otherwise.
+
+| item | command (`$U/logs/<label>.log`) | result |
+|---|---|---|
+| a. after profiles | `$U/scripts/tracy.sh before 128 2048 8192 65536` (07:52-07:54, HEAD `a12d330bb3`, clean tree in every log header), then `prefill_op_table <csv> --bucket B --grid-cores 120` into `profiles_after/b1_s<B>/` (`$U/logs/op_tables_after_e92.log`, CSV sha256 there) and `op_seq.py` into `$U/analysis/before_seq/` | 637 / 638 / 637 / 637 forward ops at 128 / 2048 / 8192 / 65536; per layer 26 ops (2 DM below 8192 tokens, 1 at >= 8192); prologue 3 / 4 / 3 / 3; epilogue 10 (2 DM). Equal to the code-derived counts; README "Op sequence per layer" now cites the profiles. Kernel sums 4.555 / 24.875 / 99.983 / 1420.502 ms. These are also the stage-3 "before" profiles. The other six buckets were captured at 08:26-08:29 (`tracy_before_b1_s{256,...,32768}`) with the E9.3 matmul table switched off (`EG2_MM_TUNED=0`, which issues the `a12d330bb3` calls, `$U/scripts/config_dump.py`); they are E9.3 inputs only |
+| b, c. batch > 1 checks | - | Dropped by the person's batch-1-only decision (2026-10-29, relayed by the orchestrator): the b4 x 2048 test case is not added (gate suite stays at 153), and the B = 3 mask A/B is not a stage gate. Both had run before the decision (logs `$U/logs/c1b_*`, `c1c_*`; informational only) |
+| d. self-check | below | |
+
+Self-check against `prefill-stage-review` for stage 2 (not independent; the orchestrator's reviewer runs
+the independent review):
+
+| check | status |
+|---|---|
+| before / after in the stage-1 regime, both regimes, same session, all 10 buckets | pass (`sweep_ctl` / `sweep_new`) |
+| kept change justified by full-model wall time, per rewrite | pass (`chain_ab`, burst per rewrite) |
+| no contract shape regressed beyond noise | pass (all 10 faster in burst and sustained) |
+| PCC gates 10 / 10, thresholds unchanged | pass |
+| masked path only in the contract; no no-mask path built | pass (n/a) |
+| geometry gate on config changes | pass: no config change in stage 2 |
+| after op table from profiles | pass since this commit (was a gap) |
+| changed path at batch > 1 (per-layer PLE at >= 8192 tokens, mask A/B) | out of scope: batch-1-only decision (row b, c) |
+| trace allocation tracking on replay | gap: the stage-2 runs did not set `TT_METAL_TRACE_ALLOC_TRACKING=1`; stage-1 tracking covered the same trace structure, and stage 2 adds no allocation after capture **[I]** |
+| anomalies with resolution | pass (anomaly ledger above); the lower sustained clock at >= 16384 is recorded, not attributed per op (gap) |
+| b32 x 128 accuracy vs HF | gap (perf.py has no HF check for it) |

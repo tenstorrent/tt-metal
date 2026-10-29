@@ -76,8 +76,24 @@ Embedding, wide PLE matmul [512 -> 12288]; epilogue 16 ops = final RMSNorm, head
 ops (Matmul keep @ h, Typecast DM, Clone DM, FillPad DM, Reduce, clip, Div, then L2: Mul, Clone DM,
 FillPad DM, Reduce, sqrt, clip, Div).
 
-After (from the code paths and the A/B runs; **no after profile was captured**, the stage ended at
-the person's deadline before the Tracy step) **[I]**:
+After: Tracy profiles of the stage-2 code (`a12d330bb3`, clean tree) at 12 x 10, captured in E9.3
+through the same stage-1 harness path (`perf.py::test_tracy_forward[b1_s<B>]`, one warmed eager
+forward between `PERF_TEXT` / `PERF_TEXT_END`) at 128, 2048, 8192 and 65536 (`tt-ops/runs/
+embeddinggemma-2/e9/03-matmul/tracy/before/`, `scripts/tracy.sh`; CSV sha256 in `logs/op_tables_after_e92.log`).
+Op tables: `profiles_after/b1_s<B>/op_table.{md,json}` (`prefill_op_table <csv> --bucket B --grid-cores 120`);
+per-layer sequences: `e9/03-matmul/analysis/before_seq/` (`op_seq.py`). These are also the stage-3
+"before" profiles **[M]**:
+
+| bucket | forward ops (profiled) | prologue | per layer (DM) | epilogue (DM) | device kernel sum ms (before -> after) |
+|---|---|---|---|---|---|
+| 128 | 637 | 3 (full mask, Embedding, wide PLE matmul) | 26 (2: Slice, NlpCreateHeads) | 10 (2: Clone, FillPad) | 4.573 -> 4.555 |
+| 2048 | 638 | 4 (full mask, band + full, Embedding, wide PLE) | 26 (2) | 10 (2) | 25.095 -> 24.875 |
+| 8192 | 637 | 3 (full mask, band + full, Embedding) | 26 (1: NlpCreateHeads; Slice -> PLE matmul) | 10 (2) | 103.377 -> 99.983 |
+| 65536 | 637 | 3 | 26 (1) | 10 (2) | 1661.090 -> 1420.502 |
+
+Epilogue = final RMSNorm, head matmul and an 8-op pooler (Matmul keep @ h, Mul, Clone, FillPad, Reduce,
+2 Unary, Div). The profiled counts equal the code-derived counts in the table below, which is kept
+as the per-part breakdown **[M: totals and per-part counts from the profiles]**:
 
 | part | before ops | after ops | change |
 |---|---|---|---|
@@ -126,7 +142,8 @@ the person's deadline before the Tracy step) **[I]**:
 
 ## Open / not done
 
-- No after Tracy profile (deadline): the after op counts above are from code and A/B, not profiles.
+- After Tracy profiles were captured in E9.3 commit 1 (128 / 2048 / 8192 / 65536, `profiles_after/`);
+  the other six buckets have no after profile.
 - Sustained clock at >= 16384 is lower after the change (16384 / 32768 / 65536: 1262 / 1193 / 1125 vs 1300 / 1243 / 1200 MHz), so the sustained
   gain is smaller than the burst gain there; not attributed per op.
 - Remaining mask cost (2 adds) and NlpCreateHeads (DM) are left for stages 4-6.
