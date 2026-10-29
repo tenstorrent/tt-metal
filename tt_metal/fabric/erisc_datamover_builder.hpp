@@ -225,6 +225,8 @@ struct FabricEriscDatamoverConfig {
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
+    // One past the last byte the router places below max_l1_loading_size.
+    std::size_t allocated_l1_end_address = 0;
     std::vector<MemoryRegion> available_buffer_memory_regions;
 
     FabricEriscDatamoverConfig(
@@ -465,8 +467,8 @@ public:
 
     size_t get_configured_risc_count() const;
 
-    // One past the last byte of L1 the router uses.
-    size_t get_allocated_l1_end_address() const;
+    // One past the last byte the router places below config.max_l1_loading_size.
+    size_t get_allocated_l1_end_address() const { return config.allocated_l1_end_address; }
 
     // Returns the resolved kernel build optimization level for this router.
     // This opt-level is per-builder/router, and should not be shared across builders.
