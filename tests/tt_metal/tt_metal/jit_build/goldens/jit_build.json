@@ -2,6 +2,15 @@
   "schema_version": 1,
   "suite": "jit_build",
   "environments": {
+    "bh_p150_perf_high_core_count": {
+      "metrics": {"compile_ms": {"aggregate": "min", "better": "lower", "unit": "ms"}},
+      "repetitions": 3,
+      "provenance": {"commit": "2060de2dd19b98bca21c7794650313b08ec5ef75", "date": "2026-10-28", "source": "CI run 40787186036"},
+      "context": {},
+      "cases": {
+        "compile/num_kernels:300": {"compile_ms": 15460.0}
+      }
+    },
     "wh_n300_civ2": {
       "metrics": {"compile_ms": {"aggregate": "min", "better": "lower", "unit": "ms"}},
       "repetitions": 3,
