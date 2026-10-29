@@ -32,21 +32,20 @@ void ttnn_linear_backward(
     auto reshaped_grad = ttnn::reshape(
         out->get_grad(),
         ttnn::Shape({static_cast<uint32_t>(volume_without_features), out->get_grad().logical_shape()[-1]}));
-    auto reshaped_weight_grad =
-        ttnn_fixed::matmul(reshaped_grad, reshaped_tensor, /* transpose_a */ true, /* transpose_b */ false);
-    auto reshaped_tensor_grad =
-        ttnn_fixed::matmul(reshaped_grad, weight->get_value(), /* transpose_a */ false, /* transpose_b */ false);
-    if (bias) {
-        auto reshaped_bias_grad = ttnn_fixed::sum_over_dim(reshaped_grad, /* axis */ 0);
-        auto bias_grad = ttnn::reshape(reshaped_bias_grad, bias->get_value().logical_shape());
-        bias->add_grad(bias_grad);
+    if (weight->get_requires_grad()) {
+        auto reshaped_weight_grad =
+            ttnn_fixed::matmul(reshaped_grad, reshaped_tensor, /* transpose_a */ true, /* transpose_b */ false);
+        weight->add_grad(ttnn::reshape(reshaped_weight_grad, weight->get_value().logical_shape()));
     }
-    auto weight_grad = ttnn::reshape(reshaped_weight_grad, weight->get_value().logical_shape());
-
-    auto tensor_grad = ttnn::reshape(reshaped_tensor_grad, tensor_value.logical_shape());
-
-    tensor->add_grad(tensor_grad);
-    weight->add_grad(weight_grad);
+    if (tensor->get_requires_grad()) {
+        auto reshaped_tensor_grad =
+            ttnn_fixed::matmul(reshaped_grad, weight->get_value(), /* transpose_a */ false, /* transpose_b */ false);
+        tensor->add_grad(ttnn::reshape(reshaped_tensor_grad, tensor_value.logical_shape()));
+    }
+    if (bias && bias->get_requires_grad()) {
+        auto reshaped_bias_grad = ttnn_fixed::sum_over_dim(reshaped_grad, /* axis */ 0);
+        bias->add_grad(ttnn::reshape(reshaped_bias_grad, bias->get_value().logical_shape()));
+    }
 }
 
 void moreh_linear_backward(
@@ -54,35 +53,42 @@ void moreh_linear_backward(
     const autograd::TensorPtr& weight,
     const autograd::TensorPtr& bias,
     const autograd::TensorPtr& out) {
-    auto tensor_grad = ttnn::empty_like(tensor->get_value());
-    auto weight_grad = ttnn::empty_like(weight->get_value());
+    const bool tensor_needs_grad = tensor->get_requires_grad();
+    const bool weight_needs_grad = weight->get_requires_grad();
+    const bool bias_needs_grad = bias != nullptr && bias->get_requires_grad();
 
     auto res = ttnn::moreh_linear_backward(
         out->get_grad(),
         tensor->get_value(),
         weight->get_value(),
-        /* are required outputs */ std::vector<bool>{true, true, bias != nullptr},
+        /* are required outputs */ std::vector<bool>{tensor_needs_grad, weight_needs_grad, bias_needs_grad},
         bias != nullptr ? std::optional<ttnn::Tensor>(bias->get_value()) : std::optional<ttnn::Tensor>(std::nullopt),
-        tensor_grad,
-        weight_grad,
-        bias ? std::optional<ttnn::Tensor>(ttnn::empty_like(bias->get_value()))
-             : std::optional<ttnn::Tensor>(std::nullopt),
+        tensor_needs_grad ? std::optional<ttnn::Tensor>(ttnn::empty_like(tensor->get_value()))
+                          : std::optional<ttnn::Tensor>(std::nullopt),
+        weight_needs_grad ? std::optional<ttnn::Tensor>(ttnn::empty_like(weight->get_value()))
+                          : std::optional<ttnn::Tensor>(std::nullopt),
+        bias_needs_grad ? std::optional<ttnn::Tensor>(ttnn::empty_like(bias->get_value()))
+                        : std::optional<ttnn::Tensor>(std::nullopt),
         /* input_grad_mem_config */ std::nullopt,
         /* weight_grad_mem_config */ std::nullopt,
         /* bias_grad_mem_config */ std::nullopt,
         /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
 
-    if (!res[0].has_value()) {
-        throw std::runtime_error("Tensor gradient is not available");
+    if (tensor_needs_grad) {
+        if (!res[0].has_value()) {
+            throw std::runtime_error("Tensor gradient is not available");
+        }
+        tensor->add_grad(res[0].value());
     }
-    tensor->add_grad(res[0].value());
 
-    if (!res[1].has_value()) {
-        throw std::runtime_error("Weight gradient is not available");
+    if (weight_needs_grad) {
+        if (!res[1].has_value()) {
+            throw std::runtime_error("Weight gradient is not available");
+        }
+        weight->add_grad(res[1].value());
     }
-    weight->add_grad(res[1].value());
 
-    if (res[2].has_value()) {
+    if (bias_needs_grad && res[2].has_value()) {
         bias->add_grad(res[2].value());
     }
 }
