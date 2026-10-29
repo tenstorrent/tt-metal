@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""MIRACL-en through the traced serving runner: packed rows (TracedReranker.score_ids) vs one pair per row.
+"""MIRACL-en through the traced runner directly, no server: packed rows (TracedReranker.score_ids) vs one pair per row.
 
     python models/demos/blackhole/llama_nemotron_rerank_1b/perf_tools/miracl_runner.py miracl_eval.pt [key=value] [buckets]
 

@@ -67,7 +67,7 @@ python $M/perf_tools/opsol.py prof/reports/*/ops_perf_results_*.csv 32x512
 one spawned worker process per chip holding a resident `TracedReranker`, an async pool handing requests
 to idle chips, a collector thread resolving futures. The server tokenizes the prompt template and ships
 token ids; the worker packs the pairs into rows and runs them as traced batches of 1 / 8 / 32 rows (see
-"Serving: packed rows" below).
+"Packed rows" below).
 
 | endpoint | request | response |
 |---|---|---|
@@ -76,8 +76,8 @@ token ids; the worker packs the pairs into rows and runs them as traced batches 
 | `GET /health`, `/v1/models`, `/metrics` | | readiness, model id, per-request tokenize / device / wall ms |
 
 `relevance_score` is sigmoid(logit) (`--score raw` returns the logit); `logit` is always included.
-One P150, MIRACL-en through the server at concurrency 4, before packed rows: 172 pairs/s, nDCG@10 0.6844
-(HF 0.6840), Pearson 0.99960 vs HF fp32.
+The model's own throughput is measured without the server (`perf_tools/miracl_runner.py`, "Packed rows"
+below).
 
 ## Accuracy
 
@@ -89,19 +89,20 @@ and nDCG@10 within 0.015 of HF.
 | HF bf16 (CPU) | 0.064 | 0.99997 | 0.6845 | 0.6486 |
 | this model, batch 8 | 0.205 | 0.99966 | 0.6745 | 0.6361 |
 | this model, batch 32 | 0.235 | 0.99956 | 0.6841 | 0.6486 |
-| serving runner, packed rows (25-document requests) | 0.241 | 0.99957 | 0.6837 | |
+| `TracedReranker`, packed rows (25-document requests) | 0.241 | 0.99957 | 0.6837 | |
 | HF fp32 (reference) | 0 | 1 | 0.6840 | 0.6486 |
 
 ## Performance (one P150)
 
 Traced forward, inputs on device. Each time is the median of the second half of 30 back-to-back replays:
 under continuous load the board holds its 150 W limit by lowering the clock from 1.35 GHz to about 0.95 GHz,
-so this is the latency a loaded server sees. The benchmark's pairs fill the bucket, so no pair is padded and
-SDPA runs without a mask (the serving runner does the same for such a batch). "Padded" is a batch with any
-padded pair: SDPA reads and adds the padding mask on every K chunk it computes (`demo/bench.py --masked`,
-same full-length inputs, so it is the upper bound for a padded batch of that shape).
+so this is the latency under continuous load. "Now": every row is one pair that fills it, so SDPA runs
+without a mask (`TracedReranker` does the same for such a batch). "Mask on": the same inputs with the
+attention mask applied (`demo/bench.py --masked`). Any batch whose rows hold several packed pairs, or a
+padded pair, runs with the mask, so this column is the time per batch of full rows in normal use; what
+packing saves is rows per request, which is in the MIRACL table under "Packed rows".
 
-| batch x tokens | after bring-up | now | now, padded batch | speed of light (kernel cycles) |
+| batch x tokens | after bring-up | now | now, mask on | speed of light (kernel cycles) |
 |---|---|---|---|---|
 | 1 x 128 | 12.8 ms | 6.27 ms | 6.41 ms | |
 | 1 x 256 | | 6.47 ms | 6.70 ms | |
@@ -115,7 +116,7 @@ same full-length inputs, so it is the upper bound for a padded batch of that sha
 
 32 x 512 was at 75.9 % (147.0 M cycles, 175 ms) with FF1 + FF3 accumulating in bf16; packed rows put every
 pair through that shape, where bf16 accumulation fails the accuracy gate, so it now accumulates in fp32
-(see "Serving: packed rows").
+(see "Packed rows").
 
 Speed of light: ideal cycles for the matmuls and attention at the precision each op runs at
 (130 cores x 4096 FLOP/cycle LoFi, / 2 for HiFi2, / 4 for HiFi4), divided by the sum of the ops' device
@@ -135,7 +136,7 @@ shape was benchmarked in its own process on an idle board.
 | WO + residual add + RMSNorm (`matmul_add_norm`, HiFi2) | 12.2 | 8 % | 67 % |
 | embedding + first RMSNorm (`embed_rmsnorm`), score head | 0.6 | 0.4 % | |
 
-## Serving: packed rows
+## Packed rows
 
 A trace runs one fixed shape, so a pair is padded to a row of S tokens (S = 128, 256, 512, ...). On MIRACL-en
 (median pair 140 tokens, p90 256) one pair per row left 33 % of the token slots as padding, and every pad
@@ -153,8 +154,8 @@ The runner picks the row length S with the least estimated cost, and splits the 
 1 / 8 / 32 at the least cost (rows run, repeat rows included, plus ~0.7 row per launch: 1 x 512 takes
 7.7 ms, 8 x 512 39.8 ms). The old plan rounded 9 rows up to a batch of 32; it now runs 8 + 1.
 
-MIRACL-en, 40 requests of 25 documents each through the traced runner (`TracedReranker.score_ids`), then
-all 1000 pairs in one call:
+MIRACL-en through tt-metal's traced runner directly (`TracedReranker.score_ids`, no server;
+`perf_tools/miracl_runner.py`): 40 requests of 25 documents each, then all 1000 pairs in one call:
 
 | | per request | 1000 pairs in one call | MIRACL Pearson | nDCG@10 |
 |---|---|---|---|---|
@@ -186,7 +187,7 @@ Data movement, in the order they landed (32x512 unless noted):
 | SDPA writes concatenated heads (`output_concat_heads`) | no `nlp_concat_heads` pass | |
 | padding mask built on device from a [B, 1, 32, S] valid row, stored as bfp4 | the mask holds only 0 and -1e9, exact in bfp4 at a quarter of bf16's bytes; the host sends no S x S tensor | SDPA 32x512 1780 -> 1113 us |
 | SDPA block map (`attn_mask_block_map`) | blocks with no real query or key are skipped | 1x2048 802 -> 389 us |
-| SDPA without the mask when no pair is padded: `forward(masked=False)`, and the serving runner keeps a second trace per bucket for such batches | an all-zero padding mask is still read from DRAM and added on every K chunk | 32x512 SDPA 1101 -> 623 us per layer; 1x8192 220 -> 188 ms sustained |
+| SDPA without the mask when no pair is padded: `forward(masked=False)`, and `TracedReranker` keeps a second trace per bucket for such batches | an all-zero padding mask is still read from DRAM and added on every K chunk | 32x512 SDPA 1101 -> 623 us per layer; 1x8192 220 -> 188 ms sustained |
 | softmax scale 1/8 folded into Wq (exact: power of two), SDPA at scale 1 | ttnn's SDPA wrapper otherwise multiplies the mask by 1/scale on every call | one [B, 1, S, S] pass per layer removed |
 | activations up to 8.5 MB in L1 | bs1 intermediates never touch DRAM | 1x512 10.1 -> 8.9 ms |
 | block-sharded RMSNorm up to 512 rows | stock rms_norm gives each core whole tile rows (16 cores at 512 rows) | 1x128 7.03 -> 6.27 ms |
@@ -207,7 +208,7 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
 
 * 32 x 512 is at 71.3 % of speed of light (75.9 % before FF1 + FF3 moved to fp32 accumulation). The rest
   is spread over the ops: FF1 + FF3 is at 76 % (85 % with bf16 accumulation, which fails the accuracy gate
-  with packed rows; the faster fp32 K-32 block is throttled by the board, see "Serving: packed rows"); the fused
+  with packed rows; the faster fp32 K-32 block is throttled by the board, see "Packed rows"); the fused
   WO / FF2 matmuls run at ~76-84 % of their limit inside their K loops (FF2 at LoFi with 4 x 1 subblocks, which
   the 7-tile N slice per core forces) plus ~8 % of epilogue; QKV + RoPE's matmul runs at ~80 % of HiFi2 peak and
   waits ~10 % on its inputs (the rotation itself is ~1.5 %); SDPA's softmax bounds it (HiFi2 matmuls are no
