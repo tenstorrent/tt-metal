@@ -359,7 +359,7 @@ private:
         if (spin_until([this] { return has_work(); })) {
             return;
         }
-        // close_spin_window() ends it early for a worker whose last job is the one published at that time.
+        // A parallel_for with AfterFanOut::Park ends it for the workers whose last job is that one.
         auto window_closed = [this] {
             return pool_spin_window_closed_at_.load(std::memory_order_relaxed) == last_seen_job_;
         };
@@ -715,8 +715,14 @@ public:
         workers_[thread_id]->enqueue(std::move(f));
     }
 
-    void parallel_for(ttsl::Span<const uint32_t> device_ids, ttsl::move_only_function<void(size_t)>&& fn) override {
+    void parallel_for(
+        ttsl::Span<const uint32_t> device_ids,
+        ttsl::move_only_function<void(size_t)>&& fn,
+        AfterFanOut after = AfterFanOut::Spin) override {
         if (device_ids.empty()) {
+            if (after == AfterFanOut::Park) {
+                close_spin_window();
+            }
             return;
         }
         auto* job = acquire_job();
@@ -724,6 +730,9 @@ public:
             // No free job, e.g. when the enclosing parallel_for calls hold them all: run every call on this thread.
             for (const uint32_t device_id : device_ids) {
                 worker_of(device_id);  // Throws for a device the pool does not serve, as planning would.
+            }
+            if (after == AfterFanOut::Park) {
+                close_spin_window();
             }
             run_on_caller(device_ids.size(), fn);
             return;
@@ -737,6 +746,9 @@ public:
         const auto& participants = job->participants();
         if (participants.size() == 1) {
             job->release();
+            if (after == AfterFanOut::Park) {
+                close_spin_window();
+            }
             run_on_caller(device_ids.size(), fn);
             return;
         }
@@ -744,6 +756,9 @@ public:
         job->start();
         // seq_cst pairs with the workers' check before they park: either the first participant sees the job, or
         // wake() sees it parked. It wakes the others as it starts; awake workers see the job on their own.
+        if (after == AfterFanOut::Park) {
+            spin_window_closed_at_.store(job->published(), std::memory_order_relaxed);
+        }
         published_.store(job->published(), std::memory_order_seq_cst);
         participants[0]->wake();
         // The workers are woken first to last, so take participants from the back. The caller runs the calls of
@@ -754,10 +769,6 @@ public:
         if (auto exception = job->finish()) {
             std::rethrow_exception(exception);
         }
-    }
-
-    void close_spin_window() override {
-        spin_window_closed_at_.store(published_.load(std::memory_order_relaxed), std::memory_order_relaxed);
     }
 
     void wait() override {
@@ -780,6 +791,11 @@ public:
     }
 
 private:
+    // For a Park hint that publishes nothing: idle workers last saw the current job, so they all park.
+    void close_spin_window() {
+        spin_window_closed_at_.store(published_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    }
+
     void allocate_jobs() {
         // A worker holds at most one job, while it takes part; each concurrent or nested caller holds one more.
         jobs_.resize(num_workers_ + 2);
@@ -825,7 +841,8 @@ private:
     std::atomic<uint32_t> last_job_ = 0;
     // The job of the current parallel_for, (generation << 32) | slot; every worker watches it.
     alignas(64) std::atomic<uint64_t> published_ = 0;
-    // The published word when close_spin_window() was last called: workers that last saw it park without polling.
+    // The published word of the last parallel_for with AfterFanOut::Park: workers that last saw it park without
+    // polling.
     alignas(64) std::atomic<uint64_t> spin_window_closed_at_ = UINT64_MAX;
     // Worker by physical device id; NO_WORKER for a device without one.
     static constexpr uint32_t NO_WORKER = UINT32_MAX;
@@ -849,7 +866,10 @@ public:
         f();
     }
     void wait() override {}
-    void parallel_for(ttsl::Span<const uint32_t> device_ids, ttsl::move_only_function<void(size_t)>&& fn) override {
+    void parallel_for(
+        ttsl::Span<const uint32_t> device_ids,
+        ttsl::move_only_function<void(size_t)>&& fn,
+        AfterFanOut /*after*/ = AfterFanOut::Spin) override {
         run_on_caller(device_ids.size(), fn);
     }
 };
