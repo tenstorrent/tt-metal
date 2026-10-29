@@ -18,7 +18,7 @@ The served loop (the harness loop of ``tt/spec_decode.py`` spread over the plugi
 
 Knobs: ``GLM53_VLLM_SPEC=1`` enables the path (the MTP drafter is built, the P / V / C / D / D0 graphs are warmed and
 captured at boot; off = today's plain adapter, bit for bit); ``GLM53_VLLM_SPEC_K`` (default 3) the draft length
-ceiling, capped by ``B (K + 1) <= 32`` per mesh row (``spec_decode.spec_draft_len``); ``GLM53_SPEC_COMMIT`` the
+ceiling, capped by ``B (K + 1) <= 31`` per mesh row (``VERIFY_ROWS_CAP``: below the full tile); ``GLM53_SPEC_COMMIT`` the
 KDA commit mode (the adapter's default is ``fused``, the measured 8x4 point; the model's own default stays
 ``blend``).
 """
@@ -40,12 +40,18 @@ SPEC_K_ENV = "GLM53_VLLM_SPEC_K"
 # users per row -> K; a launch uses the entry at the smallest listed batch >= its own; the catalog's
 # num_speculative_tokens is the ceiling. GLM53_SPEC_K_BY_ROWS="B:K,B:K" replaces the table, "off" leaves the catalog's K.
 K_BY_ROWS_ENV = "GLM53_SPEC_K_BY_ROWS"
-DEFAULT_K_BY_ROWS: tuple[tuple[int, int], ...] = ((1, 3), (2, 3), (4, 3), (8, 3), (16, 1))
+# (8 -> 2) and (16 -> 0) keep the verify below the full tile: B (K + 1) = 32 breaks losslessness on mesh row 5 (the
+# 2026-10-29 sweep: B2_K15, B4_K7 and B8_K3 all diverge there at token 4; VERIFY_ROWS_CAP), so 8 users per row draft 2
+# and 16 per row decode plainly until the full-tile defect is fixed
+DEFAULT_K_BY_ROWS: tuple[tuple[int, int], ...] = ((1, 3), (2, 3), (4, 3), (8, 2), (16, 0))
 DEFAULT_SPEC_K = 3  # the measured sweet spot on the 8x4 (24.0 tok/s per user at 32 users, K=3, fused commit)
 SPEC_COMMIT_ENV = "GLM53_SPEC_COMMIT"
 DEFAULT_SERVING_COMMIT = "fused"
 SPEC_COMMIT_MODES = ("blend", "gated", "fused")  # = spec_decode.SPEC_COMMIT_MODES (ttnn-free copy)
 MAX_VERIFY_ROWS = 32  # = spec_decode.MAX_VERIFY_ROWS: B (K + 1) candidate rows fit one tile row per mesh row
+# the policy stays BELOW the full tile: at B (K + 1) = 32 every user of mesh row 5 diverges from plain greedy at token 4
+# (2026-10-29 sweep B2_K15 / B4_K7 / B8_K3, the same signature; an open verify defect), so the cap is 31 rows
+VERIFY_ROWS_CAP = MAX_VERIFY_ROWS - 1
 ACCEPT_MODE_ARGMAX_IDS = "argmax_ids"
 PLACEHOLDER_TOKEN_ID = -1  # the plugin's padded-column / padded-tail marker (vllm_tt_plugin.spec_decode)
 MTP_LAYER = 45
@@ -76,8 +82,9 @@ def spec_enabled(env=None) -> bool:
     return _flag(env, SPEC_ENV, "0")
 
 
-def draft_len_cap(users_per_row: int, k_ctx: int, max_rows: int = MAX_VERIFY_ROWS) -> int:
-    """``min(k_ctx, max_rows // B - 1)`` (0 = plain decode): ``spec_decode.spec_draft_len`` without ttnn."""
+def draft_len_cap(users_per_row: int, k_ctx: int, max_rows: int = VERIFY_ROWS_CAP) -> int:
+    """``min(k_ctx, max_rows // B - 1)`` (0 = plain decode): ``spec_decode.spec_draft_len`` without ttnn, under the
+    policy's ``VERIFY_ROWS_CAP`` (31: never the full tile)."""
     if int(users_per_row) <= 0:
         raise ValueError(f"users_per_row must be positive, got {users_per_row}")
     return max(0, min(int(k_ctx), max_rows // int(users_per_row) - 1))
@@ -190,8 +197,8 @@ def resolve_spec_decision(
             False,
             users_per_row=users_per_row,
             reason=(
-                f"{users_per_row} users per row leave no room for drafts: B (K + 1) <= {MAX_VERIFY_ROWS} candidate "
-                f"rows per mesh row (at most {MAX_VERIFY_ROWS // 2} users per row speculate; {SPEC_K_ENV}={k_setting}, "
+                f"{users_per_row} users per row leave no room for drafts: B (K + 1) <= {VERIFY_ROWS_CAP} candidate "
+                f"rows per mesh row (at most {VERIFY_ROWS_CAP // 2} users per row speculate; {SPEC_K_ENV}={k_setting}, "
                 f"the geometry allows K <= {k_any})"
             ),
         )
