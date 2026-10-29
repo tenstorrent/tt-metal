@@ -32,30 +32,23 @@ sfpi_inline sfpi::vInt ckv_imax(sfpi::vInt a, sfpi::vInt b) {
     return a;
 }
 
-// x rounded to q 2^(E - 127 - (MBITS - 1)) (q = host rule), sign kept, 0 as +0. Round to nearest even in one add:
-// (mm + 2^(SH - 1) - 1 + lsb) >> SH, SH = 24 - MBITS. A shift past MBITS + 1 already gives q = 0, so diff is capped
-// there.
+// x rounded to q 2^(E - 127 - (MBITS - 1)) (q = host rule), sign kept, 0 as +0. The SFPU adder rounds to nearest
+// even (tt-llk _round_even_), so |x| + M - M with M = 2^23 step (step = the group's LSB) is |x| rounded to a multiple
+// of step; then clamped at (2^MBITS - 1) step (the host clamps q). Equal to the host rule for bf16 inputs: its
+// alignment shift (at most MBITS + 1 bits) drops only zero bits of an 8-bit significand. Groups whose max is below
+// 2^(MBITS - 127) come out 0; maxima above 2^(232 - 127) are out of range.
 template <int MBITS>
 sfpi_inline sfpi::vFloat ckv_round_one(sfpi::vFloat x, sfpi::vInt e_max) {
-    constexpr int SH = 24 - MBITS;
-    constexpr int QMAX = (1 << MBITS) - 1;
-    sfpi::vInt u = sfpi::as<sfpi::vInt>(x);
-    sfpi::vInt ex = sfpi::exexp(x, sfpi::ExponentMode::Biased);
-    sfpi::vInt diff = e_max - ex;
-    v_if(diff > MBITS + 1) { diff = MBITS + 1; }
+    constexpr float QMAX_FRAC = 2.0f - 1.0f / (1 << (MBITS - 1));  // (2^MBITS - 1) step / 2^(E - 127)
+    const sfpi::vFloat m = sfpi::setexp(sfpi::vFloat(1.0f), e_max + (23 - (MBITS - 1)));
+    sfpi::vFloat a = sfpi::setsgn(x, 0);
+    a = a + m;
+    a = a - m;
+    const sfpi::vFloat lim = sfpi::setexp(sfpi::vFloat(QMAX_FRAC), e_max);
+    v_if(a > lim) { a = lim; }
     v_endif;
-    sfpi::vUInt man = sfpi::as<sfpi::vUInt>((u & 0x7FFFFF) | 0x800000);
-    v_if(ex == 0) { man = 0; }
-    v_endif;
-    sfpi::vUInt mm = man >> sfpi::as<sfpi::vUInt>(diff);
-    sfpi::vInt q = sfpi::as<sfpi::vInt>((mm + ((1 << (SH - 1)) - 1) + ((mm >> SH) & 1)) >> SH);
-    v_if(q > QMAX) { q = QMAX; }
-    v_endif;
-    sfpi::vFloat r = sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(q), sfpi::RoundMode::Nearest);
-    r = r * sfpi::setexp(sfpi::vFloat(1.0f), e_max - (MBITS - 1));
-    v_if(x < 0.0f) { r = -r; }
-    v_endif;
-    v_if(q == 0) { r = 0.0f; }
+    sfpi::vFloat r = sfpi::copysgn(a, x);
+    v_if(a == 0.0f) { r = 0.0f; }
     v_endif;
     v_if(e_max < MBITS) { r = 0.0f; }
     v_endif;

@@ -435,3 +435,24 @@ Build fixes after fork_op.py (no behaviour change):
   `device/sparse_sdpa_program_factory.cpp`, `device/kernels/sparse_sdpa_common.hpp`,
   `device/kernels/dataflow/sparse_sdpa_{reader,writer,gather}.{cpp,hpp}`, `device/kernels/compute/sparse_sdpa_compute.cpp`,
   `tests/unit/test_sparse_sdpa_row_bfp4.py`
+
+### sparse_sdpa: a bfloat8_b window (kv_window uint8) and kv_format ROW_BFP8
+- What: with ROW_BFP4, `kv_window` may be `[1, 1, Tw, 576]` uint8 bfloat8_b row records (`ckv_bfp4(dtype=bfloat8_b)`;
+  define `SPARSE_SDPA_WINDOW_BFP8`): the window chunk is gathered like the top-k chunks (two NoC reads a row: the
+  congruent exponent copy, the 512 value bytes) into its own staging block (`cb_k8_rm`) and turned into bfloat8_b K tiles
+  (`cb_k8`) by the same unpacker conversion; the bf16 window CBs shrink to one page. New `SparseKVFormat.ROW_BFP8` (a
+  window-only layer): kv = the records, TOPK == k_chunk_size, no kv_window (the ROW_BFP4 kernels with kv as the window).
+  Default unchanged: everything behind the define, added only for a uint8 window; the hash adds the window's dtype.
+- Why: deepseek_v41_flash_d_p lowbit, the window KV at the reference's fp8 width (owner 2026-10-29).
+- Tests (`tests/unit/test_sparse_sdpa_row_bfp4.py`, 5 new): the bfloat8_b window equals the bf16 window holding the
+  same values bit for bit (full and partial windows, top-k parts 0 / 37 / 512, fp32 DEST off / on); ROW_BFP8 equals
+  the BF16 path on the same values (H 32 / 64, windows 1..128 keys); both deterministic; the refusals. Regression: 38
+  unit + the model case pass.
+- Time, one p150b (H 64, K 512): compressed layers (640 keys) 160 q 351 -> 362 us (+3.3 %), 512 q 1250 -> 1286 us
+  (+2.9 %); window-only layers (128 keys) 160 q 133 -> 138 us, 512 q 494 -> 567 us (BF16 -> ROW_BFP8); plain fp8 rows
+  (FP8_E4M3, no scales) 119 / 484 us.
+- Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit phase 1)
+- Files: sparse_sdpa.hpp, sdpa_nanobind.cpp, device/sparse_sdpa_device_operation*.{hpp,cpp},
+  device/sparse_sdpa_program_factory.cpp, device/kernels/sparse_sdpa_common.hpp,
+  device/kernels/dataflow/sparse_sdpa_{reader,writer,gather}.{cpp,hpp}, device/kernels/compute/sparse_sdpa_compute.cpp,
+  tests/unit/test_sparse_sdpa_row_bfp4.py

@@ -10,7 +10,9 @@ Every callable above is bound; the program config is the shared `ttnn.SDPAProgra
   float32 q), `bf16_probs` (Float32 running max, probabilities rounded to bf16 before P@V: DeepSeek sparse_attn precision).
 - `sparse_sdpa`: opt-in `kv_format=SparseKVFormat.ROW_BFP4` + `kv_window=`: K / V from 320 B bfloat4_b row records
   (`ttnn.bringup.ckv_bfp4`) gathered by NoC reads and turned into bfloat4_b tiles by the unpacker; the first k_chunk
-  (the window) from a separate bf16 tensor. Realistic for a cache the reference stores in 4 bits.
+  (the window) from a separate bf16 tensor, or (opt-in) from 576 B bfloat8_b row records read the same way; and
+  `kv_format=ROW_BFP8` (a window-only layer: kv = the bfloat8_b records). Realistic for a cache the reference stores in 4
+  (compressed) / 8 (window) bits.
 - `ring_mla` (latent V) runs at `fp32_dest_acc_en=True` on the streaming path (the source refuses it). Host only.
 - `ring_mla` / `ring_joint_scaled_dot_product_attention`: host `kv_actual_isl=0` with per-device Q.seq == K.seq
   (non-chunked causal) runs the full-prefill path (the source raises TT_FATAL).
@@ -45,7 +47,10 @@ Realistic (use by default):
 - `sparse_sdpa(q, kv, indices, v_dim, kv_format=SparseKVFormat.ROW_BFP4, kv_window=w, ...)` (fork, opt-in): kv
   `[B, 1, T, 320]` uint8 row records, kv_window `[1, 1, Tw, 512]` bf16 DRAM interleaved ROW_MAJOR; the index row is
   `[window k_chunk | top-k]`, each part with its own sentinel tail (no compaction). Needs K_DIM 512, a bf16 q,
-  TOPK > k_chunk_size, no block_cyclic. kv_window is given exactly with ROW_BFP4.
+  TOPK > k_chunk_size, no block_cyclic. kv_window is given exactly with ROW_BFP4. kv_window may instead be
+  `[1, 1, Tw, 576]` uint8 bfloat8_b records (`ttnn.bringup.ckv_bfp4(dtype=ttnn.bfloat8_b)`), read into bfloat8_b tiles.
+- `sparse_sdpa(q, kv, indices, v_dim, kv_format=SparseKVFormat.ROW_BFP8, ...)` (fork, opt-in): kv `[1, 1, T, 576]` uint8
+  bfloat8_b records, every index a window row (TOPK == k_chunk_size), no kv_window, no cache_batch_idx.
 
 Precision only: per-step checks or a measured end-to-end gap (rule 7):
 - `sparse_sdpa(...)` plus:

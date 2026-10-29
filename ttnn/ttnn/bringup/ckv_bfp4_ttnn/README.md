@@ -1,4 +1,4 @@
-# ttnn.bringup.ckv_bfp4 (ckv_bfp4_ttnn)
+# ttnn.bringup.ckv_bfp4, ttnn.bringup.bfp_round (ckv_bfp4_ttnn)
 
 ## What it does
 New op (Python ProgramDescriptor, no TTNN source). bf16 TILE rows `[1, 1, n, 512]` -> 320-byte bfloat4_b row records
@@ -26,8 +26,22 @@ rounded values as a new bf16 TILE tensor (`rounded=True`).
   dispatched with ttnn.bringup.run_prepared (prepared_program), row0 a value slot and every tensor address patched; the
   same program and bytes. Falls back to the generic_op path if a frozen runtime arg collides with an io address (the
   patch count says so).
+- `dtype=ttnn.bfloat8_b` (opt-in, default bfloat4_b): 576-byte bfloat8_b records `[32 exponents | the same 32 | 512
+  sign-magnitude bytes]` into a `[1, 1, R, 576]` table, rounded to nearest even (the packer alone rounds bfp8 half away
+  from zero: a bias at the many exact ties of bf16 inputs). Read by sparse_sdpa as a bfloat8_b window.
+- `bfp_round(x, dtype=bfloat4_b | bfloat8_b, out=None, row0=0)`: bf16 TILE (any shape) -> the same tiles on the bfp grid
+  by the same rounding, as a new TILE tensor, or in place into `out` (TILE, that dtype, x's width) at tile row `row0` of
+  its flattened rows (a key table appended per chunk). Every core, blocks of up to 16 tiles.
+- The SFPU round: the group max exponent (two loads, three lane rotations), then |x| + M - M with M = 2^23 x the
+  group's LSB (the SFPU adder rounds to nearest even), clamped at the largest code. Equal to the host rule for bf16
+  inputs (its alignment shift drops only zero bits).
+- Limit: a 16-value group whose max is below 2^-124 (bfloat8_b: 2^-120) comes out 0 (the host rule would keep it); maxima
+  above 2^105 are out of range.
 
 ## Measured
+- One p150b, after the shorter round (2026-10-29): ckv_bfp4 24-27 us a call at n 512 / 1280 (it was ~34 us a band
+  before); bfloat8_b records of a 2176-row window 28 us (a bf16 untilize of the same: 13 us); bfp_round of 512 keys x 128
+  into a bfloat4_b table 2.1 us, of an index query [1, 32, 512, 128] 16-28 us.
 - One p150b: records byte-exact vs the host rule (tests/unit). 2x2 deepseek_v41_flash_d_p rung `last` (chunk 2048):
   0.04 ms a chunk vs 0.006-0.011 ms for the bf16 slice_write it replaces.
 - Galaxy 8x4, deepseek_v41_flash_d_p FIX.8 (chunk 5120, 4 KV sources): device 0.209 ms a chunk (4 calls) vs 0.066 ms
@@ -57,10 +71,13 @@ rounded = ttnn.bringup.ckv_bfp4(ckv_bf16_tile, rows, row0, rounded=True, prepare
 
 ## Tests
 `tests/unit/test_ckv_bfp4.py` (one device, ~10 s): records == `tests/reference.py` (host rule) byte for byte at n = 32 /
-64 / 2560 / 5120, other rows untouched, rounded == the records' values, deterministic (A, B, A x5); prepared=True
-over 5 calls (other row0, inputs, tables) byte-equal to the generic_op path, prepared once.
+64 / 2560 / 5120 (bfloat8_b: 32 / 64 / 2176), other rows untouched, rounded == the records' values, deterministic (A,
+B, A x5); prepared=True over 5 calls (other row0, inputs, tables) byte-equal to the generic_op path, prepared once.
+`tests/unit/test_bfp_round.py`: bfloat4_b / bfloat8_b values == the host rule at 4 shapes, in place at a tile row with
+the rest untouched, deterministic, the refusals.
 The device rounding facts: `models/demos/deepseek_v41_flash_d_p/tests/test_bfp_packer_rounding.py`.
 
 ## Used by
 deepseek_v41_flash_d_p (CKV_FORMAT=bfp4_rows: the compressed-KV attention table; prepared=True under
-CKV_BFP4_PREPARED=on, P.7).
+CKV_BFP4_PREPARED=on, P.7; lowbit phase 1, not wired yet: WINDOW_KV_FORMAT=bfp8_rows (bfloat8_b records),
+INDEX_K_FORMAT / INDEX_Q_FORMAT=bfp4 (bfp_round)).
