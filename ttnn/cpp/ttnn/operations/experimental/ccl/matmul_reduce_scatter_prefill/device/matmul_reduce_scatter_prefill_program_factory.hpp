@@ -24,21 +24,19 @@ struct MatmulReduceScatterPrefillProgramFactory {
         const MatmulReduceScatterPrefillParams& attrs,
         const MatmulReduceScatterPrefillInputs& tensor_args,
         Tensor& output,
+        const Tensor& staging,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 };
 
 // The mesh workload: a program per coordinate from create_descriptor, with what a cache hit writes kept at creation
-// (the four kernels' common-arg objects, the three staging-backed CBs and their zone offsets), so a hit computes the
-// call's addresses once and writes them into each program, with no lookup per program.
+// (the reader's and writer's common-arg objects), so a hit computes the call's addresses once and writes them into
+// each program, with no lookup per program. The shared variables also own the programs' staging tensor.
 struct MatmulReduceScatterPrefillMeshWorkloadFactory {
     struct shared_variables_t {
         // Cache the argument objects, not their data(): dispatch may relocate the payload.
         std::reference_wrapper<tt::tt_metal::RuntimeArgsData> reader;
         std::reference_wrapper<tt::tt_metal::RuntimeArgsData> writer;
-        std::reference_wrapper<tt::tt_metal::RuntimeArgsData> port_reader;
-        std::reference_wrapper<tt::tt_metal::RuntimeArgsData> port_sender;
-        std::array<tt::tt_metal::CBHandle, 3> staging_cbs{};  // FINISHED, ARRIVALS_FWD, ARRIVALS_BWD
-        std::array<uint32_t, 3> staging_offsets{};
+        Tensor staging;  // the same mesh tensor in every program's entry; freed when the cache entry goes
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -48,8 +46,8 @@ struct MatmulReduceScatterPrefillMeshWorkloadFactory {
         const MatmulReduceScatterPrefillInputs& tensor_args,
         Tensor& output);
 
-    // A, W and the output on every hit; the staging address and its CBs only when the staging tensor moved; the
-    // per-mesh semaphores and mailbox never (they keep create_descriptor's values for the mesh's life).
+    // A, W and the output, on every hit. Staging is the cached program's own; the per-mesh semaphores and mailbox keep
+    // create_descriptor's values for the mesh's life.
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached,
         const MatmulReduceScatterPrefillParams& attrs,
@@ -68,22 +66,12 @@ enum MeshSem : uint32_t { ARR_FWD, ARR_BWD, READY, CREDIT };
 
 // Called by the public entry before launch: creates the mesh's resources on first use (synchronizing the device once).
 MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh);
-// One call's staging tensor (bf16 tiles, height-sharded over the full grid, staging_tiles tiles per core). The mesh
-// allocator gives it the same address on every chip, which the fabric writes rely on; the entry frees it when the call
-// has been enqueued: a neighbour writes into it only after this chip's fence_ready, and this chip's program finishes
-// only after every arrival has landed.
-//
-// Open trade-off (to revisit): allocating per call costs host time on every eager call. On a QuietBox 2 (1x4 ring and
-// line, a tiny 32x256 @ 256x512 per-device shape, program cache warm) a hot call went from 13.8 to ~35 us of host
-// time: creating + freeing a height-sharded L1 tensor over the full grid costs ~24 us there (an L1 interleaved one
-// ~4 us). Traced calls pay nothing. The alternatives considered:
-//   - one persistent staging per mesh, reallocated when the size changes (the previous scheme): no host cost, but a
-//     trace that holds two shapes with different staging sizes points at freed L1;
-//   - persistent, one tensor per staging size: no host cost and trace-safe, but holds L1 for every size used;
-//   - persistent, grow-only: no host cost, smallest persistent footprint, but a trace stays valid only if the largest
-//     shape ran before capture.
-// A cheaper per-call allocation (e.g. a buffer without the sharded page mapping) would remove the cost without the
-// persistent L1.
+// A cached program's staging tensor (bf16 tiles, height-sharded over the full grid, staging_tiles tiles per core): the
+// finished slots the port readers pick up and the arrival zones the neighbouring chips write into over fabric. The
+// mesh allocator gives it the same address on every chip, which the fabric writes rely on. create_mesh_workload
+// allocates it on the cache miss and the program's shared variables own it, so a call allocates nothing and a trace
+// never sees it freed (it is created before any capture, which needs a warm cache, and lives while the program is
+// cached). The cost is L1: each cached shape keeps staging_tiles of L1 per core until its cache entry goes.
 Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles);
 // Lookup only (factory and the hit path); TT_FATAL when the entry has not created them.
 MeshResources& mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh);
