@@ -46,6 +46,7 @@ from models.demos.glm53_flash.tt.kda_snapshot import (
     one_hot_row,
 )
 from models.demos.glm53_flash.tt.memory_plan import MemoryPlan, kda_state_bytes_per_user, snapshot_bytes_per_chip
+from models.demos.glm53_flash.tt.packed_inputs import RESIDENT_ENV
 from models.demos.glm53_flash.tt.vllm_config import (
     APC_ALLOC_CHECK_ENV,
     APC_ENV,
@@ -332,19 +333,23 @@ def _apc_adapter(entries=2, users_per_row=4, max_seq_len=65536, tail_split=False
     return a, model
 
 
-def _decode(a, tokens, positions):
+def _decode(a, tokens, positions, reload=True):
     return a.decode_forward(
         torch.tensor([[t] for t in tokens], dtype=torch.int32),
         torch.tensor(positions),
         sampling_params=_greedy(len(tokens)),
-        reload_inputs=True,
+        reload_inputs=reload,
         reload_page_table=False,
         reload_sampling_params=False,
         reset_sampling_state=False,
     )
 
 
-def test_multi_turn_hit_restores_the_crossing_snapshot_and_prefills_from_it():
+@pytest.mark.parametrize("resident", [False, True])
+def test_multi_turn_hit_restores_the_crossing_snapshot_and_prefills_from_it(monkeypatch, resident):
+    # resident: the decode steps after the first are the plugin's chain (reload_inputs=False, the fed tokens ignored):
+    # the content record and the crossing snapshot come from the ids read after each step
+    monkeypatch.setenv(RESIDENT_ENV, "1" if resident else "0")
     a, m = _apc_adapter(entries=2)
     L = 300
     prompt = (torch.arange(L) % 60 + 1).to(torch.int32).reshape(1, L)
@@ -353,12 +358,16 @@ def test_multi_turn_hit_restores_the_crossing_snapshot_and_prefills_from_it():
     assert not [c for c in m.calls if c[0] == "snapshot_kda"], "300 is not a 32-multiple: no prefill snapshot"
     # 20 decode steps: the slot crosses 320 at the step that consumes position 319 -> one decode snapshot (entry 0)
     tok = 5
-    for p in range(L, L + 20):
-        out = _decode(a, [tok, 0, 0, 0], [p, -1, -1, -1])
+    chain = [tok]
+    for k, p in enumerate(range(L, L + 20)):
+        out = _decode(a, [tok if not (resident and k) else 0, 0, 0, 0], [p, -1, -1, -1], reload=not (resident and k))
         tok = int(out[0, 0])
+        chain.append(tok)
     assert [c for c in m.calls if c[0] == "snapshot_kda"] == [("snapshot_kda", user, 0)]
     content = a.apc.content(0, user)
     assert content.length == L + 20 and content.snapshots == {320: 0} and content.live
+    assert content.tokens[L : L + 20].tolist() == chain[:20], "the record holds the tokens the steps consumed"
+    assert a._perf_chain == (19 if resident else 0)
     a.release_request(0)
     assert content.retained and a.apc.park_positions() == {(0, user): 320}
     # the next turn: the whole content + 40 new tokens, vLLM says 320 cached -> served from the snapshot at 320

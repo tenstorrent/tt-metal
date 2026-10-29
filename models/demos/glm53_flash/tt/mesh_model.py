@@ -836,6 +836,14 @@ class GLM53MeshModel:
         follows a replay (``GLM53FlashForCausalLM._snapshot``) so that order does not rest on this default."""
         ttnn.execute_trace(self.device, trace_id, cq_id=cq_id, blocking=blocking)
 
+    def dram_free(self) -> int:
+        """The chip's free DRAM in bytes (every bank; a host-side query): what the served adapter sizes the KDA
+        snapshot ring from right after the build (``_prefix_cache_plan``)."""
+        mv = ttnn.device.get_memory_view(self.device, ttnn.BufferType.DRAM)
+        alloc = int(mv.total_bytes_allocated_per_bank)
+        free = getattr(mv, "total_bytes_free_per_bank", mv.total_bytes_per_bank - alloc)
+        return int(free) * int(mv.num_banks)
+
     def dram_allocated(self) -> int:
         """The DRAM allocator's allocated bytes per bank (a host-side query, no device op): the footprint the served
         adapter fingerprints after the decode capture and re-checks after every prefix-cache call site

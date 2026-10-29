@@ -584,6 +584,10 @@ class GLM53FlashForCausalLM:
         # Slot-level APC (doc/serving/prefix_caching.md); off until device-validated. Read at import: the plugin
         # snapshots the class attribute in check_and_update_config.
         "supports_prefix_caching": _env_flag(APC_ENV, "0"),
+        # with the cache on, the scheduler asks ``confirm_prefix_cache_hit`` before committing vLLM's hit (plugin
+        # arg/glm53_registration 4d96dec): num_computed_tokens is what a retained slot serves, so vLLM never strips a
+        # multimodal item the adapter cannot recompute
+        "confirms_prefix_cache_hits": _env_flag(APC_ENV, "0"),
         # GLM53_RESIDENT_DECODE=1 (doc/mesh/resident_decode.md): the mesh model's decode step feeds its sampled ids
         # back and advances the live positions on device, so the plugin's reload-plan chain (reload_inputs=False
         # steps) and vLLM's async scheduling are admitted; off = every decode reloads tokens / positions from the host
@@ -701,6 +705,9 @@ class GLM53FlashForCausalLM:
         # inputs with the live mask, a chain step (reload_inputs=False) uploads nothing
         self.resident = resident_decode_enabled()
         self._resident_live: list[int] | None = None  # the live logical slots of the last staged step
+        self._last_read_ids: dict[
+            int, int
+        ] = {}  # per logical slot: the greedy id of its last read step (the chain's feed)
         if self.resident:
             if self.spec is not None:
                 raise NotImplementedError(
@@ -719,10 +726,6 @@ class GLM53FlashForCausalLM:
         self.apc_tail_split = _env_flag(APC_TAIL_SPLIT_ENV, "0")
         if prefix_cache_entries is not None:
             self.apc = SlotPrefixCache(geometry, int(prefix_cache_entries))
-            if self.resident:
-                raise NotImplementedError(
-                    f"{RESIDENT_ENV}=1 with the slot prefix cache: a chain step carries no token for the decode record"
-                )
             if self.apc.entries and not callable(getattr(model, "snapshot_kda", None)):
                 raise NotImplementedError("the prefix cache needs a mesh model with snapshot_kda / restore_kda")
         # GLM53_VLLM_APC_ALLOC_CHECK: the DRAM footprint right after the decode capture; every later prefix-cache call
@@ -931,7 +934,10 @@ class GLM53FlashForCausalLM:
         geometry = dataclasses.replace(geometry, traced_prefill_lengths=tuple(model.trace_prefill_lengths()))
         entries = None
         if cls.model_capabilities.get("supports_prefix_caching"):
-            entries, store = cls._prefix_cache_plan(plan, users_per_row, int(max_seq_len))
+            free = getattr(model, "dram_free", None)
+            entries, store = cls._prefix_cache_plan(
+                plan, users_per_row, int(max_seq_len), free_bytes=free() if callable(free) else None
+            )
             if entries:
                 model.allocate_kda_snapshots(entries, store)  # before any capture: a persistent ring
             if store == "device" and entries:
@@ -967,14 +973,28 @@ class GLM53FlashForCausalLM:
         )
 
     @staticmethod
-    def _prefix_cache_plan(plan, users_per_row: int, max_seq_len: int) -> tuple[int, str]:
+    def _prefix_cache_plan(
+        plan, users_per_row: int, max_seq_len: int, free_bytes: float | None = None
+    ) -> tuple[int, str]:
         """``(entries per slot, store)`` of the KDA snapshot ring: ``GLM53_VLLM_APC_SNAPSHOTS`` (0 / unset = as many
-        as the planner's spare DRAM fits, at most ``APC_MAX_SNAPSHOTS``) in the ``GLM53_VLLM_APC_SNAPSHOT_STORE``
-        (``device``, the default; ``host``: torch copies, no DRAM). A device ring that fits nothing falls back to
-        one host entry per slot (the multi-turn hit still works, over PCIe) with a warning."""
+        as the spare DRAM fits, at most ``APC_MAX_SNAPSHOTS``) in the ``GLM53_VLLM_APC_SNAPSHOT_STORE`` (``device``,
+        the default; ``host``: torch copies, no DRAM). The spare is the planner's, or, with ``free_bytes`` (the
+        chip's free DRAM right after the model build, before any warm-up), the live free minus the planner's prefill
+        reserve at ``max_seq_len`` (the planner's envelope counts the partitioned cache's scratch slot at full
+        length and refuses a ring the live DRAM holds: the 1 M profile, 2026-10-29). A device ring that fits nothing
+        falls back to one host entry per slot (the multi-turn hit still works, over PCIe) with a warning."""
         want = int(os.environ.get(APC_SNAPSHOTS_ENV, "0"))
         store = os.environ.get(APC_SNAPSHOT_STORE_ENV, "device").strip().lower()
         fit = plan.max_snapshot_entries(users_per_row, max_seq_len, cap=APC_MAX_SNAPSHOTS)
+        if free_bytes is not None and plan.kda_state_bytes > 0:
+            reserve = plan.dram_bytes - plan.weights_bytes - plan.vision_bytes - plan.headroom(max_seq_len)
+            live = int(max(0.0, float(free_bytes) - reserve) // (users_per_row * plan.kda_state_bytes))
+            logger.info(
+                f"GLM53 vLLM APC: live DRAM free {free_bytes / 2**20:.0f} MiB per chip after the build, the planner's "
+                f"prefill reserve {reserve / 2**20:.0f} MiB: {live} snapshot entries per slot fit (the planner's "
+                f"envelope: {fit})"
+            )
+            fit = max(fit, min(APC_MAX_SNAPSHOTS, live))
         if store == "host":
             entries = want or 1
         else:
@@ -2131,7 +2151,7 @@ class GLM53FlashForCausalLM:
             )
         if sampling_params is not None:
             greedy_rows(sampling_params, live)
-        feed_tokens: dict[int, int | None] = {}
+        feed_tokens: dict[int, int] = {}
         feed_positions: dict[int, int] = {}
         rows = DecodeRowMap(wire_rows=wire, read_index=[-1] * wire)
         for i in live:
@@ -2149,7 +2169,13 @@ class GLM53FlashForCausalLM:
                 )
             if page_table is not None:
                 self.blocks.check_row(page_table[i], p + 1)
-            feed_tokens[i] = None  # the device fed its own sampled id back
+            tok = self._last_read_ids.get(i)
+            if tok is None:
+                raise RuntimeError(
+                    f"resident decode row {i}: no sampled id was read for slot {i} since its last step (the chain "
+                    "needs every step's ids read before the next submission)"
+                )
+            feed_tokens[i] = tok  # the id the device fed itself: what this step consumes at state.position
             feed_positions[i] = state.position
             rows.read_index[i] = self.slots.read_index(i)
         return live, feed_tokens, feed_positions, rows
@@ -2432,6 +2458,12 @@ class GLM53FlashForCausalLM:
             logits[i, 0] = out.logits[rows.read_index[i]]
         return logits, None
 
+    def _note_read_ids(self, rows: DecodeRowMap, host_ids: torch.Tensor) -> None:
+        """The greedy ids of a read step per logical slot: a resident chain step feeds them back (its token record
+        for the prefix cache)."""
+        for i in rows.live_rows():
+            self._last_read_ids[i] = int(host_ids[rows.read_index[i]])
+
     def _read(self, out: GLM53DecodeOutput) -> GLM53DecodeOutput:
         """Device -> host: the greedy ids of every slot (tiny) or the logits of the rows that hold live slots (one
         ``[B, vocab]`` bf16 shard per mesh row, the first column's replica). TODO(device): the logits shard read is
@@ -2442,9 +2474,11 @@ class GLM53FlashForCausalLM:
             ttnn = _ttnn()
             host = torch.cat([ttnn.to_torch(t) for t in out.pending], dim=2)  # like GLMMesh.to_host(ids, rows=2)
             host_ids = host.view(torch.int32).reshape(-1).long()
+            self._note_read_ids(out.rows, host_ids)
             return GLM53DecodeOutput(ids=host_ids, logits=None, rows=out.rows, is_tokens=True, on_host=True)
         if out.is_tokens:
             host_ids = self.model.ids_to_host(out.ids).reshape(-1)
+            self._note_read_ids(out.rows, host_ids)
             return GLM53DecodeOutput(ids=host_ids, logits=None, rows=out.rows, is_tokens=True, on_host=True)
         B = self.geometry.users_per_row
         host = torch.zeros(self.geometry.physical_slots, self.vocab_size, dtype=torch.float32)
