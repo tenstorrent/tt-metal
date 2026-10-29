@@ -13,6 +13,16 @@ import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import chunk_gated_delta_rule_fused_adapter
 from models.demos.blackhole.qwen36.tt.prefill_matmul import prefill_linear
 
+_PINNED_FUSED_CONFIG = None
+
+
+def _pinned_fused_config():
+    # The cost model picks phased at 16 heads x 128 tokens; pinned fused is ~25% faster, bit-exact.
+    global _PINNED_FUSED_CONFIG
+    if _PINNED_FUSED_CONFIG is None:
+        _PINNED_FUSED_CONFIG = ttnn.ChunkGdnFusedProgramConfig(num_producers=3, num_receivers=2, producer_pool=False)
+    return _PINNED_FUSED_CONFIG
+
 
 def stateless_prefill_supported(gdn, mode, stateless):
     """True when recurrent_forward may take this path: stateless chunk prefill on one device, fused chunk op,
@@ -147,6 +157,7 @@ def stateless_prefill_forward(gdn, x):
     v = ttnn.reshape(v, (Bp, F * S, v_dim))
 
     # Chunk op: flat q/k/v in, head-major o out; the final state is dropped.
+    program_config = _pinned_fused_config() if (Bp * Nv == 16 and F * S == 128) else None
     o, final_state = chunk_gated_delta_rule_fused_adapter(
         q,
         k,
@@ -159,6 +170,7 @@ def stateless_prefill_forward(gdn, x):
         qkv_head_dims=(Nk, Dk, Nv, Dv),
         return_o_bh=True,
         const_tiles=gdn.fused_prefill_fn.keywords["const_tiles"],
+        program_config=program_config,
     )
     ttnn.deallocate(final_state)
     for t in (q, k, v, beta, g):
