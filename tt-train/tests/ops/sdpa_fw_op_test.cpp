@@ -2062,6 +2062,33 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_ManyPieces
     run_split_vs_unsplit(base, {128, 32, 1, 16, 0});
 }
 
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_TwoMergers) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // Two mergers on one core, so one of them waits on the core's second semaphore: one head of dim 32,
+    // S=768, one-row chunks of three K/V tiles on 31 cores (the host Schedule test holds the same
+    // schedule). Also the only split run with one-tile-wide heads.
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 768U,
+        .query_dim = 32U,
+        .key_value_dim = 32U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_SplitUnits_TwoMergers"};
+    const ChunkKnobs knobs{32, 96, 1, 4, 31};
+    SDPATestConfig split = base;
+    split.program_config = program_config_of(knobs);
+    uint32_t highest_sem_idx = 0;
+    for (const auto& units : host_schedule(split).per_core) {
+        for (const auto& unit : units) {
+            highest_sem_idx = std::max(highest_sem_idx, unit.sem_idx);
+        }
+    }
+    ASSERT_EQ(highest_sem_idx, 1U) << "the shape must put two mergers on one core";
+    run_split_vs_unsplit(base, knobs);
+}
+
 // Splits with stacked heads, a different value dim and the gate; the gate is applied by the merger only.
 const SDPATestConfig kSplitUnitsGqaGateBase{
     .batch_size = 1U,
@@ -2274,7 +2301,7 @@ uint32_t count_role(const SDPAForwardSchedule& schedule, UnitRole role) {
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
     // The scheduler is pure, so its invariants are checked on the host for the cases the device tests can
-    // not reach: many pieces per item, the merger cap, the runtime-arg fallback.
+    // not reach: many pieces per item, two mergers on one core, the runtime-arg fallback.
     using namespace ttml::metal::ops::sdpa_fw::device;
     constexpr uint32_t kCores = 120U;
 
@@ -2326,7 +2353,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
     check_schedule(two_heads, sq4sk8, one_piece, 1U);
 
     // One head with one K tile per step: items of up to 64 steps cut into many pieces, more partials than
-    // any device test reaches, several mergers on one core.
+    // any device test reaches.
     const SDPAForwardShape one_head = causal_shape(1U, 1U, 1U, 64U, 2U);
     const SDPAForwardSchedule many = make_schedule(one_head, sq4sk1, kCores, 16U);
     uint32_t most_partials = 0;
@@ -2338,6 +2365,27 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
     EXPECT_GT(most_partials, 3U);
     EXPECT_LT(many.num_slots, kCores);
     check_schedule(one_head, sq4sk1, many, 16U);
+
+    // Two mergers on one core, so the second waits on the core's next semaphore: one head, S=768, one-row
+    // chunks of three K/V tiles, on 31 cores. Their senders carry the merger's semaphore index.
+    const SDPAForwardShape one_head_short = causal_shape(1U, 1U, 1U, 24U, 1U);
+    const SDPAForwardChunks sq1sk3{.Sq_chunk_t = 1U, .Sk_chunk_t = 3U, .heads_per_item = 1U};
+    const SDPAForwardSchedule two_mergers = make_schedule(one_head_short, sq1sk3, 31U, kDefaultMaxPieces);
+    uint32_t most_mergers_on_a_core = 0;
+    uint32_t highest_sem_idx = 0;
+    for (const auto& units : two_mergers.per_core) {
+        uint32_t mergers = 0;
+        for (const auto& unit : units) {
+            if (unit.role == UnitRole::Merger) {
+                ++mergers;
+                highest_sem_idx = std::max(highest_sem_idx, unit.sem_idx);
+            }
+        }
+        most_mergers_on_a_core = std::max(most_mergers_on_a_core, mergers);
+    }
+    EXPECT_GE(most_mergers_on_a_core, 2U) << "the shape must put two mergers on one core";
+    EXPECT_EQ(highest_sem_idx + 1U, most_mergers_on_a_core) << "a core's mergers take its semaphores in turn";
+    check_schedule(one_head_short, sq1sk3, two_mergers, kDefaultMaxPieces);
 
     // More cores than items with no cuts allowed: one core per item.
     const SDPAForwardSchedule few_items = make_schedule(two_heads, sq4sk8, kCores, 1U);
