@@ -70,6 +70,18 @@ Order: (1) the in-graph feedback + the `supports_async_decode` flag behind `GLM5
 by the served smokes (stages a / b / d: the ids must be identical to today's reload path for the same prompts);
 (2) the bench A/B at 32 users; (3) vLLM async scheduling on; (4) the interleave.
 
+## Step 3 result (2026-10-29 20:38): async scheduling parked
+
+`served_8x4_async_r1` (1 M profile, resident chain, `--async-scheduling`, the non-blocking ids readback): stages a / b
+PASS (texts identical), bench 128 x 128 at 32 users 13.37 tok/s per user against the synchronous chain's 14.13 (no
+gain: the readback event is waited in the same engine thread before the output processing, so nothing overlaps),
+then the engine died on a chain step: "the plugin's position 129 and the device's 130 must agree". Under async
+scheduling vLLM schedules step N + 1 before step N's token lands, so the plugin's `start_pos` (its `num_tokens - 1`)
+lags the device by one on every chain step. The adapter could accept the lag (its own position is the truth on a
+chain step), but with no gain to pay for it the flag stays off in the catalog; the parity remainder (71 ms
+inter-token vs the 48 ms device step) is the engine's synchronous per-step host work, to be attributed with
+`GLM53_VLLM_STEP_PROFILE` before anything else is changed.
+
 ## Step 4, the prefill / decode interleave: design (2026-10-29 19:30)
 
 Today the adapter refuses a decode step while a slot is mid-prefill (`_stage_rows`: `supports_slot_mask` is unset on
