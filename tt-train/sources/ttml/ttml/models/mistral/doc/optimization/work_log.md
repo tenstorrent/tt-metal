@@ -29,6 +29,8 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 
 - Stage review round 3 (`review_round3.md`, more-work-needed, 7 findings). Follow-up: `frozen_embedding.py` / `rmsnorm_allcore.py` graph-free on no-grad inputs (finding 1); stacking microbenchmark `O/review3_stack_bench.{py,log}` (finding 2: no gain from tile-aligned stacking, cost recorded); chain `O/review3_followup.sh` -> `O/review3_followup.log`: harness `O/review3_harness.log` 15 passed, gradient check `O/review3_tp_grad_check_tp4.{log,npz}` PASS, 8-layer profile `O/review3_tracy_8layers` -> `O/review3_tracy_8layers_ranked_ops.txt`, `tp_measure.sh review3_tp` after 600 s (`O/review3_tp_mfu_tp4.log` 545.7 ms, `O/review3_tp_analysis.txt`, `O/review3_tp_ranked_ops.txt`: 17/17 collectives, 8+8 norm backward), 8-layer real-weight host-loss run `O/review3_train_8layers_hostloss.log` + `O/review3_loss_comparison.txt` (max 0.027, PASS), TP=4 real-weight 10 steps `O/review3_full_tp4_real.{log,json}` (finding 3); docs reworded per findings 4-7, the traceback file `iter6_diff_vs_iter4_8layers.txt` deleted.
 
+- Stage review round 4 (`review_round4.md`, more-work-needed on five P3 doc / test items): fixed in `ddf3a77be15` (README count and wording, commit rows, the frozen-embedding assertion, the no-grad norm harness case, `O/review4_tests.log` 5 passed, sweep numbers). Round 5 (`review_round5.md`): **clean-pass**; its three P4 wording notes taken in the closing commit.
+
 ## Commits (local, never pushed)
 
 | iteration | commit | content |
@@ -49,7 +51,8 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | TP sweeps | `d03dfffa23c` | TP-local shape sweeps: no config win; logs and write-up |
 | 8 | `4777ff7646a` | frozen vocab-parallel embedding table, resumed-loop state section, iteration-8 evidence |
 | review 3 | `4ae4eef5bcc` | review round 3 and its follow-up: graph-free frozen paths, loss match on the final path, doc corrections |
-| review 4 | (this commit) | review round 4 items: README / work-log rows, frozen-embedding test assertion, no-grad norm harness case, sweep numbers |
+| review 4 | `ddf3a77be15` | review round 4 items: README / work-log rows, frozen-embedding test assertion, no-grad norm harness case, sweep numbers |
+| review 5 close | (this commit) | round-5 clean-pass recorded, three wording notes |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run described in `perf_analysis.md`, "Iteration 1".
 - Review round 1 of the loop (`doc/optimization/review_round1.md`): required a TP=4 gradient-level check of the fused/transposed paths (`tp_gradient_check.py`: `O/tp_grad_check_single.{npz,log}`, `O/tp_grad_check_tp4_plain.{npz,log}`, `O/tp_grad_check_tp4_fused.{npz,log}`), the exit restated at the measured clock with the falling-clock anomaly classified, and arithmetic fixes in the gap decomposition; also taken: the 16-layer Tracy point the plan's rule asks for once 16 layers fit (`O/iter3_fused_tracy_16layers*`), the iteration-3 op sequence (`O/iter3_fused_op_sequence_1layer.txt`), the fused-LoRA isolation script and its after-fix log in evidence.
