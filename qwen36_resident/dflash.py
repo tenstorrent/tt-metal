@@ -139,6 +139,7 @@ class ResidentDFlash:
         self.drafter.alloc(torch.arange(nb, dtype=torch.int32).reshape(1, nb), 64, self.taps)
         self.max_pos = max_pos
         self.ring = self.slot = 0
+        self.prev = None
         # every program once, eagerly, before any trace is captured; then the target's trace (the drafter's are
         # captured on their first armed call)
         self._step([0] * R, 0)
@@ -152,16 +153,19 @@ class ResidentDFlash:
 
     def _step(self, toks, p):
         self.m.step(
-            self.m.token_state(self.emb[list(toks)], list(range(p, p + self.R)), ring=self.ring, slot=self.slot)
+            self.m.token_state(
+                self.emb[list(toks)], list(range(p, p + self.R)), ring=self.ring, slot=self.slot, prev=self.prev
+            )
         )
 
     def _commit(self, a):
-        self.ring, self.slot = self.ring + 1 + a, (self.slot + a) % self.R
+        self.ring, self.slot, self.prev = self.ring + 1 + a, (self.slot + a) % self.R, a
 
     def _prompt(self, ids, draft_context=True):
         """the prompt through verify steps (R tokens each, all accepted): returns the first generated token"""
         self.m.reset()
         self.ring = self.slot = 0
+        self.prev = None
         P, R = len(ids), self.R
         for p0 in range(0, P, R):
             k = min(R, P - p0)

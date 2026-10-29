@@ -86,6 +86,11 @@ KV_BLOCK = 8  # KV position tiles per streamed block of an attention worker
     SEM_GROUP,
 ) = range(13)
 HEAD_FP32_CBS = (5, 6, 7, 15, 30, 31)
+# the chunked verify's head cores (gdn_chunk_compute.cpp): fp32 CBs unpacked straight to DEST, and every CB
+CHUNK_FP32_CBS = (5, 6, 11, 16, 25, 28)
+# (GDN of a verify of R > 2 rows in the chunked / WY form, gdn_chunk_*.cpp; 0: the rows one after another)
+GDN_CHUNK = os.environ.get("RESIDENT_GDN_CHUNK", "1") == "1"
+TOK_PREV = 14  # token state word: the previous verify step's accepted drafts (chunked GDN; none: 0xFFFFFFFF)
 TOK_X0 = 64
 TOK_SLOT = 4  # token state word: the GDN state slot of row 0 (verify)
 TOK_SLOT_ROWS = 15  # the same for a verify of R > 2 rows (words 1 .. R hold their positions)
@@ -472,6 +477,7 @@ class ResidentModel:
         R = 0 if not verify else (2 if verify is True else int(verify))
         assert R in (0, 2, 4, 8), "verify runs 2, 4 or 8 rows"
         self.verify, self.R = bool(verify), R
+        self.gdn_chunk = R > 2 and GDN_CHUNK
         self.taps = list(taps or [])
         assert len(self.taps) <= 5
         self.fc = fc is not None
@@ -987,9 +993,46 @@ class ResidentModel:
                 30: (f4, 1),
                 31: (f4, 1),
             }
+            if self.gdn_chunk:
+                head_cb_spec = {
+                    0: (bf, 4),
+                    1: (bf, 4),
+                    2: (bf, 4),
+                    3: (bf, 4),
+                    4: (bf, 4),
+                    5: (f4, 16),
+                    6: (f4, 5),
+                    7: (f4, 5),
+                    8: (f4, 2),
+                    9: ((ttnn.bfloat16, 4 * 64 * B), 1),
+                    11: (f4, 1),
+                    12: (f4, 1),
+                    13: (f4, 4),
+                    14: (f4, 4),
+                    15: (bf, 5),
+                    16: (f4, 1),
+                    17: (f4, 16),
+                    18: (f4, 16),
+                    19: (f4, 4),
+                    20: (f4, 4),
+                    21: (f4, 4),
+                    22: (f4, 2),
+                    23: (f4, 4),
+                    24: (f4, 4),
+                    25: (f4, 2),
+                    26: (bf, 2),
+                    27: (f4, 4),
+                    28: (f4, 2),
+                    # (the single tiles' FIFO: 14 pushes per layer, so a layer's tiles never wrap: the unpacker
+                    # addresses a tile at an index from the read pointer without wrapping)
+                    29: (f4, 14),
+                    30: (bf, 4),
+                    31: (f4, 10),
+                }
             for idx, ((dt, page), cnt) in head_cb_spec.items():
                 cbs.append(cb(idx, head_grid, cnt, dt, page))
-            cbs.append(cb(22, head_grid, 1, page=4 * 64 * B))
+            if not self.gdn_chunk:
+                cbs.append(cb(22, head_grid, 1, page=4 * 64 * B))
             # attention workers (chunk workers and the tail core)
             cbs += [
                 T(0, q_t),
@@ -1063,7 +1106,7 @@ class ResidentModel:
 
             streamer_compute = compute_cfg(ttnn.MathFidelity.HiFi4, True, True)
             head_unpack = type(ttnn.ComputeConfigDescriptor().unpack_to_dest_mode)([ttnn.UnpackToDestMode.Default] * 64)
-            for i in HEAD_FP32_CBS:
+            for i in CHUNK_FP32_CBS if self.gdn_chunk else HEAD_FP32_CBS:
                 head_unpack[i] = ttnn.UnpackToDestMode.UnpackToDestFp32
             head_compute = compute_cfg(ttnn.MathFidelity.HiFi4, True, False, head_unpack)
             attn_compute = compute_cfg(ttnn.MathFidelity.HiFi4, True, True)
@@ -1261,7 +1304,7 @@ class ResidentModel:
                     )
                 head_ct = [4, 4, self.n_gdn, gdn_copies, S]
                 head_compute_ct = [d.nk, d.nv, 4, 4, group, f32_bits(DK**-0.5), f32_bits(1e-6), f32_bits(1e-6)]
-                head_compute_ct += [f32_bits(1.0 / DV), self.n_gdn * (B // G)]
+                head_compute_ct += [f32_bits(1.0 / DV), self.n_gdn * (1 if self.gdn_chunk else B // G), R]
 
                 # attention cores
                 parent = {}
@@ -1314,20 +1357,26 @@ class ResidentModel:
                 if self.n_gdn:
                     kernels += [
                         kernel(
-                            "gdn_head_reader.cpp",
+                            "gdn_chunk_reader.cpp" if self.gdn_chunk else "gdn_head_reader.cpp",
                             head_grid,
                             head_ct + [SEM_ROWS, d.nv, SEM_LOCAL, B, int(self.verify), SEM_ADDR],
                             hr,
                             dm(NCRISC, NOC1),
                         ),
                         kernel(
-                            "gdn_head_writer.cpp",
+                            "gdn_chunk_writer.cpp" if self.gdn_chunk else "gdn_head_writer.cpp",
                             head_grid,
                             head_ct + [SEM_HEADS, d.nv, SEM_LOCAL, B, SEM_GROUP, int(self.verify), SEM_ADDR],
                             hw,
                             dm(BRISC, NOC0),
                         ),
-                        kernel("gdn_head_compute.cpp", head_grid, head_compute_ct, ttnn.RuntimeArgs(), head_compute),
+                        kernel(
+                            "gdn_chunk_compute.cpp" if self.gdn_chunk else "gdn_head_compute.cpp",
+                            head_grid,
+                            head_compute_ct,
+                            ttnn.RuntimeArgs(),
+                            head_compute,
+                        ),
                     ]
                 if self.n_attn:
                     kernels += [
@@ -1387,19 +1436,22 @@ class ResidentModel:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
 
-    def token_state(self, x0, pos, ring=None, slot=0, words=None):
+    def token_state(self, x0, pos, ring=None, slot=0, words=None, prev=None):
         """host tensor of the token state: x0 [HIDDEN] at pos, or per user x0 [users, HIDDEN] at positions pos
         (a list); ring is the conv ring step (default: the position, batch 1). With sub-batches, one host
         tensor per sub-batch. Verify: rows [t, draft] at [p, p + 1]; after a step at ring k and slot s the
         next one continues from row 0 at ring k + 1, slot s, or from row 1 at ring k + 2, slot s ^ 1.
         Verify of R > 2 rows: rows [t, d_1 .. d_R-1] at [p .. p + R - 1]; the next step continues from row a
-        (a drafts accepted) at ring k + 1 + a, slot (s + a) % R."""
+        (a drafts accepted) at ring k + 1 + a, slot (s + a) % R; with the chunked GDN (gdn_chunk) it gets prev = a
+        instead of a slot (None: the state is the committed one, the first step after a reset or handoff)."""
         if self.n_sub > 1:
             x0 = x0.reshape(self.users, HIDDEN)
             B = self.batch
             return [
                 self._token_state(x0[k * B : (k + 1) * B], pos[k * B : (k + 1) * B], ring) for k in range(self.n_sub)
             ]
+        if self.gdn_chunk:
+            words = {**(words or {}), TOK_PREV: 0xFFFFFFFF if prev is None else int(prev)}
         return self._token_state(x0, pos, ring, slot, words)
 
     def _token_state(self, x0, pos, ring, slot=0, extra=None):
