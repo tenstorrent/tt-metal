@@ -123,6 +123,10 @@ class KVSplitPlan:
                     "place": self._shard0(place, ttnn.bfloat16, ttnn.TILE_LAYOUT),
                 }
 
+    def has(self, B):
+        """True when width B (>= 2) was prepared; any other width keeps the unsplit decode instead of failing."""
+        return B in self._by_b
+
     def consts(self, B):
         c = self._by_b.get(B)
         assert c is not None, f"KVSplitPlan: width {B} not prepared (prepare() must run before any trace capture)"
@@ -1745,6 +1749,7 @@ class TPAttention:
             topology=self.args.ccl_topology(),
             memory_config=_L1,
         )
+        ttnn.deallocate(placed)
 
         attn_flat = ttnn.reshape(mine, (1, B, W))
         gate_flat = ttnn.reshape(gate, (1, B, W))

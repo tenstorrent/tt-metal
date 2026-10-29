@@ -38,7 +38,12 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     tp_composer,
 )
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode, rot_mats_prefill
-from models.demos.blackhole.qwen36.tt.attention.tp import TPAttention, load_attention_weights_tp
+from models.demos.blackhole.qwen36.tt.attention.tp import (
+    KVSplitPlan,
+    TPAttention,
+    kv_split_supported,
+    load_attention_weights_tp,
+)
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 
 
@@ -358,9 +363,16 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim], row u = user u's decode token
     cos_db, sin_db = rot_mats_decode(mesh_device, rd, max_seq, theta, torch.tensor(prompt_lens, dtype=torch.int32))
     page_table_b = rm_pt([list(range(u * bpu, (u + 1) * bpu)) for u in range(B)])  # [B, bpu]
-    out_b = a_b.forward_decode(
-        replicate_to_device(mesh_device, x_dec), cur_pt(prompt_lens), cos_db, sin_db, page_table=page_table_b
-    )
+    cur_b = cur_pt(prompt_lens)
+    if kv_split_supported(args) and "wq_partner" in tw:
+        # QWEN36_ATTN_KV_SPLIT=user: Qwen36Model._forward_decode normally sets these around its layer loop; set them
+        # here so this per-user comparison exercises the split path (forward_decode alone never takes it).
+        plan = KVSplitPlan(mesh_device, nd, args.n_local_heads, args.head_dim)
+        plan.prepare([B])
+        a_b.kv_split_plan = plan
+        a_b._kv_split_pos = plan.cur_pos_sdpa(cur_b)
+        logger.info(f"QWEN36_ATTN_KV_SPLIT=user: batched decode runs the KV-pair user split (B={B})")
+    out_b = a_b.forward_decode(replicate_to_device(mesh_device, x_dec), cur_b, cos_db, sin_db, page_table=page_table_b)
     out_t = ttnn.to_torch(out_b, mesh_composer=comp)  # [1, 1, B, dim]
 
     # ---- per-row comparison (a flattened PCC would mask a single bad user) ----

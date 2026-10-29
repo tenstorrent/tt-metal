@@ -1619,7 +1619,7 @@ class Qwen36Model:
         _cap = getattr(self, "_capture_layer", None)
         _split = getattr(self, "_kv_split_plan", None)
         _split_pos = None
-        if _split is not None and page_table is not None and cur_pos_tensor.shape[-1] >= 2:
+        if _split is not None and page_table is not None and _split.has(cur_pos_tensor.shape[-1]):
             # QWEN36_ATTN_KV_SPLIT: one per-device SDPA position tensor per step, shared by every full-attention layer.
             _split_pos = _split.cur_pos_sdpa(cur_pos_tensor)
             for layer in self.layers:
