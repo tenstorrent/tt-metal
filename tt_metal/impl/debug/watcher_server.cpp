@@ -145,9 +145,6 @@ void WatcherServer::Impl::attach_devices() {
             fprintf(logfile_, "At %.3lfs attach device %d\n\n", get_elapsed_secs(), device_id);
             fflush(logfile_);  // Ensure attach message is committed before watcher server thread writes
         }
-
-        // Since dma library is not thread-safe, disable it when watcher runs.
-        rtoptions.set_disable_dma_ops(true);
     }
 
     // Spin off thread to run the server.
@@ -204,8 +201,6 @@ void WatcherServer::Impl::detach_devices() {
             fprintf(logfile_, "At %.3lfs detach device %d\n", get_elapsed_secs(), device_id);
         }
 
-        // Watcher server closed, can use dma library again.
-        env_.get_rtoptions().set_disable_dma_ops(false);
         close_file(logfile_);
         const std::lock_guard<std::mutex> names_lock(kernel_names_mutex_);
         close_file(kernel_file_);

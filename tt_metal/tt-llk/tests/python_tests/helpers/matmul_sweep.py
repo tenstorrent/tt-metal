@@ -93,6 +93,10 @@ DEST_RT_CT_BLOCKS = (
     (4, 2),
 )
 
+# Odd t_dim (rt, ct >= 3 with min(rt, ct) odd): 16-tile dest blocks the sweeps above never reach.
+ODD_REUSE_RT_CT = ((3, 3), (3, 4), (4, 3), (3, 5), (5, 3))
+ODD_REUSE_KT_DIMS = (1, 2)
+
 
 def mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
     """Half-dest occupancy: 2×2, 1×(cap/2), (cap/2)×1 when they fit."""

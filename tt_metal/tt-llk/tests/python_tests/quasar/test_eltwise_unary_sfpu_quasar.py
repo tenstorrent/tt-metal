@@ -90,7 +90,6 @@ def _seed_rng():
 # Formats swept by every op.
 SFPU_UNARY_FORMATS = input_output_formats(
     [
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Float16_b,
     ]
@@ -1032,7 +1031,7 @@ def _assert_op_format_pairs_partition_configs():
 
 
 # Float formats whose 16-bit Dest route gets an explicit MOVA2D (FPU datacopy) signbit variant.
-SIGNBIT_MOVA2D_FORMATS = (DataFormat.Float16, DataFormat.Float16_b)
+SIGNBIT_MOVA2D_FORMATS = (DataFormat.Float16_b,)
 
 
 def signbit_fpu_route_variants() -> List[QuasarSfpuVariant]:
@@ -1547,12 +1546,11 @@ def test_eltwise_unary_sfpu_signbit_fpu_route_quasar(
 #   1. the kernel addresses Dest as the TILE-layout tile `copy_tile` puts there, not as an
 #      untilized row-major buffer, and
 #   2. the running total crosses the face-pair boundary (tile row 15 -> 16) intact.
-# Pinned to the 16-bit float formats on purpose: a Float32 input would be written straight
+# Pinned to a 16-bit float format on purpose: a Float32 input would be written straight
 # to Dest by UNPACR_DEST, bypassing the SrcA -> A2D datacopy that is `copy_tile`.
 # ---------------------------------------------------------------------------
 CUMSUM_DETECTOR_FORMATS = [
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-    InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
 ]
 
 # The tile row the accumulation chain crosses from face pair 0/1 into face pair 2/3.

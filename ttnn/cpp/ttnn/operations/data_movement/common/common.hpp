@@ -200,7 +200,13 @@ BlockPlan make_block_plan(
     uint32_t output_single_tile_size,
     uint32_t tile_height,
     uint32_t tile_width,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> max_block_tiles = std::nullopt);
+
+// Widest row-major block the Quasar unpacker may tilize in one pass. On the RTL emulator a
+// tilize_with_val_padding block of 191 or more tiles never completes (176 does; emu-quasar-2x3
+// sweep, #56622), so Quasar keeps every tilize block at or under this width.
+constexpr uint32_t QUASAR_MAX_TILIZE_BLOCK_TILES = 128;
 
 // The buffer set whose block width this core was assigned. Asserts the core belongs to exactly one
 // set: an unmatched core silently defaulting to `full_set` would bind the wrong-width buffers, and

@@ -158,6 +158,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/blitz_decode_pipeline.hpp
     api/internal/cluster.hpp
     api/internal/cluster_noc_helpers.hpp
+    api/internal/mesh_device.hpp
     api/internal/disaggregation/kv_chunk_address_table.hpp
     api/internal/disaggregation/kv_chunk_table_cache.hpp
     api/internal/fabric.hpp
