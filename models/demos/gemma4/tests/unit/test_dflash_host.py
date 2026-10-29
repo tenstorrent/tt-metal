@@ -3452,8 +3452,8 @@ def _dflash_after_n_plain_steps_the_next_request_bootstraps_and_its_first_propos
     lines = [m for m in messages if m.startswith("Gemma4DFlash adaptive K:")]
     assert lines[0] == (
         "Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> record (1, 5) S_k=1024 (gain; was none); EWMA accepted "
-        "prior, per-position 0.35/0.35/0.35/0.35/0.35, expected 1.54 tokens/row at 46.9 ms (1.38x plain 34.0), "
-        "gain 1.11x"
+        "prior, per-position 0.35/0.35/0.35/0.35/0.35, expected 1.54 tokens/row at 46.9 ms (1.38x plain 34.0, "
+        "pool none), gain 1.11x"
     )
     assert lines[1].startswith(
         "Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> plain step (exit; was K=5); EWMA accepted 0."
@@ -3803,7 +3803,7 @@ def _mtp_a_batch_may_replay_a_smaller_record_than_its_rows_select(
     assert mtp._mtp_sessions[5].retained is None
     line = [m for m in messages if "for 5/6 rows" in m]
     assert len(line) == 1 and "-> record (8, 3) S_k=1024 for 5/6 rows (gain; was K=5)" in line[0]
-    assert "at 55.0 ms (2.75x plain 20.0), gain 1.27x" in line[0]
+    assert "at 55.0 ms (2.75x plain 20.0, pool " in line[0] and "), gain 1.27x" in line[0]
 
 
 def _mtp_the_reseed_cost_of_entering_speculation_is_part_of_the_candidates_cost(
@@ -3891,7 +3891,7 @@ def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
     lines = [m for m in messages if m.startswith("Gemma4MTP adaptive K:")]
     assert lines[0] == (
         "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> record (1, 5) S_k=1024 (gain; was none); EWMA accepted prior, "
-        "per-position 1.00/1.00/1.00/1.00/1.00, expected 6.00 tokens/row at 50.0 ms (2.50x plain 20.0), gain 2.40x"
+        "per-position 1.00/1.00/1.00/1.00/1.00, expected 6.00 tokens/row at 50.0 ms (2.50x plain 20.0, pool none), gain 2.40x"
     )
     assert [re.search(r"-> (record \(\d+, \d+\) S_k=\d+|plain step)", line).group(1) for line in lines] == [
         "record (1, 5) S_k=1024",
@@ -3900,7 +3900,11 @@ def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
         "record (16, 1) S_k=1024",
         "plain step",
     ]
-    assert "(retry; was K=0)" in lines[3] and "at 30.0 ms (1.50x plain 20.0), gain 0.79x" in lines[3]
+    assert (
+        "(retry; was K=0)" in lines[3]
+        and "at 30.0 ms (1.50x plain 20.0, pool " in lines[3]
+        and "), gain 0.79x" in lines[3]
+    )
     assert lines[2] == (
         "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> plain step (exit; was K=3); EWMA accepted 0.93, "
         "per-position 0.19/1.00/1.00/1.00/1.00, plain 20.0 ms"
