@@ -10,7 +10,8 @@
 # Env (optional, defaults below): CACHED NEW ITERS USERS TARGET_CHUNKS REQS SKIP_IDLE CHUNK LAYER_COUNTS MAX_NEW
 #   KV_CAPACITY EXPERT_DTYPE HF_MODEL TT_CACHE_PATH PREFILL_TRACE_DIR TABLE_WAIT_SECS PRODUCER_TIMEOUT_SECS
 #   SHUTDOWN_WAIT_SECS, MATRIX_CI_DRY_RUN=1 (print the commands only), MATRIX_CI_LAUNCH=discovery (tt-run places the
-#   z-chain mesh graph) | binding (binding_16stage_quad.yaml.in, hosts in rankfile order).
+#   z-chain mesh graph) | binding (binding_16stage_quad.yaml.in, hosts in rankfile order), MATRIX_CI_EXPECT_14KW=1
+#   (warn when the galaxies are not 14 kW).
 set -euo pipefail
 
 PKG_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -31,6 +32,7 @@ MAX_NEW=${MAX_NEW:-$MATRIX_MAX_NEW}
 KV_CAPACITY=${KV_CAPACITY:-$((1048576 / MATRIX_CHUNK * MATRIX_CHUNK))}   # model max context, whole chunks
 LAUNCH=${MATRIX_CI_LAUNCH:-discovery}
 DRY_RUN=${MATRIX_CI_DRY_RUN:-0}
+EXPECT_14KW=${MATRIX_CI_EXPECT_14KW:-0}
 TABLE_WAIT_SECS=${TABLE_WAIT_SECS:-2400}
 PRODUCER_TIMEOUT_SECS=${PRODUCER_TIMEOUT_SECS:-900}
 SHUTDOWN_WAIT_SECS=${SHUTDOWN_WAIT_SECS:-240}
@@ -153,8 +155,36 @@ all_runner_logs() {   # tt-run's own stdout plus the per-rank files
   { cat "${RUNNER_LOG}"; rank_log_files "${RANKLOGS}" | xargs -r cat; } 2>/dev/null || true
 }
 
+# ---- power class of every host, with the probe the other prefill runner jobs use (run_multirank_pcc.sh) ----------
+POWER_CLASS=unknown
+PERF_GATE="${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_gate.py"
+power_cmd() {   # stdout: 14kw | 8kw; stderr: "perf baseline: TDP_LIMIT_MAX=<W> -> <class> ..."
+  echo "cd '${TT_METAL_HOME}' && PYTHONPATH='${TT_METAL_HOME}' timeout 60 python3 ${PERF_GATE} --print-power"
+}
+check_power() {   # sets POWER_CLASS = 14kw | 8kw | mixed | unknown; never fails the job
+  local out n_hp n_8 n_unread
+  out=$(timeout 180 "${MPIRUN}" -np "${NUM_HOSTS}" --host "$(sed 's/\(,\|$\)/:1\1/g' <<< "${RESOLVED_HOSTS}")" \
+    --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH bash -lc "$(power_cmd)" 2>&1) || true
+  n_hp=$(grep -cE '(^|<stdout>: *)14kw$' <<< "${out}" || true)
+  n_8=$(grep -cE '(^|<stdout>: *)8kw$' <<< "${out}" || true)
+  n_unread=$(grep -cE 'TDP_LIMIT_MAX=(None|unreadable)' <<< "${out}" || true)   # power_class() calls those 8kw
+  if [ "${n_unread}" -gt 0 ] || [ $((n_hp + n_8)) -ne "${NUM_HOSTS}" ]; then POWER_CLASS=unknown
+  elif [ "${n_hp}" -eq "${NUM_HOSTS}" ]; then POWER_CLASS=14kw
+  elif [ "${n_hp}" -eq 0 ]; then POWER_CLASS=8kw
+  else POWER_CLASS=mixed
+  fi
+  echo "[matrix-ci] [power] ranks [1,0]..[1,$((NUM_HOSTS - 1))] = ${RESOLVED_HOSTS}"
+  grep 'TDP_LIMIT_MAX=' <<< "${out}" | sed 's/^/[matrix-ci] [power] /' || tail -n 5 <<< "${out}"
+  echo "[matrix-ci] power class: ${POWER_CLASS} (${n_hp}/${NUM_HOSTS} hosts with TDP_LIMIT_MAX >= 130 W)"
+  if [ "${EXPECT_14KW}" = 1 ] && [ "${POWER_CLASS}" != 14kw ]; then
+    echo "::warning title=MiniMax-M3 prefill matrix::expected 14 kW galaxies, got ${POWER_CLASS}" \
+      "(${n_hp}/${NUM_HOSTS} hosts with TDP_LIMIT_MAX >= 130 W); numbers are not comparable with a 14 kW run"
+  fi
+}
+
 if [ "${DRY_RUN}" != 0 ]; then
   R0_HOST="<rank0 host from the tt-run rankfile>"
+  echo "[matrix-ci] DRY RUN -- power check on every host:"; echo "  $(power_cmd)"
   echo "[matrix-ci] DRY RUN -- runner, KV capacity ${KV_CAPACITY}:"; printf '  %q' "${RUNNER_CMD[@]}"; echo
   for c in "${CACHED_LIST[@]}"; do
     set_row "${c}"
@@ -236,7 +266,8 @@ cleanup() {
       echo
       echo "**Setup:** commit \`${COMMIT}\`, hosts \`${RESOLVED_HOSTS}\` (launch \`${LAUNCH}\`). ${STAGES} stages x [2,4]," \
         "chunk ${MATRIX_CHUNK}, layers per stage \`${MATRIX_LAYER_COUNTS:-even}\`, ${EXPERT_DTYPE:-bf4} experts, ${USERS} users," \
-        "${ITERS} idle iterations, ${TARGET_CHUNKS} chunks per loaded cell, KV capacity ${KV_CAPACITY} for every row" \
+        "${ITERS} idle iterations, ${TARGET_CHUNKS} chunks per loaded cell, power class ${POWER_CLASS}," \
+        "KV capacity ${KV_CAPACITY} for every row" \
         "(one runner launch). Cached rows \`${CACHED_LIST[*]}\`. Baseline and history: tt-metal#57827."
       cat "${OUT_DIR}/tables.md"
     } > "${PREFILL_SUMMARIES}/perf/m3_prefill_matrix_sc4.md"
@@ -255,6 +286,7 @@ cleanup() {
 trap cleanup EXIT
 
 # ---- one runner launch, one producer session per cached row ---------------------------------------------------------
+check_power
 start_runner
 for c in "${CACHED_LIST[@]}"; do
   set_row "${c}"
