@@ -1208,7 +1208,27 @@ class SpecDecoder:
         self._run(self.trace_v, self._verify_graph)
         ids = verify_ids_user_major(self._ids_host(self.out_ids), self.B, self.K, self.rows)
         d1 = verify_ids_user_major(self._ids_host(self.out_d1), self.B, self.K, self.rows)
+        if os.environ.get("GLM53_SPEC_DEBUG_ROWS") == "1" and self.out_logits is not None and self.rows > 1:
+            self._log_row_margins(ids)
         return ids, d1
+
+    def _log_row_margins(self, ids: torch.Tensor) -> None:
+        """``GLM53_SPEC_DEBUG_ROWS=1``: user 0 of every mesh row, per candidate: the verify's top-2 logit margin and
+        the rank of row 0's greedy id in this row's logits (the rows' slots hold the same prompt in the harness, so
+        a differing id with a wide margin is a verify error, a narrow one the rows' ulp-level difference)."""
+        lg = self.verify_logits()  # [N, K + 1, V]
+        if lg is None:
+            return
+        B, P = self.B, self.K + 1
+        top2 = torch.topk(lg, 2, dim=-1).values  # [N, P, 2]
+        ref = ids[0]  # row 0, user 0: [P]
+        parts = []
+        for r in range(self.rows):
+            u = r * B
+            margin = (top2[u, :, 0] - top2[u, :, 1]).tolist()
+            rank = [int((lg[u, j] > lg[u, j, int(ref[j])]).sum()) + 1 for j in range(P)]
+            parts.append(f"row {r}: margin {[round(m, 3) for m in margin]} rank-of-row0-id {rank}")
+        logger.info("[spec-rows] verify margins " + "; ".join(parts))
 
     def verify_logits(self) -> torch.Tensor | None:
         """The last verify's main logits ``[N, K + 1, V]`` fp32 (``keep_logits``): acceptance diagnostics."""
