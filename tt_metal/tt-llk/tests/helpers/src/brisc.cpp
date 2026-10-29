@@ -158,14 +158,14 @@ int main()
                 break;
         }
 
-#if defined(TT_METAL_TTSIM) // ttsim simulates every NOP and nothing there interferes, so it polls every microsecond
-        constexpr std::uint32_t poll_period_us = 1;
+#if defined(TT_METAL_TTSIM) // ttsim simulates every NOP and nothing there interferes, so it polls about every 12 us
+        constexpr std::uint32_t spin_trips = ARCH_CYCLE_MICRO_SECOND;
 #else
-        constexpr std::uint32_t poll_period_us = 100;
+        constexpr std::uint32_t spin_trips = 100 * ARCH_CYCLE_MICRO_SECOND;
 #endif
-        // Poll about every 100 us and spin on NOPs in between: each poll is an L1 read and a wall clock wait reads its
-        // registers over the debug register bus, and both change the timing of the kernel under test.
-        for (std::uint32_t i = 0; i < poll_period_us * ARCH_CYCLE_MICRO_SECOND; ++i)
+        // A NOP trip takes about 12 cycles with branch prediction off, so this polls about every 1.2 ms: each poll is an
+        // L1 read and a wall clock wait reads its registers over the debug register bus, and both perturb the kernel.
+        for (std::uint32_t i = 0; i < spin_trips; ++i)
         {
             asm volatile("nop");
         }
