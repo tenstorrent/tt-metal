@@ -354,8 +354,6 @@ RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
 # switching to libgl1
-# socat is for the exabox-tools image (dockerfile/exabox_tools/Dockerfile), which
-# derives from this stage and cannot run apt itself.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     acl \
     emacs \
@@ -367,7 +365,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     vim \
     libgl1 \
     ipmitool \
-    socat \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Configure SSH for MPI multihost jobs readiness

@@ -51,6 +51,8 @@ blackhole:
 quasar:
   # ttsim: rv32_v_alu baby-RISC V extension is out of scope.
   - tt_metal/tt-llk/tests/python_tests/quasar/test_vector_add_l1_quasar.py::test_vector_add_l1_quasar
+  # ttsim: tensix_stallwait wait_res_idx=10 (PACK1) is unimplemented; the multi-loop epilogue handshake needs it.
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_matmul_int4_dequant_quasar.py::test_matmul_int4_dequant_loops_quasar
   # ttsim: tensix_cfg_wr32 reg=80 is unimplemented.
   - tt_metal/tt-llk/tests/python_tests/quasar/test_rand_quasar.py::test_rand_quasar
   - tt_metal/tt-llk/tests/python_tests/quasar/test_rand_quasar.py::test_rand_seed_quasar

@@ -37,6 +37,8 @@
 
 namespace ckernel {
 
+// Every op (MUL, ADD, SUB) accumulates both passes into dest, so the output tiles must be zero on entry: a freshly
+// released dest section, or sdpa_bcast_col_reuse_preamble<true>, which zeroes the whole dest half / all of dest.
 template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     std::uint32_t num_tiles,
@@ -45,7 +47,7 @@ ALWI void sdpa_bcast_col_reuse_tiles_init(std::uint32_t icb0) {
     UNPACK((llk_unpack_A_sdpa_init<num_tiles, BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
         false, false, icb0)));
     MATH((llk_math_sdpa_bcast_col_srcb_reuse_init_with_operands<eltwise_binary_type, num_tiles, MATH_FIDELITY, dense>(
-        icb0, icb0, false)));
+        icb0, icb0)));
 }
 
 template <bool clear_dest = false>
@@ -213,16 +215,16 @@ inline void init_fast_approx_exp_constants() {
     constexpr float A_scaled = A * scale_fp32;
     constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
 
-    TTI_SFPLOADI(0, 0xA, sfpu::lo16(THRESHOLD_scaled));
-    TTI_SFPLOADI(0, 0x8, sfpu::hi16(THRESHOLD_scaled));
+    TTI_SFPLOADI(0, 0xA, sfpu::exp_detail::lo16(THRESHOLD_scaled));
+    TTI_SFPLOADI(0, 0x8, sfpu::exp_detail::hi16(THRESHOLD_scaled));
     TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
 
-    TTI_SFPLOADI(0, 0xA, sfpu::lo16(A_scaled));
-    TTI_SFPLOADI(0, 0x8, sfpu::hi16(A_scaled));
+    TTI_SFPLOADI(0, 0xA, sfpu::exp_detail::lo16(A_scaled));
+    TTI_SFPLOADI(0, 0x8, sfpu::exp_detail::hi16(A_scaled));
     TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
 
-    TTI_SFPLOADI(0, 0xA, sfpu::lo16(B_minus_C));
-    TTI_SFPLOADI(0, 0x8, sfpu::hi16(B_minus_C));
+    TTI_SFPLOADI(0, 0xA, sfpu::exp_detail::lo16(B_minus_C));
+    TTI_SFPLOADI(0, 0x8, sfpu::exp_detail::hi16(B_minus_C));
     TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 }
 
@@ -347,14 +349,14 @@ void compute_sdpa_chunk(
     static_assert(
         chunk_size % qk_signal_granularity == 0,
         "compute_sdpa_chunk: chunk_size must be divisible by qk_signal_granularity");
-    // The custom-MM unpacks issue a single MOP of (kt_dim/2)-1 iterations and only support an even
-    // kt_dim >= 2 (see the "kt_dim: even number from 2 to 256" note in the unpack LLK headers). With
-    // kt_dim < 2 the count underflows to ~4 billion and the unpacker hangs silently. Fail at compile
-    // time instead. OV matmul: kt_dim = chunk_size (Sk_chunk_t); QK matmul: kt_dim = qk_kt.
+    // OV matmul: kt_dim = chunk_size (Sk_chunk_t). Its reuse-dest unpack runs a MOP over K-tile pairs
+    // plus a replay tail for an odd last tile, so odd chunk sizes work. A 1-tile chunk does not: the
+    // chunk computes a wrong running max on device (SdpaChunkSizeCompileLimits pins the rejection).
     static_assert(
-        chunk_size >= 2 && chunk_size % 2 == 0,
-        "compute_sdpa_chunk: chunk_size (Sk_chunk_t = OV-matmul kt_dim) must be even and >= 2; "
-        "k_chunk_size of 32 gives Sk_chunk_t=1, which underflows the OV custom-MM unpack MOP and hangs");
+        chunk_size >= 2,
+        "compute_sdpa_chunk: chunk_size (Sk_chunk_t) must be >= 2; k_chunk_size of 32 gives Sk_chunk_t=1, "
+        "which computes a wrong running max");
+    // QK matmul: kt_dim = qk_kt. Kept even and >= 2 (pinned by SdpaChunkMergedKvCompileLimits).
     static_assert(
         qk_kt >= 2 && qk_kt % 2 == 0,
         "compute_sdpa_chunk: QK contraction must be even and >= 2 for the custom-MM unpack");
@@ -368,9 +370,12 @@ void compute_sdpa_chunk(
     static_assert(
         chunk_size / exp_signal_granularity + 1 <= 15,
         "compute_sdpa_chunk: bcast-sub posts (chunk_size/exp_signal_granularity)+1 must fit the 4-bit semaphore");
+    // On the last chunk the OV matmul posts one output group per output_granularity tiles while the
+    // bcast-mul/dummy post of this chunk may still be outstanding (PACK consumes it only after reduce-sum),
+    // so the semaphore must hold both; SEMPOST saturates at 15 and a lost post hangs the pack loop.
     static_assert(
-        num_tiles_v / output_granularity <= 15,
-        "compute_sdpa_chunk: num_tiles_v / output_granularity must be with tensix semaphore range");
+        num_tiles_v / output_granularity + 1 <= 15,
+        "compute_sdpa_chunk: output posts (num_tiles_v/output_granularity)+1 must fit the 4-bit semaphore");
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
     sdpa_custom_mm_block_init_short<transpose_k, mm_pack_init>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
