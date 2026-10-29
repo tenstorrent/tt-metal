@@ -111,7 +111,14 @@ def write_manifest(bundle, *, prompts, seeds, scorer=DEFAULT_SCORER, scorer_kwar
 
 
 def read_manifest(bundle):
-    manifest = Manifest.from_json((Path(bundle) / "manifest.json").read_text())
+    path = Path(bundle) / "manifest.json"
+    if not path.is_file():
+        # The test writes the manifest last, so a skipped test (e.g. a missing checkpoint) leaves none.
+        raise ValueError(
+            f"No VBench bundle at {bundle}: {path.name} is missing, so the test that renders the clips "
+            "did not finish. Check whether it was skipped or failed."
+        )
+    manifest = Manifest.from_json(path.read_text())
     manifest.check_clips(bundle)
     return manifest
 
