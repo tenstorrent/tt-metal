@@ -71,6 +71,7 @@ Replaying each silicon run's own requests with this model (send to prefill done,
 |---|---|---|---|---|---|
 | 12 sessions, measured | 0.29 | 0.89 | 3.0 | 6.8 | 87.4% |
 | 12 sessions, slot6 + rr | 0.29 | 0.86 | 3.0 | 6.7 | 87.5% |
+| 12 sessions, token LRU + fcfs | 0.28 | 0.43 | 1.7 | 2.3 | 93.7% |
 | 24 sessions, measured | 0.72 | 4.8 | 14.7 | 23.1 | 67.7% |
 | 24 sessions, slot6 + rr | 0.86 | 5.9 | 15.7 | 25.2 | 63.6% |
 | 24 sessions, token LRU + fcfs | 0.28 | 0.70 | 3.3 | 6.6 | 92.0% |
