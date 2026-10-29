@@ -130,6 +130,8 @@ chip 31 (0000:c8:00.0, ubb: 3, chip: 8) wedged in noc 0 batch 1/3: 1 source(s) s
 - If the chip can still be read, its results up to the hang are reported,
   including the `NOC hang` line for the stuck source.
 - Wedged chips can't be closed cleanly, so after the report the test exits
-  with code 1 without the usual teardown. Later tests in the same run (for
+  with code 2 without the usual teardown (the watchdog uses the same code).
+  `test_runner.sh` runs the NOC tests last in each iteration and asks for a
+  reset if this happens. Later tests in the same run (for
   example `Noc01` after `Noc00`) don't run. Reset the boards before the next
   run.

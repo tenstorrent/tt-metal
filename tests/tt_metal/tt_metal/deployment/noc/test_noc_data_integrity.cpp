@@ -37,6 +37,8 @@ using namespace std;
 
 constexpr uint32_t MAX_DESTS = 64;
 constexpr const char* KERNEL_PATH = "tests/tt_metal/tt_metal/deployment/kernels/noc_integrity_kernel.cpp";
+// Exit code when devices are left open; test_runner.sh relies on it to skip tests that would hang.
+constexpr int EXIT_DEVICES_LEFT_OPEN = 2;
 
 struct params {
     uint32_t iterations;
@@ -223,7 +225,7 @@ private:
                 "Exiting without closing devices. Reset with tt-smi -glx_reset before the next run.");
             fflush(stdout);
             fflush(stderr);
-            _Exit(1);
+            _Exit(EXIT_DEVICES_LEFT_OPEN);
         }
     }
 
@@ -757,9 +759,10 @@ static vector<failure> run_phase(
             }
             SetRuntimeArgs(program, kernel, s.logical, rt_args);
 
-            // Stale progress from a previous batch must not look like completion.
+            // Stale progress and results from a previous batch must not look like completion if the kernel never
+            // starts.
             watchdog::get().step(fmt::format(
-                "noc {} batch {}/{}: resetting progress of {} on {}",
+                "noc {} batch {}/{}: resetting progress and results of {} on {}",
                 noc,
                 batch + 1,
                 num_batches,
@@ -767,6 +770,11 @@ static vector<failure> run_phase(
                 chip_str(s.device)));
             MetalContext::instance().get_cluster().write_core(
                 s.device->id(), s.virt, vector<uint32_t>(NOC_PROGRESS_WORDS, 0), pl.layout.progress);
+            vector<uint32_t> cleared(run.dests.size() * NOC_RESULT_WORDS, 0);
+            for (size_t d = 0; d < run.dests.size(); d++) {
+                cleared[d * NOC_RESULT_WORDS + NOC_RESULT_STATUS] = NOC_STATUS_NOT_RUN;
+            }
+            MetalContext::instance().get_cluster().write_core(s.device->id(), s.virt, cleared, pl.layout.results);
             runs.push_back(std::move(run));
         }
         if (runs.empty()) {
@@ -1079,7 +1087,7 @@ static void exit_if_wedged(const test_result& result) {
         result.wedged.size());
     fflush(stdout);
     fflush(stderr);
-    _Exit(1);
+    _Exit(EXIT_DEVICES_LEFT_OPEN);
 }
 
 template <typename FIXTURE>

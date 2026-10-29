@@ -14,7 +14,7 @@ usage() {
 	cat << EOF
 Usage: $0 [--output <logdir>] [--iterations <n>] [--skip-reset] [--continue-on-failure] [--no-eth-links] [--mgd <path>]
 
-Run the deployment test suite (Ethernet, DRAM, NOC, PCIe read/write, DIDT).
+Run the deployment test suite (Ethernet, DRAM, PCIe read/write, NOC, DIDT).
 Must be run from the repository root with the tests already built.
 Everything printed to the console is also written to a single log file per run.
 
@@ -233,15 +233,25 @@ run_tests() {
 	run_test 'DRAM tests' $PYTHON tests/tt_metal/tt_metal/deployment/dram/test_runner.py &&
 		last_dram_ok=1 || last_dram_ok=0
 
-	# Active Ethernet cores only accept kernels in slow dispatch.
-	run_test 'NOC tests' env TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_deployment --gtest_filter='*DeploymentNoc*' &&
-		last_noc_ok=1 || last_noc_ok=0
-
 	run_test 'PCIe read test' ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741824/32768/1/0/0/iterations:5/manual_time' --device-id=0 &&
 		last_pcie_read_ok=1 || last_pcie_read_ok=0
 
 	run_test 'PCIe write test' ./build/tools/mem_bench --benchmark_filter='Device Writing Host/1073741824/32768/0/1/0/iterations:5/manual_time' --device-id=0 &&
 		last_pcie_write_ok=1 || last_pcie_write_ok=0
+
+	# Runs last: it can leave chips wedged and open (exit code 2), which only a board reset recovers.
+	# Active Ethernet cores only accept kernels in slow dispatch.
+	if run_test 'NOC tests' env TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_deployment --gtest_filter='*DeploymentNoc*'
+	then
+		last_noc_ok=1
+	else
+		last_noc_ok=0
+		if [ "$rc" -eq 2 ]
+		then
+			emit ""
+			emit_bold "NOC tests left chips wedged. Reset the boards with '$RESET_CMD' before running anything else on them."
+		fi
+	fi
 
 	emit_section 'Test results'
 
@@ -262,7 +272,7 @@ run_tests() {
 emit_banner "DEPLOYMENT TESTS RUN"
 emit "$(printf '%-12s %s' 'Date:' "$(date)")"
 emit "$(printf '%-12s %s' 'Host:' "$(hostname)")"
-emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, NOC, PCIe read, PCIe write (per iteration), DIDT (once, after all iterations)')"
+emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write, NOC (per iteration), DIDT (once, after all iterations)')"
 emit_setup
 emit "$RULE_HEAVY"
 
