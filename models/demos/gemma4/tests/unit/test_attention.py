@@ -1115,3 +1115,142 @@ def test_cp_prefill(mesh_device, reset_seeds, request):
 
     # A short prompt stays single-chunk and must still answer correctly.
     ask("What is the opposite of hot? Answer in one word.", "cold")
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The decode SDPA core split at long context (tt-metal#59300). The catalog pins GEMMA4_SDPA_MAX_CORES_PER_HEAD=3 on
+# every decode graph of the Galaxy entries so a row reduces in the same order whichever padded batch it decodes in
+# (seeded requests on DP engines land in different graphs); the price is a lone row's attention at long context on
+# 3 of the grid's cores: the 12B decode step 24.8 -> 82.5 ms at 256K (the TP4 block: 22.6 -> 33.9), 2026-10-29.
+# Pure op, synthetic cache: the invariance a fix must keep (a row's output identical across the padded batches and
+# the core splits) and the timing it must recover. xfails until the op's reduction order is independent of the split.
+# ---------------------------------------------------------------------------------------------------------------------
+_CORE_SPLIT_CAPS = (3, 16, 32)
+_CORE_SPLIT_BATCHES = (1, 4, 8, 32)
+
+
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="Long-context device timing of the decode SDPA core split; run locally (GEMMA4_SDPA_TEST_CACHE sets S).",
+)
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+def test_decode_sdpa_core_split_long_context(mesh_device, device_params, reset_seeds):
+    """A row's paged decode attention across the padded batches 1/4/8/32 and the per-head core caps 3/16/32.
+
+    One kv head per device (the TP=8 Galaxy layout), 4 q heads, head_dim 256, a bfloat8_b paged cache of
+    ``GEMMA4_SDPA_TEST_CACHE`` tokens (default 131072), row 0 live at the last position and every other row
+    padding (cur_pos -1). Checks, in order: the pinned split (cap 3, the catalog's value) gives row 0 the same
+    bytes in every graph and matches a torch reference; the timing table of every (batch, cap) is logged with
+    the lone row's cost of the pin; then the property a fix must deliver, bitwise-identical row 0 across the
+    caps as well, which the op does not have today (its reduction order follows the split): the test xfails on
+    it and will fail loudly once an op or custom kernel makes it hold.
+    """
+    import time
+
+    S = int(os.environ.get("GEMMA4_SDPA_TEST_CACHE", "131072"))
+    block, D, H_q, H_kv = 64, 256, 4, 1
+    num_blocks = S // block
+    torch.manual_seed(0)
+    k_fill = torch.randn(1, H_kv, S, D, dtype=torch.bfloat16)
+    v_fill = torch.randn(1, H_kv, S, D, dtype=torch.bfloat16)
+    q0 = torch.randn(H_q, D, dtype=torch.bfloat16)
+    grid = mesh_device.compute_with_storage_grid_size()
+
+    def cache():
+        c = ttnn.from_torch(
+            torch.zeros(num_blocks, H_kv, block, D, dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return c
+
+    k_cache, v_cache = cache(), cache()
+    fill_table = ttnn.from_torch(
+        torch.arange(num_blocks, dtype=torch.int32).reshape(1, -1), device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    for c, fill in ((k_cache, k_fill), (v_cache, v_fill)):
+        ttnn.experimental.paged_fill_cache(
+            c,
+            ttnn.from_torch(fill, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b),
+            fill_table,
+            batch_idx=0,
+        )
+
+    # the torch reference for row 0 over the bfloat8_b cache the device reads (round-trip the fill through bfp8)
+    k_ref = ttnn.to_torch(ttnn.from_torch(k_fill, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)).float()[0, 0]
+    v_ref = ttnn.to_torch(ttnn.from_torch(v_fill, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)).float()[0, 0]
+    scores = torch.softmax(q0.float() @ k_ref.T, dim=-1)  # scale 1.0 as the model passes it
+    ref0 = scores @ v_ref  # [H_q, D]
+
+    outputs, times = {}, {}
+    for B in _CORE_SPLIT_BATCHES:
+        q = torch.zeros(1, B, H_q, D, dtype=torch.bfloat16)
+        q[0, 0] = q0
+        tt_q = ttnn.from_torch(q, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        cur_pos = torch.full((B,), -1, dtype=torch.int32)
+        cur_pos[0] = S - 1
+        tt_pos = ttnn.from_torch(cur_pos, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+        table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, -1).repeat(B, 1)
+        tt_table = ttnn.from_torch(table, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+        for cap in _CORE_SPLIT_CAPS:
+            pc = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+                q_chunk_size=32,
+                k_chunk_size=64,
+                exp_approx_mode=False,
+                max_cores_per_head_batch=cap,
+            )
+
+            def run():
+                return ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                    tt_q,
+                    k_cache,
+                    v_cache,
+                    cur_pos_tensor=tt_pos,
+                    page_table_tensor=tt_table,
+                    scale=1.0,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    program_config=pc,
+                )
+
+            out = run()
+            ttnn.synchronize_device(mesh_device)
+            reps = 10
+            t0 = time.perf_counter()
+            for _ in range(reps):
+                o = run()
+                o.deallocate(True)
+            ttnn.synchronize_device(mesh_device)
+            times[(B, cap)] = (time.perf_counter() - t0) * 1e3 / reps
+            row0 = ttnn.to_torch(out)[0, 0, :H_q, :].contiguous()
+            outputs[(B, cap)] = row0.view(torch.int16).clone()
+            out.deallocate(True)
+            logger.info(f"  B={B:2d} cap={cap:2d}: {times[(B, cap)]:7.2f} ms/op at S={S}")
+
+    # correctness of the call: the pinned B=1 output against the torch reference
+    got = outputs[(1, 3)].view(torch.bfloat16).float()
+    pcc = torch.corrcoef(torch.stack([got.flatten(), ref0.flatten()]))[0, 1].item()
+    assert pcc > 0.99, f"paged sdpa_decode row 0 vs torch: pcc {pcc:.4f}"
+
+    # the pin's purpose: identical bytes for the row in every padded batch when every graph splits 3 cores per head
+    pinned = outputs[(1, 3)]
+    for B in _CORE_SPLIT_BATCHES[1:]:
+        assert torch.equal(outputs[(B, 3)], pinned), f"cap 3: row 0 differs between the batch-1 and batch-{B} graphs"
+
+    lone = {cap: times[(1, cap)] for cap in _CORE_SPLIT_CAPS}
+    logger.info(
+        f"lone row at S={S}: cap 3 {lone[3]:.2f} ms, cap 16 {lone[16]:.2f} ms, cap 32 {lone[32]:.2f} ms "
+        f"(the pin costs {lone[3] / min(lone.values()):.2f}x against the fastest cap); batch-32 graph at cap 3: "
+        f"{times[(32, 3)]:.2f} ms"
+    )
+
+    # the property a fix must deliver: the row's bytes independent of the split as well (xfails on the stock op)
+    across_caps = all(torch.equal(outputs[(B, cap)], pinned) for B in _CORE_SPLIT_BATCHES for cap in _CORE_SPLIT_CAPS)
+    if not across_caps:
+        pytest.xfail(
+            "paged sdpa_decode's reduction order follows its per-row core split (tt-metal#59300): row 0 differs "
+            "between the caps, so the Galaxy entries pin cap 3 on every graph and a lone row pays "
+            f"{lone[3] / min(lone.values()):.2f}x at S={S}"
+        )
