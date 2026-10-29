@@ -57,6 +57,88 @@ def kv_multirow_write_ok():
     return KV_MULTIROW_WRITE_SUPPORTED and tpc.kv_write_multirow_enabled()
 
 
+def kv_split_supported(args):
+    """QWEN36_ATTN_KV_SPLIT is on and this TP layout has KV pairs: TP == 2 * n_kv_heads, so devices 2h and 2h+1
+    hold the same replicated KV head h (tpc.replicate_kv_weight) and one local KV head each."""
+    return (
+        tpc.attn_kv_split_mode() is not None
+        and args.num_devices == 2 * args.n_kv_heads
+        and args.n_local_kv_heads == 1
+    )
+
+
+class KVSplitPlan:
+    """Per-device constants of the QWEN36_ATTN_KV_SPLIT=user decode (design 'attention-kv' P0).
+
+    Users [0, ceil(B/2)) belong to rank 0 of every KV pair, the rest to rank 1 (static halves: uniform-context
+    balance; ragged rebalancing is a TODO). Device d = 2h + r of the TP mesh (ShardTensorToMesh order, the same order
+    shard_w gives the heads). Per active width B:
+      cap   int32 [1,B] TILE: INT32_MAX for owned users, -1 otherwise; cur_pos_sdpa = min(cur_pos, cap) keeps -1 (and
+            plus_one's -1 skip) for inactive users and gives -1 (the SDPA skip path) to the partner's users.
+      odd   bf16 [1,1,B,2W] TILE: all ones on odd devices (selects the [partner|own] swap = pair-global head order).
+      place bf16 [1,1,B,tp*W] TILE: 1 where row u is owned by d and the column lies in the pair's block
+            [2h*W, (2h+2)*W) -- the masked reduce-scatter input positions (W = local heads * head_dim).
+    All tensors are built eagerly by prepare() (never inside a trace capture)."""
+
+    INT32_MAX = 2**31 - 1
+
+    def __init__(self, mesh, num_devices, nh_local, head_dim):
+        self.mesh = mesh
+        self.tp = num_devices
+        self.W = nh_local * head_dim
+        self._by_b = {}
+
+    @staticmethod
+    def owned(B, rank):
+        half = (B + 1) // 2
+        return range(0, half) if rank == 0 else range(half, B)
+
+    def _shard0(self, t, dtype, layout):
+        return ttnn.from_torch(
+            t,
+            dtype=dtype,
+            layout=layout,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+        )
+
+    def prepare(self, widths):
+        for B in widths:
+            if B >= 2 and B not in self._by_b:
+                tp, W = self.tp, self.W
+                cap = torch.full((tp, B), -1, dtype=torch.int32)
+                odd = torch.zeros(tp, 1, B, 2 * W)
+                place = torch.zeros(tp, 1, B, tp * W)
+                for d in range(tp):
+                    rows = list(self.owned(B, d % 2))
+                    cap[d, rows] = self.INT32_MAX
+                    if d % 2:
+                        odd[d] = 1.0
+                    h = d // 2
+                    place[d, 0, rows, 2 * h * W : (2 * h + 2) * W] = 1.0
+                self._by_b[B] = {
+                    "cap": self._shard0(cap, ttnn.int32, ttnn.TILE_LAYOUT),
+                    "odd": self._shard0(odd, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                    "place": self._shard0(place, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                }
+
+    def consts(self, B):
+        c = self._by_b.get(B)
+        assert c is not None, f"KVSplitPlan: width {B} not prepared (prepare() must run before any trace capture)"
+        return c
+
+    def cur_pos_sdpa(self, cur_pos):
+        """int32 [B] RM -> per-device int32 [B] RM: own users keep their position, the partner's users get -1."""
+        B = cur_pos.shape[-1]
+        t = ttnn.to_layout(ttnn.reshape(cur_pos, (1, B)), ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        m = ttnn.minimum(t, self.consts(B)["cap"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(t)
+        r = ttnn.to_layout(m, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(m)
+        return ttnn.reshape(r, (B,))
+
+
 def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     """Shard one full-attention layer's weights across the mesh."""
     if cache_dir is not None:
@@ -156,6 +238,19 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             cache_path=c("wv" + tag),
             dtype=_attn_dtype,
         )
+    if fused_qkv and kv_split_supported(args):
+        # QWEN36_ATTN_KV_SPLIT: the KV-pair partner's query columns (device d gets device d^1's q). DRAM-interleaved,
+        # its own cache stem (never shares a file with the fused weight); only loaded with the flag on.
+        tw["wq_partner"] = tpc.shard_w(
+            tpc.prepare_attn_q_partner(
+                state_dict["q_proj.weight"], args.n_local_heads, args.head_dim, args.num_devices
+            ),
+            mesh,
+            dim=-1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_path=c("wq_partner.il"),
+            dtype=_attn_dtype,
+        )
     # Row-parallel wo (reduce-scatter after): DRAM-width-sharded like the in-proj — decode tput win.
     wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
     tw["wo"] = tpc.shard_w(
@@ -223,6 +318,10 @@ class TPAttention:
         # Per-instance override for the decode SDPA's max_cores_per_head_batch (None = the ttnn
         # default of 16). Only the MTP drafter sets it — see Qwen36MTP.__init__.
         self.decode_sdpa_max_cores = None
+        # QWEN36_ATTN_KV_SPLIT=user: the per-device SDPA positions (KVSplitPlan.cur_pos_sdpa) of the current plain decode
+        # step, set by Qwen36Model._forward_decode around its layer loop; None (always, with the flag off) = no split.
+        self._kv_split_pos = None
+        self.kv_split_plan = None  # the model's shared KVSplitPlan (QWEN36_ATTN_KV_SPLIT); None with the flag off
         # False: forward_decode keeps the legacy path even where the lean one is eligible (see _decode_lean_eligible).
         self.lean_decode = True
         self.k_caches = None
@@ -1435,6 +1534,9 @@ class TPAttention:
         B = x.shape[-2]
         _L1 = ttnn.L1_MEMORY_CONFIG
 
+        if self._kv_split_pos is not None and not kv_only and B >= 2 and "wq_partner" in tw:
+            return self._forward_decode_kv_split(x, cur_pos_tt, cos_tt, sin_tt, page_table, decode_ar)
+
         # q|k|v block (contiguous in the fused [q|k|v|gate] weight) in L1, gate (trailing block) in DRAM.
         qkv3, gate, _ = self._qkv(x, decode_qkv3_l1=True)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -1525,6 +1627,135 @@ class TPAttention:
             gated_flat = ttnn.multiply(attn_flat, ttnn.sigmoid(gate_flat, memory_config=_L1), memory_config=_L1)
         ttnn.deallocate(attn_flat)
         ttnn.deallocate(gate)  # gate_flat is a view of it
+
+        wo_partial = self._wo_proj(gated_flat, tw["wo"])
+        ttnn.deallocate(gated_flat)
+        wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
+        if decode_ar is not None:
+            return decode_ar.all_reduce(wo_partial)
+        return tt_all_reduce(
+            wo_partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _forward_decode_kv_split(self, x, cur_pos_tt, cos_tt, sin_tt, page_table, decode_ar=None):
+        """QWEN36_ATTN_KV_SPLIT=user (design 'attention-kv' P0): _forward_decode_lean with the KV-pair user split.
+
+        Devices 2h and 2h+1 hold the same KV head (replicated cache, full page table, unchanged KV write). Each runs the
+        SDPA for the 2*NH query heads of the pair ([own NH | partner NH], the partner's q from tw["wq_partner"]) but
+        only for its own users (self._kv_split_pos: -1 = the SDPA's skip path for the partner's users), so it streams
+        half of the pair's KV bytes. Merge: the per-device output is put in pair-global head order ([heads 2h | heads
+        2h+1]; odd devices swap), tiled across the TP width, masked to (own users) x (this pair's column block) with a
+        real select (skipped rows hold unwritten L1, possibly NaN), and reduce-scattered over the TP axis: device d
+        receives its own NH heads for ALL users. Every output element has exactly one non-zero contributor, so the
+        reduction is exact. The gate, wo and the all-reduce then run exactly as the lean path."""
+        tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
+        B = x.shape[-2]
+        W = NH * HD
+        NH2 = 2 * NH
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        consts = self.kv_split_plan.consts(B)
+        cur_pos_sdpa = self._kv_split_pos
+        assert cur_pos_sdpa.shape[-1] == B == page_table.shape[0], (
+            f"kv split width mismatch: B {B}, cur_pos_sdpa {cur_pos_sdpa.shape[-1]}, page_table {page_table.shape[0]}"
+        )
+
+        # Partner q (device d^1's heads) from the replicated decode input; the fused QKV matmul is untouched.
+        x_il = ttnn.sharded_to_interleaved(x, _L1) if x.is_sharded() else x
+        q_partner = ttnn.linear(x_il, tw["wq_partner"], compute_kernel_config=self.qkv_cfg, memory_config=_L1)
+        if x_il is not x:
+            ttnn.deallocate(x_il)
+
+        qkv3, gate, _ = self._qkv(x, decode_qkv3_l1=True)
+        sh = list(qkv3.shape)
+        q_own = ttnn.slice(qkv3, (0, 0, 0, 0), (sh[0], sh[1], sh[2], W), memory_config=_L1)
+        kv = ttnn.slice(qkv3, (0, 0, 0, W), (sh[0], sh[1], sh[2], sh[3]), memory_config=_L1)
+        ttnn.deallocate(qkv3)
+        qkv6 = ttnn.concat([q_own, q_partner, kv], dim=-1, memory_config=_L1)  # [q own | q partner | k | v]
+        ttnn.deallocate(q_own)
+        ttnn.deallocate(q_partner)
+        ttnn.deallocate(kv)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            qkv6, num_heads=NH2, num_kv_heads=NKV, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        )
+        ttnn.deallocate(qkv6)
+        q = ttnn.sharded_to_interleaved(q, _L1)
+        k = ttnn.sharded_to_interleaved(k, _L1)
+        q = ttnn.rms_norm(q, epsilon=1e-6, weight=tw["q_norm"], memory_config=_L1)
+        k = ttnn.rms_norm(k, epsilon=1e-6, weight=tw["k_norm"], memory_config=_L1)
+        q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH2, B, self.rope_dim)
+        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+
+        # KV write: unchanged (global cur_pos, full page table) -- both pair members keep the full replicated cache.
+        k_sh = ttnn.to_memory_config(k, self._kv_key_shard_cfg(B))
+        ttnn.deallocate(k)
+        ttnn.experimental.paged_fused_update_cache(
+            self.paged_k, k_sh, self.paged_v, v, update_idxs_tensor=cur_pos_tt, page_table=page_table
+        )
+        ttnn.deallocate(k_sh)
+        ttnn.deallocate(v)
+
+        _sdpa_grid = self.mesh.compute_with_storage_grid_size()
+        sdpa_dec_cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(_sdpa_grid.x, _sdpa_grid.y),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
+            **({} if self.decode_sdpa_max_cores is None else {"max_cores_per_head_batch": self.decode_sdpa_max_cores}),
+        )
+        attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q,
+            self.paged_k,
+            self.paged_v,
+            page_table_tensor=page_table,
+            cur_pos_tensor=cur_pos_sdpa,
+            scale=self.scale,
+            program_config=sdpa_dec_cfg,
+            memory_config=_L1,
+        )
+        ttnn.deallocate(q)
+
+        # [1,B,2NH,HD] -> [1,1,B,2W] = [own | partner] heads, valid only on this device's users.
+        o6 = ttnn.reshape(attn_out, (1, 1, B, 2 * W), memory_config=_L1)
+        ttnn.deallocate(attn_out)
+        own = ttnn.slice(o6, (0, 0, 0, 0), (1, 1, B, W), memory_config=_L1)
+        par = ttnn.slice(o6, (0, 0, 0, W), (1, 1, B, 2 * W), memory_config=_L1)
+        swapped = ttnn.concat([par, own], dim=-1, memory_config=_L1)
+        ttnn.deallocate(own)
+        ttnn.deallocate(par)
+        pair_order = ttnn.where(consts["odd"], swapped, o6, memory_config=_L1)  # [heads 2h | heads 2h+1]
+        ttnn.deallocate(swapped)
+        ttnn.deallocate(o6)
+        tiled = ttnn.repeat(pair_order, ttnn.Shape([1, 1, 1, self.args.num_devices // 2]))
+        ttnn.deallocate(pair_order)
+        placed = ttnn.where(consts["place"], tiled, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(tiled)
+        # On the 1xTP row tt_all_reduce is a reduce-scatter on dim 3: device d keeps column block d = its NH heads.
+        mine = tt_all_reduce(
+            placed,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=_L1,
+        )
+
+        attn_flat = ttnn.reshape(mine, (1, B, W))
+        gate_flat = ttnn.reshape(gate, (1, B, W))
+        gated_flat = ttnn.multiply(
+            attn_flat,
+            gate_flat,
+            input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
+            memory_config=_L1,
+        )
+        ttnn.deallocate(mine)
+        ttnn.deallocate(gate)
 
         wo_partial = self._wo_proj(gated_flat, tw["wo"])
         ttnn.deallocate(gated_flat)

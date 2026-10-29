@@ -319,6 +319,10 @@ class Qwen36Model:
             layer = Qwen36DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path, tt_ccl=self.tt_ccl)
             self.layers.append(layer)
 
+        # QWEN36_ATTN_KV_SPLIT (default off): KV-pair user split of the plain decode SDPA. Constants for every decode width
+        # are built here, never inside a trace capture. None (flag off / unsupported layout) -> nothing differs.
+        self._kv_split_plan = self._build_kv_split_plan()
+
         # Framework RMSNorm (add_unit_offset=True). Single device: is_distributed=None.
         # 27B TP: hidden is sharded -> pass is_distributed + tt_ccl or use DistributedNorm.
         self.norm = RMSNorm(
@@ -1577,6 +1581,22 @@ class Qwen36Model:
 
         return logits
 
+    def _build_kv_split_plan(self):
+        """KVSplitPlan for QWEN36_ATTN_KV_SPLIT on a 1xTP row with KV pairs (TP == 2 * n_kv_heads), else None."""
+        from models.demos.blackhole.qwen36.tt.attention.tp import KVSplitPlan, kv_split_supported
+
+        if self.num_devices <= 1 or not kv_split_supported(self.args) or 1 not in list(self.mesh_device.shape):
+            return None
+        attns = [l.attention for l in self.layers if l.is_full_attention and hasattr(l.attention, "_kv_split_pos")]
+        if not attns or any("wq_partner" not in a.tw for a in attns):
+            return None
+        plan = KVSplitPlan(self.mesh_device, self.num_devices, self.args.n_local_heads, self.args.head_dim)
+        plan.prepare(range(2, self.args.max_batch_size + 1))
+        for a in attns:
+            a.kv_split_plan = plan
+        logger.info(f"QWEN36_ATTN_KV_SPLIT=user: KV-pair user split on {len(attns)} full-attention layers")
+        return plan
+
     def _forward_decode(
         self, token_ids_buf, cos, sin, cur_pos_tensor, page_table, sharded_lm_head=False, return_hidden=False
     ):
@@ -1597,13 +1617,28 @@ class Qwen36Model:
                 # consumes the last-layer hidden FRACTURED [1,1,B,dim/tp], so that decode keeps the fractured residual.
                 x = self._decode_ar.enter(x)
         _cap = getattr(self, "_capture_layer", None)
-        for _li, layer in enumerate(self.layers):
-            if layer.is_full_attention:
-                x = layer.forward(x, cos, sin, position_tensor=cur_pos_tensor, page_table=page_table, mode="decode")
-            else:
-                x = layer.forward(x, mode="decode")
-            if _cap is not None and _li == _cap:  # debug: capture hidden after layer _cap
-                self._cap_rec = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        _split = getattr(self, "_kv_split_plan", None)
+        _split_pos = None
+        if _split is not None and page_table is not None and cur_pos_tensor.shape[-1] >= 2:
+            # QWEN36_ATTN_KV_SPLIT: one per-device SDPA position tensor per step, shared by every full-attention layer.
+            _split_pos = _split.cur_pos_sdpa(cur_pos_tensor)
+            for layer in self.layers:
+                if layer.is_full_attention:
+                    layer.attention._kv_split_pos = _split_pos
+        try:
+            for _li, layer in enumerate(self.layers):
+                if layer.is_full_attention:
+                    x = layer.forward(x, cos, sin, position_tensor=cur_pos_tensor, page_table=page_table, mode="decode")
+                else:
+                    x = layer.forward(x, mode="decode")
+                if _cap is not None and _li == _cap:  # debug: capture hidden after layer _cap
+                    self._cap_rec = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        finally:
+            if _split_pos is not None:
+                for layer in self.layers:
+                    if layer.is_full_attention:
+                        layer.attention._kv_split_pos = None
+                ttnn.deallocate(_split_pos)
         # Independent clone of the live last-layer output: the MTP head consumes this hidden on a
         # LATER forward and all-gathers it, so it must survive the final norm + lm_head below (a
         # to_memory_config is a no-op alias when x is already DRAM, so the norm would free it).

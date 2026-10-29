@@ -339,6 +339,34 @@ def kv_cache_bf8_enabled():
     return os.environ.get("QWEN_SDPA_BF8", "0") == "1" or os.environ.get("QWEN36_KV_BF8", "1") == "1"
 
 
+def attn_kv_split_mode():
+    """QWEN36_ATTN_KV_SPLIT (default "0" = off): KV-pair read split for the plain paged decode SDPA (tt-lab's KV-pair
+    split, design 'attention-kv' P0). At TP = 2 * n_kv_heads the two devices of a pair (2h, 2h+1) hold the same
+    (replicated) KV head; "user" makes each device run the SDPA for all 6 query heads of the pair but only for its half
+    of the users, so each device streams half the KV bytes, then a masked reduce-scatter hands every device its own
+    3 heads for all users. "seq" (the sequence split, P1) needs the sdpa_decode kv_split / return_lse C++ change and is
+    rejected here. Off: no weight, tensor or op differs from the base."""
+    v = os.environ.get("QWEN36_ATTN_KV_SPLIT", "0").strip().lower()
+    if v in ("", "0", "off"):
+        return None
+    if v == "user":
+        return "user"
+    raise ValueError(f"QWEN36_ATTN_KV_SPLIT={v!r}: only 'user' (P0) is implemented; 'seq' needs the SDPA kv_split op")
+
+
+def prepare_attn_q_partner(q_w, nh_local, hd, tp):
+    """Per-device PARTNER query weight for QWEN36_ATTN_KV_SPLIT: device d gets the de-interleaved q rows of device
+    d ^ 1 (the other member of its KV pair), in the same head order prepare_attn_qkv_deint gives device d^1's all_q.
+    q_w: [nh_total*hd*2, in] (interleaved [q,gate] per head). Returns [tp*nh_local*hd, in] for shard_w(dim=-1)."""
+    assert tp % 2 == 0, f"KV-pair split needs an even TP, got {tp}"
+    hd2 = hd * 2
+    parts = []
+    for d in range(tp):
+        base = (d ^ 1) * nh_local * hd2
+        parts.extend(q_w[base + h * hd2 : base + h * hd2 + hd, :] for h in range(nh_local))
+    return torch.cat(parts, dim=0)
+
+
 def prefill_l1_rows_ok(rows):
     """L1 placement of prefill activations is validated up to 2048 rows (the serving chunk); a larger prefill chunk
     (QWEN36_PREFILL_L1_MAX_ROWS, default 2048) keeps those tensors in DRAM so their L1 banks do not clash with the
