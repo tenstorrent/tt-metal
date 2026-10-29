@@ -9,7 +9,6 @@ set -euo pipefail
 BASELINE="$(realpath -m "${1:?usage: run_llk_perf_merge_stage2.sh <baseline dir> <out dir>}")"
 OUT="$(realpath -m "${2:?usage: run_llk_perf_merge_stage2.sh <baseline dir> <out dir>}")"
 DEADLINE="${LLK_STAGE2_DEADLINE:?LLK_STAGE2_DEADLINE must be an epoch time}"
-CAP="${LLK_STAGE2_CAP:-300}"
 LLK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="$(git -C "$LLK" rev-parse --show-toplevel)"
 mkdir -p "$OUT"
@@ -35,7 +34,7 @@ if [[ ! -s "$OUT/stage1.regressions.csv" ]]; then
   exit 0
 fi
 python3 "$LLK/perf/placement_check.py" nodes --candidates "$OUT/stage1.regressions.csv" \
-  --map "$LLK/perf_data/runs/**/*.windowhash" --cap "$CAP" --out "$OUT/nodes.txt"
+  --map "$LLK/perf_data/runs/**/*.windowhash" --cap 1000000 --out "$OUT/nodes.txt"
 
 measure() {
   local left=$(( $3 - $(date +%s) ))
@@ -65,14 +64,10 @@ elif ! cmp -s "$LLK/tests/sfpi-version" "$BASE/tt_metal/tt-llk/tests/sfpi-versio
   exit 0
 fi
 ln -s "$LLK/tests/sfpi" "$BASE/tt_metal/tt-llk/tests/sfpi"
-if [[ -s "$OUT/nodes.over" ]]; then
-  # More tests than the leg can re-measure: every regression is reported as not re-measured, which blocks.
-  echo "::warning::$(wc -l < "$OUT/nodes.over") stage-1 regression(s) are over the limit of ${CAP} tests; stage 2 does not measure."
-else
-  # Each side gets half of the time left.
-  measure head "$LLK" $(( ($(date +%s) + DEADLINE) / 2 ))
-  measure base "$BASE/tt_metal/tt-llk" "$DEADLINE"
-fi
+# No test limit: stage 2 measures until the deadline, and what it did not measure on both sides blocks.
+# Each side gets half of the time left.
+measure head "$LLK" $(( ($(date +%s) + DEADLINE) / 2 ))
+measure base "$BASE/tt_metal/tt-llk" "$DEADLINE"
 
 mkdir -p "$BASE/tt_metal/tt-llk/perf_data/runs"
 python3 "$LLK/perf/placement_check.py" decide "${COMPARE[@]}" --candidates "$OUT/stage1.regressions.csv" \
