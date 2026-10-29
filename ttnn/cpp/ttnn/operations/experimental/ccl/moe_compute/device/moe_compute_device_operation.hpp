@@ -11,7 +11,6 @@
 #include "hostdevcommon/config.hpp"
 #include "moe_compute_device_operation_types.hpp"
 #include "moe_compute_program_factory.hpp"
-#include "moe_expert_rows.hpp"
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
@@ -25,7 +24,7 @@ struct MoEComputeDeviceOperation {
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
-    using program_factory_t = std::variant<MoEComputeMeshWorkloadFactory, MoEComputePlaceFactory>;
+    using program_factory_t = std::variant<MoEComputeMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -34,7 +33,6 @@ struct MoEComputeDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim

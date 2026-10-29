@@ -9,7 +9,7 @@
 //    id to this device; a token that names one expert at several k gives one entry per k, as moe_compute lists them)
 //    and sends its local entries (local expert, token, score, k) to the root core (core 0). The root counting-sorts
 //    them by local expert in core order (= token order) into the routing table: per local expert the routed rows in
-//    token order, at most row_cap (the expert's e_t page and double-buffer half; later entries are dropped), and jobs
+//    token order with their tokens and k, at most `tokens` (the expert's e_t page; later entries are dropped), and jobs
 //    of at most job_rows rows of one expert, dealt to the expert groups: with one row tile per job every job has the
 //    same predicted time and job j of the expert order runs on group j % expert_groups (the table stays in expert
 //    order); with several each job goes to the group with the earliest predicted finish and the jobs are listed group
@@ -52,13 +52,12 @@ constexpr uint32_t mapping_page_bytes = get_named_compile_time_arg_val("mapping_
 constexpr uint32_t tokens_per_source = get_named_compile_time_arg_val("tokens_per_source");
 constexpr uint32_t expert_groups = get_named_compile_time_arg_val("expert_groups");
 constexpr uint32_t job_rows = get_named_compile_time_arg_val("job_rows");
-constexpr uint32_t row_cap = get_named_compile_time_arg_val("row_cap");
 constexpr uint32_t grid_w = get_named_compile_time_arg_val("grid_w");
 constexpr uint32_t grid_h = get_named_compile_time_arg_val("grid_h");
 constexpr uint32_t mask_words = get_named_compile_time_arg_val("mask_words");
 constexpr uint32_t sem_entries = get_named_compile_time_arg_val("sem_entries");
 constexpr uint32_t sem_table = get_named_compile_time_arg_val("sem_table");
-// cb_routing byte offsets (RoutingLayout in moe_expert_rows.cpp)
+// cb_routing byte offsets (RoutingLayout, moe_expert_rows_plan.hpp)
 constexpr uint32_t routing_own_mapping = get_named_compile_time_arg_val("routing_own_mapping");
 constexpr uint32_t routing_source_mappings = get_named_compile_time_arg_val("routing_source_mappings");
 constexpr uint32_t routing_token_ids = get_named_compile_time_arg_val("routing_token_ids");
@@ -67,18 +66,10 @@ constexpr uint32_t routing_ctl = get_named_compile_time_arg_val("routing_ctl");
 constexpr uint32_t routing_active_experts = get_named_compile_time_arg_val("routing_active_experts");
 constexpr uint32_t routing_expert_rows = get_named_compile_time_arg_val("routing_expert_rows");
 constexpr uint32_t routing_expert_first_rows = get_named_compile_time_arg_val("routing_expert_first_rows");
-constexpr uint32_t routing_table = get_named_compile_time_arg_val("routing_table");
-constexpr uint32_t routing_table_counts = get_named_compile_time_arg_val("routing_table_counts");
-constexpr uint32_t routing_table_offsets = get_named_compile_time_arg_val("routing_table_offsets");
-constexpr uint32_t routing_row_tokens = get_named_compile_time_arg_val("routing_row_tokens");
-constexpr uint32_t routing_entry_experts = get_named_compile_time_arg_val("routing_entry_experts");
-constexpr uint32_t routing_entry_tokens = get_named_compile_time_arg_val("routing_entry_tokens");
-constexpr uint32_t routing_entry_scores = get_named_compile_time_arg_val("routing_entry_scores");
-constexpr uint32_t routing_entry_k = get_named_compile_time_arg_val("routing_entry_k");
-constexpr uint32_t routing_table_bytes = get_named_compile_time_arg_val("routing_table_bytes");
+constexpr uint32_t routing_table = get_named_compile_time_arg_val("routing_table");  // the table block
 constexpr uint32_t routing_jobs = get_named_compile_time_arg_val("routing_jobs");
 constexpr uint32_t routing_entry_areas = get_named_compile_time_arg_val("routing_entry_areas");
-// weights in moe_compute's prepared layout (tiles, PreparedLayout in moe_expert_rows.cpp): the stride of a ring
+// weights in moe_compute's prepared layout (tiles, PreparedLayout in moe_expert_rows_plan.hpp): the stride of a ring
 // position's W0/W1 column groups and a bank piece of W0/W1 per (layer, expert); the stride of its W2 output groups
 // and its W2 per (layer, expert)
 constexpr uint32_t w0_w1_group_tiles = get_named_compile_time_arg_val("w0_w1_group_tiles");
@@ -103,6 +94,7 @@ constexpr uint32_t deal_single = get_named_compile_time_arg_val("deal_single");
 constexpr uint32_t bias_rows = has_bias ? 1 : 0;  // the bias K row of the prepared weights
 // jobs of several row tiles: held units, padded passes, per-job row tiles
 constexpr bool weight_stationary = row_tiles > 1;
+constexpr expert_rows::TableLayout table_block = expert_rows::table_layout(tokens, top_k, local_experts);
 // what the other cores read of the ctl block (expert_rows::ctl_bytes)
 constexpr uint32_t ctl_bytes =
     weight_stationary ? expert_rows::align_up(expert_rows::ctl_bytes(expert_groups), expert_rows::l1_word_bytes)
@@ -112,7 +104,7 @@ constexpr uint32_t block_bytes = block_tiles * weight_tile_bytes;
 constexpr uint32_t packet_tiles = expert_rows::div_up(block_tiles, block_packets);  // tiles per NoC packet of a block
 static_assert(packet_tiles * weight_tile_bytes <= NOC_MAX_BURST_SIZE, "a block's packets fit a NoC burst each");
 static_assert(
-    top_k >= 1 && top_k <= 32, "top_k in 1..32 (kMaxTopK in moe_expert_rows.cpp): one u16 per k on the stack");
+    top_k >= 1 && top_k <= 32, "top_k in 1..32 (kMaxTopK, moe_expert_rows_plan.hpp): one u16 per k on the stack");
 constexpr uint32_t index_page_entries = index_page_bytes / expert_rows::u16_bytes;
 constexpr uint16_t not_local = 0xFFFFu;
 
@@ -180,13 +172,14 @@ FORCE_INLINE void read_routing_inputs(
     uint32_t routing,
     const TokenRange& range,
     uint32_t device_id) {
+    // each row at the mapping's page stride: a DRAM read keeps its source address's alignment in L1
     constexpr uint32_t mapping_bytes = global_experts * expert_rows::u16_bytes;
     noc.async_read(
         mapping, CoreLocalMem<uint32_t>(routing + routing_own_mapping), mapping_bytes, {.page_id = device_id}, {});
     for (uint32_t source = 0; source < range.sources; ++source) {
         noc.async_read(
             mapping,
-            CoreLocalMem<uint32_t>(routing + routing_source_mappings + source * mapping_bytes),
+            CoreLocalMem<uint32_t>(routing + routing_source_mappings + source * mapping_page_bytes),
             mapping_bytes,
             {.page_id = source_mapping_row(range.first_source + source)},
             {});
@@ -218,8 +211,8 @@ FORCE_INLINE void map_to_local_experts(uint32_t routing, uint32_t sources, uint3
         local_expert[expert] = local_expert[expert] == device_id ? next_local_expert++ : not_local;
     }
     for (uint32_t source = 0; source < sources; ++source) {
-        tt_l1_ptr uint16_t* source_expert = reinterpret_cast<tt_l1_ptr uint16_t*>(
-            routing + routing_source_mappings + source * global_experts * expert_rows::u16_bytes);
+        tt_l1_ptr uint16_t* source_expert =
+            reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_source_mappings + source * mapping_page_bytes);
         for (uint32_t expert = 0; expert < global_experts; ++expert) {
             source_expert[expert] = source_expert[expert] == device_id ? local_expert[expert] : not_local;
         }
@@ -234,8 +227,7 @@ FORCE_INLINE void collect_local_entries(uint32_t routing, const EntryArea& area,
     uint32_t entry_count = 0;
     for (uint32_t token = range.first; token < range.end; ++token) {
         const tt_l1_ptr uint16_t* source_expert = reinterpret_cast<const tt_l1_ptr uint16_t*>(
-            routing + routing_source_mappings +
-            (token / tokens_per_source - range.first_source) * global_experts * expert_rows::u16_bytes);
+            routing + routing_source_mappings + (token / tokens_per_source - range.first_source) * mapping_page_bytes);
         const tt_l1_ptr uint16_t* ids = token_ids + (token - range.first) * index_page_entries;
         uint16_t experts[top_k];
         for (uint32_t k_index = 0; k_index < top_k; ++k_index) {
@@ -276,12 +268,13 @@ struct RoutingTable {
     tt_l1_ptr uint16_t* expert_first_row;
     tt_l1_ptr uint16_t* active_experts;
     tt_l1_ptr uint16_t* row_tokens;
+    tt_l1_ptr uint16_t* row_k;
     tt_l1_ptr JobRecord* jobs;
     uint32_t active = 0;  // local experts with rows
     uint32_t routed_rows = 0;
 };
 
-// Rows per local expert over every core's entries, at most row_cap each.
+// Rows per local expert over every core's entries, at most `tokens` each (its e_t page).
 FORCE_INLINE void count_expert_rows(
     RoutingTable& table, uint32_t routing, uint32_t program_cores, uint32_t area_bytes, uint32_t capacity) {
     for (uint32_t expert = 0; expert < local_experts; ++expert) {
@@ -291,7 +284,7 @@ FORCE_INLINE void count_expert_rows(
         const EntryArea area = entry_area(routing, core, area_bytes, capacity);
         const uint32_t entry_count = area.count();
         for (uint32_t entry = 0; entry < entry_count; ++entry) {
-            if (table.expert_rows[area.expert[entry]] < row_cap) {
+            if (table.expert_rows[area.expert[entry]] < tokens) {
                 table.expert_rows[area.expert[entry]] = table.expert_rows[area.expert[entry]] + 1;
             }
         }
@@ -311,23 +304,29 @@ FORCE_INLINE void lay_out_experts(RoutingTable& table) {
 }
 
 // Areas in core order = tokens ascending within an expert: each expert's rows in token order, and the same entries in
-// token order for the table (routing_entry_*). Entries past an expert's row_cap are dropped, as in count_expert_rows.
+// token order for the table (routing_entry_*). Entries past an expert's `tokens` rows are dropped, as in
+// count_expert_rows.
 FORCE_INLINE void fill_rows_and_entries(
     RoutingTable& table, uint32_t routing, uint32_t program_cores, uint32_t area_bytes, uint32_t capacity) {
-    tt_l1_ptr uint16_t* entry_experts = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_entry_experts);
-    tt_l1_ptr uint16_t* entry_tokens = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_entry_tokens);
-    tt_l1_ptr uint16_t* entry_scores = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_entry_scores);
-    tt_l1_ptr uint16_t* entry_k = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_entry_k);
+    tt_l1_ptr uint16_t* entry_experts =
+        reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_table + table_block.entry_experts);
+    tt_l1_ptr uint16_t* entry_tokens =
+        reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_table + table_block.entry_tokens);
+    tt_l1_ptr uint16_t* entry_scores =
+        reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_table + table_block.entry_scores);
+    tt_l1_ptr uint16_t* entry_k = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_table + table_block.entry_k);
     uint32_t table_entry = 0;
     for (uint32_t core = 0; core < program_cores; ++core) {
         const EntryArea area = entry_area(routing, core, area_bytes, capacity);
         const uint32_t entry_count = area.count();
         for (uint32_t entry = 0; entry < entry_count; ++entry) {
             const uint32_t expert = area.expert[entry];
-            if (table.expert_rows[expert] == row_cap) {
+            if (table.expert_rows[expert] == tokens) {
                 continue;
             }
-            table.row_tokens[table.expert_first_row[expert] + table.expert_rows[expert]] = area.token[entry];
+            const uint32_t row = table.expert_first_row[expert] + table.expert_rows[expert];
+            table.row_tokens[row] = area.token[entry];
+            table.row_k[row] = area.k_index[entry];
             table.expert_rows[expert] = table.expert_rows[expert] + 1;
             entry_experts[table_entry] = expert;
             entry_tokens[table_entry] = area.token[entry];
@@ -392,6 +391,7 @@ struct JobDealer {
                 best_work = group_work;
             }
         }
+        ASSERT(best_group < expert_groups);  // expert_groups (ctl_words - 1) >= the most jobs of a call (host)
         finish[best_group] += job_work > deal_stream ? job_work : deal_stream;
         work[best_group] += job_work;
         ++group_job_counts[best_group];
@@ -462,13 +462,15 @@ FORCE_INLINE uint32_t deal_jobs(const RoutingTable& table, uint32_t routing, tt_
 // The ctl block (job count, active experts, routed rows) and the table head for the placement program: routed rows,
 // per-expert counts and first rows.
 FORCE_INLINE void write_table_head(
-    const RoutingTable& table, uint32_t routing, volatile tt_l1_ptr uint32_t* ctl, uint32_t table_jobs) {
-    ctl[0] = table_jobs;
-    ctl[1] = table.active;
-    ctl[2] = table.routed_rows;
+    const RoutingTable& table, uint32_t routing, volatile tt_l1_ptr expert_rows::CtlHeader* ctl, uint32_t table_jobs) {
+    ctl->table_jobs = table_jobs;
+    ctl->active_experts = table.active;
+    ctl->routed_rows = table.routed_rows;
     *reinterpret_cast<tt_l1_ptr uint32_t*>(routing + routing_table) = table.routed_rows;
-    tt_l1_ptr uint16_t* head_expert_rows = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_table_counts);
-    tt_l1_ptr uint16_t* head_expert_first_row = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_table_offsets);
+    tt_l1_ptr uint16_t* head_expert_rows =
+        reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_table + table_block.row_counts);
+    tt_l1_ptr uint16_t* head_expert_first_row =
+        reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_table + table_block.first_rows);
     uint32_t first_row = 0;
     for (uint32_t expert = 0; expert < local_experts; ++expert) {
         head_expert_rows[expert] = table.expert_rows[expert];
@@ -502,7 +504,7 @@ FORCE_INLINE void signal_table_ready(const Noc& noc, const CommonArgs& common, u
 template <typename TableAccessor>
 FORCE_INLINE uint32_t build_routing_table(
     const Noc& noc,
-    const TableAccessor& table_block,
+    const TableAccessor& table_dram,
     uint32_t routing,
     uint32_t program_cores,
     uint32_t area_bytes,
@@ -510,14 +512,15 @@ FORCE_INLINE uint32_t build_routing_table(
     const CommonArgs& common,
     uint32_t root_x,
     uint32_t root_y) {
-    volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(routing + routing_ctl);
+    auto* ctl = reinterpret_cast<volatile tt_l1_ptr expert_rows::CtlHeader*>(routing + routing_ctl);
     tt_l1_ptr uint16_t* group_first_job =
         reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_ctl + expert_rows::ctl_header_bytes);
     RoutingTable table{
         .expert_rows = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_expert_rows),
         .expert_first_row = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_expert_first_rows),
         .active_experts = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_active_experts),
-        .row_tokens = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_row_tokens),
+        .row_tokens = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_table + table_block.row_tokens),
+        .row_k = reinterpret_cast<tt_l1_ptr uint16_t*>(routing + routing_table + table_block.row_k),
         .jobs = reinterpret_cast<tt_l1_ptr JobRecord*>(routing + routing_jobs)};
     Semaphore<>(sem_entries).wait_min(program_cores - 1);
     invalidate_l1_cache();
@@ -533,14 +536,13 @@ FORCE_INLINE uint32_t build_routing_table(
     write_table_head(table, routing, ctl, table_jobs);
     signal_table_ready(noc, common, root_x, root_y);
     // drained before this kernel ends
-    noc.async_write(
-        CoreLocalMem<uint32_t>(routing + routing_table), table_block, routing_table_bytes, {}, {.page_id = 0});
+    noc.async_write(CoreLocalMem<uint32_t>(routing + routing_table), table_dram, table_block.bytes, {}, {.page_id = 0});
     return table_jobs;
 }
 
 // Every other core: the ctl block, the jobs and the routed rows' tokens from the root. Returns the job count.
 FORCE_INLINE uint32_t read_routing_table(const Noc& noc, uint32_t routing, uint32_t root_x, uint32_t root_y) {
-    volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(routing + routing_ctl);
+    auto* ctl = reinterpret_cast<volatile tt_l1_ptr expert_rows::CtlHeader*>(routing + routing_ctl);
     Semaphore<>(sem_table).wait_min(1);
     noc.async_read(
         UnicastEndpoint{},
@@ -549,8 +551,8 @@ FORCE_INLINE uint32_t read_routing_table(const Noc& noc, uint32_t routing, uint3
         {.noc_x = root_x, .noc_y = root_y, .addr = routing + routing_ctl},
         {});
     noc.async_read_barrier();
-    const uint32_t table_jobs = ctl[0];
-    const uint32_t routed_rows = ctl[2];
+    const uint32_t table_jobs = ctl->table_jobs;
+    const uint32_t routed_rows = ctl->routed_rows;
     if (table_jobs) {
         noc.async_read(
             UnicastEndpoint{},
@@ -560,32 +562,23 @@ FORCE_INLINE uint32_t read_routing_table(const Noc& noc, uint32_t routing, uint3
             {});
         noc.async_read(
             UnicastEndpoint{},
-            CoreLocalMem<uint32_t>(routing + routing_row_tokens),
+            CoreLocalMem<uint32_t>(routing + routing_table + table_block.row_tokens),
             expert_rows::align_up(routed_rows * expert_rows::u16_bytes, expert_rows::l1_word_bytes),
-            {.noc_x = root_x, .noc_y = root_y, .addr = routing + routing_row_tokens},
+            {.noc_x = root_x, .noc_y = root_y, .addr = routing + routing_table + table_block.row_tokens},
             {});
         noc.async_read_barrier();
     }
     return table_jobs;
 }
 
-// This group's jobs by local index: table jobs group, group + expert_groups, ... with one row tile per job, else as
-// dealt (from group_first_job[group]).
-// count: the group's jobs.
-struct GroupJobs : expert_rows::GroupJobs<weight_stationary, expert_groups, const tt_l1_ptr JobRecord*> {
-    uint32_t count;
-};
+using GroupJobs = expert_rows::GroupJobs<weight_stationary, expert_groups, const tt_l1_ptr JobRecord*>;
 
 FORCE_INLINE GroupJobs group_jobs(uint32_t routing, uint32_t group, uint32_t table_jobs) {
-    const tt_l1_ptr uint16_t* group_first_job =
-        reinterpret_cast<const tt_l1_ptr uint16_t*>(routing + routing_ctl + expert_rows::ctl_header_bytes);
-    const auto jobs = expert_rows::group_jobs<weight_stationary, expert_groups>(
-        reinterpret_cast<const tt_l1_ptr JobRecord*>(routing + routing_jobs), group_first_job, group);
-    // the group's jobs: from the ctl block when dealt, else its share of the table's jobs
-    const uint32_t count = weight_stationary
-                               ? group_first_job[group + 1] - jobs.first
-                               : (table_jobs > group ? (table_jobs - group + expert_groups - 1) / expert_groups : 0);
-    return {jobs, count};
+    return expert_rows::group_jobs<weight_stationary, expert_groups>(
+        reinterpret_cast<const tt_l1_ptr JobRecord*>(routing + routing_jobs),
+        reinterpret_cast<const tt_l1_ptr uint16_t*>(routing + routing_ctl + expert_rows::ctl_header_bytes),
+        group,
+        table_jobs);
 }
 
 // The compute's ctl tile: this group's job count and (weight_stationary) the row tiles of each of its jobs.
@@ -594,7 +587,8 @@ FORCE_INLINE void publish_group_jobs(CircularBuffer& cb_ctl, const GroupJobs& jo
     volatile tt_l1_ptr uint32_t* group_ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_ctl.get_write_ptr());
     group_ctl[0] = jobs.count;
     if constexpr (weight_stationary) {
-        for (uint32_t job = 0; job < jobs.count && job + 1 < ctl_words; ++job) {
+        ASSERT(jobs.count < ctl_words);  // the deal keeps every group within its ctl list
+        for (uint32_t job = 0; job < jobs.count; ++job) {
             group_ctl[1 + job] = expert_rows::row_tiles_of(jobs.rows(job));
         }
     }
@@ -620,27 +614,14 @@ FORCE_INLINE uint32_t chunk_k_rows(uint32_t chunk, uint32_t chunk_rows, uint32_t
     return (chunk + 1 < chunks ? chunk_rows : k_rows - chunk * chunk_rows) + (chunk + 1 == chunks ? bias_rows : 0);
 }
 
-FORCE_INLINE uint32_t unit_padding(uint32_t blocks) { return (unit_blocks - blocks % unit_blocks) % unit_blocks; }
+FORCE_INLINE uint32_t unit_padding(uint32_t blocks) { return expert_rows::unit_padding(blocks, unit_blocks); }
 
 // CB blocks of a one-row-tile pass before its padding
 inline uint32_t single_pass_blocks(const CoreGroups& groups, Projection projection) {
-    uint32_t blocks = 0;
-    if (projection == Projection::Down) {
-        for (uint32_t output_group = 0; output_group < groups.output_groups; ++output_group) {
-            blocks += expert_rows::run_blocks(
-                groups.outputs().width(output_group), intermediate_tiles + bias_rows, block_tiles);
-        }
-        return blocks;
-    }
-    for (uint32_t column_group = 0; column_group < groups.column_groups; ++column_group) {
-        for (uint32_t chunk = 0; chunk < single_chunks; ++chunk) {
-            blocks += expert_rows::run_blocks(
-                groups.columns().width(column_group),
-                chunk_k_rows(chunk, single_chunk_tiles, single_chunks, hidden_tiles),
-                block_tiles);
-        }
-    }
-    return blocks;
+    return projection == Projection::Down
+               ? expert_rows::down_pass_blocks(groups.outputs(), intermediate_tiles, bias_rows, block_tiles)
+               : expert_rows::gate_up_pass_blocks(
+                     groups.columns(), hidden_tiles, single_chunk_tiles, bias_rows, block_tiles);
 }
 
 // Pass pass_index of the stream: gate/up(0), gate/up(1), down(0), gate/up(2), down(1), ..., down(jobs - 1)
@@ -788,7 +769,7 @@ struct ReadState {
     uint32_t bank = 0, tiles = 0, bank_lo = 0;
     FORCE_INLINE void set(uint32_t new_bank, uint32_t new_tiles) {
         const uint64_t bank_noc = get_noc_addr_from_bank_id<true>(new_bank, 0);
-        noc_async_read_one_packet_set_state<true>(bank_noc, new_tiles * weight_tile_bytes, 0);
+        noc_async_read_one_packet_set_state</*use_vc=*/true>(bank_noc, new_tiles * weight_tile_bytes, /*vc=*/0);
         bank_lo = (uint32_t)bank_noc;
         bank = new_bank;
         tiles = new_tiles;
@@ -829,6 +810,7 @@ FORCE_INLINE void stream_weights(
     cursor.advance();
     uint32_t issued = 0, pushed = 0;
     while (pushed < total_blocks) {
+        invalidate_l1_cache();  // cb_w's acks come from the compute, as in cb_reserve_back
         if (issued < total_blocks && issued - pushed < blocks_in_flight &&
             cb_w.pages_reservable_at_back(block_tiles * (issued - pushed + 1))) {
             const uint32_t tiles = cursor.left < block_tiles ? cursor.left : block_tiles;
@@ -887,7 +869,7 @@ void kernel_main() {
     // ---- routing ----
     const TokenRange range = token_range(core_index, program_cores);
     // entries per token at most: one per k
-    const uint32_t capacity = ((tokens + program_cores - 1) / program_cores) * top_k;  // per entry area
+    const uint32_t capacity = expert_rows::entry_capacity(tokens, top_k, program_cores);
     const uint32_t area_bytes = expert_rows::entry_area_bytes(capacity);
     const Noc noc;
     cb_routing.reserve_back(1);
@@ -902,11 +884,11 @@ void kernel_main() {
     if (!root) {
         send_entries_to_root(noc, area, area_bytes, root_x, root_y);
     }
-    const auto table_block = TensorAccessor(table_args, table_addr, routing_table_bytes);
+    const auto table_dram = TensorAccessor(table_args, table_addr, table_block.bytes);
     const uint32_t table_jobs =
-        root ? build_routing_table(
-                   noc, table_block, routing, program_cores, area_bytes, capacity, common, root_x, root_y)
-             : read_routing_table(noc, routing, root_x, root_y);
+        root
+            ? build_routing_table(noc, table_dram, routing, program_cores, area_bytes, capacity, common, root_x, root_y)
+            : read_routing_table(noc, routing, root_x, root_y);
     asm volatile("" ::: "memory");  // every table store above is issued before the CB is pushed
     cb_routing.push_back(1);
     const GroupJobs jobs = group_jobs(routing, group, table_jobs);
