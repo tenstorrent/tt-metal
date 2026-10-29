@@ -15,10 +15,13 @@
 // (NOC coordinates), 4 leader row-max slots address, 5 parent x, 6 parent y, 7 slot at the parent,
 // 8 children, then children x (x, y), then an optional timeline buffer (0 = off; word [3] of the
 // reader's: partial sent), then (tail core) k cache address, v cache address, per-copy stride, token
-// state address, then workers - 1 x (x, y) of the chunk workers (verify: see attn_common.hpp).
+// state address, then workers - 1 x (x, y) of the chunk workers (verify: see attn_common.hpp). Paged KV
+// (attn_paged.hpp): the k / v addresses are the pools, the stride is 0, and the tail tiles' pages come from the
+// reader's page lists (ready once cb_ntiles is).
 
 #include "api/dataflow/dataflow_api.h"
 #include "attn_common.hpp"
+#include "attn_paged.hpp"
 
 using namespace resident_attn;
 
@@ -147,12 +150,16 @@ void kernel_main() {
             for (uint32_t kv = 0; kv < 2; kv++) {
                 for (uint32_t j = 0; j < n_tail; j++) {
                     const uint32_t t = tp0 + j;
-                    const uint32_t addr =
-                        get_arg_val<uint32_t>(tail_args + kv) + (l % copies) * copy_stride + (t / banks) * kKvRow;
-                    noc_async_write(
-                        get_read_ptr(cb_flush) + (kv * n_tail + j) * kKvRow,
-                        get_noc_addr_from_bank_id<true>(t % banks, addr),
-                        kKvRow);
+                    uint64_t dst;
+                    if constexpr (kv_paged) {
+                        const uint32_t page = (l % copies) * kv_copy_pages + page_list(0)[j];
+                        dst = page_noc_addr(get_arg_val<uint32_t>(tail_args + kv), page);
+                    } else {
+                        const uint32_t addr =
+                            get_arg_val<uint32_t>(tail_args + kv) + (l % copies) * copy_stride + (t / banks) * kKvRow;
+                        dst = get_noc_addr_from_bank_id<true>(t % banks, addr);
+                    }
+                    noc_async_write(get_read_ptr(cb_flush) + (kv * n_tail + j) * kKvRow, dst, kKvRow);
                 }
             }
             noc_async_write_barrier();
@@ -165,8 +172,14 @@ void kernel_main() {
             cb_wait_front(cb_flush, 2 * Dt);
             for (uint32_t kv = 0; kv < 2; kv++) {
                 const uint32_t addr = get_arg_val<uint32_t>(tail_args + kv) + copy_off;
-                noc_async_write(
-                    get_read_ptr(cb_flush) + kv * kKvRow, get_noc_addr_from_bank_id<true>(tail_bank[u], addr), kKvRow);
+                uint64_t dst;
+                if constexpr (kv_paged) {
+                    const uint32_t page = (l % copies) * kv_copy_pages + page_list(u)[0];
+                    dst = page_noc_addr(get_arg_val<uint32_t>(tail_args + kv), page);
+                } else {
+                    dst = get_noc_addr_from_bank_id<true>(tail_bank[u], addr);
+                }
+                noc_async_write(get_read_ptr(cb_flush) + kv * kKvRow, dst, kKvRow);
             }
             noc_async_write_barrier();
             cb_pop_front(cb_flush, 2 * Dt);

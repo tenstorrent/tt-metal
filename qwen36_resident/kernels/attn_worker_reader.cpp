@@ -15,10 +15,12 @@
 // 3 v cache address, 4 per-copy stride (bytes per bank), 5 children, 6 optional timeline buffer
 // (0 = off; per layer 4 wall-clock words: [0] KV read, [1] q arrived, [2] M arrived), 7 token state
 // address, 8 rope offset in it, then (tail core) 9 row buffer address, 10 k norm weight address (DRAM,
-// [copies][Dt] bf16 tiles).
+// [copies][Dt] bf16 tiles), then (paged KV, attn_paged.hpp; arg 9 on a chunk worker, 11 on the tail core) the
+// page table address. Paged: 2 / 3 are the K / V pools and 4 is 0.
 
 #include "api/dataflow/dataflow_api.h"
 #include "attn_common.hpp"
+#include "attn_paged.hpp"
 #include "attn_rows.hpp"
 
 using namespace resident_attn;
@@ -99,6 +101,13 @@ void kernel_main() {
     const uint32_t n_tail = packed && tps[batch - 1] != tps[0] ? 2 : 1;
     for (uint32_t u = 0; packed && u < users; u++) {
         chs[u] = role == 2 ? Chunk{tps[0], 1, n_tail} : chunk_of(w, tps[0]);
+    }
+    if constexpr (kv_paged) {
+        // the pages of this core's tiles (the writer's tail pages too: it reads them after the cb_ntiles push)
+        const uint32_t pt_addr = get_arg_val<uint32_t>(role == 2 ? 11 : 9);
+        for (uint32_t u = 0; u < users; u++) {
+            translate_chunk(pt_addr, verify ? 0 : u, u, chs[u], chs[u].n);
+        }
     }
     for (uint32_t u = 0; u < users; u++) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[u] = chs[u].n;
@@ -181,13 +190,25 @@ void kernel_main() {
     if (dual) {
         noc_local_state_init(other_noc);
     }
-    // tiles from, from + 1, ... of chunk ch (tile t: row t / banks of bank t % banks), one kv_row each
-    auto read_rows = [&](const Chunk& ch, uint32_t addr, uint32_t from, uint32_t n, uint32_t l1) {
+    // tiles from, from + 1, ... of chunk ch (tile t: row t / banks of bank t % banks; paged: page copy_page +
+    // pages[k] of the pool at addr, attn_paged.hpp), one kv_row each
+    auto read_rows = [&](const Chunk& ch,
+                         uint32_t addr,
+                         uint32_t from,
+                         uint32_t n,
+                         uint32_t l1,
+                         volatile tt_l1_ptr uint32_t* pages,
+                         uint32_t copy_page) {
         for (uint32_t k = from; k < from + n; k++, l1 += kKvRow) {
-            const uint32_t t = ch.t0 + k * ch.dt;
             const uint8_t noc = dual && (k & 1) ? other_noc : noc_index;
-            noc_async_read(
-                get_noc_addr_from_bank_id<true>(t % banks, addr + (t / banks) * kKvRow, noc), l1, kKvRow, noc);
+            uint64_t src;
+            if constexpr (kv_paged) {
+                src = page_noc_addr(addr, copy_page + pages[k], noc);
+            } else {
+                const uint32_t t = ch.t0 + k * ch.dt;
+                src = get_noc_addr_from_bank_id<true>(t % banks, addr + (t / banks) * kKvRow, noc);
+            }
+            noc_async_read(src, l1, kKvRow, noc);
         }
     };
 
@@ -208,14 +229,16 @@ void kernel_main() {
         const Chunk& ch = chs[u];
         const uint32_t k_addr = k_cache + u * user_stride + (l % copies) * copy_stride;
         const uint32_t v_addr = v_cache + u * user_stride + (l % copies) * copy_stride;
+        volatile tt_l1_ptr uint32_t* pages = kv_paged ? page_list(u) : nullptr;
+        const uint32_t copy_page = (l % copies) * kv_copy_pages;
         // blocks of chunk_max rows; the ring holds two, so a block is read while the previous one is used
         auto read_blocks = [&](uint32_t from, uint32_t to) {
             for (uint32_t b0 = from; b0 < to; b0 += chunk_max) {
                 const uint32_t nb = ch.n - b0 < chunk_max ? ch.n - b0 : chunk_max;
                 cb_reserve_back(cb_k, chunk_max * Dt);
                 cb_reserve_back(cb_v, chunk_max * Dt);
-                read_rows(ch, k_addr, b0, nb, get_write_ptr(cb_k));
-                read_rows(ch, v_addr, b0, nb, get_write_ptr(cb_v));
+                read_rows(ch, k_addr, b0, nb, get_write_ptr(cb_k), pages, copy_page);
+                read_rows(ch, v_addr, b0, nb, get_write_ptr(cb_v), pages, copy_page);
                 noc_async_read_barrier();
                 if (dual) {
                     noc_async_read_barrier(other_noc);
@@ -236,8 +259,8 @@ void kernel_main() {
             // once per layer: the tail tiles, the k norm weight and every row's k / v (rows 0 .. batch - 1)
             if (u == 0) {
                 cb_reserve_back(cb_tail8, 2 * n_tail * Dt);
-                read_rows(ch, k_addr, 0, n_tail, get_write_ptr(cb_tail8));
-                read_rows(ch, v_addr, 0, n_tail, get_write_ptr(cb_tail8) + n_tail * kKvRow);
+                read_rows(ch, k_addr, 0, n_tail, get_write_ptr(cb_tail8), pages, copy_page);
+                read_rows(ch, v_addr, 0, n_tail, get_write_ptr(cb_tail8) + n_tail * kKvRow, pages, copy_page);
                 cb_reserve_back(cb_kw, Dt);
                 for (uint32_t d = 0; d < Dt; d++) {
                     noc_async_read_page((l % copies) * Dt + d, kw_dram, get_write_ptr(cb_kw) + d * kTile);
@@ -267,8 +290,8 @@ void kernel_main() {
                 noc_semaphore_wait_min(tail_sem, i - copies * batch + 1);
             }
             cb_reserve_back(cb_tail8, 2 * Dt);
-            read_rows(ch, k_addr, 0, 1, get_write_ptr(cb_tail8));
-            read_rows(ch, v_addr, 0, 1, get_write_ptr(cb_tail8) + kKvRow);
+            read_rows(ch, k_addr, 0, 1, get_write_ptr(cb_tail8), pages, copy_page);
+            read_rows(ch, v_addr, 0, 1, get_write_ptr(cb_tail8) + kKvRow, pages, copy_page);
             cb_reserve_back(cb_kw, Dt);
             for (uint32_t d = 0; d < Dt; d++) {
                 noc_async_read_page((l % copies) * Dt + d, kw_dram, get_write_ptr(cb_kw) + d * kTile);

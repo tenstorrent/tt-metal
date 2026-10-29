@@ -1062,10 +1062,12 @@ class PPPrefill:
         return torch.stack(out), start
 
     # ------------------------------------------------------------------ handoff
-    def handoff(self, model, n_tokens, timings=None):
+    def handoff(self, model, n_tokens, timings=None, block_table=None):
         """move the state after n_tokens prompt tokens into the resident decode `model` (TP-sharded):
         GDN states and KV caches chip to chip on device (kernels/handoff.cpp), conv histories via the host.
         A verify model (ResidentModel verify) takes the states in slot 0 and the histories at ring step 0.
+        A paged-KV model takes the KV into the pool pages of block_table (the physical block of each logical
+        block of the prompt; default: its user 0's).
         timings, if given, gets the seconds of each part"""
         import time
 
@@ -1093,6 +1095,7 @@ class PPPrefill:
             # every job for a max_len prompt, once per decode model: per chip [m, 8] rows, each row's KV tile
             # (-1: a GDN state, always sent) and the packets it sends to another chip
             rows, tile_of, pk = [[] for _ in range(n)], [[] for _ in range(n)], [[] for _ in range(n)]
+            kv_of = [[] for _ in range(n)]  # per row (K or V, attention layer) of a KV job, (-1, -1) for GDN
             tiles_max = self.max_len // TILE
             per_block = self.block // TILE
             t = torch.arange(tiles_max, dtype=torch.int64)
@@ -1115,6 +1118,7 @@ class PPPrefill:
                             rows[p].append(r)
                             tile_of[p].append(t)
                             pk[p].append(torch.full((tiles_max,), -(-kv_row // 4096) if c != p else 0))
+                            kv_of[p].append(torch.tensor([[int(dst is model.V_t), a_i]]).expand(tiles_max, 2))
                     a_i += 1
                 else:
                     pages = d.nv * 16
@@ -1137,14 +1141,29 @@ class PPPrefill:
                             )
                             tile_of[p].append(torch.tensor([-1]))
                             pk[p].append(torch.tensor([cnt if c != p else 0]))
+                            kv_of[p].append(torch.tensor([[-1, -1]]))
                     g_i += 1
             cat = lambda xs: [torch.cat(x) for x in xs]
-            self._ho.update(model=model, rows=cat(rows), tile_of=cat(tile_of), pk=cat(pk))
+            self._ho.update(model=model, rows=cat(rows), tile_of=cat(tile_of), pk=cat(pk), kv_of=cat(kv_of))
         tiles = (n_tokens + TILE - 1) // TILE
+        paged = getattr(model, "kv_paged", False)
+        if paged:
+            # position tile t of attention layer a -> page a * copy_pages + table[t / tpb] * tpb + t % tpb
+            # (attn_paged.hpp): bank page % banks, at row page / banks of the pool's shard
+            table = torch.as_tensor(list(model.block_tables[0] if block_table is None else block_table))
+            assert len(table) * model.kv_tpb >= tiles, "the block table does not cover the prompt"
+            pools = [model.K_t.buffer_address(), model.V_t.buffer_address()]
         jobs, packets_in = [], torch.zeros(n, dtype=torch.int64)
         for p in range(n):
             sel = self._ho["tile_of"][p] < tiles
             jobs.append(self._ho["rows"][p][sel])
+            if paged:  # (jobs[p] is a copy: the cached rows keep their contiguous-mode targets)
+                kv, t = self._ho["kv_of"][p][sel], self._ho["tile_of"][p][sel]
+                is_kv = kv[:, 0] >= 0
+                t, which, a = t[is_kv], kv[is_kv, 0], kv[is_kv, 1] % model._attn_copies
+                page = a * model.kv_copy_pages + table[t // model.kv_tpb] * model.kv_tpb + t % model.kv_tpb
+                jobs[p][is_kv, 5] = torch.tensor(pools)[which] + (page // banks) * kv_row
+                jobs[p][is_kv, 6] = page % banks
             packets_in += torch.bincount(jobs[p][:, 0], weights=self._ho["pk"][p][sel].double(), minlength=n).long()
         packets_in = packets_in.tolist()
         most = max(1, max(len(jb) for jb in jobs))
