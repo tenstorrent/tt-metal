@@ -187,3 +187,58 @@ mix-up), `test_distributed_rms_norm_perf.py` (perf driver); both run with `--no-
 - Tests added: `test_distributed_rms_norm_perf_guard.py` (config-spanning same-session A/B, correctness-checked),
   `_zone_report.py` (zone table off `profile_log_device.csv`); `test_distributed_rms_norm_perf_traced.py` gained
   `DRMS_PT_EXTRA_ABLATE`.
+
+## Refinement 3 — OVERLAP: hide the exchange behind the local work (exposed 6.0 / 3.4 / 9.4 µs)
+- Date: 2026-10-29
+- What was done (perf, OVERLAP; SUPPORTED unchanged). Diagnosed first on the traced slowest chip with stage zones: launch
+  skew (~4 µs between the earliest and the last-launched chip, read off the ports' ready-fence waits) is most of op −
+  stub, and every chip ends at about the same absolute time as the last-launched one; the controllable part is the chain
+  from a wave's last landing to its stores (every core of the slowest chip gets wave w's inv within < 1 µs, then the
+  wave's ~800 KB stores leave as one DRAM burst). That chain was collect 1.45 µs (0.95 of it a RISC-V column-0 scatter),
+  fold 0.68, inv all-gather 1.1 (28 face writes), a 14-atomic SEM_INV announce, push, scale, store; and owners folded
+  every owned wave before scaling any. Levers kept:
+  - records land in row 0 of their `cb_stats` pages by two 64 B NoC reads (no RISC-V scatter; collect 1.45 → 0.6 µs;
+    `cb_record_scratch` (G+1)·q → q pages);
+  - fold unchanged in arithmetic (fp32 SFPU adds, position order), finalize on row 0 (`VectorMode::R`);
+  - compact inv all-gather: the 128 B row-0 record into face 1 of each member's `cb_inv_rms` page; the member's reader
+    moves it into column 0 (4 KiB → 128 B per row per member);
+  - arrival by sentinel: a zeroed record slot means "not arrived" (inv is never +0; a zero inv is written as −0); no
+    SEM_INV atomics, no wave-ordered announce gate;
+  - `FOLD_AHEAD` knob, path-gated: 1 for G_w > 1 (2048×1280 33.4 / 32.5 / 32.2 → 30.8 / 30.8 / 30.7 µs), every fold
+    first for G_w == 1 (D1-HS: 1 costs +0.35 Ring / +0.6 Linear).
+  Measured nulls (reverted): a transposing fold (`transpose_tile`, +0.33 µs per fold — superseded by the row-0
+  finalize); one joined 128 B write per member (20.9 vs 20.7 µs); flushed-only all-gather writes (flat); `FOLD_AHEAD = 0`
+  (last-launched chip +2.6 µs).
+  Reused: the Phase B poll loop, the fold / finalize bodies, `combine_write`-style stateful writes, `cb_inv_rms` /
+  `cb_stats` / `cb_rms_root` (no new CB). Added: `FOLD_AHEAD` / `FOLD_AHEAD_SOLO` / `fold_ahead(plan)` (single source,
+  `DRMS_FOLD_AHEAD` measurement override, in the program hash), `finalize_row0_body`, reader `inv_ready` / `unpack_inv`.
+- Perf (traced slowest chip, 8 traced calls, 1×4 ring, Ring, 2 links, bf16 / TILE bf16 γ, HiFi4 + fp32 acc; this
+  session's Refinement 2 code → now): 640×1792 op 21.4 / 22.0 / 21.8 → 20.4 / 20.6 / 20.7 µs, stub 17.4–17.8 → 16.7–16.9,
+  op − stub ≈ 4.0–4.4 → 3.7–3.9 (6.0 at the heading's Phase 0 baseline); 32×1792 op 12.2–12.8 → 11.7–11.8, stub 9.9 →
+  8.9; 2048×1280 op 32.4–33.0 → 29.6–31.0, stub 28.6 → 28.5, op − stub ≈ 4.3 → 1.0–2.4. The collect / fold / all-gather
+  chain also runs in the stubbed variant, so part of the gain shows in the stub. Note: the traced-slowest metric depends
+  on the trace length (32 traced calls read ~28–31 µs at 640×1792 for every variant); all numbers here use the driver's
+  default 8.
+  Guard set (`test_distributed_rms_norm_perf_guard.py`, now spanning topology / links / axis; Refinement 2 code vs now,
+  op traced slowest): Ring 2 links axis 1 — D3 focus 21.6 → 20.1, RM γ 21.9 → 21.1, no γ 21.5 → 20.9, decode 12.7 → 11.8,
+  2048×1280 32.9 → 30.1, D3-WS 20.7 → 18.0, D3-WS no γ 21.1 → 18.7, D1 10.8 → 10.6, D1-HS 11.8 → 11.3–11.7 (with the
+  G_w == 1 gate), streamed-γ rung 23.0 → 22.1, pass rung 42.3 → 37.3, re-read rung 25.7 → 24.5; Linear 1 link axis 0 — D3
+  focus 24.0 → 22.7, decode 14.2 → 13.3, D3-WS 21.2 → 19.3, D1 11.9 → 11.4–11.7, D1-HS 14.7 → 13.4–14.5 (gate), pass rung
+  45.9 → 42.6, re-read rung 28.2 → 27.4. Noise on this metric: ±0.6 µs (two identical columns of the Refinement 2 run).
+- Accuracy achieved: unchanged arithmetic (same fold order, same finalize body; only the layout of the records and the
+  inv transport changed). Precision baseline (2048×1280 et al.): bf16 + fp32 acc PCC 0.9999985, max_abs 0.046,
+  rel_rms 0.0018, ULP max 1; bf16 + 16-bit acc PCC 0.999993, rel_rms 0.0047; fp32 PCC 0.9999998, rel_rms 0.0011 — equal
+  to the Phase 0 record. Guard cases PCC ≥ 0.99999.
+- Golden test progress: `test_regression` (bit-identical repeats) + `test_ring_mock` + `test_op_loose` 39/39; `test_op`
+  random 400-cell sample (seed 3): 99 passed, 282 invalid-skipped, 19 xfailed, 0 failed. Unit: acceptance 192 passed /
+  1 skipped, L1 fallbacks 26/26, precision baseline 12/12.
+- Issues encountered: none blocking. Ablating one lever at a time is unreliable on this metric: launch skew adds
+  ±1 µs per run, so every decision here used interleaved A/B repeats.
+- What binds now / next (640×1792, slowest chip): launch skew (~4 µs, not the op's to hide) plus the chain after the last
+  landing (~5 µs: collect 0.6, fold 0.7, all-gather ~1.0 — per-packet issue cost, not bytes — member move 0.35,
+  scale 0.3, last-wave store burst ~1.1–1.5). Next candidates, not attempted: the late chip's last publish lags its last
+  x landing by ~2.2 µs (on-chip combine faces-0/2 wire, lamp L5 on-chip half); a smaller last wave (its store burst);
+  TRANSPORT (Refinement 4).
+- Tests added: `test_distributed_rms_norm_r3.py` (an overflowed Σx² row must not hang the sentinel protocol; other rows
+  at the acceptance PCC; `--no-precompile`); `test_distributed_rms_norm_perf_guard.py` gained `DRMS_GUARD_TOPO` /
+  `DRMS_GUARD_LINKS` / `DRMS_GUARD_AXIS`.

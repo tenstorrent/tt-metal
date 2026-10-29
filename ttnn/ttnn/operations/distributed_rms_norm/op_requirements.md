@@ -179,7 +179,7 @@ levers are the next step; not attempted here because they are that refinement's 
 measured against the faster local schedule it has to hide behind. Re-measure the base mechanisms on the fused grid
 rather than assuming the base's wins carry over.
 
-### [ ] Refinement 3 — OVERLAP: hide the exchange behind the local work (exposed 6.0 / 3.4 / 9.4 µs)
+### [x] Refinement 3 — OVERLAP: hide the exchange behind the local work (exposed 6.0 / 3.4 / 9.4 µs)
 
 **Type**: perf
 
@@ -204,6 +204,17 @@ No SUPPORTED change.
 slowest-chip time improves, with the flagged case's PCC held, the golden suite green, the regression suite's
 bit-identical repeats intact, and no regression across the guard set (Refinement 2's set, Linear and Ring, 1 and
 2 links, cluster_axis 0 and 1).
+
+**Outcome** (implementer): 640×1792 traced slowest op 21.4–22.0 → 20.4–20.7 µs (same-session Refinement 2 code),
+stub 17.4–17.8 → 16.7–16.9, op − stub ≈ 4.0–4.4 → 3.7–3.9 (6.0 at the Phase 0 baseline); 2048×1280 op 32.4–33.0 →
+29.6–31.0 (op − stub 4.3 → 1.0–2.4); decode op 12.2–12.8 → 11.7–11.8. Levers kept: records land in row 0 by NoC
+(no RISC-V scatter), row-0 finalize, compact 128 B inv all-gather into face 1 of the members' pages, arrival by
+sentinel (no SEM_INV atomics / announce gate), `FOLD_AHEAD` path-gated (1 for G_w > 1, all for G_w == 1). Nulls:
+transposing fold, joined single write, flushed-only writes, `FOLD_AHEAD = 0`. Bound now: launch skew (~4 µs, not
+hideable) + the post-landing chain (~5 µs: collect 0.6, fold 0.7, all-gather ~1.0 of per-packet issue cost, member
+move 0.35, scale 0.3, last-wave store burst ~1.2). Next: the late chip's last publish lags its last x landing by
+~2.2 µs (on-chip combine wire), a smaller last wave; not attempted here (payoff unclear against the per-core RISC-V
+extraction a compact contribution needs).
 
 **Verifier notes**: OVERLAP is measured only in the op, never on a dummy exchange. Must follow Refinement 2: the
 amount of local work available to hide behind is what Refinement 2 changes.

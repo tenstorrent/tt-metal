@@ -559,3 +559,50 @@ chain (Refinement 3): collect (1.35 µs per owned wave), fold (0.7), inv all-gat
 local DRAM traffic now adds ~5 µs on top of the 12.6 µs chain floor instead of ~8.
 The x re-read rung's deadlock note (Refinement 1a) assumed the lagged order; with `COMBINE_LAG = 0` the reader no longer
 pushes wave w+1 before servicing wave w, and the rung keeps `COMBINE_DEPTH` anyway (harmless).
+
+## Refinement 3 — OVERLAP: the post-landing chain (implementer)
+
+**Diagnosis** (640×1792, 1×4 ring, Ring, 2 links, traced slowest chip, `DRMS_PERF_ZONES=1`). The ports' ready-fence
+waits put the earliest chip ~4 µs ahead of the last-launched one, and every chip ends at about the same *absolute*
+time as the last-launched chip: launch skew is the bulk of op − stub and cannot be hidden (no output exists before the
+last chip's records). What the op controls is the chain from a wave's last landing to its stores. On the slowest chip
+every core gets wave w's inv within < 1 µs of every other core, so each wave's stores leave as one ~800 KB DRAM burst
+(~2.3 µs), and the end ≈ the last wave's inv arrival + its burst. Per wave, that chain was collect 1.45 µs (0.42 NoC
+read + **0.95 µs RISC-V column-0 scatter**), fold 0.68, inv all-gather 1.1 (28 × 1 KiB face writes + barrier),
+SEM_INV announce (14 atomics, wave-ordered gate), push, scale, store. Compute also folded every owned wave before
+scaling any, so an owner of a late wave held its early waves' stores until its last records landed.
+
+**What changed** (OVERLAP; no SUPPORTED change):
+- **Records land in row 0** (lamp L5's wire, applied to the cross-device records). Collect reads each 128 B record as
+  two 64 B NoC reads straight into row 0 of faces 0 / 1 of its `cb_stats` page: no RISC-V scatter, no staging
+  (`cb_record_scratch` shrinks to the publish staging). Collect 1.45 → 0.6 µs.
+- **Row-0 fold + finalize.** The fold is unchanged (`copy_tile` with `UnpackToDestFp32` + SFPU `add_binary_tile`, same
+  position order, bit-identical sums); finalize runs the base op's body on row 0 (`VectorMode::R`, vectors 0 / 1 of
+  faces 0 / 1). A transposing fold (`transpose_tile`) was built first: correct, but +0.33 µs per wave, so the
+  transpose moved to the members as a 32-value column-0 move instead.
+- **Compact inv all-gather.** The owner writes the finalized row-0 record (2 × 64 B fp32, 2 × 32 B bf16) into face 1
+  of each member's `cb_inv_rms` page (face 1 is never read by the Col-broadcast scaling); the member's reader moves it
+  into column 0, clears the slot and pushes. 4 KiB → 128 B per row per member.
+- **Arrival by sentinel, no SEM_INV.** inv = rsqrt(ss/W + ε) is never +0 (finalize writes a zero inv as −0, which
+  scales identically), so a zeroed record slot is its own arrival flag: members poll one word per 16 B L1 write granule.
+  The slots are zeroed in the reader prologue (before any owner can write: an owner writes only after this core
+  contributed to it) and cleared by each member when consumed, so a later pass reuses zeroed slots behind the existing
+  `SEM_PASS` barrier. The 14 announce atomics per owned wave and the wave-ordered announce gate are gone (`SEM_INV` is
+  still allocated, unused).
+- **`FOLD_AHEAD`** (new knob, single source in the descriptor, `DRMS_FOLD_AHEAD` for measurement): waves an owner's fold
+  may run ahead of its own scaling. Path-gated: `1` for combine regimes (G_w > 1) — an owner stores its earlier waves
+  before its last owned records land; deadlock-free for any value (an owner folds wave w before it scales wave w, and
+  scale(w) waits only on folds of waves ≤ w). `FOLD_AHEAD_SOLO` = all for G_w == 1 (D1 / D1-HS: the core owns every
+  wave and its inv returns through its own reader; 1 measured +0.35 / +0.6 µs there). 0 measured worse (last-launched
+  chip +2.6 µs: a fold waits behind the previous wave's scaling).
+
+**Measured nulls** (built, A/B'd interleaved, reverted): one 128 B write per member after joining the two halves on the
+owner's RISC-V (the join costs what the 14 saved write issues save: 640×1792 20.9 vs 20.7 µs); flushed-only
+all-gather writes (`noc_async_writes_flushed` instead of the ack barrier, legal once no semaphore follows): flat.
+
+**Not attempted**: lamp L5 for the *on-chip* combine (contributor partials as 128 B rows) — the late chip's last
+publish lags its last landing by ~2.2 µs (square, faces-0/2 contribution, gather wait, chip sum, 0.4 µs record
+extraction), and that publish time feeds the early chip's last landing; a compact contribution needs either a
+per-contributor RISC-V column extraction (≈ 0.25 µs on every core per wave) or a transposed collapse, so its payoff is
+unclear. Lamps L7 (owner placement) / L8 (notify quantum) and multicast inv all-gather (row-groups of 14 consecutive
+workers are not NoC rectangles on this grid) were not built.
