@@ -115,7 +115,8 @@ class Device:
     inputs: list[Input]  # in the order the run loop receives them
     outputs: list[Output]  # in the order it sends them
     acks: Word | None  # D2H layer acks
-    dummy: int = 0  # Handoff.dummy
+    warmup_out: int = 0  # Handoff.warmup_out
+    warmup_in: int = 0  # Handoff.warmup_in
 
     def words(self) -> list[Word]:
         """Every word, in the same order on every device of the stage."""
@@ -129,8 +130,9 @@ class Device:
 
     @property
     def consumed(self) -> int:
-        """Rank 0 counts the dummy it sent as consumed too, once it is out."""
-        return min(i.consumed.chunks for i in self.inputs) + (self.dummy if self.produced >= 1 else 0)
+        """Warm-up sent but never taken in counts as consumed too, once the first output is out."""
+        warmup = self.warmup_out - self.warmup_in if self.produced >= 1 else 0
+        return min(i.consumed.chunks for i in self.inputs) + warmup
 
     def read(self) -> bool:
         """Read every word; True if any moved. The counters are uint32: a word below its last read has wrapped."""
@@ -176,8 +178,8 @@ class Device:
         ]
         if self.acks is not None:
             parts.append(f"acks={self.acks.chunks}")
-        if self.dummy:
-            parts.append(f"dummy={self.dummy}")
+        if self.warmup_out or self.warmup_in:
+            parts.append(f"warmup out={self.warmup_out} in={self.warmup_in}")
         return f"  device ({self.r},{self.c}): " + ", ".join(parts)
 
 
@@ -188,8 +190,8 @@ class Handoff:
     stage_idx: int
     pid: int
     layers: str
-    warmup: int
-    dummy: int
+    warmup_out: int
+    warmup_in: int
     timeout_s: float
     first_chunk_timeout_s: float
     poll_s: float
@@ -211,7 +213,8 @@ def load(probe_path: str) -> Handoff:
                 for o in dev["outputs"]
             ],
             acks=None if dev["acks"] is None else Word(**dev["acks"]),
-            dummy=d["dummy"],
+            warmup_out=d["warmup_out"],
+            warmup_in=d["warmup_in"],
         )
         for dev in d["devices"]
     ]
@@ -252,7 +255,7 @@ def main(probe_path: str) -> int:
             )
             return 1
         # Until the first real chunk is out, the trace capture can hold the stage still for seconds.
-        limit_s = handoff.timeout_s if dev00.produced >= 1 + handoff.warmup else handoff.first_chunk_timeout_s
+        limit_s = handoff.timeout_s if dev00.produced >= 1 + handoff.warmup_out else handoff.first_chunk_timeout_s
 
         now = time.monotonic()
         if moved:

@@ -8,7 +8,7 @@ L1 address) and how far it moves per chunk. hang_watcher.py polls them out of pr
 them after arming. The hand-off is one line of JSON. Spread out, with one device of a GLM-5.3 middle rank
 (addresses made up):
 
-    {"stage_idx": 1, "pid": 4242, "layers": "20-39", "warmup": 1, "dummy": 0, "timeout_s": 10.0,
+    {"stage_idx": 1, "pid": 4242, "layers": "20-39", "warmup_out": 1, "warmup_in": 1, "timeout_s": 10.0,
      "first_chunk_timeout_s": 100.0, "poll_s": 2.0, "command": "",
      "devices": [
        {"uid": 81985529, "r": 0, "c": 0,
@@ -115,7 +115,8 @@ class HangDetector:
         idx_in: ttnn.D2DStreamServiceReceiver | None,
         idx_out: ttnn.D2DStreamServiceSender | None,
         acks_per_chunk: int,
-        dummy: int,
+        sends_warmup: bool,
+        warmup_acks: int,
         layers: str,
     ) -> HangDetector | None:
         """Start this rank's watcher when TT_PREFILL_STAGE_HANG_DETECTION_ENABLED=1.
@@ -123,11 +124,14 @@ class HangDetector:
         None when it is off, or when the rank has neither a D2D output nor layer acks: then nothing says a
         chunk finished.
 
-        dummy: output chunks this rank produces before its first real chunk, 1 on a traced run: its warm-up send,
-        or its capture's layer acks on the last and single rank.
+        sends_warmup: before the first real chunk, every rank with a D2D output sends a warm-up chunk to the next.
+        warmup_acks: layer acks the trace capture's warm pass fires.
         """
         if os.environ.get(ENABLED_ENV, "0") != "1" or (d2d_out is None and d2h is None):
             return None
+        # Chunks out and in before the first real one: the warm-up send, or the warm pass's acks without a D2D output.
+        warmup_out = int(sends_warmup) if d2d_out is not None else (warmup_acks // acks_per_chunk if warmup_acks else 0)
+        warmup_in = int(sends_warmup and rank > 0)
         devices = []
         for r in range(mesh_device.shape[0]):
             for c in range(mesh_device.shape[1]):
@@ -157,10 +161,8 @@ class HangDetector:
             "stage_idx": rank,
             "pid": os.getpid(),
             "layers": layers,
-            # Every traced rank's first output is its warm-up, not a real chunk.
-            "warmup": dummy,
-            # Other ranks take in a dummy for each they send, so theirs cancels.
-            "dummy": dummy if rank == 0 else 0,
+            "warmup_out": warmup_out,
+            "warmup_in": warmup_in,
             "timeout_s": float(os.environ.get(TIMEOUT_ENV, DEFAULT_TIMEOUT_S)),
             "first_chunk_timeout_s": float(os.environ.get(FIRST_CHUNK_TIMEOUT_ENV, DEFAULT_FIRST_CHUNK_TIMEOUT_S)),
             "poll_s": float(os.environ.get(POLL_ENV, DEFAULT_POLL_S)),

@@ -1284,7 +1284,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         idx_in=idx_in,
         idx_out=idx_out,
         acks_per_chunk=layout.rank_record_count,
-        dummy=int(traced),
+        # What _capture_trace will do before the first real chunk.
+        sends_warmup=traced and hasattr(runtime, "send_warmup_inputs"),
+        warmup_acks=getattr(runtime, "warmup_ack_count", lambda: 0)(),
         layers=f"{first_layer_idx}-{first_layer_idx + num_my_layers - 1}",
     )
     try:
