@@ -307,6 +307,9 @@ def test_served_vllm_cached_prefix_miss_with_budget_split(mesh_device, monkeypat
     monkeypatch.setenv("GLM53_VLLM_WARMUP_PREFILL", "128,2048,4096")
     monkeypatch.setenv("GLM53_VLLM_APC_TAIL_SPLIT", "0")
     monkeypatch.setenv(APC_ALLOC_CHECK_ENV, "1")
+    # what initialize_vllm_model sets in serving: the whole-prefix latent copies key on the device chunk, so a
+    # continuation from any start reads a warmed width (the adapter is built directly here)
+    monkeypatch.setenv("GLM53_PREFIX_BUCKET", str(CHUNK))
     layers = _layer_range()
     cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
     model = GLM53MeshModel(
