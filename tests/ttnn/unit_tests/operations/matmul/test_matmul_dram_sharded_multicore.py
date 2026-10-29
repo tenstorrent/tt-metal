@@ -407,6 +407,40 @@ def test_qb2_demo_block_width(device, case):
     _no_worse_than_stock(err, stock_err, case[10])
 
 
+# Qwen3.8-27B decode projections, per chip of a P150x8 TP=8 row (models/demos/blackhole/qwen36, QWEN36_DSHARD_MC),
+# in the BH_SHAPES format. The activation and output layouts are the model's: gate/up and the GDN in-proj read the
+# 32-core (8 x 4) x 5-tile decode norm output; down reads gate*up, which stays on the gate/up output shard (34 cores x
+# 2 tiles); the GDN out-proj reads its 24-core x 1-tile activation shard. Outputs are per_core_N wide on
+# N / per_core_N cores. The last field is the default workers per bank (tp_common.dram_multicore_workers); the test
+# sweeps 2, 3 and 4. The stock arm runs main's single-reader program with in0_block_w = the activation shard width.
+# fmt: off
+QWEN38_BH_SHAPES = [
+    (5120, 2176, 'bfp4', 'bf16', 'bf16', ('rect', 8, 4), 5, ('rm', 34), 2, 'HiFi2', True, 5, 2),  # gate/up
+    (5120, 2176, 'bfp8', 'bf16', 'bf16', ('rect', 8, 4), 5, ('rm', 34), 2, 'HiFi2', True, 5, 2),  # gate/up
+    (2176, 5120, 'bfp4', 'bf16', 'bf16', ('rm', 34), 2, ('rm', 40), 4, 'HiFi2', True, 2, 3),  # down
+    (2176, 5120, 'bfp8', 'bf16', 'bf16', ('rm', 34), 2, ('rm', 40), 4, 'HiFi2', True, 2, 3),  # down
+    (5120, 2060, 'bfp4', 'bf16', 'bf16', ('rect', 8, 4), 5, ('rm', 13), 5, 'LoFi', True, 5, 2),  # GDN in-proj [qkv|z|a|b]
+    (5120, 2060, 'bfp8', 'bf16', 'bf16', ('rect', 8, 4), 5, ('rm', 13), 5, 'HiFi2', True, 5, 2),  # GDN in-proj
+    (768, 5120, 'bfp4', 'bf16', 'bf16', ('rect', 8, 3), 1, ('rm', 40), 4, 'HiFi2', True, 1, 3),  # GDN out-proj
+    (768, 5120, 'bfp8', 'bf16', 'bf16', ('rect', 8, 3), 1, ('rm', 40), 4, 'HiFi2', True, 1, 3),  # GDN out-proj
+]
+# fmt: on
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole shapes")
+@pytest.mark.parametrize("case", [pytest.param(c, id=_id(c)) for c in QWEN38_BH_SHAPES])
+@pytest.mark.parametrize("cores_per_bank", [2, 3, 4])
+@DEST
+def test_qwen38_decode_shapes(device, case, cores_per_bank, fp32):
+    """The Qwen3.8-27B TP=8 decode shapes at 2, 3 and 4 workers per bank, against float64 of the stored operands
+    and against main's single-reader program on the same operands."""
+    x, w, kw, out, ref = _bh_case(device, case, cores_per_bank, fp32=fp32)
+    err = _check(out, ref, case[4], fp32)
+    stock_err = _rel_err(_stock(x, w, case, kw), ref)
+    print(f"{_id(case)} W={cores_per_bank} fp32={fp32}: pipeline {err:.6f} stock {stock_err:.6f}")
+    _no_worse_than_stock(err, stock_err, fp32)
+
+
 @pytest.mark.skipif(not is_wormhole_b0(), reason="Wormhole shapes (12 DRAM banks)")
 # A served shape with cores_per_bank 1 keeps the single-reader program, which the multi-core arm would only
 # compare with itself (and with in0_block_w 2, which an odd activation shard width does not allow there).

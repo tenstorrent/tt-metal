@@ -18,6 +18,18 @@ class MLPWeights:
     w2: ttnn.Tensor  # down_proj [in, out], bfloat8_b (bfloat4_b if QWEN36_BFP4_MLP_DOWN=1, dense only)
     w3: ttnn.Tensor  # up_proj [in, out], bfloat8_b (bfloat4_b if QWEN36_MLP_GATEUP_BFP8=0, dense only)
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
+    w2_dec: ttnn.Tensor = None  # QWEN36_DSHARD_MC (down): DRAM-width-sharded decode copy of w2; None when off
+
+
+def mlp_dsmc_targets(args, dense=True):
+    """(gateup, down): which QWEN36_DSHARD_MC targets this MLP serves in decode. Dense TP MLP on the default 1D
+    decode path only (the MoE shared expert and the legacy DRAM-sharded decode path keep their layouts)."""
+    if not dense or args is None or getattr(args, "num_devices", 1) <= 1 or not getattr(args, "mlp_1d_decode", False):
+        return False, False
+    return (
+        getattr(args, "mlp_w1_dsmc_progcfg", None) is not None,
+        getattr(args, "mlp_w2_dsmc_progcfg", None) is not None,
+    )
 
 
 def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
@@ -56,6 +68,7 @@ def load_mlp_weights(
     passes ttnn.bfloat8_b explicitly."""
     from models.demos.blackhole.qwen36.tt import tp_common as _tpc
 
+    _dsmc_gu, _dsmc_down = mlp_dsmc_targets(args, dense=down_dtype is None)
     down_dtype = _tpc.resolve_mlp_down_dtype(down_dtype)
     gateup_dtype = _tpc.resolve_mlp_gateup_dtype(gateup_dtype)
     tp = getattr(args, "num_devices", 1) if args is not None else 1
@@ -156,9 +169,32 @@ def load_mlp_weights(
                 dtype=gateup_dtype,
             )
 
-        # Default: INTERLEAVED DRAM shards; ttnn.linear works for decode and prefill. Load order w1, w3, w2 as before.
-        w1 = gate_up("gate_proj", "mlp_w1_decode_1d_progcfg")
-        w3 = gate_up("up_proj", "mlp_w3_decode_1d_progcfg")
+        if _dsmc_gu:
+            # QWEN36_DSHARD_MC (gateup): decode-only w1/w3 (prefill reads the packed AGMM weight), DRAM-width-sharded
+            # for the multi-core DRAM-sharded pipeline. Distinct `.dsmc` cache (layout differs from the interleaved).
+            tpc.dshard_mc_check_weight("gateup", gateup_dtype)
+            if wgu is None:
+                raise ValueError(
+                    f"{tpc.DSHARD_MC_ENV} gateup needs the prefill fused-swiglu AGMM weight (prefill would otherwise "
+                    "read the DRAM-sharded w1/w3)"
+                )
+            w1, w3 = (
+                tpc.shard_w(
+                    state_dict[f"{name}.weight"],
+                    mesh_device,
+                    dim=-1,
+                    memory_config=memcfg,
+                    cache_path=cache(name, ".dsmc"),
+                    dtype=gateup_dtype,
+                )
+                for name, memcfg in (("gate_proj", args.mlp_w1_weight_memcfg), ("up_proj", args.mlp_w3_weight_memcfg))
+            )
+        else:
+            # Default: INTERLEAVED DRAM shards (decode and prefill). Load order w1, w3, w2 as before.
+            w1 = gate_up("gate_proj", "mlp_w1_decode_1d_progcfg")
+            w3 = gate_up("up_proj", "mlp_w3_decode_1d_progcfg")
+        if _dsmc_down:
+            tpc.dshard_mc_check_weight("down", down_dtype)
         w2 = tpc.shard_w(
             state_dict["down_proj.weight"],
             mesh_device,
@@ -185,7 +221,18 @@ def load_mlp_weights(
             ),
             _w2_pc,
         )
-        return MLPWeights(w1=w1, w2=w2, w3=w3, w_gate_up=wgu)
+        w2_dec = None
+        if _dsmc_down:
+            # QWEN36_DSHARD_MC (down): prefill keeps the interleaved w2; decode reads this DRAM-width-sharded copy.
+            w2_dec = tpc.shard_w(
+                state_dict["down_proj.weight"],
+                mesh_device,
+                dim=0,
+                memory_config=args.mlp_w2_weight_memcfg,
+                cache_path=cache("down_proj", ".dsmc"),
+                dtype=down_dtype,
+            )
+        return MLPWeights(w1=w1, w2=w2, w3=w3, w_gate_up=wgu, w2_dec=w2_dec)
 
     def load(name, dtype):
         return ttnn.as_tensor(
@@ -238,6 +285,8 @@ class Qwen36MLP:
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and use_gateup_agmm
+        # QWEN36_DSHARD_MC (gateup / down): decode on the multi-core DRAM-sharded pipeline (load_mlp_weights matches).
+        self._dsmc_gu, self._dsmc_down = mlp_dsmc_targets(args, dense=down_dtype is None)
         self.weights = load_mlp_weights(
             mesh_device,
             state_dict,
@@ -297,6 +346,9 @@ class Qwen36MLP:
         args = self.args
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
+
+        if (self._dsmc_gu or self._dsmc_down) and x.shape[-2] <= ttnn.TILE_SIZE:
+            return self._forward_tp_dsmc_decode(x, ckc, decode_ar)
 
         mc = ttnn.DRAM_MEMORY_CONFIG
         _silu_fused = False
@@ -434,3 +486,94 @@ class Qwen36MLP:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return out
+
+    def _forward_tp_dsmc_decode(self, x, ckc, decode_ar):
+        """QWEN36_DSHARD_MC decode (M <= 1 tile): gate/up and/or down on the multi-core DRAM-sharded pipeline; a
+        target that is off keeps today's 1D decode matmul. The pipeline's output is L1 width-sharded on
+        ceil(N / per_core_N) cores (gate/up 34 x 2 tiles, down 40 x 4), which feeds the next matmul as is."""
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+        from models.demos.blackhole.qwen36.tt import weight_prefetch
+        from models.tt_transformers.tt.ccl import tt_all_reduce
+
+        w = self.weights
+        args = self.args
+        ws = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+
+        def width_sharded(t):
+            return t.is_sharded() and t.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
+        if self._dsmc_gu:
+            # The decode ff_norm output is already act_shard_hidden (32 cores x 5 tiles): no interleave.
+            x_sh = x if width_sharded(x) else ttnn.to_memory_config(x, args.act_shard_hidden)
+            g = ttnn.linear(
+                x_sh, w.w1, program_config=args.mlp_w1_dsmc_progcfg, compute_kernel_config=ckc, memory_config=ws
+            )
+            u = ttnn.linear(
+                x_sh, w.w3, program_config=args.mlp_w3_dsmc_progcfg, compute_kernel_config=ckc, memory_config=ws
+            )
+            if x_sh is not x:
+                ttnn.deallocate(x_sh)
+            # SiLU on the mul input: a fused activation would drop the matmul back to the single-reader program.
+            hidden = ttnn.mul(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=g.memory_config())
+            ttnn.deallocate(g)
+            ttnn.deallocate(u)
+        else:
+            # Today's 1D decode gate/up (silu fused in the w1 progcfg), as _forward_tp.
+            x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            w1_out = weight_prefetch.linear(
+                x_il,
+                w.w1,
+                args.mlp_w1_decode_1d_progcfg,
+                compute_kernel_config=ckc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            w3_out = weight_prefetch.linear(
+                x_il,
+                w.w3,
+                args.mlp_w3_decode_1d_progcfg,
+                compute_kernel_config=ckc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(x_il)
+            hidden = ttnn.mul(w1_out, w3_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(w1_out)
+            ttnn.deallocate(w3_out)
+
+        if self._dsmc_down:
+            h_sh = hidden if width_sharded(hidden) else ttnn.to_memory_config(hidden, args.mlp_w2_dsmc_act_memcfg)
+            partial = ttnn.linear(
+                h_sh, w.w2_dec, program_config=args.mlp_w2_dsmc_progcfg, compute_kernel_config=ckc, memory_config=ws
+            )
+            if h_sh is not hidden:
+                ttnn.deallocate(h_sh)
+        else:
+            # 1D mcast decode down-proj needs an interleaved in0.
+            h_il = ttnn.to_memory_config(hidden, ttnn.L1_MEMORY_CONFIG) if hidden.is_sharded() else hidden
+            partial = weight_prefetch.linear(
+                h_il,
+                w.w2,
+                args.mlp_w2_decode_1d_progcfg,
+                compute_kernel_config=ckc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            if h_il is not hidden:
+                ttnn.deallocate(h_il)
+        ttnn.deallocate(hidden)
+
+        if decode_ar is not None:
+            # all_reduce reshards the partial into RES40 (to_memory_config) as it does today.
+            return decode_ar.all_reduce(partial)
+        if partial.is_sharded():
+            p_il = ttnn.to_memory_config(partial, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(partial)
+            partial = p_il
+        return tt_all_reduce(
+            partial,
+            self.device,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            num_reduce_scatter_links=tpc.prefill_rs_links(partial.shape[-2]),
+            topology=args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )

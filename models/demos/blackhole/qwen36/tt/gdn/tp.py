@@ -473,6 +473,9 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard")),
             dtype=_in_dtype,
         )
+        _dsmc_in = _proj1d and getattr(args, "gdn_qkvz_dsmc_progcfg", None) is not None
+        if _dsmc_in:
+            tpc.dshard_mc_check_weight("gdn_in", _in_dtype)
         if _proj1d:
             # QWEN36_WEIGHT_PREFETCH (gdn_in): receiver-contiguous decode copy for the Tensor prefetcher.
             _pc = getattr(args, "gdn_qkvz_decode_1d_progcfg", None)
@@ -483,6 +486,17 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
                     "gdn_in", "gdn.qkvzab", mesh, fused, -1, _in_dtype, c("qkvzab.il"), _pc, tp
                 ),
                 _pc,
+            )
+        if _dsmc_in:
+            # QWEN36_DSHARD_MC (gdn_in): DRAM-width-sharded decode copy for the multi-core DRAM-sharded pipeline
+            # (prefill keeps the interleaved weight for its AGMM).
+            tw["qkvz_dec"] = tpc.shard_w(
+                fused,
+                mesh,
+                dim=-1,
+                memory_config=args.gdn_qkvzab_weight_memcfg,
+                cache_path=c("qkvzab.dsmc"),
+                dtype=_in_dtype,
             )
     else:
         fused = torch.cat(
@@ -522,6 +536,13 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         cache_path=c("out.dramshard" if _out_sharded else "out"),
         dtype=_out_dtype,
     )
+    _dsmc_out = (
+        not _out_sharded
+        and getattr(args, "proj_1d_decode", False)
+        and getattr(args, "gdn_out_dsmc_progcfg", None) is not None
+    )
+    if _dsmc_out:
+        tpc.dshard_mc_check_weight("gdn_out", _out_dtype)
     if not _out_sharded and getattr(args, "proj_1d_decode", False):
         # QWEN36_WEIGHT_PREFETCH (gdn_out): receiver-contiguous decode copy for the Tensor prefetcher.
         _pc = getattr(args, "gdn_out_decode_1d_progcfg", None)
@@ -529,9 +550,19 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             mesh,
             tw["out"],
             weight_prefetch.load_prefetched(
-                "gdn_out", "gdn.out_proj", mesh, sd[P + "out_proj.weight"], 0, ttnn.bfloat8_b, c("out"), _pc, tp
+                "gdn_out", "gdn.out_proj", mesh, sd[P + "out_proj.weight"], 0, _out_dtype, c("out"), _pc, tp
             ),
             _pc,
+        )
+    if _dsmc_out:
+        # QWEN36_DSHARD_MC (gdn_out): DRAM-width-sharded decode copy (prefill keeps out_colpar / the interleaved out).
+        tw["out_dec"] = tpc.shard_w(
+            sd[P + "out_proj.weight"],
+            mesh,
+            dim=0,
+            memory_config=args.gdn_out_dsmc_weight_memcfg,
+            cache_path=c("out.dsmc"),
+            dtype=_out_dtype,
         )
     if getattr(args, "num_devices", 1) > 1:
         # COLUMN-parallel copy of the out-proj for prefill.
@@ -649,6 +680,9 @@ class TPGatedDeltaNet:
         # PREFILL out-proj as column-parallel AG+matmul (takes precedence over the MMRS arm when the
         # col-sharded weight was loaded).
         self._out_colpar_prefill = "out_colpar" in tw
+        # QWEN36_DSHARD_MC (gdn_in / gdn_out): decode copies on the multi-core DRAM-sharded pipeline when loaded.
+        self._dsmc_in = "qkvz_dec" in tw
+        self._dsmc_out = "out_dec" in tw
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).
@@ -1839,13 +1873,7 @@ class TPGatedDeltaNet:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
         assert 1 <= B <= self._decode_B == self.B
         # the fused [qkv|z|a|b] decode projection (1D matmul) straight into L1; the op consumes the whole row.
-        qkvzab = tpc.matmul_1d_decode(
-            x,
-            tw["qkvz"],
-            self.args.gdn_qkvz_decode_1d_progcfg,
-            self.cfg_in,
-            out_memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        qkvzab = self._qkvz_decode(x, out_memory_config=ttnn.L1_MEMORY_CONFIG)
         qkvzab = ttnn.reshape(qkvzab, (1, B, qkvzab.shape[-1]))
         gated = ttnn.experimental.kda.gdn_decode_step(
             qkvzab,
@@ -1961,10 +1989,42 @@ class TPGatedDeltaNet:
             ttnn.deallocate(t)
         return tuple(outs)
 
+    def _qkvz_decode(self, x, out_memory_config):
+        """The decode [qkv|z|a|b] projection (M <= 1 tile) into `out_memory_config` (interleaved): the 1D matmul on
+        the interleaved fused weight, or under QWEN36_DSHARD_MC (gdn_in) the multi-core DRAM-sharded pipeline on its
+        DRAM-width-sharded copy (act_shard_hidden input, then one reshard to the interleaved output)."""
+        if self._dsmc_in:
+            return tpc.sharded_decode_matmul(
+                x,
+                self.tw["qkvz_dec"],
+                self.cfg_in,
+                self.args.gdn_qkvz_dsmc_progcfg,
+                self.args.act_shard_hidden,
+                None,
+                None,
+                decode_out_memory_config=out_memory_config,
+            )
+        return tpc.matmul_1d_decode(
+            x, self.tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg_in, out_memory_config=out_memory_config
+        )
+
     def _row_proj(self, x, weight):
         """Row-parallel out projection: DRAM-sharded decode/prefill matmul (K=gdn_value_dim_tp),
         matching the in-proj. Falls back to plain interleaved on single device (no sharded memcfg)."""
         if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
+            if self._dsmc_out and weight is self.tw["out"] and x.dtype == ttnn.bfloat16:
+                # QWEN36_DSHARD_MC (gdn_out): reshard to act_shard_gdn_value (24 cores x 1 tile at TP8), multi-core
+                # DRAM-sharded matmul on the decode copy, then DRAM as the 1D arm returns.
+                return tpc.sharded_decode_matmul(
+                    x,
+                    self.tw["out_dec"],
+                    self.cfg,
+                    self.args.gdn_out_dsmc_progcfg,
+                    self.args.act_shard_gdn_value,
+                    None,
+                    None,
+                    decode_out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
             # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
             return tpc.matmul_1d_decode(
                 x, weight, self.args.gdn_out_decode_1d_progcfg, self.cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -2015,12 +2075,8 @@ class TPGatedDeltaNet:
                 qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
             elif getattr(self.args, "proj_1d_decode", False) and S <= tpc.TILE_SIZE:
                 # Decode: small-grid 1D matmul on the interleaved fused weight (beats the DRAM-sharded grid).
-                qkvzab = tpc.matmul_1d_decode(
-                    x,
-                    self.tw["qkvz"],
-                    self.args.gdn_qkvz_decode_1d_progcfg,
-                    self.cfg_in,
-                    out_memory_config=ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
+                qkvzab = self._qkvz_decode(
+                    x, out_memory_config=ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
                 )
             else:
                 qkvzab = self._col_proj(
@@ -3378,12 +3434,8 @@ class TPGatedDeltaNet:
             "the fused GDN spec op needs the fused [qkv|z|a|b] weight and the 1D decode projection "
             f"(fuse_ab={self._fuse_ab}, proj_1d_decode={getattr(self.args, 'proj_1d_decode', False)}, S={S})"
         )
-        qkvzab = tpc.matmul_1d_decode(
-            x,
-            self.tw["qkvz"],
-            self.args.gdn_qkvz_decode_1d_progcfg,
-            self.cfg_in,
-            out_memory_config=ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
+        qkvzab = self._qkvz_decode(
+            x, out_memory_config=ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
         )
         return ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
 

@@ -764,6 +764,150 @@ def mlp_fidelity(math_fidelity=None):
     return table[name]
 
 
+# QWEN36_DSHARD_MC (default off): decode projections on ttnn's multi-core DRAM-sharded pipeline
+# (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig with use_multicore_pipeline=True and
+# num_workers_per_dram_bank >= 2; tests/ttnn/unit_tests/operations/matmul/test_matmul_dram_sharded_multicore.py).
+# Meant for BFP4 (GPTQ) weights, where the weight read is the whole cost; BFP8 is allowed for A/B. Targets:
+#   gateup  - dense-MLP w1/w3 load DRAM-width-sharded (prefill reads the packed AGMM weight, so it must exist)
+#   down    - dense-MLP w2 gets a DRAM-width-sharded decode copy (prefill keeps the interleaved w2)
+#   gdn_in  - GDN [qkv|z|a|b] in-proj gets a DRAM-width-sharded decode copy
+#   gdn_out - GDN out-proj gets a DRAM-width-sharded decode copy (prefill keeps out_colpar / interleaved out)
+# Value: 0/off (default) | all | a comma list of the targets. Per target, QWEN36_DSHARD_MC_W_<T> (workers per DRAM
+# bank, default the qb2 rule dram_multicore_workers) and QWEN36_DSHARD_MC_IBW_<T> (K tiles per streamed weight
+# block, default 4). The output of this config is width-sharded on ceil(N / per_core_N) cores, row-major on the
+# compute grid; the op ignores any caller shard spec, so per_core_N (the OUTPUT shard width) must divide N tiles.
+DSHARD_MC_ENV = "QWEN36_DSHARD_MC"
+DSHARD_MC_TARGETS = ("gateup", "down", "gdn_in", "gdn_out")
+DSHARD_MC_DEFAULT_IBW = 4
+# Largest output core count picked for per_core_N (gate/up 68 tiles -> 2 x 34, down/gdn_out 160 -> 4 x 40,
+# gdn_in 65 -> 5 x 13).
+DSHARD_MC_MAX_OUT_CORES = 40
+# Tiles per column pass in the pipeline's compute (factory dst_tiles).
+_DSHARD_MC_DST_TILES = 8
+_DSHARD_MC_LOGGED = False
+
+
+def parse_dshard_mc_targets(value):
+    """QWEN36_DSHARD_MC value -> frozenset of targets. ''/0/off -> empty; all/1/on -> every target."""
+    v = (value or "").strip().lower()
+    if v in ("", "0", "off", "false", "no"):
+        return frozenset()
+    out = set()
+    for tok in v.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if tok in ("all", "1", "on", "true", "yes"):
+            out.update(DSHARD_MC_TARGETS)
+        elif tok in DSHARD_MC_TARGETS:
+            out.add(tok)
+        else:
+            raise ValueError(
+                f"{DSHARD_MC_ENV}: unknown target {tok!r}; expected 0, all or a comma list of {DSHARD_MC_TARGETS}"
+            )
+    return frozenset(out)
+
+
+def dshard_mc_targets():
+    global _DSHARD_MC_LOGGED
+    targets = parse_dshard_mc_targets(os.environ.get(DSHARD_MC_ENV, "0"))
+    if targets and not _DSHARD_MC_LOGGED:
+        _DSHARD_MC_LOGGED = True
+        logger.info(f"{DSHARD_MC_ENV}: multi-core DRAM-sharded decode matmul for {sorted(targets)}")
+    return targets
+
+
+def dshard_mc_enabled(target):
+    assert target in DSHARD_MC_TARGETS, target
+    return target in dshard_mc_targets()
+
+
+def dshard_mc_bank_tiles(n):
+    """Weight tiles per DRAM bank for an [k, n] weight in create_dram_sharded_mem_config's layout (N padded to a
+    multiple of DRAM_CORES tiles)."""
+    return _roundup(n, TILE_SIZE * DRAM_CORES) // TILE_SIZE // DRAM_CORES
+
+
+def dshard_mc_layout(bank_tiles, workers):
+    """(CN, CK, P) of the pipeline factory: column groups per bank, K row groups per column group, column passes."""
+    cn = min(workers, bank_tiles)
+    ck = workers // bank_tiles if workers > bank_tiles else 1
+    passes = math.ceil(math.ceil(bank_tiles / cn) / _DSHARD_MC_DST_TILES)
+    return cn, ck, passes
+
+
+def dshard_mc_workers_ok(bank_tiles, workers):
+    """The factory's layout rules (TT_FATALs) for `workers` per bank on a bank of `bank_tiles` columns."""
+    if workers < 2:
+        return False
+    cn, ck, passes = dshard_mc_layout(bank_tiles, workers)
+    return (ck == 1 or passes == 1) and bank_tiles // cn >= passes
+
+
+def dshard_mc_workers(target, bank_tiles):
+    """QWEN36_DSHARD_MC_W_<TARGET> or the qb2 rule (about one worker per 8 bank tiles, 2 to 4)."""
+    name = f"{DSHARD_MC_ENV}_W_{target.upper()}"
+    raw = os.environ.get(name, "").strip()
+    workers = int(raw) if raw else dram_multicore_workers(bank_tiles)
+    if not dshard_mc_workers_ok(bank_tiles, workers):
+        raise ValueError(f"{name}={workers}: not a valid multi-core layout for {bank_tiles} tiles per DRAM bank")
+    return workers
+
+
+def dshard_mc_ibw(target):
+    """QWEN36_DSHARD_MC_IBW_<TARGET>: K tiles per streamed weight block (the last block may be short)."""
+    name = f"{DSHARD_MC_ENV}_IBW_{target.upper()}"
+    raw = os.environ.get(name, "").strip()
+    ibw = int(raw) if raw else DSHARD_MC_DEFAULT_IBW
+    if ibw < 1:
+        raise ValueError(f"{name}={ibw}: must be at least 1")
+    return ibw
+
+
+def dshard_mc_out_per_core_n(n_tiles, max_cores=DSHARD_MC_MAX_OUT_CORES):
+    """Smallest divisor of the output width (tiles) that puts it on at most `max_cores` cores."""
+    for d in range(1, n_tiles + 1):
+        if n_tiles % d == 0 and n_tiles // d <= max_cores:
+            return d
+    return n_tiles
+
+
+def create_dram_sharded_mc_progcfg(k, n, out_per_core_n, workers, ibw):
+    """Multi-core DRAM-sharded decode matmul config (M = 1 tile). per_core_N is the output shard width."""
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=ibw,
+        per_core_M=1,
+        per_core_N=out_per_core_n,
+        fused_activation=None,
+        num_workers_per_dram_bank=workers,
+        use_multicore_pipeline=True,
+    )
+
+
+def create_dshard_mc_target_progcfg(target, k, n):
+    """create_dram_sharded_mc_progcfg for a [k, n] per-device weight of `target`, from the flags."""
+    bank_tiles = dshard_mc_bank_tiles(n)
+    return create_dram_sharded_mc_progcfg(
+        k,
+        n,
+        dshard_mc_out_per_core_n(math.ceil(n / TILE_SIZE)),
+        dshard_mc_workers(target, bank_tiles),
+        dshard_mc_ibw(target),
+    )
+
+
+def dshard_mc_check_weight(target, dtype):
+    """Init-time guard for a dsmc target: BFP4/BFP8 weight only, and never also a QWEN36_WEIGHT_PREFETCH target
+    (both would claim the same decode weight; dsmc is the one this flag asks for)."""
+    if dtype not in (ttnn.bfloat4_b, ttnn.bfloat8_b):
+        raise ValueError(f"{DSHARD_MC_ENV} target {target}: weight dtype {dtype} is not bfloat4_b / bfloat8_b")
+    if weight_prefetch.enabled(target):
+        raise ValueError(
+            f"{DSHARD_MC_ENV} and {weight_prefetch.ENV} both name {target!r}; drop it from one of them "
+            f"({DSHARD_MC_ENV} wins only when the prefetch target is off)"
+        )
+
+
 # Grid helpers
 def prefill_grid_default():
     """BH P150: (8,10); WH: (8,8). y capped at 10 on BH (grid_x=10 breaks matmul)."""

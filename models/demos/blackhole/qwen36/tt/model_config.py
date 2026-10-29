@@ -295,6 +295,27 @@ class Qwen36ModelArgs(ModelArgs):
             M, self.gdn_value_dim_tp, self.dim, num_cores=84 if tp8 else 33, grid_w=self.decode_grid_w
         )
 
+        # QWEN36_DSHARD_MC (default off): multi-core DRAM-sharded pipeline decode configs for the enabled targets
+        # (tp_common.create_dshard_mc_target_progcfg; per_core_N is the output shard width). None when off.
+        _dsmc = tpc.dshard_mc_targets()
+        self.dshard_mc_targets = _dsmc
+        self.mlp_w1_dsmc_progcfg = self.mlp_w3_dsmc_progcfg = self.mlp_w2_dsmc_progcfg = None
+        self.gdn_qkvz_dsmc_progcfg = self.gdn_out_dsmc_progcfg = None
+        self.gdn_out_dsmc_weight_memcfg = self.mlp_w2_dsmc_act_memcfg = None
+        if "gateup" in _dsmc:
+            self.mlp_w1_dsmc_progcfg = tpc.create_dshard_mc_target_progcfg("gateup", self.dim, self.hidden_dim // tp)
+            self.mlp_w3_dsmc_progcfg = tpc.create_dshard_mc_target_progcfg("gateup", self.dim, self.hidden_dim // tp)
+        if "down" in _dsmc:
+            self.mlp_w2_dsmc_progcfg = tpc.create_dshard_mc_target_progcfg("down", self.hidden_dim // tp, self.dim)
+            # down's input when gate/up stay on the 1D path (interleaved hidden): 4 cores x 17 tiles at TP8. With
+            # gateup on, the gate/up output shard (34 cores x 2 tiles) feeds down directly.
+            self.mlp_w2_dsmc_act_memcfg = tpc.create_activation_shard_config(self.hidden_dim // tp)
+        if "gdn_in" in _dsmc:
+            self.gdn_qkvz_dsmc_progcfg = tpc.create_dshard_mc_target_progcfg("gdn_in", self.dim, self.gdn_qkvzab_dim_tp)
+        if "gdn_out" in _dsmc:
+            self.gdn_out_dsmc_progcfg = tpc.create_dshard_mc_target_progcfg("gdn_out", self.gdn_value_dim_tp, self.dim)
+            self.gdn_out_dsmc_weight_memcfg = tpc.create_dram_sharded_mem_config(self.gdn_value_dim_tp, self.dim)
+
         # Prefill matmul factory (M = seq_len)
         self._prefill_grid = tpc.prefill_grid_default()
         self.prefill_tuning = tpc.prefill_tuning(tp)
