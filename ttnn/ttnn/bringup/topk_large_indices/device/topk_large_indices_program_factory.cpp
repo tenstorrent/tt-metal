@@ -153,7 +153,7 @@ ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim) {
     // one binary; rows of at most 32 chunks naturally execute as one segment.
     // Gate on the snapped LLK K so public k values in [528, 1008] get the same
     // fused body as k=1024 instead of silently falling back to classic.
-    if (llk_k >= to_uint32(LlkTargetK::K1024)) {
+    if (llk_k >= to_uint32(LlkTargetK::K512)) {
         return ComputeBodyMode::FusedSegmented;
     }
 
@@ -179,10 +179,10 @@ bool split_whole_rows(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, ui
     if (compute_body_mode(k, input_last_dim) == ComputeBodyMode::Classic) {
         return false;
     }
-    // Only K' 2048 has a split body for a row past one fused segment. Below that the split needs the whole row
-    // to fit a segment, so a longer row could never take it, and compiling reduce_split_row for such a program
+    // Only K' 512 and 2048 have a split body for a row past one fused segment. Otherwise the split needs the whole
+    // row to fit a segment, so a longer row could never take it, and compiling reduce_split_row for such a program
     // just spends kernel config buffer on a path it cannot reach.
-    if (long_rows(k, input_last_dim) && to_uint32(snap_to_llk_target_k(k)) != to_uint32(LlkTargetK::K2048)) {
+    if (long_rows(k, input_last_dim) && to_uint32(snap_to_llk_target_k(k)) == to_uint32(LlkTargetK::K1024)) {
         return false;
     }
     return multi_chunk_rows(k, input_last_dim) && (!row_split_possible(num_rows, num_cores) || num_rows >= num_cores);
@@ -392,11 +392,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         flattened_rows_excluding_last_dim(input.logical_shape()),
         input.logical_shape()[-1],
         static_cast<uint32_t>(cores.size()));
-    // The K' 2048 segmented body holds its unfused accumulator in L1 while a later segment is split across the
+    // The K' 512 / 2048 segmented body holds its unfused accumulator in L1 while a later segment is split across the
     // threads: two sequences of raw 32-bit words, packed out of Dst and unpacked back. Whole rows and
     // block-aligned halves both take it, but only past one segment -- a shorter row never touches the CB.
     const bool has_acc =
-        llk_k == to_uint32(LlkTargetK::K2048) && whole_rows_split && long_rows(k, input.logical_shape()[-1]);
+        llk_k != to_uint32(LlkTargetK::K1024) && whole_rows_split && long_rows(k, input.logical_shape()[-1]);
     if (has_acc) {
         // Same shape as a survivor: two sequences of raw 32-bit words.
         const auto acc_cb_config =
