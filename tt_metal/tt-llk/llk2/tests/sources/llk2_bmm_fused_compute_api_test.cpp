@@ -8,7 +8,7 @@
 // This file gives the kernel what tt-metal's build would (tests/helpers/tt_metal_kernel.h): its compile-time args from
 // the test's parameters, named args for the CB ids and formats and the activation, and the harness's stand-in for
 // tt-metal's DataflowBuffer (tests/helpers/test_dataflow_buffer.h). The test's defines (FUSE_BIAS, PACKER_L1_ACC,
-// PACK_RELU, SFPU_ACTIVATION) come from params.h, as tt-metal passes them. run_kernel does the TEST ONLY setup below
+// PACK_RELU, SFPU_ACTIVATION, SFPU_ACTIVATION_ON_MATH) come from params.h, as tt-metal passes them. run_kernel does the TEST ONLY setup below
 // and calls the kernel's kernel_main.
 //
 // What is emulated, and what tt-metal does instead:

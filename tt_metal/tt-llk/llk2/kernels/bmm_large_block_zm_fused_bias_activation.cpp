@@ -21,7 +21,7 @@
 //     acc = reserve_back<AccRing>()                            a zeroed Dest section
 //     reload: copy(wait_front(partials), acc)                  the previous blocks' sum back into Dest
 //     y = matmul(x, w, acc)                                    y = acc + x * w
-//     last block: pack(activation(y), reserve_back(out))       the activation runs on the pack thread; PACK_RELU
+//     last block: pack(activation(y), reserve_back(out))       the activation on activation_thread; PACK_RELU
 //                 (FUSE_BIAS: pack into the partials instead)
 //     else:       pack(y, reserve_back(partials))              spill, or with L1 acc add into the partials
 //     release everything
@@ -114,7 +114,19 @@ constexpr std::uint32_t relu6_max     = 0x40c00000u; // 6.0, the 1.0 kernel's RE
 constexpr std::uint32_t param0        = get_named_compile_time_arg_val("activation_param0");
 constexpr std::uint32_t activation_p0 = kernel_activation == KernelActivation::RELU6 && param0 == 0 ? relu6_max : param0;
 constexpr std::uint32_t activation_p1 = get_named_compile_time_arg_val("activation_param1");
+#endif
+
+// The thread that drives the SFPU for the activation. TRISC2 (pack) by default, as the 1.0 kernel does
+// (apply_activation_from_pack): math moves on to the next block while pack runs the activation. With
+// SFPU_ACTIVATION_ON_MATH (new: the 1.0 kernel has no such define), TRISC1 (math) runs it right after the FPU, as
+// most other kernels do. Nothing else changes: the hand-offs follow the owners (compute_api/sync.h).
+#ifdef SFPU_ACTIVATION_ON_MATH
+constexpr Thread activation_thread = Thread::Math;
 #else
+constexpr Thread activation_thread = Thread::Pack;
+#endif
+
+#ifndef SFPU_ACTIVATION
 constexpr VecFunction activation_function = VecFunction::None;
 constexpr std::uint32_t activation_p0     = 0;
 constexpr std::uint32_t activation_p1     = 0;
@@ -155,22 +167,22 @@ constexpr bool relu_on_matmul_out = pack_relu && !fuse_bias;
 /// Two Dest sections: math writes one block while pack reads the other.
 using AccRing = DestRing<acc_spec>;
 
-/// The activation on y, driven from the pack thread (the 1.0 kernel's apply_activation_from_pack). Without one, y.
+/// The activation on y, driven from activation_thread. Without one, y.
 template <const TensorSpec<tensor_rank>& D, class R>
 inline __attribute__((always_inline)) auto activation(const Tensor<D, R>& y)
 {
-    constexpr vec_modifiers on_pack {.thread = Thread::Pack};
+    constexpr vec_modifiers mods {.thread = activation_thread};
     if constexpr (activation_function == VecFunction::Silu)
     {
-        return vec_silu<on_pack>(y);
+        return vec_silu<mods>(y);
     }
     else if constexpr (activation_function == VecFunction::ReluMax)
     {
-        return vec_relu_max<on_pack>(y, activation_p0);
+        return vec_relu_max<mods>(y, activation_p0);
     }
     else if constexpr (activation_function == VecFunction::Hardtanh)
     {
-        return vec_hardtanh<on_pack>(y, activation_p0, activation_p1);
+        return vec_hardtanh<mods>(y, activation_p0, activation_p1);
     }
     else
     {
