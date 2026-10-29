@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Gather writer (BRISC): dual-RISC pattern.
-// 1) Reads full input data row (Wt_input tiles) from DRAM into cb_input.
-// 2) Writes completed output tiles from cb_output to DRAM.
+// 1) Reads full input data row (Wt_input tiles) from DRAM into dfb::input.
+// 2) Writes completed output tiles from dfb::output to DRAM.
 //
 // This runs on BRISC while the reader (NCRISC) reads index tiles and does
 // the element-level gather. Both RISCs do DRAM reads concurrently.
@@ -14,45 +14,40 @@
 
 #include "codegen_gather_common.hpp"
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 #include <cstdint>
 
 void kernel_main() {
     // Runtime args
-    const uint32_t input_addr = get_arg_val<uint32_t>(0);
-    const uint32_t output_addr = get_arg_val<uint32_t>(1);
-    const uint32_t core_loop_count = get_arg_val<uint32_t>(2);
-    const uint32_t core_id = get_arg_val<uint32_t>(3);
+    const uint32_t core_loop_count = get_arg(args::core_loop_count);
+    const uint32_t core_id = get_arg(args::core_id);
 
     // Compile-time args
-    constexpr uint32_t cb_input = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_output = get_compile_time_arg_val(1);
-    constexpr uint32_t Wt_input = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt_index = get_compile_time_arg_val(3);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(4);
+    constexpr uint32_t Wt_input = get_arg(args::Wt_input);
+    constexpr uint32_t Wt_index = get_arg(args::Wt_index);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
     // Both come from gather_output_cb_tiles()/kGatherWriteBatchTiles, the same values the factory
-    // sizes cb_output with -- the Phase 2 wrap clamp below is only correct against the real depth.
-    constexpr uint32_t OUT_CB_DEPTH = get_compile_time_arg_val(5);
-    constexpr uint32_t WRITE_BATCH = get_compile_time_arg_val(6);
-    constexpr auto input_ta_args = TensorAccessorArgs<7>();
-    constexpr auto output_ta_args = TensorAccessorArgs<input_ta_args.next_compile_time_args_offset()>();
+    // sizes dfb::output with; the Phase 2 wrap clamp below is only correct against the real depth.
+    constexpr uint32_t OUT_DFB_DEPTH = get_arg(args::OUT_DFB_DEPTH);
+    constexpr uint32_t WRITE_BATCH = get_arg(args::WRITE_BATCH);
 
     constexpr uint32_t READ_BATCH = kGatherReadBatchTiles;
-    // Read-pointer position within the output CB ring (see the Phase 2 clamp below).
-    uint32_t out_cb_pos = 0;
+    // Read-pointer position within the output DFB ring (see the Phase 2 clamp below).
+    uint32_t out_dfb_pos = 0;
 
     // Input tensor accessor (for DRAM reads)
-    constexpr uint32_t input_tile_bytes = get_tile_size(cb_input);
-    const auto input_accessor = TensorAccessor(input_ta_args, input_addr, input_tile_bytes);
+    constexpr uint32_t input_tile_bytes = get_tile_size(dfb::input);
+    const auto input_accessor = TensorAccessor(tensor::input);
 
     // Output tensor accessor (for DRAM writes)
-    constexpr uint32_t output_tile_bytes = get_tile_size(cb_output);
-    const auto output_accessor = TensorAccessor(output_ta_args, output_addr, output_tile_bytes);
+    constexpr uint32_t output_tile_bytes = get_tile_size(dfb::output);
+    const auto output_accessor = TensorAccessor(tensor::output);
 
     Noc noc;
-    CircularBuffer input_buffer(cb_input);
-    CircularBuffer output_buffer(cb_output);
+    DataflowBuffer input_buffer(dfb::input);
+    DataflowBuffer output_buffer(dfb::output);
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         const uint32_t h = core_loop * num_cores + core_id;
@@ -83,10 +78,10 @@ void kernel_main() {
         uint32_t tiles_written = 0;
         while (tiles_written < Wt_index) {
             uint32_t batch = (Wt_index - tiles_written < WRITE_BATCH) ? (Wt_index - tiles_written) : WRITE_BATCH;
-            // cb_pop_front wraps the read pointer only when a pop lands exactly on the
+            // pop_front wraps the read pointer only when a pop lands exactly on the
             // ring end (dataflow_api.h pop contract), and a flat multi-tile read must
             // not cross it: clamp each batch to the remaining distance to the wrap.
-            const uint32_t to_wrap = OUT_CB_DEPTH - out_cb_pos;
+            const uint32_t to_wrap = OUT_DFB_DEPTH - out_dfb_pos;
             if (batch > to_wrap) {
                 batch = to_wrap;
             }
@@ -106,9 +101,9 @@ void kernel_main() {
             noc.async_writes_flushed();
             output_buffer.pop_front(batch);
             tiles_written += batch;
-            out_cb_pos += batch;
-            if (out_cb_pos == OUT_CB_DEPTH) {
-                out_cb_pos = 0;
+            out_dfb_pos += batch;
+            if (out_dfb_pos == OUT_DFB_DEPTH) {
+                out_dfb_pos = 0;
             }
         }
     }

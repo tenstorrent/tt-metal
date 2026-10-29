@@ -4,7 +4,7 @@
 
 // Gather reader – streaming mode (NCRISC).
 // For large Wt_input where the full input row cannot fit in L1 alongside a
-// Wt_index-deep output CB (see _interleaved_fits_l1).
+// Wt_index-deep output DFB (see _interleaved_fits_l1).
 //
 // Work is split by Wt_index across cores (not Ht like the row-buffered mode).
 // Each core processes a strided subset of output columns across ALL Ht rows.
@@ -23,49 +23,45 @@
 
 #include "codegen_gather_common.hpp"
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 #include <cstdint>
 
 void kernel_main() {
     // Runtime args
-    const uint32_t index_addr = get_arg_val<uint32_t>(0);
-    const uint32_t core_loop_count = get_arg_val<uint32_t>(1);
-    const uint32_t tile_width = get_arg_val<uint32_t>(2);
-    const uint32_t tile_height = get_arg_val<uint32_t>(3);
-    const uint32_t core_id = get_arg_val<uint32_t>(4);
+    const uint32_t core_loop_count = get_arg(args::core_loop_count);
+    const uint32_t tile_width = get_arg(args::tile_width);
+    const uint32_t tile_height = get_arg(args::tile_height);
+    const uint32_t core_id = get_arg(args::core_id);
 
     // Compile-time args
-    constexpr uint32_t cb_input = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_output = get_compile_time_arg_val(2);
-    constexpr uint32_t Ht = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt_input = get_compile_time_arg_val(4);
-    constexpr uint32_t Wt_index = get_compile_time_arg_val(5);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(6);
-    constexpr uint32_t index_valid_h_last = get_compile_time_arg_val(7);
-    constexpr uint32_t index_valid_w_last = get_compile_time_arg_val(8);
-    constexpr uint32_t index_ht_per_batch = get_compile_time_arg_val(9);
-    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(10);
-    constexpr auto index_ta_args = TensorAccessorArgs<11>();
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt_input = get_arg(args::Wt_input);
+    constexpr uint32_t Wt_index = get_arg(args::Wt_index);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
+    constexpr uint32_t index_valid_h_last = get_arg(args::index_valid_h_last);
+    constexpr uint32_t index_valid_w_last = get_arg(args::index_valid_w_last);
+    constexpr uint32_t index_ht_per_batch = get_arg(args::index_ht_per_batch);
+    constexpr uint32_t chunk_tiles = get_arg(args::chunk_tiles);
 
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t n_chunks = (Wt_input + chunk_tiles - 1) / chunk_tiles;
     const uint32_t tile_width_mask = tile_width - 1;
 
     // Index tensor accessor
-    constexpr uint32_t index_tile_bytes = get_tile_size(cb_index);
-    const auto index_accessor = TensorAccessor(index_ta_args, index_addr, index_tile_bytes);
+    constexpr uint32_t index_tile_bytes = get_tile_size(dfb::index);
+    const auto index_accessor = TensorAccessor(tensor::index);
 
     Noc noc;
-    CircularBuffer input_buffer(cb_input);
-    CircularBuffer index_buffer(cb_index);
-    CircularBuffer output_buffer(cb_output);
+    DataflowBuffer input_buffer(dfb::input);
+    DataflowBuffer index_buffer(dfb::index);
+    DataflowBuffer output_buffer(dfb::output);
 
     // Data format sizes for element-level access
-    constexpr uint32_t input_df_size = get_tile_size(cb_input) / get_tile_hw(cb_input);
-    constexpr uint32_t index_df_size = index_tile_bytes / get_tile_hw(cb_index);
-    constexpr uint32_t output_df_size = get_tile_size(cb_output) / get_tile_hw(cb_output);
+    constexpr uint32_t input_df_size = get_tile_size(dfb::input) / get_tile_hw(dfb::input);
+    constexpr uint32_t index_df_size = index_tile_bytes / get_tile_hw(dfb::index);
+    constexpr uint32_t output_df_size = get_tile_size(dfb::output) / get_tile_hw(dfb::output);
 
     constexpr uint32_t face_size = 16;
     constexpr uint32_t FACE_SIZE_MASK = face_size - 1;
@@ -103,7 +99,7 @@ void kernel_main() {
             for (uint32_t chunk = 0; chunk < n_chunks; chunk++) {
                 const uint32_t chunk_first_tile = chunk * chunk_tiles;
                 // The writer always pushes a full chunk_tiles-deep block (tail padded), so
-                // this matches its push cadence and leaves the CB empty for the next block.
+                // this matches its push cadence and leaves the DFB empty for the next block.
                 input_buffer.wait_front(chunk_tiles);
 
                 const uint32_t input_l1 = input_buffer.get_read_ptr();
@@ -146,7 +142,7 @@ void kernel_main() {
                         }
                     }
                 }
-                // Release the block so the writer can refill the CB
+                // Release the block so the writer can refill the DFB
                 input_buffer.pop_front(chunk_tiles);
             }  // chunk loop
 

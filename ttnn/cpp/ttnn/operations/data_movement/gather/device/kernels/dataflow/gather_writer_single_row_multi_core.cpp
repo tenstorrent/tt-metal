@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 #include "api/debug/dprint.h"
 
@@ -18,40 +19,34 @@ To improve performance writer kernel performs both writing as well as reading da
 */
 void kernel_main() {
     // Runtime args
-    const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(0);
-    const uint32_t output_tensor_buffer_addr = get_arg_val<uint32_t>(1);
-    const uint32_t core_loop_count = get_arg_val<uint32_t>(2);
-    const uint32_t core_id = get_arg_val<uint32_t>(3);
+    const uint32_t core_loop_count = get_arg(args::core_loop_count);
+    const uint32_t core_id = get_arg(args::core_id);
 
     // Compile time args
-    constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t output_tensor_cb_index = get_compile_time_arg_val(1);
-    constexpr bool input_tensor_is_dram = get_compile_time_arg_val(2);
-    constexpr bool output_tensor_is_dram = get_compile_time_arg_val(3);
-    constexpr uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr uint32_t Wt_input = get_compile_time_arg_val(5);
-    constexpr uint32_t Wt_index = get_compile_time_arg_val(6);
-    constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(7);
-    constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(8);
-    constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(9);
-    constexpr auto input_tensor_args = TensorAccessorArgs<10>();
-    constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
+    constexpr bool input_tensor_is_dram = get_arg(args::input_tensor_is_dram);
+    constexpr bool output_tensor_is_dram = get_arg(args::output_tensor_is_dram);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt_input = get_arg(args::Wt_input);
+    constexpr uint32_t Wt_index = get_arg(args::Wt_index);
+    constexpr uint32_t total_number_of_cores = get_arg(args::total_number_of_cores);
+    constexpr uint32_t compute_with_storage_grid_size_x = get_arg(args::compute_with_storage_grid_size_x);
+    constexpr uint32_t compute_with_storage_grid_size_y = get_arg(args::compute_with_storage_grid_size_y);
 
     constexpr uint32_t one_tile = 1;
 
     // Input tensor config
-    const auto input_tensor_dram = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
+    const auto input_tensor_dram = TensorAccessor(tensor::input_tensor);
 
     // Output tensor config
-    const auto output_tensor_dram = TensorAccessor(output_tensor_args, output_tensor_buffer_addr);
+    const auto output_tensor_dram = TensorAccessor(tensor::output_tensor);
 
     // Tile size in bytes for input and output tensors
-    constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
-    constexpr uint32_t output_tensor_tile_size_bytes = get_tile_size(output_tensor_cb_index);
+    constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(dfb::input_tensor);
+    constexpr uint32_t output_tensor_tile_size_bytes = get_tile_size(dfb::output_tensor);
 
     Noc noc;
-    DataflowBuffer input_dfb(input_tensor_cb_index);
-    DataflowBuffer output_dfb(output_tensor_cb_index);
+    DataflowBuffer input_dfb(dfb::input_tensor);
+    DataflowBuffer output_dfb(dfb::output_tensor);
 
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {

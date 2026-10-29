@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Gather reader (NCRISC): reads index tiles from DRAM, performs element-level
-// L1 gather from input data (already loaded by writer into cb_input),
-// and pushes output tiles to cb_output for the writer to flush to DRAM.
+// L1 gather from input data (already loaded by writer into dfb::input),
+// and pushes output tiles to dfb::output for the writer to flush to DRAM.
 //
 // dim=-1 path: each "row" is one tile-row (Ht index). For each row the writer
-// has loaded Wt_input data tiles into cb_input. We iterate over Wt_index index
+// has loaded Wt_input data tiles into dfb::input. We iterate over Wt_index index
 // tiles, and for each element in the index tile we look up the corresponding
 // element in the data tiles and write it to the output tile.
 //
@@ -16,46 +16,42 @@
 
 #include "codegen_gather_common.hpp"
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 #include <cstdint>
 
 void kernel_main() {
     // Runtime args
-    const uint32_t index_addr = get_arg_val<uint32_t>(0);
-    const uint32_t core_loop_count = get_arg_val<uint32_t>(1);
-    const uint32_t tile_width = get_arg_val<uint32_t>(2);
-    const uint32_t tile_height = get_arg_val<uint32_t>(3);
-    const uint32_t core_id = get_arg_val<uint32_t>(4);
+    const uint32_t core_loop_count = get_arg(args::core_loop_count);
+    const uint32_t tile_width = get_arg(args::tile_width);
+    const uint32_t tile_height = get_arg(args::tile_height);
+    const uint32_t core_id = get_arg(args::core_id);
 
     // Compile-time args
-    constexpr uint32_t cb_input = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_output = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt_input = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt_index = get_compile_time_arg_val(4);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(5);
-    constexpr uint32_t index_valid_h_last = get_compile_time_arg_val(6);
-    constexpr uint32_t index_valid_w_last = get_compile_time_arg_val(7);
-    constexpr uint32_t index_ht_per_batch = get_compile_time_arg_val(8);
-    constexpr auto index_ta_args = TensorAccessorArgs<9>();
+    constexpr uint32_t Wt_input = get_arg(args::Wt_input);
+    constexpr uint32_t Wt_index = get_arg(args::Wt_index);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
+    constexpr uint32_t index_valid_h_last = get_arg(args::index_valid_h_last);
+    constexpr uint32_t index_valid_w_last = get_arg(args::index_valid_w_last);
+    constexpr uint32_t index_ht_per_batch = get_arg(args::index_ht_per_batch);
 
     constexpr uint32_t one_tile = 1;
     const uint32_t tile_width_mask = tile_width - 1;
 
     // Index tensor accessor
-    constexpr uint32_t index_tile_bytes = get_tile_size(cb_index);
-    const auto index_accessor = TensorAccessor(index_ta_args, index_addr, index_tile_bytes);
+    constexpr uint32_t index_tile_bytes = get_tile_size(dfb::index);
+    const auto index_accessor = TensorAccessor(tensor::index);
 
     Noc noc;
-    CircularBuffer input_buffer(cb_input);
-    CircularBuffer index_buffer(cb_index);
-    CircularBuffer output_buffer(cb_output);
+    DataflowBuffer input_buffer(dfb::input);
+    DataflowBuffer index_buffer(dfb::index);
+    DataflowBuffer output_buffer(dfb::output);
 
     // Data format sizes for element-level access
-    constexpr uint32_t input_df_size = get_tile_size(cb_input) / get_tile_hw(cb_input);
-    constexpr uint32_t index_df_size = index_tile_bytes / get_tile_hw(cb_index);
-    constexpr uint32_t output_df_size = get_tile_size(cb_output) / get_tile_hw(cb_output);
+    constexpr uint32_t input_df_size = get_tile_size(dfb::input) / get_tile_hw(dfb::input);
+    constexpr uint32_t index_df_size = index_tile_bytes / get_tile_hw(dfb::index);
+    constexpr uint32_t output_df_size = get_tile_size(dfb::output) / get_tile_hw(dfb::output);
 
     constexpr uint32_t face_size = 16;
     constexpr uint32_t FACE_SIZE_MASK = face_size - 1;
@@ -102,7 +98,7 @@ void kernel_main() {
                             for (uint32_t l = 0; l < face_size; l++) {
                                 const uint32_t global_index = get_value_from_tile(index_l1, count, index_df_size);
 
-                                // Bound reads to cb_input's allocated Wt_input tiles to prevent
+                                // Bound reads to dfb::input's allocated Wt_input tiles to prevent
                                 // an out-of-bounds L1 load (#55819). Invalid-index output remains
                                 // unspecified, including reads of logical input padding. Streaming
                                 // instead skips indices that do not match the current chunk.

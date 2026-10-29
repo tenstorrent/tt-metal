@@ -4,56 +4,51 @@
 
 // Gather writer – streaming mode (BRISC).
 // For large Wt_input where the full input row cannot fit in L1 alongside a
-// Wt_index-deep output CB (see _interleaved_fits_l1).
+// Wt_index-deep output DFB (see _interleaved_fits_l1).
 //
 // Work is split by Wt_index across cores. Each core processes a strided
 // subset of output columns across ALL Ht rows.
 //
 // For each assigned index tile:
-//   1. Walk the Wt_input row in chunk_tiles-deep blocks into cb_input so the
+//   1. Walk the Wt_input row in chunk_tiles-deep blocks into dfb::input so the
 //      reader can scan the index tile once per block
 //   2. Wait for the completed output tile from the reader
 //   3. Write the output tile to DRAM
 
 #include "codegen_gather_common.hpp"
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 #include <cstdint>
 
 void kernel_main() {
     // Runtime args
-    const uint32_t input_addr = get_arg_val<uint32_t>(0);
-    const uint32_t output_addr = get_arg_val<uint32_t>(1);
-    const uint32_t core_loop_count = get_arg_val<uint32_t>(2);
-    const uint32_t core_id = get_arg_val<uint32_t>(3);
+    const uint32_t core_loop_count = get_arg(args::core_loop_count);
+    const uint32_t core_id = get_arg(args::core_id);
 
     // Compile-time args
-    constexpr uint32_t cb_input = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_output = get_compile_time_arg_val(1);
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt_input = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt_index = get_compile_time_arg_val(4);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(5);
-    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(6);
-    constexpr auto input_ta_args = TensorAccessorArgs<7>();
-    constexpr auto output_ta_args = TensorAccessorArgs<input_ta_args.next_compile_time_args_offset()>();
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt_input = get_arg(args::Wt_input);
+    constexpr uint32_t Wt_index = get_arg(args::Wt_index);
+    constexpr uint32_t num_cores = get_arg(args::num_cores);
+    constexpr uint32_t chunk_tiles = get_arg(args::chunk_tiles);
 
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t n_chunks = (Wt_input + chunk_tiles - 1) / chunk_tiles;
     constexpr uint32_t READ_BATCH = kGatherReadBatchTiles;
 
     // Input tensor accessor (for DRAM reads)
-    constexpr uint32_t input_tile_bytes = get_tile_size(cb_input);
-    const auto input_accessor = TensorAccessor(input_ta_args, input_addr, input_tile_bytes);
+    constexpr uint32_t input_tile_bytes = get_tile_size(dfb::input);
+    const auto input_accessor = TensorAccessor(tensor::input);
 
     // Output tensor accessor (for DRAM writes)
-    constexpr uint32_t output_tile_bytes = get_tile_size(cb_output);
-    const auto output_accessor = TensorAccessor(output_ta_args, output_addr, output_tile_bytes);
+    constexpr uint32_t output_tile_bytes = get_tile_size(dfb::output);
+    const auto output_accessor = TensorAccessor(tensor::output);
 
     Noc noc;
-    CircularBuffer input_buffer(cb_input);
-    CircularBuffer output_buffer(cb_output);
+    DataflowBuffer input_buffer(dfb::input);
+    DataflowBuffer output_buffer(dfb::output);
 
     // Reset the column-tile id per row h (see gather_reader_streaming.cpp): the
     // DRAM tile id is h*Wt_* + column, and this core owns the same strided columns

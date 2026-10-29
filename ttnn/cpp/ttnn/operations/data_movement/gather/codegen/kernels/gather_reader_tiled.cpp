@@ -22,51 +22,47 @@
 // CONSTRUCTION: the paired writer (gather_writer_tiled.cpp) walks the identical
 // [start, n) range with the identical row-chunking arithmetic and, on every row
 // change, loads the FULL input row h (all Wt_input tiles) into THIS core's
-// cb_input before the reader consumes it. The reader's
+// dfb::input before the reader consumes it. The reader's
 // input_buffer.wait_front(Wt_input) blocks until exactly those Wt_input tiles
-// are present. No core ever reads a cb_input slot it did not itself populate
+// are present. No core ever reads a dfb::input slot it did not itself populate
 // for the current row.
 
 #include "codegen_gather_common.hpp"
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 #include <cstdint>
 
 void kernel_main() {
     // Runtime args: per-core contiguous output-tile range [start, start+n)
-    const uint32_t index_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start = get_arg_val<uint32_t>(1);
-    const uint32_t n = get_arg_val<uint32_t>(2);
-    const uint32_t tile_width = get_arg_val<uint32_t>(3);
-    const uint32_t tile_height = get_arg_val<uint32_t>(4);
+    const uint32_t start = get_arg(args::start);
+    const uint32_t n = get_arg(args::n);
+    const uint32_t tile_width = get_arg(args::tile_width);
+    const uint32_t tile_height = get_arg(args::tile_height);
 
     // Compile-time args. No core count: this factory hands each core a contiguous output-tile
     // range, so no row is ever derived from a core ordinal.
-    constexpr uint32_t cb_input = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_output = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt_input = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt_index = get_compile_time_arg_val(4);
-    constexpr uint32_t index_valid_h_last = get_compile_time_arg_val(5);
-    constexpr uint32_t index_valid_w_last = get_compile_time_arg_val(6);
-    constexpr uint32_t index_ht_per_batch = get_compile_time_arg_val(7);
-    constexpr auto index_ta_args = TensorAccessorArgs<8>();
+    constexpr uint32_t Wt_input = get_arg(args::Wt_input);
+    constexpr uint32_t Wt_index = get_arg(args::Wt_index);
+    constexpr uint32_t index_valid_h_last = get_arg(args::index_valid_h_last);
+    constexpr uint32_t index_valid_w_last = get_arg(args::index_valid_w_last);
+    constexpr uint32_t index_ht_per_batch = get_arg(args::index_ht_per_batch);
 
     constexpr uint32_t one_tile = 1;
     const uint32_t tile_width_mask = tile_width - 1;
 
-    constexpr uint32_t index_tile_bytes = get_tile_size(cb_index);
-    const auto index_accessor = TensorAccessor(index_ta_args, index_addr, index_tile_bytes);
+    constexpr uint32_t index_tile_bytes = get_tile_size(dfb::index);
+    const auto index_accessor = TensorAccessor(tensor::index);
 
     Noc noc;
-    CircularBuffer input_buffer(cb_input);
-    CircularBuffer index_buffer(cb_index);
-    CircularBuffer output_buffer(cb_output);
+    DataflowBuffer input_buffer(dfb::input);
+    DataflowBuffer index_buffer(dfb::index);
+    DataflowBuffer output_buffer(dfb::output);
 
-    constexpr uint32_t input_df_size = get_tile_size(cb_input) / get_tile_hw(cb_input);
-    constexpr uint32_t index_df_size = index_tile_bytes / get_tile_hw(cb_index);
-    constexpr uint32_t output_df_size = get_tile_size(cb_output) / get_tile_hw(cb_output);
+    constexpr uint32_t input_df_size = get_tile_size(dfb::input) / get_tile_hw(dfb::input);
+    constexpr uint32_t index_df_size = index_tile_bytes / get_tile_hw(dfb::index);
+    constexpr uint32_t output_df_size = get_tile_size(dfb::output) / get_tile_hw(dfb::output);
 
     constexpr uint32_t face_size = 16;
     constexpr uint32_t FACE_SIZE_MASK = face_size - 1;
@@ -85,7 +81,7 @@ void kernel_main() {
             w_count = remaining;
         }
 
-        // Wait for the writer to make the FULL input row h resident in cb_input.
+        // Wait for the writer to make the FULL input row h resident in dfb::input.
         // These Wt_input tiles stay resident for every column w in this chunk.
         input_buffer.wait_front(Wt_input);
         const uint32_t input_l1 = input_buffer.get_read_ptr();

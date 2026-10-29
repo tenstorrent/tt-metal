@@ -8,6 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include <cstdint>
 
 /*
@@ -15,9 +16,9 @@ To improve performance of both reader and writer kernels the work has been split
 save output data.
 
 Reader:
-    * Reads input index tensor data from DRAM and writes it to L1 circular buffer.
+    * Reads input index tensor data from DRAM and writes it to L1 dataflow buffer.
     * Performs calculation on indexes to get the correct value from input tensor indexes.
-    * Writes values to output L1 circular buffer.
+    * Writes values to output L1 dataflow buffer.
 
 Writer:
     * Reads input tensor values from DRAM to L1.
@@ -77,7 +78,7 @@ cores process multiple rows.
     - This ensures efficient utilization of all cores and minimizes idle time during computation.
 
 5. **Final Steps**:
-    - Once the appropriate value is read from input tensor circular buffer they are placed in the output tensor L1.
+    - Once the appropriate value is read from input tensor dataflow buffer they are placed in the output tensor L1.
     - The output data is then written back to DRAM.
 
 ### Example:
@@ -110,45 +111,40 @@ Calculation of each row:
  */
 void kernel_main() {
     // Runtime args
-    const uint32_t input_index_tensor_buffer_addr = get_arg_val<uint32_t>(0);
-    const uint32_t core_loop_count = get_arg_val<uint32_t>(1);
-    const uint32_t tile_width = get_arg_val<uint32_t>(2);
-    const uint32_t tile_height = get_arg_val<uint32_t>(3);
-    const uint32_t core_id = get_arg_val<uint32_t>(4);
+    const uint32_t core_loop_count = get_arg(args::core_loop_count);
+    const uint32_t tile_width = get_arg(args::tile_width);
+    const uint32_t tile_height = get_arg(args::tile_height);
+    const uint32_t core_id = get_arg(args::core_id);
 
     // Compile time args
-    constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t input_index_tensor_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t output_tensor_cb_index = get_compile_time_arg_val(2);
-    constexpr bool input_index_tensor_is_dram = get_compile_time_arg_val(3);
-    constexpr uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr uint32_t Wt_input = get_compile_time_arg_val(5);
-    constexpr uint32_t Wt_index = get_compile_time_arg_val(6);
-    constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(7);
-    constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(8);
-    constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(9);
-    constexpr auto input_index_tensor_args = TensorAccessorArgs<10>();
+    constexpr bool input_index_tensor_is_dram = get_arg(args::input_index_tensor_is_dram);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt_input = get_arg(args::Wt_input);
+    constexpr uint32_t Wt_index = get_arg(args::Wt_index);
+    constexpr uint32_t total_number_of_cores = get_arg(args::total_number_of_cores);
+    constexpr uint32_t compute_with_storage_grid_size_x = get_arg(args::compute_with_storage_grid_size_x);
+    constexpr uint32_t compute_with_storage_grid_size_y = get_arg(args::compute_with_storage_grid_size_y);
 
     constexpr uint32_t one_tile = 1;
     const uint32_t tile_width_mask = tile_width - 1;
 
     // Index tensor config
-    constexpr uint32_t input_index_tensor_tile_size_bytes = get_tile_size(input_index_tensor_cb_index);
-    constexpr DataFormat input_index_tensor_data_format = get_dataformat(input_index_tensor_cb_index);
-    const auto input_index_tensor_dram = TensorAccessor(input_index_tensor_args, input_index_tensor_buffer_addr);
+    constexpr uint32_t input_index_tensor_tile_size_bytes = get_tile_size(dfb::input_index_tensor);
+    constexpr DataFormat input_index_tensor_data_format = get_dataformat(dfb::input_index_tensor);
+    const auto input_index_tensor_dram = TensorAccessor(tensor::input_index_tensor);
 
     // Dataformats size
     constexpr uint32_t input_tensor_data_format_size =
-        get_tile_size(input_tensor_cb_index) / get_tile_hw(input_tensor_cb_index);
+        get_tile_size(dfb::input_tensor) / get_tile_hw(dfb::input_tensor);
     constexpr uint32_t input_index_tensor_data_format_size =
-        input_index_tensor_tile_size_bytes / get_tile_hw(input_index_tensor_cb_index);
+        input_index_tensor_tile_size_bytes / get_tile_hw(dfb::input_index_tensor);
     constexpr uint32_t output_tensor_data_format_size =
-        get_tile_size(output_tensor_cb_index) / get_tile_hw(input_tensor_cb_index);
+        get_tile_size(dfb::output_tensor) / get_tile_hw(dfb::input_tensor);
 
     Noc noc;
-    DataflowBuffer input_index_dfb(input_index_tensor_cb_index);
-    DataflowBuffer input_dfb(input_tensor_cb_index);
-    DataflowBuffer output_dfb(output_tensor_cb_index);
+    DataflowBuffer input_index_dfb(dfb::input_index_tensor);
+    DataflowBuffer input_dfb(dfb::input_tensor);
+    DataflowBuffer output_dfb(dfb::output_tensor);
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         // Calculate tile h coordinate

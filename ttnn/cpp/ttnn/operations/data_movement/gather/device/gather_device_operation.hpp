@@ -10,7 +10,7 @@
 #include <variant>
 
 #include "ttnn/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
@@ -22,23 +22,23 @@ struct GatherDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct SingleRowSingleCore {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     };
 
     struct SingleRowMultiCore {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     };
 
     // ROW_MAJOR variants: row/column split at stick granularity; noc_async_*_sharded with per-shard page size.
     struct RmSingleRowSingleCore {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     };
 
     struct RmSingleRowMultiCore {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     };
 

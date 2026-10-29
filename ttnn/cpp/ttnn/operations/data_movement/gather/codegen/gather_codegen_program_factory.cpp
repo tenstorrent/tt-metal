@@ -12,20 +12,19 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "gather_codegen_device_operation.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim {
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace {
-
-constexpr uint32_t kCbInput = tt::CBIndex::c_0;
-constexpr uint32_t kCbIndex = tt::CBIndex::c_1;
-constexpr uint32_t kCbOutput = tt::CBIndex::c_2;
 
 constexpr const char* kReaderInterleaved =
     "ttnn/cpp/ttnn/operations/data_movement/gather/codegen/kernels/gather_reader.cpp";
@@ -158,17 +157,14 @@ std::vector<std::pair<CoreCoord, uint32_t>> gather_assigned_cores(const CoreSpli
     return assigned;
 }
 
-CBDescriptor make_tile_cb(uint32_t cb_id, const Tensor& tensor, uint32_t depth, const CoreRangeSet& core_range) {
+DataflowBufferSpec make_tile_dfb(const DFBSpecName& dfb_name, const Tensor& tensor, uint32_t depth) {
     const tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     const uint32_t page_size = tensor.buffer()->aligned_page_size();
-    return CBDescriptor{
-        .total_size = depth * page_size,
-        .core_ranges = core_range,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_id),
-            .data_format = data_format,
-            .page_size = page_size,
-        }}},
+    return DataflowBufferSpec{
+        .unique_id = dfb_name,
+        .entry_size = page_size,
+        .num_entries = depth,
+        .data_format_metadata = data_format,
     };
 }
 
@@ -212,8 +208,8 @@ bool gather_interleaved_fits_l1(
         static_cast<uint64_t>(Wt_input) * input_page + index_page + gather_output_cb_tiles(Wt_index) * output_page;
     // Every term is checked, with no short-circuit for a narrow row: the gathered axis is the one
     // axis whose index extent is NOT bounded by the input extent, so a narrow row with a very wide
-    // index would clear any Wt_input floor while its gather_output_cb_tiles(Wt_index)-deep output CB does not fit,
-    // and the row-buffered plan would fail CB allocation instead of reaching the streaming one.
+    // index would clear any Wt_input floor while its gather_output_cb_tiles(Wt_index)-deep output DFB does not fit,
+    // and the row-buffered plan would fail DFB allocation instead of reaching the streaming one.
     return footprint <= gather_usable_l1(input_tensor);
 }
 
@@ -260,7 +256,7 @@ uint32_t gather_streaming_chunk_tiles(const Tensor& input_tensor, const Tensor& 
     return (Wt_input + n_chunks - 1) / n_chunks;
 }
 
-tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryInterleaved::create_descriptor(
+ttnn::device_operation::ProgramArtifacts GatherCodegenProgramFactoryInterleaved::create_program_artifacts(
     const GatherCodegenParams& attributes, const GatherCodegenInputs& tensor_args, Tensor& output_tensor) {
     const auto& in_t = tensor_args.input_tensor;
     const auto& index_t = tensor_args.input_index_tensor;
@@ -272,72 +268,169 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryInterleaved::create_d
         attributes.index_valid_w_last,
         attributes.index_ht_per_batch};
 
+    const auto& input_mesh_tensor = in_t.mesh_tensor();
+    const auto& index_mesh_tensor = index_t.mesh_tensor();
+    const auto& output_mesh_tensor = output_tensor.mesh_tensor();
+
     auto* device = in_t.device();
     const auto split = split_gather_work(*device, attributes.sub_core_grids, geometry.Ht);
 
     const uint32_t tile_width = in_t.tensor_spec().tile().get_width();
     const uint32_t tile_height = in_t.tensor_spec().tile().get_height();
 
-    ProgramDescriptor desc;
-    desc.cbs.push_back(make_tile_cb(kCbInput, in_t, geometry.Wt_input, split.core_range));
-    desc.cbs.push_back(make_tile_cb(kCbIndex, index_t, 1, split.core_range));
-    desc.cbs.push_back(
-        make_tile_cb(kCbOutput, output_tensor, gather_output_cb_tiles(geometry.Wt_index), split.core_range));
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const DFBSpecName INPUT_DFB{"input"};
+    const DFBSpecName INDEX_DFB{"index"};
+    const DFBSpecName OUTPUT_DFB{"output"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName INDEX{"index"};
+    const TensorParamName OUTPUT{"output"};
 
-    KernelDescriptor::CompileTimeArgs reader_ct = {
-        kCbInput,
-        kCbIndex,
-        kCbOutput,
-        geometry.Wt_input,
-        geometry.Wt_index,
-        split.num_cores,
-        geometry.index_valid_h_last,
-        geometry.index_valid_w_last,
-        geometry.index_ht_per_batch,
-    };
-    TensorAccessorArgs(*index_t.buffer()).append_to(reader_ct);
+    ProgramSpec spec;
+    spec.name = "gather_codegen_interleaved";
+    spec.dataflow_buffers.push_back(make_tile_dfb(INPUT_DFB, in_t, geometry.Wt_input));
+    spec.dataflow_buffers.push_back(make_tile_dfb(INDEX_DFB, index_t, 1));
+    spec.dataflow_buffers.push_back(
+        make_tile_dfb(OUTPUT_DFB, output_tensor, gather_output_cb_tiles(geometry.Wt_index)));
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = kReaderInterleaved;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = split.core_range;
-    reader_desc.compile_time_args = reader_ct;
-    reader_desc.config = ReaderConfigDescriptor{};
+    spec.tensor_parameters.push_back(TensorParameter{
+        .unique_id = INPUT,
+        .spec = input_mesh_tensor.tensor_spec(),
+    });
+    spec.tensor_parameters.push_back(TensorParameter{
+        .unique_id = INDEX,
+        .spec = index_mesh_tensor.tensor_spec(),
+    });
+    spec.tensor_parameters.push_back(TensorParameter{
+        .unique_id = OUTPUT,
+        .spec = output_mesh_tensor.tensor_spec(),
+    });
 
-    KernelDescriptor::CompileTimeArgs writer_ct = {
-        kCbInput,
-        kCbOutput,
-        geometry.Wt_input,
-        geometry.Wt_index,
-        split.num_cores,
-        gather_output_cb_tiles(geometry.Wt_index),
-        kGatherWriteBatchTiles};
-    TensorAccessorArgs(*in_t.buffer()).append_to(writer_ct);
-    TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
+    // The reader is the only kernel that touches the index DFB: it fills it from memory and then
+    // reads it, so it is bound as both producer and consumer.
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = READER,
+        .source = kReaderInterleaved,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = INPUT_DFB,
+                    .accessor_name = "input",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INDEX_DFB,
+                    .accessor_name = "index",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INDEX_DFB,
+                    .accessor_name = "index",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT_DFB,
+                    .accessor_name = "output",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INDEX,
+                    .accessor_name = "index",
+                },
+            },
+        .compile_time_args =
+            {
+                {"Wt_input", geometry.Wt_input},
+                {"Wt_index", geometry.Wt_index},
+                {"num_cores", split.num_cores},
+                {"index_valid_h_last", geometry.index_valid_h_last},
+                {"index_valid_w_last", geometry.index_valid_w_last},
+                {"index_ht_per_batch", geometry.index_ht_per_batch},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"core_loop_count", "tile_width", "tile_height", "core_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    });
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kWriterInterleaved;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = split.core_range;
-    writer_desc.compile_time_args = writer_ct;
-    writer_desc.config = WriterConfigDescriptor{};
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = WRITER,
+        .source = kWriterInterleaved,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = INPUT_DFB,
+                    .accessor_name = "input",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT_DFB,
+                    .accessor_name = "output",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INPUT,
+                    .accessor_name = "input",
+                },
+                TensorBinding{
+                    .tensor_parameter_name = OUTPUT,
+                    .accessor_name = "output",
+                },
+            },
+        .compile_time_args =
+            {
+                {"Wt_input", geometry.Wt_input},
+                {"Wt_index", geometry.Wt_index},
+                {"num_cores", split.num_cores},
+                {"OUT_DFB_DEPTH", gather_output_cb_tiles(geometry.Wt_index)},
+                {"WRITE_BATCH", kGatherWriteBatchTiles},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"core_loop_count", "core_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    });
+
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "main",
+        .kernels = {READER, WRITER},
+        .target_nodes = split.core_range,
+    });
 
     // Per-core RT follows the ORDINAL convention: a sequential counter over assigned cores in
     // gather_assigned_cores() order, NOT the per-core work offset. Kernel ABI:
-    // reader [index_addr, n, tile_w, tile_h, core_id], writer [in_addr, out_addr, n, core_id].
+    // reader {core_loop_count = n, tile_width, tile_height, core_id}, writer {core_loop_count = n, core_id}.
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
     uint32_t id = 0;
     for (const auto& [core, n] : gather_assigned_cores(split, geometry.Ht)) {
-        reader_desc.emplace_runtime_args(core, {index_t.buffer(), n, tile_width, tile_height, id});
-        writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), n, id});
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"core_loop_count", n}, {"tile_width", tile_width}, {"tile_height", tile_height}, {"core_id", id}});
+        AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"core_loop_count", n}, {"core_id", id}});
         id++;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    run_args.tensor_args = {
+        {INPUT, input_mesh_tensor},
+        {INDEX, index_mesh_tensor},
+        {OUTPUT, output_mesh_tensor},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
-tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryTiled::create_descriptor(
+ttnn::device_operation::ProgramArtifacts GatherCodegenProgramFactoryTiled::create_program_artifacts(
     const GatherCodegenParams& attributes, const GatherCodegenInputs& tensor_args, Tensor& output_tensor) {
     const auto& in_t = tensor_args.input_tensor;
     const auto& index_t = tensor_args.input_index_tensor;
@@ -350,72 +443,169 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryTiled::create_descrip
         attributes.index_ht_per_batch};
     const uint32_t total_work = geometry.Ht * geometry.Wt_index;
 
+    const auto& input_mesh_tensor = in_t.mesh_tensor();
+    const auto& index_mesh_tensor = index_t.mesh_tensor();
+    const auto& output_mesh_tensor = output_tensor.mesh_tensor();
+
     auto* device = in_t.device();
     const auto split = split_gather_work(*device, attributes.sub_core_grids, total_work);
 
     const uint32_t tile_width = in_t.tensor_spec().tile().get_width();
     const uint32_t tile_height = in_t.tensor_spec().tile().get_height();
 
-    ProgramDescriptor desc;
-    // Identical three-CB footprint to the Interleaved factory, so `gather_interleaved_fits_l1` is
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const DFBSpecName INPUT_DFB{"input"};
+    const DFBSpecName INDEX_DFB{"index"};
+    const DFBSpecName OUTPUT_DFB{"output"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName INDEX{"index"};
+    const TensorParamName OUTPUT{"output"};
+
+    ProgramSpec spec;
+    spec.name = "gather_codegen_tiled";
+    // Identical three-DFB footprint to the Interleaved factory, so `gather_interleaved_fits_l1` is
     // the correct admission test for this factory too.
-    desc.cbs.push_back(make_tile_cb(kCbInput, in_t, geometry.Wt_input, split.core_range));
-    desc.cbs.push_back(make_tile_cb(kCbIndex, index_t, 1, split.core_range));
-    desc.cbs.push_back(
-        make_tile_cb(kCbOutput, output_tensor, gather_output_cb_tiles(geometry.Wt_index), split.core_range));
+    spec.dataflow_buffers.push_back(make_tile_dfb(INPUT_DFB, in_t, geometry.Wt_input));
+    spec.dataflow_buffers.push_back(make_tile_dfb(INDEX_DFB, index_t, 1));
+    spec.dataflow_buffers.push_back(
+        make_tile_dfb(OUTPUT_DFB, output_tensor, gather_output_cb_tiles(geometry.Wt_index)));
 
-    KernelDescriptor::CompileTimeArgs reader_ct = {
-        kCbInput,
-        kCbIndex,
-        kCbOutput,
-        geometry.Wt_input,
-        geometry.Wt_index,
-        geometry.index_valid_h_last,
-        geometry.index_valid_w_last,
-        geometry.index_ht_per_batch,
-    };
-    TensorAccessorArgs(*index_t.buffer()).append_to(reader_ct);
+    spec.tensor_parameters.push_back(TensorParameter{
+        .unique_id = INPUT,
+        .spec = input_mesh_tensor.tensor_spec(),
+    });
+    spec.tensor_parameters.push_back(TensorParameter{
+        .unique_id = INDEX,
+        .spec = index_mesh_tensor.tensor_spec(),
+    });
+    spec.tensor_parameters.push_back(TensorParameter{
+        .unique_id = OUTPUT,
+        .spec = output_mesh_tensor.tensor_spec(),
+    });
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = kReaderTiled;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = split.core_range;
-    reader_desc.compile_time_args = reader_ct;
-    reader_desc.config = ReaderConfigDescriptor{};
+    // The reader is the only kernel that touches the index DFB: it fills it from memory and then
+    // reads it, so it is bound as both producer and consumer.
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = READER,
+        .source = kReaderTiled,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = INPUT_DFB,
+                    .accessor_name = "input",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INDEX_DFB,
+                    .accessor_name = "index",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INDEX_DFB,
+                    .accessor_name = "index",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT_DFB,
+                    .accessor_name = "output",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INDEX,
+                    .accessor_name = "index",
+                },
+            },
+        .compile_time_args =
+            {
+                {"Wt_input", geometry.Wt_input},
+                {"Wt_index", geometry.Wt_index},
+                {"index_valid_h_last", geometry.index_valid_h_last},
+                {"index_valid_w_last", geometry.index_valid_w_last},
+                {"index_ht_per_batch", geometry.index_ht_per_batch},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"start", "n", "tile_width", "tile_height"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    });
 
-    KernelDescriptor::CompileTimeArgs writer_ct = {
-        kCbInput,
-        kCbOutput,
-        geometry.Wt_input,
-        geometry.Wt_index,
-        gather_output_cb_tiles(geometry.Wt_index),
-        kGatherWriteBatchTiles};
-    TensorAccessorArgs(*in_t.buffer()).append_to(writer_ct);
-    TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = WRITER,
+        .source = kWriterTiled,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = INPUT_DFB,
+                    .accessor_name = "input",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT_DFB,
+                    .accessor_name = "output",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INPUT,
+                    .accessor_name = "input",
+                },
+                TensorBinding{
+                    .tensor_parameter_name = OUTPUT,
+                    .accessor_name = "output",
+                },
+            },
+        .compile_time_args =
+            {
+                {"Wt_input", geometry.Wt_input},
+                {"Wt_index", geometry.Wt_index},
+                {"OUT_DFB_DEPTH", gather_output_cb_tiles(geometry.Wt_index)},
+                {"WRITE_BATCH", kGatherWriteBatchTiles},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"start", "n"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    });
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kWriterTiled;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = split.core_range;
-    writer_desc.compile_time_args = writer_ct;
-    writer_desc.config = WriterConfigDescriptor{};
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "main",
+        .kernels = {READER, WRITER},
+        .target_nodes = split.core_range,
+    });
 
     // Per-core RT is the CONTIGUOUS [start, n) output-tile range, unlike Interleaved/Streaming's
     // core ordinal.
-    // Kernel ABI: reader [index_addr, start, n, tile_w, tile_h], writer [in_addr, out_addr, start, n].
+    // Kernel ABI: reader {start, n, tile_width, tile_height}, writer {start, n}.
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
     uint32_t start = 0;
     for (const auto& [core, n] : gather_assigned_cores(split, total_work)) {
-        reader_desc.emplace_runtime_args(core, {index_t.buffer(), start, n, tile_width, tile_height});
-        writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), start, n});
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"start", start}, {"n", n}, {"tile_width", tile_width}, {"tile_height", tile_height}});
+        AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"start", start}, {"n", n}});
         start += n;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    run_args.tensor_args = {
+        {INPUT, input_mesh_tensor},
+        {INDEX, index_mesh_tensor},
+        {OUTPUT, output_mesh_tensor},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
-tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryStreaming::create_descriptor(
+ttnn::device_operation::ProgramArtifacts GatherCodegenProgramFactoryStreaming::create_program_artifacts(
     const GatherCodegenParams& attributes, const GatherCodegenInputs& tensor_args, Tensor& output_tensor) {
     const auto& in_t = tensor_args.input_tensor;
     const auto& index_t = tensor_args.input_index_tensor;
@@ -427,6 +617,10 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryStreaming::create_des
         attributes.index_valid_w_last,
         attributes.index_ht_per_batch};
 
+    const auto& input_mesh_tensor = in_t.mesh_tensor();
+    const auto& index_mesh_tensor = index_t.mesh_tensor();
+    const auto& output_mesh_tensor = output_tensor.mesh_tensor();
+
     auto* device = in_t.device();
     const auto split = split_gather_work(*device, attributes.sub_core_grids, geometry.Wt_index);
 
@@ -434,61 +628,160 @@ tt::tt_metal::ProgramDescriptor GatherCodegenProgramFactoryStreaming::create_des
     const uint32_t tile_height = in_t.tensor_spec().tile().get_height();
     const uint32_t chunk_tiles = gather_streaming_chunk_tiles(in_t, index_t, geometry.Wt_input);
 
-    ProgramDescriptor desc;
-    // The input CB holds one chunk_tiles-deep block of the row rather than the whole row, which is
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const DFBSpecName INPUT_DFB{"input"};
+    const DFBSpecName INDEX_DFB{"index"};
+    const DFBSpecName OUTPUT_DFB{"output"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName INDEX{"index"};
+    const TensorParamName OUTPUT{"output"};
+
+    ProgramSpec spec;
+    spec.name = "gather_codegen_streaming";
+    // The input DFB holds one chunk_tiles-deep block of the row rather than the whole row, which is
     // what makes this the fallback when gather_interleaved_fits_l1() rejects the row-buffered plan.
-    // Both kernels walk ceil(Wt_input / chunk_tiles) blocks of exactly chunk_tiles pages, so the CB
+    // Both kernels walk ceil(Wt_input / chunk_tiles) blocks of exactly chunk_tiles pages, so the DFB
     // is emptied every block and never wraps mid-block.
-    desc.cbs.push_back(make_tile_cb(kCbInput, in_t, chunk_tiles, split.core_range));
-    desc.cbs.push_back(make_tile_cb(kCbIndex, index_t, 1, split.core_range));
-    desc.cbs.push_back(make_tile_cb(kCbOutput, output_tensor, 1, split.core_range));
+    spec.dataflow_buffers.push_back(make_tile_dfb(INPUT_DFB, in_t, chunk_tiles));
+    spec.dataflow_buffers.push_back(make_tile_dfb(INDEX_DFB, index_t, 1));
+    spec.dataflow_buffers.push_back(make_tile_dfb(OUTPUT_DFB, output_tensor, 1));
 
-    KernelDescriptor::CompileTimeArgs reader_ct = {
-        kCbInput,
-        kCbIndex,
-        kCbOutput,
-        geometry.Ht,
-        geometry.Wt_input,
-        geometry.Wt_index,
-        split.num_cores,
-        geometry.index_valid_h_last,
-        geometry.index_valid_w_last,
-        geometry.index_ht_per_batch,
-        chunk_tiles,
-    };
-    TensorAccessorArgs(*index_t.buffer()).append_to(reader_ct);
+    spec.tensor_parameters.push_back(TensorParameter{
+        .unique_id = INPUT,
+        .spec = input_mesh_tensor.tensor_spec(),
+    });
+    spec.tensor_parameters.push_back(TensorParameter{
+        .unique_id = INDEX,
+        .spec = index_mesh_tensor.tensor_spec(),
+    });
+    spec.tensor_parameters.push_back(TensorParameter{
+        .unique_id = OUTPUT,
+        .spec = output_mesh_tensor.tensor_spec(),
+    });
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = kReaderStreaming;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = split.core_range;
-    reader_desc.compile_time_args = reader_ct;
-    reader_desc.config = ReaderConfigDescriptor{};
+    // The reader is the only kernel that touches the index DFB: it fills it from memory and then
+    // reads it, so it is bound as both producer and consumer.
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = READER,
+        .source = kReaderStreaming,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = INPUT_DFB,
+                    .accessor_name = "input",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INDEX_DFB,
+                    .accessor_name = "index",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INDEX_DFB,
+                    .accessor_name = "index",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT_DFB,
+                    .accessor_name = "output",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INDEX,
+                    .accessor_name = "index",
+                },
+            },
+        .compile_time_args =
+            {
+                {"Ht", geometry.Ht},
+                {"Wt_input", geometry.Wt_input},
+                {"Wt_index", geometry.Wt_index},
+                {"num_cores", split.num_cores},
+                {"index_valid_h_last", geometry.index_valid_h_last},
+                {"index_valid_w_last", geometry.index_valid_w_last},
+                {"index_ht_per_batch", geometry.index_ht_per_batch},
+                {"chunk_tiles", chunk_tiles},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"core_loop_count", "tile_width", "tile_height", "core_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    });
 
-    KernelDescriptor::CompileTimeArgs writer_ct = {
-        kCbInput, kCbOutput, geometry.Ht, geometry.Wt_input, geometry.Wt_index, split.num_cores, chunk_tiles};
-    TensorAccessorArgs(*in_t.buffer()).append_to(writer_ct);
-    TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct);
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = WRITER,
+        .source = kWriterStreaming,
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = INPUT_DFB,
+                    .accessor_name = "input",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = OUTPUT_DFB,
+                    .accessor_name = "output",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INPUT,
+                    .accessor_name = "input",
+                },
+                TensorBinding{
+                    .tensor_parameter_name = OUTPUT,
+                    .accessor_name = "output",
+                },
+            },
+        .compile_time_args =
+            {
+                {"Ht", geometry.Ht},
+                {"Wt_input", geometry.Wt_input},
+                {"Wt_index", geometry.Wt_index},
+                {"num_cores", split.num_cores},
+                {"chunk_tiles", chunk_tiles},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"core_loop_count", "core_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    });
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kWriterStreaming;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = split.core_range;
-    writer_desc.compile_time_args = writer_ct;
-    writer_desc.config = WriterConfigDescriptor{};
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "main",
+        .kernels = {READER, WRITER},
+        .target_nodes = split.core_range,
+    });
 
     // Ordinal RT convention, same as Interleaved (work is split by Wt_index; each core streams its
     // strided columns across all Ht rows -- see gather_reader_streaming.cpp).
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
     uint32_t id = 0;
     for (const auto& [core, n] : gather_assigned_cores(split, geometry.Wt_index)) {
-        reader_desc.emplace_runtime_args(core, {index_t.buffer(), n, tile_width, tile_height, id});
-        writer_desc.emplace_runtime_args(core, {in_t.buffer(), output_tensor.buffer(), n, id});
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"core_loop_count", n}, {"tile_width", tile_width}, {"tile_height", tile_height}, {"core_id", id}});
+        AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"core_loop_count", n}, {"core_id", id}});
         id++;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    run_args.tensor_args = {
+        {INPUT, input_mesh_tensor},
+        {INDEX, index_mesh_tensor},
+        {OUTPUT, output_mesh_tensor},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::prim
