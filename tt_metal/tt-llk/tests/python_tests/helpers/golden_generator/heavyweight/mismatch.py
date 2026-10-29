@@ -6,11 +6,11 @@
 ``passed_test`` already prints the failing tiles with the bad datums
 highlighted, which answers *where* in the tile. What it cannot answer is:
 
-* **how badly** -- for an MX output the tolerance is a number of lattice steps,
+* **how badly**: for an MX output the tolerance is a number of lattice steps,
   and the step is relative to each element's own magnitude. Ranked by absolute
   error, the top of a table is large-magnitude datums that comfortably pass
   while the one that actually failed sits further down.
-* **where to look next** -- a datum can disagree because the device's math
+* **where to look next**: a datum can disagree because the device's math
   left a different value in Dest, or because its packer treated the same value
   differently. Telling those apart needs the *device's* pre-pack Dest, which
   this report does not have. What it shows is the golden's, which narrows the
@@ -20,7 +20,7 @@ highlighted, which answers *where* in the tile. What it cannot answer is:
   its Dest. Not "with a Float16 output": that only coincides when Dest is
   Float16 too, and for a Float16_b input Dest is Float16_b, so a Float16 output
   narrows the exponent range and can zero values between 2**-126 and 2**-14 by
-  itself -- which is the very symptom this was meant to settle.
+  itself, which is the very symptom this was meant to settle.
   ``describe_mismatch`` already knows which is which, through ``dest_format``.
 
 So this adds a step-ranked table, the golden's pre-pack Dest beside it, and the
@@ -85,11 +85,11 @@ def describe_mismatch(
 ) -> str:
     """Rank a golden-vs-device disagreement by lattice steps.
 
-    `output_format` selects the lattice the result landed on; a format with no
+    `output_format` selects the lattice the result landed on. A format with no
     MX-float model falls back to ranking by absolute error, omits the steps
     column and does not claim a tolerance. `dest` is the golden's pre-pack
     Dest, when the caller collected it, and `dest_format` is the format it was
-    held in -- needed to say anything about flush-to-zero, since the floor is
+    held in, needed to say anything about flush-to-zero, since the floor is
     the Dest format's smallest normal and differs by ~2^112 between fp16 and
     bf16. Without it the FTZ line is omitted rather than guessed.
     """
@@ -115,7 +115,7 @@ def describe_mismatch(
     )
     lattice = lattice_step(magnitude, output_format)
     if lattice:
-        # A step of 0 means the magnitude was 0 -- both values zero, or a
+        # A step of 0 means the magnitude was 0, either both values zero, or a
         # non-finite datum. Dividing would give NaN, and torch sorts NaN first
         # descending, so keep the error as is: 0 for zeros, inf for a mismatch.
         steps = err.clone()
@@ -127,7 +127,7 @@ def describe_mismatch(
 
     lines = [f"GOLDEN MISMATCH  {context}".rstrip()]
     # Differing is not failing. Most of what shows up here is within tolerance
-    # and is only listed because it is non-zero -- say which datums actually
+    # and is only listed because it is non-zero, so say which datums actually
     # break the test, or the top of the table reads as the cause when it is
     # noise.
     if lattice:
@@ -205,7 +205,7 @@ def describe_mismatch(
     # A device zero against a nonzero golden is the one case where the Dest
     # value is decisive: hardware writes no denormal, so a golden Dest at or
     # above the Dest format's smallest normal rules Dest flushing out. The floor
-    # has to come from that format -- using fp16's 2^-14 for a bf16 Dest calls
+    # has to come from that format. Using fp16's 2^-14 for a bf16 Dest calls
     # everything below it "consistent with FTZ" when the golden Dest held it
     # perfectly well and the loss was really in the pack.
     floor = None
