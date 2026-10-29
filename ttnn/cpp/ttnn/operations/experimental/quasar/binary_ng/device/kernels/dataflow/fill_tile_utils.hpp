@@ -534,3 +534,23 @@ template <typename T, typename AddressType>
 FORCE_INLINE void fill_tile_with_first_column_bfp4(const CoreLocalMem<T, AddressType>& mem) {
     fill_tile_with_first_column_bfp4(fill_tile_utils::detail::l1_address(mem));
 }
+
+template <typename ElemT, typename T, typename AddressType>
+FORCE_INLINE void fill_tile_with_first_element(const CoreLocalMem<T, AddressType>& mem) {
+    fill_tile_with_first_element<ElemT>(fill_tile_utils::detail::l1_address(mem));
+}
+
+template <typename T, typename AddressType>
+FORCE_INLINE void fill_tile_with_first_element_bfloat16(const CoreLocalMem<T, AddressType>& mem) {
+    fill_tile_with_first_element_bfloat16(fill_tile_utils::detail::l1_address(mem));
+}
+
+template <typename T, typename AddressType>
+FORCE_INLINE void fill_tile_with_first_element_bfp8(const CoreLocalMem<T, AddressType>& mem) {
+    fill_tile_with_first_element_bfp8(fill_tile_utils::detail::l1_address(mem));
+}
+
+template <typename T, typename AddressType>
+FORCE_INLINE void fill_tile_with_first_element_bfp4(const CoreLocalMem<T, AddressType>& mem) {
+    fill_tile_with_first_element_bfp4(fill_tile_utils::detail::l1_address(mem));
+}
