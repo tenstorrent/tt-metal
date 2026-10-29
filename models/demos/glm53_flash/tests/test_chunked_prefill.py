@@ -395,14 +395,21 @@ def test_indexer_static_maintenance_matches_offset_path(mesh_device, monkeypatch
 @pytest.mark.timeout(2400)
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
-    "layer_idx, aligned, split",
+    "layer_idx, aligned, split, sealed",
     [
-        (3, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522)),
-        (0, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522)),
+        (3, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522), False),
+        (0, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522), False),
+        (3, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522), True),
+        (0, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522), True),
     ],
-    ids=["layer3-65514-continued-at-36736-and-52992", "layer0-kda-65514-continued-at-36736-and-52992"],
+    ids=[
+        "layer3-65514-continued-at-36736-and-52992",
+        "layer0-kda-65514-continued-at-36736-and-52992",
+        "layer3-sealed-continued-at-36736-and-52992",
+        "layer0-kda-sealed-continued-at-36736-and-52992",
+    ],
 )
-def test_sparse_continuation_at_unaligned_chunk_ends(mesh_device, layer_idx, aligned, split):
+def test_sparse_continuation_at_unaligned_chunk_ends(mesh_device, layer_idx, aligned, split, sealed):
     """A chunk plan whose chunks end at 32-aligned but not device-chunk-aligned positions deep in the sparse
     range must give the same layer output as the device-chunk-aligned plan of the same prompt. That is what
     vLLM's chunked-prefill budget produces under prefix caching when two prompts prefill in one step (the
@@ -421,7 +428,16 @@ def test_sparse_continuation_at_unaligned_chunk_ends(mesh_device, layer_idx, ali
     dec = _decoder(mesh_device, raw, cfg, layer_idx, S + 64, max_batch=2)
     assert dec.layer.is_kda == (layer_idx == 0), "layer 0 is the KDA case, layer 3 the DSA case"
     ref, _ = prefill_chunked(dec, x_in, aligned, mesh_device, user=0)
-    out, _ = prefill_chunked(dec, x_in, split, mesh_device, user=1)
+    if sealed:
+        # the served condition: every program the aligned plan built is warm; the split plan must build NONE (a
+        # continuation from a 32-aligned, chunk-unaligned start compiles nothing at request time). A miss raises
+        # with the op's name: the fix list of doc/mesh/galaxy_throughput_plan.md A3 (index half).
+        mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        out, _ = prefill_chunked(dec, x_in, split, mesh_device, user=1)
+    finally:
+        if sealed:
+            mesh_device.set_program_cache_misses_allowed(True)
     first_unaligned_end = next(e for e in torch.tensor(split).cumsum(0).tolist() if e % 16384)
     p_all = pcc(ref, out)
     p_tail = pcc(ref[:, first_unaligned_end:], out[:, first_unaligned_end:])
