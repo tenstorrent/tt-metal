@@ -228,6 +228,7 @@ class WaveSlot:
     rec_mask: ttnn.Tensor  # [B, 1, 1, 1] fp32 TILE per row
     rec_keep: ttnn.Tensor
     kda_zero: KdaState | None
+    _taps: int = 3
     user: int = -1
     idle: tuple = ()
 
@@ -263,6 +264,7 @@ class WaveSlot:
             rec_mask=_upload(mesh, rmk, ttnn.float32, ttnn.TILE_LAYOUT, rows_dim=0),
             rec_keep=_upload(mesh, rk, ttnn.float32, ttnn.TILE_LAYOUT, rows_dim=0),
             kda_zero=kda_zero,
+            _taps=taps,
             user=0,
             idle=(),
         )
@@ -283,12 +285,16 @@ class WaveSlot:
 
     @staticmethod
     def _masks_host(taps: int, B: int, rows: int, user: int, idle):
+        """Row-concatenated on dim 0 (``rows_dim=0`` hands row r its block): the conv masks ``[rows * taps, B, 1]`` ->
+        ``[taps, B, 1]`` per chip, the recurrent masks ``[rows * B, 1, 1, 1]`` -> ``[B, 1, 1, 1]`` per chip."""
         cm = torch.zeros(rows, taps, B, 1)
         rmk = torch.zeros(rows, B, 1, 1, 1)
         for r in range(rows):
             if r not in idle:
                 cm[r, :, user, 0] = 1.0
                 rmk[r, user] = 1.0
+        cm = cm.reshape(rows * taps, B, 1)
+        rmk = rmk.reshape(rows * B, 1, 1, 1)
         return cm, 1.0 - cm, rmk, 1.0 - rmk
 
     def set(self, user: int, idle) -> None:
@@ -302,7 +308,7 @@ class WaveSlot:
             self.cache_idx,
             mapper=self.mesh.shard_2d(0, 0),
         )
-        cm, ck, rmk, rk = self._masks_host(int(self.conv_mask.shape[0]), self.max_batch, rows, user, idle)
+        cm, ck, rmk, rk = self._masks_host(self._taps, self.max_batch, rows, user, idle)
         for host, dst in ((cm, self.conv_mask), (ck, self.conv_keep), (rmk, self.rec_mask), (rk, self.rec_keep)):
             _refresh(self.mesh, host, dst, rows_dim=0)
         self.user, self.idle = user, idle
