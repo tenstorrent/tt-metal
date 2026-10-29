@@ -321,6 +321,9 @@ SERVED_CHUNK = 1024  # the SP device chunk: 512 local rows per rank on 2 rows (t
 # summaries with the exclusive scan's CBs at 1024 local rows x 2 ranks: the 2026-10-29 block runs; the 8x4's 16384
 # chunk = 2048 local rows is unaffected)
 SERVED_MAX_SEQ_LEN = 8192  # the prefix-bucket starts for the ladders
+SERVED_MAX_SEQ_LEN_LONG = (
+    32768  # the long profile: the served needle stage's spans (prompts of 18-21 K in 2048-row waves)
+)
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 N_DECODE = 4  # decode steps compared after every prefill
 
@@ -335,7 +338,8 @@ def _served_ids(n: int, seed: int, vocab: int) -> torch.Tensor:
     "device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
 )
 @pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
-def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch):
+@pytest.mark.parametrize("profile", ["short", "long"])
+def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
     """The served adapter under per-row prefill ownership (``ServingGeometry.rows_independent``, the
     GLM53_VLLM_ROWS_INDEPENDENT flip) on the partitioned heads2users cache: the warm-up ladders (SP + waves), the wave
     traces prepared before and captured after the prefill traces, the program cache sealed (no request-time compile);
@@ -351,21 +355,28 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch):
 
     if B % MESH[1]:
         pytest.skip(f"the user partition needs users per row {B} % cols {MESH[1]} == 0")
+    long = profile == "long"
+    if long and MESH[0] < 4:
+        pytest.skip("the long profile (case g: four prompts advancing in pairs over 16 K spans) needs 4 mesh rows")
+    max_seq_len = SERVED_MAX_SEQ_LEN_LONG if long else SERVED_MAX_SEQ_LEN
     monkeypatch.setenv("GLM53_PARTITION_USERS", "1")
     monkeypatch.setenv("GLM53_PREFILL_PARTITION", "heads2users")
-    monkeypatch.setenv("GLM53_PREFIX_BUCKET", str(SERVED_CHUNK))  # the adapter's launcher sets it; a direct build must
+    # the adapter's launcher sets the prefix bucket (max(chunk, max_seq_len / 8 to the chunk)); a direct build must
+    monkeypatch.setenv(
+        "GLM53_PREFIX_BUCKET", str(max(SERVED_CHUNK, -(-(max_seq_len // 8) // SERVED_CHUNK) * SERVED_CHUNK))
+    )
+    if long:  # the ladders' prefix-start walk is the boot cost at 32 K; the sealed cache names any program it misses
+        monkeypatch.setenv("GLM53_VLLM_WARMUP_PREFIX_STARTS", "0")
     cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
     layers = _layers()
-    model = GLM53MeshModel(
-        mesh_device, cfg, layers, max_batch=B, max_seq_len=SERVED_MAX_SEQ_LEN, weight_cache_path=CACHE_ROOT
-    )
+    model = GLM53MeshModel(mesh_device, cfg, layers, max_batch=B, max_seq_len=max_seq_len, weight_cache_path=CACHE_ROOT)
     rows = model.mesh.rows
     assert rows > 1, "waves are the multi-row case"
     g = ServingGeometry(
         rows=rows,
         cols=MESH[1],
         users_per_row=B,
-        max_seq_len=SERVED_MAX_SEQ_LEN,
+        max_seq_len=max_seq_len,
         partitioned=True,
         rows_independent=True,
         device_prefill_chunk=SERVED_CHUNK,
@@ -422,6 +433,46 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch):
         _, outs = srv.generate(0, logits, int(ids.numel()), N_DECODE)
         a.release_request(0)
         return [logits] + outs
+
+    if long:
+        # (g) the served needle stage's shape at 4 layers: four prompts of 18-21 K on rows 0-3 of slot index 0 advancing
+        # in PAIRS of 16 K step-chunks (vLLM's 32768 budget), so every wave pairs a member deep in its prompt with one
+        # near its start (spans of 16 K), 8-10 waves per prompt, the served prefix bucket (4096 here: rows past a
+        # member's end inside the bucket); each against its own SP path from scratch
+        pg = {20 + i: _served_ids(n, 40 + i, vocab) for i, n in enumerate((18000, 19000, 20000, 21000))}
+        K16 = 16384
+        plan = [
+            [(20, pg[20][:K16], 0), (21, pg[21][:K16], 0)],
+            [(20, pg[20], K16), (22, pg[22][:K16], 0)],
+            [(21, pg[21], K16), (23, pg[23][:K16], 0)],
+            [(22, pg[22], K16), (23, pg[23], K16)],
+        ]
+        firsts: dict[int, torch.Tensor] = {}
+        for reqs in plan:
+            out = step_prefill(reqs)
+            for l, ids, _ in reqs:
+                if int(ids.numel()) == int(pg[l].numel()):
+                    firsts[l] = out[l]
+        assert set(firsts) == set(pg)
+        placed = {l: (a.slots.physical(l).row, a.slots.physical(l).user) for l in pg}
+        assert sorted(placed.values()) == [(r, 0) for r in range(4)], placed
+        outs = decode_jointly(firsts, {l: int(ids.numel()) for l, ids in pg.items()})
+        gots = {l: [firsts[l]] + outs[l] for l in pg}
+        for l in pg:
+            a.release_request(l)
+        for l, ids in pg.items():
+            ref = reference(ids)
+            _assert_agree(
+                f"(g) row {placed[l][0]} prompt {int(ids.numel())} (paired 16 K spans) vs SP",
+                gots[l],
+                ref,
+                pcc_min=PCC_BAR_SP,
+            )
+            logger.info(
+                f"(g) row {placed[l][0]}: first token {int(firsts[l].argmax())} (SP {int(ref[0].argmax())}), pcc {pcc(firsts[l], ref[0]):.5f}"
+            )
+        logger.info("served waves: PASS (g) four 18-21 K prompts in paired waves")
+        return
 
     # (a) two fresh prompts in one step on slot index 0 of rows 0 and 1: one traced wave (both within 1024)
     p0, p1 = _served_ids(300, 1, vocab), _served_ids(700, 2, vocab)
