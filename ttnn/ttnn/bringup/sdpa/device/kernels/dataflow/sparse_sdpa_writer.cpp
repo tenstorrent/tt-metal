@@ -179,7 +179,9 @@ void kernel_main() {
                 sparse_sdpa::gather_bfp4_rows<k_dim, k4_chunk, sparse_sdpa::SCALED_K_TRID_RING>(
                     noc, kv, dst_l1, idx_ptr, base, 0, split, kv_batch_page_offset);
             } else {
-#ifdef SPARSE_SDPA_WINDOW_BFP8
+#if defined(SPARSE_SDPA_WINDOW_BLOCKS)
+                sparse_sdpa::gather_bfp8_window_blocks<k_dim, k4_chunk>(noc, kvw, dst_l1, idx_ptr[base], 0, split);
+#elif defined(SPARSE_SDPA_WINDOW_BFP8)
                 sparse_sdpa::gather_bfp4_rows<k_dim, k4_chunk, sparse_sdpa::SCALED_K_TRID_RING, k_dim>(
                     noc, kvw, dst_l1, idx_ptr, base, 0, split, 0);
 #else
