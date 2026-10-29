@@ -13,8 +13,9 @@ Workload: USERS users, each with history tokens of KV already prefilled (filled 
 same runtime), then one new request each (PRODUCTION_REQUEST_LENGTHS). The timed phase prefills every
 new request, traced, in the configuration's forwards (cK-fF: K-token chunks, F chunks per forward).
 
-  galaxy 8x4   c5120-f1 (today's production shape), c2048-f1 / f2 / f4 (smaller chunk on the same mesh; 2,560
-               would be 80 rows per TP rank, not whole tiles, which the indexer refuses)
+  galaxy 8x4   c5120-f1 (today's production shape), c5120-f2 / f4 (packing alone, same padding),
+               c2048-f1 / f2 / f4 (smaller chunk on the same mesh; 2,560 would be 80 rows per TP rank, not
+               whole tiles, which the indexer refuses)
   galaxy 4x4   c2560-f1 / f2 / f4 (the proposed stage: 640 rows/chip, 16 experts/chip). Needs the
                subtorus carve: TT_VISIBLE_DEVICES and TT_MESH_GRAPH_DESC_PATH as test_prefill_block_perf's
                _SUBTORUS_XY4_ENV, set before pytest starts.
@@ -88,7 +89,15 @@ def _workload(scale):
 # 80 rows per TP rank, which the indexer refuses. The LoudBox 4x2 runs the 2x4's SP=2 / TP=4 with the axes
 # swapped, so its KV must match the 2x4's config for config (test_glm_chunk_batching_workload_kv_sp_axis_agree).
 _MESHES = {
-    "galaxy-8x4": ((8, 4), torus_xy_device_params, "mesh-8x4", 2, 1, [(5120, 1), (2048, 1), (2048, 2), (2048, 4)], 0),
+    "galaxy-8x4": (
+        (8, 4),
+        torus_xy_device_params,
+        "mesh-8x4",
+        2,
+        1,
+        [(5120, 1), (5120, 2), (5120, 4), (2048, 1), (2048, 2), (2048, 4)],
+        0,
+    ),
     "galaxy-4x4": ((4, 4), torus_x_device_params, "mesh-4x4", 2, 1, [(5120, 1), (2560, 1), (2560, 2), (2560, 4)], 1),
     "loudbox-fabric2d-2x4": (
         (2, 4),
