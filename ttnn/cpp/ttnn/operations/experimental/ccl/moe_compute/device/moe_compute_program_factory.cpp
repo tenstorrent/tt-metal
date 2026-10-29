@@ -1694,8 +1694,11 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
         !args.combine_params->optional_cross_device_semaphore.has_value()) {
         return;
     }
-    override_selective_reduce_combine_cross_device_semaphore(
-        program, kCombineWriterKernelIdx, *args.combine_params->optional_cross_device_semaphore);
+    override_cross_device_semaphore_arg(
+        program,
+        kCombineWriterKernelIdx,
+        kCombineWriterCrossDeviceSemaphoreArgIdx,
+        *args.combine_params->optional_cross_device_semaphore);
 }
 
 }  // namespace ttnn::experimental::prim

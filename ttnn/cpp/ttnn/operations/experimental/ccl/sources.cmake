@@ -109,6 +109,9 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     moe_compute/device/moe_compute_device_operation.cpp
     moe_compute/device/moe_compute_program_factory.cpp
     moe_compute/device/moe_expert_rows.cpp
+    moe_compute/device/moe_expert_rows_plan.cpp
+    moe_compute/device/moe_expert_rows_select.cpp
+    moe_compute/device/moe_compute_place_program_factory.cpp
     moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.cpp
     moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.cpp
 )

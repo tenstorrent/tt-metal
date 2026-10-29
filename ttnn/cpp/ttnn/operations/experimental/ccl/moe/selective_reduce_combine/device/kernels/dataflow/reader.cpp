@@ -45,20 +45,22 @@ void get_token_activation_offsets(
             continue;
         }
 
-        const auto st_start = dense_token_maps_ptr[(e * (GlobalNumTokens + 1) + token_split_offsets[e]) * MapStride];
+        const auto token_split_offset = token_split_offsets[e];
+        const auto st_start = dense_token_maps_ptr[(e * (GlobalNumTokens + 1) + token_split_offset) * MapStride];
 
-        // The first activation row of st_start. Scan from row 0: the split offset counts e_t entries, and a token
-        // that names one expert at several k has one entry per k but one activation row, so the offset can lie past
-        // the row. The rows are in e_t order (tilize merges both the same way) but not sorted by token id.
-        auto* expert_token_activations_ptr = token_activations_ptr;
-        for (uint32_t t = 0; t < GlobalNumTokens; ++t) {
-            if (expert_token_activations_ptr[0] == st_start) {
-                token_activation_offsets[e] = t;
-                break;
-            }
-            expert_token_activations_ptr += ActivationStride;
-            ASSERT(t != GlobalNumTokens - 1);
+        // The activation row of st_start. The rows are in e_t order (tilize merges both the same way), so it is at or
+        // after the split offset when every token names the expert once. The offset counts e_t entries: a token that
+        // names the expert at several k has one entry per k but one row, so the row can then lie before the offset.
+        uint32_t row = token_split_offset;
+        while (row < GlobalNumTokens && token_activations_ptr[row * ActivationStride] != st_start) {
+            ++row;
         }
+        if (row == GlobalNumTokens) {
+            for (row = 0; token_activations_ptr[row * ActivationStride] != st_start; ++row) {
+                ASSERT(row < token_split_offset);
+            }
+        }
+        token_activation_offsets[e] = row;
     }
 }
 

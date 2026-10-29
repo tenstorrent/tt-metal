@@ -66,7 +66,9 @@ constexpr uint32_t unit_tiles = chunk_blocks * block_tiles;  // weight pages of 
 // runs. When units are held (row_tiles > 1, rows_reader.cpp), its pass is padded to whole units of unit_blocks blocks.
 constexpr uint32_t single_chunk_tiles = expert_rows::single_chunk_tiles(chunk_tiles, row_tiles, hidden_tiles);
 constexpr uint32_t single_chunks = expert_rows::div_up(hidden_tiles, single_chunk_tiles);
-constexpr uint32_t unit_blocks = row_tiles > 1 ? chunk_blocks : 1;
+constexpr bool weight_stationary = row_tiles > 1;
+constexpr uint32_t unit_blocks = weight_stationary ? chunk_blocks : 1;
+constexpr uint32_t bias_rows = has_bias ? 1 : 0;
 // cb_partials holds one slot of partial_slot_tiles per (group, row tile), whatever the group's width (a half group
 // fills 2 of them): partial CB = row_tiles * groups * partial_slot_tiles tiles, so every reserve starts at a multiple
 // of partial_slot_tiles and none runs past the CB's end.
@@ -220,9 +222,10 @@ FORCE_INLINE void pack_activation(uint32_t width, uint32_t first_tile) {
     }
 }
 
-// The weight blocks that pad a one-row-tile pass to whole units (row_tiles > 1, rows_reader.cpp).
-FORCE_INLINE void pop_unit_padding(uint32_t blocks) {
-    const uint32_t pad = (unit_blocks - blocks % unit_blocks) % unit_blocks;
+// The weight blocks that pad a one-row-tile pass of pass_blocks blocks to whole units (weight-stationary,
+// rows_reader.cpp).
+FORCE_INLINE void pop_unit_padding(uint32_t pass_blocks) {
+    const uint32_t pad = expert_rows::unit_padding(pass_blocks, unit_blocks);
     if (pad) {
         CircularBuffer cb_w(cb_w_id);
         cb_w.wait_front(pad * block_tiles);
@@ -247,7 +250,6 @@ FORCE_INLINE void gate_up_one_row_tile(const CoreGroups& groups, WeightStream& w
     CircularBuffer cb_x(cb_x_id);
     CircularBuffer cb_activated(cb_activated_id);
     init_gate_up_projection();
-    uint32_t blocks = 0;
     for (uint32_t chunk = 0; chunk < single_chunks; ++chunk) {
         const bool last = chunk + 1 == single_chunks;
         const uint32_t k_tiles = last ? hidden_tiles - chunk * single_chunk_tiles : single_chunk_tiles;
@@ -273,7 +275,6 @@ FORCE_INLINE void gate_up_one_row_tile(const CoreGroups& groups, WeightStream& w
                 }
             }
             weights.end_run();
-            blocks += expert_rows::run_blocks(width, k_tiles + (has_bias && last ? 1 : 0), block_tiles);
             tile_regs_commit();
             if (last) {
                 pack_activation(width, expert_rows::group_columns * column_group);
@@ -285,7 +286,10 @@ FORCE_INLINE void gate_up_one_row_tile(const CoreGroups& groups, WeightStream& w
         cb_x.pop_front(chunk_tiles * row_tiles);
     }
     cb_activated.push_back(row_tiles * activated_tiles);
-    pop_unit_padding(blocks);
+    if constexpr (weight_stationary) {
+        pop_unit_padding(expert_rows::gate_up_pass_blocks(
+            groups.columns(), hidden_tiles, single_chunk_tiles, bias_rows, block_tiles));
+    }
 }
 
 // Gate/up projection and activation of a job of job_row_tiles row tiles: x chunk slot = [hidden tile of the chunk][row
@@ -345,7 +349,6 @@ FORCE_INLINE void down_one_row_tile(const CoreGroups& groups, WeightStream& weig
     cb_intermediate.wait_front(row_tiles * intermediate_tiles);
     matmul_block_init(
         cb_intermediate_id, cb_w_id, /*transpose=*/false, /*ct_dim=*/group_tiles, /*rt_dim=*/1, /*kt_dim=*/1);
-    uint32_t blocks = 0;
     for (uint32_t output_group = 0; output_group < groups.output_groups; ++output_group) {
         const uint32_t width = groups.outputs().width(output_group);
         if (width != group_tiles) {
@@ -362,13 +365,14 @@ FORCE_INLINE void down_one_row_tile(const CoreGroups& groups, WeightStream& weig
             matmul_block(cb_ones_id, cb_w_id, 0, weights.take(width), 0, false, width, 1, 1);
         }
         weights.end_run();
-        blocks += expert_rows::run_blocks(width, intermediate_tiles + (has_bias ? 1 : 0), block_tiles);
         tile_regs_commit();
         pack_slot(cb_rows_id, group_tiles);
         tile_regs_release();
     }
     cb_intermediate.pop_front(row_tiles * intermediate_tiles);
-    pop_unit_padding(blocks);
+    if constexpr (weight_stationary) {
+        pop_unit_padding(expert_rows::down_pass_blocks(groups.outputs(), intermediate_tiles, bias_rows, block_tiles));
+    }
 }
 
 // Down projection of a job of job_row_tiles row tiles: intermediate slot = [row tile][intermediate column], rows ->
@@ -424,7 +428,7 @@ FORCE_INLINE void down_row_tiles(uint32_t job_row_tiles, const CoreGroups& group
 
 // row tiles of this group's job `job` (cb_ctl, rows_reader.cpp); always 1 with row_tiles = 1
 FORCE_INLINE uint32_t row_tiles_of_job(uint32_t job) {
-    return row_tiles > 1 ? CircularBuffer(cb_ctl_id).read_tile_value(0, 1 + job) : 1;
+    return weight_stationary ? CircularBuffer(cb_ctl_id).read_tile_value(0, 1 + job) : 1;
 }
 
 FORCE_INLINE void gate_up_projection(
