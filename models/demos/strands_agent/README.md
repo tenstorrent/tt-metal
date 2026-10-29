@@ -15,14 +15,14 @@ pytest -sv models/demos/strands_agent/demo/text_demo.py
 ```
 
 ## Perf
-Prefill replayed from ttnn traces for prompts up to 2048 tokens (eager above), p50 of 5 runs after 2 warmups. One Blackhole chip of a QB2 (P300x2), 1x1 mesh.
+Prefill replayed from ttnn traces for the 128, 256, 512, 1024, 2048 and 4096-token buckets (other buckets run eager), p50 of 5 runs after 2 warmups. One Blackhole chip of a QB2 (P300x2), 1x1 mesh.
 B=32: one question repeated 32 times in one call, split into forwards of at most 8192 padded tokens. Throughput is 32 / B=32 latency.
 
 | Prompt tokens | 128 | 256 | 512 | 1024 | 2048 | 4000 |
 |---|---|---|---|---|---|---|
-| B=1 latency (ms) | 10.6 | 12.7 | 16.8 | 25.7 | 44.8 | 84.6 |
-| B=32 latency (ms) | 78.5 | 143.5 | 291.0 | 584.8 | 1165.5 | 2495.9 |
-| Batch throughput (questions/s) | 407.8 | 223.0 | 110.0 | 54.7 | 27.5 | 12.8 |
+| B=1 latency (ms) | 10.3 | 12.8 | 17.0 | 25.9 | 44.5 | 82.1 |
+| B=32 latency (ms) | 78.6 | 143.6 | 290.8 | 585.7 | 1167.4 | 2440.4 |
+| Batch throughput (questions/s) | 407.2 | 222.9 | 110.0 | 54.6 | 27.4 | 13.1 |
 
 ```bash
 pytest -sv models/demos/strands_agent/tests/test_perf.py
