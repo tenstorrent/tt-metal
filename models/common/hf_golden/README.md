@@ -124,7 +124,14 @@ and the real-checkpoint check). `HF_GOLDEN_SERVING=hopper` instead emulates vLLM
 e4m3 KV and index-K caches read back by prefill, fp32 router, and one top-16 block selection per KV head, where
 transformers shares the max over the 4 index heads between all heads. That last one is not rounding: it changes which
 keys attention sees once N > 2048. It writes `isl<N>-serving-hopper` beside the plain trace; at startup its attention
-and indexer are checked against upstream's with quantization off and the selection shared.
+and indexer are checked against upstream's with quantization off and the selection shared. Chat prefix (wikitext ppl at
+isl 5120 over the same 4880 tokens: 11.34 chat, 293 `]~!b[` only, 594 raw; variants of the framing, fp32 compute and
+the serving emulation all within 2%). isl 56320 with `--prefill-chunk 5120 --attn-chunk 4096` and
+`HF_GOLDEN_INDEXER_CHUNK=4096` on one H100 from cached weights: 2 min, 72 GB GPU peak, 50 GB (33 GB trimmed to 31
+layers: 0-11, 20-22, 26-28, 37-39, 50-59); the serving trace needs `--attn-chunk 2048` on an H100 (4096 OOMs): 6 min,
+48 GB, 51 GB (34 GB trimmed). Both equal their isl 10240 runs on the first 10240 rows bit for bit (474/474 tensors),
+also unchunked. Perplexity rises with context: 21.2 at isl 10240, 61.9 at 56320 (21.7 / 45.1 / 93.5 / 160.4 by
+quarter; serving 63.1), not explained by chunking (an unchunked isl 10240 run scores the same); kept as is.
 
 **DeepSeek-V4 (Flash, Pro-0813) at long ISL:** the indexer scorer holds [N, 64 heads, N // 4] fp32 scores (~200 GB
 each at isl 56320). `HF_GOLDEN_INDEXER_CHUNK` builds them a slice of query rows at a time; weights_proj still runs on
@@ -172,7 +179,10 @@ in-graph activation rounding off (the unquantized model, as V4-Flash). Cross-lay
 top-k, candidate blocks) passes through the reference's own `shared_attn`; the mHC pre mix is carried per layer. The
 two ~98 GB Engram tables are memory-mapped from their shards and only the hashed rows are read. Indexer scores, the
 sparse-attention gather and `hc_post` run in token chunks, so isl 56320 fits an H100 (~30 GB of weights per layer).
-The selftest compares against one whole, unchunked reference forward; it executes the downloaded reference code.
+The selftest compares against one whole, unchunked reference forward; it executes the downloaded reference code. Chat prefix (wikitext ppl at
+isl 10240 over the same 10100 tokens: 1.683 chat, 1.751 BOS only, 1.842 raw). Unchunked: CSA2's cross-layer carry is
+not supported by `--prefill-chunk`. isl 56320 on one H100 from cached weights: 4 min, 54 GB GPU peak, 95 GB on disk,
+ppl 2.069 over all 56272 tokens (1.72 / 1.94 / 2.09 / 2.62 by quarter).
 
 ```
 uv run --no-project --python python_env/bin/python --with sympy --with pillow \
