@@ -577,6 +577,25 @@ def _verify_head_splits(
     return valid[-1]
 
 
+def packed_verify_mask_span(table_cols, block_size, mask_cols):
+    """The keys a paged packed verify attends: ``table_cols * block_size``, which must equal the mask width.
+
+    sdpa_decode checks a mask against K only for unpaged calls; paged, it attends the table width times the block
+    size and reads every mask row tile past the first at THAT pitch (``mask_tile_id = start + row * PSt``), so a
+    table narrower than the mask shifts the mask of packed rows 32 and up by the difference (the 31B at TP4:
+    a 4096-column sliding table under a 263168-key mask moved three of eight local heads 1024 keys ahead).
+    Returns the span; raises on a mismatch."""
+    table_cols, block_size, mask_cols = int(table_cols), int(block_size), int(mask_cols)
+    span = table_cols * block_size
+    if span != mask_cols:
+        raise ValueError(
+            f"packed verify: the page table spans {table_cols} x {block_size} = {span} keys but the mask is "
+            f"{mask_cols} wide; the kernel attends the table span and reads the mask's row tiles at that pitch, so "
+            f"the two must be equal (serving_verify_table_widths sizes the table from the mask)"
+        )
+    return span
+
+
 def _packed_verify_sdpa(
     q_packed, k, v, layer_page_table, attn_mask, scale, pc, n_splits, B, H_local, P, head_dim, block_size, num_kv_heads
 ):
@@ -597,6 +616,8 @@ def _packed_verify_sdpa(
     # increase, and fp32 accumulation is strictly higher precision. On multi-device
     # meshes heads split so PNHt is already power-of-2 — leave the op default (None)
     # there so the packed path stays identical to upstream.
+    if layer_page_table is not None and attn_mask is not None:
+        packed_verify_mask_span(layer_page_table.shape[-1], block_size, attn_mask.shape[-1])
     _dev = k.device()
     _num_dev = getattr(_dev, "get_num_devices", lambda: 1)()
     # Single-device ONLY, as originally shipped. Forcing fp32_dest_acc on a

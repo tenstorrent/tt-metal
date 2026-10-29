@@ -6461,6 +6461,8 @@ SPEC_DRAFT_LEN_ENV = "GEMMA4_SPEC_DRAFT_LEN"
 #                                 hold) when the prior's gain is at least this, whatever the retry cadence says;
 #                                 below it the request runs plain until the retry
 #   GEMMA4_SPEC_PROBE_STEPS=32    after this many steps below the cap, one step at the next larger draft length (0 = off)
+#   GEMMA4_SPEC_VERIFY_CHECK=0    the first N replays of every shape also run a plain forward of each row's anchor and
+#                                 log whether its argmax matches the packed verify's row 0 (a wrong-keys detector)
 #   GEMMA4_SPEC_EWMA=0.1          the acceptance EWMA weight of one verify
 #   GEMMA4_SPEC_PLAIN_STEP_MS     the plain decode step cost (``ms`` flat, or ``ms_at_0,ms_at_top``); unset = timed
 #                                 at warmup at position 0 and at the top position, per warmed decode bucket (every

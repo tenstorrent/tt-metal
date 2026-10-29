@@ -64,6 +64,12 @@ SPEC_MASK_KEY_CHUNK = 32768
 SPEC_WIDTH_RUNG_SMALLEST = 2048
 SPEC_WIDTH_RUNG_FACTOR = 4
 SPEC_WIDTH_RUNGS_ENV = "GEMMA4_SPEC_WIDTH_RUNGS"
+# GEMMA4_SPEC_VERIFY_CHECK=N (default 0): the first N replays of every shape also run a plain target forward of
+# each live row's anchor at its position and compare its argmax with the packed verify's row-0 argmax (the same
+# keys in both: a disagreement past a bf16 near-tie means the packed verify read the wrong keys -- a mask pitch,
+# table width or KV write-slot defect -- and is logged as a WARNING with the rows). One eager forward per checked
+# replay; the forward rewrites the anchor's K/V in place with the same values.
+SPEC_VERIFY_CHECK_ENV = "GEMMA4_SPEC_VERIFY_CHECK"
 # Measured 12B TP8 (3 GB region): 21.9-31.9 MB per captured record, width-independent.
 SPEC_RECORD_MB_DEFAULT = 32.0
 
@@ -600,16 +606,26 @@ def serving_check_group_tables(installed, slots):
 def serving_verify_table_widths(s_k, block_size_by_type, ring_by_type, blocks):
     """Width (columns) of each layer type's width-matched verify page table at rung ``s_k``.
 
-    The packed SDPA attends the TABLE width times the layer's block size, so a
-    type's table must span exactly its mask: ``s_k // block_size`` columns
-    (or ``ring // block_size`` for a bounded ring type, whose sliding mask is
-    ring-wide), capped by the ``blocks`` columns the adapter's tables hold.
-    ``block_size_by_type`` is each type's EFFECTIVE block size
-    (``effective_block_size`` of the layer's own view of its cache): under
-    vLLM hybrid kv-cache groups the sliding and full-attention pools hold a
-    different number of tokens per block (e.g. 256 and 128 for the 12B), so
-    one block size for both types would size one table at half or double its
-    mask. Pure: config-time arithmetic.
+    The packed SDPA attends the TABLE width times the layer's block size, and
+    reads the mask's second and later row tiles at that pitch, so a type's
+    table must span EXACTLY its mask: ``s_k // block_size`` columns (or
+    ``ring // block_size`` for a bounded ring type, whose sliding mask is
+    ring-wide) -- wider than the ``blocks`` columns the adapter's tables hold
+    when the top rung passes the model length (it always does: the rung rounds
+    ``max_context + K + 2`` up), with the extra columns zero (block 0, keys the
+    mask hides). The earlier cap at ``blocks`` left the 31B's sliding table at
+    TP4 at 4096 columns under a 263168-wide mask (block 64, the plugin's
+    4096-column table): the kernel then attended 262144 keys and read the
+    mask's second row tile (packed rows 32-47: three of the eight local heads)
+    32 tiles early, so those heads saw 1024 keys past their position -- the
+    other draft rows and whatever sat beyond the top -- and the 256K verify
+    accepted drafts the target would not have produced. ``block_size_by_type``
+    is each type's EFFECTIVE block size (``effective_block_size`` of the
+    layer's own view of its cache): under vLLM hybrid kv-cache groups the
+    sliding and full-attention pools hold a different number of tokens per
+    block (e.g. 256 and 128 for the 12B), so one block size for both types
+    would size one table at half or double its mask. Pure: config-time
+    arithmetic.
     """
     s_k, blocks = int(s_k), int(blocks)
     if s_k < 1 or blocks < 1:
@@ -623,7 +639,7 @@ def serving_verify_table_widths(s_k, block_size_by_type, ring_by_type, blocks):
         span = int(ring) if ring else s_k
         if span % bs:
             raise ValueError(f"{lt}: {'ring' if ring else 'rung'} {span} is not a multiple of its block size {bs}")
-        widths[lt] = min(span // bs, blocks)
+        widths[lt] = span // bs
     return widths
 
 
@@ -765,6 +781,9 @@ class SpeculativeDecoder:
         # shape stays stable as the context grows; a new trace is captured when
         # the bucket rolls.
         self._pv_sk_bucket = 1024
+        self._srv_check_steps = 0  # GEMMA4_SPEC_VERIFY_CHECK, read by serving_prepare
+        self._srv_checked = {}  # shape -> replays checked so far
+        self._srv_check_last = []  # the last check's disagreements (row, position, plain id, packed id)
         self._pv_ready = False
         self._pv_a_prev = -1  # last hot block index (-1 ⇒ staging unseeded)
         self._pv_traces = {}  # (P, S_k) -> persistent trace inputs/outputs
@@ -2508,6 +2527,8 @@ class SpeculativeDecoder:
             f"ring {self._pv_ring} (layer 0 physical block dim {self._pv_bs})"
         )
         self._srv_blocks = int(self.page_table_torch.shape[-1])
+        self._srv_check_steps = int(os.environ.get(SPEC_VERIFY_CHECK_ENV, "0") or 0)
+        self._srv_checked = {}
         self._srv_max_rows = max_rows
         self._srv_shapes = shapes
         self._srv_widths = widths
@@ -2826,6 +2847,8 @@ class SpeculativeDecoder:
         vx = ttnn.get_device_tensors(rec["verify_x"])[0] if self._tp > 1 else rec["verify_x"]
         vx = ttnn.to_torch(vx).to(torch.int64).reshape(B, P)
         gids = torch.tensor(self._ids_to_host(rec["vidx"], B * P), dtype=torch.int64).reshape(B, P)
+        if self._srv_check_steps > 0 and self._srv_checked.get(shape, 0) < self._srv_check_steps:
+            self._srv_verify_check(shape, rec, rows, live, anchors, positions, gids)
         self._srv_last = {"shape": shape, "rows": [int(r) for r in rows], "K": K}
         return ServingStepResult(
             shape=shape,
@@ -2875,6 +2898,7 @@ class SpeculativeDecoder:
         self._srv_uploaded = {}
         self._srv_last = None
         self._srv_seeded = {}
+        self._srv_checked = {}
 
     # ── serving internals ────────────────────────────────────────────────────
     def _srv_alloc_shape(self, shape):
@@ -2975,9 +2999,9 @@ class SpeculativeDecoder:
         if not _same_device_buffer(src, hidden):
             src.deallocate(True)
 
-    def _srv_seed_rows(self, shape, tokens, positions):
-        """Eager target forward of ``tokens`` at ``positions`` (B_v entries) through the
-        shape's drafter tables; its post-norm hidden fills the reseed pool rows."""
+    def _srv_eager_forward(self, shape, tokens, positions):
+        """Eager (plain, one row per batch row) target forward of ``tokens`` at ``positions`` (B entries) through
+        the shape's drafter tables, on the shape's persistent seed inputs; returns ``(logits, hidden)``."""
         S = self._srv_shape_bufs[shape]
         B = S["B"]
         if len(tokens) != B or len(positions) != B:
@@ -2993,7 +3017,7 @@ class SpeculativeDecoder:
         ttnn.copy_host_to_device_tensor(hpi, S["seed_pi"])
         hpu.deallocate(True)
         hpi.deallocate(True)
-        logits, hidden = self.target.ttnn_verify_forward(
+        return self.target.ttnn_verify_forward(
             x=S["seed_tok"],
             current_pos=S["seed_pu"],
             current_pos_cache=S["seed_pi"],
@@ -3001,6 +3025,42 @@ class SpeculativeDecoder:
             kv_cache=self.tt_kv_cache,
             page_tables_per_layer=S["d_ptl_list"],
         )
+
+    def _srv_verify_check(self, shape, rec, rows, live, anchors, positions, gids):
+        """GEMMA4_SPEC_VERIFY_CHECK: the packed verify's row-0 argmax of every live row against the plain forward
+        of the same anchor at the same position (keys <= position in both; the forward rewrites the anchor's K/V
+        with the same values). Returns the disagreements ``(row, position, plain id, packed id)``; logs them."""
+        S = self._srv_shape_bufs[shape]
+        B = S["B"]
+        logits, hidden = self._srv_eager_forward(
+            shape, serving_pad_rows([int(a) for a in anchors], B), serving_pad_rows([int(p) for p in positions], B)
+        )
+        hidden.deallocate(True)
+        idx = self._argmax_last(logits, rows=B)  # [1, 1, B] uint32
+        logits.deallocate(True)
+        plain = self._ids_to_host(idx, B)[:live]
+        idx.deallocate(True)
+        packed = [int(gids[r, 0]) for r in range(live)]
+        bad = [(int(rows[r]), int(positions[r]), plain[r], packed[r]) for r in range(live) if plain[r] != packed[r]]
+        from loguru import logger as _lg
+
+        n = self._srv_checked.get(shape, 0) + 1
+        self._srv_checked[shape] = n
+        self._srv_check_last = bad
+        line = (
+            f"[spec-check] shape {shape} S_k={rec['S_k']} replay {n} of {self._srv_check_steps}: the packed verify's "
+            f"row-0 argmax agrees with the plain forward on {live - len(bad)} of {live} rows"
+        )
+        if bad:
+            _lg.warning(line + "; disagreements (row, position, plain, packed): " + ", ".join(map(str, bad)))
+        else:
+            _lg.info(line)
+        return bad
+
+    def _srv_seed_rows(self, shape, tokens, positions):
+        """Eager target forward of ``tokens`` at ``positions`` (B_v entries) through the
+        shape's drafter tables; its post-norm hidden fills the reseed pool rows."""
+        logits, hidden = self._srv_eager_forward(shape, tokens, positions)
         logits.deallocate(True)
         if self._srv_pool_v is None:
             if getattr(self, "_srv_frozen", False):
@@ -3317,8 +3377,9 @@ class SpeculativeDecoder:
                 v_host = v_host.clone()
                 v_host[live:] = v_host[0]
             width = int(rec["v_ptl_slots"][slot].shape[-1])
-            # Clipped, not checked: the verify table is width-matched to its
-            # mask on purpose, and columns past the mask are never attended.
+            # Fitted, not checked: the verify table is width-matched to its mask
+            # on purpose (serving_verify_table_widths); columns past the adapter's
+            # table are zero (block 0) and columns past the mask are never attended.
             v_host = serving_select_rows(v_host, list(range(B)), B, width, allow_clip=True)
             self._srv_copy_if_changed(
                 ("v", shape, rec["S_k"], slot), v_host.to(torch.int32), rec["v_ptl_slots"][slot], ttnn.int32

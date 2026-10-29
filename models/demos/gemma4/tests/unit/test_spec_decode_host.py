@@ -25,6 +25,7 @@ from types import SimpleNamespace
 import ttnn
 from models.demos.gemma4.tests.unit.dflash_contract_harness import make_expect_error
 from models.demos.gemma4.tt.attention import SPEC_RING_HEADROOM_ENV, bounded_ring_modulo
+from models.demos.gemma4.tt.attention.decode import packed_verify_mask_span
 from models.demos.gemma4.tt.dflash_drafter import DFlashFusedDecoder
 from models.demos.gemma4.tt.spec_decode import (
     SPEC_K_BY_ROWS_DEFAULT,
@@ -1681,6 +1682,7 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     spec._srv_slots, spec._srv_n_slots = serving_kv_group_slots(layer_types)
     spec._srv_flat_type = "full_attention"
     spec._srv_per_layer, spec._srv_uploaded, spec._srv_last, spec._srv_seeded = None, {}, None, {}
+    spec._srv_check_steps, spec._srv_checked, spec._srv_check_last = 1, {}, []  # GEMMA4_SPEC_VERIFY_CHECK=1
     spec._srv_pool_v = spec._srv_pool_s = spec._srv_logits = spec._srv_backbone = None
     spec._srv_iota, spec._srv_records, spec._srv_shape_bufs = {}, {}, {}
     spec._srv_widths, spec._srv_shapes = {shape: list(ladder) for shape in shapes}, shapes
@@ -1773,6 +1775,11 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
                 used.extend([rec["id"], rec["id"]])
     assert allocated == [], [buf.shape for buf in allocated]
     assert all(gone(ref) for ref in ops) and set(h2d) <= prepared and replays == used and copies == []
+    # the verify check (one replay per shape here) ran its plain forward on the shape's persistent seed inputs
+    # and compared row 0 of every live row: the recording argmax answers arange(rows), so the plain ids are
+    # 0..live-1 and the packed row-0 ids r * P -- rows past the first disagree, the first agrees
+    assert spec._srv_checked == {shape: 1 for shape in shapes}
+    assert spec._srv_check_last == [] or all(plain != packed for _r, _p, plain, packed in spec._srv_check_last)
     assert {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()} == outputs
     assert all(
         buf.address in prepared and not buf.freed
@@ -2058,9 +2065,26 @@ def test_hybrid_pools_get_one_width_per_type_spanning_the_same_mask():
     # a hybrid ring pool: the ring in tokens over the sliding type's own block size
     widths = serving_verify_table_widths(8192, _HYBRID_12B, ring, blocks=4096)
     assert widths == {"sliding_attention": 8, "full_attention": 64}
-    # the adapter's table width caps every type
+    # the adapter's table width never caps a type: the top rung rounds max_context + K + 2 up, so a type at the
+    # plugin's own block size always needs more columns than the adapter's table (zero-padded, block 0). The 31B
+    # at TP4 (sliding block 64, full 128 under hybrid groups; a 4096-column plugin table at 262144 context): a
+    # 4096-column sliding table under the 263168-wide mask made the kernel read the mask's second row tile
+    # (packed rows 32-47) 32 tiles early, 1024 keys ahead, and its 256K verify accepted drafts the target would
+    # not have produced; 128K (2048 columns) and the one-row-tile geometries (12B TP4, 31B TP8) were untouched.
     widths = serving_verify_table_widths(263168, _HYBRID_12B, _NO_RING, blocks=1500)
-    assert widths == {"sliding_attention": 1028, "full_attention": 1500}
+    assert widths == {"sliding_attention": 1028, "full_attention": 2056}
+    _31B_TP4 = {"sliding_attention": 64, "full_attention": 128}
+    widths = serving_verify_table_widths(263168, _31B_TP4, _NO_RING, blocks=4096)
+    assert widths == {"sliding_attention": 4112, "full_attention": 2056}
+    assert all(widths[lt] * _31B_TP4[lt] == 263168 for lt in widths)
+    assert serving_verify_table_widths(131072, _31B_TP4, _NO_RING, blocks=4096) == {
+        "sliding_attention": 2048,
+        "full_attention": 1024,
+    }
+    # the paged packed verify refuses a table that does not span its mask (the kernel's mask pitch)
+    assert packed_verify_mask_span(4112, 64, 263168) == 263168 and packed_verify_mask_span(2056, 128, 263168) == 263168
+    with pytest.raises(ValueError, match="262144 keys but the mask is 263168"):  # allow-pytest.raises (pure)
+        packed_verify_mask_span(4096, 64, 263168)
     # misaligned geometries are refused
     for s_k, bs, ring, blocks, message in [
         (2048, {"full_attention": 96}, {}, 64, "rung 2048 is not a multiple"),
