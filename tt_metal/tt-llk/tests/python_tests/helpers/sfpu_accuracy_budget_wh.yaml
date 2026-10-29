@@ -1928,7 +1928,7 @@ Sinh:
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
 Softplus:
-- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 4, nonfinite: 4, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=65408: 65408 -> inf; x=65440: 65440 -> inf)'}
+- {input: Float16, output: Float16, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 4}]}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
