@@ -1132,6 +1132,16 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
+    // Close the submeshes that are still open first. They share this mesh's ScopedDevices, so an open one would keep
+    // the devices open past this close and close them when it is freed: after the MetalContext is destroyed below, or
+    // under the next mesh opened on them. A submesh whose close released the last reference to this mesh (running this
+    // close from ~MeshDevice) has released the ScopedDevices by then, so it reports as not initialized here.
+    for (const auto& weak_submesh : submeshes_) {
+        if (auto submesh = weak_submesh.lock(); submesh && submesh->is_initialized()) {
+            submesh->close();
+        }
+    }
+
     // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
     // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
     if (is_initialized()) {
@@ -2319,7 +2329,11 @@ bool MeshDevice::initialize(
     return pimpl_->initialize_impl(
         this, num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }
-bool MeshDevice::close() { return pimpl_->close_impl(this); }
+bool MeshDevice::close() {
+    // close_impl closes the open submeshes first, and each releases its reference to this mesh, which can be the last.
+    const auto keep_alive = shared_from_this();
+    return pimpl_->close_impl(this);
+}
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }
 void MeshDevice::clear_program_cache() { pimpl_->clear_program_cache(); }
 void MeshDevice::disable_and_clear_program_cache() { pimpl_->disable_and_clear_program_cache(); }

@@ -300,17 +300,15 @@ void py_module(nb::module_& mod) {
                 return device->id();
             })
         .def("get_fabric_node_id", &MeshDevice::get_fabric_node_id, nb::arg("coord"))
+        // keep_alive<1, 0>: this MeshDevice keeps the submeshes it returns alive, so get_submeshes() still finds one
+        // the caller dropped, and closing this MeshDevice closes them. (The C++ submesh keeps its parent alive.)
         .def(
             "create_submesh",
             &MeshDevice::create_submesh,
             nb::arg("submesh_shape"),
             nb::arg("offset") = nb::none(),
-            nb::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevice is alive
-        .def(
-            "create_submeshes",
-            &MeshDevice::create_submeshes,
-            nb::arg("submesh_shape"),
-            nb::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevices are alive
+            nb::keep_alive<1, 0>())
+        .def("create_submeshes", &MeshDevice::create_submeshes, nb::arg("submesh_shape"), nb::keep_alive<1, 0>())
         .def(
             "get_submeshes",
             &MeshDevice::get_submeshes,
@@ -327,7 +325,7 @@ void py_module(nb::module_& mod) {
             R"doc(
               Drain all command queues of this MeshDevice and its submeshes and reset their
               in-use state. Call before closing a mesh that has carved submeshes so the shared
-              command queue is idle, otherwise close throws "cq is in use by child submesh".
+              command queue is idle, otherwise close throws "cq is in use by parent mesh".
         )doc")
         .def(
             "compute_with_storage_grid_size",
