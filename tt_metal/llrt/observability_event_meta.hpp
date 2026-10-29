@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#include "hostdev/debug_event_meta.h"
+#include "hostdev/observability_event_meta.h"
 
 namespace ll_api {
 class ElfFile;

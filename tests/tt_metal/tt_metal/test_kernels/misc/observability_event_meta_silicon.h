@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Metadata types and values shared by the kernel debug_event_meta_silicon.cpp and its host test,
-// tests/tt_metal/tt_metal/debug_tools/debug_event/test_debug_event_meta_silicon.cpp. The kernel's sites carry exactly
-// these values, so the host compares what it decoded against the same constants.
+// Metadata types and values shared by the kernel observability_event_meta_silicon.cpp and its host test,
+// tests/tt_metal/tt_metal/debug_tools/observability_event/test_observability_event_meta_silicon.cpp. The kernel's sites
+// carry exactly these values, so the host compares what it decoded against the same constants.
 #pragma once
 
 #include <stdint.h>
 
-#include "hostdev/debug_event_meta.h"
+#include "hostdev/observability_event_meta.h"
 
-namespace debug_event_meta_silicon {
+namespace observability_event_meta_silicon {
 
 enum class Level : int8_t { Low = -3, High = 9 };
 enum Wide : uint64_t { kWideMax = 0xFFFFFFFFFFFFFFFFull };
@@ -82,4 +82,4 @@ inline constexpr const char* kTemplatedName = "meta_templated";
 inline constexpr uint32_t kTemplatedA = 11;
 inline constexpr uint32_t kTemplatedB = 22;
 
-}  // namespace debug_event_meta_silicon
+}  // namespace observability_event_meta_silicon

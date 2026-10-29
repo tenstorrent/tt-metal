@@ -24,13 +24,13 @@
 // is expanded there is one handle and one record for it; TT_PROFILER_TU_ID (this TU's index in its link, from
 // jit_build/build.cpp) keeps labels apart when LTO merges a link's TUs into one assembly. .tt_observability_event_str
 // is "MS" so __FILE__ is stored once per file. Each .tt_observability_event_meta record carries the site's metadata
-// struct; its layout is in hostdev/debug_event_meta.h. The whole path, with diagrams:
-// tools/profiler/STREAMING_PROFILER_ZONE_IDS.md.
+// struct; its layout is in hostdev/observability_event_meta.h. The whole path, with diagrams:
+// tools/profiler/OBSERVABILITY_EVENT_IDS.md.
 #pragma once
 
 #include <stdint.h>
 
-#include "hostdev/debug_event_meta.h"
+#include "hostdev/observability_event_meta.h"
 
 // The id space: a process assigns [0, TT_ZONE_STALL_ID) to images in load order.
 #define TT_OBSERVABILITY_EVENT_ID_BITS 16
@@ -57,7 +57,7 @@
 
 // Declares `site` as this site's type; site::id() returns the site's id in two instructions with no memory
 // access. The variadic argument is the site's metadata, a constant value of any metadata struct (e.g.
-// ::tt::debug_event::ZoneColorMeta{"name", 0xFF0000}); hostdev/debug_event_meta.h marshals it into the site's
+// ::tt::debug_event::ZoneColorMeta{"name", 0xFF0000}); hostdev/observability_event_meta.h marshals it into the site's
 // record; the handle's label is TT_OBSERVABILITY_EVENT_LABEL(ctr) plus a hash of that value, so template instantiations
 // that give the site different values get different ids. Usable at namespace or block scope. `ctr` is a parameter
 // because

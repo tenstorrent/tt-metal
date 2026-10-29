@@ -10,7 +10,7 @@ image.** The device executes `lui`/`addi` of a constant, exactly as it would for
 is decided by the linker (dense within an image) and then by the loader (dense across images).
 
 To see it happen to one real zone, step by step with the actual bytes, read
-[`STREAMING_PROFILER_ZONE_IDS_WALKTHROUGH.md`](STREAMING_PROFILER_ZONE_IDS_WALKTHROUGH.md).
+[`OBSERVABILITY_EVENT_IDS_WALKTHROUGH.md`](OBSERVABILITY_EVENT_IDS_WALKTHROUGH.md).
 
 ```mermaid
 flowchart TB

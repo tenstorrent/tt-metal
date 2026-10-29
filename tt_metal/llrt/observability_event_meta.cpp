@@ -24,7 +24,7 @@ namespace tt::llrt {
 namespace {
 
 // The fixed part of a .tt_observability_event_meta record; the site's metadata fields follow
-// (hostdev/debug_event_meta.h).
+// (hostdev/observability_event_meta.h).
 struct RecordHeader {
     uint32_t event_id;       // the handle's VMA in .tt_observability_event_ids, which RebaseZoneIds has already moved
     uint32_t signature_ptr;  // VMA into .tt_observability_event_str: "<type name>:<field codes>"

@@ -1172,7 +1172,7 @@ __attribute__((noinline)) void trace_only_init() {
 #endif
 
 // DeviceZoneScopedNCU's unit, named the same in every profiler mode so a kernel builds in all of them.
-#include "hostdev/debug_event_meta.h"
+#include "hostdev/observability_event_meta.h"
 namespace kernel_profiler {
 using ::tt::debug_event::TimeUnit;
 }  // namespace kernel_profiler

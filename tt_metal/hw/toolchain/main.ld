@@ -177,7 +177,7 @@ SECTIONS
   }
 
   /* Site records: {id, signature_ptr, file_ptr, line} followed by the site's metadata struct,
-     emitted by TT_DEBUG_SITE (hostdev/observability_event_id.h, layout in hostdev/debug_event_meta.h);
+     emitted by TT_DEBUG_SITE (hostdev/observability_event_id.h, layout in hostdev/observability_event_meta.h);
      the host sizes each record from its signature. (INFO) for the same reason as above. */
   .tt_observability_event_meta TT_OBSERVABILITY_EVENT_META_VMA (INFO) :
   {

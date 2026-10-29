@@ -43,8 +43,8 @@ p100a, running the demo program:
 test_streaming_profiler_zones --gx 1 --gy 1 --iters 2 --markers 1
 ```
 
-Why it works this way is in [the design document](STREAMING_PROFILER_ZONE_IDS.md); the metadata rules and the record
-layout are in `tt_metal/hw/inc/hostdev/debug_event_meta.h`. This page only shows each step and where each number
+Why it works this way is in [the design document](OBSERVABILITY_EVENT_IDS.md); the metadata rules and the record
+layout are in `tt_metal/hw/inc/hostdev/observability_event_meta.h`. This page only shows each step and where each number
 comes from.
 
 Code identifiers on this page (`DeviceZoneScopedN`, the `.tt_observability_event_*` sections, `TT_PROFILER_TU_ID`, file names and
@@ -60,7 +60,7 @@ the kernel.
 | `0x06600000` | `TT_OBSERVABILITY_EVENT_STR_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_observability_event_str` (the strings) |
 | `0x06700000` | `TT_OBSERVABILITY_EVENT_META_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_observability_event_meta` (the records) |
 | `0x06800000` | `TT_OBSERVABILITY_EVENT_IDS_VMA` | `tt_metal/hw/toolchain/main.ld` | address the linker gives `.tt_observability_event_ids` (the handles) |
-| `16` | `kRecordHeaderBytes` | `tt_metal/hw/inc/hostdev/debug_event_meta.h` | bytes of a record's fixed header; the site's metadata fields follow it |
+| `16` | `kRecordHeaderBytes` | `tt_metal/hw/inc/hostdev/observability_event_meta.h` | bytes of a record's fixed header; the site's metadata fields follow it |
 | `0xFFFF` | `TT_ZONE_STALL_ID` | `tt_metal/hw/inc/hostdev/observability_event_id.h` | reserved id; the space handed out is `0 … 0xFFFE` |
 
 The three addresses are **made up**. None of these sections is ever loaded onto the device, so their addresses
@@ -95,7 +95,7 @@ a constant value of it; the host gets that value back, field by field. `DeviceZo
 use, and `DeviceZoneScopedNCU(name, color, unit)` passes this one:
 
 ```cpp
-// tt_metal/hw/inc/hostdev/debug_event_meta.h
+// tt_metal/hw/inc/hostdev/observability_event_meta.h
 enum class TimeUnit : uint8_t { Cycles, Nanoseconds, Microseconds, Milliseconds };
 
 struct ZoneUnitMeta {
@@ -490,7 +490,7 @@ sites[51] = { name "T1_Zone5", file ".../kernels/zones_compute.cpp", line 126,
 
 A reader gets the struct back by asking for its type. `as<T>()` checks the signature against `T`'s and walks `T`'s
 fields with the same structured binding the compiler used in step 3, filling each one in. The host and the device
-include the same `hostdev/debug_event_meta.h`, so both name the type alike:
+include the same `hostdev/observability_event_meta.h`, so both name the type alike:
 
 ```cpp
 if (auto v = site.meta->as<tt::debug_event::ZoneUnitMeta>()) {

@@ -8,7 +8,7 @@
 
 #if defined(TRACY_ENABLE)
 
-#include "hostdev/debug_event_meta.h"
+#include "hostdev/observability_event_meta.h"
 
 #include <algorithm>
 

@@ -15,7 +15,7 @@ wire format (§4), the offline Tracy tools (§5), and — in the companion
 [`STREAMING_PROFILER_FINDINGS.md`](STREAMING_PROFILER_FINDINGS.md), §6 — the complete dated record of the findings
 and benchmarks that produced all of it. The findings record is a separate file only because of the 500 KB
 per-file pre-commit limit. One mechanism has its own short document:
-[`STREAMING_PROFILER_ZONE_IDS.md`](STREAMING_PROFILER_ZONE_IDS.md), how a zone site's id is made at link time
+[`OBSERVABILITY_EVENT_IDS.md`](OBSERVABILITY_EVENT_IDS.md), how a zone site's id is made at link time
 and rebased at load so ids are dense, 16-bit and collision-free.
 
 It consolidates, unchanged in substance, the former standalone zone-format, architecture, hang-runbook,
@@ -1135,7 +1135,7 @@ zone id (`hostdev/observability_event_id.h`: a zone site's id is the address of 
 non-ALLOC `.tt_observability_event_ids` section, and the host gives each image the next block of the id space when it
 loads it, rebasing the `lui`/`addi` immediates through the image's relocations), ELF-name-resolved on the
 host. How the id is made, linked, rebased and resolved is its own document:
-[`STREAMING_PROFILER_ZONE_IDS.md`](STREAMING_PROFILER_ZONE_IDS.md).
+[`OBSERVABILITY_EVENT_IDS.md`](OBSERVABILITY_EVENT_IDS.md).
 
 | type | name | words | payload after word0 | expresses |
 |---|---|---|---|---|
