@@ -174,7 +174,7 @@ def _vol(t: ttnn.Tensor) -> int:
 def round_program(x: ttnn.Tensor, out: ttnn.Tensor, page0: int) -> ttnn.ProgramDescriptor:
     nt = _vol(x) // 1024
     g = x.device().compute_with_storage_grid_size()
-    ncores = max(1, min(-(-nt // BLOCK), g.x * g.y))
+    ncores = max(1, min(nt, g.x * g.y))  # every core (the SFPU round is the cost); blocks of up to BLOCK tiles
     cores = [(i % g.x, i // g.x) for i in range(ncores)]
     crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x_, y_), ttnn.CoreCoord(x_, y_)) for x_, y_ in cores])
     per, extra = divmod(nt, ncores)
