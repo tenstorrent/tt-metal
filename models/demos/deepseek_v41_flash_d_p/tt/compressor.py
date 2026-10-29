@@ -230,7 +230,8 @@ class AttnTable:
         replicated; not consumed) as row records; ``rounded``: also return their bf16 values (TILE, the caller frees).
         """
         assert self.bfp4 and g0 + rows_tile.shape[-2] <= self.hist, (self.bfp4, g0, rows_tile.shape, self.hist)
-        return ttnn.bringup.ckv_bfp4(rows_tile, self.buf, g0, rounded=rounded, memory_config=DRAM)
+        prepared = settings.get("CKV_BFP4_PREPARED") == "on"  # (P.7: the program built once, row0 patched)
+        return ttnn.bringup.ckv_bfp4(rows_tile, self.buf, g0, rounded=rounded, memory_config=DRAM, prepared=prepared)
 
     def put_window(self, carry: ttnn.Tensor, kv_rm: ttnn.Tensor) -> None:
         """The window region = [carry 128 | chunk S] (device; both bf16 ROW_MAJOR, replicated, not consumed)."""

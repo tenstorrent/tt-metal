@@ -1,0 +1,59 @@
+{
+ "used": [
+  {
+   "id": "DS41-135",
+   "how": "its open fix is what P.7 builds: the program cached per (mesh, n, rounded) and row0 / addresses patched through prepared_program, which needed a value-slot option because row0 is no address",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-66",
+   "how": "cache key design: no kernel-source hashing per call (prepared program's stored hash), the descriptor built once; keyed on mesh.id() not the Python wrapper",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "prepared_program patches only io-tensor addresses: an op with a per-call scalar runtime arg (a write offset) could not use it; added value_slots (prepared_program CHANGELOG 2026-10-29)",
+  "prepared_program's own test cases are 2x2-only (require_exact_physical_num_devices): its regression skips on the 8x4 Galaxy"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: the same program, the same runtime args and bytes (ckv_bfp4 tests/unit test_ckv_bfp4_prepared byte-equal to generic_op; tt/perf_ckv_bfp4_host.py tables equal on 8x4)"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.7",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-29T09:06:46",
+  "head": "3bad6c15590",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.7.perf.2.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_ckv_bfp4_host.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/README.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/ckv_bfp4.py",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/tests/unit/test_ckv_bfp4.py",
+   "ttnn/ttnn/bringup/prepared_program/CHANGELOG.md",
+   "ttnn/ttnn/bringup/prepared_program/README.md",
+   "ttnn/ttnn/bringup/prepared_program/device/prepared_program_device_operation.cpp",
+   "ttnn/ttnn/bringup/prepared_program/device/prepared_program_device_operation.hpp",
+   "ttnn/ttnn/bringup/prepared_program/prepared_program.cpp",
+   "ttnn/ttnn/bringup/prepared_program/prepared_program.hpp",
+   "ttnn/ttnn/bringup/prepared_program/prepared_program_nanobind.cpp"
+  ]
+ }
+}

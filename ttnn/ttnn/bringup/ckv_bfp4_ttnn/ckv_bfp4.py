@@ -15,6 +15,7 @@ only move tiles and records.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from pathlib import Path
 
 import ttnn
@@ -23,6 +24,9 @@ KERNELS = Path(__file__).parent / "kernels"
 _RD = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp"
 WIDTH, ROW_BYTES, GROUP = 512, 320, 16
 CB_IN, CB_ROWS, CB_ROUNDED = 0, 16, 17
+K_WRITER, WR_ROW0 = 1, 3  # (program(): the writer's kernel index and row0's runtime-arg index)
+_PREPARED_CAP = 64
+_PREPARED = OrderedDict()  # prepared=True: key -> (mesh device, PreparedProgram | None) (could not prepare), LRU
 
 
 def _cores(device, bands: int):
@@ -96,11 +100,19 @@ def program(ckv: ttnn.Tensor, rows: ttnn.Tensor, row0: int, rounded: ttnn.Tensor
 
 
 def ckv_bfp4(
-    ckv: ttnn.Tensor, rows: ttnn.Tensor, row0: int = 0, *, rounded: bool = False, memory_config=None
+    ckv: ttnn.Tensor,
+    rows: ttnn.Tensor,
+    row0: int = 0,
+    *,
+    rounded: bool = False,
+    memory_config=None,
+    prepared: bool = False,
 ) -> ttnn.Tensor | None:
     """ckv [1, 1, n, 512] bf16 TILE (n % 32 == 0; on a mesh, the same program on every chip) -> rows [row0, row0 + n)
     of ``rows`` ([1, 1, R, 320] uint8 ROW_MAJOR, written in place). ``rounded``: also return the rounded values as a new
-    [1, 1, n, 512] bf16 TILE tensor (else None)."""
+    [1, 1, n, 512] bf16 TILE tensor (else None). ``prepared`` (default False: a fresh descriptor through generic_op
+    every call): the program is built once per (mesh, n, rounded, memory configs) and dispatched as a prepared program
+    (ttnn.bringup.run_prepared, row0 a value slot): the same program and bytes without the per-call descriptor build."""
     n = ckv.shape[-2]
     assert ckv.dtype == ttnn.bfloat16 and ckv.layout == ttnn.TILE_LAYOUT, (ckv.dtype, ckv.layout)
     assert ckv.shape[-1] == WIDTH and n % 32 == 0, ckv.shape
@@ -120,5 +132,41 @@ def ckv_bfp4(
             memory_config or ttnn.DRAM_MEMORY_CONFIG,
         )
     io = [ckv, rows] + ([out] if out is not None else [])
-    ttnn.generic_op(io, program(ckv, rows, row0, out))
+    pp = _prepared(ckv, rows, out, row0, io) if prepared else None
+    if pp is not None:
+        # (looked up on ttnn.bringup at each call: the bring-up capture wraps run_prepared, F201)
+        ttnn.bringup.run_prepared(pp, io, [row0])
+    else:
+        ttnn.generic_op(io, program(ckv, rows, row0, out))
     return out
+
+
+def _prepared(ckv, rows, out, row0, io):
+    """prepared=True: the program for this (mesh, n, rounded, memory configs), built and prepared once (row0 a
+    value slot, every tensor address patched), or None when it cannot be prepared (a frozen runtime arg equal to an io
+    address: the patch count says so) - the caller then takes the plain generic_op path."""
+    mesh = ckv.device()
+    key = (
+        mesh.id(),  # (MeshDevice::id: unique per opened mesh, a reopened mesh never hits an old program)
+        ckv.shape[-2],
+        out is not None,
+        str(ckv.memory_config()),
+        str(rows.memory_config()),
+        str(out.memory_config()) if out is not None else None,
+    )
+    hit = _PREPARED.get(key)
+    if hit is not None:
+        _PREPARED.move_to_end(key)
+        return hit[1]
+    desc = program(ckv, rows, row0, out)
+    shape = mesh.shape
+    md = ttnn.MeshProgramDescriptor()
+    md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(shape[0] - 1, shape[1] - 1))] = desc
+    pp = ttnn.bringup.prepare_program(md, io, [(K_WRITER, WR_ROW0)])
+    cores = len(_cores(mesh, ckv.shape[-2] // 32))
+    # reader: ckv; writer: rows [, out], row0 - one slot each a core; anything else matched a frozen value
+    entry = (mesh, pp if pp.patch_count == cores * (3 + (out is not None)) else None)
+    if len(_PREPARED) >= _PREPARED_CAP:
+        _PREPARED.popitem(last=False)
+    _PREPARED[key] = entry
+    return entry[1]

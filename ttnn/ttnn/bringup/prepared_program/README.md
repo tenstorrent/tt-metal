@@ -21,7 +21,12 @@ the descriptor's.
 ## Options
 - `prepare_program(mesh_program_descriptor, io_tensors)`: no options. Returns a `PreparedProgram` (`patch_count`,
   `n_io`, `hash`, and diagnostic `payload`, `kernel_stats`, `invariant_runs`).
-- `run_prepared(prepared, io_tensors)`: no options; the output is the last io tensor, as `generic_op`.
+- `prepare_program(..., value_slots=[(kernel index, runtime-arg index), ...])` (default `[]`: the behaviour before
+  the option, same cache key): runtime arg `arg` of kernel `kernel` on every core of every mesh program that has it
+  takes a per-run value (slot = position in the list); such a slot is never matched to an io address and is left out
+  of the cache key. `PreparedProgram.n_values` is the slot count.
+- `run_prepared(prepared, io_tensors, values=[])`: `values` one per value slot (written on every run, cache miss and
+  hit); the output is the last io tensor, as `generic_op`.
 - Contract (prepared_program.hpp): every per-call tensor a kernel addresses (a runtime arg holding it, or a CB on it) is
   in `io_tensors`, at the same positions at prepare and every run; every other runtime-arg value and address is frozen
   at prepare; a constant equal to an io tensor's address is taken for it (prepare refuses two io tensors at one
@@ -34,7 +39,7 @@ the descriptor's.
 - Not measured on this branch.
 
 ## Limits
-- Only addresses of io tensors are patched: anything else that changes between calls needs a new descriptor (a new
+- Only addresses of io tensors (and, with `value_slots`, the named per-core args) are patched: anything else that changes between calls needs a new descriptor (a new
   prepare). Exact-match patching: an argument that holds an io tensor's address plus an offset is frozen.
 - The bring-up framework's step profiler on this branch does not wrap `run_prepared` (Marko's branch does, in
   models/demos/common/bringup/testing/profiler.py); its launches are missing from per-step device times here.
@@ -63,3 +68,5 @@ ttnn.bringup.run_prepared(p, [in0, in1, out])             # every call
   tt/moe_block_adapter.py, setting TAIL_A2A_PREPARED, P.2 galaxy): one PreparedProgram per cached descriptor (keyed by
   the y / se / out addresses, so a hit patches nothing), called directly. 8x4 warm chunk wall 594.3 -> 544.4 ms, ladder
   metrics identical.
+- ttnn.bringup.ckv_bfp4(prepared=True) (deepseek_v41_flash_d_p tt/compressor.AttnTable.append_tiles, setting
+  CKV_BFP4_PREPARED, P.7 galaxy): one PreparedProgram per (mesh, n, rounded, memory configs), row0 a value slot.

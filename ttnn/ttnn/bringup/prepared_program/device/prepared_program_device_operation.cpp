@@ -49,6 +49,14 @@ tt::tt_metal::ProgramDescriptor PreparedProgramFactory::create_descriptor(
     for (const auto& c : p.cbs[pi]) {
         desc.cbs[c.cb].buffer = buffer_of(io[c.io]);
     }
+    for (const auto& v : p.val[pi]) {
+        for (auto& [core, args] : desc.kernels[v.kernel].runtime_args) {
+            if (core.x == v.x && core.y == v.y) {
+                args[v.arg] = attributes.values[v.slot];
+                break;
+            }
+        }
+    }
     return desc;
 }
 
@@ -88,6 +96,9 @@ void PreparedProgramFactory::override_runtime_arguments(
                 }
             }
         }
+    }
+    for (const auto& v : p.val[pi]) {  // (value_slots option: every run)
+        tt::tt_metal::GetRuntimeArgs(program, v.kernel, CoreCoord(v.x, v.y))[v.arg] = attributes.values[v.slot];
     }
     if (!p.cbs[pi].empty()) {
         const auto program_cbs = program.circular_buffers();

@@ -34,6 +34,7 @@ void bind_prepared_program(nb::module_& mod) {
         )doc")
         .def_prop_ro("patch_count", &Prepared::patch_count)
         .def_prop_ro("n_io", [](const Prepared& p) { return p.n_io; })
+        .def_prop_ro("n_values", [](const Prepared& p) { return p.n_values; })
         .def_prop_ro("hash", [](const Prepared& p) { return static_cast<uint64_t>(p.hash); })
         // (the launch payload of the first mesh program: runtime-arg words over its cores, kernel-cores with args,
         // common runtime-arg words, CBs)
@@ -145,18 +146,32 @@ void bind_prepared_program(nb::module_& mod) {
 
     mod.def(
         "prepare_program",
-        [](const tt::tt_metal::experimental::MeshProgramDescriptor& desc, const std::vector<Tensor>& io_tensors) {
-            return std::const_pointer_cast<Prepared>(prepare(desc, io_tensors));
+        [](const tt::tt_metal::experimental::MeshProgramDescriptor& desc,
+           const std::vector<Tensor>& io_tensors,
+           const std::vector<std::tuple<uint32_t, uint32_t>>& value_slots) {
+            std::vector<ValueSlot> vs;
+            for (uint32_t s = 0; s < value_slots.size(); ++s) {
+                vs.push_back(
+                    ValueSlot{.kernel = std::get<0>(value_slots[s]), .arg = std::get<1>(value_slots[s]), .slot = s});
+            }
+            return std::const_pointer_cast<Prepared>(prepare(desc, io_tensors, vs));
         },
         nb::arg("mesh_program_descriptor"),
         nb::arg("io_tensors"),
-        "Prepare a MeshProgramDescriptor for patched dispatch (copies it once; records the patch slots).");
+        nb::arg("value_slots") = std::vector<std::tuple<uint32_t, uint32_t>>{},
+        "Prepare a MeshProgramDescriptor for patched dispatch (copies it once; records the patch slots). "
+        "value_slots: [(kernel index, runtime-arg index)], one per-run value each (run_prepared values=, in this "
+        "order), patched on every core of that kernel, left out of the cache key; default none.");
     mod.def(
         "run_prepared",
-        [](const std::shared_ptr<Prepared>& p, const std::vector<Tensor>& io_tensors) { return run(p, io_tensors); },
+        [](const std::shared_ptr<Prepared>& p,
+           const std::vector<Tensor>& io_tensors,
+           const std::vector<uint32_t>& values) { return run(p, io_tensors, values); },
         nb::arg("prepared"),
         nb::arg("io_tensors"),
-        "Dispatch a prepared program on these io tensors (the output last); returns the output.");
+        nb::arg("values") = std::vector<uint32_t>{},
+        "Dispatch a prepared program on these io tensors (the output last); returns the output. values: one per "
+        "value slot of the prepare (default none).");
 }
 
 }  // namespace ttnn::operations::bringup::prepared_program::detail
