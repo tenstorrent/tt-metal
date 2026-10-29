@@ -208,8 +208,8 @@ void check_l1(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, ui
     const uint64_t bytes = l1_bytes(cb_tiles(shape, chunks));
     TT_FATAL(
         bytes <= l1_budget_bytes,
-        "SDPA forward circular buffers need {} bytes of L1 per core but only {} are available. Reduce "
-        "q_chunk_size ({} rows), k_chunk_size ({} rows) or heads_per_item ({}); 0 = pick.",
+        "SDPA forward circular buffers need {} bytes of L1 per core but only {} are available at q_chunk_size {} "
+        "rows, k_chunk_size {} rows, heads_per_item {}. Reduce the pinned knobs; 0 = pick.",
         bytes,
         l1_budget_bytes,
         chunks.Sq_chunk_t * tt::constants::TILE_HEIGHT,
@@ -220,12 +220,15 @@ void check_l1(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, ui
 }  // namespace
 
 void check_chunks(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape, uint64_t l1_budget_bytes) {
-    SDPAForwardChunks user = user_chunks(config, shape);
-    // With both chunk sizes pinned nothing can shrink, so the L1 check is final here (heads_per_item 0 = 1).
-    if (user.Sq_chunk_t != 0U && user.Sk_chunk_t != 0U) {
-        user.heads_per_item = std::max(user.heads_per_item, 1U);
-        check_l1(shape, user, l1_budget_bytes);
-    }
+    const SDPAForwardChunks user = user_chunks(config, shape);
+    // The pick only shrinks the unset chunk sizes, down to one tile, so the config fits at all iff it fits
+    // with every unset chunk size at one tile (heads_per_item 0 = 1). With both chunk sizes pinned this is
+    // the final check.
+    const SDPAForwardChunks floor{
+        .Sq_chunk_t = std::max(user.Sq_chunk_t, 1U),
+        .Sk_chunk_t = std::max(user.Sk_chunk_t, 1U),
+        .heads_per_item = std::max(user.heads_per_item, 1U)};
+    check_l1(shape, floor, l1_budget_bytes);
 }
 
 SDPAForwardChunks resolve_chunks(
