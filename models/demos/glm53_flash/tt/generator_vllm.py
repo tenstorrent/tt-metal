@@ -721,6 +721,9 @@ class GLM53FlashForCausalLM:
         self._perf_steps = 0
         self._perf_s = 0.0
         self._perf_chain = 0  # resident chain steps (reload_inputs=False) among the counted steps
+        self._perf_stale_positions = (
+            0  # chain-step rows whose plugin position lagged the device by one (async scheduling)
+        )
         self._perf_log_every = max(1, int(os.environ.get("GLM53_VLLM_PERF_LOG_EVERY", "32")))
         # slot-level prefix cache: the resident-content records + the KDA snapshot policy (None = APC off); the
         # model's snapshot store (``allocate_kda_snapshots``) must exist when entries > 0
@@ -2149,8 +2152,10 @@ class GLM53FlashForCausalLM:
 
     def _stage_resident_rows(self, positions: torch.Tensor, page_table, sampling_params):
         """The resident chain's step (``reload_inputs=False``): the live wire rows are the rows of the last staged
-        step (the plugin reloads on any layout change), every one decoding at the host-tracked position (the
-        plugin's position must agree); nothing is fed to the device. ``page_table``: the block-table check of a
+        step (the plugin reloads on any layout change), every one decoding at the host-tracked position; the
+        plugin's position is the device's or one behind it (under vLLM's async scheduling step N + 1 is built
+        before step N's token lands, so the host inputs of a chain step are known-stale and the device's position
+        is the truth); nothing is fed to the device. ``page_table``: the block-table check of a
         ``reload_page_table`` step."""
         wire = int(positions.shape[0])
         live = [i for i in range(wire) if int(positions[i]) >= 0]
@@ -2172,13 +2177,16 @@ class GLM53FlashForCausalLM:
                     f"{'unprefilled' if state is None else state.phase}, not decoding (a chain starts with a reload)"
                 )
             p = int(positions[i])
-            if p != state.position:
+            if p not in (state.position, state.position - 1):
                 raise RuntimeError(
-                    f"resident decode row {i}: the plugin's position {p} and the device's {state.position} must agree "
-                    "on a chain step (the device advanced the slot itself)"
+                    f"resident decode row {i}: the plugin's position {p} is neither the device's {state.position} nor "
+                    "one behind it (vLLM's async scheduling builds step N + 1 before step N's token lands): the slot's "
+                    "history diverged"
                 )
+            if p != state.position:
+                self._perf_stale_positions += 1  # the async-scheduling lag: the device's position is the truth
             if page_table is not None:
-                self.blocks.check_row(page_table[i], p + 1)
+                self.blocks.check_row(page_table[i], state.position + 1)
             tok = self._last_read_ids.get(i)
             if tok is None:
                 raise RuntimeError(
@@ -2660,7 +2668,11 @@ class GLM53FlashForCausalLM:
             logger.info(
                 f"[glm53-vllm-perf] decode step {ms:.1f} ms = {1000 / ms:.2f} tok/s per user, "
                 f"{live * 1000 / ms:.1f} tok/s aggregate over {live} live users ({self._perf_steps} steps, host wall incl. readback"
-                + (f"; {self._perf_chain} resident chain steps" if self.resident else "")
+                + (
+                    f"; {self._perf_chain} resident chain steps, {self._perf_stale_positions} rows a step behind the plugin"
+                    if self.resident
+                    else ""
+                )
                 + ")"
             )
             if self.spec is not None:

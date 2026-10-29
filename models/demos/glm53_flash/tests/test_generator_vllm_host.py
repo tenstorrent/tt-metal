@@ -870,18 +870,23 @@ def test_decode_reload_contract_is_enforced(monkeypatch):
     assert int(out2[0, 0]) == _next_token(t1, 41) and a.slots.physical(0).position == 42
     assert len([c for c in m.calls if c[0] == "load_decode_inputs"]) == loads  # nothing uploaded on the chain step
     assert m.calls[-1][0] == "advance_positions_host" and sum(m.calls[-1][1]) == len(a.slots.flat_indices(0))
-    with expect_error(RuntimeError, "must agree"):
+    # async scheduling builds step N + 1 before step N's token lands: a plugin position one behind the device is
+    # accepted (the device's is the truth), any other disagreement is refused
+    out2b = a.decode_forward(torch.zeros_like(tokens), torch.tensor([41, -1, -1, -1]), reload_inputs=False, **kw)
+    assert int(out2b[0, 0]) == _next_token(_next_token(t1, 41), 42) and a.slots.physical(0).position == 43
+    assert a._perf_stale_positions == 1
+    with expect_error(RuntimeError, "diverged"):
         a.decode_forward(tokens, torch.tensor([50, -1, -1, -1]), reload_inputs=False, **kw)
     t2 = torch.full((1, 40), 6, dtype=torch.int32)
     a.prefill_forward(t2, prompt_lens=[40], start_pos=torch.tensor([0]), empty_slots=[1], sampling_params=_greedy(1))
     with expect_error(RuntimeError, "layout changed"):
-        a.decode_forward(tokens, torch.tensor([42, 40, -1, -1]), reload_inputs=False, **kw)
+        a.decode_forward(tokens, torch.tensor([43, 40, -1, -1]), reload_inputs=False, **kw)
     out3 = a.decode_forward(
-        torch.tensor([[t1], [1], [0], [0]], dtype=torch.int32), torch.tensor([42, 40, -1, -1]), reload_inputs=True, **kw
+        torch.tensor([[t1], [1], [0], [0]], dtype=torch.int32), torch.tensor([43, 40, -1, -1]), reload_inputs=True, **kw
     )
     assert int(out3[1, 0]) == _next_token(1, 40) and a.slots.physical(1).position == 41
     with expect_error(ValueError, "not a legal command"):  # reload_page_table rides a chain step only
-        a.decode_forward(tokens, torch.tensor([43, 41, -1, -1]), reload_inputs=True, reload_page_table=True)
+        a.decode_forward(tokens, torch.tensor([44, 41, -1, -1]), reload_inputs=True, reload_page_table=True)
 
 
 def test_chunked_prefill_contiguity_and_the_mid_prefill_guard():
