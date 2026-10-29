@@ -205,7 +205,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       export DS_PREFILL_REUSE_MODEL=1
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and (notrace or traced) and with_determinism" -xvs
     '
   test_type: kimi_chunked_perf_suite
   test_tags: [kimi_k2_7, transformer, kimi_chunked, kimi_chunked_untraced_perf]
@@ -616,7 +616,7 @@
       # dense and MoE parametrizations.
       timeout -k 2m 60m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and torus-xy-8x4 and glm53" -vvv --tb=short --timeout=600
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and torus-xy-8x4 and glm53 and iter2 and with_determinism" -vvv --tb=short --timeout=600
       '
     )
 
@@ -710,7 +710,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       export DS_PREFILL_REUSE_MODEL=1
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced) and with_determinism" -xvs
     '
   test_type: glm_chunked_perf_suite
   test_tags: [glm_5_3, transformer, glm_chunked, glm_chunked_untraced_perf]
