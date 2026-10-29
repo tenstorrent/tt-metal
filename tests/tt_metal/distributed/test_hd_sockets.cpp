@@ -33,6 +33,7 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <cstring>
 #include <tt-metalium/tt_align.hpp>
+#include <internal/mesh_device.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-umd/io_window/io_window.hpp>
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
@@ -105,7 +106,7 @@ void test_h2d_socket(
         cluster.read_core(
             recv_data_readback.data(),
             data_size,
-            tt_cxy_pair(mesh_device->get_device(recv_core.device_coord)->id(), recv_core_virtual),
+            tt_cxy_pair(internal::get_device(*mesh_device, recv_core.device_coord)->id(), recv_core_virtual),
             recv_data_buffer->address());
         EXPECT_EQ(src_vec, recv_data_readback);
     }
@@ -519,7 +520,7 @@ void test_hd_socket_staged_loopback(
 bool is_device_coord_mmio_mapped(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, const MeshCoordinate& device_coord) {
     const auto& cluster = MetalContext::instance().get_cluster();
-    auto device_id = mesh_device->get_device(device_coord)->id();
+    auto device_id = internal::get_device(*mesh_device, device_coord)->id();
     return cluster.get_associated_mmio_device(device_id) == device_id;
 }
 
@@ -677,7 +678,7 @@ bool is_blackhole() { return MetalContext::instance().hal().get_arch() == tt::AR
 // Assert the bank table against the same allocator and soc-descriptor sources that
 // RiscFirmwareInitializer programs BRISC from.
 TEST_F(L2CpuSocketFixture, DramBankTableMatchesAllocatorAndSocDescriptor) {
-    auto* device = mesh_device_->get_device(MeshCoordinate(0, 0));
+    auto* device = internal::get_device(*mesh_device_, MeshCoordinate(0, 0));
     const ChipId device_id = device->id();
 
     const auto table = internal::get_dram_bank_table(device_id);
@@ -717,7 +718,7 @@ TEST_F(L2CpuSocketFixture, L2CpuIoWindowsAnchoredAtLimBase) {
     if (!is_blackhole()) {
         GTEST_SKIP() << "L2CPU tiles only exist on Blackhole";
     }
-    auto* device = mesh_device_->get_device(MeshCoordinate(0, 0));
+    auto* device = internal::get_device(*mesh_device_, MeshCoordinate(0, 0));
     const ChipId device_id = device->id();
 
     const auto l2cpu_cores = get_l2cpu_cores(device_id);
@@ -751,7 +752,7 @@ TEST_F(L2CpuSocketFixture, L2CpuSocketRejectsInvalidLimAddresses) {
     if (!is_blackhole()) {
         GTEST_SKIP() << "L2CPU sockets are Blackhole-only";
     }
-    const auto l2cpu_cores = get_l2cpu_cores(mesh_device_->get_device(MeshCoordinate(0, 0))->id());
+    const auto l2cpu_cores = get_l2cpu_cores(internal::get_device(*mesh_device_, MeshCoordinate(0, 0))->id());
     if (l2cpu_cores.empty()) {
         GTEST_SKIP() << "No unharvested L2CPU tiles on this device";
     }

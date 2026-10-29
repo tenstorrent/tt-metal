@@ -1391,7 +1391,7 @@ def _verify_resident_slots(
                 read_config_slice=read_dflash_slice,
                 golden_dir=os.environ.get("PREFILL_DFLASH_GOLDEN_KV_DIR") or ADAPTER.dflash_golden_default,
                 threshold=dflash_threshold,
-                rope_convention="interleaved",
+                rope_convention=ADAPTER.dflash_rope_convention,
             )
             if dflash_pcc is not None:
                 min_dflash_overall = dflash_pcc if min_dflash_overall is None else min(min_dflash_overall, dflash_pcc)

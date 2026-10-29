@@ -20,7 +20,7 @@ from typing import Literal
 import ttnn
 
 import torch
-from ..config import DeformableAttentionConfig
+from ..model_config import DeformableAttentionConfig
 
 try:
     from tracy import signpost
@@ -180,7 +180,7 @@ class TTMSDeformableAttention:
     Based on the MMCV/BEVFormer approach.
     """
 
-    def __init__(self, config: DeformableAttentionConfig, device, params=None, *, spatial_shapes):
+    def __init__(self, config: DeformableAttentionConfig, device, params=None, *, spatial_shapes, residual=True):
         """
         Initialize TTNN Multi-Scale Deformable Attention module.
 
@@ -198,6 +198,8 @@ class TTMSDeformableAttention:
                 module: forward takes no shapes of its own, and they are handed to the
                 fused op as a static attribute. Features at a different resolution
                 require a new instance.
+            residual: Add the identity to the output. BEVFormer's MSDeformableAttention3D, inside
+                the spatial cross-attention, has no shortcut.
 
         Raises:
             ValueError: If the configuration or spatial shapes are invalid.
@@ -233,6 +235,7 @@ class TTMSDeformableAttention:
         self.total_keys = int(self.spatial_shapes.prod(dim=1).sum().item())
 
         self.head_dim = self.embed_dims // self.num_heads
+        self.residual = residual
 
     def forward(
         self,
@@ -364,7 +367,11 @@ class TTMSDeformableAttention:
             logger.info("MSDA Adding Residual")
 
         # Add residual connection
-        output = ttnn.add(output, identity)
+        if self.residual:
+            output = ttnn.add(output, identity)
+        else:
+            # The fused op's output is ROW_MAJOR; without output_proj or the residual nothing tiles it.
+            output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
 
         # Handle batch_first format for output
         if not self.batch_first:

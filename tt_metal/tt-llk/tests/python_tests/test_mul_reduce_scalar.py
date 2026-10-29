@@ -97,10 +97,6 @@ def _num_tiles_for_format(formats):
 def test_mul_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions, math_op):
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("mul_reduce_scalar is a Blackhole-only experimental LLK")
-    if math_op != MathOperation.Elwmul and tile_dimensions[0] == 8:
-        pytest.skip(
-            "The ELWADD/ELWSUB MOP reads the stale rows 8-15 of an 8-row face (#60970, remove with #62117)"
-        )
 
     tile_shape = construct_tile_shape(tile_dimensions)
     elements_per_tile = tile_shape.total_tile_size()

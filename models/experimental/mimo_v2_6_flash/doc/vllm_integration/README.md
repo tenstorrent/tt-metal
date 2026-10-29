@@ -112,8 +112,8 @@ vllm serve /path/to/MiMo-V2.6-Flash-MOPD --served-model-name XiaomiMiMo/MiMo-V2.
 - `MIMO_EXPERT_QUANT=gptq` serves the GPTQ-prepared bfloat4_b experts (same speed, KL about half the stock
   packer's; see doc/tp8_dp4_plan.md "Accuracy"). Building their cache the first time needs
   `MIMO_EXPERT_PREP_DIR` with `tests/perf/gptq_experts.py` output. The default is the MSE-prepared experts.
-- `trace_region_size` 1 GB holds the decode trace and the 28 prefill-batch traces per replica (150 MB is enough with
-  `MIMO_PREFILL_TRACE=0`). `sample_on_device_mode` and the prefill gather need plugin `mimo-v2.6-flash/c16-throughput`.
+- `trace_region_size` 1 GB holds the decode trace, the 28 prefill-batch traces and the traced later prefill chunks per
+  replica (150 MB is enough with `MIMO_PREFILL_TRACE=0` and `MIMO_PREFILL_CHUNK_TRACE=0`). `sample_on_device_mode` and the prefill gather need plugin `mimo-v2.6-flash/c16-throughput`.
 
 - `--max-num-seqs` is per lane (16 users in total). `--block-size 64` is required.
 - vLLM starts one API server per DP rank (4) by default; that needs plugin 11dc5a9 or later (before it, every
@@ -122,14 +122,19 @@ vllm serve /path/to/MiMo-V2.6-Flash-MOPD --served-model-name XiaomiMiMo/MiMo-V2.
 - `MIMO_KV_GB_PER_CHIP` caps the KV pool per lane (default 6.7 with the pair split, else 6); the adapter warns when
   the cap holds fewer than `--max-num-seqs` requests of `--max-model-len` (vLLM then queues the rest).
   `MIMO_MODEL_PATH` / `MIMO_TT_CACHE` as for the tests.
-- `MIMO_PREFILL_CHUNK_TRACE=1` (default 0) traces a whole later prefill chunk (start > 0) of the step's full token
-  budget and replays it (`TtMiMoModel.setup_prefill_chunk_traces`): two traces per replica (the global layers' legacy and
-  grouped / K-split SDPA programs; `MIMO_PREFILL_CHUNK_TRACE_SDPA=256,128` adds the program of a start at an odd
-  multiple of 128). Warmup sets them up and `warmup_model_decode` captures them after the decode trace, so it works
-  with `trace_mode` `decode_only`. Each eager chunk costs ~0.23 s of host dispatch, so one host thread serving 4 busy
-  lanes was host bound; replays make it device bound (256K per lane, budget 4096, pair split: 4 lanes 109 -> 53 s,
-  9.6K -> 20.0K tok/s for the Galaxy; one lane unchanged; logits bitwise equal). A lane's last, partial chunk and
-  chunks of other lengths still run eagerly.
+- `MIMO_PREFILL_CHUNK_TRACE` (default 1; `MIMO_PREFILL_CHUNK_TRACE=0` opts out) traces a whole later prefill chunk
+  (start > 0) of the step's full token budget and replays it (`TtMiMoModel.setup_prefill_chunk_traces`): two traces per
+  replica (the global layers' legacy and grouped / K-split SDPA programs; `MIMO_PREFILL_CHUNK_TRACE_SDPA=256,128` adds
+  the program of a start at an odd multiple of 128). Warmup sets them up and `warmup_model_decode` captures them last,
+  after the decode, prefill-batch and MTP traces, so it works with `trace_mode` `decode_only`. Each eager chunk costs
+  ~0.23 s of host dispatch, so one host thread serving 4 busy lanes was host bound; replays make it device bound (256K
+  per lane, budget 4096, pair split: 4 lanes 109 -> 53 s, 9.6K -> 20.0K tok/s for the Galaxy; one lane unchanged;
+  logits bitwise equal). A lane's last, partial chunk and chunks of other lengths still run eagerly. The traces are
+  optional: when their setup fails, or the trace region has no room for the next one (checked against the allocator
+  before each capture) or a capture fails, the replica drops them with a warning ("traced later prefill chunks
+  disabled, later chunks run eagerly") and serves with eager later chunks instead of failing startup; the same holds
+  for a build whose `chunked_flash_mla_prefill` takes no runtime start. The log line "later-chunk prefill traces
+  captured; trace region X MB of Y MB used per device" gives the region's headroom.
 - `MIMO_KV_PAIR_SPLIT` (default 1; "Global KV pair split" below) halves the global layers' KV: 4 x 1M per lane fits at
   `MIMO_KV_GB_PER_CHIP=6.7` (6.69 GB: 4 x 546,368 pool tokens; 6.6 holds 3.95), the default. It needs a ttnn build whose MLA attention ops return their LSE; `MIMO_KV_PAIR_SPLIT=0`
   restores the duplicated layout (and serves on builds without those ops).
