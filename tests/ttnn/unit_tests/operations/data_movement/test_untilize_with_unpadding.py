@@ -960,7 +960,7 @@ def test_untilize_with_unpadding_sharded_multi_batch_unpadding_regression(
         ((1, 1, 96, 7392), (1, 1, 90, 7392)),
         ((1, 1, 160, 6304), (1, 1, 150, 6301)),
         ((2, 1, 64, 7328), (2, 1, 60, 7328)),
-        # Crops that remove one or more whole tile rows of the padded height. The work split of the
+        # Unpadding that removes one or more whole tile rows of the padded height. The work split of the
         # block-interleaved factory walks the input padded height, so a tile row that starts at or
         # past the end of the output has none of its rows in the output, and the rows before it must
         # still come out intact.
@@ -972,7 +972,7 @@ def test_untilize_with_unpadding_sharded_multi_batch_unpadding_regression(
         ((1, 1, 96, 2048), (1, 1, 32, 2048)),
         # The tile row at row 32 starts past the end of the 30-row output.
         ((1, 1, 64, 2048), (1, 1, 30, 2048)),
-        # Height and width cropped together, so some sub-blocks also lie entirely in the width padding.
+        # Height and width unpadded together, so some sub-blocks also lie entirely in the width padding.
         ((2, 1, 96, 2048), (2, 1, 32, 1000)),
     ],
 )
