@@ -666,6 +666,9 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
 )
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("layer_type", ["dense", "moe"], ids=["dense", "moe"])
+@pytest.mark.parametrize("num_iterations", [1, 2], ids=["iter1", "iter2"])
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.uncollect_if(pred=lambda **p: p["determinism_check"] and p["num_iterations"] < 2)
 # KV dedup through TtPrefillBlock -> ttMLA (the whole norm/attn/FFN stack, not just the MLA-level tests
 # in tests/sparse_mla/).
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
@@ -679,6 +682,8 @@ def test_glm_prefill_block(
     num_links,
     seq_len,
     layer_type,
+    num_iterations,
+    determinism_check,
     model_path,
     weight_cache_path,
 ):
@@ -819,15 +824,25 @@ def test_glm_prefill_block(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
 
-    logger.info(f"[glm block {layer_type}] running device block")
-    out = block.forward(
-        tt_x, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, actual_isl=seq_len, index_kv_cache=index_kv_cache
-    )
-    if isinstance(out, tuple):
-        out = out[0]
-    tt_out = ttnn.to_torch(
-        out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
-    ).to(torch.bfloat16)
+    tt_out, repeat_failures = None, []
+    for it in range(num_iterations):
+        logger.info(f"[glm block {layer_type}] running device block, iter {it}")
+        out = block.forward(
+            tt_x, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, actual_isl=seq_len, index_kv_cache=index_kv_cache
+        )
+        if isinstance(out, tuple):
+            out = out[0]
+        cur = ttnn.to_torch(
+            out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).to(torch.bfloat16)
+        if tt_out is None:
+            tt_out = cur
+        elif determinism_check and not torch.equal(tt_out, cur):
+            repeat_failures.append(f"iter {it}: {int((tt_out != cur).sum())} elements differ")
+    if repeat_failures:
+        pytest.fail("determinism (baseline=iter0) failed: " + "; ".join(repeat_failures))
+    if determinism_check:
+        logger.success(f"[glm block {layer_type}] output bit-identical across {num_iterations} iterations")
 
     # --- composed reference (reference/glm_5_3): assembles MLA + norm/residual + FFN ---
     logger.info(
