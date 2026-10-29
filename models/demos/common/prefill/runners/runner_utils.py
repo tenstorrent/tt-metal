@@ -16,16 +16,8 @@ def _create_fabric_router_config(max_payload_size):
     return config
 
 
-# The HAL's default kernel config ring (default_l1_kernel_config_size on Wormhole and Blackhole)
-KERNEL_CONFIG_RING = 69 * 1024
-
-
 def open_mesh_device(
-    mesh_shape: tuple,
-    max_payload_size: int,
-    l1_small_size: int = 0,
-    trace_region_size: int = 0,
-    kernel_config_extra: int = 0,
+    mesh_shape: tuple, max_payload_size: int, l1_small_size: int = 0, trace_region_size: int = 0
 ) -> ttnn.MeshDevice:
     sp = mesh_shape[0]
     fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
@@ -59,16 +51,8 @@ def open_mesh_device(
         ttnn.FabricManagerMode.DEFAULT,
         fabric_router_config,
     )
-    kwargs = {}
-    if kernel_config_extra:
-        # worker_l1_size is the L1 left to the allocator above the ring, so shrinking it grows the ring
-        kwargs["worker_l1_size"] = ttnn.get_max_worker_l1_unreserved_size() - KERNEL_CONFIG_RING - kernel_config_extra
-        logger.info(f"Kernel config ring: {KERNEL_CONFIG_RING + kernel_config_extra} B (+{kernel_config_extra} B)")
     return ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(*mesh_shape),
-        l1_small_size=l1_small_size,
-        trace_region_size=trace_region_size,
-        **kwargs,
+        mesh_shape=ttnn.MeshShape(*mesh_shape), l1_small_size=l1_small_size, trace_region_size=trace_region_size
     )
 
 

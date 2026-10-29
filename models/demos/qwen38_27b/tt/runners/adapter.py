@@ -57,9 +57,6 @@ class Qwen38PrefillAdapter(PrefillModelAdapter):
     ttnn_cache_default = ""
     prefill_trace_default = ""
     pipeline_activation_emb_tp_sharded = False
-    # At full depth the ring SDPA program (ring_joint reader / writer / sdpa) of a chunk that starts past 0 is 70,672 B,
-    # 16 B over the default 70,656 B ring; 4 KB more leaves headroom without moving the ops that size from free L1.
-    kernel_config_extra = 4 * 1024
 
     def load_hf_config(self):
         hf_dir = settings.get("HF_DIR")

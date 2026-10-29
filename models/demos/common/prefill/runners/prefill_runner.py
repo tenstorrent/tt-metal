@@ -157,7 +157,6 @@ TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_size))
 if MTP_LEVELS:
     _L1_SMALL_SIZE += 512
-_KERNEL_CONFIG_EXTRA = int(os.environ.get("PREFILL_KERNEL_CONFIG_EXTRA", ADAPTER.kernel_config_extra))
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 # GLM KVPE cache: scaled FP8 unless PREFILL_SCALED_FP8_KV_CACHE=0 (bf16). Dense-MLA models get None.
 SCALED_FP8_KV_CACHE = os.environ.get("PREFILL_SCALED_FP8_KV_CACHE", "1") == "1"
@@ -813,7 +812,6 @@ def _print_config() -> None:
         ("PREFILL_MTP_LEVELS", f"{MTP_LEVELS} (adapter.supports_mtp={ADAPTER.supports_mtp})"),
         ("PREFILL_MTP_DECODE_LEVELS", str(MTP_DECODE_LEVELS)),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
-        ("PREFILL_KERNEL_CONFIG_EXTRA", str(_KERNEL_CONFIG_EXTRA)),
         ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
@@ -906,7 +904,6 @@ def main() -> None:
         ADAPTER.fabric_payload_size(),
         l1_small_size=_L1_SMALL_SIZE,
         trace_region_size=_TRACE_REGION_SIZE,
-        kernel_config_extra=_KERNEL_CONFIG_EXTRA,
     )
 
     hf_config = ADAPTER.load_hf_config()
