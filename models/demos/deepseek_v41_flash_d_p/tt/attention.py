@@ -96,6 +96,11 @@ WINDOW = 128  # sliding window (cfg.window); the table's carry region
 WINDOW_BLOCK_BYTES = 18496
 
 
+def lowbit_host() -> bool:
+    """LOWBIT_HOST=on (P.12): the window blocks' carry and chunk in one compact ckv_bfp4 call (``_put_blocks``)."""
+    return settings.get("LOWBIT_HOST") == "on"
+
+
 def window_bfp8() -> bool:
     """WINDOW_KV_FORMAT=bfp8_blocks (DS41-150): the window region as bfloat8_b blocks of 32 rows (``WindowTables``)."""
     return settings.get("WINDOW_KV_FORMAT") == "bfp8_blocks"
@@ -528,22 +533,31 @@ class TtWindowAttention:
             if full is not kv:
                 dealloc(full)
         kv_rm = ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
-        if blocks:
+        one = blocks and lowbit_host()  # LOWBIT_HOST=on (P.12): [carry | chunk] in one call below
+        if blocks and not one:
             self._put_blocks(masked, WINDOW)
-        if masked is not kv:
+        if masked is not kv and not one:
             dealloc(masked)
         cache.write(kv_rm, start, end)
         carry = cache.carry(start)
         if blocks:
             ct = ttnn.to_layout(carry, ttnn.TILE_LAYOUT, memory_config=DRAM)
-            self._put_blocks(ct, 0)
+            if one:
+                self._put_blocks(masked, 0, prefix=ct)
+                if masked is not kv:
+                    dealloc(masked)
+            else:
+                self._put_blocks(ct, 0)
             dealloc(ct)
         return carry, kv_rm
 
-    def _put_blocks(self, rows_tile: ttnn.Tensor, row0: int) -> None:
+    def _put_blocks(self, rows_tile: ttnn.Tensor, row0: int, prefix: ttnn.Tensor | None = None) -> None:
         """WINDOW_KV_FORMAT=bfp8_blocks: bf16 TILE rows (replicated, not consumed) at row0 of the window blocks,
-        rounded to nearest even onto the bfloat8_b grid."""
+        rounded to nearest even onto the bfloat8_b grid. ``prefix`` (LOWBIT_HOST=on, P.12): the carry's TILE rows,
+        written first in the same call ([carry | chunk] at row0 0), the fork's compact program (no per-core runtime
+        args; row0 is always 0 here, so one prepared program)."""
         prepared = settings.get("CKV_BFP4_PREPARED") == "on"  # P.7: the program built once, row0 patched
+        extra = dict(prefix=prefix, compact=True) if prefix is not None else {}
         ttnn.bringup.ckv_bfp4(
             rows_tile,
             self.tables.window_blocks(),
@@ -552,6 +566,7 @@ class TtWindowAttention:
             blocks=True,
             memory_config=DRAM,
             prepared=prepared,
+            **extra,
         )
 
     def _release_window(self, carry, kv_rm, cache: TtWindowCache, start: int, end: int) -> None:

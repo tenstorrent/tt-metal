@@ -66,3 +66,23 @@ Source: none (new op), deepseek_v41_flash_d_p 4-bit compressed KV (owner 2026-10
   tables equal generic_op byte for byte, prepared once); tests/unit 19 pass.
 - Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit phase 2)
 - Files: ckv_bfp4.py, kernels/bfp_round_writer.cpp, tests/unit/test_bfp_round.py
+
+### Options prefix and compact (2026-10-29)
+- What: `ckv_bfp4(..., prefix=t)` (default None; not with `rounded`): a second bf16 TILE input whose rows go first, one
+  call writing `[prefix | ckv]` at `[row0, row0 + m + n)` (new fork reader `kernels/ckv_bfp4_reader.cpp`: tile i <
+  split from the prefix, else from ckv). `compact=True` on ckv_bfp4 and bfp_round (default False: the program before):
+  the cores as merged rectangles (not one range per core), and no per-core runtime args: every arg is a common arg and
+  the kernels take their share of bands / tiles from their logical core index (`kernels/ckv_share.hpp`, define
+  `CKV_COMMON_GX` = the grid width; the same split as the host's per-core args); row0 / page0 is then a frozen common
+  arg (in the prepared key: one prepared program per row0). The default path's programs, kernels and args are unchanged.
+- Why: deepseek_v41_flash_d_p P.12 (LOWBIT_HOST, owner 2026-10-29 19:00): FIX.14's window blocks (two calls a layer,
+  ~0.21 ms host each) and bfp_round (~0.5 ms) in a host-bound model. Isolated on the 8x4 (32 chips), host a call:
+  a program with per-core args costs ~150 us at 120 cores (the command sequence carries them for each of 32 chips) vs
+  46 us flat with none at any core count; merged ranges alone ~-40 us.
+- Exactness: the same records / values: tests/unit/test_ckv_bfp4.py::test_ckv_bfp8_prefix_compact (one call vs the
+  two-call default path and the host rule, on the bytes the block format defines: a block page's gaps are never
+  written, stale L1, DS41-144) and test_bfp_round.py::test_bfp_round_compact (new and in place, vs the default path
+  and the host rule, generic and prepared). tests/unit 51 passed (35 before, all unchanged + 16 new).
+- Needed by: deepseek_v41_flash_d_p P.12
+- Files: ckv_bfp4.py, kernels/ckv_bfp4_reader.cpp, kernels/ckv_share.hpp, kernels/ckv_bfp4_{writer,compute}.cpp,
+  kernels/bfp_round_{writer,compute}.cpp, tests/unit/test_ckv_bfp4.py, tests/unit/test_bfp_round.py, README.md

@@ -15,13 +15,19 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "ckv_round_bfp4.hpp"
+#include "ckv_share.hpp"
 
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #endif
 
 void kernel_main() {
+#ifdef CKV_COMMON_GX  // (option compact: common [per, extra])
+    uint32_t t_first, n_tiles;
+    ckv_share(get_common_arg_val<uint32_t>(0), get_common_arg_val<uint32_t>(1), CKV_COMMON_GX, t_first, n_tiles);
+#else
     const uint32_t n_tiles = get_arg_val<uint32_t>(0);
+#endif
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_out = get_compile_time_arg_val(1);
     constexpr uint32_t BLOCK = get_compile_time_arg_val(2);

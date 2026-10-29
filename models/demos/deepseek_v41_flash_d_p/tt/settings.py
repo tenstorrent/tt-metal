@@ -660,6 +660,19 @@ TABLE = {
         "run_prepared each call). off = a fresh ProgramDescriptor through ttnn.generic_op every call (the path before "
         "P.7). Same program, same runtime arguments, same bytes",
     ),
+    "LOWBIT_HOST": Setting(
+        "on",
+        ("on", "off"),
+        "P.12 (galaxy 8x4, owner 2026-10-29 19:00: the host time of FIX.14's low-bit writes, DS41-142): on = the window "
+        "blocks' carry and chunk rows in ONE ttnn.bringup.ckv_bfp4 call a layer (fork option prefix: [carry | chunk] "
+        "at row0 0; tt/attention._put_blocks) and that call and ttnn.bringup.bfp_round (tt/indexer.py, index query and "
+        "keys) as the fork's compact programs (option compact: merged core ranges, every runtime arg common, the "
+        "kernels split the work by core index, row0 frozen in the program), bfp_round into each layer's persistent "
+        "output buffers (no allocation a call). 8x4 isolated host a call (tt/perf_lowbit_host.py): window blocks "
+        "160 + 60 -> 58 us a layer, bfp_round 207-213 -> 60 us. Same records and values (the blocks' unwritten gap "
+        "bytes aside, DS41-144). off = FIX.14's path (two calls a layer, per-core runtime args, a new bfp_round "
+        "output a call)",
+    ),
     "INDEXER_TOPK_LOCAL": Setting(
         "on",
         ("on", "off"),

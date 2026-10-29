@@ -1432,12 +1432,90 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 434
       device_ms_total: <= 230
+- id: P.13
+  title: 'INDEX_TOPK_OP: the indexers'' top-k on the 2x2''s ttnn.bringup.topk_large_indices fork (DS41-151)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.11
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-29 20:10. Before this task starts the overseer merges dnijemcevic/model_bringup_lowbit @
+      9e5e0556b80 (READY FOR GALAXY) and rebuilds ttnn (the fork has C++). The 2x2 forked
+      ttnn.experimental.topk_large_indices into ttnn.bringup.topk_large_indices (upstream''s split LLK #62035 / #62488
+      / #62411 plus a K'' 512 port of the split segmented body) and made it the default for every indexer top-k (the
+      index top-k 512 and the candidate blocks'' k 2048), setting INDEX_TOPK_OP (fork | stock). One p150b: top-k 512
+      over 27648 keys 596 -> 337 us, over 262144 2258 -> 954 us; candidate k 2048 182 -> 138 us. Expected: device time
+      down, host time about the same. Do: run it at 8x4 sizes (per-chip key counts after P.8 / P.10, 40 layers), fix
+      what breaks in the fork behind the same behaviour keeping the 2x2 working; the selection must be identical to the
+      stock op (same ids; ties as the stock op orders them) or explain any difference. Report per-call top-k time
+      (index and candidates, r2 and r1), indexer section, device and warm wall per chunk (DS41_ENGRAM_TABLE=resident)
+      on vs off.'
+  ab:
+    env:
+      DS41_INDEX_TOPK_OP: stock
+      DS41_ENGRAM_TABLE: resident
+    change:
+      DS41_INDEX_TOPK_OP: fork
+      DS41_ENGRAM_TABLE: resident
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
+- id: P.14
+  title: 'PREPARED_ALL: every Python-built op the model calls dispatched as a prepared program'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.13
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-29: no Python-built op stays non-prepared. Census first: every op the model calls per chunk
+      whose program is built in Python (ttnn.generic_op / ProgramDescriptor: candidates rms_norm, mhc_pre_xing /
+      mhc_pre_xing_pack / mhc_post, combine_rf and its parts, flat_routed_expert*, fabric_all_gather /
+      fabric_reduce_scatter, moe_grouped_topk, update_padded_kv_cache - check each), with its calls a chunk, host time
+      a call (cProfile of warm chunks) and whether it already goes through ttnn.bringup.prepare_program /
+      run_prepared. Then move every one that does not onto the prepared path (as ckv_bfp4 / bfp_round prepared=True,
+      P.7, P.12): built once per shape and memory config, addresses patched per call, outputs reused where possible,
+      bit-identical results. One setting PREPARED_ALL (default on, ''off'' = today''s per-op paths). Report the census
+      table and host_overhead_ms, device time and warm wall per chunk (DS41_ENGRAM_TABLE=resident) on vs off.'
+  ab:
+    env:
+      DS41_PREPARED_ALL: 'off'
+      DS41_ENGRAM_TABLE: resident
+    change:
+      DS41_PREPARED_ALL: 'on'
+      DS41_ENGRAM_TABLE: resident
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
   deps:
   - P.5
   - P.12
+  - P.13
+  - P.14
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
