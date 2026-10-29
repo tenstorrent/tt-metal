@@ -1422,7 +1422,8 @@ class ResidentModel:
         next one continues from row 0 at ring k + 1, slot s, or from row 1 at ring k + 2, slot s ^ 1.
         Rows mode: active (per user, default all) says which users run the step (an inactive user's x0 and
         position are written as 0); preserve: the inactive users hold live state (a masked launch beside them, e.g.
-        a new user's first token), see kernels/active_rows.hpp. A launch needs at least one active user."""
+        a new user's first token), see kernels/active_rows.hpp. A launch with no active user changes no slot's
+        state only with preserve set (without it every row's conv history is rewritten)."""
         if self.n_sub > 1:
             x0 = x0.reshape(self.users, HIDDEN)
             B = self.batch
@@ -1785,7 +1786,19 @@ class ResidentModel:
     def capture_trace(self):
         """record the step's launches into a trace (the device needs a trace region): step() then replays it,
         which skips the host's per-launch work (~0.5 ms); the token state is written before each replay.
-        Rows mode: one trace per launch, so a step replays only the launches it runs."""
+        Rows mode: one trace per launch, so a step replays only the launches it runs; each launch first runs once
+        eagerly (a trace records only compiled programs) on an idle token state: no row active, preserve set, which
+        changes no slot's state. The launches' token states are left idle."""
+        if self.rows:
+            idle = self._token_state(
+                torch.zeros(self.batch, HIDDEN), [0] * self.batch, None, active=[False] * self.batch, preserve=True
+            )
+            for k in range(self.n_sub):
+                ttnn.copy_host_to_device_tensor(idle, self.subs[k]["tok"])
+                ttnn.generic_op(self.ios[k], self.mesh_pds[k])
+            ttnn.synchronize_device(self.mesh)
+            if getattr(self, "feed", False):
+                self.reset(state=False)  # the warm-up counted on the feeding hubs' semaphores
         groups = [[k] for k in range(self.n_sub)] if self.rows else [list(range(self.n_sub))]
         self.trace_ids = []
         for ks in groups:

@@ -15,7 +15,7 @@
 // children x (x, y), then an optional timeline buffer (0 = off; per layer words [4] q sent, [6] M sent,
 // [7] output sent, next to the reader's), then the token state address.
 // Rows mode (active_rows.hpp): only the active users run; the stage starts zeroed, so inactive users' output rows
-// are 0.
+// are 0. With none active the leader still releases every layer's (zero) output, once the layer's rows are in.
 
 #include "api/dataflow/dataflow_api.h"
 #include "attn_common.hpp"
@@ -84,6 +84,22 @@ void kernel_main() {
     const ActiveRows<batch> act(mask);
     const uint32_t n_act = act.n;
 
+    // the staged output rows into every streamer's attention-output buffer, and their head semaphore bumped
+    auto layer_out = [&](uint32_t l) {
+        for (uint32_t s = 0; s < num_streamers; s++) {
+            const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
+            const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
+            noc_async_write(stage, get_noc_addr(px, py, o_in), heads * Dt * kRowTile);
+        }
+        noc_async_write_barrier();
+        for (uint32_t s = 0; s < num_streamers; s++) {
+            const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
+            const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
+            noc_semaphore_inc(get_noc_addr(px, py, heads_sem), 1);
+        }
+        mark(l, 7);
+    };
+
     auto send_q = [&](uint32_t i) {
         cb_wait_front(cb_q_mc, Dt);
         noc_async_write_multicast(get_read_ptr(cb_q_mc), mc_q, Dt * kTile, mc_dests);
@@ -142,18 +158,14 @@ void kernel_main() {
         if (k + 1 < n_act) {
             continue;
         }
-        for (uint32_t s = 0; s < num_streamers; s++) {
-            const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
-            const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
-            noc_async_write(stage, get_noc_addr(px, py, o_in), heads * Dt * kRowTile);
+        layer_out(l);
+    }
+    if (n_act == 0) {
+        volatile tt_l1_ptr uint32_t* rows_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_rows));
+        for (uint32_t l = 0; l < layers; l++) {
+            noc_semaphore_wait_min(rows_sem, num_streamers * (l + 1));  // the streamers are done with o of l - 1
+            layer_out(l);
         }
-        noc_async_write_barrier();
-        for (uint32_t s = 0; s < num_streamers; s++) {
-            const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
-            const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
-            noc_semaphore_inc(get_noc_addr(px, py, heads_sem), 1);
-        }
-        mark(l, 7);
     }
     noc_async_atomic_barrier();
 }
