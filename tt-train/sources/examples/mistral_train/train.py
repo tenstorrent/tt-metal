@@ -29,7 +29,7 @@ from ttml.common.utils import set_seed
 from ttml.common.utils import get_loss_over_devices
 from ttml.models import EmbeddingPlacement
 from ttml.models.mistral import Mistral, MistralConfig, load_from_safetensors, useful_flops_per_step
-from ttml.modules import LoraConfig, LoraModel
+from ttml.modules import LoraConfig, LoraModel, transpose_frozen_weights
 
 DEFAULT_MODEL = "mistralai/Mistral-Small-24B-Base-2501"
 DEFAULT_REVISION = "b0a2e4ed093c26997495ae625528f81ea04b749f"
@@ -57,6 +57,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--track-memory", action="store_true", help="print device memory after the first step")
     p.add_argument("--mem-probe", action="store_true", help="print allocated DRAM after the forward and after the step")
+    p.add_argument(
+        "--no-transposed-weights",
+        action="store_true",
+        help="keep the frozen base weights as [out, in] with transpose_b matmuls (the composite-phase path)",
+    )
     p.add_argument(
         "--host-loss",
         action="store_true",
@@ -153,6 +158,9 @@ def main() -> None:
         print(load_from_safetensors(model, model_dir))
     lora = LoraConfig(rank=args.rank, alpha=args.alpha, target_modules=LORA_TARGETS)
     model = LoraModel(model, lora)
+    if not args.no_transposed_weights:
+        converted = transpose_frozen_weights(model)
+        print(f"frozen weights stored transposed: {len(converted)} linears")
     model.train()
     params = model.parameters()
     trainable = sum(int(np.prod(t.shape())) for t in params.values() if t.get_requires_grad())

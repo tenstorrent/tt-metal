@@ -66,6 +66,12 @@ class LinearLayer(AbstractModuleBase):
 
     def forward(self, x):
         """Compute linear projection of x."""
+        if getattr(self, "weight_transposed", False):
+            from .frozen_linear import frozen_linear_t
+
+            return frozen_linear_t(
+                x, self.weight.tensor, self.bias.tensor if self.bias is not None else None, self.frozen_shape
+            )
         bias_t = self.bias.tensor if self.bias is not None else None
         return ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
 
@@ -126,7 +132,12 @@ class ColumnParallelLinear(AbstractModuleBase):
         # Broadcast ensures the input is replicated across all TP devices.
         x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
         bias_t = self.bias.tensor if self.bias is not None else None
-        x = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
+        if getattr(self, "weight_transposed", False):
+            from .frozen_linear import frozen_linear_t
+
+            x = frozen_linear_t(x, self.weight.tensor, bias_t, self.frozen_shape)
+        else:
+            x = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
             # Reconstitute the full output across TP devices (dim 3 = last feature dim).
             x = ttml.ops.distributed.all_gather(x, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED)
@@ -190,7 +201,12 @@ class RowParallelLinear(AbstractModuleBase):
         if not self.input_is_parallel:
             # Split the input along the feature dimension across TP devices.
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
-        x = ttml.ops.linear.linear(x, self.weight.tensor, None)
+        if getattr(self, "weight_transposed", False):
+            from .frozen_linear import frozen_linear_t
+
+            x = frozen_linear_t(x, self.weight.tensor, None, self.frozen_shape)
+        else:
+            x = ttml.ops.linear.linear(x, self.weight.tensor, None)
         # Sum partial products across TP devices to obtain the full result.
         x = ttml.ops.distributed.all_reduce(x, self.input_is_parallel, self.cluster_axis)
         # Bias is replicated, so it is safe to add after the all-reduce.

@@ -12,6 +12,7 @@ from _ttml.modules import InferenceMode, ModuleBase, RunMode
 from .embedding import Embedding, FeatureParallelEmbedding, VocabParallelEmbedding
 from .linear import LinearLayer, ColumnParallelLinear, RowParallelLinear
 from .lora import LoraConfig, LoraLinear, LoraColumnParallelLinear, LoraRowParallelLinear, LoraModel
+from .frozen_linear import FrozenLinearT, frozen_linear_t, transpose_frozen_weights
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Buffer, Parameter, TensorMetadata
 

@@ -34,7 +34,7 @@ from ttml.models.llama.transformer import LlamaBlock, LlamaMLP, RMSNormLayer
 from ttml.models.llama.gqattn import GroupedQueryAttention
 from ttml.models.mistral import Mistral, MistralConfig, load_from_safetensors, useful_flops_per_step
 from ttml.models.mistral.frozen_embedding import embed_tokens
-from ttml.modules import Embedding, LinearLayer, LoraConfig, LoraLinear, LoraModel
+from ttml.modules import Embedding, LinearLayer, LoraConfig, LoraLinear, LoraModel, transpose_frozen_weights
 
 pytestmark = pytest.mark.requires_device
 
@@ -344,9 +344,11 @@ def test_lora_linear_forward_and_gradients_frozen_base():
     assert not layer.weight.tensor.is_grad_initialized(), "frozen base weight received a gradient"
 
 
-def test_block_forward_and_gradients_under_lora():
+@pytest.mark.parametrize("transposed", [False, True], ids=["weights [out,in]", "frozen weights transposed"])
+def test_block_forward_and_gradients_under_lora(transposed):
     """A whole decoder block at real shapes with LoRA on its four linears: output, dx, every adapter gradient;
-    base weights and gammas frozen and gradient-free."""
+    base weights and gammas frozen and gradient-free. ``transposed`` runs the base projections through the
+    transposed-weight path (``transpose_frozen_weights``) the training example uses."""
     rng = seeded(6)
     x_np = rand_x(rng)
     gammas = [bf16(rng.normal(1.0, 0.1, (1, 1, 1, HIDDEN))) for _ in range(2)]
@@ -396,6 +398,16 @@ def test_block_forward_and_gradients_under_lora():
         assert isinstance(layer, LoraLinear), name
         assign(layer.lora_A.tensor, adapters[name][0])
         assign(layer.lora_B.tensor, adapters[name][1])
+    if transposed:
+        # qkv, out and gate_up have a measured win and are stored [in, out]; w2 (32768 -> 5120) does not and stays.
+        converted = transpose_frozen_weights(lora)
+        assert sorted(converted) == [
+            "model.attention.out_linear",
+            "model.attention.qkv_linear",
+            "model.mlp.w_gate_up",
+        ], converted
+        assert tuple(block.mlp.w_gate_up.weight.tensor.shape()) == (1, 1, HIDDEN, 2 * INTER)
+        assert tuple(block.mlp.w2.weight.tensor.shape()) == (1, 1, HIDDEN, INTER)
     x = to_device(x_np, requires_grad=True)
     out = lora(x, None)
     out_val = to_host(out)
@@ -458,7 +470,8 @@ def test_frozen_embedding_matches_the_ttml_op():
     assert out.get_node() is None or not emb.weight.tensor.get_requires_grad()
 
 
-def test_lm_head_and_cross_entropy_forward_and_gradients():
+@pytest.mark.parametrize("transposed", [False, True], ids=["weights [out,in]", "frozen weights transposed"])
+def test_lm_head_and_cross_entropy_forward_and_gradients(transposed):
     rng = seeded(8)
     x_np = rand_x(rng)
     w_np = rand_weight(rng, VOCAB, HIDDEN, std=0.02)
@@ -467,6 +480,8 @@ def test_lm_head_and_cross_entropy_forward_and_gradients():
     head = LinearLayer(HIDDEN, VOCAB, False)
     assign(head.weight.tensor, w_np)
     head.weight.tensor.set_requires_grad(False)
+    if transposed:
+        assert transpose_frozen_weights(head) == [""]
     x = to_device(x_np, requires_grad=True)
     logits = head(x)
     y = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)

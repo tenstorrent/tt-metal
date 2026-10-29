@@ -153,6 +153,16 @@ def _create_lora_B(rank: int, out_features: int, mapper=None):
     return ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
+def _base_linear(module, x, bias):
+    """The frozen base projection of a LoRA wrapper: the ttml linear, or the transposed-weight matmul once
+    :func:`ttml.modules.frozen_linear.transpose_frozen_weights` has converted it."""
+    if getattr(module, "weight_transposed", False):
+        from .frozen_linear import frozen_linear_t
+
+        return frozen_linear_t(x, module.weight.tensor, bias, module.frozen_shape)
+    return ttml.ops.linear.linear(x, module.weight.tensor, bias)
+
+
 class LoraLinear(AbstractModuleBase):
     """LinearLayer with frozen base weights and a trainable low-rank path.
 
@@ -181,7 +191,7 @@ class LoraLinear(AbstractModuleBase):
 
     def forward(self, x):
         bias = self.bias.tensor if self.bias is not None else None
-        base = ttml.ops.linear.linear(x, self.weight.tensor, bias)
+        base = _base_linear(self, x, bias)
         lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
@@ -222,7 +232,7 @@ class LoraColumnParallelLinear(AbstractModuleBase):
     def forward(self, x):
         bias_t = self.bias.tensor if self.bias is not None else None
         x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
-        base = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
+        base = _base_linear(self, x, bias_t)
         if self.gather_output:
             base = ttml.ops.distributed.all_gather(
                 base, 3, self.cluster_axis, ttml.ops.distributed.GradOutputType.REPLICATED
@@ -280,7 +290,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
     def forward(self, x):
         if not self.input_is_parallel:
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
-        base = ttml.ops.linear.linear(x, self.weight.tensor, None)
+        base = _base_linear(self, x, None)
         base = ttml.ops.distributed.all_reduce(base, self.input_is_parallel, self.cluster_axis)
         if self.bias is not None:
             base = ttml.ops.binary.add(base, self.bias.tensor)
