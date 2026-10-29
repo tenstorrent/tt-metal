@@ -88,6 +88,10 @@ NOC mismatch: chip 26 (0000:c3:00.0, ubb: 3, chip: 3) src eth ch 2 [noc0 2-1, lo
 - `NOC hang`: a source stopped making progress entirely. The line names the
   destination it was on; its later destinations show as `NOC not run`.
 
+On Blackhole Galaxy, Ethernet channels 10 and 11 are unused by design. Failures
+whose source or destination is one of them are logged as warnings and do not
+fail the test or appear in the summary.
+
 At the end, a `NOC FAILURE SUMMARY` groups failures per chip and NOC:
 - **Recurring sources**: one source failing to several destinations, listed
   with those destinations. Points at the source core's NOC path.

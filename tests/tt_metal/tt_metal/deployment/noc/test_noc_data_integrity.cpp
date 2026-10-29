@@ -912,52 +912,72 @@ static void print_failure_summary(const vector<failure>& failures, const map<Chi
 
 struct test_result {
     vector<failure> failures;
+    vector<failure> warnings;
     map<ChipId, wedged_chip> wedged;
 };
 
+// Blackhole Galaxy leaves Ethernet channels 10 and 11 unused by design.
+static bool is_unused_eth_chan(IDevice* device, bool is_eth, int chan) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    return is_eth && (chan == 10 || chan == 11) && cluster.arch() == tt::ARCH::BLACKHOLE &&
+           cluster.get_board_type(device->id()) == BoardType::UBB;
+}
+
+static bool is_warning(const failure& f) {
+    return is_unused_eth_chan(f.src.device, f.src.is_eth, f.src.chan) ||
+           is_unused_eth_chan(f.src.device, !f.dst.is_tensix && !f.dst.is_dram, f.dst.chan);
+}
+
+static string failure_str(const failure& f) {
+    const auto& rec = f.record;
+    string prefix =
+        fmt::format("{} {} -> {} @0x{:x} noc {}", chip_str(f.src.device), src_str(f.src), dst_str(f.dst), f.addr, f.noc);
+    switch (rec[NOC_RESULT_STATUS]) {
+        case NOC_STATUS_WRITE_TIMEOUT:
+        case NOC_STATUS_READ_TIMEOUT:
+            return fmt::format(
+                "NOC timeout: {}: {} barrier timed out ({}, iteration {})",
+                prefix,
+                rec[NOC_RESULT_STATUS] == NOC_STATUS_WRITE_TIMEOUT ? "write" : "read",
+                noc_pattern_name(rec[NOC_RESULT_PATTERN]),
+                rec[NOC_RESULT_ITERATION]);
+        case NOC_STATUS_NOT_RUN:
+            return fmt::format("NOC not run: {}: source stopped before this destination", prefix);
+        case NOC_STATUS_HANG:
+            return fmt::format(
+                "NOC hang: {}: source stopped making progress ({}, iteration {})",
+                prefix,
+                noc_pattern_name(rec[NOC_RESULT_PATTERN]),
+                rec[NOC_RESULT_ITERATION]);
+        default:
+            return fmt::format(
+                "NOC mismatch: {}: {} words in {} transfers, first at +0x{:x}, expected 0x{:08x}, got 0x{:08x} "
+                "({}, iteration {})",
+                prefix,
+                rec[NOC_RESULT_MISMATCHES],
+                rec[NOC_RESULT_TRANSFERS],
+                rec[NOC_RESULT_FIRST_OFFSET],
+                rec[NOC_RESULT_EXPECTED],
+                rec[NOC_RESULT_ACTUAL],
+                noc_pattern_name(rec[NOC_RESULT_PATTERN]),
+                rec[NOC_RESULT_ITERATION]);
+    }
+}
+
 static void report(const test_result& result) {
+    for (const auto& f : result.warnings) {
+        log_warning(tt::LogTest, "{} (unused Ethernet channel on Blackhole Galaxy)", failure_str(f));
+    }
+    if (!result.warnings.empty()) {
+        log_warning(
+            tt::LogTest,
+            "{} source/destination pairs failed on unused Ethernet channels 10/11; not counted as failures",
+            result.warnings.size());
+    }
+
     const auto& failures = result.failures;
     for (const auto& f : failures) {
-        const auto& rec = f.record;
-        string chip = chip_str(f.src.device);
-        string prefix = fmt::format("{} {} -> {} @0x{:x} noc {}", chip, src_str(f.src), dst_str(f.dst), f.addr, f.noc);
-        switch (rec[NOC_RESULT_STATUS]) {
-            case NOC_STATUS_WRITE_TIMEOUT:
-            case NOC_STATUS_READ_TIMEOUT:
-                log_critical(
-                    tt::LogTest,
-                    "NOC timeout: {}: {} barrier timed out ({}, iteration {})",
-                    prefix,
-                    rec[NOC_RESULT_STATUS] == NOC_STATUS_WRITE_TIMEOUT ? "write" : "read",
-                    noc_pattern_name(rec[NOC_RESULT_PATTERN]),
-                    rec[NOC_RESULT_ITERATION]);
-                break;
-            case NOC_STATUS_NOT_RUN:
-                log_critical(tt::LogTest, "NOC not run: {}: source stopped before this destination", prefix);
-                break;
-            case NOC_STATUS_HANG:
-                log_critical(
-                    tt::LogTest,
-                    "NOC hang: {}: source stopped making progress ({}, iteration {})",
-                    prefix,
-                    noc_pattern_name(rec[NOC_RESULT_PATTERN]),
-                    rec[NOC_RESULT_ITERATION]);
-                break;
-            default:
-                log_critical(
-                    tt::LogTest,
-                    "NOC mismatch: {}: {} words in {} transfers, first at +0x{:x}, expected 0x{:08x}, got 0x{:08x} "
-                    "({}, iteration {})",
-                    prefix,
-                    rec[NOC_RESULT_MISMATCHES],
-                    rec[NOC_RESULT_TRANSFERS],
-                    rec[NOC_RESULT_FIRST_OFFSET],
-                    rec[NOC_RESULT_EXPECTED],
-                    rec[NOC_RESULT_ACTUAL],
-                    noc_pattern_name(rec[NOC_RESULT_PATTERN]),
-                    rec[NOC_RESULT_ITERATION]);
-                break;
-        }
+        log_critical(tt::LogTest, "{}", failure_str(f));
     }
 
     if (failures.empty() && result.wedged.empty()) {
@@ -1043,7 +1063,9 @@ static test_result run_test(
     test_result result;
     for (uint32_t noc = 0; noc < 2; noc++) {
         auto f = run_phase(fixture, noc, sources_per_chip, dests_per_chip, eth_l, tensix_l, p, result.wedged);
-        result.failures.insert(result.failures.end(), f.begin(), f.end());
+        for (auto& fail : f) {
+            (is_warning(fail) ? result.warnings : result.failures).push_back(std::move(fail));
+        }
     }
     watchdog::get().disarm();
     return result;
