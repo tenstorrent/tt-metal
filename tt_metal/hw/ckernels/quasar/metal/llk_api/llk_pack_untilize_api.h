@@ -37,18 +37,11 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
 
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
-    LLK_ASSERT(
-        tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES ||
-            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
-        "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
-
-    if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
-        const std::uint8_t bfd_id = llk_pack_program_bfd(output_id);
-        _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(bfd_id, tensor_shape);
-    } else {
-        const std::uint8_t bfd_id = llk_pack_program_bfd<ckernel::trisc::L1AccessMode::Strided>(output_id);
-        _llk_pack_untilize_strided_init_<full_ct_dim, block_ct_dim>(bfd_id, tensor_shape);
-    }
+    // Strided pack untilize (every tile shape but 32x32) needs a buffer descriptor that indexes L1 rows.
+    const std::uint8_t bfd_id = _llk_pack_untilize_is_strided_(tensor_shape)
+                                    ? llk_pack_program_bfd<ckernel::trisc::L1AccessMode::Strided>(output_id)
+                                    : llk_pack_program_bfd(output_id);
+    _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(bfd_id, tensor_shape);
 }
 
 /**
@@ -87,11 +80,6 @@ inline void llk_pack_untilize(
     // merging adjacent face-columns into a single output row. Hence we use num_faces_r_dim instead of num_faces for L1
     // strides
 
-    LLK_ASSERT(
-        tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES ||
-            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
-        "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
-
     const std::uint32_t y_stride = full_ct_dim * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
 
@@ -107,15 +95,6 @@ inline void llk_pack_untilize(
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         const std::uint32_t dest_idx = block_rt * block_ct_dim + tile_dst_rt_offset;
         const std::uint32_t l1_tile_idx = base_l1 + block_rt * y_stride + block_c_index * block_ct_dim;
-        if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
-            _llk_pack_untilize_set_dst_offset_(tensor_shape, l1_tile_idx);
-            _llk_pack_untilize_(dest_idx, 0 /*l1_tile_idx*/);
-        } else {
-            // Strided PACR consumes buf_desc_id as an immediate; pass the id programmed by
-            // llk_pack_untilize_init (bfd_current), not the DFB output_id (which no longer doubles
-            // as the BFD id). The MOP branch already bakes in the correct id at init.
-            _llk_pack_untilize_strided_<full_ct_dim>(
-                ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape, l1_tile_idx, dest_idx);
-        }
+        _llk_pack_untilize_<full_ct_dim>(dest_idx, l1_tile_idx, tensor_shape);
     }
 }

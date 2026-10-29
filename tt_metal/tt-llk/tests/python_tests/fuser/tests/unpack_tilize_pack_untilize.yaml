@@ -1,0 +1,25 @@
+# Datacopy that reads through UnpackerTilizeA and packs out with PackUntilize:
+# a row-major input goes through dest and comes back row-major.
+
+operands:
+  - name: "input_A"
+    tile_dims: all
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "output1"
+    tile_dims: all
+    dims: [256, 256]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        block_tiles: [1, 8]
+        in0: "input_A"
+        operation: "Datacopy"
+        unpacker: "UnpackerTilizeA"
+        math_fidelity: "LoFi"
+    pack:
+      - output: "output1"
+        block_tiles: [1, 8]
+        packer: "PackUntilize"
