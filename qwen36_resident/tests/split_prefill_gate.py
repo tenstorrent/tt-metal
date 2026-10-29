@@ -19,8 +19,10 @@ C  as B without the decode steps (separates span mechanics from decode interfere
 Pass, at every length: B and C equal A bit for bit: GDN state, the conv history elements the decode reads (the q|k|v
 tiles the handoff writes; hist_index), KV pages of positions 0..T-2, the logits of every launch.
 Information: the history pad (the other elements of the slot's row: a non-preserve launch rewrites them, the handoff
-does not, no step reads them), and A against a whole run at the other chunk (rounding expected: PCC, argmax
-agreement; a low PCC would be a bug of one chunk's path, see ROUNDING).
+does not, no step reads them), and the chunk triangulation: whole runs at every PP chunk (CHUNKS), compared pairwise
+(PCC of state, K, V, per-copy K/V minimum, logits of every launch, argmax agreement, the per-position K/V error
+curve). Different chunks round differently; a bug in one chunk's path makes that chunk the outlier: every pair with it
+at least twice as far apart as any pair without it (the per-length "outlier" verdict).
 
 usage: python -m qwen36_resident.tests.split_prefill_gate --doc METALIUM_GUIDE.md [--prompt-lens 1000,1025,...]
     [--out split.json]
@@ -46,7 +48,7 @@ TARGET = 9  # resident slot of the split prompt: launch 1, beside live slot 8
 LIVE = 9  # live users in vLLM slots 0..8 -> resident slots 0..8
 LENGTHS = "1000,1025,1100,2100,3333,5000"
 # the other-chunk comparison counts as rounding when every launch's logits PCC and the KV PCC reach these
-ROUNDING = dict(logits=0.99, kv=0.999)
+CHUNKS = (128, 256, 512, 1024)  # the PP prefill's chunk sizes, triangulated per length
 
 
 def kv_rows(slot_state, n_pos):
@@ -91,12 +93,47 @@ def compare(a, b, n_pos, mask):
     return res
 
 
+def chunk_pair(a, b, n_pos):
+    """two whole runs of one prompt at different PP chunks: how far apart (information)"""
+    (sa, la), (sb, lb) = a, b
+    ka, va = kv_rows(sa, n_pos)
+    kb, vb = kv_rows(sb, n_pos)
+
+    def pos_err(x, y):  # relative error per position over chips, copies and head dims
+        return (x - y).float().pow(2).sum(dim=(0, 1, 3)).sqrt() / (y.float().pow(2).sum(dim=(0, 1, 3)).sqrt() + 1e-30)
+
+    e = (pos_err(ka, kb) + pos_err(va, vb)) / 2
+    return dict(
+        state=pcc(sa["state"], sb["state"]),
+        K=pcc(ka, kb),
+        V=pcc(va, vb),
+        K_min_copy=min(pcc(ka[:, c], kb[:, c]) for c in range(ka.shape[1])),
+        V_min_copy=min(pcc(va[:, c], vb[:, c]) for c in range(va.shape[1])),
+        logits=[pcc(x, y) for x, y in zip(la, lb)],
+        argmax_equal=[int(x.argmax()) == int(y.argmax()) for x, y in zip(la, lb)],
+        pos_err_curve=[round(float(e[i : i + 256].mean()), 5) for i in range(0, n_pos, 256)],
+        pos_err_max=(float(e.max()), int(e.argmax())),
+    )
+
+
+def outlier(pairs, chunks, factor=2.0):
+    """the chunk whose pairs are all at least `factor` times further apart (1 - K/V PCC) than every pair without it,
+    else None (chunks that merely round differently sit at similar distances from each other)"""
+    dist = {k: 2 - v["K"] - v["V"] for k, v in pairs.items()}
+    for c in chunks:
+        with_c = [d for k, d in dist.items() if c in k]
+        without = [d for k, d in dist.items() if c not in k]
+        if without and min(with_c) > factor * max(without):
+            return c
+    return None
+
+
 def compare_logits(la, lb):
     return dict(logits=torch.equal(la, lb), per_step=[torch.equal(x, y) for x, y in zip(la, lb)])
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(allow_abbrev=False)  # --prompt-len must not pass for --prompt-lens
     ap.add_argument("--doc", required=True)
     ap.add_argument("--prompt-lens", default=LENGTHS)
     ap.add_argument("--chunk", type=int, default=None, help="PP chunk (default: the serving pick for each prompt)")
@@ -202,20 +239,14 @@ def main():
             state_c, logits_c = split(0)
             r["B_interleaved"] = dict(compare(state_a, state_b, T - 1, mask), **compare_logits(logits_a, logits_b))
             r["C_spans_only"] = dict(compare(state_a, state_c, T - 1, mask), **compare_logits(logits_a, logits_c))
-            # information: a whole run at the other chunk (rounding, not a gate)
-            other = 512 if c == 1024 else 1024
-            state_o, logits_o = whole(other)
-            ko, vo = kv_rows(state_o, T - 1)
-            ka, va = kv_rows(state_a, T - 1)
-            p_lg = [pcc(x, y) for x, y in zip(logits_a, logits_o)]
-            p_kv = min(pcc(ka, ko), pcc(va, vo))
-            r["other_chunk_info"] = dict(
-                chunk=other,
-                **compare(state_a, state_o, T - 1, mask),
-                pcc=dict(state=pcc(state_a["state"], state_o["state"]), K=pcc(ka, ko), V=pcc(va, vo), logits=p_lg),
-                argmax_equal=[int(x.argmax()) == int(y.argmax()) for x, y in zip(logits_a, logits_o)],
-                rounding=min(p_lg) >= ROUNDING["logits"] and p_kv >= ROUNDING["kv"],
-            )
+            # information: the chunk triangulation (whole runs at every PP chunk, pairwise)
+            runs = {c: (state_a, logits_a)}
+            for ch in CHUNKS:
+                if ch not in runs:
+                    runs[ch] = whole(ch)
+            pairs = {(x, y): chunk_pair(runs[x], runs[y], T - 1) for x in CHUNKS for y in CHUNKS if x < y}
+            r["chunk_pairs"] = {f"{x}-{y}": v for (x, y), v in pairs.items()}
+            r["chunk_outlier"] = outlier(pairs, CHUNKS)
             gates = ("state", "hist", "kv", "logits")
             r["ok"] = all(r[v][k] for v in ("B_interleaved", "C_spans_only") for k in gates)
             return r
@@ -223,11 +254,20 @@ def main():
         for T in lens:
             res[T] = r = gate_length(T)
             for k, v in r.items():
-                print(f"T={T} {k}: {v}", flush=True)
+                if k != "chunk_pairs":
+                    print(f"T={T} {k}: {v}", flush=True)
         ok = all(res[T]["ok"] for T in lens)
-        rounding = all(res[T]["other_chunk_info"]["rounding"] for T in lens)
-        res["ok"], res["other_chunk_rounding"] = ok, rounding
-        print(f"other chunk vs serving chunk: {'rounding' if rounding else 'NOT ROUNDING: check the chunk paths'}")
+        res["ok"] = ok
+        res["chunk_outliers"] = {T: res[T]["chunk_outlier"] for T in lens}
+        for T in lens:
+            for k, v in res[T]["chunk_pairs"].items():
+                print(
+                    f"T={T} chunks {k}: K {v['K']:.6f} V {v['V']:.6f} (min copy {v['K_min_copy']:.5f} / "
+                    f"{v['V_min_copy']:.5f}) state {v['state']:.6f} logits {[round(x, 5) for x in v['logits']]} "
+                    f"argmax {v['argmax_equal']} max pos err {v['pos_err_max']}",
+                    flush=True,
+                )
+        print(f"chunk outliers per length (a chunk further from every other): {res['chunk_outliers']}", flush=True)
         print("SPLIT PREFILL GATE " + ("PASS" if ok else "FAIL"), flush=True)
     finally:
         close_mesh(mesh)
