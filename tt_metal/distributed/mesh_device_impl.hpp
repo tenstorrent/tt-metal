@@ -133,6 +133,17 @@ private:
     // on the device may not be thread safe.
     std::mutex api_mutex_;
     bool command_list_builder_active_ = false;
+    // Traces that switch sub-device managers (recorded during capture, one hardware CQ): the manager the capture began
+    // in, which owns the trace and where it ends, and the other managers it switches through, whose allocators also
+    // keep it registered.
+    struct SwitchingTrace {
+        SubDeviceManagerId start;
+        std::set<SubDeviceManagerId> through;
+    };
+    std::unordered_map<MeshTraceId, SwitchingTrace> switching_traces_;
+    void check_switch_during_capture() const;
+    void record_switch_during_capture(SubDeviceManagerId from_manager_id, SubDeviceManagerId to_manager_id);
+    std::set<SubDeviceManagerId> trace_manager_ids(const MeshTraceId& trace_id) const;
     // Traces and command lists may both be used on a MeshDevice, but never at the same time.
     // Traces are the legacy pre-recorded dispatch path (supported today, slated for deprecation);
     // command lists are the Metal 2.0 replacement. This counter, and the trace checks that use it
@@ -447,6 +458,9 @@ public:
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
+    // See SubDeviceManagerTracker::set_active_sub_device_manager_view. For the mesh CQ encoding a trace whose capture
+    // switched managers.
+    void set_active_sub_device_manager_view(SubDeviceManagerId sub_device_manager_id);
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
     const std::vector<SubDeviceId>& get_sub_device_ids() const override;
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;

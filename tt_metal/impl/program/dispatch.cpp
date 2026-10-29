@@ -3101,7 +3101,8 @@ void for_each_program_command_sequence_chunk_impl(
     bool stall_first,
     bool stall_before_program,
     bool send_binary,
-    const ProcessChunk& process_chunk) {
+    const ProcessChunk& process_chunk,
+    const std::function<void()>& before_launch = {}) {
     auto process_commands = [&](const auto& commands) {
         if (commands.size_bytes() != 0) {
             process_chunk(commands.data(), commands.size_bytes());
@@ -3140,6 +3141,10 @@ void for_each_program_command_sequence_chunk_impl(
     } else {
         // Write the wait barrier before writing launch messages.
         process_commands(program_command_sequence.wait_barrier_command_sequence);
+    }
+
+    if (before_launch) {
+        before_launch();
     }
 
     // Write the launch message
@@ -3243,6 +3248,46 @@ void write_program_command_sequence(
 
     LOG_TRACE_LAZY(tt::LogDispatch, "========== Finished Writing Program Command Sequence ==========");
     LOG_TRACE_LAZY(tt::LogDispatch, "");
+}
+
+void write_program_command_sequence_around(
+    const ProgramCommandSequence& program_command_sequence,
+    SystemMemoryManager& manager,
+    uint32_t command_queue_id,
+    bool stall_first,
+    bool send_binary,
+    const std::function<void()>& before_launch) {
+    // One fetch queue entry per chunk: this runs once per sub-device manager switch, with before_launch's commands in
+    // between.
+    auto write_data_to_cq = [&](const void* data, uint32_t size_bytes) {
+        manager.issue_queue_reserve(size_bytes, command_queue_id);
+        manager.cq_write(data, size_bytes, manager.get_issue_queue_write_ptr(command_queue_id));
+        manager.issue_queue_push_back(size_bytes, command_queue_id);
+        manager.fetch_queue_reserve_back(command_queue_id);
+        manager.fetch_queue_write(size_bytes, command_queue_id);
+    };
+    for_each_program_command_sequence_chunk_impl(
+        program_command_sequence,
+        /*stall_first=*/false,
+        /*stall_before_program=*/false,
+        send_binary,
+        write_data_to_cq,
+        [&]() {
+            // The config and binary writes complete before what before_launch writes, such as GO signals to the same
+            // cores (the chunks already end in this barrier when the binary is not sent).
+            const auto& barrier = program_command_sequence.wait_barrier_command_sequence;
+            if (send_binary && barrier.size_bytes() != 0) {
+                write_data_to_cq(barrier.data(), barrier.size_bytes());
+            }
+            before_launch();
+            if (stall_first) {
+                const auto& stall =
+                    program_command_sequence.stall_command_sequences[program_command_sequence.current_stall_seq_idx];
+                if (stall.size_bytes() != 0) {
+                    write_data_to_cq(stall.data(), stall.size_bytes());
+                }
+            }
+        });
 }
 
 TraceNode create_trace_node(

@@ -195,6 +195,9 @@ TraceDescriptorByTraceIdOffset to_flatbuffer(
     std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::SubDeviceDescriptorMapping>>
         sub_device_descriptor_offsets;
     for (const auto& [sub_device_id, descriptor] : trace_desc.descriptors) {
+        TT_FATAL(
+            !descriptor.reset_launch_msg_at_start,
+            "Light Metal cannot capture a trace that switches sub-device managers");
         auto descriptor_offset = tt::tt_metal::flatbuffer::CreateTraceWorkerDescriptor(
             builder,
             descriptor.num_completion_worker_cores,
