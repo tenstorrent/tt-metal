@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from types import SimpleNamespace
 from typing import List, Mapping, Union
 
 import torch
@@ -438,9 +437,36 @@ class DummyInputsBuilder(BaseDummyInputsBuilder):
         raise NotImplementedError
 
 
-class CustomNamespace(SimpleNamespace):
-    def __contains__(self, key):
-        return key in self.__dict__
+def _mistral3_vision_inputs(pixel_values):
+    """Group the vLLM image inputs of each request for the Mistral vision tower.
+
+    vllm-tt-plugin passes one pixel_values entry per request: None, or a list with one [C, H, W]
+    tensor per image, which vLLM's Mistral3 processor cuts to the size of that image. The vision
+    tower takes one (num_images, C, H, W) tensor per user and the (height, width) of each image.
+    Images of different sizes are padded at the bottom and the right, as the HF processor does.
+    Returns (None, None) when no request has an image.
+    """
+    user_pixel_values, user_image_sizes = [], []
+    for images in pixel_values or []:
+        images = [image for image in images or [] if image is not None]
+        if not images:
+            user_pixel_values.append(None)
+            user_image_sizes.append(None)
+            continue
+        height = max(image.shape[-2] for image in images)
+        width = max(image.shape[-1] for image in images)
+        user_pixel_values.append(
+            torch.stack(
+                [
+                    torch.nn.functional.pad(image, (0, width - image.shape[-1], 0, height - image.shape[-2]))
+                    for image in images
+                ]
+            )
+        )
+        user_image_sizes.append([[image.shape[-2], image.shape[-1]] for image in images])
+    if all(user_pixels is None for user_pixels in user_pixel_values):
+        return None, None
+    return user_pixel_values, user_image_sizes
 
 
 @MULTIMODAL_REGISTRY.register_processor(
@@ -507,27 +533,20 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
 
         tokens = kwargs["tokens"]
         prompt_lens = kwargs["prompt_lens"]
-        inputs = CustomNamespace()
-        inputs.input_ids = tokens
-        data = kwargs.get("images", None)
         for i in range(tokens.shape[0]):
             tokens[i][prompt_lens[i] :] = pad_token_id
-        pixel_values, image_sizes = None, None
 
-        if data and hasattr(data[0], "pixel_values"):
-            pixel_values = [im.pixel_values for im in data if hasattr(im, "pixel_values")]
-            image_sizes = [im.image_sizes for im in data if hasattr(im, "image_sizes")]
-
-        page_table = kwargs.get("page_table", None)
-        kv_cache = kwargs.get("kv_cache", None)
+        pixel_values, image_sizes = _mistral3_vision_inputs(kwargs.get("pixel_values"))
 
         return super().prefill_forward_text(
-            tokens=inputs.input_ids,
-            page_table=page_table,
-            kv_cache=kv_cache,
+            tokens=tokens,
+            page_table=kwargs.get("page_table", None),
+            kv_cache=kwargs.get("kv_cache", None),
             prompt_lens=prompt_lens,
-            pixel_values=pixel_values if pixel_values else None,
-            image_sizes=image_sizes if image_sizes else None,
+            # A traced prefill embeds the token ids inside the trace, so it cannot take image features.
+            enable_trace=kwargs.get("enable_trace", True) and pixel_values is None,
+            pixel_values=pixel_values,
+            image_sizes=image_sizes,
         )
 
     def decode_forward(self, *args, **kwargs):
