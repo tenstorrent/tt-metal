@@ -19,10 +19,10 @@ namespace {
 // ValidateNodeBounds: Node coordinate bounds checking
 // ----------------------------------------------------------------------------
 //
-// Validates explicitly placed nodes, including work units, semaphores and scratchpad overrides,
-// is within the compute worker grid on this device.
-// (Kernel and DFB placement is derived from WorkUnitSpec membership, so
-// bounds-checking the WorkUnitSpecs covers them too.)
+// Validates that explicitly placed nodes, including work units, semaphores, and resource overrides,
+// are within the compute worker grid on this device.
+// (Kernel and inferred resource placement comes from WorkUnitSpec membership, so
+// bounds-checking the WorkUnitSpecs covers those nodes too.)
 //
 // NOTE: We're dealing in logical coordinates. (Harvesting is handled by UMD.)
 //
@@ -54,6 +54,11 @@ void ValidateNodeBounds(const ProgramSpec& spec, const CoreCoord& compute_grid_s
     }
     for (const auto& sem : spec.semaphores) {
         check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id.get());
+    }
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (dfb.advanced_options.override_placement) {
+            check_target_nodes(*dfb.advanced_options.override_placement, "DataflowBufferSpec", dfb.unique_id.get());
+        }
     }
     for (const auto& scratchpad : spec.scratchpads) {
         if (scratchpad.advanced_options.override_placement) {

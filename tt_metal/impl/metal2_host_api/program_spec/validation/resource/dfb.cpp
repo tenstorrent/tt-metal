@@ -101,6 +101,21 @@ void ValidateDFBSpec(
         "DataflowBufferSpec '{}' has num_entries = 0. num_entries must be set to a non-zero value.",
         dfb.unique_id);
 
+    if (dfb.advanced_options.override_placement) {
+        TT_FATAL(
+            !dfb.advanced_options.override_placement->empty(),
+            "DFB '{}' has an empty override_placement",
+            dfb.unique_id);
+        TT_FATAL(
+            !dfb.borrowed_from.has_value(),
+            "DFB '{}' sets both override_placement and borrowed_from; this combination is not supported",
+            dfb.unique_id);
+        TT_FATAL(
+            dfb.advanced_options.prefetcher_pipe_relays.empty(),
+            "DFB '{}' sets both override_placement and prefetcher_pipe_relays; this combination is not supported",
+            dfb.unique_id);
+    }
+
     // Data format must be valid for the architecture
     if (dfb.data_format_metadata.has_value()) {
         TT_FATAL(
@@ -400,10 +415,12 @@ using DFBEndpointsByNode = std::unordered_map<NodeCoord, std::vector<const Kerne
 
 DFBEndpointsByNode CollectDFBEndpointsByNode(
     const std::vector<CollectedSpecData::DFBEndpointInfo::EndpointRecord>& records,
-    const CollectedSpecData& collected) {
+    const CollectedSpecData& collected,
+    const NodeRangeSet& placement) {
     DFBEndpointsByNode on_node;
     for (const auto& rec : records) {
-        for (const NodeCoord& node : corerange_to_cores(collected.kernel_node_set.at(rec.kernel->unique_id))) {
+        const auto nodes = collected.kernel_node_set.at(rec.kernel->unique_id).intersection(placement);
+        for (const NodeCoord& node : corerange_to_cores(nodes)) {
             on_node[node].push_back(rec.kernel);
         }
     }
@@ -474,18 +491,19 @@ void ValidateDFBEndpointCoverage(const DataflowBufferSpec& dfb, const CollectedS
     const bool allow_multi = dfb.advanced_options.allow_instance_multi_binding;
 
     // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
-    // every node it is instantiated on must run exactly one producer instance and exactly one
-    // consumer instance. Tally instances per node directly from the bindings: this subsumes the
-    // old within-role disjointness check (a node with >1 same-role instance) and the cross-role
-    // coverage check (a node with one role but not the other), and reports the offending node in
+    // every reserved node with an endpoint must run exactly one producer instance and exactly one
+    // consumer instance. Reserved nodes with neither endpoint are permitted. Tally instances on
+    // the effective placement: this checks within-role disjointness (a node with >1 same-role instance)
+    // and cross-role coverage (a node with one role but not the other), and reports the offending node in
     // node terms rather than WorkUnitSpec terms. It counts actual node occupancy, so overlapping
     // same-role placements are caught regardless of how the WorkUnitSpec bookkeeping produced
     // them. (Self-loops fall out naturally: a self-looping kernel tallies as one producer AND
     // one consumer on each of its nodes.)
-    const auto producers_on_node = CollectDFBEndpointsByNode(endpoints.producers, collected);
-    const auto consumers_on_node = CollectDFBEndpointsByNode(endpoints.consumers, collected);
+    const auto& placement = collected.dfb_node_set.at(dfb.unique_id);
+    const auto producers_on_node = CollectDFBEndpointsByNode(endpoints.producers, collected, placement);
+    const auto consumers_on_node = CollectDFBEndpointsByNode(endpoints.consumers, collected, placement);
 
-    // Footprint = every node hosting any instance of either role. A std::set gives deterministic
+    // Footprint = every reserved node hosting any instance of either role. A std::set gives deterministic
     // iteration order, hence deterministic error messages.
     std::set<NodeCoord> footprint;
     for (const auto& [node, kernels] : producers_on_node) {
@@ -641,11 +659,11 @@ void ValidateDFBRoleProcessors(const DataflowBufferSpec& dfb, const CollectedSpe
 // Validate local DFB endpoint placement and multi-binding consistency.
 //
 // The hardware invariant is local: a local DFB lives in shared SRAM on each node, so at every
-// node where the DFB is instantiated, exactly one producer kernel instance and exactly one
-// consumer kernel instance must run on that node. Metal 2.0 permits multiple PRODUCER
-// KernelSpecs (and multiple CONSUMER KernelSpecs) per DFB, so we enforce that invariant directly
+// reserved node with an endpoint, exactly one producer kernel instance and exactly one
+// consumer kernel instance must run. Reserved nodes with neither endpoint are permitted. Metal 2.0 permits
+// multiple PRODUCER KernelSpecs (and multiple CONSUMER KernelSpecs) per DFB, so we enforce that invariant directly
 // as a per-node census, plus per-role uniformity of the binding-site config:
-//   1./2. Placement: every node hosting the DFB runs exactly one producer instance and exactly
+//   1./2. Placement: every reserved node with an endpoint runs exactly one producer instance and exactly
 //         one consumer instance (the per-node census). This subsumes both "no node has two
 //         same-role instances" and "producer and consumer node coverage coincide".
 //   3. All bindings on the same role have matching `access_pattern` (the DFB scheduler
@@ -748,8 +766,7 @@ void ValidateDFBAliasing(const ValidationContext& ctx) {
             TT_FATAL(
                 nodes_a == nodes_b,
                 "Aliased DFBs '{}' and '{}' cover different sets of nodes. Aliased DFBs must "
-                "cover the same node coverage (their bound kernels' WorkUnitSpec membership "
-                "must yield identical target_nodes unions) — the shared L1 region must be "
+                "have identical effective placements — the shared L1 region must be "
                 "reserved at the same cores for all members.",
                 dfb.unique_id,
                 alias_name);

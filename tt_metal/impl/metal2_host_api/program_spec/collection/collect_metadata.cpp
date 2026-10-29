@@ -190,11 +190,13 @@ void DeriveNodeSets(const ProgramSpec& spec, CollectedSpecData& collected) {
             kernel.unique_id);
     }
 
-    // dfb_node_set: union of the endpoint kernels' node sets, for each local DFB.
-    // (Collected, but unvalidated. Semantic integrity checks for DFB take place in ValidateProgramSpec.
-    //  Once those pass, producer and consumer coverages are guaranteed equal; here we union both
-    //  sides for safety before that guarantee holds.)
+    // dfb_node_set: explicit placement, or the union of endpoint kernels' node sets.
+    // Collected, but unvalidated. Semantic integrity checks for DFB take place in ValidateProgramSpec.
     for (const auto& dfb : spec.dataflow_buffers) {
+        if (dfb.advanced_options.override_placement) {
+            collected.dfb_node_set[dfb.unique_id] = *dfb.advanced_options.override_placement;
+            continue;
+        }
         const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
         NodeRangeSet node_set;
         for (const auto& rec : endpoints.producers) {

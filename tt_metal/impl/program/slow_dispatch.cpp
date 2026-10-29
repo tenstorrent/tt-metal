@@ -62,6 +62,29 @@ void ConfigureKernelGroup(
     }
 }
 
+void ConfigureDataflowBuffers(IDevice& device, const Program& program, MetalContext& metal_ctx) {
+    if (program.impl().dataflow_buffers().empty()) {
+        return;
+    }
+    const auto& hal = metal_ctx.hal();
+    const auto index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const auto& config = program.impl().get_program_config(index);
+    const uint64_t addr =
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG) + config.dfb_offset;
+    std::vector<uint8_t> payload(config.dfb_size);
+    // DFB placement can include nodes that run no kernels.
+    for (const auto& range : program.impl().dataflow_buffers_unique_coreranges()) {
+        const auto dfbs = program.impl().dataflow_buffers_on_corerange(range);
+        for (const auto& logical_core : range) {
+            const size_t bytes_written =
+                experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, payload);
+            const auto physical_core = device.virtual_core_from_logical_core(logical_core, CoreType::WORKER);
+            metal_ctx.get_cluster().write_core(
+                device.id(), physical_core, std::span<const uint8_t>(payload.data(), bytes_written), addr);
+        }
+    }
+}
+
 // Returns true iff the program has kernels and every core it targets is a DRAM programmable core.
 // Such programs (e.g. the persistent tensor-prefetcher DRISC senders) are disjoint from the FD
 // worker grid and dispatch column, so launching them via slow dispatch does not perturb an active
@@ -154,7 +177,6 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                 uint64_t kernel_config_base =
                     hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
                 const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
-                const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
                 const bool scans_remote_cb_configs =
                     kernel_group->launch_msg.view().kernel_config().min_remote_cb_start_index() < max_dfbs;
                 if (!cbs_on_core.empty() || scans_remote_cb_configs) {
@@ -187,18 +209,6 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                     }  // PROF_END("CBS")
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).cb_offset;
                     metal_ctx.get_cluster().write_core(device_id, physical_core, circular_buffer_config_vec, addr);
-                }
-
-                if (!dfbs_on_core.empty()) {
-                    std::vector<uint8_t> dfb_config_vec(
-                        program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
-
-                    const size_t bytes_written = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
-                        logical_core, dfbs_on_core, dfb_config_vec);
-
-                    uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;
-                    metal_ctx.get_cluster().write_core(
-                        device_id, physical_core, std::span<const uint8_t>(dfb_config_vec.data(), bytes_written), addr);
                 }
 
                 // CrossNodeDFB dense index in the worker kernel-config window. Full host
@@ -257,6 +267,7 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
             program.impl().init_semaphores(device, logical_core, index);
         }
     }
+    ConfigureDataflowBuffers(device, program, metal_ctx);
 }
 
 void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow_dispatch) {

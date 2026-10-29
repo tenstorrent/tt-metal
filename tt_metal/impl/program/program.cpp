@@ -18,6 +18,7 @@
 #include <array>
 #include <atomic>
 #include <bitset>
+#include <compare>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -31,6 +32,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -46,6 +48,7 @@
 #include "buffer_types.hpp"
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
+#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
@@ -114,10 +117,19 @@ namespace {
 
 using namespace tt::tt_metal;
 
-using KernelGroupCoreRanges = std::map<std::set<KernelHandle>, std::set<CoreRange>>;
+struct KernelGroupMembership {
+    std::set<KernelHandle> kernels;
+    // Device slots can be reused by DFBs on disjoint nodes, so membership uses host identities.
+    std::set<uint32_t> dfbs;
 
-KernelGroupCoreRanges group_cores_by_kernels(
+    auto operator<=>(const KernelGroupMembership&) const = default;
+};
+
+using KernelGroupCoreRanges = std::map<KernelGroupMembership, std::set<CoreRange>>;
+
+KernelGroupCoreRanges group_cores_by_kernels_and_dfbs(
     const std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& handle_to_kernel,
+    std::span<const std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers,
     const CoreCoord& base,
     const CoreCoord& grid_extent) {
     // grid maps cores to sets-of-kernels running on that core
@@ -132,14 +144,20 @@ KernelGroupCoreRanges group_cores_by_kernels(
         }
     }
 
-    // Flip the mapping to get sets-of-kernels to cores
+    // Flip the mapping to get kernel and DFB membership to cores.
     KernelGroupCoreRanges map;
     for (auto y = base.y; y < grid_extent.y; y++) {
         for (auto x = base.x; x < grid_extent.x; x++) {
             int index = (y * grid_extent.x) + x;
             if (valid[index]) {
                 // grid is not used any more. Avoid copy construction by moving.
-                auto [it, inserted] = map.try_emplace(std::move(grid[index]));
+                KernelGroupMembership membership{.kernels = std::move(grid[index])};
+                for (const auto& dfb : dataflow_buffers) {
+                    if (dfb->core_ranges.contains(CoreCoord{x, y})) {
+                        membership.dfbs.insert(dfb->id);
+                    }
+                }
+                auto [it, inserted] = map.try_emplace(std::move(membership));
                 it->second.insert(CoreRange({x, y}, {x, y}));
             }
         }
@@ -1178,18 +1196,24 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         grid_extent_[programmable_core_type_index].x++;
         grid_extent_[programmable_core_type_index].y++;
 
-        auto map = group_cores_by_kernels(handle_to_kernel, base, grid_extent_[programmable_core_type_index]);
+        const auto& hal = MetalContext::instance(context_id_).hal();
+        std::span<const std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>> dfbs;
+        if (hal.get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::TENSIX) {
+            dfbs = dataflow_buffers_;
+        }
+        auto map =
+            group_cores_by_kernels_and_dfbs(handle_to_kernel, dfbs, base, grid_extent_[programmable_core_type_index]);
 
         // Build the list of KernelGroups with merged core range sets from the
-        // mapping of sets-of-kernels to cores
+        // mapping of kernel and DFB membership to cores.
         TT_ASSERT(map.size() < core_to_kernel_group_invalid_index);
         kernel_groups_.reserve(map.size());
         int index = 0;
         core_to_kernel_group_index_table_[programmable_core_type_index].resize(
             grid_extent_[programmable_core_type_index].x * grid_extent_[programmable_core_type_index].y,
             core_to_kernel_group_invalid_index);
-        const auto& hal = MetalContext::instance(context_id_).hal();
-        for (auto& [kernels, cores] : map) {
+        for (auto& [membership, cores] : map) {
+            const auto& kernels = membership.kernels;
             // Start inclusive, max exclusive
             uint32_t max_local_cb_end_index = 0;
             uint32_t min_remote_cb_start_index = max_dfbs_;
@@ -3052,6 +3076,10 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
             const auto ids = resource_sub_device_ids(device, group.cores, "Scratchpad");
             used_sub_device_ids.insert(ids.begin(), ids.end());
         }
+        for (const auto& dfb : dataflow_buffers_) {
+            const auto ids = resource_sub_device_ids(device, dfb->core_ranges, "DFB");
+            used_sub_device_ids.insert(ids.begin(), ids.end());
+        }
         auto [sub_device_ids, _] = sub_device_ids_map.insert_or_assign(
             sub_device_manager_id, std::vector<SubDeviceId>(used_sub_device_ids.begin(), used_sub_device_ids.end()));
         return sub_device_ids->second;
@@ -3683,8 +3711,11 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             index, kernel_groups_getter(index), dataflow_buffers, state.offset, state.dfb_offset, state.dfb_size);
 
         // Only now that the CB and DFB config regions are placed may local_cb_mask describe the DFBs.
-        if (!dataflow_buffers.empty()) {
-            program_dispatch::finalize_dfb_masks(metal_ctx, kernel_groups_getter(index), dataflow_buffers);
+        if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
+            for (ProgramImpl* program : programs) {
+                program_dispatch::finalize_dfb_masks(
+                    metal_ctx, program->get_kernel_groups(index), program->dataflow_buffers());
+            }
         }
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));

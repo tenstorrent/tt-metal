@@ -84,6 +84,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/fabric/fabric_kernel_defines.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/binding_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/compute_semaphore.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/integration_tests/dfb_placement.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/kernel_args_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/llk_operand_mul.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/mesh_workload_factories.cpp

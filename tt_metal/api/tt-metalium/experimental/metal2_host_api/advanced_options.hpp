@@ -208,8 +208,7 @@ struct DFBAdvancedOptions {
     // Rules for aliased DFBs:
     //   - Every DFB in the alias group must list every other member as an alias
     //   - Aliased DFBs must have the same total size (num_entries * entry_size).
-    //   - All members must target the same node set
-    //     (derived from their bound kernels' WorkUnitSpecs).
+    //   - All members must have identical effective placements, including any placement overrides.
     Group<DFBSpecName> alias_with;
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -217,12 +216,12 @@ struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
 
     // A DFB is a software FIFO. By default, a DFB instance (i.e., a DFB on a
-    // particular node) must have exactly one producer kernel instance and exactly
-    // one consumer kernel instance.
+    // particular node) with an endpoint must have exactly one producer kernel instance and exactly
+    // one consumer kernel instance. Reserved nodes with neither endpoint are permitted.
     //
     // This invariant holds at the INSTANCE level; a *DFBSpec* (spanning multiple
     // nodes) can have more than one KernelSpec producer or more consumer bindings,
-    // as long as every node's DFB instance has one producer and one consumer.
+    // as long as every reserved node with an endpoint has one producer and one consumer.
     // (This enables, for example, a grid-spanning compute kernel to be fed data by
     // different types of producer kernels on different nodes.)
     //
@@ -256,7 +255,7 @@ struct DFBAdvancedOptions {
     // pipe), the compute kernel is its CONSUMER. Empty = ordinary local DFB.
     //
     // Requirements (validated at MakeProgramFromSpec):
-    //  - mutually exclusive with borrowed_from
+    //  - mutually exclusive with borrowed_from and override_placement
     //  - entry_size == pipe entry_size and entry_size * num_entries == pipe ring_size, for every
     //    named pipe (all named pipes share ring_size and entry_size)
     //  - the DFB's node set (union of its bound kernels' nodes) equals the union of the named
@@ -279,7 +278,16 @@ struct DFBAdvancedOptions {
     // Placement override
     ////////////////////////////////////////////////////////////////////////////////
 
-    std::optional<CoreRangeSet> override_placement;
+    // Replace placement inferred from the endpoint kernels. Must be non-empty and within
+    // the logical worker grid; may omit endpoint nodes and include nodes with no endpoint.
+    // Placement is fixed for the Program lifetime; per-node size and kernel placement are unchanged.
+    // Reserved nodes must have both endpoint roles or neither. Existing endpoint configuration
+    // and allow_instance_multi_binding restrictions still apply.
+    // Cannot be combined with borrowed_from or prefetcher_pipe_relays.
+    //
+    // CAUTION: Access outside this set is undefined behavior. Kernel code must guard
+    // such accesses; the framework adds no device-side checks. Unset preserves inferred placement.
+    std::optional<CoreRangeSet> override_placement = std::nullopt;
 };
 
 struct ScratchpadAdvancedOptions {

@@ -95,11 +95,11 @@ struct CollectedSpecData {
     //  - Every kernel in kernel_by_name have an entry.
     std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_set;
 
-    // dfb_node_set: union of binding-kernels' node sets.
+    // dfb_node_set: effective placement of each DFB.
     //   - For each DFBSpecName, the node set could be empty.
     //   - Every key of dfb_by_name has an entry.
-    //   - The node set of a DFB d is the union of kernel_node_set[rec.kernel->unique_id] over every
-    //     record in dfb_endpoints[d].producers and dfb_endpoints[d].consumers.
+    //   - The node set is override_placement when set; otherwise it is the union of the
+    //     producer and consumer kernels' node sets.
     std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_set;
 
     // Semaphore binder census (derived from kernel semaphore bindings and kernel_node_set): which

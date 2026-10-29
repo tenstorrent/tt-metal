@@ -262,7 +262,7 @@ DataflowBufferHandles RegisterDataflowBuffers(
             MakeDataflowBufferConfig(&dfb_spec, dfb_endpoint_info, kernel_to_risc_mask);
 
         // Add the DFB to the ProgramImpl, and register the name -> handle mapping.
-        // Allocation nodes are derived from binding kernels' WorkUnitSpec membership.
+        // Allocation nodes use the DFB's effective placement.
         // (For borrowed-memory DFBs, config.borrows_memory was set in MakeDataflowBufferConfig;
         // the device-side runtime uses that to skip regular L1 allocation.)
         uint32_t dfb_id = program_impl.add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);

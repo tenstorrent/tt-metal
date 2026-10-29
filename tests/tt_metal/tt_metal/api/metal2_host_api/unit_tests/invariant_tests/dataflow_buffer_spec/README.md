@@ -27,6 +27,7 @@ struct DataflowBufferSpec {
 
     // Invariant:
     // - When set, the named TensorParameter's TensorSpec is L1-resident (L1 or L1_SMALL).
+    // - Cannot be set together with advanced_options.override_placement.
     std::optional<TensorParamName> borrowed_from = std::nullopt;
 
     DFBAdvancedOptions advanced_options;
