@@ -63,7 +63,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Validate storage types and buffers
     for (const auto& tensor : sdpa_input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
-        TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
+        TT_FATAL(tensor.is_allocated(), "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
             tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
@@ -172,7 +172,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "logical_n tensor must be UINT32 or INT32 (the kernels read element 0 as a raw 32-bit word). Got {}",
             t.dtype());
         TT_FATAL(t.storage_type() == StorageType::DEVICE, "logical_n tensor must be on device");
-        TT_FATAL(t.buffer() != nullptr, "logical_n tensor must be allocated on device");
+        TT_FATAL(t.is_allocated(), "logical_n tensor must be allocated on device");
         TT_FATAL(
             t.logical_volume() == 1,
             "logical_n tensor must hold exactly one value (the kernels read page 0, element 0). Got volume {}",
