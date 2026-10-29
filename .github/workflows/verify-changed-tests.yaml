@@ -315,6 +315,8 @@ jobs:
               || (contains(matrix.leg.sku, 'quasar') && 'quasar')
               || ((startsWith(matrix.leg.sku, 'bh_') || startsWith(matrix.leg.sku, 'sim_bh')) && 'blackhole')
               || 'wormhole_b0' }}
+        # tests/perf picks the golden environment from this, as runtime-perf-tests-impl.yaml does.
+        PERF_ENVIRONMENT: ${{ matrix.leg.sku }}
         LOGURU_LEVEL: INFO
         TT_LOGGER_LEVEL: info
         LD_LIBRARY_PATH: /work/build/lib
