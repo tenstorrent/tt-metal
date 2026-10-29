@@ -813,7 +813,11 @@ class Phi3ForCausalLM(Generator):
         custom = os.environ.get("TT_PHI3_OPTIMIZATIONS")
         if custom:
             logger.info(f"Phi3ForCausalLM: optimizations from TT_PHI3_OPTIMIZATIONS: {custom}")
-            precision = parse_optimizations(custom)
+            # parse_optimizations returns f(model_args); the loader calls optimizations(n_layers, model_name).
+            apply_settings = parse_optimizations(custom)
+            precision = lambda n_layers, model_name: apply_settings(  # noqa: E731
+                SimpleNamespace(n_layers=n_layers, model_name=model_name)
+            )
         else:
             precision = (
                 DecodersPrecision.from_string(optimizations)
