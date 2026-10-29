@@ -163,7 +163,7 @@ def _plain_greedy_bN(spec, anchor_token, anchor_pos, n, pad):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_verify_batched_matches_sequential(mesh_device, reset_seeds):
+def test_verify_batched_matches_sequential(mesh_device, device_params, reset_seeds):
     """The batched multi-position verify forward must match sequential single
     verify, position-for-position. Guards the paged-cache write path: a single
     batched paged_update_cache races when candidates share a physical block, so
@@ -347,7 +347,7 @@ def _kv_to_tt(k_torch, mesh_device, num_kv_heads, num_attention_heads, tp, num_d
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_assistant_step_pcc_vs_hf(mesh_device, reset_seeds):
+def test_assistant_step_pcc_vs_hf(mesh_device, device_params, reset_seeds):
     """Isolated assistant-forward fidelity vs HF.
 
     Feeds IDENTICAL inputs — target raw-token embedding, a random seed hidden,
@@ -625,7 +625,7 @@ def _depage(k_cache, page_table_torch, n_pos, block_size, mesh_device, replicate
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_assistant_first_step_vs_hf_realistic(mesh_device, reset_seeds):
+def test_assistant_first_step_vs_hf_realistic(mesh_device, device_params, reset_seeds):
     """Faithful first-step check with REAL inputs.
 
     Runs a real prefill, then feeds the REAL drafter seed (target pre-final-norm
@@ -813,7 +813,7 @@ def test_assistant_first_step_vs_hf_realistic(mesh_device, reset_seeds):
 @_needs_assistant
 @_assistant_probe
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_export_tt_spec_features(mesh_device, reset_seeds):
+def test_export_tt_spec_features(mesh_device, device_params, reset_seeds):
     """Export per-step TT drafter inputs + TT target greedy chain (DISCRIMINATOR).
 
     Plain-greedy decode on the TT target; at each step record the drafter seed
@@ -920,7 +920,7 @@ def test_export_tt_spec_features(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_assistant_recurrent_vs_hf_realistic(mesh_device, reset_seeds):
+def test_assistant_recurrent_vs_hf_realistic(mesh_device, device_params, reset_seeds):
     """Localize the TT drafter (assistant.step) divergence vs HF across ALL K
     recurrent steps on REAL features (the discriminator showed the clean HF
     drafter hits 1.44 on TT features while the TT drafter only gets 0.21, so the
@@ -1098,7 +1098,7 @@ def test_assistant_recurrent_vs_hf_realistic(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_assistant_step_pcc_real(mesh_device, reset_seeds):
+def test_assistant_step_pcc_real(mesh_device, device_params, reset_seeds):
     """Per-stage TT-vs-HF fidelity on REAL features (localizes the drafter bug).
 
     Unlike test_assistant_step_pcc_vs_hf (random OOD inputs), this feeds the REAL
@@ -1313,7 +1313,7 @@ def test_assistant_step_pcc_real(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_drafter_per_position_tt_vs_hf(mesh_device, reset_seeds):
+def test_drafter_per_position_tt_vs_hf(mesh_device, device_params, reset_seeds):
     """Per-position TT-vs-HF free-running drafts on IDENTICAL seeds (reproduces
     both 1.44 (HF) and 0.17 (TT) in one harness and localizes the divergent
     positions). At each greedy position both drafters run K free-running steps
@@ -1456,7 +1456,7 @@ def test_drafter_per_position_tt_vs_hf(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_tt_drafter_greedychain_acceptance(mesh_device, reset_seeds):
+def test_tt_drafter_greedychain_acceptance(mesh_device, device_params, reset_seeds):
     """TT drafter acceptance vs the TRUE greedy chain (TT analog of the HF
     discriminator). DISAMBIGUATES drafter vs verify:
 
@@ -1556,7 +1556,7 @@ def test_tt_drafter_greedychain_acceptance(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
+def test_spec_decode_matches_greedy(mesh_device, device_params, reset_seeds):
     """Greedy spec-decode matches plain greedy decode, EXCEPT at target near-ties.
 
     The verify forward runs batched (anchor + K drafts), so it uses the per-user
@@ -1668,7 +1668,7 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_verify_batchsize_invariance(mesh_device, reset_seeds):
+def test_verify_batchsize_invariance(mesh_device, device_params, reset_seeds):
     """Isolate batch-size numerics from spec accept logic.
 
     Greedy-decode the SAME prompt twice, advancing one token per step, but with
@@ -1765,7 +1765,7 @@ def test_verify_batchsize_invariance(mesh_device, reset_seeds):
 @_needs_assistant
 @_assistant_probe
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_spec_decode_perf_breakdown(mesh_device, reset_seeds):
+def test_spec_decode_perf_breakdown(mesh_device, device_params, reset_seeds):
     """Device-time breakdown to project the achievable (traced) spec-decode speedup.
 
     Times, on-device with NO host readback, the per-op latency of:
@@ -1905,7 +1905,7 @@ def test_spec_decode_perf_breakdown(mesh_device, reset_seeds):
 
 @_needs_assistant
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
-def test_spec_decode_sampling_acceptance(mesh_device, reset_seeds):
+def test_spec_decode_sampling_acceptance(mesh_device, device_params, reset_seeds):
     """Measure SAMPLING-mode acceptance (production config: temp/top_p/top_k).
 
     Speculative SAMPLING accepts draft d_i with prob min(1, p_target(d_i)/q_draft(d_i)),
