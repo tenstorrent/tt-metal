@@ -226,7 +226,6 @@ the chain is *built* from, fixed before it runs. Data flows through `Registers`.
 | `arch` | The `ArchProfile` this golden runs on: which blocks to use. Supplied by the factories in `arch.py`. |
 | `op_name` | Used as the math step's trace name. |
 | `Golden(arch=None, blocks=None)` | `blocks` overrides the profile's blocks, for a test driving one architecture's op through another's. Raises a pointed `TypeError` if neither is given, so using an arch-independent class by accident fails loudly. |
-| `fpu` | `self.blocks.fpu` — the unit that performs what the op selects. Ask it for the fidelity phases, the mantissa windows and the flush; none of that is restated per op, and three ops used to carry identical copies of the split. |
 | `build_chain(cfg)` | **Abstract.** Every op declares its own pipeline. |
 | `source(operand, tile=0)` | Slot name for one operand's buffer in one tile: `in0`, `in1`, then `in0_t1`, `in0_t2`. Tile 0 keeps the plain name so a non-folding op's trace stays uncluttered. |
 
@@ -317,7 +316,7 @@ It is not here. The phase tables, `split_mantissa`, the operand windows and the
 pre-carry flush describe the **FPU** — how many phases a fidelity runs, how wide
 the multiplier is, when a product is flushed — so they live with the FPU, in
 [`data_transfer_blocks/units/fidelity.py`](../data_transfer_blocks/units/fidelity.py).
-An operation reaches them through `self.fpu`; see
+An operation reaches them through the blocks' `fpu_*` methods; see
 [The FPU computes](../data_transfer_blocks/README.md#the-fpu-computes) for the full account, including the
 proof that the mantissa split is equivalent to the lightweight golden's
 mask-and-reassemble.
@@ -359,7 +358,7 @@ in Dest. The only difference is that the partial product is a *matrix* product.
 |---|---|
 | `OPERAND_REGISTERS` | Which src register each stimulus lands in, in argument order. `("srcB", "srcA")` on every architecture. |
 | `models_fidelity(cfg)` | The FPU's answer for this input format: its split has to be modelled, and the datums have to be floats. `False` → the product is exact at every fidelity, and it warns. |
-| `_product(srcA, srcB, geometry, k_face)` | The one place operand order lives, so a subclass inverting it overrides neither `apply` nor `partial_product`. `k_face` picks the 16-wide slice of the inner dimension. Arranges the two registers into matrices and hands them to `fpu.sum_of_products`. |
+| `_product(srcA, srcB, geometry, k_face)` | The one place operand order lives, so a subclass inverting it overrides neither `apply` nor `partial_product`. `k_face` picks the 16-wide slice of the inner dimension. Arranges the two registers into matrices and hands them to `blocks.fpu_sum_of_products`. |
 | `K_FACES` | How many MVMULs cover one tile's inner dimension — 2, since SrcA's face is 16×16. One Dest write each. |
 
 `TILE_DIM` (32) is a module constant in `pipelines/matmul.py`, not a class member — it
@@ -376,7 +375,7 @@ Two things the RTL rules out, both of which would be natural to assume:
   each product *is* a lane result and the flush applies.
 - **No per-MAC rounding.** `SOP_PREC = SOP_IN_MAN_PREC + SOP_GUARD_BITS` and
   `MAN_PREC_ACC = 23` — a wide fixed-point adder tree with guard bits, which
-  rounds once. `fpu.sum_of_products` therefore sums in float64, so the model
+  rounds once. `blocks.fpu_sum_of_products` therefore sums in float64, so the model
   does not introduce a float32 accumulation error the hardware does not have.
 
 But a single MVMUL is only `D[8,16] += B[8,16] * A[16,16]`, so a 32-wide inner
@@ -477,11 +476,12 @@ Float32 sources.
 The phase tables, the mantissa split and the pre-carry flush are the FPU's and
 live with it — see
 [The FPU computes](../data_transfer_blocks/README.md#the-fpu-computes).
-`EltwiseBinaryGolden` carries none of them: `partial_product` asks
-`fpu.operand_halves` for the windows and `fpu.flush_pre_carry` for the flush.
+`EltwiseBinaryGolden` carries none of them: `partial_product` hands the whole
+phase to `blocks.fpu_partial_product`, so the multiply stays inside the unit
+that defines how this device multiplies.
 
-`partial_product(regs, *, phase, dest_format=None)` multiplies the phase's
-operand halves element-wise and applies the flush when `dest_format` is given.
+`partial_product(regs, *, phase, dest_format=None)` delegates; all the op
+contributes is `dest_format`, which applies the flush.
 Every phase reads the **original** `srcA`/`srcB` — feeding a phase the previous
 phase's sliced operands zeroes every phase after the first and turns fidelity
 into a silent no-op.
@@ -489,7 +489,7 @@ into a silent no-op.
 Unlike matmul, each product here **is** a lane result written to Dest, which is
 why the flush applies at all. `apply` is the other half: where the split is not
 modelled, and for add and subtract always, the whole operation is one
-`fpu.elementwise` step.
+`blocks.fpu_elementwise` step.
 
 ## `EltwiseBinaryReuseDestGolden` — `pipelines/reuse_dest.py`
 
@@ -570,7 +570,7 @@ datacopy / eltwise / matmul for Wormhole and Blackhole.
    with `chain.dry_run([...pre-loaded slots...])`.
 2. If the maths is not one of the existing `apply` implementations, pass your own
    `fn` to `src_to_dest`, and make `reads` match what it touches.
-3. Add a factory per architecture in `arch.py`: `QuasarMyOpGolden = _factory(MyOpGolden, QUASAR)`. If the op multiplies, ask `self.fpu` for the phases and the operand windows rather than carrying them.
+3. Add a factory per architecture in `arch.py`: `QuasarMyOpGolden = _factory(MyOpGolden, QUASAR)`. If the op multiplies, ask the blocks' `fpu_*` methods for the phases and the operand windows rather than carrying them.
 4. Validate against silicon at **full Dest width first** — run with a `Float16`
    output so the packed result *is* Dest, and compare in ULPs. Only then move to
    an MX output, where a lattice step is hundreds of ULPs wide and will hide a

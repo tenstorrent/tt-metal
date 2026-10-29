@@ -42,7 +42,7 @@ def _face_order_permutation() -> Tuple[torch.Tensor, torch.Tensor]:
     the dtype of the ``stimuli_format`` they were given, and there is no
     ``DataFormat`` wide enough for an integer matmul's accumulator. Running an
     ``arange`` through them instead captures the rearrangement on its own, and
-    the data is then reordered by indexing -- which cannot change its type.
+    the data is then reordered by indexing, which cannot change its type.
 
     Returns ``(to_logical, to_face_order)``, the inverse of each other.
     """
@@ -74,7 +74,7 @@ class MatmulGolden(Golden):
     """L1 -> SrcA, L1 -> SrcB -> product -> Dest -> L1.
 
     A matmul decomposes into fidelity phases the same way an element-wise
-    multiply does -- the multiplier is narrower than a src datum, so each pass
+    multiply does: the multiplier is narrower than a src datum, so each pass
     multiplies a different slice of the operands' mantissas and the partial
     products accumulate in Dest. The only difference from the element-wise case
     is that the partial product is a matrix product.
@@ -84,7 +84,7 @@ class MatmulGolden(Golden):
     both significands and are summed in wide fixed point with guard bits, so
     there is no per-MAC rounding to model and no per-product denormal flush:
     an individual product never becomes a lane result, so the flush rule does
-    not reach it. :meth:`.Fpu.sum_of_products` is where that width lives.
+    not reach it. ``blocks.fpu_sum_of_products`` is where that width lives.
 
     But one MVMUL is only ``D[8,16] += B[8,16] * A[16,16]``, so a 32-wide inner
     dimension takes **two** of them, and the second accumulates onto a Dest the
@@ -102,7 +102,7 @@ class MatmulGolden(Golden):
 
     #: Which src register each stimulus lands in, in argument order. Set so that
     #: ``run([arg0, arg1])`` mirrors ``_llk_unpack_matmul_init_(arg0, arg1)`` and
-    #: produces ``arg0 @ arg1``, which holds on every architecture -- what the
+    #: produces ``arg0 @ arg1``, which holds on every architecture. What the
     #: caller passes does not change, only which register each operand rides.
     #:
     #: Every architecture routes the first operand to SrcB and the second to
@@ -127,7 +127,7 @@ class MatmulGolden(Golden):
         The FPU's answer, which needs the input format: the decomposition
         slices a mantissa, and an integer datum has none to slice.
         """
-        return self.fpu.models_fidelity(cfg.in_formats[0])
+        return self.blocks.fpu_models_fidelity(cfg.in_formats[0])
 
     def build_chain(self, cfg: OpConfig) -> Chain:
         unpack = {"srcA": self.l1_to_srcA, "srcB": self.l1_to_srcB}
@@ -140,8 +140,8 @@ class MatmulGolden(Golden):
             ]
         )
         if self.models_fidelity(cfg):
-            # One Dest write per (phase, K face) -- see the class docstring.
-            for phase in self.fpu.phases(self.math_fidelity):
+            # One Dest write per (phase, K face). See the class docstring.
+            for phase in self.blocks.fpu_phases(self.math_fidelity):
                 for k_face in range(K_FACES):
                     chain.then(
                         self.src_to_dest(
@@ -158,7 +158,7 @@ class MatmulGolden(Golden):
                         )
                     )
         else:
-            self.fpu.warn_split_unmodelled(self.op_name)
+            self.blocks.fpu_warn_split_unmodelled(self.op_name)
             # Still one step per K face: the missing mantissa split is a
             # separate gap from the missing Dest rounding, and modelling only
             # the exact product here would hide the second one too.
@@ -187,7 +187,7 @@ class MatmulGolden(Golden):
         wrong answer reads as a plausible one.
 
         Rearranges without converting, so an integer register stays an integer
-        one all the way into :meth:`.Fpu.sum_of_products`.
+        one all the way into ``blocks.fpu_sum_of_products``.
         """
         # Against the full tile, not datums_per_tile(**geometry): the product
         # below is a 32x32 one whatever geometry says, so a partial-face tile
@@ -210,7 +210,7 @@ class MatmulGolden(Golden):
 
         Keeps the product's own type. An integer matmul accumulates in int64
         and reaches 2**35, which the ``Int32`` the tilize helpers would cast to
-        cannot hold -- it would wrap to a negative number here, *before*
+        cannot hold, since it would wrap to a negative number here, *before*
         :func:`..storage.to_dest_storage` had a chance to saturate it, turning
         a clean clamp into a sign flip.
         """
@@ -225,24 +225,24 @@ class MatmulGolden(Golden):
         ``Dest = SrcB @ SrcA``, which is not a transpose of the caller's
         arguments: :attr:`OPERAND_REGISTERS` puts the first operand in SrcB, so
         the two together give ``arg0 @ arg1``. Both halves are load-bearing and
-        have to agree -- the routing without this order, or this order without
+        have to agree: the routing without this order, or this order without
         the routing, transposes the result into something wrong everywhere but
         still plausible-looking, which is how it was last caught.
 
         The one place operand order lives, so a subclass that diverges does not
         have to override both the exact and the per-phase paths. The multiply
-        itself is the FPU's -- including the accumulator being wider than the
-        operands -- so this arranges the two registers into the matrices one
+        itself is the FPU's, including the accumulator being wider than the
+        operands, so this arranges the two registers into the matrices one
         instruction covers and hands them over. The rounding the hardware takes
         *between* K faces is the caller's, which writes Dest once per face
         rather than once per phase.
 
         `k_face` selects the 16-wide slice of the inner dimension this MVMUL
-        covers -- columns of SrcB, rows of SrcA.
+        covers: columns of SrcB, rows of SrcA.
         """
         lo = k_face * K_FACE_DIM
         hi = lo + K_FACE_DIM
-        product = self.fpu.sum_of_products(
+        product = self.blocks.fpu_sum_of_products(
             self._as_tile(srcB, geometry)[:, lo:hi],
             self._as_tile(srcA, geometry)[lo:hi, :],
         )
@@ -257,9 +257,9 @@ class MatmulGolden(Golden):
     ) -> torch.Tensor:
         """One fidelity phase: the matrix product of the chosen operand halves.
 
-        The FPU picks the windows, non-finite operands included -- it carries
+        The FPU picks the windows, non-finite operands included, and it carries
         those on the first phase and zeroes them on the rest, so an infinity
         reaches every output position that sums over it exactly once.
         """
-        a, b = self.fpu.operand_halves(regs["srcA"], regs["srcB"], phase)
+        a, b = self.blocks.fpu_operand_halves(regs["srcA"], regs["srcB"], phase)
         return self._product(a, b, geometry, k_face)

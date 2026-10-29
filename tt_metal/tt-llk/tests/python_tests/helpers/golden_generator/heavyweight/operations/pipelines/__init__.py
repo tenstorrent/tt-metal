@@ -4,8 +4,8 @@
 """One module per operation: the pipelines themselves.
 
 Each declares a chain of data-transfer blocks and supplies the arithmetic
-between them. The machinery they are built from -- ``Chain``, ``Golden``, the
-fidelity phases -- sits one level up, because it knows nothing about any
+between them. The machinery they are built from (``Chain``, ``Golden``, the
+fidelity phases) sits one level up, because it knows nothing about any
 particular operation.
 
 Architectures are not here either: an operation takes one as an argument, so

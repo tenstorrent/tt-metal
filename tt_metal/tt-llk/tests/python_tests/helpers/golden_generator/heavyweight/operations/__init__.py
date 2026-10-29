@@ -3,13 +3,13 @@
 
 """Operations, each declaring a chain of data-transfer blocks.
 
-The operations live in :mod:`.pipelines`; everything here is the machinery
+The operations live in :mod:`.pipelines`. Everything here is the machinery
 that builds and runs them.
 
-Use an architecture's golden -- ``QuasarMatmulGolden``,
+Use an architecture's golden, such as ``QuasarMatmulGolden``,
 ``WormholeEltwiseBinaryGolden`` and so on, all exported from here. Each is the
 architecture-independent pipeline bound to an ``ArchProfile`` from
-:mod:`.arch`; the classes themselves take the architecture as an argument.
+:mod:`.arch`. The classes themselves take the architecture as an argument.
 """
 
 from .arch import (

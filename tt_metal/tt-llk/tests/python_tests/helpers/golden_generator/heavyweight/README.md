@@ -270,7 +270,7 @@ WormholeMyOpGolden = _factory(MyOpGolden, WORMHOLE)
 ```
 
 No subclass: the architecture is an argument, so there is nothing for one to
-add. If your op multiplies, ask `self.fpu` for the phases and the operand
+add. If your op multiplies, ask `self.blocks.fpu_*` for the phases and the operand
 windows — the FPU carries them, so you do not restate them.
 
 Three things to get right:

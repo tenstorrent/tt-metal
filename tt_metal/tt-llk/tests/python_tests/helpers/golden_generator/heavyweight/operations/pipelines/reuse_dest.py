@@ -59,7 +59,7 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
     def build_chain(self, cfg: OpConfig) -> Chain:
         # The seed reaches Dest through SrcA, not straight from L1. The kernel's
         # phase 1 unpacks into SrcA with IS_32B_DEST_EN=false and moves it over
-        # with an A2D datacopy -- the same two steps DataCopyGolden runs -- so
+        # with an A2D datacopy, the same two steps DataCopyGolden runs, so
         # the seed sees src-register storage on the way. l1_to_dest would model
         # the unpack_to_dest=true path, which this test does not configure.
         #
@@ -92,7 +92,7 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
                 )
             else:
                 # Named rather than caught by an else: the enum also has NONE,
-                # which an else would quietly build as the SrcB chain -- a
+                # which an else would quietly build as the SrcB chain, a
                 # different operation that still returns a plausible tile, with
                 # one stimulus never read.
                 raise ValueError(
@@ -133,7 +133,7 @@ class EltwiseBinaryReuseDestGolden(EltwiseBinaryGolden):
         contents as they stood *before* the pack: the intermediate value the
         golden expects, to show beside a packed-output mismatch. It narrows
         whether the math or the packer disagreed, but deciding that needs the
-        device's own Dest too -- most simply a Float16-output run, where the
+        device's own Dest too, most simply a Float16-output run, where the
         device's packed result is its Dest.
         """
         src_a, src_b = stimuli

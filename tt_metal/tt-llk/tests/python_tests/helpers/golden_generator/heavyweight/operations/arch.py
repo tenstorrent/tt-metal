@@ -4,7 +4,7 @@
 """The architectures an operation can run on, and the per-op factories.
 
 An operation does not have a subclass per architecture. What differs between
-architectures is **data** -- which blocks to use -- so each architecture states
+architectures is **data**, namely which blocks to use, so each architecture states
 that once here and every operation takes one as an argument. Everything an
 operation needs to know about the hardware itself it asks the blocks: the FPU
 carries its own multiplier width, the packer its own edge-mask polarity.
@@ -47,9 +47,9 @@ class ArchProfile:
     #:
     #: This and a name are all that is left: everything else an operation used
     #: to be told about the architecture turned out to belong to a unit behind
-    #: this field. The FPU's per-phase mantissa split was the last of them --
-    #: see :class:`...data_transfer_blocks.units.Fpu`, which an operation
-    #: reaches as ``self.fpu``.
+    #: this field. The FPU's per-phase mantissa split was the last of them.
+    #: An operation asks for it through the blocks' ``fpu_*`` methods rather
+    #: than holding the unit, so the units stay private to that package.
     blocks: Callable[[], DataTransferBlocks]
 
 
@@ -72,7 +72,7 @@ def _factory(golden_class, arch: ArchProfile):
     """`golden_class` bound to `arch`, named so it reads like the class it replaces.
 
     ``partial`` carries no ``__name__``, which breaks anything that introspects
-    it -- a ``pytest.mark.parametrize`` id, a repr in a failure, a log line. Set
+    it: a ``pytest.mark.parametrize`` id, a repr in a failure, a log line. Set
     it here so the factories are drop-in for the classes they replaced.
     """
     f = partial(golden_class, arch=arch)
