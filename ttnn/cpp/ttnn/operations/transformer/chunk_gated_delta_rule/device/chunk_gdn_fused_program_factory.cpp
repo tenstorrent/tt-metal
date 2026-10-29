@@ -80,16 +80,21 @@ namespace ttnn::prim {
 // Kickoff staggering (cycles at the 1.35 GHz core clock). Chunk 0's producers read first: a producer whose first
 // chunk is c > 0 waits kProducerKickoffLeadCycles plus (c - 1) * kProducerKickoffStaggerCycles. The lead is shorter
 // than chunk 0's own read (~3.6 us): chunk 0's producers publish q/k/v right after their read barrier and finish the
-// constants behind them, while a staggered producer builds its constants inside the wait, so a ~1 us lead puts
-// chunk 1's VALID about one scan step behind chunk 0's. Chunk c is needed c receiver steps after chunk 0, so the
-// stagger stays below the fastest scan step (~2.1 us): a stagger longer than the step delays the first NP chunks (the
-// chain waits on each one) and, in a production-bound pool, idles the late producers for up to c_first * stagger.
+// constants behind them, while a staggered producer builds its constants inside the wait. Chunk c is needed c
+// receiver steps after chunk 0, so the stagger stays below the scan step (~1.8 us): a stagger longer than the step
+// delays the first NP chunks (the chain waits on each one) and, in a production-bound pool, idles the late producers
+// for up to c_first * stagger. With the two-link hand-off (placement 1's west producers) the first items' writes
+// serialize on their link at kickoff whatever the stagger, so a short one just has every first item ready early:
+// measured at BH 12 (p150, medians of 5), lead / stagger 0.5 / 1.0 us 143.3 us, 1.0 / 1.5 145.2, 1.5 / 1.85 152.0
+// (the chain of most heads starts 6 us earlier, the top rows' 7 us later), 0 / 0.5 154.3, 0 / 0 154.7 (all 84 first
+// reads at once); BH 16 / 24 / 32 unchanged within noise. The receivers' initial-state hold (4 us, 0 or 10 tried)
+// makes no difference.
 // Producers carrying the program's maximum item count are never staggered: in a production-bound run (the pool) they
 // bound the op one-for-one and do not wait on credits, so a kickoff wait delays the op by its full length. Every other
 // producer has at least one item (~14 us) of slack, more than its stagger.
 // Receivers issue their first credits, then hold the initial-state read back by kReceiverKickoffWaitCycles.
-constexpr uint32_t kProducerKickoffLeadCycles = 1350;     // ~1 us
-constexpr uint32_t kProducerKickoffStaggerCycles = 2025;  // ~1.5 us
+constexpr uint32_t kProducerKickoffLeadCycles = 675;      // ~0.5 us
+constexpr uint32_t kProducerKickoffStaggerCycles = 1350;  // ~1 us
 constexpr uint32_t kReceiverKickoffWaitCycles = 5400;     // ~4 us
 constexpr uint32_t producer_kickoff_wait_cycles(uint32_t c_first, bool busiest) {
     return (c_first == 0 || busiest) ? 0u : kProducerKickoffLeadCycles + (c_first - 1) * kProducerKickoffStaggerCycles;
