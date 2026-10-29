@@ -11,7 +11,8 @@ max_tokens=1), never through /tokenize (optional, reported as a separate non-fat
 random marker that only the tool result contains. Exit code 0 = every case PASS, 1 = at least one FAIL.
 
 Cases: 1 schema_in_prompt, 2 tools_request_parsed, 3 assistant_tool_calls_in_prompt, 4 tool_result_in_prompt,
-5 plain_chat_placement, 6 thinking_true_placement, 7 tool_loop_marker.
+5 plain_chat_placement, 6 thinking_true_placement, 7 tool_loop_marker, 8 stream_plain_placement,
+9 stream_thinking_placement, 10 thinking_with_tools.
 """
 import argparse
 import json
@@ -77,6 +78,44 @@ class Probe:
             body["tool_choice"] = "auto"
         body.update(extra)
         return self.post("/v1/chat/completions", body)
+
+    def stream_chat(self, messages, tools=None, max_tokens=400, timeout=900, **extra):
+        """SSE chat completion; returns (status, content, reasoning, tool_calls_seen, n_events) accumulated over the deltas."""
+        body = {"model": self.model, "messages": messages, "max_tokens": max_tokens, "temperature": 0, "stream": True}
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+        body.update(extra)
+        req = urllib.request.Request(
+            self.base + "/v1/chat/completions",
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        content, reasoning, tcs, n = [], [], [], 0
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                st = r.status
+                for raw in r:
+                    line = raw.decode(errors="replace").strip()
+                    if not line.startswith("data:") or line[5:].strip() == "[DONE]":
+                        continue
+                    try:
+                        d = json.loads(line[5:])["choices"][0].get("delta", {})
+                    except (ValueError, KeyError, IndexError):
+                        continue
+                    n += 1
+                    content.append(d.get("content") or "")
+                    reasoning.append(d.get("reasoning") or d.get("reasoning_content") or "")
+                    tcs.extend(d.get("tool_calls") or [])
+        except urllib.error.HTTPError as e:
+            st = e.code
+        except Exception as e:
+            st = -1
+            content = [repr(e)]
+        self.calls.append(
+            {"path": "/v1/chat/completions (stream)", "request": body, "status": st, "response": {"events": n}}
+        )
+        return st, "".join(content), "".join(reasoning), tcs, n
 
     def prompt_tokens(self, messages, tools=None):
         st, r = self.chat(messages, tools, max_tokens=1)
@@ -214,6 +253,44 @@ def main():
         ok,
         detail,
         "end to end: call, history, tool result are all encoded; the model's final answer quotes the marker only the tool result contains",
+    )
+
+    # 8 streaming, no thinking kwarg: answer streams in delta.content, no reasoning deltas (how real clients call it)
+    st, content, reasoning, _, n = p.stream_chat(q, max_tokens=300)
+    ok = st == 200 and "391" in content and not reasoning and n > 1
+    case(
+        "8_stream_plain_placement",
+        ok,
+        "HTTP %s events=%s content=%r reasoning=%r" % (st, n, content[:60], reasoning[:60]),
+        "streaming non-thinking default: the answer is in delta.content, not in delta.reasoning",
+    )
+
+    # 9 streaming thinking=true: reasoning deltas AND a non-empty final answer in content
+    st, content, reasoning, _, n = p.stream_chat(q, max_tokens=3000, chat_template_kwargs={"thinking": True})
+    ok = st == 200 and bool(reasoning) and "391" in content and n > 1
+    case(
+        "9_stream_thinking_placement",
+        ok,
+        "HTTP %s events=%s reasoning=%r content=%r" % (st, n, reasoning[:60], content[:60]),
+        "streaming thinking=true: reasoning arrives in delta.reasoning, the answer in delta.content (answer never lost in reasoning)",
+    )
+
+    # 10 thinking=true together with tools: the tool call is still parsed, and not swallowed by the reasoning
+    st, r = p.chat([USER], TOOLS, max_tokens=3000, chat_template_kwargs={"thinking": True})
+    m = message(r)
+    tc = m.get("tool_calls") or []
+    good = False
+    if tc:
+        try:
+            good = tc[0]["function"]["name"] == "get_weather" and "city" in json.loads(tc[0]["function"]["arguments"])
+        except (KeyError, ValueError, TypeError):
+            good = False
+    case(
+        "10_thinking_with_tools",
+        good,
+        "HTTP %s tool_calls=%s reasoning=%r"
+        % (st, json.dumps(tc)[:120], ((m.get("reasoning") or m.get("reasoning_content")) or "")[:60]),
+        "thinking=true plus tools: the tool call is parsed into tool_calls (not left inside the reasoning text)",
     )
 
     # optional /tokenize (not all renderers support history messages there): separate, never fails the run
