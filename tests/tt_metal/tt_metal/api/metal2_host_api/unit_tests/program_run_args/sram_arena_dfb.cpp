@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <stdexcept>
@@ -18,6 +19,7 @@
 #include "impl/sram_arena/sram_arena_impl.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -55,6 +57,42 @@ uint32_t ArenaBase(const SRAMArena& arena) {
 
 dfb::detail::DataflowBufferImpl& ArenaDFB(Program& program) {
     return *program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("fifo"));
+}
+
+ProgramSpec MakeArenaAliasAndScratchpadSpecForTest() {
+    auto spec = ArenaDFBSpec(512, 2, 1024);
+    auto alias = spec.dataflow_buffers[0];
+    alias.unique_id = DFBSpecName{"alias"};
+    alias.advanced_options.alias_with = {DFBSpecName{"fifo"}};
+    spec.dataflow_buffers[0].advanced_options.alias_with = {DFBSpecName{"alias"}};
+    spec.dataflow_buffers.push_back(alias);
+    spec.kernels[0].dfb_bindings.push_back(ProducerOf(DFBSpecName{"alias"}, "alias"));
+    spec.kernels[1].dfb_bindings.push_back(ConsumerOf(DFBSpecName{"alias"}, "alias"));
+    spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 512}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 3072};
+    spec.kernels[0].scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
+    return spec;
+}
+
+ProgramRunArgs MakeArenaArgsForTest(const SRAMArena& arena) {
+    ProgramRunArgs args;
+    args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
+    return args;
+}
+
+std::array<uint32_t, 6> GetArenaBindingAddressesForTest(Program& program) {
+    const auto& dfb = ArenaDFB(program);
+    const auto alias = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("alias"));
+    const auto kernel = program.impl().get_kernel_by_spec_name("producer");
+    const auto& scratchpad = kernel->scratchpad_binding_handles().at(0);
+    return {
+        dfb.borrowed_addr_,
+        dfb.core_lookup_.at(NodeCoord{0, 0}).second,
+        dfb.core_lookup_.at(NodeCoord{1, 0}).second,
+        alias->borrowed_addr_,
+        scratchpad.allocated_address,
+        kernel->common_runtime_args_data()[scratchpad.addr_crta_word]};
 }
 
 TEST_F(SRAMArenaDFBTest, CPU_WaitsForAllocationArgument) {
@@ -238,6 +276,36 @@ TEST_F(SRAMArenaDFBTest, CPU_LaterResizeUsesCurrentEntryCount) {
     UpdateProgramRunArgs(program, update);
     EXPECT_EQ(ArenaDFB(program).config.entry_size, 1536u);
     EXPECT_EQ(ArenaDFB(program).config.num_entries, 2u);
+}
+
+TEST_F(SRAMArenaDFBTest, CPU_FullSetLateFailurePreservesArenaBindings) {
+    // A rejected alias resize preserves the bound DFB and scratchpad arena addresses.
+    SRAMArena first = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
+    SRAMArena second = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
+    Program program = MakeProgramFromSpec(fixture_device(), MakeArenaAliasAndScratchpadSpecForTest());
+    SetProgramRunArgs(program, MakeArenaArgsForTest(first));
+    const auto original_addresses = GetArenaBindingAddressesForTest(program);
+    auto args = MakeArenaArgsForTest(second);
+    args.dfb_run_overrides = {{.dfb = DFBSpecName{"fifo"}, .num_entries = 4}};
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, args); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("was not overridden")));
+    EXPECT_EQ(GetArenaBindingAddressesForTest(program), original_addresses);
+}
+
+TEST_F(SRAMArenaDFBTest, CPU_PartialUpdateLateFailurePreservesArenaBindings) {
+    // A rejected alias resize preserves the bound DFB and scratchpad arena addresses.
+    SRAMArena first = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
+    SRAMArena second = SRAMArena::allocate(fixture_device(), ArenaProperties(4096));
+    Program program = MakeProgramFromSpec(fixture_device(), MakeArenaAliasAndScratchpadSpecForTest());
+    SetProgramRunArgs(program, MakeArenaArgsForTest(first));
+    const auto original_addresses = GetArenaBindingAddressesForTest(program);
+    auto args = MakeArenaArgsForTest(second);
+    args.dfb_run_overrides = {{.dfb = DFBSpecName{"fifo"}, .num_entries = 4}};
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, args); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("was not overridden")));
+    EXPECT_EQ(GetArenaBindingAddressesForTest(program), original_addresses);
 }
 
 }  // namespace
