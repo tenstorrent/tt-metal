@@ -17,6 +17,7 @@ never reused within a call, so no credits: the call fence only."""
 from ttnn.bringup.combine_rf.fabric_all_gather_py import _OPP, NOC0, NOC1, plan
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 from models.demos.moe_block.tt.router_stream import LSTREAM
 
 # (the port cores' roles: the sender (Ethernet writes) on the NCRISC / NOC0, the reader on the BRISC / NOC1. The ports
@@ -115,10 +116,10 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos, uint32_t m, uint32_t* se
             if (!((mask >> ((cw >> 16) & 1)) & 1) || cnt == 0) continue;
             uint32_t fo = 0;  // (the sub-block's FINB offset: the core's tiles of the entries before e)
             for (uint32_t e2 = 0; e2 < e; ++e2) fo += (cnts >> (8 * get_arg_val<uint32_t>(en0 + e2))) & 0xFF;
-            volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + 16 * (cw >> 20));
+            volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + XG_HS * (cw >> 20));
             const uint32_t target = ++seen[i];
             invalidate_l1_cache();
-            HWW(16, 0xA1000000u | un << 8 | i); HWW(17, target); HWW(18, *mb); HWW(19, mbox + 16 * (cw >> 20));
+            HWW(16, 0xA1000000u | un << 8 | i); HWW(17, target); HWW(18, *mb); HWW(19, mbox + XG_HS * (cw >> 20));
             if (*mb < target && c > 0) flush();  // (never hold reads while blocked on a producer)
 #ifdef SE_PROBE_RSSTAT
             if (*mb < target) {
@@ -165,7 +166,7 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos, uint32_t m, uint32_t* se
         return;
     }
     for (uint32_t i = 0; i < nc; ++i)  // (re-arm: every hand-off of the call was waited for)
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + 16 * (get_arg_val<uint32_t>(c0 + 2 * i) >> 20)) = 0;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + XG_HS * (get_arg_val<uint32_t>(c0 + 2 * i) >> 20)) = 0;
 }
 """
 
@@ -195,7 +196,7 @@ FORCE_INLINE void la_gather(uint32_t a0, uint32_t& pos, uint32_t m, uint32_t* se
             const uint32_t cw = get_arg_val<uint32_t>(c0 + 2 * i), rw = (get_arg_val<uint32_t>(c0 + 2 * i + 1) >> (4 * b)) & 0xF;
             const uint32_t r0 = rw & 3, nr = rw >> 2, cnt = nr * LW;
             if (cnt == 0) continue;
-            volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word + 16 * (cw >> 16));
+            volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word + XG_HS * (cw >> 16));
             const uint32_t target = ++seen[i];
             invalidate_l1_cache();
             HWW(21, 0xA5000000u | un << 8 | i); HWW(22, target); HWW(23, *mb);
@@ -217,7 +218,7 @@ FORCE_INLINE void la_gather(uint32_t a0, uint32_t& pos, uint32_t m, uint32_t* se
     }
     if (m + 1 < NCH) return;
     for (uint32_t i = 0; i < nc; ++i)
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word + 16 * (get_arg_val<uint32_t>(c0 + 2 * i) >> 16)) = 0;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word + XG_HS * (get_arg_val<uint32_t>(c0 + 2 * i) >> 16)) = 0;
 }
 """
 
@@ -802,8 +803,8 @@ class XGather3:
             | {(self.watcher_core(k).x, self.watcher_core(k).y) for k in self.chips}
         )
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores])
-        self.sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3 + 2 * num_links)]
-        addrs = [int(ttnn.get_global_semaphore_address(s)) for s in self.sems]
+        self.sems = [persist_l1.semaphore(mesh_device, crs, 0) for _ in range(3 + 2 * num_links)]
+        addrs = [persist_l1.address(s) for s in self.sems]
         self.arrival, self.ready, self.xloaded = addrs[0], addrs[1], addrs[-1]
         self.watch = {
             (d, v): addrs[2 + i * num_links + v] for i, d in enumerate(("fwd", "bwd")) for v in range(num_links)
@@ -1064,7 +1065,7 @@ class XGather3:
         x_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         kernels = [
             ttnn.KernelDescriptor(
-                kernel_source=f"#define LA_CHL {getattr(e, 'LATP', 0) * 2048 if e.NCH > 1 else 0}u\n"
+                kernel_source=f"#define XG_HS {persist_l1.handoff_bytes()}u\n#define LA_CHL {getattr(e, 'LATP', 0) * 2048 if e.NCH > 1 else 0}u\n"
                 + _probes()
                 + _READER,
                 source_type=st,
@@ -1074,7 +1075,7 @@ class XGather3:
                 config=dm("RISCV_0", NOC1) if PORT_NOC0 else dm("RISCV_1", NOC0),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=f"#define LS_FIRST {int(bool(router and router.prio_first))}\n"
+                kernel_source=f"#define XG_HS {persist_l1.handoff_bytes()}u\n#define LS_FIRST {int(bool(router and router.prio_first))}\n"
                 + f"#define LA_CHL {getattr(e, 'LATP', 0) * 2048 if e.NCH > 1 else 0}u\n"
                 + (routing.defines(coord) if routing is not None else "")
                 + _probes()
@@ -1113,7 +1114,7 @@ class XGather3:
         wt[wc.x][wc.y] = wl
         kernels.append(
             ttnn.KernelDescriptor(
-                kernel_source=wsrc,
+                kernel_source=f"#define XG_HS {persist_l1.handoff_bytes()}u\n" + wsrc,
                 source_type=st,
                 core_ranges=cs([wc]),
                 compile_time_args=[],

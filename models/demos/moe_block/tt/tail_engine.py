@@ -39,6 +39,7 @@ import torch
 from ttnn.bringup.combine_rf.lin2d import column_split
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 from models.demos.moe_block.tt.se_engine3 import _ring_pages, l1_free_bytes
 
 CB_W, CB_A, CB_PART, CB_PMY, CB_ONES, CB_ACCM, CB_XSEND, CB_SQM, CB_XRECV, CB_SE, CB_OUT, CB_L0, CB_RM = range(13)
@@ -871,7 +872,7 @@ class TailEngine:
         )
         # (the fence: a port's ready counter - persistent, re-armed by its one waiter. The engine cores' per-step
         # words (landed, shares in, E tiles in) + their NCRISC's call count: persistent, only counting up)
-        self.ready = ttnn.create_global_semaphore(mesh, self.port_crs, 0)
+        self.ready = persist_l1.semaphore(mesh, self.port_crs, 0)
         nw = 4 * (3 * self.NSTMAX + 1 + self.NSTMAX * GX)  # (+ the shares' words: a column a step)
         self.words = ttnn.from_torch(
             torch.zeros(GX * GY, nw, dtype=torch.int32),
@@ -880,7 +881,7 @@ class TailEngine:
             device=mesh,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
+                persist_l1.buffer_type(),
                 ttnn.ShardSpec(self.crs, [1, nw], ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
@@ -892,7 +893,7 @@ class TailEngine:
             device=mesh,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
+                persist_l1.buffer_type(),
                 ttnn.ShardSpec(self.port_crs, [1, 4], ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
@@ -1103,7 +1104,7 @@ class TailEngine:
             args = [
                 b + off["land"],
                 wa,
-                int(ttnn.get_global_semaphore_address(self.ready)),
+                persist_l1.address(self.ready),
                 int(send_ready),
                 rc.x,
                 rc.y,
@@ -1210,7 +1211,10 @@ class TailEngine:
         # Prepared dispatch (ttnn.bringup.prepare_program): built and prepared for these addresses, each call patches
         # only the CBs on the arena (taken again at its base); rebuilt when any address moves - the runtime args hold
         # addresses inside y / se / out (rows at offsets), which exact-address patching cannot follow
-        pkey = (base,) + tuple(int(t.buffer_address()) for t in (y, w, se, out))
+        from models.demos.moe_block.tt.fused_head import _addr
+
+        a = _addr if getattr(self, "cache_addrs", False) else (lambda t: int(t.buffer_address()))  # noqa: E731
+        pkey = (base, a(y), a(w), a(se), int(out.buffer_address()))  # (out: a new tensor a call)
         # (one prepared program per address set: several layers on one tail - each its own latent up / norm, w - would
         # otherwise rebuild all the chips' programs at every layer switch, ~300 ms a call in K3's 24-layer stack)
         hit = self.state.setdefault("pps", {}).get(pkey)

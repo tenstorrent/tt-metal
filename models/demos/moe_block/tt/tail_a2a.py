@@ -34,6 +34,7 @@ from ttnn.bringup.combine_rf import fabric_all_gather_py as fag
 from ttnn.bringup.prepared_program import generic_op as prepared_generic_op
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 from models.demos.moe_block.tt.se_engine3 import _ring_pages
 
 CB_RM, CB_T, CB_SE, CB_OUT, CB_CH = 0, 1, 2, 3, 4
@@ -421,7 +422,7 @@ class TailA2A:
         pc = sorted(ports)
         self.port_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in pc])
         self.work_crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.workers])
-        self.sems = [ttnn.create_global_semaphore(mesh, self.port_crs, 0) for _ in range(2)]  # (arrival, ready)
+        self.sems = [persist_l1.semaphore(mesh, self.port_crs, 0) for _ in range(2)]  # (arrival, ready)
         # (the z-ready words: a row tile's, 16 B apart, on every port core)
         self.zrw = ttnn.from_torch(
             torch.zeros(len(pc), 4 * self.RT, dtype=torch.int32),
@@ -471,7 +472,7 @@ class TailA2A:
         p = self._pos(coord)
         virt = lambda c: mesh.worker_core_from_logical_core(c)  # noqa: E731
         node = lambda c: mesh.get_fabric_node_id(ttnn.MeshCoordinate(*c))  # noqa: E731
-        arr, rdy = (int(ttnn.get_global_semaphore_address(s)) for s in self.sems)
+        arr, rdy = (persist_l1.address(s) for s in self.sems)
         zr = int(self.zrw.buffer_address())
         prog = ttnn.ProgramDescriptor()
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731

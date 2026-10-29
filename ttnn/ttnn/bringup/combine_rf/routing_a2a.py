@@ -45,6 +45,7 @@ core 0): wait for N, then subtract N (counts stay right with the next call's ear
 import os
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 
 from .fabric_all_gather_py import allowed_cores
 from .sparse_all_gather_2d import DIRS, mesh_plan, place_ports
@@ -733,17 +734,17 @@ def routing_a2a_reserve(mesh_device, *, L=2, torus=(False, False), max_cores=16)
         [ttnn.CoreRange(ttnn.CoreCoord(*x), ttnn.CoreCoord(*x)) for x in sorted(cells)]
     )
     c0_ = crs(pcells[:1])
-    sems = [ttnn.create_global_semaphore(mesh_device, c0_, 0) for _ in range(2)]  # (arrivals, per call parity)
-    sems.append(ttnn.create_global_semaphore(mesh_device, crs(pcells), 0))  # (every planner core's call count)
-    sems.append(ttnn.create_global_semaphore(mesh_device, crs(port_cells), 0))  # (every port core's call count)
-    sems.append(ttnn.create_global_semaphore(mesh_device, crs(port_cells), 0))  # (port cores: "slices in")
+    sems = [persist_l1.semaphore(mesh_device, c0_, 0) for _ in range(2)]  # (arrivals, per call parity)
+    sems.append(persist_l1.semaphore(mesh_device, crs(pcells), 0))  # (every planner core's call count)
+    sems.append(persist_l1.semaphore(mesh_device, crs(port_cells), 0))  # (every port core's call count)
+    sems.append(persist_l1.semaphore(mesh_device, crs(port_cells), 0))  # (port cores: "slices in")
     return dict(
         chips=chips,
         wraps=wraps,
         port_core=port_core,
         pcells=pcells,
         sems=sems,
-        addrs=[int(ttnn.get_global_semaphore_address(x)) for x in sems],
+        addrs=[persist_l1.address(x) for x in sems],
         torus=torus,
         L=L,
     )

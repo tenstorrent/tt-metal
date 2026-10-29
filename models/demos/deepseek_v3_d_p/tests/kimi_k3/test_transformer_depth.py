@@ -100,9 +100,13 @@ def _device_params() -> dict:
     block's combine needs (2 x 3584 + 32 B: K3's own FABRIC_PAYLOAD_SIZE, 7168, is short of it)."""
     import os
 
-    params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE}
+    # (K3_L1_SMALL: room for the MoE block's persistent words with PERSIST_L1=small - combine_rf/persist_l1.py)
+    l1s = int(os.environ.get("K3_L1_SMALL", KimiK3Config.L1_SMALL_SIZE))
+    params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": l1s}
     if os.environ.get("K3_FABRIC") == "torus_xy":
         params["fabric_config"] = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    if os.environ.get("K3_PERF_TRACE") == "1":  # (test_prefill_perf's traced replays: the runtime's trace region)
+        params["trace_region_size"] = 256 * 1024 * 1024
     if os.environ.get("K3_MOE_IMPL") == "block":
         from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
         from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import fabric_payload

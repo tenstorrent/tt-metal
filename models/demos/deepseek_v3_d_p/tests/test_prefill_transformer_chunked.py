@@ -92,7 +92,8 @@ SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 # GLM rows only; the Kimi/Mistral rows keep their own device params. 1216 overflowed on the traced path
 # once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs. Keep in
 # sync with the glm_5_3 runner adapter.
-GLM_L1_SMALL_SIZE = 1536
+# (GLM_L1_SMALL: room for the MoE block's persistent words too, PERSIST_L1=small - combine_rf/persist_l1.py)
+GLM_L1_SMALL_SIZE = int(os.environ.get("GLM_L1_SMALL", "1536"))
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 
@@ -2234,8 +2235,11 @@ def run_chunked_transformer_updated(
 
         trace_controller = SubDeviceTraceController(mesh_device)
         transformer.set_trace_controller(trace_controller)
-        _fwd_meta()  # warm/compile the metadata-variant programs before recording
-        ttnn.synchronize_device(mesh_device)
+        # warm/compile the metadata-variant programs before recording (PREFILL_TRACE_WARMUPS=n: n passes - an MoE whose
+        # first pass also builds its layers / L1 places later programs at other addresses than the capture's)
+        for _ in range(int(os.environ.get("PREFILL_TRACE_WARMUPS", "1"))):
+            _fwd_meta()
+            ttnn.synchronize_device(mesh_device)
 
         trace_controller.begin_capture()
         _fwd_meta()
@@ -2876,7 +2880,8 @@ def _k3_device_params():
     extra = {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY} if os.environ.get("K3_FABRIC") == "torus_xy" else {}
     return fabric2d_device_params(
         fabric_payload_size=payload,
-        l1_small_size=KimiK3Config.L1_SMALL_SIZE,
+        # (K3_L1_SMALL: room for the MoE block's persistent words with PERSIST_L1=small - persist_l1.py)
+        l1_small_size=int(os.environ.get("K3_L1_SMALL", KimiK3Config.L1_SMALL_SIZE)),
         trace_region_size=256 * 1024 * 1024,
         **extra,
     )

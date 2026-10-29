@@ -26,6 +26,7 @@ import torch
 from ttnn.bringup.combine_rf.lin2d import column_split, glu_weight  # noqa: F401
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 
 NWS = int(__import__("os").environ.get("SE_NWS", "3"))  # (W slots; SE_NWS: A/B, <= 4 - the source words rotate over 4)
 XREADY, WV, WFREE = 0, 1, 1 + NWS  # (hand-written semaphores; the kernel_lib families' come after)
@@ -1987,7 +1988,7 @@ class SeEngine3:
                 device=mesh_device,
                 memory_config=ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.BufferType.L1,
+                    persist_l1.buffer_type(),
                     ttnn.ShardSpec(cores, (1, 64), ttnn.ShardOrientation.ROW_MAJOR),
                 ),
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -2526,7 +2527,7 @@ class SeEngine3:
         rs = self.rs
         k = rs.k(cx, cy)
         hs = rs.handoffs(p, cx, cy)
-        return [len(hs), mbox + 16 * k] + [v for _, d in hs for v in port(d, rs.link(k))]
+        return [len(hs), mbox + persist_l1.handoff_bytes() * k] + [v for _, d in hs for v in port(d, rs.link(k))]
 
     def la_rows(self, cy, b):
         """(first local row, rows) of core row cy's MT row tiles in owner block b (RB = CR / G row tiles a block)."""
@@ -2549,7 +2550,7 @@ class SeEngine3:
         dst = [b for b in range(self.shards) if b != p and self.la_rows(cy, b)[1]]
         if "NOA2A" in _probes():  # (timing / hang probe: no all-to-all)
             dst = []
-        return [len(dst), la["word"] + 16 * k] + [v for b in dst for v in port(self.la_dir(p, b), k % self.rs.nv)]
+        return [len(dst), la["word"] + persist_l1.handoff_bytes() * k] + [v for b in dst for v in port(self.la_dir(p, b), k % self.rs.nv)]
 
     def _la_ncrisc(self, p, la, cx, cy):
         if not self.LT:

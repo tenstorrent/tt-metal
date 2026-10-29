@@ -501,8 +501,13 @@ class MoEBlock(LightweightModule):
                 layer.tails[id(self.tail)] = self.tail.w
         if self.head_mode == "fused":
             self._warm_up_tail()
-            hole = _l1_hole(mesh_device, FusedHead.HOLE)
-            holes = [_l1_hole(mesh_device, FusedHead.HOLE_HEAD) for _ in range(2)]
+            # (PERSIST_L1=small: the kept words go to L1_SMALL - no holes, which settle_arena would otherwise fill
+            # with a filler kept in L1 below everything)
+            from ttnn.bringup.combine_rf import persist_l1
+
+            small = persist_l1.small()
+            hole = None if small else _l1_hole(mesh_device, FusedHead.HOLE)
+            holes = [] if small else [_l1_hole(mesh_device, FusedHead.HOLE_HEAD) for _ in range(2)]
             try:
                 self.fused = FusedHead(
                     mesh_device,
@@ -538,7 +543,8 @@ class MoEBlock(LightweightModule):
                 import gc
 
                 gc.collect()
-            ttnn.deallocate(hole)
+            if hole is not None:
+                ttnn.deallocate(hole)
             if self.fused is None:
                 self._head_ops_fallback(weights, dtypes, options)
         else:
@@ -565,6 +571,8 @@ class MoEBlock(LightweightModule):
         # model's layers and the prepared program is rebuilt every call, ~90 ms of host)
         if self.fused is not None:
             self.fused.head.persist = True
+            if self.tail is not None and getattr(self.tail, "a2a", None) is None:  # (its y / se: the persistent ones)
+                self.tail.eng.cache_addrs = True
 
     def _mark(self, name):
         if self.stage_hook is not None:
@@ -1007,6 +1015,35 @@ def _free_partial_l1(roots, tb):
     _free_device_tensors(roots, ("models.demos.moe_block.tt",), l1_only=True)
 
 
+def l1_tensors(roots, modules=("models.demos", "ttnn.bringup")):
+    """The allocated L1 device tensors reachable from roots (as _free_device_tensors walks them) -> [(path, tensor)]."""
+    seen, out, stack = set(), [], [(r, n) for r, n in roots if r is not None]
+    ours = lambda o: (getattr(o, "__module__", None) or "").startswith(modules)  # noqa: E731
+    while stack:
+        o, path = stack.pop()
+        if id(o) in seen:
+            continue
+        seen.add(id(o))
+        if isinstance(o, ttnn.Tensor):
+            if o.storage_type() == ttnn.StorageType.DEVICE and o.is_allocated():
+                if o.memory_config().buffer_type in (ttnn.BufferType.L1, ttnn.BufferType.L1_SMALL):
+                    out.append((path, o))
+        elif isinstance(o, (list, tuple, set)):
+            stack.extend((v, f"{path}[{i}]") for i, v in enumerate(o))
+        elif isinstance(o, dict):
+            stack.extend((v, f"{path}[{k!r}]") for k, v in o.items())
+        elif callable(o) and hasattr(o, "__code__") and ours(o):
+            for c in o.__closure__ or ():
+                try:
+                    stack.append((c.cell_contents, f"{path}<closure>"))
+                except ValueError:
+                    pass
+            stack.extend((v, f"{path}.{k}") for k, v in vars(o).items())
+        elif ours(type(o)) and hasattr(o, "__dict__"):
+            stack.extend((v, f"{path}.{k}") for k, v in vars(o).items())
+    return out
+
+
 def _free_device_tensors(roots, modules, l1_only):
     """Force-free the device tensors reachable from roots through objects (and closures) of the given modules."""
     seen, stack = set(), [r for r in roots if r is not None]
@@ -1018,7 +1055,7 @@ def _free_device_tensors(roots, modules, l1_only):
         seen.add(id(o))
         if isinstance(o, ttnn.Tensor):
             dev = o.storage_type() == ttnn.StorageType.DEVICE and o.is_allocated()
-            if dev and (not l1_only or o.memory_config().buffer_type == ttnn.BufferType.L1):
+            if dev and (not l1_only or o.memory_config().buffer_type in (ttnn.BufferType.L1, ttnn.BufferType.L1_SMALL)):
                 ttnn.deallocate(o, force=True)
         elif isinstance(o, (list, tuple, set)):
             stack.extend(o)

@@ -28,6 +28,7 @@ import os
 import torch
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 
 from .fabric_all_gather_py import NOC0, NOC1, _SEM_CACHE
 from .sparse_all_gather_2d import DIRS, OPP, mesh_plan, place_ports
@@ -727,7 +728,7 @@ def sparse_combine_l1_prepare(
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in all_cores])
     key = (id(mesh_device), tuple(all_cores), "combine_l1", area_bytes)
     if key not in _SEM_CACHE:
-        ready = ttnn.create_global_semaphore(mesh_device, core_set, 0)
+        ready = persist_l1.semaphore(mesh_device, core_set, 0)
         words = area_bytes // 4
         shard = ttnn.ShardSpec(core_set, [1, words], ttnn.ShardOrientation.ROW_MAJOR)
         area_t = ttnn.from_torch(
@@ -741,7 +742,7 @@ def sparse_combine_l1_prepare(
         ttnn.synchronize_device(mesh_device)
         _SEM_CACHE[key] = (mesh_device, ready, area_t)
     _, ready, area_t = _SEM_CACHE[key]
-    ready_addr = int(ttnn.get_global_semaphore_address(ready))
+    ready_addr = persist_l1.address(ready)
     area = int(area_t.buffer_address())
 
     # one table tensor per chip: the ports' injection lists then the accumulators' local lists ((y row, header) pairs)

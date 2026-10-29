@@ -14,6 +14,7 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,22 @@ def head_layouts(rows, G, *, grid_y=10, GX=11, num_links=2, router=True):
                 continue
             out.append((gy, CR // gy, nch))
     return out
+
+
+_ADDRS: dict = {}  # id(tensor) -> (tensor, its buffer address): long-lived io tensors' addresses, read once
+
+
+def _addr(t):
+    """t's buffer address, read once a tensor object (it holds t: an id is not reused while cached). Only for tensors
+    that keep their buffer for their lifetime - a new allocation is a new object, so it misses."""
+    hit = _ADDRS.get(id(t))
+    if hit is not None and hit[0] is t:
+        return hit[1]
+    a = int(t.buffer_address())
+    if len(_ADDRS) > 4096:
+        _ADDRS.clear()
+    _ADDRS[id(t)] = (t, a)
+    return a
 
 
 class HeadSE3:
@@ -341,7 +358,8 @@ class HeadSE3:
             # (SE / latent hand-offs, the router cores', the routing's forwards and their landed count, then the logits
             # ports' sub-block words: 16 B a (unit, core) - a port's units (the owners it sends to) x its link's router
             # cores, at least 16)
-            self.lw_off = (2 * GX * GY * 4 + 4 * 8 + 4 * 16 + 4 + 3) // 4 * 4
+            HS = persist_l1.handoff_bytes()  # (a hand-off word every HS bytes: 16, or 4 with PERSIST_L1=small)
+            self.lw_off = (2 * GX * GY * HS // 4 + 4 * 8 + 4 * 16 + 4 + 3) // 4 * 4
             nrc = rows // 32 // G * (2 if router is not None and router.split else 1)
             self.port_words = max(16, (G - 1) * -(-nrc // num_links))
             # (then, with chunks, the RS zone credits: a port's zone-free word (its chip's cores) and zone-credit word
@@ -355,14 +373,14 @@ class HeadSE3:
                 device=mesh_device,
                 memory_config=ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.BufferType.L1,
+                    persist_l1.buffer_type(),
                     ttnn.ShardSpec(crs, (1, words), ttnn.ShardOrientation.ROW_MAJOR),
                 ),
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
             # (arrivals fwd / bwd, the latent's; with chunks the ports' FINB-free credits)
             self.arr_sems = [
-                ttnn.create_global_semaphore(mesh_device, self.eng.crs, 0) for _ in range(4 if self.eng.NCH > 1 else 3)
+                persist_l1.semaphore(mesh_device, self.eng.crs, 0) for _ in range(4 if self.eng.NCH > 1 else 3)
             ]
             ttnn.synchronize_device(mesh_device)
         self.router = None
@@ -436,7 +454,7 @@ class HeadSE3:
                 rows_cap=rows_cap,
                 ycores=[watcher],
                 arena=(self.eng.base, self.eng.arena_bytes, off0),
-                flags=int(self.mbox.buffer_address()) + 16 * 2 * GX * GY + 128,
+                flags=int(self.mbox.buffer_address()) + persist_l1.handoff_bytes() * 2 * GX * GY + 128,
             )
             self.router.ra = self.routing
             if routing.prep:
@@ -709,8 +727,13 @@ class HeadSE3:
         layers = getattr(self, "layers", False)
         nr = 4 + len(self.outputs)
         wpos = {1} | (set(range(nr, nr + len(self.rw))) if self.router is not None else set())
+        keep = getattr(self, "persist", False)  # (the outputs reused across calls: their addresses can be cached)
+        # (the key's addresses: the arena's read each call - a new tensor every forward - the rest, long-lived, from
+        # their first read: buffer_address() on a mesh tensor costs ~20 us, ~17 of them a call were most of _run)
         skey = (self.eng.base, len(io)) + tuple(
-            0 if layers and i in wpos else int(t.buffer_address()) for i, t in enumerate(io) if i
+            0 if layers and i in wpos else (_addr(t) if keep and i != 3 else int(t.buffer_address()))
+            for i, t in enumerate(io)
+            if i
         )
         if self.state.get("pp") is not None and self.state.get("skey") == skey:
             ttnn.bringup.run_prepared(self.state["pp"], io)
@@ -736,7 +759,7 @@ class HeadSE3:
                     virt = self.mesh.worker_core_from_logical_core
                     pc = {(d, l): virt(c) for (_, d, l), c in self.xg.chips[coord]["ports"].items()}
                     mbox = int(self.mbox.buffer_address())
-                    arr = tuple(int(ttnn.get_global_semaphore_address(s_)) for s_ in self.arr_sems)
+                    arr = tuple(persist_l1.address(s_) for s_ in self.arr_sems)
                     zfree = mbox + 4 * self.zw_off
                     rsx = dict(
                         plan=self.plan,
@@ -754,7 +777,7 @@ class HeadSE3:
                     if self.latent:
                         # (fence: the latent's end-to-end "started" word - the old router words' slot, zeroed, free)
                         la = dict(
-                            word=mbox + 16 * e.GX * e.GY + 128, ctr=arr[2], out=self.lout, fence=mbox + 16 * e.GX * e.GY
+                            word=mbox + persist_l1.handoff_bytes() * e.GX * e.GY + 128, ctr=arr[2], out=self.lout, fence=mbox + persist_l1.handoff_bytes() * e.GX * e.GY
                         )
                     rse = dict(
                         rs_pos=p,

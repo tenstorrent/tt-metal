@@ -33,6 +33,7 @@ from ttnn.bringup.combine_rf.routing_a2a import (
 )
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 
 DIR_OF = {"fwd": 0, "bwd": 1}  # (the gather's TP directions on X+ / X-: checked against the chips' coordinates)
 
@@ -435,7 +436,7 @@ class RoutingStream:
             device=mesh_device,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
+                persist_l1.buffer_type(),
                 ttnn.ShardSpec(ycrs, (1, 16), ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -499,7 +500,7 @@ class RoutingStream:
         ports = sorted({(c.x, c.y) for ch in xg.chips.values() for c in ch["ports"].values()})
         senders = ports + [(c.x, c.y) for c in ycores]
         scs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in senders])
-        gs = lambda crs: ttnn.create_global_semaphore(mesh_device, crs, 0)  # noqa: E731
+        gs = lambda crs: persist_l1.semaphore(mesh_device, crs, 0)  # noqa: E731
         self.sems = dict(
             c0=gs(c0),
             c1=gs(c0),
@@ -517,7 +518,7 @@ class RoutingStream:
             ready=gs(scs),
             ready2=gs(scs),  # (the second Y direction's sender's: the planners count each sender apart)
         )
-        self.addr = {k: int(ttnn.get_global_semaphore_address(v)) for k, v in self.sems.items()}
+        self.addr = {k: persist_l1.address(v) for k, v in self.sems.items()}
 
     # ---- the plan of one chip ----
     def _first_hop(self, s, d):

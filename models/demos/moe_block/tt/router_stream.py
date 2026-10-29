@@ -23,6 +23,7 @@ import struct
 import torch
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 
 XR, WR, HOLD, ARRF, ARRB, BIAS, SC, FINC, PSYNC, BEST, BESTI, IDX = range(12)  # (BESTI unused)
 PART = 13  # (split: the partner's best K, half 0)
@@ -924,7 +925,7 @@ class RouterStream:
             device=mesh_device,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
+                persist_l1.buffer_type(),
                 ttnn.ShardSpec(
                     ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores]),
                     [1, 32],
@@ -936,8 +937,8 @@ class RouterStream:
         self.pbase, self.words = self.base, words
         self.port_words = port_words  # (the words a port has: its units x its link's router cores)
         # (arrivals / the engine's own-block tiles / the engine cores' "partials written", router core 0: the W gate)
-        self.sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3)]
-        self.arr = [int(ttnn.get_global_semaphore_address(s)) for s in self.sems]
+        self.sems = [persist_l1.semaphore(mesh_device, crs, 0) for _ in range(3)]
+        self.arr = [persist_l1.address(s) for s in self.sems]
         # (the arrivals: a word a source slot, 16 B apart, zero between calls - each re-armed by the router core that
         # saw it; arr[0] is their base)
         self.slot_words = ttnn.from_torch(
@@ -947,7 +948,7 @@ class RouterStream:
             device=mesh_device,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
+                persist_l1.buffer_type(),
                 ttnn.ShardSpec(crs, [1, 4 * max(1, G - 1)], ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),

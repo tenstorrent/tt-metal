@@ -34,6 +34,7 @@ import functools
 import torch
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 
 from .fabric_all_gather_py import (
     NOC0,
@@ -727,7 +728,7 @@ def ensure_semaphores(mesh_device, *, num_links=2, torus=(False, False)):
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cores])
         _SEM_CACHE[key] = (
             mesh_device,
-            tuple(ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(4)),
+            tuple(persist_l1.semaphore(mesh_device, crs, 0) for _ in range(4)),
             None,
         )
     return _SEM_CACHE[key][1]
@@ -920,8 +921,8 @@ def sparse_all_gather_2d(
         ttnn.synchronize_device(mesh_device)
         _SEM_CACHE[key] = (mesh_device, sems, man_t)
     _, sems, man_t = _SEM_CACHE[key]
-    cnt_addrs = [int(ttnn.get_global_semaphore_address(x)) for x in sems[:3]]
-    ready_addr = int(ttnn.get_global_semaphore_address(sems[3]))
+    cnt_addrs = [persist_l1.address(x) for x in sems[:3]]
+    ready_addr = persist_l1.address(sems[3])
     if manifest is not None:
         sh = manifest.memory_config().shard_spec
         assert int(sh.shape[1]) >= man_words and sh.grid == core_set, "manifest: manifest_spec(...) of this call"
@@ -1127,8 +1128,8 @@ def dispatch_phase(
     off1, off2, man_entries = manifest_layout(R, C, wrap_x, wrap_y, S)
     assert int(manifest.memory_config().shard_spec.shape[1]) >= man_entries * 4, "manifest: too small"
     ring_offs = off1 | off2 << 16
-    cnt_addrs = [int(ttnn.get_global_semaphore_address(x)) for x in sems[:3]]
-    ready_addr = int(ttnn.get_global_semaphore_address(sems[3]))
+    cnt_addrs = [persist_l1.address(x) for x in sems[:3]]
+    ready_addr = persist_l1.address(sems[3])
     man_addr, out_addr, plan_addr = (
         int(manifest.buffer_address()),
         int(output.buffer_address()),

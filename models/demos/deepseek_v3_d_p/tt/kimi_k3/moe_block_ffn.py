@@ -161,10 +161,11 @@ def glm_nonrouted(layer_idx: int, hf_config):
     names = [k for k in wm if k.startswith(p + "gate.") or k.startswith(p + "shared_experts.")]
     assert names, f"MOE_IMPL=block: no {p}gate / shared_experts keys in {ckpt}"
     t = load_tensors(ckpt, {k: k for k in names})
-    if hf_config is None or not hasattr(hf_config, "quantization_config"):
-        from transformers import AutoConfig
+    if hf_config is None or getattr(hf_config, "quantization_config", None) is None:
+        import types
 
-        hf_config = AutoConfig.from_pretrained(str(ckpt), trust_remote_code=True)
+        with (ckpt / "config.json").open(encoding="utf-8") as f:  # (only its quantization_config is read)
+            hf_config = types.SimpleNamespace(quantization_config=json.load(f).get("quantization_config"))
     t = dequantize_state_dict(t, hf_config, dtype=torch.float32)
     return t, p
 
@@ -289,6 +290,79 @@ def device_routing(rows, S, K):
     return torch.cat(ids), torch.cat(wts)
 
 
+class _L1Trace:
+    """Logs every L1 tensor allocated / freed through ttnn's Python entry points while open (K3_BLOCK_L1_TRACE=1): its
+    address, bytes a core and the caller - where the block's persistent L1 lands and which transient ones left holes
+    above it."""
+
+    def __init__(self):
+        import traceback
+
+        self.n = 0
+        self.saved = {}
+
+        def where():
+            for fr in reversed(traceback.extract_stack()[:-2]):
+                if ("models/demos" in fr.filename or "ttnn/bringup" in fr.filename) and "moe_block_ffn" not in fr.filename:
+                    return f"{Path(fr.filename).name}:{fr.lineno} {fr.name}"
+            return "?"
+
+        def per_core(t):
+            ss = t.memory_config().shard_spec
+            return ss.shape[0] * ss.shape[1] * t.element_size() if ss is not None else -1
+
+        def wrap_alloc(name):
+            fn = getattr(ttnn, name)
+            self.saved[name] = fn
+
+            def call(*a, **k):
+                t = fn(*a, **k)
+                try:
+                    if (
+                        isinstance(t, ttnn.Tensor)
+                        and t.storage_type() == ttnn.StorageType.DEVICE
+                        and t.memory_config().buffer_type == ttnn.BufferType.L1
+                    ):
+                        self.n += 1
+                        logger.info(f"K3_L1_TRACE +{self.n} @{int(t.buffer_address())} {per_core(t)} B {name} {where()}")
+                except Exception:  # noqa: BLE001 (a diagnostic)
+                    pass
+                return t
+
+            setattr(ttnn, name, call)
+
+        for name in ("allocate_tensor_on_device", "from_torch"):
+            wrap_alloc(name)
+        dealloc = ttnn.deallocate
+        self.saved["deallocate"] = dealloc
+
+        def free(t, *a, **k):
+            try:
+                if t.is_allocated() and t.memory_config().buffer_type == ttnn.BufferType.L1:
+                    logger.info(f"K3_L1_TRACE - @{int(t.buffer_address())} {per_core(t)} B {where()}")
+            except Exception:  # noqa: BLE001
+                pass
+            return dealloc(t, *a, **k)
+
+        ttnn.deallocate = free
+        gs = ttnn.create_global_semaphore
+        self.saved["create_global_semaphore"] = gs
+
+        def sem(*a, **k):
+            s_ = gs(*a, **k)
+            try:
+                logger.info(f"K3_L1_TRACE +sem @{int(ttnn.get_global_semaphore_address(s_))} {where()}")
+            except Exception:  # noqa: BLE001
+                pass
+            return s_
+
+        ttnn.create_global_semaphore = sem
+
+    def close(self):
+        for name, fn in self.saved.items():
+            setattr(ttnn, name, fn)
+
+
 class TtK3MoEBlockFfn:
     """One K3 MoE layer on the shared MoE block: __call__(ffn_norm's x [1, 1, S/SP, H/TP]) -> [1, 1, S/SP, H/TP]."""
 
@@ -307,6 +381,34 @@ class TtK3MoEBlockFfn:
         self.gather_check = self.device_layout and os.environ.get("K3_BLOCK_GATHER_CHECK") == "1"
         self.layer = None  # (weka / real_gate: this layer's MoELayer, the block switches between them)
 
+    def _l1_list(self, block, layer):
+        """The L1 tensors the block keeps between calls: where, how much a core (the top of L1 is what the model's
+        other programs' circular buffers need - a persistent L1 buffer there clashes with them)."""
+        from models.demos.moe_block.moe_block import l1_tensors
+
+        roots = [(block, "block"), (layer, "layer"), (_DONE, "_DONE"), (_POOL_EXPERTS, "_POOL_EXPERTS")]
+        rows = []
+        for path, t in l1_tensors(roots):
+            mc = t.memory_config()
+            ss = mc.shard_spec
+            if ss is not None:
+                cores = ss.grid.num_cores()
+                per_core = ss.shape[0] * ss.shape[1] * t.element_size()
+                where = f"{cores} cores {ss.grid}"
+            else:
+                cores = 0
+                per_core = -1
+                where = str(mc.memory_layout)
+            rows.append((int(t.buffer_address()), per_core, path, tuple(t.shape), str(t.dtype), where))
+        rows.sort(key=lambda r: r[0])
+        tot = sum(r[1] for r in rows if r[1] > 0)
+        logger.info(f"K3_BLOCK_L1 {len(rows)} persistent L1 tensors, {tot >> 10} KB a core summed (sharded ones):")
+        for a, b, path, shape, dt, where in rows:
+            logger.info(f"K3_BLOCK_L1   @{a} {b} B a core  {path}  {shape} {dt}  {where[:160]}")
+        if rows:
+            lo, hi = rows[0][0], max(a + max(b, 0) for a, b, *_ in rows)
+            logger.info(f"K3_BLOCK_L1 span: lowest @{lo}, highest end {hi} -> {(hi - lo) >> 10} KB from the lowest")
+
     def _l1_report(self, when):
         """The L1 the model holds when the block is built: free a core (to the lowest allocation), the allocator's view."""
         from models.demos.moe_block.tt.se_engine3 import ARENA_MAX, l1_free_bytes
@@ -317,6 +419,12 @@ class TtK3MoEBlockFfn:
             f"(ARENA_MAX {ARENA_MAX >> 10} KB); allocator: allocated {int(mv.total_bytes_allocated_per_bank) >> 10} KB, "
             f"free {int(mv.total_bytes_free_per_bank) >> 10} KB, largest free block "
             f"{int(mv.largest_contiguous_bytes_free_per_bank) >> 10} KB a bank"
+        )
+        ms = ttnn.get_memory_view(self.mesh, ttnn.BufferType.L1_SMALL)
+        logger.info(
+            f"K3 MoE block L1_SMALL {when}: allocated {int(ms.total_bytes_allocated_per_bank)} B, free "
+            f"{int(ms.total_bytes_free_per_bank)} B, largest free block {int(ms.largest_contiguous_bytes_free_per_bank)} B a "
+            f"bank"
         )
 
     def _weights(self):
@@ -469,9 +577,29 @@ class TtK3MoEBlockFfn:
             built = self._weights() if layer is None else layer
             logger.info(f"K3 MoE block: building for chunk {chunk} (first MoE layer {self.layer_idx}, {self.kind} weights)")
             self._l1_report("before the block")
-            block = MoEBlock(self.mesh, self.model, chunk, built, WeightCache(path=None, layer=0), num_links=LINKS)
+            trace = _L1Trace() if os.environ.get("K3_BLOCK_L1_TRACE") == "1" else None
+            try:
+                from models.demos.moe_block.moe_block import MoEOptions
+
+                opts = MoEOptions(head=os.environ.get("MOE_BLOCK_HEAD", "auto"))  # (MOE_BLOCK_HEAD=ops: the ops head)
+                block = MoEBlock(
+                    self.mesh, self.model, chunk, built, WeightCache(path=None, layer=0), options=opts, num_links=LINKS
+                )
+            finally:
+                if trace is not None:
+                    trace.close()
+            # (the exchange's own flat op - never launched when every layer brings its MoELayer - shares the layers'
+            # done words: its own was a second 2 KB of persistent L1 on that core, reserved on every core)
+            shared = _DONE.get(id(self.mesh))
+            xop = getattr(getattr(getattr(block, "exchange", None), "block", None), "op", None)
+            if layer is not None and shared is not None and shared[0] is self.mesh and xop is not None:
+                if getattr(xop, "done", None) is not None and xop.done is not shared[1]:
+                    ttnn.deallocate(xop.done)
+                    xop.done = shared[1]
             logger.info(f"K3 MoE block: {block.summary}")
             self._l1_report("after the block")
+            if os.environ.get("K3_BLOCK_L1_LIST") == "1":
+                self._l1_list(block, layer)
             hit = _BLOCKS[key] = (self.mesh, block, built)
         return hit[1], layer, self._weights()
 

@@ -31,6 +31,7 @@ import math
 import os
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 
 CB_CHUNKS = 0
 NOC0 = ttnn.NOC.RISCV_0_default  # routes +X, then +Y
@@ -1186,12 +1187,12 @@ def fabric_all_gather(
             cores = ttnn.CoreRangeSet(
                 [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(port_cores)]
             )
-            sems = tuple(ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(2))
+            sems = tuple(persist_l1.semaphore(mesh_device, cores, 0) for _ in range(2))
             # every chip's counters must be zero before any chip's first call can increment a neighbour's
             ttnn.synchronize_device(mesh_device, sub_device_ids=[subdevice_id] if subdevice_id is not None else [])
             _SEM_CACHE[key] = (mesh_device, sems)
         sems = _SEM_CACHE[key][1]
-    arrival_addr, ready_addr = (int(ttnn.get_global_semaphore_address(x)) for x in sems)
+    arrival_addr, ready_addr = (persist_l1.address(x) for x in sems)
     # (no merged op: the descriptor of the same buffers, semaphores and options is kept - ~1 ms of host per call)
     dkey = None
     if extra is None:
