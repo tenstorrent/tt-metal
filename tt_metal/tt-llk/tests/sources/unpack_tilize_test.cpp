@@ -30,6 +30,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+    const std::uint32_t num_faces = params.num_faces;
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t BLOCK_CT_DIM = params.BLOCK_CT_DIM;
     const std::uint32_t BLOCK_RT_DIM = params.BLOCK_RT_DIM;
@@ -37,12 +38,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     static constexpr bool is_perf = LOOP_FACTOR > 1;
     LLK_ASSERT(BLOCK_RT_DIM * BLOCK_CT_DIM == TILE_CNT, "BLOCK_RT_DIM * BLOCK_CT_DIM must be equal to TILE_CNT");
+    // num_faces 2 is 16x32, 4 is 32x32.
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
 
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
-        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */, num_faces);
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            tensor_shape,
+            tensor_shape);
+        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, tensor_shape);
         PROFILER_SYNC();
     }
 
@@ -61,8 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t tile_row_addr = is_perf ? L1_ADDRESS(PERF_INPUT_A + (i % 8) * 0x1000) : L1_ADDRESS(buffer_A[read_offset]);
                     for (std::uint32_t j = 0; j < BLOCK_CT_DIM; ++j)
                     {
-                        _llk_unpack_tilize_wrapper_(
-                            tile_row_addr, j, formats.unpack_A_src, formats.unpack_A_dst, block_ct_dim, FACE_R_DIM, num_faces, false /*narrow_tile*/);
+                        _llk_unpack_tilize_wrapper_(tile_row_addr, j, formats.unpack_A_src, formats.unpack_A_dst, block_ct_dim, tensor_shape);
                     }
                     read_offset += BLOCK_CT_DIM;
                 }
@@ -70,7 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-    _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, num_faces);
+    _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, tensor_shape);
 }
 
 #endif

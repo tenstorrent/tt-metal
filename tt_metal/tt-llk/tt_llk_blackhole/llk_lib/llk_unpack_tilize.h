@@ -15,6 +15,7 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
+#include "tensor_shape_coverage_unpack.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -63,21 +64,26 @@ inline void _llk_unpack_tilize_mop_config_(const bool unpack_to_dest = false)
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @param ct_dim: Number of column tiles in the block, used to size the column dimension.
- * @param face_r_dim: Rows per face, valid values = <2, 4, 8, 16>.
- * @param narrow_tile: Whether the tile is narrow (single column of faces). Not supported on the 8-bit path (asserted false).
- * @param num_faces: Number of faces in the tile, valid values = <2, 4>.
+ * @param tensor_shape: Tile geometry. Supported: 32x32, 16x32 and 1/2/4/8x32. Tiles one face wide
+ *        (32x16, 16x16) are not implemented (tt-llk#1281) and are asserted.
  * @note Call @ref _llk_unpack_tilize_uninit_ to restore the modified tile-descriptor state.
  * @ref _llk_unpack_tilize_ is the matching execute call.
  * @ref _llk_math_eltwise_unary_datacopy_init_ (A2D, PackMode::Tilize) is the matching init on the math thread.
  */
 inline void _llk_unpack_tilize_init_(
-    const std::uint32_t unpack_src_format = 0,
-    const std::uint32_t unpack_dst_format = 0,
-    const std::uint32_t ct_dim            = 0,
-    const std::uint32_t face_r_dim        = FACE_R_DIM,
-    const bool narrow_tile                = false,
-    const std::uint32_t num_faces         = 4)
+    const std::uint32_t unpack_src_format   = 0,
+    const std::uint32_t unpack_dst_format   = 0,
+    const std::uint32_t ct_dim              = 0,
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilize_init_", tensor_shape);
+    const std::uint32_t face_r_dim = tensor_shape.face_r_dim;
+    const std::uint32_t num_faces  = tensor_shape.total_num_faces();
+    const bool narrow_tile         = (tensor_shape.num_faces_c_dim == 1);
+    // One-face-wide tiles: 32x16 is not implemented (tt-llk#1281; the 8-bit path asserts on it below),
+    // and 16x16 has num_faces == 1, which the num_faces assert below already rejected on main.
+    LLK_ASSERT(tensor_shape.num_faces_c_dim == 2, "Blackhole tilize supports only 32-wide tiles");
+    LLK_ASSERT(face_r_dim == FACE_R_DIM || tensor_shape.num_faces_r_dim == 1, "tilize supports face_r_dim < 16 only on 1/2/4/8x32 tiles");
     LLK_ASSERT(face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be 1, 2, 4, 8, or 16 for tilize");
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
@@ -185,21 +191,20 @@ inline void _llk_unpack_tilize_init_(
  * @param tile_index: Column tile index selecting which tile to unpack.
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
- * @param face_r_dim: Rows per face.
- * @param num_faces: Number of faces in the tile, valid values = <2, 4>.
- * @param narrow_tile: Whether the tile is narrow (single column of faces). Not supported on the 8-bit path.
+ * @param tensor_shape: Tile geometry, the same as passed to @ref _llk_unpack_tilize_init_.
  * @note Call @ref _llk_unpack_tilize_init_ before this function, and
  *       @ref _llk_unpack_tilize_uninit_ after it to restore modified state.
  */
 inline void _llk_unpack_tilize_(
     const std::uint32_t base_address,
     const std::uint32_t tile_index,
-    std::uint32_t unpack_src_format                 = 0,
-    std::uint32_t unpack_dst_format                 = 0,
-    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces                   = 4,
-    const bool narrow_tile                          = false)
+    std::uint32_t unpack_src_format         = 0,
+    std::uint32_t unpack_dst_format         = 0,
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilize_", tensor_shape);
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+    const bool narrow_tile        = (tensor_shape.num_faces_c_dim == 1);
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
@@ -369,6 +374,7 @@ inline void _llk_unpack_tilize_(
  */
 inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilize_uninit_", tensor_shape);
     const std::uint32_t num_faces  = tensor_shape.total_num_faces();
     const std::uint32_t face_r_dim = tensor_shape.face_r_dim;
 
@@ -407,12 +413,14 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
  * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
  * @tparam zero_srcA: Clear SrcA to zero before unpacking.
  * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
- * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param tensor_shape: Operand A tile geometry; only checked, the replay buffer does not depend on it.
  */
 // TODO: add support for all the template parameters
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
-inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
+inline void _llk_unpack_tilizeA_B_mop_config_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_mop_config_", tensor_shape);
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const std::uint32_t replay_buf_run_len  = 6;
     const std::uint32_t replay_buf_half_len = replay_buf_run_len >> 1;
@@ -466,8 +474,9 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
  * @param unpack_src_format: Source data format of operand A in L1.
  * @param unpack_dst_format: Destination data format operand A is converted to.
  * @param ct_dim: Number of column tiles in the block, used to size the column stride.
- * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
- * @param unpB_face_r_dim: Rows per face for operand B.
+ * @param tensor_shape_a: Operand A tile geometry. Supported: 32x32, 16x32 and 1/2/4/8x32. Tiles one
+ *        face wide (32x16, 16x16) give wrong results and are asserted.
+ * @param tensor_shape_b: Operand B tile geometry; only its face_r_dim is used.
  * @note Call @ref _llk_unpack_tilizeA_B_uninit_ to revert the config it writes; it re-asserts the canonical SrcA Y stride.
  * @ref _llk_unpack_tilizeA_B_ is the matching execute call.
  */
@@ -476,10 +485,19 @@ inline void _llk_unpack_tilizeA_B_init_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
     const std::uint32_t ct_dim,
-    const std::uint32_t num_faces       = 4,
-    const std::uint32_t unpB_face_r_dim = FACE_R_DIM)
+    const ckernel::TensorShape tensor_shape_a = ckernel::DEFAULT_TENSOR_SHAPE,
+    const ckernel::TensorShape tensor_shape_b = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_init_", tensor_shape_a);
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_init_", tensor_shape_b);
+    const std::uint32_t num_faces       = tensor_shape_a.total_num_faces();
+    const std::uint32_t unpB_face_r_dim = tensor_shape_b.face_r_dim;
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    // The row stride, the tile offset and the face 1 address all assume a 32-wide operand A.
+    LLK_ASSERT(tensor_shape_a.num_faces_c_dim == 2, "Blackhole tilizeA_B supports only a 32-wide operand A");
+    LLK_ASSERT(
+        tensor_shape_a.face_r_dim == FACE_R_DIM || tensor_shape_a.num_faces_r_dim == 1,
+        "tilizeA_B supports operand A face_r_dim < 16 only on 1/2/4/8x32 tiles");
     // Sets the block_c_dim for unpack to use to increment the L1 address
     const std::uint32_t c_dim_size = SCALE_DATUM_SIZE(unpack_src_format, ct_dim * ((num_faces == 1) ? FACE_C_DIM : TILE_C_DIM)) >> 4;
 
@@ -501,7 +519,7 @@ inline void _llk_unpack_tilizeA_B_init_(
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(unpA_ch1_y_stride);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
-    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
+    _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(tensor_shape_a);
 }
 
 /**
@@ -516,25 +534,26 @@ inline void _llk_unpack_tilizeA_B_init_(
  * @tparam zero_srcA: Clear SrcA to zero before unpacking.
  * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
  * @param unpA_src_format: Source data format of operand A in L1.
- * @param face_r_dim: Rows per face.
  * @param base_address_a: L1 base address of operand A's tile buffer.
  * @param address_b: L1 address of operand B's face data.
  * @param tile_index_a: Column tile index into operand A.
  * @param block_ct_dim: Number of column tiles in the block, used to compute face strides.
- * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param tensor_shape_a: Operand A tile geometry, the same as passed to @ref _llk_unpack_tilizeA_B_init_.
  * @note Call @ref _llk_unpack_tilizeA_B_init_ with matching template args before this function, and
  *       @ref _llk_unpack_tilizeA_B_uninit_ after it to restore modified state.
  */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_(
     std::uint32_t unpA_src_format,
-    std::uint32_t face_r_dim,
     std::uint32_t base_address_a,
     std::uint32_t address_b,
     std::uint32_t tile_index_a,
     std::uint32_t block_ct_dim,
-    std::uint32_t num_faces = 4)
+    const ckernel::TensorShape tensor_shape_a = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_", tensor_shape_a);
+    const std::uint32_t face_r_dim = tensor_shape_a.face_r_dim;
+    const std::uint32_t num_faces  = tensor_shape_a.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const std::uint32_t offset_address_a = SCALE_DATUM_SIZE(unpA_src_format, tile_index_a) << 1;
     const std::uint32_t address_a        = base_address_a + offset_address_a;
@@ -614,10 +633,13 @@ inline void _llk_unpack_tilizeA_B_(
  * reprogrammed by the next operation's init, so they are not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
+ * @param tensor_shape: Operand A tile geometry; only checked, nothing restored here depends on it.
  * @note Call @ref _llk_unpack_tilizeA_B_init_ before this function.
  */
-inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
+inline void _llk_unpack_tilizeA_B_uninit_(
+    const std::uint32_t unpack_dst_format, [[maybe_unused]] const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_tilizeA_B_uninit_", tensor_shape);
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
 
     // _llk_unpack_tilizeA_B uses y-stride and updates y counter

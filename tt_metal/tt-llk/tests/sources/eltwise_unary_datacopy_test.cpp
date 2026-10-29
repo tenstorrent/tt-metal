@@ -67,7 +67,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 formats.unpack_B_dst,
                 ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
                 ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
-            _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */, num_faces);
+            _llk_unpack_tilize_init_wrapper_(
+                formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
         }
         PROFILER_SYNC();
     }
@@ -112,9 +113,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 formats.unpack_A_src,
                                 formats.unpack_A_dst,
                                 0 /* block_ct_dim */,
-                                FACE_R_DIM,
-                                num_faces,
-                                false /* narrow_tile */);
+                                ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
                         }
                     }
                 }
@@ -124,7 +123,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     if constexpr (tilize_en)
     {
-        _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, num_faces);
+        _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
     }
 }
 

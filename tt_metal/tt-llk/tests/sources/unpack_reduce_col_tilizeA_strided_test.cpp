@@ -62,7 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
         _llk_unpack_tilizeA_B_init_wrapper_<NEGINF_SRCA, RELOAD_B, ZERO_SRCA, ZERO_SRCA_REDUCE>(
-            formats.unpack_A_src, formats.unpack_A_dst, TILE_CNT, num_faces, tensor_shape.face_r_dim);
+            formats.unpack_A_src, formats.unpack_A_dst, TILE_CNT, tensor_shape);
         PROFILER_SYNC();
     }
     {
@@ -82,13 +82,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     _llk_unpack_tilizeA_B_wrapper_<NEGINF_SRCA, RELOAD_B, ZERO_SRCA, ZERO_SRCA_REDUCE>(
-                        formats.unpack_A_src, tensor_shape.face_r_dim, L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]), tile, TILE_CNT, num_faces);
+                        formats.unpack_A_src, L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]), tile, TILE_CNT, tensor_shape);
                 }
             }
         }
         PROFILER_SYNC();
     }
-    _llk_unpack_tilizeA_B_uninit_wrapper_(formats.unpack_A_dst, num_faces, tensor_shape.face_r_dim);
+    _llk_unpack_tilizeA_B_uninit_wrapper_(formats.unpack_A_dst, tensor_shape);
 }
 
 #endif
