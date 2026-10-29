@@ -11,6 +11,11 @@ User direction (2026-10-29): "you need to have different K value based on batch 
 * The verify is wired for REPLICATED caches only (`DsaSpecState`: `cache.partition` refused; served speculation runs
   the 128 K profile at 8 users per row = the 1 M positions the planner fits). The user-partitioned cache
   (`GLM53_PARTITION_USERS=1`, the serving default at 32 users per row and 1 M) has no verify path.
+* The sweep (`tests/test_mtp_spec.py -k spec_decode_lossless`, 45 layers, H1/H2 defaults): the acceptance plateaus at
+  ~2.5 drafts per step whatever K, so the shortest K wins (K=3: 24 tok/s per user at 2 per row; K=7: 23.9); at the
+  bound itself, K=15 with 2 users per row (B (K + 1) = 32) gives 15.4 tok/s per user AND breaks losslessness: one row's
+  two users diverge from plain greedy at token 4 with a 2.69 gap (2026-10-29 13:22, no near-tie). The default table
+  never selects it (2 per row -> K=3); the K-bound defect is an open spec issue, not a release path.
 * The plugin contract already allows a per-row draft count below the width: `propose_draft_tokens` returns
   `draft_token_ids [rows, K_max]` + `num_valid [rows]` (`model_runner.py`), and a row offering 0 takes the plain step.
 
