@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <optional>
 #include <stdexcept>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -253,6 +254,35 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaAliasedDFBsRejectDefaultAllocation) {
         [&] { MakeProgramFromSpec(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("inconsistent allocation_override arena parameters")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaAliasedDFBsRejectClearedOverrideOnOneMember) {
+    // An alias group is rejected when one member keeps an arena override and another member's override was cleared.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    ProgramSpec spec = MakeArenaAliasSpecForTest();
+    spec.advanced_options.sram_arena_parameters.resize(1);
+    const SRAMArenaAllocation allocation{.arena = SRAMArenaParamName{"first_arena"}};
+    spec.dataflow_buffers[0].advanced_options.allocation_override = allocation;
+    spec.dataflow_buffers[1].advanced_options.allocation_override = allocation;
+    spec.dataflow_buffers[1].advanced_options.allocation_override = std::nullopt;
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("inconsistent allocation_override arena parameters")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBsWithClearedArenaOverridesUseDefaultAllocation) {
+    // Aliased DFBs whose different arena overrides were cleared build as a default-allocated alias group.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    ProgramSpec spec = MakeArenaAliasSpecForTest();
+    spec.advanced_options.sram_arena_parameters.clear();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}, .offset = 0};
+    spec.dataflow_buffers[1].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"second_arena"}, .offset = 4096};
+    spec.dataflow_buffers[0].advanced_options.allocation_override = std::nullopt;
+    spec.dataflow_buffers[1].advanced_options.allocation_override = std::nullopt;
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
 }
 
 }  // namespace

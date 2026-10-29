@@ -6,6 +6,7 @@
 // These expect working arena allocation placement; unsupported construction is a test failure.
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -13,6 +14,7 @@
 #include <initializer_list>
 #include <numeric>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <variant>
@@ -1174,6 +1176,31 @@ TEST_F(SRAMArenaLockstep, SharedByScratchpadAndDFB) {
         cq,
         report,
         {{.scratchpad = base + scratch_offset, .dfb_write = base + dfb_offset, .dfb_read = base + dfb_offset}});
+}
+
+// Test-only spec: a minimal kernel on node (0, 0) whose scratchpad "pad" is allocated from SRAMArenaParameter "arena".
+ProgramSpec ArenaScratchpadOnMinimalKernelSpec() {
+    ProgramSpec spec;
+    spec.name = "SRAMArenaUnboundScratchpad";
+    spec.kernels = {MakeMinimalGen1DMKernel("writer")};
+    spec.kernels[0].scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
+    spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 1024}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 4096}}};
+    spec.work_units = {MakeMinimalWorkUnit("work", NodeCoord{0, 0}, {"writer"})};
+    return spec;
+}
+
+TEST_F(SRAMArenaLockstep, EnqueueRejectsUnboundScratchpad) {
+    // Fast-dispatch enqueue rejects a program whose arena scratchpad never received an SRAMArena argument.
+    Program program = MakeProgramFromSpec(*mesh_device, ArenaScratchpadOnMinimalKernelSpec());
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    EXPECT_THAT(
+        [&] { distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no bound SRAMArena")));
 }
 
 }  // namespace

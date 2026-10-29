@@ -105,5 +105,17 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterEmptyRangeLockstepNodes) {
             "SRAMArenaParameter 'arena' has empty banks_to_be_allocated_on; at least one node is required.")));
 }
 
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterZeroSizeUsedByScratchpad) {
+    // A zero-size arena that a scratchpad allocates from is reported as a zero-size arena.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeProgramSpecWithArenaScratchpadForTest();
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 0}}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "SRAMArenaParameter 'arena' has per_bank_size = 0; per_bank_size must be greater than zero.")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental
