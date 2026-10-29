@@ -810,3 +810,7 @@ NEXT (owner order 22:00): merge origin/dnijemcevic/model_bringup_bfp4kv @ 969787
   state.json; workaround: gate + commit by hand).
 - NEXT: orchestrator --until P.5: FIX.9 (shared expert x/h bfp8, placed, attempt 3) -> P.7 CKV_BFP4_PREPARED -> P.4 ->
   P.5 (perf picks stop for the overseer's A/B decision; clean wins accepted) -> index query fp4 (to queue).
+- 05:30 OWNER: a fresh 0k-512k profile on the current code after FIX.9 (tag CUR; posprof/series_cur.sh, ~65 min).
+  Orchestrator PAUSE requested (stops after FIX.9); tmux ds41-chain3 = /scratch/dnijemcevic/run_ds41_chain3.sh waits
+  for it, checks FIX.9 PASS, runs the profile, then resumes --until P.5 (P.7 -> P.4 -> P.5). Then publish the page
+  (update https://claude.ai/artifact/EeioFZEY2jHgdzPRYXbaxc or a new one) comparing ENG (22:10) and CUR.
