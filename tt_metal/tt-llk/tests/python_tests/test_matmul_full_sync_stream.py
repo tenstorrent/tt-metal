@@ -1,10 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat, is_dest_acc_needed
+from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
@@ -50,12 +48,7 @@ FULL_SYNC_STREAM_DIMENSIONS = [
     dimensions=FULL_SYNC_STREAM_DIMENSIONS,
 )
 def test_matmul_full_sync_stream(math_fidelity, formats, dimensions):
-    if is_dest_acc_needed(formats):
-        pytest.skip("Format combination needs a 32-bit DEST")
     input_A_dimensions, input_B_dimensions = dimensions
-    streamed_tiles = max(input_A_dimensions[0], input_B_dimensions[1]) // 32
-    if streamed_tiles > 8 and get_chip_architecture() == ChipArchitecture.BLACKHOLE:
-        pytest.xfail("https://github.com/tenstorrent/tt-metal/issues/59769")
 
     torch_format = format_dict[formats.output_format]
     spec = StimuliSpec.uniform(low=0.0, high=1.0)
