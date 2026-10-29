@@ -456,6 +456,9 @@ class TtDSAIndexer(LightweightModule):
         # crop width under the sealed program cache). The extra columns are causally invisible (-inf) to every query.
         self.prefix_bucket_pools = int(os.environ.get(PREFIX_BUCKET_ENV, "0")) // self.P
         self._const_cache: dict[tuple, ttnn.Tensor] = {}
+        self.scored_shapes: set[
+            tuple[int, int]
+        ] = set()  # every (sub-block rows, crop width) the scorer ran (the ladder's coverage)
         self.stage_timer = None  # TtDSA.set_stage_timer installs a StageTimer (test instrumentation)
 
     def _mark(self, name: str):
@@ -853,15 +856,13 @@ class TtDSAIndexer(LightweightModule):
             R = len(row_starts)
             op_start = max(s - r * T for r, s in enumerate(row_starts))
             bounded = R > 1
-            # every row's chunk start (op_start + r*T) must lie inside the scored width: cover the last row's end
-            kv_len = self._kv_len(cache, max(num_pools_valid, (op_start + R * T) // self.P))
+            kv_len = self.scored_width(cache, T=T, row_starts=row_starts, num_pools_valid=num_pools_valid)
         else:
             op_start = query_start + self.row_offset_sim * T
             extra = 0 if q_rows_form else self._extra_rows()
             bounded = bool(extra)
-            kv_len = self._kv_len(cache, num_pools_valid, extra * T)
-        if self.prefix_bucket_pools:  # one scored width per prefix bucket (served: no program per chunk position)
-            kv_len = min(cache.pools_per_user, -(-kv_len // self.prefix_bucket_pools) * self.prefix_bucket_pools)
+            kv_len = self._bucket_width(cache, self._kv_len(cache, num_pools_valid, extra * T))
+        self.scored_shapes.add((T, kv_len))
         if q_rows_form:
             scores_rm = self._score_prefill_rows(q, w, cache, user, positions=positions, kv_len=kv_len)
             self._mark("index_score")
@@ -987,6 +988,24 @@ class TtDSAIndexer(LightweightModule):
         """The largest chunk-start offset of a mesh row in query rows (rows - 1 on a multi-row mesh; the emulated
         row on one chip)."""
         return max(self._mesh_rows - 1, self.row_offset_sim)
+
+    def _bucket_width(self, cache: TtIndexCache, kv_len: int) -> int:
+        """One scored width per prefix bucket (served: no program per chunk position), capped at the allocation."""
+        if self.prefix_bucket_pools:
+            kv_len = min(cache.pools_per_user, -(-kv_len // self.prefix_bucket_pools) * self.prefix_bucket_pools)
+        return kv_len
+
+    def scored_width(self, cache: TtIndexCache, *, T: int, row_starts: tuple[int, ...], num_pools_valid: int) -> int:
+        """The scorer's crop width in pools for a multi-row sub-block of ``T`` queries whose mesh rows start at
+        ``row_starts`` (the slab-local / wave form): the op's superset start ``max_r(start_r - r*T)`` (so every row's
+        chunk start ``op_start + r*T`` lies inside the width), the last row's end, the spare tile and the prefix
+        bucket. The sealed program cache keys the crop on ``(T, width)``, so the wave ladder covers every width a
+        wave can reach through this function (``_warmup_waves``: the block profile's 256-pool bucket is smaller than
+        the superset slack R*T/P and a member continued at a grid start between bucket multiples reached a width the
+        bucket-multiple starts never did, 2026-10-29 block case (f))."""
+        R = len(row_starts)
+        op_start = max(s - r * T for r, s in enumerate(row_starts))
+        return self._bucket_width(cache, self._kv_len(cache, max(num_pools_valid, (op_start + R * T) // self.P)))
 
     def _kv_len(self, cache: TtIndexCache, num_pools_valid: int, extra_tokens: int = 0) -> int:
         """The scored width in pools: one spare tile beyond the valid pools (the op requires the (32-aligned) chunk

@@ -128,8 +128,10 @@ from models.demos.glm53_flash.tt.vllm_config import (
     DEFAULT_DEVICE_PREFILL_CHUNK,
     DEFAULT_VISION_BATCH_PATCHES,
     DEFAULT_WAVE_ROWS,
+    DENSE_PREFILL_ROWS,
     PREFIX_BUCKET_ENV,
     TILE,
+    WAVE_CHUNK_UNIT,
     DecodeRowMap,
     LogicalBlockTable,
     PrefillPlan,
@@ -1415,12 +1417,49 @@ class GLM53FlashForCausalLM:
             self.model.rewind_user(u0, 0)
             self.model.prefill_wave(call)
             n_calls += 1
+        # every scorer-crop width a wave can reach: the sealed cache keys the crop on (sub-block rows, width), the width
+        # follows the superset start max_r(start_r - r*T) rounded to the prefix bucket (``TtDSAIndexer.scored_width``),
+        # and a member continued at a grid start between two bucket multiples reaches widths the starts above never
+        # do when the bucket is smaller than the superset slack R*T/P (the block profile's 256-pool bucket: case (f),
+        # 2026-10-29; the served buckets of >= 16384 tokens are not); per tail one lone row-0 wave per width still
+        # unscored, at the first grid start that reaches it
+        n_exact = 0
+        dsa = next((d for d in getattr(self.model, "layers", []) if not d.is_kda and d.cache is not None), None)
+        attn = getattr(getattr(dsa, "layer", None), "attn", None) if dsa is not None else None
+        if attn is not None and getattr(attn, "indexer", None) is not None:
+            from models.demos.glm53_flash.tt.dsa import prefill_blocks, sparse_block_plan
+
+            idx, index, P = attn.indexer, dsa.cache.index, attn.indexer.P
+            dense_rows = int(getattr(attn, "sparse_row_start", DENSE_PREFILL_ROWS))
+            qb, ab = prefill_blocks(g.max_seq_len)
+            for n in tails:
+                subs = [(q0, q1) for _, _, ss in sparse_block_plan(0, n, qb, ab) for q0, q1 in ss]
+                reach: dict[tuple[int, int], int] = {}  # (sub-block rows, width) -> the first grid start reaching it
+                for s in range(0, g.max_seq_len - n + 1, WAVE_CHUNK_UNIT):
+                    if s + n <= dense_rows:
+                        continue  # all-dense: no scorer
+                    for q0, q1 in subs:
+                        rs = tuple(s + q0 if r == 0 else q0 for r in range(g.rows))
+                        key = (q1 - q0, idx.scored_width(index, T=q1 - q0, row_starts=rs, num_pools_valid=(s + n) // P))
+                        reach.setdefault(key, s)
+                for key, s in sorted(reach.items(), key=lambda kv: kv[1]):
+                    if key in idx.scored_shapes:
+                        continue
+                    dummy = torch.arange(n, dtype=torch.long) % 1000 + 1000
+                    members = (WaveMember(logical=0, row=0, user=u0, start=s, end=s + n),)
+                    call = WaveCall(rows=g.rows, t_pad=n, members=members, user=u0)
+                    call.ids[0] = dummy.clone()
+                    self.model.rewind_user(u0, s)
+                    self.model.prefill_wave(call)
+                    n_calls += 1
+                    n_exact += 1
         for u in slots:
             self.model.rewind_user(u, 0)
         self._sync()
         logger.info(
             f"GLM53 vLLM: eager wave warm-up ({n_calls} waves x {g.rows} rows: per-row buckets {tails} at starts "
-            f"{starts} into {len(slots)} slot(s), each bucket once ragged) in {time.perf_counter() - t0:.1f} s"
+            f"{starts} into {len(slots)} slot(s), each bucket once ragged, {n_exact} lone wave(s) for the scorer widths "
+            f"the starts missed) in {time.perf_counter() - t0:.1f} s"
         )
 
     def _warmup_slots(self, B: int) -> list[int]:
