@@ -32,6 +32,63 @@ TRACE_BATCHES = (1, 2, 4, 8, 16, 32)
 TRACED_P = 64
 
 
+_NORM_DIM = 2048
+_NORM_GRID_X = 8
+_NORM_MAX_ROWS = 512
+_norm_configs = {}
+
+
+def _norm_config(rows):
+    cfg = _norm_configs.get(rows)
+    if cfg is None:
+        m_tiles = rows // 32
+        gy = max(d for d in range(1, 9) if m_tiles % d == 0)
+        block_h = m_tiles // gy
+        mem = ttnn.create_sharded_memory_config(
+            [rows // gy, _NORM_DIM // _NORM_GRID_X],
+            core_grid=ttnn.CoreGrid(x=_NORM_GRID_X, y=gy),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        prog = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(_NORM_GRID_X, gy),
+            subblock_w=4,
+            block_h=block_h,
+            block_w=_NORM_DIM // 32 // _NORM_GRID_X,
+            inplace=False,
+        )
+        cfg = _norm_configs[rows] = (mem, prog)
+    return cfg
+
+
+def _rms_norm(norm, x):
+    """RMSNorm; block-sharded on an 8-wide grid for M <= 512 rows (the interleaved op uses one core per tile row)."""
+    rows = x.shape[-2]
+    if (
+        rows > _NORM_MAX_ROWS
+        or rows % 32 != 0
+        or x.shape[-1] != _NORM_DIM
+        or x.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+        or x.memory_config().buffer_type != ttnn.BufferType.DRAM
+    ):
+        return norm(x, mode=Mode.PREFILL, norm_config=None)
+    mem, prog = _norm_config(rows)
+    xs = ttnn.to_memory_config(x, mem)
+    y = ttnn.rms_norm(
+        xs,
+        epsilon=norm.eps,
+        weight=norm.weight,
+        program_config=prog,
+        memory_config=mem,
+        compute_kernel_config=norm.compute_kernel_config_hifi2,
+    )
+    ttnn.deallocate(xs)
+    out = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(y)
+    return out
+
+
 def plan_batches(lengths, max_batch=MAX_BATCH, max_tokens=MAX_BATCH_TOKENS) -> list[list[int]]:
     """Group prompt indices into forwards at the lowest estimated cost.
 
@@ -186,7 +243,7 @@ class StrandsDecider:
         x = ttnn.to_memory_config(model.embd(tok), ttnn.DRAM_MEMORY_CONFIG)
         for layer in model.layers:
             # The single-chip prefill branch of Qwen36DecoderLayer.forward, with the batch folded into rows.
-            attn_in = layer.attention_norm(x, mode=Mode.PREFILL, norm_config=None)
+            attn_in = _rms_norm(layer.attention_norm, x)
             attn_in = ttnn.reshape(attn_in, [B, S, dim])
             if layer.is_full_attention:
                 # Stateless: one fused q|k|v|gate projection, heads built straight to [B, H, S, D], plain causal
@@ -205,7 +262,7 @@ class StrandsDecider:
             h = ttnn.add(x, ttnn.reshape(attn_out, [1, B * S, dim]))
             ttnn.deallocate(attn_out)
             ttnn.deallocate(x)
-            ff_in = layer.ffn_norm(h, mode=Mode.PREFILL, norm_config=None)
+            ff_in = _rms_norm(layer.ffn_norm, h)
             ff_out = layer.feed_forward.forward(ff_in, mode="prefill")
             ttnn.deallocate(ff_in)
             x = ttnn.add(h, ff_out)
@@ -217,7 +274,7 @@ class StrandsDecider:
         rows = ttnn.matmul(sel_tt, ttnn.reshape(x, [B, S, dim]))
         ttnn.deallocate(x)
         rows = ttnn.to_memory_config(ttnn.reshape(rows, [1, B * P, dim]), ttnn.DRAM_MEMORY_CONFIG)
-        normed = model.norm(rows, mode=Mode.PREFILL)
+        normed = _rms_norm(model.norm, rows)
         if normed is not rows:
             ttnn.deallocate(rows)
         return normed
