@@ -6,7 +6,7 @@ How to add an entry: measure before and after on the same host and settings (4 c
 
 Conventions. `L` = `/mnt/tt-data/ssinghal/dsv4-logs`, `D` = `models/demos/blackhole/deepseek_v41_flash`. Source tags in the Details: **[log]** the number was read in the raw log named; **[doc]** the number is in a note of this directory and was not re-read in a raw log; **[commit]** the number is only in a commit message. Numbers are copied, not rounded. Where two sources disagree both are given. B is the batch (users), k the number of drafted tokens, "batch TTFT" the time until every user of the batch has its first token.
 
-Entry counts: server and scheduling 12, prefill 17, decode 6, speculative decoding 10, sampling 3, memory/DRAM and tracing 15, tt-opt 0 (section 8.1-8.10 are lever blocks, 8.7-8.10 are the B=8 levers), branches not merged 4, tried and not kept 17, known regressions 13. Items that are not accepted yet are not entries: they are listed in "Pending (not in this release yet)" with owner branch and status only. Paths starting with `tt/` or `tests/` are under `D`.
+Entry counts: server and scheduling 12, prefill 17, decode 6, speculative decoding 10, sampling 3, memory/DRAM and tracing 15, tt-opt 0 (section 8.1-8.12 are lever blocks, 8.7-8.12 are the B=8 levers), branches not merged 4, tried and not kept 17, known regressions 13. Items that are not accepted yet are not entries: they are listed in "Pending (not in this release yet)" with owner branch and status only. Paths starting with `tt/` or `tests/` are under `D`.
 
 ## 0. Combined release comparison (mixed, not isolated)
 
@@ -386,6 +386,28 @@ and OSL 4096: per user B=8 c8 vs B=4 c4 128 48.5 / 73.0, 1024 47.2 / 64.9, 8192 
 
 **Caveats.** Each server cell ran once; WARM burns one core at idle priority (it only runs when the round thread is not runnable, and is paused during prefill calls); the demo-loop and server numbers come from different harnesses and are not additive.
 
+## 8.11 Fused MoE tail v2 (`DSV41_MOE_TAIL_V2`)
+
+**What changed.** The fused MoE tail (D2, tilize + reduce of the routed output for T < 32) scatters the row segments into the face rows with L1 -> L1 NoC copies instead of RISC-V word loops, and the column mask uses `& (mesh_cols - 1)` instead of `%`. Design note: direct 32 B DRAM reads into the faces do not work on Blackhole (a 32 B read at 32 mod 64 returns the 64 B-aligned half), so the kernel keeps the staged 64 B read. Commit 8ceaba34a14 (`tt/moe_tail.py` and its kernel). Default off, on in the B=8 catalog env (coordinator's statement, not checked here). Restore: unset the switch.
+
+**Measured, per op** (commit message [commit], device 8, traced, us v1 -> v2): T=4 17.0 -> 11.3, T=6 23.1 -> 14.6, T=12 41.8 -> 24.9, T=16 53.3 -> 30.6, T=24 80.1 -> 45.9. Layer op tables (traced layer, `L/decode_fusion/opt/mtbase_T*_L*` vs `mtnew_T*_L*`, `compare_mt.py` [log]): L3 T=4 0.915 -> 0.909 ms, T=16 1.262 -> 1.239 ms, T=24 1.534 -> 1.501 ms; L2 T=4 0.987 -> 0.982 ms, T=16 1.344 -> 1.321 ms, T=24 1.615 -> 1.581 ms. In those tables the moe_tail op itself reads 19.6 -> 14.1 us (L3 T=4), 54.3 -> 31.7 (T=16), 82.1 -> 47.7 (T=24), 18.8 -> 13.3 / 54.3 -> 31.8 / 82.4 -> 48.1 (L2); the per-op figures of the commit and of the tables are different measurements.
+
+**Gates.** Op level: bit-identical to v1 including padding rows at T = 1..16, 24, 32 x 3 seeds, 54 of 54 [commit]. Decode gate (tt-opt, golden written by the flags-off tree, `L/decode_fusion/`): B=4 k=3 `gate_c3.log` and k=5 `gate_c5.log`, B=16 k=5 with moe_tail v2 + post-SDPA glue `gate_cc_B16.log`, B=8 k=5 (T=12) with both `gate_g_dc_B8.log`: streams PCC 1.000000, logits PCC 1.000000, accepted ids and drafts equal. An earlier B=8 run with both switches (`gate_cc_B8.log`, before the stock-exact fix of 8.12) failed; the repeat passes.
+
+**Caveats.** The gates ran at `TT_OPT_MAX_CTX=131072` (the spec policy caps 131584); layer op tables exist only at T=4 / 16 / 24 (the harness fails at T=6 and 12 on the baseline: `mtbase_T12_L2` FAIL in `opt/chain_mt.status`); no end-to-end latency A/B yet; the round saving is a sum of per-op deltas (below), not a measured round.
+
+## 8.12 Post-SDPA glue (`DSV41_ATTN_POSTFUSE`)
+
+**What changed.** In the paged attention path one `generic_op` (reads the row-major SDPA output, rotates dims 448..511, writes the [1, 1, 32, 4608] tile tensor for `wo_a`) replaces permute + tilize + `rope_inplace` + `to_memory_config` + `nlp_concat_heads_decode` + `to_memory_config`. Stock-exactness: `spec_attention._finish` rotates T > 8 with T % 8 != 0 (e.g. T=12, B=8 k=5) with an unfused `addcmul(multiply(x, c), x @ Pf, s)`, which runs in bf16 DEST with SFPU rounding ties away from zero; the glue reproduces that arithmetic for those T (p = x @ P exact, m = SFPU x * c, out = SFPU addcmul(m, p, s)) and keeps the fused x @ R sequence for T <= 8 and T % 8 == 0. Commits 25954256a18 (glue) and 8ba335d09fd (stock-exact rotation; eaf327b87a3 on `ssinghal/dsv4p1-fz-sdpa-post`). Default off, on in the B=8 catalog env (coordinator's statement). Restore: unset the switch.
+
+**Measured, per op** (commit messages [commit], us stock chain -> glue): T=4 13.0 -> 4.0, T=6 15.1 -> 4.1, T=12 79.3 -> 16.9 (the first commit measured 26.6 -> 5.6 against the fused chain, which is not what stock runs at T=12), T=16 25.3 -> about 6 (5.8 in the first commit), T=24 29.9 -> about 8 (7.9). The 43.5 us linear inside the T=12 stock chain, named by the coordinator, is not in the commit messages or in `post_*.log` (not found). Layer op tables at T=16 only (`L/decode_fusion/opt/pbase_T16_L*` vs `pnew_T16_L*` [log]): L3 1.2606 -> 1.1966 ms, L2 1.3435 -> 1.2790 ms.
+
+**Round saving of 8.11 + 8.12 (arithmetic from the per-op deltas times 40 layers, not measured):** T=12: (41.8 - 24.9) + (79.3 - 16.9) = 79.3 us per layer, 3.2 ms per round; T=24: (80.1 - 45.9) + (29.9 - 8.0) = 56.1 us, 2.2 ms per round (the coordinator's 2.25 ms).
+
+**Gates.** Op level: bit-identical to the real stock chain, rows, T = 1..16, 24, 32 x 3 seeds, 54 of 54 [commit]. Decode gates against the stock goldens (`L/decode_fusion/`, streams and logits PCC 1.000000, ids and drafts equal in each): B=4 k=3 `gate_pc3.log`, k=5 `gate_pc5.log` (first version); after the stock-exact fix, with `gold_moetail`: B=4 k=3 `gate_g_c_k3.log`, k=5 `gate_g_c_k5.log`; B=8 k=5 T=12 `gate_g_c_B8.log` (alone) and `gate_g_dc_B8.log` (with moe_tail v2); B=16 k=5 T=24 `gate_g_c_B16.log`.
+
+**Caveats.** Gates at `TT_OPT_MAX_CTX=131072` (policy caps 131584); layer tables only at T=16 for this lever (T=4 / 24 and T=6 / 12 not run or failing on the baseline harness); stock padding rows are stale DRAM, so padding rows are not compared (the 8.11 op test compares them, the glue's does not); no end-to-end latency A/B yet.
+
 ## 9. Branches not merged
 
 | # | Optimization | Metric | Before | After | Where |
@@ -436,12 +458,10 @@ Details. [commit] for all four; B1 measured on image `0.24.0-9bf06a9-84b529b` wi
 
 ## Pending (not in this release yet)
 
-How to update: after an item's gates pass, move it out of this list into an entry (a table row or a numbered block with measured numbers and the evidence location, as above) and set its switch on in the B=8 catalog env (branch `ssinghal/dsv4p1-b8-final-ttis`). Nothing in this list is an accepted optimization; numbers are given only where an evidence file exists. The server-side host-optimization flags of 8.10 (accepted, no longer Pending) are set ON in the B=8 catalog env on branch `ssinghal/dsv4p1-b8-final-ttis` except `DSV41_HOSTOPT_POST` (no effect in the server); this was stated by the coordinator and not checked against that branch here.
+How to update: after an item's gates pass, move it out of this list into an entry (a table row or a numbered block with measured numbers and the evidence location, as above) and set its switch on in the B=8 catalog env (branch `ssinghal/dsv4p1-b8-final-ttis`). Nothing in this list is an accepted optimization; numbers are given only where an evidence file exists. The server-side host-optimization flags of 8.10 and the switches of 8.11 and 8.12 (accepted, no longer Pending) are set ON in the B=8 catalog env on branch `ssinghal/dsv4p1-b8-final-ttis` except `DSV41_HOSTOPT_POST` (no effect in the server); this was stated by the coordinator and not checked against that branch here.
 
 | Item | Owner branch (commit) | Status |
 |---|---|---|
-| moe_tail v2 (`DSV41_MOE_TAIL_V2`) | `ssinghal/dsv4p1-fz-moetail` (b4c3edbbc16) | per-op numbers in the commit message; no PASS gate log in `L/decode_fusion/gate/` |
-| Post-SDPA glue (`DSV41_ATTN_POSTFUSE`) | `ssinghal/dsv4p1-fz-sdpa-post` (7fab4d88a7b) | per-op numbers in the commit message; no PASS gate log in `L/decode_fusion/gate/` |
 | mHC fused front up to T=24 (PRE24, `DSV41_MHC_PRE24`) | `ssinghal/dsv4p1-fz-mhc-t16` (be21b128edf) | B=4 decode gate PASSED at k=3 and k=5 (`L/decode_fusion/gate/g_pre16_B4_k3.log`, `g_pre16_B4_k5.log`); the B=8 gate chain is not complete: the base golden write `g_base_B8_k3` timed out (`chain.status`: FAIL); no end-to-end A/B |
 | mHC expand on valid rows only (`DSV41_MHC_EXPAND_VALID`) | `ssinghal/dsv4p1-fz-mhc-valid` (d6c186f4cbc) | B=4 decode gate PASSED at k=3 and k=5 (`g_valid_B4_k3.log`, `g_valid_B4_k5.log`); the B=8 gate and an end-to-end A/B are not done |
 | Key-export lean (`DSV41_KEY_EXPORT_LEAN`) | `ssinghal/dsv4p1-keyexport` (9d29ea96181) | code is on this branch default off; no measured result in the logs opened |
@@ -453,7 +473,7 @@ How to update: after an item's gates pass, move it out of this list into an entr
 | Dispatch layouts | `ssinghal/dsv4p1-fz-dispatch` (at 1dbe2b10562) | no result read |
 | Router fused2 (one-program router) | `ssinghal/dsv4p1-lever-router-r` (42f1903c377) | held back: the drop in acceptance is unexplained |
 
-Gate state of the decode-fusion branches on 2026-10-29: the tt-opt decode gate (`L/decode_fusion/gate/`) passed at B=4 for PRE24 and valid-row expand; the B=8 golden of the base tree did not complete, and the moe_tail v2 / post-SDPA gates have no log there. They stay here until the B=8 gate passes.
+Gate state of the decode-fusion branches on 2026-10-29: the tt-opt decode gate (`L/decode_fusion/gate/`) passed at B=4 for PRE24 and valid-row expand; the B=8 golden of the base tree did not complete. They stay here until the B=8 gate passes. (moe_tail v2 and the post-SDPA glue passed their gates and are entries 8.11 and 8.12.)
 
 ## Not entries (kept out on purpose)
 
