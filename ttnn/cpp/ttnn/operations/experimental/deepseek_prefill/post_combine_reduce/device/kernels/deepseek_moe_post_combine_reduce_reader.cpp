@@ -25,7 +25,9 @@ constexpr uint32_t ri_off = combine_accessor_args.next_compile_time_args_offset(
 constexpr bool row_indexed = get_compile_time_arg_val(ri_off) != 0;
 constexpr uint32_t skip_row = get_compile_time_arg_val(ri_off + 1);
 constexpr uint32_t row_index_aligned_page_size = get_compile_time_arg_val(ri_off + 2);
-constexpr auto row_index_accessor_args = TensorAccessorArgs<ri_off + 3>();
+// The table's row count: a row index at or past it is not read (a bad index must not read past the table).
+constexpr uint32_t table_rows = get_compile_time_arg_val(ri_off + 3);
+constexpr auto row_index_accessor_args = TensorAccessorArgs<ri_off + 4>();
 constexpr uint32_t cb_row_index_id = tt::CBIndex::c_5;
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
@@ -74,8 +76,9 @@ void kernel_main() {
                 if constexpr (row_indexed) {
                     expert_page_idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                         row_index_l1 + token_idx * row_index_aligned_page_size)[expert_idx];
+                    ASSERT(expert_page_idx == skip_row || expert_page_idx < table_rows);
                 }
-                if (!row_indexed || expert_page_idx != skip_row) {
+                if (!row_indexed || (expert_page_idx != skip_row && expert_page_idx < table_rows)) {
                     noc.async_read(
                         combine_addrg,
                         cb_combine_input,

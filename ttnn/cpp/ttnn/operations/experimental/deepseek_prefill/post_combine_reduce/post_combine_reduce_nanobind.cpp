@@ -67,8 +67,10 @@ void bind_post_combine_reduce(nb::module_& mod) {
                     [rows, emb_dim] ROW_MAJOR table and slot j of token t reads row combine_row_index[t, j]
                     (no gathered copy of the rows).
 
-                skip_row (int, optional): with combine_row_index, a row the kernel never reads: slots
-                    pointing at it must be ones the expert skip drops (their L1 slot keeps finite stale data).
+                skip_row (int, optional): with combine_row_index, a row the kernel never reads. Slots
+                    pointing at it must be ones the expert skip drops: weight 0 (no expert_dispatch_table) or a
+                    non-local expert in expert_dispatch_table (their L1 slot keeps finite stale data). A row
+                    index past the table's last row is not read either.
 
             Returns:
                 ttnn.Tensor: Reduced output in TILE_LAYOUT ready for reduce_scatter.

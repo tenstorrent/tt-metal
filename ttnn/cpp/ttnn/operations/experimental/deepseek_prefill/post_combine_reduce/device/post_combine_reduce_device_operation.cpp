@@ -43,6 +43,13 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_hit(
         TT_FATAL(expert_dispatch_table->is_allocated(), "expert_dispatch_table must have a buffer");
     }
 
+    if (tensor_args.combine_row_index.has_value()) {
+        // Checked on every call: the reader takes the index buffer's address as a runtime arg.
+        TT_FATAL(
+            tensor_args.combine_row_index->device() == combine_output.device(),
+            "combine_row_index must be on combine_output's device");
+    }
+
     const ttnn::Shape combine_shape = logical_combine_shape(tensor_args);
     const auto combine_rank = combine_shape.rank();
     TT_FATAL(
@@ -93,6 +100,12 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(combine_output.dtype() == DataType::BFLOAT16, "combine_output must be bfloat16");
     TT_FATAL(weights.layout() == ttnn::Layout::ROW_MAJOR, "weights must be ROW_MAJOR");
     TT_FATAL(weights.dtype() == DataType::BFLOAT16, "weights must be bfloat16");
+    if (weights.padded_shape().rank() + 1 == logical_combine_shape(tensor_args).rank()) {
+        // The writer reads one page per token and takes all of the token's weights from it.
+        TT_FATAL(
+            weights.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            "per-token weights must be interleaved (one page holds one token's weights)");
+    }
 
     if (indices.has_value()) {
         TT_FATAL(indices->layout() == ttnn::Layout::ROW_MAJOR, "indices must be ROW_MAJOR");
@@ -115,6 +128,10 @@ void PostCombineReduceDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             ri.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "combine_row_index must be interleaved");
+        // The reader reads row combine_row_index[t, j] as one whole page of the table.
+        TT_FATAL(
+            combine_output.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            "with combine_row_index, combine_output must be interleaved (one page per row)");
         TT_FATAL(
             combine_output.padded_shape().rank() == 2,
             "with combine_row_index, combine_output must be a [rows, emb_dim] table, got shape {}",
