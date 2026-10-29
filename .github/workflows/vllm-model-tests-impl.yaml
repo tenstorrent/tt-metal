@@ -281,7 +281,7 @@ jobs:
           start=$(date +%s)
           python3 -c 'import sys; from huggingface_hub import snapshot_download; print(snapshot_download(sys.argv[1], max_workers=16))' "$HF_MODEL"
           echo "Checkpoint ready in $(( $(date +%s) - start )) s"
-          du -sh "$HF_HUB_CACHE/models--${HF_MODEL//\//--}" || true
+          du -sh --apparent-size "$HF_HUB_CACHE/models--${HF_MODEL//\//--}" || true
 
       - name: 🚀 Run server
         timeout-minutes: 1
