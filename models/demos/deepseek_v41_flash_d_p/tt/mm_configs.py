@@ -92,6 +92,8 @@ def _largest_div(n: int, cap: int) -> int:
 
 # minimal_matmul blocking (tiles): the sweep's best within 1-2 % on every bf16-output projection of this run
 MIN_BLOCK_M, MIN_BLOCK_K, MIN_BLOCK_N = 4, 4, 8
+# at most this many row tiles: a wide-N bf16 projection on 1D multicast (P.9: the 160-row projections of ATTN_SP32_PROJ)
+SMALL_M_TILES = 8
 
 
 def rule(M: int, K: int, N: int, a_dt, w_dt, o_dt, fp32: bool, grid, batch: int = 1, l1_budget: int = L1_BUDGET):
@@ -101,6 +103,10 @@ def rule(M: int, K: int, N: int, a_dt, w_dt, o_dt, fp32: bool, grid, batch: int 
         family: each core loops the batches, fp32 partials) at the widest in0 block, 32 tiles of K included: auto
         picks in0_block_w 1 there (K-51); bit-identical to auto, 4.1x (P.24). Never MatmulMultiCoreReuseProgramConfig:
         its K-block partials lose fp32 (rel vs float64 9.5e-3..2.8e-2 vs auto's 4.4e-3, DS41-113);
+      - bf16 output, N wider than 4 tiles per grid column and at most SMALL_M_TILES row tiles (P.9, 8x4 with
+        ATTN_SP32_PROJ=on: wq_b 160 x 1280 x 32768, wo_b 160 x 8192 x 5120 with full bfp8 weights; the indexer wq_b):
+        1D multicast of in0 (every core all M rows, N split over the whole grid), in0 block 8 tiles of K: bit-identical
+        to auto, wq_b 0.234 -> 0.199 ms, wo_b 0.279 -> 0.158 (minimal_matmul 0.275 / 0.283; probe ds41_p9_mm);
       - bf16 output, N wider than 4 tiles per grid column (q_a, wq_b, wo_b, engram wkv, indexer wq_b): minimal_matmul
         (MIN_BLOCK_*, subblock 2 x 2): 3-4.5x faster than auto, output equal to auto or within 1e-5 rel (the last
         bf16 rounding), the same error vs float64. fp32 outputs never (minimal's fp32 output is further from float64:
@@ -113,6 +119,10 @@ def rule(M: int, K: int, N: int, a_dt, w_dt, o_dt, fp32: bool, grid, batch: int 
     if M % TILE or K % TILE or N % TILE:
         return None
     Mt, Kt, Nt = M // TILE, K // TILE, N // TILE
+    if batch == 1 and o_dt == ttnn.bfloat16 and Nt > 4 * grid.x and Mt <= SMALL_M_TILES:
+        pc = _mcast_1d(Mt, Kt, Nt, a_dt, w_dt, o_dt, fp32, grid, l1_budget)
+        if pc is not None:
+            return pc
     if batch == 1 and o_dt == ttnn.bfloat16 and Nt > 4 * grid.x and Mt >= MIN_BLOCK_M:
         kb = _largest_div(Kt, MIN_BLOCK_K)
         return (
@@ -158,6 +168,42 @@ def rule(M: int, K: int, N: int, a_dt, w_dt, o_dt, fp32: bool, grid, batch: int 
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=batch == 1,
+                ),
+            )
+    return None
+
+
+def _mcast_1d(Mt, Kt, Nt, a_dt, w_dt, o_dt, fp32, grid, l1_budget):
+    """1D multicast of in0 over the whole grid (per_core_M = Mt, N split over the cores), the widest in0 block of 8,
+    4, 2, 1 tiles of K whose CBs fit ``l1_budget``; None when nothing fits."""
+    a, b, o = TILE_BYTES.get(a_dt), TILE_BYTES.get(w_dt), TILE_BYTES.get(o_dt)
+    if None in (a, b, o):
+        return None
+    pn = -(-Nt // (grid.x * grid.y))
+    dst = 4 if fp32 else 8
+    sh, sw = max(
+        ((h, w) for h in range(1, Mt + 1) for w in range(1, pn + 1) if Mt % h == 0 and pn % w == 0 and h * w <= dst),
+        key=lambda t: (t[1], t[0]),
+    )
+    for bw in (8, 4, 2, 1):
+        if Kt % bw:
+            continue
+        interm = Mt * pn * 4096 if fp32 else 0
+        if 2 * Mt * bw * a + 2 * bw * pn * b + Mt * pn * o + interm <= l1_budget:
+            return (
+                "mm",
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=grid,
+                    in0_block_w=bw,
+                    out_subblock_h=sh,
+                    out_subblock_w=sw,
+                    out_block_h=Mt,
+                    out_block_w=pn,
+                    per_core_M=Mt,
+                    per_core_N=pn,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
                 ),
             )
     return None

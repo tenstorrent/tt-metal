@@ -1,0 +1,68 @@
+{
+ "used": [
+  {
+   "id": "DS41-112",
+   "how": "minimal_matmul was the rule's choice for bf16 wide-N projections; at M=160 with replicated weights it lost to 1D mcast (0.273 vs 0.199 ms wq_b), so mm_configs.rule takes 1D for Mt <= 8 ahead of the minimal entry",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-113",
+   "how": "the batched wo_a (8 groups x 160 rows) stays on the 2D fuse_batch=False family at bw32 (0.207 ms); MatmulMultiCoreReuseProgramConfig not tried",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-117",
+   "how": "the chip's 160 rows (mesh_partition of q_resid over TP) are WindowGeometry.query_offsets / the indexer's Sq block, so sparse_sdpa's index lists and the local top-k need no change",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-57",
+   "how": "after three one-card tt-probe runs the 8x4 open failed (SAT placement, no PGD grouping); a --mesh probe (whole-box reset) restored it before the measure was re-run",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "K-57's symptom list lacks this run's message: after a one-card probe the 8x4 open raised 'SAT placement: mesh M0 has no PGD grouping and no embeddable MGD fallback' (physical_grouping_descriptor_matching.cpp:3117)",
+  "all_to_all_async_generic's in_dim is the concatenated dim and out_dim the split one (added as DS41-138)",
+  "replicating attention weights makes the 160-row projections DRAM-bound, ~3x a call vs the column split; the SP=32 study's -20..-26 ms estimate left that out (measured -11 ms attention; added as DS41-139)",
+  "measure --part only knows the runs of the task's ab_mode: P.9 is quick, so 'measure --part test_ladder' printed 'no run matches' and only 'quick' exists"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or zero-filled: the replicated weights are the owner's option B (FLOPs a chip unchanged, 160 rows x full N instead of 640 x N/4). The kernel limit hit (all_to_all row padding 40 % 16) came from wrong dims, fixed by DS41-138, not worked around. The M=160 cost was tuned with a config (mm_configs 1D mcast), not by inflating work"
+  }
+ ],
+ "cited_only": [
+  "DS41-138",
+  "DS41-139"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.9",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-29T11:54:16",
+  "head": "7987b98645e",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.9.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.9_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.9_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.9.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py"
+  ]
+ }
+}

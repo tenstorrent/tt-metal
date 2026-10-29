@@ -3891,3 +3891,53 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   section and op calls on / off.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.8`; old path
   `DS41_INDEXER_TOPK_LOCAL=off`.
+
+## P.9 (galaxy 8x4, perf): ATTN_SP32_PROJ, the attention projections on the chip's own 160 rows (option B)
+
+- What: setting ATTN_SP32_PROJ (tt/settings.py, default on; off = the old path; takes effect with ROPE_IMPL=on). On,
+  `TtWindowAttention` (and `TtSparseAttention`, which inherits `_q` / `_out`) uploads wq_b, wo_a, wo_b replicated
+  (bfp8, `wdim`), sets h_l / g_l to all 64 heads / 8 groups, and per chunk: `mesh_partition(q_resid, dim 2, TP)` to the
+  chip's S/(SP TP) rows, then `_q_stock` (scale x bfp8 cast, wq_b, nlp_create_q_heads_split, rope_stock) gives
+  [1, 64, 160, 512] directly, so there is no head -> seq all_to_all. After sparse_sdpa: inverse rope_stock on the chip's rows, wo_a (8
+  groups), wo_b full writing bf16 (act_dtype) [1, 1, 160, 5120], then ONE `all_to_all_async_generic(in_dim=2,
+  out_dim=3)` over TP -> [1, 1, 640, 1280] (the residual layout). No seq -> head all_to_all, no wo_b reduce-scatter.
+  cos / sin: `_rope_rows` -> `RopeTable.rows(tp_split=True)` (memoized, the indexer's rows). The chip's rows are
+  `WindowGeometry.query_offsets` (chip c: rows [c q_rows, (c+1) q_rows) of its SP block), the rows sparse_sdpa's index
+  lists already use. Sizes come from mesh.shape; with TP == 1 neither the partition nor the all_to_all runs.
+- DS41-138: all_to_all_async_generic concatenates on in_dim and splits on out_dim (my first try, in 3 / out 2,
+  failed validation).
+- DS41-139: replicated weights make the 160-row matmuls DRAM-bound (4x the weight bytes a chip). tt/mm_configs.py
+  rule: new entry before minimal_matmul for bf16 output, wide N, Mt <= SMALL_M_TILES (8): 1D mcast of in0, in0 block 8
+  (`_mcast_1d`). Probe (one chip, 12x10 grid, HiFi2 fp32 DEST): wq_b 160x1280x32768 0.273 (minimal) -> 0.199
+  ms, wo_b 160x8192x5120 0.285 -> 0.158, bit-identical to auto (rel 0). The indexer wq_b 160x1280x4096 also takes it:
+  0.056 -> 0.058 ms (a wash; same bytes as auto). wo_a batched 8x160x4096x1024 stays on the rule's 2D fuse_batch=False
+  bw32: 0.207 ms (2D bw16 0.223, auto 0.696). Other boxes: 4x4 has 320 rows (Mt 10) and keeps minimal_matmul.
+- Accuracy (measure --task P.9, quick, on, final code): all 102 limits hold. L39 err 0.834 / 1.533 (P.8: 0.907),
+  min layer PCC 0.659 (P.8: 0.545), err_state max 0.206, tightest err_state_window_kv_L28 0.148 / 0.175 (0.85),
+  host_transfers_per_layer 0. The bf16 TP partial sum of wo_b is gone: wo_b sums all of K in fp32 DEST.
+  Component tests test_c_swa_attention / test_c_enc_source_attention fail on the 8x4 with both settings (on 0.0171 /
+  0.0604, off 0.0173 / 0.0603 vs limits 0.0033 / 0.0499): this change did not cause it; not in the P.9 gate.
+- Device (plain profile, chunk [51200, 56320), same code, DS41_ENGRAM_TABLE=resident): total 221.8 off -> 209.9 on ms,
+  attention 78.9 -> 67.7; other sections within 0.6 ms. Per layer (op profile L0 window / L2 compressed): 1.91 ->
+  1.60 / 2.05 -> 1.81 ms. Removed: 2 all_to_all at 0.24-0.31 ms + reduce-scatter 0.16. Added: one all_to_all 0.14,
+  matmuls 0.217 -> 0.555 ms a layer.
+- Op calls a chunk (op profile, all 40 layers): 2373 -> 2333 (attention 1126 -> 1086): -40 fabric_reduce_scatter,
+  -40 all_to_all, +40 mesh_partition; 80 minimal_matmul -> 80 linear. Programs 77472 -> 76192. The brief estimated ~85
+  fewer; the real count is 40 because the q_resid mesh_partition is a new op.
+- Collectives per layer (attention): off 3 fabric_all_gather + 2 all_to_all (10.5 MB each) + 1 fabric_reduce_scatter;
+  on 3 fabric_all_gather + 1 all_to_all (1.6 MB a chip). Per chunk 240 -> 160.
+- Host: the op profile's host_ms a chunk is 482.5 off -> 426.2 on (attention 219.8 -> 166.5). The fabric_reduce_scatter
+  cost 1.25 ms host a call. Warm wall (quick measure, on): 387.5 (spread 24.7), then 400.5 (spread 54.4) on the final
+  code; P.8's quick runs were 417.5 / 415.8. Gate unit test_profile (on): clean wall median 420.4 with host loadavg
+  23.7 during the run. The orchestrator's A/B gives the paired wall.
+- DRAM per chip (computed, bfp8 1088 B a 1024-value tile): full wq_b + wo_a + wo_b = 119.0 MiB a layer, before 29.75
+  (1/4) -> +89.25 MiB a layer, +3.49 GiB for 40 layers. It loaded and ran on the 8x4 (32 GB a chip). 4x4 / 2x4 add
+  the same; 2x2 adds half. Not checked against plan_memory.
+- Gotcha (K-57): `tt-probe.sh --device auto` probes reset their card on exit, and the next 8x4 open then failed with
+  "SAT placement: mesh 'M0' has no PGD grouping". A `--mesh` probe (whole-box reset) cleared it.
+- Next (not done): wo_a and wq_b are still at ~170-220 GB/s. A DRAM-sharded matmul would need sharded inputs or
+  outputs, which means more ops on the host-bound path.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.9`; old path
+  `DS41_ATTN_SP32_PROJ=off`. The matmul probe (one chip, `scripts/tt-probe.sh --device auto`, then a --mesh run per
+  K-57) was not kept, because it is outside this step's paths. It timed mm._run with mm.rule's config against auto over 40 calls
+  after a synchronize, on random bfp8 inputs.
