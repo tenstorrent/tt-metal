@@ -9160,3 +9160,105 @@ def test_ring_joint_attention_gemma4_global_segmented_accuracy():
         kv_mean_offset=1.0,
         rmse_threshold=0.05,
     )
+
+
+def test_ring_joint_sdpa_cache_hit_uses_new_semaphores():
+    """A program-cache hit must use the all-gather semaphores passed to that call (#62923).
+
+    The global semaphores are not part of the program hash, so a second call with fresh semaphores
+    hits the cache. Its override must re-point the fused all-gather at them. If it keeps the first
+    call's semaphores instead, it wipes whatever that slot holds by then; in H3 that was another
+    all-gather's in-flight increments, and that all-gather then waited forever.
+
+    Call 1 runs on set A. A sentinel then goes into A on every all-gather core; the reader waits with
+    >=, so a stale use of A cannot hang on it. Call 2 runs on set B and must not touch A.
+    """
+    sentinel = 0x5E5E
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, num_global_semaphores=3)
+    mesh_device = runtime.mesh_device
+    sem_a = runtime.ccl_semaphore_handles
+    try:
+        grid = mesh_device.compute_with_storage_grid_size()
+        all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        sem_b = create_global_semaphores(mesh_device, all_cores, 0, count=len(sem_a))
+        ag_cores = [ttnn.CoreCoord(x, y) for x in range(runtime.ccl_column, grid.x) for y in range(grid.y)]
+        coords = [ttnn.MeshCoordinate(r, c) for r in range(mesh_device.shape[0]) for c in range(mesh_device.shape[1])]
+        addrs_a = [ttnn.get_global_semaphore_address(s) for s in sem_a]
+
+        b, nh, d = 1, 4 * MESH_CONFIG.tp_size, 128
+        sq = 256 * MESH_CONFIG.sp_size
+        sp_dims = [None, None]
+        sp_dims[runtime.sp_axis] = 2
+        if MESH_CONFIG.tp_size > 1:
+            sp_dims[runtime.tp_axis] = 1
+        buf_dims = [None, None]
+        if MESH_CONFIG.tp_size > 1:
+            buf_dims[runtime.tp_axis] = 1
+
+        def to_mesh(t, dims):
+            return ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+            )
+
+        tt_q, tt_k, tt_v = (to_mesh(fa_rand(b, nh, sq, d), sp_dims) for _ in range(3))
+        p_buf_k = to_mesh(torch.zeros(b, nh, sq, d), buf_dims)
+        p_buf_v = to_mesh(torch.zeros(b, nh, sq, d), buf_dims)
+        fence_persistent_buffers(mesh_device)
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+
+        def run(sems):
+            call_sdpa(
+                tt_q,
+                tt_k,
+                tt_v,
+                sq,
+                is_causal=False,
+                is_balanced=False,
+                p_buf_k=p_buf_k,
+                p_buf_v=p_buf_v,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=sems,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=runtime.ccl_column,
+            )
+            ttnn.synchronize_device(mesh_device)
+
+        run(sem_a)
+        entries = mesh_device.num_program_cache_entries()
+        for addr in addrs_a:
+            for coord in coords:
+                for core in ag_cores:
+                    ttnn.experimental.reload.write_core_l1(mesh_device, core, addr, [sentinel], coord)
+
+        run(sem_b)
+        assert mesh_device.num_program_cache_entries() == entries, "second call must be a program-cache hit"
+
+        changed = {}
+        for addr in addrs_a:
+            for coord in coords:
+                for core in ag_cores:
+                    word = list(ttnn.experimental.reload.read_core_l1(mesh_device, core, addr, 4, coord))[0]
+                    if word != sentinel:
+                        changed[(hex(addr), coord[0], coord[1], core.x, core.y)] = word
+        for sem in sem_a:
+            ttnn.reset_global_semaphore_value(sem, 0)
+        assert not changed, (
+            f"cache hit reused the first call's all-gather semaphores: {len(changed)} slots changed, "
+            f"e.g. {sorted(changed.items())[:4]}"
+        )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
