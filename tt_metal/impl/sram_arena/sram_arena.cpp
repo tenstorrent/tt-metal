@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "experimental/sram_arena/sram_arena_properties.hpp"
+#include "impl/metal2_host_api/helpers.hpp"
 #include "impl/sram_arena/sram_arena_impl.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -35,7 +36,7 @@ bool SRAMArenaImpl::matches_properties(const SRAMArenaProperties& properties) co
     const auto& range = std::get<RangeLockstepSRAMArena>(layout);
     const auto* expected = std::get_if<RangeLockstepSRAMArenaProperties>(&properties);
     return expected != nullptr && range.config.per_bank_size == expected->per_bank_size &&
-           range.config.banks_to_be_allocated_on == expected->banks_to_be_allocated_on;
+           same_node_set(range.config.banks_to_be_allocated_on, expected->banks_to_be_allocated_on);
 }
 
 SRAMArena SRAMArena::allocate(distributed::MeshDevice& device, LockstepSRAMArenaProperties properties) {
