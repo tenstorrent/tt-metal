@@ -4808,11 +4808,13 @@ inline void _topk_large_indices_mark_neginf_indices_()
     }
 }
 
-// A K = 2048 segment's unfused result from tiles 0 to 3 to tiles 4 to 7, raw words; ADDR_MOD_0 steps two rows.
+// A segment's unfused result (values and indices, two sequences) to the tiles right after it, raw words: K = 2048
+// tiles 0 to 3 to 4 to 7, K = 512 tiles 0 and 1 to 2 and 3. ADDR_MOD_0 steps two rows.
+template <std::uint32_t K>
 inline void _topk_large_indices_move_segment_result_()
 {
     constexpr std::uint32_t rows_per_tile      = 64;
-    constexpr std::uint32_t result_tiles       = 4;
+    constexpr std::uint32_t result_tiles       = 2 * ((K + 1023) / 1024);
     constexpr std::uint32_t rows_per_access    = 2;
     constexpr std::uint32_t iterations         = result_tiles * rows_per_tile / rows_per_access;
     constexpr std::uint32_t destination_offset = result_tiles * rows_per_tile;

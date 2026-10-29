@@ -106,7 +106,7 @@ FORCE_INLINE void sfpu_row(uint32_t num_chunks, bool first_prefetched) {
     });
 }
 
-// UNPACK's share of one 32-chunk segment of a long K' 2048 row.
+// UNPACK's share of one 32-chunk segment of a long K' 512 / 2048 row.
 template <uint32_t K>
 FORCE_INLINE void feed_segment(CircularBuffer& input, uint32_t seg_chunks, uint32_t seg_tail) {
     // A segment is fed exactly like a row that neither inherits a prefetched first chunk nor leaves one.
@@ -399,9 +399,9 @@ FORCE_INLINE void reduce_split_row(
     }
 }
 
-// A K = 2048 row of more than 32 chunks, its segments split as above. A later segment's chunks cycle through all eight
-// Dst tiles and its result moves to tiles 4 to 7, so the unfused accumulator (tiles 0 to 3) waits in acc_cb's L1 until
-// its merge with the segment.
+// A K = 512 / 2048 row of more than 32 chunks, its segments split as above. A later segment's chunks cycle through the
+// Dst banks and its result moves to the tiles after the accumulator's (K 2048: 4 to 7, K 512: 2 and 3), so the unfused
+// accumulator waits in acc_cb's L1 until its merge with the segment.
 template <uint32_t K>
 FORCE_INLINE void reduce_split_segmented_row(
     CircularBuffer& input,
@@ -412,7 +412,7 @@ FORCE_INLINE void reduce_split_segmented_row(
     uint32_t tail_elements,
     bool final_ascending,
     bool emit_indices) {
-    static_assert(K == 2048, "the segmented body is K = 2048's");
+    static_assert(K == 512 || K == 2048, "the split segmented body is K = 512's and 2048's");
     constexpr uint32_t accumulator_tiles = 2 * tiles_per_sequence<K>;
     constexpr uint32_t accumulator_slot = 0;
     constexpr uint32_t segment_slot = accumulator_tiles;
@@ -584,7 +584,8 @@ void kernel_main() {
     // The physical width decides which split body a program needs, so only that one is built. A shorter
     // valid_length can still drop the row below a segment at runtime; the segmented body handles that as a
     // single segment, it just cannot prefetch, which is why prefetch is off for these programs.
-    constexpr bool split_segments = K == 2048 && body_mode == ComputeBodyMode::FusedSegmented && has_acc_cb;
+    constexpr bool split_segments =
+        (K == 512 || K == 2048) && body_mode == ComputeBodyMode::FusedSegmented && has_acc_cb;
     constexpr bool segmented_split = split_segments && long_rows;
     // Shorter rows run on one thread: the set-up costs more than the overlap saves.
     constexpr uint32_t min_split_chunks = K == 2048 ? 2 : 3;

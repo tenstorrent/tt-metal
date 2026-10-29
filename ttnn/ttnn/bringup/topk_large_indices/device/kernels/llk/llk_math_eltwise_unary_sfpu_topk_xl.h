@@ -282,12 +282,12 @@ inline void llk_math_eltwise_unary_sfpu_topk_large_indices_mark_neginf_indices_a
 
 template <std::uint32_t K>
 inline void llk_math_eltwise_unary_sfpu_topk_large_indices_move_segment_result_at_split() {
-    static_assert(K == 2048, "the segment-result move is hard-wired to K = 2048");
+    static_assert(K == 512 || K == 2048, "the segment-result move is K = 512's and 2048's");
     SAN_HOOK(unsupported());
     // Row offset 0: the accumulator always sits at the base of Dst. The routine also needs ADDR_MOD_0 left
     // at +2 rows, which the global init in split_indices sets.
     ckernel::sfpu::_topk_xl_split_begin_(0);
-    ckernel::sfpu::_topk_large_indices_move_segment_result_();
+    ckernel::sfpu::_topk_large_indices_move_segment_result_<K>();
     // Leave the Dst RWC where the next SFPU body expects it, as _topk_xl_separate_indices_* does.
     TTI_SETRWC(ckernel::p_setrwc::CLR_NONE, 0, 0, 0, 0, ckernel::p_setrwc::SET_D);
 }
