@@ -271,6 +271,10 @@ class TTResLayer:
         assert all(layer.whole_first_block is None for layer in layers[1:]), "only a run's first layer reads DRAM"
         if first.whole_first_block is not None:
             x = first.whole_first_block(x, subsample=first_subsample)
+        elif group_input is None and first.layer[0].stride == (1, 1):
+            # Unless the first block subsamples them, the groups go straight into its linears, which
+            # take TILE.
+            assert x.layout == ttnn.TILE_LAYOUT, f"an unstrided per-camera run takes a TILE input, got {x.layout}"
         rows = first.cameras * first.camera_rows
         # A group that starts inside a tile row makes the slice untilize, slice and tilize again, with
         # temporaries the size of the group; those go through DRAM, and one copy brings the group
@@ -370,13 +374,15 @@ class TTResLayer:
 
 
 def pool_rows(x):
-    """``x``, a TILE height-sharded L1 tensor, untilized in its shards for a max pool: given TILE
+    """``x``, a height-sharded L1 tensor, untilized in its shards for a max pool: given TILE
     rows, the pool's halo untilizes them itself and deadlocks on some shard sizes (small's layer2
     input, 58880 x 256 over the grid). ``x`` is freed and the rows move to the top of L1, which
     leaves the halo its room below them."""
-    rows = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(x)
-    return ttnn.reallocate(rows)
+    if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+        rows = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(x)
+        x = rows
+    return ttnn.reallocate(x)
 
 
 def _for_cameras(args, cameras):
@@ -561,15 +567,16 @@ class TTCameraBottleneck:
             if self.dcn.input_memory_config is None:
                 # Without a sharded input the DCN's offset conv reads conv1's output from DRAM.
                 staged = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(x)
             else:
                 # The DCN's circular buffers fill L1 from the bottom up to the lowest tensor in it,
-                # so its ROW_MAJOR input moves to the top of L1 once the TILE copies are freed.
+                # so its ROW_MAJOR input moves to the top of L1 once the TILE copies, x among them,
+                # are freed.
                 tiled = ttnn.to_memory_config(x, self.dcn.input_memory_config)
                 staged = ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT)
                 ttnn.deallocate(tiled)
                 ttnn.deallocate(x)
                 staged = ttnn.reallocate(staged)
-            ttnn.deallocate(x)
             # The group's output fits L1 next to the DCN's buffers, and the DCN writes it faster there.
             y, _, _ = self.dcn(staged, ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(staged)
@@ -788,7 +795,8 @@ class TTBottleneck:
             if subsample is None:
                 subsample = self.conv1.subsample(x_identity)
             x_identity = ttnn.to_layout(subsample, ttnn.TILE_LAYOUT)
-            ttnn.deallocate(subsample)
+            if subsample.layout != ttnn.TILE_LAYOUT:
+                ttnn.deallocate(subsample)
         x, _, _ = self.conv1(x_identity, subsampled=self.shared_subsample)
 
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -939,6 +947,7 @@ class TTResNet:
         # already tiled, and its (1, 1, N*H*W, 3) view is free as W is a tile multiple. Two
         # transposes, NHCW then NHWC, run in under half the time of the one permute.
         n, c, h, w = x.shape
+        assert x.layout == ttnn.ROW_MAJOR_LAYOUT, f"the images come ROW_MAJOR, got {x.layout}"
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         nhcw = ttnn.transpose(x, 1, 2)
         ttnn.deallocate(x)
