@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
+#include <map>
 #include <algorithm>
 #include <cstdlib>
 #include <optional>
@@ -1254,6 +1255,86 @@ TEST(RoutingTableValidation, TestSingleGalaxyTorusY) {
     EXPECT_EQ(intra_mesh_routing_table[0][se_fabric_id][ne_fabric_id], RoutingDirection::S);
     EXPECT_EQ(intra_mesh_routing_table[0][se_fabric_id][sw_fabric_id], RoutingDirection::W);
     EXPECT_EQ(intra_mesh_routing_table[0][se_fabric_id][se_fabric_id], RoutingDirection::C);
+}
+
+TEST(RoutingTableValidation, TestSingleGalaxyTorusXYTieBreakBalancesRings) {
+    using namespace single_galaxy_constants;
+    // A destination exactly halfway around a ring is reached N/E from an even source position on that axis and
+    // S/W from an odd one. Walk every route hop by hop: it must stay minimal and NS-then-EW, follow the tie rule,
+    // and uniform all-to-all traffic must load every link of the torus equally.
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto";
+    auto helper = make_routing_table_generator(mesh_graph_desc_path.string());
+    const auto& intra_mesh_routing_table = helper->routing_table_generator->get_intra_mesh_table();
+    const auto& intra_mesh_connectivity = helper->mesh_graph->get_intra_mesh_connectivity();
+
+    constexpr std::uint32_t num_rows = mesh_size / mesh_row_size;
+    const auto chip_at = [](std::uint32_t row, std::uint32_t col) { return (row * mesh_row_size) + col; };
+    const auto ring_distance = [](std::uint32_t from, std::uint32_t to, std::uint32_t ring_size) {
+        const std::uint32_t forward = (to + ring_size - from) % ring_size;
+        return std::min(forward, ring_size - forward);
+    };
+    const auto is_ew = [](RoutingDirection d) { return d == RoutingDirection::E || d == RoutingDirection::W; };
+
+    // Ties on the 8-chip NS ring and the 4-chip EW ring
+    EXPECT_EQ(intra_mesh_routing_table[0][chip_at(0, 0)][chip_at(4, 0)], RoutingDirection::N);
+    EXPECT_EQ(intra_mesh_routing_table[0][chip_at(1, 0)][chip_at(5, 0)], RoutingDirection::S);
+    EXPECT_EQ(intra_mesh_routing_table[0][chip_at(0, 0)][chip_at(0, 2)], RoutingDirection::E);
+    EXPECT_EQ(intra_mesh_routing_table[0][chip_at(0, 1)][chip_at(0, 3)], RoutingDirection::W);
+
+    std::map<std::pair<ChipId, RoutingDirection>, std::uint32_t> link_load;
+    for (ChipId src = 0; src < mesh_size; src++) {
+        for (ChipId dst = 0; dst < mesh_size; dst++) {
+            if (src == dst) {
+                continue;
+            }
+            const std::uint32_t src_row = src / mesh_row_size, src_col = src % mesh_row_size;
+            const std::uint32_t dst_row = dst / mesh_row_size, dst_col = dst % mesh_row_size;
+            const std::uint32_t ns_distance = ring_distance(src_row, dst_row, num_rows);
+            const std::uint32_t ew_distance = ring_distance(src_col, dst_col, mesh_row_size);
+
+            std::uint32_t hops = 0;
+            std::optional<RoutingDirection> ns_direction, ew_direction;
+            ChipId curr = src;
+            while (curr != dst && hops < ns_distance + ew_distance) {
+                const auto direction = intra_mesh_routing_table[0][curr][dst];
+                if (is_ew(direction)) {
+                    ew_direction = ew_direction.value_or(direction);
+                } else {
+                    ASSERT_FALSE(ew_direction.has_value()) << "NS hop after EW hop on " << src << " -> " << dst;
+                    ns_direction = ns_direction.value_or(direction);
+                }
+                link_load[{curr, direction}]++;
+                const auto& neighbors = intra_mesh_connectivity[0][curr];
+                const auto next = std::find_if(neighbors.begin(), neighbors.end(), [&](const auto& neighbor) {
+                    return neighbor.second.port_direction == direction;
+                });
+                ASSERT_NE(next, neighbors.end())
+                    << "No " << enchantum::to_string(direction) << " neighbor of chip " << curr;
+                curr = next->first;
+                hops++;
+            }
+            ASSERT_EQ(curr, dst) << "Route " << src << " -> " << dst << " is not minimal";
+
+            if (ns_distance == num_rows / 2) {
+                EXPECT_EQ(ns_direction, src_row % 2 == 0 ? RoutingDirection::N : RoutingDirection::S)
+                    << src << " -> " << dst;
+            }
+            if (ew_distance == mesh_row_size / 2) {
+                EXPECT_EQ(ew_direction, src_col % 2 == 0 ? RoutingDirection::E : RoutingDirection::W)
+                    << src << " -> " << dst;
+            }
+        }
+    }
+
+    // An NS link carries the 1D 8-ring load (8) for each of the 4 destination columns, and an EW link the 1D 4-ring
+    // load (2) for each of the 8 source rows. With every tie sent N/E these were 40 vs 24 and 24 vs 8.
+    EXPECT_EQ(link_load.size(), mesh_size * 4);
+    for (const auto& [link, load] : link_load) {
+        EXPECT_EQ(load, is_ew(link.second) ? num_rows * 2 : mesh_row_size * 8)
+            << "chip " << link.first << " " << enchantum::to_string(link.second);
+    }
 }
 
 TEST(MeshGraphValidation, TestDualGalaxyMeshGraph) {
