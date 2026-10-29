@@ -254,7 +254,11 @@ def _compare_slots(label, kv_slots, idx_slots, pairs, threshold):
             ref, got = slots[ref_slot], slots[got_slot]
             for layer in range(ref.shape[0]):
                 pcc = _pcc(ref[layer], got[layer])
-                logger.info(f"[{label}] slot {got_slot} vs {ref_slot} {name}[{layer}] PCC {pcc:.6f}")
+                diff = (ref[layer].float() - got[layer].float()).abs()
+                logger.info(
+                    f"[{label}] slot {got_slot} vs {ref_slot} {name}[{layer}] PCC {pcc:.6f} "
+                    f"max|diff| {diff.max().item():.3e} differing {(diff > 0).float().mean().item():.2e}"
+                )
                 if pcc < threshold:
                     failures.append(f"slot {got_slot} vs {ref_slot} {name} layer {layer} PCC {pcc:.6f} < {threshold}")
     return failures
@@ -307,6 +311,54 @@ def test_glm_multiuser_interleaved_matches_sequential(variant, config_only, mesh
         cross = _pcc(sequential[(0, N_CHUNKS - 1)], sequential[(1, N_CHUNKS - 1)])
         assert cross < DISTINCT_USERS_MAX_PCC, f"users 0 and 1 produced the same output (PCC {cross:.6f})"
         assert not failures, f"[interleaved] {len(failures)} mismatch(es):\n" + "\n".join(failures)
+    finally:
+        transformer.release_sub_device_managers()
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links", MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm_multiuser_repeat_is_deterministic(variant, config_only, mesh_device, device_params, num_links):
+    """DEBUG: the same sequential schedule twice (slots 0..N-1, then N..2N-1, same order). Any difference is
+    run-to-run nondeterminism, not ordering. Also repeats user 0's first chunk (no KV prefix) back to back."""
+    assert_gate_mode_matches_adapter(variant, GATE_MODE)
+    chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * mesh_device.shape[0]
+    num_slots = 2 * NUM_USERS
+    mesh_device.enable_program_cache()
+    config, transformer, kvpe_cache, index_kv_cache = _build(
+        mesh_device, config_only, device_params, num_links, chunk, num_slots
+    )
+    try:
+        ids = _token_ids(config, NUM_USERS, N_CHUNKS * chunk)
+        ids_by_slot = {s: ids[s % NUM_USERS] for s in range(num_slots)}
+
+        def run(slot, c):
+            chunks = [PrefillChunk(slot, c * chunk, (c + 1) * chunk)]
+            return _run_forward(transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, ids_by_slot, chunk)
+
+        # Back to back, no prefix: chunk 0 of user 0 into slot 0 twice.
+        a, b = run(0, 0), run(0, 0)
+        logger.info(
+            f"[repeat] chunk0 back-to-back PCC {_pcc(a, b):.6f} max|diff| {(a - b).abs().max().item():.3e} "
+            f"differing {((a - b) != 0).float().mean().item():.2e}"
+        )
+        first = {(u, c): run(u, c) for u in range(NUM_USERS) for c in range(N_CHUNKS)}
+        second = {(u, c): run(NUM_USERS + u, c) for u in range(NUM_USERS) for c in range(N_CHUNKS)}
+        for key, ref in first.items():
+            got = second[key]
+            logger.info(
+                f"[repeat] user {key[0]} chunk {key[1]} last-layer PCC {_pcc(ref, got):.6f} "
+                f"max|diff| {(ref - got).abs().max().item():.3e} differing {((ref - got) != 0).float().mean().item():.2e}"
+            )
+        kv_slots = _read_user_slots(kvpe_cache, mesh_device, NUM_LAYERS, num_slots)
+        idx_slots = _read_user_slots(index_kv_cache, mesh_device, full_indexer_rank(config, NUM_LAYERS), num_slots)
+        failures = _compare_slots(
+            "repeat", kv_slots, idx_slots, [(u, NUM_USERS + u) for u in range(NUM_USERS)], INTERLEAVED_PCC
+        )
+        assert not failures, f"[repeat] {len(failures)} mismatch(es):\n" + "\n".join(failures)
     finally:
         transformer.release_sub_device_managers()
 
