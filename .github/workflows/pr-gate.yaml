@@ -120,12 +120,25 @@ jobs:
       manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
       llk-ci-docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
 
+  # Disabled on merge_group: Merge Gate's build-asan compiles the same sha with
+  # the same platform, toolchain, build type and tracy flag, so the two builds
+  # share a build-artifact.yaml concurrency group and are serialized. The one
+  # that loses then re-joins the scarce large-prio runner pool from scratch and
+  # pays the pool wait twice, which under load stalls the queue for hours.
+  # Merge Gate keeps its ASan build and basic tier (runtime-basic-tests,
+  # ttnn-basic-tests) and runs the smoke binaries under TSan on n300, llmbox
+  # and p150b. The ASan smoke, sdk-examples and build-docs legs below therefore
+  # run on PR gate and push-to-main only; in the queue they skip cleanly via
+  # their needs.asan-build.result guards, and PR Gate Status still reports on
+  # the jobs that do run there (code-analysis, llk-smoke-tests,
+  # verify-time-budgets).
   asan-build:
     if: >-
       ${{
         github.event.action != 'destroyed' &&
+        github.event_name != 'merge_group' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-        ((github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.find-changed-files.outputs.any-code-changed == 'true')
+        (github.event_name != 'pull_request' || needs.find-changed-files.outputs.any-code-changed == 'true')
       }}
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     uses: ./.github/workflows/build-artifact.yaml
