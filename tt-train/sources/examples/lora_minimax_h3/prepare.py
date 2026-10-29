@@ -219,8 +219,10 @@ def main(argv: list[str] | None = None) -> int:
             and (cache / "tokens" / f"{key}.npy").exists()
         ):
             continue
-        # encode_text.py skips existing embeds, which would still hold the old caption.
+        # encode_text.py and encode_vae.py skip existing outputs, which would still hold the old caption / pixels.
         (cache / "embeds" / f"{key}.npy").unlink(missing_ok=True)
+        (cache / "moments" / f"{key}.npy").unlink(missing_ok=True)
+        (cache / "samples" / f"{key}.npy").unlink(missing_ok=True)
         image = Image.open(png)
         height, width = training_canvas(image.width, image.height, args.short_edge)
         image = fit_image(image, height, width, resample)
