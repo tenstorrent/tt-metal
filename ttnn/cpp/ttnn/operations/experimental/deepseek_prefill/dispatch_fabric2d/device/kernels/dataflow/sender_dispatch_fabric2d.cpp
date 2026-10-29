@@ -13,6 +13,11 @@
 // Entries are claimed and released in batches to amortise the counter signals and the source flush. The
 // flush is needed because a payload send reads L1 asynchronously, so an entry cannot go back to the
 // reader until that read has finished.
+//
+// Nothing this sender writes may reach the next chip in a launch that chip has not started. Until then its
+// reader may still be reading the previous launch's pages of the forwarding region, which is reused at the same
+// offsets every launch, and the previous launch's output may still be in use at an address this launch's output
+// can reuse. That chip grants a credit when it starts, and this sender takes it before its first send.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -79,12 +84,36 @@ void prebuild_routes() {
             ct.downstream_chip_id,
             ct.downstream_mesh_id);
     }
-    // pkt_hdr_signal is used by signal_downstream during the send loop and reused by drain_fabric after it.
-    // Setting the command fields later leaves this route in place.
+    // pkt_hdr_signal is used by grant_launch_credit before the send loop, by signal_downstream during it and
+    // by drain_fabric after it. Setting the command fields later leaves this route in place.
     fabric_set_unicast_route(
         reinterpret_cast<volatile tt::tt_fabric::HybridMeshPacketHeader*>(ct.pkt_hdr_signal_addr),
         ct.downstream_chip_id,
         ct.downstream_mesh_id);
+}
+
+// Tell the chip across the cable that this chip has started the launch. Its sender on the stream back toward
+// us waits for this before it writes to us. Being in this launch means every kernel of this op's previous
+// launch on this chip, our readers included, has finished: a launch's go signal waits for every core of its
+// sub-device to finish the one before.
+//
+// Sent before this kernel waits on the reader or on any other chip, so the credit never depends on this
+// launch making progress.
+template <typename FabricSender>
+void grant_launch_credit(FabricSender& fabric) {
+    volatile PACKET_HEADER_TYPE* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
+    hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        get_noc_addr(ct.credit_noc_x, ct.credit_noc_y, ct.launch_credit_addr), /*val=*/1, /*flush=*/true});
+    fabric.wait_for_empty_write_slot();
+    fabric.send_payload_flush_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
+}
+
+// Wait until the chip across the cable has started this launch, then take its credit. Taken by subtracting
+// one rather than by zeroing: that chip can start the next launch, and grant the next credit, while this
+// one is still running.
+void take_launch_credit() {
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.launch_credit_addr), 1);
+    noc_semaphore_inc(get_noc_addr(ct.launch_credit_addr), 0u - 1u);
 }
 
 // Blocks until the reader has announced at least one entry beyond `sent`, then reports how many.
@@ -144,9 +173,9 @@ uint64_t send_entry(FabricSender& fabric, uint32_t entry, uint32_t& fwd_since_si
     return cmd;
 }
 
-// Drain the queue until the reader ends the stream. Returns the number of tokens actually sent.
+// Drain the queue until the reader ends the stream.
 template <typename FabricSender>
-uint32_t pump_stream(FabricSender& fabric) {
+void pump_stream(FabricSender& fabric) {
     const uint64_t my_freed_noc = get_noc_addr(ct.freed_addr);
     uint32_t sent = 0;
     // The stream length is not known here because it includes the tokens the reader forwards for other
@@ -170,11 +199,11 @@ uint32_t pump_stream(FabricSender& fabric) {
         sent += processed;
         noc_semaphore_inc(my_freed_noc, processed);
     }
-    return sent - 1;  // the CMD_END entry carried no payload
 }
 
 // Delivery barrier. Program completion does not mean our packets reached the destination chip, so
-// without this the host could read an output while its last tokens are still in flight.
+// without this the host could read an output while its last tokens are still in flight, and a launch credit
+// could land after the program that granted it.
 //
 // With D = num_buffers_per_channel, the free EDM slot count is D - (packets_written - credits_returned),
 // and only the far end returns credits. Writing D-1 more packets and then waiting for one more free EDM slot
@@ -205,10 +234,15 @@ void kernel_main() {
     auto& fabric = fabric_connections.get(0).sender;
 
     prebuild_routes();
-    const uint32_t sent = pump_stream(fabric);
-    if (sent > 0) {
-        drain_fabric(fabric);
-    }
+    grant_launch_credit(fabric);
+    // Once per launch, so the credits stay in step with the launches: every stream has at least its CMD_END
+    // entry. The reader publishes its first entry only after building its tables, so the credit has usually
+    // arrived by the time this wait starts.
+    wait_for_filled(0);
+    take_launch_credit();
+    pump_stream(fabric);
+    // Even on a stream that sent no token, the launch credit is on the cable.
+    drain_fabric(fabric);
 
     noc_async_writes_flushed();
     fabric_connections.close();
@@ -219,7 +253,7 @@ void kernel_main() {
     //
     // `freed` is incremented by NoC atomics, which noc_async_writes_flushed does not wait for. Without the
     // barrier an increment can land after the reset, and the next launch computes the reader's
-    // `claimed - *freed` as a negative wrap.
+    // `claimed - *freed` as a negative wrap. The barrier also retires the launch credit taken above.
     noc_async_atomic_barrier();
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.filled_addr), 0);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.freed_addr), 0);

@@ -16,6 +16,9 @@ void kernel_main() {
     constexpr int onetile = 1;
     const auto per_core_block_cnt = get_arg(args::per_core_block_cnt);
     DataflowBuffer dfb_scaler(dfb::scaler);
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_im0(dfb::im0);
     compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
@@ -26,7 +29,7 @@ void kernel_main() {
             ckl::input(dfb::in1),
             ckl::output(
                 dfb::im0, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>(
-            ckl::IterationShape::tiles(onetile));
+            ckl::IterationShape::tiles(onetile), dfb_in0, dfb_in1, dfb_im0);
 
         // reduce-w
         if (last_out) {

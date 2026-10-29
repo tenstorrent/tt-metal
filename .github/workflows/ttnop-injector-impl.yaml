@@ -45,6 +45,7 @@ jobs:
     outputs:
       base-sha: ${{ steps.select.outputs.base-sha }}
       mode: ${{ steps.select.outputs.mode }}
+      retry: ${{ steps.select.outputs.retry }}
       shards: ${{ steps.select.outputs.shards }}
     steps:
       - name: Checkout repository history
@@ -121,7 +122,11 @@ jobs:
             shards=0
           fi
 
+          # Shards reuse this base and retry list instead of repeating the lookup.
+          base="$(python3 -c 'import json, sys; print(json.load(sys.stdin)["base"])' <<< "$selection")"
+          retry="$(python3 -c 'import json, sys; print(",".join(json.load(sys.stdin)["retry"]))' <<< "$selection")"
           echo "base-sha=$base" >> "$GITHUB_OUTPUT"
+          echo "retry=$retry" >> "$GITHUB_OUTPUT"
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "shards=$shards" >> "$GITHUB_OUTPUT"
           if [[ "$shards" -eq 0 ]]; then
@@ -238,6 +243,7 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           BASE_SHA: ${{ needs.select-tests.outputs.base-sha }}
+          TTNOP_RETRY: ${{ needs.select-tests.outputs.retry }}
           SELECTED_SHARDS: ${{ needs.select-tests.outputs.shards }}
         run: |
           set -euo pipefail

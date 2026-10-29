@@ -48,6 +48,7 @@ On the **host**, a `DataflowBufferSpec` plus per-kernel `DFBBinding`s declare th
 - Entry size and total capacity (in entries)
 - Number of producers and consumers
 - Producer access pattern and consumer access pattern
+- The block size (entries per block) of a BLOCKED `DFBBinding`, this is 0 on STRIDED/ALL bindings
 - Whether endpoints use NOC-backed implicit sync (`noc.async_read` / `async_write` with `NocOptions::TXN_ID`) when applicable
 - `accessor_name` for each binding (becomes the kernel-side token)
 
@@ -133,7 +134,7 @@ dfb_in.finish();
 dfb_in.write_barrier(noc);
 ```
 
-Each such call issues **one NOC transaction**. Credits are posted/acked by the **DM0 ISR** when that transaction’s threshold is hit.
+Each such call issues **one NOC transaction**, this is one entry on a STRIDED or ALL side and one whole block on a BLOCKED side. Credits are posted/acked by the **DM0 ISR** when that transaction’s threshold is hit.
 
 Always call `finish()` so partial batches below the ISR threshold still exchange credits and all tile counters drain.
 
@@ -144,7 +145,7 @@ Always call `finish()` so partial batches below the ISR threshold still exchange
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | **STRIDED** | Independent work: each of N threads owns every N-th entry (elementwise, split readers).                                                |
 | **ALL**     | Fan-out / broadcast to at most four<sup>[1](#fn1)</sup> consumers: every consumer sees every entry (e.g. matmul weights shared across engines). Producer ALL is not supported. |
-| **BLOCKED** | Contiguous block of N entries per thread, then stride by `block_size × num_threads`. Intended to unblock compute with large NOC fills. |
+| **BLOCKED** | Contiguous block of `block_size` entries per thread, then stride by `block_size × num_threads`. Intended to unblock compute with large NOC fills. |
 
 <a id="fn1"></a><sup>1</sup> More than four consumers can be supported if needed in the future.
 
@@ -220,7 +221,7 @@ Packed as `(tensix_id[1:0], tc_id[4:0])` in `PackedTileCounter`.
 | ----------- | ------------------------------------------------------------------------ |
 | **STRIDED** | Each of N threads owns every N-th entry (interleaved ring)               |
 | **ALL**     | Each consumer sees every entry (broadcast / fan-out)                     |
-| **BLOCKED** | Contiguous block of N entries, then stride by `block_size × num_threads` |
+| **BLOCKED** | Contiguous block of `block_size` entries, then stride by `block_size × num_threads` |
 
 
 
@@ -280,14 +281,39 @@ Typical use: each math engine needs the same input block.
 
 #### BLOCKED
 
-Each thread processes a contiguous block of `block_size` entries, then advances by `block_size × num_threads`. With implicit sync, one NOC transaction can still move that whole block.
+```mermaid
+flowchart LR
+  subgraph FIFO [Blocked_FIFO_block_size_2]
+    B0["slots 0-1 P0"]
+    B1["slots 2-3 P1"]
+    B2["slots 4-5 P0"]
+    B3["slots 6-7 P1"]
+  end
+  P0 --> B0
+  P1 --> B1
+  P0 --> B2
+  P1 --> B3
+```
 
-**TC count (BLOCKED):** same pairing math as STRIDED (`calculate_num_tile_counters` falls through to the STRIDED formulas). Asymmetric `P ≠ C` is supported — the per-thread RR fans blocks across the unequal side the same way.
 
-- Producer: `num_consumers / num_producers` if C ≥ P (else 1)
-- Consumer: `num_producers / num_consumers` if P ≥ C (else 1)
-- Capacity per TC: `num_entries / max(P, C)`; `stride_in_entries = 1` (contiguous sub-rings — block-ness is the credit/move quantum, not an interleaved ring stride)
-- `num_entries` must be divisible by `producer_block_size × max(P, C)` and by `consumer_block_size × max(P, C)` so each sub-ring holds a whole number of blocks on both sides
+
+Same dealing as STRIDED with a block of `block_size` entries as the unit: block *k* belongs to thread *k mod N*, so each thread works on a contiguous chunk and every operation moves one whole block. Both sides may be BLOCKED, or one side is STRIDED or ALL and takes its share of each block:
+
+
+| Pairing           | Host rules                                                                                  | Per-op share                                                       | Capacity per TC          | `stride_in_entries` |
+| ----------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------ | ------------------- |
+| BLOCKED → BLOCKED | same `block_size` on both sides; `P/C` or `C/P` integer; `num_entries % (block_size × lcm(P, C)) == 0` | a block on both sides                                              | `num_entries / lcm(P, C)` | `lcm(P, C)`         |
+| BLOCKED → STRIDED | `C` divides `block_size`; `num_entries % (block_size × P) == 0`                             | producer: a block; each consumer: `block_size / C` entries, `C` apart | `num_entries / (P × C)`  | `C`                 |
+| STRIDED → BLOCKED | `P` divides `block_size`; `num_entries % (block_size × C) == 0`                             | each producer: `block_size / P` entries, `P` apart; consumer: a block | `num_entries / (P × C)`  | `P`                 |
+| BLOCKED → ALL     | `num_entries % (block_size × P) == 0`; DM → DM: producer must use explicit sync | a block on both sides (every consumer sees every block)            | `num_entries / P`        | `1`                 |
+
+
+ALL → BLOCKED is not allowed. Limits: `block_size ≤ 65535` or `≤ 1023` with a Tensix endpoint; with implicit sync a block must also fit one NOC packet.
+
+**TC count (BLOCKED):**
+
+- BLOCKED → BLOCKED and BLOCKED → ALL: same formulas as STRIDED and ALL
+- BLOCKED ↔ STRIDED: one TC per (producer, consumer) pair, so a producer holds `num_consumers` TCs and a consumer holds `num_producers` TCs. A BLOCKED side with more than one hart on the other side splits each whole-block operation over its own TCs, crediting `block_size / num_consumers` or `block_size / num_producers` to each, so one block lands on every counter on the other side at once
 
 
 
@@ -394,11 +420,15 @@ That requires the batch to divide evenly across txn ids, participating DMs, and 
 
 **Normal (non–ALL-consumer) side:**
 
-- `threshold = num_entries / num_txn_ids`
-- Must have `threshold % num_prods_or_cons == 0` → `per_txn = threshold / num_prods_or_cons`
+- `entry_threshold = num_entries / num_txn_ids`
+- Must have `entry_threshold % num_prods_or_cons == 0` → `per_txn = entry_threshold / num_prods_or_cons`
 - Must have `per_txn % num_tcs_per_risc == 0` → `per_txn_per_tc = per_txn / num_tcs_per_risc`
+- `entries_per_noc_txn = block_size` on a BLOCKED side, otherwise `1`
+- `threshold = entry_threshold / entries_per_noc_txn` (the cmdbuf count is in transactions); each DM issues `per_txn / entries_per_noc_txn` NOC ops per txn id
 
-So one ISR fire means: all participating DMs have each completed `per_txn` NOC ops on that trid, which RR’d evenly so each TC is owed exactly `per_txn_per_tc` credits — matching the uniform increment.
+So one ISR fire means: all participating DMs have each completed their NOC ops on that trid (`per_txn` entries each), which RR’d evenly so each TC is owed exactly `per_txn_per_tc` credits — matching the uniform increment.
+
+**BLOCKED side:** every transaction completes a whole block, so `per_txn` must also be a whole number of blocks: `per_txn % block_size == 0`, and `per_txn % (block_size × num_tcs_per_risc) == 0` unless the block is split over the TCs, then `block_size % num_tcs_per_risc == 0`. A STRIDED or ALL side facing a BLOCKED one moves one entry per transaction but stays on one TC for its whole share, so there `per_txn % (share × num_tcs_per_risc) == 0`. The host picks `num_txn_ids` to satisfy this and rejects the DFB only when no count works; then change `num_entries`, `block_size` or the thread counts, or use explicit sync on that side.
 
 **ALL consumer:** `wr_sent` is global across DMs, so the threshold waits for **every** consumer’s batch:
 
@@ -492,7 +522,7 @@ sequenceDiagram
 
 - Threshold / `per_txn` / `per_txn_per_tc` as above — programmed so each TC gets the **same** increment per ISR fire
 - **ALL consumer:** threshold scales by `#consumers` so the IRQ waits for the full collective batch
-- Each `async_read` / `async_write` with `NocOptions::TXN_ID` still issues **one** NOC transaction; with BLOCKED that txn can be a **large chunk**
+- Each `async_read` / `async_write` with `NocOptions::TXN_ID` still issues **one** NOC transaction: one entry on a STRIDED or ALL side and one whole block on a BLOCKED side
 - Partial last batches that never hit the ISR threshold are flushed by `handle_final_credits` inside `finish()` (below)
 
 
@@ -636,7 +666,7 @@ See [Part D](#part-d--common-debugging).
   Credit posted before write visible; missing L1/L2 invalidate on consumer read of Tensix-written L1; PUSH_TILES packer_wr_done not modeled on sim.
    Check: barriers / STALLWAIT before push; invalidate before DM reads; compare HW vs emulator.
 8. **Access-pattern / binding mismatches**
-  Producer ALL; BLOCKED without `block_size > 0`; wrong `#producers/#consumers` for split readers; STRIDED when every consumer needs full data (use ALL); BLOCKED `num_entries` not divisible by `block_size × max(P,C)`.
+  Producer ALL; BLOCKED with `block_size <= 0`, incompatible producer/consumer counts, or `num_entries` that does not divide into complete blocks and evenly sized portions for the participating producers or consumers; wrong `#producers/#consumers` for split readers; STRIDED when every consumer needs full data (use ALL); reserve/push/wait/pop count not equal to the side’s share.
    Check: host `TT_FATAL` text; Metal2 `DFBBinding` matches intent.
 9. **Remapper / intra-tensix weirdness**
   DM→DM ALL expected remapper (it does not); Tensix-only TC alias without shadow pair; packer remapper window not cleared across kernels.

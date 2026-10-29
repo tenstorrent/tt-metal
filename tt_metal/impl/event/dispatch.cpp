@@ -28,8 +28,8 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -111,15 +111,13 @@ void issue_record_event_commands(
                 wait_flags,
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                expected_num_workers_completed[offset_index],
-                cq_id);
+                expected_num_workers_completed[offset_index]);
         } else {
             command_sequence.add_dispatch_wait(
                 wait_flags,
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                expected_num_workers_completed[offset_index],
-                cq_id);
+                expected_num_workers_completed[offset_index]);
         }
     }
 
@@ -182,7 +180,7 @@ void issue_wait_for_event_commands(
         event_cq_id == 0 ? completion_q0_last_event_addr : completion_q1_last_event_addr;
 
     command_sequence.add_dispatch_wait(
-        CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, last_completed_event_address, 0, event_id, cq_id);
+        CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, last_completed_event_address, 0, event_id);
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
 

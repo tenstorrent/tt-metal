@@ -50,7 +50,7 @@ This skill covers three related workflows:
    - `run_types=PERF_RUN_TYPES_QUASAR` from `helpers.llk_params`
    - a fixed `loop_factor=32`, unless the operation has an established value
    - a fixed `is_perf=True`
-   - `DestSync.Half` and `ImpliedMathFormat.Yes` only
+   - `DestSync.Half` only
    - tile sizes and dest-fill matrices from **Perf sweep coverage**, not a
      single hardcoded tile or the full functional dimension grid
 7. Pass `perf_report` and `is_perf=True` to the correctness helper.
@@ -116,10 +116,8 @@ Float16_b, and Int8 inputs are LoFi-only; Float16 still sweeps LoFi–HiFi4.
 versus perf. Cross-arch perf versus perf is
 `compare_test_and_perf.py --cross-arch blackhole quasar --kind perf`;
 functional versus functional is `--kind func`. Composite splits name `list`
-as the input matrix and `tuple` as `tile_dimensions`. The comparer ignores
-`implied_math_format`; it is not a measurement control and not a BH/WH join
-key. Also ignore `DestSync.Full`, `run_types`, `loop_factor`, and `is_perf`
-when judging coverage.
+as the input matrix and `tuple` as `tile_dimensions`. Ignore `DestSync.Full`,
+`run_types`, `loop_factor`, and `is_perf` when judging coverage.
 
 ## C++ structure
 
@@ -278,7 +276,7 @@ From the `tt-llk` root:
 6. If tile sizes or dimensions changed, run
    `compare_test_and_perf.py --dir quasar --arch quasar` and confirm the
    composite `tuple` (tile) and `list` (matrix) axes match **Perf sweep
-   coverage**. `implied_math_format` is ignored by that comparer.
+   coverage**.
 7. Check edited files for lint errors and run `git diff --check`.
 
 Do not:

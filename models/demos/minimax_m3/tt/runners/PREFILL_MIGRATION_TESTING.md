@@ -142,7 +142,7 @@ endpoint kills both workers.
 # ---- Between runs: stop terminal A (Ctrl-C), then clear ----
 pkill -f migration_endpoint ; pkill prun ; pkill prted ; pkill prte
 rm -f /dev/shm/mig_ep1_* /dev/shm/ep_1_[ab]_* \
-      /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_acks_* \
+      /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_completions_* \
       /tmp/m3_kv_chunk_table.pb /tmp/m3_kv_device_map.json /tmp/m3_migration_done.sentinel
 
 # ---- Terminal A — migration endpoint (leave running) ----
@@ -178,7 +178,7 @@ minutes of silence first):
 [migration] delivered 32 local device-map entries -> /ep_1_a_cmd     (and again for /ep_1_b_cmd)
 [migration] KV chunk address table serialized to /tmp/m3_kv_chunk_table.pb (configs=9, entries=691200)
 [migration] WORKER_READY: table=/tmp/m3_kv_chunk_table.pb
-[migration] LayerAck channel ready at /tt_prefill_layer_acks_m3_prefill
+[migration] layer-completion routing up: rank=0/1 master=0 ring=/tt_prefill_layer_completion_ring_0 source=host on_layer_complete callback (owns scheduler shm /tt_prefill_layer_completions_m3_prefill)
 ```
 
 **Every verdict is logged by the DRIVER (terminal C), not the runner** — the runner-side

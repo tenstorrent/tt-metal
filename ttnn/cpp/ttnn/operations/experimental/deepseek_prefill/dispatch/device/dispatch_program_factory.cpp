@@ -94,6 +94,7 @@ namespace {
 // cores across links where more than one plane exists. (Shared by the tile and row-major paths below;
 // kept file-local because the natural shared home, ccl/common, is outside this op's code ownership.)
 std::vector<uint32_t> compute_per_neighbor_forwarding_links(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
     uint32_t core_link,
@@ -101,7 +102,7 @@ std::vector<uint32_t> compute_per_neighbor_forwarding_links(
     std::vector<uint32_t> per_conn_links;
     per_conn_links.reserve(dst_nodes.size());
     for (const auto& dst_node : dst_nodes) {
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_node);
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(mesh_device, src_fabric_node_id, dst_node);
         TT_FATAL(
             !links.empty(), "No forwarding links from {} to {} neighbor {}", src_fabric_node_id, axis_label, dst_node);
         log_debug(
@@ -162,6 +163,17 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
 
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
+    const bool local_only = num_links == 0;
+    TT_FATAL(
+        !local_only || ((mesh_device->shape().mesh_size() == 1 ||
+                         (operation_attributes.axis == 0 && mesh_device->shape()[0] == 1)) &&
+                        operation_attributes.dispatch_group_size == 1 && topology == tt::tt_fabric::Topology::Linear),
+        "Zero-link prefill dispatch requires a singleton communication domain, dispatch_group_size=1, and Linear "
+        "topology");
+    TT_FATAL(
+        !local_only || (operation_attributes.experts_per_chip > 0 &&
+                        operation_attributes.num_routed_experts == operation_attributes.experts_per_chip),
+        "Local prefill dispatch requires all routed experts on its only chip");
 
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
@@ -182,7 +194,8 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
     constexpr uint32_t MAX_WORKER_CORES = 4;
-    uint32_t effective_num_links = std::min(num_links, MAX_WORKER_CORES);
+    // Local NoC work still needs a sender group for mailboxes, drains, and sentinels.
+    uint32_t effective_num_links = local_only ? 1 : std::min(num_links, MAX_WORKER_CORES);
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
@@ -554,7 +567,8 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     }
 
     const auto [neighbors, directions] =
-        ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+        local_only ? std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>>{}
+                   : ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
     // FABRIC_2D uses the portable RoutingPlaneConnectionManager (one connection per required physical
     // first-hop direction) so dispatch-axis traffic forwards multi-hop; FABRIC_1D keeps the legacy
@@ -600,7 +614,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     log_debug(tt::LogOp, "dest_mesh_id: {}", ccl::common::stringify(dest_mesh_id));
     log_debug(tt::LogOp, "directions: {}", ccl::common::stringify(directions));
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = local_only ? 0 : tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     log_debug(
         tt::LogOp, "Fabric max packet size: {} bytes, L1 alignment: {} bytes", fabric_max_packet_size, l1_alignment);
 
@@ -1083,8 +1097,8 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
                 //
                 // Pick a forwarding link valid for each neighbor's own direction (see
                 // compute_per_neighbor_forwarding_links above for why a single broadcast {core_link} hangs).
-                const std::vector<uint32_t> per_conn_links =
-                    compute_per_neighbor_forwarding_links(src_fabric_node_id, dst_nodes, core_link, "dispatch-axis");
+                const std::vector<uint32_t> per_conn_links = compute_per_neighbor_forwarding_links(
+                    *mesh_device, src_fabric_node_id, dst_nodes, core_link, "dispatch-axis");
                 writer_runtime_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                     src_fabric_node_id,

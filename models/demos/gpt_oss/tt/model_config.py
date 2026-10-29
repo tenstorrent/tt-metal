@@ -185,7 +185,7 @@ class ModelArgs:
             "gpt-oss-20b": {
                 "T3K": [128],
                 "TG": [128],
-            }
+            },
             # exmaple : #base_model_name : {device_name : [sequence_lengths]}
         }
 
@@ -312,8 +312,12 @@ class ModelArgs:
     # skipping the load and hard-failing in ttnn.as_tensor(None, ...) on a missing .tensorbin.
     # (Mirrors DeepSeek's WEIGHT_CACHE_FORMAT_VERSION in deepseek_v3/utils/weight_config.py.)
     WEIGHT_CACHE_FORMAT_VERSION = 1
+    # Layout version of the fused decode (DRAM-streaming) weights; a marker from an older fused build is rejected.
+    FUSED_DECODE_WEIGHTS_VERSION = 4  # 4: QKV stream in K/V-first slot order (wqkv_kvfirst)
+    # Layout version of the batched dense decode MoE weights (experts dense_decode_*).
+    DENSE_MOE_DECODE_WEIGHTS_VERSION = 1
 
-    def weight_cache_is_complete(self, dtype):
+    def weight_cache_is_complete(self, dtype, fused_decode=False, dense_moe=False):
         """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was
         fully built by a previous run.
 
@@ -321,7 +325,11 @@ class ModelArgs:
         state_dict is never read, so the caller can skip the expensive from_pretrained host
         load entirely (the load that OOMs/hangs during prefill, #48509) without needing the
         manual --skip-model-load flag. Set GPT_OSS_FORCE_MODEL_LOAD=1 to force a fresh load
-        (e.g. to regenerate the cache)."""
+        (e.g. to regenerate the cache).
+
+        fused_decode: the model about to be built uses the fused decode layers (fused_decode/), whose
+        decode-only weights are only written by a fused build; a marker from a non-fused build of the same
+        model (e.g. batch > 1 on the same mesh) does not cover them."""
         if os.getenv("GPT_OSS_FORCE_MODEL_LOAD") == "1":
             return False
         cache_path = self.weight_cache_path(dtype)
@@ -340,14 +348,29 @@ class ModelArgs:
             return False
         if meta.get("model_name") != self.model_name or meta.get("n_layers") != self.n_layers:
             return False
+        if fused_decode and meta.get("fused_decode_weights") != self.FUSED_DECODE_WEIGHTS_VERSION:
+            return False
+        if dense_moe and meta.get("dense_moe_decode_weights") != self.DENSE_MOE_DECODE_WEIGHTS_VERSION:
+            return False
         # Belt-and-suspenders: the cache dir must still actually hold tensor files.
         return any(cache_path.glob("*.tensorbin"))
 
-    def mark_weight_cache_complete(self, dtype):
+    def mark_weight_cache_complete(self, dtype, fused_decode=False, dense_moe=False):
         """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
-        built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete)."""
+        built, so subsequent runs can skip the HF state_dict load (see weight_cache_is_complete).
+        The optional decode weight sets a previous build of the same cache recorded stay recorded."""
         cache_path = self.weight_cache_path(dtype)
         marker = cache_path / self.WEIGHT_CACHE_MARKER
+        previous = {}
+        try:
+            previous = json.loads(marker.read_text()) if marker.is_file() else {}
+        except (ValueError, OSError):
+            previous = {}
+        if (
+            previous.get("format_version") != self.WEIGHT_CACHE_FORMAT_VERSION
+            or previous.get("model_name") != self.model_name
+        ):
+            previous = {}
         try:
             marker.write_text(
                 json.dumps(
@@ -356,6 +379,16 @@ class ModelArgs:
                         "model_name": self.model_name,
                         "n_layers": self.n_layers,
                         "dtype": str(dtype),
+                        "fused_decode_weights": (
+                            self.FUSED_DECODE_WEIGHTS_VERSION
+                            if fused_decode
+                            else previous.get("fused_decode_weights", False)
+                        ),
+                        "dense_moe_decode_weights": (
+                            self.DENSE_MOE_DECODE_WEIGHTS_VERSION
+                            if dense_moe
+                            else previous.get("dense_moe_decode_weights", False)
+                        ),
                     }
                 )
             )

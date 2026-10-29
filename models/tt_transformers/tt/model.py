@@ -394,11 +394,6 @@ class Transformer(LightweightModule):
     ):
         """Extract each user's last-token hidden state from batched prefill output.
 
-        Reads hidden states to host, extracts the relevant row for each user,
-        and sends the combined tensor back to device with the correct column-sharded
-        mesh mapping (ShardTensorToMesh dim=-1) so the DistributedNorm all-gather
-        produces the correct full hidden dim.
-
         Args:
             hidden_states: [padded_batch, 1, prefill_seq_len, dim_per_device] on device (column-sharded, TILE_LAYOUT)
             last_token_idx_list: list of length padded_batch with per-user last token positions
@@ -407,57 +402,40 @@ class Transformer(LightweightModule):
 
         Returns:
             user_tokens: [1, 1, target_batch or padded_batch, dim_per_device] per device,
-            column-sharded, TILE_LAYOUT
+            column-sharded, TILE_LAYOUT. Rows past padded_batch are zero.
         """
-        active_indices = [lt for lt in last_token_idx_list if lt > 0]
-        all_same = len(set(active_indices)) <= 1
-
-        if all_same and active_indices:
-            common_last = active_indices[0]
-            get_last = (common_last // 32) * 32
-            R = common_last % 32
-            block = ttnn.slice(
-                hidden_states,
-                (0, 0, get_last, 0),
-                (padded_batch, 1, get_last + 32, hidden_states.shape[-1]),
-            )
-        else:
-            block = hidden_states
-            R = None
-
-        host_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(block)]
-        host_full = torch.cat(host_tensors, dim=-1)
-
-        if R is not None:
-            combined = host_full[:, :, R : R + 1, :].reshape(1, 1, padded_batch, -1).contiguous()
-        else:
-            rows = []
-            for slot in range(padded_batch):
-                lt_idx = last_token_idx_list[slot]
-                rows.append(host_full[slot : slot + 1, :, lt_idx : lt_idx + 1, :])
-            combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
-
         target_batch = padded_batch if target_batch is None else target_batch
         if target_batch < padded_batch:
             raise ValueError(f"target_batch {target_batch} must be >= padded_batch {padded_batch}")
-        if target_batch > padded_batch:
-            padded_combined = torch.zeros(
-                1,
-                1,
-                target_batch,
-                combined.shape[-1],
-                dtype=combined.dtype,
-            )
-            padded_combined[:, :, :padded_batch, :] = combined
-            combined = padded_combined
 
-        user_tokens = ttnn.from_torch(
-            combined,
+        fold_len = padded_batch * prefill_seq_len
+        sel = torch.zeros(1, 1, target_batch, fold_len, dtype=torch.bfloat16)
+        for slot in range(padded_batch):
+            last = last_token_idx_list[slot]
+            assert 0 <= last < prefill_seq_len, f"slot {slot}: last token index {last} outside [0, {prefill_seq_len})"
+            sel[0, 0, slot, slot * prefill_seq_len + last] = 1.0
+        sel_tt = ttnn.from_torch(
+            sel,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        hidden_folded = ttnn.reshape(hidden_states, (1, 1, fold_len, hidden_states.shape[-1]))
+        user_tokens = ttnn.matmul(
+            sel_tt,
+            hidden_folded,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            ),
+        )
+        ttnn.deallocate(sel_tt)
         return user_tokens
 
     def process_logits_after_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):

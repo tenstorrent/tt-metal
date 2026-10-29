@@ -144,3 +144,46 @@ def test_rms_norm_with_weight_and_residual(device, batch_size, h, w, dtype):
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+@pytest.mark.parametrize(
+    "x, eps, w, b",
+    [
+        (0.0, 1e-5, None, None),
+        (0.001, 0.25, None, None),
+        (-2.0, 4.0, None, None),
+        (3.0, 1e-5, None, None),
+        (0.001, 0.25, 2.0, 0.5),
+        (0.0, 1e-5, 1.5, -0.25),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_rms_norm_0d(device, x, eps, w, b, dtype):
+    # RMSNorm over a single element is x / sqrt(x^2 + eps); epsilon must not be dropped.
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.tensor(x, dtype=torch_dtype)
+    torch_weight = None if w is None else torch.tensor(w, dtype=torch_dtype)
+    torch_bias = None if b is None else torch.tensor(b, dtype=torch_dtype)
+
+    expected = torch.nn.functional.rms_norm(
+        torch_input.reshape(1).double(),
+        (1,),
+        None if torch_weight is None else torch_weight.reshape(1).double(),
+        eps,
+    )
+    if torch_bias is not None:
+        expected = expected + torch_bias.double()
+
+    def to_device(t):
+        return None if t is None else ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.rms_norm(
+        to_device(torch_input), epsilon=eps, weight=to_device(torch_weight), bias=to_device(torch_bias)
+    )
+    output = ttnn.to_torch(output).double()
+
+    assert output.shape == torch_input.shape
+    rtol, atol = (1e-3, 1e-6) if dtype == ttnn.float32 else (2e-2, 1e-4)
+    assert torch.allclose(
+        output.reshape(1), expected, rtol=rtol, atol=atol
+    ), f"x={x} eps={eps} w={w} b={b}: ttnn={output.item()!r} torch={expected.item()!r}"

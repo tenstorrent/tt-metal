@@ -25,7 +25,7 @@ void UntilizeCodegenDeviceOperation::validate_on_program_cache_miss(
     // and input.buffer() first and fail on a null instead of on the established error.
     TT_FATAL(
         tensor_args.input.storage_type() == ttnn::StorageType::DEVICE, "Operands to untilize need to be on device!");
-    TT_FATAL(tensor_args.input.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
+    TT_FATAL(tensor_args.input.is_allocated(), "Operands to untilize need to be allocated in buffers on device!");
     TT_FATAL(
         ttnn::operations::data_movement::untilize_codegen::supported_by_codegen(
             tensor_args.input, operation_attributes.output_mem_config),

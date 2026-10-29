@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -13,14 +14,34 @@
 #include "ckernel.h"
 #endif
 #include "experimental/kernel_args.h"
+#if !defined(ARCH_QUASAR)
+// ckernel::load_blocking (the store drain below) is WH/BH only: Quasar's ckernel.h has no load_blocking,
+// and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. The Quasar branch uses a
+// fence instead. Same guard as data_movement/common/kernels/common.hpp.
+#include "ckernel.h"
+#endif
 
+template <typename DFB>
 inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
-    Noc& noc, DataflowBuffer& dfb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
+    Noc& noc, DFB& dfb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
 
     for (uint32_t i = 0; i < num_bytes_risc / 2; ++i) {
         ptr[i] = val;
     }
+    // The seed above is baby-RISCV stores and the loop-back noc.async_read below uses it as its source.
+    // A store can retire before its write-request lands in L1, and the RISCV core and the NoC are
+    // different L1 clients with no program-order guarantee between them
+    // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). Read back the last seeded word so the seed
+    // is processed before the first loop-back read is issued. Same guard as the interleaved reader of
+    // this op (reader_pad_dims_rm_interleaved_v2.cpp) and #50374.
+#if defined(ARCH_QUASAR)
+    // Quasar DM: get_write_ptr() is the uncached alias, so the seed already targets TL1; the fence orders
+    // those stores before the loop-back read. Same as tt_memmove in data_movement/common/kernels/common.hpp.
+    __asm__ __volatile__("fence" ::: "memory");
+#else
+    (void)ckernel::load_blocking(ptr + (num_bytes_risc / 2) - 1);
+#endif
 
     uint32_t pad_val_addr = dfb.get_write_ptr();
     // The loop-back reads below source the words just stored, so the stores must reach L1 first.
@@ -47,8 +68,9 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     noc.async_read_barrier();
 }
 
+template <typename DFB>
 inline __attribute__((always_inline)) void fill_pad_dfb_with_zero(
-    Noc& noc, DataflowBuffer& dfb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
+    Noc& noc, DFB& dfb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
     noc.async_write_zeros(dfb, num_bytes_risc * num_noc_transfer);
     noc.write_zeros_l1_barrier();
 }

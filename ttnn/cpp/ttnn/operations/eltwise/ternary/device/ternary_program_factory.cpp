@@ -220,10 +220,13 @@ bool is_llk_bcast(
     const ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
     const ttnn::DataType a_dtype,
     const ttnn::DataType b_dtype,
-    const ttnn::DataType c_dtype) {
+    const ttnn::DataType c_dtype,
+    const ttnn::DataType output_dtype) {
+    // The LLK row broadcast (MOVB2D) corrupts bf16 sources in an fp32 DEST, so a non-bf16
+    // output (which enables fp32 DEST) uses the reader-side row broadcast instead.
     if (broadcast_type == TernaryBroadcastType::ROW_BCAST) {
         if (a_dtype == ttnn::DataType::BFLOAT16 && b_dtype == ttnn::DataType::BFLOAT16 &&
-            c_dtype == ttnn::DataType::BFLOAT16) {
+            c_dtype == ttnn::DataType::BFLOAT16 && output_dtype == ttnn::DataType::BFLOAT16) {
             return true;
         }
     }
@@ -1254,7 +1257,8 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
                 broadcast_type,
                 predicate_tensor.dtype(),
                 value_true_tensor.value().dtype(),
-                value_false_tensor.value().dtype())) {
+                value_false_tensor.value().dtype(),
+                output.dtype())) {
             CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
                 compute_kernel, broadcast_type, operation_attributes.ternary_op_type);
             reader_defines["BCAST_LLK"] = "1";
@@ -1421,15 +1425,15 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
             kernel_defines["BCAST_C"] = (broadcast_type == TernaryBroadcastType::SCALAR_B_BCAST) ? "1" : "0";
         }
     }
-    // Get operation-specific compute kernel defines.
-    // where_tile reads Dest in the layout its format names, so a 16-bit float predicate must select the
-    // Float32 variant once another operand has put Dest in 32-bit mode.
-    auto compute_dtype = predicate_tensor.dtype();
-    if (operation_attributes.ternary_op_type == TernaryOpType::WHERE && fp32_dest_acc_en &&
-        !is_32bit_format(predicate_data_format)) {
-        compute_dtype = DataType::FLOAT32;
+    // The SFPU variant must match the Dest layout: Float16_b variants access only the low 16 bits of each Dest word,
+    // so once another operand has put Dest in 32-bit mode a 16-bit predicate selects the Float32 variant. That holds
+    // for every floating-point predicate, and for where with any 16-bit predicate.
+    auto sfpu_dtype = predicate_tensor.dtype();
+    if (fp32_dest_acc_en && !is_32bit_format(predicate_data_format) &&
+        (is_floating_point(predicate_tensor.dtype()) || operation_attributes.ternary_op_type == TernaryOpType::WHERE)) {
+        sfpu_dtype = DataType::FLOAT32;
     }
-    auto op_defines = CMAKE_UNIQUE_NAMESPACE::get_ternary_compute_defines(operation_attributes, compute_dtype);
+    auto op_defines = CMAKE_UNIQUE_NAMESPACE::get_ternary_compute_defines(operation_attributes, sfpu_dtype);
     for (const auto& [key, value] : op_defines) {
         kernel_defines[key] = value;
     }

@@ -13,7 +13,6 @@
 
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
-#include "impl/context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/program_spec/collection/collect_metadata.hpp"
 #include "impl/metal2_host_api/program_spec/construction/construct_program.hpp"
