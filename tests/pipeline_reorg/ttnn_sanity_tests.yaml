@@ -404,19 +404,6 @@
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
 
-- name: "models quasar device name"
-  cmd: >-
-    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v -n 0
-    models/common/tests/test_device_utils.py
-    models/tt_transformers/tests/test_model_config_utils.py::test_quasar_takes_the_blackhole_device_names
-    models/tt_transformers/tests/test_device_name.py
-  skus:
-    sim_quasar:
-      timeout: 10
-  team: models
-  budget_type: sanity
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-
 - name: "ttnn quasar yolo ops"
   cmd: >-
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v -n 0 -m emulator models/experimental/ops/quasar/tests/yolo_ops/

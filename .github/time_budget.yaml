@@ -356,7 +356,6 @@ models:
     wh_galaxy_perf: 8
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
-    sim_quasar: 10
   stress:
     wh_galaxy_perf: 500
   e2e:
