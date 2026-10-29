@@ -153,6 +153,8 @@ class PrefillModelAdapter(ABC):
     # The drafter partial travels as its own D2D plane next to the model's planes; False packs it beside the
     # hidden instead, widening the activation to 2H.
     dflash_partial_separate_plane: bool = False
+    # Stored drafter K layout used when comparing against half-split HF goldens.
+    dflash_rope_convention: str = "interleaved"
     supports_mtp: bool = False
     supports_tp_shard_kv: bool = False
     tp_shard_kv_default: bool = False
