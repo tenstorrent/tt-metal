@@ -269,12 +269,18 @@ inline void llk_pack_block_dense_init(const std::uint32_t output) {
     }
 }
 
+#ifndef LLK_PACK_BLOCK_MIN_TILES
+#define LLK_PACK_BLOCK_MIN_TILES 4
+#endif
+
 // dense_small: the caller called llk_pack_block_dense_init for this output, small tiles of a plain format then run back to back with one close.
 // guard_dest_straddle: for a caller whose start tile index is not a constant 0: two block-float tiles that straddle a four tile boundary of DEST (tiles 3 and 4)
 // read 6 cycles slower as a closed block than packed one by one, so they take the per-tile path. Off by default, the check costs instructions in the callers that pass 0.
 template <bool is_fp32_dest_acc_en, bool dense_small = false, bool guard_dest_straddle = false>
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);
+    // Blocks of fewer tiles read slower than the per-tile pack in the tt-llk sweep, whatever the format.
+    const bool block_form = ntiles >= LLK_PACK_BLOCK_MIN_TILES;
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     LLK_ASSERT(
@@ -291,7 +297,7 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
         StateDiscard<std::uint32_t>(start_tile_index),
         StateDiscard<std::uint32_t>(ntiles)));
 
-    if (ntiles > 1 && llk_pack_block_is_contiguous(output_id)) {
+    if (block_form && llk_pack_block_is_contiguous(output_id)) {
         std::uint32_t pack_tile_addr =
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
         get_local_cb_interface(output_id).fifo_wr_tile_ptr +=
@@ -307,7 +313,7 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
         _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_dest>(
             start_tile_index, pack_tile_addr, ntiles);
 #endif
-    } else if (dense_small && ntiles > 1 && llk_pack_block_is_dense(output_id)) {
+    } else if (dense_small && block_form && llk_pack_block_is_dense(output_id)) {
         std::uint32_t pack_tile_addr =
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
         get_local_cb_interface(output_id).fifo_wr_tile_ptr +=
@@ -315,7 +321,7 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
         _llk_pack_block_dense_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
             start_tile_index, pack_tile_addr, ntiles, get_output_face_r_dim(output_id), get_output_num_faces(output_id));
     } else if (
-        ntiles > 1 && llk_pack_block_is_closable(output_id) &&
+        block_form && llk_pack_block_is_closable(output_id) &&
         !(guard_dest_straddle && IS_BFP_FORMAT(pack_dst_format[output_id]) && ntiles == 2 && (start_tile_index & 3) == 3)) {
         const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
         std::uint32_t pack_tile_addr =
