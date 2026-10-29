@@ -18,7 +18,7 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
-from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
+from models.common.utility_functions import hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -514,10 +514,6 @@ ROTATED_VALID_LISTS = [
 ]
 ROTATED_VALID_IDS = ["aligned_min", "midchip_straddle", "lastchip", "rot_partial", "multislab", "allfull"]
 
-# Determinism gate, same contract as test_prefill_block / test_prefill_transformer: repeats must be
-# bit-identical, so the threshold is exactly 1.0. Rep 0 is the baseline, hence >= 2.
-DETERMINISM_PCC_THRESHOLD = 1.0
-
 # Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
 # subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build. Not comparable to
 # the Tracy path's number -- Tracy averages collectives across chips, this takes the max.
@@ -883,11 +879,15 @@ def _run_chunked_prefill(
                     continue
                 # Collect rather than assert: one report listing every non-deterministic (user, iter,
                 # rep) beats aborting on the first, same as the prefill-block/transformer checks.
-                _, pcc = comp_pcc(det_baseline.float(), out_flat.float())
-                status = "PASS" if pcc >= DETERMINISM_PCC_THRESHOLD else "FAIL"
-                logger.info(f"  user {u} iter {i} rep {rep} vs rep0: PCC = {pcc:.6f}  {status}")
-                if pcc < DETERMINISM_PCC_THRESHOLD:
-                    det_failures.append((u, i, rep, pcc))
+                if torch.equal(det_baseline, out_flat):
+                    logger.info(f"  user {u} iter {i} rep {rep} bit-identical to rep 0")
+                    continue
+                diff = (det_baseline.float() - out_flat.float()).abs()
+                det_failures.append((u, i, rep, int((diff > 0).sum()), float(diff.max())))
+                logger.error(
+                    f"[determinism] user {u} iter {i} rep {rep} output DIFFERS from rep 0: "
+                    f"{det_failures[-1][3]} element(s), max abs delta {det_failures[-1][4]:.3e}"
+                )
             if kv_pad_metadata is not None:
                 # .scalars: field 3 is a persistent buffer allocated outside this loop, so a
                 # blanket deallocate would free it before the next chunk reads it.
@@ -916,8 +916,13 @@ def _run_chunked_prefill(
 
     if determinism_check:
         if det_failures:
-            msg = "; ".join(f"user {u} iter {i} rep {rep}: {pcc:.6f}" for u, i, rep, pcc in det_failures)
-            pytest.fail(f"Determinism PCC below {DETERMINISM_PCC_THRESHOLD}: {msg}")
+            pytest.fail(
+                "chunked prefill is not deterministic: "
+                + "; ".join(
+                    f"user {u} iter {i} rep {rep}: {n} element(s), max abs delta {mx:.3e}"
+                    for u, i, rep, n, mx in det_failures
+                )
+            )
         logger.success(
             f"✓ Chunked prefill determinism: {request.config.getoption('--mla-determinism-reps')} reps of every "
             f"forward bit-identical ({n_iters} iter(s) x {num_users} user(s))"
