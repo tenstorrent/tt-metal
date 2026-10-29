@@ -1581,6 +1581,22 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 12:45: the finite guard validated at 45 layers; the wave-vs-SP drift at 64 K is intrinsic
+
+The 45-layer harness replays of r5's schedule with the finite guard (l45_64k_r6-r8, 65514 x 4, 1 M profile): the NaN on
+rows 2 and 3 is gone (first-token pcc 0.985 / 0.983 / 0.982 / 0.978 vs each prompt's SP path, the SP top-1 at rank 1-2 of
+the wave's top-3 on every row). The per-layer KDA carry comparison (recurrent + conv after the wave prefill, before any
+decode) drifts uniformly over the four rows (lowest recurrent pcc 0.963-0.973 at layers 24 / 28 / 33), so no row-specific
+state error remains. The control (g2), the same length ALONE through waves (one member, the other rows idle), drifts the
+same way (pcc 0.984, carries 0.95-0.97; |wave - SP| std 0.14 logits against top-2 gaps of 0.2-0.9), so the drift is the
+wave path's own (the local vs the sequence-parallel KDA scan grouping accumulated over 45 layers x 64 K), not the pairing,
+and sits at the SP-vs-HF level of the 1 M gate (0.98). The long profile now judges step 0 at pcc >= 0.97 with the SP top-1
+within the wave's top-3 (73798ae1b13); the block short profile passes (a)-(d) on the fix tree and exposed a second
+hazard in case (f): a wave with a member continued at 256 beside one at 2048 misses the sealed program cache in the
+scorer crop (a served engine death for five or more concurrent long prompts), under diagnosis with
+GLM53_INDEXER_DEBUG=1 (block_v13). The served waves needle smoke (GLM53_VLLM_SP_FIRST=0, 4 x 64 K) is queued as the
+user-visible closure.
+
 ### 2026-10-29 10:51: the SP-first placement served (4 x 64 K needles)
 
 r5's stage c again (4 x 65514 needles, 4 concurrent, APC off) with `GLM53_VLLM_SP_FIRST=1`: the four eager prompts took
