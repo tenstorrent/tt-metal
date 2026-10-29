@@ -6,7 +6,8 @@
 
 Times 40 requests of 25 documents (one score_ids call per query), then all 1000 pairs in one call, and
 reports Pearson / mean error / nDCG@10 against the eval set's HF fp32 scores. Optional: a model attribute
-override such as ``bf16_acc_kinds=ff13s`` (applied before the traces are captured; ``none`` = no override),
+override such as ``bf16_acc_kinds=ff13s`` or a RerankConfig field such as ``cfg.sdpa_k_chunk=128`` (applied
+before the traces are captured; several separated by ``;``, ``none`` = no override),
 and the batch buckets, e.g. ``1,8,32``.
 """
 import sys
@@ -27,10 +28,14 @@ from models.demos.blackhole.llama_nemotron_rerank_1b.tt.runner import TracedRera
 BUCKETS = tuple(int(b) for b in (sys.argv[3] if len(sys.argv) > 3 else "1,8,32").split(","))
 m.runner = r = TracedReranker(m.runner.model, max_seq_len=512, batch_buckets=BUCKETS)
 print(f"batch buckets {BUCKETS}", flush=True)
-if len(sys.argv) > 2 and "=" in sys.argv[2]:  # e.g. "bf16_acc_kinds=" : fp32 accumulation everywhere
-    key, val = sys.argv[2].split("=")
-    setattr(r.model, key, {k for k in val.split(",") if k})
-    print(f"model.{key} = {getattr(r.model, key)}", flush=True)
+for item in sys.argv[2].split(";") if len(sys.argv) > 2 and "=" in sys.argv[2] else []:
+    key, val = item.split("=")
+    if key.startswith("cfg."):  # e.g. cfg.sdpa_k_chunk=128
+        setattr(r.model.cfg, key[4:], int(val))
+        print(f"{key} = {getattr(r.model.cfg, key[4:])}", flush=True)
+    else:  # e.g. bf16_acc_kinds= : fp32 accumulation everywhere
+        setattr(r.model, key, {k for k in val.split(",") if k})
+        print(f"model.{key} = {getattr(r.model, key)}", flush=True)
 r.warmup()
 
 

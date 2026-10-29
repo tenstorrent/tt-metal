@@ -118,6 +118,15 @@ A batch where every row is exactly one pair of S tokens skips the mask (`demo/be
 32 x 512 ran 175 ms unmasked (75.9 %), but packed rows put every pair through that shape, where bf16
 accumulation fails the accuracy gate (see "Packed rows").
 
+Clock under load: the board's limits are 150 W (TDP) and 200 A core current (TDC). At 1.35 GHz the model draws
+~300 A, so within ~0.8 s of continuous work the firmware lowers the clock until the current is just under
+200 A: 800-940 MHz at 0.68-0.70 V and ~128 W, so current, not power, is the limit (hwmon `curr1_input`,
+`power1_input`, `tt_aiclk`; limits from `tt-smi -s`). A hotter chip leaks more current, so the settled clock
+falls with temperature: 32 x 512 175 ms at 57 C (937 MHz) vs 196 ms at 71 C (831 MHz). Work shorter than
+~0.8 s (a 25-document request) runs at full clock. Block configs swept for this steady state differ from the
+full-clock choices by 1-3 % at most; FF1 + FF3 (2, 32, 8, 1, 4) instead trips a harder limiter (345 ms per
+32 x 512 replay while the clock reads 1081 MHz).
+
 Speed of light: ideal cycles for the matmuls and attention at the precision each op runs at
 (130 cores x 4096 FLOP/cycle LoFi, / 2 for HiFi2, / 4 for HiFi4), divided by the sum of the ops' device
 kernel cycles (`perf_tools/opsol.py`). Kernel durations, not firmware windows: an op that runs on fewer
@@ -207,8 +216,12 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
 ## Open items
 
 * 32 x 512 is at 65.8 % of speed of light with the mask (71.3 % without; 75.9 % unmasked before FF1 + FF3
-  moved to fp32 accumulation). The mask almost doubles SDPA (26.8 vs 14.1 M cycles): ttnn's SDPA reads and
-  adds every mask tile of each computed block. The rest
+  moved to fp32 accumulation). The mask almost doubles SDPA (26.8 vs 14.1 M cycles), and ~95 % of that is
+  reading it: ttnn's SDPA reads the [B, 1, S, S] mask from DRAM again for every Q head (151 MB per 32 x 512
+  call against 34 MB of K / V; one call 657 us unmasked, 1251 us masked, 693 us with the mask not read). The
+  ttnn branch `jerrywangTT/sdpa-mask-head-cache` keeps a head-broadcast mask in L1 per batch (one call
+  834 us; this model at 32 x 512: SDPA 17.9 M cycles, forward 160.5 M cycles, 69.5 % of SoL; 32 x 512
+  sustained 193 -> 189 ms); this branch runs on stock ttnn. The rest
   is spread over the ops: FF1 + FF3 is at 76 % (85 % with bf16 accumulation, which fails the accuracy gate
   with packed rows; the faster fp32 K-32 block is throttled by the board, see "Packed rows"); the fused
   WO / FF2 matmuls run at ~76-84 % of their limit inside their K loops (FF2 at LoFi with 4 x 1 subblocks, which
