@@ -51,6 +51,9 @@
 // are never written). Published mode only; the writes go out after the round's multicast.
 //
 // Runtime arg after the taps' (before the fabric's): an optional L1 timeline (0 = off), kHubTs words per round.
+// Compile-time arg 29 links (1 / 2): with 2 the fabric args hold a second set (fwd, bwd) on the neighbours' second
+// link, and each vector's odd packets go over it (the peers count all packets on the same semaphores).
+// Compile-time arg 30 mc_nocs (1 / 2): with 2, x goes to the streamers half over NOC 0 and half over NOC 1.
 //
 // Compile-time arg 21 sample (feed kind 0): the records are the streamers' top-k lists and the candidate slots
 // the chips' (sampling::kListBytes each); the token is drawn from them with the sampling parameters (DRAM, 16 words,
@@ -123,6 +126,11 @@ constexpr uint32_t tap_rounds[5] = {
     get_compile_time_arg_val(27)};
 constexpr uint32_t hidden_tiles = get_compile_time_arg_val(28);
 constexpr uint32_t kHubTs = 8;                               // timeline words per round
+// fabric links to each neighbour: with 2, the odd packets of a vector go over the second link
+constexpr uint32_t links = get_compile_time_arg_val(29);
+static_assert(links == 1 || links == 2, "one or two fabric links");
+// NOCs x is multicast to the streamers over (2: half on each; this core runs nothing else on NOC 1)
+constexpr uint32_t mc_nocs = get_compile_time_arg_val(30);
 constexpr uint32_t kTapTile = 2048;                          // a bf16 32x32 tile of a tap tensor
 constexpr uint32_t kRowsTile = vector_bytes / hidden_tiles;  // a batch x 32 bf16 tile of x
 constexpr uint32_t kTapTiles = hidden_tiles / num_chips;     // this chip's hidden tiles
@@ -313,6 +321,12 @@ void kernel_main() {
     auto fabric =
         FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
             arg_idx);
+    // (links == 2: the second link's connections, from the args after the first's)
+    auto fabric1 =
+        links > 1
+            ? FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
+                  arg_idx)
+            : FabricConnectionManager{};
 
     // one header per (parity, packet, direction), built once: the header writes to the routers are
     // non-blocking, so a header is never rewritten while a send of it may still be reading it
@@ -358,6 +372,12 @@ void kernel_main() {
     }
     if (fabric.is_logically_connected()) {
         fabric.open_finish();
+    }
+    if constexpr (mc_nocs > 1) {
+        noc_local_state_init(1);
+    }
+    if (links > 1 && fabric1.is_logically_connected()) {
+        fabric1.open_finish();
     }
 
     volatile tt_l1_ptr uint32_t* gather = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_gather));
@@ -406,11 +426,12 @@ void kernel_main() {
                 const uint32_t src = base + chip * vector_bytes + p * packet_bytes;
                 const uint32_t bytes =
                     (p + 1) * packet_bytes <= vector_bytes ? packet_bytes : vector_bytes - p * packet_bytes;
-                if (fabric.has_forward_connection()) {
-                    perform_payload_send(fabric.get_forward_connection(), src, bytes, hdr[par][p][0]);
+                auto& f = links > 1 && (p & 1) ? fabric1 : fabric;
+                if (f.has_forward_connection()) {
+                    perform_payload_send(f.get_forward_connection(), src, bytes, hdr[par][p][0]);
                 }
-                if (fabric.has_backward_connection()) {
-                    perform_payload_send(fabric.get_backward_connection(), src, bytes, hdr[par][p][1]);
+                if (f.has_backward_connection()) {
+                    perform_payload_send(f.get_backward_connection(), src, bytes, hdr[par][p][1]);
                 }
             }
             mark(l, 1);
@@ -434,14 +455,29 @@ void kernel_main() {
             }
         }
         if (l + 1 < layers || mcast_last) {
+            // (mc_nocs == 2: the second half of x over NOC 1, whose rectangles run corner to corner the other way)
+            const uint32_t half = mc_nocs > 1 ? (bytes / 2 + 31) & ~31u : bytes;
             for (uint32_t r = 0; r < rects; r++) {
                 noc_async_write_multicast(
                     src,
                     get_noc_multicast_addr(rect(r, 0), rect(r, 1), rect(r, 2), rect(r, 3), streamer_slots),
-                    bytes,
+                    half,
                     rect(r, 4));
+                if constexpr (mc_nocs > 1) {
+                    noc_async_write_multicast(
+                        src + half,
+                        get_noc_multicast_addr(
+                            rect(r, 2), rect(r, 3), rect(r, 0), rect(r, 1), streamer_slots + half, 1),
+                        bytes - half,
+                        rect(r, 4),
+                        false,
+                        1);
+                }
             }
             noc_async_write_barrier();
+            if constexpr (mc_nocs > 1) {
+                noc_async_write_barrier(1);
+            }
             *flag = l + 1;
             for (uint32_t r = 0; r < rects; r++) {
                 noc_semaphore_set_multicast(
@@ -647,5 +683,8 @@ void kernel_main() {
     }
     if (fabric.is_logically_connected()) {
         fabric.close();
+    }
+    if (links > 1 && fabric1.is_logically_connected()) {
+        fabric1.close();
     }
 }

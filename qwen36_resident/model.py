@@ -25,6 +25,7 @@ import weakref
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 from qwen36_resident import PKG_DIR
@@ -94,6 +95,8 @@ CHUNK_FP32_CBS = (5, 6, 11, 16, 25, 28)
 GDN_CHUNK = os.environ.get("RESIDENT_GDN_CHUNK", "1") == "1"
 # (attention of a verify of R > 2 rows in packed passes of several rows, attn_common.hpp; 0: a pass per row)
 ATTN_PACKED = os.environ.get("RESIDENT_ATTN_PACKED", "1") == "1"
+HUB_LINKS = int(os.environ.get("RESIDENT_HUB_LINKS", "2"))  # fabric links per neighbour the hubs' all-reduce uses
+HUB_MC_NOCS = int(os.environ.get("RESIDENT_HUB_MC_NOCS", "1"))  # NOCs the hub multicasts x over (mlp_hub.cpp mc_nocs)
 TOK_PREV = 14  # token state word: the previous verify step's accepted drafts (chunked GDN; none: 0xFFFFFFFF)
 TOK_X0 = 64
 TOK_SLOT = 4  # token state word: the GDN state slot of row 0 (verify)
@@ -626,6 +629,7 @@ class ResidentModel:
         attn_grid = work_grid.merge(lead_grid)
         mixer_grid = head_grid.merge(prep_grid)
         all_grid = grid.merge(hub_grid).merge(attn_grid).merge(head_grid)
+        nohub_grid = grid.merge(attn_grid).merge(head_grid)
         phys = lambda c: mesh.worker_core_from_logical_core(c)
         sphys = [phys(c) for c in cores]
         hub_p, lead_p, tail_p = phys(hub), phys(leader), phys(tail_core)
@@ -897,6 +901,19 @@ class ResidentModel:
         # the hub's slots are a hub CB; it dumps the last layer's x here (for the host)
         self.x_t = dram_t(torch.zeros(n, B * HIDDEN), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
         self.ccl_sems = [ttnn.create_global_semaphore(mesh, hub_grid, 0) for _ in range(2)]  # per slot parity
+        # the hubs' all-reduce over RESIDENT_HUB_LINKS fabric links per neighbour where that many trained, else fewer
+        # (a cabling or mesh descriptor with one link per neighbour takes the one-link path)
+        self.hub_links = 1
+        if n > 1 and HUB_LINKS > 1:
+            node = lambda c: mesh.get_fabric_node_id(ttnn.MeshCoordinate(0, c))  # noqa: E731
+            trained = min(
+                len(ttnn.get_forwarding_link_indices(node(c), node(c + s)))
+                for c in range(n)
+                for s in (1, -1)
+                if 0 <= c + s < n
+            )
+            self.hub_links = max(1, min(HUB_LINKS, trained))
+        logger.info(f"resident hub all-reduce: {self.hub_links} fabric link(s) per neighbour")
         # per streamer (order key, vocab index) of its largest logit, written by the streamer writers
         # (sample: its top-k list, sampling.hpp)
         rec_words = S * B * (2 * TOP_K if self.sample else 4)  # (sampling: B = 1, or rows mode)
@@ -1214,8 +1231,13 @@ class ResidentModel:
             if self.kv_paged:
                 # page lists of the workers' tiles, then a page-table window (attn_paged.hpp cb_pages)
                 cbs.append(cb(30, work_grid, 1, ttnn.uint32, -(-(4 * B * self.kv_max_n + 2048 + 64) // 64) * 64))
-            # the hub needs free semaphore ids for its fabric connections: the head-group one only on the heads
-            sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=all_grid, initial_value=0) for i in range(SEM_GROUP)]
+            # the hub needs free semaphore ids for its fabric connections (2 per connection, 2 or 4 connections): the
+            # head-group one only on the heads, and on the hub only the ones mlp_hub.cpp owns
+            hub_sems = (SEM_GATHER, SEM_FLAG, SEM_ADDR)
+            sems = [
+                ttnn.SemaphoreDescriptor(id=i, core_ranges=all_grid if i in hub_sems else nohub_grid, initial_value=0)
+                for i in range(SEM_GROUP)
+            ]
             sems.append(ttnn.SemaphoreDescriptor(id=SEM_GROUP, core_ranges=head_grid, initial_value=0))
 
             # every kernel: multi-user rows mode (active_rows.hpp)
@@ -1398,6 +1420,7 @@ class ResidentModel:
                 # taps: the hub round holding x after the tap's decoder layer
                 rounds_of = [2 * l + 1 + int(self.fc) for l, _ in self.taps]
                 hub_ct += [len(self.taps)] + (rounds_of + [0xFFFFFFFF] * 5)[:5] + [d.Ht]
+                hub_ct += [self.hub_links, HUB_MC_NOCS]
                 if self.feed:
                     hub_args += [
                         sub["argmax"].buffer_address(),
@@ -1544,17 +1567,18 @@ class ResidentModel:
                 program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
                 self._cb_top = max(getattr(self, "_cb_top", 0), cb_extent(cbs))  # (TraceL1Guard)
                 args = program.kernels[3].runtime_args[hub.x][hub.y]
-                for nb in (chip + 1, chip - 1):
-                    if 0 <= nb < n:
-                        me = mesh.get_fabric_node_id(coord)
-                        args.append(1)
-                        args.extend(
-                            ttnn.setup_fabric_connection(
-                                me, mesh.get_fabric_node_id(ttnn.MeshCoordinate(0, nb)), 0, program, hub
+                for link in range(self.hub_links):  # (mlp_hub.cpp links: a (fwd, bwd) set per link)
+                    for nb in (chip + 1, chip - 1):
+                        if 0 <= nb < n:
+                            me = mesh.get_fabric_node_id(coord)
+                            args.append(1)
+                            args.extend(
+                                ttnn.setup_fabric_connection(
+                                    me, mesh.get_fabric_node_id(ttnn.MeshCoordinate(0, nb)), link, program, hub
+                                )
                             )
-                        )
-                    else:
-                        args.append(0)
+                        else:
+                            args.append(0)
                 mesh_pd[ttnn.MeshCoordinateRange(coord, coord)] = program
             io = [sub["x"], self.o_in_t, rows_t, q_t, M_t, m_slots_t, one_t, mean_t]
             io += [taps_t, sub["hist"], sub["state"], norm_t, qw_t, kw_t, sub["K"], sub["V"], sub["tok"]]
