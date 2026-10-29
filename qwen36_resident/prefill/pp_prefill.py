@@ -31,7 +31,7 @@ from qwen36_resident import PKG_DIR
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from qwen36_resident.prefill import pp_weights as PW
 from qwen36_resident.prefill.smm import SmallMatmul
-from qwen36_resident.common import EPS, HIDDEN, INTER, device_zeros
+from qwen36_resident.common import EPS, HIDDEN, INTER, device_zeros, zero_dram
 from qwen36_resident.model import (
     CONV_K,
     DK,
@@ -51,6 +51,8 @@ from qwen36_resident.model import (
 )
 
 KDIR = f"{PKG_DIR}/prefill/kernels/"
+# 1: reset() uploads host zeros (~65 MB / chip) instead of zero-filling on device (A/B)
+HOST_ZERO = os.environ.get("RESIDENT_PP_HOST_ZERO", "0") == "1"
 QD, VD = NK * DK, NV * DV  # 2048, 6144
 CONV_CH = 2 * QD + VD  # 10240
 Z0, A0 = CONV_CH, CONV_CH + VD  # z | a | b columns
@@ -988,7 +990,18 @@ class PPPrefill:
         self._trace_guard = TraceL1Guard(self.mesh, "prefill")  # the L1 its replays assume (model.TraceL1Guard)
 
     def reset(self):
+        """a new prompt: the GDN states and conv carries zero (a stage's first chunk starts from them) and the chunks in
+        flight (x_last, every chunk size's) zero. A stage's idle ticks (update flag 0: the gates mask g and beta to 0,
+        the conv keeps its carry) leave its states as they are, and stale x_last only ever feeds idle ticks; zeroing
+        it keeps them finite. Zero-filled on device (zero_dram) rather than uploaded from the host (~65 MB per chip:
+        S 12 x 48 x 128 x 128 fp32, x_last of 4 chunk sizes, carry)"""
         self._use(self.C)
+        if not HOST_ZERO:
+            zero_dram(
+                self.mesh,
+                [geo["x_last"] for geo in self._geo.values()] + list(self.S.values()) + list(self.carry.values()),
+            )
+            return
         if not hasattr(self, "_zeros"):
             # built once: tilizing the zero tensors on the host costs ~0.4 s per reset
             shard = ttnn.ShardTensorToMesh(self.mesh, dim=0)
