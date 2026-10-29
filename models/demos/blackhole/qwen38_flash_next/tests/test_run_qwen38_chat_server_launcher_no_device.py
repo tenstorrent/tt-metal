@@ -117,6 +117,18 @@ def test_long_chunks_and_a_slab_combine_with_mtp(tmp_path, stub_python) -> None:
     assert "accepted for compatibility: the 128-row chunks are the server's default (combines with --mtp)" in launcher
 
 
+def test_lanes_and_their_stall_budget_reach_the_server(tmp_path, stub_python) -> None:
+    common = ("--profile", "p150-line", "--checkpoint", str(tmp_path / "checkpoint"), "--cache-root", str(tmp_path))
+    common += ("--python", str(stub_python), "--mtp", "4", "--no-sampling", "--validate-only")
+    run = run_launcher(tmp_path, *common, "--lanes", "4", "--lanes-stall-budget", "off")
+    assert run.returncode == 0, run.stderr
+    args = [line[len("arg=") :] for line in run.stdout.splitlines()[1:]]
+    assert args[args.index("--lanes") + 1] == "4" and args[args.index("--lanes-stall-budget") + 1] == "off"
+    assert "--sampling" not in args
+    refused = run_launcher(tmp_path, *common, "--lanes", "0")
+    assert refused.returncode == 2 and "--lanes must be a positive integer" in refused.stderr, refused.stderr
+
+
 def test_a_tree_without_git_history_starts_only_with_its_declared_head(tmp_path) -> None:
     """A tree without git history (such as a CI image) takes its head from QWEN38_TT_METAL_SHA, as the server's
     runtime admission does; without a 40-hex value the launcher refuses before it probes the interpreter."""
