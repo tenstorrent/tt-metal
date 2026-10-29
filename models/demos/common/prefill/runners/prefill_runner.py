@@ -159,9 +159,7 @@ TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_
 assert (
     not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv
 ), f"PREFILL_TP_SHARD_KV=1: model {ADAPTER.name!r} does not support a TP-deduped KV cache"
-SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 CHUNK_TIMEOUT_SECONDS = float(os.environ.get("TT_PREFILL_CHUNK_TIMEOUT_SECONDS", 0))
-TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 # Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
 # that used to make this a narrow band; what is left is MLA's chunked-attention ceiling.
 _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_size))
@@ -665,23 +663,6 @@ def _capture_socket_ops(
     )
 
 
-def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: float) -> None:
-    if not TIMING_DIR:
-        return
-    try:
-        # O_CREAT makes the file, not the parent. Without this the open raises ENOENT, the except
-        # below swallows it, and the run silently records nothing -- which is how a 5-point sweep
-        # finished with five empty timing dirs and no Gantt input.
-        os.makedirs(TIMING_DIR, exist_ok=True)
-        fd = os.open(os.path.join(TIMING_DIR, f"rank{rank}.csv"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-        try:
-            os.write(fd, f"{rank},{c},{compute_start:.6f},{compute_ms:.3f}\n".encode())
-        finally:
-            os.close(fd)
-    except OSError:
-        pass
-
-
 @contextlib.contextmanager
 def _with_hang_timeout():
     if not CHUNK_TIMEOUT_SECONDS:
@@ -787,10 +768,7 @@ def _compute_and_send(
     indices=None,
     idx_out=None,
 ) -> float:
-    if SYNC_PER_CHUNK:
-        ttnn.synchronize_device(runtime.mesh_device)
     t_start = time.time()
-    t_perf = time.perf_counter()
     where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     logger.info(
         f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where} "
@@ -829,11 +807,6 @@ def _compute_and_send(
                 **mtp_kwargs,
                 **({"indexer_indices": indices} if indices is not None else {}),
             )
-    if SYNC_PER_CHUNK:
-        ttnn.synchronize_device(runtime.mesh_device)
-        compute_ms = (time.perf_counter() - t_perf) * 1000.0
-        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
-        _record_chunk_timing(rank, c, t_start, compute_ms)
     forward_md = None
     if not runtime.config.is_last_rank:
         if sockets.send_trace is None:

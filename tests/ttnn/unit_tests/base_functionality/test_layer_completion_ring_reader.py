@@ -225,6 +225,21 @@ def test_drain_reports_each_retired_chunk_in_completion_order():
     assert retired == [(0, 0, 128), (1, 0, 128)]
 
 
+def test_drain_reports_every_completion_before_its_chunk_retires():
+    events = []
+    ring = FakeRing([msg(0, 2), msg(2, 4)])
+    drain = start_layer_completion_drain(
+        ring,
+        num_layers=NUM_LAYERS,
+        chunk_layers=NUM_LAYERS,
+        on_completion=lambda c: events.append(("ack", c.layer_start)),
+        on_chunk_complete=lambda key, cov: events.append(("retire", key)),
+    )
+    assert wait_for_layer_completions(drain, NUM_LAYERS, timeout_s=5) == NUM_LAYERS
+    drain.stop()
+    assert events == [("ack", 0), ("ack", 2), ("retire", (0, 0, 128))]
+
+
 def test_drain_surfaces_a_producer_bug_on_the_callers_thread():
     drain = LayerCompletionDrain(FakeRing([msg(0, 3), msg(2, 4)]), num_layers=NUM_LAYERS).start()
     with pytest.raises(ValueError, match="overlaps"):  # allow-pytest.raises: host-only, no device error

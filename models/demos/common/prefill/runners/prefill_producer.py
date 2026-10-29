@@ -32,6 +32,7 @@ from models.demos.common.prefill.prefill_chunk import (
     sentinel_metadata,
 )
 from models.demos.common.prefill.runners.layer_completion_ring_reader import (
+    chunk_key,
     connect_layer_completion_channel,
     start_layer_completion_drain,
     wait_for_layer_completions,
@@ -573,33 +574,37 @@ class RunStats:
 
 
 class _ChunkRetireClock:
-    """Producer-clock lifecycle of each pushed chunk: push start to the drain seeing its last layer.
+    """Producer-clock span of each chunk: the drain seeing its first layer ack to seeing its last.
 
-    Every stamp is time.perf_counter() on this process, so chunk latency, retire cadence and in-flight depth
-    need no cross-host clock and no per-chunk device sync. One CHUNK_RETIRE line per chunk feeds the summarizer.
+    Every stamp is time.perf_counter() on this process, so chunk time and retire cadence need no cross-host clock
+    and no per-chunk device sync. One CHUNK_RETIRE line per chunk feeds the summarizer.
     """
 
     def __init__(self):
         self._lock = threading.Lock()
         self._pushed = {}
+        self._first_ack = {}
         self.warmup = False
 
-    def on_push(self, key: tuple, push_ts: float) -> None:
+    def on_push(self, key: tuple) -> None:
         with self._lock:
-            self._pushed[key] = (push_ts, self.warmup)
+            self._pushed[key] = self.warmup
+
+    def on_ack(self, c) -> None:
+        with self._lock:
+            self._first_ack.setdefault(chunk_key(c), time.perf_counter())
 
     def on_retire(self, key: tuple, retire_ts: float) -> None:
         with self._lock:
-            entry = self._pushed.pop(key, None)
-            depth = len(self._pushed)
-        if entry is None:
+            warmup = self._pushed.pop(key, None)
+            first_ts = self._first_ack.pop(key, None)
+        if warmup is None or first_ts is None:
             logger.warning(f"[producer] CHUNK_RETIRE for unpushed chunk {key}")
             return
-        push_ts, warmup = entry
         slot_id, pos_start, pos_end = key
         logger.info(
-            f"[producer] CHUNK_RETIRE slot={slot_id} start={pos_start} end={pos_end} push={push_ts:.6f} "
-            f"retire={retire_ts:.6f} depth={depth} warmup={int(warmup)}"
+            f"[producer] CHUNK_RETIRE slot={slot_id} start={pos_start} end={pos_end} first={first_ts:.6f} "
+            f"retire={retire_ts:.6f} warmup={int(warmup)}"
         )
 
 
@@ -1782,9 +1787,9 @@ def main() -> None:
             logger.info(
                 f"[producer] push slot={p.slot_id} cidx={p.chunk_idx} start={p.actual_start} end={p.actual_end}"
             )
-        push_start = time.perf_counter()
         for p in pushes:
-            retire_clock.on_push((p.slot_id, p.actual_start, p.actual_end), push_start)
+            retire_clock.on_push((p.slot_id, p.actual_start, p.actual_end))
+        push_start = time.perf_counter()
         _push(service, payload_bytes, *_forward_payload(pushes, lambda slot_id: pools_by_trace[slot_traces[slot_id]]))
         return (time.perf_counter() - push_start) * 1000.0
 
@@ -1794,6 +1799,7 @@ def main() -> None:
         completion_channel,
         num_layers=layer_bound,
         chunk_layers=chunk_layers,
+        on_completion=retire_clock.on_ack,
         on_chunk_complete=lambda key, cov: retire_clock.on_retire(key, time.perf_counter()),
     )
     try:
