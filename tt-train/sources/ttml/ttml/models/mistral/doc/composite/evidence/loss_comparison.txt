@@ -1,0 +1,15 @@
+8 of 40 layers, real weights, LoRA r16, seq 1024, batch 1, lr 1e-4, same token windows and LoRA init
+step | ttml run 1 | ttml run 2 (determinism) | torch fp64 | ttml - torch
+   1 | 12.1250 | 12.1250 | 12.1058 | +0.0192
+   2 | 11.9375 | 11.9375 | 11.8370 | +0.1005
+   3 | 11.3125 | 11.3125 | 11.2683 | +0.0442
+   4 | 10.4375 | 10.4375 | 10.3571 | +0.0804
+   5 | 9.7500 | 9.7500 | 9.6544 | +0.0956
+   6 | 9.8750 | 9.8750 | 10.1088 | -0.2338
+   7 | 9.2500 | 9.2500 | 9.2275 | +0.0225
+   8 | 8.6875 | 8.6875 | 8.6786 | +0.0089
+   9 | 8.9375 | 8.9375 | 8.9936 | -0.0561
+  10 | 8.5625 | 8.5625 | 8.6285 | -0.0660
+max |ttml - torch| = 0.2338  (ttml loss is a bf16 value: 1 ulp = 0.0625 for 8 <= loss < 16, so +-0.031 is quantisation alone)
+runs identical: True
+torch decrease step 1 -> 10: 3.4772; ttml: 3.5625

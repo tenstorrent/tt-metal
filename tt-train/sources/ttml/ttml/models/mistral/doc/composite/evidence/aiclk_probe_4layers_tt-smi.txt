@@ -1,0 +1,6 @@
+t=10s aiclk 1350 MHz, temp 65.4 C, power  71.0 W
+t=20s aiclk 1350 MHz, temp 65.4 C, power  71.0 W
+t=30s aiclk 1350 MHz, temp 66.2 C, power  71.0 W
+t=40s aiclk 1162 MHz, temp 72.3 C, power 168.0 W
+t=50s aiclk  800 MHz, temp 60.1 C, power  22.0 W
+t=60s aiclk  800 MHz, temp 60.1 C, power  22.0 W

@@ -1,0 +1,61 @@
+At 4.129s starting
+Legend:
+	Comma separated list specifies waypoint for BRISC, NCRISC, TRISC0, TRISC1, TRISC2
+	BRISC is main processor, others are subordinates
+	I=initialization sequence
+	W=wait (top of spin loop)
+	R=run (entering kernel)
+	D=done (finished spin loop)
+	X=host written value prior to fw launch
+
+	A single character status is in the FW, other characters clarify where, eg:
+		NRW is "noc read wait"
+		NWD is "noc write done"
+	rmsg(BRISC host run message): D/H device/host dispatch; NOC ID; I/G/D init/go/done; | separator; enable flags UPPER=enabled, lower=disabled: B/b=BRISC N/n=NCRISC T/t=TRISC
+	smsg(subordinate run message): I/G/D for subordinate processors
+	k_ids: kernel IDs per processor (ID map to file at end of section)
+
+At 4.130s attach device 0
+
+At 4.130s attach device 1
+
+At 4.130s attach device 2
+
+At 4.130s attach device 3
+
+-----
+Dump #1 at 4.130s
+Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 2):   GW,   W,   W,   W,   W  rmsg:D0D|bnt h_id:  0 smsg:DDDD
+k_ids:  0|  0|  0|  0|  0
+Device 0 worker core(x= 1,y= 0) virtual(x= 2,y= 2):   GW,   W,   W,   W,   W  rmsg:D0D|bnt h_id:  0 smsg:DDDD
+...
+Device 3 acteth core(x= 0,y= 5) virtual(x=25,y=25):   GW,   W,   X,   X,   X  rmsg:D0D|ee h_id:  0 smsg:D
+k_ids:  0|  0
+Device 3 acteth core(x= 0,y= 4) virtual(x=24,y=25):   GW,   W,   X,   X,   X  rmsg:D0D|ee h_id:  0 smsg:D
+k_ids:  0|  0
+Device 3 acteth core(x= 0,y= 3) virtual(x=23,y=25):   GW,   W,   X,   X,   X  rmsg:D0D|ee h_id:  0 smsg:D
+k_ids:  0|  0
+Device 3 acteth core(x= 0,y= 2) virtual(x=22,y=25):   GW,   W,   X,   X,   X  rmsg:D0D|ee h_id:  0 smsg:D
+k_ids:  0|  0
+Device 3 idleth core(x= 0,y=11) virtual(x=31,y=25):   GW,   W,   X,   X,   X  rmsg:H0D|ee h_id:  0 smsg:D
+k_ids:  0|  0
+Device 3 idleth core(x= 0,y=10) virtual(x=30,y=25):   GW,   W,   X,   X,   X  rmsg:H0D|ee h_id:  0 smsg:D
+k_ids:  0|  0
+Device 3 idleth core(x= 0,y= 9) virtual(x=29,y=25):   GW,   W,   X,   X,   X  rmsg:H0D|ee h_id:  0 smsg:D
+k_ids:  0|  0
+Device 3 idleth core(x= 0,y= 8) virtual(x=28,y=25):   GW,   W,   X,   X,   X  rmsg:H0D|ee h_id:  0 smsg:D
+k_ids:  0|  0
+Device 3 idleth core(x= 0,y= 7) virtual(x=27,y=25):   GW,   W,   X,   X,   X  rmsg:H0D|ee h_id:  0 smsg:D
+k_ids:  0|  0
+Device 3 idleth core(x= 0,y= 6) virtual(x=26,y=25):   GW,   W,   X,   X,   X  rmsg:H0D|ee h_id:  0 smsg:D
+k_ids:  0|  0
+Device 3 idleth core(x= 0,y= 1) virtual(x=21,y=25):   GW,   W,   X,   X,   X  rmsg:H0D|ee h_id:  0 smsg:D
+k_ids:  0|  0
+Device 3 idleth core(x= 0,y= 0) virtual(x=20,y=25):   GW,   W,   X,   X,   X  rmsg:H0D|ee h_id:  0 smsg:D
+k_ids:  0|  0
+k_id[  0]: blank
+Dump #105 completed at 112.921s
+At 113.087s detach device 0
+At 113.087s detach device 1
+At 113.087s detach device 2
+At 113.087s detach device 3

@@ -52,6 +52,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--random-data", action="store_true", help="uniform random tokens (perf runs)")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--track-memory", action="store_true", help="print device memory after the first step")
+    p.add_argument("--mem-probe", action="store_true", help="print allocated DRAM after the forward and after the step")
     p.add_argument("--loss-log", default=None, help="write per-step losses and timings as JSON")
     p.add_argument("--data-log", default=None, help="write the token windows used per step (for the torch reference)")
     p.add_argument(
@@ -82,6 +83,12 @@ def load_tokens(model_dir: Path, data_path: Path, vocab_size: int) -> np.ndarray
         raise ValueError(f"token id {tokens.max()} exceeds vocab {vocab_size}")
     np.save(cache, tokens)
     return tokens
+
+
+def dram_allocated_gib() -> float:
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    view = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM)
+    return view.total_bytes_allocated_per_bank * view.num_banks / 2**30
 
 
 class Batcher:
@@ -160,10 +167,18 @@ def main() -> None:
         optimizer.zero_grad()
         logits = model(x, None)
         loss = ttml.ops.loss.cross_entropy_loss(logits, y, ttml.ops.ReduceType.MEAN)
+        if args.mem_probe and step <= 2:
+            print(f"step {step}: DRAM allocated after forward {dram_allocated_gib():.2f} GiB")
         loss.backward(False)
+        if args.mem_probe and step <= 2:
+            print(f"step {step}: DRAM allocated after backward {dram_allocated_gib():.2f} GiB")
         ctx.reset_graph()
         optimizer.step()
         loss_val = float(loss.to_numpy(ttnn.DataType.FLOAT32).item())  # the read-back is the step's host sync
+        if args.mem_probe and step <= 2:
+            print(
+                f"step {step}: DRAM allocated after the optimizer step {dram_allocated_gib():.2f} GiB (weights + state)"
+            )
         ms = (time.perf_counter() - t0) * 1e3
         if step > args.warmup_steps:
             steps_ms.append(ms)
