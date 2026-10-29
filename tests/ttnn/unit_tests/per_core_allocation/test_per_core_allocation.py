@@ -677,7 +677,7 @@ def test_triangle_allocation_then_uniform_sharded(device):
 
 
 @requires_hybrid_allocator
-def test_per_core_view_is_rejected(device):
+def test_per_core_view_is_rejected(device, expect_error):
     core = ttnn.CoreCoord(0, 0)
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]), [64, 64], ttnn.ShardOrientation.ROW_MAJOR
@@ -687,5 +687,5 @@ def test_per_core_view_is_rejected(device):
     owner = ttnn.from_torch(
         torch.randn(64, 64, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config
     )
-    with pytest.raises(RuntimeError, match="per-core allocated tensor"):
+    with expect_error(RuntimeError, "per-core allocated tensor"):
         ttnn.experimental.view(owner, [128, 32])
