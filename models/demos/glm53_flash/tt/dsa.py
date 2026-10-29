@@ -691,6 +691,61 @@ class TtLatentCache:
             out.append(self._upload_view(shifted, per_chip and i == 0))
         return out
 
+    def _wave_view_rows(self, user: int, idle: tuple[int, ...]) -> list[torch.Tensor]:
+        """Per mesh row r the ``[cols, blocks_per_seq]`` host page-table rows a wave's fill of slot ``user`` writes on
+        row r's chips (``_view_rows``'s per-chip row), or on an idle row the dummy row (heads2users) / scratch row on
+        every column; an unpartitioned cache has no harmless target for an idle row."""
+        cols = self.mesh.cols
+        if not self.partition:
+            if idle:
+                raise NotImplementedError(
+                    "a wave with idle rows needs a partitioned latent cache (dummy / scratch rows)"
+                )
+            return [self.page_table_host[user : user + 1].expand(cols, -1) for _ in range(self.mesh.rows)]
+        other = self.scratch if self.scratch is not None else self.dummy_row
+        member = self._view_rows(user)[0]
+        return [
+            self.page_table_host[other : other + 1].expand(cols, -1) if r in idle else member
+            for r in range(self.mesh.rows)
+        ]
+
+    def _wave_upload(self, per_row: list[torch.Tensor], shifts: tuple[int, ...]) -> ttnn.Tensor:
+        rows = []
+        for r, t in enumerate(per_row):
+            b0 = int(shifts[r])
+            rows.append(t if b0 == 0 else torch.cat([t[:, b0:], t[:, -1:].expand(-1, b0)], dim=1))
+        return self.mesh.upload(
+            torch.cat(rows, dim=0).contiguous(), ttnn.int32, rows=0, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+
+    def fill_wave(self, latent: ttnn.Tensor, user: int, starts: tuple[int, ...], idle: tuple[int, ...]):
+        """``fill`` for a wave: mesh row r writes ``latent`` (ITS chunk ``[1,1,T,L]``) into slot ``user``'s pages from
+        ITS start ``starts[r]`` through per-chip fixed-width page-table views (``[rows * cols, blocks_per_seq]`` in
+        row-major chip order, one fill program for every wave shape); an idle row writes into its dummy / scratch
+        pages."""
+        if any(s0 % self.block_size for s0 in starts):
+            raise ValueError(f"wave fill starts {starts} must be multiples of the block size {self.block_size}")
+        src = latent if latent.dtype == self.dtype else ttnn.typecast(latent, self.dtype)
+        shifts = tuple(s0 // self.block_size for s0 in starts)
+        if max(shifts) >= self.blocks_per_seq:
+            raise ValueError(f"wave fill start block {max(shifts)} outside [0, {self.blocks_per_seq})")
+        rows = min(fill_rows(src.shape[-2], b0, self.blocks_per_seq, self.block_size) for b0 in shifts)
+        clipped = None
+        if rows < src.shape[-2]:
+            clipped = ttnn.slice(src, [0, 0, 0, 0], [1, 1, rows, src.shape[-1]])
+            src = clipped
+        views = [self._wave_upload(self._wave_view_rows(user, idle), shifts)]
+        if self.partition and self.scratch is not None:
+            scratch = self.page_table_host[self.scratch : self.scratch + 1].expand(self.mesh.cols, -1)
+            views.append(self._wave_upload([scratch] * self.mesh.rows, shifts))
+        try:
+            for view in views:
+                ttnn.experimental.paged_fill_cache(self.cache, src, view, batch_idx=0)
+                ttnn.deallocate(view)
+        finally:
+            if clipped is not None:
+                ttnn.deallocate(clipped)
+
     def fill(self, latent: ttnn.Tensor, user: int, start: int = 0, slot=None):
         """latent [1, 1, T_pad, 512] (T_pad % block_size == 0) -> pages of ``user`` from position
         ``start`` (a block multiple): page-table view from block ``start // block_size`` on.
@@ -1261,6 +1316,7 @@ class TtDSA(LightweightModule):
         ring_sel: ttnn.Tensor | None = None,
         *,
         slab: bool = False,
+        wave=None,
     ) -> ttnn.Tensor:
         """One user, one chunk: x row i is the token at absolute position ``start + i``
         (``start % block_size == 0``; ``start == 0`` = a new prompt). x [1,1,T_pad,4096] with
@@ -1277,6 +1333,9 @@ class TtDSA(LightweightModule):
         (``_prefill_slab``: the sequence-parallel form, no gathered hidden, no reduce-scatter)."""
         if slot is not None:
             cache.release_prefix()  # the device-slot fill names its user on device: no arena can follow it
+        if wave is not None:
+            cache.release_prefix()  # the wave reads its kv straight from the pages (per-row starts)
+            return self._prefill_wave(x, cache, user, wave)
         if slab and self.mesh.rows > 1:
             return self._prefill_slab(x, cache, user, seq_len, start, slot=slot, ring_sel=ring_sel)
         T = x.shape[-2]
@@ -1346,6 +1405,78 @@ class TtDSA(LightweightModule):
         ttnn.deallocate(o_dense)
         ttnn.deallocate(o_sparse)
         y = self._o_proj(o)
+        self._mark("out_proj")
+        return y
+
+    # ------------------------------------------------------------------ waves (per-row chunks)
+    def _prefill_wave(self, x: ttnn.Tensor, cache: TtLatentCache, user: int, wave) -> ttnn.Tensor:
+        """A wave (``doc/mesh/row_ownership.md`` mechanism (a), phase 1): mesh row r's ``x`` [1,1,T,4096] is ITS own
+        chunk ``[starts[r], starts[r] + valids[r])`` of slot ``user`` (``wave.starts`` / ``wave.valids``; an idle row
+        runs pad rows, its results discarded). No gathers: each row fills its own slot's pages and pools from its own
+        start (per-chip page-table views; idle rows into the dummy / scratch rows) and attends the shape-static way
+        of ``_prefill_static`` with per-row starts: the dense SDPA over the user's first P cached rows with the
+        row-sharded Q offsets, the sparse path over every row with the rows' true positions (``row_starts_of``), the
+        whole-prefix kv read to the wave's longest prefix (a superset: every selection is causal per row), the
+        per-row position mask keeping the dense result below P. One program set per T."""
+        T = x.shape[-2]
+        rows = self.mesh.rows
+        starts, valids = tuple(int(v) for v in wave.starts), tuple(int(v) for v in wave.valids)
+        if wave.T != T or len(starts) != rows:
+            raise ValueError(f"wave T {wave.T} x {len(starts)} rows vs x {tuple(x.shape)} on {rows} rows")
+        idle = tuple(r for r, v in enumerate(valids) if v == 0)
+        if self.stage_timer is not None:
+            self.stage_timer.start()
+        q_resid = self._q_resid(x)
+        q = self._q(q_resid)  # [1,1,T,H*Dq]
+        c = self._latent(x)  # [1,1,T,L]
+        k_idx, g_idx = self.indexer.keys_and_gates(x)  # [1,1,T,D]
+        self._mark("prefill_stems")
+        cache.fill_wave(c, user, starts, idle)
+        self._mark("cache_fill")
+        self.indexer.maintain_prefill_wave(cache.index, user, k_idx, g_idx, starts, valids)
+        self._mark("index_maintain")
+        P = self._dense_rows(cache)
+        ends = tuple(s0 + v for s0, v in zip(starts, valids))
+        all_dense = max(s0 + T for s0 in starts) <= P
+        keys = self._dense_keys_static(cache, user)
+        q_off = self._q_offset_tensor(starts)
+        o_dense = self._dense_attention(q, keys, None, 0, q_offset=q_off, keys_only=True)
+        ttnn.deallocate(keys)
+        ttnn.deallocate(q_off)
+        self._mark("dense_attention")
+        if all_dense:
+            for t in (q_resid, q, c):
+                ttnn.deallocate(t)
+            y = self._o_proj(o_dense)
+            ttnn.deallocate(o_dense)
+            self._mark("out_proj")
+            return y
+        kv_rm = cache.user_rows_rm(user, max(starts) + T)  # the wave's longest prefix on every row (superset)
+        ttnn.deallocate(c)
+        self._mark("kv_copy")
+        o_sparse = self._sparse_rows(
+            x,
+            q_resid,
+            q,
+            cache,
+            user,
+            kv_rm,
+            start=min(starts),
+            end=max(ends),
+            r0=0,
+            r1=T,
+            row_starts_of=lambda q0: tuple(s0 + q0 for s0 in starts),
+            pos_floor=self.sparse_row_start,
+        )
+        ttnn.deallocate(q_resid)
+        ttnn.deallocate(q)
+        ttnn.deallocate(kv_rm)
+        mask = self._position_mask(starts, T, P)
+        o = self._select_rows_mask(o_dense, o_sparse, mask)
+        for t in (mask, o_dense, o_sparse):
+            ttnn.deallocate(t)
+        y = self._o_proj(o)
+        ttnn.deallocate(o)
         self._mark("out_proj")
         return y
 

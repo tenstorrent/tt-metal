@@ -242,6 +242,63 @@ class TtIndexCache:
             out.append(self._upload_pool_view(shifted, per_chip and i == 0))
         return out
 
+    # ------------------------------------------------------------------ waves (per-row chunks)
+    def _wave_target_rows(self, table_host: torch.Tensor, user: int, idle: tuple[int, ...]) -> list[torch.Tensor]:
+        """Per mesh row r the ``[cols, W]`` host rows of ``table_host`` a wave's prefill of slot ``user`` writes on row
+        r's chips: the user's owner / dummy (or scratch) rows, or on an idle row (no member) a harmless target on
+        every column: the dummy row (heads2users) or the scratch row; an unpartitioned cache has none."""
+        cols = self.mesh.cols
+        if not self.partition:
+            if idle:
+                raise NotImplementedError("a wave with idle rows needs a partitioned index (dummy / scratch rows)")
+            return [table_host[user : user + 1].expand(cols, -1) for _ in range(self.mesh.rows)]
+        other = self.scratch if self.scratch is not None else self.dummy_slot
+        member = self._owner_rows(user, table_host)
+        return [table_host[other : other + 1].expand(cols, -1) if r in idle else member for r in range(self.mesh.rows)]
+
+    def _wave_upload(self, per_row: list[torch.Tensor], shifts: tuple[int, ...]) -> ttnn.Tensor:
+        """``[rows * cols, W]`` int32 ROW_MAJOR, one row per chip (row-major chip order): mesh row r's rows shifted by
+        ``shifts[r]`` blocks (padded back to the width with the last block, never written)."""
+        rows = []
+        for r, t in enumerate(per_row):
+            b0 = int(shifts[r])
+            rows.append(t if b0 == 0 else torch.cat([t[:, b0:], t[:, -1:].expand(-1, b0)], dim=1))
+        host = torch.cat(rows, dim=0).contiguous()
+        return self.mesh.upload(host, ttnn.int32, rows=0, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    def write_pools_wave(self, pooled: ttnn.Tensor, user: int, start_pools: tuple[int, ...], idle: tuple[int, ...]):
+        """``write_pools`` for a wave: mesh row r writes ``pooled`` (its own ``[1,1,n,D]``) at ITS pool start
+        ``start_pools[r]`` (tile-aligned: a wave chunk starts at a multiple of 32 * P) through per-chip page-table
+        views; an idle row writes into its dummy / scratch pools."""
+        if any(sp % TILE for sp in start_pools):
+            raise ValueError(f"wave pool starts {start_pools} must be multiples of {TILE} (chunk starts of 32 * P)")
+        n = pooled.shape[-2]
+        n_pad = -(-n // TILE) * TILE
+        if n_pad != n:
+            pooled = ttnn.pad(pooled, [(0, 0), (0, 0), (0, n_pad - n), (0, 0)], value=0.0)
+        if pooled.dtype != self.pool_dtype:
+            pooled = ttnn.typecast(pooled, self.pool_dtype)
+        shifts = tuple(sp // TILE for sp in start_pools)
+        views = [self._wave_upload(self._wave_target_rows(self._pt_host, user, idle), shifts)]
+        if self.partition and self.scratch is not None:
+            scratch = self._pt_host[self.scratch : self.scratch + 1].expand(self.mesh.cols, -1)
+            views.append(self._wave_upload([scratch] * self.mesh.rows, shifts))
+        for view in views:
+            ttnn.experimental.paged_fill_cache(self.pool_cache, pooled, view, batch_idx=0)
+            ttnn.deallocate(view)
+
+    def write_ring_block_user_wave(self, k_tile: ttnn.Tensor, g_tile: ttnn.Tensor, user: int, idle: tuple[int, ...]):
+        """``write_ring_block_user`` for a wave: every row writes its own ring block of slot ``user`` (an idle row its
+        dummy / scratch ring block)."""
+        tables = [self._wave_upload(self._wave_target_rows(self._ring_ids_host, user, idle), (0,) * self.mesh.rows)]
+        if self.partition and self.scratch is not None:
+            scratch = self._ring_ids_host[self.scratch : self.scratch + 1].expand(self.mesh.cols, -1)
+            tables.append(self._wave_upload([scratch] * self.mesh.rows, (0,) * self.mesh.rows))
+        for pt in tables:
+            for ring, tile in ((self.ring_k, k_tile), (self.ring_g, g_tile)):
+                ttnn.experimental.paged_fill_cache(ring, tile, pt, batch_idx=0)
+            ttnn.deallocate(pt)
+
     def _pool_table_row(self, user: int) -> ttnn.Tensor:
         """[1, pool_blocks] row ``user`` of the identity pool page table (a device slice, cached by the caller)."""
         return ttnn.slice(self.page_table, [user, 0], [user + 1, self.pool_blocks])
@@ -564,6 +621,37 @@ class TtDSAIndexer(LightweightModule):
         self._write_tail_rows(cache, user, k_idx, g_idx, row0=lead + n_pools * P, n=tail, slot0=0)
         ttnn.deallocate(k_idx)
         ttnn.deallocate(g_idx)
+
+    def maintain_prefill_wave(
+        self, cache: TtIndexCache, user: int, k_idx, g_idx, starts: tuple[int, ...], valids: tuple[int, ...]
+    ):
+        """The shape-static maintenance for a wave (``doc/mesh/row_ownership.md``): mesh row r's stems ``k_idx`` /
+        ``g_idx`` ``[1,1,T,D]`` are ITS chunk ``[starts[r], starts[r] + valids[r])`` (0 valid rows on an idle row);
+        every pool of the padded chunk is written from the row's own pool ``starts[r] // P`` (a multiple of 32: wave
+        chunks start at multiples of 32 * P), the ring block gets the row's last row of each ``% P`` class through a
+        ROW-SHARDED one-hot selector (``[rows, 1, 32, T]``: row r's ``ring_selector(valids[r], T)``, zeros on an idle
+        row). The program set depends on T only."""
+        P = self.P
+        T = k_idx.shape[-2]
+        rows = self.mesh.rows
+        if len(starts) != rows or len(valids) != rows:
+            raise ValueError(f"{len(starts)} starts / {len(valids)} valids for a {rows}-row mesh")
+        if T % (TILE * P) or any(s0 % (TILE * P) for s0 in starts):
+            raise ValueError(f"wave index maintenance: T {T} and every start {starts} must be multiples of {TILE * P}")
+        if max(starts) // P + T // P > cache.pools_per_user:
+            raise ValueError(f"wave chunk past the pool capacity: {max(starts)} + {T} > {cache.pools_per_user * P}")
+        idle = tuple(r for r, v in enumerate(valids) if v == 0)
+        pooled = self.pool(k_idx, g_idx)  # [1,1,T/P,D]
+        cache.write_pools_wave(pooled, user, tuple(s0 // P for s0 in starts), idle)
+        ttnn.deallocate(pooled)
+        sel = torch.cat([ring_selector(v, T, P) if v else torch.zeros(1, 1, TILE, T) for v in valids], dim=0)
+        sel_dev = self.mesh.upload(sel, ttnn.bfloat16, rows=0)  # [1,1,32,T] per chip: its row's selector
+        k_tile = ttnn.matmul(sel_dev, k_idx, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)  # [1,1,32,D]
+        g_tile = ttnn.matmul(sel_dev, g_idx, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)
+        cache.write_ring_block_user_wave(k_tile, g_tile, user, idle)
+        for t in (sel_dev, k_idx, g_idx, k_tile, g_tile):
+            ttnn.deallocate(t)
+        self.static_maintenance_calls += 1
 
     def _maintain_static(self, cache: TtIndexCache, user: int, k_idx, g_idx, seq_len: int, start: int):
         """The traced path's maintenance with host-side ``user`` / ``seq_len`` (``start % 128 == 0``, ``T_pad % 128

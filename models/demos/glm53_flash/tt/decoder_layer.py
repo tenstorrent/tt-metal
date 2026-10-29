@@ -320,11 +320,8 @@ class TtDecoderLayer(LightweightModule):
                     ttnn.reshape(h, [1, T_loc, self.hidden]), state.kda, start_t, end, local=wave_mode
                 )
                 return ttnn.reshape(y, [1, 1, T_loc, self.hidden])
-            if wave_mode:
-                raise NotImplementedError(
-                    "the DSA wave path (doc/mesh/row_ownership.md step 3: per-row cache views and index maintenance) "
-                    "is not implemented yet"
-                )
+            if wave_mode:  # every row its own chunk: per-row fills / index / attention (``TtDSA._prefill_wave``)
+                return self.attn.prefill_forward(h, state.cache, user, T, start=0, wave=wave)
             dsa_kw = dict(start=start, slot=slot, ring_sel=ring_sel)
             if self.mesh.rows == 1:
                 return self.attn.prefill_forward(h, state.cache, user, seq_len, **dsa_kw)

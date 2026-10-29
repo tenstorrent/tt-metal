@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Per-row prefill ownership (waves) on a multi-row mesh (``doc/mesh/row_ownership.md`` mechanism (a), phase 1:
 one slot index per wave): ``GLM53MeshModel.prefill_wave`` against the sequence-parallel ``prefill`` on the KDA +
-dense layers (0-2 by default; the DSA wave path is the design's step 3), real weights, two short prompts:
+dense layers (0-2 by default) or, with GLM53_MODEL_LAYERS=0-3 and the partitioned heads2users cache (GLM53_PARTITION_USERS=1 GLM53_PREFILL_PARTITION=heads2users GLM53_WAVE_B=4), the DSA + MoE layer too, real weights, two short prompts:
 
 (i)   the same prompt through SP and through a wave on row 0 (row 1 idle) and on row 1: the first token equal, the
       last-token logits within bf16 noise (the local and the sequence-parallel scans group the recurrence
@@ -37,6 +37,9 @@ MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","
 _cache_env = os.environ.get("GLM53_MESH_CACHE", "/home/ttuser/ashai/glm53/_cache/mesh")
 CACHE_ROOT = None if _cache_env.lower() == "none" else Path(_cache_env)
 PCC_BAR = 0.999  # SP vs local scan grouping, chunk boundaries: bf16 noise
+B = int(
+    os.environ.get("GLM53_WAVE_B", "2")
+)  # user slots per row (a multiple of the columns with the partitioned cache)
 
 
 def _layers() -> list[int]:
@@ -114,7 +117,7 @@ def test_wave_prefill_vs_sequence_parallel(mesh_device, expect_error):
     ids_b = torch.tensor(tok.encode("量子计算机使用量子比特，它可以同时处于多个状态；这使得某些问题的求解速度远远超过经典计算机。" * 10), dtype=torch.long)
     n_a, n_b = int(ids_a.numel()), int(ids_b.numel())
     assert n_a > 96 and n_b > 128 and n_a != n_b, (n_a, n_b)
-    model = GLM53MeshModel(mesh_device, cfg, layers, max_batch=2, max_seq_len=2048, weight_cache_path=CACHE_ROOT)
+    model = GLM53MeshModel(mesh_device, cfg, layers, max_batch=B, max_seq_len=2048, weight_cache_path=CACHE_ROOT)
     rows = model.mesh.rows
     assert rows > 1, "waves are the multi-row case"
     logger.info(f"wave test: {len(layers)} layers {layers}, prompts {n_a} / {n_b} tokens, mesh {MESH}")
