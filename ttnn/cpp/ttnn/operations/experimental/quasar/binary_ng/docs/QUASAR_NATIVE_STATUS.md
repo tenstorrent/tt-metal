@@ -2129,7 +2129,7 @@ columns stay. (`F#` in the review-findings doc is an unrelated namespace.)
 | 1.6 | F7 | activations (lhs/rhs/post) | re-measure cyc/tile; `binary_tiles_init` added cost since our branch point |
 | **2.0** | — | **milestone 2 — once F7 lands** | dtype/layout/memory/activation-complete for whole-tile operands |
 | 2.1 | F13 | **outer-dim broadcast — done** | each operand is read through its Map, a cursor per tile counter, in bf16 and fp32; a dense program keeps its kernels byte for byte |
-| 2.2 | F8 | subtile broadcast ROW/COL/SCALAR — ROW done | ROW in bf16: a staging ring on the FPU kernel, straight into DST on the SFPU kernel |
+| 2.2 | F8 | subtile broadcast ROW/COL/SCALAR — done | bf16; COL and SCALAR held, read and expanded once per page change; a tensor of all ones is one value, in bf16 and fp32 |
 | 2.3 | F9 | mixed broadcast | keep the ROW-via-LLK / COL-via-reader-fill hybrid |
 | 2.4 | F10 | tensor-scalar | writer fills `in1` once |
 | 2.5 | F14 | **per-operand reader allocation** | **emulator-only** — no roofline gain (per-core reads are `T/2` either way); the case is DRAM/NoC locality, which craq-sim cannot price. Hypothesis: tile-split pairs `in0[k]`/`in1[k]` on the **same bank**. Proportional allocation matters from F4 (mixed layouts) onward, not just broadcast. STRIDED rule limits splits to `p in {1,2,4}` at `C=4` |

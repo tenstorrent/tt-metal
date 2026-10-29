@@ -155,16 +155,20 @@ DfbKernelSources select_dfb_kernel_sources(bool is_sfpu) {
 
 // The mode of a and of b (kernels_qsr/common/operand_walk.hpp) for the op's subtile broadcast type.
 // matches_quasar_native_slice admits only the types that have a mode here; any other is a broken precondition.
-std::array<OperandMode, 2> operand_modes(SubtileBroadcastType subtile_broadcast_type, bool is_scalar) {
+// A SCALAR operand whose every dim is 1, `a_one_value` or `b_one_value`, is one value for the whole op: VALUE.
+std::array<OperandMode, 2> operand_modes(
+    SubtileBroadcastType subtile_broadcast_type, bool is_scalar, bool a_one_value, bool b_one_value) {
     TT_FATAL(!is_scalar, "binary_ng Quasar-native: tensor-scalar does not run native; the gate refuses it");
     switch (subtile_broadcast_type) {
         case SubtileBroadcastType::NONE: return {OperandMode::FULL, OperandMode::FULL};
         case SubtileBroadcastType::ROW_A: return {OperandMode::ROW, OperandMode::FULL};
         case SubtileBroadcastType::ROW_B: return {OperandMode::FULL, OperandMode::ROW};
-        case SubtileBroadcastType::COL_A:
-        case SubtileBroadcastType::COL_B:
+        case SubtileBroadcastType::COL_A: return {OperandMode::COL, OperandMode::FULL};
+        case SubtileBroadcastType::COL_B: return {OperandMode::FULL, OperandMode::COL};
         case SubtileBroadcastType::SCALAR_A:
+            return {a_one_value ? OperandMode::VALUE : OperandMode::SCALAR, OperandMode::FULL};
         case SubtileBroadcastType::SCALAR_B:
+            return {OperandMode::FULL, b_one_value ? OperandMode::VALUE : OperandMode::SCALAR};
         case SubtileBroadcastType::ROW_A_COL_B:
         case SubtileBroadcastType::ROW_B_COL_A: break;
     }
@@ -239,6 +243,10 @@ enum class AnchorKind { kNone, kShard, kSlice };
 // Whether a program may send a borrowed shard's last tiles through the tail rings. The tail rings carry no
 // activation chain, so a program with activations runs none.
 enum class TailRings { kAllowed, kNone };
+
+// Whether the anchor may hold pad slots. Across a pad slot the change of a held operand's page does not show, so a
+// program with a held operand (COL, SCALAR) takes no anchor with pad slots: its operands move over the NoC.
+enum class PadSlots { kAllowed, kNone };
 
 struct BorrowAnchor {
     AnchorKind kind = AnchorKind::kNone;
@@ -436,7 +444,8 @@ BorrowAnchor select_borrow_anchor(
     const std::array<bool, 3>& borrowable,
     const CoreRangeSet& worker_grid,
     const NativeTuning& tuning,
-    TailRings tail_rings) {
+    TailRings tail_rings,
+    PadSlots pad_slots) {
     const std::array<const Tensor*, 3> operands{&a, &b, &c};
     const uint32_t compute_threads = native_compute_threads(tuning);
     const uint32_t min_clusters = legacy_cluster_count(a, b, c, worker_grid);
@@ -472,7 +481,8 @@ BorrowAnchor select_borrow_anchor(
           borrowable[0] ? shard_anchor(a, operands, borrowable, worker_grid) : std::nullopt,
           borrowable[1] ? shard_anchor(b, operands, borrowable, worker_grid) : std::nullopt,
           slice_anchor(operands, borrowable, worker_grid)}) {
-        if (!candidate.has_value() || candidate->num_borrowed() == 0 || !eligible(*candidate)) {
+        if (!candidate.has_value() || candidate->num_borrowed() == 0 || !eligible(*candidate) ||
+            (pad_slots == PadSlots::kNone && candidate->has_pad_slots)) {
             continue;
         }
         if (!best.has_value() || rank(*candidate) > rank(*best)) {
@@ -533,7 +543,18 @@ ProgramArtifacts create_native_artifacts(
         !is_scalar || op.scalar.has_value(),
         "binary_ng Quasar-native no-bcast factory tensor-scalar path requires a scalar value");
     // Fires before any JIT work on a type that matches_quasar_native_slice, the only admitting caller, refuses.
-    const std::array<OperandMode, 2> modes = operand_modes(op.subtile_broadcast_type, is_scalar);
+    const std::array<OperandMode, 2> modes = operand_modes(
+        op.subtile_broadcast_type,
+        is_scalar,
+        a.logical_shape().volume() == 1,
+        !is_scalar && tensor_args.input_tensor_b->logical_shape().volume() == 1);
+    // A held operand (COL, SCALAR) is expanded once per page change. It runs its activation chain while it expands,
+    // so it has no post ring. A held or VALUE operand is read at one ring entry for a run of tiles.
+    const auto held = [](OperandMode mode) { return mode == OperandMode::COL || mode == OperandMode::SCALAR; };
+    const bool held_a = held(modes[0]);
+    const bool held_b = held(modes[1]);
+    const bool value_a = modes[0] == OperandMode::VALUE;
+    const bool value_b = modes[1] == OperandMode::VALUE;
     const std::optional<Tensor>& b_opt = tensor_args.input_tensor_b;
 
     // The knobs: the same cached instance matches_quasar_native_slice gated on. Every knob left unset takes the
@@ -653,6 +674,8 @@ ProgramArtifacts create_native_artifacts(
 
     const bool has_lhs_act = !compute_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty();
     const bool has_rhs_act = !compute_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty();
+    const bool post_a = has_lhs_act && !held_a;
+    const bool post_b = has_rhs_act && !held_b;
     const bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
 
@@ -673,8 +696,9 @@ ProgramArtifacts create_native_artifacts(
         std::tie(bD, bN, bC, bHt, bWt) = get_shape_dims(*b_opt);
     }
     const auto [cD, cN, cC, cHt, cWt] = get_shape_dims(c);
-    const bool a_outer_bcast = aND != cND || aE != cE || aD != cD || aN != cN || aC != cC;
-    const bool b_outer_bcast = bND != cND || bE != cE || bD != cD || bN != cN || bC != cC;
+    // A VALUE operand has no Map, so no outer broadcast either.
+    const bool a_outer_bcast = !value_a && (aND != cND || aE != cE || aD != cD || aN != cN || aC != cC);
+    const bool b_outer_bcast = !value_b && (bND != cND || bE != cE || bD != cD || bN != cN || bC != cC);
     const bool a_identity = modes[0] == OperandMode::FULL && !a_outer_bcast;
     const bool b_identity = modes[1] == OperandMode::FULL && !b_outer_bcast;
     // A mapped program reads some operand through a Map that is not the identity.
@@ -694,7 +718,8 @@ ProgramArtifacts create_native_artifacts(
         {a_identity, b_identity, true},
         op.worker_grid,
         t,
-        has_activations ? TailRings::kNone : TailRings::kAllowed);
+        has_activations ? TailRings::kNone : TailRings::kAllowed,
+        held_a || held_b ? PadSlots::kNone : PadSlots::kAllowed);
     const bool a_borrowed = anchor.borrowed[0];
     const bool b_borrowed = anchor.borrowed[1];
     const bool c_borrowed = anchor.borrowed[2];
@@ -710,6 +735,13 @@ ProgramArtifacts create_native_artifacts(
         t,
         {.inputs = !a_borrowed || !b_borrowed, .output = !c_borrowed, .sfpu = is_sfpu, .dst_32bit = fp32_dest_acc_en});
     const uint32_t reader_threads = cfg.reader_threads;
+    // A held or VALUE operand needs each compute thread to own one tile counter of its input ring, as the gate checks.
+    TT_FATAL(
+        !(held_a || held_b || value_a || value_b) || reader_threads <= compute_threads,
+        "binary_ng Quasar-native: a COL, SCALAR or VALUE operand needs R <= C, so that each compute thread owns one "
+        "tile counter of its input ring, got R={} C={}",
+        describe_native_value(t.reader_threads, reader_threads),
+        describe_native_value(t.compute_threads, compute_threads));
     const uint32_t writer_threads = cfg.writer_threads;
     // A borrowed ring must divide by the compute count, so, until the DFB can give each tile counter its own
     // capacity, the tiles past its largest multiple go through three owned tail rings of one entry per compute
@@ -816,6 +848,8 @@ ProgramArtifacts create_native_artifacts(
     const m2::DFBSpecName POST_RHS{"binary_ng_post_rhs_dfb"};          // CBIndex::c_4 (RHS activations)
     const m2::DFBSpecName STAGE_LHS{"binary_ng_stage_lhs_dfb"};        // a ROW a, expanded on the FPU kernel
     const m2::DFBSpecName STAGE_RHS{"binary_ng_stage_rhs_dfb"};        // a ROW b, expanded on the FPU kernel
+    const m2::DFBSpecName HELD_LHS{"binary_ng_held_lhs_dfb"};          // a COL or SCALAR a, expanded
+    const m2::DFBSpecName HELD_RHS{"binary_ng_held_rhs_dfb"};          // a COL or SCALAR b, expanded
     const m2::DFBSpecName IN0_TAIL{"binary_ng_in0_tail_dfb"};          // borrowed shard tiles past the ring
     const m2::DFBSpecName IN1_TAIL{"binary_ng_in1_tail_dfb"};
     const m2::DFBSpecName OUT_TAIL{"binary_ng_out_tail_dfb"};
@@ -869,10 +903,12 @@ ProgramArtifacts create_native_artifacts(
     // A borrowed ring is the first tiles of the anchor's shard or slice, which divide by the ring's
     // max(producers, consumers) as the DFB host asserts, so the reader's publish fills each counter exactly.
     // Every borrowed operand holds the anchor's tile count.
-    const uint32_t a_entries = a_borrowed ? c_main_tiles : in_entries;
+    // A VALUE operand's ring holds one full tile per compute thread, as a tail ring does; its reader threads fill one
+    // entry per tile counter. Never borrowed.
+    const uint32_t a_entries = value_a ? compute_threads : (a_borrowed ? c_main_tiles : in_entries);
     // Scalar in1 is a single writer-filled tile (never borrowed); otherwise the borrowed shard or slice, or
     // the derived NoC ring.
-    const uint32_t b_entries = is_scalar ? 1u : (b_borrowed ? c_main_tiles : in_entries);
+    const uint32_t b_entries = is_scalar ? 1u : (value_b ? compute_threads : (b_borrowed ? c_main_tiles : in_entries));
     const uint32_t c_entries = c_borrowed ? c_main_tiles : out_entries;
 
     // The FPU kernel expands a ROW operand into its staging ring; the SFPU kernel expands it straight into DST.
@@ -883,8 +919,8 @@ ProgramArtifacts create_native_artifacts(
     constexpr uint32_t num_main_dfbs = 3;  // in0, in1, out
     constexpr uint32_t num_tail_dfbs = 3;  // in0_tail, in1_tail, out_tail
     dfbs.reserve(
-        (has_main_ring ? num_main_dfbs : 0) + (tail_tiles > 0 ? num_tail_dfbs : 0) + (has_lhs_act ? 1 : 0) +
-        (has_rhs_act ? 1 : 0) + (stage_a ? 1 : 0) + (stage_b ? 1 : 0));
+        (has_main_ring ? num_main_dfbs : 0) + (tail_tiles > 0 ? num_tail_dfbs : 0) + (post_a ? 1 : 0) +
+        (post_b ? 1 : 0) + (stage_a ? 1 : 0) + (stage_b ? 1 : 0) + (held_a ? 1 : 0) + (held_b ? 1 : 0));
     if (has_main_ring) {
         dfbs.push_back(
             make_dfb(IN0, a_tile_bytes, a_entries, a_df, a_tile, a_borrowed ? std::optional{T_A} : std::nullopt));
@@ -906,7 +942,7 @@ ProgramArtifacts create_native_artifacts(
     // post_lhs/post_rhs intermediate rings (c_3/c_4), allocated only when that operand has an activation chain.
     // Each compute thread produces (PREPROCESS) and consumes (binary op) its own tile counter of the ring, in
     // program order, so the ring holds one batch per compute thread.
-    if (has_lhs_act) {
+    if (post_a) {
         dfbs.push_back(make_dfb(
             POST_LHS,
             static_cast<uint32_t>(a_tile.get_tile_size(a_inter_df)),
@@ -915,7 +951,7 @@ ProgramArtifacts create_native_artifacts(
             a_tile,
             std::nullopt));
     }
-    if (has_rhs_act) {
+    if (post_b) {
         dfbs.push_back(make_dfb(
             POST_RHS,
             static_cast<uint32_t>(b_tile.get_tile_size(b_inter_df)),
@@ -933,6 +969,13 @@ ProgramArtifacts create_native_artifacts(
     if (stage_b) {
         dfbs.push_back(
             make_dfb(STAGE_RHS, b_tile_bytes, compute_threads * num_tiles_per_cycle, b_df, b_tile, std::nullopt));
+    }
+    // A held ring holds two entries per compute thread: each thread expands its new page before it pops the old one.
+    if (held_a) {
+        dfbs.push_back(make_dfb(HELD_LHS, a_tile_bytes, 2 * compute_threads, a_df, a_tile, std::nullopt));
+    }
+    if (held_b) {
+        dfbs.push_back(make_dfb(HELD_RHS, b_tile_bytes, 2 * compute_threads, b_df, b_tile, std::nullopt));
     }
 
     // --- Dataflow defines. SRC_SHARDED[_B]/DST_SHARDED select the BORROWED (publish/drain a resident
@@ -963,6 +1006,14 @@ ProgramArtifacts create_native_artifacts(
         (*defines)["SHARD_WALK_WIDTH"] = std::to_string(shard_walk_width);
         (*defines)["BANK_WALK_STRIDE"] = std::to_string(bank_walk_stride);
         (*defines)["WALK_PADS"] = walk_pads ? "1" : "0";
+    }
+    // Beside a held operand the compute follows the walk too, to see each change of the held page; the anchor then
+    // has no pad slots.
+    TT_FATAL(
+        !(held_a || held_b) || !walk_pads, "binary_ng Quasar-native: an anchor with pad slots beside a held operand");
+    if (held_a || held_b) {
+        compute_defines["SHARD_WALK_WIDTH"] = std::to_string(shard_walk_width);
+        compute_defines["BANK_WALK_STRIDE"] = std::to_string(bank_walk_stride);
     }
 
     // TAIL_TILES > 0 compiles in the tail-ring code of all three kernels; HAS_MAIN_RING = 0 compiles out
@@ -1004,10 +1055,10 @@ ProgramArtifacts create_native_artifacts(
         set_unpack_mode(IN0_TAIL, a_df);
         set_unpack_mode(IN1_TAIL, b_df);
     }
-    if (has_lhs_act) {
+    if (post_a) {
         set_unpack_mode(POST_LHS, a_inter_df);
     }
-    if (has_rhs_act) {
+    if (post_b) {
         set_unpack_mode(POST_RHS, b_inter_df);
     }
 
@@ -1145,11 +1196,11 @@ ProgramArtifacts create_native_artifacts(
         compute_dfb_bindings.push_back(m2::ConsumerOf(IN1_TAIL, "pre_rhs_tail"));
         compute_dfb_bindings.push_back(m2::ProducerOf(OUT_TAIL, "out_tail"));
     }
-    if (has_lhs_act) {
+    if (post_a) {
         compute_dfb_bindings.push_back(m2::ProducerOf(POST_LHS, "post_lhs"));
         compute_dfb_bindings.push_back(m2::ConsumerOf(POST_LHS, "post_lhs"));
     }
-    if (has_rhs_act) {
+    if (post_b) {
         compute_dfb_bindings.push_back(m2::ProducerOf(POST_RHS, "post_rhs"));
         compute_dfb_bindings.push_back(m2::ConsumerOf(POST_RHS, "post_rhs"));
     }
@@ -1162,8 +1213,26 @@ ProgramArtifacts create_native_artifacts(
         compute_dfb_bindings.push_back(m2::ProducerOf(STAGE_RHS, "stage_rhs"));
         compute_dfb_bindings.push_back(m2::ConsumerOf(STAGE_RHS, "stage_rhs"));
     }
+    if (held_a) {
+        compute_dfb_bindings.push_back(m2::ProducerOf(HELD_LHS, "held_lhs"));
+        compute_dfb_bindings.push_back(m2::ConsumerOf(HELD_LHS, "held_lhs"));
+    }
+    if (held_b) {
+        compute_dfb_bindings.push_back(m2::ProducerOf(HELD_RHS, "held_rhs"));
+        compute_dfb_bindings.push_back(m2::ConsumerOf(HELD_RHS, "held_rhs"));
+    }
 
+    // Beside a held operand the compute follows the walk and both Maps: the reader's args of these names.
+    constexpr std::array<const char*, 21> kWalkArgNames{
+        "start_tile_id", "E",          "D",          "N",          "C",          "Ht",          "Wt",
+        "nD_stride",     "e_stride",   "d_stride",   "n_stride",   "c_stride",   "ht_stride",   "wt_stride",
+        "nD_stride_b",   "e_stride_b", "d_stride_b", "n_stride_b", "c_stride_b", "ht_stride_b", "wt_stride_b"};
     m2::Group<std::string> compute_rt_names = {"num_tiles"};
+    if (held_a || held_b) {
+        for (const char* name : kWalkArgNames) {
+            compute_rt_names.push_back(name);
+        }
+    }
     if (op_type == BinaryOpType::ISCLOSE) {
         compute_rt_names.push_back("rtol_bits");
         compute_rt_names.push_back("atol_bits");
@@ -1329,6 +1398,11 @@ ProgramArtifacts create_native_artifacts(
         writer_args["cND"][node] = cND;
 
         compute_args["num_tiles"][node] = c_num_tiles_core;
+        if (held_a || held_b) {
+            for (const char* name : kWalkArgNames) {
+                compute_args[name][node] = reader_args[name][node];
+            }
+        }
         if (op_type == BinaryOpType::ISCLOSE) {
             compute_args["rtol_bits"][node] = isclose_rtol_bits;
             compute_args["atol_bits"][node] = isclose_atol_bits;

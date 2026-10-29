@@ -662,20 +662,29 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (attributes.is_where_op || attributes.is_quant_op) {
         return false;
     }
-    // Subtile broadcast. ROW expands with unary_bcast, which takes no 32-bit operand on Quasar, so it runs in bf16
-    // only.
+    // Subtile broadcast. ROW, COL and SCALAR expand with unary_bcast, which takes no 32-bit operand on Quasar, so they
+    // run in bf16 only. A SCALAR operand whose every dim is 1 is one value (VALUE), read and filled with no
+    // unary_bcast, so it runs in bf16 and fp32.
     switch (attributes.subtile_broadcast_type) {
         case SubtileBroadcastType::NONE: break;
         case SubtileBroadcastType::ROW_A:
         case SubtileBroadcastType::ROW_B:
+        case SubtileBroadcastType::COL_A:
+        case SubtileBroadcastType::COL_B:
             if (a.dtype() != DataType::BFLOAT16) {
                 return false;
             }
             break;
-        case SubtileBroadcastType::COL_A:
-        case SubtileBroadcastType::COL_B:
         case SubtileBroadcastType::SCALAR_A:
+            if (a.dtype() != DataType::BFLOAT16 && a.logical_shape().volume() != 1) {
+                return false;
+            }
+            break;
         case SubtileBroadcastType::SCALAR_B:
+            if (a.dtype() != DataType::BFLOAT16 && b.logical_shape().volume() != 1) {
+                return false;
+            }
+            break;
         case SubtileBroadcastType::ROW_A_COL_B:
         case SubtileBroadcastType::ROW_B_COL_A: return false;
     }
@@ -758,7 +767,13 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     // W beside the compute count can fail.
     const NativeConfig noc = resolve_native_config(tuning, {.inputs = true, .output = true});
     const auto ratio_ok = [](uint32_t p, uint32_t c) { return std::max(p, c) % std::min(p, c) == 0; };
-    return ratio_ok(noc.reader_threads, noc.compute_threads) && ratio_ok(noc.compute_threads, noc.writer_threads);
+    // A COL, SCALAR or VALUE operand needs each compute thread to own one tile counter of its input ring, so R <= C.
+    // Every type but NONE and ROW has one. The rule never sets R above C; a set R can.
+    const SubtileBroadcastType type = attributes.subtile_broadcast_type;
+    const bool one_entry_operand = type != SubtileBroadcastType::NONE && type != SubtileBroadcastType::ROW_A &&
+                                   type != SubtileBroadcastType::ROW_B;
+    return ratio_ok(noc.reader_threads, noc.compute_threads) && ratio_ok(noc.compute_threads, noc.writer_threads) &&
+           (!one_entry_operand || noc.reader_threads <= noc.compute_threads);
 }
 
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(

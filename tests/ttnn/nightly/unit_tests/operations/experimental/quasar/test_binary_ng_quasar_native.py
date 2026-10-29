@@ -2063,9 +2063,18 @@ _NOC_WALK = _walk()  # every operand moves over the NoC
 _ANCHORED_WALK = _walk(a=1, out=1)  # an anchor borrows a and the output; b moves in the anchor's tile order
 _PADDED_WALK = _walk(a=1, out=1, pads=1)  # the anchor has pad slots, which the reader skips
 # In L1 the bank walk gives a cluster 2 tiles of _OUTER_SHAPE, which 4 compute threads do not divide: these cases take
-# the NoC path at C = 4 and the slice anchor at C = 1, so they declare no walk.
+# the NoC path at C = 4 and the slice anchor at C = 1, so they declare no walk. The VALUE L1 cases join them for the
+# same reason. The held L1 cases do not: a held operand refuses an anchor with pad slots, so they take the NoC path in
+# every configuration, and declare it.
 _BCAST_WALK_BY_CONFIG = frozenset(
-    {"outer_b_L1", "row_b_L1", "row_b_L1/multiply", *(f"outer_b/fp32/{op}" for op in _FP32_OPS)}
+    {
+        "outer_b_L1",
+        "row_b_L1",
+        "row_b_L1/multiply",
+        "value_b_L1/divide",
+        *(f"outer_b/fp32/{op}" for op in _FP32_OPS),
+        *(f"value_b/fp32/{op}" for op in _FP32_OPS),
+    }
 )
 
 
@@ -2344,6 +2353,234 @@ def test_native_row_broadcast_matches_the_oracle(name, knobs):
     _check_arm(p, f"row broadcast, {name}")
 
 
+# COL and SCALAR: a held operand. The reader reads its page only where the page changed, and every other entry of its
+# ring is a credit only; the compute expands the page once into its held ring and reads held entry 0 until the next
+# change. COL changes on each tile row, SCALAR with outer dims above 1 on each (N, C) slab. A compute batch ends at the
+# next multiple of the batch size, as in the same-shape loop, or earlier at a change. The L1 cases of _OUTER_SHAPE take
+# the NoC path in every configuration: 60 pages leave short banks, and a held operand refuses an anchor with pad slots.
+# A cluster gets at most 2 tiles there. The col_b_split cases hold a and the output in _H2_14 shards, where a Neo meets
+# 3 or 4 tiles of each row: the SFPU kernel's batches of 4, and the FPU kernel's of 8 at R1C1W1, end early at row
+# changes, and a batch that crossed a multiple of the batch size would cross the end of a ring. col_b_rows/multiply
+# gives the same early ends on the NoC path, with 4 rows of 14 tiles on each cluster. col_b_split_act chains SQUARE on
+# a, whose post ring holds one batch per Neo. SQUARE on the held operand runs once per change, in the expansion. Beside
+# a height-sharded a and output, production borrows a and the output, and so does the native anchor. An uneven shard
+# beside a held operand takes no anchor: everything moves over the NoC. With one output tile per cluster, three Neos
+# per cluster hold nothing. bf16 only.
+_H8 = ("height", [4 * 32, 4 * 32], (0, 0, 7, 0))  # on [2, 1, 512, 128]: 8 shards of 4x4 tiles, Wt = 4
+_HELD = [
+    _bcast("col_b", _OUTER_SHAPE, [1, 3, 64, 1], _modes(b="COL", b_outer=True), walk=_NOC_WALK),
+    _bcast("col_a", [1, 3, 64, 1], _OUTER_SHAPE, _modes(a="COL", a_outer=True), op="subtract", walk=_NOC_WALK),
+    _bcast("col_b_L1", _OUTER_SHAPE, [2, 3, 64, 1], _modes(b="COL"), a=_IL1, b=_IL1, out=_IL1, walk=_NOC_WALK),
+    _bcast(
+        "col_b_L1/multiply",
+        _OUTER_SHAPE,
+        [2, 3, 64, 1],
+        _modes(b="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast("scalar_b", _OUTER_SHAPE, [2, 3, 1, 1], _modes(b="SCALAR"), walk=_NOC_WALK),
+    _bcast(
+        "scalar_a/divide", [2, 1, 1, 1], _OUTER_SHAPE, _modes(a="SCALAR", a_outer=True), op="divide", walk=_NOC_WALK
+    ),
+    _bcast(
+        "scalar_b_L1/multiply",
+        _OUTER_SHAPE,
+        [2, 3, 1, 1],
+        _modes(b="SCALAR"),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "col_b_shard_walk",
+        [2, 1, 256, 1024],
+        [1, 1, 256, 1],
+        _modes(b="COL", b_outer=True),
+        a=_B32_WALK,
+        out=_B32_WALK,
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast(
+        "col_b_bank_walk",
+        [2, 1, 64, 1024],
+        [2, 1, 64, 1],
+        _modes(b="COL"),
+        a=_IL1,
+        out=_IL1,
+        op="multiply",
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast("col_b_act", _OUTER_SHAPE, [1, 3, 64, 1], _modes(b="COL", b_outer=True), act="rhs", walk=_NOC_WALK),
+    _bcast(
+        "col_b_act/multiply",
+        _OUTER_SHAPE,
+        [1, 3, 64, 1],
+        _modes(b="COL", b_outer=True),
+        act="rhs",
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "col_b_height_borrowed", [2, 1, 512, 128], [2, 1, 512, 1], _modes(b="COL"), a=_H8, out=_H8, walk=_ANCHORED_WALK
+    ),
+    _bcast(
+        "col_b_uneven_shard",
+        [1, 1, 14 * 32, 30 * 32],
+        [1, 1, 14 * 32, 1],
+        _modes(b="COL"),
+        a=_B32,
+        out=_B32,
+        walk=_NOC_WALK,
+    ),
+    _bcast("col_b_idle_neos", [1, 1, 32, 64], [1, 1, 32, 1], _modes(b="COL"), walk=_NOC_WALK),
+    _bcast(
+        "col_b_split",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast(
+        "col_b_split/multiply",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        op="multiply",
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast(
+        "col_b_split_act/multiply",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        op="multiply",
+        act="lhs",
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast("col_b_rows/multiply", [1, 1, 4096, 448], [1, 1, 4096, 1], _modes(b="COL"), op="multiply", walk=_NOC_WALK),
+    _bcast(
+        "col_b_split/multiply_fast",
+        [1, 1, 1024, 448],
+        [1, 1, 1024, 1],
+        _modes(b="COL"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        op="multiply_fast",
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast(
+        "scalar_a_act",
+        [2, 1, 1, 1],
+        _OUTER_SHAPE,
+        _modes(a="SCALAR", a_outer=True),
+        op="subtract",
+        act="lhs",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "scalar_a_act/multiply",
+        [2, 1, 1, 1],
+        _OUTER_SHAPE,
+        _modes(a="SCALAR", a_outer=True),
+        op="multiply",
+        act="lhs",
+        walk=_NOC_WALK,
+    ),
+    _bcast("col_b/relu", _OUTER_SHAPE, [1, 3, 64, 1], _modes(b="COL", b_outer=True), act="relu", walk=_NOC_WALK),
+    _bcast(
+        "col_b/relu/multiply",
+        _OUTER_SHAPE,
+        [1, 3, 64, 1],
+        _modes(b="COL", b_outer=True),
+        act="relu",
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+]
+
+# VALUE: a tensor whose every dim is 1 is one value for the whole op. The reader reads its page 0 once per tile counter
+# and fills the entry from the first element; each compute thread waits for its entry once and reads it for every
+# tile. No unary_bcast, so bf16 and fp32. A rank-2 [1, 1] counts too. Beside a borrowed a, no operand is read per tile.
+# With one output tile per cluster, three Neos per cluster still take their entry.
+_VALUE = [
+    _bcast("value_b", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), walk=_NOC_WALK),
+    _bcast("value_a", [1, 1, 1, 1], _OUTER_SHAPE, _modes(a="VALUE"), op="subtract", walk=_NOC_WALK),
+    _bcast("value_b_rank2/multiply", _OUTER_SHAPE, [1, 1], _modes(b="VALUE"), op="multiply", walk=_NOC_WALK),
+    _bcast("value_b_L1/divide", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), a=_IL1, b=_IL1, out=_IL1, op="divide"),
+    _bcast("value_b_act", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), act="rhs", walk=_NOC_WALK),
+    _bcast(
+        "value_b_borrowed_a",
+        [2, 1, 2048, 32],
+        [1, 1, 1, 1],
+        _modes(b="VALUE"),
+        a=_H32_4,
+        out=_H32_4,
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast("value_b_one_tile", [1, 1, 32, 32], [1, 1, 1, 1], _modes(b="VALUE"), walk=_NOC_WALK),
+    _bcast("value_b/multiply_fast", _OUTER_SHAPE, [1, 1, 1, 1], _modes(b="VALUE"), op="multiply_fast", walk=_NOC_WALK),
+]
+_VALUE_FP32 = [
+    _bcast(
+        f"value_b/fp32/{op}",
+        _OUTER_SHAPE,
+        [1, 1, 1, 1],
+        _modes(b="VALUE"),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op=op,
+        dtype="float32",
+    )
+    for op in _FP32_OPS
+] + [
+    _bcast(
+        "value_a/fp32", [1, 1, 1, 1], _OUTER_SHAPE, _modes(a="VALUE"), op="subtract", dtype="float32", walk=_NOC_WALK
+    )
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+def test_native_held_broadcast_matches_the_oracle(name, knobs):
+    """A COL or SCALAR operand must run native on both kernels and give the oracle's bits.
+
+    A read skipped where the page changed, a held entry kept across a change, or a batch that crosses a change gives
+    the binary op another row or slab, and fails the exact comparison. A pad slot beside a held operand would hide a
+    change; the uneven shard must take the NoC path and stay exact.
+    """
+    p = _run_shard_arm(_HELD, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"held broadcast, {name}")
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+def test_native_value_broadcast_matches_the_oracle(name, knobs):
+    """A tensor whose every dim is 1 must run native as one value, in bf16 and fp32, and give the oracle's bits.
+
+    A fill that the compute cannot see, an entry popped early, or a Neo with no tiles that skips its entry gives
+    stale data or hangs.
+    """
+    p = _run_shard_arm(_VALUE + _VALUE_FP32, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"value broadcast, {name}")
+
+
 # One case per child, as above, and one case of each kind of anchor and walk. The thread counts tell the
 # programs apart where the clusters do not, as both bind the same kernel sources.
 _MIXED_ROUTED = (
@@ -2578,7 +2815,7 @@ def test_native_illegal_thread_knobs_fall_back():
 
 
 # Every broadcast table, for the no-device checks below.
-_BCAST_TABLES = {"outer": _OUTER + _OUTER_FP32, "row": _ROW}
+_BCAST_TABLES = {"outer": _OUTER + _OUTER_FP32, "row": _ROW, "held": _HELD, "value": _VALUE + _VALUE_FP32}
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")

@@ -10,7 +10,8 @@
 //   - the nD stride cascade is gone: page = start_tile_id + k, or, beside a borrowed operand, the tile order of
 //     the program's anchor (SHARD_WALK_WIDTH, BANK_WALK_STRIDE).
 //   - where an operand's Map is not the identity (QSR_MAPPED), each tile counter keeps a cursor, which steps the output
-//     position with adds and gives each operand's page through its Map.
+//     position with adds and gives each operand's page through its Map. A held operand (COL, SCALAR) moves only where
+//     its page changed; a VALUE operand fills one entry per tile counter, once.
 //   - the tile loop is per-thread. Thread t of N takes the STRIDED share {t, t+N, t+2N, ...}, which
 //     is the slot assignment the DFB gives producer thread t.
 //   - a borrowed input is published once per tile counter, and a shard's tiles past the borrowed rings are
@@ -29,6 +30,13 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/common/operand_walk.hpp"
+#if A_VALUE || B_VALUE
+#include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
+#endif
+
+// The inputs that this reader reads per tile: not borrowed, and not one value for the whole op.
+#define A_PER_TILE (!SRC_SHARDED && !A_VALUE)
+#define B_PER_TILE (!SRC_SHARDED_B && !B_VALUE)
 
 void kernel_main() {
     // A borrowed ring drains when its object leaves scope, so it lives to kernel exit: the compute pops a borrowed
@@ -108,10 +116,12 @@ void kernel_main() {
     }
 #endif
 #if !SRC_SHARDED || !SRC_SHARDED_B
+#if A_PER_TILE || B_PER_TILE
     const uint32_t start_tile_id = get_arg(args::start_tile_id);
     const uint32_t dst_num_tiles = get_arg(args::dst_num_tiles);
 
     constexpr uint32_t dm_batch = get_arg(args::dm_batch);
+#endif
 
     Noc noc;
 #if !SRC_SHARDED
@@ -134,16 +144,49 @@ void kernel_main() {
     const auto src_b = TensorAccessor(tensor::in1);
 #endif
 
+#if A_VALUE || B_VALUE
+    // A VALUE operand is one value for the whole op, in a ring of one full tile per compute thread. This thread fills
+    // the entry of each tile counter it round-robins, once: page 0 lands in the entry, and its first element fills the
+    // tile. The fill is a CPU store to L1, so it runs inside scoped_write_lock, whose release fences and flushes the
+    // stores before push_back credits the entry. A thread with no tiles fills its entries too: each compute thread
+    // waits for one.
+    {
+        constexpr uint32_t num_tcs = get_arg(args::num_tcs);
+        for (uint32_t c = 0; c < num_tcs; ++c) {
+#if A_VALUE
+            dfb_in0.reserve_back(1);
+            {
+                const auto lock = dfb_in0.scoped_write_lock(1);
+                noc.async_read(src, dfb_in0, src_tile_bytes, {.page_id = 0}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                FILL_TILE_WITH_FIRST_ELEMENT(lock.get_ptr());
+            }
+            dfb_in0.push_back(1);
+#endif
+#if B_VALUE
+            dfb_in1.reserve_back(1);
+            {
+                const auto lock = dfb_in1.scoped_write_lock(1);
+                noc.async_read(src_b, dfb_in1, src_tile_bytes_b, {.page_id = 0}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                FILL_TILE_WITH_FIRST_ELEMENT_B(lock.get_ptr());
+            }
+            dfb_in1.push_back(1);
+#endif
+        }
+    }
+#endif
+#if A_PER_TILE || B_PER_TILE
     const uint32_t thread_id = get_my_thread_id();
     const uint32_t num_threads = get_num_threads();
 
     // Each thread reads every input that moves for its own k, as the legacy reader reads both inputs.
     // Entry i of a reserved batch sits at i * stride_size, NOT i * entry_size: with more than one
     // producer or consumer the ring is STRIDED and a thread's entries interleave with its siblings'.
-#if !SRC_SHARDED
+#if A_PER_TILE
     const uint32_t in0_stride = dfb_in0.get_stride_size();
 #endif
-#if !SRC_SHARDED_B
+#if B_PER_TILE
     const uint32_t in1_stride = dfb_in1.get_stride_size();
 #endif
 
@@ -205,16 +248,17 @@ void kernel_main() {
 #endif
 
     // n tiles of one counter from its cursor, the first at core-local tile k: a read per operand that moves, then one
-    // barrier and one push_back per ring.
+    // barrier and one push_back per ring. A held operand (COL, SCALAR) moves only where its page changed; every other
+    // entry of its ring is a credit only, and keeps stale bytes, which the compute never unpacks.
     auto read_mapped = [&](binary_ng_qsr::Cursor& cursor, uint32_t k, uint32_t n) {
-#if !SRC_SHARDED
+#if A_PER_TILE
         {
             DeviceZoneScopedSumN1("RD_RSV");
             dfb_in0.reserve_back(n);
         }
         uint32_t offset = 0;
 #endif
-#if !SRC_SHARDED_B
+#if B_PER_TILE
         {
             DeviceZoneScopedSumN1("RD_RSV");
             dfb_in1.reserve_back(n);
@@ -223,20 +267,24 @@ void kernel_main() {
 #endif
         for (uint32_t i = 0; i < n; ++i) {
             if (in_tensor(k)) {
-#if !SRC_SHARDED
-                noc.async_read(src, dfb_in0, src_tile_bytes, {.page_id = cursor.page[0]}, {.offset_bytes = offset});
+#if A_PER_TILE
+                if (!A_HELD || (cursor.changed & 1u) != 0) {
+                    noc.async_read(src, dfb_in0, src_tile_bytes, {.page_id = cursor.page[0]}, {.offset_bytes = offset});
+                }
 #endif
-#if !SRC_SHARDED_B
-                noc.async_read(
-                    src_b, dfb_in1, src_tile_bytes_b, {.page_id = cursor.page[1]}, {.offset_bytes = offset_b});
+#if B_PER_TILE
+                if (!B_HELD || (cursor.changed & 2u) != 0) {
+                    noc.async_read(
+                        src_b, dfb_in1, src_tile_bytes_b, {.page_id = cursor.page[1]}, {.offset_bytes = offset_b});
+                }
 #endif
             }
             binary_ng_qsr::advance(cursor, step);
             k += tile_step;
-#if !SRC_SHARDED
+#if A_PER_TILE
             offset += in0_stride;
 #endif
-#if !SRC_SHARDED_B
+#if B_PER_TILE
             offset_b += in1_stride;
 #endif
         }
@@ -244,10 +292,10 @@ void kernel_main() {
             DeviceZoneScopedSumN2("RD_BAR");
             noc.async_read_barrier();
         }
-#if !SRC_SHARDED
+#if A_PER_TILE
         dfb_in0.push_back(n);
 #endif
-#if !SRC_SHARDED_B
+#if B_PER_TILE
         dfb_in1.push_back(n);
 #endif
     };
@@ -418,6 +466,7 @@ void kernel_main() {
             }
         }
     }
+#endif
 #endif
     // Each ring's destructor drains this thread's credits at kernel exit. Keep explicit sync here: the implicit-sync
     // overloads (NocOptions::TXN_ID with a DataflowBuffer endpoint) put a thread barrier in that drain,
