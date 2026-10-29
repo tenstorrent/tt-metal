@@ -340,9 +340,9 @@ void kernel_main() {
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW>();
         }
-        // inv record slots start zeroed (arrival flags); every member clears a slot when it consumes it, so the
-        // slots are zero again whenever a later pass reuses them. No owner writes here before this core contributed
-        // to its first owned wave, which is after this point.
+        // inv record slots start zeroed on every call (arrival flags); a member clears a slot after consuming it only
+        // when a later pass reuses it (NP > 1), so the slots are zero whenever an owner writes them. No owner writes
+        // here before this core contributed to its first owned wave, which is after this point.
         CircularBuffer inv_cb(cb_inv_rms);
         noc.async_write_zeros(inv_cb, PW * Q_W * T_I, {.offset_bytes = 0});
         noc.write_zeros_l1_barrier();
@@ -576,6 +576,12 @@ void kernel_main() {
     // Compact inv wire: the owner's finalized row 0 (two half-records: row 0 of faces 0 / 1 of a cb_rms_root page)
     // goes to face 1 of the member's cb_inv_rms page (never read by the Col-broadcast scaling); the member's reader
     // moves it into column 0 before it pushes the page. 2 x H bytes per row per member instead of faces 0 / 2.
+    // Perf 1: the two halves are joined in place (row 0 of face 1 copied behind row 0 of face 0, i.e. into row 1 of
+    // face 0, which the finalized page never uses) and sent as ONE posted packet per member: the fan-out is bound by
+    // per-packet issue cost (~32 ns per 64 B packet, ~50 ns per 128 B one), not bytes, and arrival is detected by the
+    // sentinel, so no ack is needed — the owner only waits for the source to be read (flushed) before it frees the
+    // page; the kernel tail flushes / barriers the posted writes. Measured: perf_experiments/inv_distribution
+    // (NoC multicast per row segment, a 2-level relay tree and a second NoC were measured slower there).
     auto allgather = [&](uint32_t w) {
         DRMS_ZONE("rd_allgather");
         const uint32_t k = my_k(w);
@@ -583,21 +589,36 @@ void kernel_main() {
         if (no > 0) {
             const uint32_t src = get_read_ptr(cb_rms_root);
             const uint32_t dst = inv_base + ((w % PW) * Q_W + k * Q) * T_I;
-            for (uint32_t i = 0; i < G_W; ++i) {
-                const uint32_t m = rotated(i, my_j, G_W);
-                noc_async_write_one_packet_set_state(get_noc_addr(member_x(m), member_y(m), dst), INV_HALF);
-                for (uint32_t r = 0; r < no; ++r) {
-                    noc_async_write_one_packet_with_state(src + r * T_I, dst + r * T_I + INV_FACE);
-                    noc_async_write_one_packet_with_state(
-                        src + r * T_I + INV_FACE, dst + r * T_I + INV_FACE + INV_HALF);
+            for (uint32_t r = 0; r < no; ++r) {
+                volatile tt_l1_ptr uint32_t* pg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + r * T_I);
+                uint32_t v[INV_HALF / 4];
+#pragma GCC unroll 16
+                for (uint32_t i = 0; i < INV_HALF / 4; ++i) {
+                    v[i] = pg[INV_FACE / 4 + i];
+                }
+#pragma GCC unroll 16
+                for (uint32_t i = 0; i < INV_HALF / 4; ++i) {
+                    pg[INV_HALF / 4 + i] = v[i];
                 }
             }
-            noc_async_write_barrier();
+            for (uint32_t i = 0; i < G_W; ++i) {
+                const uint32_t m = rotated(i, my_j, G_W);
+                noc_async_write_one_packet_set_state<true>(get_noc_addr(member_x(m), member_y(m), dst), 2 * INV_HALF);
+                for (uint32_t r = 0; r < no; ++r) {
+                    noc_async_write_one_packet_with_state<true>(src + r * T_I, dst + r * T_I + INV_FACE);
+                }
+            }
+            {
+                DRMS_ZONE("rd_ag_flush");
+                noc_async_posted_writes_flushed();
+            }
             cb_pop_front(cb_rms_root, no);
         }
     };
-    // member side: the n inv records of wave w (face 1 of each page) -> column 0 of the same pages; the record slot is
-    // cleared again (the arrival flag of the slot's next use)
+    // member side: the n inv records of wave w (face 1 of each page) -> column 0 of the same pages. Perf 1: all loads
+    // first, then the scattered stores (no load-use stall per element; ~450 -> ~290 ns per row); the record slot is
+    // cleared (the arrival flag of the slot's next use) only when a later pass reuses it (NP > 1) — within a pass
+    // every wave owns its own slot.
     constexpr uint32_t REC_CHUNKS = 2 * INV_HALF / 16;  // 16 B L1 write granules per record
     auto inv_ready = [&](uint32_t w) -> bool {
         const uint32_t n = n_wave(w);
@@ -619,20 +640,34 @@ void kernel_main() {
             const uint32_t page = inv_base + ((w % PW) * Q_W + r) * T_I;
             if constexpr (INTERM_FP32) {
                 volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page);
-#pragma GCC unroll 8
+                uint32_t v[32];
+#pragma GCC unroll 32
                 for (uint32_t i = 0; i < 32; ++i) {
-                    p[col0_index(i)] = p[INV_FACE / 4 + i];
+                    v[i] = p[INV_FACE / 4 + i];
+                }
+#pragma GCC unroll 32
+                for (uint32_t i = 0; i < 32; ++i) {
+                    p[col0_index(i)] = v[i];
                 }
             } else {
+                volatile tt_l1_ptr uint32_t* p32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + INV_FACE);
                 volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page);
-#pragma GCC unroll 8
-                for (uint32_t i = 0; i < 32; ++i) {
-                    p[col0_index(i)] = p[INV_FACE / 2 + i];
+                uint32_t v[16];
+#pragma GCC unroll 16
+                for (uint32_t i = 0; i < 16; ++i) {
+                    v[i] = p32[i];
+                }
+#pragma GCC unroll 16
+                for (uint32_t i = 0; i < 16; ++i) {
+                    p[col0_index(2 * i)] = static_cast<uint16_t>(v[i] & 0xFFFF);
+                    p[col0_index(2 * i + 1)] = static_cast<uint16_t>(v[i] >> 16);
                 }
             }
-            volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + INV_FACE);
-            for (uint32_t i = 0; i < 2 * INV_HALF / 4; ++i) {
-                rec[i] = 0;
+            if constexpr (NP > 1) {
+                volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + INV_FACE);
+                for (uint32_t i = 0; i < 2 * INV_HALF / 4; ++i) {
+                    rec[i] = 0;
+                }
             }
         }
     };
@@ -717,5 +752,8 @@ void kernel_main() {
             }
         }
     }
+    // the posted inv record writes (allgather) and every other write of this RISC-V have left / landed
+    noc_async_write_barrier();
+    noc_async_posted_writes_flushed();
     noc_async_atomic_barrier();
 }

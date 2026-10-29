@@ -1,0 +1,337 @@
+--- kernels/distributed_rms_norm_reader.cpp	2026-10-29 04:50:08.539559077 +0000
++++ perf_experiments/owner_offload/drms_oo/kernels/distributed_rms_norm_reader.cpp	2026-10-29 06:25:46.379976508 +0000
+@@ -29,6 +29,17 @@
+ //
+ // All NoC atomics are issued from this RISC-V (NCRISC); the kernel ends with noc_async_atomic_barrier().
+
++// owner_offload experiment (OO_MODE >= 1): Phase A runs as a non-blocking poll over three in-order queues instead of
++// land(w) -> service(w) in sequence, so an owner core's gather wait / chip-sum handoff / publish never holds back the
++// push of its next wave's landed x (nor its next contribution):
++//   land       next wave whose reads were issued: trid flushed (non-blocking) -> W-pad zero, push, issue the next wave
++//   contribute next landed wave whose collapsed partials are in cb_partial_col -> owners' gather regions + SEM_GATHER
++//   owner      next owned (contributed) wave: gather count complete -> push cb_gather; chip partial ready -> publish
++// OO_MODE 2: the compute also runs the owner's chip sum one wave behind its square (square(w+1) before chip_sum(w)).
++#ifndef OO_MODE
++#define OO_MODE 0
++#endif
++
+ #include <stdint.h>
+
+ #include "api/dataflow/dataflow_api.h"
+@@ -348,6 +359,11 @@
+         noc.write_zeros_l1_barrier();
+     }
+
++    if constexpr (OO_MODE == 3 && !REREAD && COMBINE_LAG == 0 && NP == 1) {
++        CircularBuffer stats_cb(cb_stats);
++        noc.async_write_zeros(stats_cb, G * Q * 4096, {.offset_bytes = 0});
++        noc.write_zeros_l1_barrier();
++    }
+     if constexpr (!SHARDED) {
+         load_pass(0, PW < NW ? PW : NW);
+     } else {
+@@ -509,6 +525,129 @@
+         }
+     };
+
++    // ================= Phase A, polled (OO_MODE >= 1) =================
++    auto x_landed = [&](uint32_t w) -> bool {
++        if constexpr (SHARDED || REREAD) {
++            return true;  // sharded: resident; re-read: stream_wave blocks on its own rows
++        } else {
++            return ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid(w));
++        }
++    };
++    auto contribute = [&](uint32_t w) {
++        const uint32_t n = n_wave(w);
++        DRMS_ZONE("rd_contrib");
++        const uint32_t src = get_read_ptr(cb_partial_col);
++        const uint32_t gsem = get_semaphore(SEM_GATHER);
++        for (uint32_t i = 0; i < OWNERS; ++i) {
++            const uint32_t k = rotated(i, my_j % OWNERS, OWNERS);
++            const uint32_t no = n_own(w, k);
++            if (no == 0) {
++                continue;
++            }
++            const uint32_t m = member_of(w, k);
++            const uint32_t dst = gather_base + ((ordinal(m, w) * G_W + my_j) * Q) * T_I;
++            combine_write_tiles<T_I>(src + k * Q * T_I, member_x(m), member_y(m), dst, no);
++        }
++        noc_async_write_barrier();
++        for (uint32_t k = 0; k < OWNERS; ++k) {
++            if (n_own(w, k) > 0) {
++                const uint32_t m = member_of(w, k);
++                noc_semaphore_inc(get_noc_addr(member_x(m), member_y(m), gsem), 1u << (GB * ordinal(m, w)));
++            }
++        }
++        cb_pop_front(cb_partial_col, n);
++    };
++    // Priority of the polled queues: OO_MODE 4 serves the owner queue FIRST (a ready publish never waits behind a
++    // landing push or the next wave's contribution — the publish is on the exchange's critical path); OO_MODE 1 / 2:
++    // land, contribute, then owner.
++    [[maybe_unused]] auto phase_a_polled = [&](uint32_t w_begin, uint32_t w_end) {
++        uint32_t wl = w_begin;  // next wave to land (push)
++        uint32_t wc = w_begin;  // next wave to contribute
++        auto owned_from = [&](uint32_t from) -> uint32_t {
++            uint32_t w = from;
++            while (w < w_end && my_k(w) == OWNERS) {
++                ++w;
++            }
++            return w;
++        };
++        uint32_t wo = owned_from(w_begin);  // next owned wave to serve
++        bool gathered = false;              // wave wo's cb_gather pushed (or nothing to gather)
++        auto owner_try = [&]() -> bool {
++            if (wo >= wc) {
++                return false;
++            }
++            const uint32_t k = my_k(wo);
++            const uint32_t no = n_own(wo, k);
++            if (!gathered) {
++                if (G_W == 1 || no == 0) {
++                    gathered = true;
++                } else {
++                    const uint32_t field = GB * ordinal(my_j, wo);
++                    invalidate_l1_cache();
++                    volatile tt_l1_ptr uint32_t* gs =
++                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER));
++                    if (((*gs >> field) & ((1u << GB) - 1)) < G_W) {
++                        return false;
++                    }
++                    DRMS_ZONE("rd_gather_push");
++                    cb_reserve_back(cb_gather, G_W * Q);
++                    cb_push_back(cb_gather, G_W * Q);
++                    gathered = true;
++                    return true;
++                }
++            }
++            if (no == 0 || cb_pages_available_at_front(cb_chip_partial, no)) {
++                publish(wo, k);
++                wo = owned_from(wo + 1);
++                gathered = false;
++                return true;
++            }
++            return false;
++        };
++        constexpr bool OWNER_FIRST = OO_MODE == 4 || OO_MODE == 6;
++        // GATE (OO_MODE 5 / 6 / 7): wave i's reads go out on the blocking schedule's terms — wave i-1-LOOKAHEAD landed
++        // AND every wave <= i-2-LOOKAHEAD contributed and (owned) published — so DRAM still serves the grid wave by
++        // wave; only the PUSH of a landed wave is decoupled from the owner duties.
++        constexpr bool GATE = OO_MODE >= 5;
++        while (wc < w_end || wo < w_end) {
++            if constexpr (OWNER_FIRST) {
++                if (owner_try()) {
++                    continue;
++                }
++            }
++            if constexpr (GATE) {
++                if (issued < issue_end && issued <= wl + LOOKAHEAD && issued <= wc + 1 + LOOKAHEAD &&
++                    issued <= wo + 1 + LOOKAHEAD) {
++                    issue_wave(issued++);
++                    continue;
++                }
++            }
++            if (wl < w_end && (SHARDED || !GATE || wl < issued) && x_landed(wl)) {
++                land_wave(wl);
++                if constexpr (!GATE) {
++                    issue_ahead(wl + 1 + LOOKAHEAD);
++                }
++                ++wl;
++                continue;
++            }
++            if (wc < wl) {
++                const uint32_t n = n_wave(wc);
++                if (G_W == 1 || n == 0) {
++                    ++wc;
++                    continue;
++                }
++                if (cb_pages_available_at_front(cb_partial_col, n)) {
++                    contribute(wc);
++                    ++wc;
++                    continue;
++                }
++            }
++            if constexpr (!OWNER_FIRST) {
++                owner_try();
++            }
++        }
++    };
++
+     // ================= Phase B =================
+     // A non-blocking poll over three in-order queues, so no wave waits behind another wave's exchange:
+     //   collect  (owned waves with rows)  landed notifies satisfied and cb_stats free -> records -> cb_stats
+@@ -640,6 +779,98 @@
+     // slots (the same slots pass p-1 used), every member's compute must be done with pass p-1. Each reader learns
+     // that of its own compute from cb_inv_rms (every page it pushed was popped), clears its SEM_GATHER fields (all of
+     // pass p-1's contributions were counted), then counts itself done on every member's SEM_PASS.
++    // OO_MODE 3 (one pass, resident interleaved / sharded x): Phase A's polled queues and Phase B's queues in ONE poll
++    // loop, so an owner collects / all-gathers an early wave while its later waves are still landing / contributing.
++    // collect(w) runs only after publish(w) (the own record in the port slot is written by the publish).
++    constexpr bool MERGED = OO_MODE == 3 && !REREAD && COMBINE_LAG == 0 && NP == 1;
++    [[maybe_unused]] auto phase_ab_merged = [&](uint32_t w_begin, uint32_t w_end) {
++        uint32_t wl = w_begin, wc = w_begin;
++        auto owned_from = [&](uint32_t from) -> uint32_t {
++            uint32_t w = from;
++            while (w < w_end && my_k(w) == OWNERS) {
++                ++w;
++            }
++            return w;
++        };
++        uint32_t wo = owned_from(w_begin);
++        bool gathered = false;
++        uint32_t wb = next_owned_rows(w_begin);  // Phase B collect
++        uint32_t wa = next_owned(w_begin);       // Phase B all-gather
++        uint32_t wi = w_begin;                   // Phase B inv push
++        cb_reserve_back(cb_inv_rms, (w_end - w_begin) * Q_W);
++        inv_base = get_write_ptr(cb_inv_rms);
++        while (wc < w_end || wo < w_end || wi < w_end || wa < w_end) {
++            if (wl < w_end && x_landed(wl)) {
++                land_wave(wl);
++                issue_ahead(wl + 1 + LOOKAHEAD);
++                ++wl;
++                continue;
++            }
++            if (wc < wl) {
++                const uint32_t n = n_wave(wc);
++                if (G_W == 1 || n == 0) {
++                    ++wc;
++                    continue;
++                }
++                if (cb_pages_available_at_front(cb_partial_col, n)) {
++                    contribute(wc);
++                    ++wc;
++                    continue;
++                }
++            }
++            if (wo < wc) {
++                const uint32_t k = my_k(wo);
++                const uint32_t no = n_own(wo, k);
++                if (!gathered) {
++                    if (G_W == 1 || no == 0) {
++                        gathered = true;
++                    } else {
++                        const uint32_t field = GB * ordinal(my_j, wo);
++                        invalidate_l1_cache();
++                        volatile tt_l1_ptr uint32_t* gs =
++                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER));
++                        if (((*gs >> field) & ((1u << GB) - 1)) >= G_W) {
++                            DRMS_ZONE("rd_gather_push");
++                            cb_reserve_back(cb_gather, G_W * Q);
++                            cb_push_back(cb_gather, G_W * Q);
++                            gathered = true;
++                            continue;
++                        }
++                    }
++                }
++                if (gathered && (no == 0 || cb_pages_available_at_front(cb_chip_partial, no))) {
++                    publish(wo, k);
++                    wo = owned_from(wo + 1);
++                    gathered = false;
++                    continue;
++                }
++            }
++            if (wb < w_end && wb < wo) {
++                const uint32_t kp = group * OWNERS + my_k(wb);
++                if (landed_ok(wb, kp % L) && cb_pages_reservable_at_back(cb_stats, G * Q)) {
++                    collect(wb);
++                    wb = next_owned_rows(wb + 1);
++                    continue;
++                }
++            }
++            if (wa < w_end && wa < wo) {
++                const uint32_t no = n_own(wa, my_k(wa));
++                if (no == 0 || (wb > wa && cb_pages_available_at_front(cb_rms_root, no))) {
++                    allgather(wa);
++                    wa = next_owned(wa + 1);
++                    continue;
++                }
++            }
++            invalidate_l1_cache();
++            if (wi < w_end && inv_ready(wi)) {
++                unpack_inv(wi);
++                cb_push_back(cb_inv_rms, Q_W);
++                ++wi;
++                continue;
++            }
++        }
++    };
++
+     const uint32_t pass_sem = get_semaphore(SEM_PASS);
+     auto pass_barrier = [&](uint32_t p) {
+         DRMS_ZONE("rd_pass_barrier");
+@@ -667,15 +898,22 @@
+         // ================= Phase A =================
+         // COMBINE_LAG 1: wave w-1 is serviced after wave w landed (Phase 0); 0: right after its own landing, so a
+         // wave's contribution / gather / publish never waits for a later wave's reads (compute mirrors the lag).
+-        for (uint32_t w = w_begin; w < w_end + COMBINE_LAG; ++w) {
+-            if (w < w_end) {
+-                land_wave(w);
+-                if constexpr (!REREAD) {
+-                    issue_ahead(w + 1 + LOOKAHEAD);
++        if constexpr (MERGED) {
++            phase_ab_merged(w_begin, w_end);
++            continue;  // one pass: Phase B ran inside the merged loop
++        } else if constexpr (OO_MODE >= 1 && COMBINE_LAG == 0 && !REREAD) {
++            phase_a_polled(w_begin, w_end);
++        } else {
++            for (uint32_t w = w_begin; w < w_end + COMBINE_LAG; ++w) {
++                if (w < w_end) {
++                    land_wave(w);
++                    if constexpr (!REREAD) {
++                        issue_ahead(w + 1 + LOOKAHEAD);
++                    }
++                }
++                if (w >= w_begin + COMBINE_LAG) {
++                    service(w - COMBINE_LAG);
+                 }
+-            }
+-            if (w >= w_begin + COMBINE_LAG) {
+-                service(w - COMBINE_LAG);
+             }
+         }
+         if (p == 0) {
+--- kernels/distributed_rms_norm_compute.cpp	2026-10-29 04:50:08.539186577 +0000
++++ perf_experiments/owner_offload/drms_oo/kernels/distributed_rms_norm_compute.cpp	2026-10-29 06:25:27.966226840 +0000
+@@ -30,6 +30,12 @@
+ //     record wire — records land in row 0 of their cb_stats pages and the finalized row 0 is the 2 x 64 B inv record
+ //     the owner's reader all-gathers; each member's reader puts it in column 0 of its own cb_inv_rms page).
+
++// owner_offload experiment: OO_MODE 2 (with the reader's polled Phase A; interleaved resident x only) runs the
++// owner's chip sum one wave behind its square, so square(w+1) / its contribution never wait for wave w's gather.
++#ifndef OO_MODE
++#define OO_MODE 0
++#endif
++
+ #include <stdint.h>
+
+ #include "api/compute/compute_kernel_hw_startup.h"
+@@ -148,7 +154,8 @@
+     constexpr bool REREAD = get_compile_time_arg_val(19) != 0;
+     constexpr uint32_t WP = NCH * C;
+     // waves between a wave's square and its chip sum (the reader's service lag, the same CT value): 1 / 0
+-    constexpr uint32_t COMBINE_LAG = get_compile_time_arg_val(20);
++    constexpr uint32_t COMBINE_LAG_CT = get_compile_time_arg_val(20);
++    constexpr uint32_t COMBINE_LAG = ((OO_MODE == 2 || OO_MODE == 7) && !REREAD && COMBINE_LAG_CT == 0) ? 1 : COMBINE_LAG_CT;
+     // waves an owner's cross-device fold may run ahead of its own scaling pass (>= NW: every owned fold first)
+     constexpr uint32_t FOLD_AHEAD = get_compile_time_arg_val(21);
+
+--- distributed_rms_norm_program_descriptor.py	2026-10-29 05:33:56.244158537 +0000
++++ perf_experiments/owner_offload/drms_oo/distributed_rms_norm_program_descriptor.py	2026-10-29 06:06:44.304866038 +0000
+@@ -1085,6 +1085,8 @@
+     defines = [(d, "1") for a, d in _ABLATE_DEFINES.items() if a in ablate]
+     if os.environ.get("DRMS_PERF_ZONES", "0") not in ("", "0"):
+         defines.append(("DRMS_PERF_ZONES", "1"))
++    # owner_offload experiment: OO_MODE 0 = op as is; 1 = polled Phase A reader; 2 = 1 + owner chip-sum lag 1
++    defines.append(("OO_MODE", os.environ.get("DRMS_OO", "0")))
+     return defines
+
+
+@@ -1617,7 +1619,7 @@
+             key = "|".join(
+                 str(v)
+                 for v in (
+-                    "distributed_rms_norm",
++                    "drms_owner_offload_copy",
+                     tuple(dm_defines),
+                     coord,
+                     p,

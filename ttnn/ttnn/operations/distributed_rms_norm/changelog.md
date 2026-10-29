@@ -266,3 +266,107 @@ mix-up), `test_distributed_rms_norm_perf.py` (perf driver); both run with `--no-
   carry into the op — its ports also serialize the publishes and the per-entry notifies of many roots.
 - Tests added: `test_distributed_rms_norm_r4_debug.py` (host-only probe: per chip / direction / link Ethernet channel,
   its NoC coordinate and the nearest-NoC1 port core). Unit files green on default, `eth` and `eth_uniform` placement.
+
+## Perf 1 — perf tournament round 1 (2 experiments): the inv distribution hop
+- Date: 2026-10-29. Perf only; SUPPORTED unchanged. Focus = the perf-flagged LOOSE_CASE 640×1792 (bf16 x, TILE bf16 γ,
+  HiFi4, fp32_dest_acc_en=True, 1×4 ring, Ring, 2 links, cluster_axis 1); every knob of it is in SUPPORTED.
+- Instrumentation: the kernels' permanent `DRMS_ZONE(...)` stage zones (`DRMS_PERF_ZONES=1`; free when off) were reused —
+  `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` / `MaybeDeviceZoneScope` does not exist in this tree. Added
+  `rd_ag_flush` (the all-gather's source flush, split from its issue loop).
+
+### Measured breakdown (traced slowest chip per call, µs, one fresh-cache run per variant)
+| variant (cumulative peel) | op | exchange stubbed |
+|---|---|---|
+| full | 21.39 | 16.81 |
+| x reads stubbed | 18.48 | 14.77 |
+| + output writes stubbed | 17.37 | 12.70 |
+| + γ reads stubbed (every DRAM payload off) | 16.76 | 12.71 |
+32×1792: 11.45 / 8.90; 2048×1280: 30.50 / 28.58. Roofline 9.0 / 0.45 / 20.5.
+- With every DRAM payload AND the exchange stubbed at once the focus case still takes 12.7 µs (> the 9.0 µs DRAM
+  roofline): the op is bound by its on-chip / exchange chain, not DRAM; DRAM adds ~4.1 µs above that chain.
+- Per chip (zones, last traced call): chip 0 launched last and runs 17.2 µs; the others 21.7–24.7 µs, of which their
+  ports' `prt_ready_wait` is 2–8 µs (launch skew: every chip ends at about the last-launched chip's absolute end).
+- Critical path on the last-launched chip: x landings end 8.5 (roots) / 6.4 (members) → last publish 10.6 → exchange
+  done ~11.0 → collect 11.9 → fold 13.7 → inv all-gather 15.0 → member row0→col0 move 15.6 → scale 15.9 → stores 17.0.
+  Per owned wave: collect 0.6, fold 0.67, inv all-gather 1.0 (28 packet issues), member move 0.44, scale 0.2.
+- Ranked (headroom on the slowest chip): (1) OVERLAP — post-landing chain (~6 µs exposed; its inv distribution hop
+  is ~1.5 µs per wave); (2) OVERLAP — root cores' x landings 2.1 µs behind the members' (owner duties on the same
+  NCRISC); (3) launch skew ~4–7 µs (not the op's to remove; every chip's local work already runs in it); (4) DRAM
+  reads ~300 GB/s (ablation: −2.0 µs stub).
+
+### Portfolio (cap 2) and verdicts
+| idea | kind | verdict | focus op / stub (µs, base → cand) | domain |
+|---|---|---|---|---|
+| `inv_distribution`: shorten the inv distribution hop | OVERLAP (post-exchange chain) | **WIN (modest)**, graduated | 20.84 → 20.35 / 16.79 → 16.58 (6 interleaved rounds, subagent copy) | everywhere, no exception |
+| `owner_offload`: stop owner duties delaying the root's x landings | OVERLAP (work split / data availability) | **NULL** at the op level | c1 −0.95…+0.2 / −0.86; c2 +0.3…+0.7 / −1.1 | — |
+
+`inv_distribution` option menu (all bit-exact vs the real op, PCC 0.999998): NoC multicast per row segment (a row-group
+is 14 consecutive workers on the 11-wide grid = 2–3 one-row rectangles) 21.32 / 17.09 — **regression** (~180 ns per
+multicast issue + slow acks); multicast with one 128 B packet 21.97 / 17.04 — regression; joined 128 B + posted
+21.02 / 16.87 — flat; batched member move alone 20.63 / 16.58; **joined + posted + batched move 20.35 / 16.58** (chosen);
+2-level relay tree 21.20 / 16.89 — regression (relays busy with their own waves); owner self-slot by RISC-V stores
++180 ns; two command buffers flat; second NoC via the writer's command buffer **hung** (that NoC is the other RISC's)
+→ BLOCKED; dynamic-NoC two-NIU fan-out correct but slower (other NoC busy with stores). Members fold their own rows
+(option C) not built: same fan-out cost moves to notifies. Finding: the fan-out is bound by per-packet issue cost
+(~32 ns / 64 B packet, ~50 ns / 128 B), not bytes. Per-wave hop medians from the owner's fold end: last member arrival
+1548 → 1284 ns, move end 1987 → 1567, scale end 2643 → 2367.
+
+`owner_offload` (NULL): premise corrected — with LOOKAHEAD 0 the root's next-wave reads are already issued before
+`service(w)`; its late `rd_land` is the trid barrier + push reached only after the gather wait / publish, plus compute's
+`chip_sum(w)` before `square(w+1)` on owners. Variants (all bit-exact, no hangs): c1 non-blocking Phase A poll (root
+landings 8.2–8.45 → 6.3–6.6 µs = members, publish end 10.6 → 9.8, untraced last-launched 16.7 → 15.6–15.8) but the op
+metric does not move (exposed transport grows by what the stub loses) and c1 regresses 2048×1280 +1.05 (7/7 rounds,
+decoupled roots break wave-ordered DRAM) and the chunk-stream rung +0.8…+1.2; c2 (= c1 + owner chip-sum one wave
+later) wins D3-WS −1.0…−1.3 op / −1.5 stub (3 sessions) but regresses 2048×1280 +0.55…+1.7, chunk-stream +1.5, focus
++0.3…+0.7, decode +0.45; c3–c7 (merged loops, owner-first, DRAM-order gates) flat or worse. Option B (owner duties on
+the writer BRISC) not built — dominated by c1's measurement. Not graduated: no variant wins op-wide, and c2 would need a
+regime-gated dual reader loop for a non-perf-flagged regime (D3-WS already gains −1.2 µs from the graduated wire).
+Candidate for round 2, re-measured on top of this round's wire.
+
+### Graduated: joined + posted inv record, batched member move (reader only)
+- `allgather`: row 0 of face 1 of the finalized `cb_rms_root` page is copied into row 1 of face 0 (unused), so each row's
+  record is one contiguous 2·INV_HALF packet; one **posted** packet per member (`noc_async_write_one_packet_*<true>`);
+  the owner waits only for the source to be read (`noc_async_posted_writes_flushed`) before popping `cb_rms_root`
+  (arrival is by the existing sentinel, so no ack is needed); kernel tail `noc_async_write_barrier()` +
+  `noc_async_posted_writes_flushed()` before the atomic barrier.
+- `unpack_inv`: all record loads first, then the scattered column-0 stores (~450 → ~290 ns per row); the slot is cleared
+  only when a later pass reuses it (`NP > 1`) — the prologue zeroes every slot on every call, so a single-pass call
+  never sees a stale record.
+- Domain: the ONE path everywhere (every regime, dtype, DEST mode, topology, link count, pass count, L1 rung); the
+  two-packet acked wire and the per-element move were deleted. No carve-out: none was earned (no measured regression).
+- Whole op, same-session interleaved A/B, real op (3 rounds, traced slowest median, op / stub µs): 640×1792 20.62 → 21.10
+  (flat: inside the ±1 µs launch-skew noise, ranges overlap) / 16.86 → 16.60 (−0.26, every round); 32×1792 11.87 → 11.42
+  / 8.92 → 8.57; 2048×1280 30.63 → 29.90 / 28.66 → 28.23.
+- Guard set (`test_distributed_rms_norm_perf_guard.py`, current defaults, old → new op slowest / stub, µs; pcc 1.00000
+  everywhere): D3 focus 21.03 → 21.20 / 16.82 → 16.50; RM γ 21.65 → 20.17 / 16.92 → 16.57; no γ 20.69 → 20.74 /
+  16.67 → 16.44; decode 11.61 → 11.21 / 8.88 → 8.62; 2048×1280 30.85 → 30.40 / 28.63 → 28.14; D1 10.39 → 10.48 / 6.25 →
+  6.06; D1-HS 11.62 → 11.40 / 7.34 → 7.18; **D3-WS 18.32 → 17.15 / 14.28 → 12.75**; **D3-WS no γ 18.64 → 17.22 / 14.25 →
+  12.68**; passes rung 37.96 → 38.17 / 25.25 → 24.78; chunk-stream rung 22.28 → 22.05 / 18.25 → 17.99; re-read rung
+  24.34 → 24.11 / 22.55 → 22.17. The subagent's copy also covered bf16 DEST, fp32 input and Linear / 1 link / axis 0
+  (focus, decode, D1-HS, D3-WS, passes): flat or better, D3-WS −1.5…−2.2 µs.
+- Accuracy: unchanged arithmetic (same records, same fold / finalize, only the wire and the move order changed);
+  bit-identical to the pre-change op on every subagent config; R3 overflow / sentinel test green.
+- Tests: unit acceptance + L1 fallbacks + R3 + precision baseline 234 passed / 1 skipped; golden `test_op_loose` +
+  `test_regression` + `test_ring_mock` 39/39; golden `test_op` HEIGHT_SHARDED×Linear 3420 passed / 620 xfailed,
+  INTERLEAVED×Linear 3600 / 720 xfailed, WIDTH_SHARDED×Linear 3599 passed / 720 xfailed / 1 failed — the failure
+  (4096×1024 fp32 WIDTH_SHARDED axis 0 Linear 1 link: "footprint 301184 B exceeds L1 budget 216576 B") is
+  **pre-existing**: the pre-change reader fails the same cell in the same chunk, and the cell passes alone (suite-order L1
+  fragmentation by the harness's tensors, the Refinement 1 failure class) → upstream L1-fit work, not perf. Ring cells
+  are pruned at collection on this box's 2×2 system mesh (covered by `test_ring_mock` and the 1×4 ring drivers).
+- Summary: 2 ideas measured; 1 graduated (modest: −0.26 µs stub on the focus case, op flat within launch-skew noise;
+  −1.2…−1.4 µs op on D3-WS), 1 null; no regression.
+- What binds next (focus, slowest chip): launch skew, then the post-landing chain (collect 0.6 + fold 0.67 per wave are
+  now the largest hops) and the root landing lag (`owner_offload` c1 removes it but needs the exchange chain shortened
+  before it shows on the op metric).
+
+### Helper bypasses — none
+The graduated path uses the dataflow API it used before (`noc_async_write_one_packet_set_state` / `_with_state`, now
+with the posted template flag, and `noc_async_posted_writes_flushed`); no kernel_lib helper was bypassed. (The losing
+multicast variant used raw `noc_async_write_multicast*` because no helper multicasts to a list of 1-row rectangles derived
+from a member list — `mcast_pipe` / `ttnn.Mcast` take one rectangle; recorded here only as a gap note, it did not
+graduate.)
+
+Artifacts: `perf_experiments/inv_distribution/` (op copy `drms_copy/` with every variant behind `DRMS_INV_VARIANT`,
+interleaved A/B driver, overflow test, `hop_report.py`), `perf_experiments/owner_offload/` (op copy `drms_oo/` behind
+`DRMS_OO`, `owner_offload_vs_op.diff`, A/B drivers, zone tools, `logs_summary.txt`; zone CSVs dropped). Both drivers
+need `--import-mode=prepend`.

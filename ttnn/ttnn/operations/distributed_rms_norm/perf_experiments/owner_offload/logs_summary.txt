@@ -1,0 +1,82 @@
+### logs/guard2.log
+========================================
+============================= test session starts ==============================
+GUARD D3-focus           real op  21.41 stub  16.82 | c1 op  20.46 stub  16.01 | c4 op  20.76 stub  15.98 | c2 op  22.07 stub  15.82
+GUARD D3-2048            real op  31.16 stub  28.54 | c1 op  31.16 stub  28.49 | c4 op  30.86 stub  28.61 | c2 op  31.71 stub  28.61
+GUARD D3-WS              real op  18.74 stub  14.30 | c1 op  18.92 stub  14.32 | c4 op  19.40 stub  14.30 | c2 op  17.44 stub  12.84
+GUARD rung-chunk-stream  real op  22.02 stub  18.02 | c1 op  22.33 stub  17.44 | c4 op  23.37 stub  17.89 | c2 op  23.28 stub  18.04
+GUARD rung-reread        real op  24.61 stub  22.45 | c1 op  24.45 stub  22.53 | c4 op  23.94 stub  22.46 | c2 op  24.31 stub  22.57
+GUARD D3-focus           real op  21.41 stub  16.82 | c1 op  20.46 stub  16.01 | c4 op  20.76 stub  15.98 | c2 op  22.07 stub  15.82
+GUARD D3-2048            real op  31.16 stub  28.54 | c1 op  31.16 stub  28.49 | c4 op  30.86 stub  28.61 | c2 op  31.71 stub  28.61
+GUARD D3-WS              real op  18.74 stub  14.30 | c1 op  18.92 stub  14.32 | c4 op  19.40 stub  14.30 | c2 op  17.44 stub  12.84
+GUARD rung-chunk-stream  real op  22.02 stub  18.02 | c1 op  22.33 stub  17.44 | c4 op  23.37 stub  17.89 | c2 op  23.28 stub  18.04
+GUARD rung-reread        real op  24.61 stub  22.45 | c1 op  24.45 stub  22.53 | c4 op  23.94 stub  22.46 | c2 op  24.31 stub  22.57
+============================= slowest 25 durations =============================
+============================== 1 passed in 49.36s ==============================
+========================================
+### logs/guard3.log
+========================================
+============================= test session starts ==============================
+GUARD D3-focus           real op  20.43 stub  16.86 | c1 op  20.63 stub  15.98 | c4 op  20.48 stub  16.05
+GUARD D3-2048            real op  29.97 stub  28.60 | c1 op  31.02 stub  28.55 | c4 op  30.70 stub  28.51
+GUARD rung-chunk-stream  real op  21.93 stub  18.02 | c1 op  22.75 stub  17.50 | c4 op  22.77 stub  17.57
+GUARD D3-focus           real op  20.43 stub  16.86 | c1 op  20.63 stub  15.98 | c4 op  20.48 stub  16.05
+GUARD D3-2048            real op  29.97 stub  28.60 | c1 op  31.02 stub  28.55 | c4 op  30.70 stub  28.51
+GUARD rung-chunk-stream  real op  21.93 stub  18.02 | c1 op  22.75 stub  17.50 | c4 op  22.77 stub  17.57
+============================= slowest 25 durations =============================
+============================== 1 passed in 29.89s ==============================
+========================================
+### logs/guard4.log
+========================================
+============================= test session starts ==============================
+GUARD D3-focus           real op  20.31 stub  16.80 | c5 op  20.77 stub  16.50 | c6 op  20.25 stub  16.48 | c7 op  20.99 stub  16.37
+GUARD D3-2048            real op  30.54 stub  28.74 | c5 op  30.01 stub  28.14 | c6 op  30.75 stub  28.17 | c7 op  31.33 stub  28.24
+GUARD rung-chunk-stream  real op  22.05 stub  17.97 | c5 op  23.06 stub  18.22 | c6 op  22.15 stub  18.41 | c7 op  23.61 stub  18.97
+GUARD D3-focus           real op  20.31 stub  16.80 | c5 op  20.77 stub  16.50 | c6 op  20.25 stub  16.48 | c7 op  20.99 stub  16.37
+GUARD D3-2048            real op  30.54 stub  28.74 | c5 op  30.01 stub  28.14 | c6 op  30.75 stub  28.17 | c7 op  31.33 stub  28.24
+GUARD rung-chunk-stream  real op  22.05 stub  17.97 | c5 op  23.06 stub  18.22 | c6 op  22.15 stub  18.41 | c7 op  23.61 stub  18.97
+============================= slowest 25 durations =============================
+============================== 1 passed in 48.75s ==============================
+========================================
+### logs/guard5.log
+========================================
+============================= test session starts ==============================
+GUARD D3-focus           real op  20.94 stub  16.74 | c6 op  20.79 stub  16.53 | c2 op  21.39 stub  15.70
+GUARD D3-rmg             real op  21.83 stub  16.91 | c6 op  21.12 stub  16.43 | c2 op  21.54 stub  15.82
+GUARD D3-nog             real op  21.24 stub  16.77 | c6 op  21.12 stub  16.47 | c2 op  21.91 stub  15.66
+GUARD D3-decode          real op  11.31 stub   8.91 | c6 op  11.99 stub   9.00 | c2 op  11.81 stub   9.02
+GUARD D3-2048            real op  30.70 stub  28.54 | c6 op  30.16 stub  28.18 | c2 op  32.42 stub  28.39
+GUARD D1                 real op  10.44 stub   6.26 | c6 op  10.55 stub   6.34 | c2 op  10.63 stub   6.32
+GUARD D1-HS              real op  12.05 stub   7.36 | c6 op  11.89 stub   7.32 | c2 op  12.00 stub   7.34
+GUARD D3-WS              real op  18.40 stub  14.32 | c6 op  19.06 stub  14.30 | c2 op  17.42 stub  12.81
+GUARD D3-WS-nog          real op  18.42 stub  14.23 | c6 op  19.05 stub  14.22 | c2 op  17.17 stub  12.75
+GUARD rung-passes        real op  38.04 stub  25.32 | c6 op  38.54 stub  25.58 | c2 op  37.91 stub  25.44
+GUARD rung-chunk-stream  real op  21.82 stub  18.16 | c6 op  23.01 stub  18.50 | c2 op  23.32 stub  18.20
+GUARD rung-reread        real op  24.73 stub  22.32 | c6 op  25.36 stub  22.54 | c2 op  24.88 stub  22.50
+GUARD D3-focus           real op  20.94 stub  16.74 | c6 op  20.79 stub  16.53 | c2 op  21.39 stub  15.70
+GUARD D3-rmg             real op  21.83 stub  16.91 | c6 op  21.12 stub  16.43 | c2 op  21.54 stub  15.82
+GUARD D3-nog             real op  21.24 stub  16.77 | c6 op  21.12 stub  16.47 | c2 op  21.91 stub  15.66
+GUARD D3-decode          real op  11.31 stub   8.91 | c6 op  11.99 stub   9.00 | c2 op  11.81 stub   9.02
+GUARD D3-2048            real op  30.70 stub  28.54 | c6 op  30.16 stub  28.18 | c2 op  32.42 stub  28.39
+GUARD D1                 real op  10.44 stub   6.26 | c6 op  10.55 stub   6.34 | c2 op  10.63 stub   6.32
+GUARD D1-HS              real op  12.05 stub   7.36 | c6 op  11.89 stub   7.32 | c2 op  12.00 stub   7.34
+GUARD D3-WS              real op  18.40 stub  14.32 | c6 op  19.06 stub  14.30 | c2 op  17.42 stub  12.81
+GUARD D3-WS-nog          real op  18.42 stub  14.23 | c6 op  19.05 stub  14.22 | c2 op  17.17 stub  12.75
+GUARD rung-passes        real op  38.04 stub  25.32 | c6 op  38.54 stub  25.58 | c2 op  37.91 stub  25.44
+GUARD rung-chunk-stream  real op  21.82 stub  18.16 | c6 op  23.01 stub  18.50 | c2 op  23.32 stub  18.20
+GUARD rung-reread        real op  24.73 stub  22.32 | c6 op  25.36 stub  22.54 | c2 op  24.88 stub  22.50
+============================= slowest 25 durations =============================
+========================= 1 passed in 83.50s (0:01:23) =========================
+========================================
+### logs/z2048_c1.log
+========================================
+============================= test session starts ==============================
+============================= slowest 25 durations =============================
+============================== 1 passed in 4.57s ===============================
+========================================
+### logs/z2048_real.log
+========================================
+============================= test session starts ==============================
+============================= slowest 25 durations =============================
+============================== 1 passed in 4.67s ===============================
+========================================

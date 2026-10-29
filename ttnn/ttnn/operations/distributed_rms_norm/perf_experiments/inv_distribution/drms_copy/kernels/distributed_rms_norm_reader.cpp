@@ -1,0 +1,1065 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// distributed_rms_norm reader (NCRISC, NoC0) on every worker core (op_design.md -> Block schedule).
+// Passes (Refinement 1): Phase A + Phase B below run once per pass block of PW waves (one pass in Phase 0). Before a
+// later pass writes into other members' cb_gather regions / cb_inv_rms slots, a row-group barrier (SEM_PASS) makes
+// sure every member's compute is done with the previous pass; SEM_GATHER fields are cleared at that barrier.
+//
+// Prologue (ahead of the x reads: on Blackhole the NoC zero fill's barrier waits for every read in flight): reduce
+// scaler (1.0; [full, partial] on the sharded W-pad mask path); cb_stats pages zeroed once after Phase A (only row 0 of
+// faces 0 / 1 is ever rewritten).
+// Phase A, per wave w (COMBINE_LAG 0: wave w is serviced right after it landed; 1 (Phase 0): after wave w+1 landed):
+//   load                 interleaved: wave-ordered reads, 1 + LOOKAHEAD waves in flight (transaction id w + 1; x is
+//                        resident), each wave pushed once its own reads landed; pad tiles [V, WS) and the W-pad columns
+//                        of tile Wt-1 zeroed; sharded: the resident shard is pushed once (zero-copy)
+//   contribute_wave      (G_W > 1) this slice's collapsed partials of owner k's rows -> owner k's gather region
+//                        (faces 0/2, base combine transport), then one SEM_GATHER increment per owner
+//   (owner) gather push  once every member's partial landed
+//   publish_wave (owner) OVERLAP: the chip partials' column 0 -> compact fp32 records (128 B per tile-row), written
+//                        into the own slot of both ports of the publisher's link; own_stats[w] increment on each
+// Phase B, a non-blocking poll over three in-order queues (no wave waits behind another wave's exchange):
+//   collect_wave (owner) once the link ports' landed notifies cover the wave: read the G records of each owned row
+//                        from the ports straight into row 0 of cb_stats pages (group-position order; no CPU scatter)
+//   allgather_inv_wave   (owner) the finalized inv rows (compact: row 0, 2 x 64 B fp32) -> face 1 of every member's
+//                        cb_inv_rms rows. No semaphore: inv = rsqrt(ss/W + eps) is never +0, so a zeroed record slot
+//                        is its own arrival flag (one word per 16 B L1 write granule is polled)
+//   (every member)       once every record of the wave arrived, move each into column 0, clear the slot, push the
+//                        wave's Q_W cb_inv_rms pages
+//
+// All NoC atomics are issued from this RISC-V (NCRISC); the kernel ends with noc_async_atomic_barrier().
+
+#include <stdint.h>
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
+// Measurement-only stage zones (host DRMS_PERF_ZONES=1 -> define DRMS_PERF_ZONES; off in production).
+#if defined(DRMS_PERF_ZONES) && DRMS_PERF_ZONES
+#include "tools/profiler/kernel_profiler.hpp"
+#define DRMS_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define DRMS_ZONE(name)
+#endif
+
+// Measurement-only (host DRMS_ABLATE=exchange; 0 in production): the ports do nothing, so the counted gate and the
+// landed waits are skipped (the collected records are stale landing bytes — timing only).
+#ifndef DRMS_ABLATE_EXCHANGE
+#define DRMS_ABLATE_EXCHANGE 0
+#endif
+#ifndef DRMS_ABLATE_READS
+#define DRMS_ABLATE_READS 0
+#endif
+
+// perf_experiments/inv_distribution variants (measurement copy only):
+//   INV_MCAST    0: unicast the inv record to each of the G_W members (2 packets each, today's wire)
+//                1: NoC multicast per row segment of the row-group (maximal runs of members on one NoC row with
+//                   consecutive x — the rectangle is exactly those members, never a port / idle core); loopback when
+//                   the owner sits in the segment. Raw noc_async_write_multicast*: no helper multicasts to a list of
+//                   1-row rectangles derived from a member list.
+//   INV_JOIN     1: one 128 B packet per destination (segment / member) from a contiguous staging copy of the
+//                   record (row 0 of face 1 copied behind row 0 of face 0 of the owner's cb_rms_root page)
+//   INV_TREE     1: (implies the joined record) two-level fan-out: the owner writes itself + the first INV_TREE_R
+//                   members of its rotated member list (the relays); relay i (detects its record by the sentinel in
+//                   its Phase B poll) forwards its face-1 slot to members R + i, R + i + R, ... of that list
+//   INV_FASTMOVE 1: member row0->col0 move with batched loads; the record slot is cleared only when a later pass
+//                   reuses it (NP > 1)
+#ifndef INV_MCAST
+#define INV_MCAST 0
+#endif
+#ifndef INV_JOIN
+#define INV_JOIN 0
+#endif
+#ifndef INV_TREE
+#define INV_TREE 0
+#endif
+#ifndef INV_TREE_R
+#define INV_TREE_R 3
+#endif
+#if INV_TREE && !INV_JOIN
+#undef INV_JOIN
+#define INV_JOIN 1
+#endif
+// INV_TREE_REV 1: the owner's member list runs backwards (o-1, o-2, ...): the relays are the previous waves' owners
+//                 (done with their own all-gather) instead of the next waves' owners (busy collecting / folding)
+// INV_SELF_LOCAL 1: the owner's own record slot is filled by RISC-V stores after the remote packets are issued
+// INV_POSTED 1: posted (no-ack) record writes; flushed (source read) before the source is reused / at kernel end
+#ifndef INV_TREE_REV
+#define INV_TREE_REV 0
+#endif
+#ifndef INV_SELF_LOCAL
+#define INV_SELF_LOCAL 0
+#endif
+#ifndef INV_POSTED
+#define INV_POSTED 0
+#endif
+// INV_DUALBUF 1: record packets alternate between the reader's two write command buffers (write / write-reg), so a
+//                packet's issue never waits for the previous one's command buffer to drain (raw ncrisc_noc_write_*)
+#ifndef INV_DUALBUF
+#define INV_DUALBUF 0
+#endif
+// INV_TWONOC 1: (join + posted, unicast fan-out) every other member's record packet goes out on the OTHER NoC from
+//               its write-reg command buffer (2), which this core's other RISC-V (the writer: tile writes on cmd
+//               buf 0, non-posted) never uses; posted writes leave that NoC's non-posted / ack counters untouched.
+//               The source is flushed against a snapshot of the other NIU's posted-sent counter (only this RISC
+//               posts there). Two NIUs inject the fan-out in parallel.
+#ifndef INV_TWONOC
+#define INV_TWONOC 0
+#endif
+#if INV_TWONOC && !(INV_JOIN && INV_POSTED)
+#error "INV_TWONOC needs join + posted"
+#endif
+// INV_DYN2 1: (host: reader + writer in DM_DYNAMIC_NOC; join + posted, unicast fan-out) every other member's record
+//            packet goes out on the other NoC through this RISC-V's own dynamic-mode command buffer: two NIUs inject
+//            the fan-out in parallel
+#ifndef INV_DYN2
+#define INV_DYN2 0
+#endif
+#if INV_DYN2 && !(INV_JOIN && INV_POSTED)
+#error "INV_DYN2 needs join + posted"
+#endif
+#ifndef INV_FASTMOVE
+#define INV_FASTMOVE 0
+#endif
+
+namespace {
+
+constexpr uint32_t cb_x_tiles = 1;
+constexpr uint32_t cb_reduce_scaler = 2;
+constexpr uint32_t cb_inv_rms = 4;
+constexpr uint32_t cb_partial_col = 9;
+constexpr uint32_t cb_gather = 10;
+constexpr uint32_t cb_rms_root = 11;
+constexpr uint32_t cb_chip_partial = 14;
+constexpr uint32_t cb_stats = 15;
+constexpr uint32_t cb_record_scratch = 17;
+
+constexpr uint32_t FACE_DIM = 16;
+constexpr uint32_t RECORD_BYTES = 128;
+constexpr uint32_t STATS_TILE_BYTES = 4096;  // cb_stats pages are fp32 tiles (STATS_FORMAT)
+constexpr uint32_t STATS_FACE_BYTES = 1024;  // record values 16..31 -> row 0 of face 1
+constexpr uint32_t FWD = 0, BWD = 1, OWN = 2;
+
+// word / element index of column-0 row r (0..31) of a tile: face 0 rows 0-15, face 2 rows 16-31
+FORCE_INLINE uint32_t col0_index(uint32_t r) { return r < 16 ? r * 16 : 512 + (r - 16) * 16; }
+
+// Faces 0 and 2 of n tiles (column-0 data: the only part any consumer reads) — base rms_norm_combine.hpp.
+template <uint32_t T>
+FORCE_INLINE void combine_write_tiles(uint32_t src, uint32_t x, uint32_t y, uint32_t dst_l1, uint32_t n) {
+    constexpr uint32_t F = T / 4;
+    static_assert(F <= NOC_MAX_BURST_SIZE, "one face must fit one NoC packet");
+    if (n == 0) {
+        return;
+    }
+    noc_async_write_one_packet_set_state(get_noc_addr(x, y, dst_l1), F);
+    for (uint32_t t = 0; t < n; ++t) {
+        noc_async_write_one_packet_with_state(src + t * T, dst_l1 + t * T);
+        noc_async_write_one_packet_with_state(src + t * T + 2 * F, dst_l1 + t * T + 2 * F);
+    }
+}
+
+FORCE_INLINE uint32_t rotated(uint32_t i, uint32_t my_index, uint32_t n) {
+    uint32_t j = my_index + 1 + i;
+    while (j >= n) {
+        j -= n;
+    }
+    return j;
+}
+
+template <uint32_t es>
+FORCE_INLINE void store_zeros(uint32_t addr, uint32_t n_elems) {
+    if constexpr (es == 4) {
+        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+        for (uint32_t i = 0; i < n_elems; ++i) {
+            p[i] = 0;
+        }
+    } else if constexpr (es == 2) {
+        volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr);
+        for (uint32_t i = 0; i < n_elems; ++i) {
+            p[i] = 0;
+        }
+    } else {
+        volatile tt_l1_ptr uint8_t* p = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(addr);
+        for (uint32_t i = 0; i < n_elems; ++i) {
+            p[i] = 0;
+        }
+    }
+}
+
+// Zero columns [w_valid, 32) of a tile at tile_offset of the CB's write window (base zero_tile_w_padding).
+// es = 4 / 2: Float32 / Float16_b datums. es = 1: Bfp8_b — the 1 B sign+magnitude mantissas (64 B exponent section
+// first, then 4 faces of 16x16 bytes); a zero magnitude is zero whatever the shared exponent, so the exponent bytes
+// are left alone. Whole pad faces go through the NoC zero loopback, partial face rows through element stores.
+template <uint32_t es>
+FORCE_INLINE void zero_tile_w_padding(
+    const Noc& noc, const CircularBuffer& cb, uint32_t tile_offset, uint32_t w_valid) {
+    constexpr uint32_t head = es == 1 ? 64 : 0;
+    constexpr uint32_t face_bytes = FACE_DIM * FACE_DIM * es;
+    constexpr uint32_t face_row_bytes = FACE_DIM * es;
+    const uint32_t tile_addr = cb.get_write_ptr() + tile_offset + head;
+    if (w_valid <= FACE_DIM) {
+        noc.async_write_zeros(cb, face_bytes, {.offset_bytes = tile_offset + head + 1 * face_bytes});
+        noc.async_write_zeros(cb, face_bytes, {.offset_bytes = tile_offset + head + 3 * face_bytes});
+        if (w_valid < FACE_DIM) {
+            const uint32_t n = FACE_DIM - w_valid;
+            for (uint32_t f = 0; f < 4; f += 2) {
+                for (uint32_t r = 0; r < FACE_DIM; ++r) {
+                    store_zeros<es>(tile_addr + f * face_bytes + r * face_row_bytes + w_valid * es, n);
+                }
+            }
+        }
+        noc.write_zeros_l1_barrier();
+    } else {
+        const uint32_t c0 = w_valid - FACE_DIM;
+        const uint32_t n = FACE_DIM - c0;
+        for (uint32_t f = 1; f < 4; f += 2) {
+            for (uint32_t r = 0; r < FACE_DIM; ++r) {
+                store_zeros<es>(tile_addr + f * face_bytes + r * face_row_bytes + c0 * es, n);
+            }
+        }
+    }
+}
+
+}  // namespace
+
+void kernel_main() {
+    constexpr bool SHARDED = get_compile_time_arg_val(0) != 0;
+    constexpr uint32_t G_W = get_compile_time_arg_val(1);
+    constexpr uint32_t WS = get_compile_time_arg_val(2);
+    constexpr uint32_t NW = get_compile_time_arg_val(3);
+    constexpr uint32_t Q_W = get_compile_time_arg_val(4);
+    constexpr uint32_t OWNERS = get_compile_time_arg_val(5);
+    constexpr uint32_t Q = get_compile_time_arg_val(6);
+    constexpr uint32_t G = get_compile_time_arg_val(7);
+    constexpr uint32_t L = get_compile_time_arg_val(8);
+    constexpr uint32_t T_IN = get_compile_time_arg_val(9);
+    constexpr uint32_t T_I = get_compile_time_arg_val(10);
+    constexpr bool INTERM_FP32 = get_compile_time_arg_val(11) != 0;
+    constexpr bool MASKED = get_compile_time_arg_val(12) != 0;
+    constexpr uint32_t W_VALID_LAST = get_compile_time_arg_val(13);
+    constexpr uint32_t DTYPE_KIND = get_compile_time_arg_val(14);  // 0 fp32, 1 bf16, 2 bfp8_b
+    constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(15);
+    [[maybe_unused]] constexpr uint32_t SEM_INV = get_compile_time_arg_val(16);  // unused since Refinement 3
+    // SEM_GATHER holds one GB-bit field per owned wave (ordinal o): a contributor running a wave ahead can never
+    // complete an earlier owned wave's count.
+    constexpr uint32_t GB = get_compile_time_arg_val(22);
+    constexpr uint32_t SEM_LANDED_BASE = get_compile_time_arg_val(17);
+    constexpr uint32_t SEM_OWN_STATS_BASE = get_compile_time_arg_val(18);  // + wave, on the port cores
+    constexpr uint32_t SEG_STRIDE = get_compile_time_arg_val(20);
+    constexpr uint32_t WT = get_compile_time_arg_val(21);
+    constexpr uint32_t LOOKAHEAD = get_compile_time_arg_val(19);  // waves of x reads in flight beyond the oldest
+    // passes: the core's waves run in pass blocks of PW waves (Phase A + Phase B each); cb_gather holds REGIONS
+    // owned-wave regions and cb_inv_rms PW waves, reused pass after pass behind a row-group barrier (SEM_PASS)
+    constexpr uint32_t PW = get_compile_time_arg_val(23);
+    constexpr uint32_t REGIONS = get_compile_time_arg_val(24);
+    constexpr uint32_t SEM_PASS = get_compile_time_arg_val(25);
+    constexpr uint32_t NP = (NW + PW - 1) / PW;
+    // x re-read (L1 fallback, interleaved only): x is never resident — Phase A streams it one tile-row at a time
+    // through cb_x_tiles (square + collapse), Phase B's writer re-reads it (cb_x_reread)
+    constexpr bool REREAD = get_compile_time_arg_val(26) != 0;
+    // waves between a wave's landing and its service (contribute / gather / publish): 1 = Phase 0, 0 = none
+    constexpr uint32_t COMBINE_LAG = get_compile_time_arg_val(27);
+    constexpr auto input_args = TensorAccessorArgs<28>();
+    // compact inv record in an intermediate tile (T_I: fp32 4096 B / bf16 2048 B): face bytes, half-record bytes
+    constexpr uint32_t INV_FACE = T_I / 4;
+    constexpr uint32_t INV_HALF = 16 * (T_I / 1024);
+
+    size_t a = 0;
+    const uint32_t in_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t start_row = get_arg_val<uint32_t>(a++);
+    const uint32_t rows = get_arg_val<uint32_t>(a++);
+    const uint32_t w0 = get_arg_val<uint32_t>(a++);
+    const uint32_t V = get_arg_val<uint32_t>(a++);
+    const uint32_t my_j = get_arg_val<uint32_t>(a++);
+    const uint32_t my_pos = get_arg_val<uint32_t>(a++);
+    const uint32_t landing = get_arg_val<uint32_t>(a++);
+    const uint32_t group = get_arg_val<uint32_t>(a++);
+    const uint32_t n_in_fwd = get_arg_val<uint32_t>(a++);
+    const uint32_t n_in_bwd = get_arg_val<uint32_t>(a++);
+    const bool holds_pad = get_arg_val<uint32_t>(a++) != 0;
+    [[maybe_unused]] const bool masked_core = get_arg_val<uint32_t>(a++) != 0;
+    [[maybe_unused]] const uint32_t n_active = get_arg_val<uint32_t>(a++);  // ports per link sending the own slot
+    const uint32_t member_idx = a;
+    a += G_W;
+    const uint32_t port_idx = a;
+    a += 2 * L;
+    const bool sends_own_fwd = get_arg_val<uint32_t>(a++) != 0;
+    const bool sends_own_bwd = get_arg_val<uint32_t>(a++) != 0;
+    const uint32_t srcdir_idx = a;
+    a += G;
+
+    auto member_x = [&](uint32_t m) { return get_arg_val<uint32_t>(member_idx + m) >> 16; };
+    auto member_y = [&](uint32_t m) { return get_arg_val<uint32_t>(member_idx + m) & 0xFFFF; };
+    // member at position i of owner o's fan-out list (position G_W - 1 is o itself)
+    auto pos_member = [](uint32_t i, uint32_t o) -> uint32_t {
+#if INV_TREE_REV
+        return (o + 2 * G_W - 1 - i) % G_W;
+#else
+        return (o + 1 + i) % G_W;
+#endif
+    };
+    constexpr bool PST = INV_POSTED != 0;
+    // one joined record packet (2 x INV_HALF bytes) per row to member m (src / dst rows T_I apart), command buffer
+    // chosen by the packet ordinal pk (INV_DUALBUF)
+    auto send_rec = [&](uint32_t pk, uint32_t m, uint32_t src, uint32_t dst, uint32_t no) {
+#if INV_DUALBUF
+        const uint32_t buf = (pk & 1) ? NCRISC_WR_REG_CMD_BUF : NCRISC_WR_CMD_BUF;
+        ncrisc_noc_write_set_state<PST, true>(
+            noc_index, buf, get_noc_addr(member_x(m), member_y(m), dst), 2 * INV_HALF);
+        for (uint32_t r = 0; r < no; ++r) {
+            ncrisc_noc_write_with_state<noc_mode, PST, true, true>(noc_index, buf, src + r * T_I, dst + r * T_I);
+        }
+#else
+        noc_async_write_one_packet_set_state<PST>(get_noc_addr(member_x(m), member_y(m), dst), 2 * INV_HALF);
+        for (uint32_t r = 0; r < no; ++r) {
+            noc_async_write_one_packet_with_state<PST>(src + r * T_I, dst + r * T_I);
+        }
+#endif
+    };
+    auto rec_flush = [&]() {
+        if constexpr (PST) {
+            noc_async_posted_writes_flushed();
+        } else {
+            noc_async_writes_flushed();
+        }
+    };
+    auto port_noc = [&](uint32_t l, uint32_t d, uint32_t addr) {
+        const uint32_t v = get_arg_val<uint32_t>(port_idx + 2 * l + d);
+        return get_noc_addr(v >> 16, v & 0xFFFF, addr);
+    };
+
+    auto n_wave = [&](uint32_t w) -> uint32_t {
+        const uint32_t r0 = w * Q_W;
+        return r0 >= rows ? 0 : ((rows - r0) < Q_W ? rows - r0 : Q_W);
+    };
+    auto member_of = [](uint32_t w, uint32_t k) -> uint32_t { return (w * OWNERS + k) % G_W; };
+    auto my_k = [&](uint32_t w) -> uint32_t {
+        for (uint32_t k = 0; k < OWNERS; ++k) {
+            if (member_of(w, k) == my_j) {
+                return k;
+            }
+        }
+        return OWNERS;
+    };
+    auto n_own = [&](uint32_t w, uint32_t k) -> uint32_t {
+        const uint32_t n = n_wave(w);
+        const uint32_t first = k * Q;
+        return first >= n ? 0 : ((n - first) < Q ? n - first : Q);
+    };
+    // owned-wave ordinal of member m at wave w: how many earlier waves m owned with rows. Its gather region (and
+    // SEM_GATHER field) is ordinal mod REGIONS: one pass holds at most REGIONS owned waves, and the ring of regions
+    // follows the owner's cb_gather pushes (one region per owned wave with rows).
+    auto ordinal = [&](uint32_t m, uint32_t w) -> uint32_t {
+        uint32_t o = 0;
+        for (uint32_t v = 0; v < w; ++v) {
+            for (uint32_t k = 0; k < OWNERS; ++k) {
+                if (member_of(v, k) == m && n_own(v, k) > 0) {
+                    ++o;
+                }
+            }
+        }
+        return o % REGIONS;
+    };
+
+    Noc noc;
+    CircularBuffer x_cb(cb_x_tiles);
+
+    uint32_t inv_base = 0;  // cb_inv_rms write pointer at the pass start (the same on every member: same pushes)
+    [[maybe_unused]] uint32_t gather_base = 0;
+    if constexpr (G_W > 1) {
+        gather_base = get_write_ptr(cb_gather);
+    }
+    const uint32_t scratch = get_write_ptr(cb_record_scratch);  // Q records: publish staging
+
+    // ---------------- load: wave-ordered reads with a bounded look-ahead (x resident per pass block) ----------------
+    // Wave w's reads carry transaction id w + 1 (mod 15: ids 1..15). At most 1 + LOOKAHEAD waves are in flight per
+    // core, so DRAM serves the grid's reads roughly in wave order: every row-group's wave 0 lands first and its
+    // exchange starts early, instead of competing with every core's last wave.
+    [[maybe_unused]] uint32_t x_base = 0;
+    [[maybe_unused]] uint32_t x_row0 = 0;
+    [[maybe_unused]] const auto input_accessor = TensorAccessor(input_args, in_addr);
+    uint32_t issued = 0;
+    uint32_t issue_end = 0;
+    auto trid = [](uint32_t w) -> uint32_t { return 1 + w % 15; };
+    auto issue_wave = [&](uint32_t w) {
+        if constexpr (!SHARDED) {
+            DRMS_ZONE("rd_issue");
+            noc_async_read_set_trid(trid(w));
+            const uint32_t r0 = w * Q_W;
+            const uint32_t n = n_wave(w);
+            for (uint32_t r = r0; r < r0 + n; ++r) {
+                const uint32_t page0 = (start_row + r) * WT + w0;
+                const uint32_t l1 = x_base + (r - x_row0) * WS * T_IN;
+                for (uint32_t t = 0; t < V && !DRMS_ABLATE_READS; ++t) {
+                    noc_async_read_tile(page0 + t, input_accessor, l1 + t * T_IN);
+                }
+            }
+            noc_async_read_set_trid(0);
+        }
+    };
+    auto issue_ahead = [&](uint32_t upto) {
+        while (issued < issue_end && issued <= upto) {
+            issue_wave(issued++);
+        }
+    };
+    // reserve + start the x reads of the pass block [w_begin, w_end)
+    auto load_pass = [&](uint32_t w_begin, uint32_t w_end) {
+        if constexpr (!SHARDED && !REREAD) {
+            const uint32_t row0 = w_begin * Q_W;
+            const uint32_t row_end = (w_end * Q_W < rows) ? w_end * Q_W : rows;
+            const uint32_t rows_p = row_end > row0 ? row_end - row0 : 0;
+            issued = w_begin;
+            issue_end = w_end;
+            if (rows_p == 0) {
+                return;
+            }
+            cb_reserve_back(cb_x_tiles, rows_p * WS);
+            x_base = get_write_ptr(cb_x_tiles);
+            x_row0 = row0;
+            if (V < WS) {
+                for (uint32_t r = 0; r < rows_p; ++r) {
+                    noc.async_write_zeros(x_cb, (WS - V) * T_IN, {.offset_bytes = (r * WS + V) * T_IN});
+                }
+                noc.write_zeros_l1_barrier();
+            }
+            issue_ahead(w_begin + LOOKAHEAD);
+        }
+    };
+    // ---------------- prologue (ahead of the x reads) ----------------
+    // On Blackhole a NoC zero fill's barrier (write_zeros_l1_barrier) is a full noc_async_read_barrier: run behind
+    // the x reads it would wait for every read in flight (~3 us at the focus case) before the next wave's reads issue.
+    {
+        DRMS_ZONE("rd_prologue");
+        if constexpr (MASKED) {
+            dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+                cb_reduce_scaler,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                (MASKED ? W_VALID_LAST : 1)>();
+        } else {
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                cb_reduce_scaler,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW>();
+        }
+        // inv record slots start zeroed (arrival flags); every member clears a slot when it consumes it, so the
+        // slots are zero again whenever a later pass reuses them. No owner writes here before this core contributed
+        // to its first owned wave, which is after this point.
+        CircularBuffer inv_cb(cb_inv_rms);
+        noc.async_write_zeros(inv_cb, PW * Q_W * T_I, {.offset_bytes = 0});
+        noc.write_zeros_l1_barrier();
+    }
+
+    if constexpr (!SHARDED) {
+        load_pass(0, PW < NW ? PW : NW);
+    } else {
+        cb_reserve_back(cb_x_tiles, rows * WS);
+        cb_push_back(cb_x_tiles, rows * WS);
+    }
+
+    // x re-read: the wave's tile-rows streamed one at a time (cb_x_tiles holds a few rows; compute pops each row
+    // after its square + collapse). Pad tiles [V, WS) and the W-pad columns are zeroed per row as in the resident path.
+    [[maybe_unused]] auto stream_wave = [&](uint32_t w) {
+        if constexpr (!SHARDED && REREAD) {
+            DRMS_ZONE("rd_stream");
+            const uint32_t r0 = w * Q_W;
+            const uint32_t n = n_wave(w);
+            for (uint32_t r = r0; r < r0 + n; ++r) {
+                cb_reserve_back(cb_x_tiles, WS);
+                const uint32_t l1 = get_write_ptr(cb_x_tiles);
+                if (V < WS) {
+                    noc.async_write_zeros(x_cb, (WS - V) * T_IN, {.offset_bytes = V * T_IN});
+                }
+                const uint32_t page0 = (start_row + r) * WT + w0;
+                for (uint32_t t = 0; t < V; ++t) {
+                    noc_async_read_tile(page0 + t, input_accessor, l1 + t * T_IN);
+                }
+                noc_async_read_barrier();
+                if (V < WS) {
+                    noc.write_zeros_l1_barrier();
+                }
+                if constexpr (W_VALID_LAST < 32) {
+                    if (holds_pad) {
+                        constexpr uint32_t es = DTYPE_KIND == 0 ? 4 : (DTYPE_KIND == 1 ? 2 : 1);
+                        zero_tile_w_padding<es>(noc, x_cb, (V - 1) * T_IN, W_VALID_LAST);
+                    }
+                }
+                cb_push_back(cb_x_tiles, WS);
+            }
+        }
+    };
+
+    auto land_wave = [&](uint32_t w) {
+        if constexpr (REREAD) {
+            stream_wave(w);
+        } else if constexpr (!SHARDED) {
+            DRMS_ZONE("rd_land");
+            noc_async_read_barrier_with_trid(trid(w));
+            const uint32_t n = n_wave(w);
+            if constexpr (W_VALID_LAST < 32) {
+                if (holds_pad) {
+                    constexpr uint32_t es = DTYPE_KIND == 0 ? 4 : (DTYPE_KIND == 1 ? 2 : 1);
+                    // zero_tile_w_padding addresses relative to the CB write pointer, which sits at x_base
+                    // offsets are relative to the CB write pointer, which sits at the wave's first row
+                    for (uint32_t r = 0; r < n; ++r) {
+                        zero_tile_w_padding<es>(noc, x_cb, (r * WS + V - 1) * T_IN, W_VALID_LAST);
+                    }
+                }
+            }
+            cb_push_back(cb_x_tiles, n * WS);
+        }
+    };
+
+    // ---------------- service of wave w (Phase A): contribute, gather, publish ----------------
+    auto publish = [&](uint32_t w, uint32_t k) {
+        const uint32_t no = n_own(w, k);
+        const uint32_t kp = group * OWNERS + k;
+        const uint32_t l = kp % L;
+        const uint32_t kl = kp / L;
+        volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+        if (no > 0) {
+            {
+                DRMS_ZONE("rd_wait_chip");
+                cb_wait_front(cb_chip_partial, no);
+            }
+            const uint32_t src = get_read_ptr(cb_chip_partial);
+            for (uint32_t r = 0; r < no; ++r) {
+                const uint32_t tile = src + r * T_I;
+                for (uint32_t i = 0; i < 32; ++i) {
+                    if constexpr (INTERM_FP32) {
+                        rec[r * 32 + i] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile)[col0_index(i)];
+                    } else {
+                        rec[r * 32 + i] =
+                            static_cast<uint32_t>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile)[col0_index(i)])
+                            << 16;
+                    }
+                }
+            }
+            cb_pop_front(cb_chip_partial, no);
+        }
+        for (uint32_t r = no; r < Q; ++r) {
+            for (uint32_t i = 0; i < 32; ++i) {
+                rec[r * 32 + i] = 0;
+            }
+        }
+        DRMS_ZONE("rd_publish");
+        const uint32_t off = landing + (w * G + my_pos) * SEG_STRIDE + kl * Q * RECORD_BYTES;
+        if (sends_own_fwd) {
+            noc_async_write(scratch, port_noc(l, FWD, off), Q * RECORD_BYTES);
+        }
+        if (sends_own_bwd) {
+            noc_async_write(scratch, port_noc(l, BWD, off), Q * RECORD_BYTES);
+        }
+        noc_async_write_barrier();
+        // announce wave w on the port's own_stats[w] (one semaphore per wave: no ordering gate needed)
+        const uint32_t own_stats = get_semaphore(SEM_OWN_STATS_BASE + w);
+        if (sends_own_fwd) {
+            noc_semaphore_inc(port_noc(l, FWD, own_stats), 1);
+        }
+        if (sends_own_bwd) {
+            noc_semaphore_inc(port_noc(l, BWD, own_stats), 1);
+        }
+    };
+
+    auto service = [&](uint32_t w) {
+        const uint32_t n = n_wave(w);
+        if constexpr (G_W > 1) {
+            if (n > 0) {
+                {
+                    DRMS_ZONE("rd_wait_partial");
+                    cb_wait_front(cb_partial_col, n);
+                }
+                DRMS_ZONE("rd_contrib");
+                const uint32_t src = get_read_ptr(cb_partial_col);
+                const uint32_t gsem = get_semaphore(SEM_GATHER);
+                for (uint32_t i = 0; i < OWNERS; ++i) {
+                    const uint32_t k = rotated(i, my_j % OWNERS, OWNERS);
+                    const uint32_t no = n_own(w, k);
+                    if (no == 0) {
+                        continue;
+                    }
+                    const uint32_t m = member_of(w, k);
+                    const uint32_t dst = gather_base + ((ordinal(m, w) * G_W + my_j) * Q) * T_I;
+                    combine_write_tiles<T_I>(src + k * Q * T_I, member_x(m), member_y(m), dst, no);
+                }
+                noc_async_write_barrier();
+                for (uint32_t k = 0; k < OWNERS; ++k) {
+                    if (n_own(w, k) > 0) {
+                        const uint32_t m = member_of(w, k);
+                        noc_semaphore_inc(get_noc_addr(member_x(m), member_y(m), gsem), 1u << (GB * ordinal(m, w)));
+                    }
+                }
+                cb_pop_front(cb_partial_col, n);
+            }
+        }
+        const uint32_t k = my_k(w);
+        if (k < OWNERS) {
+            if constexpr (G_W > 1) {
+                if (n_own(w, k) > 0) {
+                    const uint32_t field = GB * ordinal(my_j, w);
+                    DRMS_ZONE("rd_gather_wait");
+                    volatile tt_l1_ptr uint32_t* gs =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER));
+                    do {
+                        invalidate_l1_cache();
+                    } while (((*gs >> field) & ((1u << GB) - 1)) < G_W);
+                    cb_reserve_back(cb_gather, G_W * Q);
+                    cb_push_back(cb_gather, G_W * Q);
+                }
+            }
+            publish(w, k);
+        }
+    };
+
+    // ================= Phase B =================
+    // A non-blocking poll over three in-order queues, so no wave waits behind another wave's exchange:
+    //   collect  (owned waves with rows)  landed notifies satisfied and cb_stats free -> records -> cb_stats
+    //   allgather (owned waves)           the finalized rows in cb_rms_root -> every member's cb_inv_rms
+    //   inv      (every wave)             every inv record of the wave arrived -> column 0, push the wave's Q_W pages
+    uint32_t w_lim = NW;  // end of the current pass block (the Phase B queues stop there)
+    auto next_owned = [&](uint32_t from) -> uint32_t {
+        uint32_t w = from;
+        while (w < w_lim && my_k(w) == OWNERS) {
+            ++w;
+        }
+        return w;
+    };
+    auto next_owned_rows = [&](uint32_t from) -> uint32_t {
+        uint32_t w = next_owned(from);
+        while (w < w_lim && n_own(w, my_k(w)) == 0) {
+            w = next_owned(w + 1);
+        }
+        return w;
+    };
+    auto landed_ok = [&](uint32_t w, uint32_t l) -> bool {
+        if constexpr (DRMS_ABLATE_EXCHANGE) {
+            return true;
+        }
+        invalidate_l1_cache();
+        if (n_in_fwd > 0 && *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                get_semaphore(SEM_LANDED_BASE + 2 * l + FWD)) < (w + 1) * n_in_fwd) {
+            return false;
+        }
+        if (n_in_bwd > 0 && *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                get_semaphore(SEM_LANDED_BASE + 2 * l + BWD)) < (w + 1) * n_in_bwd) {
+            return false;
+        }
+        return true;
+    };
+    // Records land straight in row 0 of their cb_stats page (faces 0 / 1: two 64 B NoC reads per record), so the
+    // owner's RISC-V never touches the values; compute transposes each page into the column-0 layout of the inv tile.
+    auto collect = [&](uint32_t w) {
+        DRMS_ZONE("rd_collect");
+        const uint32_t k = my_k(w);
+        const uint32_t no = n_own(w, k);
+        const uint32_t kp = group * OWNERS + k;
+        const uint32_t l = kp % L;
+        const uint32_t kl = kp / L;
+        cb_reserve_back(cb_stats, G * Q);
+        const uint32_t st = get_write_ptr(cb_stats);
+        for (uint32_t pos = 0; pos < G; ++pos) {
+            uint32_t d = get_arg_val<uint32_t>(srcdir_idx + pos);
+            if (d == OWN) {
+                d = sends_own_fwd ? FWD : BWD;
+            }
+            const uint32_t off = landing + (w * G + pos) * SEG_STRIDE + kl * Q * RECORD_BYTES;
+            for (uint32_t r = 0; r < no; ++r) {
+                const uint32_t page = st + (pos * Q + r) * STATS_TILE_BYTES;
+                noc_async_read(port_noc(l, d, off + r * RECORD_BYTES), page, RECORD_BYTES / 2);
+                noc_async_read(
+                    port_noc(l, d, off + r * RECORD_BYTES + RECORD_BYTES / 2),
+                    page + STATS_FACE_BYTES,
+                    RECORD_BYTES / 2);
+            }
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_stats, G * Q);
+    };
+    // Compact inv wire: the owner's finalized row 0 (two half-records: row 0 of faces 0 / 1 of a cb_rms_root page)
+    // goes to face 1 of the member's cb_inv_rms page (never read by the Col-broadcast scaling); the member's reader
+    // moves it into column 0 before it pushes the page. 2 x H bytes per row per member instead of faces 0 / 2.
+    auto allgather = [&](uint32_t w) {
+        DRMS_ZONE("rd_allgather");
+        const uint32_t k = my_k(w);
+        const uint32_t no = n_own(w, k);
+        if (no > 0) {
+            const uint32_t src = get_read_ptr(cb_rms_root);
+            const uint32_t dst = inv_base + ((w % PW) * Q_W + k * Q) * T_I;
+#if INV_JOIN
+            // contiguous 2 x INV_HALF staging of each row's record in the (now idle) cb_rms_root page itself:
+            // row 0 of face 0 is already in place; copy row 0 of face 1 right behind it (row 1 of face 0, unused)
+            for (uint32_t r = 0; r < no; ++r) {
+                volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + r * T_I);
+                uint32_t v[INV_HALF / 4];
+#pragma GCC unroll 16
+                for (uint32_t i = 0; i < INV_HALF / 4; ++i) {
+                    v[i] = p[INV_FACE / 4 + i];
+                }
+#pragma GCC unroll 16
+                for (uint32_t i = 0; i < INV_HALF / 4; ++i) {
+                    p[INV_HALF / 4 + i] = v[i];
+                }
+            }
+#endif
+#if INV_MCAST
+            // row segments of the row-group (group order): members j..j+len-1 on one NoC row, x consecutive
+            uint32_t j = 0;
+            while (j < G_W) {
+                const uint32_t y = member_y(j);
+                const uint32_t x0 = member_x(j);
+                uint32_t len = 1;
+                while (j + len < G_W && member_y(j + len) == y && member_x(j + len) == x0 + len) {
+                    ++len;
+                }
+                const uint32_t x1 = x0 + len - 1;
+                const bool self_in = my_j >= j && my_j < j + len;
+                // NoC1 travels the other way: its multicast rectangle starts at the larger corner
+                const uint32_t xs = noc_index == 0 ? x0 : x1;
+                const uint32_t xe = noc_index == 0 ? x1 : x0;
+                for (uint32_t r = 0; r < no; ++r) {
+#if INV_JOIN
+                    constexpr uint32_t NPK = 1;
+                    constexpr uint32_t PK = 2 * INV_HALF;
+#else
+                    constexpr uint32_t NPK = 2;
+                    constexpr uint32_t PK = INV_HALF;
+#endif
+                    for (uint32_t h = 0; h < NPK; ++h) {
+                        const uint32_t s_addr = src + r * T_I + h * INV_FACE;
+                        const uint32_t d_addr = dst + r * T_I + INV_FACE + h * INV_HALF;
+                        if (len == 1) {
+                            noc_async_write(s_addr, get_noc_addr(x0, y, d_addr), PK);
+                        } else if (self_in) {
+                            noc_async_write_multicast_loopback_src(
+                                s_addr, get_noc_multicast_addr(xs, y, xe, y, d_addr), PK, len);
+                        } else {
+                            noc_async_write_multicast_one_packet(
+                                s_addr, get_noc_multicast_addr(xs, y, xe, y, d_addr), PK, len);
+                        }
+                    }
+                }
+                j += len;
+            }
+#else
+            [[maybe_unused]] uint32_t pk = 0;
+#if INV_TWONOC
+            const uint32_t onoc = 1 - noc_index;
+            const uint32_t o_base = NOC_STATUS_READ_REG(onoc, NIU_MST_POSTED_WR_REQ_SENT);
+            uint32_t o_sent = 0;
+#endif
+#if INV_TREE
+            // self + the relays (positions 0..R-1 of the rotated list; position G_W-1 is the owner itself)
+            constexpr uint32_t R = INV_TREE_R < G_W - 1 ? INV_TREE_R : G_W - 1;
+            for (uint32_t t = 0; t < R + (INV_SELF_LOCAL ? 0 : 1); ++t) {
+                const uint32_t m = t == R ? my_j : pos_member(t, my_j);
+#else
+            for (uint32_t i = 0; i < G_W; ++i) {
+                const uint32_t m = rotated(i, my_j, G_W);
+#endif
+#if INV_JOIN
+#if INV_DYN2
+                {
+                    const uint8_t nc = (pk++ & 1) ? (1 - noc_index) : noc_index;
+                    noc_async_write_one_packet_set_state<true>(
+                        get_noc_addr(member_x(m), member_y(m), dst, nc), 2 * INV_HALF, nc);
+                    for (uint32_t r = 0; r < no; ++r) {
+                        noc_async_write_one_packet_with_state<true>(src + r * T_I, dst + r * T_I + INV_FACE, nc);
+                    }
+                }
+#elif INV_TWONOC
+                if (pk++ & 1) {
+                    ncrisc_noc_write_set_state<true, true>(
+                        onoc, NCRISC_WR_REG_CMD_BUF, get_noc_addr(member_x(m), member_y(m), dst, onoc), 2 * INV_HALF);
+                    for (uint32_t r = 0; r < no; ++r) {
+                        ncrisc_noc_write_with_state<noc_mode, true, false, true>(
+                            onoc, NCRISC_WR_REG_CMD_BUF, src + r * T_I, dst + r * T_I + INV_FACE);
+                    }
+                    o_sent += no;
+                } else {
+                    send_rec(0, m, src, dst + INV_FACE, no);
+                }
+#else
+                send_rec(pk++, m, src, dst + INV_FACE, no);
+#endif
+#else
+                noc_async_write_one_packet_set_state(get_noc_addr(member_x(m), member_y(m), dst), INV_HALF);
+                for (uint32_t r = 0; r < no; ++r) {
+                    noc_async_write_one_packet_with_state(src + r * T_I, dst + r * T_I + INV_FACE);
+                    noc_async_write_one_packet_with_state(
+                        src + r * T_I + INV_FACE, dst + r * T_I + INV_FACE + INV_HALF);
+                }
+#endif
+            }
+#endif
+#if INV_SELF_LOCAL && INV_TREE
+            for (uint32_t r = 0; r < no; ++r) {
+                volatile tt_l1_ptr uint32_t* sp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + r * T_I);
+                volatile tt_l1_ptr uint32_t* dp =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + r * T_I + INV_FACE);
+                uint32_t v[2 * INV_HALF / 4];
+#pragma GCC unroll 32
+                for (uint32_t i = 0; i < 2 * INV_HALF / 4; ++i) {
+                    v[i] = sp[i];
+                }
+                // data first, the sentinel granules are all non-zero together once every store landed
+#pragma GCC unroll 32
+                for (uint32_t i = 0; i < 2 * INV_HALF / 4; ++i) {
+                    dp[i] = v[i];
+                }
+            }
+#endif
+            {
+                DRMS_ZONE("rd_ag_barrier");
+                if constexpr (PST) {
+                    noc_async_posted_writes_flushed();
+                } else {
+                    noc_async_write_barrier();
+                }
+#if INV_TWONOC
+                while (NOC_STATUS_READ_REG(onoc, NIU_MST_POSTED_WR_REQ_SENT) - o_base < o_sent) {
+                }
+#endif
+#if INV_DYN2
+                noc_async_posted_writes_flushed(1 - noc_index);
+#endif
+            }
+            cb_pop_front(cb_rms_root, no);
+        }
+    };
+    // member side: the n inv records of wave w (face 1 of each page) -> column 0 of the same pages; the record slot is
+    // cleared again (the arrival flag of the slot's next use)
+    constexpr uint32_t REC_CHUNKS = 2 * INV_HALF / 16;  // 16 B L1 write granules per record
+    auto inv_ready = [&](uint32_t w) -> bool {
+        const uint32_t n = n_wave(w);
+        for (uint32_t r = 0; r < n; ++r) {
+            volatile tt_l1_ptr uint32_t* rec =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inv_base + ((w % PW) * Q_W + r) * T_I + INV_FACE);
+            for (uint32_t c = 0; c < REC_CHUNKS; ++c) {
+                if (rec[4 * c] == 0) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    auto unpack_inv = [&](uint32_t w) {
+        DRMS_ZONE("rd_inv_col0");
+#if INV_TREE
+        rec_flush();  // a forward of this record slot has read it before the slot is cleared
+#endif
+        const uint32_t n = n_wave(w);
+        for (uint32_t r = 0; r < n; ++r) {
+            const uint32_t page = inv_base + ((w % PW) * Q_W + r) * T_I;
+#if INV_FASTMOVE
+            // batched: all loads first (no load-use stall per element), then the scattered stores
+            if constexpr (INTERM_FP32) {
+                volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page);
+                uint32_t v[32];
+#pragma GCC unroll 32
+                for (uint32_t i = 0; i < 32; ++i) {
+                    v[i] = p[INV_FACE / 4 + i];
+                }
+#pragma GCC unroll 32
+                for (uint32_t i = 0; i < 32; ++i) {
+                    p[col0_index(i)] = v[i];
+                }
+            } else {
+                volatile tt_l1_ptr uint32_t* p32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + INV_FACE);
+                volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page);
+                uint32_t v[16];
+#pragma GCC unroll 16
+                for (uint32_t i = 0; i < 16; ++i) {
+                    v[i] = p32[i];
+                }
+#pragma GCC unroll 16
+                for (uint32_t i = 0; i < 16; ++i) {
+                    p[col0_index(2 * i)] = static_cast<uint16_t>(v[i] & 0xFFFF);
+                    p[col0_index(2 * i + 1)] = static_cast<uint16_t>(v[i] >> 16);
+                }
+            }
+            if constexpr (NP > 1) {
+                volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + INV_FACE);
+                for (uint32_t i = 0; i < 2 * INV_HALF / 4; ++i) {
+                    rec[i] = 0;
+                }
+            }
+#else
+            if constexpr (INTERM_FP32) {
+                volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page);
+#pragma GCC unroll 8
+                for (uint32_t i = 0; i < 32; ++i) {
+                    p[col0_index(i)] = p[INV_FACE / 4 + i];
+                }
+            } else {
+                volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page);
+#pragma GCC unroll 8
+                for (uint32_t i = 0; i < 32; ++i) {
+                    p[col0_index(i)] = p[INV_FACE / 2 + i];
+                }
+            }
+            volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + INV_FACE);
+            for (uint32_t i = 0; i < 2 * INV_HALF / 4; ++i) {
+                rec[i] = 0;
+            }
+#endif
+        }
+    };
+#if INV_TREE
+    // ---- relays (INV_TREE): my position in owner k's rotated member list of wave w; < R: I forward its rows ----
+    constexpr uint32_t TR = INV_TREE_R < G_W - 1 ? INV_TREE_R : G_W - 1;
+    auto relay_pos = [&](uint32_t w, uint32_t k) -> uint32_t {
+        const uint32_t o = member_of(w, k);
+#if INV_TREE_REV
+        return (o + G_W - 1 - my_j) % G_W;
+#else
+        return (my_j + G_W - o - 1) % G_W;
+#endif
+    };
+    auto rows_arrived = [&](uint32_t w, uint32_t row0, uint32_t n) -> bool {
+        for (uint32_t r = row0; r < row0 + n; ++r) {
+            volatile tt_l1_ptr uint32_t* rec =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inv_base + ((w % PW) * Q_W + r) * T_I + INV_FACE);
+            for (uint32_t c = 0; c < REC_CHUNKS; ++c) {
+                if (rec[4 * c] == 0) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    auto forward = [&](uint32_t w, uint32_t k) {
+        DRMS_ZONE("rd_relay");
+        const uint32_t no = n_own(w, k);
+        const uint32_t o = member_of(w, k);
+        const uint32_t i = relay_pos(w, k);
+        const uint32_t base = inv_base + ((w % PW) * Q_W + k * Q) * T_I + INV_FACE;
+        for (uint32_t c = TR + i; c < G_W - 1; c += TR) {
+            send_rec(c, pos_member(c, o), base, base, no);
+        }
+    };
+#endif
+    // Row-group pass barrier (passes > 1 only): before pass p writes into other members' cb_gather / cb_inv_rms
+    // slots (the same slots pass p-1 used), every member's compute must be done with pass p-1. Each reader learns
+    // that of its own compute from cb_inv_rms (every page it pushed was popped), clears its SEM_GATHER fields (all of
+    // pass p-1's contributions were counted), then counts itself done on every member's SEM_PASS.
+    const uint32_t pass_sem = get_semaphore(SEM_PASS);
+    auto pass_barrier = [&](uint32_t p) {
+        DRMS_ZONE("rd_pass_barrier");
+        while (!cb_pages_reservable_at_back(cb_inv_rms, PW * Q_W)) {
+        }
+        if constexpr (G_W > 1) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER)) = 0;
+        }
+        for (uint32_t i = 0; i < G_W; ++i) {
+            const uint32_t m = rotated(i, my_j, G_W);
+            noc_semaphore_inc(get_noc_addr(member_x(m), member_y(m), pass_sem), 1);
+        }
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pass_sem), p * G_W);
+    };
+
+    for (uint32_t p = 0; p < NP; ++p) {
+        const uint32_t w_begin = p * PW;
+        const uint32_t w_end = (w_begin + PW < NW) ? w_begin + PW : NW;
+        w_lim = w_end;
+        if (p > 0) {
+            load_pass(w_begin, w_end);  // x reads of this pass go out before the barrier wait
+            pass_barrier(p);
+        }
+
+        // ================= Phase A =================
+        // COMBINE_LAG 1: wave w-1 is serviced after wave w landed (Phase 0); 0: right after its own landing, so a
+        // wave's contribution / gather / publish never waits for a later wave's reads (compute mirrors the lag).
+        for (uint32_t w = w_begin; w < w_end + COMBINE_LAG; ++w) {
+            if (w < w_end) {
+                land_wave(w);
+                if constexpr (!REREAD) {
+                    issue_ahead(w + 1 + LOOKAHEAD);
+                }
+            }
+            if (w >= w_begin + COMBINE_LAG) {
+                service(w - COMBINE_LAG);
+            }
+        }
+        if (p == 0) {
+            CircularBuffer stats_cb(cb_stats);
+            noc.async_write_zeros(stats_cb, G * Q * 4096, {.offset_bytes = 0});
+            noc.write_zeros_l1_barrier();
+        }
+
+        // ================= Phase B (the pass's waves) =================
+        uint32_t wc = next_owned_rows(w_begin);  // next owned wave (with rows) to collect
+        uint32_t wa = next_owned(w_begin);       // next owned wave whose rows to all-gather
+        uint32_t wi = w_begin;                   // next wave whose inv rows to push
+        cb_reserve_back(cb_inv_rms, (w_end - w_begin) * Q_W);
+        inv_base = get_write_ptr(cb_inv_rms);
+#if INV_TREE
+        uint32_t fw = w_begin, fk = 0;  // next (wave, owner) whose rows I relay
+        auto relay_skip = [&]() {
+            while (fw < w_end && !(n_own(fw, fk) > 0 && relay_pos(fw, fk) < TR && TR + relay_pos(fw, fk) < G_W - 1)) {
+                if (++fk == OWNERS) {
+                    fk = 0;
+                    ++fw;
+                }
+            }
+        };
+        relay_skip();
+#endif
+        while (wi < w_end || wa < w_end) {
+#if INV_TREE
+            if (fw < w_end) {
+                invalidate_l1_cache();
+                if (rows_arrived(fw, fk * Q, n_own(fw, fk))) {
+                    forward(fw, fk);
+                    if (++fk == OWNERS) {
+                        fk = 0;
+                        ++fw;
+                    }
+                    relay_skip();
+                    continue;
+                }
+            }
+#endif
+            if (wc < w_end) {
+                const uint32_t kp = group * OWNERS + my_k(wc);
+                if (landed_ok(wc, kp % L) && cb_pages_reservable_at_back(cb_stats, G * Q)) {
+                    collect(wc);
+                    wc = next_owned_rows(wc + 1);
+                    continue;
+                }
+            }
+            if (wa < w_end) {
+                const uint32_t no = n_own(wa, my_k(wa));
+                // a wave with rows is all-gathered only after it was collected (wc moved past it)
+                if (no == 0 || (wc > wa && cb_pages_available_at_front(cb_rms_root, no))) {
+                    allgather(wa);
+                    wa = next_owned(wa + 1);
+                    continue;
+                }
+            }
+            invalidate_l1_cache();
+#if INV_TREE
+            // a record that landed after this iteration's relay check must be forwarded before it is consumed
+            // (cleared): wave wi is unpacked only once every relay duty of waves <= wi is done
+            const bool relayed = fw > wi;
+#else
+            constexpr bool relayed = true;
+#endif
+            if (wi < w_end && relayed && inv_ready(wi)) {
+                unpack_inv(wi);
+                cb_push_back(cb_inv_rms, Q_W);
+                ++wi;
+                continue;
+            }
+        }
+    }
+#if INV_TREE || INV_POSTED
+    noc_async_write_barrier();
+    noc_async_posted_writes_flushed();
+#endif
+#if INV_DYN2
+    noc_async_posted_writes_flushed(1 - noc_index);
+#endif
+    noc_async_atomic_barrier();
+}
