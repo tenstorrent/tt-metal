@@ -969,6 +969,28 @@ class DeepseekV41ForCausalLM:
             self.ring_owner = 0
         logger.info(f"DeepSeek-V4.1-Flash warm-up: {self.max_batch_size} slots joined in {time.time() - t0:.1f} s")
         _l1_probe(self.mesh_device, "after warm-up joins")
+        if defer_final():
+            self._prewarm_restore()
+
+    def _prewarm_restore(self) -> None:
+        """Run one eager restore of every width bucket (``join_widths``) into a prefill state before any capture
+        (TT_V41_DEFER_FINAL). The restore's row-major gathers are ``all_gather_async``'s
+        composite path, ``all_broadcast`` + ``concat``, and ``all_broadcast`` creates two global semaphores in L1
+        per cached workload, resident for the program cache's lifetime: created lazily, at the first restore of a
+        shape after the captures, they took L1 addresses a capture's freed intermediates had baked, the next
+        replay overwrote them with tensor rows, and the next restore of that shape waited forever on its
+        out-ready semaphore (``broadcast_rm_writer.cpp:212``, every device). Created here, the captures allocate
+        below them. A served restore uses the bucket's shapes only (``TtV41BatchDecoder.restore``)."""
+        state = self.prefill_states[0]
+        t0 = time.time()
+        for width in self.decoder.join_widths:
+            self.decoder.pool.restore_ops(0, state, width)
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(
+            f"DeepSeek-V4.1-Flash warm-up: the restore's {len(self.decoder.join_widths)} width buckets run once"
+            f" in {time.time() - t0:.1f} s"
+        )
+        _l1_probe(self.mesh_device, "after warm-up restores")
 
     def warmup_model_decode(self, enable_trace: bool, **kwargs) -> None:
         """Run the decode step on every slot until it is captured and replayed once (the first call compiles, the

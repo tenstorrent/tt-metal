@@ -634,16 +634,18 @@ class TtV41BatchDecoder(TtV41Decoder):
         self.pool.park_carries(slot, state)
 
     def restore(self, slot: int, state: V41PrefillState, length: int, piece: int = 65536, probe=None) -> None:
-        """The parked prefix of ``length`` tokens in ``slot`` back into ``state`` (``V41DecodePool.restore_ops``):
-        the capture of ``(state, slot, join_width(length))`` replayed when ``capture_restore`` made it, else
-        eager; ``last_restore`` records the host issue time and the op counts (the device time is the caller's
-        to measure with a synchronize)."""
+        """The parked prefix of ``length`` tokens in ``slot`` back into ``state`` (``V41DecodePool.restore_ops``
+        of the width bucket ``join_width(length)``): the capture of ``(state, slot, width)`` replayed when
+        ``capture_restore`` made it, else eager; ``last_restore`` records the host issue time and the op counts
+        (the device time is the caller's to measure with a synchronize)."""
         assert slot in self.slots and self.slots[slot].position == length, (slot, self.slots.get(slot), length)
         t0 = time.time()
         width = self.join_width(length)
         trace = self.restore_traces.get((id(state), slot, width))
         if trace is None:
-            counts = self.pool.restore_ops(slot, state, length, piece=piece, probe=probe)
+            # the bucket, eagerly: its shapes are the ones the warm-up ran before any capture (the generator's
+            # _prewarm_restore), so no collective workload is created here
+            counts = self.pool.restore_ops(slot, state, width, piece=piece, probe=probe)
             mode = "eager"
         else:
             trace.replay(blocking=False)
