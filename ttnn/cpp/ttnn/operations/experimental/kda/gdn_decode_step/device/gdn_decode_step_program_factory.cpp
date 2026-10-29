@@ -175,6 +175,11 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
             // exact-fp32 copy of hd for the SFPU state add (KV tiles = 64 KB)
             compute_local.push_back({"hd32", KVs, fp32});
         }
+        if (VSPLIT) {
+            // the vsplit compute's Vs-tile intermediates (vm - vread, the gated output): `tmp` takes Kt / Vt blocks
+            // only, since an indexed block must not straddle a DFB's ring end
+            compute_local.push_back({"tmpv", Vs, fp32});
+        }
     }
     std::vector<Dfb> compute_out = {{"hnew", KVs, fp32}, {"out", Vs, out_fmt}};
     std::vector<Dfb> writer_local;

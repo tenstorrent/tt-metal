@@ -16,6 +16,14 @@
 // straight into `acc_mine` (exact fp32, as into `o`); after the last user the writer swaps the users' tiles with the
 // head's other blocks into `acc_x` (user ui's full pre-norm row at ui*Vt), and the gated RMSNorm runs per user on the
 // full row as before, emitting only this block's Vs output tiles.
+//
+// DFB block sizes: an indexed reserve_back(n) / pack_tile(i) / reduce over a DFB assumes the n-tile block does not
+// straddle the ring end (the packer writes linearly past it while the per-tile pops wrap), so every block pushed into
+// a DFB must keep its write pointer aligned to the DFB's other block sizes. `tmp` (max(Kt, Vt) tiles) only ever takes
+// Kt / Vt blocks, as in the VB = 1 kernel; the Vs-tile intermediates (vm - vread, the gated output) go through their
+// own Vs-tile `tmpv`. Sharing `tmp` for them left its pointer at Vs (mod Vt) after a user, so the next user's q / k
+// squares and every norm's squares were misread: wrong rec_state from the second user of a group on, and a wrong
+// RMSNorm scale whenever nu * Vs % Vt != 0 (B = 1, and VB = 4 at B = 8).
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/compute/gdn_step_helpers.hpp"
 
 using namespace gdn_step;
@@ -130,7 +138,10 @@ inline void gate_decay(DataflowBuffer& dec) {
 }
 
 // zs[i] = silu(z[i])
-inline void silu_tiles(uint32_t a, uint32_t out, DataflowBuffer& out_dfb, uint32_t n) {
+// noinline: inlined into this (large) compute(), GCC 15 at -O2 + LTO stops constant-folding the LLK ADDR_MOD setup
+// behind silu_tile_init, and the TTI_SETC16 immediates fail to link ("impossible constraint in 'asm'"); which
+// value_blocks / fp32_state variant hits it depends on the inlining budget. Called once per launch.
+__attribute__((noinline)) void silu_tiles(uint32_t a, uint32_t out, DataflowBuffer& out_dfb, uint32_t n) {
     out_dfb.reserve_back(n);
     pack_reconfig_data_format(out);
     reconfig_data_format_srca(a);
@@ -149,10 +160,10 @@ inline void silu_tiles(uint32_t a, uint32_t out, DataflowBuffer& out_dfb, uint32
 }
 
 // gated = (on x w per column) * zs, with the final product on the SFPU (fp32); rows other than b stay exactly 0.
-// VSPLIT: column tiles [first, first + n) of on / w_in / zs -> tmp[0, n).
-inline void gated_user(DataflowBuffer& tmp, uint32_t first, uint32_t n) {
-    tmp.reserve_back(n);
-    pack_reconfig_data_format(dfb::tmp);
+// VSPLIT: column tiles [first, first + n) of on / w_in / zs -> tmpv[0, n).
+inline void gated_user(DataflowBuffer& tmpv, uint32_t first, uint32_t n) {
+    tmpv.reserve_back(n);
+    pack_reconfig_data_format(dfb::tmpv);
     reconfig_data_format(dfb::on, dfb::w_in);
     for (uint32_t i = 0; i < n; ++i) {
         mul_bcast_rows_init(dfb::on, dfb::w_in);
@@ -164,10 +175,10 @@ inline void gated_user(DataflowBuffer& tmp, uint32_t first, uint32_t n) {
         mul_binary_tile(0, 1, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, dfb::tmp, i);
+        pack_tile(0, dfb::tmpv, i);
         tile_regs_release();
     }
-    tmp.push_back(n);
+    tmpv.push_back(n);
 }
 
 // FAST: out[i] = a[i] + b[i], packed into two DFBs (hn for o = qn @ hn, hnew for the writer) from the same DST tile
@@ -285,7 +296,8 @@ TT_KERNEL void compute(uint32_t nu, uint32_t s) {
     DataflowBuffer vc(dfb::vc);
     DataflowBuffer beta_t(dfb::beta_t);
     DataflowBuffer zs(dfb::zs);
-    DataflowBuffer tmp(dfb::tmp);
+    DataflowBuffer tmp(dfb::tmp);    // Kt / Vt tile blocks only (q / k squares, the norm's squares)
+    DataflowBuffer tmpv(dfb::tmpv);  // Vs tile blocks (vm - vread, the gated output); see the header note
     DataflowBuffer stats(dfb::stats);
     DataflowBuffer scratch(dfb::scratch);
     DataflowBuffer inv(dfb::inv);
@@ -385,13 +397,13 @@ TT_KERNEL void compute(uint32_t nu, uint32_t s) {
         row_times_matrix(dfb::kn, dfb::hd, dfb::vread, vread, Kt, Vs);
         vread.wait_front(Vs);
         vm.wait_front(Vs);
-        subtract_tiles(dfb::vm, dfb::vread, dfb::tmp, tmp, Vs);
+        subtract_tiles(dfb::vm, dfb::vread, dfb::tmpv, tmpv, Vs);
         vread.pop_front(Vs);
         vm.pop_front(Vs);
-        tmp.wait_front(Vs);
+        tmpv.wait_front(Vs);
         a_s.wait_front(1);
-        multiply_tiles<true>(dfb::tmp, dfb::a_s, dfb::delta, delta, Vs);
-        tmp.pop_front(Vs);
+        multiply_tiles<true>(dfb::tmpv, dfb::a_s, dfb::delta, delta, Vs);
+        tmpv.pop_front(Vs);
         a_s.pop_front(1);
         delta.wait_front(Vs);
 
@@ -438,20 +450,20 @@ TT_KERNEL void compute(uint32_t nu, uint32_t s) {
         inv.pop_front(1);
         acc_x.pop_front(Vt);
         on.wait_front(Vt);
-        gated_user(tmp, v0, Vs);  // only this block's output columns
+        gated_user(tmpv, v0, Vs);  // only this block's output columns
         on.pop_front(Vt);
-        tmp.wait_front(Vs);
+        tmpv.wait_front(Vs);
         if (ui == 0) {
-            copy_tiles(dfb::tmp, dfb::out_acc, out_acc, Vs);
+            copy_tiles(dfb::tmpv, dfb::out_acc, out_acc, Vs);
         } else {
             out_acc.wait_front(Vs);
-            add_tiles_n(dfb::out_acc, dfb::tmp, dfb::acc2, acc2, Vs);
+            add_tiles_n(dfb::out_acc, dfb::tmpv, dfb::acc2, acc2, Vs);
             out_acc.pop_front(Vs);
             acc2.wait_front(Vs);
             copy_tiles(dfb::acc2, dfb::out_acc, out_acc, Vs);
             acc2.pop_front(Vs);
         }
-        tmp.pop_front(Vs);
+        tmpv.pop_front(Vs);
     }
     // the group's rows of this block's columns go out once
     out_acc.wait_front(Vs);
