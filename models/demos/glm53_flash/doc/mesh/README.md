@@ -1581,6 +1581,23 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 19:15: resident decode coded (plan A12 step 1)
+
+`GLM53_RESIDENT_DECODE=1` (`tt/resident_decode.py`): the captured decode step ends with the head's greedy ids copied
+into `ids_dev` (through fp32 for the [B,1] -> [1,B] transpose) and every position-derived field (`positions`,
+`pool_ids`, `ring_slots`, `dense_positions`, `cur_pos`, `tail_pool`, `valid_len_rows`) recomputed on device from a
+persistent fp32 TILE shadow of the positions advanced by a live mask (`pos_f += live_f`; the host formulas of
+`tt/packed_inputs.py` in exact fp32 arithmetic), then copied into the existing persistent int32 / uint32 tensors
+(the consumers never change). A reload (`GLM53MeshModel.load_decode_inputs(ids, positions, live=...)`) uploads the
+packed segment, unpacks it eagerly (the resident step carries no unpack) and refreshes the shadows; the host mirrors
+the advance (`advance_positions_host`, the sparse-regime guard included). The served adapter declares
+`supports_async_decode` under the knob, accepts the plugin's `reload_inputs=False` chain steps (nothing uploaded;
+the plugin's positions must agree with the host-tracked ones, a changed layout without a reload is refused) and
+refuses the knob with speculative decode or the slot prefix cache (not wired). Pinned: the generator host suite (the
+chain on the fake model), the packed-inputs block test gains pass E (the resident traced chain bit-identical to the
+direct eager chain, every device-advanced field equal to the host formulas after each replay, a parked slot keeping
+its position). Queued: the block test on the rows-4-5 block, then the served smoke (stages a / b / d) under the knob.
+
 ### 2026-10-29 18:55: multimodal under per-row ownership takes the SP path
 
 The 1 M profile (32 requests, rows independent) refused image and video prompts with the adapter's NotImplementedError,

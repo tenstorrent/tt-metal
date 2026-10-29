@@ -9,7 +9,10 @@ crosses an index_kpool boundary at every step, the first sparse pool (2047 -> 20
 back per chip and compared with the direct path's host values; the user-partitioned cache is the second case.
 
 Four passes over the same ladder from the same state: direct eager, packed eager (+ the field checks), packed
-traced, direct traced. The prompts are prefilled ONCE, before any decode step, in ``PREFILL_CHUNK``-token chunks
+traced, direct traced; then the resident chain (``GLM53_RESIDENT_DECODE=1``, ``tt/resident_decode.py``): the
+captured step feeds its greedy ids back and advances the live positions on device, one load at the chain start and
+replays with no upload, bit-identical to the direct eager chain (step k feeds step k-1's greedy ids), every
+device-advanced field equal to the host formulas after each replay, and a parked slot (live 0) keeping its position. The prompts are prefilled ONCE, before any decode step, in ``PREFILL_CHUNK``-token chunks
 (512-row slabs per chip, the chunked prefill the adapter uses) because of the L1 hazard below. Every pass warms
 up / captures at the ladder's first positions (the prompt ends, multiples of 4: the warm-up's latent row and ring
 slot are rewritten by step 0 before anything reads them and no pool completes there) and resets the KDA states
@@ -57,7 +60,7 @@ from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.dsa import SparseDecodeMeta, dense_exact_max_pos
 from models.demos.glm53_flash.tt.mesh import mesh_device_params
 from models.demos.glm53_flash.tt.mesh_model import PACKED_INPUTS_ENV, GLM53MeshModel, PackedDecodeInputs
-from models.demos.glm53_flash.tt.packed_inputs import PackedDecodeLayout
+from models.demos.glm53_flash.tt.packed_inputs import RESIDENT_ENV, PackedDecodeLayout
 
 MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","))
 B = int(os.environ.get("GLM53_MODEL_B", "4"))  # users per row
@@ -127,6 +130,23 @@ class _Ladder:
                     ttnn.deallocate(t)
         return out
 
+    def eager_chain(self, load):
+        """The greedy chain from the first step (the resident reference): step k feeds step k-1's greedy ids at the
+        first positions + k. Returns (outputs, the (ids, positions) fed per step)."""
+        out, steps = [], []
+        ids, pos0 = self.steps[0]
+        for k in range(len(self.steps)):
+            pos = [p + k for p in pos0]
+            steps.append((ids, pos))
+            load(k, ids, pos)
+            outs = self.model.decode_step(self.model.ids_dev, self.model.positions)
+            out.append(self.read(outs))
+            for t in outs:
+                if t is not None:
+                    ttnn.deallocate(t)
+            ids = out[-1][0]
+        return out, steps
+
     def traced(
         self, trace_id, trace_outs, load
     ) -> tuple[list[tuple[torch.Tensor, torch.Tensor]], list[float], list[float]]:
@@ -173,10 +193,17 @@ def _chip_values(model: GLM53MeshModel, t: ttnn.Tensor, chip: int) -> list[int]:
 
 
 def _check_fields(
-    model: GLM53MeshModel, layout: PackedDecodeLayout, ids: torch.Tensor, pos: list[int], *, per_user: bool
+    model: GLM53MeshModel,
+    layout: PackedDecodeLayout,
+    ids: torch.Tensor,
+    pos: list[int],
+    *,
+    per_user: bool,
+    packed: bool = True,
 ):
-    """After an unpack: every persistent field tensor, read per chip, equals the direct path's host values (the
-    planner's expectation and, independently, tt/dsa.py's ``SparseDecodeMeta.host_values`` / the position formulas)."""
+    """After an unpack (or a resident step's device-side advance, ``packed=False``: no segment to compare): every
+    persistent field tensor, read per chip, equals the direct path's host values (the planner's expectation and,
+    independently, tt/dsa.py's ``SparseDecodeMeta.host_values`` / the position formulas)."""
     mesh, dp, cfg = model.mesh, model.positions, model.cfg
     host_ids = model.embedding.tokens_to_host(ids, pad_to=model.total_users).reshape(-1)
     valid, tail, cur = SparseDecodeMeta.host_values(pos, cfg)
@@ -212,6 +239,8 @@ def _check_fields(
                 assert (
                     got == exp[name] == direct[name]
                 ), f"chip {chip} field {name}: device {got}, planner {exp[name]}, direct {direct[name]}"
+            if not packed:
+                continue
             seg = layout.segment_of(model.packed.host, layout.segment(r, c))
             dev_seg = ttnn.to_torch(mesh.device_tensors(model.packed.dev)[chip]).view(torch.int32)
             assert torch.equal(
@@ -325,9 +354,52 @@ def test_packed_decode_inputs_bit_identical(mesh_device, monkeypatch, partition)
         f"PERF pass D (direct, traced): {_tok_s(walls_d, U)} (host wall per step incl. the per-field uploads: "
         f"{sum(loads_d[2:]) / max(1, len(loads_d) - 2) * 1e3:.2f} ms)"
     )
+    # ---- pass E: the resident chain (GLM53_RESIDENT_DECODE=1 with the packed inputs): the captured step feeds its
+    # greedy ids back and advances the live positions on device; one load at the chain start, then replays that
+    # upload nothing. Reference: the direct eager chain from (ids0, pos0) (traced == eager by passes C / D).
+    model.packed = saved_packed
+    monkeypatch.setenv(PACKED_INPUTS_ENV, "1")
+    model.reset_kda_states()
+    chain_ref, chain_steps = ladder.eager_chain(packed_load)
+    monkeypatch.setenv(RESIDENT_ENV, "1")
+    model.warmup_decode(ids0, pos0)  # allocates the feedback shadows (before the capture), compiles the feedback
+    assert model.resident is not None
+    trace_id, trace_outs = model.capture(ids0, pos0)
+    model.reset_kda_states()
+    t0 = time.perf_counter()
+    model.load_decode_inputs(ids0, pos0, live=[True] * U)  # the chain start: the one host upload
+    load_e = time.perf_counter() - t0
+    out_e, walls_e = [], []
+    for k in range(N_STEPS):
+        t0 = time.perf_counter()
+        model.replay(trace_id)
+        walls_e.append(time.perf_counter() - t0)
+        out_e.append(ladder.read(trace_outs))
+        model.advance_positions_host()
+        # after the replay the persistent inputs hold the NEXT step's values: this step's greedy ids at pos0 + k + 1
+        _check_fields(model, layout, out_e[-1][0], [p + k + 1 for p in pos0], per_user=False, packed=False)
+    _assert_identical("resident traced vs direct eager chain", out_e, chain_ref, chain_steps)
+    # the live mask: a parked slot keeps its position (and its fed-back id), the others advance
+    live = [u % 2 == 0 for u in range(U)]
+    pos_k = [p + N_STEPS for p in pos0]
+    model.load_decode_inputs(out_e[-1][0], pos_k, live=live)
+    model.replay(trace_id)
+    model.advance_positions_host()
+    ids_k = ladder.read(trace_outs)[0]
+    _check_fields(
+        model, layout, ids_k, [p + (1 if v else 0) for p, v in zip(pos_k, live)], per_user=False, packed=False
+    )
+    assert model.positions.host == [p + (1 if v else 0) for p, v in zip(pos_k, live)]
+    ttnn.release_trace(mesh_device, trace_id)
+    monkeypatch.delenv(RESIDENT_ENV, raising=False)
+    logger.info(
+        f"PERF pass E (resident, traced): {_tok_s(walls_e, U)} (replay only, no per-step upload; the chain-start load "
+        f"{load_e * 1e3:.2f} ms); bit-identical to the direct eager chain over {N_STEPS} steps; the live mask holds"
+    )
     rows_agree = sum(torch.equal(i[: U // 2], i[U // 2 :]) for i, _ in out_a) if model.mesh.rows == 2 else None
     logger.info(
         f"PERF mesh {MESH} layers {len(layers)} users {U} partition {partition}: packed traced {_tok_s(walls_c, U)}; "
-        f"direct traced {_tok_s(walls_d, U)}; all four passes bit-identical over {N_STEPS} steps"
+        f"direct traced {_tok_s(walls_d, U)}; resident traced {_tok_s(walls_e, U)}; all five passes bit-identical "
+        f"over {N_STEPS} steps"
         + (f"; rows agree on the greedy ids in {rows_agree}/{N_STEPS} steps (info)" if rows_agree is not None else "")
     )

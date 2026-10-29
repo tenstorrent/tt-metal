@@ -30,6 +30,7 @@ from models.demos.glm53_flash.tt.mesh import GLMMesh
 from models.demos.glm53_flash.tt.model_head import TtModelHead
 from models.demos.glm53_flash.tt.moe import pad_mask_enabled
 from models.demos.glm53_flash.tt.packed_inputs import UINT32, PackedDecodeLayout
+from models.demos.glm53_flash.tt.resident_decode import RESIDENT_ENV, ResidentDecodeFeedback, resident_decode_enabled
 from models.demos.glm53_flash.tt.trace_prefill import (
     DEFAULT_LENGTHS,
     DENSE_ROWS,
@@ -272,6 +273,9 @@ class GLM53MeshModel:
         # and the last token ids they carry (``[rows*B]`` int32, padded); None = the direct per-field refreshes
         self.packed: PackedDecodeInputs | None = None
         self._host_ids: torch.Tensor | None = None
+        # GLM53_RESIDENT_DECODE (tt/resident_decode.py): the decode step's device-side feedback (allocated by
+        # ``warmup_decode``, before any capture); None = every step reloads its inputs from the host
+        self.resident: ResidentDecodeFeedback | None = None
         # the traced prefill's device-side user slot (tt/trace_prefill.py): allocated here, before any trace
         # capture, because a persistent tensor allocated after a capture may alias that trace's transient buffers
         self.prefill_slot: PrefillSlot | None = PrefillSlot.allocate(self.mesh, self.layers) if self.layers else None
@@ -322,17 +326,24 @@ class GLM53MeshModel:
         else:
             self.layers[0].update_decode_positions(self.positions, host_positions)
 
-    def load_decode_inputs(self, ids: torch.Tensor, host_positions: list[int]):
+    def load_decode_inputs(self, ids: torch.Tensor, host_positions: list[int], live: list[bool] | None = None):
         """``load_ids`` + ``set_positions`` of one decode step. With ``GLM53_DECODE_PACKED_INPUTS=1`` (after
         ``warmup_decode``) this is ONE ``copy_host_to_device_tensor`` of the packed segments (``tt/packed_inputs.py``)
-        plus the host bookkeeping of ``update_decode_positions``; otherwise the direct per-field refreshes."""
+        plus the host bookkeeping of ``update_decode_positions``; otherwise the direct per-field refreshes. Under
+        ``GLM53_RESIDENT_DECODE=1`` this is the chain's transition: the packed segments are unpacked eagerly (the
+        resident step carries no unpack) and the feedback shadows take the positions and the ``live`` mask (one flag
+        per user slot; None = every slot advances)."""
         if self.packed is None:
             self.load_ids(ids)
             self.set_positions(host_positions)
-            return
-        self._host_ids = self.embedding.tokens_to_host(ids, pad_to=self.total_users).reshape(-1)
-        self.layers[0].update_decode_positions(self.positions, host_positions, upload=False)
-        self.packed.upload(self.packed.layout.pack(self._host_ids, host_positions))
+        else:
+            self._host_ids = self.embedding.tokens_to_host(ids, pad_to=self.total_users).reshape(-1)
+            self.layers[0].update_decode_positions(self.positions, host_positions, upload=False)
+            self.packed.upload(self.packed.layout.pack(self._host_ids, host_positions))
+            if self.resident is not None:
+                self.packed.unpack(self.ids_dev, self.positions)
+        if self.resident is not None:
+            self.resident.host_load(host_positions, live)
 
     def packed_layout(self) -> PackedDecodeLayout:
         """The packed layout of this model (``self.positions`` must exist: it decides ``dense``). The per-user
@@ -374,11 +385,34 @@ class GLM53MeshModel:
             )
         elif self.packed is not None:
             self.packed.upload(self.packed.layout.pack(self._host_ids, host_positions))
+        if self.resident is None and resident_decode_enabled():
+            self.resident = ResidentDecodeFeedback(
+                self.mesh, self.cfg, self.positions, self.ids_dev, partition=self.layers[0].partition
+            )
+            logger.info(f"mesh model: {RESIDENT_ENV}=1: resident decode feedback allocated ({self.total_users} slots)")
+        if self.resident is not None:
+            if self.packed is not None:
+                self.packed.unpack(self.ids_dev, self.positions)  # eager (the resident step carries no unpack)
+            self.resident.host_load(host_positions, None)
 
     def _unpack_inputs(self, ids_dev: ttnn.Tensor, positions: DecodePositions):
-        """The packed inputs' device-side unpack when the step runs on the model's persistent inputs."""
-        if self.packed is not None and ids_dev is self.ids_dev and positions is self.positions:
+        """The packed inputs' device-side unpack when the step runs on the model's persistent inputs (the resident
+        step has none: its reload unpacks eagerly in ``load_decode_inputs``)."""
+        if (
+            self.packed is not None
+            and self.resident is None
+            and ids_dev is self.ids_dev
+            and positions is self.positions
+        ):
             self.packed.unpack(ids_dev, positions)
+
+    def advance_positions_host(self, live: list[bool] | None = None) -> None:
+        """The host mirror of the resident step's device-side advance (``ResidentDecodeFeedback.advance``):
+        ``positions.host`` and the sparse regime bookkeeping follow the live slots by one (``live`` None = the mask
+        of the last ``load_decode_inputs``)."""
+        if self.resident is None:
+            raise RuntimeError(f"advance_positions_host without {RESIDENT_ENV}=1")
+        self.layers[0].update_decode_positions(self.positions, self.resident.advance_host(live), upload=False)
 
     # ------------------------------------------------------------------ step
     def decode_step(self, ids_dev: ttnn.Tensor, positions: DecodePositions, keep_layer_outputs: bool = False):
@@ -403,6 +437,10 @@ class GLM53MeshModel:
         if self.head is None:
             return streams, None, None
         logits, ids = self.head.forward_greedy(streams)
+        if self.resident is not None and ids_dev is self.ids_dev and positions is self.positions:
+            # resident decode: the next replay embeds these ids at the advanced positions (no host upload)
+            self.resident.feed_ids(ids)
+            self.resident.advance()
         return streams, logits, ids
 
     # ------------------------------------------------------------------ prefill (TTFT)

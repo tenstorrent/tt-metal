@@ -50,6 +50,18 @@ UINT32 = "uint32"
 COL_STRIDE = 16  # column fields start at 64-byte boundaries (the Blackhole DRAM alignment): aligned slice begins
 INT32_MAX = 2**31 - 1
 _SPARSE_FIELDS = ("cur_pos", "tail_pool", "valid_len_rows")
+# GLM53_RESIDENT_DECODE (tt/resident_decode.py, doc/mesh/resident_decode.md): the traced decode step feeds its sampled
+# ids back and advances the live positions on device; the served adapter then declares supports_async_decode
+RESIDENT_ENV = "GLM53_RESIDENT_DECODE"
+
+
+def resident_decode_enabled(env=None) -> bool:
+    """``GLM53_RESIDENT_DECODE=1``: the mesh model's decode step carries the device-side feedback and the served
+    adapter runs the plugin's reload-plan chain (``reload_inputs=False`` steps). Default off until the served A/B."""
+    import os
+
+    env = os.environ if env is None else env
+    return str(env.get(RESIDENT_ENV, "0")).strip().lower() in ("1", "true", "yes", "on")
 
 
 def position_fields(positions: Sequence[int], kpool: int, dense_max_pos: int) -> dict[str, list[int]]:

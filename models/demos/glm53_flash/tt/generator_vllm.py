@@ -117,6 +117,7 @@ from models.demos.glm53_flash.tt.mm_inputs import (
     mm_items,
     mm_present,
 )
+from models.demos.glm53_flash.tt.packed_inputs import RESIDENT_ENV, resident_decode_enabled
 from models.demos.glm53_flash.tt.vllm_config import (
     APC_ALLOC_CHECK_ENV,
     APC_ENV,
@@ -580,9 +581,10 @@ class GLM53FlashForCausalLM:
         # Slot-level APC (doc/serving/prefix_caching.md); off until device-validated. Read at import: the plugin
         # snapshots the class attribute in check_and_update_config.
         "supports_prefix_caching": _env_flag(APC_ENV, "0"),
-        # Every decode reloads tokens / positions from the host (no resident token feedback in the mesh model's
-        # decode step yet); the plugin then runs synchronous scheduling. Flip with the device-side feedback.
-        "supports_async_decode": False,
+        # GLM53_RESIDENT_DECODE=1 (doc/mesh/resident_decode.md): the mesh model's decode step feeds its sampled ids
+        # back and advances the live positions on device, so the plugin's reload-plan chain (reload_inputs=False
+        # steps) and vLLM's async scheduling are admitted; off = every decode reloads tokens / positions from the host
+        "supports_async_decode": resident_decode_enabled(),
         # The head's greedy argmax is the only device sampler: greedy rows (and top_k == 1) sample on device,
         # the plugin routes any other row to host sampling from the returned logits.
         "supports_sample_on_device": True,
@@ -692,6 +694,18 @@ class GLM53FlashForCausalLM:
         self.already_warmed_up_prefill = False
         self._decode_warmup_complete = False
         self._pending_moves: dict[int, int] | None = None
+        # GLM53_RESIDENT_DECODE (doc/mesh/resident_decode.md): the plugin's reload-plan chain; a reload step stages the
+        # inputs with the live mask, a chain step (reload_inputs=False) uploads nothing
+        self.resident = resident_decode_enabled()
+        self._resident_live: list[int] | None = None  # the live logical slots of the last staged step
+        if self.resident:
+            if self.spec is not None:
+                raise NotImplementedError(
+                    f"{RESIDENT_ENV}=1 with speculative decode: the verify / commit chain breaks are not wired"
+                )
+            for name in ("load_decode_inputs", "advance_positions_host"):
+                if not callable(getattr(model, name, None)):
+                    raise NotImplementedError(f"{RESIDENT_ENV}=1 needs a mesh model with {name} (GLM53MeshModel)")
         self._perf_steps = 0
         self._perf_s = 0.0
         self._perf_log_every = max(1, int(os.environ.get("GLM53_VLLM_PERF_LOG_EVERY", "32")))
@@ -701,6 +715,10 @@ class GLM53FlashForCausalLM:
         self.apc_tail_split = _env_flag(APC_TAIL_SPLIT_ENV, "0")
         if prefix_cache_entries is not None:
             self.apc = SlotPrefixCache(geometry, int(prefix_cache_entries))
+            if self.resident:
+                raise NotImplementedError(
+                    f"{RESIDENT_ENV}=1 with the slot prefix cache: a chain step carries no token for the decode record"
+                )
             if self.apc.entries and not callable(getattr(model, "snapshot_kda", None)):
                 raise NotImplementedError("the prefix cache needs a mesh model with snapshot_kda / restore_kda")
         # GLM53_VLLM_APC_ALLOC_CHECK: the DRAM footprint right after the decode capture; every later prefix-cache call
@@ -1911,9 +1929,12 @@ class GLM53FlashForCausalLM:
     ):
         """One decode step for the whole mesh. ``tokens`` ``[B_pad, 1]`` / ``start_pos`` ``[B_pad]`` (``-1`` on
         padding rows): row ``i`` is logical slot ``i`` once ``slot_remap`` (row ``i`` reads slot ``remap[i]``) is
-        applied to the indirection table. Version-1 reload contract: this adapter restages tokens and positions on
-        every step, so ``reload_inputs`` must be true (``supports_async_decode`` is false, which is what the plugin
-        sends); the sampling commands are accepted and need no state (greedy argmax has none)."""
+        applied to the indirection table. Version-1 reload contract: without ``GLM53_RESIDENT_DECODE`` this adapter
+        restages tokens and positions on every step, so ``reload_inputs`` must be true (``supports_async_decode`` is
+        false, which is what the plugin sends); with it a chain step (``reload_inputs=False``) uploads nothing: the
+        device fed its sampled ids back and advanced the live positions, ``tokens`` is ignored and ``start_pos`` must
+        agree with the host-tracked positions. The sampling commands are accepted and need no state (greedy argmax
+        has none)."""
         if "reset_batch" in kwargs:
             raise TypeError("legacy reset_batch keyword: this adapter declares decode_input_update_contract = 1")
         spec_mode = kwargs.pop("spec_mode", None)
@@ -1958,11 +1979,20 @@ class GLM53FlashForCausalLM:
             applied_moves = self.slots.apply_remap(remap)
         try:
             is_tokens = sampling_params is not None
-            live, feed_tokens, feed_positions, rows = self._stage_rows(tokens, positions, page_table, sampling_params)
-            park = self.apc.park_positions() if self.apc is not None else None
-            ids_feed, pos_feed = self.slots.device_feed(feed_tokens, feed_positions, park=park)
-            t0 = time.perf_counter()
-            self._load_inputs(ids_feed, pos_feed, live)
+            if reload_inputs:
+                live, feed_tokens, feed_positions, rows = self._stage_rows(
+                    tokens, positions, page_table, sampling_params
+                )
+                park = self.apc.park_positions() if self.apc is not None else None
+                ids_feed, pos_feed = self.slots.device_feed(feed_tokens, feed_positions, park=park)
+                t0 = time.perf_counter()
+                self._load_inputs(ids_feed, pos_feed, live)
+            else:  # the resident chain: the device holds this step's ids / positions already (nothing uploaded)
+                live, feed_tokens, feed_positions, rows = self._stage_resident_rows(
+                    positions, page_table if reload_page_table else None, sampling_params
+                )
+                pos_feed = None
+                t0 = time.perf_counter()
             if self.spec is None:
                 if enable_trace:
                     self.model.replay(self.trace_id)
@@ -1991,6 +2021,9 @@ class GLM53FlashForCausalLM:
                         # drains the device first (the replay just enqueued), the later ones queue behind it
                         if self._snapshot(state, state.position, "decode", sync=not synced):
                             synced = True
+            if self.resident:  # the device advanced the live slots at the end of the step; mirror it on the host
+                self.model.advance_positions_host(self._live_flat(live))
+                self._resident_live = list(live)
         except Exception:
             self.slots._phys = snapshot
             raise
@@ -2014,12 +2047,12 @@ class GLM53FlashForCausalLM:
         return out
 
     def _check_reload(self, reload_inputs: bool, reload_page_table: bool, enable_trace: bool) -> None:
-        if not reload_inputs:
+        if not reload_inputs and not self.resident:
             raise ValueError(
-                "reload_inputs=False: the GLM53 adapter has no resident token / position state yet "
-                "(supports_async_decode is False), every decode must reload its inputs"
+                "reload_inputs=False: the GLM53 adapter has no resident token / position state without "
+                f"{RESIDENT_ENV}=1 (supports_async_decode is False), every decode must reload its inputs"
             )
-        if reload_page_table:
+        if reload_page_table and reload_inputs:
             raise ValueError("reload_page_table with reload_inputs is not a legal command combination")
         if self.trace_id is None and enable_trace:
             raise RuntimeError("decode trace not captured: warmup_model_decode(enable_trace=True) must run first")
@@ -2071,13 +2104,61 @@ class GLM53FlashForCausalLM:
             )
         return live, feed_tokens, feed_positions, rows
 
+    def _live_flat(self, live: list[int]) -> list[bool]:
+        """One flag per physical user slot: the slots the live logical slots occupy (every replica row)."""
+        flat = [False] * self.geometry.physical_slots
+        for i in live:
+            for f in self.slots.flat_indices(i):
+                flat[f] = True
+        return flat
+
+    def _stage_resident_rows(self, positions: torch.Tensor, page_table, sampling_params):
+        """The resident chain's step (``reload_inputs=False``): the live wire rows are the rows of the last staged
+        step (the plugin reloads on any layout change), every one decoding at the host-tracked position (the
+        plugin's position must agree); nothing is fed to the device. ``page_table``: the block-table check of a
+        ``reload_page_table`` step."""
+        wire = int(positions.shape[0])
+        live = [i for i in range(wire) if int(positions[i]) >= 0]
+        if self._resident_live is None or live != self._resident_live:
+            raise RuntimeError(
+                f"resident decode step over rows {live} but the last staged step had {self._resident_live}: the decode "
+                "layout changed without reload_inputs (the plugin's reload plan reloads on a layout change)"
+            )
+        if sampling_params is not None:
+            greedy_rows(sampling_params, live)
+        feed_tokens: dict[int, int | None] = {}
+        feed_positions: dict[int, int] = {}
+        rows = DecodeRowMap(wire_rows=wire, read_index=[-1] * wire)
+        for i in live:
+            state = self.slots.physical(i)
+            if state is None or state.phase != "decode":
+                raise RuntimeError(
+                    f"resident decode row {i}: slot {i} is "
+                    f"{'unprefilled' if state is None else state.phase}, not decoding (a chain starts with a reload)"
+                )
+            p = int(positions[i])
+            if p != state.position:
+                raise RuntimeError(
+                    f"resident decode row {i}: the plugin's position {p} and the device's {state.position} must agree "
+                    "on a chain step (the device advanced the slot itself)"
+                )
+            if page_table is not None:
+                self.blocks.check_row(page_table[i], p + 1)
+            feed_tokens[i] = None  # the device fed its own sampled id back
+            feed_positions[i] = state.position
+            rows.read_index[i] = self.slots.read_index(i)
+        return live, feed_tokens, feed_positions, rows
+
     def _load_inputs(self, ids_feed: list[int], pos_feed: list[int], live: list[int]) -> None:
         """The step's token / position vectors onto the device (one call per step: with GLM53_DECODE_PACKED_INPUTS=1
         the mesh model uploads ONE packed tensor, ids + positions + sparse metadata, tt/packed_inputs.py) and the
         future active-slot hook."""
         load = getattr(self.model, "load_decode_inputs", None)
         if load is not None:
-            load(torch.tensor(ids_feed, dtype=torch.long), pos_feed)
+            if self.resident:  # the chain's transition: the feedback shadows take the positions and the live mask
+                load(torch.tensor(ids_feed, dtype=torch.long), pos_feed, live=self._live_flat(live))
+            else:
+                load(torch.tensor(ids_feed, dtype=torch.long), pos_feed)
         else:
             self.model.load_ids(torch.tensor(ids_feed, dtype=torch.long))
             self.model.set_positions(pos_feed)

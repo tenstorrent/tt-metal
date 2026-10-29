@@ -25,6 +25,7 @@ from loguru import logger
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.generator_vllm import GLM53DecodeOutput, GLM53FlashForCausalLM
 from models.demos.glm53_flash.tt.memory_plan import MemoryPlan
+from models.demos.glm53_flash.tt.packed_inputs import RESIDENT_ENV
 from models.demos.glm53_flash.tt.vllm_config import (
     DEFAULT_WAVE_ROWS,
     LogicalBlockTable,
@@ -444,6 +445,9 @@ class _FakeMeshModel:
         self._last_ids = torch.zeros(self.total_users, dtype=torch.long)
         self._last_logits = torch.zeros(self.total_users, VOCAB)
         self.next_start = [0] * max_batch  # the chunked-prefill cursor per slot (``rewind_user``)
+        # GLM53_RESIDENT_DECODE: the step feeds its own ids back and advances the live positions (the device side)
+        self.resident = os.environ.get(RESIDENT_ENV, "0") == "1"
+        self._live: list[bool] | None = None
 
     # trace management
     def trace_prefill_lengths(self):
@@ -502,11 +506,16 @@ class _FakeMeshModel:
         assert len(positions) == self.total_users
         self._fed_pos = list(positions)
 
-    def load_decode_inputs(self, ids, positions):
-        """The one-call input load (``GLM53MeshModel.load_decode_inputs``: one packed upload with the knob)."""
+    def load_decode_inputs(self, ids, positions, live=None):
+        """The one-call input load (``GLM53MeshModel.load_decode_inputs``: one packed upload with the knob; the
+        resident chain's transition carries the live mask)."""
         self.calls.append(("load_decode_inputs", len(positions)))
         self.load_ids(ids)
         self.set_positions(positions)
+        self._live = None if live is None else [bool(v) for v in live]
+
+    def advance_positions_host(self, live=None):
+        self.calls.append(("advance_positions_host", tuple(bool(v) for v in (live or ()))))
 
     def _step(self):
         self.calls.append(("decode", self._fed_ids.tolist(), list(self._fed_pos)))
@@ -515,6 +524,10 @@ class _FakeMeshModel:
             self._last_ids[s] = nxt
             self._last_logits[s] = 0.0
             self._last_logits[s, nxt] = 1.0
+        if self.resident:  # the in-graph feedback: the next step embeds these ids at the advanced live positions
+            self._fed_ids = self._last_ids.clone()
+            live = [True] * self.total_users if self._live is None else self._live
+            self._fed_pos = [p + (1 if v else 0) for p, v in zip(self._fed_pos, live)]
 
     def replay(self, trace_id, blocking=True):
         assert trace_id == self.trace_id
@@ -785,7 +798,7 @@ def test_decode_loads_inputs_with_one_call_per_step():
     assert int(out[0, 0]) == _next_token(1, 40) and not [c for c in mb.calls if c[0] == "load_decode_inputs"]
 
 
-def test_decode_reload_contract_is_enforced():
+def test_decode_reload_contract_is_enforced(monkeypatch):
     a, _ = _adapter()
     t = torch.full((1, 40), 5, dtype=torch.int32)
     a.prefill_forward(t, prompt_lens=[40], start_pos=torch.tensor([0]), empty_slots=[0], sampling_params=_greedy(1))
@@ -838,6 +851,37 @@ def test_decode_reload_contract_is_enforced():
             reset_sampling_state=False,
         )
     assert a.slots.physical(0).phase == "prefill"  # a refused step leaves the table untouched
+    # the resident chain (GLM53_RESIDENT_DECODE=1, doc/mesh/resident_decode.md): the reload step stages the inputs
+    # with the live mask, a chain step uploads nothing (the device fed its sampled ids back and advanced the live
+    # positions), a disagreeing position or a changed layout without reload_inputs is refused
+    monkeypatch.setenv(RESIDENT_ENV, "1")
+    a, m = _adapter()
+    assert a.resident and m.resident
+    a.prefill_forward(t, prompt_lens=[40], start_pos=torch.tensor([0]), empty_slots=[0], sampling_params=_greedy(1))
+    kw = dict(
+        sampling_params=_greedy(4), reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False
+    )
+    out1 = a.decode_forward(tokens, positions, reload_inputs=True, **kw)
+    t1 = _next_token(1, 40)
+    assert int(out1[0, 0]) == t1 and a.slots.physical(0).position == 41
+    assert m._live is not None and sum(m._live) == len(a.slots.flat_indices(0))
+    loads = len([c for c in m.calls if c[0] == "load_decode_inputs"])
+    out2 = a.decode_forward(torch.zeros_like(tokens), torch.tensor([41, -1, -1, -1]), reload_inputs=False, **kw)
+    assert int(out2[0, 0]) == _next_token(t1, 41) and a.slots.physical(0).position == 42
+    assert len([c for c in m.calls if c[0] == "load_decode_inputs"]) == loads  # nothing uploaded on the chain step
+    assert m.calls[-1][0] == "advance_positions_host" and sum(m.calls[-1][1]) == len(a.slots.flat_indices(0))
+    with expect_error(RuntimeError, "must agree"):
+        a.decode_forward(tokens, torch.tensor([50, -1, -1, -1]), reload_inputs=False, **kw)
+    t2 = torch.full((1, 40), 6, dtype=torch.int32)
+    a.prefill_forward(t2, prompt_lens=[40], start_pos=torch.tensor([0]), empty_slots=[1], sampling_params=_greedy(1))
+    with expect_error(RuntimeError, "layout changed"):
+        a.decode_forward(tokens, torch.tensor([42, 40, -1, -1]), reload_inputs=False, **kw)
+    out3 = a.decode_forward(
+        torch.tensor([[t1], [1], [0], [0]], dtype=torch.int32), torch.tensor([42, 40, -1, -1]), reload_inputs=True, **kw
+    )
+    assert int(out3[1, 0]) == _next_token(1, 40) and a.slots.physical(1).position == 41
+    with expect_error(ValueError, "not a legal command"):  # reload_page_table rides a chain step only
+        a.decode_forward(tokens, torch.tensor([43, 41, -1, -1]), reload_inputs=True, reload_page_table=True)
 
 
 def test_chunked_prefill_contiguity_and_the_mid_prefill_guard():

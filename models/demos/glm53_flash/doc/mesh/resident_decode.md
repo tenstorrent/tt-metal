@@ -1,6 +1,6 @@
 # Resident decode: closing the served step gap (plan row A12)
 
-Status 2026-10-29 18:45: design. The measured gap at 32 users on the 1 M profile: the device step is 48.5 ms (the
+Status 2026-10-29 19:15: step 1 coded (`tt/resident_decode.py`, the knob `GLM53_RESIDENT_DECODE=1`; the design below is as built, with one difference: the reload path unpacks the packed segment EAGERLY and the resident trace carries no unpack, so one trace serves both the chain and its transitions). Validation: the packed-inputs block test's pass E, then the served smoke a / b / d under the knob (ids identical to the reload path). The measured gap at 32 users on the 1 M profile: the device step is 48.5 ms (the
 harness's traced replay), the adapter's step is 61.2 ms host wall, the vLLM bench's inter-token 91 ms.
 
 ## Where the 13 ms per step go today (the version-1 reload contract)
