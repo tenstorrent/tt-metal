@@ -101,7 +101,7 @@ def _from_device(tensor, mesh_device):
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"], ids=["sliding", "global"])
 @pytest.mark.parametrize("seq_len", PREFILL_BUCKETS, ids=[f"seq{b}" for b in PREFILL_BUCKETS])
-def test_attention_prefill(layer_type, seq_len, mesh_device, reset_seeds, request):
+def test_attention_prefill(layer_type, seq_len, mesh_device, device_params, reset_seeds, request):
     """Test prefill attention against HF reference; threshold per
     pcc_thresholds.json (defaults to 0.99 when unmeasured).
 
@@ -148,7 +148,7 @@ def test_attention_prefill(layer_type, seq_len, mesh_device, reset_seeds, reques
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 @pytest.mark.parametrize("position", [0, 32, 512, 1023, 1024, 1500, 2047], ids=lambda p: f"pos{p}")
-def test_rope_pcc(layer_idx, position, mesh_device, reset_seeds, request):
+def test_rope_pcc(layer_idx, position, mesh_device, device_params, reset_seeds, request):
     """Test RoPE cos/sin values and apply_rope PCC at various decode positions up to 2k.
 
     Compares TT rotary embedding output against HF reference at each position.
@@ -233,7 +233,7 @@ def _build_sliding_window_mask(cache_len, sliding_window):
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 @pytest.mark.parametrize("cache_len", [32, 512, 1023, 1500], ids=lambda c: f"cache{c}")
-def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, request):
+def test_attention_decode_paged(layer_idx, cache_len, mesh_device, device_params, reset_seeds, request):
     """Test decode attention with paged KV cache against HF reference.
 
     Tests at various cache lengths including positions beyond the sliding window (1024).
@@ -391,7 +391,9 @@ def _kv_fill_to_tt(k_torch, mesh_device, *, num_kv_heads, num_attention_heads, t
 @pytest.mark.parametrize("batch", [1, 16, 32], ids=lambda b: f"batch{b}")
 @pytest.mark.parametrize("cache_len", [512, 1500], ids=lambda c: f"cache{c}")
 @pytest.mark.parametrize("qkv_path", ["composite", "fused_presliced"])
-def test_attention_decode_paged_batched(layer_idx, batch, cache_len, qkv_path, mesh_device, reset_seeds, request):
+def test_attention_decode_paged_batched(
+    layer_idx, batch, cache_len, qkv_path, mesh_device, device_params, reset_seeds, request
+):
     """True batched decode (batch > 1 single forward) with paged KV cache.
 
     ``qkv_path``: ``composite`` = the per-head norms + RoPE composite with the 2D cache gathered inside attention
@@ -598,7 +600,7 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, qkv_path, m
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, request):
+def test_sliding_tail_survives_cross_call_chunking(mesh_device, device_params, reset_seeds, request):
     """Regression test for the sliding-window prefill-tail-lifetime bug.
 
     vLLM-driven token-chunked prefill makes separate ``__call__`` invocations
@@ -748,7 +750,7 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds, request):
+def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, device_params, reset_seeds, request):
     """APC remnant: first grant < sliding_window must still stash a hist-wide tail.
 
     Reproduces the shield failure mode where chunk_start=384 arrives on the
@@ -973,7 +975,7 @@ def _setup_fractured_attention(mesh_device, layer_idx, max_seq_len=128):
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)])
 @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"], ids=["sliding", "global"])
 @pytest.mark.parametrize("seq_len", [128, 1024], ids=["seq128", "seq1024"])
-def test_attention_fracture_prefill(layer_type, seq_len, mesh_device, reset_seeds, request):
+def test_attention_fracture_prefill(layer_type, seq_len, mesh_device, device_params, reset_seeds, request):
     """Prefill PCC vs HF: heads over the tp axis, replicated across the lane axis."""
     hf_text_config = TestFactory.create_hf_text_config()
     try:
@@ -1024,7 +1026,7 @@ FILLER = "The sky is blue and the grass is green. "
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)])
-def test_cp_prefill(mesh_device, reset_seeds, request):
+def test_cp_prefill(mesh_device, device_params, reset_seeds, request):
     os.environ["GEMMA4_GALAXY_FRACTURE"] = "1"
     os.environ["GEMMA4_CP_PREFILL"] = "1"
     os.environ.pop("GEMMA4_GALAXY_LANES", None)  # CP and lanes are exclusive
