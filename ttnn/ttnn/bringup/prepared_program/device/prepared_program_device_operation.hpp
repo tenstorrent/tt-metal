@@ -21,6 +21,7 @@ namespace ttnn::operations::bringup::prepared_program {
 
 struct operation_attributes_t {
     std::shared_ptr<const Prepared> prepared;
+    std::vector<uint32_t> values;  // (value_slots option: this run's values, patched every call, not in the key)
 
     // (the descriptor is too large for reflection inline storage; keyed by compute_program_hash)
     static constexpr auto attribute_names = std::forward_as_tuple("hash");

@@ -22,3 +22,12 @@ Source: none (new op), deepseek_v41_flash_d_p 4-bit compressed KV (owner 2026-10
 - Gotcha: without `llk_math_reconfig_remap(true)` the strided read's second interface reads DEST 8 rows early on BH.
 - Needed by: deepseek_v41_flash_d_p FIX.8
 - Files: ckv_bfp4.py, kernels/ckv_bfp4_compute.cpp, kernels/ckv_bfp4_writer.cpp, tests/*
+
+### Option prepared: the program built once, row0 patched (2026-10-29)
+- What: `ckv_bfp4(..., prepared=True)`: one PreparedProgram per (mesh id, n, rounded, memory configs) (LRU of 64),
+  row0 the writer's value slot (prepared_program option value_slots), ckv / rows / out addresses patched; default False
+  keeps the per-call descriptor through generic_op.
+- Why: DS41-135: 1.33 ms host a call on the 8x4 (4 calls a chunk) in a host-bound model.
+- Needed by: deepseek_v41_flash_d_p P.7 (CKV_BFP4_PREPARED)
+- Files: ckv_bfp4.py, tests/unit/test_ckv_bfp4.py, README.md
+- Tests: tests/unit 8 passed (5 before + 3 prepared); sdpa tests/unit/test_sparse_sdpa_row_bfp4.py passed.

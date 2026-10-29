@@ -621,6 +621,15 @@ TABLE = {
         "0.19-0.21), layers within limits (worst L20 0.032 / 0.051, L24 0.029 / 0.042); table 3.3x smaller. "
         "bf16 = bf16 rows, stock sparse_sdpa",
     ),
+    "CKV_BFP4_PREPARED": Setting(
+        "on",
+        ("on", "off"),
+        "P.7 (galaxy 8x4, owner focus: host time per chunk; DS41-135): on = ttnn.bringup.ckv_bfp4 (CKV_FORMAT=bfp4_rows, "
+        "tt/compressor.AttnTable.append_tiles) builds its program once per (mesh, n, rounded) and dispatches it as a "
+        "prepared program (fork option prepared=True: ttnn.bringup.prepare_program with row0 as a value slot, "
+        "run_prepared each call). off = a fresh ProgramDescriptor through ttnn.generic_op every call (the path before "
+        "P.7). Same program, same runtime arguments, same bytes",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8

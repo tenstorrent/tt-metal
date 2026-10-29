@@ -4,6 +4,7 @@
 """ttnn.bringup.ckv_bfp4 on one device: the row records equal the host bfloat4_b rule byte for byte, rows outside
 [row0, row0 + n) are untouched, the rounded bf16 output holds the records' values, and the op is deterministic."""
 
+import importlib
 import importlib.util
 from pathlib import Path
 
@@ -62,3 +63,39 @@ def test_ckv_bfp4_without_rounded_output(device):
     rows = ttnn.from_torch(torch.zeros(1, 1, 64, 320, dtype=torch.uint8), dtype=ttnn.uint8, device=device)
     assert ttnn.bringup.ckv_bfp4(ckv, rows) is None
     assert torch.equal(ttnn.to_torch(rows).view(torch.uint8).reshape(64, 320), ref.encode_rows(x))
+
+
+@pytest.mark.parametrize("n, rounded", [(64, True), (2560, True), (64, False)])
+def test_ckv_bfp4_prepared(device, n, rounded):
+    """prepared=True (P.7): one program per (mesh, n, rounded), row0 a value slot, every address patched. Over calls at
+    other row0, other inputs and other tables (new addresses), the records and the rounded output equal the plain
+    generic_op path byte for byte, rows outside each call's range untouched, and the program is prepared once."""
+    mod = importlib.import_module("ttnn.bringup.ckv_bfp4_ttnn.ckv_bfp4")
+
+    table_rows = 4 * n + 64
+    tables = {
+        p: [
+            ttnn.from_torch(
+                torch.full((1, 1, table_rows, 320), FILL, dtype=torch.uint8), dtype=ttnn.uint8, device=device
+            )
+            for _ in range(2)
+        ]
+        for p in (False, True)
+    }
+    before = len(mod._PREPARED)
+    for i, (t, row0) in enumerate([(0, 0), (0, n), (1, 32), (0, 3 * n + 64), (1, 2 * n)]):
+        x = _inputs(n, 100 * n + i)
+        ckv = ttnn.from_torch(x.reshape(1, 1, n, 512), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        outs = {p: ttnn.bringup.ckv_bfp4(ckv, tables[p][t], row0, rounded=rounded, prepared=p) for p in (False, True)}
+        exp = ref.encode_rows(x)
+        for p in (False, True):
+            got = ttnn.to_torch(tables[p][t]).view(torch.uint8).reshape(table_rows, 320)
+            assert torch.equal(got[row0 : row0 + n], exp), f"prepared={p} call {i}: records differ"
+        a, b = (ttnn.to_torch(tables[p][t]).view(torch.uint8) for p in (False, True))
+        assert torch.equal(a, b), f"call {i}: prepared table != generic_op table"
+        if rounded:
+            assert torch.equal(ttnn.to_torch(outs[False]), ttnn.to_torch(outs[True])), f"call {i}: rounded differ"
+        else:
+            assert outs[True] is None
+    assert len(mod._PREPARED) == before + 1, "the program was not prepared exactly once"
+    assert list(mod._PREPARED.values())[-1][1] is not None, "the program could not be prepared (patch count)"

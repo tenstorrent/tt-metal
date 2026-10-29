@@ -3828,3 +3828,39 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   0.04662); head 462.2 -> 463.9-464.7 us a call (noise). The contract window passing with it (0.99131) is partly luck,
   per the means above: an owner / overseer reading this should treat that check as noise-limited at layer 20.
 - Re-run of the contract diagnosis: not kept (it edits the frozen helper); use the numbers above.
+
+## P.7 (perf, galaxy 8x4): CKV_BFP4_PREPARED, ttnn.bringup.ckv_bfp4 as a prepared program (DS41-135)
+- What: setting CKV_BFP4_PREPARED (tt/settings.py, default on; off = the old path, unchanged code). On:
+  tt/compressor.AttnTable.append_tiles calls ttnn.bringup.ckv_bfp4(..., prepared=True): the program is built once per
+  (mesh.id(), n, rounded, memory configs) (ckv_bfp4.py _prepared, LRU 64), prepared with ttnn.bringup.prepare_program
+  and dispatched with run_prepared each call: ckv / rows / out addresses patched, row0 patched as a value slot.
+- Fork change (prepared_program, CHANGELOG 2026-10-29): option `value_slots=[(kernel, arg)]` on prepare_program and
+  `values=[...]` on run_prepared. Before it only io-tensor addresses were patched, and row0 (the writer's runtime arg 3)
+  changes every call, so without it every call would need a new prepare. A value slot is never matched to an address
+  and is left out of the cache key. With no slots the hash walk and key are as before (fabric_reduce_scatter / TailA2A
+  prepared paths unchanged). ckv_bfp4 checks patch_count == cores x (3 + rounded) and falls back to generic_op if a
+  frozen arg collided with an io address.
+- Bytes: ckv_bfp4 tests/unit 8 passed (new test_ckv_bfp4_prepared: 5 calls at other row0 / inputs / tables, byte-equal
+  to the generic_op path, prepared once); sdpa tests/unit/test_sparse_sdpa_row_bfp4.py passed; prepared_program
+  tests/test_prepared_program.py: its cases are 2x2-only, 2 skipped on the 8x4 (as before).
+- Host (8x4, chunk 5120, position 0, DS41_ENGRAM_TABLE=resident, cProfile of 5 warm chunks after warm-up, 4 calls a
+  chunk; /scratch/dnijemcevic/p7/hostprof_p7.sh and _rev.sh, results /scratch/dnijemcevic/p7/): ckv_bfp4 1.427 / 1.307
+  ms a call off -> 0.503 / 0.508 on: 3.4-3.7 ms host saved a chunk. Isolated (tt/perf_ckv_bfp4_host.py, 20 warm calls):
+  n=1280 0.514 -> 0.133 ms, n=64 0.168 -> 0.094 ms; tables equal. In the model the remaining ~0.5 ms is
+  allocate_tensor_on_device for the rounded output + run_prepared (C++ calls, not split by cProfile).
+- Warm wall (BRINGUP_PROFILE_WALL, 10 timed runs, medians): pair 1 (on first) on 415.7 / off 393.3; pair 2 (off first)
+  off 391.8 / on 389.6. In pair 1 every unrelated host function was slower in the on run too (decorators __call__ +66
+  ms over 5 chunks, fused_head +14, tail_a2a +7) while ckv_bfp4 saved 18.5 ms: the first run of a session is slower.
+  So the wall gain is within the 30-50 ms run spread; expect ~3.5 ms. measure --task P.7 (quick, on): 413.3 ms, every
+  err limit held (L39 0.907 / 1.533), host_transfers_per_layer 0.
+- Device time: the same kernels, compile args and runtime args (bytes equal), so the device program is unchanged
+  (FIX.8: ckv_bfp4 0.209 ms a chunk). Not re-profiled; the orchestrator's A/B profile has device_ms_total on and off.
+- For optests: the model now calls ttnn.bringup.run_prepared with a value slot (ckv_bfp4 prepared); a prepared_program
+  case for it (tests/cases.py) is still to write.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  ttnn/ttnn/bringup/ckv_bfp4_ttnn/tests/unit/test_ckv_bfp4.py`; `... models/demos/deepseek_v41_flash_d_p/tt/perf_ckv_bfp4_host.py -s`;
+  `python -m models.demos.common.bringup.orchestrator measure --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --task P.7`; old path
+  DS41_CKV_BFP4_PREPARED=off.
+- Attempt 3 (P.7): only docs fixed after attempt 2 failed the lint: ckv_bfp4_ttnn/README.md now has the `## Options`,
+  `## Limits` and `## How to call` sections (ops_lint: 0 problems); DS41-135's fix line labelled `Fix:`. Code unchanged.

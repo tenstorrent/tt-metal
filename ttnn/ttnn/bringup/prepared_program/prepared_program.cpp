@@ -28,17 +28,30 @@ int Prepared::program_of(const ttnn::MeshCoordinate& coord) const {
 size_t Prepared::patch_count() const {
     size_t n = 0;
     for (size_t i = 0; i < rt.size(); ++i) {
-        n += rt[i].size() + crt[i].size() + cbs[i].size();
+        n += rt[i].size() + crt[i].size() + cbs[i].size() + (i < val.size() ? val[i].size() : 0);
     }
     return n;
 }
 
 std::shared_ptr<const Prepared> prepare(
-    tt::tt_metal::experimental::MeshProgramDescriptor desc, const std::vector<Tensor>& io_tensors) {
+    tt::tt_metal::experimental::MeshProgramDescriptor desc,
+    const std::vector<Tensor>& io_tensors,
+    const std::vector<ValueSlot>& value_slots) {
     TT_FATAL(!io_tensors.empty(), "prepared_program: io_tensors must hold at least the output (last)");
     TT_FATAL(!desc.mesh_programs.empty(), "prepared_program: an empty MeshProgramDescriptor");
     auto p = std::make_shared<Prepared>();
     p->n_io = io_tensors.size();
+    for (const auto& v : value_slots) {
+        p->n_values = std::max<size_t>(p->n_values, v.slot + 1);
+    }
+    auto value_slot_of = [&](uint32_t k, uint32_t i) -> int {
+        for (const auto& v : value_slots) {
+            if (v.kernel == k && v.arg == i) {
+                return static_cast<int>(v.slot);
+            }
+        }
+        return -1;
+    };
 
     // the io tensors' addresses and buffers; the same tensor at two positions maps to its first; two distinct
     // tensors at one address cannot be told apart from a runtime arg
@@ -75,12 +88,22 @@ std::shared_ptr<const Prepared> prepare(
     p->rt.resize(np);
     p->crt.resize(np);
     p->cbs.resize(np);
+    p->val.resize(np);
     for (size_t pi = 0; pi < np; ++pi) {
         const auto& pd = desc.mesh_programs[pi].second;
         for (uint32_t k = 0; k < pd.kernels.size(); ++k) {
             const auto& kd = pd.kernels[k];
             for (const auto& [core, args] : kd.runtime_args) {
                 for (uint32_t i = 0; i < args.size(); ++i) {
+                    if (const int s = value_slot_of(k, i); s >= 0) {  // (a value slot: never an io address)
+                        p->val[pi].push_back(ValPatch{
+                            .kernel = k,
+                            .x = static_cast<uint32_t>(core.x),
+                            .y = static_cast<uint32_t>(core.y),
+                            .arg = i,
+                            .slot = static_cast<uint32_t>(s)});
+                        continue;
+                    }
                     const int j =
                         io_at(args[i], [&] { return fmt::format("kernel {} core {} arg {}", k, core.str(), i); });
                     if (j >= 0) {
@@ -131,7 +154,10 @@ std::shared_ptr<const Prepared> prepare(
                 for (uint32_t i = 0; i < args.size(); ++i) {
                     const auto& pr = r < p->rt[pi].size() ? p->rt[pi][r] : RtPatch{.kernel = ~0u};
                     const bool patched = pr.kernel == k && pr.x == core.x && pr.y == core.y && pr.arg == i;
-                    ttsl::hash::hash_combine(h, patched ? ~0u - pr.io : args[i]);
+                    const int s = value_slot_of(k, i);
+                    // (a value slot: its marker, never its value; none without the option, as before it)
+                    ttsl::hash::hash_combine(
+                        h, s >= 0 ? (~0u >> 1) - static_cast<uint32_t>(s) : (patched ? ~0u - pr.io : args[i]));
                     r += patched;
                 }
             }
@@ -144,6 +170,14 @@ std::shared_ptr<const Prepared> prepare(
             }
         }
         TT_FATAL(r == p->rt[pi].size(), "prepared_program: patch walk out of step ({} of {})", r, p->rt[pi].size());
+    }
+    if (!value_slots.empty()) {
+        ttsl::hash::hash_combine(h, p->n_values);
+        size_t nv = 0;
+        for (const auto& v : p->val) {
+            nv += v.size();
+        }
+        TT_FATAL(nv > 0, "prepared_program: value_slots match no runtime arg");
     }
     p->hash = h;
     p->rt_of_io.assign(np, std::vector<std::vector<uint32_t>>(p->n_io));
@@ -160,11 +194,19 @@ std::shared_ptr<const Prepared> prepare(
     return p;
 }
 
-Tensor run(const std::shared_ptr<const Prepared>& prepared, const std::vector<Tensor>& io_tensors) {
+Tensor run(
+    const std::shared_ptr<const Prepared>& prepared,
+    const std::vector<Tensor>& io_tensors,
+    const std::vector<uint32_t>& values) {
     TT_FATAL(prepared != nullptr, "prepared_program: no prepared program");
     TT_FATAL(!io_tensors.empty(), "prepared_program: io_tensors must hold at least the output (last)");
+    TT_FATAL(
+        values.size() == prepared->n_values,
+        "prepared_program: {} values, prepared with {} value slots",
+        values.size(),
+        prepared->n_values);
     using Op = PreparedProgramDeviceOperation;
-    const Op::operation_attributes_t attributes{.prepared = prepared};
+    const Op::operation_attributes_t attributes{.prepared = prepared, .values = values};
     const Op::tensor_args_t tensor_args{.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
     return ttnn::device_operation::launch<Op>(attributes, tensor_args);
 }
