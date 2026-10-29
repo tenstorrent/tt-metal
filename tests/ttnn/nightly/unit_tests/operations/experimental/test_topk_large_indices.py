@@ -1537,3 +1537,43 @@ def test_topk_large_indices_metadata_matches_scalar_causal(device, valid_end, ba
         msg += f"; first row {r} at slots {pos}: scalar {s[r, pos].tolist()} metadata {m[r, pos].tolist()}"
     logger.info(msg)
     assert not differ, msg
+
+
+@pytest.mark.parametrize("grid", ["default", "topk108"], ids=["grid_default", "grid_topk108"])
+@pytest.mark.parametrize("valid_end", [256, 896, 2048, 5120], ids=["end256", "end896", "end2048", "end5120"])
+def test_topk_large_indices_metadata_matches_scalar_ties(device, valid_end, grid):
+    """Causal GLM-5.3-shaped logits with bf16 ties (randn rounded to bf16, as the indexer's scores are): does the
+    index ORDER of a row depend on the bound form (metadata vs scalar), i.e. on how the row is split across cores?
+    Reports sets and order separately; sparse attention sums in index order, so either difference changes its
+    output."""
+    k, n, num_rows = 2048, 5120, 160
+    g = torch.Generator().manual_seed(896)
+    torch_input = torch.randn(num_rows, n, generator=g)
+    future = torch.arange(n)[None, :] > torch.arange(num_rows)[:, None]
+    torch_input = torch_input.masked_fill(future, float("-inf")).to(torch.bfloat16)
+    valid = -(-valid_end // 32) * 32
+    kwargs = {}
+    if grid == "topk108":
+        g_size = device.compute_with_storage_grid_size()
+        if (g_size.x, g_size.y) != (12, 10):
+            pytest.skip(f"the top-k overlap sub-grid is defined on a 12x10 grid, got {g_size.x}x{g_size.y}")
+        kwargs["sub_core_grids"] = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(11, 9))])
+
+    def run(**bound):
+        out = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, **bound, **kwargs)
+        return ttnn.to_torch(out, dtype=torch.uint32).to(torch.int64).reshape(num_rows, k)
+
+    s = run(valid_length=valid)
+    m = run(
+        valid_length_tensor=_make_valid_length_metadata(device, 0),
+        valid_length_offset=n,
+        valid_end_tensor=_make_valid_length_metadata(device, valid_end),
+    )
+    full = run(valid_length=n)  # the full chunk's bound: what a token computed inside a full chunk gets
+    for label, other in (("metadata", m), ("scalar-full", full)):
+        differ = [r for r in range(num_rows) if not torch.equal(s[r], other[r])]
+        set_differ = [r for r in differ if not torch.equal(s[r].sort().values, other[r].sort().values)]
+        logger.info(
+            f"end={valid_end} grid={grid} scalar vs {label}: {len(differ)} of {num_rows} rows differ "
+            f"(first {differ[:1]}, rows >= 108: {sum(r >= 108 for r in differ)}), {len(set_differ)} as sets"
+        )
