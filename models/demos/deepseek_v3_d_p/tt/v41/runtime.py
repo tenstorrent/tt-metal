@@ -215,7 +215,12 @@ class V41PrefillRuntime:
         assert self.pf.kv_actual == int(actual_start), (self.pf.kv_actual, actual_start)
         self._request_id = int(request_id)
         t0 = time.time()
-        self.pf._chunk([int(v) for v in ids[:real]], int(actual_start), self.engram, None)
+        # DS41F-0119 V41_PREFILL_DEVICE_EMBED: the prefill may embed a full chunk straight from the H2D ids tensor
+        self.pf._ids_dev = None if isinstance(input_tensor, list) else input_tensor
+        try:
+            self.pf._chunk([int(v) for v in ids[:real]], int(actual_start), self.engram, None)
+        finally:
+            self.pf._ids_dev = None
         t1 = time.time()
         export_chunk(kv_caches, self.pf, slot_id, int(actual_start), int(actual_end))
         t2 = time.time()

@@ -46,6 +46,12 @@ EMBED_PARTITION = os.environ.get("V41_PREFILL_EMBED_PARTITION", "1") == "1"
 ENGRAM_EARLY = (
     os.environ.get("V41_PREFILL_ENGRAM_EARLY", "1") == "1"
 )  # DS41F-0068: the Engram fetch before the embedding
+# DS41F-0119 (prefill bench 10-29: chunks are host-issue bound): V41_PREFILL_DEVICE_EMBED=1 looks a full text chunk's rows up on
+# device from the runner's H2D ids ([1, 1, S_l] uint32 per chip, SP-sharded, TP-replicated) in the table TP-sharded on D
+# (~331 MB per chip), instead of the host gather (84 MB) + tilize + TP-replicated upload; ragged / image chunks keep the host
+# path. Same bf16 rows by construction; V41_PREFILL_DEVICE_EMBED_CHECK=N compares both paths on the first N chunks.
+DEVICE_EMBED = os.environ.get("V41_PREFILL_DEVICE_EMBED", "0") == "1"
+DEVICE_EMBED_CHECK = int(os.environ.get("V41_PREFILL_DEVICE_EMBED_CHECK", "0"))
 
 
 class PhaseProfile:
@@ -196,6 +202,11 @@ class V41Prefill:
                 s: self.kv_attn.alloc_state(self.max_seq_len, chunk_tokens=self.chunk) for s in range(self.num_users)
             }
         self._embed = None
+        # DEVICE_EMBED: the table on device, allocated here -- before any trace-island capture (a buffer allocated after a
+        # capture can sit in the islands' intermediates, DS41F-0037 10-10 21:25); _ids_dev = the current chunk's H2D ids
+        self._ids_dev = None
+        self._embed_dev = self._device_embedding() if DEVICE_EMBED else None
+        self._embed_checks = DEVICE_EMBED_CHECK
         self.kv_actuals = {s: 0 for s in range(self.num_users)}
         # ViT V2 (tt-blaze vit_plan.md E1 / G1): the current prompt's image-span rows (virtual id vocab + k -> row k) and
         # each gate's (text, bias_vl) bias rows; ``_vl_live`` = some gate holds bias_vl rows from the previous chunk
@@ -245,7 +256,56 @@ class V41Prefill:
             self._embed = self.ck.raw("embed.weight")  # [vocab, D] bf16
         return self._embed
 
+    def _device_embedding(self):
+        """DEVICE_EMBED: the [vocab, D] bf16 table, replicated over SP and sharded on D over TP (TtParallelEmbedding's layout)."""
+        assert (self.sp_axis, self.tp_axis) == (0, 1), (self.sp_axis, self.tp_axis)
+        t0 = time.time()
+        mapper = ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(None, 1))
+        t = ttnn.from_torch(
+            self._embedding().contiguous(),
+            device=self.mesh,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        logger.info(f"[v41 prefill] device embedding table {tuple(t.shape)} per chip in {time.time() - t0:.1f} s")
+        return t
+
+    def _streams_device(self, ids_dev):
+        """DEVICE_EMBED: [1, 1, S_l, D_l] bf16 TILE per chip straight from the H2D ids (no host round trip)."""
+        S_l, D_l = self.chunk // self.sp, self.cfg.dim // self.tp
+        t = ttnn.embedding(ids_dev, self._embed_dev, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if tuple(t.shape) != (1, 1, S_l, D_l):
+            t = ttnn.reshape(t, (1, 1, S_l, D_l))
+        return t
+
     def _streams(self, ids: list[int]) -> list:
+        ids_dev = self._ids_dev
+        if (
+            self._embed_dev is not None
+            and ids_dev is not None
+            and len(ids) == self.chunk
+            and max(ids) < self._embedding().shape[0]
+        ):
+            t = self._streams_device(ids_dev)
+            if (
+                self._embed_checks > 0
+            ):  # DEVICE_EMBED_CHECK: the host path's tensor for the same ids, compared on chip 0..n
+                self._embed_checks -= 1
+                self._ids_dev = None
+                ref = self._streams(ids)[0]
+                self._ids_dev = ids_dev
+                a = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(t)]
+                b = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(ref)]
+                same = all(
+                    x.shape == y.shape and torch.equal(x.view(torch.int16), y.view(torch.int16)) for x, y in zip(a, b)
+                )
+                logger.warning(
+                    f"[v41 prefill] DEVICE_EMBED_CHECK: device rows {'BIT-IDENTICAL' if same else 'DIFFER'} to the host path on "
+                    f"{len(a)} chips (shape {tuple(a[0].shape)} vs {tuple(b[0].shape)})"
+                )
+            return [t] + [ttnn.clone(t) for _ in range(HC - 1)]
         emb = self._embedding()
         t = torch.tensor(ids, dtype=torch.long)
         vl = t >= emb.shape[0]  # ViT V2 E1: image-span VIRTUAL ids (vocab + k) embed as the request's span row k
