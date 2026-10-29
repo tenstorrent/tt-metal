@@ -21,6 +21,11 @@ Resting layout between steps (components.yaml header, tt/layout.py): per chip (r
 
 Rows are the chunk's natural blocks: mesh row r holds positions [start + r S/SP, start + (r + 1) S/SP).
 
+ATTN_SP32=on (P.10, the default): attn_norm, q_resid and kv are the chip's own rows with whole hidden rows instead,
+[1, 1, S/(SP TP), H | 1280 | 512] (mesh column c: rows [c S/(SP TP), (c+1) S/(SP TP)) of its row block, the rows
+sparse_sdpa reads): one all_to_all of attn_in over TP before a local attn_norm (tt/common.cols_to_rows); the
+attention's exit all_to_all (ATTN_SP32_PROJ, P.9) returns to the hidden split.
+
 What the assembled model shares between steps (no host work per chunk; agent rule 5):
   * q_a and kv: one fused [wq_a | wkv] projection (tt/q_a.TtQa.with_proj -> tt/kv.TtWindowKv.from_proj): one matmul,
     one exchange.
@@ -46,7 +51,17 @@ from . import ccl
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights
 from .ccl import dealloc
 from .collapse import TtHcCollapse
-from .common import DRAM, SP_AXIS, TP_AXIS, act_dtype, bf16_activations, set_load_layer, stream_dtype
+from .common import (
+    DRAM,
+    SP_AXIS,
+    TP_AXIS,
+    act_dtype,
+    attn_sp32,
+    bf16_activations,
+    cols_to_rows,
+    set_load_layer,
+    stream_dtype,
+)
 from .compressor import CompressRope, TtCompressCaches, TtCompressor, compressor_weights
 from .engram import TtEngramRows
 from .engram_add import build_engram_add
@@ -336,25 +351,29 @@ class TtDS41Block:
         self.collapse = TtHcCollapse(n=cfg.hc)
         self.fused = model.fused  # MHC_FUSED=on (P.14): hc + collapse in one program, residuals emit the next hc row
         self.fold = ccl.glue_fold()  # GLUE_FOLD=on (P.19)
-        self.attn_norm = build_norm(mesh, ck, cfg, i, "attn_norm")
+        # ATTN_SP32=on (P.10): attn_norm, q_a, kv, compressor and the indexer gates on the chip's own S/(SP TP) rows
+        # with whole hidden rows (one all_to_all of attn_in over TP, then local); the attention projections already
+        # run there (ATTN_SP32_PROJ=on, P.9)
+        self.sp32 = attn_sp32()
+        self.attn_norm = build_norm(mesh, ck, cfg, i, "attn_norm", rows=self.sp32)
         # (MOE_IMPL=block, MOE_HEAD=fused: the fused head gathers x over TP itself - ffn_norm keeps the column split)
         fused_head = settings.get("MOE_IMPL") == "block" and settings.get("MOE_HEAD") == "fused"
         self.ffn_norm = build_norm(mesh, ck, cfg, i, "ffn_norm", gather=False if fused_head else None)
         self.attn_res = build_residual(cfg)
         self.ffn_res = build_residual(cfg, step="ffn_residual")
         # attention input: one fused [wq_a | wkv] projection for q_a and kv
-        proj = TtAttnInProj(mesh, attn_in_weights(ck, cfg, i))
+        proj = TtAttnInProj(mesh, attn_in_weights(ck, cfg, i), full_rows=self.sp32)
         self.q_a = TtQa(mesh, proj, ck.weight(p + "attn.q_norm.weight", torch.float32), cfg.eps)
         kv_norm = ck.weight(p + "attn.kv_norm.weight", torch.float32)
         self.kv = TtWindowKv(mesh, proj, kv_norm, cfg.eps, rope, cfg.rope_dim)
         self.compressor = None
         if cfg.is_kv_source(i):
             self.compressor = TtCompressor(
-                mesh, compressor_weights(ck, i), cfg, r, model.compress_rope(r), model.tables
+                mesh, compressor_weights(ck, i), cfg, r, model.compress_rope(r), model.tables, full_rows=self.sp32
             )
         self.indexer = None
         if cfg.is_index_source(i):
-            self.indexer = build_indexer(mesh, ck, cfg, i, model.max_seq, model.chunk, rope=rope)
+            self.indexer = build_indexer(mesh, ck, cfg, i, model.max_seq, model.chunk, rope=rope, full_rows=self.sp32)
             self.indexer.local = topk_local()  # INDEXER_TOPK_LOCAL=on (P.8): no TP gather of the top-k
         w = attention_weights(ck, i)
         if r:
@@ -416,6 +435,12 @@ class TtDS41Block:
             return self.collapse(x.streams, x.pre)
 
         def attn_norm(ctx, x):
+            if self.sp32:  # ATTN_SP32=on (P.10): [S/SP, H/TP] -> the chip's rows [S/(SP TP), H], a local norm
+                xr = cols_to_rows(self.mesh, x)
+                y = self.attn_norm(xr)
+                if xr is not x:
+                    dealloc(xr)
+                return y
             return self.attn_norm(x)
 
         def q_a(ctx, x):

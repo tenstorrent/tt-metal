@@ -1,0 +1,71 @@
+{
+ "used": [
+  {
+   "id": "DS41-138",
+   "how": "the inverse reshard entering attention (tt/common.py:cols_to_rows) is all_to_all_async_generic(in_dim=3, out_dim=2): concat the columns, split the rows, [S/SP, H/TP] -> [S/(SP TP), H]; worked first time",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-139",
+   "how": "the replicated [wq_a | wkv] at 160 rows (5 tiles, bf16 out, N 56 tiles) takes mm_configs.rule's 1D-mcast entry for Mt <= 8; no new matmul config",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "K-5",
+   "how": "the compressor does not pool 160 rows a chip: ratio 2 on 8x4 gives 80 compressed rows a chip (not whole tiles); it gathers the chip's projection over TP instead (one all_gather in place of the TP sum) and pools the SP row's block as before",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-1",
+   "how": "TtIndexer._sub now returns q_resid itself when it already is the chip's rows; query() frees sub / qq only when they are not q_resid",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-117",
+   "how": "the chip's 160 rows (all_to_all split order) are WindowGeometry.query_offsets / the indexer's Sq block, so the top-k, the index lists and the state read-back need no change",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work added: the ratio-2 compressor's 80-row pieces on 8x4 are avoided by gathering the chip's projection over TP (a data move) rather than padding to tiles; every weight is uploaded at its real shape"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.10",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-29T13:32:29",
+  "head": "208dff73851",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.10.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.10_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.10_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.10.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/common.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py"
+  ]
+ }
+}

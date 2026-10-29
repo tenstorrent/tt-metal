@@ -55,6 +55,26 @@ def act_dtype() -> ttnn.DataType:
     return ttnn.bfloat16 if bf16_activations() else ttnn.float32
 
 
+def attn_sp32() -> bool:
+    """Setting ATTN_SP32 (P.10, option A): the attention input steps (attn_norm, q_a, kv, compressor, indexer gates)
+    on the chip's own S/(SP TP) rows with whole hidden rows. Built on ATTN_SP32_PROJ=on, ROPE_IMPL=on and
+    NORM_IMPL=on (the stock rope, the fork norm); off whenever one of them is off."""
+    need = ("ATTN_SP32", "ATTN_SP32_PROJ", "ROPE_IMPL", "NORM_IMPL")
+    return all(settings.get(k) == "on" for k in need)
+
+
+def cols_to_rows(mesh, t: ttnn.Tensor) -> ttnn.Tensor:
+    """ATTN_SP32=on (P.10): a hidden-split [1, 1, S/SP, H/TP] -> the chip's own rows with whole hidden rows
+    [1, 1, S/(SP TP), H] (mesh column c: rows [c S/(SP TP), (c+1) S/(SP TP)) of its SP block, the rows sparse_sdpa
+    reads): ONE all_to_all over TP that concatenates the columns (in_dim 3) and splits the rows (out_dim 2), the
+    inverse of tt/attention.py's exit reshard (DS41-138). Does not consume ``t``; t itself when TP == 1."""
+    if mesh.shape[TP_AXIS] == 1:
+        return t
+    return ttnn.experimental.all_to_all_async_generic(
+        t, in_dim=3, out_dim=2, num_links=2, memory_config=DRAM, cluster_axis=TP_AXIS
+    )
+
+
 def fp32_acc(needed: bool = True) -> bool:
     """Whether a program accumulates in fp32 DEST (setting FP32_ACC): all = every program (the bring-up precision,
     max precision); needed = only the sites that pass ``needed=True``: fp32 data paths (SFPU fp32 sums / Sinkhorn /

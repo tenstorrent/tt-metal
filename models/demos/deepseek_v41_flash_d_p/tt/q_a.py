@@ -21,6 +21,11 @@ Per chip (r, c) the input is attn_norm's column split [1, 1, S/SP, H/TP] fp32 TI
 Output q_resid [1, 1, S/SP, 1280] fp32 TILE, rows split over axis 0, replicated over axis 1 (wq_b and the indexer
 need it whole). wkv rides in the same matmul and exchange (plan.md: one exchange per layer for the attention
 projections; the kv step slices columns [1280, 1792) of ``TtAttnInProj``'s output). No host work in __call__.
+
+ATTN_SP32=on (P.10, ``full_rows``; tt/model.py): attn_norm is the chip's own rows with whole hidden rows
+[1, 1, S/(SP TP), H] bf16 (one all_to_all over TP before a local attn_norm), [wq_a | wkv] replicated: ONE matmul over
+the whole K (fp32 DEST) writing the activation dtype, no exchange; q_resid / kv are then the chip's rows
+[1, 1, S/(SP TP), 1280 / 512], what the attention projections (ATTN_SP32_PROJ) and the indexer read.
 """
 
 from __future__ import annotations
@@ -42,8 +47,11 @@ class TtAttnInProj:
     Call with attn_norm [1, 1, S/SP, H/TP] bf16 TILE; returns [1, 1, S/SP, sum(widths)] fp32 TILE, the full sum
     over the hidden, replicated over TP. ``cols[name]`` = (start, end) of each block."""
 
-    def __init__(self, mesh, weights: dict[str, torch.Tensor]):
+    def __init__(self, mesh, weights: dict[str, torch.Tensor], full_rows: bool = False):
         tp = mesh.shape[TP_AXIS]
+        # ATTN_SP32=on (P.10, ``full_rows``): the input is the chip's own rows with whole hidden rows
+        # [1, 1, S/(SP TP), H]: the weight replicated, one matmul over the whole K, no TP sum
+        self.full_rows = full_rows
         hidden = None
         cols, start, blocks = {}, 0, []
         for name, w in weights.items():
@@ -62,6 +70,8 @@ class TtAttnInProj:
         # K (dim 2) split over the TP axis: chip column c holds rows [c H/TP, (c+1) H/TP), its attn_norm columns;
         # replicated over the SP axis.
         dims = (None, 2) if TP_AXIS == 1 else (2, None)
+        if full_rows:
+            dims = (None, None)
         # DENSE_WEIGHTS (P.13): bf16 (exact) or bfloat8_b (the checkpoint's 8-bit width)
         wdt = dense_dtype(w_t, "attn." + " | ".join(cols))
         self.weight = ttnn.from_torch(
@@ -74,6 +84,12 @@ class TtAttnInProj:
         )
 
     def __call__(self, xq: ttnn.Tensor) -> ttnn.Tensor:
+        if self.full_rows:
+            # ATTN_SP32=on (P.10): the whole sum over the hidden in fp32 DEST, written in the activation dtype (bf16
+            # under BF16_ACTIVATIONS=on: the GPU code's fp8 GEMM writes bf16), the chip's rows only
+            return mm.linear(
+                xq, self.weight, site="q_a", dtype=act_dtype(), compute_kernel_config=self.attn_ckc, memory_config=DRAM
+            )
         # CCL_IMPL=fabric_bf16 (P.6): the partial in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
         pdt = ccl.partial_dtype(self.mesh) if settings.get("HC_TP_SUM") == "gather_add" else ttnn.float32
         part = mm.linear(

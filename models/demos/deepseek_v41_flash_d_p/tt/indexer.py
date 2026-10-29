@@ -41,6 +41,10 @@ positions start + r W + c Sq + [0, Sq) (natural blocks, any 32-aligned start):
         INDEXER_TOPK_LOCAL=on (P.8, ``local``, set by the all-device model): no gather, the chip keeps its own
         [1, 1, Sq, 512] rows (the sparse attention reads exactly those)
 
+ATTN_SP32=on (P.10, ``full_rows``; tt/model.py): attn_norm [1, 1, Sq, H] and q_resid [1, 1, Sq, q_lora] are already
+the chip's query rows: w = ONE local matmul with weights_proj replicated (whole K in fp32 DEST, written bf16; no TP
+sum), q_resid read as it is (no mesh_partition).
+
 The key buffer the ring gathers into ([1, 1, T, 128], T = the cache's compressed capacity) is allocated once per
 cache capacity (``setup``). No host work in ``__call__``: the per-chunk inputs are integers (start) and device
 tensors. Ties: the scores are bf16 (topk_large_indices is bf16-only), so near ties flip where the reference's fp32
@@ -91,8 +95,14 @@ class TtIndexer:
     all-device model sets it; component harnesses keep the gathered layout) [1, 1, Sq, topk], the chip's own query
     rows. Does not consume its inputs."""
 
-    def __init__(self, mesh, w: dict[str, torch.Tensor], cfg, ratio: int, rope: RopeTable, chunk: int):
+    def __init__(
+        self, mesh, w: dict[str, torch.Tensor], cfg, ratio: int, rope: RopeTable, chunk: int, full_rows: bool = False
+    ):
         from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+
+        # ATTN_SP32=on (P.10, ``full_rows``): attn_norm [1, 1, Sq, H] and q_resid [1, 1, Sq, q_lora] are the chip's own
+        # query rows: weights_proj replicated, the gates one local matmul (no TP sum), q_resid used as it is
+        self.full_rows = full_rows
 
         self.mesh, self.rope, self.ratio, self.chunk = mesh, rope, ratio, chunk
         self.sp, self.tp = mesh.shape[SP_AXIS], mesh.shape[TP_AXIS]
@@ -125,6 +135,8 @@ class TtIndexer:
         hidden = wp.shape[1]
         assert hidden % (32 * self.tp) == 0, (hidden, self.tp)
         dims = (None, 2) if TP_AXIS == 1 else (2, None)
+        if full_rows:
+            dims = None  # replicated
         self.wproj = _upload(mesh, wp.t().reshape(1, 1, hidden, self.nh), ttnn.bfloat16, dims=dims)
         self.ccl = get_tt_ccl(mesh)
         self.topology = ttnn.Topology.Linear  # FABRIC_2D: no wrap assumed on the SP axis (every box)
@@ -178,7 +190,10 @@ class TtIndexer:
         return kt
 
     def _sub(self, t: ttnn.Tensor) -> ttnn.Tensor:
-        """This chip's Sq query rows of a row-split, TP-replicated [1, 1, W, n] tensor."""
+        """This chip's Sq query rows of a row-split, TP-replicated [1, 1, W, n] tensor (ATTN_SP32=on, P.10: ``t``
+        itself, already the chip's rows; the caller frees the result only when it is not ``t``)."""
+        if self.full_rows and t.shape[-2] == self.sq:
+            return t
         if self.tp == 1:
             return ttnn.clone(t, memory_config=DRAM)
         return ttnn.mesh_partition(t, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
@@ -187,6 +202,15 @@ class TtIndexer:
         """attn_norm [1, 1, W, H/TP] fp32 -> the chip's per-head gates [1, 1, Sq, nh] bf16."""
         # INDEXER_GLUE=on (P.16): the partial in the CCL's partial dtype (bf16 under fabric_bf16, as q_a's) and ONE
         # reduce-scatter by row blocks: its block is the chip's Sq query rows (no all_gather, mesh_partition, casts)
+        if self.full_rows:  # ATTN_SP32=on (P.10): the chip's rows, the whole sum in fp32 DEST, written bf16
+            return mm.linear(
+                x,
+                self.wproj,
+                site="indexer.weights_proj",
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.ckc,
+                memory_config=DRAM,
+            )
         rs = self.glue and settings.get("HC_TP_SUM") == "gather_add"
         pdt = ccl.partial_dtype(self.mesh) if rs else ttnn.float32
         part = mm.linear(
@@ -216,11 +240,12 @@ class TtIndexer:
         """q_resid [1, 1, W, q_lora] fp32 -> the chip's index queries [1, nh, Sq, hd] bf16."""
         sub = self._sub(qr)
         qq = gemm_input(sub)  # GEMM_INPUTS (FIX.7): bfloat8_b, the reference's fp8 act quant of q_resid
-        if qq is not sub:
+        if qq is not sub and sub is not qr:
             dealloc(sub)
         qdt = ttnn.bfloat16 if self.stock else ttnn.float32  # ROPE_IMPL=on: the bf16 heads the stock rope reads
         q = mm.linear(qq, self.wq_b, site="indexer.wq_b", dtype=qdt, compute_kernel_config=self.ckc, memory_config=DRAM)
-        dealloc(qq)
+        if qq is not qr:  # (ATTN_SP32=on: qr itself when it is already the matmul's dtype)
+            dealloc(qq)
         if self.stock:
             return self._query_stock(q, start)
         if self.rope.pairs is not None:
@@ -364,8 +389,8 @@ class TtCandidateIndexer(TtIndexer):
     buffer, block_max_pin = +inf at each query's own block), then a bf16 cast (exact) and the same top blocks: the
     same candidate sets as the slices + maximum + pin ops."""
 
-    def __init__(self, mesh, w, cfg, ratio: int, rope: RopeTable, chunk: int):
-        super().__init__(mesh, w, cfg, ratio, rope, chunk)
+    def __init__(self, mesh, w, cfg, ratio: int, rope: RopeTable, chunk: int, full_rows: bool = False):
+        super().__init__(mesh, w, cfg, ratio, rope, chunk, full_rows=full_rows)
         assert ratio == 1, "the candidate pool is over key positions (the candidate source is ratio 1)"
         self.block, self.ctopk = cfg.cand_block, cfg.cand_topk_blocks
         assert 16 <= self.ctopk <= 2048 and self.ctopk % 16 == 0, self.ctopk  # topk_large_indices' k range
@@ -507,8 +532,8 @@ class TtReindexer(TtIndexer):
     block epilogue: block_keys 8, block_bias): its writer writes -inf over every key of a non-candidate block, so the
     scores come out masked (no repeat_interleave, slice or add)."""
 
-    def __init__(self, mesh, w, cfg, ratio: int, rope: RopeTable, chunk: int):
-        super().__init__(mesh, w, cfg, ratio, rope, chunk)
+    def __init__(self, mesh, w, cfg, ratio: int, rope: RopeTable, chunk: int, full_rows: bool = False):
+        super().__init__(mesh, w, cfg, ratio, rope, chunk, full_rows=full_rows)
         assert ratio == 1, "the re-index layers score the candidate source's key positions (ratio 1)"
         self.block, self.ctopk = cfg.cand_block, cfg.cand_topk_blocks
         assert 32 % self.block == 0, self.block  # kv_len (a multiple of 32) holds whole blocks
@@ -577,7 +602,9 @@ def indexer_weights(ck, layer: int) -> dict[str, torch.Tensor]:
     }
 
 
-def build_indexer(mesh, ck, cfg, layer: int, max_seq: int, chunk: int, rope: RopeTable | None = None) -> TtIndexer:
+def build_indexer(
+    mesh, ck, cfg, layer: int, max_seq: int, chunk: int, rope: RopeTable | None = None, full_rows: bool = False
+) -> TtIndexer:
     """The indexer of an index-source layer (enc_source: own keys; the candidate source, layer 20: TtCandidateIndexer;
     the re-index layers over layer 20's keys and pool: TtReindexer) with its own RoPE table (component tests); the
     assembled model passes the layer's shared table."""
@@ -590,4 +617,4 @@ def build_indexer(mesh, ck, cfg, layer: int, max_seq: int, chunk: int, rope: Rop
         cls = TtReindexer
     else:
         cls = TtIndexer
-    return cls(mesh, indexer_weights(ck, layer), cfg, cfg.ratio(layer), rope, chunk)
+    return cls(mesh, indexer_weights(ck, layer), cfg, cfg.ratio(layer), rope, chunk, full_rows=full_rows)

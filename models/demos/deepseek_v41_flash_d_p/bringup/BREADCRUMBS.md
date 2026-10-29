@@ -3968,3 +3968,50 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   emulations on the component golden, CPU only). Device: `DS41_ATTN_FIDELITY=HiFi4 scripts/run_safe_pytest.sh
   --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py`. Log:
   /scratch/dnijemcevic/fix11/swa_hifi4.log.
+
+## P.10 (galaxy 8x4, perf): ATTN_SP32, the rest of attention on the chip's own 160 rows (option A)
+
+- What: setting ATTN_SP32 (tt/settings.py, default on; off = the P.9 path; takes effect only with ATTN_SP32_PROJ,
+  ROPE_IMPL and NORM_IMPL on, `tt/common.py:attn_sp32`). On, `TtDS41Block` (tt/model.py) runs:
+  - attn_norm: ONE `all_to_all_async_generic(in_dim=3, out_dim=2)` over TP (`tt/common.py:cols_to_rows`, the inverse
+    of P.9's exit reshard, DS41-138) [S/SP, H/TP] -> [S/(SP TP), H] bf16, then a local whole-row norm
+    (`build_norm(rows=True)`: split=False, whole weight replicated; no stats_out / gather / apply split).
+  - q_a: `TtAttnInProj(full_rows=True)`: [wq_a | wkv] replicated (bfp8), ONE matmul over the whole K (fp32 DEST)
+    writing bf16 (act_dtype); no tp_sum (RS + AG). q_norm / kv_norm read their windows as before, on 160 rows.
+  - kv: rope with the chip's cos / sin rows (`RopeTable.rows(tp_split=True)`, the memo P.9's attention already makes).
+  - attention: q_resid is already the chip's rows (no mesh_partition); the window KV is gathered over TP, then SP
+    (`_window_rows`), the rest unchanged (`chunk_of(rows)` derives the chunk from either layout).
+  - compressor (KV sources 2 / 8 / 14 / 20): `TtCompressor(full_rows=True)`: [wkv | wgate] replicated, the chip's 160
+    rows' whole sum (fp32 out), then ONE all_gather over TP -> [S/SP, 1024 | 512] and the old path from there (pool,
+    norm, rope, wk, k_norm, rope, SP gathers). Departure from the brief ("compressor on 160 rows with 32-way gathers"):
+    ratio 2 on 8x4 pools 160 rows to 80 (not whole tiles, K-5; padding is OV-3), and the 160-row path needs two 32-way
+    gathers (ckv, k = 4 collectives) where this takes 1 TP gather + the 2 SP gathers it had; the redundant pooling /
+    norm / rope there is 4 layers of small ops (compressor section 2.46 -> 2.09 ms anyway).
+  - indexer: `TtIndexer(full_rows=True)`: weights_proj replicated, the gates ONE local matmul writing bf16 (no RS);
+    `_sub(q_resid)` returns q_resid itself (K-1: query() frees sub / qq only when they are not q_resid).
+  Component / swap harnesses (bringup/hooks.py) build the modules with full_rows=False: their layout is unchanged.
+  Every size comes from mesh.shape (TP == 1: cols_to_rows returns its input; 4x4: 320 rows a chip, 2x4 640).
+- Precision: the q_a, compressor and gates TP sums were bf16 reduce-scatters of bf16 partials (CCL_IMPL=fabric_bf16);
+  now each is one fp32-DEST matmul over the whole K (q_a / gates written bf16, compressor fp32). Not a raise above the
+  reference (its fp8 GEMM sums in fp32 and writes bf16).
+- Accuracy (quick measure, on): all limits hold; pcc_chunk_out 0.707 (P.9 0.659), L39 err 0.723 / 1.533 (P.9 0.834),
+  err_state_max 0.2014 (P.9 0.2064), window_kv L28 0.142 / 0.175 (P.9 0.148), host_transfers_per_layer 0. Gate units
+  passed on this code: test_contract, test_profile.
+- Device (plain profile, gate unit test_profile, chunk [51200, 56320), DS41_ENGRAM_TABLE=resident; before = P.9's
+  test_profile stamp on the committed code, i.e. the off path): total 209.94 -> 206.04 ms. q_a 9.41 -> 3.42,
+  attn_norm 3.10 -> 4.43 (the all_to_all in), attention 67.69 -> 69.31 (+1 TP all_gather of kv), indexer 9.29 ->
+  8.65, compressor 2.46 -> 2.09, kv 0.86 -> 0.75; other sections within 0.3 ms. The study's 6-8 ms was not reached:
+  the new all_to_all (~0.03 ms a layer) and the kv TP gather (~0.04) eat part of the q_a RS + AG saving.
+- Op calls a chunk (the profile's op table, 40 layers): 2333 -> 2189 (-144): q_a 200 -> 120 (-RS, -AG; minimal_matmul
+  -> linear), attn_norm 120 -> 80 (2 rms_norm + AG -> a2a + 1 rms_norm), indexer 90 -> 74 (-8 RS, -8 mesh_partition),
+  compressor 133 -> 125 (-4 RS, -4 typecast), attention 1086 -> 1086 (-40 mesh_partition, +40 all_gather).
+  Programs 76192 -> 71584. Host ms of those ops 426.2 -> 354.7 (q_a 62.4 -> 17.8, compressor 42.2 -> 22.2).
+- Collectives per layer (attention side): off 1 AG (norm stats) + q_a RS + AG + 3 AG + 1 a2a (attention) = 7; on
+  1 a2a (in) + 4 AG + 1 a2a (attention) = 6. KV sources: RS + AG -> AG; index sources: -1 RS.
+- Wall: quick measure 367.5 ms, then 384.7 on the final code (spread 33.9 / 67.8; same metrics to the bit; P.9's quick table: 393.1 on / 397.7 off); test_profile clean wall
+  370.7 (loadavg 16.4) vs P.9's gate 420.4 (loadavg 23.7). host_overhead_ms 210.5 -> 164.7.
+- DRAM per chip (computed): [wq_a | wkv] bfp8 9.30 MiB a layer whole vs 2.33 (+279 MiB / 40 layers); compressor
+  [wkv | wgate] bf16 +7.5 MiB x 3 (ratio 2) + 3.75 (ratio 1); attn_norm fp32 weight tile rows +0.47 MiB x 40;
+  weights_proj +0.23 MiB x 8: ~+0.32 GiB a chip (loaded and ran on the 8x4). Not checked against plan_memory.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.10`; old path
+  `DS41_ATTN_SP32=off`.
