@@ -8,7 +8,8 @@
 #   --profile p150-line     4x p150 in one host as an ethernet line, ttnn's default descriptor; the route is
 #                           derived at start
 #   --profile qb2           p300-based box (QuietBox 2, or a 4x p300 host with --instance 0|1) -- UNTESTED, see README
-#   --devices A,B,C,D       run p150-line on these four KMD device nodes (four chips of a larger host)
+#   --devices A,B,C,D       run p150-line on these four KMD device nodes (four chips of a larger host); a container
+#                           that presents exactly four nodes runs p150-line on them without it
 #   --checkpoint DIR        the ModelScope checkpoint directory (tools/download_checkpoint.py)
 #   --cache-root DIR        the converted weights, the BF4 expert cache, the model I/O cache, the JIT cache and the run
 #                           directories (about 23 GB for 32k plus 69 GB of BF4 experts on the first start)
@@ -54,9 +55,10 @@ readonly HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly MODEL_DIR="$(cd -- "$HERE/.." && pwd -P)"
 readonly REPO_ROOT="$(cd -- "$MODEL_DIR/../../../.." && pwd -P)"
 readonly SERVER="$HERE/qwen38_chat_server.py"
+readonly DEVICE_ROOT=/dev/tenstorrent
 
 die() { printf 'run_qwen38_chat_server: %s\n' "$*" >&2; exit 2; }
-usage() { sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 profile= instance=0 devices= checkpoint= cache_root= allocated_context=32768 mtp= port=8000 host=0.0.0.0 long_chunks=
 prefill_slab=
@@ -120,7 +122,14 @@ case "$profile" in
         descriptor="$HERE/qb_p150_x4_1x4_line_mesh_graph_descriptor.textproto" ;;
     p150-line)
         [[ "$instance" == 0 ]] || die "--instance applies to --profile qb2"
-        hardware_profile=p150-line visible_devices=${devices:-0,1,2,3} descriptor= ;;
+        # UMD reads TT_VISIBLE_DEVICES as indices over the nodes present: 0..3 when the chips are all the host
+        # presents (a container), else their node numbers (hardware_profiles.with_device_nodes; the server checks)
+        present=$(ls -- "$DEVICE_ROOT" 2>/dev/null | grep -xE '[0-9]+' | sort -n | paste -sd, -) || present=
+        if [[ -z "$devices" && "$present" =~ ^[0-9]+(,[0-9]+){3}$ && "$present" != 0,1,2,3 ]]; then devices=$present; fi
+        visible_devices=${devices:-0,1,2,3}
+        sorted=$(tr , '\n' <<<"$visible_devices" | sort -n | paste -sd, -)
+        if [[ "$sorted" == "$present" ]]; then visible_devices=0,1,2,3; fi
+        hardware_profile=p150-line descriptor= ;;
     qb2)
         [[ -z "$devices" ]] || die "--devices applies to --profile p150-line"
         printf 'run_qwen38_chat_server: the qb2 profile is UNTESTED (no QuietBox 2 was available); the first run prints the derived route to pin\n' >&2
