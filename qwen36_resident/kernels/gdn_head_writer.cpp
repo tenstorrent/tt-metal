@@ -17,7 +17,9 @@
 // [3] output sent), then u0, nu, the head's cores (1: this core is the collector), the collector's x, y, then
 // the token state address
 // Rows mode (active_rows.hpp): only this core's active users run; its stage rows start zeroed, so inactive users'
-// output rows are 0. The head's collector exchange still runs every layer, also on a core with none.
+// output rows are 0. A non-collector core with no active user sends nothing; the collector waits each layer for the
+// cores with one only (counting a core with none would let its count stand in for a busy core's rows) and zeroes the
+// idle cores' rows itself. The collector sends the head's output every layer, also when it has no active user.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -69,6 +71,21 @@ void kernel_main() {
         cur = *slot_sem - 1;
     }
 
+    // the stage rows of users r0 .. r0 + nu, zeroed
+    auto zero_rows = [&](uint32_t r0) {
+        for (uint32_t t = 0; t < Vt; t++) {
+            for (uint32_t f = 0; f < 2; f++) {
+                volatile tt_l1_ptr uint32_t* p =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + t * kRowTile + (f * batch + r0) * kFaceRow);
+                for (uint32_t w = 0; w < nu * kFaceRow / 4; w++) {
+                    p[w] = 0;
+                }
+            }
+        }
+    };
+    // collector: the head's other cores it waits for every layer. Rows mode: only those with an active user; a core
+    // with none sends nothing (its count would run ahead of the busy cores' rows), its rows are zeroed here instead
+    uint32_t busy = cores - 1;
     // this core's users that run this step (see the reader)
     uint32_t act[batch], n = 0;
     {
@@ -79,12 +96,14 @@ void kernel_main() {
             noc_async_read_barrier();
             mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage)[kTokActive];
             // this core's rows only: another core of the head may already be writing its rows into ours
-            for (uint32_t t = 0; t < Vt; t++) {
-                for (uint32_t f = 0; f < 2; f++) {
-                    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        stage + t * kRowTile + (f * batch + u0) * kFaceRow);
-                    for (uint32_t w = 0; w < nu * kFaceRow / 4; w++) {
-                        p[w] = 0;
+            zero_rows(u0);
+            if (collector) {
+                busy = 0;
+                for (uint32_t g = 1; g < cores; g++) {  // core g of the head takes users g nu .. (g + 1) nu
+                    if ((mask >> (g * nu)) & ((1u << nu) - 1)) {
+                        busy++;
+                    } else {
+                        zero_rows(g * nu);
                     }
                 }
             }
@@ -109,7 +128,7 @@ void kernel_main() {
             noc_async_write_barrier();
             noc_semaphore_inc(get_noc_addr(cx, cy, get_semaphore(sem_group)), 1);
         } else {
-            noc_semaphore_wait_min(group_sem, (cores - 1) * (l + 1));
+            noc_semaphore_wait_min(group_sem, busy * (l + 1));
             for (uint32_t s = 0; s < num_streamers; s++) {
                 const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
                 const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
@@ -126,8 +145,10 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < layers * (n ? n : 1); i++) {
         const uint32_t l = n ? i / n : i, k = n ? i % n : 0;
-        if (n == 0) {
-            layer_out(l);  // rows mode, no active user on this core
+        if (n == 0) {  // rows mode, no active user on this core: the collector still sends the head's output
+            if (collector) {
+                layer_out(l);
+            }
             continue;
         }
         const uint32_t u = act[k];
