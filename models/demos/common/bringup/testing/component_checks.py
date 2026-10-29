@@ -418,9 +418,10 @@ class Expect:
                 _, sc, kk = NF.tapped(run, _clone(x.inputs))
                 outs, nsc = [], []
                 for k_ in range(NF.SEEDS):
-                    o, ns, _ = NF.tapped(
-                        run, [NF.nudge(t, 1000 * k_ + j, d) for j, (t, d) in enumerate(zip(x.inputs, self.dtypes))]
-                    )
+                    with NF.inner(k_, self.dtypes):
+                        o, ns, _ = NF.tapped(
+                            run, [NF.nudge(t, 1000 * k_ + j, d) for j, (t, d) in enumerate(zip(x.inputs, self.dtypes))]
+                        )
                     outs.append(o)
                     nsc.append(ns)
                 self.floor[x.name] = outs

@@ -13,8 +13,8 @@ larger of
 - the reference arithmetic: the official code at its own dtypes on the same inputs vs the fp32 step (tapped per step
   from the official model and cached with the goldens: official_floor.json; testing/official_floor.py), and
 - the input nudge: the fp32 step on its inputs moved uniformly inside their rounding cell, in the dtype the official
-  code holds each input (official_taps.yaml; default bf16; an fp4 quantizer's output `fp4/<block>`, F223; other
-  quantizer outputs `fixed`), SEEDS seeds, the worst.
+  code holds each input (official_taps.yaml; default bf16; an fp4 quantizer's output `fp4/<block>`, F223, or with a
+  power-of-two scale `fp4e8/<block>`, F224; other quantizer outputs `fixed`), SEEDS seeds, the worst.
 A limit is calib (component_calib) x that floor on the same
 comparison (vs the CPU step on the same inputs, or vs the golden), never below what one rounding of the output to
 its official dtype shows (F133: bf16, or fp32 for an fp32 output) (an exact step) or one element of an integer output. For a correlation the miss is 1 - pcc ~ rel^2 / 2, so calib
@@ -28,6 +28,7 @@ A gate metric written ``>= limit`` in tasks.yaml is compared with the ``<metric>
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 
@@ -100,30 +101,40 @@ def bf16_res(mode: str, ref: torch.Tensor, dtype: str = "bf16") -> float:
 FP4_GRID_STEP = ((2.0, 0.5), (4.0, 1.0), (math.inf, 2.0))  # e2m1 magnitudes 0..6: the step below each bound
 
 
-def _fp4_block(dtype: str) -> int | None:
-    """``fp4/<block>``: an fp4 (e2m1) quantizer output with a scale per <block> values of the last dim; else None."""
-    if not dtype.startswith("fp4/"):
+FP4_KINDS = {"fp4/": False, "fp4e8/": True}  # prefix -> power-of-two (e8m0) scale
+
+
+def _fp4_block(dtype: str) -> tuple[int, bool] | None:
+    """``fp4/<block>``: an fp4 (e2m1) quantizer output with a scale per <block> values of the last dim (amax / 6, e.g. an
+    e4m3 scale); ``fp4e8/<block>``: the same with a power-of-two (e8m0) scale, 2^ceil(log2(amax / 6)) (F224). Returns
+    (block, pow2), else None."""
+    kind = next((k for k in FP4_KINDS if dtype.startswith(k)), None)
+    if kind is None:
         return None
-    b = dtype[4:]
+    b = dtype[len(kind) :]
     if not b.isdigit() or int(b) < 1:
-        raise ValueError(f"input dtype {dtype!r}: fp4/<block>, e.g. fp4/16")
-    return int(b)
+        raise ValueError(f"input dtype {dtype!r}: {kind}<block>, e.g. {kind}16")
+    return int(b), FP4_KINDS[kind]
 
 
 def nudge(t, seed: int, dtype: str = "bf16"):
     """t moved uniformly inside its rounding cell in ``dtype`` (bf16 / fp32, or fp4/<block>: the e2m1 grid step at
-    |t| / s, s = the block's amax / 6, the official fp4 quantizer's rounding, F223); `fixed` (a quantizer's output whose
-    rounding the step does not repeat) and integer tensors stay as they are."""
+    |t| / s, s = the block's amax / 6, the official fp4 quantizer's rounding, F223; fp4e8/<block>: s = 2^ceil(log2(amax
+    / 6)), a power-of-two scale, F224); `fixed` (a quantizer's output whose rounding the step does not repeat) and
+    integer tensors stay as they are."""
     if not isinstance(t, torch.Tensor) or not t.is_floating_point() or dtype == "fixed":
         return t
     g = torch.Generator().manual_seed(seed)
     x = t.double()
-    block = _fp4_block(dtype)
-    if block is not None:
+    fp4 = _fp4_block(dtype)
+    if fp4 is not None:
+        block, pow2 = fp4
         if x.shape[-1] % block:
             raise ValueError(f"input dtype {dtype}: last dim {x.shape[-1]} is not a multiple of {block}")
         xg = x.reshape(*x.shape[:-1], -1, block)
         s = (xg.abs().amax(-1, keepdim=True) / 6.0).clamp_min(1e-38)
+        if pow2:
+            s = torch.pow(2.0, torch.ceil(torch.log2(s)))
         m = xg.abs() / s
         step = torch.full_like(m, FP4_GRID_STEP[-1][1])
         for bound, st in reversed(FP4_GRID_STEP[:-1]):
@@ -134,22 +145,56 @@ def nudge(t, seed: int, dtype: str = "bf16"):
     return (x + (torch.rand(t.shape, generator=g, dtype=torch.float64) - 0.5) * cell).to(t.dtype)
 
 
+class Dtypes(list):
+    """input_dtypes' result: one dtype an input; ``inner`` (official_taps.yaml ``nudge_inner: true``, F224): the step's
+    own quantizers (a reference calling nudge_inner) move inside their cell too in its nudged runs."""
+
+    inner = False
+
+
+_INNER = None  # [seed, calls] inside a nudged run of a step with nudge_inner (F224)
+
+
+@contextlib.contextmanager
+def inner(seed: int, dtypes):
+    """One nudged run of a step: when ``dtypes.inner``, the reference's internal quantizers nudge inside their cell."""
+    global _INNER
+    prev, _INNER = _INNER, ([seed, 0] if getattr(dtypes, "inner", False) else None)
+    try:
+        yield
+    finally:
+        _INNER = prev
+
+
+def nudge_inner(x, dtype: str):
+    """For a reference's internal quantizer at full precision (F224; e.g. DeepSeek-V4.1's fp4 index query): x as it
+    is, or, inside a nudged run of a step marked nudge_inner, x nudged inside its ``dtype`` cell (one seed a call), so
+    the floor of synthetic inputs counts the official code's own rounding there as the golden's official arithmetic
+    does."""
+    if _INNER is None:
+        return x
+    _INNER[1] += 1
+    return nudge(x, 7919 * (_INNER[0] + 1) + _INNER[1], dtype)
+
+
 def input_dtypes(s, block_type: str | None, step: str, n: int) -> list[str]:
     """The dtype the official code holds each of a step's n inputs in (official_taps.yaml: steps.<step> or
-    <block type>.<step>, inputs: [bf16 | fp32 | fp4/<block> | fixed, ...]); bf16 when not mapped."""
+    <block type>.<step>, inputs: [bf16 | fp32 | fp4/<block> | fp4e8/<block> | fixed, ...]); bf16 when not mapped. A
+    Dtypes list: ``.inner`` = the entry's ``nudge_inner`` (F224)."""
     import yaml
 
     p = s.bringup_dir / TAPS_FILE
     steps = ((yaml.safe_load(p.read_text()) if p.exists() else None) or {}).get("steps") or {}
     e = steps.get(f"{block_type}.{step}") or steps.get(step) or {}
     got = list(e.get("inputs") or [])
-    bad = [d for d in got if d not in ("bf16", "fp32", "fixed") and not str(d).startswith("fp4/")]
+    bad = [d for d in got if d not in ("bf16", "fp32", "fixed") and not str(d).startswith(tuple(FP4_KINDS))]
     if bad:
-        raise ValueError(f"{p}: {step}: input dtypes {bad} not in bf16 / fp32 / fp4/<block> / fixed")
+        raise ValueError(f"{p}: {step}: input dtypes {bad} not in bf16 / fp32 / fp4/<block> / fp4e8/<block> / fixed")
     for d in got:
-        if str(d).startswith("fp4/"):
-            _fp4_block(d)
-    return (got + ["bf16"] * n)[:n]
+        _fp4_block(str(d))
+    out = Dtypes((got + ["bf16"] * n)[:n])
+    out.inner = bool(e.get("nudge_inner", False))
+    return out
 
 
 def explanation(s, block_type: str | None, step: str) -> str:
@@ -178,7 +223,11 @@ def output_dtype(s, block_type: str | None, step: str) -> str:
 
 def nudged(run, inputs, dtypes, seeds: int = SEEDS) -> list:
     """run(*inputs) on the inputs nudged with each seed (the floor's outputs)."""
-    return [run(*[nudge(t, 1000 * k + j, d) for j, (t, d) in enumerate(zip(inputs, dtypes))]) for k in range(seeds)]
+    outs = []
+    for k in range(seeds):
+        with inner(k, dtypes):
+            outs.append(run(*[nudge(t, 1000 * k + j, d) for j, (t, d) in enumerate(zip(inputs, dtypes))]))
+    return outs
 
 
 def worst_float(outs, want, errors) -> dict:
