@@ -311,6 +311,21 @@ class GreedySpecLoop:
             raise ValueError("K > 1 needs the draft chain (MTP levels 2 .. K)")
         self.verify, self.commit, self.draft_chain = verify, commit, draft_chain
 
+    def _log_row_diff(self, it: int, tokens: torch.Tensor, ids: torch.Tensor, d1: torch.Tensor) -> None:
+        """``GLM53_SPEC_DEBUG_ROWS=1`` (the harness: every slot decodes the same prompt, so every mesh row's verify
+        must return the same greedy ids): the rows whose ids differ from row 0's, with their ids and margins -- the
+        2026-10-29 full-tile defect (B (K + 1) = 32) diverged on mesh row 5 at the fourth token of every point."""
+        R, B, P = self.rows, self.B, self.K + 1
+        t, i, d = tokens.reshape(R, B, P), ids.reshape(R, B, P), d1.reshape(R, B, P)
+        bad = [r for r in range(R) if not torch.equal(i[r], i[0])]
+        logger.info(
+            f"[spec-rows] iteration {it}: tokens row 0 user 0 {t[0, 0].tolist()}, verify ids {i[0, 0].tolist()}, "
+            f"d1 {[round(float(v), 3) for v in d[0, 0]]}; rows differing from row 0: {bad}"
+            + "".join(
+                f"; row {r} user 0: ids {i[r, 0].tolist()}, d1 {[round(float(v), 3) for v in d[r, 0]]}" for r in bad
+            )
+        )
+
     def run(
         self, anchors: list[int], positions: list[int], max_new_tokens: int, eos: int | None = None
     ) -> tuple[list[list[int]], SpecStats]:
@@ -331,6 +346,8 @@ class GreedySpecLoop:
         while not all(done):
             tokens = torch.cat([anchors_t[:, None], drafts], dim=1)  # [N, K + 1]
             ids, d1 = self.verify(tokens, pos)
+            if os.environ.get("GLM53_SPEC_DEBUG_ROWS") == "1" and stats.iterations < 3:
+                self._log_row_diff(stats.iterations, tokens, ids, d1)
             m, committed, bonus = accept_greedy(drafts, ids, valid)
             for u in range(N):
                 if done[u]:
