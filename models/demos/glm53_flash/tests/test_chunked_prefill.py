@@ -390,3 +390,43 @@ def test_indexer_static_maintenance_matches_offset_path(mesh_device, monkeypatch
     )
     assert worst_ref > 0.98 and p_ring > 0.99
     assert same_pools and same_ring, "the static maintenance must reproduce the offset path's writes"
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "aligned, split",
+    [((16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522))],
+    ids=["65514-continued-at-36736-and-52992"],
+)
+def test_sparse_continuation_at_unaligned_chunk_ends(mesh_device, aligned, split):
+    """A chunk plan whose chunks end at 32-aligned but not device-chunk-aligned positions deep in the sparse
+    range must give the same layer output as the device-chunk-aligned plan of the same prompt. That is what
+    vLLM's chunked-prefill budget produces under prefix caching when two prompts prefill in one step (the
+    2026-10-29 APC smoke: a request's chunk ended at 36736, the next continued from there; another continued
+    from 52992), so the adapter continues a prefill from 36736 / 52992 instead of 32768 / 49152. Layer 3
+    (DSA + MoE), random activations at the dump's scale (no HF dump at this length), both plans in the same
+    decoder on their own user slot. Gate: PCC between the plans > 0.999 overall and on the rows after the
+    first unaligned continuation (bf16 noise only; a wrong prefix read / split shows as a collapse there)."""
+    layer_idx = 3
+    raw, cfg = _load(layer_idx)
+    assert sum(aligned) == sum(split), (aligned, split)
+    S = sum(aligned)
+    pre = torch.load(REF / "R4097" / f"layer{layer_idx}_prefill.pt")
+    scale = pre["x_in"].float().std().item()
+    torch.manual_seed(0)
+    x_in = (torch.randn(1, S, 4, cfg.hidden_size) * scale).to(pre["x_in"].dtype)
+    dec = _decoder(mesh_device, raw, cfg, layer_idx, S + 64, max_batch=2)
+    assert not dec.layer.is_kda, "layer 3 is a DSA layer"
+    ref, _ = prefill_chunked(dec, x_in, aligned, mesh_device, user=0)
+    out, _ = prefill_chunked(dec, x_in, split, mesh_device, user=1)
+    first_unaligned_end = next(e for e in torch.tensor(split).cumsum(0).tolist() if e % 16384)
+    p_all = pcc(ref, out)
+    p_tail = pcc(ref[:, first_unaligned_end:], out[:, first_unaligned_end:])
+    p_head = pcc(ref[:, :first_unaligned_end], out[:, :first_unaligned_end])
+    logger.info(
+        f"layer {layer_idx} S={S}: split plan {list(split)} vs aligned {list(aligned)}: pcc {p_all:.6f} "
+        f"(rows < {first_unaligned_end}: {p_head:.6f}, rows from the first unaligned continuation: {p_tail:.6f})"
+    )
+    assert p_head > 0.999, f"the rows before the first unaligned chunk end differ: pcc {p_head}"
+    assert p_tail > 0.999 and p_all > 0.999, f"continuation at an unaligned chunk end: pcc {p_tail} (all {p_all})"
