@@ -15,6 +15,7 @@ value and chunk 5 a second, and two distinct values separate "refreshed per chun
 The comparison is the KV cache, since on a single rank prefill_chunk returns no activation. Layer 0
 is temperature-independent and acts as the control for whether the two paths agree at all.
 """
+import copy
 import gc
 import math
 
@@ -25,11 +26,20 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_transformer_state_dict
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
+from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
-from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_tp0, unrotate_cache_layer
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, gather_cache_tp0, unrotate_cache_layer
 from tests.ttnn.utils_for_testing import comp_pcc
 
 CHUNK = PREFILL_CHUNK_TOKENS  # 5120
@@ -299,3 +309,171 @@ def test_prefill_chunk_traced_matches_eager(
         f"temperature on the traced path: layer 0 is temperature-independent, deeper layers are not. "
         f"For scale, temperature 1.0 drives the same layers to {sens_deep:.6f}"
     )
+
+
+# ---------------------------------------------------------------------------------------------------------
+# GLM-5.3, synthetic weights: a PARTIAL single chunk through the traced path. The chunks above are all full,
+# and so are the traced chunks every other GLM test replays, so a partial first chunk (any prompt shorter
+# than one chunk) has no traced-vs-eager coverage. Synthetic weights need no checkpoint or ttnn cache.
+#
+# Two dense layers: layer 0's KV comes from the embeddings and is the control; layer 1's KV is computed
+# from layer 0's output, so it shows any difference in layer 0's attention (traced vs eager).
+GLM_LAYERS = 2
+# actual_end of one chunk starting at 0. 5,120 is the full-chunk control.
+GLM_CHUNK_ENDS = [CHUNK, 2048, 896, 256]
+GLM_SLOT_WARMUP = 0  # compile() / capture_trace() write here
+
+
+def _glm_slots(case: int) -> tuple[int, int]:
+    return 1 + 2 * case, 2 + 2 * case  # (traced, eager)
+
+
+def _glm_natural_slot_rows(rows: torch.Tensor, stripes: int, chunk: int) -> torch.Tensor:
+    """[layers, seq, D] in gather_cache_natural's linear chip order (TP-deduped: stripe s*tp + t holds
+    chunk_local = chunk / stripes rows of every chunk) -> natural token order."""
+    seq = rows.shape[1]
+    local, cl = seq // stripes, chunk // stripes
+    out = torch.empty_like(rows)
+    for i in range(stripes):
+        for c in range(local // cl):
+            out[:, c * chunk + i * cl : c * chunk + (i + 1) * cl] = rows[
+                :, i * local + c * cl : i * local + (c + 1) * cl
+            ]
+    return out
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=GLM53Adapter.l1_small_size,
+                trace_region_size=512 * 1024 * 1024,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm_prefill_chunk_traced_matches_eager_partial(variant, config_only, mesh_device, device_params, num_links):
+    """Traced prefill_chunk must write the same KV as eager for one chunk [0, actual_end), full or partial.
+
+    One traced runtime; per actual_end, traced -> one slot, eager (model.forward, host scalars) -> another.
+    Same ops on the same device, so the real tokens' KV must match bit for bit.
+    """
+    gate_mode = GateComputeMode.DEVICE_FP32
+    assert_gate_mode_matches_adapter(variant, gate_mode)
+    sp, tp = tuple(mesh_device.shape)
+    config = copy.deepcopy(config_only)
+    config.max_seq_len = CHUNK
+    num_users = 1 + 2 * len(GLM_CHUNK_ENDS)
+    rt_config = TtPrefillRuntimeConfig(
+        num_layers=GLM_LAYERS,
+        max_seq_len=CHUNK,
+        mesh_shape=(sp, tp),
+        chunk_size=CHUNK,
+        num_users=num_users,
+        num_links=num_links,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        capacity_factor=8,
+        gate_fallback_mode=gate_mode,
+        model_cfg=GLM53Config,
+        routing_use_l1_small_for_semaphores=GLM53Adapter.routing_use_l1_small_for_semaphores,
+        sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
+        use_trace=True,
+        tp_shard_kv=True,
+    )
+    mesh_device.enable_program_cache()
+    state_dict = glm_random_transformer_state_dict(config, GLM53Config, GLM_LAYERS)
+    runtime = TtPrefillRuntime(mesh_device, config, state_dict, rt_config)
+    del state_dict
+    index_layers = full_indexer_rank(config, GLM_LAYERS)
+    caches = MlaKvCaches(
+        kvpe=init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BF16_RM,
+            hf_config=config,
+            mesh_device=mesh_device,
+            seq_len=CHUNK,
+            mesh_shape=[sp, tp],
+            sp_axis=0,
+            tp_axis=1,
+            num_kvpe_cache_layers=GLM_LAYERS,
+            num_users=num_users,
+        ),
+        index=init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=CHUNK,
+            mesh_shape=[sp, tp],
+            sp_axis=0,
+            tp_axis=1,
+            num_kvpe_cache_layers=index_layers,
+            num_users=num_users,
+            dtype=ttnn.bfloat8_b,
+        ),
+    )
+    ids = torch.randint(0, config.vocab_size, (CHUNK,), generator=torch.Generator().manual_seed(896)).tolist()
+    try:
+        runtime.compile(caches)
+        runtime.capture_trace(caches)
+        for case, end in enumerate(GLM_CHUNK_ENDS):
+            traced_slot, eager_slot = _glm_slots(case)
+            tokens = ids[:end] + [0] * (CHUNK - end)
+            msg = _packed_metadata_msg(mesh_device, traced_slot, 0, end)
+            runtime.prefill_chunk(
+                runtime.make_chunk_input(tokens),
+                caches,
+                slot_id=traced_slot,
+                actual_start=0,
+                actual_end=end,
+                metadata_msg=msg,
+            )
+            ttnn.synchronize_device(mesh_device)
+            ttnn.deallocate(msg)
+            inp = runtime.make_chunk_input(tokens)
+            runtime.model.forward(
+                inp,
+                caches.kvpe,
+                actual_isl=CHUNK,
+                actual_start=0,
+                actual_end=end,
+                cache_user_id=eager_slot,
+                index_kv_cache=caches.index,
+            )
+            ttnn.synchronize_device(mesh_device)
+            ttnn.deallocate(inp)
+        kvpe_rows, _ = gather_cache_natural(caches.kvpe, mesh_device, tp_shard_kv=True)
+        index_rows, _ = gather_cache_natural(caches.index, mesh_device, tp_shard_kv=True)
+    finally:
+        runtime.release_trace()
+        runtime.model.release_sub_device_managers()
+        del runtime
+        gc.collect()
+
+    failures = []
+    for name, rows, layers in (("kvpe", kvpe_rows, GLM_LAYERS), ("indexer_k", index_rows, index_layers)):
+        for case, end in enumerate(GLM_CHUNK_ENDS):
+            traced_slot, eager_slot = _glm_slots(case)
+            traced = _glm_natural_slot_rows(rows[traced_slot * layers : (traced_slot + 1) * layers], sp * tp, CHUNK)
+            eager = _glm_natural_slot_rows(rows[eager_slot * layers : (eager_slot + 1) * layers], sp * tp, CHUNK)
+            for layer in range(layers):
+                t, e = traced[layer, :end], eager[layer, :end]
+                differ = torch.nonzero((t - e).abs().amax(dim=-1) > 0).flatten()
+                _, pcc = comp_pcc(e, t)
+                logger.info(
+                    f"[0, {end}) {name}[{layer}]: PCC {float(pcc):.6f}, {len(differ)} of {end} real tokens differ"
+                    + (f" (first {differ[0].item()}, last {differ[-1].item()})" if len(differ) else "")
+                )
+                if len(differ):
+                    failures.append(
+                        f"[0, {end}) {name} layer {layer}: {len(differ)} real tokens differ, first {differ[0].item()}, "
+                        f"PCC {float(pcc):.6f}"
+                    )
+    assert not failures, "traced vs eager KV mismatch:\n" + "\n".join(failures)
