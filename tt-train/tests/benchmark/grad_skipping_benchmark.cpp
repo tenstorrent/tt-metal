@@ -6,8 +6,8 @@
 // Frozen-weight gradient skipping benchmark
 //
 // Uses Google Benchmark to measure the average time and DRAM peak of one forward +
-// synthetic-grad backward step of the linear and RMSNorm ops in Qwen3.8-27B's decoder layers,
-// plus lm_head, with the weight trainable and with it frozen (LoRA base weights and norm gammas).
+// synthetic-grad backward step of the linear ops in Qwen3.8-27B's decoder layers, plus lm_head,
+// with the weight trainable and with it frozen (LoRA base weights).
 // The input always requires grad, as it does in every layer above the first.
 //
 // Shapes come from the Qwen/Qwen3.8-27B checkpoint (hidden 5120, intermediate 17408, vocab 248320)
@@ -38,7 +38,6 @@
 #include "autograd/tensor.hpp"
 #include "benchmark_utils.hpp"
 #include "ops/linear_op.hpp"
-#include "ops/rmsnorm_op.hpp"
 #include "ttnn/operations/rand/rand.hpp"
 
 namespace {
@@ -46,19 +45,13 @@ namespace {
 constexpr uint32_t kNumWarmup = 2U;
 constexpr uint32_t kNumMeasure = 5U;
 constexpr uint32_t kSequenceLength = 2048U;
-constexpr float kEpsilon = 1e-6F;
 constexpr double kBytesPerMb = 1024.0 * 1024.0;
 
 const std::vector<uint32_t> kBatchSizes = {1U, 4U};
 
-enum class OpKind { Linear, RMSNorm };
-
-// Linear: input [B, 1, S, in_features], weight [1, 1, out_features, in_features], no bias (as in Qwen3).
-// RMSNorm: input [B, heads, S, features], gamma [1, 1, 1, features]; heads is 1 for the decoder norms.
+// Input [B, 1, S, in_features], weight [1, 1, out_features, in_features], no bias (as in Qwen3).
 struct OpShape {
     std::string name;
-    OpKind kind;
-    uint32_t heads;
     uint32_t in_features;
     uint32_t out_features;
 };
@@ -66,23 +59,18 @@ struct OpShape {
 const std::vector<OpShape>& all_ops() {
     static const std::vector<OpShape> ops = {
         // Full attention layers.
-        {"attn.q_proj", OpKind::Linear, 1U, 5120U, 12288U},
-        {"attn.kv_proj", OpKind::Linear, 1U, 5120U, 2048U},
-        {"attn.o_proj", OpKind::Linear, 1U, 6144U, 5120U},
-        {"attn.q_norm", OpKind::RMSNorm, 24U, 256U, 256U},
-        {"attn.k_norm", OpKind::RMSNorm, 4U, 256U, 256U},
+        {"attn.q_proj", 5120U, 12288U},
+        {"attn.kv_proj", 5120U, 2048U},
+        {"attn.o_proj", 6144U, 5120U},
         // Linear attention layers. in_proj_b and in_proj_a share this shape.
-        {"linear.in_proj_qkv", OpKind::Linear, 1U, 5120U, 10240U},
-        {"linear.in_proj_z", OpKind::Linear, 1U, 5120U, 6144U},
-        {"linear.in_proj_ba", OpKind::Linear, 1U, 5120U, 48U},
-        {"linear.out_proj", OpKind::Linear, 1U, 6144U, 5120U},
-        // Without the silu(z) gating.
-        {"linear.norm", OpKind::RMSNorm, 48U, 128U, 128U},
-        // Every layer. gate_proj and up_proj share this shape, as do input_layernorm and post_attention_layernorm.
-        {"mlp.gate_up_proj", OpKind::Linear, 1U, 5120U, 17408U},
-        {"mlp.down_proj", OpKind::Linear, 1U, 17408U, 5120U},
-        {"decoder_norm", OpKind::RMSNorm, 1U, 5120U, 5120U},
-        {"lm_head", OpKind::Linear, 1U, 5120U, 248320U},
+        {"linear.in_proj_qkv", 5120U, 10240U},
+        {"linear.in_proj_z", 5120U, 6144U},
+        {"linear.in_proj_ba", 5120U, 48U},
+        {"linear.out_proj", 6144U, 5120U},
+        // Every layer. gate_proj and up_proj share this shape.
+        {"mlp.gate_up_proj", 5120U, 17408U},
+        {"mlp.down_proj", 17408U, 5120U},
+        {"lm_head", 5120U, 248320U},
     };
     return ops;
 }
@@ -125,8 +113,7 @@ ArmResult run_arm(
     const auto run_step = [&]() {
         const auto input = ttml::autograd::create_tensor(input_value, /*requires_grad=*/true);
         const auto weight = ttml::autograd::create_tensor(weight_value, weight_requires_grad);
-        auto out = op.kind == OpKind::Linear ? ttml::ops::linear_op(input, weight, nullptr)
-                                             : ttml::ops::rmsnorm(input, weight, kEpsilon);
+        auto out = ttml::ops::linear_op(input, weight, nullptr);
         out->set_grad(grad_out_value);
         out->backward();
         ttml::autograd::ctx().reset_graph();
@@ -145,14 +132,12 @@ CaseResult run_case(const OpShape& op, const uint32_t batch_size) {
     auto* const device = &ttml::autograd::ctx().get_device();
     device->clear_program_cache();
 
-    const bool is_linear = op.kind == OpKind::Linear;
     const uint32_t seed = ttml::benchmark_utils::seed_from_name(op.name) + batch_size;
-    const ttnn::Shape input_shape({batch_size, op.heads, kSequenceLength, op.in_features});
-    const ttnn::Shape output_shape({batch_size, op.heads, kSequenceLength, op.out_features});
-    const ttnn::Shape weight_shape =
-        is_linear ? ttnn::Shape({1U, 1U, op.out_features, op.in_features}) : ttnn::Shape({1U, 1U, 1U, op.in_features});
+    const ttnn::Shape input_shape({batch_size, 1U, kSequenceLength, op.in_features});
+    const ttnn::Shape output_shape({batch_size, 1U, kSequenceLength, op.out_features});
+    const ttnn::Shape weight_shape({1U, 1U, op.out_features, op.in_features});
     // Values don't affect the timing. Drawn on device directly in BF16: lm_head's weight is 778M elements, too many
-    // for a host vector or for ops::randn's FP32 intermediates. The norm gamma is kept near 1.
+    // for a host vector or for ops::randn's FP32 intermediates.
     const auto uniform = [&](const ttnn::Shape& shape, const float from, const float to, const uint32_t shape_seed) {
         return ttnn::rand(
             shape,
@@ -165,8 +150,7 @@ CaseResult run_case(const OpShape& op, const uint32_t batch_size) {
             shape_seed);
     };
     const auto input_value = uniform(input_shape, -1.0F, 1.0F, seed);
-    const auto weight_value =
-        is_linear ? uniform(weight_shape, -0.02F, 0.02F, seed + 1U) : uniform(weight_shape, 0.9F, 1.1F, seed + 1U);
+    const auto weight_value = uniform(weight_shape, -0.02F, 0.02F, seed + 1U);
     const auto grad_out_value = uniform(output_shape, -1.0F, 1.0F, seed + 2U);
     tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
 
@@ -230,13 +214,11 @@ void BM_GradSkipping(benchmark::State& state) {
 
     for ([[maybe_unused]] auto _ : state) {
         const auto result = run_case(op, batch_size);
-        const bool is_linear = op.kind == OpKind::Linear;
         g_rows.push_back(RowSummary{
             .op_name = op.name,
             .batch_size = batch_size,
-            .input_shape = fmt::format("[{}, {}, {}, {}]", batch_size, op.heads, kSequenceLength, op.in_features),
-            .weight_shape = is_linear ? fmt::format("[{}, {}]", op.out_features, op.in_features)
-                                      : fmt::format("[{}]", op.in_features),
+            .input_shape = fmt::format("[{}, 1, {}, {}]", batch_size, kSequenceLength, op.in_features),
+            .weight_shape = fmt::format("[{}, {}]", op.out_features, op.in_features),
             .result = result,
         });
 
