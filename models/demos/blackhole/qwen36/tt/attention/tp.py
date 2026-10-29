@@ -69,6 +69,18 @@ def _probe_spec_sdpa_pack():
 SPEC_SDPA_PACK_SUPPORTED = _probe_spec_sdpa_pack()
 
 
+def _free_unless_view(src, padded):
+    """Free ``src`` after ``padded = ttnn.pad(src, ...)``, unless pad returned a view of it.
+
+    The decode K/V are [1, B, NKV, HD] TILE tensors with NKV < 32, so their tiles already hold the 32 rows the KV
+    write pads to: ttnn.pad then only fills the implicit tile padding in place and returns a VIEW of the same buffer
+    (gdn/tp.py notes the same). ttnn.deallocate forces, so freeing the source frees the buffer under the view, and the
+    next allocations (the KV write's slices and shards) can land on it and overwrite rows before they reach the cache.
+    The view's consumer frees the shared buffer instead."""
+    if not tpc.aliases(padded, src):
+        ttnn.deallocate(src)
+
+
 def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     """Shard one full-attention layer's weights across the mesh."""
     if cache_dir is not None:
@@ -1059,8 +1071,8 @@ class TPAttention:
             keys, values = self.paged_k, self.paged_v
             k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
             v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
+            _free_unless_view(k, k_p)
+            _free_unless_view(v, v_p)
             if alias_kv_write and B > 1:
                 self._write_kv_aliased(
                     keys,
@@ -1158,8 +1170,8 @@ class TPAttention:
                 v_h = ttnn.slice(v, (0, 0, h, 0), (1, B, h + 1, HD))
                 k_hp = ttnn.pad(k_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
                 v_hp = ttnn.pad(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-                ttnn.deallocate(k_h)
-                ttnn.deallocate(v_h)
+                _free_unless_view(k_h, k_hp)
+                _free_unless_view(v_h, v_hp)
                 _kv_cfg = self._kv_shard_cfg(B)
                 k_sh = ttnn.to_memory_config(k_hp, _kv_cfg)
                 v_sh = ttnn.to_memory_config(v_hp, _kv_cfg)

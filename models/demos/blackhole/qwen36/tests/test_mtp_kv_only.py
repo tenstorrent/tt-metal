@@ -8,8 +8,17 @@ the full decode step, for every shape the MTP drafter's KV-maintenance forwards 
   warm_b1      1 row, independent                                      (eager reseed / single-row join warm; lean path)
   warm_b8      8 rows, independent users                               (batched join warm; lean path)
 
-Both caches start from the same random content, so a stray write anywhere in the cache also shows up. The comparison is
-torch.equal on every device's cache shard, not a PCC.
+Two checks per case, on every device's cache shard:
+  * full vs kv_only: torch.equal, not a PCC.
+  * each mode vs an oracle: the initial cache with exactly the intended rows replaced by the K/V rows the KV write was
+    handed (read back when the write starts: _write_kv_aliased for the aliased legacy path, the fused cache update for
+    the lean path). Both caches start from the same random content, so a stray write anywhere shows up, and so does a
+    write that stores other bytes than it was given in BOTH modes alike, which full vs kv_only alone cannot see.
+    The pad-view bug was of that kind: ttnn.pad of the [1, B, 1, HD] K/V returns a view of their buffer, the legacy
+    path freed the source, and the grouped write's own L1 slices and shards could then land on V's freed buffer and
+    overwrite tiles before they were read. Whether they did depends on the allocation map: here the full step was
+    clean and the kv_only step (q and gate freed earlier) lost 16 of V's 256 tiles per device. bf16 caches compare
+    exactly; bf8 rows that were written compare within the bf8 quantization step (untouched rows stay exact).
 
 Run (inside the tt-metal container, on a Blackhole Galaxy / P150x8 TP mesh):
     MESH_DEVICE=P150x8 HF_MODEL=Qwen/Qwen3.6-27B \
@@ -35,6 +44,14 @@ from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 BLOCK, BPU = 64, 4  # 4 blocks of 64 per user
 
 
+def _bf8_close(got, exp):
+    """Whether bf16 rows ``exp`` stored in a bfloat8_b cache read back as ``got``: bfloat8_b keeps 7 mantissa bits
+    under one exponent per 16 consecutive values of a row, so each value is within 2^-6 of its group's largest one."""
+    g = exp.float().reshape(*exp.shape[:-1], -1, 16)
+    tol = g.abs().amax(dim=-1, keepdim=True) * 2.0**-6
+    return bool(((got.float().reshape(g.shape) - g).abs() <= tol).all())
+
+
 @torch.no_grad()
 @parametrize_mesh_tp()
 @pytest.mark.parametrize("cache_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8"])
@@ -43,7 +60,7 @@ BLOCK, BPU = 64, 4  # 4 blocks of 64 per user
     [(8, 4, True), (1, 4, True), (1, 1, False), (8, 1, False)],
     ids=["reseed_b8", "reseed_b1", "warm_b1", "warm_b8"],
 )
-def test_mtp_kv_only_cache_bytes(mesh_device, users, T, aliased, cache_dtype, reset_seeds, ensure_gc):
+def test_mtp_kv_only_cache_bytes(mesh_device, users, T, aliased, cache_dtype, monkeypatch, reset_seeds, ensure_gc):
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=8, max_seq_len=1024)
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "full_attention")
@@ -55,6 +72,8 @@ def test_mtp_kv_only_cache_bytes(mesh_device, users, T, aliased, cache_dtype, re
 
     R = users * T
     nblocks = users * BPU
+    ndev = mesh_device.get_num_devices()
+    comp = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
     g = torch.Generator().manual_seed(7)
     init_k = torch.randn(nblocks, NKV, BLOCK, HD, generator=g).to(torch.bfloat16)
     init_v = torch.randn(nblocks, NKV, BLOCK, HD, generator=g).to(torch.bfloat16)
@@ -74,6 +93,9 @@ def test_mtp_kv_only_cache_bytes(mesh_device, users, T, aliased, cache_dtype, re
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def read_back(t):
+        return ttnn.to_torch(t, mesh_composer=comp)
+
     def rep_rm(t):
         return ttnn.from_torch(
             t,
@@ -83,7 +105,42 @@ def test_mtp_kv_only_cache_bytes(mesh_device, users, T, aliased, cache_dtype, re
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
+    # The oracle's input: the K/V rows the KV write is handed, read back before it allocates anything. Each device's
+    # rows come back stacked on dim 0: [ndev, R, >= NKV, HD]; row r's head h sits at [d, r, h].
+    handed = {}
+    _aliased_write = TPAttention._write_kv_aliased
+    _fused_update = ttnn.experimental.paged_fused_update_cache
+
+    def spy_aliased_write(self, keys, values, k_p, v_p, *a, **kw):
+        handed["k"], handed["v"] = read_back(k_p), read_back(v_p)
+        return _aliased_write(self, keys, values, k_p, v_p, *a, **kw)
+
+    def spy_fused_update(k_cache, k_in, v_cache, v_in, *a, **kw):
+        handed["k"], handed["v"] = read_back(k_in), read_back(v_in)
+        return _fused_update(k_cache, k_in, v_cache, v_in, *a, **kw)
+
+    monkeypatch.setattr(TPAttention, "_write_kv_aliased", spy_aliased_write)
+    monkeypatch.setattr(ttnn.experimental, "paged_fused_update_cache", spy_fused_update)
+
+    def expected(stored_init, rows):
+        exp = stored_init.clone()
+        for d in range(ndev):
+            for r in range(R):
+                p = int(pos[r])
+                blk = d * nblocks + int(pt_rows[r][p // BLOCK])
+                exp[blk, :, p % BLOCK, :] = rows[d, r, :NKV, :]
+        return exp
+
+    def written_mask():
+        m = torch.zeros(ndev * nblocks, NKV, BLOCK, dtype=torch.bool)
+        for d in range(ndev):
+            for r in range(R):
+                p = int(pos[r])
+                m[d * nblocks + int(pt_rows[r][p // BLOCK]), :, p % BLOCK] = True
+        return m
+
     def run(kv_only):
+        handed.clear()
         a = TPAttention(mesh_device, args, tw, tt_ccl)
         a.decode_sdpa_max_cores = 64  # as Qwen36MTP sets it
         kc, vc = cache(init_k), cache(init_v)
@@ -103,19 +160,35 @@ def test_mtp_kv_only_cache_bytes(mesh_device, users, T, aliased, cache_dtype, re
         if out is not None:
             ttnn.deallocate(out)
         ttnn.synchronize_device(mesh_device)
-        comp = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
-        got = (ttnn.to_torch(kc, mesh_composer=comp), ttnn.to_torch(vc, mesh_composer=comp))
+        assert set(handed) == {"k", "v"}, "the KV write was not intercepted (a new write path needs a spy here)"
+        got = (read_back(kc), read_back(vc))
         ttnn.deallocate(kc)
         ttnn.deallocate(vc)
-        return got
+        return got, (handed["k"], handed["v"])
 
-    full_k, full_v = run(False)
-    lean_k, lean_v = run(True)
+    # The initial caches as stored (bf8 rounds them), to build the oracle from.
+    stored = []
+    for t in (init_k, init_v):
+        dev = cache(t)
+        stored.append(read_back(dev))
+        ttnn.deallocate(dev)
+    mask = written_mask()
+
+    full_kv, full_rows = run(False)
+    lean_kv, lean_rows = run(True)
+    for mode, kv, rows in (("full", full_kv, full_rows), ("kv_only", lean_kv, lean_rows)):
+        for name, got, init, handed_rows in zip("KV", kv, stored, rows):
+            exp = expected(init, handed_rows)
+            assert torch.equal(got[~mask], init[~mask]), f"{mode}: {name} cache changed outside the written rows"
+            if cache_dtype == ttnn.bfloat16:
+                bad = int((got[mask] != exp[mask]).sum())
+                assert bad == 0, f"{mode}: {name} cache rows differ from the rows the KV write was handed ({bad} values)"
+            else:
+                assert _bf8_close(got[mask], exp[mask]), f"{mode}: {name} cache rows are not the handed rows (bf8)"
     # The step wrote something (else the comparison proves nothing): the written rows differ from the initial cache.
-    init_k_dev = cache(init_k)
-    k0 = ttnn.to_torch(init_k_dev, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    ttnn.deallocate(init_k_dev)
-    assert not torch.equal(full_k, k0), "the full step left the K cache unchanged"
+    assert not torch.equal(full_kv[0], stored[0]), "the full step left the K cache unchanged"
+    full_k, full_v = full_kv
+    lean_k, lean_v = lean_kv
     assert torch.equal(full_k, lean_k), f"K cache differs: {int((full_k != lean_k).sum())} elements"
     assert torch.equal(full_v, lean_v), f"V cache differs: {int((full_v != lean_v).sum())} elements"
     logger.info(f"kv_only cache bytes identical: {users} users x T={T}, aliased={aliased}, cache {cache_dtype}")

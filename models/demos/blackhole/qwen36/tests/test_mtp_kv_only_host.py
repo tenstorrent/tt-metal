@@ -154,6 +154,81 @@ def test_kv_only_refuses_the_spec_verify(monkeypatch):
         _run(monkeypatch, 32, True, alias_kv_write=True, spec_verify_mode=True, spec_n_users=8)
 
 
+class _Buf(_Sym):
+    """A fake device tensor with a buffer: a view shares its source's buffer, as ttnn.pad's in-place tile fill does."""
+
+    def __init__(self, name, shape=(1, 1, 8, 64), buf=None):
+        super().__init__(name, shape)
+        self.buf = buf if buf is not None else [name]
+
+    def buffer_address(self):
+        return id(self.buf)
+
+
+@pytest.mark.parametrize("pad_is_view", [True, False], ids=["pad_view", "pad_copy"])
+@pytest.mark.parametrize("kv_only", [False, True], ids=["full", "kv_only"])
+@pytest.mark.parametrize(
+    "B, kw",
+    [
+        (32, dict(alias_kv_write=True, spec_n_users=8)),  # batched reseed: grouped aliased write
+        (4, dict(alias_kv_write=True, spec_n_users=1)),  # per-row aliased write
+        (8, {}),  # legacy non-aliased write (QWEN36_ATTN_DECODE_LEAN=0)
+    ],
+)
+def test_legacy_kv_write_never_reads_a_freed_pad_view(monkeypatch, B, kw, kv_only, pad_is_view):
+    """The legacy paged branch pads k / v ([1, B, NKV, HD]) to 32 rows. For NKV < 32 the rows already sit in the tiles,
+    so ttnn.pad fills the tile padding in place and returns a VIEW of the same buffer. ttnn.deallocate forces, so
+    freeing k / v right after the pad freed the buffer under k_p / v_p, and the KV write's own slices and shards could
+    land on it before it was read (device: V rows differing between full and kv_only, test_mtp_kv_only.py). The
+    source must stay allocated until the KV write has read k_p / v_p; the branch frees it only when pad made a copy."""
+    monkeypatch.setenv("QWEN36_ATTN_DECODE_LEAN", "0")
+    log, writes = [], []
+    _patch_ttnn(monkeypatch, log, writes)
+    freed = []
+    monkeypatch.setattr(ttnn, "deallocate", lambda t, *a, **k: freed.append(getattr(t, "buf", None)))
+
+    def pad(t, *a, **k):
+        log.append("pad")
+        return _Buf(f"pad({t!r})", t.shape, t.buf if pad_is_view else None)
+
+    monkeypatch.setattr(ttnn, "pad", pad)
+    # rope and the head split hand back buffer-backed tensors, so the padded k / v have a source buffer to share.
+    monkeypatch.setattr(tp_mod, "apply_partial_rope_decode", lambda k, *a, **kw: _Buf(f"rope({k!r})", k.shape))
+    reads = []  # (what, buffer still allocated?) when the KV write consumes k_p / v_p
+
+    def consume(what, t):
+        reads.append((what, all(t.buf is not f for f in freed)))
+
+    def to_mc(t, cfg, *a, **k):
+        if isinstance(t, _Buf) and repr(t).startswith("pad("):
+            consume("to_memory_config", t)
+        return _Sym(f"to_memory_config({t!r})", t.shape)
+
+    monkeypatch.setattr(ttnn, "to_memory_config", to_mc)
+    a = _attention(B)
+    a._make_heads_decode = lambda qg, kp, vp, b: (
+        _Buf(f"q[{qg!r}]"),
+        kp,
+        _Buf(f"k[{qg!r}]"),
+        _Buf(f"v[{qg!r}]", (1, b, 1, 64)),
+    )
+    if kw.get("alias_kv_write"):
+
+        def aliased(keys, values, k_p, v_p, *args, **k):
+            consume("_write_kv_aliased k", k_p)
+            consume("_write_kv_aliased v", v_p)
+
+        a._write_kv_aliased = aliased
+    x, pos, pt = _Sym("x", (1, 1, B, 640)), _Sym("pos", (B,)), _Sym("pt", (B, 4))
+    a.forward_decode(x, pos, _Sym("cos"), _Sym("sin"), page_table=pt, kv_only=kv_only, **kw)
+    assert len(reads) == 2, reads
+    assert all(alive for _, alive in reads), f"the KV write read a freed pad view: {reads}"
+    if not pad_is_view:  # pad made copies: the branch frees the sources (roped k, head-split v) itself: no leak
+        freed_names = [b[0] for b in freed if isinstance(b, list)]
+        assert any(n.startswith("rope(") and "k[" in n for n in freed_names), f"k never freed: {freed_names}"
+        assert any(n.startswith("v[") for n in freed_names), f"v never freed: {freed_names}"
+
+
 # --------------------------------------------------------------------------- #
 # Decoder layer: kv_only returns after the attention, never touching ffn_norm / MLP
 # --------------------------------------------------------------------------- #
