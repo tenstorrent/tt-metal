@@ -35,7 +35,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4.custom_ops.grid import plan_packed_sdpa
+from models.demos.gemma4.custom_ops.grid import plan_packed_sdpa, sdpa_tile_bytes
 from models.demos.gemma4.tt.ccl import ccl_allgather, ccl_allreduce
 from models.demos.gemma4.tt.dflash_constants import VERIFY_WIDTH_MARGIN
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -508,16 +508,27 @@ class DFlashDrafter:
         scale = 1.0 / math.sqrt(self.head_dim)
         use_sdpa = self._use_sdpa
         if use_sdpa:
-            # The drafter packs local_heads x K1 query rows into the head dim of one decode SDPA; its chunk and
-            # cores per head come from the same CB model as the target's packed verify (the 31B drafter at TP4,
-            # 16 local heads x 17 rows on head_dim 128, overflowed the per-core L1 at the op defaults).
+            # The drafter packs local_heads x K1 query rows into the head dim of one decode SDPA (non-paged, bf16
+            # context caches); its chunk and cores per head come from the same CB model as the target's packed
+            # verify (the 31B drafter at TP4, 16 local heads x 16 rows = PNHt 8 on head_dim 128 with 2 local KV
+            # heads, overflowed the per-core L1 at the op defaults and again at 8 cores per head: 715 tiles that
+            # fit the 1.5 MB alone, not above the unreserved base the CBs start at).
             grid = self.mesh_device.compute_with_storage_grid_size()
-            plan = plan_packed_sdpa(self.local_heads, self.local_kv, K1, self.head_dim, 1, grid.x * grid.y)
+            plan = plan_packed_sdpa(
+                self.local_heads,
+                self.local_kv,
+                K1,
+                self.head_dim,
+                1,
+                grid.x * grid.y,
+                arch=getattr(self.mesh_device, "arch", lambda: None)(),
+                kv_tile_bytes=sdpa_tile_bytes(getattr(ctx_k[0], "dtype", None) if ctx_k else None),
+            )
             if not plan.fits and not getattr(self, "_sdpa_overflow_logged", False):
                 self._sdpa_overflow_logged = True
                 logger.warning(
-                    f"dFlash drafter: no SDPA config on the ladder fits the per-core L1 for {self.local_heads} local "
-                    f"heads x {K1} rows, {self.local_kv} KV heads, head_dim {self.head_dim}: {plan.describe()}"
+                    f"dFlash drafter: no SDPA config on the ladder fits the per-core L1 on the {grid.x}x{grid.y} "
+                    f"grid: {plan.describe()}"
                 )
             # keys padded to a k_chunk multiple; pad columns arrive NEG from the
             # mask builder. Masks are H-repeated once per iteration (h-major

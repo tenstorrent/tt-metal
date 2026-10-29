@@ -64,16 +64,31 @@ def test_compute_grid_cap(monkeypatch):
     assert g.compute_grid(Dev()) == (8, 8)
     monkeypatch.setenv("GEMMA4_TEST_GRID", "16x16")  # never above the device grid
     assert g.compute_grid(Dev()) == (13, 10)
-    # The packed-verify decode SDPA planner: sdpa_decode_program_factory's CB total per core, and the first
-    # (k_chunk, cores per head) rung that fits 15/16 of the 1.5 MB L1. The two programs that overflowed on the
-    # 31B at TP4 (a 2x2 Galaxy block): the global layer's packed verify (8 local q heads x 6 rows = PNHt 2,
-    # head_dim 512, 1 local KV head, the 8x4 grid) read 1,884,544 B against a model of 925 tiles = 1,894,400 B
-    # at (64, 16); the dFlash drafter (16 local heads x 17 rows = PNHt 9, head_dim 128, 2 local KV heads, the
-    # 12x10 grid) 2,362,752 B against 1232 tiles = 2,523,136 B -- the model over-reads both, never under.
+    # The packed decode SDPA planner: sdpa_decode_program_factory's CB total per core, and the first (k_chunk,
+    # cores per head) rung whose bytes fit 15/16 of the L1 above the tensix unreserved base the CBs start at
+    # (program.cpp checks the CB region's END ADDRESS: Blackhole base 112,000 B, Wormhole 106,080 B). The model
+    # is byte-exact on the three programs that overflowed on the 31B at TP4 (a 2x2 Galaxy block): the global
+    # layer's packed verify (8 local q heads x 6 rows = PNHt 2, head_dim 512, 1 local KV head in bfp8 tiles of
+    # 1088 B, the 8x4 grid, a 1024 B page-table row) 1,884,544 B at the op defaults; the dFlash drafter (16 local
+    # heads x 16 rows = PNHt 8, head_dim 128, 2 local KV heads in bf16, the 12x10 grid) 2,362,752 B at the
+    # defaults and 1,576,320 B at (64, 8 cores per head): 715 tiles = 1,464,320 B that fit the 1,572,864 B L1
+    # alone and pass it by 3,456 B above the base.
+    assert g.sdpa_decode_l1("Arch.BLACKHOLE") == (1_572_864, 112_000) and g.sdpa_decode_l1(None) == (1_572_864, 112_000)
+    assert g.sdpa_decode_l1("Arch.WORMHOLE_B0") == (1_499_136, 106_080)
+    assert g.sdpa_decode_cb_budget_bytes() == 1_369_560 and g.sdpa_decode_cb_budget_bytes("wormhole_b0") == 1_305_990
+    assert (g.sdpa_tile_bytes("DataType.BFLOAT8_B"), g.sdpa_tile_bytes("DataType.FLOAT32")) == (1088, 4096)
+    assert g.sdpa_tile_bytes(None) == 2048 and g.sdpa_tile_bytes("DataType.BFLOAT16") == 2048
+    assert g.sdpa_decode_page_table_bytes(256) == 1024 and g.sdpa_decode_page_table_bytes(100) == 448
     assert g.sdpa_decode_cores_per_head(32, 1, 1, 16) == 16 and g.sdpa_decode_cores_per_head(120, 1, 2, 16) == 16
     assert g.sdpa_decode_cores_per_head(32, 5, 1, 16) == 6 and g.sdpa_decode_cores_per_head(120, 16, 4, 16) == 1
-    assert g.sdpa_decode_cb_tiles(2, 16, 2, 16) == 925 and g.sdpa_decode_cb_tiles(9, 4, 2, 16) == 1232
+    assert g.sdpa_decode_cb_tiles(2, 16, 2, 16) == 925 and g.sdpa_decode_cb_tiles(8, 4, 2, 16) == 1099
     assert g.sdpa_decode_cb_tiles(1, 16, 2, 16) == 528 and g.sdpa_decode_cb_tiles(1, 8, 2, 16) == 288
+    base = g.SDPA_DECODE_L1_UNRESERVED_BYTES
+    assert base + g.sdpa_decode_cb_bytes(2, 16, 2, 16, kv_tile_bytes=1088, extra_bytes=1024) == 1_884_544
+    assert (
+        base + g.sdpa_decode_cb_bytes(8, 4, 2, 16) == 2_362_752
+        and base + g.sdpa_decode_cb_bytes(8, 4, 2, 8) == 1_576_320
+    )
     for name in (g.PACKED_SDPA_K_CHUNK_ENV, g.PACKED_SDPA_Q_CHUNK_ENV, g.PACKED_SDPA_K_CHUNK_LEGACY_ENV):
         monkeypatch.delenv(name, raising=False)
     plan = g.plan_packed_sdpa  # (h_local, nkv_local, rows, head_dim, batch, grid cores)
@@ -90,7 +105,7 @@ def test_compute_grid_cap(monkeypatch):
         "31B TP4 global": (8, 1, 6, 512, 1, 32),
     }
     chosen = {name: plan(*args) for name, args in cases.items()}
-    assert all(p.fits and p.q_chunk == 32 for p in chosen.values())
+    assert all(p.fits and p.q_chunk == 32 and p.l1_end == base + p.cb_bytes for p in chosen.values())
     assert {name: (p.k_chunk, p.max_cores_per_head_batch, p.tiles) for name, p in chosen.items()} == {
         "12B TP8 sliding": (64, 16, 288),
         "12B TP8 global": (64, 16, 528),
@@ -101,15 +116,45 @@ def test_compute_grid_cap(monkeypatch):
         "31B TP4 sliding": (64, 16, 509),
         "31B TP4 global": (64, 8, 637),  # 925 tiles at the defaults, 857 at a 32 chunk: the cores halve
     }
-    assert chosen["31B TP4 global"].cb_bytes == 637 * 2048 <= 15 * g.SDPA_DECODE_L1_BYTES // 16
-    # the 31B dFlash drafter at TP4 (PNHt 9 on head_dim 128): 1232 / 1198 / 800 / 766 tiles down the ladder, (64, 4)
-    # fits at 584; at TP8 (8 local heads x 17 rows: PNHt 5, 1 KV head) the defaults fit at 700 and stay
-    assert (plan(16, 2, 17, 128, 1, 120).k_chunk, plan(16, 2, 17, 128, 1, 120).max_cores_per_head_batch) == (64, 4)
-    assert plan(16, 2, 17, 128, 1, 120).tiles == 584 and plan(8, 1, 17, 128, 1, 120).tiles == 700
-    assert plan(8, 1, 17, 128, 1, 120).max_cores_per_head_batch == 16
+    assert chosen["31B TP4 global"].cb_bytes == 637 * 2048 <= g.sdpa_decode_cb_budget_bytes()
+    # the same global layer with its bfp8 cache and page-table row: the defaults reproduce the thrown 1,884,544 B
+    # and the rung the target serves with, (64, 8), ends at 1,294,720 B
+    served = plan(8, 1, 6, 512, 1, 32, kv_tile_bytes=1088, extra_bytes=1024)
+    assert (served.k_chunk, served.max_cores_per_head_batch, served.tiles, served.l1_end) == (64, 8, 637, 1_294_720)
+    assert (
+        "K/V tile 1088 B, untiled 1024 B" in served.describe()
+        and "8 cores/head, 7 reduction blocks" in served.describe()
+    )
+    # the 31B dFlash drafter at TP4 (PNHt 8 on head_dim 128, bf16 caches): 1099 / 1067 / 715 / 683 / 523 tiles down
+    # the ladder, the first two rungs reproducing the thrown programs (2,362,752 and 1,576,320 B end addresses) and
+    # (32, 8) still 1,510,784 B; (64, 4) fits at 523 tiles, ending at 1,183,104 B. A 17-row block (PNHt 9) lands on
+    # the same rung at 584 tiles. At TP8 (8 local heads: PNHt 4, 1 KV head) the defaults fit at 567 and stay.
+    drafter = plan(16, 2, 16, 128, 1, 120)
+    assert (drafter.k_chunk, drafter.max_cores_per_head_batch, drafter.tiles, drafter.l1_end) == (64, 4, 523, 1_183_104)
+    assert (
+        "H_local 16 x rows 16 = PNHt 8, nkv_local 2, head_dim 128 (DHt 4), batch 1, grid 120 cores"
+        in drafter.describe()
+    )
+    rungs = [
+        (k, c, g.sdpa_decode_cb_tiles(8, 4, k // 32, g.sdpa_decode_cores_per_head(120, 1, 2, c)))
+        for k, c in g.PACKED_SDPA_LADDER[:5]
+    ]
+    assert rungs == [(64, 16, 1099), (32, 16, 1067), (64, 8, 715), (32, 8, 683), (64, 4, 523)]
+    assert [base + t * 2048 for _k, _c, t in rungs] == [2_362_752, 2_297_216, 1_576_320, 1_510_784, 1_183_104]
+    assert (plan(16, 2, 17, 128, 1, 120).max_cores_per_head_batch, plan(16, 2, 17, 128, 1, 120).tiles) == (4, 584)
+    assert (plan(8, 1, 16, 128, 1, 120).max_cores_per_head_batch, plan(8, 1, 16, 128, 1, 120).tiles) == (16, 567)
+    # the same drafter on a Wormhole 8x8 grid reads that arch's L1 and base
+    wh = plan(16, 2, 16, 128, 1, 64, arch="Arch.WORMHOLE_B0")
+    assert (wh.max_cores_per_head_batch, wh.l1_bytes, wh.l1_base, wh.budget_bytes, wh.l1_end) == (
+        4,
+        1_499_136,
+        106_080,
+        1_305_990,
+        1_177_184,
+    )
     # the batched records: (5,5) at batch 5 shares the 32-core global grid six ways per row, so the defaults fit
     assert (plan(8, 1, 6, 512, 5, 32).max_cores_per_head_batch, plan(8, 1, 6, 512, 5, 32).cores_per_head) == (16, 6)
-    assert plan(8, 1, 6, 512, 5, 32).tiles == 565
+    assert plan(8, 1, 6, 512, 5, 32).tiles == 565 and plan(8, 1, 4, 512, 8, 32).tiles == 312
     # the env pins a chunk and the ladder walks the cores alone; the earlier GEMMA4_PV_K_CHUNK name still reads;
     # a pin outside the multiples of 32 is refused by name
     pinned = plan(8, 1, 6, 512, 1, 32, env={g.PACKED_SDPA_K_CHUNK_ENV: "32", g.PACKED_SDPA_Q_CHUNK_ENV: "64"})
