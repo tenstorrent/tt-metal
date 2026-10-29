@@ -6,7 +6,7 @@ from DRAM once per batch per core instead of once per Q head.
 
 The mask this model passes is [B, 1, S, S]: the same for all 32 Q heads. Stock SDPA's reader reads each mask block
 from DRAM again for every Q head (32 x 512 x 512 bfp4: 151 MB of mask reads vs 34 MB of K / V). The reader here
-(``kernels/reader_mask_cache.cpp``, tt-metal commit 99e64a0093c applied to ttnn's ``reader_interleaved.cpp``) keeps
+(``kernels/reader_mask_cache.cpp``, ttnn's ``reader_interleaved.cpp`` with the cache added) keeps
 one batch's mask tiles (Sqt x Skt) in an extra L1 CB: a (Q chunk, K chunk) block is read from DRAM on its first use
 for the batch and copied L1 -> mask CB for the other heads. A core runs several heads of one batch in a row (global Q
 order: batch, head, Q chunk), so most blocks come from L1. Compute and writer are ttnn's kernels, unchanged.
@@ -37,8 +37,8 @@ TILE = 32
 INACTIVE = 0xFFFFFFFF  # sdpa_cb::CBIds::inactive
 UINT32_MAX = 0xFFFFFFFF
 INVALID, VALID = 0, 1  # hostdevcommon/common_values.hpp
-# The reader keeps the batch's mask in L1 only up to this size (sdpa_program_factory.cpp, kMaskCacheMaxBytes in
-# 99e64a0093c); its valid bits are one uint32, so at most 32 (Q chunk, K chunk) blocks.
+# The mask cache is allocated only up to this size (it shares L1 with SDPA's other CBs and the model's resident
+# residual); the reader's valid bits are one uint32, so at most 32 (Q chunk, K chunk) blocks.
 MASK_CACHE_MAX_BYTES = 160 * 1024
 # build_kv_chains: multicast only pays on chains of at least 4 cores.
 MIN_MCAST_CHAIN_CORES = 4
@@ -648,7 +648,7 @@ def sdpa_mask_cache(
     cb["v_in"] = allocate_tile_cb(v_tiles, v_df)
     cb["kv_fwd_ctrl"] = cb["q_in"]  # kv_chain_mode < 2
     cb["mask_in"] = allocate_tile_cb(mask_tiles, mask_df)  # needs_mask_cb (provided mask), not lightweight
-    # 99e64a0093c: the head-broadcast mask cache, one batch's Sqt x Skt mask tiles.
+    # Not in ttnn: the head-broadcast mask cache, one batch's Sqt x Skt mask tiles.
     mask_cache_bytes = Sqt * Skt * TILE_BYTES[mask_df]
     if not (
         use_provided_mask
@@ -680,7 +680,7 @@ def sdpa_mask_cache(
     cb["exp_max_diff"] = allocate_tile_cb(statistics_tiles, stats_df)
     cb["out"] = allocate_tile_cb(out0_t, out_df)
 
-    # sdpa_interleaved_cb_ids.hpp (+ mask_cache on the reader's list, 99e64a0093c)
+    # sdpa_interleaved_cb_ids.hpp, plus mask_cache appended to the reader's list (not in ttnn)
     reader_ct += [
         cb[n]
         for n in (

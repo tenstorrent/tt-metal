@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Model-local copy of ttnn's SDPA reader
-// (ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp) with the
-// head-broadcast mask cache of tt-metal commit 99e64a0093c applied: compile-time CB arg cb_arg_offset + 12 is
+// (ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp) with a
+// head-broadcast mask cache added (the use_mask_cache blocks): compile-time CB arg cb_arg_offset + 12 is
 // the mask_cache CB (0xFFFFFFFF = off). Built by ../op.py; ttnn's writer and compute kernels are used unchanged.
 // Only change besides the cache: dataflow_common.hpp is included by its path under the ttnn include root, since
 // this file no longer sits next to it.
