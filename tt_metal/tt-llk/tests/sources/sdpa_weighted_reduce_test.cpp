@@ -19,7 +19,7 @@
 //     Rows 1..7 are zero, so only Dst row 0 is populated.
 //   - SrcA holds qk: face0 = qk[0:8, 0:16] (SrcA rows 0..15), face1 = qk[0:8, 16:32]
 //     (SrcA rows 16..31).
-//   - MVMUL #1 (ADDR_MOD_6): qk face0 -> Dst row 0 cols 0..15 (out[0:16]); then SrcA += 16
+//   - MVMUL #1 (ADDR_MOD_5): qk face0 -> Dst row 0 cols 0..15 (out[0:16]); then SrcA += 16
 //     rows (-> face1), Dst += 8 rows.
 //   - MVMUL #2 (ADDR_MOD_3, CLR_AB): qk face1 -> Dst row 16 cols 0..15 (out[16:32]).
 //   So DEST logical row 0 == out[0:32]. Only logical row 0 is meaningful; the rest of the
@@ -36,7 +36,7 @@
 //     we feed WEIGHTS as buffer_A (-> SrcB) and QK as buffer_B (-> SrcA). This lands the same
 //     SrcA=qk / SrcB=weights operands the two MVMULs consume.
 //   - MATH: the header's weighted_reduce_math_impl call-for-call -- weighted_reduce_addrmod_init
-//     (ADDR_MOD_6 = SrcA+16 / Dst+8; ADDR_MOD_3 set here too so the test is self-contained,
+//     (ADDR_MOD_5 = SrcA+16 / Dst+8; ADDR_MOD_3 set here too so the test is self-contained,
 //     standing in for sdpa_custom_mm_init), then reset_counters, TT_SETC16 DEST target, and the
 //     two TTI_MVMUL. This is the numeric heart of the op, byte-for-byte.
 //   - PACK: standard _llk_pack_ of DEST tile 0. The header's raw two-PACR path only differs in
@@ -56,9 +56,9 @@
 // ----------------------------------------------------------------------
 // This test runs the header's MATH core verbatim but packs with a standard full-tile _llk_pack_
 // instead of the header's raw two-PACR face-stepping pack. Under that path:
-//   - MVMUL #1 (ADDR_MOD_6) writes the reduced row into DEST row 0, cols 0..15 == logical row 0
+//   - MVMUL #1 (ADDR_MOD_5) writes the reduced row into DEST row 0, cols 0..15 == logical row 0
 //     cols 0..15 (Dest face0 row 0).
-//   - ADDR_MOD_6 then advances DEST by 8 rows (dest.incr = 8), so MVMUL #2 (qk face1) writes DEST
+//   - ADDR_MOD_5 then advances DEST by 8 rows (dest.incr = 8), so MVMUL #2 (qk face1) writes DEST
 //     row 8 -- still inside face0, NOT physical face1 (DEST rows 16..31), which is where logical
 //     row 0 cols 16..31 lives. The header's real pack reaches that face1 data via a custom
 //     face-stepping addrmod; a plain full-tile pack does not, and that Dest<->face mapping is BH
@@ -138,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 
 // Replicates ckernel::weighted_reduce_addrmod_init() (MATH side) from
-// api/compute/experimental/sdpa_weighted_reduce.h: after MVMUL #1, ADDR_MOD_6 advances SrcA by
+// api/compute/experimental/sdpa_weighted_reduce.h: after MVMUL #1, ADDR_MOD_5 advances SrcA by
 // one 16-row face (-> qk face1) and DEST by 8 rows. In the real pipeline ADDR_MOD_3 is left by
 // sdpa_custom_mm_init; here we program it too so MVMUL #2 is self-contained (SrcA/DEST hold on
 // the CLR_AB close).
@@ -149,7 +149,7 @@ inline void weighted_reduce_addrmod_init_math()
         .srcb = {.incr = 0, .clr = 0, .cr = 0},
         .dest = {.incr = 8, .clr = 0, .cr = 0},
     }
-        .set(ADDR_MOD_6);
+        .set(ADDR_MOD_5);
     addr_mod_t {
         .srca = {.incr = 0, .clr = 0, .cr = 0},
         .srcb = {.incr = 0, .clr = 0, .cr = 0},
@@ -164,8 +164,8 @@ inline void weighted_reduce_math_impl(const std::uint32_t dst_slot = 0)
     constexpr std::uint32_t weighted_dest_slot_rows = 16;
     math::reset_counters(p_setrwc::SET_ABD_F);
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base() + dst_slot * weighted_dest_slot_rows);
-    // MVMUL #1: qk face0 -> Dst row 0 (out[0:16]); then advance SrcA+16, Dst+8 (ADDR_MOD_6).
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_6, 0);
+    // MVMUL #1: qk face0 -> Dst row 0 (out[0:16]); then advance SrcA+16, Dst+8 (ADDR_MOD_5).
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0);
     // MVMUL #2: qk face1 -> Dst row 16 (out[16:32]); clear SrcA/SrcB (ADDR_MOD_3).
     TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);
 }
@@ -177,7 +177,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     // Base matmul math init to establish the FPU config the MVMULs run under (LoFi, the only
     // fidelity the SDPA path uses). This programs the standard matmul addrmods; we then override
-    // ADDR_MOD_6/ADDR_MOD_3 with the weighted-reduce values below.
+    // ADDR_MOD_5/ADDR_MOD_3 with the weighted-reduce values below.
     _llk_math_matmul_init_no_mop_<ckernel::MathFidelity::LoFi, 0>(
         TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, WR_CT_DIM, WR_RT_DIM);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
