@@ -8,10 +8,10 @@
 
 #if defined(COMPILE_FOR_TRISC)
 #include "ckernel_trisc_common.h"
-#ifdef UCK_CHLKC_PACK
+#if DFB_TRISC_CAN_PRODUCE
 #include "llk_io_pack.h"
 #endif
-#ifdef UCK_CHLKC_UNPACK
+#if DFB_TRISC_CAN_CONSUME
 #include "llk_io_unpack.h"
 #endif
 #endif
@@ -121,7 +121,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_local_size_bytes() const {
 
 namespace {
 
-#if !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
+#if !DFB_IS_COMPUTE_MATH
 
 #ifndef COMPILE_FOR_TRISC
 // The stride in entries (the host sends it in bytes).
@@ -251,7 +251,7 @@ inline uint32_t dfb_ring_span_address_units(const LocalDFBInterface& intf) {
     return intf.tc_slots[last].limit - intf.tc_slots[0].base_addr;
 #endif
 }
-#endif  // !DFB_IS_COMPUTE_MATH && !defined(UCK_CHLKC_ISOLATE_SFPU)
+#endif  // !DFB_IS_COMPUTE_MATH
 
 }  // namespace
 
@@ -366,7 +366,10 @@ inline void DataflowBuffer<Pap, Cap>::reserve_back_impl(uint16_t num_entries) {
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     ASSERT(num_entries == get_producer_share() || !share_strict);
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if DFB_TRISC_CAN_PRODUCE
+    if ((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_PRODUCER_ROLE) == 0) {
+        return;  // another TRISC produces this DFB
+    }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_wait_for_free_tiles<Pap, Cap>(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
@@ -392,9 +395,12 @@ inline void DataflowBuffer<Pap, Cap>::push_back_impl(uint16_t num_entries) {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     ASSERT(num_entries == get_producer_share() || !share_strict);
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if DFB_TRISC_CAN_PRODUCE
+    if ((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_PRODUCER_ROLE) == 0) {
+        return;  // another TRISC produces this DFB
+    }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
-    llk_push_tiles<0x1, Pap, Cap>(logical_dfb_id_, num_entries);
+    llk_push_tiles<DFB_PACK_DONE_WAIT_MASK, Pap, Cap>(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     if (producer_broadcast()) {
         // BROADCAST: post the full count to every counter (every consumer reads every entry).
@@ -422,9 +428,9 @@ inline void DataflowBuffer<Pap, Cap>::wait_front_impl(uint16_t num_entries) {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     ASSERT(num_entries == get_consumer_share() || !share_strict);
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
-    if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
-        return;
+#if DFB_TRISC_CAN_CONSUME
+    if ((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_CONSUMER_ROLE) == 0) {
+        return;  // another TRISC consumes this DFB
     }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_wait_tiles<Pap, Cap>(logical_dfb_id_, num_entries);
@@ -448,12 +454,12 @@ inline void DataflowBuffer<Pap, Cap>::pop_front_impl(uint16_t num_entries) {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     ASSERT(num_entries == get_consumer_share() || !share_strict);
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
-    if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
-        return;
+#if DFB_TRISC_CAN_CONSUME
+    if ((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_MY_CONSUMER_ROLE) == 0) {
+        return;  // another TRISC consumes this DFB
     }
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
-    llk_pop_tiles<0x3, Pap, Cap>(logical_dfb_id_, num_entries);
+    llk_pop_tiles<DFB_UNPACK_DONE_WAIT_MASK, Pap, Cap>(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     if (consumer_split) {
         // SPLIT: ack each counter its share of the block and step every bookmark past it.
@@ -494,10 +500,10 @@ template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_write_ptr_impl() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
-#elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#elif DFB_TRISC_CAN_PRODUCE
     {
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
-        return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);
+        return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.wr_entry_idx);
     }
 #elif !defined(COMPILE_FOR_TRISC)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].ptr;
@@ -512,10 +518,10 @@ template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_read_ptr_impl() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
-#elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+#elif DFB_TRISC_CAN_CONSUME
     {
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
-        return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);
+        return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
     }
 #elif !defined(COMPILE_FOR_TRISC)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].ptr;
@@ -532,11 +538,13 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_tile_address(uint32_t tile_index) 
     uint32_t address = 0;
 #if defined(UCK_CHLKC_UNPACK)
     {
+        // The front of a DFB trisc3 consumes is on trisc3, out of reach of this unpack-thread read.
+        ASSERT((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_ROLE_CONSUMER_T3) == 0);
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
         // Linear (front + tile_index * stride), no wrap. Safe because wait_front(n) must
         // not straddle slot.limit; tile_index is in [0, n).
         const uint32_t base_address =
-            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);
+            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
         const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
         address = address_units_to_bytes(base_address + offset_address);
         mailbox_write(ckernel::ThreadId::MathThreadId, address);
@@ -560,10 +568,12 @@ T DataflowBuffer<Pap, Cap>::read_tile_value(uint32_t tile_index, uint32_t elemen
     T value = T{};
 #if defined(UCK_CHLKC_UNPACK)
     {
+        // The front of a DFB trisc3 consumes is on trisc3, out of reach of this unpack-thread read.
+        ASSERT((local_dfb_interface_.tensix_trisc_mask & DFB_TRISC_ROLE_CONSUMER_T3) == 0);
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
         // Same linear addressing as get_tile_address: the wait_front window does not wrap.
         const uint32_t base_address =
-            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);
+            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
         const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
         const uint32_t byte_address = address_units_to_bytes(base_address + offset_address);
         value = reinterpret_cast<volatile T*>(byte_address)[element_offset];

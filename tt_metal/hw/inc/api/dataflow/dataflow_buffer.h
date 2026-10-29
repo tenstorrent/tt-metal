@@ -17,7 +17,8 @@
 #endif
 
 // PrefetcherPipe-relay checkpoint align, called from the RelayDFBBindingToken constructor on
-// TRISC (unpack/pack). DM aligns in PrefetcherPipe::bind_relay().
+// TRISC (unpack/pack; trisc3 is left out because the host never puts a relay DFB on it). DM aligns in
+// PrefetcherPipe::bind_relay().
 #if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
 #include "internal/prefetcher_pipe_init.h"
 #endif
@@ -86,10 +87,9 @@ template <bool IsWrite, typename ReleaseFunc>
     return DfbScopedLock<IsWrite, ReleaseFunc>(pointer, release);
 }
 
-// Only UNPACK and PACK have a DFB interface. On MATH and on the SFPU thread a DataflowBuffer
-// is just an id and the sync calls do nothing. Drop ISOLATE_SFPU from this list when the SFPU
-// thread gets its own interface and unpacks from DFBs.
-#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU))
+// UNPACK, PACK and (on Quasar) the isolate-SFPU thread trisc3 have a DFB interface. On MATH a
+// DataflowBuffer is just an id and the sync calls do nothing.
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
 #define DFB_IS_COMPUTE_MATH 1
 #else
 #define DFB_IS_COMPUTE_MATH 0
@@ -415,7 +415,7 @@ public:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
     template <typename Operand>
     [[nodiscard]] Operand front() const {
-#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
+#if DFB_IS_COMPUTE_MATH
         return Operand{0};
 #else
         return Operand{(get_read_ptr_impl() >> (4 - cb_addr_shift)) - 1};
@@ -429,7 +429,7 @@ public:
     // - Operand: The LLKOperand type to return. (hint: use LLKOperandFrom<dfb::token>)
     template <typename Operand>
     [[nodiscard]] Operand back() const {
-#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_ISOLATE_SFPU)
+#if DFB_IS_COMPUTE_MATH
         return Operand{0};
 #else
         return Operand{(get_write_ptr_impl() >> (4 - cb_addr_shift)) - 1};

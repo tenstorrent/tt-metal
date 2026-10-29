@@ -225,7 +225,8 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
         if (idx == cursor_entry) {
             local.tc_idx = t;
         }
-        slot.cursor_entry_idx = static_cast<uint16_t>(idx);
+        slot.wr_entry_idx = static_cast<uint16_t>(idx);
+        slot.rd_entry_idx = static_cast<uint16_t>(idx);
     }
 #elif !defined(COMPILE_FOR_TRISC)
     // DM: ptrs/limits are raw bytes; entry_size is address units (cb_addr_shift==0 → bytes).

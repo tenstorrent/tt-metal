@@ -74,7 +74,7 @@ FIELDS = {
         "common_runtime_array_args",
     },
     E.ArrayArgDecl: {"name", "size"},
-    E.DFBBinding: {"dfb_spec_name", "accessor_name", "endpoint_type", "access_pattern", "block_size"},
+    E.DFBBinding: {"dfb_spec_name", "accessor_name", "endpoint_type", "access_pattern", "block_size", "use_trisc3"},
     E.SemaphoreBinding: {"semaphore_spec_name", "accessor_name"},
     E.ScratchpadBinding: {"scratchpad_spec_name", "accessor_name"},
     E.TensorBinding: {"tensor_parameter_name", "accessor_name"},
@@ -174,6 +174,10 @@ def test_defaults_are_the_header_defaults():
     assert E.DFBBinding(
         dfb_spec_name="in", accessor_name="in", endpoint_type=E.DFBEndpointType.PRODUCER
     ).access_pattern == (E.DFBAccessPattern.STRIDED)
+    assert (
+        E.DFBBinding(dfb_spec_name="in", accessor_name="in", endpoint_type=E.DFBEndpointType.PRODUCER).use_trisc3
+        is False
+    )
     relaxations = E.TensorParameter(unique_id="input", spec=TENSOR_SPEC).relaxations
     assert not (relaxations.match_padded_shape_only or relaxations.dynamic_tensor_shape)
     assert E.WorkUnitSpec(name="unit", target_nodes=ttnn.CoreCoord(0, 0)).kernels == []
@@ -393,8 +397,10 @@ def test_each_field_reads_back_what_it_was_given():
         endpoint_type=E.DFBEndpointType.CONSUMER,
         access_pattern=E.DFBAccessPattern.BLOCKED,
         block_size=2,
+        use_trisc3=True,
     )
     assert (dfb_binding.dfb_spec_name, dfb_binding.accessor_name, dfb_binding.block_size) == ("in", "reader_in", 2)
+    assert dfb_binding.use_trisc3 is True
     assert same_member(dfb_binding.endpoint_type, E.DFBEndpointType.CONSUMER)
     assert same_member(dfb_binding.access_pattern, E.DFBAccessPattern.BLOCKED)
     for binding_type, name_field in (

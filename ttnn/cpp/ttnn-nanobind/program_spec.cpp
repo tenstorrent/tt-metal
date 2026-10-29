@@ -167,7 +167,7 @@ static_assert(reflect::size<m2::KernelSpec::SourceCode>() == 1);
 static_assert(reflect::size<m2::KernelSpec::CompilerOptions>() == 3);
 static_assert(reflect::size<m2::KernelSpec::RuntimeArgSchema>() == 4);
 static_assert(reflect::size<m2::ArrayArgDecl>() == 2);
-static_assert(reflect::size<m2::DFBBinding>() == 5);
+static_assert(reflect::size<m2::DFBBinding>() == 6);
 static_assert(reflect::size<m2::SemaphoreBinding>() == 2);
 static_assert(reflect::size<m2::ScratchpadBinding>() == 2);
 static_assert(reflect::size<m2::TensorBinding>() == 2);
@@ -731,25 +731,29 @@ void bind_kernel_spec(nb::module_& mod) {
                std::string accessor_name,
                m2::DFBEndpointType endpoint_type,
                m2::DFBAccessPattern access_pattern,
-               uint32_t block_size) {
+               uint32_t block_size,
+               bool use_trisc3) {
                 new (self) m2::DFBBinding{
                     .dfb_spec_name = std::move(dfb_spec_name),
                     .accessor_name = std::move(accessor_name),
                     .endpoint_type = endpoint_type,
                     .access_pattern = access_pattern,
-                    .block_size = block_size};
+                    .block_size = block_size,
+                    .use_trisc3 = use_trisc3};
             },
             nb::kw_only(),
             nb::arg("dfb_spec_name"),
             nb::arg("accessor_name"),
             nb::arg("endpoint_type"),
             nb::arg("access_pattern") = dfb_binding_defaults.access_pattern,
-            nb::arg("block_size") = dfb_binding_defaults.block_size)
+            nb::arg("block_size") = dfb_binding_defaults.block_size,
+            nb::arg("use_trisc3") = dfb_binding_defaults.use_trisc3)
         .def_rw("dfb_spec_name", &m2::DFBBinding::dfb_spec_name)
         .def_rw("accessor_name", &m2::DFBBinding::accessor_name)
         .def_rw("endpoint_type", &m2::DFBBinding::endpoint_type)
         .def_rw("access_pattern", &m2::DFBBinding::access_pattern)
-        .def_rw("block_size", &m2::DFBBinding::block_size);
+        .def_rw("block_size", &m2::DFBBinding::block_size)
+        .def_rw("use_trisc3", &m2::DFBBinding::use_trisc3);
 
     nb::class_<m2::SemaphoreBinding>(
         kernel_spec,
