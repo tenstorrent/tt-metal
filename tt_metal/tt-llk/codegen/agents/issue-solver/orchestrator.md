@@ -117,6 +117,19 @@ stage proves the missing prerequisite is required.
 
 ## 2. Solve: analyse, research and apply the fix in one session
 
+A continued attempt keeps the failed run's work. Check first:
+
+```bash
+source codegen/scripts/issue_solver/orchestrator_steps.sh
+execute_step_import_resume
+```
+
+On `RESUMED=1` the analysis and fix plan are imported and the change is already
+in the worktree. Do not spawn the solve session. Handle the imported analysis
+exactly as below (`execute_step_refine_perf_goal`, then `in_scope`), take the
+fix half's marker as `FIX_APPLIED`, and go on to route verification. Everything
+is verified again; no earlier result counts. On `RESUMED=0`, solve as below.
+
 Measured on this corpus: run duration tracks the number of agent stages at
 roughly half an hour each, and analysis, architecture research and the initial
 fix shared almost all of their discovery while paying that cost three times

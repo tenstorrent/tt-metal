@@ -49,6 +49,11 @@ Analysis, architecture research and the shared fix run as **one** agent
 session, for the same reason as in `orchestrator.md`: they share nearly all
 their discovery and were paying the per-stage cost three times over.
 
+A continued attempt runs `execute_step_import_resume` first, exactly as in
+`orchestrator.md`. On `RESUMED=1`, skip the session below, apply the imported
+analysis's `arch_scope` decisions as described here, and take the fix as
+`FIX_APPLIED`.
+
 ```bash
 source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_advance_solve

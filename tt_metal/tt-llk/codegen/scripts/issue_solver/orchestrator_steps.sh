@@ -1018,6 +1018,34 @@ execute_step_advance_solve() {
     ss PREVIOUS_AGENT "solve"
 }
 
+# ===========================================================================
+# Step 2 (continue) — a continued attempt keeps the source run's analysis and fix
+# plan; setup_worktree already applied its change. Prints RESUMED=1 when they were
+# imported and the solve session is skipped, else RESUMED=0 for a normal solve.
+# ===========================================================================
+execute_step_import_resume() {
+    local _L; _L="$(_LOG)"
+    local S="$_ORCH_SCRIPTS" wt src run num f imported=0; wt="$(_wt)"
+    run="$(python "$S/state.py" --worktree-dir "$wt" get RESUMED_FROM_RUN_ID)"
+    src="${CODEGEN_RESUME_RUN_DIR:-}"
+    num="$(sg ISSUE_NUMBER)"
+    if [ -z "$run" ] || [ ! -f "$src/issue_${num}_analysis.md" ]; then
+        echo "RESUMED=0"
+        return 0
+    fi
+    _disk_guard mkdir -p codegen/artifacts || return $?
+    for f in "$src/issue_${num}_analysis.md" "$src/issue_${num}_fix_plan.md"; do
+        [ -f "$f" ] || continue
+        cp "$f" codegen/artifacts/ && imported=$((imported + 1))
+        cp "$f" "$_L/" 2>/dev/null || true
+    done
+    rj advance --new-step "solve" \
+        --new-message "Continuing from ${run}: kept its analysis, plan and change" \
+        --prev-result "success" --prev-message "Run set up" --agent "orchestrator"
+    ss PREVIOUS_AGENT "solve"
+    echo "RESUMED=1 SOURCE_RUN_ID=${run} ARTIFACTS=${imported}"
+}
+
 execute_step_advance_writer() {
     local _L; _L="$(_LOG)"
     local num mode prev; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"; prev="$(sg PREVIOUS_AGENT)"
