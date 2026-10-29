@@ -797,6 +797,11 @@ class SpeculativeDecoder:
         self._srv_per_layer = None  # adapter-installed per-layer host page tables
         self._srv_pool_v = None  # [1, 1, 32, backbone] last verify hidden
         self._srv_pool_s = None  # [1, 1, 32, backbone] last reseed hidden
+        # The seed forward as a trace per shape, captured with the records (serving_capture): a reseed replays it
+        # instead of dispatching the eager verify forward (108-186 ms on the 12B against a ~20 ms traced step).
+        # GEMMA4_SPEC_TRACED_SEED=0 keeps every reseed eager.
+        self._srv_seed_traces = {}  # shape -> trace id
+        self._srv_traced_seed = os.environ.get("GEMMA4_SPEC_TRACED_SEED", "1") == "1"
         self._srv_logits = None  # [1, 1, 32, V_padded] the last replay's verify logits (shared by every record)
         self._srv_iota = {}  # key-chunk length -> [1, 1, 1, n] fp32 iota for the in-trace masks
         self._srv_uploaded = {}  # last uploaded small inputs, by key
@@ -2543,6 +2548,7 @@ class SpeculativeDecoder:
         self._srv_shape_bufs = {}
         self._srv_pool_v = None
         self._srv_pool_s = None
+        self._srv_seed_traces = {}
         self._srv_logits = None
         self._srv_iota = {}
         self._srv_backbone = None
@@ -2638,6 +2644,27 @@ class SpeculativeDecoder:
                 f"+{now - used:.1f} MB trace, {now:.1f} MB in use"
             )
             used = now
+        if self._srv_traced_seed:
+            for shape in self._srv_shape_bufs:
+                t0 = time.perf_counter()
+                try:
+                    tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+                    self._srv_seed_body(shape)
+                    ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+                except RuntimeError as exc:
+                    region_text = f"{region:.0f} MB" if region is not None else "not readable"
+                    raise RuntimeError(
+                        f"serving_capture failed on the seed trace of shape={shape} after the {len(captured)} "
+                        f"records; trace region {used:.1f} MB in use of {region_text}; GEMMA4_SPEC_TRACED_SEED=0 "
+                        f"keeps the reseeds eager. Device error: {exc}"
+                    ) from exc
+                self._srv_seed_traces[shape] = tid
+                now = self._srv_trace_region_mb()
+                cost[("seed", shape)] = round(time.perf_counter() - t0, 2)
+                _lg.info(
+                    f"[spec-serving] captured seed trace shape={shape}: +{now - used:.1f} MB trace, {now:.1f} MB in use"
+                )
+                used = now
         self._srv_captured = True
         # The capture passes replayed nothing real: no previous verify, no seed.
         self._srv_last = None
@@ -2918,6 +2945,9 @@ class SpeculativeDecoder:
             return
         self._srv_records = None
         self._srv_captured = False
+        for tid in self._srv_seed_traces.values():
+            ttnn.release_trace(self.mesh_device, tid)
+        self._srv_seed_traces = {}
         for rec in recs.values():
             if rec.get("id") is not None:
                 ttnn.release_trace(self.mesh_device, rec["id"])
@@ -3061,6 +3091,12 @@ class SpeculativeDecoder:
         # The forward's inputs are the shape's persistent buffers, refreshed from host staging tensors: a
         # reseed allocates nothing on the device itself (serving_prepare), only the eager forward's own
         # transients come and go.
+        self._srv_seed_upload(shape, tokens, positions)
+        return self._srv_seed_forward(shape)
+
+    def _srv_seed_upload(self, shape, tokens, positions):
+        """Refresh the shape's persistent seed inputs (tokens, positions) from host."""
+        S = self._srv_shape_bufs[shape]
         host_tok = self._host_tokens([int(t) for t in tokens])
         ttnn.copy_host_to_device_tensor(host_tok, S["seed_tok"])
         host_tok.deallocate(True)
@@ -3069,6 +3105,10 @@ class SpeculativeDecoder:
         ttnn.copy_host_to_device_tensor(hpi, S["seed_pi"])
         hpu.deallocate(True)
         hpi.deallocate(True)
+
+    def _srv_seed_forward(self, shape):
+        """The device-only seed forward of the shape's persistent inputs (what the seed trace captures)."""
+        S = self._srv_shape_bufs[shape]
         return self.target.ttnn_verify_forward(
             x=S["seed_tok"],
             current_pos=S["seed_pu"],
@@ -3077,6 +3117,13 @@ class SpeculativeDecoder:
             kv_cache=self.tt_kv_cache,
             page_tables_per_layer=S["d_ptl_list"],
         )
+
+    def _srv_seed_body(self, shape):
+        """The seed forward and its publish into the reseed pool: the body of the shape's seed trace."""
+        logits, hidden = self._srv_seed_forward(shape)
+        logits.deallocate(True)
+        self._srv_publish_hidden(hidden, self._srv_pool_s)
+        hidden.deallocate(True)
 
     def _srv_verify_check(self, shape, rec, rows, live, anchors, positions, gids, zero_tables=False):
         """GEMMA4_SPEC_VERIFY_CHECK: the packed verify's row-0 argmax of every live row against the plain forward
@@ -3115,8 +3162,15 @@ class SpeculativeDecoder:
         return bad
 
     def _srv_seed_rows(self, shape, tokens, positions):
-        """Eager target forward of ``tokens`` at ``positions`` (B_v entries) through the
-        shape's drafter tables; its post-norm hidden fills the reseed pool rows."""
+        """Target forward of ``tokens`` at ``positions`` (B_v entries) through the shape's drafter tables; its
+        post-norm hidden fills the reseed pool rows. The shape's seed trace once serving_capture made it, the
+        eager forward before (the pools are made by the first seed of serving_prepare)."""
+        tid = self._srv_seed_traces.get(shape)
+        if tid is not None:
+            self._srv_seed_upload(shape, tokens, positions)
+            # blocking: the reseed phase is the seed's device time (the cost table's entry cost), nothing overlaps it
+            ttnn.execute_trace(self.mesh_device, tid, cq_id=0, blocking=True)
+            return
         logits, hidden = self._srv_eager_forward(shape, tokens, positions)
         logits.deallocate(True)
         if self._srv_pool_v is None:
