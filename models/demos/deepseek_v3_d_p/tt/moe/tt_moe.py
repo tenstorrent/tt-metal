@@ -528,9 +528,7 @@ class TtMoe(LightweightModule):
             and fabric2d_error is None
             and not axis_wired_into_ring(self.tt_expert_dispatch_table, cluster_axis=self.sp_axis)
         ):
-            fabric2d_error = (
-                f"the fabric {ttnn.get_fabric_config()} came up without a wrap link on axis {self.sp_axis}; check the wrap cabling"
-            )
+            fabric2d_error = f"the fabric {ttnn.get_fabric_config()} came up without a wrap link on axis {self.sp_axis}; check the wrap cabling"
         if fabric2d_error is not None and moe_transport == "fabric2d":
             raise ValueError(f"TtMoe: moe_transport 'fabric2d': {fabric2d_error}")
         if moe_transport is None:
