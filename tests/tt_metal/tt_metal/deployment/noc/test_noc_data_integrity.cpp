@@ -918,9 +918,11 @@ struct test_result {
 
 // Blackhole Galaxy leaves Ethernet channels 10 and 11 unused by design.
 static bool is_unused_eth_chan(IDevice* device, bool is_eth, int chan) {
-    const auto& cluster = MetalContext::instance().get_cluster();
-    return is_eth && (chan == 10 || chan == 11) && cluster.arch() == tt::ARCH::BLACKHOLE &&
-           cluster.get_board_type(device->id()) == BoardType::UBB;
+    if (!is_eth || (chan != 10 && chan != 11)) {
+        return false;
+    }
+    const auto board = MetalContext::instance().get_cluster().get_board_type(device->id());
+    return board == BoardType::UBB_BLACKHOLE || board == BoardType::UBB_BLACKHOLE_CF;
 }
 
 static bool is_warning(const failure& f) {
