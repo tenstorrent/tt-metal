@@ -7,9 +7,14 @@ random: a few layers with random weights at batch 1, 2, 4, 8 against torch_step 
 real:   the Qwen3.8 checkpoint, teacher-forced against a Hugging Face reference (hf_teacher_ref.py):
     top-1 / top-5 agreement of the device logits, then the traced greedy decode TPOT and the
     pipeline-parallel prefill TTFT at a few prompt lengths.
+paged:  random weights, paged KV (ResidentModel kv_pool_blocks) against the contiguous KV: the same users and
+    inputs through a contiguous and a paged model (a shuffled block table per user, from a larger pool), x after
+    every step bit-identical (and the contiguous run against torch_step); optionally the traced step time of
+    both.
 
 usage: python -m qwen36_resident.tests.e0_bringup random [--layers 4] [--steps 4] [--batches 1,2,4,8]
        python -m qwen36_resident.tests.e0_bringup real --ref hf_ref_qwen38.pt [--max-len 32768]
+       python -m qwen36_resident.tests.e0_bringup paged [--layers 4] [--steps 40] [--batches 1,8] [--time-steps 64]
 """
 import argparse
 import copy
@@ -81,6 +86,145 @@ def run_random(mesh, layers, steps, batches, interval=4, max_pos=256, start_pos=
         )
         del model
     return rows
+
+
+def shuffled_tables(users, max_pos, block=64, slack=1.5, seed=0):
+    """(pool blocks, per-user block tables): every user's blocks drawn without replacement from a pool
+    `slack` times what the users need, in shuffled order (physical order differs from logical and per user)"""
+    bpu = -(-max_pos // block)
+    blocks = max(int(users * bpu * slack), users * bpu + 5)
+    perm = torch.randperm(blocks, generator=torch.Generator().manual_seed(seed))[: users * bpu]
+    tables = perm.reshape(users, bpu).tolist()
+    assert any(t != list(range(t[0], t[0] + bpu)) for t in tables)
+    return blocks, tables
+
+
+def run_paged(
+    mesh, layers, steps, batches, interval=4, max_pos=1024, start=37, spread=61, copies=None, ref=True, time_steps=0
+):
+    """paged vs contiguous KV with random weights: bit-identical x after every step (see the module doc).
+    copies: (gdn, attn, mlp) weight copies (default one per layer); users start at start + spread * u"""
+    d = Dims(mesh.get_num_devices(), mesh.dram_grid_size().x)
+    n_attn = sum(is_attn(l, interval) for l in range(layers))
+    n_gdn = layers - n_attn
+    gc, ac, mc = copies or (n_gdn, n_attn, layers)
+    w = random_weights(d, gc, ac, mc)
+    rows = []
+    for B in batches:
+        starts = [start + spread * u for u in range(B)]
+        assert starts[-1] + steps < max_pos
+        sts = [State(d, gc, ac, starts[u], max_pos, seed=11 + u) for u in range(B)]
+        g = torch.Generator().manual_seed(100 + B)
+        x0s = [torch.randn(B, 5120, generator=g) for _ in range(steps)]
+        blocks, tables = shuffled_tables(B, max_pos, seed=B)
+        got, step_ms = {}, {}
+        for mode in ("contiguous", "paged"):
+            kw = dict(kv_pool_blocks=blocks, block_tables=tables) if mode == "paged" else {}
+            t0 = time.time()
+            model = ResidentModel(mesh, d, w, sts if B > 1 else sts[0], layers, interval, **kw)
+            build_s = time.time() - t0
+            toks = [
+                model.token_state(
+                    x0s[s][0] if B == 1 else x0s[s],
+                    [p + s for p in starts] if B > 1 else starts[0] + s,
+                    ring=None if B == 1 else s,
+                )
+                for s in range(steps)
+            ]
+            xs = []
+            for s in range(steps):
+                model.step(toks[s])
+                ttnn.synchronize_device(mesh)
+                xs.append(model.x().reshape(B, -1).clone())
+            got[mode] = xs
+            if time_steps:
+                # traced replays of the same token states (the KV rows at those positions are rewritten)
+                model.capture_trace()
+                for s in range(min(8, steps)):
+                    model.step(toks[s])
+                ttnn.synchronize_device(mesh)
+                t0 = time.time()
+                for s in range(time_steps):
+                    model.step(toks[s % steps])
+                ttnn.synchronize_device(mesh)
+                step_ms[mode] = (time.time() - t0) / time_steps * 1e3
+                model.release_trace()
+            print(
+                f"paged-test B={B} {mode}: build {build_s:.1f} s"
+                + (f", traced step {step_ms[mode]:.3f} ms" if time_steps else ""),
+                flush=True,
+            )
+            del model
+        worst = (0.0, 1.0)
+        ref_sts = copy.deepcopy(sts) if ref else None
+        mism = 0
+        for s in range(steps):
+            same = torch.equal(got["contiguous"][s], got["paged"][s])
+            mism += not same
+            diff = float((got["contiguous"][s] - got["paged"][s]).abs().max())
+            if ref:
+                for u in range(B):
+                    want = torch_step(x0s[s][u], d, w, ref_sts[u], layers, interval)
+                    e, p = rel(got["contiguous"][s][u], want), pcc(got["contiguous"][s][u], want)
+                    worst = (max(worst[0], e), min(worst[1], p))
+            rows.append(dict(B=B, step=s, identical=same, max_abs_diff=diff))
+        print(
+            f"paged B={B} layers={layers} steps={steps} positions {starts[0]}..{starts[-1] + steps - 1} "
+            f"pool {blocks} blocks: {steps - mism}/{steps} steps bit-identical"
+            + (f"; contiguous vs torch worst rel {worst[0]:.4f} pcc {worst[1]:.5f}" if ref else "")
+            + (
+                f"; traced step contiguous {step_ms['contiguous']:.3f} ms paged {step_ms['paged']:.3f} ms"
+                if time_steps
+                else ""
+            ),
+            flush=True,
+        )
+        rows.append(
+            dict(
+                B=B,
+                summary=True,
+                identical_steps=steps - mism,
+                steps=steps,
+                step_ms=step_ms,
+                ref_worst=worst if ref else None,
+            )
+        )
+    return rows
+
+
+def run_paged_verify(mesh, layers, steps, interval=4, max_pos=1024, start=90):
+    """paged vs contiguous KV in a verify model (two rows of one user at p and p + 1 sharing its KV, MTP's step):
+    bit-identical x of both rows after every step; the steps alternate between continuing from row 1 (draft
+    accepted) and from row 0"""
+    d = Dims(mesh.get_num_devices(), mesh.dram_grid_size().x)
+    n_attn = sum(is_attn(l, interval) for l in range(layers))
+    n_gdn = layers - n_attn
+    w = random_weights(d, n_gdn, n_attn, layers)
+    st = State(d, n_gdn, n_attn, start, max_pos, seed=11)
+    g = torch.Generator().manual_seed(200)
+    x0s = [torch.randn(2, 5120, generator=g) for _ in range(steps)]
+    blocks, tables = shuffled_tables(1, max_pos, seed=3)
+    got = {}
+    for mode in ("contiguous", "paged"):
+        kw = dict(kv_pool_blocks=blocks, block_tables=tables) if mode == "paged" else {}
+        model = ResidentModel(mesh, d, w, st, layers, interval, verify=True, **kw)
+        p, ring, slot, xs = start, 0, 0, []
+        for s in range(steps):
+            model.step(model.token_state(x0s[s], [p, p + 1], ring=ring, slot=slot))
+            ttnn.synchronize_device(mesh)
+            xs.append(model.x().reshape(2, -1).clone())
+            if s % 3:  # from row 1
+                p, ring, slot = p + 2, ring + 2, slot ^ 1
+            else:
+                p, ring = p + 1, ring + 1
+        got[mode] = xs
+        del model
+    same = sum(torch.equal(c, q) for c, q in zip(got["contiguous"], got["paged"]))
+    print(
+        f"paged verify layers={layers} steps={steps} positions {start}..{p}: {same}/{steps} steps bit-identical",
+        flush=True,
+    )
+    return [dict(verify=True, identical_steps=same, steps=steps)]
 
 
 def run_real(mesh, ref_path, max_seq_len, ttft_lens, tpot_steps):
@@ -196,7 +340,7 @@ def run_real(mesh, ref_path, max_seq_len, ttft_lens, tpot_steps):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["random", "real"])
+    ap.add_argument("mode", choices=["random", "real", "paged"])
     ap.add_argument("--layers", type=int, default=4)
     ap.add_argument("--steps", type=int, default=4)
     ap.add_argument("--batches", default="1,2,4,8")
@@ -205,12 +349,34 @@ def main():
     ap.add_argument("--ttft", default="128,2048,8192")
     ap.add_argument("--tpot-steps", type=int, default=128)
     ap.add_argument("--out")
+    ap.add_argument("--max-pos", type=int, default=1024)
+    ap.add_argument("--start", type=int, default=37)
+    ap.add_argument("--spread", type=int, default=61)
+    ap.add_argument("--copies", help="gdn,attn,mlp weight copies (paged; default one per layer)")
+    ap.add_argument("--no-ref", action="store_true")
+    ap.add_argument("--time-steps", type=int, default=0)
+    ap.add_argument("--verify", action="store_true", help="paged: also the verify (MTP) model")
     a = ap.parse_args()
     faulthandler.dump_traceback_later(300, repeat=True, file=sys.stderr)
     mesh = open_mesh()
     try:
         if a.mode == "random":
             res = run_random(mesh, a.layers, a.steps, [int(b) for b in a.batches.split(",")])
+        elif a.mode == "paged":
+            res = run_paged(
+                mesh,
+                a.layers,
+                a.steps,
+                [int(b) for b in a.batches.split(",")],
+                max_pos=a.max_pos,
+                start=a.start,
+                spread=a.spread,
+                copies=tuple(int(c) for c in a.copies.split(",")) if a.copies else None,
+                ref=not a.no_ref,
+                time_steps=a.time_steps,
+            )
+            if a.verify:
+                res += run_paged_verify(mesh, a.layers, a.steps, max_pos=a.max_pos, start=a.start)
         else:
             res = run_real(mesh, a.ref, a.max_len, [int(t) for t in a.ttft.split(",")], a.tpot_steps)
     finally:
