@@ -68,7 +68,7 @@ N_CHUNKS = 3
 GATE_MODE = GateComputeMode.DEVICE_FP32
 
 # Chunks per packed forward. 4 x 640 rows = 2,560 MoE rows per chip.
-FORWARD_CHUNKS = 4
+FORWARD_CHUNKS = int(os.environ.get("GLM_DEBUG_FORWARD_CHUNKS", "4"))  # DEBUG override
 
 # Interleaving changes only the order of whole forward() calls, so it should be bit-exact; the bar
 # leaves room for nothing but a reduction-order tie.
@@ -380,6 +380,8 @@ def _packed_schedule(chunk):
         [PrefillChunk(0, C, 2 * C), PrefillChunk(1, C, C + 704), PrefillChunk(3, 0, C), PrefillChunk(3, C, 2 * C)],
         [PrefillChunk(0, 2 * C, 3 * C), E, E, E],
     ]
+    if FORWARD_CHUNKS == 1:  # DEBUG: the same chunks, one per forward, in schedule order
+        forwards = [[c] for f in forwards for c in f if not c.is_empty]
     return lengths, forwards
 
 
@@ -565,6 +567,46 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
                 real = [] if c.is_empty else ids[user_of(c.slot_id)][c.actual_start : c.actual_end].tolist()
                 tokens.append(real + [0] * (chunk - len(real)))
             return runtime.make_forward_input(tokens, [c.actual_start for c in chunks])
+
+        def chunk_tokens(c, user):
+            real = ids[user][c.actual_start : c.actual_end].tolist()
+            return real + [0] * (chunk - len(real))
+
+        if FORWARD_CHUNKS == 1:  # DEBUG: production single-chunk path, traced (metadata msg) vs eager
+            for c in (f[0] for f in forwards):
+                logger.info(f"[traced] chunk {c}")
+                msg = ttnn.from_torch(
+                    torch.tensor([c.slot_id, c.actual_start, c.actual_end], dtype=torch.int64).reshape(1, 1, 1, 3),
+                    device=mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                runtime.prefill_chunk(
+                    runtime.make_chunk_input(chunk_tokens(c, c.slot_id)),
+                    caches,
+                    slot_id=c.slot_id,
+                    actual_start=c.actual_start,
+                    actual_end=c.actual_end,
+                    metadata_msg=msg,
+                )
+                ttnn.synchronize_device(mesh_device)
+                ttnn.deallocate(msg)
+            for c in (f[0] for f in forwards):
+                inp = runtime.make_chunk_input(chunk_tokens(c, c.slot_id))
+                runtime.model.forward(
+                    inp,
+                    caches.kvpe,
+                    actual_isl=chunk,
+                    actual_start=c.actual_start,
+                    actual_end=c.actual_end,
+                    cache_user_id=c.slot_id + num_users,
+                    index_kv_cache=caches.index,
+                )
+                ttnn.deallocate(inp)
+            ttnn.synchronize_device(mesh_device)
+            forwards = []  # the packed loops below have nothing left to run
 
         for f, chunks in enumerate(forwards):
             logger.info(f"[traced] forward {f}: {chunks}")
