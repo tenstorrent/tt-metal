@@ -20,3 +20,19 @@ fork_op.py markers (a new op, not a fork), as on Marko's branch.
   `prepare_program` / `run_prepared` directly.
 - Needed by: deepseek_v41_flash_d_p, MOE_IMPL=block (models/demos/deepseek_v41_flash_d_p/tt/MOE_BLOCK.md)
 - Files: all
+
+### value_slots: per-run plain runtime args (2026-10-29)
+- What: `prepare_program(desc, io, value_slots=[(kernel, arg)])` / `run_prepared(p, io, values=[...])`: the named
+  runtime arg of a kernel, on every core that has it, is patched from the run's values on every call (create_descriptor
+  and override_runtime_arguments); a value slot is never matched to an io address; the cache key hashes a marker for
+  it instead of its value. `PreparedProgram.n_values`. Default (no value slots): the old behaviour and the old cache
+  key (the hash walk is unchanged when no slot is named).
+- Why: ttnn.bringup.ckv_bfp4's writer takes row0 (the table row it writes at), which changes every call; without a
+  value slot each call needed a new descriptor (DS41-135: 1.33 ms host a call on 8x4).
+- Needed by: deepseek_v41_flash_d_p P.7 (CKV_BFP4_PREPARED)
+- Files: prepared_program.hpp, prepared_program.cpp, prepared_program_nanobind.cpp,
+  device/prepared_program_device_operation.hpp, device/prepared_program_device_operation.cpp, README.md
+- Tests: ckv_bfp4_ttnn/tests/unit/test_ckv_bfp4.py::test_ckv_bfp4_prepared (value slot, moved tensors, byte-equal to
+  generic_op). The option-off regression (tests/test_prepared_program.py) has only 2x2 cases: skipped on the 8x4
+  Galaxy (2 skipped, as before); the option-off users (fabric_reduce_scatter prepared, TailA2A prepared) run in the
+  model's ladder.
