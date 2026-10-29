@@ -32,6 +32,8 @@ VAE_SPATIAL_COMPRESSION = 16
 PATCH_SIZE = (1, 2, 2)
 # The tt_dit pipeline rejects longer prompts (MINIMAX_H3_MAX_TEXT_TOKENS).
 MAX_TEXT_TOKENS = 3008
+# Longest caption training has run with; longer ones grow every block's saved activations and are not known to fit.
+CAPTION_BUDGET = 512
 
 # Stable-Diffusion prompt boilerplate that says nothing about the picture; stripped from plain captions.
 _CAPTION_JUNK = re.compile(
@@ -121,12 +123,9 @@ def load_tokenizer(spec: str | None, model: str, revision: str):
     return Tokenizer.from_file(str(path)), str(path)
 
 
-def tokenize(tokenizer, caption: str, max_tokens: int) -> np.ndarray:
+def tokenize(tokenizer, caption: str) -> np.ndarray:
     """H3's t2va presentation: the verbatim prompt, no chat template, no special tokens."""
-    ids = tokenizer.encode(caption, add_special_tokens=False).ids
-    if len(ids) > max_tokens:
-        raise SystemExit(f"caption is {len(ids)} tokens, over --max-tokens {max_tokens}: {caption[:80]!r}")
-    return np.asarray(ids, dtype=np.int32)
+    return np.asarray(tokenizer.encode(caption, add_special_tokens=False).ids, dtype=np.int32)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -163,6 +162,23 @@ def main(argv: list[str] | None = None) -> int:
     tokenizer, tokenizer_path = load_tokenizer(args.tokenizer, args.model, args.revision)
     resample = Image.Resampling.NEAREST if args.resample == "nearest" else Image.Resampling.LANCZOS
 
+    samples = []
+    for png, raw_caption in pairs:
+        caption = apply_trigger(clean_caption(raw_caption) if clean else raw_caption, args.trigger)
+        samples.append((png, caption, tokenize(tokenizer, caption)))
+    lengths = sorted(((len(tokens), png.stem) for png, _, tokens in samples), reverse=True)
+    over = [f"{key} ({n})" for n, key in lengths if n > args.max_tokens]
+    if over:
+        raise SystemExit(f"{len(over)} captions over --max-tokens {args.max_tokens}: {', '.join(over)}")
+    long = [f"{key} ({n})" for n, key in lengths if n > CAPTION_BUDGET]
+    if long:
+        log.warning(
+            "%d captions over %d tokens may run out of device memory in training; shorten them at the source: %s",
+            len(long),
+            CAPTION_BUDGET,
+            ", ".join(long[:10]),
+        )
+
     cache = Path(args.cache)
     (cache / "pixels").mkdir(parents=True, exist_ok=True)
     (cache / "tokens").mkdir(exist_ok=True)
@@ -193,12 +209,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     t0 = time.perf_counter()
-    for i, (png, raw_caption) in enumerate(pairs):
+    for i, (png, caption, tokens) in enumerate(samples):
         key = png.stem
-        caption = apply_trigger(clean_caption(raw_caption) if clean else raw_caption, args.trigger)
         if (
             key in manifest
             and manifest[key]["caption"] == caption
+            and manifest[key]["num_tokens"] == len(tokens)
             and (cache / "pixels" / f"{key}.npy").exists()
             and (cache / "tokens" / f"{key}.npy").exists()
         ):
@@ -208,7 +224,6 @@ def main(argv: list[str] | None = None) -> int:
         image = Image.open(png)
         height, width = training_canvas(image.width, image.height, args.short_edge)
         image = fit_image(image, height, width, resample)
-        tokens = tokenize(tokenizer, caption, args.max_tokens)
 
         np.save(cache / "pixels" / f"{key}.npy", np.asarray(image, dtype=np.uint8))
         np.save(cache / "tokens" / f"{key}.npy", tokens)
