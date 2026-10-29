@@ -33,6 +33,7 @@ from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import Mistra
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_transformer_state_dict
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
+from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
@@ -326,8 +327,10 @@ GLM_CHUNK_ENDS = [CHUNK, 2048, 896, 256]
 GLM_SLOT_WARMUP = 0  # compile() / capture_trace() write here
 
 
-def _glm_slots(case: int) -> tuple[int, int]:
-    return 1 + 2 * case, 2 + 2 * case  # (traced, eager)
+def _glm_slots(case: int) -> tuple[int, int, int]:
+    # (traced, eager, eager through the metadata path): the third runs the traced path's ops without a trace,
+    # reading (slot, start, end) from device tensors, to tell trace replay apart from the metadata path.
+    return 1 + 3 * case, 2 + 3 * case, 3 + 3 * case
 
 
 def _glm_natural_slot_rows(rows: torch.Tensor, stripes: int, chunk: int) -> torch.Tensor:
@@ -368,6 +371,18 @@ def _glm_cpu_layer_caches(config, state_dict, token_ids, end):
     return {"kvpe": kvpe, "indexer_k": index}
 
 
+def _glm_meta_scalar(mesh_device, value: int) -> ttnn.Tensor:
+    """One 1-element uint32 replicated DRAM scalar, as the runtime's per-chunk metadata."""
+    return ttnn.from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
 def _rel_err(dev: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
     """Per-token relative L2 error [tokens]."""
     return (dev - ref).norm(dim=-1) / ref.norm(dim=-1).clamp_min(1e-6)
@@ -404,7 +419,7 @@ def test_glm_prefill_chunk_traced_matches_eager_partial(variant, config_only, me
     sp, tp = tuple(mesh_device.shape)
     config = copy.deepcopy(config_only)
     config.max_seq_len = CHUNK
-    num_users = 1 + 2 * len(GLM_CHUNK_ENDS)
+    num_users = 1 + 3 * len(GLM_CHUNK_ENDS)
     rt_config = TtPrefillRuntimeConfig(
         num_layers=GLM_LAYERS,
         max_seq_len=CHUNK,
@@ -462,7 +477,7 @@ def test_glm_prefill_chunk_traced_matches_eager_partial(variant, config_only, me
         runtime.compile(caches)
         runtime.capture_trace(caches)
         for case, end in enumerate(GLM_CHUNK_ENDS):
-            traced_slot, eager_slot = _glm_slots(case)
+            traced_slot, eager_slot, meta_slot = _glm_slots(case)
             tokens = ids[:end] + [0] * (CHUNK - end)
             msg = _packed_metadata_msg(mesh_device, traced_slot, 0, end)
             runtime.prefill_chunk(
@@ -487,6 +502,23 @@ def test_glm_prefill_chunk_traced_matches_eager_partial(variant, config_only, me
             )
             ttnn.synchronize_device(mesh_device)
             ttnn.deallocate(inp)
+            # The traced forward's exact call (runtime._forward_traced), run eagerly: no capture, no replay.
+            meta = ChunkMetadata(*(_glm_meta_scalar(mesh_device, v) for v in (meta_slot, 0, end)))
+            inp = runtime.make_chunk_input(tokens)
+            runtime.model.forward(
+                inp,
+                caches.kvpe,
+                index_kv_cache=caches.index,
+                actual_isl=CHUNK,
+                actual_start=None,
+                actual_end=None,
+                cache_user_id=0,
+                metadata=meta,
+            )
+            ttnn.synchronize_device(mesh_device)
+            ttnn.deallocate(inp)
+            for scalar in meta.scalars:
+                ttnn.deallocate(scalar)
         kvpe_rows, _ = gather_cache_natural(caches.kvpe, mesh_device, tp_shard_kv=True)
         index_rows, _ = gather_cache_natural(caches.index, mesh_device, tp_shard_kv=True)
     finally:
@@ -501,11 +533,17 @@ def test_glm_prefill_chunk_traced_matches_eager_partial(variant, config_only, me
     failures = []
     for name, rows, layers in (("kvpe", kvpe_rows, GLM_LAYERS), ("indexer_k", index_rows, index_layers)):
         for case, end in enumerate(GLM_CHUNK_ENDS):
-            traced_slot, eager_slot = _glm_slots(case)
+            traced_slot, eager_slot, meta_slot = _glm_slots(case)
             traced = _glm_natural_slot_rows(rows[traced_slot * layers : (traced_slot + 1) * layers], sp * tp, CHUNK)
             eager = _glm_natural_slot_rows(rows[eager_slot * layers : (eager_slot + 1) * layers], sp * tp, CHUNK)
+            meta = _glm_natural_slot_rows(rows[meta_slot * layers : (meta_slot + 1) * layers], sp * tp, CHUNK)
             for layer in range(layers):
-                t, e = traced[layer, :end], eager[layer, :end]
+                t, e, m = traced[layer, :end], eager[layer, :end], meta[layer, :end]
+                for label, other in (("eager", e), ("traced", t)):
+                    n_diff = int(((m - other).abs().amax(dim=-1) > 0).sum())
+                    logger.info(
+                        f"[0, {end}) {name}[{layer}] eager-metadata vs {label}: {n_diff} of {end} real tokens differ"
+                    )
                 differ = torch.nonzero((t - e).abs().amax(dim=-1) > 0).flatten()
                 _, pcc = comp_pcc(e, t)
                 logger.info(
