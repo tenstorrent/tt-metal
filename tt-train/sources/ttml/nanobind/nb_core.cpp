@@ -302,8 +302,7 @@ void py_module(nb::module_& m) {
                     auto filled = self.recv(tensor.get_grad(), ctx, Rank{rank});
                     tensor.set_grad(filled);
                 } else {
-                    auto filled = self.recv(tensor.get_value(), ctx, Rank{rank});
-                    tensor.set_value(filled);
+                    self.recv_value(tensor, ctx, Rank{rank});
                 }
                 return tensor;
             },

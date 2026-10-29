@@ -7,6 +7,8 @@ import json
 import math
 import os
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import NamedTuple
 
@@ -22,6 +24,48 @@ from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import CONFIG_NAMES
 PREPARED_GPU_TRACE_LAYOUT = "gemma4_kv_heads_v1"
 
 
+_READ_BLOCK_BYTES = 64 << 20
+_READ_THREADS = 16
+
+
+def _tensor_file_offsets(path):
+    """Absolute byte offset of each tensor in a safetensors file."""
+    with open(path, "rb") as file:
+        header_size = int.from_bytes(file.read(8), "little")
+        header = json.loads(file.read(header_size))
+    return {
+        name: 8 + header_size + entry["data_offsets"][0] for name, entry in header.items() if name != "__metadata__"
+    }
+
+
+def _read_rows(path, offsets, shapes):
+    """Read row prefixes with large parallel preads; mmap page faults reach a fraction of NFS bandwidth."""
+    tensors = [torch.empty(shape, dtype=torch.bfloat16) for shape in shapes]
+    reads = []
+    for offset, tensor in zip(offsets, tensors):
+        buffer = memoryview(tensor.view(torch.uint8).numpy()).cast("B")
+        reads.extend(
+            (offset + start, buffer[start : start + _READ_BLOCK_BYTES])
+            for start in range(0, len(buffer), _READ_BLOCK_BYTES)
+        )
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+
+        def read(entry):
+            position, view = entry
+            while len(view):
+                count = os.preadv(descriptor, [view], position)
+                if count <= 0:
+                    raise ValueError(f"Truncated prepared GPU trace {path}")
+                position, view = position + count, view[count:]
+
+        with ThreadPoolExecutor(_READ_THREADS) as pool:
+            list(pool.map(read, reads))
+    finally:
+        os.close(descriptor)
+    return tensors
+
+
 def load_prepared_gpu_cache_heads(path, layer, real_len):
     configs = range(4) if is_global_layer_by_index(layer) else range(4, 36)
     width = 640 if is_global_layer_by_index(layer) else 256
@@ -30,7 +74,6 @@ def load_prepared_gpu_cache_heads(path, layer, real_len):
             raise ValueError(f"Layer {layer}: invalid prepared GPU layout in {path}")
         if set(tensors.keys()) != {CONFIG_NAMES[config] for config in configs}:
             raise ValueError(f"Layer {layer}: invalid prepared GPU head names in {path}")
-        result = {}
         for config in configs:
             rows = tensors.get_slice(CONFIG_NAMES[config])
             shape = rows.get_shape()
@@ -38,8 +81,9 @@ def load_prepared_gpu_cache_heads(path, layer, real_len):
                 raise ValueError(f"Layer {layer}: invalid prepared GPU KV shape {shape} for {real_len} tokens")
             if rows.get_dtype() != "BF16":
                 raise ValueError(f"Layer {layer}: prepared GPU KV must be BF16")
-            result[config] = rows[:real_len]
-    return result
+    offsets = _tensor_file_offsets(path)
+    heads = _read_rows(path, [offsets[CONFIG_NAMES[config]] for config in configs], [(real_len, width)] * len(configs))
+    return dict(zip(configs, heads))
 
 
 def load_gpu_cache_heads(trace_dir, layer, real_len):
@@ -219,8 +263,14 @@ def read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir):
     return compare_slot_cache(read_heads, slot_id, real_len, trace_dir)
 
 
-def read_cache_tensor(tensor, slot_id, real_len):
-    """Gather one slot's populated prefix and restore chunk-major CP order."""
+def read_cache_tensor(tensor, slot_id, real_len, staging=None):
+    """Gather one slot's populated prefix and restore chunk-major CP order.
+
+    `staging` keeps one host tensor per cache shape across calls. Reading into it and viewing its
+    shards without a copy avoids allocating and freeing ~2 GB of host memory per call, which costs
+    several times the transfer itself and holds the GIL while it frees.
+    """
+    staging = {} if staging is None else staging
     cp, tp = Gemma4ServiceConfig.MESH_SHAPE
     local_chunk = Gemma4ServiceConfig.CHUNK_SIZE // cp
     if real_len % Gemma4ServiceConfig.CHUNK_SIZE:
@@ -236,10 +286,15 @@ def read_cache_tensor(tensor, slot_id, real_len):
     finally:
         ttnn.deallocate(selected)
     try:
-        host = ttnn.from_device(row_major, blocking=True)
+        key = (tuple(row_major.shape), row_major.dtype)
+        if key not in staging:
+            staging[key] = ttnn.allocate_tensor_on_host(row_major.spec, row_major.device())
+        host = staging[key]
+        ttnn.copy_device_to_host_tensor(row_major, host, blocking=True)
     finally:
         ttnn.deallocate(row_major)
-    shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(host)]
+    # Views of the staging buffers, consumed by the gather below before the next read reuses them.
+    shards = [shard.to_torch_with_padded_shape() for shard in ttnn.get_device_tensors(host)]
     local_heads, width = shards[0].shape[1], shards[0].shape[3]
     chunks = real_len // Gemma4ServiceConfig.CHUNK_SIZE
     gathered = torch.empty((local_heads * tp, chunks, cp, local_chunk, width), dtype=shards[0].dtype)
@@ -269,55 +324,103 @@ def check_table_samples(table, device_map, layer, slot_id, config_id, actual):
             torch.testing.assert_close(decoded, actual[position : position + 32].float(), rtol=0, atol=0)
 
 
+_PREFETCH_LAYERS = 2
+_COMPARE_WORKERS = 6
+
+
+def _timed(function, *args):
+    start = time.perf_counter()
+    result = function(*args)
+    return result, time.perf_counter() - start
+
+
+def _read_layer_heads(read_heads, layer):
+    return list(read_heads(layer))
+
+
+def compare_head(config_id, expected, actual):
+    if config_id < 4:
+        return {
+            "global_k_rotary": cache_metrics(expected[:, :128], actual[:, :128]),
+            "global_v": cache_metrics(expected[:, 128:], actual[:, 128:]),
+        }
+    return {"sliding_k" if config_id < 20 else "sliding_v": cache_metrics(expected, actual)}
+
+
 def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
     started = time.perf_counter()
-    timings = dict(reference_seconds=0.0, readback_seconds=0.0, comparison_seconds=0.0)
+    timings = dict(reference_seconds=0.0, readback_seconds=0.0, comparison_seconds=0.0, wait_seconds=0.0)
     minima = {"global_k_rotary": 1.0, "global_v": 1.0, "sliding_k": 1.0, "sliding_v": 1.0}
     measurements = []
     layer_timings = []
     all_comparisons = []
     layer_metrics = []
-    for layer in range(Gemma4ServiceConfig.NUM_LAYERS):
-        previous_timings = timings.copy()
-        start = time.perf_counter()
-        expected_heads = load_gpu_cache_heads(trace_dir, layer, real_len)
-        timings["reference_seconds"] += time.perf_counter() - start
-        layer_minima = {}
-        layer_comparisons = []
-        start = time.perf_counter()
-        for config_id, actual in read_heads(layer):
-            timings["readback_seconds"] += time.perf_counter() - start
-            start = time.perf_counter()
-            expected = expected_heads[config_id]
-            if config_id < 4:
-                comparisons = {
-                    "global_k_rotary": cache_metrics(expected[:, :128], actual[:, :128]),
-                    "global_v": cache_metrics(expected[:, 128:], actual[:, 128:]),
-                }
-            else:
-                comparisons = {"sliding_k" if config_id < 20 else "sliding_v": cache_metrics(expected, actual)}
-            layer_comparisons.extend(comparisons.values())
-            scores = {name: comparison.pcc for name, comparison in comparisons.items()}
-            for name, score in scores.items():
-                minima[name] = min(minima[name], score)
-                layer_minima[name] = min(layer_minima.get(name, 1.0), score)
-            measurements.append(dict(layer=layer, config=CONFIG_NAMES[config_id], pcc=scores))
-            timings["comparison_seconds"] += time.perf_counter() - start
-            start = time.perf_counter()
-        all_comparisons.extend(layer_comparisons)
-        layer_summary = summarize_metrics(layer_comparisons)
-        layer_metrics.append(dict(layer=layer, **layer_summary))
-        layer_seconds = {name: timings[name] - previous_timings[name] for name in previous_timings}
-        layer_timings.append(dict(layer=layer, **layer_seconds))
-        logger.info(
-            f"[Gemma4 KV PCC] slot={slot_id} layer={layer} layer_minima={layer_minima} "
-            f"running_min_pcc={min(minima.values()):.8f} "
-            f"layer_pcc={layer_summary['pcc']:.8f} "
-            f"rmse={layer_summary['rmse']:.8f} relative_rmse={layer_summary['relative_rmse']} "
-            f"reference={layer_seconds['reference_seconds']:.2f}s "
-            f"readback={layer_seconds['readback_seconds']:.2f}s "
-            f"comparison={layer_seconds['comparison_seconds']:.2f}s"
-        )
+    layers = range(Gemma4ServiceConfig.NUM_LAYERS)
+    # Golden loads and device readback each run up to _PREFETCH_LAYERS ahead on their own thread;
+    # reference/readback are those threads' busy time and wait is how long this thread blocked on them.
+    # A layer's heads compare concurrently, but each worker keeps this thread's intra-op thread count,
+    # so every reduction splits as it would serially, and results are folded in layer and head order:
+    # every reported number is bit-identical to a serial pass.
+    with (
+        ThreadPoolExecutor(1) as golden_loader,
+        ThreadPoolExecutor(1) as device_reader,
+        ThreadPoolExecutor(
+            _COMPARE_WORKERS, initializer=torch.set_num_threads, initargs=(torch.get_num_threads(),)
+        ) as comparer,
+    ):
+
+        def submit(layer):
+            return (
+                golden_loader.submit(_timed, load_gpu_cache_heads, trace_dir, layer, real_len),
+                device_reader.submit(_timed, _read_layer_heads, read_heads, layer),
+            )
+
+        pending = deque(submit(layer) for layer in layers[:_PREFETCH_LAYERS])
+        try:
+            for layer in layers:
+                golden, device = pending.popleft()
+                if layer + _PREFETCH_LAYERS < len(layers):
+                    pending.append(submit(layer + _PREFETCH_LAYERS))
+                previous_timings = timings.copy()
+                start = time.perf_counter()
+                expected_heads, seconds = golden.result()
+                timings["reference_seconds"] += seconds
+                actual_heads, seconds = device.result()
+                timings["readback_seconds"] += seconds
+                timings["wait_seconds"] += time.perf_counter() - start
+                start = time.perf_counter()
+                layer_minima = {}
+                layer_comparisons = []
+                head_comparisons = comparer.map(
+                    lambda head: compare_head(head[0], expected_heads[head[0]], head[1]), actual_heads
+                )
+                for (config_id, _), comparisons in zip(actual_heads, head_comparisons):
+                    layer_comparisons.extend(comparisons.values())
+                    scores = {name: comparison.pcc for name, comparison in comparisons.items()}
+                    for name, score in scores.items():
+                        minima[name] = min(minima[name], score)
+                        layer_minima[name] = min(layer_minima.get(name, 1.0), score)
+                    measurements.append(dict(layer=layer, config=CONFIG_NAMES[config_id], pcc=scores))
+                timings["comparison_seconds"] += time.perf_counter() - start
+                all_comparisons.extend(layer_comparisons)
+                layer_summary = summarize_metrics(layer_comparisons)
+                layer_metrics.append(dict(layer=layer, **layer_summary))
+                layer_seconds = {name: timings[name] - previous_timings[name] for name in previous_timings}
+                layer_timings.append(dict(layer=layer, **layer_seconds))
+                logger.info(
+                    f"[Gemma4 KV PCC] slot={slot_id} layer={layer} layer_minima={layer_minima} "
+                    f"running_min_pcc={min(minima.values()):.8f} "
+                    f"layer_pcc={layer_summary['pcc']:.8f} "
+                    f"rmse={layer_summary['rmse']:.8f} relative_rmse={layer_summary['relative_rmse']} "
+                    f"reference={layer_seconds['reference_seconds']:.2f}s "
+                    f"readback={layer_seconds['readback_seconds']:.2f}s "
+                    f"comparison={layer_seconds['comparison_seconds']:.2f}s "
+                    f"wait={layer_seconds['wait_seconds']:.2f}s"
+                )
+        finally:
+            for futures in pending:
+                for future in futures:
+                    future.cancel()
     worst_measurement = min(measurements, key=lambda entry: min(entry["pcc"].values()))
     worst_cache_type = min(worst_measurement["pcc"], key=worst_measurement["pcc"].get)
     worst_head = dict(

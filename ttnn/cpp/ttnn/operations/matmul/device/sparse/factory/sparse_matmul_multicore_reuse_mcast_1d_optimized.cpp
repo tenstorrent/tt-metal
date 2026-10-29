@@ -197,6 +197,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     const auto Nt = get_N_dim(bshape, in1_tile);
 
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
+    TT_FATAL(per_core_M <= Mt, "sparse_matmul requires per_core_M ({}) <= Mt ({})", per_core_M, Mt);
 
     // This should allocate a DRAM buffer on the device
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -208,6 +209,11 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     uint32_t num_blocks_x = ((Nt - 1) / per_core_N) + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
 
+    TT_FATAL(
+        num_blocks_y == 1,
+        "sparse_matmul requires num_blocks_y == 1 (Mt <= per_core_M) for mcast_in0. Got Mt={}, per_core_M={}.",
+        Mt,
+        per_core_M);
     TT_FATAL(
         num_blocks_total <= num_cores_available,
         "Number of blocks exceeds number of cores available: {} blocks > {} cores",
@@ -793,6 +799,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                 // batch args
                 {"KtNt", Kt * Nt},
                 {"batch", batchA},
+                {"out_block_num_tiles", out_block_tiles},
                 {"bcast_B", 1u},
                 // sparsity args (in indexed/gather mode this slot carries the active-group id list)
                 {"batchB", batchB},

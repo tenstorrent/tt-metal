@@ -625,10 +625,8 @@ class HfRotarySetup(LightweightModule):
             )
         else:
             self.batch_size_per_device_group = self.original_batch_size
-        # Match RotarySetup: Wormhole Galaxy reports (8, 9) storage grid; decode rope shards use (8, 8).
-        self.core_grid = (
-            device.compute_with_storage_grid_size() if ttnn.get_arch_name() == "blackhole" else ttnn.CoreCoord(8, 8)
-        )
+        # Decode rope reads cos/sin from the core holding its Q shard, and Q is placed 8 wide on every arch.
+        self.core_grid = ttnn.CoreCoord(8, 8)
 
         # Decode: ROW_MAJOR cache for embedding lookup (same numerics as prefill via get_rot_mats_hf).
         self.cos_matrix, self.sin_matrix = get_rot_mats_hf(

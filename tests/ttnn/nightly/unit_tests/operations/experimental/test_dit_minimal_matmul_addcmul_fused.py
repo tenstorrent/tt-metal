@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc
 
 
 def assert_quality(torch_output, tt_output):

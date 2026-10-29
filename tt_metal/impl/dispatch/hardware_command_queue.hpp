@@ -5,19 +5,10 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
 
-#include "buffer.hpp"
 #include "core_coord.hpp"
-#include "dispatch_settings.hpp"
-#include "launch_message_ring_buffer_state.hpp"
-#include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
-#include "sub_device_types.hpp"
-#include "trace/trace_buffer.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include "vector_aligned.hpp"
-#include "worker_config_buffer.hpp"
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class SystemMemoryManager;
@@ -35,10 +26,7 @@ public:
 
     const CoreCoord& virtual_enqueue_program_dispatch_core() const;
 
-    void set_go_signal_noc_data_and_dispatch_sems(
-        uint32_t num_dispatch_sems,
-        const vector_aligned<uint32_t>& noc_mcast_unicast_data,
-        ttsl::Span<const uint32_t> workers_per_sub_device);
+    void set_dispatch_sems(uint32_t num_dispatch_sems, ttsl::Span<const uint32_t> workers_per_sub_device);
 
     uint32_t id() const;
 

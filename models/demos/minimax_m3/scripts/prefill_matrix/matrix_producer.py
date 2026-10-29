@@ -120,7 +120,7 @@ def main() -> int:
 
     def push(actual_start: int, actual_end: int, slot: int = 0) -> float:
         nonlocal next_c
-        arr = pp._chunk_to_host_array(pool[actual_start : actual_start + chunk])
+        arr = pp._h2d_rows(list(pool[actual_start : actual_start + chunk]), actual_start)
         assert arr.nbytes == payload_bytes
         t = time.time()
         service.forward_to_tensor_bytes(arr, metadata=pp._pack_metadata(slot, actual_start, actual_end))

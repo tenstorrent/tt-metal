@@ -33,6 +33,11 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
     if (operation_attributes.sub_core_grids.has_value()) {
         all_cores = operation_attributes.sub_core_grids.value();
     }
+    // Interleaved input is not split across cores, so each extra core would add one more increment
+    // to every value. Run it on one core.
+    if (!input.is_sharded()) {
+        all_cores = CoreRangeSet(CoreRange(corerange_to_cores(all_cores, 1, true).front()));
+    }
 
     const auto& input_shape = input.padded_shape();
     uint32_t W = input_shape[-1];
@@ -53,45 +58,22 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
     // ---- Resource names ----
     const TensorParamName INPUT{"input"};
     const DFBSpecName IN0{"in0"};
+    const ScratchpadSpecName IN0_SCRATCH{"in0"};
     const KernelSpecName READER{"reader"};
 
-    // The input tensor is a Program-scope resource when the kernel touches it:
-    //  - DRAM (interleaved): via TensorAccessor (accessor path, gated by SRC0_IS_DRAM).
-    //  - sharded (L1): as the DFB's borrowed backing memory.
-    // For an L1-interleaved input (neither DRAM nor sharded — the pre-existing
-    // "unhandled" anomaly) the kernel operates on uninitialized L1 scratch and never
-    // references the input, so no TensorParameter is declared. Behavior is preserved.
-    const bool needs_tensor_param = src_is_dram || input.is_sharded();
-
-    // ---- Dataflow buffer (legacy c_0) ----
-    // When the input is sharded, borrow the DFB from the input buffer so the framework
-    // re-applies the globally-allocated address on a program-cache hit. Otherwise the
-    // DFB is plain L1 scratch. The reader uses it purely as an address source (raw
-    // get_write_ptr, no FIFO ops), so it is a single-toucher sync-free CB → self-loop.
-    DataflowBufferSpec in0_dfb{
-        .unique_id = IN0,
-        .entry_size = aligned_input_page_size,
-        .num_entries = 1,
-        .data_format_metadata = input_cb_data_format,
-    };
-    if (input.is_sharded()) {
-        in0_dfb.borrowed_from = INPUT;
-    }
+    // The kernel always uses the input tensor:
+    //  - interleaved (DRAM or L1): copied in and out over the NoC (NEEDS_NOC_COPY).
+    //  - sharded (L1): the DFB borrows the shard's memory.
+    const bool needs_noc_copy = !input.is_sharded();
 
     // ---- Reader kernel ----
-    // Self-loop: the sole toucher binds the DFB as both PRODUCER and CONSUMER (one
-    // accessor name). Legacy CTA slots 0 (cb index) and 1 (src_is_dram) are gone: the
-    // CB index becomes the DFB binding, and src_is_dram becomes the SRC0_IS_DRAM define
-    // (it gates the conditional TensorAccessor binding). The Buffer* RTA and the
+    // Legacy CTA slots 0 (cb index) and 1 (src_is_dram) are gone: the CB index becomes the
+    // scratchpad / DFB binding below, and src_is_dram is replaced by the NEEDS_NOC_COPY define
+    // (set for interleaved input; it gates the TensorAccessor binding). The Buffer* RTA and the
     // TensorAccessorArgs plumbing are replaced by the tensor binding.
     KernelSpec reader{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/experimental/plusone/device/kernels/reader_plusone_interleaved.cpp",
-        .dfb_bindings =
-            {
-                DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
-            },
         .compile_time_args =
             {
                 {"stick_size", aligned_input_page_size},
@@ -101,20 +83,41 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
             },
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
-    if (src_is_dram) {
-        // Accessor path (DRAM): bind the input tensor and enable the NoC transfers.
+
+    // ---- Working buffer (legacy c_0) ----
+    ProgramSpec spec;
+    if (needs_noc_copy) {
+        // Interleaved: the reader copies each stick into a private scratchpad over the NoC,
+        // increments it there and writes it back; it never uses the buffer as a FIFO. (Formerly a
+        // self-loop DFB. Quasar rejects a DFB that one data-movement kernel both produces and
+        // consumes, and rejects UInt32 as a DFB data format; a scratchpad has no data format.)
+        spec.scratchpads = {ScratchpadSpec{.unique_id = IN0_SCRATCH, .size_per_node = aligned_input_page_size}};
+        reader.scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = IN0_SCRATCH, .accessor_name = "in0"}};
         reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}};
-        reader.compiler_options.defines = {{"SRC0_IS_DRAM", "1"}};
+        reader.compiler_options.defines = {{"NEEDS_NOC_COPY", "1"}};
+    } else {
+        // Sharded: borrow the DFB from the input buffer so the framework re-applies the shard
+        // address on a program-cache hit; the reader increments the shard in place. The reader is
+        // the DFB's only toucher, so it binds it as both PRODUCER and CONSUMER (a self-loop, which
+        // Quasar rejects).
+        DataflowBufferSpec in0_dfb{
+            .unique_id = IN0,
+            .entry_size = aligned_input_page_size,
+            .num_entries = 1,
+            .data_format_metadata = input_cb_data_format,
+        };
+        in0_dfb.borrowed_from = INPUT;
+        spec.dataflow_buffers = {std::move(in0_dfb)};
+        reader.dfb_bindings = {
+            DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
+            DFBBinding{.dfb_spec_name = IN0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
+        };
     }
 
     // ---- Assemble the spec ----
-    ProgramSpec spec;
     spec.name = "plusone";
     spec.kernels = {std::move(reader)};
-    spec.dataflow_buffers = {std::move(in0_dfb)};
-    if (needs_tensor_param) {
-        spec.tensor_parameters = {TensorParameter{.unique_id = INPUT, .spec = input_mesh_tensor.tensor_spec()}};
-    }
+    spec.tensor_parameters = {TensorParameter{.unique_id = INPUT, .spec = input_mesh_tensor.tensor_spec()}};
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER}, .target_nodes = all_cores}};
 
     // ---- Run args ----
@@ -123,9 +126,7 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
     // every kernel" contract.
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{.kernel = READER}};
-    if (needs_tensor_param) {
-        run_args.tensor_args.insert({INPUT, input_mesh_tensor});
-    }
+    run_args.tensor_args.insert({INPUT, input_mesh_tensor});
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }

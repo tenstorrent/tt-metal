@@ -80,8 +80,8 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
 
     // cores must not exceed available fabric links
     {
-        auto available_link_indices =
-            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_ids[0], sender_fabric_node_ids[0]);
+        auto available_link_indices = tt::tt_fabric::get_forwarding_link_indices(
+            *input_tensor.device(), receiver_fabric_node_ids[0], sender_fabric_node_ids[0]);
         uint32_t num_available_links = available_link_indices.size();
 
         TT_FATAL(
@@ -267,7 +267,8 @@ ProgramDescriptor SendDirectAsyncProgramFactory::create_descriptor(
 
         const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[core_idx];
-        auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
+        auto link_indices = tt::tt_fabric::get_forwarding_link_indices(
+            *input_tensor.device(), sender_fabric_node_id, receiver_fabric_node_id);
 
         uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
         tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(

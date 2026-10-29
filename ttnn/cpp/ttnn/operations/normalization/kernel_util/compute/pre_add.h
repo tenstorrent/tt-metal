@@ -25,9 +25,8 @@ namespace norm::kernel_util::compute::pre_add {
  * fp32, and add_binary_tile adds them there. FPU add_tiles reads its operands from SrcA/SrcB
  * instead, and the unpacker rounds fp32 down to tf32 when it loads those registers.
  */
-template <bool fuse_pre_add, bool unpack_fp32_active = false>
-ALWI void one_row(
-    DataflowBuffer& dfb_in0, DataflowBuffer& dfb_res, DataflowBuffer& dfb_inp, uint32_t Wt, uint32_t blk) {
+template <bool fuse_pre_add, bool unpack_fp32_active = false, typename In0DFB, typename ResDFB, typename InpDFB>
+ALWI void one_row(In0DFB& dfb_in0, ResDFB& dfb_res, InpDFB& dfb_inp, uint32_t Wt, uint32_t blk) {
     if constexpr (!fuse_pre_add) {
         return;
     }

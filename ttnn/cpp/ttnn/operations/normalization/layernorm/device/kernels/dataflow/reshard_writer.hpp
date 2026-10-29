@@ -13,9 +13,10 @@
 // Move this core's output block to the storage cores that own it. `output_base_addr` is the base
 // address of the output tensor's shard, which is the same on every core it is sharded across, so it
 // doubles as the destination address on each storage core.
+template <typename DFB>
 inline void write_resharded_data(
     const Noc& noc,
-    DataflowBuffer& dfb_out,
+    DFB& dfb_out,
     uint32_t output_base_addr,
     uint32_t num_segments_to_write_back,
     uint32_t storage_core_start_offset,
