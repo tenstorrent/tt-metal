@@ -54,26 +54,45 @@
 //      e^x * 1/∑e^x
 // 2: Loop till we have parsed all of WT
 //clang-format on
+template <typename InDFB, typename OutDFB>
 void apply_fused_scale_mask(
-    std::uint32_t dfb_in, std::uint32_t dfb_fused_scale_mask, std::uint32_t dfb_out, std::uint32_t dfb_length_t, std::uint32_t blk);
+    InDFB& dfb_in_obj, std::uint32_t dfb_fused_scale_mask, OutDFB& dfb_out_obj, std::uint32_t dfb_length_t, std::uint32_t blk);
+template <typename InDFB, typename FusedAttnMaskDFB, typename OutDFB, typename MaskPaddedDFB>
 void apply_fused_attn_mask(
-    std::uint32_t dfb_in, std::uint32_t dfb_fused_attn_mask, std::uint32_t dfb_out, std::uint32_t dfb_length_t, std::uint32_t blk, bool do_mask);
-void pad_input(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_length_t, std::uint32_t blk);
-void exp_cb(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_max, std::uint32_t dfb_length_t, std::uint32_t blk);
+    InDFB& dfb_in_obj,
+    FusedAttnMaskDFB& dfb_fused_attn_mask_obj,
+    OutDFB& dfb_out_obj,
+    MaskPaddedDFB& dfb_mask_padded_obj,
+    std::uint32_t dfb_length_t,
+    std::uint32_t blk,
+    bool do_mask);
+template <typename InDFB, typename OutDFB, typename MaskPaddedDFB>
+void pad_input(
+    InDFB& dfb_in_obj, OutDFB& dfb_out_obj, MaskPaddedDFB& dfb_mask_padded_obj, std::uint32_t dfb_length_t, std::uint32_t blk);
+template <typename InDFB, typename OutDFB>
+void exp_cb(InDFB& dfb_in_obj, OutDFB& dfb_out_obj, std::uint32_t dfb_max, std::uint32_t dfb_length_t, std::uint32_t blk);
 
-template <PoolType reduce_type, std::uint32_t dfb_in_id, std::uint32_t dfb_scaler_id, std::uint32_t dfb_prev_out_id, std::uint32_t dfb_out_id>
-void reduce_cb(bool use_prev_reduce, std::uint32_t dfb_length_t);
-void apply_recip(std::uint32_t dfb_in, std::uint32_t dfb_recip, std::uint32_t dfb_out, std::uint32_t dfb_length_t, std::uint32_t blk);
+template <PoolType reduce_type, std::uint32_t dfb_in_id, std::uint32_t dfb_scaler_id, std::uint32_t dfb_prev_out_id, std::uint32_t dfb_out_id, typename InDFB, typename ScalerDFB, typename PrevOutDFB, typename OutDFB>
+void reduce_cb(
+    InDFB& dfb_in_obj,
+    ScalerDFB& dfb_scaler_obj,
+    PrevOutDFB& dfb_prev_out_obj,
+    OutDFB& dfb_out_obj,
+    bool use_prev_reduce,
+    std::uint32_t dfb_length_t);
+template <typename InDFB, typename RecipDFB, typename OutDFB>
+void apply_recip(
+    InDFB& dfb_in_obj, RecipDFB& dfb_recip_obj, OutDFB& dfb_out_obj, std::uint32_t dfb_length_t, std::uint32_t blk);
 
 // CB consumers cannot wrap mid-fifo: pops in one cycle must land exactly on fifo_limit.
 // After a partial last pass (Wt % dfb_length_t != 0), rd/wr sit at that offset. Push/pop
 // `pad` tiles to complete the cycle and return pointers to the CB base before the next stage.
 // Kept identical to the copy in softmax.cpp.
-ALWI void cycle_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
+template <typename DFB>
+ALWI void cycle_dfb_pad(DFB& dfb, std::uint32_t pad) {
     if (pad == 0) {
         return;
     }
-    DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
     dfb.reserve_back(static_cast<uint16_t>(pad));
     dfb.push_back(static_cast<uint16_t>(pad));
     dfb.wait_front(static_cast<uint16_t>(pad));
@@ -81,11 +100,11 @@ ALWI void cycle_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
 }
 
 // Same, for CBs whose padding tiles the reader already pushed: only consume them.
-ALWI void drain_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
+template <typename DFB>
+ALWI void drain_dfb_pad(DFB& dfb, std::uint32_t pad) {
     if (pad == 0) {
         return;
     }
-    DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
     dfb.wait_front(static_cast<uint16_t>(pad));
     dfb.pop_front(static_cast<uint16_t>(pad));
 }
@@ -96,13 +115,14 @@ ALWI void drain_dfb_pad(std::uint32_t dfb_id, std::uint32_t pad) {
 // Note that the attention mask will not fit in L1 for the entire tensor
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
+template <typename InDFB, typename OutDFB>
 void apply_fused_scale_mask(
-    std::uint32_t dfb_in, std::uint32_t dfb_fused_scale_mask, std::uint32_t dfb_out, std::uint32_t dfb_length_t, std::uint32_t blk) {
+    InDFB& dfb_in_obj, std::uint32_t dfb_fused_scale_mask, OutDFB& dfb_out_obj, std::uint32_t dfb_length_t, std::uint32_t blk) {
     // Requirements:
     //   dfb_length_t of dfb_in and dfb_out are the same.
     //   A partial final block (dfb_length_t not a multiple of blk) is handled by clamping rem below.
-    DataflowBuffer dfb_in_obj(static_cast<uint16_t>(dfb_in));
-    DataflowBuffer dfb_out_obj(static_cast<uint16_t>(dfb_out));
+    const std::uint32_t dfb_in = dfb_in_obj.get_id();
+    const std::uint32_t dfb_out = dfb_out_obj.get_id();
     reconfig_data_format(dfb_in, dfb_fused_scale_mask);
     pack_reconfig_data_format(dfb_out);
     mul_bcast_scalar_init(dfb_in, dfb_fused_scale_mask);
@@ -124,13 +144,19 @@ void apply_fused_scale_mask(
         tile_regs_release();
     }
 }
+template <typename InDFB, typename FusedAttnMaskDFB, typename OutDFB, typename MaskPaddedDFB>
 void apply_fused_attn_mask(
-    std::uint32_t dfb_in, std::uint32_t dfb_fused_attn_mask, std::uint32_t dfb_out, std::uint32_t dfb_length_t, std::uint32_t blk, bool do_mask) {
+    InDFB& dfb_in_obj,
+    FusedAttnMaskDFB& dfb_fused_attn_mask_obj,
+    OutDFB& dfb_out_obj,
+    MaskPaddedDFB& dfb_mask_padded_obj,
+    std::uint32_t dfb_length_t,
+    std::uint32_t blk,
+    bool do_mask) {
     constexpr auto dfb_mask_padded = dfb::mask_padded;
-    DataflowBuffer dfb_in_obj(static_cast<uint16_t>(dfb_in));
-    DataflowBuffer dfb_fused_attn_mask_obj(static_cast<uint16_t>(dfb_fused_attn_mask));
-    DataflowBuffer dfb_out_obj(static_cast<uint16_t>(dfb_out));
-    DataflowBuffer dfb_mask_padded_obj(dfb_mask_padded);
+    const std::uint32_t dfb_in = dfb_in_obj.get_id();
+    const std::uint32_t dfb_fused_attn_mask = dfb_fused_attn_mask_obj.get_id();
+    const std::uint32_t dfb_out = dfb_out_obj.get_id();
     reconfig_data_format(dfb_in, dfb_fused_attn_mask);
     pack_reconfig_data_format(dfb_out);
 #ifdef CAUSAL_MASK
@@ -175,11 +201,12 @@ void apply_fused_attn_mask(
 }
 
 // applies pad to the last pass cb if needed
-void pad_input(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_length_t, std::uint32_t blk) {
+template <typename InDFB, typename OutDFB, typename MaskPaddedDFB>
+void pad_input(
+    InDFB& dfb_in_obj, OutDFB& dfb_out_obj, MaskPaddedDFB& dfb_mask_padded_obj, std::uint32_t dfb_length_t, std::uint32_t blk) {
     constexpr auto dfb_mask_padded = dfb::mask_padded;
-    DataflowBuffer dfb_in_obj(static_cast<uint16_t>(dfb_in));
-    DataflowBuffer dfb_out_obj(static_cast<uint16_t>(dfb_out));
-    DataflowBuffer dfb_mask_padded_obj(dfb_mask_padded);
+    const std::uint32_t dfb_in = dfb_in_obj.get_id();
+    const std::uint32_t dfb_out = dfb_out_obj.get_id();
     reconfig_data_format(dfb_in, dfb_mask_padded);
     pack_reconfig_data_format(dfb_out);
     copy_init(dfb_in);  // need to copy from CB to DST to be able to run sfpu math
@@ -208,15 +235,16 @@ void pad_input(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_le
     }
 }
 
-void exp_cb(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_max, const std::uint32_t dfb_length_t, std::uint32_t blk) {
+template <typename InDFB, typename OutDFB>
+void exp_cb(InDFB& dfb_in_obj, OutDFB& dfb_out_obj, std::uint32_t dfb_max, const std::uint32_t dfb_length_t, std::uint32_t blk) {
     // requirements:
     //   dfb_length_t of dfb_in and dfb_out are the same.
     //   Calculates e^dfb_in for dfb_length_t num of tiles
     //      Also if numeric stable calcs e^(dfb_in- BCASTCOL(dfb_max))
     //   A partial final block (dfb_length_t not a multiple of blk) is handled by clamping rem below.
 
-    DataflowBuffer dfb_in_obj(static_cast<uint16_t>(dfb_in));
-    DataflowBuffer dfb_out_obj(static_cast<uint16_t>(dfb_out));
+    const std::uint32_t dfb_in = dfb_in_obj.get_id();
+    const std::uint32_t dfb_out = dfb_out_obj.get_id();
     reconfig_data_format_srca(dfb_in);
     pack_reconfig_data_format(dfb_out);
 #ifdef NUMERIC_STABLE
@@ -254,19 +282,29 @@ void exp_cb(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_max, 
     }
 }
 
-template <PoolType reduce_type, std::uint32_t dfb_in_id, std::uint32_t dfb_scaler_id, std::uint32_t dfb_prev_out_id, std::uint32_t dfb_out_id>
-void reduce_cb(bool use_prev_reduce, std::uint32_t dfb_length_t) {
+template <PoolType reduce_type, std::uint32_t dfb_in_id, std::uint32_t dfb_scaler_id, std::uint32_t dfb_prev_out_id, std::uint32_t dfb_out_id, typename InDFB, typename ScalerDFB, typename PrevOutDFB, typename OutDFB>
+void reduce_cb(
+    InDFB& dfb_in_obj,
+    ScalerDFB& dfb_scaler_obj,
+    PrevOutDFB& dfb_prev_out_obj,
+    OutDFB& dfb_out_obj,
+    bool use_prev_reduce,
+    std::uint32_t dfb_length_t) {
+    ASSERT(dfb_prev_out_obj.get_id() == dfb_prev_out_id);
     // Single reduce call with lambda that conditionally accumulates
     compute_kernel_lib::reduce<reduce_type, ReduceDim::REDUCE_ROW, dfb_in_id, dfb_scaler_id, dfb_out_id>(
+        dfb_in_obj,
+        dfb_scaler_obj,
+        dfb_out_obj,
         compute_kernel_lib::ReduceInputBlockShape::row(dfb_length_t),
         compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
         compute_kernel_lib::NoAccumulation{},
         // PostReduceOp: conditionally accumulate with previous result
-        [use_prev_reduce](std::uint32_t) {
+        [use_prev_reduce, &dfb_prev_out_obj](std::uint32_t) {
             if (use_prev_reduce) {
                 // At this point, DST[0] contains the current reduce result
                 // Load previous result into DST[1] and accumulate
-                DataflowBuffer(dfb_prev_out_id).wait_front(1);
+                dfb_prev_out_obj.wait_front(1);
                 reconfig_data_format_srca(dfb_prev_out_id);
                 copy_init(dfb_prev_out_id);
                 copy_tile(dfb_prev_out_id, 0, 1);
@@ -281,25 +319,40 @@ void reduce_cb(bool use_prev_reduce, std::uint32_t dfb_length_t) {
                     add_binary_tile(0, 1, 0);  // add(DST[0], DST[1]) -> DST[0]
                 }
 
-                DataflowBuffer(dfb_prev_out_id).pop_front(1);
+                dfb_prev_out_obj.pop_front(1);
             }
             // If !use_prev_reduce, lambda is no-op (compiles away)
         });
 }
 
-template <PoolType reduce_type, std::uint32_t dfb_in_id, std::uint32_t dfb_scaler_id, std::uint32_t dfb_ping_a, std::uint32_t dfb_ping_b>
-ALWI void reduce_dfb_pass(std::uint32_t cur_pass, bool use_prev_reduce, std::uint32_t dfb_length_t) {
+template <PoolType reduce_type, std::uint32_t dfb_in_id, std::uint32_t dfb_scaler_id, std::uint32_t dfb_ping_a, std::uint32_t dfb_ping_b, typename InDFB, typename ScalerDFB, typename PingADFB, typename PingBDFB>
+ALWI void reduce_dfb_pass(
+    InDFB& dfb_in_obj,
+    ScalerDFB& dfb_scaler_obj,
+    PingADFB& dfb_ping_a_obj,
+    PingBDFB& dfb_ping_b_obj,
+    std::uint32_t cur_pass,
+    bool use_prev_reduce,
+    std::uint32_t dfb_length_t) {
+    ASSERT(dfb_in_obj.get_id() == dfb_in_id);
+    ASSERT(dfb_scaler_obj.get_id() == dfb_scaler_id);
+    ASSERT(dfb_ping_a_obj.get_id() == dfb_ping_a);
+    ASSERT(dfb_ping_b_obj.get_id() == dfb_ping_b);
     if ((cur_pass & 1) == 0) {
-        reduce_cb<reduce_type, dfb_in_id, dfb_scaler_id, dfb_ping_b, dfb_ping_a>(use_prev_reduce, dfb_length_t);
+        reduce_cb<reduce_type, dfb_in_id, dfb_scaler_id, dfb_ping_b, dfb_ping_a>(
+            dfb_in_obj, dfb_scaler_obj, dfb_ping_b_obj, dfb_ping_a_obj, use_prev_reduce, dfb_length_t);
     } else {
-        reduce_cb<reduce_type, dfb_in_id, dfb_scaler_id, dfb_ping_a, dfb_ping_b>(use_prev_reduce, dfb_length_t);
+        reduce_cb<reduce_type, dfb_in_id, dfb_scaler_id, dfb_ping_a, dfb_ping_b>(
+            dfb_in_obj, dfb_scaler_obj, dfb_ping_a_obj, dfb_ping_b_obj, use_prev_reduce, dfb_length_t);
     }
 }
 
-void apply_recip(std::uint32_t dfb_in, std::uint32_t dfb_recip, std::uint32_t dfb_out, std::uint32_t dfb_length_t, std::uint32_t blk) {
-    DataflowBuffer dfb_in_obj(static_cast<uint16_t>(dfb_in));
-    DataflowBuffer dfb_recip_obj(static_cast<uint16_t>(dfb_recip));
-    DataflowBuffer dfb_out_obj(static_cast<uint16_t>(dfb_out));
+template <typename InDFB, typename RecipDFB, typename OutDFB>
+void apply_recip(
+    InDFB& dfb_in_obj, RecipDFB& dfb_recip_obj, OutDFB& dfb_out_obj, std::uint32_t dfb_length_t, std::uint32_t blk) {
+    const std::uint32_t dfb_in = dfb_in_obj.get_id();
+    const std::uint32_t dfb_recip = dfb_recip_obj.get_id();
+    const std::uint32_t dfb_out = dfb_out_obj.get_id();
     reconfig_data_format(dfb_in, dfb_recip);
     pack_reconfig_data_format(dfb_out);
     dfb_recip_obj.wait_front(1);
@@ -352,10 +405,18 @@ void kernel_main() {
 #endif
     DataflowBuffer dfb_max_scaler_obj(dfb_max_scaler);
     DataflowBuffer dfb_sum_scaler_obj(dfb_sum_scaler);
+    DataflowBuffer dfb_exps_obj(dfb_exps);
+    DataflowBuffer dfb_sumexps_obj(dfb_sumexps);
+    DataflowBuffer dfb_prev_reduce_obj(dfb_prev_reduce);
+    DataflowBuffer dfb_in0_obj(dfb_in0);
+    DataflowBuffer dfb_out0_obj(dfb_out0);
+    DataflowBuffer dfb_x_obj(dfb_x);
     DataflowBuffer dfb_recip_obj(dfb_recip);
     DataflowBuffer dfb_mask_padded_obj(dfb_mask_padded);
 #ifdef FUSED_SCALE_MASK
     DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
+    DataflowBuffer dfb_fused_attn_obj(dfb_fused_attn);
+    DataflowBuffer dfb_scale_mask_obj(dfb_scale_mask);
 #endif
     compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_exps);
     copy_init(dfb_mask_padded);
@@ -375,12 +436,16 @@ void kernel_main() {
     // reduce_dfb_pass<> calls below), so it is scoped to this #ifdef along with dfb_max.
     constexpr auto dfb_prev_max = dfb::prev_max;
     const std::uint32_t dfb_max_final = ((num_dfb_passes & 1) != 0) ? static_cast<std::uint32_t>(dfb_max) : static_cast<std::uint32_t>(dfb_prev_max);
+    DataflowBuffer dfb_max_obj(dfb_max);
+    DataflowBuffer dfb_prev_max_obj(dfb_prev_max);
+    auto& dfb_max_final_obj = ((num_dfb_passes & 1) != 0) ? dfb_max_obj : dfb_prev_max_obj;
 #else
     // dfb_max is only consumed on the numeric-stable path; exp_cb ignores its dfb_max argument otherwise. Bind
     // the unused slot to a valid DFB (dfb_exps) so the handle resolves without dfb_max (c_8) being allocated.
     const std::uint32_t dfb_max_final = dfb_exps;
 #endif
     const std::uint32_t dfb_sum_final = ((num_dfb_passes & 1) != 0) ? static_cast<std::uint32_t>(dfb_sumexps) : static_cast<std::uint32_t>(dfb_prev_reduce);
+    auto& dfb_sum_final_obj = ((num_dfb_passes & 1) != 0) ? dfb_sumexps_obj : dfb_prev_reduce_obj;
     // Tiles needed after Wt to finish each CB's cycle, named for the capacity they align.
     // The streamed CBs all share dfb_length_t; the reader pushes dfb_in0/dfb_fused_attn's pad.
     const std::uint32_t stream_pad = (dfb_length_t - (Wt % dfb_length_t)) % dfb_length_t;
@@ -409,18 +474,19 @@ void kernel_main() {
         for (std::uint32_t cur_pass = 0; cur_pass < num_dfb_passes; cur_pass++) {
             const bool do_mask = mask_padded_data && (cur_pass == num_dfb_passes - 1);
 #ifdef FUSED_SCALE_MASK
-            apply_fused_scale_mask(dfb_in0, dfb_fused_scale, dfb_scale_mask, cur_dfb_length_t, blk);
-            apply_fused_attn_mask(dfb_scale_mask, dfb_fused_attn, dfb_x, cur_dfb_length_t, blk, do_mask);
+            apply_fused_scale_mask(dfb_in0_obj, dfb_fused_scale, dfb_scale_mask_obj, cur_dfb_length_t, blk);
+            apply_fused_attn_mask(
+                dfb_scale_mask_obj, dfb_fused_attn_obj, dfb_x_obj, dfb_mask_padded_obj, cur_dfb_length_t, blk, do_mask);
             reduce_dfb_pass<PoolType::MAX, dfb_x, dfb_max_scaler, dfb_max, dfb_prev_max>(
-                cur_pass, use_prev_reduce, cur_dfb_length_t);
+                dfb_x_obj, dfb_max_scaler_obj, dfb_max_obj, dfb_prev_max_obj, cur_pass, use_prev_reduce, cur_dfb_length_t);
 #else
             if (do_mask && cur_pass == num_dfb_passes - 1) {
-                pad_input(dfb_in0, dfb_x, cur_dfb_length_t, blk);
+                pad_input(dfb_in0_obj, dfb_x_obj, dfb_mask_padded_obj, cur_dfb_length_t, blk);
                 reduce_dfb_pass<PoolType::MAX, dfb_x, dfb_max_scaler, dfb_max, dfb_prev_max>(
-                    cur_pass, use_prev_reduce, cur_dfb_length_t);
+                    dfb_x_obj, dfb_max_scaler_obj, dfb_max_obj, dfb_prev_max_obj, cur_pass, use_prev_reduce, cur_dfb_length_t);
             } else {
                 reduce_dfb_pass<PoolType::MAX, dfb_in0, dfb_max_scaler, dfb_max, dfb_prev_max>(
-                    cur_pass, use_prev_reduce, cur_dfb_length_t);
+                    dfb_in0_obj, dfb_max_scaler_obj, dfb_max_obj, dfb_prev_max_obj, cur_pass, use_prev_reduce, cur_dfb_length_t);
             }
 #endif
             use_prev_reduce = true;
@@ -428,14 +494,14 @@ void kernel_main() {
             cur_dfb_length_t = std::min(cur_dfb_length_t, length_left_t);
         }
         // Finish the CB cycle so the next stage starts at fifo base (see realign helpers).
-        drain_dfb_pad(dfb_in0, stream_pad);
+        drain_dfb_pad(dfb_in0_obj, stream_pad);
 #ifdef FUSED_SCALE_MASK
-        drain_dfb_pad(dfb_fused_attn, stream_pad);
-        cycle_dfb_pad(dfb_scale_mask, stream_pad);
-        cycle_dfb_pad(dfb_x, stream_pad);
+        drain_dfb_pad(dfb_fused_attn_obj, stream_pad);
+        cycle_dfb_pad(dfb_scale_mask_obj, stream_pad);
+        cycle_dfb_pad(dfb_x_obj, stream_pad);
 #else
         if (mask_padded_data) {
-            cycle_dfb_pad(dfb_x, stream_pad);
+            cycle_dfb_pad(dfb_x_obj, stream_pad);
         }
 #endif
         use_prev_reduce = false;
@@ -443,7 +509,7 @@ void kernel_main() {
         cur_dfb_length_t = dfb_length_t;
 #endif
 #ifdef NUMERIC_STABLE
-        DataflowBuffer(static_cast<uint16_t>(dfb_max_final)).wait_front(1);
+        dfb_max_final_obj.wait_front(1);
 #endif
 
         /*
@@ -456,36 +522,37 @@ void kernel_main() {
         for (std::uint32_t cur_pass = 0; cur_pass < num_dfb_passes; cur_pass++) {
             const bool do_mask = mask_padded_data && (cur_pass == num_dfb_passes - 1);
 #ifdef FUSED_SCALE_MASK
-            apply_fused_scale_mask(dfb_in0, dfb_fused_scale, dfb_scale_mask, cur_dfb_length_t, blk);
-            apply_fused_attn_mask(dfb_scale_mask, dfb_fused_attn, dfb_x, cur_dfb_length_t, blk, do_mask);
-            exp_cb(dfb_x, dfb_exps, dfb_max_final, cur_dfb_length_t, blk);
+            apply_fused_scale_mask(dfb_in0_obj, dfb_fused_scale, dfb_scale_mask_obj, cur_dfb_length_t, blk);
+            apply_fused_attn_mask(
+                dfb_scale_mask_obj, dfb_fused_attn_obj, dfb_x_obj, dfb_mask_padded_obj, cur_dfb_length_t, blk, do_mask);
+            exp_cb(dfb_x_obj, dfb_exps_obj, dfb_max_final, cur_dfb_length_t, blk);
             reduce_dfb_pass<PoolType::SUM, dfb_exps, dfb_sum_scaler, dfb_sumexps, dfb_prev_reduce>(
-                cur_pass, use_prev_reduce, cur_dfb_length_t);
+                dfb_exps_obj, dfb_sum_scaler_obj, dfb_sumexps_obj, dfb_prev_reduce_obj, cur_pass, use_prev_reduce, cur_dfb_length_t);
 #else
             if (do_mask && cur_pass == num_dfb_passes - 1) {
-                pad_input(dfb_in0, dfb_x, cur_dfb_length_t, blk);
-                exp_cb(dfb_x, dfb_exps, dfb_max_final, cur_dfb_length_t, blk);
+                pad_input(dfb_in0_obj, dfb_x_obj, dfb_mask_padded_obj, cur_dfb_length_t, blk);
+                exp_cb(dfb_x_obj, dfb_exps_obj, dfb_max_final, cur_dfb_length_t, blk);
                 reduce_dfb_pass<PoolType::SUM, dfb_exps, dfb_sum_scaler, dfb_sumexps, dfb_prev_reduce>(
-                    cur_pass, use_prev_reduce, cur_dfb_length_t);
+                    dfb_exps_obj, dfb_sum_scaler_obj, dfb_sumexps_obj, dfb_prev_reduce_obj, cur_pass, use_prev_reduce, cur_dfb_length_t);
             } else {
-                exp_cb(dfb_in0, dfb_exps, dfb_max_final, cur_dfb_length_t, blk);
+                exp_cb(dfb_in0_obj, dfb_exps_obj, dfb_max_final, cur_dfb_length_t, blk);
                 reduce_dfb_pass<PoolType::SUM, dfb_exps, dfb_sum_scaler, dfb_sumexps, dfb_prev_reduce>(
-                    cur_pass, use_prev_reduce, cur_dfb_length_t);
+                    dfb_exps_obj, dfb_sum_scaler_obj, dfb_sumexps_obj, dfb_prev_reduce_obj, cur_pass, use_prev_reduce, cur_dfb_length_t);
             }
 #endif
             use_prev_reduce = true;  // We want to accumulate the previous cb reductions
             length_left_t -= cur_dfb_length_t;
             cur_dfb_length_t = std::min(cur_dfb_length_t, length_left_t);
         }
-        drain_dfb_pad(dfb_in0, stream_pad);
-        cycle_dfb_pad(dfb_exps, stream_pad);
+        drain_dfb_pad(dfb_in0_obj, stream_pad);
+        cycle_dfb_pad(dfb_exps_obj, stream_pad);
 #ifdef FUSED_SCALE_MASK
-        drain_dfb_pad(dfb_fused_attn, stream_pad);
-        cycle_dfb_pad(dfb_scale_mask, stream_pad);
-        cycle_dfb_pad(dfb_x, stream_pad);
+        drain_dfb_pad(dfb_fused_attn_obj, stream_pad);
+        cycle_dfb_pad(dfb_scale_mask_obj, stream_pad);
+        cycle_dfb_pad(dfb_x_obj, stream_pad);
 #else
         if (mask_padded_data) {
-            cycle_dfb_pad(dfb_x, stream_pad);
+            cycle_dfb_pad(dfb_x_obj, stream_pad);
         }
 #endif
         /*
@@ -495,7 +562,7 @@ void kernel_main() {
          * --------------------------------------------------------
          * --------------------------------------------------------
          */
-        DataflowBuffer(static_cast<uint16_t>(dfb_sum_final)).wait_front(1);
+        dfb_sum_final_obj.wait_front(1);
 
         reconfig_data_format_srca(dfb_sum_final);
         pack_reconfig_data_format(dfb_sum_final, dfb_recip);
@@ -503,7 +570,7 @@ void kernel_main() {
         copy_init(dfb_sum_final);
         copy_tile(dfb_sum_final, 0, dst0);
 
-        DataflowBuffer(static_cast<uint16_t>(dfb_sum_final)).pop_front(1);
+        dfb_sum_final_obj.pop_front(1);
 
         // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
         if constexpr (DST_ACCUM_MODE) {
@@ -536,40 +603,40 @@ void kernel_main() {
         for (std::uint32_t cur_pass = 0; cur_pass < num_dfb_passes; cur_pass++) {
             const bool do_mask = mask_padded_data && (cur_pass == num_dfb_passes - 1);
 #ifdef FUSED_SCALE_MASK
-            apply_fused_scale_mask(dfb_in0, dfb_fused_scale, dfb_scale_mask, cur_dfb_length_t, blk);
-            apply_fused_attn_mask(dfb_scale_mask, dfb_fused_attn, dfb_x, cur_dfb_length_t, blk, do_mask);
-            exp_cb(dfb_x, dfb_exps, dfb_max_final, cur_dfb_length_t, blk);
+            apply_fused_scale_mask(dfb_in0_obj, dfb_fused_scale, dfb_scale_mask_obj, cur_dfb_length_t, blk);
+            apply_fused_attn_mask(
+                dfb_scale_mask_obj, dfb_fused_attn_obj, dfb_x_obj, dfb_mask_padded_obj, cur_dfb_length_t, blk, do_mask);
+            exp_cb(dfb_x_obj, dfb_exps_obj, dfb_max_final, cur_dfb_length_t, blk);
 #else
             if (do_mask && cur_pass == num_dfb_passes - 1) {
-                pad_input(dfb_in0, dfb_x, cur_dfb_length_t, blk);
-                exp_cb(dfb_x, dfb_exps, dfb_max_final, cur_dfb_length_t, blk);
+                pad_input(dfb_in0_obj, dfb_x_obj, dfb_mask_padded_obj, cur_dfb_length_t, blk);
+                exp_cb(dfb_x_obj, dfb_exps_obj, dfb_max_final, cur_dfb_length_t, blk);
             } else {
-                exp_cb(dfb_in0, dfb_exps, dfb_max_final, cur_dfb_length_t, blk);
+                exp_cb(dfb_in0_obj, dfb_exps_obj, dfb_max_final, cur_dfb_length_t, blk);
             }
 #endif
-            apply_recip(dfb_exps, dfb_recip, dfb_out0, cur_dfb_length_t, blk);
+            apply_recip(dfb_exps_obj, dfb_recip_obj, dfb_out0_obj, cur_dfb_length_t, blk);
             length_left_t -= cur_dfb_length_t;
             cur_dfb_length_t = std::min(cur_dfb_length_t, length_left_t);
         }
-        drain_dfb_pad(dfb_in0, stream_pad);
-        cycle_dfb_pad(dfb_exps, stream_pad);
+        drain_dfb_pad(dfb_in0_obj, stream_pad);
+        cycle_dfb_pad(dfb_exps_obj, stream_pad);
 #ifdef FUSED_SCALE_MASK
-        drain_dfb_pad(dfb_fused_attn, stream_pad);
-        cycle_dfb_pad(dfb_scale_mask, stream_pad);
-        cycle_dfb_pad(dfb_x, stream_pad);
+        drain_dfb_pad(dfb_fused_attn_obj, stream_pad);
+        cycle_dfb_pad(dfb_scale_mask_obj, stream_pad);
+        cycle_dfb_pad(dfb_x_obj, stream_pad);
 #else
         if (mask_padded_data) {
-            cycle_dfb_pad(dfb_x, stream_pad);
+            cycle_dfb_pad(dfb_x_obj, stream_pad);
         }
 #endif
         if (out0_pad > 0) {
-            DataflowBuffer dfb_out0_obj(dfb_out0);
             dfb_out0_obj.reserve_back(static_cast<uint16_t>(out0_pad));
             dfb_out0_obj.push_back(static_cast<uint16_t>(out0_pad));
         }
         dfb_recip_obj.pop_front(1);
 #ifdef NUMERIC_STABLE
-        DataflowBuffer(static_cast<uint16_t>(dfb_max_final)).pop_front(1);
+        dfb_max_final_obj.pop_front(1);
 #endif
     }
     // The writer generates and pushes the padding mask only when there is padding to mask, and

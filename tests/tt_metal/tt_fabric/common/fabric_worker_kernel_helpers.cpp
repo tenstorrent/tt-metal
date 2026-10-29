@@ -99,7 +99,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
     };
 
     // Get a valid link index for the connection
-    auto link_indices = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node, dest_fabric_node);
+    auto link_indices = tt::tt_fabric::get_forwarding_link_indices(*device, src_fabric_node, dest_fabric_node);
     TT_FATAL(!link_indices.empty(), "No forwarding link indices found for source {} to destination {}", src_fabric_node, dest_fabric_node);
 
     // Append fabric connection runtime args

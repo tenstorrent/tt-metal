@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Local invariants of DataflowBufferSpec::borrowed_from (dataflow_buffer_spec.hpp): the TensorParameter it names is
-// L1-resident and large enough to hold the DFB.
+// L1-resident, not per-node allocated, and large enough to hold the DFB.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -24,6 +24,7 @@ namespace {
 
 using test_helpers::MakeBorrowedDFBProgramSpec;
 using test_helpers::MakeNdShardedTensorParameter;
+using test_helpers::MakePerNodeTensorParameter;
 using test_helpers::MakeShardedTensorParameter;
 using test_helpers::ProgramSpecTestQuasar;
 
@@ -40,6 +41,14 @@ TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBNonL1TensorParameterFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is not L1-resident")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBPerNodeTensorParameterFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec();
+    spec.tensor_parameters = {MakePerNodeTensorParameter("borrowed_tensor", /*num_cores=*/1)};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("which is per-node allocated")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_BorrowedMemoryDFBOversizedFails) {

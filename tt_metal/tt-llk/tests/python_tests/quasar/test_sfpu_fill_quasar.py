@@ -6,6 +6,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     UnarySFPUGolden,
@@ -59,7 +60,7 @@ def generate_sfpu_fill_combinations(
 
         # SFPU unpack_to_dest requires bit-width match: 32-bit formats pair with
         # dest_acc=Yes, non-32-bit formats pair with dest_acc=No.
-        dest_acc = DestAccumulation.Yes if in_fmt.is_32_bit() else DestAccumulation.No
+        dest_acc = dest_acc_for(in_fmt)
 
         # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
         if (
@@ -76,7 +77,7 @@ def generate_sfpu_fill_combinations(
     # Int32 is 32-bit → dest_acc Yes; Int16 (16-bit) and Int8/UInt8 (8-bit) → dest_acc No.
     for fmt in int_formats:
         in_fmt = fmt.input_format
-        dest_acc = DestAccumulation.Yes if in_fmt.is_32_bit() else DestAccumulation.No
+        dest_acc = dest_acc_for(in_fmt)
         for input_dimensions in [[32, 32], [64, 64]]:
             combinations.append((fmt, dest_acc, runtime(input_dimensions)))
 
