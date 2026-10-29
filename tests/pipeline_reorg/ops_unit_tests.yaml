@@ -489,8 +489,8 @@
 # --- Wormhole legs moved from the Sanity pipeline (ttnn_sanity_tests.yaml) ---
 # These used to run on wh_n300_civ2 on every push to main. Sanity still runs the same
 # commands on Blackhole and ttsim; Wormhole hardware now runs them here, nightly.
-# ttnn indexer_score group moved too, but needs no entry: its WH coverage is the
-# full indexer_score file in "ttnn nightly experimental tests (wormhole)" above.
+# ttnn indexer_score group dropped its WH leg without an entry here: the op is
+# Blackhole-only and test_indexer_score.py skips the whole module on Wormhole.
 
 - name: ttnn conv group
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"'
