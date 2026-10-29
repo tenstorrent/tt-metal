@@ -405,7 +405,7 @@ protected:
         return expected;
     }
 
-    std::vector<uint32_t> ExpectedReservation(uint32_t seed) {
+    std::vector<uint32_t> ExpectedReservation(uint32_t seed) const {
         std::vector<uint32_t> expected(fixture_reservation_bytes / sizeof(uint32_t), kSentinel);
         PutPattern(expected, fixture_offset, kDFBDepth * fixture_entry_size, seed);
         return expected;

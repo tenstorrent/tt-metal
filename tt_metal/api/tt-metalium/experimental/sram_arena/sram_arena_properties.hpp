@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <variant>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>

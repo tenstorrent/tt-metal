@@ -99,7 +99,7 @@ TEST_F(SRAMArenaAllocationTest, CPU_MovedFromMutableAccessFails) {
     auto arena = SRAMArena::allocate(fixture_device, LockstepSRAMArenaProperties{4096});
     auto owner = std::move(arena);
     EXPECT_THAT(
-        [&] { (void)arena.impl(); },
+        [&] { (void)arena.impl(); },  // NOLINT(bugprone-use-after-move)
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
 }
 
@@ -109,7 +109,7 @@ TEST_F(SRAMArenaAllocationTest, CPU_MovedFromConstAccessFails) {
     auto arena = SRAMArena::allocate(fixture_device, LockstepSRAMArenaProperties{4096});
     auto owner = std::move(arena);
     EXPECT_THAT(
-        [&] { (void)std::as_const(arena).impl(); },
+        [&] { (void)std::as_const(arena).impl(); },  // NOLINT(bugprone-use-after-move)
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
 }
 
@@ -125,7 +125,7 @@ TEST_F(SRAMArenaAllocationTest, CPU_MoveConstructionTransfersValue) {
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto source = SRAMArena::allocate(fixture_device, LockstepSRAMArenaProperties{4096});
     auto owner = std::move(source);
-    EXPECT_TRUE(source.is_valueless_after_move());
+    EXPECT_TRUE(source.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
     EXPECT_FALSE(owner.is_valueless_after_move());
 }
 
@@ -135,7 +135,7 @@ TEST_F(SRAMArenaAllocationTest, CPU_MoveAssignmentTransfersValue) {
     auto source = SRAMArena::allocate(fixture_device, LockstepSRAMArenaProperties{4096});
     auto target = SRAMArena::allocate(fixture_device, LockstepSRAMArenaProperties{4096});
     target = std::move(source);
-    EXPECT_TRUE(source.is_valueless_after_move());
+    EXPECT_TRUE(source.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
     EXPECT_FALSE(target.is_valueless_after_move());
 }
 

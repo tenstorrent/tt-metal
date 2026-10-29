@@ -322,6 +322,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedFromValidatedSetFails) {
     auto program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
     auto owner = std::move(arena);
     EXPECT_THAT(
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         [&] { SetProgramRunArgs(program, AllocationArgs(arena), /*skip_validation=*/false); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
 }
@@ -333,6 +334,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedFromUncheckedSetFails) {
     auto program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
     auto owner = std::move(arena);
     EXPECT_THAT(
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         [&] { SetProgramRunArgs(program, AllocationArgs(arena), /*skip_validation=*/true); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
 }
@@ -345,6 +347,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedFromValidatedUpdateFails) {
     SetProgramRunArgs(program, AllocationArgs(arena));
     auto owner = std::move(arena);
     EXPECT_THAT(
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         [&] { UpdateProgramRunArgs(program, AllocationArgs(arena), /*skip_validation=*/false); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
 }
@@ -357,6 +360,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedFromUncheckedUpdateFails) {
     SetProgramRunArgs(program, AllocationArgs(arena));
     auto owner = std::move(arena);
     EXPECT_THAT(
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         [&] { UpdateProgramRunArgs(program, AllocationArgs(arena), /*skip_validation=*/true); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
 }
