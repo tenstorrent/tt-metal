@@ -12,9 +12,14 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
+
+constexpr std::uint32_t SDPA_REUSE_REPLAY_BLOCK_LEN          = 3;
+constexpr std::uint32_t SDPA_REUSE_REPLAY_BUF_LEN            = 30;
+constexpr std::uint32_t SDPA_REUSE_REPLAY_FINAL_BLOCK_OFFSET = SDPA_REUSE_REPLAY_BUF_LEN - SDPA_REUSE_REPLAY_BLOCK_LEN;
 
 // SDPA_CUSTOM_MM_REUSE_DEST_SRCB
 // Custom matmul that reuses SrcB from dest and only unpacks SrcA.
@@ -49,13 +54,12 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     // This supports first_half up to 9 tiles and second_half up to 9 tiles = 18 max.
     // Practical limit is 16 due to dst size.
 
-    constexpr std::uint32_t REPLAY_BUF_LEN = 30;
     load_replay_buf(
         0,
-        REPLAY_BUF_LEN,
+        SDPA_REUSE_REPLAY_BUF_LEN,
         []
         {
-            for (std::uint32_t i = 0; i < 9; i++)
+            for (std::uint32_t i = 0; i < SDPA_REUSE_REPLAY_FINAL_BLOCK_OFFSET / SDPA_REUSE_REPLAY_BLOCK_LEN; i++)
             {
                 TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);
                 TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
@@ -84,13 +88,14 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
     const std::uint32_t first_half_iters  = (nt_dim + 1) >> 1;
     const std::uint32_t second_half_iters = nt_dim >> 1;
 
-    const std::uint32_t first_half  = lltt::replay_insn(0, first_half_iters * 3);
-    const std::uint32_t second_half = lltt::replay_insn(REPLAY_BUF_LEN - second_half_iters * 3, second_half_iters * 3);
+    const std::uint32_t first_half = lltt::replay_insn(0, first_half_iters * SDPA_REUSE_REPLAY_BLOCK_LEN);
+    const std::uint32_t second_half =
+        lltt::replay_insn(SDPA_REUSE_REPLAY_BUF_LEN - second_half_iters * SDPA_REUSE_REPLAY_BLOCK_LEN, second_half_iters * SDPA_REUSE_REPLAY_BLOCK_LEN);
 
     // For nt_dim == 1: only inner_increment block is needed, use B-mode
     // block_increment == inner_increment when nt_dim == 1 so either block works,
     // but we use the inner_increment block (last 3 insns) for correctness
-    const std::uint32_t single_tile = lltt::replay_insn(REPLAY_BUF_LEN - 3, 3);
+    const std::uint32_t single_tile = lltt::replay_insn(SDPA_REUSE_REPLAY_FINAL_BLOCK_OFFSET, SDPA_REUSE_REPLAY_BLOCK_LEN);
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
         nt_dim == 1,                            // B-mode when single tile per k-row
@@ -120,6 +125,47 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_sdpa_custom_mm_reuse_d
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+}
+
+/**
+ * @brief Unpack one OV K row using the SrcB-reuse replay buffer.
+ *
+ * @param address_a: L1 address of the first V tile in 16-byte words, minus one.
+ * @param tile_size_a: V tile size in 16-byte words.
+ * @param nt_dim: Number of contiguous V tiles in the row, from 1 to 16.
+ * @note Call @ref _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_ with the same nt_dim first;
+ *       do not reload the replay buffer before this call. Call @ref _llk_unpack_A_sdpa_set_srcb_dummy_valid_
+ *       before unpacking and pair with @ref _llk_math_sdpa_custom_mm_reuse_dest_srcb_ at kt_dim = 1.
+ */
+inline void _llk_unpack_A_sdpa_custom_mm_single_row_(const std::uint32_t address_a, const std::uint32_t tile_size_a, const std::uint32_t nt_dim)
+{
+    LLK_ASSERT(nt_dim >= 1 && nt_dim <= 16, "single-row OV nt_dim must be between 1 and 16");
+    volatile std::uint32_t* cfg = get_cfg_pointer();
+    wait_for_next_context(1 /*num_contexts*/);
+    reset_config_context();
+    cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
+    cfg[SCRATCH_SEC0_val_ADDR32]             = tile_size_a;
+    cfg[SCRATCH_SEC1_val_ADDR32]             = tile_size_a; // Final address is unused.
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+    // Each replay block is [UNPACR SrcA, CFGSHIFTMASK, NOP]. Split wider rows
+    // into head and tail windows; the tail includes the final inner-increment block.
+    if (nt_dim == 1)
+    {
+        lltt::replay(SDPA_REUSE_REPLAY_FINAL_BLOCK_OFFSET, SDPA_REUSE_REPLAY_BLOCK_LEN);
+    }
+    else
+    {
+        const std::uint32_t first_half_len  = SDPA_REUSE_REPLAY_BLOCK_LEN * ((nt_dim + 1) / 2);
+        const std::uint32_t second_half_len = SDPA_REUSE_REPLAY_BLOCK_LEN * (nt_dim / 2);
+        lltt::replay(0 /*start*/, first_half_len);
+        lltt::replay(SDPA_REUSE_REPLAY_BUF_LEN - second_half_len, second_half_len);
+    }
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    wait_for_next_context(1 /*num_contexts*/);
+    reset_config_context();
+    TTI_SETADCZW(p_setadc::UNP_AB, 0 /*Ch1_W*/, 0 /*Ch1_Z*/, 0 /*Ch0_W*/, 0 /*Ch0_Z*/, 0b1111 /*BitMask*/);
+    TTI_SETADCXY(p_setadc::UNP_AB, 0 /*Ch1_Y*/, 0 /*Ch1_X*/, 0 /*Ch0_Y*/, 0 /*Ch0_X*/, 0b1010 /*BitMask*/);
 }
 
 // Both nt_dim and kt_dim loops collapsed into a single MOP call.
