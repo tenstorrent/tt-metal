@@ -805,7 +805,7 @@ tasks:
       DS41_ENGRAM_TABLE: resident
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && DS41_ENGRAM_TABLE=resident BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -842,7 +842,7 @@ tasks:
       DS41_ENGRAM_TABLE: resident
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && DS41_ENGRAM_TABLE=resident BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -878,7 +878,7 @@ tasks:
       DS41_CCL_PERSISTENT_OUT: 'on'
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -911,7 +911,7 @@ tasks:
       DS41_ROPE_UNIFORM_PROGRAM: 'on'
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
-      && BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit

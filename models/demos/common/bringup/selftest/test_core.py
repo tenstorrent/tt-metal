@@ -484,3 +484,28 @@ def test_a_spec_rule_that_contradicts_realistic_precision_is_refused():
     }
     assert stale_precision_rules(ok) == []
     assert stale_precision_rules({}) == []
+
+
+def test_a_gate_that_needs_device_time_but_only_profiles_the_wall_is_refused_up_front(sandbox):
+    """F212: device_ms_* gated while every test_profile.py segment is wall-only (BRINGUP_PROFILE_WALL=1): the gate adds
+    no profiled run, the metric is MISSING and no agent attempt can pass it (DeepSeek-V4.1 P.6). The ledger and the
+    gate's pre-check name it; without the flag the gate adds the wall run and the profiled run itself (F114)."""
+    from models.demos.common.bringup.core.gate import with_clean_wall
+    from models.demos.common.bringup.core.ledger import wall_only_device_metrics
+
+    prof = "scripts/run_safe_pytest.sh models/demos/common/bringup/tests/test_profile.py"
+    bad = {
+        "step": "perf",
+        "gate": {"cmd": f"true && BRINGUP_PROFILE_WALL=1 {prof}", "metrics": {"device_ms_total": "<= 230"}},
+    }
+    good = {"step": "perf", "gate": {"cmd": f"true && {prof}", "metrics": {"device_ms_total": "<= 230"}}}
+    wall = {"step": "perf", "gate": {"cmd": f"BRINGUP_PROFILE_WALL=1 {prof}", "metrics": {"chunk_wall_ms": "< 500"}}}
+    assert wall_only_device_metrics(bad) and "device_ms_total" in wall_only_device_metrics(bad)[0]
+    assert wall_only_device_metrics(good) == [] and wall_only_device_metrics(wall) == []
+    segs = with_clean_wall(good["gate"]["cmd"]).split("&&")
+    assert any("BRINGUP_PROFILE_WALL=1" in s for s in segs) and any("BRINGUP_WALL_CLEAN=1" in s for s in segs)
+    led = sandbox.tasks(task("A.1", "true", metrics={"device_ms_total": "<= 230"}))
+    t = led.tasks()["A.1"]
+    t["gate"]["cmd"] = f"BRINGUP_PROFILE_WALL=1 {prof}"
+    led.tasks_path.write_text(__import__("yaml").safe_dump({"tasks": list(led.tasks().values())[:0] + [t]}))
+    assert any("wall-only" in e for e in led.validate())
