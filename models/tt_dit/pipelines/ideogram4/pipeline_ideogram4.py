@@ -315,9 +315,10 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         self.tokenizer = _tf.AutoTokenizer.from_pretrained(weights_dir, subfolder="tokenizer")
         self._enc_head_dim = qcfg.hidden_size // qcfg.num_attention_heads
         self._enc_mrope = qcfg.rope_scaling["mrope_section"]
-        # transformers >=4.57 moved rope_theta to the top-level config; older versions
-        # kept it inside rope_scaling. Accept both.
-        self._enc_rope_theta = qcfg.rope_scaling.get("rope_theta", qcfg.rope_theta)
+        # rope_theta lives inside rope_scaling on some transformers versions and only at the top
+        # level on others (5.x has no top-level attribute). Accept both; don't use .get()'s default,
+        # which evaluates qcfg.rope_theta eagerly and raises AttributeError on 5.x.
+        self._enc_rope_theta = qcfg.rope_scaling.get("rope_theta") or qcfg.rope_theta
         self.encoder = Qwen3VlTextEncoder(
             vocab_size=qcfg.vocab_size,
             hidden_size=qcfg.hidden_size,
