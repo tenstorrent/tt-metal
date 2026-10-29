@@ -272,8 +272,15 @@ class Case:
                 rt.ccl_column,
             )
             dense = ttnn.to_torch(tt_dense, mesh_composer=self.composer).float()
-        # want_ref="slice": the first and last head of the first and last shard only (production sizes).
-        sl = dict(heads=[0, self.H - 1], shards=[0, self.S - 1]) if want_ref == "slice" else {}
+        # Reference coverage (fp64 on the host dominates the test time):
+        #   True / "sample": heads first, second, middle, last on every shard (every device, the head boundaries);
+        #   "slice": first and last head of the first and last shard (production sizes); "full": everything.
+        if want_ref == "full":
+            sl = {}
+        elif want_ref == "slice":
+            sl = dict(heads=[0, self.H - 1], shards=[0, self.S - 1])
+        else:
+            sl = dict(heads=sorted({0, 1, self.H // 2, self.H - 1}))
         ref = (
             sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, self.S, self.scale, pooled=pooled, **sl)
             if want_ref
@@ -325,7 +332,7 @@ def test_keep_all_matches_dense(runtime, geom):
     """Every full block kept and no partial blocks: the sparse op is dense attention."""
     case = Case(runtime, ALIGNED[geom])
     mask = make_mask(case.geo, case.S, case.H, density=KEEP_ALL)
-    r = case.run(*case.inputs(0), mask)
+    r = case.run(*case.inputs(0), mask, want_ref="full" if geom == "r512k512" else True)
     _check(f"keepall {geom}", r, _density(mask, case.geo, case.S), dense_min=0.9995, ref_min=0.9995)
 
 
@@ -460,7 +467,7 @@ def test_kept_only_keep_all_matches_dense(runtime, geom):
     """No pooled route and every full block kept: dense attention."""
     case = Case(runtime, ALIGNED[geom])
     mask = make_mask(case.geo, case.S, case.H, density=KEEP_ALL)
-    r = case.run(*case.inputs(9), mask, pooled=False)
+    r = case.run(*case.inputs(9), mask, pooled=False, want_ref="full" if geom == "r512k512" else True)
     _check(f"kept-only keepall {geom}", r, _density(mask, case.geo, case.S), dense_min=0.9995, ref_min=0.9995)
 
 
