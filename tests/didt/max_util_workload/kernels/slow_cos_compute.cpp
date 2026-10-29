@@ -19,6 +19,7 @@
 
 // Provides TRISC_UNPACK infra (llk_unpack_AB_matmul_api.h, etc.) and the
 // shared compute pack/common headers.
+#include <cstdint>
 #include "api/compute/matmul.h"
 // Adds cos_tile_init() / cos_tile() under TRISC_MATH.
 #include "api/compute/eltwise_unary/trigonometry.h"
@@ -30,31 +31,29 @@
 // ---------------------------------------------------------------------------
 
 #ifdef TRISC_UNPACK
-ALWI void slow_cos_unpack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_buffer0_addr) {
+ALWI void slow_cos_unpack(std::uint32_t num_loops, std::uint32_t num_tiles, std::uint32_t l1_buffer0_addr) {
     constexpr bool is_fp32_dest_acc_en = false;
-    constexpr uint32_t face_r_dim = 16;
-    constexpr uint32_t num_faces_A = 4;
-    constexpr uint32_t num_faces_B = 4;
+    constexpr std::uint32_t face_r_dim = 16;
+    constexpr std::uint32_t num_faces_A = 4;
+    constexpr std::uint32_t num_faces_B = 4;
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        (uint32_t)DataFormat::Float16_b,
-        (uint32_t)DataFormat::Float16_b,
-        (uint32_t)DataFormat::Float16_b,
-        (uint32_t)DataFormat::Float16_b,
-        face_r_dim,
-        face_r_dim,
-        num_faces_A,
-        num_faces_B,
+        (std::uint32_t)DataFormat::Float16_b,
+        (std::uint32_t)DataFormat::Float16_b,
+        (std::uint32_t)DataFormat::Float16_b,
+        (std::uint32_t)DataFormat::Float16_b,
+        ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces_A),
+        ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces_B),
         128 /* tile size for float16_b >> 4 */,
         128 /* tile size for float16_b >> 4 */);
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     TT_SETADCXX(p_setadc::UNP_A, 1024 - 1, 0x0);
 
-    volatile uint32_t* cfg = get_cfg_pointer();
+    volatile std::uint32_t* cfg = get_cfg_pointer();
 
-    for (uint32_t i = 0; i < num_loops; i++) {
-        for (uint32_t j = 0; j < num_tiles; j++) {
-            uint32_t address_a = L1_ADDRESS(l1_buffer0_addr + j * 2048);
+    for (std::uint32_t i = 0; i < num_loops; i++) {
+        for (std::uint32_t j = 0; j < num_tiles; j++) {
+            std::uint32_t address_a = L1_ADDRESS(l1_buffer0_addr + j * 2048);
 
             wait_for_next_context(2);
             if (0 == unp_cfg_context) {
@@ -96,9 +95,10 @@ ALWI void slow_cos_unpack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_bu
 // ---------------------------------------------------------------------------
 
 #ifdef TRISC_MATH
-ALWI void slow_cos_math(uint32_t num_loops, uint32_t num_tiles) {
+ALWI void slow_cos_math(std::uint32_t num_loops, std::uint32_t num_tiles) {
     constexpr bool is_fp32_dest_acc_en = false;
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>((uint32_t)DataFormat::Float16_b, (uint32_t)DataFormat::Float16_b);
+    _llk_math_hw_configure_<is_fp32_dest_acc_en>(
+        (std::uint32_t)DataFormat::Float16_b, (std::uint32_t)DataFormat::Float16_b);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     addr_mod_t{
@@ -114,9 +114,9 @@ ALWI void slow_cos_math(uint32_t num_loops, uint32_t num_tiles) {
 
     cos_tile_init();
 
-    for (uint32_t i = 0; i < num_loops; i++) {
+    for (std::uint32_t i = 0; i < num_loops; i++) {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-        for (uint32_t j = 0; j < num_tiles; j++) {
+        for (std::uint32_t j = 0; j < num_tiles; j++) {
             math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(j);
             ckernel_template::run();
 
@@ -128,10 +128,10 @@ ALWI void slow_cos_math(uint32_t num_loops, uint32_t num_tiles) {
 #endif  // TRISC_MATH
 
 void kernel_main() {
-    constexpr uint32_t l1_buffer0_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t l1_buffer2_addr = get_compile_time_arg_val(1);
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t num_loops = get_compile_time_arg_val(3);
+    constexpr std::uint32_t l1_buffer0_addr = get_compile_time_arg_val(0);
+    constexpr std::uint32_t l1_buffer2_addr = get_compile_time_arg_val(1);
+    constexpr std::uint32_t num_tiles = get_compile_time_arg_val(2);
+    constexpr std::uint32_t num_loops = get_compile_time_arg_val(3);
 
     UNPACK((slow_cos_unpack(num_loops, num_tiles, l1_buffer0_addr)));
     MATH((slow_cos_math(num_loops, num_tiles)));

@@ -164,10 +164,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             unpack_src_format,
                             unpack_dst_format,
                             unpack_dst_format,
-                            FACE_R_DIM,
-                            FACE_R_DIM,
-                            4 /* num_faces */,
-                            4 /* num_faces */);
+                            ckernel::DEFAULT_TENSOR_SHAPE,
+                            ckernel::DEFAULT_TENSOR_SHAPE);
                     }
                     else
                     {
