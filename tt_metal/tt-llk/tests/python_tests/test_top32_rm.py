@@ -98,9 +98,8 @@ TOP_K = 32
 #              transpose moves to the math thread. This is the branch the consumer uses for
 #              its uint32 INDEX tile.
 #
-# Through the Metal wrappers (test_top32_rm_via_metal_wrappers) the branch is the wrapper's
-# choice, which is unpack-to-dest for Int32 only: there Float32 takes the SrcA branch and is
-# narrowed on the way in -- see "the Metal wrapper layer" below.
+# Through the Metal wrappers (test_top32_rm_via_metal_wrappers) the wrapper picks the branch:
+# unpack-to-dest for Int32 only, so Float32 takes SrcA and is narrowed on the way in.
 #
 # bf16's 8 mantissa bits are what bound the row at 256, since indices ride in the same format
 # as the values; Float32 would not bind, but keeping one sweep makes the two branches
@@ -116,9 +115,8 @@ FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=
 # 256  four full chunks, and the largest row whose indices stay exact in bf16
 ROW_ELEMENTS = [64, 128, 160, 256]
 
-# The Metal unpack wrapper reads its operand through Metal's operand tables and CB interface,
-# which live under two roots the harness does not add for every test. Relative to tests/,
-# the compile cwd, like the roots in TestConfig.setup_compilation_options.
+# The Metal unpack wrapper reads Metal's operand tables and CB interface, whose roots the
+# harness does not add by default (relative to tests/, the compile cwd).
 METAL_WRAPPER_INCLUDE_DIRS = [
     "-I../../hw/ckernels/blackhole/metal/llk_io",
     "-I../../api",
@@ -156,11 +154,9 @@ def _pad_to_tile(flat):
 )
 def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
     is_32bit = formats.input_format.is_32_bit()
-    # Through the Metal wrapper layer the unpack branch is the wrapper's choice, and it sends
-    # every format but Int32 through SrcA: a Float32 row is converted to the Dest width on the
-    # way in (Float16_b without fp32 Dest, Tf32 with), which is how the consumer's build
-    # configures Float32 scores. Driving the primitives directly, Float32 is too wide for SrcA
-    # and takes the unpack-to-dest branch, which needs fp32 Dest and whole chunks.
+    # Through the Metal wrappers Float32 goes through SrcA, narrowed to the Dest width (as the
+    # consumer configures its scores); driving the primitives, Float32 is too wide for SrcA and
+    # takes unpack-to-dest, which needs fp32 Dest and whole chunks.
     unpacks_to_dest = is_32bit and not via_wrappers
     if unpacks_to_dest:
         skip_if_32bit_input_without_dest_acc(formats, dest_acc)
@@ -205,12 +201,9 @@ def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
         include_dirs=METAL_WRAPPER_INCLUDE_DIRS if via_wrappers else None,
     )
 
-    # Round the stimuli to the format the unpacker hands on before generating the golden, so
-    # the golden is a statement about what the device actually sorts. That is the input format
-    # on the primitives path, but through the Metal wrappers a Float32 row is narrowed to
-    # Float16_b (dest_acc=No) or Tf32 (dest_acc=Yes) on its way into SrcA. Exact here by
-    # construction -- every value and index is a small integer -- and asserted rather than
-    # assumed.
+    # Round the stimuli to the format the unpacker hands on (the input format on the primitives
+    # path; Float16_b or Tf32 through the wrappers) so the golden is about what the device sorts.
+    # Exact here by construction (small integers), and asserted.
     unpack_out_format = configuration.formats_config[0].unpack_A_dst
     values_in = values.to(format_dict[unpack_out_format]).to(torch.float32)
     indices_in = indices.to(format_dict[unpack_out_format]).to(torch.float32)
@@ -221,10 +214,8 @@ def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
 
     golden_values, golden_indices = _golden(values_in, indices_in)
 
-    # Every chunk after the first is reached through a computed L1 offset, and the last chunk
-    # is the one furthest from where a wrong offset would land. Make sure the answer depends
-    # on it: a winner must come from the last chunk, or an offset that re-reads earlier
-    # elements could pass because the whole top-32 happened to sit in the chunks it did reach.
+    # A winner must come from the last chunk, which is reached through the computed L1 offset:
+    # otherwise an offset that re-reads earlier elements could pass.
     last_chunk_first = ((row_elements - 1) // ELEMENTS_PER_CHUNK) * ELEMENTS_PER_CHUNK
     assert bool((golden_indices >= last_chunk_first).any()), (
         f"row_elements={row_elements}: no element of the top-32 lies in the last chunk "
@@ -490,16 +481,11 @@ def test_top32_rm_32bit_partial_chunk(formats, row_elements, request):
 # code-generated, and computes what the primitives compute. A signature drift or a wrong
 # template argument inside a wrapper is invisible without this.
 #
-# In the plain mode the unpack thread goes through the Metal wrapper as well
-# (`experimental/llk_unpack_A_top32_rm_api.h`, the consumer's entry point). That wrapper is not
-# thin: it picks the unpack branch from the src format and computes the L1 offset of each chunk
-# from the operand's formats, neither of which the primitives are handed. So the Float32 cells
-# here are a different test from their `test_top32_rm` namesakes: there Float32 is driven down
-# the unpack-to-dest branch, here it takes the SrcA branch the wrapper chooses for it, with the
-# unpacker narrowing to Float16_b (dest_acc=No) or Tf32 (dest_acc=Yes) -- the configurations
-# the consumer's build produces for Float32 scores. The dest_acc=No, 160-element cell is the
-# only place where a wrapper that sizes the chunk offset by the Dest format rather than the L1
-# format shows: the two widths differ there, and the row has chunks past the first.
+# In the plain mode the unpack thread goes through the Metal wrapper too
+# (`experimental/llk_unpack_A_top32_rm_api.h`), which picks the branch from the src format and
+# sizes the chunk offset from the operand's formats. Float32 therefore takes SrcA here, narrowed
+# to Float16_b (dest_acc=No) or Tf32 (dest_acc=Yes); the dest_acc=No, 160-element cell is the
+# one where an offset sized by the Dest format instead of the L1 format shows.
 
 
 @parametrize(

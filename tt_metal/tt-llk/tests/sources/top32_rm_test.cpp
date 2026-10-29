@@ -127,10 +127,9 @@ static constexpr bool PRE_SORTED_MODE = (TOP32_MODE == 1);
 
 static_assert(!PRE_SORTED_MODE || TOP32_ROW_ELEMENTS >= ELEMENTS_PER_TILE, "the pre-sorted mode needs at least one whole 1024-element chunk");
 
-// In the plain mode through the Metal wrappers the unpack branch is the wrapper's choice -- Int32 src
-// to Dest, every other format through SrcA -- while the math thread still branches on the harness's
-// unpack_to_dest. The two agree only when unpack_to_dest is false (no Int32 cell exists); make that a
-// build error rather than a hang. bind_operand checks the src format side of the same contract.
+// Through the Metal wrappers the unpack branch is the wrapper's choice (Int32 src to Dest, the
+// rest through SrcA) while the math thread branches on unpack_to_dest; they agree only when it
+// is false, so make the other case a build error rather than a hang.
 static_assert(
     !(TOP32_VIA_WRAPPERS && !PRE_SORTED_MODE && unpack_to_dest),
     "via_wrappers mode 0 sends non-Int32 formats through SrcA; build it with unpack_to_dest=false");
@@ -151,13 +150,10 @@ static_assert(
 #include "llk_unpack_common.h"
 
 #if TOP32_VIA_WRAPPERS
-// The Metal unpack wrapper (experimental/llk_unpack_A_top32_rm_api.h) owns two decisions the
-// primitives below never see: which branch a format takes -- chosen on the src format being
-// Int32, so Float32 goes through SrcA like the 16-bit formats and is converted to the Dest
-// width on the way in -- and the L1 offset of chunk k. It reads the operand's formats and CB
-// read pointer through the tables the Metal JIT build generates per kernel; the harness has no
-// CBs, so the tables are defined here and filled from the runtime formats and buffers.
-// Operand 0 is the values row, operand 1 the indices.
+// The Metal unpack wrapper (experimental/llk_unpack_A_top32_rm_api.h) picks the branch from the
+// src format (Float32 goes through SrcA, narrowed to the Dest width) and computes each chunk's L1
+// offset from the operand's formats, read through the per-kernel Metal tables. The harness has no
+// CBs, so the tables are defined here: operand 0 is the values row, operand 1 the indices.
 #include "internal/circular_buffer_interface.h"
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
@@ -206,9 +202,8 @@ inline void unpack_chunk(std::uint32_t operand, std::uint32_t chunk, std::uint32
 // One operand of one chunk. Re-initialising per call mirrors the consumer, which has to
 // because it reconfigures srcA between the value and index operands.
 //
-// Two branches. llk_unpack_A_top32_rm_api.h keys its choice on the src format being Int32 and
-// sends every other format, Float32 included, through SrcA; here unpack_to_dest = is_32bit sends
-// Float32 to Dest as well (see above), so the two agree only for Int32:
+// Two branches. The wrapper keys on the src format being Int32 and sends Float32 through SrcA;
+// here unpack_to_dest = is_32bit sends Float32 to Dest as well, so the two agree only for Int32:
 //
 //   16-bit  the unpacker does the within-face 16x16 transpose itself and clears SrcA to
 //           -infinity first, so unfed faces lose every comparison.
@@ -289,9 +284,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const std::uint32_t num_faces = chunk_num_faces(first);
 
 #if TOP32_VIA_WRAPPERS
-        // Mode 0 only. Mode 1 is Float32 and holds its operands in Dest: its unpack-to-dest
-        // transposes above and its math thread are both built for that, while the Metal wrapper
-        // would send Float32 through SrcA -- a different configuration.
+        // Mode 0 only: mode 1 holds Float32 in Dest (unpack-to-dest above, math built for it),
+        // where the Metal wrapper would send Float32 through SrcA.
         if constexpr (!PRE_SORTED_MODE)
         {
             unpack_chunk(VALUES_OPERAND, chunk, num_faces);
