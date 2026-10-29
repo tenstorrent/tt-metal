@@ -1,0 +1,683 @@
+{
+ "stage": "03-matmul (E9.3)",
+ "commit": "5207e7e7b5",
+ "compute_grid": [
+  12,
+  10
+ ],
+ "precision_config": "sdpa_nofp32acc (doc/datatype_sweep/selected_precision_config.json, unchanged)",
+ "regime": "headline sustained (contract); burst also reported",
+ "before_definition": "same-session control on the same commit with the tuned table off: EG2_MM_TUNED=0 (issues the a12d330bb3 matmul calls; config_dump.py --tuned-off)",
+ "runs": {
+  "sweep_new": "EMBEDDING_GEMMA2_PREFILL_ALL=1, defaults (tt-ops/runs/embeddinggemma-2/e9/03-matmul/run_ab/sweep_new)",
+  "sweep_ctl": "EMBEDDING_GEMMA2_PREFILL_ALL=1 EG2_MM_TUNED=0 (run_ab/sweep_ctl)",
+  "final_sweep": "scripts/mm_sweep.py --set final, EG2_MM_TUNED=0, burst medians (search/final_*.jsonl)"
+ },
+ "final_sweep_burst_median_ms": {
+  "128": {
+   "ctl_start": 4.8773,
+   "only_ple_gate": 4.8736,
+   "only_ple_wide": 4.8688,
+   "only_qkv_full": 4.8697,
+   "only_qkv_sliding": 4.8713,
+   "all_kept": 4.8396,
+   "ctl_end": 4.8779
+  },
+  "256": {
+   "ctl_start": 5.8744,
+   "only_gate": 5.8643,
+   "only_ple_gate": 5.8674,
+   "all_kept": 5.8546,
+   "ctl_end": 5.8752
+  },
+  "512": {
+   "ctl_start": 7.2146,
+   "ctl_end": 7.2138
+  },
+  "1024": {
+   "ctl_start": 11.6471,
+   "only_gate": 11.5478,
+   "only_qkv_sliding": 11.6385,
+   "only_up": 11.6279,
+   "all_kept": 11.5084,
+   "ctl_end": 11.6468
+  },
+  "2048": {
+   "ctl_start": 25.0877,
+   "only_down": 24.993,
+   "only_gate": 24.7979,
+   "only_o_sliding": 24.7903,
+   "only_ple_gate": 25.0484,
+   "only_ple_proj": 24.779,
+   "only_qkv_full": 25.0576,
+   "only_qkv_sliding": 24.9679,
+   "only_up": 24.9435,
+   "all_kept": 23.797,
+   "ctl_end": 25.0851
+  },
+  "4096": {
+   "ctl_start": 43.9273,
+   "only_down": 43.6447,
+   "only_gate": 43.36,
+   "only_o_sliding": 43.7236,
+   "only_ple_gate": 43.8795,
+   "only_ple_proj": 43.512,
+   "only_qkv_full": 43.8451,
+   "only_qkv_sliding": 43.578,
+   "only_up": 43.5074,
+   "all_kept": 41.6143,
+   "ctl_end": 43.922
+  },
+  "8192": {
+   "ctl_start": 100.218,
+   "only_down": 100.0033,
+   "only_gate": 96.6987,
+   "only_o_sliding": 100.09,
+   "only_ple_gate": 98.848,
+   "only_ple_layer": 100.1293,
+   "only_up": 99.9362,
+   "all_kept": 94.7374,
+   "ctl_end": 100.1895
+  },
+  "16384": {
+   "ctl_start": 211.7705,
+   "only_down": 211.3156,
+   "only_gate": 205.6248,
+   "only_ple_gate": 208.4826,
+   "only_ple_layer": 211.5241,
+   "only_up": 211.4028,
+   "all_kept": 201.3255,
+   "ctl_end": 211.7542
+  },
+  "32768": {
+   "ctl_start": 520.1842,
+   "only_down": 520.0035,
+   "only_gate": 512.6525,
+   "only_ple_gate": 501.2965,
+   "only_ple_layer": 520.0018,
+   "all_kept": 492.9986,
+   "ctl_end": 521.1712
+  },
+  "65536": {
+   "ctl_start": 1565.4049,
+   "only_down": 1573.7285,
+   "only_gate": 1560.3625,
+   "only_ple_gate": 1540.5192,
+   "only_ple_layer": 1573.7799,
+   "all_kept": 1529.62,
+   "ctl_end": 1576.497
+  }
+ },
+ "shapes": {
+  "b1_s128_masked": {
+   "after": {
+    "burst_ms": {
+     "median_ms": 4.839827003888786,
+     "avg_ms": 4.839743552729487,
+     "best_ms": 4.839107464067638,
+     "n": 20,
+     "windows": 5
+    },
+    "sustained_ms": 4.835886735236272,
+    "sustained_first_window_ms": 4.836294925413453,
+    "sustained_replays": 6240,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1350.0,
+     "power_w": 78.0,
+     "current_a": 97.0,
+     "vcore_v": 0.809,
+     "asic_temp_c": 69.054
+    },
+    "aiclk_min_mhz": 1350.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9942359516267729,
+    "embedding_cosine": 0.9983430504798889,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "before_control": {
+    "burst_ms": {
+     "median_ms": 4.87785441800952,
+     "avg_ms": 4.878168138675392,
+     "best_ms": 4.877803451381624,
+     "n": 20,
+     "windows": 5
+    },
+    "sustained_ms": 4.874427038814547,
+    "sustained_first_window_ms": 4.875406726869275,
+    "sustained_replays": 6180,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1350.0,
+     "power_w": 80.0,
+     "current_a": 99.0,
+     "vcore_v": 0.809,
+     "asic_temp_c": 69.695
+    },
+    "aiclk_min_mhz": 1350.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9942359516267729,
+    "embedding_cosine": 0.9983430504798889,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "change": {
+    "burst": -0.007795930518207483,
+    "sustained": -0.007906632568583372
+   },
+   "latency_ms_headline_after": 4.835886735236272
+  },
+  "b1_s256_masked": {
+   "after": {
+    "burst_ms": {
+     "median_ms": 5.854796944186091,
+     "avg_ms": 5.854724748060107,
+     "best_ms": 5.853840452618897,
+     "n": 20,
+     "windows": 5
+    },
+    "sustained_ms": 5.851423194588617,
+    "sustained_first_window_ms": 5.852515126990024,
+    "sustained_replays": 5160,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1350.0,
+     "power_w": 84.0,
+     "current_a": 105.0,
+     "vcore_v": 0.808,
+     "asic_temp_c": 70.208
+    },
+    "aiclk_min_mhz": 1350.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9933581146237362,
+    "embedding_cosine": 0.9987865090370178,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "before_control": {
+    "burst_ms": {
+     "median_ms": 5.874496512115002,
+     "avg_ms": 5.874379682354629,
+     "best_ms": 5.872073443606496,
+     "n": 20,
+     "windows": 5
+    },
+    "sustained_ms": 5.8710950700675735,
+    "sustained_first_window_ms": 5.870831220903817,
+    "sustained_replays": 5185,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1350.0,
+     "power_w": 84.0,
+     "current_a": 105.0,
+     "vcore_v": 0.808,
+     "asic_temp_c": 70.593
+    },
+    "aiclk_min_mhz": 1350.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9943216025302404,
+    "embedding_cosine": 0.998605489730835,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "change": {
+    "burst": -0.0033534053324031365,
+    "sustained": -0.003350631397411541
+   },
+   "latency_ms_headline_after": 5.851423194588617
+  },
+  "b1_s512_masked": {
+   "after": {
+    "burst_ms": {
+     "median_ms": 7.214420149102807,
+     "avg_ms": 7.214715159498155,
+     "best_ms": 7.2134086629375815,
+     "n": 20,
+     "windows": 5
+    },
+    "sustained_ms": 7.211365796891706,
+    "sustained_first_window_ms": 7.213390112987587,
+    "sustained_replays": 4200,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1350.0,
+     "power_w": 95.0,
+     "current_a": 119.0,
+     "vcore_v": 0.804,
+     "asic_temp_c": 72.387
+    },
+    "aiclk_min_mhz": 1343.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9953724605493003,
+    "embedding_cosine": 0.9991215467453003,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "before_control": {
+    "burst_ms": {
+     "median_ms": 7.2152412962168455,
+     "avg_ms": 7.2150093130767345,
+     "best_ms": 7.213959796354175,
+     "n": 20,
+     "windows": 5
+    },
+    "sustained_ms": 7.211103899005268,
+    "sustained_first_window_ms": 7.21251071829881,
+    "sustained_replays": 4200,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1350.0,
+     "power_w": 96.0,
+     "current_a": 120.0,
+     "vcore_v": 0.804,
+     "asic_temp_c": 72.772
+    },
+    "aiclk_min_mhz": 1343.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9953724605493003,
+    "embedding_cosine": 0.9991215467453003,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "change": {
+    "burst": -0.00011380729768095676,
+    "sustained": 3.631869545994704e-05
+   },
+   "latency_ms_headline_after": 7.211365796891706
+  },
+  "b1_s1024_masked": {
+   "after": {
+    "burst_ms": {
+     "median_ms": 11.511745215911004,
+     "avg_ms": 11.51143699987895,
+     "best_ms": 11.510088574141264,
+     "n": 18,
+     "windows": 5
+    },
+    "sustained_ms": 11.505555160428312,
+    "sustained_first_window_ms": 11.509510095823895,
+    "sustained_replays": 2640,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1350.0,
+     "power_w": 106.0,
+     "current_a": 133.0,
+     "vcore_v": 0.802,
+     "asic_temp_c": 74.438
+    },
+    "aiclk_min_mhz": 1343.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9957718059760876,
+    "embedding_cosine": 0.9994741678237915,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "before_control": {
+    "burst_ms": {
+     "median_ms": 11.647327182193598,
+     "avg_ms": 11.647328035905957,
+     "best_ms": 11.645866557955742,
+     "n": 18,
+     "windows": 5
+    },
+    "sustained_ms": 11.643371728876996,
+    "sustained_first_window_ms": 11.646041321719801,
+    "sustained_replays": 2580,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1350.0,
+     "power_w": 105.0,
+     "current_a": 131.0,
+     "vcore_v": 0.802,
+     "asic_temp_c": 74.822
+    },
+    "aiclk_min_mhz": 1350.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9957716740909542,
+    "embedding_cosine": 0.9993923306465149,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "change": {
+    "burst": -0.011640607682925852,
+    "sustained": -0.011836482735227194
+   },
+   "latency_ms_headline_after": 11.505555160428312
+  },
+  "b1_s2048_masked": {
+   "after": {
+    "burst_ms": {
+     "median_ms": 23.8145197638207,
+     "avg_ms": 23.814159631729126,
+     "best_ms": 23.807755464480984,
+     "n": 9,
+     "windows": 5
+    },
+    "sustained_ms": 23.81020785486769,
+    "sustained_first_window_ms": 23.811629618562403,
+    "sustained_replays": 1281,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1350.0,
+     "power_w": 118.0,
+     "current_a": 149.0,
+     "vcore_v": 0.8,
+     "asic_temp_c": 75.207
+    },
+    "aiclk_min_mhz": 1343.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.994917815599913,
+    "embedding_cosine": 0.9995266199111938,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "before_control": {
+    "burst_ms": {
+     "median_ms": 25.110852962825447,
+     "avg_ms": 25.11120141716674,
+     "best_ms": 25.102956627961248,
+     "n": 8,
+     "windows": 5
+    },
+    "sustained_ms": 25.100002950057387,
+    "sustained_first_window_ms": 25.100551499053836,
+    "sustained_replays": 1200,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1350.0,
+     "power_w": 115.0,
+     "current_a": 144.5,
+     "vcore_v": 0.8,
+     "asic_temp_c": 75.335
+    },
+    "aiclk_min_mhz": 1343.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.995737969435722,
+    "embedding_cosine": 0.9995204210281372,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "change": {
+    "burst": -0.05162441916743565,
+    "sustained": -0.05138625273296027
+   },
+   "latency_ms_headline_after": 23.81020785486769
+  },
+  "b1_s4096_masked": {
+   "after": {
+    "burst_ms": {
+     "median_ms": 41.608777549117804,
+     "avg_ms": 41.611127480864525,
+     "best_ms": 41.60474939271808,
+     "n": 5,
+     "windows": 5
+    },
+    "sustained_ms": 41.63351454413854,
+    "sustained_first_window_ms": 41.60422108207758,
+    "sustained_replays": 728,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1350.0,
+     "power_w": 115.0,
+     "current_a": 144.0,
+     "vcore_v": 0.798,
+     "asic_temp_c": 73.925
+    },
+    "aiclk_min_mhz": 1343.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9953691603761585,
+    "embedding_cosine": 0.9995163679122925,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "before_control": {
+    "burst_ms": {
+     "median_ms": 43.9192115329206,
+     "avg_ms": 43.924708385020494,
+     "best_ms": 43.9173836261034,
+     "n": 5,
+     "windows": 5
+    },
+    "sustained_ms": 43.936361597540476,
+    "sustained_first_window_ms": 43.918611171344914,
+    "sustained_replays": 684,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1350.0,
+     "power_w": 118.0,
+     "current_a": 147.0,
+     "vcore_v": 0.799,
+     "asic_temp_c": 74.31
+    },
+    "aiclk_min_mhz": 1343.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9958071231573907,
+    "embedding_cosine": 0.9996092319488525,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "change": {
+    "burst": -0.05260645405874287,
+    "sustained": -0.0524132397328696
+   },
+   "latency_ms_headline_after": 41.63351454413854
+  },
+  "b1_s8192_masked": {
+   "after": {
+    "burst_ms": {
+     "median_ms": 94.8882616745929,
+     "avg_ms": 94.88768174002568,
+     "best_ms": 94.86078176026543,
+     "n": 3,
+     "windows": 5
+    },
+    "sustained_ms": 96.30539167361955,
+    "sustained_first_window_ms": 94.89287513618667,
+    "sustained_replays": 312,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1318.0,
+     "power_w": 114.5,
+     "current_a": 146.0,
+     "vcore_v": 0.791,
+     "asic_temp_c": 72.9
+    },
+    "aiclk_min_mhz": 1312.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9967581108071714,
+    "embedding_cosine": 0.9996622800827026,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "before_control": {
+    "burst_ms": {
+     "median_ms": 100.34258368735512,
+     "avg_ms": 100.33732370163004,
+     "best_ms": 100.30753367270033,
+     "n": 3,
+     "windows": 5
+    },
+    "sustained_ms": 101.14863058552146,
+    "sustained_first_window_ms": 100.30228663235903,
+    "sustained_replays": 300,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1331.0,
+     "power_w": 116.0,
+     "current_a": 147.0,
+     "vcore_v": 0.796,
+     "asic_temp_c": 73.284
+    },
+    "aiclk_min_mhz": 1325.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.996284132345224,
+    "embedding_cosine": 0.9996507167816162,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "change": {
+    "burst": -0.054357001906156444,
+    "sustained": -0.0478823972590211
+   },
+   "latency_ms_headline_after": 96.30539167361955
+  },
+  "b1_s16384_masked": {
+   "after": {
+    "burst_ms": {
+     "median_ms": 201.34001846114793,
+     "avg_ms": 201.33152393003306,
+     "best_ms": 201.25733269378543,
+     "n": 3,
+     "windows": 5
+    },
+    "sustained_ms": 213.81042525172234,
+    "sustained_first_window_ms": 201.3399018906057,
+    "sustained_replays": 300,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1237.0,
+     "power_w": 116.5,
+     "current_a": 152.0,
+     "vcore_v": 0.768,
+     "asic_temp_c": 73.028
+    },
+    "aiclk_min_mhz": 1231.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9971117071001082,
+    "embedding_cosine": 0.9996577501296997,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "before_control": {
+    "burst_ms": {
+     "median_ms": 211.75510498384634,
+     "avg_ms": 211.7452023240427,
+     "best_ms": 211.69831464067101,
+     "n": 3,
+     "windows": 5
+    },
+    "sustained_ms": 222.04067542528114,
+    "sustained_first_window_ms": 211.7187843347589,
+    "sustained_replays": 300,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1256.0,
+     "power_w": 118.0,
+     "current_a": 153.0,
+     "vcore_v": 0.774,
+     "asic_temp_c": 73.541
+    },
+    "aiclk_min_mhz": 1243.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9970570607030382,
+    "embedding_cosine": 0.9996733665466309,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "change": {
+    "burst": -0.04918458293363415,
+    "sustained": -0.03706640757507673
+   },
+   "latency_ms_headline_after": 213.81042525172234
+  },
+  "b1_s32768_masked": {
+   "after": {
+    "burst_ms": {
+     "median_ms": 493.4900567556421,
+     "avg_ms": 493.56768978759646,
+     "best_ms": 493.22707920024794,
+     "n": 3,
+     "windows": 5
+    },
+    "sustained_ms": 544.669542927295,
+    "sustained_first_window_ms": 485.50377832725644,
+    "sustained_replays": 300,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1156.0,
+     "power_w": 123.0,
+     "current_a": 165.0,
+     "vcore_v": 0.747,
+     "asic_temp_c": 73.412
+    },
+    "aiclk_min_mhz": 1143.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9970858935609697,
+    "embedding_cosine": 0.9996540546417236,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "before_control": {
+    "burst_ms": {
+     "median_ms": 520.9105922840536,
+     "avg_ms": 520.9493810931841,
+     "best_ms": 520.2266316240033,
+     "n": 3,
+     "windows": 5
+    },
+    "sustained_ms": 564.479922875762,
+    "sustained_first_window_ms": 512.8435296937823,
+    "sustained_replays": 300,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1181.0,
+     "power_w": 117.0,
+     "current_a": 156.0,
+     "vcore_v": 0.7535000000000001,
+     "asic_temp_c": 73.669
+    },
+    "aiclk_min_mhz": 1175.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.996932675456537,
+    "embedding_cosine": 0.9996532797813416,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "change": {
+    "burst": -0.052639619801509,
+    "sustained": -0.03509492392137237
+   },
+   "latency_ms_headline_after": 544.669542927295
+  },
+  "b1_s65536_masked": {
+   "after": {
+    "burst_ms": {
+     "median_ms": 1534.655393877377,
+     "avg_ms": 1533.5873342119157,
+     "best_ms": 1528.4590708712738,
+     "n": 3,
+     "windows": 5
+    },
+    "sustained_ms": 1630.3969006985426,
+    "sustained_first_window_ms": 1425.480657722801,
+    "sustained_replays": 300,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1100.0,
+     "power_w": 126.0,
+     "current_a": 173.0,
+     "vcore_v": 0.733,
+     "asic_temp_c": 75.079
+    },
+    "aiclk_min_mhz": 1087.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.997290595334762,
+    "embedding_cosine": 0.9995840191841125,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "before_control": {
+    "burst_ms": {
+     "median_ms": 1569.3588314267497,
+     "avg_ms": 1568.5552740469575,
+     "best_ms": 1564.9566606928904,
+     "n": 3,
+     "windows": 5
+    },
+    "sustained_ms": 1661.9418021291494,
+    "sustained_first_window_ms": 1465.2928849682212,
+    "sustained_replays": 300,
+    "sustained_telemetry": {
+     "aiclk_mhz": 1112.0,
+     "power_w": 126.0,
+     "current_a": 173.0,
+     "vcore_v": 0.735,
+     "asic_temp_c": 75.463
+    },
+    "aiclk_min_mhz": 1093.0,
+    "gate": "pass",
+    "last_hidden_pcc": 0.9972403919928315,
+    "embedding_cosine": 0.9995833039283752,
+    "replay_equals_eager_bitwise": true,
+    "round_trip_ms": null
+   },
+   "change": {
+    "burst": -0.02211313107902979,
+    "sustained": -0.018980749741172587
+   },
+   "latency_ms_headline_after": 1630.3969006985426
+  }
+ }
+}
