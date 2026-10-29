@@ -12,7 +12,8 @@
 namespace ckernel::sfpu {
 
 // Programs the Cody-Waite constants of expm1_cw_clamped into vConstFloatPrgm0/1/2, which calculate_elu
-// reads on every row. This kernel runs no reciprocal, so Prgm0 is not sfpu_reciprocal_init's 2.0f here.
+// reads on every row. Nothing else may program Prgm0..2 between this init and calculate_elu; on Wormhole
+// sfpu_reciprocal_init owns all three (its Newton-seed coefficients), so no reciprocal may run in between.
 inline void elu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     expm1_cw_init_prgm_consts();
@@ -22,7 +23,7 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_elu(uint slope) {
     sfpi::vFloat alpha = Converter::as_float(slope);
     // expm1's two top Horner coefficients, loaded once and held in LRegs for the whole loop (the three
-    // Cody-Waite constants come from Prgm0/1/2, see the init above; sfpi (through 7.89.0) never hoists a literal out
+    // Cody-Waite constants come from Prgm0/1/2, see the init above; sfpi (as of 7.90.0) never hoists a literal out
     // of a loop by itself).
     sfpi::vFloat h_top1 = CW_EXPM1_H_TOP1, h_top0 = CW_EXPM1_H_TOP0;
 // unroll 2: with expm1_cw_clamped inlined the loop body is large enough that

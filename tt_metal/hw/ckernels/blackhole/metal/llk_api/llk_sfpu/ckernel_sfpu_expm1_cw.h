@@ -37,13 +37,28 @@ constexpr float CW_EXPM1_H_TOP1 = 4.1875664145e-02f;
 constexpr float CW_EXPM1_H_TOP0 = 8.3751315251e-03f;
 #endif
 
-// expm1_cw_clamped with its five loop-invariant fp32 constants supplied by the caller. Each may be a float
-// (materialised by SFPLOADI where used, exactly as the literal is in expm1_cw_clamped(x)) or an
-// sfpi::vFloat / vConstFloatPrgmN the caller holds across its row loop: sfpi (through 7.89.0) never hoists a literal
-// out of a loop by itself, so in a row loop every fp32 literal otherwise costs an SFPLOADI pair per row.
-// Identical arithmetic either way. The constants are template-typed rather than sfpi::vFloat because a
-// vFloat parameter is built before the call and stays live through the body, which changes the
-// non-hoisting callers' code.
+/**
+ * @brief exp(x) - 1 for x clamped to >= -87, with its five loop-invariant fp32 constants supplied by the caller.
+ *
+ * Each constant may be a float (materialised by SFPLOADI where used, exactly as the literal is in
+ * expm1_cw_clamped(x)) or an sfpi::vFloat / vConstFloatPrgmN the caller holds across its row loop: sfpi (as of
+ * 7.90.0) never hoists a literal out of a loop by itself, so in a row loop every fp32 literal otherwise costs an
+ * SFPLOADI pair per row. Identical arithmetic either way. The constants are template-typed rather than
+ * sfpi::vFloat because a vFloat parameter is built before the call and stays live through the body, which
+ * changes the non-hoisting callers' code.
+ *
+ * @tparam K: Type of inv_ln2, values = <float/sfpi::vFloat>
+ * @tparam HI: Type of neg_ln2_hi, values = <float/sfpi::vFloat>
+ * @tparam LO: Type of neg_ln2_lo, values = <float/sfpi::vFloat>
+ * @tparam T1: Type of h_top1, values = <float/sfpi::vFloat>
+ * @tparam T0: Type of h_top0, values = <float/sfpi::vFloat>
+ * @param x: Input value.
+ * @param inv_ln2: CW_INV_LN2.
+ * @param neg_ln2_hi: CW_NEG_LN2_HI.
+ * @param neg_ln2_lo: CW_NEG_LN2_LO.
+ * @param h_top1: CW_EXPM1_H_TOP1.
+ * @param h_top0: CW_EXPM1_H_TOP0.
+ */
 template <typename K, typename HI, typename LO, typename T1, typename T0>
 sfpi_inline sfpi::vFloat expm1_cw_clamped(
     sfpi::vFloat x, K inv_ln2, HI neg_ln2_hi, LO neg_ln2_lo, T1 h_top1, T0 h_top0) {
@@ -80,7 +95,8 @@ sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x) {
 /**
  * @brief Programs the three Cody-Waite constants into vConstFloatPrgm0/1/2 for expm1_cw_clamped_prgm.
  *
- * Only for kernels that run no reciprocal: Prgm0 is sfpu_reciprocal_init's 2.0f wherever one does.
+ * Nothing else may program Prgm0..2 between this init and expm1_cw_clamped_prgm. sfpu_reciprocal_init
+ * programs Prgm0 on Blackhole and all three on Wormhole, so a reciprocal cannot run in between.
  *
  * @note Call this in the kernel's init; @ref expm1_cw_clamped_prgm reads vConstFloatPrgm0-2 on every row.
  */
@@ -98,6 +114,8 @@ inline void expm1_cw_init_prgm_consts() {
  * are all spoken for (sfpi cannot spill: one hoisted constant too many is a compile error, "too few lregs",
  * never a slowdown).
  *
+ * @tparam T1: Type of h_top1, values = <float/sfpi::vFloat>
+ * @tparam T0: Type of h_top0, values = <float/sfpi::vFloat>
  * @param x: Input value.
  * @param h_top1: CW_EXPM1_H_TOP1, bound by the caller outside its row loop.
  * @param h_top0: CW_EXPM1_H_TOP0, bound by the caller outside its row loop.
