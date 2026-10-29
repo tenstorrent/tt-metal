@@ -247,7 +247,7 @@ class Qwen36MLP:
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
         silu_in_mul = False
-        if T > 1 and swiglu_enabled() and _rows(x) > SWIGLU_ROWS_MIN:
+        if T > 1 and swiglu_enabled() and _rows(x) >= SWIGLU_ROWS_MIN:
             hidden = prefill_swiglu(x, self._gate_up_fused(), ckc, memory_config=mc)
             return self._down(hidden, T, ckc, mc)
         if T > 1:

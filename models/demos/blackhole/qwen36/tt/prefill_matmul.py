@@ -91,7 +91,7 @@ def _blocks(m_tiles, k_tiles, n_tiles):
     return (*(entry[1] if m >= 8192 else entry[0]), None)
 
 
-SWIGLU_ROWS_MIN = 512  # fused SwiGLU only above this many rows (the cases where SiLU is not fused into w1)
+SWIGLU_ROWS_MIN = 512  # fused SwiGLU from this many rows up (below it SiLU is fused into the 1D-mcast w1)
 SWIGLU_BLOCKS = (4, 32, 8)  # (M, K, N) blocks for the fused SwiGLU matmul; K block 64 overflows L1
 SWIGLU_BLOCKS_NO_ACC = (4, 16, 12)  # same, swept with fp32 acc off
 
@@ -122,8 +122,9 @@ def _config(device, m_tiles, k_tiles, n_tiles):
 
 
 def _small_m_path(m_tiles, n, activation):
-    """None: minimal_matmul. "plain"/"silu": 1D-mcast linear at small M (silu fused when asked)."""
-    if m_tiles <= 4 or (m_tiles <= 8 and n >= 4096) or (activation == "silu" and m_tiles <= 16):
+    """None: minimal_matmul. "plain"/"silu": 1D-mcast linear at small M (silu fused when asked); at M <= 256 rows
+    from N = 3072 up (the attention q|k|v matmul included)."""
+    if m_tiles <= 4 or (m_tiles <= 8 and n >= 3072) or (activation == "silu" and m_tiles <= 16):
         return "silu" if activation == "silu" else "plain"
     return None
 
