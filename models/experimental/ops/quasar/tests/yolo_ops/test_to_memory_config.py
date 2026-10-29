@@ -69,20 +69,22 @@ def test_to_memory_config_placement(ttnn_mesh_device, reset_seeds, target_memcfg
 
 # --- interleaved -> WIDTH-sharded move (per-core conv input config). ---------
 @U.with_default_mesh()
+# The parameter is the channel count, not a spatial size: conftest drops any int ``width`` param above
+# EMU_MAX_HW as a feature-map side, which would deselect this one-tile-row case from -m emulator.
 @pytest.mark.parametrize(
-    "width",
+    "channels",
     [
         pytest.param(512, id="width-512"),  # yolov8l neck channels
         pytest.param(256, id="width-256"),  # yolov8s neck channels
         pytest.param(128, id="width-128"),  # yolov8s shallow neck channels
     ],
 )
-def test_to_memory_config_interleaved_to_sharded(ttnn_mesh_device, reset_seeds, width):
+def test_to_memory_config_interleaved_to_sharded(ttnn_mesh_device, reset_seeds, channels):
     mesh = ttnn_mesh_device
-    shape = (1, 1, U.TILE, width)
+    shape = (1, 1, U.TILE, channels)
     x_torch = U.torch_rand(shape)
     x = U.to_tt(x_torch, mesh)  # interleaved DRAM
-    out = ttnn.to_memory_config(x, _width_sharded(U.TILE, width))
+    out = ttnn.to_memory_config(x, _width_sharded(U.TILE, channels))
     assert out.is_sharded(), "expected a sharded output"
     U.assert_lossless(x_torch, out, mesh_device=mesh)
 

@@ -475,9 +475,9 @@ void append_reduce_scatter_common_args(
     const Tensor& intermediate,
     const Tensor& output,
     const std::optional<Tensor>& penult) {
-    TT_FATAL(input.buffer() != nullptr, "reduce_scatter input buffer is null");
-    TT_FATAL(intermediate.buffer() != nullptr, "reduce_scatter intermediate buffer is null");
-    TT_FATAL(output.buffer() != nullptr, "reduce_scatter output buffer is null");
+    TT_FATAL(input.is_allocated(), "reduce_scatter input buffer is null");
+    TT_FATAL(intermediate.is_allocated(), "reduce_scatter intermediate buffer is null");
+    TT_FATAL(output.is_allocated(), "reduce_scatter output buffer is null");
     common_args.push_back(input.buffer());
     common_args.push_back(intermediate.buffer());
     common_args.push_back(output.buffer());

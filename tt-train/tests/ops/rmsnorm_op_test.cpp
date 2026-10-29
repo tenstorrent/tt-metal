@@ -4,10 +4,14 @@
 
 #include "ops/rmsnorm_op.hpp"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cassert>
+#include <cmath>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <tt-umd/cluster.hpp>
@@ -18,6 +22,7 @@
 #include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 #include "metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.hpp"
 #include "metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp"
 #include "metal/ops/rmsnorm_fw/rmsnorm_fw.hpp"
@@ -25,15 +30,25 @@
 #include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
+
 class RMSNormOpTest : public ::testing::Test {
 protected:
-    void SetUp() override {
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
+    }
+
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+
+    void SetUp() override {
         ttml::autograd::ctx().set_seed(42);
     }
 
     void TearDown() override {
-        ttml::autograd::ctx().close_device();
+        ttml::autograd::ctx().reset_graph();
     }
 };
 
@@ -324,8 +339,10 @@ TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Backward_Batch) {
  * - Memory: fits in L1 cache vs exceeds L1 cache capacity
  * - Block size: odd C (block_size=1) vs even C (block_size=2)
  * - Scale: small to very large C dimensions
+ *
+ * @param train_gamma With false, gamma is frozen: the kernel skips dL/dgamma and gamma gets no gradient.
  */
-static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
+static void CompareKernelVsComposite(const std::vector<uint32_t>& shape, const bool train_gamma = true) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     float eps = 0.0078125F;
@@ -340,12 +357,12 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
 
     // Test forward pass - kernel vs composite
     auto x_kernel = autograd::create_tensor(core::from_xtensor(x_data, device), /* requires_grad */ true);
-    auto gamma_kernel = autograd::create_tensor(core::from_xtensor(gamma_data, device), /* requires_grad */ true);
+    auto gamma_kernel = autograd::create_tensor(core::from_xtensor(gamma_data, device), train_gamma);
     auto result_kernel = ops::rmsnorm(x_kernel, gamma_kernel, eps);
     auto result_kernel_xtensor = core::to_xtensor(result_kernel->get_value());
 
     auto x_composite = autograd::create_tensor(core::from_xtensor(x_data, device), /* requires_grad */ true);
-    auto gamma_composite = autograd::create_tensor(core::from_xtensor(gamma_data, device), /* requires_grad */ true);
+    auto gamma_composite = autograd::create_tensor(core::from_xtensor(gamma_data, device), train_gamma);
     auto result_composite = ops::rmsnorm_composite(x_composite, gamma_composite, eps);
     auto result_composite_xtensor = core::to_xtensor(result_composite->get_value());
 
@@ -368,25 +385,28 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
 
     // Since composite is finite, the kernel should also be finite
     auto x_grad_composite = core::to_xtensor(x_composite->get_grad());
-    auto gamma_grad_composite = core::to_xtensor(gamma_composite->get_grad());
     auto x_grad_kernel = core::to_xtensor(x_kernel->get_grad());
-    auto gamma_grad_kernel = core::to_xtensor(gamma_kernel->get_grad());
-    // Should be composite here
 
     // Verify gradients have correct shapes and are finite
     EXPECT_EQ(x_grad_kernel.shape(), x_data.shape());
-    EXPECT_EQ(gamma_grad_kernel.shape()[3], shape[3]);
     EXPECT_TRUE(xt::all(xt::isfinite(x_grad_kernel)));
-    EXPECT_TRUE(xt::all(xt::isfinite(gamma_grad_kernel)));
-
     EXPECT_EQ(x_grad_composite.shape(), x_data.shape());
-    EXPECT_EQ(gamma_grad_composite.shape()[3], shape[3]);
     EXPECT_TRUE(xt::all(xt::isfinite(x_grad_composite)));
-    EXPECT_TRUE(xt::all(xt::isfinite(gamma_grad_composite)));
 
     // Compare backward results
     EXPECT_TRUE(xt::allclose(x_grad_kernel, x_grad_composite, 1.0e-3F, 2e-3F));
-    EXPECT_TRUE(xt::allclose(gamma_grad_kernel, gamma_grad_composite, 1.0e-3F, 2e-3F));
+
+    ASSERT_EQ(gamma_kernel->is_grad_initialized(), train_gamma);
+    ASSERT_EQ(gamma_composite->is_grad_initialized(), train_gamma);
+    if (train_gamma) {
+        auto gamma_grad_composite = core::to_xtensor(gamma_composite->get_grad());
+        auto gamma_grad_kernel = core::to_xtensor(gamma_kernel->get_grad());
+        EXPECT_EQ(gamma_grad_kernel.shape()[3], shape[3]);
+        EXPECT_TRUE(xt::all(xt::isfinite(gamma_grad_kernel)));
+        EXPECT_EQ(gamma_grad_composite.shape()[3], shape[3]);
+        EXPECT_TRUE(xt::all(xt::isfinite(gamma_grad_composite)));
+        EXPECT_TRUE(xt::allclose(gamma_grad_kernel, gamma_grad_composite, 1.0e-3F, 2e-3F));
+    }
 
     autograd::ctx().reset_graph();
 }
@@ -477,6 +497,20 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_BlockSize2_EvenC) {
     CompareKernelVsComposite({1U, 1U, 1U, 126U});  // C = 126 (even)
 }
 
+// Frozen gamma (e.g. under LoRA): the backward skips dL/dgamma, on the resident and the streaming path. add_grad drops
+// the gradient of a frozen gamma by itself, so the program cache is what shows the skip: after a trained run of the
+// same shape, the frozen run compiles exactly one program, the backward without dL/dgamma.
+TEST_F(RMSNormOpTest, RMSNorm_Compare_FrozenGamma) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->clear_program_cache();
+    for (const auto& shape : {std::vector<uint32_t>{1U, 1U, 32U, 1024U}, std::vector<uint32_t>{1U, 1U, 1U, 16384U}}) {
+        CompareKernelVsComposite(shape, /* train_gamma */ true);
+        const auto num_programs = device->num_program_cache_entries();
+        CompareKernelVsComposite(shape, /* train_gamma */ false);
+        EXPECT_EQ(device->num_program_cache_entries(), num_programs + 1U) << "C = " << shape[3];
+    }
+}
+
 // Test training-like shapes with NanoLlama dimensions
 TEST_F(RMSNormOpTest, RMSNorm_Compare_TrainingShapes_NanoLlama) {
     // NanoLlama training shape: batch=64, seq_len=256, hidden_dim=384
@@ -502,7 +536,448 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_Masking_Patterns) {
 }
 
 // ============================================================================
-// Section 4: rmsnorm_fw / rmsnorm_bw program-cache hits
+// Section 4: RMSNorm Kernel vs Double-Precision Reference, Plain and Gated
+// ============================================================================
+// rmsnorm_fw/rmsnorm_bw against a host reference with bf16 and fp32 input and with dL/dgamma on and off. Gated mode
+// computes rmsnorm(x) * gamma * silu(gate) per V-wide head: x and dx are head-major [B*H, 1, T, V], while gate,
+// dL_dout, dgate and the output are head-merged [B, 1, T, H*V]. The plain mode is H = 1 without a gate.
+// ============================================================================
+
+namespace {
+
+constexpr float kEps = 1e-6F;
+// Max error over max |expected|, per index of dim 0. bf16 rounding alone is up to 2^-8 of the peak, so 1e-2 is ~2.5x
+// that. dx also carries the bf16 1/rms error (up to 2^-7), so its budget is 2^-8 + 2^-7 ~ 1.2e-2.
+constexpr double kTol = 1e-2;
+constexpr double kDxTol = 1.5e-2;
+
+struct Shape {
+    uint32_t batch;
+    uint32_t seq;
+    uint32_t heads;
+    uint32_t head_dim;
+
+    [[nodiscard]] std::vector<uint32_t> head_major() const {
+        return {batch * heads, 1U, seq, head_dim};
+    }
+    [[nodiscard]] std::vector<uint32_t> head_merged() const {
+        return {batch, 1U, seq, heads * head_dim};
+    }
+    [[nodiscard]] std::vector<uint32_t> rms() const {
+        return {batch * heads, 1U, seq, 1U};
+    }
+    [[nodiscard]] size_t head_major_index(
+        const uint32_t b, const uint32_t h, const uint32_t t, const uint32_t c) const {
+        return ((static_cast<size_t>(b) * heads + h) * seq + t) * head_dim + c;
+    }
+    [[nodiscard]] size_t head_merged_index(
+        const uint32_t b, const uint32_t h, const uint32_t t, const uint32_t c) const {
+        return ((static_cast<size_t>(b) * seq + t) * heads + h) * head_dim + c;
+    }
+};
+
+struct Inputs {
+    xt::xarray<float> x;
+    std::optional<xt::xarray<float>> gate;  // nullopt in plain mode
+    xt::xarray<float> gamma;
+    xt::xarray<float> dy;
+};
+
+struct Reference {
+    xt::xarray<double> out;
+    xt::xarray<double> rms;
+    xt::xarray<double> dx;
+    xt::xarray<double> dgate;
+    xt::xarray<double> dgamma;
+};
+
+ttnn::Tensor to_device(const xt::xarray<float>& a, const ttnn::DataType dtype = ttnn::DataType::BFLOAT16) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    return dtype == ttnn::DataType::FLOAT32 ? ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(a, device)
+                                            : ttml::core::from_xtensor(a, device);
+}
+
+std::optional<ttnn::Tensor> to_device(const std::optional<xt::xarray<float>>& a) {
+    return a.has_value() ? std::make_optional(to_device(*a)) : std::nullopt;
+}
+
+xt::xarray<float> as_stored(const xt::xarray<float>& a, const ttnn::DataType dtype = ttnn::DataType::BFLOAT16) {
+    return ttml::core::to_xtensor(to_device(a, dtype));
+}
+
+// Heads get RMS spread over 2^-2 .. 2^3, so normalizing over the wrong columns cannot pass. The gate reaches into
+// both saturation tails of sigmoid.
+Inputs make_inputs(const Shape& s, const uint32_t seed, const ttnn::DataType x_dtype, const bool gated) {
+    auto x = ttml::test_utils::make_uniform_xarray<float>(s.head_major(), -1.0F, 1.0F, seed);
+    for (uint32_t b = 0; b < s.batch; ++b) {
+        for (uint32_t h = 0; h < s.heads; ++h) {
+            const float scale = std::exp2(static_cast<float>(static_cast<int>(h % 6U) - 2));
+            for (uint32_t t = 0; t < s.seq; ++t) {
+                for (uint32_t c = 0; c < s.head_dim; ++c) {
+                    x.data()[s.head_major_index(b, h, t, c)] *= scale;
+                }
+            }
+        }
+    }
+    std::optional<xt::xarray<float>> gate;
+    if (gated) {
+        gate = as_stored(ttml::test_utils::make_uniform_xarray<float>(s.head_merged(), -20.0F, 20.0F, seed + 1U));
+    }
+    return Inputs{
+        .x = as_stored(x, x_dtype),
+        .gate = std::move(gate),
+        .gamma = as_stored(ttml::test_utils::make_uniform_xarray<float>(
+            std::vector<uint32_t>{1U, 1U, 1U, s.head_dim}, 0.5F, 1.5F, seed + 2U)),
+        .dy = as_stored(ttml::test_utils::make_uniform_xarray<float>(s.head_merged(), -1.0F, 1.0F, seed + 3U)),
+    };
+}
+
+double sigmoid(const double z) {
+    return 1.0 / (1.0 + std::exp(-z));
+}
+
+Reference reference(const Inputs& in, const xt::xarray<float>& dy, const Shape& s) {
+    Reference ref{
+        .out = xt::zeros<double>(s.head_merged()),
+        .rms = xt::zeros<double>(s.rms()),
+        .dx = xt::zeros<double>(s.head_major()),
+        .dgate = xt::zeros<double>(s.head_merged()),
+        .dgamma = xt::zeros<double>(in.gamma.shape()),
+    };
+    const uint32_t V = s.head_dim;
+    std::vector<double> u(V);
+    std::vector<double> du(V);
+    for (uint32_t b = 0; b < s.batch; ++b) {
+        for (uint32_t h = 0; h < s.heads; ++h) {
+            for (uint32_t t = 0; t < s.seq; ++t) {
+                double sum_sq = 0.0;
+                for (uint32_t c = 0; c < V; ++c) {
+                    const double x = in.x.data()[s.head_major_index(b, h, t, c)];
+                    sum_sq += x * x;
+                }
+                const double rms = std::sqrt(sum_sq / V + kEps);
+                const double inv = 1.0 / rms;
+                ref.rms.data()[(static_cast<size_t>(b) * s.heads + h) * s.seq + t] = rms;
+
+                double dot = 0.0;
+                for (uint32_t c = 0; c < V; ++c) {
+                    const size_t merged = s.head_merged_index(b, h, t, c);
+                    const double z = in.gate.has_value() ? in.gate->data()[merged] : 0.0;
+                    const double silu = in.gate.has_value() ? z * sigmoid(z) : 1.0;
+                    u[c] = in.x.data()[s.head_major_index(b, h, t, c)] * in.gamma.data()[c] * inv;
+                    du[c] = dy.data()[merged] * silu;
+                    dot += u[c] * du[c];
+                    ref.out.data()[merged] = u[c] * silu;
+                }
+                const double scale = dot * inv / V;
+                for (uint32_t c = 0; c < V; ++c) {
+                    const size_t major = s.head_major_index(b, h, t, c);
+                    const size_t merged = s.head_merged_index(b, h, t, c);
+                    const double x = in.x.data()[major];
+                    ref.dx.data()[major] = inv * (in.gamma.data()[c] * du[c] - scale * x);
+                    ref.dgamma.data()[c] += x * inv * du[c];
+                    if (in.gate.has_value()) {
+                        const double z = in.gate->data()[merged];
+                        const double sg = sigmoid(z);
+                        ref.dgate.data()[merged] = dy.data()[merged] * u[c] * sg * (1.0 + z - z * sg);
+                    }
+                }
+            }
+        }
+    }
+    return ref;
+}
+
+// Bounds the error per index of dim 0: one head for the head-major rms and dx, one batch for the head-merged out and
+// dgate, the whole tensor for dgamma.
+template <typename Got>
+void expect_close(
+    const Got& got, const xt::xarray<double>& expected, const std::string& label, const double tol = kTol) {
+    ASSERT_EQ(got.shape(), expected.shape()) << label;
+    const size_t num_slices = expected.shape()[0];
+    const size_t slice_size = expected.size() / num_slices;
+    for (size_t slice = 0; slice < num_slices; ++slice) {
+        double peak = 0.0;
+        double max_err = 0.0;
+        for (size_t i = slice * slice_size; i < (slice + 1U) * slice_size; ++i) {
+            peak = std::max(peak, std::abs(expected.data()[i]));
+            const double err = std::abs(static_cast<double>(got.data()[i]) - expected.data()[i]);
+            // Negated so that a NaN error is kept and fails the check below.
+            if (!(err <= max_err)) {
+                max_err = err;
+            }
+        }
+        EXPECT_LE(max_err, tol * peak) << label << " [" << slice << "]: max error " << max_err << " vs peak " << peak;
+    }
+}
+
+// In the negative tail of the gate dgate is ~1e-7 of the peak, far below what expect_close resolves, so dgate is also
+// bounded per element relative to itself, by kDxTol: like dx, each element carries the bf16 1/rms error on top of its
+// own bf16 rounding. The floor skips zeros and values below the bf16 normal range.
+template <typename Got>
+void expect_dgate_close(const Got& got, const xt::xarray<double>& expected, const std::string& label) {
+    constexpr double kFloor = 1e-30;
+    expect_close(got, expected, label);
+    double max_rel = 0.0;
+    size_t worst = 0;
+    for (size_t i = 0; i < expected.size(); ++i) {
+        const double magnitude = std::abs(expected.data()[i]);
+        if (magnitude < kFloor) {
+            continue;
+        }
+        const double rel = std::abs(static_cast<double>(got.data()[i]) - expected.data()[i]) / magnitude;
+        if (!(rel <= max_rel)) {
+            max_rel = rel;
+            worst = i;
+        }
+    }
+    EXPECT_LE(max_rel, kDxTol) << label << ": max relative error " << max_rel << " at " << worst << ", expected "
+                               << expected.data()[worst] << ", got " << got.data()[worst];
+}
+
+struct RMSNormCase {
+    Shape shape;
+    bool gated = false;
+    ttnn::DataType dtype = ttnn::DataType::BFLOAT16;
+};
+
+std::string rmsnorm_case_name(const ::testing::TestParamInfo<RMSNormCase>& info) {
+    const auto& c = info.param;
+    return std::string(c.gated ? "Gated_" : "Plain_") + std::to_string(c.shape.batch) + "x" +
+           std::to_string(c.shape.seq) + "x" + std::to_string(c.shape.heads) + "x" + std::to_string(c.shape.head_dim) +
+           (c.dtype == ttnn::DataType::FLOAT32 ? "_fp32" : "_bf16");
+}
+
+std::vector<RMSNormCase> rmsnorm_cases() {
+    const std::vector<Shape> gated_shapes = {
+        // V / 32 of 1, 2, 4 and 8 covers heads of 1 to 8 tiles.
+        Shape{1, 32, 1, 32},
+        Shape{1, 64, 3, 128},
+        Shape{2, 96, 4, 64},
+        Shape{1, 64, 2, 256},
+        // A single head may be any width; V = 80 also covers the partial last tile.
+        Shape{2, 64, 1, 80},
+        // V = 96: block size 3 in the forward and 1 in the backward.
+        Shape{1, 64, 4, 96},
+        // T is not a multiple of 32.
+        Shape{2, 50, 3, 128},
+        // The Qwen3.8 TP=4 layout. Its 384 tile-rows don't divide evenly over the cores, so both core groups run and
+        // every core processes more than one row.
+        Shape{1, 1024, 12, 128},
+    };
+    // The plain mode as [B, 1, T, C], with C = head_dim.
+    const std::vector<Shape> plain_shapes = {
+        // C % 32 != 0 masks the last tile.
+        Shape{1, 32, 1, 1000},
+        // With fp32 input the forward keeps everything but gamma in L1 and the backward streams.
+        Shape{1, 32, 1, 8192},
+        // With fp32 input both stream.
+        Shape{1, 32, 1, 16384},
+    };
+    std::vector<RMSNormCase> cases;
+    for (const auto dtype : {ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32}) {
+        for (const auto& s : gated_shapes) {
+            cases.push_back({.shape = s, .gated = true, .dtype = dtype});
+        }
+        for (const auto& s : plain_shapes) {
+            cases.push_back({.shape = s, .gated = false, .dtype = dtype});
+        }
+    }
+    return cases;
+}
+
+}  // namespace
+
+class RMSNormOpParamTest : public RMSNormOpTest, public ::testing::WithParamInterface<RMSNormCase> {};
+
+TEST_P(RMSNormOpParamTest, MatchesReference) {
+    const auto& c = GetParam();
+    const auto in = make_inputs(c.shape, 11U, c.dtype, c.gated);
+    const auto ref = reference(in, in.dy, c.shape);
+    const auto x = to_device(in.x, c.dtype);
+    const auto gate = to_device(in.gate);
+    const auto gamma = to_device(in.gamma);
+    const auto dy = to_device(in.dy);
+
+    const auto fw = ttml::metal::rmsnorm_fw(x, gamma, /* return_intermediates */ true, kEps, gate);
+    expect_close(ttml::core::to_xtensor(fw[0].value()), ref.out, "out");
+    expect_close(ttml::core::to_xtensor(fw[1].value()), ref.rms, "rms");
+
+    for (const bool compute_dgamma : {true, false}) {
+        const std::string suffix = compute_dgamma ? "" : " without dgamma";
+        const auto bw = ttml::metal::rmsnorm_bw(x, gamma, fw[1].value(), dy, compute_dgamma, gate);
+        ASSERT_EQ(bw.size(), 3U);
+        expect_close(ttml::core::to_xtensor(bw[0].value()), ref.dx, "dx" + suffix, kDxTol);
+        ASSERT_EQ(bw[1].has_value(), compute_dgamma);
+        if (compute_dgamma) {
+            expect_close(ttml::core::to_xtensor(bw[1].value()), ref.dgamma, "dgamma");
+        }
+        ASSERT_EQ(bw[2].has_value(), c.gated);
+        if (c.gated) {
+            expect_dgate_close(ttml::core::to_xtensor(bw[2].value()), ref.dgate, "dgate" + suffix);
+        }
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(RMSNormModes, RMSNormOpParamTest, ::testing::ValuesIn(rmsnorm_cases()), rmsnorm_case_name);
+
+TEST_F(RMSNormOpTest, GatedForwardWithoutIntermediates) {
+    const Shape s{2, 50, 3, 128};
+    const auto in = make_inputs(s, 17U, ttnn::DataType::BFLOAT16, /* gated */ true);
+    const auto ref = reference(in, in.dy, s);
+
+    const auto fw = ttml::metal::rmsnorm_fw(
+        to_device(in.x), to_device(in.gamma), /* return_intermediates */ false, kEps, to_device(in.gate));
+    ASSERT_EQ(fw.size(), 2U);
+    EXPECT_FALSE(fw[1].has_value());
+    expect_close(ttml::core::to_xtensor(fw[0].value()), ref.out, "out");
+}
+
+// Preallocated launches that hit cached programs must still read and write the new buffers, with and without
+// dL_dgamma_components.
+TEST_F(RMSNormOpTest, GatedPreallocatedOutputsOnCachedProgram) {
+    const Shape s{1, 64, 3, 128};
+    constexpr auto dtype = ttnn::DataType::FLOAT32;
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->clear_program_cache();
+
+    for (const bool compute_dgamma : {true, false}) {
+        const std::string suffix = compute_dgamma ? "" : " without dgamma";
+        // Caches the programs with launches on other inputs into fresh outputs. Everything stays alive, so no buffer
+        // below can reuse their addresses.
+        const auto num_programs_before = device->num_program_cache_entries();
+        const auto first = make_inputs(s, 29U, dtype, /* gated */ true);
+        const auto first_x = to_device(first.x, dtype);
+        const auto first_gate = to_device(first.gate);
+        const auto first_gamma = to_device(first.gamma);
+        const auto first_dy = to_device(first.dy);
+        const auto first_fw =
+            ttml::metal::rmsnorm_fw(first_x, first_gamma, /* return_intermediates */ true, kEps, first_gate);
+        const auto first_bw =
+            ttml::metal::rmsnorm_bw(first_x, first_gamma, first_fw[1].value(), first_dy, compute_dgamma, first_gate);
+        const auto num_programs = device->num_program_cache_entries();
+        // Else the program cache is off and the unchanged count below proves nothing.
+        ASSERT_GT(num_programs, num_programs_before) << "program cache not populated" << suffix;
+
+        const auto in = make_inputs(s, 31U, dtype, /* gated */ true);
+        const auto ref = reference(in, in.dy, s);
+        const auto x = to_device(in.x, dtype);
+        const auto gate = to_device(in.gate);
+        const auto gamma = to_device(in.gamma);
+        const auto dy = to_device(in.dy);
+        const auto out = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
+        const auto rms = ttml::core::zeros(ttnn::Shape(s.rms()), device);
+        const auto da = ttml::core::zeros(ttnn::Shape(s.head_major()), device);
+        const auto dgamma_components =
+            compute_dgamma ? std::make_optional(ttml::core::zeros(ttnn::Shape(s.head_major()), device)) : std::nullopt;
+        const auto dgate = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
+
+        const auto fw = ttnn::prim::ttml_rmsnorm_fw(x, gamma, gate, /* return_intermediates */ true, kEps, rms, out);
+        const auto bw =
+            ttnn::prim::ttml_rmsnorm_bw(x, gamma, rms, dy, gate, compute_dgamma, da, dgamma_components, dgate);
+        EXPECT_EQ(device->num_program_cache_entries(), num_programs) << suffix;
+
+        EXPECT_EQ(fw[0].buffer()->address(), out.buffer()->address());
+        EXPECT_EQ(fw[1].buffer()->address(), rms.buffer()->address());
+        EXPECT_EQ(bw[0]->buffer()->address(), da.buffer()->address());
+        EXPECT_EQ(bw[2]->buffer()->address(), dgate.buffer()->address());
+        expect_close(ttml::core::to_xtensor(out), ref.out, "preallocated out" + suffix);
+        expect_close(ttml::core::to_xtensor(rms), ref.rms, "preallocated rms" + suffix);
+        expect_close(ttml::core::to_xtensor(da), ref.dx, "preallocated dx" + suffix, kDxTol);
+        expect_close(ttml::core::to_xtensor(dgate), ref.dgate, "preallocated dgate" + suffix);
+        ASSERT_EQ(bw[1].has_value(), compute_dgamma);
+        if (compute_dgamma) {
+            EXPECT_EQ(bw[1]->buffer()->address(), dgamma_components->buffer()->address());
+            const xt::xarray<double> components = xt::cast<double>(ttml::core::to_xtensor(*dgamma_components));
+            const xt::xarray<double> dgamma = xt::sum(components, {0, 1, 2}, xt::keep_dims);
+            expect_close(dgamma, ref.dgamma, "preallocated dgamma");
+        }
+    }
+}
+
+// add_grad drops the gradient of a frozen gamma by itself, so the program cache is what shows that the frozen iteration
+// ran the backward without dL/dgamma: it compiles exactly the one program the trained iteration did not.
+TEST_F(RMSNormOpTest, GatedAutogradSkipsFrozenGamma) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    device->clear_program_cache();
+    for (const bool train_gamma : {true, false}) {
+        const Shape s{1, 64, 3, 128};
+        const auto in = make_inputs(s, 37U, ttnn::DataType::FLOAT32, /* gated */ true);
+        auto x = autograd::create_tensor(to_device(in.x, ttnn::DataType::FLOAT32), /* requires_grad */ true);
+        auto gate = autograd::create_tensor(to_device(*in.gate), /* requires_grad */ true);
+        auto gamma = autograd::create_tensor(to_device(in.gamma), /* requires_grad */ train_gamma);
+
+        const auto num_programs = device->num_program_cache_entries();
+        auto out = ops::gated_rmsnorm(x, gate, gamma, kEps);
+        out->backward();
+        if (!train_gamma) {
+            EXPECT_EQ(device->num_program_cache_entries(), num_programs + 1U);
+        }
+
+        const xt::xarray<float> ones = xt::ones<float>(s.head_merged());  // backward() seeds dL/dout with ones
+        const auto ref = reference(in, ones, s);
+        expect_close(core::to_xtensor(out->get_value()), ref.out, "autograd out");
+        ASSERT_TRUE(x->is_grad_initialized());
+        ASSERT_TRUE(gate->is_grad_initialized());
+        expect_close(core::to_xtensor(x->get_grad()), ref.dx, "autograd dx", kDxTol);
+        expect_dgate_close(core::to_xtensor(gate->get_grad()), ref.dgate, "autograd dgate");
+        ASSERT_EQ(gamma->is_grad_initialized(), train_gamma);
+        if (train_gamma) {
+            expect_close(core::to_xtensor(gamma->get_grad()), ref.dgamma, "autograd dgamma");
+        }
+        autograd::ctx().reset_graph();
+    }
+}
+
+TEST_F(RMSNormOpTest, GatedRejectsMismatchedBackwardTensors) {
+    const Shape s{1, 64, 3, 128};
+    const auto in = make_inputs(s, 43U, ttnn::DataType::BFLOAT16, /* gated */ true);
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto x = to_device(in.x);
+    const auto gate = to_device(in.gate);
+    const auto gamma = to_device(in.gamma);
+    const auto dy = to_device(in.dy);
+    const auto rms = ttml::metal::rmsnorm_fw(x, gamma, /* return_intermediates */ true, kEps, gate)[1].value();
+
+    // In gated mode dL_dout follows the gate's layout, not the input's.
+    EXPECT_THAT(
+        ([&] { return ttml::metal::rmsnorm_bw(x, gamma, rms, x, /* compute_dgamma */ true, gate); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("dL_dout shape")));
+    // dL_dgate only exists in gated mode.
+    EXPECT_THAT(
+        ([&] {
+            return ttnn::prim::ttml_rmsnorm_bw(
+                x,
+                gamma,
+                rms,
+                x,
+                /* gate */ std::nullopt,
+                /* compute_dgamma */ true,
+                std::nullopt,
+                std::nullopt,
+                ttml::core::zeros(ttnn::Shape(s.head_merged()), device));
+        }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("given without a gate")));
+    // No dL_dgamma_components are written without compute_dgamma.
+    EXPECT_THAT(
+        ([&] {
+            return ttnn::prim::ttml_rmsnorm_bw(
+                x,
+                gamma,
+                rms,
+                dy,
+                gate,
+                /* compute_dgamma */ false,
+                std::nullopt,
+                ttml::core::zeros(ttnn::Shape(s.head_major()), device),
+                std::nullopt);
+        }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("compute_dgamma is false")));
+}
+
+// ============================================================================
+// Section 5: rmsnorm_fw / rmsnorm_bw program-cache hits
 // ============================================================================
 // A launch whose specs and attributes match a cached program reuses it, and only the buffer addresses
 // of the new tensors are patched in. Each test starts from an empty cache so that its first launch is the miss, and
@@ -605,7 +1080,7 @@ BackwardInputs make_backward_inputs(const std::vector<uint32_t>& shape, uint32_t
     return {upload(x), upload(gamma), upload(rms), upload(dL_dout)};
 }
 
-void expect_close(const ttnn::Tensor& result, const xt::xarray<float>& expected, const std::string& label) {
+void expect_allclose(const ttnn::Tensor& result, const xt::xarray<float>& expected, const std::string& label) {
     const auto actual = ttml::core::to_xtensor(result);
     ASSERT_EQ(actual.shape(), expected.shape()) << label;
     EXPECT_TRUE(xt::allclose(actual, expected, kCacheTestRtol, kCacheTestAtol))
@@ -619,9 +1094,9 @@ void expect_rmsnorm_fw_matches_reference(
     float eps,
     const std::string& label) {
     const auto [expected_output, expected_rms] = rmsnorm_fw_reference(in.x.stored, in.gamma.stored, eps);
-    expect_close(output, expected_output, label + " output");
+    expect_allclose(output, expected_output, label + " output");
     if (rms.has_value()) {
-        expect_close(*rms, expected_rms, label + " rms");
+        expect_allclose(*rms, expected_rms, label + " rms");
     }
 }
 
@@ -632,8 +1107,17 @@ void expect_rmsnorm_bw_matches_reference(
     const std::string& label) {
     const auto [expected_dL_da, expected_dL_dgamma_components] =
         rmsnorm_bw_reference(in.x.stored, in.gamma.stored, in.rms.stored, in.dL_dout.stored);
-    expect_close(dL_da, expected_dL_da, label + " dL_da");
-    expect_close(dL_dgamma_components, expected_dL_dgamma_components, label + " dL_dgamma_components");
+    expect_allclose(dL_da, expected_dL_da, label + " dL_da");
+    expect_allclose(dL_dgamma_components, expected_dL_dgamma_components, label + " dL_dgamma_components");
+}
+
+// The backward without a gate and with compute_dgamma returns {dL_da, dL_dgamma_components, nullopt}; the
+// first two of them.
+std::vector<ttnn::Tensor> plain_backward_outputs(
+    const std::vector<std::optional<ttnn::Tensor>>& result, const std::string& label) {
+    EXPECT_EQ(result.size(), 3U) << label;
+    EXPECT_FALSE(result.size() > 2U && result[2].has_value()) << label << " returned a dL_dgate without a gate";
+    return {result.at(0).value(), result.at(1).value()};
 }
 
 // The tensors of earlier launches and the values they must keep. Holding the tensors also keeps their
@@ -715,7 +1199,7 @@ void run_rmsnorm_fw_cache_hit(bool return_intermediates) {
 // Launches without and with the preallocated rms / output on one shape. Whether or not the program key
 // records which optionals are present, the repeated patterns must hit, and every launch must write exactly
 // the tensors it returns and leave the tensors of all other launches untouched. Without return_intermediates
-// the op returns the output alone and ignores a preallocated rms, which must keep its fill.
+// the op returns the output alone and rejects a preallocated rms, so only the output is preallocated.
 void run_rmsnorm_fw_preallocated(bool return_intermediates) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
@@ -730,16 +1214,21 @@ void run_rmsnorm_fw_preallocated(bool return_intermediates) {
         bool preallocated_output;
         bool repeats_earlier_pattern;
     };
-    constexpr std::array<Launch, 6> kLaunches = {{
+    const std::vector<Launch> launches = return_intermediates ? std::vector<Launch>{
         {"no preallocation", false, false, false},
         {"preallocated rms and output", true, true, false},
         {"preallocated rms and output again", true, true, true},
         {"preallocated output only", false, true, false},
         {"preallocated rms only", true, false, false},
         {"no preallocation again", false, false, true},
-    }};
-    for (uint32_t launch = 0; launch < kLaunches.size(); ++launch) {
-        const auto& pattern = kLaunches[launch];
+    } : std::vector<Launch>{
+        {"no preallocation", false, false, false},
+        {"preallocated output", false, true, false},
+        {"preallocated output again", false, true, true},
+        {"no preallocation again", false, false, true},
+    };
+    for (uint32_t launch = 0; launch < launches.size(); ++launch) {
+        const auto& pattern = launches[launch];
         const std::string label = "launch " + std::to_string(launch) + " (" + pattern.label + ")";
         const auto in = make_forward_inputs(shape, launch, x_range_of_launch(launch));
         std::optional<ttnn::Tensor> preallocated_rms;
@@ -752,7 +1241,13 @@ void run_rmsnorm_fw_preallocated(bool return_intermediates) {
         }
         const auto entries_before = device->num_program_cache_entries();
         const auto result = ttnn::prim::ttml_rmsnorm_fw(
-            in.x.tensor, in.gamma.tensor, return_intermediates, kCacheTestEps, preallocated_rms, preallocated_output);
+            in.x.tensor,
+            in.gamma.tensor,
+            /*gate=*/std::nullopt,
+            return_intermediates,
+            kCacheTestEps,
+            preallocated_rms,
+            preallocated_output);
         const auto entries_after = device->num_program_cache_entries();
         if (launch == 0U) {
             ASSERT_GT(entries_after, entries_before) << "the first launch must compile a program";
@@ -778,11 +1273,29 @@ void run_rmsnorm_fw_preallocated(bool return_intermediates) {
         kept.add(result[0], label + " output");
         if (rms.has_value()) {
             kept.add(*rms, label + " rms");
-        } else if (preallocated_rms.has_value()) {
-            EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(*preallocated_rms), kNotWritten)))
-                << label << " wrote the preallocated rms, which it does not return";
-            kept.add(*preallocated_rms, label + " ignored rms");
         }
+    }
+
+    if (!return_intermediates) {
+        // With no rms to write, a preallocated one is rejected rather than ignored, also on a hit of the cached
+        // program: the op has no hit-only validation, so ttnn validates hits as misses.
+        const auto launch = static_cast<uint32_t>(launches.size());
+        const auto in = make_forward_inputs(shape, launch, x_range_of_launch(launch));
+        const auto preallocated_rms = test_utils::filled_on_device(rms_shape, kNotWritten);
+        EXPECT_THAT(
+            ([&] {
+                return ttnn::prim::ttml_rmsnorm_fw(
+                    in.x.tensor,
+                    in.gamma.tensor,
+                    /*gate=*/std::nullopt,
+                    /*return_intermediates=*/false,
+                    kCacheTestEps,
+                    preallocated_rms,
+                    /*preallocated_output=*/std::nullopt);
+            }),
+            ThrowsMessage<std::runtime_error>(HasSubstr("return_intermediates is false")));
+        EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(preallocated_rms), kNotWritten)))
+            << "the rejected launch wrote the preallocated rms";
     }
 
     kept.expect_unchanged();
@@ -838,9 +1351,8 @@ TEST_F(RMSNormCacheHitTest, Forward_PreallocatedOutputsAcrossOptionalPresence_Tw
     run_rmsnorm_fw_preallocated(/*return_intermediates=*/true);
 }
 
-// The preallocated rms is still passed, but the op only returns the output. If its presence is not part of the
-// program key, a program compiled without it is reused with it, and a writer that finds the output by position
-// among the passed tensors writes into the preallocated rms instead.
+// The op only returns the output, so only the output's presence flips, and a preallocated rms is rejected once the
+// program is cached as well as before.
 TEST_F(RMSNormCacheHitTest, Forward_NoIntermediates_PreallocatedOutputsAcrossOptionalPresence_TwoCoreGroups) {
     run_rmsnorm_fw_preallocated(/*return_intermediates=*/false);
 }
@@ -903,9 +1415,10 @@ TEST_F(RMSNormCacheHitTest, Backward_CacheHitReadsFreshBuffers_TwoCoreGroups) {
 
     const auto a = make_backward_inputs(shape, 0U);
     const auto entries_before_miss = device->num_program_cache_entries();
-    const auto a_result = ttnn::prim::ttml_rmsnorm_bw(a.x.tensor, a.gamma.tensor, a.rms.tensor, a.dL_dout.tensor);
+    const auto a_result = plain_backward_outputs(
+        ttnn::prim::ttml_rmsnorm_bw(a.x.tensor, a.gamma.tensor, a.rms.tensor, a.dL_dout.tensor, /*gate=*/std::nullopt),
+        "launch A");
     ASSERT_GT(device->num_program_cache_entries(), entries_before_miss) << "the first launch must compile a program";
-    ASSERT_EQ(a_result.size(), 2U);
     expect_rmsnorm_bw_matches_reference(a_result[0], a_result[1], a, "launch A");
     kept.add_inputs(a, "launch A");
     kept.add(a_result[0], "launch A dL_da");
@@ -914,9 +1427,10 @@ TEST_F(RMSNormCacheHitTest, Backward_CacheHitReadsFreshBuffers_TwoCoreGroups) {
     // Same specs, new values, launch A's tensors still alive.
     const auto b = make_backward_inputs(shape, 1U);
     const auto entries_before_hit = device->num_program_cache_entries();
-    const auto b_result = ttnn::prim::ttml_rmsnorm_bw(b.x.tensor, b.gamma.tensor, b.rms.tensor, b.dL_dout.tensor);
+    const auto b_result = plain_backward_outputs(
+        ttnn::prim::ttml_rmsnorm_bw(b.x.tensor, b.gamma.tensor, b.rms.tensor, b.dL_dout.tensor, /*gate=*/std::nullopt),
+        "launch B");
     EXPECT_EQ(device->num_program_cache_entries(), entries_before_hit) << "launch B must reuse launch A's program";
-    ASSERT_EQ(b_result.size(), 2U);
     test_utils::expect_new_buffers(
         {a.x.tensor, a.gamma.tensor, a.rms.tensor, a.dL_dout.tensor, a_result[0], a_result[1]},
         {b.x.tensor, b.gamma.tensor, b.rms.tensor, b.dL_dout.tensor, b_result[0], b_result[1]},
@@ -961,14 +1475,17 @@ TEST_F(RMSNormCacheHitTest, Backward_PreallocatedOutputsAcrossOptionalPresence_T
             preallocated_dL_dgamma_components = test_utils::filled_on_device(shape, kNotWritten);
         }
         const auto entries_before = device->num_program_cache_entries();
-        const auto result = ttnn::prim::ttml_rmsnorm_bw(
-            in.x.tensor,
-            in.gamma.tensor,
-            in.rms.tensor,
-            in.dL_dout.tensor,
-            /*epsilon=*/1e-6F,
-            preallocated_dL_da,
-            preallocated_dL_dgamma_components);
+        const auto result = plain_backward_outputs(
+            ttnn::prim::ttml_rmsnorm_bw(
+                in.x.tensor,
+                in.gamma.tensor,
+                in.rms.tensor,
+                in.dL_dout.tensor,
+                /*gate=*/std::nullopt,
+                /*compute_dgamma=*/true,
+                preallocated_dL_da,
+                preallocated_dL_dgamma_components),
+            label);
         const auto entries_after = device->num_program_cache_entries();
         if (launch == 0U) {
             ASSERT_GT(entries_after, entries_before) << "the first launch must compile a program";
@@ -976,7 +1493,6 @@ TEST_F(RMSNormCacheHitTest, Backward_PreallocatedOutputsAcrossOptionalPresence_T
         if (pattern.repeats_earlier_pattern) {
             EXPECT_EQ(entries_after, entries_before) << label << " must reuse the program of its pattern";
         }
-        ASSERT_EQ(result.size(), 2U) << label;
         if (preallocated_dL_da.has_value()) {
             EXPECT_EQ(result[0].buffer()->address(), preallocated_dL_da->buffer()->address())
                 << label << " must return the preallocated dL_da";
@@ -1021,9 +1537,11 @@ TEST_F(RMSNormCacheHitTest, Backward_DistinctKeysCompileDistinctPrograms_TwoCore
         const std::string label = "launch " + std::to_string(launch) + " (" + spec.label + ")";
         const auto in = make_backward_inputs(spec.shape, launch);
         const auto entries_before = device->num_program_cache_entries();
-        const auto result = ttnn::prim::ttml_rmsnorm_bw(in.x.tensor, in.gamma.tensor, in.rms.tensor, in.dL_dout.tensor);
+        const auto result = plain_backward_outputs(
+            ttnn::prim::ttml_rmsnorm_bw(
+                in.x.tensor, in.gamma.tensor, in.rms.tensor, in.dL_dout.tensor, /*gate=*/std::nullopt),
+            label);
         expect_cache(entries_before, spec.new_key ? CacheExpectation::Miss : CacheExpectation::Hit, label);
-        ASSERT_EQ(result.size(), 2U) << label;
         expect_rmsnorm_bw_matches_reference(result[0], result[1], in, label);
         kept.add_inputs(in, label);
         kept.add(result[0], label + " dL_da");
