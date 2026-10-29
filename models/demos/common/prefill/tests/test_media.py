@@ -100,7 +100,7 @@ def test_exact_slices_match_whole_embeddings(sp, chunk_local, layout):
     for start in range(0, max(m.end_position for m in items) + chunk, chunk):
         end = start + chunk
         exact = build_injection(slices(items, embs, start, end), start, end, sp, chunk_local)
-        full = build_injection(whole(items, embs), start, end, sp, chunk_local)
+        full = build_injection(whole(items_overlapping(items, start, end), embs), start, end, sp, chunk_local)
         assert (exact is None) == (full is None)
         if exact is not None:
             assert torch.equal(exact[0], full[0]) and torch.equal(exact[1], full[1])
@@ -183,7 +183,6 @@ def test_rows_past_actual_end_are_not_injected():
 def test_text_only_chunk_returns_none():
     assert build_injection([], 0, 128, 1, 128) is None
     items = [item(500, 10, 1)]
-    assert build_injection(whole(items, embeddings_for(items)), 0, 128, 1, 128) is None
     assert media_rows_for_chunk(items, 0, 128, stub_row_source(HIDDEN)) == []
 
 

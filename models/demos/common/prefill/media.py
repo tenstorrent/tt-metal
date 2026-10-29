@@ -84,18 +84,14 @@ def build_injection(
     chunk_local: int,
 ) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
     """(rows [sp, chunk_local, hidden], mask [sp, chunk_local]) in the chunk's rotated per-chip order, or None
-    when no slice overlaps the chunk. Each overlapping slice must cover its chunk_row_range."""
-    hits = sorted(
-        (s for s in slices if s.item.start_position < actual_end and s.item.end_position > chunk_start),
-        key=lambda s: s.item.start_position,
-    )
-    if not hits:
+    for no slices. Each slice must cover its chunk_row_range."""
+    if not slices:
         return None
-    hidden, dtype = hits[0].rows.shape[-1], hits[0].rows.dtype
+    hidden, dtype = slices[0].rows.shape[-1], slices[0].rows.dtype
     positions = torch.tensor(rotated_chunk_positions(chunk_start, sp, chunk_local), dtype=torch.long)
     rows = torch.zeros(sp, chunk_local, hidden, dtype=dtype)
     mask = torch.zeros(sp, chunk_local, dtype=torch.bool)
-    for s in hits:
+    for s in slices:
         item = s.item
         assert (
             s.rows.shape[-1] == hidden and s.rows.dtype == dtype

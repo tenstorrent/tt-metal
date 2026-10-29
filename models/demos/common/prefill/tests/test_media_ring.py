@@ -95,6 +95,12 @@ def test_missing_media_times_out(ring, expect_error):
         r.read_chunk(0, 0, 1, timeout_s=0.01)
 
 
+def test_more_items_than_the_ring_holds_is_fatal(ring, expect_error):
+    r, _ = ring
+    with expect_error(mr.MediaRingError, "ring holds 256"):
+        r.read_chunk(0, 0, 257, timeout_s=0.01)
+
+
 @pytest.mark.parametrize("ring", [{"desc_capacity": 8, "slab_bytes": 700}], indirect=True)
 def test_release_lets_the_writer_reuse_the_slab(ring):
     r, w = ring

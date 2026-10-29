@@ -116,6 +116,8 @@ class MediaRing:
         assert self._held_records == 0, "release() the previous chunk first"
         if count == 0:
             return []
+        if count > self.desc_capacity:
+            raise MediaRingError(f"{count} media items in one chunk, the ring holds {self.desc_capacity}")
         tail = self._load(_DESC_TAIL)
         if self._load(_DESC_HEAD) - tail < count:
             return None
@@ -126,7 +128,11 @@ class MediaRing:
                     f"expected item {i}/{count} of slot {slot_id} chunk {chunk_start}, found item "
                     f"{d.item_index}/{d.item_count} of slot {d.slot_id} chunk {d.chunk_start}"
                 )
-            if d.dtype != DTYPE_U8 or d.payload_bytes != d.height * d.width * d.channels:
+            if (
+                d.dtype != DTYPE_U8
+                or d.payload_bytes != d.height * d.width * d.channels
+                or d.payload_pos % self.slab_bytes + d.payload_bytes > self.slab_bytes
+            ):
                 raise MediaRingError(f"bad payload for {d}")
         view = memoryview(self._mm)
         out = []

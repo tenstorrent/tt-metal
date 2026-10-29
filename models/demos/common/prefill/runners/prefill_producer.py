@@ -95,14 +95,11 @@ def _apply_manifest_env(manifest_path: str) -> dict:
 
 
 METADATA_SIZE_BYTES = 12
-# Must match the runner: image deployments (PREFILL_MEDIA=1) add media_pending_count, which this producer sends as 0.
-MEDIA_ENABLED = os.environ.get("PREFILL_MEDIA", "0") == "1"
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MEDIA_ENABLED else 0)
 
 
 def _load_env_config() -> None:
     global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
-    global MTP_DECODE_LEVELS
+    global MTP_DECODE_LEVELS, MEDIA_ENABLED, CHUNK_METADATA_SIZE_BYTES
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
@@ -117,6 +114,9 @@ def _load_env_config() -> None:
     # deeper than that literal when a manifest omits PREFILL_NUM_LAYERS.
     NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", ADAPTER.model_config.NUM_LAYERS))
     NUM_ACK_LAYERS = NUM_LAYERS
+    # Must match the runner: image deployments add media_pending_count, which this producer sends as 0.
+    MEDIA_ENABLED = os.environ.get("PREFILL_MEDIA", "0") == "1"
+    CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MEDIA_ENABLED else 0)
 
 
 _load_env_config()
