@@ -884,6 +884,7 @@ tasks:
   device: true
   deps:
   - P.6
+  - FIX.9
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - ttnn/ttnn/bringup

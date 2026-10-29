@@ -115,7 +115,14 @@ class MoEDtypes:
     routed_activations: ttnn.DataType = ttnn.bfloat8_b  # x and h inside the experts
     routed_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
     shared_weights: ttnn.DataType = ttnn.bfloat8_b
+    # x and h inside the shared expert (its matmul inputs: gate / up's x, down's h), as routed_activations: bfloat16,
+    # or bfloat8_b (DeepSeek-V4.1: its reference quantizes both to fp8). The fused head: the engine's x / h tiles (one
+    # typecast of x for the engine and the gather; the router keeps bf16 x); the ops head: x cast for gate / up, the
+    # activation's output cast for down (gate / up write bf16)
     shared_activations: ttnn.DataType = ttnn.bfloat16
+    # the fused head's bfp8 h packed in one rounding from fp32 (bfp8_pack_precise, as ttnn.typecast packs x); False:
+    # the packer's default (first to 7 bits at each value's exponent, then at the shared one: ties away twice)
+    shared_pack_precise: bool = False
     shared_fidelity: ttnn.MathFidelity = (
         ttnn.MathFidelity.HiFi2
     )  # (HiFi3: rel L2 1.6 -> 1.3% with bf8 weights, +11-25% time)
@@ -526,6 +533,8 @@ class MoEBlock(LightweightModule):
                     logits_first=options.logits_first,
                     router_split=options.router_split,
                     fidelity=dtypes.shared_fidelity,
+                    activations=dtypes.shared_activations,
+                    pack_precise=dtypes.shared_pack_precise,
                 )
                 self._warm_up_head()
                 self.fused.head.settle_arena()
@@ -1111,6 +1120,8 @@ class FusedHead:
         fids = (ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi4)
         if dtypes.shared_weights != ttnn.bfloat8_b or dtypes.shared_fidelity not in fids:
             return "shared expert: bf8 weights at LoFi / HiFi2 / 3 / 4"
+        if dtypes.shared_activations not in (ttnn.bfloat16, ttnn.bfloat8_b):
+            return "shared expert: bf16 or bf8 x / h"
         return True
 
     def __init__(
@@ -1127,6 +1138,8 @@ class FusedHead:
         logits_first=None,
         router_split=False,
         fidelity=ttnn.MathFidelity.HiFi2,  # (the shared expert's: MoEDtypes.shared_fidelity)
+        activations=ttnn.bfloat16,  # (the shared expert's x / h: MoEDtypes.shared_activations)
+        pack_precise=False,  # (MoEDtypes.shared_pack_precise)
     ):
         from models.demos.moe_block.tt.fused_head import HeadSE3, RouterSpec, RoutingSpec
 
@@ -1172,6 +1185,8 @@ class FusedHead:
             # worst case - its plan tensors take a prefix)
             routing=RoutingSpec(A=accumulators, torus=(g.tp_wraps, g.sp_wraps)),
             l1_hole=l1_hole,
+            activations=activations,
+            pack_precise=pack_precise,
         )
         self.w, rw = self.layer_weights(w)
         # (the programs bake x's address: one x buffer - a new x tensor each call rebuilt every chip's program, ~175 ms of
@@ -1183,6 +1198,17 @@ class FusedHead:
             mesh,
             ttnn.DRAM_MEMORY_CONFIG,
         )
+        # (bf8 x / h: the engine's and the gather's x, one typecast of x a call into this persistent buffer - its
+        # address baked like x's; the router reads x)
+        self.xq = None
+        if activations != ttnn.bfloat16:
+            self.xq = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, g.tokens_per_row, H // g.tp]),
+                activations,
+                ttnn.TILE_LAYOUT,
+                mesh,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
         self.head.rw = rw
 
     def layer_weights(self, w: MoEWeights):
@@ -1229,7 +1255,9 @@ class FusedHead:
         the outputs: rows, xbuf, route (and latent)). The arena's L1 given back after."""
         if int(x.buffer_address()) != int(self.x.buffer_address()):  # (MoEBlock.input_buffer(): read in place)
             ttnn.copy(x, self.x)
-        se = self.head.run(self.x, self.w)
+        if self.xq is not None:
+            ttnn.typecast(self.x, self.xq.dtype, output_tensor=self.xq)
+        se = self.head.run(self.x, self.w, xq=self.xq)
         out = dict(self.head.outputs)
         self.head.free_arena()
         return se, out
@@ -1413,19 +1441,28 @@ class SharedExpert:
         )
 
     def __call__(self, x_full):
+        # (shared_activations: the matmul inputs x / h in that format - bf16: x as given, h bf16, as before)
+        q = self.adt != ttnn.bfloat16
+        xq = ttnn.typecast(x_full, self.adt) if q and x_full.dtype != self.adt else x_full
         if self.fused:
-            gu = self._lin(x_full, self.wgu, self.adt)
+            gu = self._lin(xq, self.wgu, ttnn.bfloat16)
             a = ttnn.swiglu(gu, dim=-1)
             ttnn.deallocate(gu)
         else:
-            g_ = self._lin(x_full, self.wg, self.adt)
-            u_ = self._lin(x_full, self.wu, self.adt)
+            g_ = self._lin(xq, self.wg, ttnn.bfloat16)
+            u_ = self._lin(xq, self.wu, ttnn.bfloat16)
             if self.act.kind == "situ":
                 a = ttnn.situ_glu(g_, u_, self.act.beta, self.act.linear_beta)
             else:
                 a = _act_dev(self.act, g_, u_)
             ttnn.deallocate(g_)
             ttnn.deallocate(u_)
+        if xq is not x_full:
+            ttnn.deallocate(xq)
+        if q and a.dtype != self.adt:
+            a_ = ttnn.typecast(a, self.adt)
+            ttnn.deallocate(a)
+            a = a_
         out = self._lin(a, self.wd, ttnn.bfloat16)
         ttnn.deallocate(a)
         return out

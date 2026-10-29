@@ -128,8 +128,13 @@ class HeadSE3:
         latent=None,
         routing=None,
         l1_hole=None,
+        activations=ttnn.bfloat16,
+        pack_precise=False,
     ):
-        """rs_dim (-2: rows to their owners, GLM; -1: the width, K3): the down + SE reduce-scatter - rs_mode "fused":
+        """activations: the shared expert's x / h in the engine (SeEngine3 x_dtype / h_dtype: bfloat16, or bfloat8_b -
+        then run() takes x in that format as xq for the engine and the gather; the router keeps x). pack_precise:
+        SeEngine3's (bfp8 h in one rounding).
+        rs_dim (-2: rows to their owners, GLM; -1: the width, K3): the down + SE reduce-scatter - rs_mode "fused":
         in this program (se_rs: h from the L1 gate / up left it in, bf16 partials into the next chip's same core, fp32
         adds there, y the chip's reduced block - the only DRAM write); "mrs": (the bar) the engine stops at h in DRAM
         and the ported matmul_reduce_scatter op runs on it. None: the engine's own down, y the chip's partial.
@@ -148,6 +153,9 @@ class HeadSE3:
         self.mesh = mesh_device
         grid = mesh_device.compute_with_storage_grid_size()
         assert GX < grid.x, "no column left for the movers"
+        if activations != ttnn.bfloat16 and rs_dim is not None and rs_mode == "mrs":
+            raise ValueError("HeadSE3: rs_mode mrs takes h in bf16 (the ported matmul_reduce_scatter's input)")
+        self.activations = activations
         # the K step: the largest <= 16 tiles dividing a chip's shard (whole steps a shard) whose arena fits L1 (smaller
         # steps give the x families more owners: less x a core)
         G = tuple(mesh_device.shape)[1]
@@ -231,6 +239,9 @@ class HeadSE3:
                         if router is not None and self.router_on_engine(router, latent) and self.plan is not None
                         else None
                     ),
+                    x_dtype=activations,
+                    h_dtype=activations if self.rs_mode != "mrs" else ttnn.bfloat16,
+                    pack_precise=pack_precise,
                 )
                 return True
             except (ValueError, RuntimeError) as err:  # (an arena too large: the engine's check, or the allocator's)
@@ -605,7 +616,11 @@ class HeadSE3:
                 self._persist[name] = t
         return t
 
-    def run(self, x, w):
+    def run(self, x, w, xq=None):
+        """x: the chip's [rows, H / TP] bf16 (the router's); xq: the same rows in the engine's x format (activations
+        bfloat8_b: the engine's own-shard load and the gather read it), None when the engine takes x itself."""
+        assert (xq is None) == (self.activations == ttnn.bfloat16), "HeadSE3: xq is x in the engine's format"
+        self._xq = xq
         if not hasattr(self, "_persist"):
             self._persist = {}
         if self.rs_mode == "fused" and not self.eng.arena.is_allocated():
@@ -685,12 +700,16 @@ class HeadSE3:
                 ttnn.DRAM_MEMORY_CONFIG,
             ),
         )
+        xq = getattr(self, "_xq", None)  # (the engine's x: run()'s xq, else x)
+        xe = x if xq is None else xq
         io = [x, w, y, self.eng.arena]
         io += list(self.outputs.values()) + (list(self.rw) if self.router is not None else [])
         if self.routing is not None:
             io += [self.routing.slots] + list(self.routing.outs.values())
             if self.routing.dbg is not None:
                 io += [self.routing.dbg]
+        if xq is not None:  # (last: the positions before it - the weights' slots - stay as they were)
+            io += [xq]
         # Prepared dispatch (ttnn.bringup.prepare_program): the descriptor is built and prepared once; each call
         # patches only the runtime args holding an io tensor's address (x: the block input, at a new address per
         # call - its args are its base address) and the CBs on the arena. Rebuilt when the arena's base or any other
@@ -708,6 +727,7 @@ class HeadSE3:
             return y
         key = (
             int(x.buffer_address()),
+            int(xe.buffer_address()),
             int(y.buffer_address()),
             0 if layers else int(w.buffer_address()),
             self.eng.base,
@@ -758,14 +778,14 @@ class HeadSE3:
                 if self.router is not None:  # (first: the routing's serve plan is made by the router's planner args)
                     c2, k2 = self.router.pieces(coord, x, *self.rw, self.rout, route=self.outputs.get("route"))
                 c0, k0 = self.xg.pieces(
-                    coord, prog, x, XREADY, rs=rsx, router=self.router, la=rse.get("la"), routing=self.routing
+                    coord, prog, xe, XREADY, rs=rsx, router=self.router, la=rse.get("la"), routing=self.routing
                 )
                 if self.router is not None:
                     c0, k0 = c0 + c2, k0 + k2
                 if self.routing is not None:
                     k0 = k0 + self.routing.y_kernels(coord, prog)
                 c1, k1, sems = e.pieces(
-                    x,
+                    xe,
                     w,
                     y,
                     x_k0=p * self.xg.klt,

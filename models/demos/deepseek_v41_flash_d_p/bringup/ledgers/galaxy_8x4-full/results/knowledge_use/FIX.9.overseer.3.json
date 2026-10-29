@@ -1,0 +1,86 @@
+{
+ "used": [
+  {
+   "id": "DS41-132",
+   "how": "named the exact places to change (se_engine3 xown / xin / hown / hall tiles, the router sharing x, shared_activations reaching only the ops head); fixed there, entry updated with the fix and the numbers",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-77",
+   "how": "predicted the positive bias of bfp8 x / h tiles (packer ties away): measured bias -0.0085 (bf16) -> +0.0074 (bfp8) on the fused head's shared expert, read as the format, not a bug",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-131",
+   "how": "the fused head is a prepared program patched by io position: the bfp8 x copy goes last in io (weights' positions unchanged) into a persistent buffer, so the prepared key stays warm",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-125",
+   "how": "identified the failing K.1 acks check (layer 20 window KV on the last 128 rows of a range) as the deep-layer contract limit known to sit near its floor; measured all its windows for SE bf16 / bfp8 / bfp8 precise before deciding",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-90",
+   "how": "routing flips at L20 explain why a 128-row window moves +-0.003 with any rounding change; read the failing window as noise (mean 1-PCC equal across variants), not a bug",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "The fused head's dispatch prep untilizes x own (se_engine3 SE_PREP, prep_units): with bfp8 x own the routed experts' dispatched rows are bfp8-rounded x (idempotent under the experts' own bfp8 x); any x-own format change reaches the routed experts too",
+  "x_gather3's port CB keeps 2048 B slots for every phase (x gather, RS, latent, logits): only the x packets' payload / addresses follow the x tile size (XTB)",
+  "The non-RS down path of se_engine3 packed OUT without a pack reconfig after h: it relied on h and y sharing bf16",
+  "The packer's default bfp8 output rounds twice (7 bits at the value's exponent, then at the group's; ties away both) while ttnn.typecast packs precise; ComputeKernel's config hash leaves bfp8_pack_precise out (now DS41-137)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.9",
+   "answer": "done",
+   "evidence": "se_engine3 x_dtype / h_dtype (tile bytes from the dtype), x_gather3 XTB, fused_head / moe_block plumbing, DS41 block_dtypes shared_activations=gemm_dtype(); tt/perf_se_activations.py: engine x / h BFLOAT8_B, head deterministic, SE rel vs float64 native L00 0.0116 -> 0.0170, L24 0.0123 -> 0.0181; W.1 err_layer within limits (L24 0.0314 <= 0.0336); plus SE_PACK_PRECISE=on (h in one rounding: rel 0.01647, bias +0.0063); first full gate failed only K.1 acks L20 chunk-0 window 0.98862 < 0.98957, a noise-limited 128-row window (mean 1-PCC over L14/20/21/24 windows: bf16 0.00772, bfp8 0.00751, bfp8 precise 0.00779)"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: x / h tiles shrink (arena 1142 -> 985 KB); the only added work is one 640x1280 typecast a layer (7 us), the router's bf16 x kept"
+  },
+  {
+   "id": "OV-19",
+   "answer": "n/a",
+   "evidence": "restart note only; P.6 is committed (HEAD a5a76dc08d1)"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.9",
+  "role": "overseer",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-10-29T06:45:35",
+  "head": "669f2fe2f87",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.9.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.9_runner_smoke.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.9_smoke.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.9.overseer.3.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.9.overseer.3.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/MOE_BLOCK.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_se_activations.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/moe_block/moe_block.py",
+   "models/demos/moe_block/tt/fused_head.py",
+   "models/demos/moe_block/tt/se_engine3.py",
+   "models/demos/moe_block/tt/x_gather3.py"
+  ]
+ }
+}
