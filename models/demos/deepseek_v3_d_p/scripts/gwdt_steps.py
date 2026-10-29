@@ -420,9 +420,9 @@ def build_steps(models: list[str]) -> list[Step]:
                 "block-random",
                 "kimi_k2_7",
                 [
-                    f"{TESTS}/test_prefill_transformer.py::test_kimi_prefill_transformer[blackhole-kimi_k2_7-torus-xy-8x4"
-                    "-iter2-with_determinism-e384_device_fp32-5_layers-isl_5k-non_balanced-smoke-json_prompts-random"
-                    "-kv_cache-right_pad]"
+                    f"{TESTS}/test_prefill_block_chunked.py::test_kimi_prefill_block_chunked_random"
+                    f"[blackhole-kimi_k2_7-torus-xy-8x4-{layer}-chunks2-iter2]"
+                    for layer in ("dense_L0", "moe_L1")
                 ],
             ),
         ],
@@ -437,7 +437,18 @@ def build_steps(models: list[str]) -> list[Step]:
                     f"[blackhole-glm53-with_determinism-iter2-{layer}-seq5120-torus-xy-8x4]"
                     for layer in ("dense", "moe")
                 ],
-            )
+            ),
+            pytest_step(
+                "block-random:glm53",
+                "block-random GLM5.3",
+                "block-random",
+                "glm53",
+                [
+                    f"{TESTS}/test_prefill_block_chunked.py::test_glm_prefill_block_chunked_random"
+                    f"[blackhole-glm53-torus-xy-8x4-{layer}-chunks2-iter2]"
+                    for layer in ("dense_L0", "moe_full_L6", "moe_shared_L3")
+                ],
+            ),
         ],
     }
     model_steps = [s for m in models for s in blocks[m]]
