@@ -14,10 +14,14 @@
 //   10 verify (0 / 1: row u writes state slot cur ^ u, see the reader), 11 sem_slot (local: cur + 1)
 // Runtime args: 0 state address (DRAM, see the reader), 1 o_in_addr (streamers' buffer), 2 head index,
 // then num_streamers x (x, y), then an optional timeline buffer (0 = off; per layer [2] state out,
-// [3] output sent), then u0, nu, the head's cores (1: this core is the collector), the collector's x, y
+// [3] output sent), then u0, nu, the head's cores (1: this core is the collector), the collector's x, y, then
+// the token state address
+// Rows mode (active_rows.hpp): only this core's active users run; its stage rows start zeroed, so inactive users'
+// output rows are 0. The head's collector exchange still runs every layer, also on a core with none.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "active_rows.hpp"
 
 constexpr uint32_t Kt = get_compile_time_arg_val(0);
 constexpr uint32_t Vt = get_compile_time_arg_val(1);
@@ -65,19 +69,36 @@ void kernel_main() {
         cur = *slot_sem - 1;
     }
 
-    for (uint32_t i = 0; i < layers * nu; i++) {
-        const uint32_t l = i / nu, u = u0 + i % nu;
-        const uint32_t set = l % copies;
-        cb_wait_front(cb_out, Vt);
-        const uint32_t out = get_read_ptr(cb_out);
-        for (uint32_t t = 0; t < Vt; t++) {
-            const uint32_t dst = stage + t * kRowTile + u * kFaceRow;
-            noc_async_read(get_noc_addr(out + t * kBf16Tile), dst, kFaceRow);
-            noc_async_read(get_noc_addr(out + t * kBf16Tile + kFaceBytes), dst + batch * kFaceRow, kFaceRow);
+    // this core's users that run this step (see the reader)
+    uint32_t act[batch], n = 0;
+    {
+        uint32_t mask = ~0u;
+        if constexpr (rows_mode) {
+            const uint32_t tok_addr = get_arg_val<uint32_t>(peers_base + 2 * num_streamers + 6);
+            noc_async_read(get_noc_addr_from_bank_id<true>(0, tok_addr), stage, kTokHeadBytes);
+            noc_async_read_barrier();
+            mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage)[kTokActive];
+            // this core's rows only: another core of the head may already be writing its rows into ours
+            for (uint32_t t = 0; t < Vt; t++) {
+                for (uint32_t f = 0; f < 2; f++) {
+                    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        stage + t * kRowTile + (f * batch + u0) * kFaceRow);
+                    for (uint32_t w = 0; w < nu * kFaceRow / 4; w++) {
+                        p[w] = 0;
+                    }
+                }
+            }
         }
-        noc_async_read_barrier();
-        cb_pop_front(cb_out, Vt);
-        if (u + 1 == u0 + nu && !collector) {
+        for (uint32_t u = u0; u < u0 + nu; u++) {
+            if ((mask >> u) & 1) {
+                act[n++] = u;
+            }
+        }
+    }
+    // after the core's last user of layer l: its rows to the head's collector, or (collector) the head's output
+    // into every streamer
+    auto layer_out = [&](uint32_t l) {
+        if (!collector) {
             // users u0 .. u0 + nu are contiguous face rows of every tile
             for (uint32_t t = 0; t < Vt; t++) {
                 for (uint32_t f = 0; f < 2; f++) {
@@ -87,8 +108,7 @@ void kernel_main() {
             }
             noc_async_write_barrier();
             noc_semaphore_inc(get_noc_addr(cx, cy, get_semaphore(sem_group)), 1);
-        }
-        if (u + 1 == u0 + nu && collector) {
+        } else {
             noc_semaphore_wait_min(group_sem, (cores - 1) * (l + 1));
             for (uint32_t s = 0; s < num_streamers; s++) {
                 const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
@@ -102,8 +122,30 @@ void kernel_main() {
                 noc_semaphore_inc(get_noc_addr(px, py, heads_sem_addr), 1);
             }
         }
+    };
+
+    for (uint32_t i = 0; i < layers * (n ? n : 1); i++) {
+        const uint32_t l = n ? i / n : i, k = n ? i % n : 0;
+        if (n == 0) {
+            layer_out(l);  // rows mode, no active user on this core
+            continue;
+        }
+        const uint32_t u = act[k];
+        const uint32_t set = l % copies;
+        cb_wait_front(cb_out, Vt);
+        const uint32_t out = get_read_ptr(cb_out);
+        for (uint32_t t = 0; t < Vt; t++) {
+            const uint32_t dst = stage + t * kRowTile + u * kFaceRow;
+            noc_async_read(get_noc_addr(out + t * kBf16Tile), dst, kFaceRow);
+            noc_async_read(get_noc_addr(out + t * kBf16Tile + kFaceBytes), dst + batch * kFaceRow, kFaceRow);
+        }
+        noc_async_read_barrier();
+        cb_pop_front(cb_out, Vt);
+        if (k + 1 == n) {
+            layer_out(l);
+        }
         cb_wait_front(cb_s_new_out, st);
-        if (ts_addr && u == u0) {
+        if (ts_addr && k == 0) {
             ts[l * 4 + 2] = *clk;
         }
         const uint32_t first = ((set * num_heads + head) * batch + (verify ? cur ^ u : u)) * st;
@@ -114,7 +156,7 @@ void kernel_main() {
         cb_pop_front(cb_s_new_out, st);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_state)) = i + 1;
 
-        if (ts_addr && u + 1 == u0 + nu) {
+        if (ts_addr && k + 1 == n) {
             ts[l * 4 + 3] = *clk;
         }
     }

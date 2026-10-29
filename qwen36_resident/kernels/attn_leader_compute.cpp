@@ -6,6 +6,7 @@
 //   o = (the group heads' partial sums) / row sum * gs into cb_out.
 //
 // Runtime args: 0 children (group heads of the reduction tree).
+// Rows mode (active_rows.hpp): only the active users run (the reader's mask in cb_lead_active).
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -14,6 +15,7 @@
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "attn_compute_common.hpp"
+#include "active_rows.hpp"
 
 using namespace resident_attn;
 
@@ -85,20 +87,29 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_qraw, cb_qraw, cb_sq);
     cb_wait_front(cb_mean, 1);
     cb_wait_front(cb_rope, 3 * batch);
+    uint32_t mask = ~0u;
+    if constexpr (rows_mode) {
+        constexpr uint32_t cb_lead_active = 7;
+        cb_wait_front(cb_lead_active, 1);
+        mask = read_tile_value(cb_lead_active, 0, kTokActive);
+        cb_pop_front(cb_lead_active, 1);
+    }
+    const ActiveRows<batch> act(mask);
+    const uint32_t n_act = act.n;
     for (uint32_t l = 0; l < layers; l++) {
-        // user u + 1's q and gate are prepared before user u's output, while the workers run user u
+        // the next user's q and gate are prepared before this user's output, while the workers run this user
         cb_wait_front(cb_qw, Dt);
-        auto prep = [&](uint32_t u) {
-            norm_rope(cb_qraw, cb_qw, 0, cb_q_mc, cb_q_mc, 3 * u);
+        auto prep = [&](uint32_t k) {
+            norm_rope(cb_qraw, cb_qw, 0, cb_q_mc, cb_q_mc, 3 * act.row[k]);
             gate_sigmoid();
-            if (u + 1 == batch) {
+            if (k + 1 == n_act) {
                 cb_pop_front(cb_qw, Dt);
             }
         };
         prep(0);
-        for (uint32_t u = 0; u < batch; u++) {
-            if (u + 1 < batch) {
-                prep(u + 1);
+        for (uint32_t k = 0; k < n_act; k++) {
+            if (k + 1 < n_act) {
+                prep(k + 1);
             }
             sum_partials<false>(children);
             normalize_gate();

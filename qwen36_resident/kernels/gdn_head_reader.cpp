@@ -24,9 +24,12 @@
 //   optional timeline buffer (0 = off): per layer 4 words, the reader writes [0] rows arrived, [1] inputs
 //   pushed; then this core's users u0 .. u0 + nu and the row writes it gets per layer (one per streamer run
 //   that covers it), then the token state address
+// Rows mode (active_rows.hpp): only this core's active users run (iteration i = layer * n + k for the k-th of
+// its n active users); n goes to compute in cb_active.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "active_rows.hpp"
 
 namespace {
 
@@ -47,6 +50,7 @@ constexpr uint32_t kTokSlot = 4;  // token state word: the state slot row 0 cont
 constexpr uint32_t cb_q_in = 0, cb_k_in = 1, cb_v_in = 2, cb_z_in = 3, cb_norm_w = 4, cb_s_in = 5;
 constexpr uint32_t cb_a_full = 6, cb_b_full = 7, cb_ones = 8, cb_row_mask = 9, cb_s_mm = 17, cb_s_new_out = 24;
 constexpr uint32_t cb_neg_a_full = 30, cb_dt_bias_full = 31;
+constexpr uint32_t cb_active = 29;  // rows mode: this core's active users per step (one word, for compute)
 constexpr uint32_t kBf16Tile = 2048, kF32Tile = 4096, kFaceBytes = 512, kFaceRow = 32;
 constexpr uint32_t kRowTile = 64 * batch;  // a batch x 32 bf16 tile of the row buffer
 
@@ -154,6 +158,27 @@ void kernel_main() {
         cur = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[kTokSlot] & 1;
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_slot)) = cur + 1;
     }
+    // this core's users that run this step (rows mode: those with their active bit; see active_rows.hpp)
+    uint32_t act[batch], n = 0;
+    {
+        uint32_t mask = ~0u;
+        if constexpr (rows_mode) {
+            const uint32_t scratch = get_write_ptr(cb_s_in);  // unused until the first state read
+            noc_async_read(get_noc_addr_from_bank_id<true>(0, tok_addr), scratch, kTokHeadBytes);
+            noc_async_read_barrier();
+            mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[kTokActive];
+        }
+        for (uint32_t u = u0; u < u0 + nu; u++) {
+            if ((mask >> u) & 1) {
+                act[n++] = u;
+            }
+        }
+        if constexpr (rows_mode) {
+            cb_reserve_back(cb_active, 1);
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_active)) = n;
+            cb_push_back(cb_active, 1);
+        }
+    }
     auto& s_new_iface = get_local_cb_interface(cb_s_new_out);
     const uint32_t s_new = s_new_iface.fifo_limit - s_new_iface.fifo_size;
 
@@ -163,12 +188,12 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* b_row = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(rows + b_tile * kRowTile);
     // element c of user u in a row tile
     auto elem = [](uint32_t c, uint32_t u) { return (c / 16) * 16 * batch + u * 16 + c % 16; };
-    for (uint32_t i = 0; i < layers * nu; i++) {
-        const uint32_t l = i / nu, u = u0 + i % nu;
+    for (uint32_t i = 0; i < layers * n; i++) {
+        const uint32_t l = i / n, k = i % n, u = act[k];
         const uint32_t set = l % copies;
         // the user's state and the norm weight do not depend on the rows: land them first
         if (l >= copies) {
-            noc_semaphore_wait_min(state_sem, i - copies * nu + 1);
+            noc_semaphore_wait_min(state_sem, i - copies * n + 1);
         }
         cb_reserve_back(cb_s_in, st);
         if (verify && u == 1) {
@@ -187,7 +212,7 @@ void kernel_main() {
         }
         cb_push_back(cb_s_in, st);
         push_pages(cb_norm_w, norm_dram, set * Vt, Vt, kBf16Tile);
-        if (u == u0) {
+        if (k == 0) {
             noc_semaphore_wait_min(rows_sem, row_writes * (l + 1));
             if (ts_addr) {
                 ts[l * 4 + 0] = *clk;
@@ -205,7 +230,7 @@ void kernel_main() {
         push_fill(cb_b_full, b_bits);
         place_rows(cb_v_in, rows, v_tile, Vt, u);
         place_rows(cb_z_in, rows, z_tile, Vt, u);
-        if (ts_addr && u + 1 == u0 + nu) {
+        if (ts_addr && k + 1 == n) {
             ts[l * 4 + 1] = *clk;
         }
     }

@@ -13,10 +13,13 @@
 // slots address, 3 row-max senders (active workers incl. the tail core), 4..7 worker rectangle NOC
 // x0 y0 x1 y1, 8 streamers' o buffer address, then num_streamers x (x, y), then children (group heads),
 // children x (x, y), then an optional timeline buffer (0 = off; per layer words [4] q sent, [6] M sent,
-// [7] output sent, next to the reader's).
+// [7] output sent, next to the reader's), then the token state address.
+// Rows mode (active_rows.hpp): only the active users run; the stage starts zeroed, so inactive users' output rows
+// are 0.
 
 #include "api/dataflow/dataflow_api.h"
 #include "attn_common.hpp"
+#include "active_rows.hpp"
 
 using namespace resident_attn;
 
@@ -67,6 +70,20 @@ void kernel_main() {
         }
     }
 
+    uint32_t mask = ~0u;
+    if constexpr (rows_mode) {
+        const uint32_t tok_addr = get_arg_val<uint32_t>(children_base + 2 + 2 * children);
+        noc_async_read(get_noc_addr_from_bank_id<true>(0, tok_addr), stage, kTokHeadBytes);
+        noc_async_read_barrier();
+        mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage)[kTokActive];
+        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage);
+        for (uint32_t w = 0; w < heads * Dt * kRowTile / 4; w++) {
+            p[w] = 0;
+        }
+    }
+    const ActiveRows<batch> act(mask);
+    const uint32_t n_act = act.n;
+
     auto send_q = [&](uint32_t i) {
         cb_wait_front(cb_q_mc, Dt);
         noc_async_write_multicast(get_read_ptr(cb_q_mc), mc_q, Dt * kTile, mc_dests);
@@ -75,10 +92,10 @@ void kernel_main() {
         noc_semaphore_set_multicast(get_semaphore(sem_q), mc_q_sem, mc_dests);
         cb_pop_front(cb_q_mc, Dt);
     };
-    for (uint32_t i = 0; i < iters; i++) {
-        const uint32_t l = i / batch, u = i % batch;
+    for (uint32_t i = 0; i < layers * n_act; i++) {
+        const uint32_t l = i / n_act, k = i % n_act, u = act.row[k];
         // q to the workers (a later user's q goes out as soon as the workers have this user's scores)
-        if (u == 0) {
+        if (k == 0) {
             send_q(i);
         }
         mark(l, 4);
@@ -105,7 +122,7 @@ void kernel_main() {
         noc_semaphore_set_multicast(get_semaphore(sem_M), mc_M_sem, mc_dests);
         mark(l, 6);
         // every worker sent its row max, so none reads q any more: the next user's q can go
-        if (u + 1 < batch) {
+        if (k + 1 < n_act) {
             send_q(i + 1);
         }
 
@@ -122,7 +139,7 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_pop_front(cb_out, Dt);
-        if (u + 1 < batch) {
+        if (k + 1 < n_act) {
             continue;
         }
         for (uint32_t s = 0; s < num_streamers; s++) {

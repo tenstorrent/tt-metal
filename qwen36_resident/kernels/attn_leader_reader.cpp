@@ -11,9 +11,11 @@
 // timeline buffer (0 = off; per layer 8 wall-clock words: [1] rows arrived, [2] rows placed,
 // [3] partials arrived), 3 token state address, 4 rope offset in it, 5 q norm weight address (DRAM,
 // [copies][Dt] bf16 tiles).
+// Rows mode (active_rows.hpp): only the active users run; the active mask goes to compute in cb_lead_active.
 
 #include "api/dataflow/dataflow_api.h"
 #include "attn_common.hpp"
+#include "active_rows.hpp"
 
 using namespace resident_attn;
 
@@ -70,6 +72,17 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_rope, 3 * batch);
     }
+    uint32_t mask = ~0u;
+    if constexpr (rows_mode) {
+        constexpr uint32_t cb_lead_active = 7;
+        cb_reserve_back(cb_lead_active, 1);
+        noc_async_read(get_noc_addr_from_bank_id<true>(0, tok_addr), get_write_ptr(cb_lead_active), kTokHeadBytes);
+        noc_async_read_barrier();
+        mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_lead_active))[kTokActive];
+        cb_push_back(cb_lead_active, 1);
+    }
+    const ActiveRows<batch> act(mask);
+    const uint32_t n_act = act.n;
 
     constexpr uint32_t gate0 = heads * Dt;
     auto place = [&](uint32_t u) {
@@ -91,9 +104,9 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_gate, Dt);
     };
-    for (uint32_t i = 0; i < iters; i++) {
-        const uint32_t l = i / batch, u = i % batch;
-        if (u == 0) {
+    for (uint32_t i = 0; i < layers * n_act; i++) {
+        const uint32_t l = i / n_act, k = i % n_act;
+        if (k == 0) {
             cb_reserve_back(cb_qw, Dt);
             for (uint32_t d = 0; d < Dt; d++) {
                 noc_async_read_page((l % copies) * Dt + d, qw_dram, get_write_ptr(cb_qw) + d * kTile);
@@ -102,16 +115,16 @@ void kernel_main() {
             cb_push_back(cb_qw, Dt);
             noc_semaphore_wait_min(rows_sem, num_streamers * (l + 1));
             mark(l, 1);
-            place(0);
+            place(act.row[0]);
             mark(l, 2);
         }
         // the next user's rows go in before this user's partials arrive, so compute prepares its q meanwhile
-        if (u + 1 < batch) {
-            place(u + 1);
+        if (k + 1 < n_act) {
+            place(act.row[k + 1]);
         }
 
         noc_semaphore_wait_min(part_sem, children * (i + 1));
-        if (u + 1 == batch) {
+        if (k + 1 == n_act) {
             mark(l, 3);
         }
         push_resident(cb_parts, fanin * kPart);

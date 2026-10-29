@@ -8,13 +8,15 @@
 //     the tail tile (masked), then the tail tiles as bf8 for the DRAM write-back;
 // a group head adds its children's partials to its own.
 //
-// Runtime args: 0 role (1 chunk worker, 2 tail core), 1 children. The chunk's KV tiles come in cb_ntiles.
+// Runtime args: 0 role (1 chunk worker, 2 tail core), 1 children. The chunk's KV tiles come in cb_ntiles, and
+// (rows mode, active_rows.hpp) the active mask in its word `batch`: only the active users run.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/binary_max_min.h"
 #include "attn_compute_common.hpp"
+#include "active_rows.hpp"
 
 using namespace resident_attn;
 
@@ -217,10 +219,12 @@ void kernel_main() {
     for (uint32_t u = 0; u < batch; u++) {
         n_of[u] = read_tile_value(cb_ntiles, 0, u);
     }
+    const ActiveRows<batch> act(read_tile_value(cb_ntiles, 0, batch));
+    const uint32_t n_act = act.n;
     if (role == 1) {
         compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_s);
-        for (uint32_t i = 0; i < iters; i++) {
-            const uint32_t n_tiles = n_of[i % batch];
+        for (uint32_t i = 0; i < layers * n_act; i++) {
+            const uint32_t n_tiles = n_of[act.row[i % n_act]];
             cb_wait_front(cb_q, Dt);
             if (n_tiles > 0) {
                 for (uint32_t b0 = 0; b0 < n_tiles; b0 += chunk_max) {
@@ -250,8 +254,8 @@ void kernel_main() {
     cb_wait_front(cb_rope, 3 * batch);
     cb_wait_front(cb_mask, batch);
     cb_wait_front(cb_rowsel, 2 * batch);
-    for (uint32_t i = 0; i < iters; i++) {
-        const uint32_t u = i % batch;
+    for (uint32_t i = 0; i < layers * n_act; i++) {
+        const uint32_t u = act.row[i % n_act];
         cb_wait_front(cb_kw, Dt);
         norm_rope(cb_kraw, cb_kw, 0, cb_knew, cb_knew, 3 * u);
         cb_pop_front(cb_kw, Dt);

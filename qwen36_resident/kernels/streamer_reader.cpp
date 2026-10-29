@@ -15,9 +15,12 @@
 // (0 = off): per layer, the wall clock at the end of each entry's stream and the cycles each entry
 // spent waiting for ring room, 34 n_conv (q|k|v tiles of this core: only the 32x32 views holding them of
 // the taps and history are read).
+// Rows mode (active_rows.hpp): the history slots are read in canonical order, and the writer gets the active
+// rows and the preserve word instead of the ring step.
 
 #include "api/dataflow/dataflow_api.h"
 #include "streamer_common.hpp"
+#include "active_rows.hpp"
 
 using namespace resident;
 
@@ -121,10 +124,13 @@ void kernel_main() {
         tok.get_noc_addr(0, kTokX0 + (fc_in && chip >= num_chips / 2 ? Ht * kTileBytes : 0)),
         get_write_ptr(cb_x),
         Ht * kTileBytes);
-    noc_async_read(tok.get_noc_addr(0), get_write_ptr(cb_dout), 16);
+    noc_async_read(tok.get_noc_addr(0), get_write_ptr(cb_dout), kTokHeadBytes);
     noc_async_read_barrier();
-    const uint32_t ring = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_dout));
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_ring)) = ring + 1;  // for the writer
+    volatile tt_l1_ptr uint32_t* head = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_dout));
+    const uint32_t ring = rows_mode ? 0 : head[0];
+    // for the writer: the ring step + 1, or (rows mode) the active rows and the preserve word (high bit set)
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_ring)) =
+        rows_mode ? 0x80000000u | ((head[kTokPreserve] & 1) << 16) | (head[kTokActive] & 0xffff) : ring + 1;
     cb_push_back(cb_x, Ht);
     if constexpr (batch > 1) {
         // rmsnorm constants: ones, the fold matrix (1 where row = column mod batch), the identity, bf16 32x32
@@ -193,7 +199,7 @@ void kernel_main() {
                 }
                 for (uint32_t j = 0; j < 3; j++) {
                     noc_async_read(
-                        hist.get_noc_addr(row, ((step + j) % kHistSlots) * kBlkBytes),
+                        hist.get_noc_addr(row, (rows_mode ? j : (step + j) % kHistSlots) * kBlkBytes),
                         get_write_ptr(cb_conv_hist) + j * kBlkBytes,
                         conv_bytes);
                 }

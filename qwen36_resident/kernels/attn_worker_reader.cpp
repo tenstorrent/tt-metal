@@ -17,10 +17,13 @@
 // address, 8 rope offset in it, then (tail core) 9 row buffer address, 10 k norm weight address (DRAM,
 // [copies][Dt] bf16 tiles), then (paged KV, attn_paged.hpp; arg 9 on a chunk worker, 11 on the tail core) the
 // page table address. Paged: 2 / 3 are the K / V pools and 4 is 0.
+// Rows mode (active_rows.hpp): only the active users run (iteration i = layer * n + k for the k-th of the n);
+// the active mask goes to the writer and compute in word `batch` of the cb_ntiles page.
 
 #include "api/dataflow/dataflow_api.h"
 #include "attn_common.hpp"
 #include "attn_paged.hpp"
+#include "active_rows.hpp"
 
 using namespace resident_attn;
 
@@ -83,8 +86,10 @@ void kernel_main() {
     const InterleavedAddrGen<true> tok{.bank_base_address = tok_addr, .page_size = rope_off + 3 * batch * kTile};
     cb_reserve_back(cb_ntiles, 1);
     const uint32_t scratch = get_write_ptr(cb_ntiles);
-    noc_async_read(tok.get_noc_addr(0), scratch, 4 * (1 + batch));
+    noc_async_read(tok.get_noc_addr(0), scratch, rows_mode ? kTokHeadBytes : 4 * (1 + batch));
     noc_async_read_barrier();
+    const uint32_t mask = rows_mode ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[kTokActive] : ~0u;
+    const ActiveRows<batch> act(mask);
     Chunk chs[batch];
     uint32_t tail_rs[batch], tps[batch];
     for (uint32_t u = 0; u < batch; u++) {
@@ -97,13 +102,16 @@ void kernel_main() {
     if constexpr (kv_paged) {
         // the pages of this core's tiles (the writer's tail pages too: it reads them after the cb_ntiles push)
         const uint32_t pt_addr = get_arg_val<uint32_t>(role == 2 ? 11 : 9);
-        for (uint32_t u = 0; u < batch; u++) {
+        for (uint32_t k = 0; k < act.n; k++) {
+            const uint32_t u = act.row[k];
             translate_chunk(pt_addr, verify ? 0 : u, u, chs[u], chs[u].n);
         }
     }
     for (uint32_t u = 0; u < batch; u++) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[u] = chs[u].n;
     }
+    static_assert((batch + 1) * 4 <= kNegInfOff, "the active mask overlaps the -inf rows");
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[batch] = mask;
     cb_push_back(cb_ntiles, 1);
 
     uint32_t rows = 0;
@@ -175,8 +183,9 @@ void kernel_main() {
         same_tile = tps[1] == tps[0];
         waits_tail = role == 1 && !same_tile && holds(chs[1], tps[0]);
     }
-    for (uint32_t i = 0; i < iters; i++) {
-        const uint32_t l = i / batch, u = i % batch;
+    const uint32_t n_act = act.n;
+    for (uint32_t i = 0; i < layers * n_act; i++) {
+        const uint32_t l = i / n_act, ka = i % n_act, u = act.row[ka];
         const Chunk& ch = chs[u];
         const uint32_t k_addr = k_cache + u * user_stride + (l % copies) * copy_stride;
         const uint32_t v_addr = v_cache + u * user_stride + (l % copies) * copy_stride;
@@ -211,7 +220,7 @@ void kernel_main() {
             if (same_tile && u == 1) {
                 noc_semaphore_wait_min(tail_sem, i);
             } else if (l >= copies) {
-                noc_semaphore_wait_min(tail_sem, i - copies * batch + 1);
+                noc_semaphore_wait_min(tail_sem, i - copies * n_act + 1);
             }
             cb_reserve_back(cb_tail8, 2 * Dt);
             read_rows(ch, k_addr, 0, 1, get_write_ptr(cb_tail8), pages, copy_page);
@@ -223,7 +232,7 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_tail8, 2 * Dt);
             cb_push_back(cb_kw, Dt);
-            if (u == 0) {
+            if (ka == 0) {
                 noc_semaphore_wait_min(rows_sem, num_streamers * (l + 1));
             }
             cb_reserve_back(cb_kraw, Dt);

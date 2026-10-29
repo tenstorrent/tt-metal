@@ -18,6 +18,7 @@ layer of that kind use copy k % copies; "mlp", "out": per layer l, copy l % copi
 folded into the following projection. The torch reference applies the same (dequantized) weights and
 bf16 rounding points.
 """
+
 import math
 import os
 
@@ -88,6 +89,7 @@ KV_BLOCK = 8  # KV position tiles per streamed block of an attention worker
 HEAD_FP32_CBS = (5, 6, 7, 15, 30, 31)
 TOK_X0 = 64
 TOK_SLOT = 4  # token state word: the GDN state slot of row 0 (verify)
+TOK_ACTIVE, TOK_PRESERVE = 9, 10  # rows mode token state words (kernels/active_rows.hpp)
 TOP_K = 32  # sampling::kTopK: the candidates of on-device sampling, the largest top-k it serves
 KV_ROW = (HD // TILE) * TILE_BYTES[ttnn.bfloat8_b]
 
@@ -448,6 +450,7 @@ class ResidentModel:
         kv_pool_blocks=None,
         block_tables=None,
         kv_block_size=64,
+        rows=False,
     ):
         """st: the decode state (State), or one State per user for a batch of len(st) users. More than 8 users
         run as sub-batches of 8, one launch each (the launches share the weights and buffers, each has its
@@ -463,9 +466,14 @@ class ResidentModel:
         kv_pool_blocks (paged KV, attn_paged.hpp): the KV caches are one pool per K / V of this many blocks of
         kv_block_size positions, shared by every user and sub-batch, instead of a contiguous max_pos cache per user;
         block_tables: per user the physical block of each logical block (default: user u takes blocks
-        u * blocks_per_user ...), see set_page_table. The users' States are placed into the pool through them."""
+        u * blocks_per_user ...), see set_page_table. The users' States are placed into the pool through them.
+        rows (multi-user rows mode, kernels/active_rows.hpp): the rows of a launch are independent users, each run
+        only when its active bit is set (token_state active=), with the conv history in canonical order; a user's
+        arithmetic does not depend on its neighbours. Batch > 1, no verify, no feed."""
         self.mesh, self.d, self.layers, self.interval, self.lm_head = mesh, d, layers, interval, lm_head
         self.verify = verify
+        self.rows = rows
+        assert not rows or (not verify and embed is None), "rows mode: independent users, host-fed"
         self.fc = fc is not None
         self.sample = embed is not None and not verify  # the hub draws the fed token (sampling.hpp)
         if verify:
@@ -478,6 +486,7 @@ class ResidentModel:
         B = self.batch = len(sts)  # users per launch
         self.n_sub, self.users = n_sub, len(sts_all)
         assert B in (1, 2, 4, 8), "custom_mm takes 1, 2, 4 or 8 rows"
+        assert not rows or B > 1, "rows mode: a batch of users"
         assert len({s.max_pos for s in sts_all}) == 1
         n, banks = d.n, d.banks
         self.n_attn = sum(is_attn(l, interval) for l in range(layers))
@@ -938,7 +947,7 @@ class ResidentModel:
                 aliased(19, 24, CONV_K * blk_tiles),
                 aliased(20, 25, (CONV_K - 1) * blk_tiles),
                 T(21, self.o_in_t),
-                cb(30, grid, (3 if self.verify else 1) * blk_tiles * B // TILE),
+                cb(30, grid, (3 if self.verify or self.rows else 1) * blk_tiles * B // TILE),
             ]
             if self.verify:
                 cbs.append(cb(36, grid, 3))
@@ -990,6 +999,8 @@ class ResidentModel:
             for idx, ((dt, page), cnt) in head_cb_spec.items():
                 cbs.append(cb(idx, head_grid, cnt, dt, page))
             cbs.append(cb(22, head_grid, 1, page=4 * 64 * B))
+            if self.rows:
+                cbs.append(cb(29, head_grid, 1, ttnn.uint32, 64))  # active_rows.hpp: the core's active users
             # attention workers (chunk workers and the tail core)
             cbs += [
                 T(0, q_t),
@@ -1022,6 +1033,7 @@ class ResidentModel:
                 cb(26, lead_grid, 2 * Dt),
                 cb(27, lead_grid, Dt),
                 cb(30, lead_grid, 1),
+                *([cb(7, lead_grid, 1, ttnn.uint32, 64)] if self.rows else []),  # the token state head
                 # tail core
                 cb(11, tail_grid, Dt),
                 cb(12, tail_grid, 2 * B),
@@ -1041,13 +1053,16 @@ class ResidentModel:
             sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=all_grid, initial_value=0) for i in range(SEM_GROUP)]
             sems.append(ttnn.SemaphoreDescriptor(id=SEM_GROUP, core_ranges=head_grid, initial_value=0))
 
+            # every kernel: multi-user rows mode (active_rows.hpp)
+            common_named = [("rows_mode", int(self.rows)), ("gdn_layers", self.n_gdn)]
+
             def kernel(src, core_ranges, ct, rt, config, named=()):
                 return ttnn.KernelDescriptor(
                     kernel_source=KDIR + src,
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=core_ranges,
                     compile_time_args=ct,
-                    named_compile_time_args=list(named),
+                    named_compile_time_args=list(named) + common_named,
                     runtime_args=rt,
                     config=config,
                 )
@@ -1266,7 +1281,7 @@ class ResidentModel:
                     hw[c.x][c.y] = (
                         [sub["state"].buffer_address(), self.o_in_t.buffer_address(), hh]
                         + peers
-                        + [0, gi * nu, nu, G, col.x, col.y]
+                        + [0, gi * nu, nu, G, col.x, col.y, tok_addr]
                     )
                 head_ct = [4, 4, self.n_gdn, gdn_copies, S]
                 head_compute_ct = [d.nk, d.nv, 4, 4, group, f32_bits(DK**-0.5), f32_bits(1e-6), f32_bits(1e-6)]
@@ -1310,7 +1325,7 @@ class ResidentModel:
                     + peers
                     + [len(groups_)]
                     + [v for grp in groups_ for v in (wphys[grp[0]].x, wphys[grp[0]].y)]
-                    + [0]
+                    + [0, tok_addr]
                 )
                 lc[leader.x][leader.y] = [len(groups_)]
 
@@ -1400,25 +1415,47 @@ class ResidentModel:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
 
-    def token_state(self, x0, pos, ring=None, slot=0, words=None):
+    def token_state(self, x0, pos, ring=None, slot=0, words=None, active=None, preserve=False):
         """host tensor of the token state: x0 [HIDDEN] at pos, or per user x0 [users, HIDDEN] at positions pos
         (a list); ring is the conv ring step (default: the position, batch 1). With sub-batches, one host
         tensor per sub-batch. Verify: rows [t, draft] at [p, p + 1]; after a step at ring k and slot s the
-        next one continues from row 0 at ring k + 1, slot s, or from row 1 at ring k + 2, slot s ^ 1."""
+        next one continues from row 0 at ring k + 1, slot s, or from row 1 at ring k + 2, slot s ^ 1.
+        Rows mode: active (per user, default all) says which users run the step (an inactive user's x0 and
+        position are written as 0); preserve: the inactive users hold live state (a masked launch beside them, e.g.
+        a new user's first token), see kernels/active_rows.hpp. A launch needs at least one active user."""
         if self.n_sub > 1:
             x0 = x0.reshape(self.users, HIDDEN)
             B = self.batch
+            act = [True] * self.users if active is None else list(active)
             return [
-                self._token_state(x0[k * B : (k + 1) * B], pos[k * B : (k + 1) * B], ring) for k in range(self.n_sub)
+                self._token_state(
+                    x0[k * B : (k + 1) * B],
+                    pos[k * B : (k + 1) * B],
+                    ring,
+                    active=act[k * B : (k + 1) * B],
+                    preserve=preserve,
+                )
+                for k in range(self.n_sub)
             ]
-        return self._token_state(x0, pos, ring, slot, words)
+        return self._token_state(x0, pos, ring, slot, words, active, preserve)
 
-    def _token_state(self, x0, pos, ring, slot=0, extra=None):
+    def _token_state(self, x0, pos, ring, slot=0, extra=None, active=None, preserve=False):
         B = self.batch
         x0 = x0.reshape(B, -1)
         pos = [pos] if B == 1 and not isinstance(pos, (list, tuple)) else list(pos)
-        assert len(pos) == B and (ring is not None or B == 1)
-        ring = pos[0] if ring is None else ring
+        assert len(pos) == B and (ring is not None or B == 1 or self.rows)
+        ring = (0 if self.rows else pos[0]) if ring is None else ring
+        if self.rows:
+            active = [True] * B if active is None else [bool(a) for a in active]
+            assert len(active) == B
+            x0 = torch.where(torch.tensor(active)[:, None], x0.float(), torch.zeros(()))
+            pos = [p if a else 0 for p, a in zip(pos, active)]
+            extra = dict(extra or {})
+            extra[TOK_ACTIVE] = sum(1 << u for u, a in enumerate(active) if a)
+            extra[TOK_PRESERVE] = int(preserve)
+            ring = 0
+        else:
+            assert active is None and not preserve, "active / preserve: rows mode"
         words = np.zeros(self.tok_words * 2, dtype=np.uint16)
         for i, v in enumerate([ring] + pos):
             words[2 * i], words[2 * i + 1] = v & 0xFFFF, v >> 16
@@ -1619,6 +1656,84 @@ class ResidentModel:
         for host, sub in zip(self.page_table_host(self.block_tables), self.subs):
             ttnn.copy_host_to_device_tensor(host, sub["pt"])
 
+    # ---- one user's state (rows mode): whole-tensor host round trips, for tests and tools
+    def _slot_index(self, s):
+        """(launch, row, element indices of the row in a history row, KV pages relative to copy 0) of slot s"""
+        k, u = divmod(s, self.batch)
+        blk = self._blk * TILE
+        e = torch.arange(blk)
+        slots = 4 if self.verify else CONV_K - 1
+        hist_el = torch.cat([j * blk * self.batch + tiny_index(e, u, self.batch) for j in range(slots)])
+        tbl = torch.as_tensor(self.block_tables[s], dtype=torch.long)
+        pages = (tbl[:, None] * self.kv_tpb + torch.arange(self.kv_tpb)).reshape(-1)
+        return k, u, hist_el, pages
+
+    def _pool_rows(self, t):
+        """the pool tensor t as [n, copies, pages per copy, TILE, HD] (host)"""
+        d = self.d
+        host = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0)).float()
+        host = host.reshape(d.n, d.banks, self._kv_pool_rows, TILE, HD)
+        page = torch.arange(self._attn_copies * self.kv_copy_pages)
+        return host[:, page % d.banks, page // d.banks].reshape(d.n, self._attn_copies, self.kv_copy_pages, TILE, HD)
+
+    def read_slot(self, s):
+        """slot s's state as stored: GDN states [n, copies, heads, 16 * 1024] fp32, conv histories [n * S * copies,
+        slots * kBlk * 32] bf16 (its row's elements), K / V [n, copies, its pages, TILE, HD] (paged pool)"""
+        assert self.rows and self.kv_paged
+        k, u, hist_el, pages = self._slot_index(s)
+        sub, d = self.subs[k], self.d
+        cat = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0)).float()
+        state = cat(sub["state"]).reshape(d.n, self._gdn_copies, d.nv, self.batch, -1)[:, :, :, u]
+        hist = cat(sub["hist"])[:, hist_el]
+        return dict(
+            state=state,
+            hist=hist,
+            K=self._pool_rows(self.K_t)[:, :, pages],
+            V=self._pool_rows(self.V_t)[:, :, pages],
+        )
+
+    def write_slot(self, s, st):
+        """write State st as slot s's state (GDN states, conv histories at canonical order, KV through the slot's
+        block table), every other slot's left bit-identical (read-modify-write of the whole tensors)"""
+        assert self.rows and self.kv_paged
+        k, u, hist_el, pages = self._slot_index(s)
+        sub, d, B = self.subs[k], self.d, self.batch
+        per_chip = ttnn.ShardTensorToMesh(self.mesh, dim=0)
+        cat = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0))
+        state = cat(sub["state"]).float().reshape(d.n, self._gdn_copies, d.nv, B, -1)
+        state[:, :, :, u] = self._state_host([st] * B).reshape(d.n, self._gdn_copies, d.nv, B, -1)[:, :, :, u]
+        hist = cat(sub["hist"]).float()
+        hist[:, hist_el] = self._hist_host([st] * B, ring=0)[:, hist_el]
+        writes = [
+            (
+                ttnn.from_torch(
+                    state.reshape(-1, TILE), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=per_chip
+                ),
+                sub["state"],
+            ),
+            (ttnn.from_torch(hist, dtype=ttnn.bfloat16, mesh_mapper=per_chip), sub["hist"]),
+        ]
+        n, banks = d.n, d.banks
+        for which, dev in (("K", self.K_t), ("V", self.V_t)):
+            pool = cat(dev).float().reshape(n, banks, self._kv_pool_rows, TILE, HD)
+            new = self._kv_pool_host([st], which, tables=[self.block_tables[s]]).reshape(
+                n, banks, self._kv_pool_rows, TILE, HD
+            )
+            for c in range(self._attn_copies):
+                pg = c * self.kv_copy_pages + pages
+                pool[:, pg % banks, pg // banks] = new[:, pg % banks, pg // banks]
+            writes.append(
+                (
+                    ttnn.from_torch(
+                        pool.reshape(-1, HD), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, mesh_mapper=per_chip
+                    ),
+                    dev,
+                )
+            )
+        for host, dev in writes:
+            ttnn.copy_host_to_device_tensor(host, dev)
+        ttnn.synchronize_device(self.mesh)
+
     def load_hist(self, st):
         """write st's conv histories (at st.pos) as the decode's"""
         host = ttnn.from_torch(
@@ -1669,28 +1784,40 @@ class ResidentModel:
 
     def capture_trace(self):
         """record the step's launches into a trace (the device needs a trace region): step() then replays it,
-        which skips the host's per-launch work (~0.5 ms); the token state is written before each replay"""
-        self.trace_id = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-        for io, pd in zip(self.ios, self.mesh_pds):
-            ttnn.generic_op(io, pd)
-        ttnn.end_trace_capture(self.mesh, self.trace_id, cq_id=0)
+        which skips the host's per-launch work (~0.5 ms); the token state is written before each replay.
+        Rows mode: one trace per launch, so a step replays only the launches it runs."""
+        groups = [[k] for k in range(self.n_sub)] if self.rows else [list(range(self.n_sub))]
+        self.trace_ids = []
+        for ks in groups:
+            tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            for k in ks:
+                ttnn.generic_op(self.ios[k], self.mesh_pds[k])
+            ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+            self.trace_ids.append(tid)
+        self.trace_id = self.trace_ids[0]
         ttnn.synchronize_device(self.mesh)
 
     def release_trace(self):
-        if getattr(self, "trace_id", None) is not None:
-            ttnn.release_trace(self.mesh, self.trace_id)
-            self.trace_id = None
+        for tid in getattr(self, "trace_ids", None) or []:
+            ttnn.release_trace(self.mesh, tid)
+        self.trace_ids, self.trace_id = [], None
 
-    def step(self, tok_host):
-        """tok_host None (feed): the token state the previous step wrote"""
+    def step(self, tok_host, launches=None):
+        """tok_host None (feed): the token state the previous step wrote; else one host token state per launch
+        (an entry None: keep that launch's). launches (rows mode): the launches to run (default all), each with
+        at least one active user"""
+        ks = list(range(self.n_sub)) if launches is None else list(launches)
+        assert self.rows or launches is None, "a subset of the launches: rows mode"
         if tok_host is not None:
-            for t, sub in zip(tok_host if isinstance(tok_host, list) else [tok_host], self.subs):
-                ttnn.copy_host_to_device_tensor(t, sub["tok"])
+            for k, t in enumerate(tok_host if isinstance(tok_host, list) else [tok_host]):
+                if t is not None:
+                    ttnn.copy_host_to_device_tensor(t, self.subs[k]["tok"])
         if getattr(self, "trace_id", None) is not None:
-            ttnn.execute_trace(self.mesh, self.trace_id, cq_id=0, blocking=False)
+            for tid in [self.trace_ids[k] for k in ks] if self.rows else self.trace_ids:
+                ttnn.execute_trace(self.mesh, tid, cq_id=0, blocking=False)
         else:
-            for io, pd in zip(self.ios, self.mesh_pds):
-                ttnn.generic_op(io, pd)
+            for k in ks:
+                ttnn.generic_op(self.ios[k], self.mesh_pds[k])
 
     def x(self):
         """x after the step: [HIDDEN], or [users, HIDDEN]"""

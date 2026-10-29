@@ -17,11 +17,13 @@
 // reader's: partial sent), then (tail core) k cache address, v cache address, per-copy stride, token
 // state address, then workers - 1 x (x, y) of the chunk workers (verify: see attn_common.hpp). Paged KV
 // (attn_paged.hpp): the k / v addresses are the pools, the stride is 0, and the tail tiles' pages come from the
-// reader's page lists (ready once cb_ntiles is).
+// reader's page lists (ready once cb_ntiles is). Rows mode (active_rows.hpp): only the active users run (the
+// reader's mask, word `batch` of the cb_ntiles page).
 
 #include "api/dataflow/dataflow_api.h"
 #include "attn_common.hpp"
 #include "attn_paged.hpp"
+#include "active_rows.hpp"
 
 using namespace resident_attn;
 
@@ -58,6 +60,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* q_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_q));
     volatile tt_l1_ptr uint32_t* M_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_M));
     cb_wait_front(cb_ntiles, 1);
+    const ActiveRows<batch> act(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_ntiles))[batch]);
+    const uint32_t n_act = act.n;
     bool chunk_of_user[batch];
     bool any_chunkless = false;
     for (uint32_t u = 0; u < batch; u++) {
@@ -96,8 +100,8 @@ void kernel_main() {
             }
         }
     }
-    for (uint32_t i = 0; i < iters; i++) {
-        const uint32_t l = i / batch, u = i % batch;
+    for (uint32_t i = 0; i < layers * n_act; i++) {
+        const uint32_t l = i / n_act, u = act.row[i % n_act];
         const bool has_chunk = chunk_of_user[u];
         if (has_chunk) {
             cb_wait_front(cb_m, 1);

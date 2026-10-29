@@ -1006,12 +1006,15 @@ class PPPrefill:
         return T
 
     # ------------------------------------------------------------------ handoff
-    def handoff(self, model, n_tokens, timings=None, block_table=None):
+    def handoff(self, model, n_tokens, timings=None, block_table=None, slot=None):
         """move the state after n_tokens prompt tokens into the resident decode `model` (TP-sharded):
         GDN states and KV caches chip to chip on device (kernels/handoff.cpp), conv histories via the host.
         A verify model (ResidentModel verify) takes the states in slot 0 and the histories at ring step 0.
         A paged-KV model takes the KV into the pool pages of block_table (the physical block of each logical
-        block of the prompt; default: its user 0's).
+        block of the prompt; default: its user's).
+        A rows-mode model (multi-user) takes them into user `slot` (launch slot // batch, row slot % batch; default
+        0), leaving every other user's state as it is: its GDN state row, its row of the conv histories
+        (canonical order), its KV pages.
         timings, if given, gets the seconds of each part"""
         import time
 
@@ -1066,12 +1069,15 @@ class PPPrefill:
                     a_i += 1
                 else:
                     pages = d.nv * 16
-                    # (verify: a head's 16 pages per state slot, slot 0)
-                    verify = getattr(model, "verify", False)
-                    per = [(hh * 16, 16) for hh in range(d.nv)] if verify else [(0, pages)]
+                    # (verify: a head's 16 pages per state slot, slot 0; rows mode: per user row, row 0 here,
+                    # moved to the slot's row per call)
+                    per_head = getattr(model, "verify", False) or getattr(model, "rows", False)
+                    per = [(hh * 16, 16) for hh in range(d.nv)] if per_head else [(0, pages)]
                     for c in range(n):
                         for off, cnt in per:
-                            dst_page = g_i * pages + off if len(per) == 1 else (g_i * d.nv + off // 16) * 2 * 16
+                            dst_page = (
+                                g_i * pages + off if len(per) == 1 else (g_i * d.nv + off // 16) * model.batch * 16
+                            )
                             rows[p].append(
                                 torch.tensor(
                                     [
@@ -1089,10 +1095,15 @@ class PPPrefill:
             self._ho.update(model=model, rows=cat(rows), tile_of=cat(tile_of), pk=cat(pk), kv_of=cat(kv_of))
         tiles = (n_tokens + TILE - 1) // TILE
         paged = getattr(model, "kv_paged", False)
+        rows_mode = getattr(model, "rows", False)
+        slot = (slot or 0) if rows_mode else 0
+        launch, row = divmod(slot, model.batch)
+        target = model.subs[launch]
+        assert not rows_mode or paged, "rows mode: the KV goes into pool pages"
         if paged:
             # position tile t of attention layer a -> page a * copy_pages + table[t / tpb] * tpb + t % tpb
             # (attn_paged.hpp): bank page % banks, at row page / banks of the pool's shard
-            table = torch.as_tensor(list(model.block_tables[0] if block_table is None else block_table))
+            table = torch.as_tensor(list(model.block_tables[slot] if block_table is None else block_table))
             assert len(table) * model.kv_tpb >= tiles, "the block table does not cover the prompt"
             pools = [model.K_t.buffer_address(), model.V_t.buffer_address()]
         jobs, packets_in = [], torch.zeros(n, dtype=torch.int64)
@@ -1106,6 +1117,9 @@ class PPPrefill:
                 page = a * model.kv_copy_pages + table[t // model.kv_tpb] * model.kv_tpb + t % model.kv_tpb
                 jobs[p][is_kv, 5] = torch.tensor(pools)[which] + (page // banks) * kv_row
                 jobs[p][is_kv, 6] = page % banks
+                if rows_mode:  # GDN state jobs: the slot's launch and row
+                    jobs[p][~is_kv, 5] = target["state"].buffer_address()
+                    jobs[p][~is_kv, 6] += row * 16
             packets_in += torch.bincount(jobs[p][:, 0], weights=self._ho["pk"][p][sel].double(), minlength=n).long()
         packets_in = packets_in.tolist()
         most = max(1, max(len(jb) for jb in jobs))
@@ -1174,7 +1188,7 @@ class PPPrefill:
                     args.append(0)
             mesh_pd[ttnn.MeshCoordinateRange(coord, coord)] = program
         io = (
-            [jobs_t, model.state_t, model.K_t, model.V_t]
+            [jobs_t, model.state_t, model.K_t, model.V_t, target["state"]]
             + list(self.S.values())
             + list(self.K.values())
             + list(self.V.values())
@@ -1221,15 +1235,19 @@ class PPPrefill:
             ages = packed.reshape(d.n, G, CONV_K - 1, K, 2, 16)
             nxt = torch.cat([ages[:, :, 1:], torch.zeros_like(ages[:, :, :1])], dim=2)
             compact = torch.stack([ages, nxt], dim=5)  # [chips, G, slot, K, face, row, 16]
+        elif rows_mode:
+            # canonical order (slot j = the j-th oldest input, see kernels/active_rows.hpp), the slot's row only
+            compact = packed.clone()
         else:
             uses = torch.tensor([(model.n_gdn - g + copies - 1) // copies for g in range(G)])
             compact = torch.zeros(d.n, G, CONV_K - 1, K * TILE, dtype=packed.dtype)
             for age in range(CONV_K - 1):
                 compact[:, torch.arange(G), (n_tokens * uses + age) % 3] = packed[:, :, age]
-        rows_per_tile, slots = (2, 4) if verify else (1, 3)
-        chunk = 64 * rows_per_tile
+        # (rows mode: the tiles are batch rows high, and only the slot's row is written)
+        rows_per_tile, slots = (2, 4) if verify else (model.batch, 3) if rows_mode else (1, 3)
+        chunk = 64 if rows_mode else 64 * rows_per_tile
         compact_t = ttnn.from_torch(
-            compact.reshape(d.n * G * (CONV_K - 1) * K, TILE * rows_per_tile),
+            compact.reshape(d.n * G * (CONV_K - 1) * K, chunk // 2),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh,
@@ -1246,7 +1264,7 @@ class PPPrefill:
         rt, first = ttnn.RuntimeArgs(), 0
         for i, c in enumerate(coords):
             cnt = G // cores + (i < G % cores)
-            rt[c.x][c.y] = [compact_t.buffer_address(), model.hist_t.buffer_address(), first, cnt] + pairs
+            rt[c.x][c.y] = [compact_t.buffer_address(), target["hist"].buffer_address(), first, cnt] + pairs
             first += cnt
         program = ttnn.ProgramDescriptor(
             kernels=[
@@ -1254,7 +1272,8 @@ class PPPrefill:
                     kernel_source=KDIR + "hist_scatter.cpp",
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=all_cores,
-                    compile_time_args=[K, copies, rows_per_tile, slots, model._blk * TILE * model.batch],
+                    compile_time_args=[K, copies, rows_per_tile, slots, model._blk * TILE * model.batch]
+                    + [row + 1 if rows_mode else 0],
                     runtime_args=rt,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
@@ -1274,7 +1293,7 @@ class PPPrefill:
         )
         hist_pd = ttnn.MeshProgramDescriptor()
         hist_pd[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, n - 1))] = program
-        ttnn.generic_op([compact_t, model.hist_t], hist_pd)
+        ttnn.generic_op([compact_t, target["hist"]], hist_pd)
         ttnn.synchronize_device(mesh)
         lap("hist_write")
         ttnn.deallocate(jobs_t)
