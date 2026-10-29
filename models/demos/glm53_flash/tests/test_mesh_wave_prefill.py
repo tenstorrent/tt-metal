@@ -498,18 +498,40 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
         gots = {l: [firsts[l]] + outs[l] for l in pg}
         for l in pg:
             a.release_request(l)
-        for l, ids in pg.items():
-            ref = reference(ids)
-            _assert_agree(
-                f"(g) row {placed[l][0]} prompt {int(ids.numel())} (paired 16 K spans) vs SP",
-                gots[l],
-                ref,
-                pcc_min=PCC_BAR_SP,
-            )
+        refs = {l: reference(ids) for l, ids in pg.items()}
+        for l, ids in pg.items():  # every row's numbers before any verdict (the served corruption sat on rows 2-3)
             logger.info(
-                f"(g) row {placed[l][0]}: first token {int(firsts[l].argmax())} (SP {int(ref[0].argmax())}), pcc {pcc(firsts[l], ref[0]):.5f}"
+                f"(g) row {placed[l][0]} prompt {int(ids.numel())}: first token {int(firsts[l].argmax())} "
+                f"(SP {int(refs[l][0].argmax())}), pcc {pcc(firsts[l], refs[l][0]):.5f}, decode steps "
+                + ", ".join(
+                    f"{int(g.argmax())}/{int(r.argmax())} {pcc(g, r):.4f}" for g, r in zip(gots[l][1:], refs[l][1:])
+                )
             )
-        logger.info("served waves: PASS (g) four 18-21 K prompts in paired waves")
+        dump = os.environ.get("GLM53_WAVE_TEST_DUMP")
+        if dump:  # the per-row wave / SP logits of every step for an offline look (no rerun for the analysis)
+            torch.save(
+                {
+                    "placed": placed,
+                    "lengths": {l: int(ids.numel()) for l, ids in pg.items()},
+                    "waves": gots,
+                    "sp": refs,
+                },
+                dump,
+            )
+            logger.info(f"(g) logits saved to {dump}")
+        failures = []
+        for l, ids in pg.items():
+            try:
+                _assert_agree(
+                    f"(g) row {placed[l][0]} prompt {int(ids.numel())} (paired 16 K spans) vs SP",
+                    gots[l],
+                    refs[l],
+                    pcc_min=PCC_BAR_SP,
+                )
+            except AssertionError as e:
+                failures.append(str(e))
+        assert not failures, "; ".join(failures)
+        logger.info("served waves: PASS (g) four long prompts in paired waves")
         return
 
     # (a) two fresh prompts in one step on slot index 0 of rows 0 and 1: one traced wave (both within 1024)
