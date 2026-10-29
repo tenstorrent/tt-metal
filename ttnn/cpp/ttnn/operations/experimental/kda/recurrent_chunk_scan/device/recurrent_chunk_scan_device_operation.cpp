@@ -132,6 +132,10 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         attrs.mode == RecurrentChunkScanMode::SUMMARY || (!attrs.tail && attrs.init),
         "{}: tail and init apply only to the summary",
         operation_name);
+    TT_FATAL(
+        !attrs.emit_outputs || (attrs.mode == RecurrentChunkScanMode::SUMMARY && attrs.groups_per_head == 1),
+        "{}: emit_outputs requires a summary with one group per head",
+        operation_name);
 }
 
 RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::compute_output_specs(
@@ -143,8 +147,21 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     // Summary structure is independent of actual_start: one [A | B] slot per segment kind.
     if (summary) {
         const uint32_t slots = attrs.tail ? 2 : 1;
-        return {TensorSpec(
+        spec_return_value_t specs = {TensorSpec(
             Shape({slots, attrs.batch_heads, attrs.key_dim, attrs.key_dim + attrs.value_dim}), output_layout)};
+        if (attrs.emit_outputs) {
+            const auto fp32_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
+            const auto emit_layout = TensorLayout(
+                DataType::FLOAT32, PageConfig(Layout::TILE), attrs.emit_mem_config.value_or(attrs.output_mem_config));
+            specs.push_back(TensorSpec(
+                Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim}),
+                emit_layout));
+            specs.push_back(TensorSpec(
+                Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.key_dim}), emit_layout));
+            specs.push_back(TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), fp32_layout));
+            specs.push_back(TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), fp32_layout));
+        }
+        return specs;
     }
     return {
         TensorSpec(
@@ -220,7 +237,9 @@ std::vector<Tensor> recurrent_chunk_scan(
     uint32_t sequence_parallel_axis,
     const std::optional<Tensor>& actual_end,
     bool tail,
-    bool init) {
+    bool init,
+    bool emit_outputs,
+    const std::optional<MemoryConfig>& emit_mem_config) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
     const std::string_view operation_name =
@@ -236,6 +255,8 @@ std::vector<Tensor> recurrent_chunk_scan(
             .mode = mode,
             .tail = tail,
             .init = init,
+            .emit_outputs = emit_outputs,
+            .emit_mem_config = emit_mem_config,
             .sequence_parallel_axis = sequence_parallel_axis,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},

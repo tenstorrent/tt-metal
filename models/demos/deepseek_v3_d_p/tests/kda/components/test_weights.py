@@ -9,7 +9,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params, random_weights
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -32,18 +32,13 @@ def _tp_rank(physical_index: int, mesh_columns: int, tensor_parallel_axis: int) 
 
 
 @pytest.mark.parametrize(
-    "mesh_device,tensor_parallel_axis",
+    "mesh_device,tensor_parallel_axis,device_params",
     [
-        pytest.param((1, 8), 1, id="tp8-1d"),
-        pytest.param((2, 4), 0, id="tp2-axis0"),
-        pytest.param((2, 4), 1, id="tp4-axis1"),
+        pytest.param((1, 8), 1, kda_device_params((1, 8)), id="tp8-1d"),
+        pytest.param((2, 4), 0, kda_device_params((2, 4)), id="tp2-axis0"),
+        pytest.param((2, 4), 1, kda_device_params((2, 4)), id="tp4-axis1"),
     ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 # A bounded gate (Kimi-K3) folds the per-head decay scale into the decay projection and bias at load.
 @pytest.mark.parametrize("gate_lower_bound", [None, -5.0], ids=["softplus-gate", "bounded-gate"])
@@ -146,11 +141,7 @@ def test_device_weight_placement(
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_params", [kda_device_params((1, 8))], indirect=True)
 def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshDevice) -> None:
     config = KDAConfig(
         hidden_size=256,

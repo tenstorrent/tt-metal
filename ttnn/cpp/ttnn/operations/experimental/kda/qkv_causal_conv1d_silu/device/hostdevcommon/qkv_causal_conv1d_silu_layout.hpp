@@ -97,6 +97,8 @@ constexpr uint32_t end_page = outgoing_page + history_rows;
 constexpr uint32_t exchange_rows = end_page + history_rows;
 // Compile-time index of a fabric connection the exchange core does not have.
 constexpr uint32_t no_fabric_connection = ~0U;
+// The exchange core's fabric connections: the SP neighbors, and on a turning 2D axis the links peer routes leave on.
+constexpr uint32_t max_fabric_connections = 4;
 
 // Writer scratch for staging the outgoing and end rows of up to `max_tiles` channel tiles: an aligned slot for the
 // chronology scalars, then per row and tile the aligned reads holding its left and right face rows, then the packed row
