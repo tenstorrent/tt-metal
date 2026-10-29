@@ -166,11 +166,15 @@
   category: pool
 
 - name: ttnn kernel-lib tests
+  # The mcast gtests and pytests run as their own entry below; together they took this
+  # step past its 10-minute timeout on n150 and p100.
   cmd: >-
-    build/test/ttnn/unit_tests_ttnn --gtest_filter='Mcast*' &&
     pytest tests/ttnn/unit_tests/kernel_lib -xv
     --ignore=tests/ttnn/unit_tests/kernel_lib/test_chain_perf.py
     --ignore=tests/ttnn/unit_tests/kernel_lib/test_chain_skip_compute_perf.py
+    --ignore=tests/ttnn/unit_tests/kernel_lib/test_mcast_compile_contracts.py
+    --ignore=tests/ttnn/unit_tests/kernel_lib/test_mcast_device_api.py
+    --ignore=tests/ttnn/unit_tests/kernel_lib/test_mcast_groups.py
     --ignore=tests/ttnn/unit_tests/kernel_lib/test_mcast_transport_perf.py
     --timeout=600
   skus:
@@ -182,6 +186,28 @@
       timeout: 20
     bh_p150b_civ2:
       timeout: 20
+  owner_id: U08ADLJ4PLP # Aleksandar Stancov
+  team: ttnn
+  budget_type: unit
+  category: kernel_lib
+
+- name: ttnn kernel-lib mcast tests
+  cmd: >-
+    build/test/ttnn/unit_tests_ttnn --gtest_filter='Mcast*' &&
+    pytest -xv
+    tests/ttnn/unit_tests/kernel_lib/test_mcast_compile_contracts.py
+    tests/ttnn/unit_tests/kernel_lib/test_mcast_device_api.py
+    tests/ttnn/unit_tests/kernel_lib/test_mcast_groups.py
+    --timeout=600
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    wh_n300_civ2:
+      timeout: 10
+    bh_p100:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
   owner_id: U08ADLJ4PLP # Aleksandar Stancov
   team: ttnn
   budget_type: unit
