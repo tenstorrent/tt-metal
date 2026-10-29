@@ -9,8 +9,12 @@ Setup for every number unless stated: chip 0 of the QB2 box (110 cores, 31.83 Gi
 | Configuration | depth | ms/step (wall, no profiler) | MFU | projected 40 layers | evidence |
 |---|---|---|---|---|---|
 | composite baseline (frozen-weight dW skipped, frozen table untilized once, 5-op `LoraLinear`) | 8 of 40 | **434.0** (best 432.4), warm-chip rerun 453.4 | **33.32 %** | **1947 ms / 33.3 %** (wall fit) | `composite/evidence/train_8layers.log`, `train_8layers_run2.log` |
+| same code, **full model, TP=4** over the box (user-authorised; 594 TFLOP/s denominator), random init | 40 of 40 | **598.7** (best 594.7) | **27.10 %** | measured, not projected | `optimization/evidence/full_tp4_baseline_random.log`, tt-smi `full_tp4_baseline_random_tt-smi.txt` |
+| same, real weights, 10 steps on Shakespeare (loss 0.45 -> 0.14-0.46) | 40 of 40 | 641.9 (best 639.6; chips warm from the preceding run) | 25.27 % | measured | `optimization/evidence/full_tp4_baseline_real.log`, `.json` |
 
 Wall-clock at the four depths, same command with `--random-init --random-data` (timing does not depend on the data): 1: 102.5, 2: 151.4, 4: 245.4, 8: 434.0 ms; MFU 33.4 / 33.1 / 33.2 / 33.3 %. Fit `wall = 56.1 + L x 47.27 ms`.
+
+Full-model convention from here on (plan.md scope change): the 40-layer MFU and loss runs are TP=4 (weights column/row-sharded over 4 chips, vocab-parallel embedding and LM head, collectives inside every linear), reported against 4 x 148.5 TFLOP/s; the single-chip projection stays as the kernel-work yardstick (no collectives, one chip's clock). The TP=4 full model at 598.7 ms is 4 x 598.7 = 2395 chip-ms per step against 1933-1985 projected single-chip wall-ms: the difference (~20 %) is the collectives (all-reduce/all-gather per linear, replicated vocab-parallel logic) plus whatever the per-chip clock does in the mesh; it is attributed in the loop's first TP profile.
 
 ## Tracy, four doubling depths (2026-10-29)
 

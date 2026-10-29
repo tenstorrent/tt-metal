@@ -16,6 +16,7 @@ from __future__ import annotations
 import ttnn
 import ttml
 from ttml.autograd import Function
+from ttml.modules import Embedding
 
 __all__ = ["FrozenEmbedding", "embed_tokens"]
 
@@ -39,8 +40,12 @@ class FrozenEmbedding(Function):
 
 
 def embed_tokens(embedding, input_ids):
-    """``embedding(input_ids)``; on the no-untilize path when the table is frozen."""
+    """``embedding(input_ids)``; on the no-untilize path when the table is a frozen plain ``Embedding``.
+
+    A vocab- or feature-parallel embedding (tensor parallelism) masks ids and reduces across chips, so it keeps
+    its own forward; its table is then untilized by the ttml op every step (a known cost under TP).
+    """
     weight = embedding.weight.tensor
-    if weight.get_requires_grad():
+    if type(embedding) is not Embedding or weight.get_requires_grad():
         return embedding(input_ids)
     return FrozenEmbedding.apply(input_ids, weight)

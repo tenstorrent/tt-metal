@@ -1,0 +1,10 @@
+# Optimisation loop work log
+
+Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all block linears, seq 1024, batch 1, AdamW. Branch `agobeljicTT/mistral-bringup`. Single-chip Tracy at 1/2/4/8 layers for attribution and the fit; full 40-layer MFU and loss runs with TP=4 over the box (user-authorised, see `plan.md`). Evidence under `doc/optimization/evidence/` (`O`). Commands from `tt-train/` with `TT_METAL_HOME=TT_METAL_RUNTIME_ROOT=/home/ttuser/agobeljic/tt-metal`; TP runs also need `TT_MESH_GRAPH_DESC_PATH=tt-train/configs/mgd/bh_p300x2_1_4_ring_ring.textproto`.
+
+## 2026-10-29
+
+- TP path: `train.py --tp N` (1x4 mesh with axes `("dp","tp")`, `use_tp=True`, vocab-parallel embedding and LM head, `vocab_parallel_cross_entropy_loss`, loss read with `get_loss_over_devices`, MFU denominator x N, LoRA-init dump gathers the sharded adapters), `frozen_embedding.embed_tokens` keeps the module's own forward for a vocab-parallel table. Mesh descriptor `configs/mgd/bh_p300x2_1_4_ring_ring.textproto` (2 eth links per edge) copied from `umales/qwen38`.
+- Full-model baseline, TP=4, random init, 8 steps, 2 warm-up (`O/full_model_tp4.sh baseline`, `O/full_tp4_baseline_random.log`, tt-smi alongside in `O/full_tp4_baseline_random_tt-smi.txt`): **598.7 ms/step (best 594.7), 161.0 TFLOP/s, MFU 27.10 %** of 594 TFLOP/s.
+- Full-model baseline with real weights (`O/full_model_tp4_real.sh baseline`): first attempt failed in the LoRA-init dump (`to_numpy` on a mesh-sharded tensor); fixed with `Sharding.gather`; the rerun that followed had picked up the uncommitted LoRA-apply port (stashed since) and was killed; the baseline run was then repeated on the committed code.
+- Full-model baseline, TP=4, real weights, 10 steps (`O/full_tp4_baseline_real.log`, `.json`, data log and gathered LoRA init `.npz` for a later torch comparison): **641.9 ms/step (best 639.6), MFU 25.27 %**, loss 0.4453, 0.3281, 0.2520, 0.2070, 0.1436, 0.2734, 0.3477, 0.2676, 0.3066, 0.4551 (the pretrained base model on Shakespeare). 43 ms slower than the random-init run minutes earlier: the chips were warm (the thermal clock effect of the composite README).

@@ -14,6 +14,7 @@ the stack; every run prints which depth it ran. Recipe and numbers: ``ttml/model
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import time
@@ -25,6 +26,8 @@ import ttnn
 import ttml
 from ttml.common.performance import get_device_peak_tflops_bf16
 from ttml.common.utils import set_seed
+from ttml.common.utils import get_loss_over_devices
+from ttml.models import EmbeddingPlacement
 from ttml.models.mistral import Mistral, MistralConfig, load_from_safetensors, useful_flops_per_step
 from ttml.modules import LoraConfig, LoraModel
 
@@ -39,7 +42,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model-path", default=DEFAULT_MODEL, help="HF repo id or a local directory with config.json")
     p.add_argument("--revision", default=DEFAULT_REVISION)
     p.add_argument("--data", default=None, help="plain-text corpus; default tt-train/data/shakespeare.txt")
-    p.add_argument("--layers", type=int, default=0, help="truncate the stack (0 = all 40; does not fit one chip)")
+    p.add_argument("--layers", type=int, default=0, help="truncate the stack (0 = all 40; needs --tp 4 on this box)")
+    p.add_argument("--tp", type=int, default=1, help="tensor-parallel size: 1 = one chip; 4 = a 1x4 mesh over the box")
     p.add_argument("--seq-len", type=int, default=1024)
     p.add_argument("--batch", type=int, default=1)
     p.add_argument("--steps", type=int, default=10)
@@ -133,7 +137,17 @@ def main() -> None:
     )
 
     memory_guard = MemoryUsageTracker.begin_capture() if args.track_memory else None
-    ttml.autograd.AutoContext.get_instance().open_device()
+    use_tp = args.tp > 1
+    if use_tp:
+        # Weights sharded over the "tp" axis (column/row-parallel linears, vocab-parallel embedding and LM head).
+        mesh = ttml.Mesh((1, args.tp), ("dp", "tp"))
+        ttml.open_device_mesh(mesh)
+        config = dataclasses.replace(config, use_tp=True, embedding_placement=EmbeddingPlacement.VocabParallel)
+        if args.host_loss:
+            raise ValueError("--host-loss needs the full logits on one chip; not available with --tp > 1")
+    else:
+        mesh = None
+        ttml.autograd.AutoContext.get_instance().open_device()
     model = Mistral(config)
     if not args.random_init:
         print(load_from_safetensors(model, model_dir))
@@ -147,7 +161,12 @@ def main() -> None:
     if args.dump_lora_init:
         np.savez(
             args.dump_lora_init,
-            **{n: t.to_numpy(ttnn.DataType.FLOAT32) for n, t in params.items() if t.get_requires_grad()},
+            # Under TP the adapters are sharded over the mesh: gather each one into its full host array.
+            **{
+                n: (ttml.Sharding.from_tensor(t).gather(t) if use_tp else t.to_numpy(ttnn.DataType.FLOAT32))
+                for n, t in params.items()
+                if t.get_requires_grad()
+            },
         )
 
     opt_cfg = ttml.optimizers.AdamWConfig.make(args.lr, 0.9, 0.999, 1e-8, args.weight_decay)
@@ -165,8 +184,11 @@ def main() -> None:
     batcher = Batcher(tokens, args.seq_len, args.seed)
 
     flops = useful_flops_per_step(config, args.batch * args.seq_len, args.seq_len, lora_rank=args.rank)
-    peak = get_device_peak_tflops_bf16() * 1e12
-    print(f"useful FLOPs/step {flops / 1e12:.3f} T ({config.num_hidden_layers} layers), peak {peak / 1e12:.1f} TFLOP/s")
+    peak = get_device_peak_tflops_bf16() * 1e12 * args.tp
+    print(
+        f"useful FLOPs/step {flops / 1e12:.3f} T ({config.num_hidden_layers} layers), peak {peak / 1e12:.1f} TFLOP/s "
+        f"({args.tp} chip{'s' if args.tp > 1 else ''})"
+    )
 
     ctx = ttml.autograd.AutoContext.get_instance()
     log: list[dict] = []
@@ -181,7 +203,11 @@ def main() -> None:
         optimizer.zero_grad()
         logits = model(x, None)
         host_loss = host_cross_entropy(logits, y_np) if args.host_loss else None
-        loss = ttml.ops.loss.cross_entropy_loss(logits, y, ttml.ops.ReduceType.MEAN)
+        if use_tp:
+            # The LM head output stays vocab-sharded; the loss reduces across the tp axis.
+            loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(logits, y, cluster_axis=mesh.axis_index("tp"))
+        else:
+            loss = ttml.ops.loss.cross_entropy_loss(logits, y, ttml.ops.ReduceType.MEAN)
         if args.mem_probe and step <= 2:
             print(f"step {step}: DRAM allocated after forward {dram_allocated_gib():.2f} GiB")
         loss.backward(False)
@@ -189,7 +215,8 @@ def main() -> None:
             print(f"step {step}: DRAM allocated after backward {dram_allocated_gib():.2f} GiB")
         ctx.reset_graph()
         optimizer.step()
-        loss_val = float(loss.to_numpy(ttnn.DataType.FLOAT32).item())  # the read-back is the step's host sync
+        # The read-back is the step's host sync; under TP every chip holds the same value.
+        loss_val = float(get_loss_over_devices(loss)) if use_tp else float(loss.to_numpy(ttnn.DataType.FLOAT32).item())
         if args.mem_probe and step <= 2:
             print(
                 f"step {step}: DRAM allocated after the optimizer step {dram_allocated_gib():.2f} GiB (weights + state)"
@@ -220,7 +247,7 @@ def main() -> None:
         mean_ms = float(np.mean(steps_ms))
         mfu = flops / (mean_ms / 1e3) / peak * 100
         print(
-            f"{config.num_hidden_layers} of 40 layers: {mean_ms:.1f} ms/step over {len(steps_ms)} steps "
+            f"{config.num_hidden_layers} of 40 layers, tp {args.tp}: {mean_ms:.1f} ms/step over {len(steps_ms)} steps "
             f"(best {min(steps_ms):.1f}), {flops / (mean_ms / 1e3) / 1e12:.1f} TFLOP/s, MFU {mfu:.2f}%"
         )
     if args.loss_log:
@@ -240,7 +267,10 @@ def main() -> None:
         Path(args.data_log).write_text(
             json.dumps([{"step": e["step"], "inputs": e["inputs"], "targets": e["targets"]} for e in log])
         )
-    ctx.close_device()
+    if use_tp:
+        ttml.close_device_mesh()
+    else:
+        ctx.close_device()
 
 
 if __name__ == "__main__":

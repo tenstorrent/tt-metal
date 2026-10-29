@@ -1,0 +1,9 @@
+# Raw profiler dumps and binaries stay on disk, not in git (the ops_perf_results CSVs are committed).
+tracy_*layers/.logs/
+tracy_*layers/reports/*/tracy_profile_log_host.tracy
+tracy_*layers/reports/*/profile_log_device.csv
+*.npz
+watcher_1layer_watcher.log
+tracy_*layers/reports/*/ops_perf_results*.csv
+done.flag
+iter*_tracy_*layers/
