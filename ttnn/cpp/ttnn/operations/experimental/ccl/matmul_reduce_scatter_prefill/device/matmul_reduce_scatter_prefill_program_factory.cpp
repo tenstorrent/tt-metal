@@ -15,6 +15,7 @@
 #include <variant>
 #include <vector>
 
+#include <internal/mesh_device.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -127,7 +128,7 @@ std::map<PortKey, CoreCoord> mrs_place_ports(
     std::set<std::pair<size_t, size_t>> taken;
     std::map<PortKey, CoreCoord> cores;
     try {
-        IDevice* device = mesh->get_device(coord);
+        IDevice* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto src = mesh->get_fabric_node_id(coord);
         for (uint32_t l = 0; l < num_links; ++l) {
             for (uint32_t d : {kFwd, kBwd}) {
