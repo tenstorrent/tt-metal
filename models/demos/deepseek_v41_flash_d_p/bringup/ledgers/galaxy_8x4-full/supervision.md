@@ -858,3 +858,10 @@ NOW: orchestrator --until P.5 running P.7 (attempt 2; attempt 1 was cut off at 0
 -> P.10 A (conditional on P.9) -> P.4 -> P.5 (re-checked). The 2x2 does window KV / index keys / index query phase 1
 (forks + tests) on dnijemcevic/model_bringup_lowbit. Perf bars stay chunk_wall_ms < 434 / device <= 230 (not-worse
 guards around the CUR walls ~412-438); the A/B decides.
+- 09:25 P.7 CKV_BFP4_PREPARED ACCEPTED by the owner (not a clean win by the rule: the wall gain is inside the noise) and
+  committed 56f7215d253. ckv_bfp4 builds one program per shape; prepared_program fork gained value_slots / values (patch
+  plain runtime args such as row0; default unchanged for P.1 / P.2's users). Host per call 1.43 / 1.31 -> 0.50 / 0.51 ms
+  (cProfile, 2 pairs) = -3.5 ms a chunk; bytes identical; quick A/B wall 415.1 on / 404.1 off (spread 26 / 17), agent
+  pairs 415.7/393.3 and 389.6/391.8 (first run of a session slow). Attempt 2 failed only on doc lint (ckv_bfp4 README
+  sections from the 2x2, DS41-135 'Fix:'). F214 note: the accept is consumed when the orchestrator commits the pick.
+  NOW: P.8 C INDEXER_TOPK_LOCAL (attempt 1), then P.9 B, P.10 A (conditional), P.4, P.5.
