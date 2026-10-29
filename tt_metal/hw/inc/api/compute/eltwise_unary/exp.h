@@ -29,6 +29,10 @@ enum class InputClamping : uint8_t {
  * Template scale parameter is used when approx is true and exp_tile is called with scale_en set to
  * true.
  *
+ * On Wormhole, exp_tile reads constants that exp_tile_init loads into the SFPU programmable
+ * registers (vConstFloatPrgm0..2, LREG12..14), in every approx / is_fp32_dest_acc_en mode. Other
+ * SFPU inits overwrite those registers (recip_tile_init and every init built on the reciprocal,
+ * among others), so call exp_tile_init again before exp_tile after any other op's init.
  */
 template <
     bool approx = false,
@@ -85,6 +89,7 @@ ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint1
 /**
  * Pack-thread variant of exp_tile_init. Runs the init on the pack thread
  * to enable FPU/SFPU overlap with math-thread matmul operations.
+ * The programmable registers it loads are shared with the math thread's SFPU ops; see exp_tile_init.
  */
 template <
     bool approx = false,
