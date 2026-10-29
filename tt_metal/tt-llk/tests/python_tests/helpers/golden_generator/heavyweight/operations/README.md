@@ -366,17 +366,17 @@ is the tile edge every op assumes, not something an architecture overrides.
 
 ### Accumulation: exact within one MVMUL, rounded at every Dest write
 
-Two things the RTL rules out, both of which would be natural to assume:
+Two things the hardware rules out, both of which would be natural to assume:
 
-- **No per-product denormal flush.** `SOP_IN_MAN_PREC = (MAN_PREC_A+1) + (MAN_PREC_B+1)`
-  — products enter the sum-of-products network at full exact significand width
-  and never become FP lane results, so `RES_A2`'s no-denormal rule does not
-  reach them. This is the one place matmul and eltwise genuinely differ: there,
-  each product *is* a lane result and the flush applies.
-- **No per-MAC rounding.** `SOP_PREC = SOP_IN_MAN_PREC + SOP_GUARD_BITS` and
-  `MAN_PREC_ACC = 23` — a wide fixed-point adder tree with guard bits, which
-  rounds once. `blocks.fpu_sum_of_products` therefore sums in float64, so the model
-  does not introduce a float32 accumulation error the hardware does not have.
+- **No per-product denormal flush.** Products enter the sum-of-products network
+  at the full combined width of both significands and never become FP lane
+  results, so the no-denormal rule that governs a lane result does not reach
+  them. This is the one place matmul and eltwise genuinely differ: there, each
+  product *is* a lane result and the flush applies.
+- **No per-MAC rounding.** The network is a wide fixed-point adder tree with
+  guard bits, so it rounds once rather than per product.
+  `blocks.fpu_sum_of_products` therefore sums in float64, so the model does not
+  introduce a float32 accumulation error the hardware does not have.
 
 But a single MVMUL is only `D[8,16] += B[8,16] * A[16,16]`, so a 32-wide inner
 dimension takes **two** of them, and the second accumulates onto a Dest the
