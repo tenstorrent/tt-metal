@@ -86,7 +86,7 @@ void kernel_main() {
     const uint32_t children = get_arg_val<uint32_t>(0);
     compute_kernel_hw_startup(cb_qraw, cb_qraw, cb_sq);
     cb_wait_front(cb_mean, 1);
-    cb_wait_front(cb_rope, 3 * batch);
+    cb_wait_front(cb_rope, kRopePages);
     uint32_t mask = ~0u;
     if constexpr (rows_mode) {
         constexpr uint32_t cb_lead_active = 7;
@@ -94,13 +94,14 @@ void kernel_main() {
         mask = read_tile_value(cb_lead_active, 0, kTokActive);
         cb_pop_front(cb_lead_active, 1);
     }
-    const ActiveRows<batch> act(mask);
+    const ActiveRows<users> act(mask);
     const uint32_t n_act = act.n;
     for (uint32_t l = 0; l < layers && n_act > 0; l++) {
         // the next user's q and gate are prepared before this user's output, while the workers run this user
         cb_wait_front(cb_qw, Dt);
         auto prep = [&](uint32_t k) {
-            norm_rope(cb_qraw, cb_qw, 0, cb_q_mc, cb_q_mc, 3 * act.row[k]);
+            const uint32_t u = act.row[k];
+            norm_rope(cb_qraw, cb_qw, 0, cb_q_mc, cb_q_mc, packed ? kRopeQ + 3 * u : 3 * u);
             gate_sigmoid();
             if (k + 1 == n_act) {
                 cb_pop_front(cb_qw, Dt);

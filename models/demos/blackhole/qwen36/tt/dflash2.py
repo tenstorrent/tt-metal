@@ -109,13 +109,17 @@ def select_path(unary, cand, hp, anchor, pred_cb, succ_cb):
     """CandidateSelector greedy chain (host). unary (K,16) float, cand (K,16) long, hp (K,256) float
     = hidden_projection(draft_hidden); returns the K chosen ids (reference CandidateSelector.select,
     temperature 0)."""
-    pred = int(anchor)
-    path = []
-    for pos in range(unary.shape[0]):
-        edge = (pred_cb[pred] * hp[pos]) @ succ_cb[cand[pos]].T  # (16,)
-        idx = int((unary[pos] + edge).argmax())
-        pred = int(cand[pos, idx])
-        path.append(pred)
+    # every edge a step can take at once: step pos's predecessor is the anchor (pos 0) or one of step pos - 1's
+    # candidates, so edges[pos, i, j] = edge from predecessor i to candidate j; then the chain is table lookups
+    K, n = cand.shape
+    preds = torch.cat([torch.full((1, n), int(anchor), dtype=cand.dtype), cand[:-1]])  # (K, 16)
+    edges = torch.matmul(pred_cb[preds] * hp[:, None, :], succ_cb[cand].transpose(1, 2))  # (K, 16, 16)
+    score, ids = (unary[:, None, :] + edges).tolist(), cand.tolist()
+    i, path = 0, []
+    for pos in range(K):
+        row = score[pos][i]
+        i = max(range(n), key=row.__getitem__)  # (the first maximum, as argmax)
+        path.append(ids[pos][i])
     return path
 
 
@@ -487,8 +491,10 @@ class DFlash2Drafter(DFlash2Draft):
         nb = pt_t.shape[-1]
         k_p = ttnn.pad(k, [1, B, ttnn.TILE_SIZE, HD], [0, 0, 0, 0], 0.0)
         v_p = ttnn.pad(v, [1, B, ttnn.TILE_SIZE, HD], [0, 0, 0, 0], 0.0)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+        # a pad within the tile padding re-views the input's buffer: free the input only if pad copied
+        for t, t_p in ((k, k_p), (v, v_p)):
+            if t_p.buffer_address() != t.buffer_address():
+                ttnn.deallocate(t)
         for i in range(B):
             pos_i = ttnn.slice(pos_t, (i,), (i + 1,))
             pt_i = ttnn.slice(pt_t, (i, 0), (i + 1, nb))

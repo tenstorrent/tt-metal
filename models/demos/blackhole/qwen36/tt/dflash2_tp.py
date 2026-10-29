@@ -183,7 +183,11 @@ class DFlash2DrafterTP:
         self.fc = self._w(Wt[perm].contiguous(), "fc", dim=0)  # [ntaps*dim_tp, H] per device
         self.hnorm = self._rep(s["hidden_norm.weight"], "hidden_norm")
         self.fnorm = self._rep(s["norm.weight"], "norm")
-        self.E = self._rep(_expansion(), "E", cache=False)  # host-built constants: never disk-cached
+        self.hnorm_rm = self._rep_rm(s["hidden_norm.weight"], "hidden_norm")
+        self.fnorm_rm = self._rep_rm(s["norm.weight"], "norm")
+        # host-built constants: never disk-cached. E is 0/1 (exact in bfp4; one nonzero term per output): a quarter
+        # of the bf16 matrix's DRAM reads, the same results
+        self.E = self._rep(_expansion(), "E", dtype=ttnn.bfloat4_b, cache=False)
         self.layers = [self._load_layer(s, i) for i in range(self.cfg["num_layers"])]
         if self.has_selector:
             self.pred_cb = s["candidate_selector.predecessor_codebook"].float()
@@ -195,6 +199,34 @@ class DFlash2DrafterTP:
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
+        )
+        # one-tile-row matmuls (_lin): K blocks of up to this many tiles (QWEN36_DFLASH_MM_BW=0: the auto configs)
+        self._mm_bw = int(os.environ.get("QWEN36_DFLASH_MM_BW", "8"))
+        self._mm_cfgs = {}
+        # the one-tile-row hidden RMSNorms (_rms_h): width-sharded, 4 tiles on each of 40 cores
+        # (QWEN36_DFLASH_LN_SHARDED=0: interleaved, A/B)
+        self._ln_sharded = os.environ.get("QWEN36_DFLASH_LN_SHARDED", "1") == "1"
+        ln_grid = ttnn.CoreGrid(y=4, x=10)
+        self._ln_mc = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, H // ln_grid.num_cores),
+            core_grid=ln_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        bw = H // ln_grid.num_cores // ttnn.TILE_SIZE
+        self._ln_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[ln_grid.x, ln_grid.y], subblock_w=bw, block_h=1, block_w=bw, inplace=False
+        )
+        # (the V row of a fused K/V cache update: one core next to _sc1's)
+        self._sc1b = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
+                [ttnn.TILE_SIZE, HD],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
         )
         grid = mesh.compute_with_storage_grid_size()
         self._sdpa_cfg = ttnn.SDPAProgramConfig(
@@ -226,6 +258,7 @@ class DFlash2DrafterTP:
         self._staging = {}  # R -> the R-row staging buffers shared by every layout of that R
         self._default_id = None
         self.last_hidden = None
+        self.keep_hidden = False  # (diagnostics) draft() also reads back the drafted rows' final hidden: last_hidden
         self.stats = {"draft_eager": 0, "draft_traced": 0, "extend_eager": 0, "extend_traced": 0}
 
     # ------------------------------------------------------------------ weights
@@ -262,16 +295,40 @@ class DFlash2DrafterTP:
             **({"mesh_mapper": mapper} if mapper else {}),
         )
 
+    def _rep_rm(self, t, name):
+        """a replicated hidden-dim norm weight as the sharded RMSNorm takes it: ROW_MAJOR [1, 1, H / 32, 32]"""
+        mapper = ttnn.ReplicateTensorToMesh(self.mesh) if self.nd > 1 else None
+        return ttnn.as_tensor(
+            t.reshape(1, 1, -1, ttnn.TILE_SIZE).contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=self._cache(f"{name}_rm", "r", ttnn.bfloat16),
+            **({"mesh_mapper": mapper} if mapper else {}),
+        )
+
     def _load_layer(self, s, i):
         p = f"layers.{i}"
         lw = {
             "in_ln": self._rep(s[f"{p}.input_layernorm.weight"], f"l{i}.in_ln"),
             "post_ln": self._rep(s[f"{p}.post_attention_layernorm.weight"], f"l{i}.post_ln"),
+            "in_ln_rm": self._rep_rm(s[f"{p}.input_layernorm.weight"], f"l{i}.in_ln"),
+            "post_ln_rm": self._rep_rm(s[f"{p}.post_attention_layernorm.weight"], f"l{i}.post_ln"),
             "qn": self._rep(s[f"{p}.self_attn.q_norm.weight"], f"l{i}.qn"),
             "kn": self._rep(s[f"{p}.self_attn.k_norm.weight"], f"l{i}.kn"),
         }
-        for k in ("q", "k", "v"):
-            lw[k] = self._w(s[f"{p}.self_attn.{k}_proj.weight"].T.contiguous(), f"l{i}.{k}", dim=-1)
+        # q | k | v (the draft's projections of one input) and k | v (the extend's) fused per chip: chip d holds
+        # its column slices of each side by side, so one matmul runs over 3x / 2x the cores of the narrow ones
+        wt = {k: s[f"{p}.self_attn.{k}_proj.weight"].T.contiguous() for k in ("q", "k", "v")}
+
+        def fused(names):
+            return torch.cat(
+                [torch.cat([wt[k].chunk(self.nd, dim=-1)[d] for k in names], -1) for d in range(self.nd)], -1
+            )
+
+        lw["qkv"] = self._w(fused("qkv"), f"l{i}.qkv", dim=-1)
+        lw["kv"] = self._w(fused("kv"), f"l{i}.kv", dim=-1)
         lw["o"] = self._w(s[f"{p}.self_attn.o_proj.weight"].T.contiguous(), f"l{i}.o", dim=0)
         lw["gate"] = self._w(s[f"{p}.mlp.gate_proj.weight"].T.contiguous(), f"l{i}.gate", dim=-1, dtype=self.mlp_dtype)
         lw["up"] = self._w(s[f"{p}.mlp.up_proj.weight"].T.contiguous(), f"l{i}.up", dim=-1, dtype=self.mlp_dtype)
@@ -296,7 +353,7 @@ class DFlash2DrafterTP:
                 seen.add(id(t))
                 ttnn.deallocate(t)
 
-        for name in ("fc", "hnorm", "fnorm", "E", "hproj"):
+        for name in ("fc", "hnorm", "fnorm", "hnorm_rm", "fnorm_rm", "E", "hproj"):
             _free(getattr(self, name, None))
             setattr(self, name, None)
         for lw in self.layers:
@@ -314,11 +371,66 @@ class DFlash2DrafterTP:
         self.K = block - 1
 
     # ------------------------------------------------------------------ primitives
-    def _lin(self, x, w, **k):
-        return ttnn.linear(x, w, compute_kernel_config=CKC, **k)
+    def _lin(self, x, w, ckc=CKC, **k):
+        """x @ w; one tile row of x (the draft / extend rows) by a narrow weight: an explicit 1D config (_mm_cfg)"""
+        pc = None
+        if x.shape[-2] <= ttnn.TILE_SIZE and self._mm_bw:
+            pc = self._mm_cfg(x.shape[-1] // ttnn.TILE_SIZE, w.shape[-1] // ttnn.TILE_SIZE, k.get("activation"))
+            if pc is not None:
+                k.pop("activation", None)
+        if pc is None:
+            return ttnn.linear(x, w, compute_kernel_config=ckc, **k)
+        return ttnn.linear(x, w, compute_kernel_config=ckc, program_config=pc, **k)
+
+    def _mm_cfg(self, Kt, Nt, activation=None):
+        """A 1D (in0-multicast) config for a [32 x Kt tiles] @ [Kt x Nt] matmul whose N fits the grid one tile column
+        per core (or whose K is short): the auto config reads weight blocks of 2 tiles of K, a DRAM round trip per
+        2 tiles (64-84 us for 2.6-16 MB at one column per core). Blocks of up to _mm_bw tiles of K. None (the auto
+        config) for the wide weights (MLP, fc, lm_head), which the larger blocks slow down."""
+        key = (Kt, Nt, activation)
+        if key not in self._mm_cfgs:
+            g = self.mesh.compute_with_storage_grid_size()
+            cores = g.x * g.y
+            pcn = -(-Nt // cores)
+            if pcn > 1 and Kt > 16:
+                self._mm_cfgs[key] = None
+                return None
+            bw = max(b for b in range(1, self._mm_bw + 1) if Kt % b == 0)
+            sbw = max(b for b in range(1, 5) if pcn % b == 0)  # (fp32 dest: up to 4 tiles)
+            self._mm_cfgs[key] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(g.x, g.y),
+                in0_block_w=bw,
+                out_subblock_h=1,
+                out_subblock_w=sbw,
+                per_core_M=1,
+                per_core_N=pcn,
+                fuse_batch=True,
+                fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if activation == "silu" else None,
+                mcast_in0=True,
+            )
+        return self._mm_cfgs[key]
 
     def _rms(self, x, w):
         return ttnn.rms_norm(x, weight=w, epsilon=1e-6, compute_kernel_config=CKC)
+
+    def _rms_h(self, x, w, w_rm):
+        """RMSNorm over the hidden dim of [1, 1, n, H] rows. Up to one tile row it runs width-sharded over
+        _ln_mc's cores (an interleaved norm of one tile row runs on one core: ~105 us); longer, interleaved."""
+        if x.shape[-2] > ttnn.TILE_SIZE or not self._ln_sharded:
+            return self._rms(x, w)
+        xs = ttnn.to_memory_config(x, self._ln_mc)
+        o = ttnn.rms_norm(
+            xs,
+            weight=w_rm,
+            epsilon=1e-6,
+            program_config=self._ln_pc,
+            memory_config=self._ln_mc,
+            compute_kernel_config=CKC,
+        )
+        ttnn.deallocate(xs)
+        out = ttnn.to_memory_config(o, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(o)
+        return out
 
     def _allreduce(self, x4):
         """Row-parallel partial [1,1,n,H] (consumed) -> replicated full [1,1,n,H]."""
@@ -364,8 +476,8 @@ class DFlash2DrafterTP:
         off = sel * 640
         d0 = ttnn.slice(kp, (0, 0, 0, off), (1, 1, L, off + 320))
         d1 = ttnn.slice(kp, (0, 0, 0, off + 320), (1, 1, L, off + 640))
-        c0 = ttnn.add(self._lin(d0, self.E), b0)
-        c1 = ttnn.add(self._lin(d1, self.E), b1)
+        c0 = self._lin(d0, self.E, bias=b0)  # (d @ E is exact: the bias add rounds once, as a separate add would)
+        c1 = self._lin(d1, self.E, bias=b1)
         shifted = ttnn.matmul(S, values, compute_kernel_config=CKC)  # [1,L,L] @ [1,1,L,H]
         out = ttnn.add(ttnn.mul(c0, values), ttnn.mul(c1, shifted))
         for t in (d0, d1, c0, c1, shifted):
@@ -388,15 +500,18 @@ class DFlash2DrafterTP:
         part = self._lin(x, self.fc)
         ttnn.deallocate(x)
         full = self._allreduce(part)
-        out = self._rms(full, self.hnorm)
+        out = self._rms_h(full, self.hnorm, self.hnorm_rm)
         ttnn.deallocate(full)
         return out
 
     def _ctx_kv(self, hctx, lw, n):
-        k = ttnn.reshape(self._lin(hctx, lw["k"]), (1, n, self.NKVl, HD))
+        kv = self._lin(hctx, lw["kv"])  # [1, 1, n, 2 NKVl HD]
+        nk = self.NKVl * HD
+        k = ttnn.reshape(ttnn.slice(kv, (0, 0, 0, 0), (1, 1, n, nk)), (1, n, self.NKVl, HD))
         kn = self._rms(k, lw["kn"])
         ttnn.deallocate(k)
-        v = ttnn.reshape(self._lin(hctx, lw["v"]), (1, n, self.NKVl, HD))
+        v = ttnn.reshape(ttnn.slice(kv, (0, 0, 0, nk), (1, 1, n, 2 * nk)), (1, n, self.NKVl, HD))
+        ttnn.deallocate(kv)
         return kn, v
 
     def _kv_cfg(self, n):
@@ -415,8 +530,36 @@ class DFlash2DrafterTP:
             )
         return cache[n]
 
-    def _write_rows(self, li, k, v, pos_t, pt_t, layout):
-        """Write the R = U*block draft/extend rows' K/V into the paged context cache.
+    @staticmethod
+    def _grouped(layout):
+        U, Bk = layout.U, layout.block
+        return (
+            U > 1
+            and Bk >= 2
+            and layout.R == U * Bk
+            and KV_GROUP_WRITE_OK
+            and os.environ.get("QWEN36_DFLASH_KV_GROUP_WRITE", "1") != "0"
+        )
+
+    def _write_index(self, pos_t, pt_t, layout):
+        """The position / page-table slices _write_rows takes per write call: one set per draft or extend body,
+        shared by its layers (free with _free_index). Per row, or per in-block index j when grouped."""
+        R, nb = layout.R, pt_t.shape[-1]
+        if self._grouped(layout):
+            Bk = layout.block
+            return [
+                (ttnn.slice(pos_t, (j,), (R,), (Bk,)), ttnn.slice(pt_t, (j, 0), (R, nb), (Bk, 1))) for j in range(Bk)
+            ]
+        return [(ttnn.slice(pos_t, (i,), (i + 1,)), ttnn.slice(pt_t, (i, 0), (i + 1, nb))) for i in range(R)]
+
+    @staticmethod
+    def _free_index(idx):
+        for pos, pt in idx:
+            ttnn.deallocate(pos)
+            ttnn.deallocate(pt)
+
+    def _write_rows(self, li, k, v, idx, layout):
+        """Write the R = U*block draft/extend rows' K/V into the paged context cache (idx: _write_index's).
 
         Rows of ONE user are consecutive positions of one sequence, so they share a cache tile and
         must never ride one paged_update_cache call (several cores would read-modify-write the same
@@ -425,36 +568,32 @@ class DFlash2DrafterTP:
         user, U rows -> 2*block calls per layer instead of 2*R (TPAttention._write_kv_aliased's
         idiom: tile-view reshape [1,R,32,HD] -> [1,U,block*32,HD], tile-aligned slice, strided
         slices of the per-row position / page-table tensors). Padding rows of different users all
-        name the scratch block and may collide there: that block is write-only junk.
+        name the scratch block and may collide there: that block is write-only junk. At U = 1 a row's
+        K and V go out in one fused call (their inputs on two cores).
         QWEN36_DFLASH_KV_GROUP_WRITE=0 keeps the per-row loop (A/B)."""
         kc, vc = self.kv[li]
         R = k.shape[1]
-        nb = pt_t.shape[-1]
         tile = ttnn.TILE_SIZE
         k_p = ttnn.pad(k, [1, R, tile, HD], [0, 0, 0, 0], 0.0)
         v_p = ttnn.pad(v, [1, R, tile, HD], [0, 0, 0, 0], 0.0)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
+        # a pad within the tile padding is a re-view of the input's buffer: freeing the input then frees the
+        # padded rows, and the slices below may be allocated over them (a row's V lost, allocation dependent)
+        for t, t_p in ((k, k_p), (v, v_p)):
+            if not _aliases(t_p, t):
+                ttnn.deallocate(t)
         U, Bk = layout.U, layout.block
-        grouped = (
-            U > 1
-            and Bk >= 2
-            and R == U * Bk
-            and KV_GROUP_WRITE_OK
-            and os.environ.get("QWEN36_DFLASH_KV_GROUP_WRITE", "1") != "0"
-        )
-        if not grouped:
-            for i in range(R):
-                pos_i = ttnn.slice(pos_t, (i,), (i + 1,))
-                pt_i = ttnn.slice(pt_t, (i, 0), (i + 1, nb))
-                for cache, src in ((kc, k_p), (vc, v_p)):
+        if not self._grouped(layout):
+            for i, (pos_i, pt_i) in enumerate(idx):
+                rows = []
+                for src, cfg in ((k_p, self._sc1), (v_p, self._sc1b)):
                     row = ttnn.slice(src, (0, i, 0, 0), (1, i + 1, tile, HD))
-                    row_sh = ttnn.to_memory_config(row, self._sc1)
+                    rows.append(ttnn.to_memory_config(row, cfg))
                     ttnn.deallocate(row)
-                    ttnn.experimental.paged_update_cache(cache, row_sh, update_idxs_tensor=pos_i, page_table=pt_i)
-                    ttnn.deallocate(row_sh)
-                ttnn.deallocate(pos_i)
-                ttnn.deallocate(pt_i)
+                ttnn.experimental.paged_fused_update_cache(
+                    kc, rows[0], vc, rows[1], update_idxs_tensor=pos_i, page_table=pt_i
+                )
+                for t in rows:
+                    ttnn.deallocate(t)
             ttnn.deallocate(k_p)
             ttnn.deallocate(v_p)
             return
@@ -465,18 +604,14 @@ class DFlash2DrafterTP:
             vw = ttnn.reshape(t, view, view)  # tile-view alias (same buffer) -- see _write_kv_aliased
             srcs.append((vw, None if _aliases(vw, t) else t))
         (k_v, k_orig), (v_v, v_orig) = srcs
-        for j in range(Bk):
+        for j, (pos_j, pt_j) in enumerate(idx):
             r0 = j * tile
-            pos_j = ttnn.slice(pos_t, (j,), (R,), (Bk,))  # rows j, j+Bk, ... = user 0..U-1 at in-block index j
-            pt_j = ttnn.slice(pt_t, (j, 0), (R, nb), (Bk, 1))
             for cache, src in ((kc, k_v), (vc, v_v)):
                 grp = ttnn.slice(src, (0, 0, r0, 0), (1, U, r0 + tile, HD))
                 grp_sh = ttnn.to_memory_config(grp, cfg)
                 ttnn.deallocate(grp)
                 ttnn.experimental.paged_update_cache(cache, grp_sh, update_idxs_tensor=pos_j, page_table=pt_j)
                 ttnn.deallocate(grp_sh)
-            ttnn.deallocate(pos_j)
-            ttnn.deallocate(pt_j)
         for t in (k_v, v_v, k_orig, v_orig):
             if t is not None:
                 ttnn.deallocate(t)
@@ -557,23 +692,42 @@ class DFlash2DrafterTP:
 
     # ------------------------------------------------------------------ LAYOUTS
     def _staging_for(self, R):
-        """The R-row staging buffers (draft: emb/cos/sin/pos/wpos/cur; extend: xpos/xcos/xsin), allocated
-        once per R and shared by every layout of that R (one layout runs per step)."""
+        """The R-row staging buffers, allocated once per R and shared by every layout of that R (one layout runs
+        per step). Draft: emb, cs = cos | sin rows [1, 2R, 1, HD], ints = pos | wpos (the KV write positions:
+        pos, or pos % ring) | cur [3R]; extend: xpos, xcs. One host copy each; the bodies slice them (_views)."""
         st = self._staging.get(R)
         if st is None:
             z = torch.zeros
             st = self._staging[R] = {
                 "emb": self._dev(z(1, 1, R, H, dtype=torch.bfloat16)),
-                "cos": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
-                "sin": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
-                "pos": self._rm(z(R, dtype=torch.int32)),
-                "wpos": self._rm(z(R, dtype=torch.int32)),  # KV write positions (== pos, or pos % ring)
-                "cur": self._rm(z(R, dtype=torch.int32)),
+                "cs": self._dev(z(1, 2 * R, 1, HD, dtype=torch.bfloat16)),
+                "ints": self._rm(z(3 * R, dtype=torch.int32)),
                 "xpos": self._rm(z(R, dtype=torch.int32)),
-                "xcos": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
-                "xsin": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
+                "xcs": self._dev(z(1, 2 * R, 1, HD, dtype=torch.bfloat16)),
             }
         return st
+
+    @staticmethod
+    def _views(st, R, extend=False):
+        """the staging buffers' parts as the body's ops take them (slices, inside the body / its trace)"""
+        if extend:
+            cs = st["xcs"]
+            return dict(
+                cos=ttnn.slice(cs, (0, 0, 0, 0), (1, R, 1, HD)), sin=ttnn.slice(cs, (0, R, 0, 0), (1, 2 * R, 1, HD))
+            )
+        cs, ints = st["cs"], st["ints"]
+        return dict(
+            cos=ttnn.slice(cs, (0, 0, 0, 0), (1, R, 1, HD)),
+            sin=ttnn.slice(cs, (0, R, 0, 0), (1, 2 * R, 1, HD)),
+            pos=ttnn.slice(ints, (0,), (R,)),
+            wpos=ttnn.slice(ints, (R,), (2 * R,)),
+            cur=ttnn.slice(ints, (2 * R,), (3 * R,)),
+        )
+
+    @staticmethod
+    def _free_views(v):
+        for t in v.values():
+            ttnn.deallocate(t)
 
     def add_layout(self, layout_id, U, block, tap_bufs=None):
         """Register the (U users x block) row geometry ``layout_id`` over the store (idempotent for the same
@@ -780,12 +934,16 @@ class DFlash2DrafterTP:
     def _extend_body(self, lay):
         st = self._staging[lay.R]
         R = lay.R
+        vw = self._views(st, R, extend=True)
         hctx = self._hctx(lay.tap_bufs, R)
+        idx = self._write_index(st["xpos"], lay.xpt, lay)
         for li, lw in enumerate(self.layers):
             k, v = self._ctx_kv(hctx, lw, R)
-            kr = apply_partial_rope_decode(k, st["xcos"], st["xsin"], self.NKVl, R, HD)
+            kr = apply_partial_rope_decode(k, vw["cos"], vw["sin"], self.NKVl, R, HD)
             ttnn.deallocate(k)
-            self._write_rows(li, kr, v, st["xpos"], lay.xpt, lay)
+            self._write_rows(li, kr, v, idx, lay)
+        self._free_index(idx)
+        self._free_views(vw)
         ttnn.deallocate(hctx)
 
     @staticmethod
@@ -816,8 +974,7 @@ class DFlash2DrafterTP:
         st = self._staging[R]
         self._stage(pos % self.ring if self.ring else pos, st["xpos"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self._stage(pt, lay.xpt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        self._stage(cos.reshape(1, R, 1, HD).bfloat16(), st["xcos"], ttnn.bfloat16)
-        self._stage(sin.reshape(1, R, 1, HD).bfloat16(), st["xsin"], ttnn.bfloat16)
+        self._stage(torch.cat([cos, sin]).reshape(1, 2 * R, 1, HD).bfloat16(), st["xcs"], ttnn.bfloat16)
 
     def extend_context(self, slot0, n_valid, layout_id=None, traced=True):
         """Per user-row u of the layout: tap-buf rows u*block .. u*block+n_valid[u]-1 -> its slot's context
@@ -888,21 +1045,23 @@ class DFlash2DrafterTP:
         self.extend_context(slots, [1] * U, layout_id=lay.id, traced=False)
 
     # ------------------------------------------------------------------ draft (traceable)
-    def _attn(self, hb, lw, li, cur_t, lay):
-        st = self._staging[lay.R]
+    def _attn(self, hb, lw, li, cur_t, lay, idx):
         B = lay.R  # every draft row (U users x block) is a pseudo-user of the paged decode SDPA
-        q = ttnn.reshape(self._lin(hb, lw["q"]), (1, B, self.NHl, HD))
+        qkv = self._lin(hb, lw["qkv"])  # [1, 1, B, (NHl + 2 NKVl) HD]
+        nq, nk = self.NHl * HD, self.NKVl * HD
+        q = ttnn.reshape(ttnn.slice(qkv, (0, 0, 0, 0), (1, 1, B, nq)), (1, B, self.NHl, HD))
         qn = self._rms(q, lw["qn"])
         ttnn.deallocate(q)
-        k = ttnn.reshape(self._lin(hb, lw["k"]), (1, B, self.NKVl, HD))
+        k = ttnn.reshape(ttnn.slice(qkv, (0, 0, 0, nq), (1, 1, B, nq + nk)), (1, B, self.NKVl, HD))
         kn = self._rms(k, lw["kn"])
         ttnn.deallocate(k)
-        v = ttnn.reshape(self._lin(hb, lw["v"]), (1, B, self.NKVl, HD))
-        qr = apply_partial_rope_decode(qn, st["cos"], st["sin"], self.NHl, B, HD)
+        v = ttnn.reshape(ttnn.slice(qkv, (0, 0, 0, nq + nk), (1, 1, B, nq + 2 * nk)), (1, B, self.NKVl, HD))
+        ttnn.deallocate(qkv)
+        qr = apply_partial_rope_decode(qn, self._dv["cos"], self._dv["sin"], self.NHl, B, HD)
         ttnn.deallocate(qn)
-        kr = apply_partial_rope_decode(kn, st["cos"], st["sin"], self.NKVl, B, HD)
+        kr = apply_partial_rope_decode(kn, self._dv["cos"], self._dv["sin"], self.NKVl, B, HD)
         ttnn.deallocate(kn)
-        self._write_rows(li, kr, v, st["wpos"], lay.ptB, lay)
+        self._write_rows(li, kr, v, idx, lay)
         kc, vc = self.kv[li]
         kw = {"sliding_window_size": self.windows[li]} if self.windows[li] else {}
         if self.ring:
@@ -925,25 +1084,24 @@ class DFlash2DrafterTP:
         ttnn.deallocate(o4)
         return self._allreduce(part)
 
-    def _layer(self, hidden, lw, li, lay):
-        st = self._staging[lay.R]
+    def _layer(self, hidden, lw, li, lay, idx):
         L = lay.R
-        cur_t = st["pos"] if self.causal[li] else st["cur"]
-        h = self._rms(hidden, lw["in_ln"])
+        cur_t = self._dv["pos"] if self.causal[li] else self._dv["cur"]
+        h = self._rms_h(hidden, lw["in_ln"], lw["in_ln_rm"])
         if "ac_kp" in lw:
             kp = self._lin(h, lw["ac_kp"])
             hb = self._gdc(h, kp, lw["ac_b00"], lw["ac_b01"], 0, L, lay.S)
-            a0 = self._attn(hb, lw, li, cur_t, lay)
+            a0 = self._attn(hb, lw, li, cur_t, lay, idx)
             ttnn.deallocate(hb)
             a = self._gdc(a0, kp, lw["ac_b10"], lw["ac_b11"], 1, L, lay.S)
             ttnn.deallocate(a0)
             ttnn.deallocate(kp)
         else:
-            a = self._attn(h, lw, li, cur_t, lay)
+            a = self._attn(h, lw, li, cur_t, lay, idx)
         ttnn.deallocate(h)
         h1 = ttnn.add(hidden, a)
         ttnn.deallocate(a)
-        h2 = self._rms(h1, lw["post_ln"])
+        h2 = self._rms_h(h1, lw["post_ln"], lw["post_ln_rm"])
         if "mc_kp" in lw:
             kpm = self._lin(h2, lw["mc_kp"])
             hm = self._gdc(h2, kpm, lw["mc_b00"], lw["mc_b01"], 0, L, lay.S)
@@ -961,21 +1119,31 @@ class DFlash2DrafterTP:
         return out
 
     def _draft_body(self, lay):
-        """Persistent inputs -> (vals [1,1,R,16] local, idx [1,1,R,16] local, hp [1,1,R,256] | None, h [1,1,R,H])."""
+        """Persistent inputs -> (rb [1,1,R,32 (+256)] fp32 local: the top-16 values | their vocab ids (local, exact
+        below 2^24) | hp (the selector projection, if any); hn [1,1,R,H]). One readback per chip (draft())."""
         st = self._staging[lay.R]
         h = st["emb"]
+        self._dv = self._views(st, lay.R)
+        idx = self._write_index(self._dv["wpos"], lay.ptB, lay)
         for li, lw in enumerate(self.layers):
-            h_new = self._layer(h, lw, li, lay)
+            h_new = self._layer(h, lw, li, lay, idx)
             if h is not st["emb"]:
                 ttnn.deallocate(h)
             h = h_new
-        hn = self._rms(h, self.fnorm)
+        self._free_index(idx)
+        self._free_views(self._dv)
+        self._dv = None
+        hn = self._rms_h(h, self.fnorm, self.fnorm_rm)
         ttnn.deallocate(h)
-        logits = ttnn.linear(hn, self.lm_w)  # [1,1,B,V/nd] per device
+        logits = self._lin(hn, self.lm_w, ckc=None)  # [1,1,B,V/nd] per device
         vals, idx = ttnn.topk(logits, self.topk, dim=-1, largest=True, sorted=True)
         ttnn.deallocate(logits)
-        hp = self._lin(hn, self.hproj) if self.has_selector else None
-        return vals, idx, hp, hn
+        parts = [vals, idx] + ([self._lin(hn, self.hproj)] if self.has_selector else [])
+        parts32 = [ttnn.typecast(t, ttnn.float32) for t in parts]
+        rb = ttnn.concat(parts32, dim=-1)
+        for t in parts + parts32:
+            ttnn.deallocate(t)
+        return rb, hn
 
     def _stage_draft(self, lay, anchors, Cs):
         """Per user-row u: block [anchor[u], MASK x (block-1)] at positions C[u] .. C[u]+block-1
@@ -989,11 +1157,9 @@ class DFlash2DrafterTP:
         cos, sin = rope_tables(self.theta, pos)
         st = self._staging[R]
         self._stage(emb, st["emb"], ttnn.bfloat16)
-        self._stage(cos.reshape(1, R, 1, HD).bfloat16(), st["cos"], ttnn.bfloat16)
-        self._stage(sin.reshape(1, R, 1, HD).bfloat16(), st["sin"], ttnn.bfloat16)
-        self._stage(pos, st["pos"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        self._stage(pos % self.ring if self.ring else pos, st["wpos"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        self._stage(cur, st["cur"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self._stage(torch.cat([cos, sin]).reshape(1, 2 * R, 1, HD).bfloat16(), st["cs"], ttnn.bfloat16)
+        wpos = pos % self.ring if self.ring else pos
+        self._stage(torch.cat([pos, wpos, cur]), st["ints"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
     _trace_armed = False
 
@@ -1028,31 +1194,32 @@ class DFlash2DrafterTP:
         if traced and lay.draft_tid is not None:
             ttnn.execute_trace(self.mesh, lay.draft_tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(self.mesh)
-            vals, idx, hp, hn = lay.draft_out
+            rb, hn = lay.draft_out
             owned = False
             self.stats["draft_traced"] += 1
             lay.stats["draft_traced"] += 1
         else:
-            vals, idx, hp, hn = self._draft_body(lay)
+            rb, hn = self._draft_body(lay)
             owned = True
             self.stats["draft_eager"] += 1
             lay.stats["draft_eager"] += 1
-        comp0 = ttnn.ConcatMeshToTensor(self.mesh, dim=0)
+        kt = self.topk
         if self.lm_sharded:
             V_l = self.lm_w.shape[-1]
-            va = ttnn.to_torch(vals, mesh_composer=comp0).float().reshape(self.nd, R, self.topk)  # [nd,R,16]
-            ia = ttnn.to_torch(idx, mesh_composer=comp0).long().reshape(self.nd, R, self.topk)
-            ia = ia + torch.arange(self.nd).view(self.nd, 1, 1) * V_l
+            x = ttnn.to_torch(rb, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0)).reshape(self.nd, R, -1)
+            va = x[..., :kt]  # [nd, R, 16]
+            ia = x[..., kt : 2 * kt].long() + torch.arange(self.nd).view(self.nd, 1, 1) * V_l
             va = va.permute(1, 0, 2).reshape(R, -1)  # [R, nd*16]
             ia = ia.permute(1, 0, 2).reshape(R, -1)
             top = va.topk(self.topk, dim=-1)
             unary_all = top.values
             cand_all = ia.gather(-1, top.indices)
         else:
-            unary_all = ttnn.to_torch(ttnn.get_device_tensors(vals)[0]).float().reshape(R, self.topk)
-            cand_all = ttnn.to_torch(ttnn.get_device_tensors(idx)[0]).long().reshape(R, self.topk)
-        hph_all = ttnn.to_torch(ttnn.get_device_tensors(hp)[0]).float().reshape(R, -1) if self.has_selector else None
-        hn_all = ttnn.to_torch(ttnn.get_device_tensors(hn)[0]).float().reshape(R, H)
+            x = ttnn.to_torch(ttnn.get_device_tensors(rb)[0]).reshape(1, R, -1)
+            unary_all = x[0, :, :kt]
+            cand_all = x[0, :, kt : 2 * kt].long()
+        hph_all = x[0, :, 2 * kt :] if self.has_selector else None
+        hn_all = ttnn.to_torch(ttnn.get_device_tensors(hn)[0]).float().reshape(R, H) if self.keep_hidden else None
         outs, hiddens = [], []
         for u in range(U):
             r0 = u * Bk
@@ -1062,10 +1229,10 @@ class DFlash2DrafterTP:
                 outs.append(select_path(unary, cand, hph_all[r0 + 1 : r0 + Bk], anchors[u], self.pred_cb, self.succ_cb))
             else:
                 outs.append([int(c[int(w.argmax())]) for w, c in zip(unary, cand)])
-            hiddens.append(hn_all[r0 + 1 : r0 + Bk])
-        self.last_hidden = torch.stack(hiddens)  # [U, K, H]
+            if hn_all is not None:
+                hiddens.append(hn_all[r0 + 1 : r0 + Bk])
+        self.last_hidden = torch.stack(hiddens) if hiddens else None  # [U, K, H] (keep_hidden)
         if owned:
-            for t in (vals, idx, hp, hn):
-                if t is not None:
-                    ttnn.deallocate(t)
+            for t in (rb, hn):
+                ttnn.deallocate(t)
         return outs if per_user_out else outs[0]

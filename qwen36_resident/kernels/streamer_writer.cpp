@@ -188,9 +188,29 @@ void kernel_main() {
             send_runs(q_off_gdn);
             o_expected += o_heads;
             // verify: T(k + 2), T(k + 3), T(k + 4); rows mode: (h1, h2, y)
-            constexpr uint32_t outs = verify || rows_mode ? 3 : 1;
+            constexpr uint32_t outs = verify_pair || rows_mode ? 3 : 1;
             cb_wait_front(cb_hist_out, outs * kBlkViews);
-            if (rows_mode && preserve && n_conv > 0) {
+            if (verify_rows && n_conv > 0) {
+                // input row r -> ring slot ring + 3 + r: rows 0 .. n1 - 1 to block b from row o, the rest to block
+                // b + 1 from row 0, per tile and face (see streamer_common.hpp)
+                const uint32_t s0 = (ring + 3) % kRingSlots;
+                const uint32_t b = s0 / batch, o = s0 % batch, n1 = batch - o;
+                const uint32_t page = first_row + g % gdn_copies;
+                const uint32_t src = get_read_ptr(cb_hist_out);
+                for (uint32_t t = 0; t < views_of(n_conv) * 32 / batch; t++) {
+                    for (uint32_t f = 0; f < 2; f++) {
+                        const uint32_t at = t * kTileBytes + f * batch * 32;
+                        noc_async_write(src + at, hist.get_noc_addr(page, b * kBlkBytes + at + o * 32), n1 * 32);
+                        if (o > 0) {
+                            noc_async_write(
+                                src + at + n1 * 32,
+                                hist.get_noc_addr(page, ((b + 1) % kHistSlots) * kBlkBytes + at),
+                                o * 32);
+                        }
+                    }
+                }
+                noc_async_write_barrier();
+            } else if (rows_mode && preserve && n_conv > 0) {
                 // the active rows' two face rows of each q|k|v tile of the 3 slots
                 const uint32_t row = first_row + g % gdn_copies;
                 for (uint32_t u = 0; u < batch; u++) {
@@ -218,7 +238,7 @@ void kernel_main() {
                         get_read_ptr(cb_hist_out) + j * kBlkViews * 2048,
                         hist.get_noc_addr(
                             first_row + g % gdn_copies,
-                            (rows_mode ? j : (step + (verify ? 2 + j : 0)) % kHistSlots) * kBlkBytes),
+                            (rows_mode ? j : (step + (verify_pair ? 2 + j : 0)) % kHistSlots) * kBlkBytes),
                         views_of(n_conv) * 2048);
                 }
                 noc_async_write_barrier();
