@@ -30,7 +30,8 @@ struct FusedRecurrentGatedDeltaRuleDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-// Low-level primitive dispatch.
+// Low-level primitive dispatch. The head counts and the geometry are passed explicitly: the tensors carry only
+// BH*T rows, and the hash must see B, HV, H, NV and the units per core apart (see the attribute struct).
 std::vector<Tensor> fused_recurrent_gated_delta_rule(
     const Tensor& q,
     const Tensor& k,
@@ -39,7 +40,12 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     const Tensor& beta,
     const std::optional<Tensor>& initial_state,
     const std::optional<Tensor>& initial_state_block_idx,
+    uint32_t B,
+    uint32_t HV,
+    uint32_t H,
     uint32_t T,
+    uint32_t num_slices,
+    uint32_t units_per_core,
     bool output_final_state,
     bool output_per_token_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,

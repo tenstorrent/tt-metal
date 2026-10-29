@@ -26,6 +26,24 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
     TT_FATAL(attrs.T >= 1, "fused_recurrent_gated_delta_rule: T must be >= 1, got {}", attrs.T);
     TT_FATAL(attrs.BH >= 1, "fused_recurrent_gated_delta_rule: B*HV must be >= 1, got {}", attrs.BH);
     TT_FATAL(
+        attrs.H >= 1 && attrs.HV >= 1 && attrs.HV % attrs.H == 0,
+        "fused_recurrent_gated_delta_rule: HV ({}) must be a multiple of H ({})",
+        attrs.HV,
+        attrs.H);
+    TT_FATAL(
+        attrs.B >= 1 && attrs.B * attrs.HV == attrs.BH,
+        "fused_recurrent_gated_delta_rule: B*HV ({}*{}) must equal BH ({})",
+        attrs.B,
+        attrs.HV,
+        attrs.BH);
+    TT_FATAL(
+        attrs.num_slices == 1 && attrs.units_per_core == 1,
+        "fused_recurrent_gated_delta_rule: this build runs one whole head per core (num_slices 1, units_per_core 1), "
+        "got num_slices {} and units_per_core {}; V-split units and units looped per core arrive in stage 2 of the v2 "
+        "plan",
+        attrs.num_slices,
+        attrs.units_per_core);
+    TT_FATAL(
         attrs.key_dim >= TILE_WIDTH && attrs.key_dim % TILE_WIDTH == 0,
         "fused_recurrent_gated_delta_rule: key_dim must be a non-zero multiple of {}, got {}",
         TILE_WIDTH,
@@ -173,7 +191,12 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     const Tensor& beta,
     const std::optional<Tensor>& initial_state,
     const std::optional<Tensor>& initial_state_block_idx,
+    uint32_t B,
+    uint32_t HV,
+    uint32_t H,
     uint32_t T,
+    uint32_t num_slices,
+    uint32_t units_per_core,
     bool output_final_state,
     bool output_per_token_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
@@ -190,12 +213,23 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
         v_shape.rank());
     const uint32_t BHT = q_shape[0];
     TT_FATAL(BHT % T == 0, "q dim0 ({}) must be divisible by T ({})", BHT, T);
+    TT_FATAL(
+        B * HV == BHT / T,
+        "fused_recurrent_gated_delta_rule: B*HV ({}*{}) must equal the heads of q ({})",
+        B,
+        HV,
+        BHT / T);
 
     auto attrs = OperationType::operation_attributes_t{
+        .B = B,
+        .HV = HV,
+        .H = H,
         .BH = BHT / T,
         .T = T,
         .key_dim = q_shape[2],
         .val_dim = v_shape[2],
+        .num_slices = num_slices,
+        .units_per_core = units_per_core,
         .output_final_state = output_final_state,
         .output_per_token_state = output_per_token_state,
         .output_mem_config = output_mem_config,

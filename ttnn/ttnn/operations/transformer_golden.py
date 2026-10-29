@@ -1789,6 +1789,34 @@ def chunk_gated_delta_rule_golden(
     return output, final_state
 
 
+def _gdn_gate_in_kernel(g, A_log, dt_bias, lower_bound, kda):
+    """g from raw gate values, as the op computes it with use_gate_in_kernel. GDN and KDA softplus form:
+    g = -exp(A_log[hv]) * softplus(raw + dt_bias), softplus(x) = x for x > 20; KDA bounded form (lower_bound):
+    g = lower_bound * sigmoid(exp(A_log[hv]) * (raw + dt_bias)). dt_bias is [HV] for GDN and [HV*K] for KDA."""
+    import torch
+
+    g = g.to(torch.float32)
+    scale = torch.exp(A_log.to(torch.float32))  # [HV]
+    bias = dt_bias.to(torch.float32)
+    if kda:
+        bias = bias.reshape(g.shape[2], g.shape[3])  # [HV, K]
+        scale = scale[:, None]
+    raw = g + bias
+    if lower_bound is not None:
+        return lower_bound * torch.sigmoid(scale * raw)
+    return -scale * torch.nn.functional.softplus(raw, threshold=20)
+
+
+def _pool_slot(indices, num_accepted_tokens, b):
+    """The slot row b starts from: indices[b] (1-D), or indices[b, n_b - 1] with n_b the row's accepted tokens
+    (2-D; n_b = 1 when num_accepted_tokens is absent). n_b must lie in [1, T]."""
+    if indices.dim() == 1:
+        return int(indices[b])
+    n_b = 1 if num_accepted_tokens is None else int(num_accepted_tokens[b])
+    assert 1 <= n_b <= indices.shape[1], f"num_accepted_tokens[{b}] = {n_b} must lie in [1, T]"
+    return int(indices[b, n_b - 1])
+
+
 def fused_recurrent_gated_delta_rule_golden(
     q,
     k,
@@ -1798,25 +1826,140 @@ def fused_recurrent_gated_delta_rule_golden(
     *,
     scale=None,
     initial_state=None,
+    state_indices=None,
+    num_accepted_tokens=None,
+    inplace_final_state=False,
     output_final_state=False,
     output_per_token_state=False,
+    use_qk_l2norm_in_kernel=False,
+    use_gate_in_kernel=False,
+    A_log=None,
+    dt_bias=None,
+    lower_bound=None,
+    use_beta_sigmoid_in_kernel=False,
+    allow_neg_eigval=False,
+    cu_seqlens=None,
+    state_v_first=False,
     use_qk_l2norm=False,
     **_,
 ):
-    """Golden of ttnn.transformer.fused_recurrent_gated_delta_rule: the op's argument order (q, k, v, g, beta) over the
-    FLA-ordered recurrence (q, k, v, beta, g). Returns (o, state); state is None unless a state output is requested."""
-    return recurrent_gated_delta_rule(
+    """Golden of ttnn.transformer.fused_recurrent_gated_delta_rule: the op's argument order (q, k, v, g, beta) over
+    the FLA-ordered recurrence (q, k, v, beta, g), with the whole v2 contract in torch so the device tests of every
+    stage compare against one reference:
+
+    - use_qk_l2norm_in_kernel (formerly use_qk_l2norm): q and k normalised over K with eps inside the root, then scale;
+    - use_gate_in_kernel / use_beta_sigmoid_in_kernel / allow_neg_eigval: the gates from raw values (_gdn_gate_in_kernel;
+      beta = sigmoid(beta), times 2 with allow_neg_eigval);
+    - state_indices with initial_state as the pool [slots, HV, K, V]: row b starts from its slot (1-D: indices[b];
+      2-D: indices[b, num_accepted_tokens[b] - 1]), a negative slot skips the row (o rows zero, pool untouched);
+      inplace_final_state returns the pool with the row's final state (1-D) or the state after token t at
+      indices[b, t] (2-D) written and every other slot untouched;
+    - state_v_first: the state (or pool) is stored [.., HV, V, K] and transposed at the boundary;
+    - cu_seqlens with B == 1: sequence n runs on tokens [cu[n], cu[n+1]) from initial_state[n]; the final state is
+      [N, HV, K, V] and the per-token state [1, T, HV, K, V].
+    Returns (o, state); state is None unless a state output is requested or the pool is updated in place."""
+    import torch
+
+    norm = use_qk_l2norm_in_kernel or use_qk_l2norm
+    kda = g.dim() == 4
+    if use_gate_in_kernel:
+        g = _gdn_gate_in_kernel(g, A_log, dt_bias, lower_bound, kda)
+    if use_beta_sigmoid_in_kernel:
+        beta = torch.sigmoid(beta.to(torch.float32)) * (2.0 if allow_neg_eigval else 1.0)
+    want_state = output_final_state or output_per_token_state
+
+    def run(q_, k_, v_, g_, beta_, s0, per_token):
+        return recurrent_gated_delta_rule(
+            q_,
+            k_,
+            v_,
+            beta_,
+            g_,
+            scale=scale,
+            initial_state=s0,
+            output_final_state=True,
+            use_qk_l2norm=norm,
+            output_per_token_state=per_token,
+        )
+
+    if cu_seqlens is not None:
+        assert q.shape[0] == 1, "cu_seqlens requires B == 1"
+        cu = [int(x) for x in cu_seqlens]
+        outs, finals, per_token = [], [], []
+        for n in range(len(cu) - 1):
+            sl = slice(cu[n], cu[n + 1])
+            s0 = None if initial_state is None else initial_state[n : n + 1]
+            if state_v_first and s0 is not None:
+                s0 = s0.transpose(-1, -2).contiguous()
+            o_n, st_n = run(q[:, sl], k[:, sl], v[:, sl], g[:, sl], beta[:, sl], s0, output_per_token_state)
+            outs.append(o_n)
+            if output_per_token_state:
+                per_token.append(st_n)
+                finals.append(st_n[:, -1])
+            else:
+                finals.append(st_n)
+        o = torch.cat(outs, dim=1)
+        state = torch.cat(per_token, dim=1) if output_per_token_state else torch.cat(finals, dim=0)
+        if state_v_first:
+            state = state.transpose(-1, -2).contiguous()
+        return o, (state if want_state else None)
+
+    if state_indices is not None:
+        B, T = q.shape[0], q.shape[1]
+        HV, V, K = v.shape[2], v.shape[3], q.shape[3]
+        pool = initial_state.to(torch.float32)
+        if state_v_first:
+            pool = pool.transpose(-1, -2).contiguous()  # contiguous: a reduction over a strided view rounds differently
+        new_pool = pool.clone()
+        o = torch.zeros(B, T, HV, V, dtype=torch.float32)
+        finals = torch.zeros(B, HV, K, V, dtype=torch.float32)
+        states = torch.zeros(B, T, HV, K, V, dtype=torch.float32) if output_per_token_state else None
+        for b in range(B):
+            slot = _pool_slot(state_indices, num_accepted_tokens, b)
+            if slot < 0:
+                continue  # a skipped row: o stays zero, the pool untouched
+            o_b, st_b = run(
+                q[b : b + 1], k[b : b + 1], v[b : b + 1], g[b : b + 1], beta[b : b + 1], pool[slot : slot + 1], True
+            )
+            o[b] = o_b[0]
+            finals[b] = st_b[0, -1]
+            if states is not None:
+                states[b] = st_b[0]
+            if inplace_final_state:
+                if state_indices.dim() == 1:
+                    new_pool[slot] = st_b[0, -1]
+                else:
+                    for t in range(T):
+                        new_pool[int(state_indices[b, t])] = st_b[0, t]
+        if inplace_final_state:
+            return o, (new_pool.transpose(-1, -2).contiguous() if state_v_first else new_pool)
+        state = states if output_per_token_state else (finals if output_final_state else None)
+        return o, state
+
+    s0 = initial_state
+    if s0 is not None and state_v_first:
+        s0 = s0.transpose(-1, -2).contiguous()
+    o, state = recurrent_gated_delta_rule(
         q,
         k,
         v,
         beta,
         g,
         scale=scale,
-        initial_state=initial_state,
-        output_final_state=output_final_state or output_per_token_state,
-        use_qk_l2norm=use_qk_l2norm,
+        initial_state=s0,
+        output_final_state=want_state,
+        use_qk_l2norm=norm,
         output_per_token_state=output_per_token_state,
     )
+    if state is not None and state_v_first:
+        state = state.transpose(-1, -2).contiguous()
+    return o, state
+
+
+def fused_recurrent_kda_golden(q, k, v, g, beta, **kwargs):
+    """Golden of ttnn.transformer.fused_recurrent_kda: the GDN golden with the per-key decay, g [B, T, HV, K]."""
+    assert g.dim() == 4, f"fused_recurrent_kda: g must be [B, T, HV, K] (rank 4), got rank {g.dim()}"
+    return fused_recurrent_gated_delta_rule_golden(q, k, v, g, beta, **kwargs)
 
 
 def gated_delta_attn_seq_golden(

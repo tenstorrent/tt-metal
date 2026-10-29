@@ -475,6 +475,7 @@ ttnn/cpp/ttnn/operations/reduction/ @tenstorrent/metalium-developers-mmfusedredu
 ttnn/cpp/ttnn/operations/reduction/accumulation/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT
 ttnn/cpp/ttnn/operations/reduction/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/ @tenstorrent/cse-developer-ttnn @iwroszTT
+ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/ @tenstorrent/cse-developer-ttnn @iwroszTT
 ttnn/cpp/ttnn/operations/transformer/sdpa/ @tenstorrent/metalium-developers-sdpa
 ttnn/cpp/ttnn/operations/transformer/sdpa_decode/ @tenstorrent/metalium-developers-sdpa
 ttnn/sources.cmake @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ttnn-core
@@ -578,6 +579,7 @@ tests/ttnn/unit_tests/operations/transformers/test_chunk_gated_delta_rule.py @te
 tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_*.py @tenstorrent/cse-developer-ttnn @iwroszTT
 tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gdn_*.py @tenstorrent/cse-developer-ttnn @iwroszTT
 tests/ttnn/unit_tests/operations/transformers/gdn_decode_test_utils.py @tenstorrent/cse-developer-ttnn @iwroszTT
+tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gated_delta_rule_api.py @tenstorrent/cse-developer-ttnn @iwroszTT
 
 # OP docs examples
 tests/ttnn/docs_examples/test_backward_examples.py @tenstorrent/metalium-developers-eltwise
