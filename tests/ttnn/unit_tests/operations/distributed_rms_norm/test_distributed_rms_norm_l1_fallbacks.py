@@ -237,3 +237,21 @@ def test_pass_regime_more_waves(mesh_cache, monkeypatch, mesh_shape, cluster_axi
         lambda base, sz, budget: (0, replace(pd.rewave(base, pd.WAVES_MAX_PASSES), PW=1, combine_depth=1)),
     )
     _run(mesh, shape, cluster_axis=cluster_axis, memory_layout=memory_layout, gamma_layout=ttnn.TILE_LAYOUT)
+
+
+@pytest.mark.parametrize("mesh_shape,cluster_axis", _MESH, ids=lambda v: str(v))
+@pytest.mark.parametrize(
+    "memory_layout,shape,gamma_layout",
+    [
+        (ML.HEIGHT_SHARDED, (1, 1, 32, 4096), ttnn.TILE_LAYOUT),
+        (ML.INTERLEAVED, (1, 1, 640, 1792), ttnn.ROW_MAJOR_LAYOUT),
+        (ML.WIDTH_SHARDED, (1, 1, 64, 1000), None),
+    ],
+    ids=["hs", "interleaved", "ws-wpad"],
+)
+def test_scratch_backed_cbs(mesh_cache, monkeypatch, mesh_shape, cluster_axis, memory_layout, shape, gamma_layout):
+    """The last resort: no static CB region (the caller's tensors at the bottom of L1) -> every CB carved out of a
+    scratch L1 buffer in the largest free hole."""
+    mesh = mesh_cache.get(mesh_shape)
+    monkeypatch.setattr(pd, "l1_budget", lambda device: 1024)
+    _run(mesh, shape, cluster_axis=cluster_axis, memory_layout=memory_layout, gamma_layout=gamma_layout)

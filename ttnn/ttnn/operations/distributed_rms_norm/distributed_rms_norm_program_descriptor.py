@@ -738,6 +738,48 @@ def _measurement_defines() -> list:
     return defines
 
 
+SCRATCH_ALIGN = 64  # byte alignment of each CB carved out of the scratch buffer
+SCRATCH_SLACK = 4096  # headroom left in the hole for the allocator's own alignment
+
+
+def l1_largest_hole(device) -> int:
+    try:
+        return int(ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _scratch_backed_cbs(mesh, worker_crs, n_workers, table, fmt, interm):
+    """Every CB of `table` as a slice of one per-worker scratch L1 buffer (dynamic CB addresses). The scratch tensor
+    must stay alive through the dispatch (the caller passes it to generic_op with the other io tensors)."""
+    offsets, off = [], 0
+    for _, ps, n in table:
+        offsets.append(off)
+        off = _align_up(off + ps * n, SCRATCH_ALIGN)
+    words = max(SCRATCH_ALIGN // 4, off // 4)
+    mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(worker_crs, (1, words), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    try:
+        scratch = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([n_workers, words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, mc
+        )
+    except RuntimeError as e:
+        raise NotImplementedError(f"distributed_rms_norm: no L1 hole for the {off} B CB scratch ({e})") from None
+    cbs = []
+    for (idx, ps, n), o in zip(table, offsets):
+        d = ttnn.cb_descriptor_from_sharded_tensor(
+            idx, scratch, address_offset=o, total_size=ps * n, core_ranges=worker_crs
+        )
+        d.format_descriptors = [
+            ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt.get(idx, interm), page_size=ps)
+        ]
+        cbs.append(d)
+    return scratch, cbs
+
+
 def _cb(index, data_format, page_size, num_pages, core_ranges):
     return ttnn.CBDescriptor(
         total_size=page_size * num_pages,
@@ -874,16 +916,25 @@ def create_mesh_program_descriptor(
     # against the budget left once the plan's resources exist (converges at once: the scratch only grows).
     budget = l1_budget(mesh)
     evicted = False
-    for _ in range(4):
+    # Last resort (never taken by a plan that fits the static CB region): when the gap below the lowest L1 buffer is
+    # too small for any rung of the ladder — the caller's tensors sit at the bottom of L1 — the CBs are carved out of
+    # a scratch L1 buffer allocated wherever the largest free hole is (dynamic CB addresses).
+    scratch_cbs = False
+    for _ in range(6):
         try:
             plan = local_plan(input_tensor, workers, sz, budget, out_resident)
         except NotImplementedError:
             # Cached exchange scratch allocated while larger tensors were alive can sit low in L1 and cap the CB
             # region; free it (it is re-created, top-down, on demand) and re-measure once before refusing.
-            if evicted or not evict_resources(mesh):
+            if not evicted and evict_resources(mesh):
+                evicted = True
+                budget = l1_budget(mesh)
+                continue
+            hole = l1_largest_hole(mesh) - SCRATCH_SLACK
+            if scratch_cbs or hole <= budget:
                 raise
-            evicted = True
-            budget = l1_budget(mesh)
+            scratch_cbs = True
+            budget = hole
             continue
 
         # ---- publishers -> links ----
@@ -895,7 +946,7 @@ def create_mesh_program_descriptor(
         ports = {(d, l): port_list[2 * l + d] for l in range(L) for d in (FWD, BWD)}
         used_ports = list(ports.values())
         res = get_resources(mesh, used_ports, G, plan.num_waves, seg_stride)
-        budget_now = l1_budget(mesh)
+        budget_now = (l1_largest_hole(mesh) - SCRATCH_SLACK) if scratch_cbs else l1_budget(mesh)
         if footprint(sz, plan) <= budget_now:
             break
         budget = budget_now
@@ -943,7 +994,11 @@ def create_mesh_program_descriptor(
         CB_OUTPUT: output_tensor.dtype,
         CB_GAMMA_TILES: gamma.dtype if gamma is not None else None,
     }
-    cbs = [_cb(idx, fmt.get(idx, interm), ps, n, worker_crs) for idx, ps, n in cb_table(plan, sz)]
+    scratch = None
+    if scratch_cbs:
+        scratch, cbs = _scratch_backed_cbs(mesh, worker_crs, len(plan.members), cb_table(plan, sz), fmt, interm)
+    else:
+        cbs = [_cb(idx, fmt.get(idx, interm), ps, n, worker_crs) for idx, ps, n in cb_table(plan, sz)]
     if plan.sharded:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X_TILES, input_tensor))
     if plan.out_resident:
@@ -1225,9 +1280,10 @@ def create_mesh_program_descriptor(
                     plan.x_depth,
                     plan.combine_depth,
                     plan.SQ,
+                    scratch_cbs,
                     res.landing_addr,
                 )
             )
             program.custom_program_hash = int.from_bytes(hashlib.sha1(key.encode()).digest()[:8], "little") >> 1
             mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*coord), ttnn.MeshCoordinate(*coord))] = program
-    return mesh_desc, res
+    return mesh_desc, res, ([scratch] if scratch is not None else [])

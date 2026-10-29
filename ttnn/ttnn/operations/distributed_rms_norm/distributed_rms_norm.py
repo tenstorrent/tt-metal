@@ -230,7 +230,7 @@ def distributed_rms_norm(
         mesh,
         out_mc,
     )
-    mesh_desc, res = create_mesh_program_descriptor(
+    mesh_desc, res, scratch = create_mesh_program_descriptor(
         input_tensor,
         output_tensor,
         gamma=gamma,
@@ -240,7 +240,7 @@ def distributed_rms_norm(
         num_links=links,
         compute_kernel_config=cfg,
     )
-    io = [input_tensor] + ([gamma] if gamma is not None else []) + [res.landing, output_tensor]
+    io = [input_tensor] + ([gamma] if gamma is not None else []) + [res.landing] + scratch + [output_tensor]
     n_collected = collected_count()
     out = ttnn.generic_op(io, mesh_desc)
     if collected_count() != n_collected:
