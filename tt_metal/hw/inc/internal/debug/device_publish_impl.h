@@ -284,8 +284,7 @@ struct CallSite {
     template <auto kMetadata, auto... Options, typename... Arguments>
     static FORCE_INLINE void publish_with_metadata([[maybe_unused]] Arguments&&... arguments) {
         if constexpr (check_call<decltype(kMetadata), Arguments...>() && check_options<decltype(Options)...>()) {
-#if defined(DEVICE_OBSERVABILITY) && defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && \
-    !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
+#if defined(DEVICE_OBSERVABILITY) && defined(PROFILE_KERNEL) && !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
             using Payload =
                 typename CallPayloadOf<RecordPayload<Arguments...>, std::remove_cv_t<decltype(Options)>...>::type;
             constexpr bool immediately = !kHasOption<PublishBatched, Options...>;
@@ -339,8 +338,7 @@ private:
 // Without the ring a Timestamp only reaches DevicePublish, which drops it, so taking one reads no clock.
 FORCE_INLINE tt::tt_metal::experimental::device_observability::Timestamp
 tt::tt_metal::experimental::device_observability::Timestamp::now() {
-#if defined(DEVICE_OBSERVABILITY) && defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && \
-    !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
+#if defined(DEVICE_OBSERVABILITY) && defined(PROFILE_KERNEL) && !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
     uint32_t high, low;
     ::device_observability::read_wall_clock(high, low);
     return Timestamp(uint64_t{high} << 32 | low);

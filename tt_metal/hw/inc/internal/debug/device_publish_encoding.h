@@ -743,13 +743,10 @@ inline constexpr size_t kUnsentLeaf<PublishTimePayload<kField>> = publish_time_l
 
 }  // namespace device_observability
 
-// The writer stores records on device observability's rings, which kernels and firmware built with it have. Dispatch
-// kernels have none: PROFILE_KERNEL is a global JIT define, so they get it too, but no relay serves a dispatch core, so
-// a ring there would fill and wedge the next relay bring-up. Nor does its relay kernel: the ring's producer is ~1 KB
-// the relay has no code room for (its self-profiling is its own staging-slot markers, see
-// impl/streaming_profiler/kernels/drisc_relay.cpp).
-#if defined(DEVICE_OBSERVABILITY) && defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && \
-    !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
+// The writer stores records on device observability's rings, which kernels and firmware built with it have. Its relay
+// kernel has none: the ring's producer is ~1 KB the relay has no code room for (its self-profiling is its own
+// staging-slot markers, see impl/streaming_profiler/kernels/drisc_relay.cpp).
+#if defined(DEVICE_OBSERVABILITY) && defined(PROFILE_KERNEL) && !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
 
 #include "internal/debug/device_publish_ring.h"
 

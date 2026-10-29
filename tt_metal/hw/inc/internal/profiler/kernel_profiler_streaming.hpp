@@ -38,8 +38,8 @@
 
 #include "internal/ethernet/erisc.h"
 
-// Dispatch kernels and the relay kernel have no markers and no ring (internal/debug/device_publish_encoding.h).
-#if defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
+// The relay kernel has no markers and no ring (internal/debug/device_publish_encoding.h).
+#if defined(PROFILE_KERNEL) && !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
 
 #include "api/debug/device_publish.h"
 
@@ -107,8 +107,7 @@
 #endif
 
 // The streaming profiler's markers, on kernels and firmware that have the ring.
-#if defined(PROFILE_STREAMING) && defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && \
-    !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
+#if defined(PROFILE_STREAMING) && defined(PROFILE_KERNEL) && !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
 
 #include "hostdevcommon/streaming_profiler_types.hpp"
 
