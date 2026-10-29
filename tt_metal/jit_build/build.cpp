@@ -66,6 +66,20 @@ namespace tt::tt_metal {
 
 namespace {
 
+// Mirrors how the watcher server picks the cores that get debug delays.
+bool debug_delay_targets_eth_cores(const llrt::RunTimeOptions& rtoptions) {
+    for (auto feature :
+         {llrt::RunTimeDebugFeatureReadDebugDelay,
+          llrt::RunTimeDebugFeatureWriteDebugDelay,
+          llrt::RunTimeDebugFeatureAtomicDebugDelay}) {
+        const auto& cores = rtoptions.get_feature_cores(feature);
+        if (auto it = cores.find(CoreType::ETH); it != cores.end() && !it->second.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Hands out the tu_id half of a structural zone id (hostdev/profiler_zone_id.h) as -DTT_PROFILER_TU_ID.
 // Ids must be unique across TUs and stable across runs (a cached ELF keeps the id in its .tt_zone_meta),
 // hence a file. The key is source identity plus build target: one source compiled for BRISC vs NCRISC can
@@ -454,9 +468,11 @@ void JitBuildEnv::init(
         this->defines_ += "-DDFB_INIT_TIMING_ENABLED ";
     }
 
-    if (rtoptions.get_watcher_debug_delay()) {
-        this->defines_ += "-DWATCHER_DEBUG_DELAY=" + to_string(rtoptions.get_watcher_debug_delay()) + " ";
-    }
+    // Added per build state, see JitBuildState::JitBuildState.
+    this->watcher_debug_delay_define_ =
+        rtoptions.get_watcher_debug_delay()
+            ? "-DWATCHER_DEBUG_DELAY=" + to_string(rtoptions.get_watcher_debug_delay()) + " "
+            : "";
 
     if (rtoptions.get_hw_cache_invalidation_enabled()) {
         this->defines_ += "-DENABLE_HW_CACHE_INVALIDATION ";
@@ -543,6 +559,9 @@ void JitBuildEnv::init(
     hasher.update(cflags_);
     hasher.update(lflags_);
     hasher.update(defines_);
+    if (!watcher_debug_delay_define_.empty()) {
+        hasher.update(watcher_debug_delay_define_);
+    }
 
     if (get_rtoptions().get_build_map_enabled()) {
         // Do not hash compiler version when generating compiler logs
@@ -627,6 +646,13 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         this->defines_ += "-DFW_BUILD ";
     } else {
         this->defines_ += "-DKERNEL_BUILD ";
+    }
+    // Ethernet kernels such as the fabric router have no code space to spare for the delay instrumentation, so
+    // only build it in when an ethernet core is actually being delayed.
+    const bool is_eth = build_config.core_type == HalProgrammableCoreType::ACTIVE_ETH ||
+                        build_config.core_type == HalProgrammableCoreType::IDLE_ETH;
+    if (!is_eth || debug_delay_targets_eth_cores(env_.get_rtoptions())) {
+        this->defines_ += env_.get_watcher_debug_delay_define();
     }
     // Flags
     {

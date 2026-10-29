@@ -77,6 +77,7 @@ public:
         return out_firmware_root_;
     }  // Path to the firmware directory for this device
     uint64_t get_build_key() const { return build_key_; }
+    const std::string& get_watcher_debug_delay_define() const { return watcher_debug_delay_define_; }
 
     // Where firmware binaries are loaded/linked from. Defaults to out_firmware_root_.
     // May differ when binaries are provided from an external source.
@@ -103,6 +104,7 @@ private:
     // Compilation options
     std::string cflags_;
     std::string defines_;
+    std::string watcher_debug_delay_define_;
     std::string includes_;
     std::string lflags_;
 
