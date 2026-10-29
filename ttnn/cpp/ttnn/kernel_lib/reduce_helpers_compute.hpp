@@ -170,9 +170,23 @@ struct AccumulationConfig {
     // CB holding the running output-tile stream across reduce() iterations; see Accumulate below.
     uint32_t cb_accumulator = 0;
     uint32_t dst_index = 0;  // DST register for accumulation (default: 0)
-    DataflowBufferAnyPattern* accumulator = nullptr;  // the kernel's accumulator buffer
+    // The kernel's accumulator buffer. reduce() only waits on and pops it, so it is held type-erased:
+    // on Quasar each access-pattern pair is its own DataflowBuffer type, and a buffer built from its
+    // binding token (DataflowBuffer<STRIDED, STRIDED>, say) must bind here as well as DataflowBuffer<>.
+    void* accumulator = nullptr;
+    void (*accumulator_wait_front)(void*, uint32_t) = nullptr;
+    void (*accumulator_pop_front)(void*, uint32_t) = nullptr;
 
     static constexpr AccumulationConfig with_cb(uint32_t cb, uint32_t dst = 0) { return {cb, dst}; }
+
+    template <typename DFB>
+    void bind(DFB& dfb) {
+        accumulator = &dfb;
+        accumulator_wait_front = [](void* p, uint32_t n) { static_cast<DFB*>(p)->wait_front(n); };
+        accumulator_pop_front = [](void* p, uint32_t n) { static_cast<DFB*>(p)->pop_front(n); };
+    }
+    void wait_front(uint32_t n) const { accumulator_wait_front(accumulator, n); }
+    void pop_front(uint32_t n) const { accumulator_pop_front(accumulator, n); }
 };
 
 /**
@@ -205,8 +219,10 @@ struct Accumulate {
 
     explicit constexpr Accumulate(AccumulationConfig cfg, uint32_t iter = 0) : config(cfg), iteration(iter) {}
     explicit constexpr Accumulate(uint32_t cb, uint32_t iter = 0) : config{cb, 0}, iteration(iter) {}
-    explicit Accumulate(DataflowBufferAnyPattern& dfb, uint32_t iter = 0, uint32_t dst = 0) :
-        config{dfb.get_id(), dst, &dfb}, iteration(iter) {}
+    template <typename DFB, std::enable_if_t<is_dataflow_buffer_v<std::remove_cv_t<DFB>>, int> = 0>
+    explicit Accumulate(DFB& dfb, uint32_t iter = 0, uint32_t dst = 0) : config{dfb.get_id(), dst}, iteration(iter) {
+        config.bind(dfb);
+    }
 
     // Factory for concise call sites
     KERNEL_LIB_ID_ONLY_HELPER static constexpr Accumulate at(uint32_t cb, uint32_t iter, uint32_t dst = 0) {
@@ -447,7 +463,7 @@ KERNEL_LIB_ID_ONLY_HELPER ALWI void reduce(
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (accumulate.config.accumulator == nullptr) {
             DataflowBuffer accum_dfb(accumulate.config.cb_accumulator);
-            accumulate.config.accumulator = &accum_dfb;
+            accumulate.config.bind(accum_dfb);
             reduce<
                 reduce_type,
                 reduce_dim,

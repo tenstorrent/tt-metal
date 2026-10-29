@@ -1,0 +1,741 @@
+{
+  "source_author": "Samuel Jett (sjettTT, sjett@tenstorrent.com)",
+  "source_sha": "cd9a11771107ea2c27da3303a0556ff7343e4af5",
+  "source_helper_sha256": "190a4ef18ca0caa17504050a6951fddd48cab5c8a0524f1502081616e904bf51",
+  "source_run_sha256": "64c5dac05f65d312e20655ddfb59ac173fc1c447ed1ed9eda7a059c6f7463a1a",
+  "source_sfpi_sha256": "2dfa8cb1c02fb350139bdfe886d9dfe2feb687a88757dd8598f96a1832e21a9e",
+  "source_native_sha256": {
+    "libtt-umd.so.0.0": "19d9238f55bddacef69e4430215d41b080735b53f36d83eea86df9ea0022f83c",
+    "libtracy.so.0.13.3": "1a5c8dca3c02ee586b111bdb1a58b7931a00317641e57a0fa45a2bade5b15f69",
+    "libtt_metal.so": "a890cda0ab302a57d1e1eec4c97c4302fdc95b0e5deab480e7de018f94814b2a",
+    "_ttnncpp.so": "7b93c875c6bdb82903d0fba0e6ce14b4898a5374adaba247d322691823e2da63",
+    "_ttnn.so": "1054bfeb7c4dfd4b838e614151264eeb1f8e3fdf74190bd97a12ebc236a98253",
+    "libtt_stl.so": "14e53105716851314dc2d8668659bab3bb818aaf801524f6d45589f848d4a59d"
+  },
+  "source_packages": {
+    "torch": "2.11.0+cpu",
+    "transformers": "5.16.1",
+    "vllm": "0.26.0+empty",
+    "pytest": "9.0.3"
+  },
+  "cases": {
+    "rows32-state0-commitNone-seed20260929": {
+      "key": "rows32-state0-commitNone-seed20260929",
+      "input_sha256": {
+        "q": "5b23284a416db3dc88cb5256836115ac873d34620cad91833649fe64ad8734af",
+        "k": "f09ce49eb3052fcfe80b22dbc74745edddffd7cfc06129ba33686e7f8dfed9b9",
+        "v": "f0ceee26196ae935dab3673b2456ad95b0c9f72987eab69721ca5ed93f78fb97",
+        "beta": "d24aba4d80c758b18cc1012df881b6f4ee1c3dda5ce20d9a930dafd1bf015296",
+        "g": "41d4a566e9198c22ed50a41dc05498510a3bdc07e5aad0d82bf71b0d52d679c4",
+        "initial": "599c1bb5ffd4b87229a81958f33f1060821cd01cd7aa7ccafa0d862f4522f3f6"
+      },
+      "seed": 20260929,
+      "rows": 32,
+      "nonzero_state": false,
+      "committed_rows": null,
+      "pcc": [
+        0.9999980330467224,
+        0.9999960660934448
+      ],
+      "output_sha256": [
+        "9e8d2483b9c6b732eacc6e0968f473dc4a1d0622fd057cd2a5946f2939bcf4e7",
+        "545e94648e8c0bb73c788a28135b28b7026e3e4516d1f3a28f64d4dff9089fa9"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5879424
+      ]
+    },
+    "rows32-state0-commitNone-seed20260930": {
+      "key": "rows32-state0-commitNone-seed20260930",
+      "input_sha256": {
+        "q": "ed225af1e6fdc5d89f859e9204c3643abb067d64e19c39f05dd556fe72c63408",
+        "k": "ebf684df0495c4025a60c3a9375a1915faff12ecd841ff8fd8b5c79b322e82d3",
+        "v": "e19336f7a11d04659c1d4e39bf66c0a1fdc3bba4ecec92b24217d0b6ff427107",
+        "beta": "90a7d0fc220f39bf776995b5b190adb4cb2d1e1ff81061ad1d538fe721f2eca7",
+        "g": "5c195935dd2e57f49233944d9000e97c338ade5b3bb84eb92f823a88229582d7",
+        "initial": "599c1bb5ffd4b87229a81958f33f1060821cd01cd7aa7ccafa0d862f4522f3f6"
+      },
+      "seed": 20260930,
+      "rows": 32,
+      "nonzero_state": false,
+      "committed_rows": null,
+      "pcc": [
+        0.9999977350234985,
+        0.9999993443489075
+      ],
+      "output_sha256": [
+        "7a857a95404c7faf859fa23b5cc944e14147f5b84c01c6a661d2d0520afbf847",
+        "b8b46c89036178424de7b4d1b8697e01b3a71bf9b32cf2967bc845fdeace8649"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5879424,
+        5936768
+      ]
+    },
+    "rows32-state1-commitNone-seed20260929": {
+      "key": "rows32-state1-commitNone-seed20260929",
+      "input_sha256": {
+        "q": "5b23284a416db3dc88cb5256836115ac873d34620cad91833649fe64ad8734af",
+        "k": "f09ce49eb3052fcfe80b22dbc74745edddffd7cfc06129ba33686e7f8dfed9b9",
+        "v": "f0ceee26196ae935dab3673b2456ad95b0c9f72987eab69721ca5ed93f78fb97",
+        "beta": "d24aba4d80c758b18cc1012df881b6f4ee1c3dda5ce20d9a930dafd1bf015296",
+        "g": "41d4a566e9198c22ed50a41dc05498510a3bdc07e5aad0d82bf71b0d52d679c4",
+        "initial": "7ccb82003f63b243d31c437f6764a989f951c526fc4a312001742857676ef30a"
+      },
+      "seed": 20260929,
+      "rows": 32,
+      "nonzero_state": true,
+      "committed_rows": null,
+      "pcc": [
+        0.9999985098838806,
+        0.9999961853027344
+      ],
+      "output_sha256": [
+        "c28a9ec54f5504d8921adedc58e9b7b5bf18f0e2ff7adffbe3fab0bca72fecd2",
+        "2e3359a1ac06f0c35dee5c5e23239472ae4f489fc2c250123f488012db46c203"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5879424
+      ]
+    },
+    "rows32-state1-commitNone-seed20260930": {
+      "key": "rows32-state1-commitNone-seed20260930",
+      "input_sha256": {
+        "q": "ed225af1e6fdc5d89f859e9204c3643abb067d64e19c39f05dd556fe72c63408",
+        "k": "ebf684df0495c4025a60c3a9375a1915faff12ecd841ff8fd8b5c79b322e82d3",
+        "v": "e19336f7a11d04659c1d4e39bf66c0a1fdc3bba4ecec92b24217d0b6ff427107",
+        "beta": "90a7d0fc220f39bf776995b5b190adb4cb2d1e1ff81061ad1d538fe721f2eca7",
+        "g": "5c195935dd2e57f49233944d9000e97c338ade5b3bb84eb92f823a88229582d7",
+        "initial": "b897a0d3ef73c8421bed84acb7a930ebcdb9c9e03c415f97f47e502015c3504e"
+      },
+      "seed": 20260930,
+      "rows": 32,
+      "nonzero_state": true,
+      "committed_rows": null,
+      "pcc": [
+        0.9999979734420776,
+        0.999999463558197
+      ],
+      "output_sha256": [
+        "0754e8877636b972d66482ba4e18e733b94c875093e6c2bba72d95d88968ba00",
+        "aabf61feb3a6b6d068e11b49617ea324a844f0597873cd145aec82039ed85f37"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5879424,
+        5936768
+      ]
+    },
+    "rows128-state0-commitNone-seed20260929": {
+      "key": "rows128-state0-commitNone-seed20260929",
+      "input_sha256": {
+        "q": "7f2fb0fd2c722d80602003d281f60fd2f2efffcb71bc643a6737473fbd1811a5",
+        "k": "2c978cc8e35b533f7042c72c8c1ca53164f4783aa967a611443dc00c21f59919",
+        "v": "72da0c57bc16e7d0c03c9cc8d01d47e81ed2ad5ec198f06e0876f4e7698e1e01",
+        "beta": "f3f1a92ea0ead189eb3ffdd26b7cfa0391d03c568b09507b341b7fce8dada167",
+        "g": "3e3f2b1211597b9e7336175b08f53974ce662d3ebc68b03868a9e39766d19128",
+        "initial": "599c1bb5ffd4b87229a81958f33f1060821cd01cd7aa7ccafa0d862f4522f3f6"
+      },
+      "seed": 20260929,
+      "rows": 128,
+      "nonzero_state": false,
+      "committed_rows": null,
+      "pcc": [
+        0.9999997019767761,
+        0.9999967813491821
+      ],
+      "output_sha256": [
+        "d1d4386dd1eb69acbbf080548807fc1665c7b5a0694c6cafb0695b20989cee40",
+        "f4342eb45d537c05d7f17a0fd388c8c28541f0e5ef3a7126721e7b3b4a57df98"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5916288
+      ]
+    },
+    "rows128-state0-commitNone-seed20260930": {
+      "key": "rows128-state0-commitNone-seed20260930",
+      "input_sha256": {
+        "q": "302efef5d2529594b7bcb5dd4cdacdd576570ce5281c4ff8d7c1a41e8fb079ff",
+        "k": "8b99965c62e74c749e391a18d5b173e0ce215067b6f3e87ff20630e8403617a3",
+        "v": "28550bcfa76184a8c8c46c23cdd1f2fb890e73c250347980d47db6f6d9c5be51",
+        "beta": "4710ce9272d97a9ec34e3b0760f809b3ffd396dfd24fe991084d59e6f0545801",
+        "g": "256fc3ac109c5a5c093097184c555b3adbbcebba0580297b2121b5293e583cfa",
+        "initial": "599c1bb5ffd4b87229a81958f33f1060821cd01cd7aa7ccafa0d862f4522f3f6"
+      },
+      "seed": 20260930,
+      "rows": 128,
+      "nonzero_state": false,
+      "committed_rows": null,
+      "pcc": [
+        0.9999978542327881,
+        0.9999973773956299
+      ],
+      "output_sha256": [
+        "a76f81e5db4b09722db73b5085aec808a88a017775d51c3adbc305208d10d435",
+        "819b79c42ca736c5b1af1a4195db8297e8e8732473946cab266bb947d4c9bb86"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5916288,
+        6137472
+      ]
+    },
+    "rows128-state1-commitNone-seed20260929": {
+      "key": "rows128-state1-commitNone-seed20260929",
+      "input_sha256": {
+        "q": "7f2fb0fd2c722d80602003d281f60fd2f2efffcb71bc643a6737473fbd1811a5",
+        "k": "2c978cc8e35b533f7042c72c8c1ca53164f4783aa967a611443dc00c21f59919",
+        "v": "72da0c57bc16e7d0c03c9cc8d01d47e81ed2ad5ec198f06e0876f4e7698e1e01",
+        "beta": "f3f1a92ea0ead189eb3ffdd26b7cfa0391d03c568b09507b341b7fce8dada167",
+        "g": "3e3f2b1211597b9e7336175b08f53974ce662d3ebc68b03868a9e39766d19128",
+        "initial": "15ff746fb90e4630298ac3e0e325c8f7cf0527ad877d0b53be07d2a996e79a36"
+      },
+      "seed": 20260929,
+      "rows": 128,
+      "nonzero_state": true,
+      "committed_rows": null,
+      "pcc": [
+        0.9999969005584717,
+        0.9999967813491821
+      ],
+      "output_sha256": [
+        "8699b6edb2cc2975cb2b87d3cde2d0feb2bffd998e92e06a17f1ebfc935103d6",
+        "f4342eb45d537c05d7f17a0fd388c8c28541f0e5ef3a7126721e7b3b4a57df98"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5916288
+      ]
+    },
+    "rows128-state1-commitNone-seed20260930": {
+      "key": "rows128-state1-commitNone-seed20260930",
+      "input_sha256": {
+        "q": "302efef5d2529594b7bcb5dd4cdacdd576570ce5281c4ff8d7c1a41e8fb079ff",
+        "k": "8b99965c62e74c749e391a18d5b173e0ce215067b6f3e87ff20630e8403617a3",
+        "v": "28550bcfa76184a8c8c46c23cdd1f2fb890e73c250347980d47db6f6d9c5be51",
+        "beta": "4710ce9272d97a9ec34e3b0760f809b3ffd396dfd24fe991084d59e6f0545801",
+        "g": "256fc3ac109c5a5c093097184c555b3adbbcebba0580297b2121b5293e583cfa",
+        "initial": "dd3f31f24c529da79a07b851df0358b3a2fc5e3274b0776930d32d33ec74e437"
+      },
+      "seed": 20260930,
+      "rows": 128,
+      "nonzero_state": true,
+      "committed_rows": null,
+      "pcc": [
+        0.9999976754188538,
+        0.9999973773956299
+      ],
+      "output_sha256": [
+        "72edfba9bdf4e81ca8cafe735c786d733d03a8f092d66494c8ca4ad744a424b6",
+        "819b79c42ca736c5b1af1a4195db8297e8e8732473946cab266bb947d4c9bb86"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5916288,
+        6137472
+      ]
+    },
+    "rows2048-state0-commitNone-seed20260929": {
+      "key": "rows2048-state0-commitNone-seed20260929",
+      "input_sha256": {
+        "q": "147bdc01bc526321b511df2b0034bf9fd2de667c340fc4f58f76dbc76e3bd87b",
+        "k": "ca4206079ee1a957b68274c7c66b09fc432b62ea18cefd0335ab35bd09fae6c2",
+        "v": "12b0181dc4f60728f8e4c7158c2168d6e62608029bff81a98aa1e2a111949038",
+        "beta": "29d8b52ebdf99c2c721b0032e00b5541234cac4f4a7972b68d5a0689760283cb",
+        "g": "1befb07e0f986fa3d640c7513e2e445f4cfab491a9ddd6ac125337bb1ccafba7",
+        "initial": "599c1bb5ffd4b87229a81958f33f1060821cd01cd7aa7ccafa0d862f4522f3f6"
+      },
+      "seed": 20260929,
+      "rows": 2048,
+      "nonzero_state": false,
+      "committed_rows": null,
+      "pcc": [
+        1.0,
+        0.9999977350234985
+      ],
+      "output_sha256": [
+        "5a9fff9c562c9487807351015affff880d4cdb9989688bcc9010153bf8a1f73a",
+        "e6a38994d9e335b274b15ab14b52021536da3408421d8120a64b9b5ac3360856"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        6653568
+      ]
+    },
+    "rows2048-state0-commitNone-seed20260930": {
+      "key": "rows2048-state0-commitNone-seed20260930",
+      "input_sha256": {
+        "q": "1b8c5f0525b81603cf09597903e778f34bc215f5369aec0192ce2b0447ddbcdc",
+        "k": "20e60b6dd5dcbb6bfe2ff7885f63972d25233dc1d3d99b715f643f19463ef031",
+        "v": "9f26c9b4b99d6cac45dd20804ca8b3bd8670fb7eb9e072fdddf0656a101ca52d",
+        "beta": "e55818c6531e5493f77be4e6ebc55e2651e3987442af89b4e25b0e9773b463a2",
+        "g": "20a31d430ae623483e0cd5e1dc663c4565e79afdd9006b840af555f367a637f8",
+        "initial": "599c1bb5ffd4b87229a81958f33f1060821cd01cd7aa7ccafa0d862f4522f3f6"
+      },
+      "seed": 20260930,
+      "rows": 2048,
+      "nonzero_state": false,
+      "committed_rows": null,
+      "pcc": [
+        0.9999952912330627,
+        0.9999961853027344
+      ],
+      "output_sha256": [
+        "2d0db5c81bca998a448527a777ccdc951d7f20a39102218691cfa98ad52a0348",
+        "e23dbb2292ceb7ceb1785ec685223d5815847e76897b25575c13ca603ab959cf"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        6653568,
+        10192512
+      ]
+    },
+    "rows2048-state1-commitNone-seed20260929": {
+      "key": "rows2048-state1-commitNone-seed20260929",
+      "input_sha256": {
+        "q": "147bdc01bc526321b511df2b0034bf9fd2de667c340fc4f58f76dbc76e3bd87b",
+        "k": "ca4206079ee1a957b68274c7c66b09fc432b62ea18cefd0335ab35bd09fae6c2",
+        "v": "12b0181dc4f60728f8e4c7158c2168d6e62608029bff81a98aa1e2a111949038",
+        "beta": "29d8b52ebdf99c2c721b0032e00b5541234cac4f4a7972b68d5a0689760283cb",
+        "g": "1befb07e0f986fa3d640c7513e2e445f4cfab491a9ddd6ac125337bb1ccafba7",
+        "initial": "fd7dd18496e6c647ea59df59ae480f65c7c28bbf48c40645cab8a59c0f6690bc"
+      },
+      "seed": 20260929,
+      "rows": 2048,
+      "nonzero_state": true,
+      "committed_rows": null,
+      "pcc": [
+        1.0,
+        0.9999977350234985
+      ],
+      "output_sha256": [
+        "e63a7c3b749bfb397792e073cb528d4964286347979f31fc73b608360a347119",
+        "e6a38994d9e335b274b15ab14b52021536da3408421d8120a64b9b5ac3360856"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        6653568
+      ]
+    },
+    "rows2048-state1-commitNone-seed20260930": {
+      "key": "rows2048-state1-commitNone-seed20260930",
+      "input_sha256": {
+        "q": "1b8c5f0525b81603cf09597903e778f34bc215f5369aec0192ce2b0447ddbcdc",
+        "k": "20e60b6dd5dcbb6bfe2ff7885f63972d25233dc1d3d99b715f643f19463ef031",
+        "v": "9f26c9b4b99d6cac45dd20804ca8b3bd8670fb7eb9e072fdddf0656a101ca52d",
+        "beta": "e55818c6531e5493f77be4e6ebc55e2651e3987442af89b4e25b0e9773b463a2",
+        "g": "20a31d430ae623483e0cd5e1dc663c4565e79afdd9006b840af555f367a637f8",
+        "initial": "b89916c005fbd560d12277c65405eff03ea1f7971278416cbf0c3c7e18e9c3fd"
+      },
+      "seed": 20260930,
+      "rows": 2048,
+      "nonzero_state": true,
+      "committed_rows": null,
+      "pcc": [
+        0.9999961853027344,
+        0.9999961853027344
+      ],
+      "output_sha256": [
+        "eec3adfd6908fadb1c1453a5349a930d8e14287552974e4921472ec1cef05f01",
+        "e23dbb2292ceb7ceb1785ec685223d5815847e76897b25575c13ca603ab959cf"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        6653568,
+        10192512
+      ]
+    },
+    "rows32-state1-commit0-seed20260929": {
+      "key": "rows32-state1-commit0-seed20260929",
+      "input_sha256": {
+        "q": "5b23284a416db3dc88cb5256836115ac873d34620cad91833649fe64ad8734af",
+        "k": "f09ce49eb3052fcfe80b22dbc74745edddffd7cfc06129ba33686e7f8dfed9b9",
+        "v": "f0ceee26196ae935dab3673b2456ad95b0c9f72987eab69721ca5ed93f78fb97",
+        "beta": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca",
+        "g": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca",
+        "initial": "7ccb82003f63b243d31c437f6764a989f951c526fc4a312001742857676ef30a"
+      },
+      "seed": 20260929,
+      "rows": 32,
+      "nonzero_state": true,
+      "committed_rows": 0,
+      "pcc": [
+        1.0,
+        0.9999991059303284
+      ],
+      "output_sha256": [
+        "ea015f2cff63c05bcc0e7c5fa3cc5aec656a9465a8f8baf1d8c5de2d8fe61b30",
+        "8d5399a625359b6a0859ce7a868f87e238b7f3e258925266bc9ac8a924e971ae"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5879424
+      ]
+    },
+    "rows32-state1-commit0-seed20260930": {
+      "key": "rows32-state1-commit0-seed20260930",
+      "input_sha256": {
+        "q": "ed225af1e6fdc5d89f859e9204c3643abb067d64e19c39f05dd556fe72c63408",
+        "k": "ebf684df0495c4025a60c3a9375a1915faff12ecd841ff8fd8b5c79b322e82d3",
+        "v": "e19336f7a11d04659c1d4e39bf66c0a1fdc3bba4ecec92b24217d0b6ff427107",
+        "beta": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca",
+        "g": "80422bc3d307b4a25bdafcc84ac7fb01cb55a09810e8b0f37bb12e0edb5c48ca",
+        "initial": "b897a0d3ef73c8421bed84acb7a930ebcdb9c9e03c415f97f47e502015c3504e"
+      },
+      "seed": 20260930,
+      "rows": 32,
+      "nonzero_state": true,
+      "committed_rows": 0,
+      "pcc": [
+        0.9999996423721313,
+        0.999999463558197
+      ],
+      "output_sha256": [
+        "2d9ccbdd9e774d04b6785e7bf64a95993812012a95302f12e54bffad52b43be5",
+        "0c4aecaf8b54eacee9918d0bf08ddf0cc15cf9cb920e361ed826d988d4f587c0"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5879424,
+        5936768
+      ]
+    },
+    "rows32-state1-commit1-seed20260929": {
+      "key": "rows32-state1-commit1-seed20260929",
+      "input_sha256": {
+        "q": "5b23284a416db3dc88cb5256836115ac873d34620cad91833649fe64ad8734af",
+        "k": "f09ce49eb3052fcfe80b22dbc74745edddffd7cfc06129ba33686e7f8dfed9b9",
+        "v": "f0ceee26196ae935dab3673b2456ad95b0c9f72987eab69721ca5ed93f78fb97",
+        "beta": "1823f60896a61e0a3a0e5253f49f47c7dc16f6db0849c470f00ada5fe1b50ed2",
+        "g": "2d9aae8319725be271b8c82f70c7e669f257a9742fcd9b41c44376ab1ab7f0eb",
+        "initial": "7ccb82003f63b243d31c437f6764a989f951c526fc4a312001742857676ef30a"
+      },
+      "seed": 20260929,
+      "rows": 32,
+      "nonzero_state": true,
+      "committed_rows": 1,
+      "pcc": [
+        1.0,
+        0.9999998211860657
+      ],
+      "output_sha256": [
+        "1ae7b5d2c1ccd3b84cc2a598dd1f546d4345386fee447b699658a5d8fc451bde",
+        "730ca798428b480ead9e71768c30905530b92848cf74224ab42d6ce5e9630087"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5879424
+      ]
+    },
+    "rows32-state1-commit1-seed20260930": {
+      "key": "rows32-state1-commit1-seed20260930",
+      "input_sha256": {
+        "q": "ed225af1e6fdc5d89f859e9204c3643abb067d64e19c39f05dd556fe72c63408",
+        "k": "ebf684df0495c4025a60c3a9375a1915faff12ecd841ff8fd8b5c79b322e82d3",
+        "v": "e19336f7a11d04659c1d4e39bf66c0a1fdc3bba4ecec92b24217d0b6ff427107",
+        "beta": "e7478b7a3f4f04087e90322aef653635eff9e59c712f95d548c81e0594f5c913",
+        "g": "a83b1b0d454cfdc0b0a1970a60959cd77a13a4bb0c87a6e42b6aa524772ff4df",
+        "initial": "b897a0d3ef73c8421bed84acb7a930ebcdb9c9e03c415f97f47e502015c3504e"
+      },
+      "seed": 20260930,
+      "rows": 32,
+      "nonzero_state": true,
+      "committed_rows": 1,
+      "pcc": [
+        0.9999999403953552,
+        0.9999963045120239
+      ],
+      "output_sha256": [
+        "778ce7d23868195cb5d962fbf148f049da0dce1501f4ef3f3a6e06ecf8f6429f",
+        "403c3c24c143ddcfe914654a5ff784557b6168d38c27325d53c61bc97397d5b7"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5879424,
+        5936768
+      ]
+    },
+    "rows32-state1-commit5-seed20260929": {
+      "key": "rows32-state1-commit5-seed20260929",
+      "input_sha256": {
+        "q": "5b23284a416db3dc88cb5256836115ac873d34620cad91833649fe64ad8734af",
+        "k": "f09ce49eb3052fcfe80b22dbc74745edddffd7cfc06129ba33686e7f8dfed9b9",
+        "v": "f0ceee26196ae935dab3673b2456ad95b0c9f72987eab69721ca5ed93f78fb97",
+        "beta": "1962662418a7abb18e182b010d321a150480371b33ff26a118e5c96a0f5dc460",
+        "g": "f98a2f4bf9c127047eed589fca8974515f47c43773f791c89c60813ca2f56d5f",
+        "initial": "7ccb82003f63b243d31c437f6764a989f951c526fc4a312001742857676ef30a"
+      },
+      "seed": 20260929,
+      "rows": 32,
+      "nonzero_state": true,
+      "committed_rows": 5,
+      "pcc": [
+        0.9999988675117493,
+        1.0
+      ],
+      "output_sha256": [
+        "e5ac483962b3d1352575589d290c283febb224330885997edf28010ee73a7db7",
+        "9f437bea0d9b9cb8670638da4d50737731db3ddd9280985356199b1075b52035"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5879424
+      ]
+    },
+    "rows32-state1-commit5-seed20260930": {
+      "key": "rows32-state1-commit5-seed20260930",
+      "input_sha256": {
+        "q": "ed225af1e6fdc5d89f859e9204c3643abb067d64e19c39f05dd556fe72c63408",
+        "k": "ebf684df0495c4025a60c3a9375a1915faff12ecd841ff8fd8b5c79b322e82d3",
+        "v": "e19336f7a11d04659c1d4e39bf66c0a1fdc3bba4ecec92b24217d0b6ff427107",
+        "beta": "900f2f692e2e358e491921e344ca2806d1fb959a6c55efa67b57600639c86990",
+        "g": "e423f60bfca2fbedfd4f6799a767c360c03feb10c3f79e67748afc7d1eae9bcf",
+        "initial": "b897a0d3ef73c8421bed84acb7a930ebcdb9c9e03c415f97f47e502015c3504e"
+      },
+      "seed": 20260930,
+      "rows": 32,
+      "nonzero_state": true,
+      "committed_rows": 5,
+      "pcc": [
+        0.999998152256012,
+        0.999998927116394
+      ],
+      "output_sha256": [
+        "e8ea43964c40ac752014e2e98599110901b8228824f9e8dbc5dcaa2fbf7ff17f",
+        "76601e548002837faccb13d489ec782b962b3ea0169610c26dd15d78aec7fb05"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5879424,
+        5936768
+      ]
+    },
+    "rows32-state1-commit31-seed20260929": {
+      "key": "rows32-state1-commit31-seed20260929",
+      "input_sha256": {
+        "q": "5b23284a416db3dc88cb5256836115ac873d34620cad91833649fe64ad8734af",
+        "k": "f09ce49eb3052fcfe80b22dbc74745edddffd7cfc06129ba33686e7f8dfed9b9",
+        "v": "f0ceee26196ae935dab3673b2456ad95b0c9f72987eab69721ca5ed93f78fb97",
+        "beta": "98c88bc84ba85aa2354969898799e3b2f2b1d542c812dabcef69d0ff6323a40d",
+        "g": "fdbffcd00f38c52eaed6a3fe75105a490143501c252292d7b0a02796ceb36171",
+        "initial": "7ccb82003f63b243d31c437f6764a989f951c526fc4a312001742857676ef30a"
+      },
+      "seed": 20260929,
+      "rows": 32,
+      "nonzero_state": true,
+      "committed_rows": 31,
+      "pcc": [
+        0.9999980926513672,
+        0.9999978542327881
+      ],
+      "output_sha256": [
+        "3c016532f67ca37dc26d83927b1a5bc3cd4904f0a3a03c90dd3591cb41faaf5b",
+        "82cd292934ac5e047bfe2c476a5d858c9ff904fb56195221729e1b6b31ddd8a1"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5879424
+      ]
+    },
+    "rows32-state1-commit31-seed20260930": {
+      "key": "rows32-state1-commit31-seed20260930",
+      "input_sha256": {
+        "q": "ed225af1e6fdc5d89f859e9204c3643abb067d64e19c39f05dd556fe72c63408",
+        "k": "ebf684df0495c4025a60c3a9375a1915faff12ecd841ff8fd8b5c79b322e82d3",
+        "v": "e19336f7a11d04659c1d4e39bf66c0a1fdc3bba4ecec92b24217d0b6ff427107",
+        "beta": "f42084003cae77a3a6b14edbb30f97f466958c7967863da93b9ae9902d52785e",
+        "g": "b5794355243dc8b76817ffb8120a88a32d4d009d87d938110c6770953d16971a",
+        "initial": "b897a0d3ef73c8421bed84acb7a930ebcdb9c9e03c415f97f47e502015c3504e"
+      },
+      "seed": 20260930,
+      "rows": 32,
+      "nonzero_state": true,
+      "committed_rows": 31,
+      "pcc": [
+        0.9999988675117493,
+        0.9999961853027344
+      ],
+      "output_sha256": [
+        "0e6f3b4d27be8088adbe51a01d9ab61536391c6c2fd35f3923551b161a2b81f7",
+        "d862b0a3814a5502ff099e550f1cbfea87f799b30ee37449961d275ef1445d07"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        5879424,
+        5936768
+      ]
+    },
+    "rows4096-state0-commitNone-seed20260929": {
+      "key": "rows4096-state0-commitNone-seed20260929",
+      "input_sha256": {
+        "q": "12667b8f61ca762221a661ceef8fd425171cd38a00ad25ea16998e6e1b22c41b",
+        "k": "fd0c4265e487bc015b15d1d9b6f955ab967a8da6f0ab2b4b0af7b3b5c6311d26",
+        "v": "638ee7ff966500617e33d607b6b526cf8619bffe5f3a206343d83e1400e3b1bf",
+        "beta": "c3af81c75a7d5d877a5b48519b4573e0e79d44f97e322fa03306e110316e6231",
+        "g": "9cd668b8db956187fbfb3c7d09d74db5297d198d183b519973ec6f6c94e9bfcb",
+        "initial": "599c1bb5ffd4b87229a81958f33f1060821cd01cd7aa7ccafa0d862f4522f3f6"
+      },
+      "seed": 20260929,
+      "rows": 4096,
+      "nonzero_state": false,
+      "committed_rows": null,
+      "pcc": [
+        0.9999993443489075,
+        0.9999983310699463
+      ],
+      "output_sha256": [
+        "d6bcb39cd942fdc5dfc2eb02df7ad53bcc17738abe9471660da9788d33d44292",
+        "e7c657c19c17d2c67e04fd0ead65b7752ffb08c2aba24319d0d3d2014d467878"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        7440000
+      ],
+      "source_run_id": "recovery-source-chunk-max4096-01"
+    },
+    "rows4096-state0-commitNone-seed20260930": {
+      "key": "rows4096-state0-commitNone-seed20260930",
+      "input_sha256": {
+        "q": "fd292c3a263c36217c551405a71791480f21ab0a971e4c9c2adf2aee7ff6569f",
+        "k": "fd09efc85f567db157251a0f2de75c9e56535a855256b465f26174c17509f3e5",
+        "v": "e8fa4ce303e253aec96c99f37db7a73fb1603314f87b225e6e2d885c487d4bc8",
+        "beta": "bcd3df2ce815a4180ad8f6a0ca6f73e3b9f0cff14d4669566c8bfd1a3e4dc36c",
+        "g": "4c7934dc19402c642bbe373697abc86d90671d90afdb9e1f43f46a89b2b13083",
+        "initial": "599c1bb5ffd4b87229a81958f33f1060821cd01cd7aa7ccafa0d862f4522f3f6"
+      },
+      "seed": 20260930,
+      "rows": 4096,
+      "nonzero_state": false,
+      "committed_rows": null,
+      "pcc": [
+        0.9999914169311523,
+        0.9999985098838806
+      ],
+      "output_sha256": [
+        "e44429d6ed60a0b3c35b146655a4cc903a6fc136363e60122faa3644877f1998",
+        "61aa80a0f3b6192c553657c95353fc4f4f31266753c1d7fa4ca558539eadef06"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        7440000,
+        14517888
+      ],
+      "source_run_id": "recovery-source-chunk-max4096-01"
+    },
+    "rows4096-state1-commitNone-seed20260929": {
+      "key": "rows4096-state1-commitNone-seed20260929",
+      "input_sha256": {
+        "q": "12667b8f61ca762221a661ceef8fd425171cd38a00ad25ea16998e6e1b22c41b",
+        "k": "fd0c4265e487bc015b15d1d9b6f955ab967a8da6f0ab2b4b0af7b3b5c6311d26",
+        "v": "638ee7ff966500617e33d607b6b526cf8619bffe5f3a206343d83e1400e3b1bf",
+        "beta": "c3af81c75a7d5d877a5b48519b4573e0e79d44f97e322fa03306e110316e6231",
+        "g": "9cd668b8db956187fbfb3c7d09d74db5297d198d183b519973ec6f6c94e9bfcb",
+        "initial": "abb8f781babe747dc8d7c9baccf3cf5a4d9dfba45733aaae7b9898e39795e4c3"
+      },
+      "seed": 20260929,
+      "rows": 4096,
+      "nonzero_state": true,
+      "committed_rows": null,
+      "pcc": [
+        0.9999997615814209,
+        0.9999983310699463
+      ],
+      "output_sha256": [
+        "d0e6fa96a8f7da9badfd500bbf4fea2172fc8a8e47fadd1ff5ea7c772f806f41",
+        "e7c657c19c17d2c67e04fd0ead65b7752ffb08c2aba24319d0d3d2014d467878"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        7440000
+      ],
+      "source_run_id": "recovery-source-chunk-max4096-01"
+    },
+    "rows4096-state1-commitNone-seed20260930": {
+      "key": "rows4096-state1-commitNone-seed20260930",
+      "input_sha256": {
+        "q": "fd292c3a263c36217c551405a71791480f21ab0a971e4c9c2adf2aee7ff6569f",
+        "k": "fd09efc85f567db157251a0f2de75c9e56535a855256b465f26174c17509f3e5",
+        "v": "e8fa4ce303e253aec96c99f37db7a73fb1603314f87b225e6e2d885c487d4bc8",
+        "beta": "bcd3df2ce815a4180ad8f6a0ca6f73e3b9f0cff14d4669566c8bfd1a3e4dc36c",
+        "g": "4c7934dc19402c642bbe373697abc86d90671d90afdb9e1f43f46a89b2b13083",
+        "initial": "56e73771c5b81efca73b8e058f45041963f1e0bdc583e7b7ac8598aead1fbd66"
+      },
+      "seed": 20260930,
+      "rows": 4096,
+      "nonzero_state": true,
+      "committed_rows": null,
+      "pcc": [
+        0.9999923706054688,
+        0.9999985098838806
+      ],
+      "output_sha256": [
+        "74e4dceebe431d6a1f61fae7182abcdffc477893bdaaa72ca58fd20ab3312c98",
+        "61aa80a0f3b6192c553657c95353fc4f4f31266753c1d7fa4ca558539eadef06"
+      ],
+      "trace_seconds_per_call": {},
+      "cache_entries": 8,
+      "fresh_input_addresses": [
+        7440000,
+        14517888
+      ],
+      "source_run_id": "recovery-source-chunk-max4096-01"
+    }
+  },
+  "additional_source_runs": [
+    {
+      "run_id": "recovery-source-chunk-max4096-01",
+      "scope": "Existing4096upperbound; zero/nonzero state, two seeds, same unchanged .99999 source/reference gate",
+      "case_keys": [
+        "rows4096-state0-commitNone-seed20260929",
+        "rows4096-state0-commitNone-seed20260930",
+        "rows4096-state1-commitNone-seed20260929",
+        "rows4096-state1-commitNone-seed20260930"
+      ],
+      "source_helper_sha256": "018193987cedb01eb1b741287cc4c52ef33d8f4d1e702aec319a9d45f1537795",
+      "source_runner_sha256": "59bbe20dfe20a76b88ceccd88e41095db45509b7616e88fde1e308d47299554e",
+      "source_run_sha256": "ca7379d3011b5a10e0173b214a4cd19f7529e3135c9f180076a3c0fa99e32067",
+      "source_sfpi_sha256": "2dfa8cb1c02fb350139bdfe886d9dfe2feb687a88757dd8598f96a1832e21a9e",
+      "source_native_sha256": {
+        "libtt-umd.so.0.0": "19d9238f55bddacef69e4430215d41b080735b53f36d83eea86df9ea0022f83c",
+        "libtracy.so.0.13.3": "1a5c8dca3c02ee586b111bdb1a58b7931a00317641e57a0fa45a2bade5b15f69",
+        "libtt_metal.so": "a890cda0ab302a57d1e1eec4c97c4302fdc95b0e5deab480e7de018f94814b2a",
+        "_ttnncpp.so": "7b93c875c6bdb82903d0fba0e6ce14b4898a5374adaba247d322691823e2da63",
+        "_ttnn.so": "1054bfeb7c4dfd4b838e614151264eeb1f8e3fdf74190bd97a12ebc236a98253",
+        "libtt_stl.so": "14e53105716851314dc2d8668659bab3bb818aaf801524f6d45589f848d4a59d"
+      },
+      "source_packages": {
+        "torch": "2.11.0+cpu",
+        "transformers": "5.16.1",
+        "vllm": "0.26.0+empty",
+        "pytest": "9.0.3"
+      }
+    }
+  ]
+}

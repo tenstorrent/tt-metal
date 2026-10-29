@@ -17,6 +17,7 @@ from enum import Enum
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, ClassVar, List
+from uuid import uuid4
 
 import numpy as np
 import pytest
@@ -378,8 +379,20 @@ class TestConfig:
 
     @staticmethod
     def resolve_artefacts_path() -> Path:
-        """Use $RUNNER_TEMP/tt-llk-build in GHA, else tempfile.gettempdir()/tt-llk-build."""
+        """Resolve the build root, isolating hardware-free sessions from device builds."""
         runner_temp = os.environ.get("RUNNER_TEMP")
+        if os.environ.get("LLK_HARDWARE_FREE") == "1":
+            # Inherit one private tree across xdist workers, outside the normal build tree.
+            run_id = os.environ.get("LLK_HARDWARE_FREE_RUN_ID")
+            if not run_id:
+                run_id = uuid4().hex
+                os.environ["LLK_HARDWARE_FREE_RUN_ID"] = run_id
+            base = (
+                Path(runner_temp)
+                if runner_temp
+                else TestConfig.DEFAULT_ARTEFACTS_PATH.parent
+            )
+            return base / f"tt-llk-hardware-free-{run_id}"
         if runner_temp:
             return Path(runner_temp) / "tt-llk-build"
         return TestConfig.DEFAULT_ARTEFACTS_PATH
@@ -519,8 +532,10 @@ class TestConfig:
                 "-I../../hw/ckernels/blackhole/metal/llk_api",
                 # Some SFPU kernels include their neighbours unqualified
                 # ("ckernel_sfpu_exp.h") rather than as "llk_sfpu/<name>.h", which only
-                # resolves with this on the path. Listed last so the tt-llk copy still
-                # wins the basenames that exist in both trees.
+                # resolves with this on the path. Its order against tt-llk's common/inc/sfpu
+                # no longer matters: tests/hardware_free/kernels/test_sfpu_header_location.py
+                # keeps each SFPU kernel in only one of the two, and the few basenames in both
+                # (its FORWARDED list) are plain forwards to the tt-llk copy.
                 "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
                 # Keep this list to include roots every Blackhole test needs: INCLUDES is a session-wide
                 # ClassVar, so anything added here lands in the compile command for every Blackhole test. A

@@ -108,9 +108,7 @@ inline void _llk_unpack_dest_dvalid_section_done_()
  * @note Call once per program before the first unpack-to-dest init (@ref _llk_unpack_unary_operand_to_dest_init_,
  *       @ref _llk_unpack_tilize_to_dest_init_), never from a per-op init: op writers may re-run the per-op init inside
  *       their tile loop, and a reset there would pin unpack to bank 0 while pack keeps alternating banks. Pair with
- *       @ref _llk_math_pack_sync_init_ (T1) and @ref _llk_pack_dest_init_ (T2). The one exception is the unpack_to_dest
- *       compatibility arm of @ref _llk_unpack_unary_operand_init_, which keeps the per-init reset its unported callers
- *       rely on.
+ *       @ref _llk_math_pack_sync_init_ (T1) and @ref _llk_pack_dest_init_ (T2).
  */
 inline void _llk_unpack_dest_init_()
 {
