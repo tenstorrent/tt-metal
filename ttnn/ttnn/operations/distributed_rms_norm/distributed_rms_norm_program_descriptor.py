@@ -181,7 +181,8 @@ class LocalPlan:
     gamma_stream: bool = False  # cb_gamma_tiles streams STREAM_DEPTH C-tile chunks instead of the resident slice
     x_depth: int = 1  # interleaved x CB depth in pass blocks (2: the next pass's reads overlap this pass)
     out_resident: bool = False  # output CB backed on the output shard (input's own placement)
-    combine_depth: int = COMBINE_DEPTH  # cb_partial_col depth in waves (1: the last rung of the L1 ladder)
+    combine_depth: int = COMBINE_DEPTH  # cb_partial_col depth in waves (1: the lean rung of the L1 ladder)
+    sq_rows: int = 0  # tile-rows per square -> collapse round (0: the whole wave; 1: the lean rung)
 
     def __post_init__(self):
         if self.PW <= 0:
@@ -220,6 +221,11 @@ class LocalPlan:
     def regions(self):
         """cb_gather regions (one per owned wave) live within one pass."""
         return max(1, max_owned_waves(self.PW, self.owners, self.G_w))
+
+    @property
+    def SQ(self):
+        """Raw Σx² CB capacity in tile-rows (cb_sumsq_partial, and cb_sumsq_last / cb_sumsq_acc when masked)."""
+        return self.q_w if self.sq_rows <= 0 else min(self.sq_rows, self.q_w)
 
     @property
     def gamma_per_wave(self):
@@ -282,7 +288,7 @@ def cb_table(plan: LocalPlan, sz: Sizes):
     T_s = ttnn.tile_size(STATS_FORMAT)
     t = [
         (CB_REDUCE_SCALER, ttnn.tile_size(SCALER_FORMAT), 2 if p.masked else 1),
-        (CB_SUMSQ_PARTIAL, sz.T_i, p.q_w),
+        (CB_SUMSQ_PARTIAL, sz.T_i, p.SQ),
         (CB_INV_RMS, sz.T_i, p.PW * p.q_w),
         (CB_CHIP_PARTIAL, sz.T_i, 2 * p.q),
         (CB_RMS_ROOT, sz.T_i, p.q),
@@ -301,8 +307,8 @@ def cb_table(plan: LocalPlan, sz: Sizes):
         xg = {GAMMA_BLOCK: p.R_pass * p.WS, GAMMA_WAVE: p.q_w * p.WS, GAMMA_CHUNK: p.q_w * p.C}[p.gamma_mode]
         t.append((CB_X_GAMMA, sz.T_i, xg))
     if p.masked:
-        t.append((CB_SUMSQ_LAST, sz.T_i, p.q_w))
-        t.append((CB_SUMSQ_ACC, sz.T_i, p.q_w))
+        t.append((CB_SUMSQ_LAST, sz.T_i, p.SQ))
+        t.append((CB_SUMSQ_ACC, sz.T_i, p.SQ))
     return t
 
 
@@ -324,7 +330,8 @@ def blocking_options(num_waves: int, has_gamma: bool, sharded: bool, combine: bo
     pass, full chunk cap, block γ) and its per-wave γ fallback the second, so every shape that fit keeps its plan:
       1. per-wave x·γ;  2. per-chunk x·γ (resident γ, then streamed γ);  3. chunk-cap halving;
       4. passes (multi-block rows: waves per pass PW < num_waves; interleaved x_depth 2, then 1);
-      5. (on-chip combine only) the whole ladder again with cb_partial_col single-buffered."""
+      5. lean: the whole ladder again with cb_partial_col single-buffered (on-chip combine) and one tile-row per
+         square -> collapse round (raw Σx² CBs of one tile-row)."""
     pws = []
     for P in range(1, num_waves + 1):
         pw = math.ceil(num_waves / P)
@@ -335,12 +342,16 @@ def blocking_options(num_waves: int, has_gamma: bool, sharded: bool, combine: bo
         if has_gamma
         else [(GAMMA_BLOCK, False)]
     )
-    for depth in [COMBINE_DEPTH, 1] if combine and COMBINE_DEPTH > 1 else [COMBINE_DEPTH]:
+    for lean in (False, True):
+        depth = 1 if (lean and combine) else COMBINE_DEPTH
+        sq = 1 if lean else 0
         for pw in pws:
             for cap in _caps():
                 for gm, gs in modes:
                     for xd in [1] if (sharded or pw >= num_waves) else [2, 1]:
-                        yield dict(PW=pw, cap=cap, gamma_mode=gm, gamma_stream=gs, x_depth=xd, combine_depth=depth)
+                        yield dict(
+                            PW=pw, cap=cap, gamma_mode=gm, gamma_stream=gs, x_depth=xd, combine_depth=depth, sq_rows=sq
+                        )
 
 
 def rewave(base: LocalPlan, waves_max: int) -> LocalPlan:
@@ -502,6 +513,7 @@ def local_plan(input_tensor, workers, sz: Sizes, budget: int, out_resident=None)
             PW=1,
             cap=1,
             combine_depth=1,
+            sq_rows=1,
             gamma_mode=GAMMA_CHUNK if sz.has_gamma else GAMMA_BLOCK,
             gamma_stream=sz.has_gamma,
         )
@@ -597,6 +609,14 @@ class Resources:
         )
         ttnn.synchronize_device(mesh)  # every chip's counters are zero before any chip's first program
 
+    def release(self):
+        """Free the L1 now. A dropped Resources can stay referenced (e.g. by a failed call's traceback frames) and
+        would keep its landing scratch and semaphores pinned low in L1, capping every later call's CB budget."""
+        if self.landing is not None:
+            self.landing.deallocate(True)
+            self.landing = None
+        self.sems = []
+
     @property
     def ready_addr(self):
         return int(ttnn.get_global_semaphore_address(self.sems[0]))
@@ -623,7 +643,7 @@ def get_resources(mesh, ports, G, num_waves, seg_stride):
     if res is None or res[1].words < words or res[1].words > 4 * want:
         if res is not None:
             _RESOURCES.pop(key)
-            del res  # free the smaller scratch before allocating its replacement (in-order queue: safe)
+            res[1].release()  # free the old scratch before allocating its replacement (in-order queue: safe)
         res = (mesh, Resources(mesh, ports, G, want))
         _RESOURCES[key] = res
     res[1].key = key
@@ -634,13 +654,15 @@ def evict_resources(mesh) -> bool:
     """Drop every cached exchange resource of this mesh (freed now, re-created on demand). True if any existed."""
     keys = [k for k, v in _RESOURCES.items() if v[0] is mesh]
     for k in keys:
-        _RESOURCES.pop(k)
+        _RESOURCES.pop(k)[1].release()
     return bool(keys)
 
 
 def forget_resources(res):
     """Drop cached resources whose device-side initialization never ran (see dispatch_collected)."""
-    _RESOURCES.pop(getattr(res, "key", None), None)
+    entry = _RESOURCES.pop(getattr(res, "key", None), None)
+    if entry is not None:
+        entry[1].release()
 
 
 def collected_count() -> int:
@@ -779,7 +801,13 @@ def plan_summary(input_tensor, *, cluster_axis, num_links, gamma=None, fp32_dest
         workers=len(workers),
     )
     # Refinement 1 L1 fallbacks: reported only when they leave the Phase 0 plan (Phase 0 summaries are unchanged)
-    if p.passes > 1 or p.cap != W_CHUNK_TILES or p.gamma_mode == GAMMA_CHUNK:
+    if (
+        p.passes > 1
+        or p.cap != W_CHUNK_TILES
+        or p.gamma_mode == GAMMA_CHUNK
+        or p.sq_rows
+        or p.combine_depth != COMBINE_DEPTH
+    ):
         out.update(
             passes=p.passes,
             waves_per_pass=p.PW,
@@ -787,6 +815,8 @@ def plan_summary(input_tensor, *, cluster_axis, num_links, gamma=None, fp32_dest
             gamma_mode=_GAMMA_MODE_NAMES[p.gamma_mode],
             gamma_stream=p.gamma_stream,
             x_depth=p.x_depth,
+            combine_depth=p.combine_depth,
+            sq_rows=p.SQ,
         )
     return out
 
@@ -968,6 +998,7 @@ def create_mesh_program_descriptor(
         plan.gamma_mode,  # 15
         plan.PW,  # 16
         int(plan.gamma_stream),  # 17
+        plan.SQ,  # 18 tile-rows per square -> collapse round
     ]
     gamma_is_tile = gamma is not None and gamma.layout == ttnn.TILE_LAYOUT
     writer_ct = [
@@ -1193,6 +1224,7 @@ def create_mesh_program_descriptor(
                     plan.cap,
                     plan.x_depth,
                     plan.combine_depth,
+                    plan.SQ,
                     res.landing_addr,
                 )
             )

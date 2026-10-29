@@ -114,6 +114,8 @@ void kernel_main() {
     constexpr uint32_t NP = (NW + PW - 1) / PW;
     // cb_gamma_tiles streams one C-tile chunk per (wave, chunk) from the writer instead of the resident slice
     constexpr bool GAMMA_STREAM = get_compile_time_arg_val(17) != 0;
+    // tile-rows per square -> collapse round (cb_sumsq_partial / cb_sumsq_last / cb_sumsq_acc capacity)
+    constexpr uint32_t SQ_ROWS = get_compile_time_arg_val(18);
     constexpr uint32_t WP = NCH * C;
 
     const uint32_t rows = get_arg_val<uint32_t>(0);
@@ -222,19 +224,8 @@ void kernel_main() {
     uint32_t x_row0 = 0;
     auto xrow = [&](uint32_t r) -> uint32_t { return SHARDED ? r : r - x_row0; };
 
-    // ---- square_collapse_wave ----
-    auto square_collapse = [&](uint32_t w) {
-        const uint32_t n = n_wave(w);
-        if (n == 0) {
-            return;
-        }
-        const uint32_t r0 = xrow(w * Q_W);
-        const uint32_t xbase = r0 * WS;
-        if constexpr (!SHARDED) {
-            DRMS_ZONE("cmp_wait_x");
-            cb_wait_front(cb_x_tiles, (r0 + n) * WS);
-        }
-        DRMS_ZONE("cmp_square");
+    // square + collapse of n consecutive tile-rows starting at x tile xbase
+    auto square_collapse_rows = [&](uint32_t xbase, uint32_t n) {
         if (full_tiles > 0) {
             ckl::eltwise_chain(
                 ckl::IterationShape::grid(n, full_tiles),
@@ -275,6 +266,27 @@ void kernel_main() {
             }
         }
         collapse(n, ckl::ReducePartialScaler::none(), ckl::NoAccumulation{}, CbSumsqPartial{}, CbCollapsed{});
+    };
+
+    // ---- square_collapse_wave ----
+    auto square_collapse = [&](uint32_t w) {
+        const uint32_t n = n_wave(w);
+        if (n == 0) {
+            return;
+        }
+        const uint32_t r0 = xrow(w * Q_W);
+        const uint32_t xbase = r0 * WS;
+        if constexpr (!SHARDED) {
+            DRMS_ZONE("cmp_wait_x");
+            cb_wait_front(cb_x_tiles, (r0 + n) * WS);
+        }
+        DRMS_ZONE("cmp_square");
+        // SQ_ROWS rows per square -> collapse round (the whole wave by default; fewer under L1 pressure: the raw Σx²
+        // CBs then hold SQ_ROWS tiles, the collapsed rows still accumulate in the wave's cb_partial_col)
+        for (uint32_t i = 0; i < n; i += SQ_ROWS) {
+            const uint32_t m = (n - i) < SQ_ROWS ? n - i : SQ_ROWS;
+            square_collapse_rows(xbase + i * WS, m);
+        }
     };
 
     // ---- chip_sum_wave (owner): Σ over the G_W slice partials of the owned rows ----
