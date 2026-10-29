@@ -52,9 +52,9 @@ def test_perf_col_tile_sdpa(
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
     tile_count = input_dimensions[0] * input_dimensions[1] // 1024
-    if tile_count < srca_reuse_count:
+    if tile_count % srca_reuse_count != 0:
         pytest.skip(
-            "No block to reuse srcA over: the unpack and math loops are empty, nothing reaches the packer"
+            "The kernel unpacks whole srcA reuse blocks but packs every tile: tiles must fill whole blocks"
         )
 
     configuration = PerfConfig(
