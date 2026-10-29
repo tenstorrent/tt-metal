@@ -51,6 +51,10 @@ struct ExchangeRoute {
     uint32_t successor_hops = 0;
     uint32_t successor_chip = 0;
     uint32_t successor_mesh = 0;
+    // On a 2D fabric whose SP axis turns, a multicast cannot follow the axis: the barrier and the carry go to each
+    // other rank as a 2D unicast, through the connection its route leaves on. Per peer: connection, chip, mesh.
+    bool unicast_peers = false;
+    std::vector<uint32_t> peer_args;
 };
 
 ExchangeRoute exchange_route(const ttnn::MeshDevice& device, const ttnn::MeshCoordinate& coordinate, uint32_t axis) {
@@ -78,6 +82,28 @@ ExchangeRoute exchange_route(const ttnn::MeshDevice& device, const ttnn::MeshCoo
     route.backward_range = ring ? sp_size - 1 - sp_size / 2 : rank;
     route.successor_connection = successor_forward ? route.forward_connection : route.backward_connection;
     route.successor_hops = successor_forward ? 1 : sp_size - 1;
+    route.unicast_peers = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) &&
+                          !ttnn::ccl::is_axis_straight(device, axis);
+    if (route.unicast_peers) {
+        const auto source = device.get_fabric_node_id(coordinate);
+        // The neighbor connections use link 0 (compute_fabric_connection_rt_args below).
+        std::vector<tt::tt_metal::CoreCoord> connection_eth_cores;
+        for (const auto& neighbor : route.neighbors) {
+            connection_eth_cores.push_back(tt::tt_fabric::get_forwarding_eth_core(device, source, neighbor, 0));
+        }
+        for (uint32_t step = 1; step < sp_size; ++step) {
+            const auto peer = at_rank((rank + step) % sp_size);
+            const auto first_hop = tt::tt_fabric::get_forwarding_eth_core(device, source, peer, 0);
+            const auto connection = std::find(connection_eth_cores.begin(), connection_eth_cores.end(), first_hop);
+            TT_FATAL(
+                connection != connection_eth_cores.end(),
+                "qkv_causal_conv1d_silu: the route to SP rank {} does not leave through a neighbor's link",
+                (rank + step) % sp_size);
+            route.peer_args.push_back(static_cast<uint32_t>(connection - connection_eth_cores.begin()));
+            route.peer_args.push_back(peer.chip_id);
+            route.peer_args.push_back(*peer.mesh_id);
+        }
+    }
     return route;
 }
 
@@ -103,12 +129,6 @@ void add_history_exchange(
     const auto& device = in.input.mesh_tensor().device();
     const uint32_t axis = attrs.sequence_parallel_axis;
     const uint32_t sp_size = device.shape()[axis];
-    // A 2D multicast is routed by the connection's ETH direction, so every hop must leave in the same direction.
-    // 1D fabric follows its routing plane, which may turn (the QuietBox ring).
-    TT_FATAL(
-        sp_size == 1 || !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
-            ttnn::ccl::is_axis_straight(device, axis),
-        "qkv_causal_conv1d_silu: the 2D fabric history exchange needs a straight SP axis");
     const uint32_t row_bytes = channel_tiles * qkv_conv::tile_row_bytes;
     // A single rank sends nothing; any aligned value satisfies the kernel's static_assert.
     const uint32_t max_payload = sp_size > 1
@@ -141,6 +161,7 @@ void add_history_exchange(
             varargs = tt::tt_metal::internal::compute_fabric_connection_rt_args(
                 device.get_fabric_node_id(coordinate), route.neighbors, {0}, unbound_semaphores, unbound_semaphores);
             varargs.insert(varargs.end(), convolution_core_xy.begin(), convolution_core_xy.end());
+            varargs.insert(varargs.end(), route.peer_args.begin(), route.peer_args.end());
         }
 
         KernelSpec kernel{
@@ -182,7 +203,8 @@ void add_history_exchange(
                  {"sp_rank", coordinate[axis]},
                  {"sp_size", sp_size},
                  {"local_rows", attrs.sequence},
-                 {"has_actual_end", uint32_t(in.actual_end.has_value())}},
+                 {"has_actual_end", uint32_t(in.actual_end.has_value())},
+                 {"unicast_peers", uint32_t(route.unicast_peers)}},
             .runtime_arg_schema = {.runtime_arg_names = {semaphore_args.begin(), semaphore_args.end()}},
             .hw_config = exchange_datamovement_config(),
         };

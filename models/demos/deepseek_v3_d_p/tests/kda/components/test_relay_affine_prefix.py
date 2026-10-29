@@ -308,10 +308,10 @@ def _perf_case(shape: tuple[int, int], case_id: str, reference_us: float | None)
     return pytest.param(*ring.values, reference_us, marks=ring.marks, id=case_id)
 
 
-# To re-measure on the dedicated runners with K3's payload on TorusY (they were 110.3 us and 80.3 us with 3-tile packets
-# on FABRIC_1D_RING).
+# Measured on the dedicated runners with K3's payload on TorusY (110.3 us and 80.3 us with 3-tile packets on
+# FABRIC_1D_RING before); QuietBox is still to measure.
 _PERF_CASES = [
-    _perf_case((8, 1), "loudbox-SP8xTP1-ring", None),
+    _perf_case((8, 1), "loudbox-SP8xTP1-ring", 119.6),
     _perf_case((4, 1), "quietbox-SP4xTP1-ring", None),
 ]
 

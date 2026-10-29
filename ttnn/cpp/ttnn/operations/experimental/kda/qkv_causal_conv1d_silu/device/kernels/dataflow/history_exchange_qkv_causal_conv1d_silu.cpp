@@ -8,6 +8,9 @@
 // rows preceding the next physical rank's segment, which its convolution cores staged, to that rank, and releases its
 // convolution cores once its own predecessor's rows have landed. The owner of the interval's final segment assembles
 // the replacement carry and multicasts it to every other rank; every rank writes it to final_history.
+//
+// A 2D multicast leaves every hop in one ETH direction, so on a 2D fabric whose SP axis turns (the LoudBox and QuietBox
+// rings) the barrier and the carry go to each other rank as a 2D unicast instead (unicast_peers).
 
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/qkv_conv_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
@@ -49,7 +52,8 @@ template <
     uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows,
-    uint32_t has_actual_end>
+    uint32_t has_actual_end,
+    uint32_t unicast_peers>
 TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore, uint32_t carry_semaphore) {
     constexpr uint32_t row_bytes = channel_tiles * tile_row_bytes;
     static_assert(max_payload % read_alignment == 0, "row chunks must stay aligned in DRAM");
@@ -117,6 +121,9 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         tt::tt_fabric::RoutingPlaneConnectionManager connections;
         open_connections(connections, num_connections, arg_index);
         const size_t convolution_core_args = arg_index;
+        // With unicast_peers: per other rank, its connection, fabric chip and mesh.
+        const size_t peer_args = convolution_core_args + 2 * num_convolution_cores;
+        constexpr size_t args_per_peer = 3;
         auto* header = PacketHeaderPool::allocate_header();
 
         const auto semaphore_noc_address = [](uint32_t address) {
@@ -129,8 +136,28 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         if constexpr (backward_connection != no_fabric_connection) {
             ranges[backward_connection] = backward_range;
         }
+        // Point the header at another rank: unicast_peers only.
+        const auto route_to_peer = [&](uint32_t peer) -> auto& {
+            const size_t args = peer_args + peer * args_per_peer;
+#if defined(FABRIC_2D)
+            fabric_set_unicast_route(header, get_arg_val<uint32_t>(args + 1), get_arg_val<uint32_t>(args + 2));
+#endif
+            return connections.get(get_arg_val<uint32_t>(args)).sender;
+        };
         // Bump `semaphore` on every other rank.
         const auto multicast_increment = [&](uint32_t semaphore) {
+            if constexpr (unicast_peers) {
+                for (uint32_t peer = 0; peer + 1 < sp_size; ++peer) {
+                    auto& sender = route_to_peer(peer);
+                    fabric_unicast_noc_unicast_atomic_inc(
+                        &sender,
+                        header,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_address(semaphore), 1, true},
+                        1);
+                    noc_async_writes_flushed();
+                }
+                return;
+            }
             for (uint32_t c = 0; c < num_connections; ++c) {
                 if (ranges[c] == 0) {
                     continue;
@@ -147,6 +174,26 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         };
         // Write three rows from `source` to exchange pages [first_page, +3) on every other rank, then bump `semaphore`.
         const auto multicast_rows = [&](uint32_t source, uint32_t first_page, uint32_t semaphore) {
+            if constexpr (unicast_peers) {
+                for (uint32_t peer = 0; peer + 1 < sp_size; ++peer) {
+                    for (uint32_t row = 0; row < history_rows; ++row) {
+                        for (uint32_t offset = 0; offset < row_bytes; offset += max_payload) {
+                            auto& sender = route_to_peer(peer);
+                            fabric_unicast_noc_unicast_write(
+                                &sender,
+                                header,
+                                source + row * row_bytes + offset,
+                                row_bytes - offset < max_payload ? row_bytes - offset : max_payload,
+                                tt::tt_fabric::NocUnicastCommandHeader{
+                                    addrgen_detail::get_noc_address(exchange_buffer, first_page + row, offset)},
+                                1);
+                            noc_async_writes_flushed();
+                        }
+                    }
+                }
+                multicast_increment(semaphore);
+                return;
+            }
             for (uint32_t c = 0; c < num_connections; ++c) {
                 if (ranges[c] == 0) {
                     continue;
