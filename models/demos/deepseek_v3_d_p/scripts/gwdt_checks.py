@@ -4,6 +4,8 @@
 
 import os
 import re
+import sqlite3
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -170,6 +172,34 @@ def missing_node_ids(wanted: list[str], collected: list[str]) -> list[str]:
 def didt_bad_devices(log_text: str) -> dict[int, int]:
     found = re.findall(r"non-deterministic outputs on device (\d+) is (\d+)", log_text)
     return {int(d): int(k) for d, k in found if int(k) > 0}
+
+
+def mla_determinism_reps(log_text: str) -> int | None:
+    found = re.findall(r"Chunked prefill determinism: (\d+) reps", log_text)
+    return int(found[-1]) if found else None
+
+
+def dram_health(db: Path) -> Result:
+    """tt-triage check_dram_health from its sqlite output: the script's own errors (uncorrected EDC,
+    training, BIST) fail; corrected EDC counts are only reported."""
+    if not db.is_file():
+        return Result(Status.FAIL, f"no DRAM health output {db}")
+    with closing(sqlite3.connect(db)) as con:
+        errors = con.execute(
+            "SELECT Device, Message FROM diagnostics WHERE Script LIKE 'check_dram_health%' AND Type = 'error'"
+        ).fetchall()
+        try:
+            rows = con.execute(
+                'SELECT "Dev", "GDDR Inst", "Corrected Reads", "Corrected Writes" FROM check_dram_health'
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+    corrected = [f"dev {d} GDDR {i}: corrected rd/wr {rd}/{wr}" for d, i, rd, wr in rows if rd or wr]
+    if errors:
+        return Result(Status.FAIL, f"{len(errors)} DRAM errors", [f"dev {d}: {m}" for d, m in errors] + corrected)
+    if not rows:
+        return Result(Status.FAIL, f"no DRAM health rows in {db}")
+    return Result(Status.PASS, f"{len(rows)} GDDR instances, {len(corrected)} with corrected EDC", corrected)
 
 
 def fabric_results(log_text: str) -> dict[str, bool]:

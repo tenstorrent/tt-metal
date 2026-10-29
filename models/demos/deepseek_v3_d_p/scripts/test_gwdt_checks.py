@@ -419,3 +419,69 @@ def test_help_lists_every_step_key(capsys):
         main(["--help"])
     out = capsys.readouterr().out
     assert all(s.key in out for s in build_steps(["kimi_k2_7", "glm53"]))
+
+
+def test_mla_determinism_reps():
+    from gwdt_checks import mla_determinism_reps
+
+    log = "✓ Chunked prefill determinism: 50 reps of every forward bit-identical (1 iter(s) x 1 user(s))\n"
+    assert mla_determinism_reps(log) == 50
+    assert mla_determinism_reps("=== 1 passed in 9s ===") is None
+
+
+def _dram_db(path, rows, errors=()):
+    import sqlite3
+
+    con = sqlite3.connect(path)
+    con.execute('CREATE TABLE diagnostics ("Script" TEXT, "Type" TEXT, "Device" INTEGER, "Message" TEXT)')
+    con.executemany("INSERT INTO diagnostics VALUES (?, 'error', ?, ?)", errors)
+    con.execute(
+        'CREATE TABLE check_dram_health ("Dev" TEXT, "GDDR Inst" INTEGER, '
+        '"Corrected Reads" INTEGER, "Corrected Writes" INTEGER)'
+    )
+    con.executemany("INSERT INTO check_dram_health VALUES (?, ?, ?, ?)", rows)
+    con.commit()
+    con.close()
+    return path
+
+
+def test_dram_health_reports_corrected_counts(tmp_path):
+    from gwdt_checks import dram_health
+
+    r = dram_health(_dram_db(tmp_path / "dram.sqlite", [("0", 0, 0, 0), ("17", 3, 2, 255)]))
+    assert r.status == Status.PASS
+    assert r.details == ["dev 17 GDDR 3: corrected rd/wr 2/255"]
+
+
+def test_dram_health_error_fails(tmp_path):
+    from gwdt_checks import dram_health
+
+    db = _dram_db(
+        tmp_path / "dram.sqlite",
+        [("5", 1, 0, 0)],
+        [("check_dram_health", 5, "GDDR instance 1 (DDR bank 1): uncorrected EDC errors rd/wr 1/0")],
+    )
+    r = dram_health(db)
+    assert r.status == Status.FAIL
+    assert "dev 5: GDDR instance 1 (DDR bank 1): uncorrected EDC errors rd/wr 1/0" in r.details
+
+
+def test_dram_health_without_rows_fails(tmp_path):
+    from gwdt_checks import dram_health
+
+    assert dram_health(tmp_path / "none.sqlite").status == Status.FAIL
+
+
+def test_mla_step_fails_without_reps_line(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State, mla_step
+
+    def write(cmd, log, env):
+        if "pytest" in cmd:
+            log.write_text("✓ Chunked prefill determinism: 3 reps of every forward\n=== 1 passed in 9s ===\n")
+        elif "--sqlite-output-path=" in cmd:
+            _dram_db(Path(cmd.split("--sqlite-output-path=")[1].split()[0]), [("0", 0, 0, 0)])
+
+    _fake_sh(monkeypatch, 0, write)
+    r = mla_step("mla-smoke", 50).run(Ctx(tmp_path, tmp_path, False), State())
+    assert r.status == Status.FAIL
+    assert "50 reps" in r.reason
