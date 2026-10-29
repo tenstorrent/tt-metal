@@ -245,11 +245,28 @@ def test_spec_decision_table():
     d = vs.resolve_spec_decision(env, max_num_seqs=4, requested_k=3, rows=8, cols=4)
     assert d.admitted and (d.effective_k, d.k_cap, d.users_per_row, d.commit_mode) == (3, 3, 4, "fused")
     assert d.supported_k == (1, 2, 3)
-    # the cap table of spec_draft_len at K=7: 1 -> 7 (31 allowed), 4 -> 7, 8 -> 3, 16 -> 1, 32 -> plain
+    # the batch's measured best K (the k_by_rows table: 3 up to 8 users per row, 1 at 16) under the catalog's K=7 and
+    # the cap of spec_draft_len (1 -> 7 allowed, 4 -> 7, 8 -> 3, 16 -> 1, 32 -> plain)
     env7 = dict(env, GLM53_VLLM_SPEC_K="7")
     assert [
-        vs.resolve_spec_decision(env7, max_num_seqs=b, requested_k=7, rows=8, cols=4).effective_k for b in (1, 4, 8, 16)
+        vs.resolve_spec_decision(env7, max_num_seqs=b, requested_k=7, rows=8, cols=4).effective_k
+        for b in (1, 3, 4, 8, 16)
+    ] == [3, 3, 3, 3, 1]
+    env_off = dict(env7, GLM53_SPEC_K_BY_ROWS="off")  # the catalog's K under the cap alone
+    assert [
+        vs.resolve_spec_decision(env_off, max_num_seqs=b, requested_k=7, rows=8, cols=4).effective_k
+        for b in (1, 4, 8, 16)
     ] == [7, 7, 3, 1]
+    # a custom table replaces the default: a batch takes the next listed entry's K (8 -> the 16-row entry), beyond the
+    # table the cap alone decides (20 users per row: refused, no room for drafts)
+    env_tab = dict(env7, GLM53_SPEC_K_BY_ROWS="4:5,16:1")
+    assert [
+        vs.resolve_spec_decision(env_tab, max_num_seqs=b, requested_k=7, rows=8, cols=4).effective_k
+        for b in (1, 4, 8, 16, 20)
+    ] == [5, 5, 1, 1, 0]
+    assert vs.k_by_rows({}) == vs.DEFAULT_K_BY_ROWS and vs.best_k(32, vs.DEFAULT_K_BY_ROWS) is None
+    bad = vs.resolve_spec_decision(dict(env7, GLM53_SPEC_K_BY_ROWS="4"), max_num_seqs=4, requested_k=7, rows=8, cols=4)
+    assert not bad.admitted and "B:K" in bad.reason
     assert [vs.draft_len_cap(b, 31) for b in (1, 4, 8, 16, 32)] == [31, 7, 3, 1, 0]
     r32 = vs.resolve_spec_decision(env7, max_num_seqs=32, requested_k=7, rows=8, cols=4)
     assert not r32.admitted and "no room for drafts" in r32.reason and r32.supported_k == ()

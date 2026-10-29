@@ -33,6 +33,14 @@ import torch
 
 SPEC_ENV = "GLM53_VLLM_SPEC"
 SPEC_K_ENV = "GLM53_VLLM_SPEC_K"
+# The draft length by the batch (the user's direction, 2026-10-29; doc/mesh/spec_k_by_batch.md): the harness sweep on the
+# 8x4 at 45 layers (fused commit, the H1/H2 defaults, tests/test_mtp_spec.py) finds the drafter's acceptance at a
+# plateau of ~2.5 drafts whatever K, so the shortest K that keeps it wins and a longer one only adds verify rows:
+# 4 users per row K=3 30.1 tok/s per user; 1 per row K=7 25.5, K=15 16.9 (the same 2.47 accepted). The table maps
+# users per row -> K; a launch uses the entry at the smallest listed batch >= its own; the catalog's
+# num_speculative_tokens is the ceiling. GLM53_SPEC_K_BY_ROWS="B:K,B:K" replaces the table, "off" leaves the catalog's K.
+K_BY_ROWS_ENV = "GLM53_SPEC_K_BY_ROWS"
+DEFAULT_K_BY_ROWS: tuple[tuple[int, int], ...] = ((1, 3), (2, 3), (4, 3), (8, 3), (16, 1))
 DEFAULT_SPEC_K = 3  # the measured sweet spot on the 8x4 (24.0 tok/s per user at 32 users, K=3, fused commit)
 SPEC_COMMIT_ENV = "GLM53_SPEC_COMMIT"
 DEFAULT_SERVING_COMMIT = "fused"
@@ -73,6 +81,34 @@ def draft_len_cap(users_per_row: int, k_ctx: int, max_rows: int = MAX_VERIFY_ROW
     if int(users_per_row) <= 0:
         raise ValueError(f"users_per_row must be positive, got {users_per_row}")
     return max(0, min(int(k_ctx), max_rows // int(users_per_row) - 1))
+
+
+def k_by_rows(env=None) -> tuple[tuple[int, int], ...] | None:
+    """The (users per row, K) table in force: the default, the ``GLM53_SPEC_K_BY_ROWS`` list, or None for ``off``."""
+    env = os.environ if env is None else env
+    raw = str(env.get(K_BY_ROWS_ENV, "")).strip().lower()
+    if raw in ("off", "none", "0"):
+        return None
+    if not raw:
+        return DEFAULT_K_BY_ROWS
+    table = []
+    for item in raw.split(","):
+        if not item.strip():
+            continue
+        b, _, k = item.partition(":")
+        if not k:
+            raise ValueError(f"{K_BY_ROWS_ENV}={raw!r}: entries are B:K")
+        table.append((int(b), int(k)))
+    return tuple(sorted(table))
+
+
+def best_k(users_per_row: int, table=None) -> int | None:
+    """The table's K for ``users_per_row``: the entry at the smallest listed batch >= it, None when none (or no
+    table): the cap and the catalog's K then decide."""
+    if table is None:
+        return None
+    fits = [k for b, k in sorted(table) if b >= int(users_per_row)]
+    return fits[0] if fits else None
 
 
 def spec_k_setting(env=None) -> int:
@@ -120,7 +156,8 @@ def resolve_spec_decision(
     multi-column mesh: ``DsaSpecState`` is not wired for it, so a speculating launch sets it to 0 explicitly); a
     geometry whose verify would exceed one tile row (``B (K + 1) > 32`` for every K >= 1, e.g. 32 users per row);
     a requested draft length below 1. ``max_model_len`` is informational: beyond the dense range (positions +
-    K <= 2050, ``dsa.dense_exact_max_pos``) a row simply gets no drafts (``ServingSpecPolicy``)."""
+    K <= 2050, ``dsa.dense_exact_max_pos``) a row simply gets no drafts (``ServingSpecPolicy``). The effective K is
+    the batch's measured best (``k_by_rows``) under the catalog's ceiling and the geometry's cap."""
     env = os.environ if env is None else env
     if not spec_enabled(env):
         return SpecDecision(False, reason=f"speculative decoding is off: set {SPEC_ENV}=1 for the GLM53 adapter")
@@ -166,6 +203,12 @@ def resolve_spec_decision(
             supported_k=supported,
         )
     effective_k = min(int(requested_k), k_cap)
+    try:
+        table_k = best_k(users_per_row, k_by_rows(env))
+    except ValueError as exc:
+        return SpecDecision(False, users_per_row=users_per_row, reason=str(exc), supported_k=supported)
+    if table_k is not None:
+        effective_k = max(1, min(effective_k, table_k))  # the batch's measured best, under the catalog's ceiling
     return SpecDecision(
         True,
         effective_k=effective_k,
