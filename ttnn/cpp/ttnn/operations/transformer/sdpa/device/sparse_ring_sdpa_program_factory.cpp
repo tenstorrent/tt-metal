@@ -1671,6 +1671,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
     compute_kernel.defines = kernel_defines;
+    // DEBUG (dev branch only): compile in the step and wait zones; they emit only under TT_METAL_DEVICE_PROFILER=1.
+    compute_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
+    reader_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
+    writer_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
     // The compute kernel builds at O2: at the default level the 5 s program sits at the 70,656 B kernel config buffer,
     // and O2 cuts the three TRISC binaries by ~30 %. Profiled runs at O2 showed the same per-piece compute as the
     // default-level timings: the step is bound by Tensix instruction throughput, not by RISC issue. This kernel file
