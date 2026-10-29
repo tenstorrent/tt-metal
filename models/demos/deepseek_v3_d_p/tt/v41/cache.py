@@ -36,8 +36,8 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import fabric_num_links
-from models.demos.deepseek_v3_d_p.tt.v41.layout import SP_AXIS, V41MeshLayout
 from models.demos.deepseek_v3_d_p.tt.v41.dspark import seed_rows
+from models.demos.deepseek_v3_d_p.tt.v41.layout import SP_AXIS, V41MeshLayout
 from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCacheFormat,
@@ -339,15 +339,22 @@ class V41ChunkTables:
         _, a, b = seed_rows(length, self.config.SLIDING_WINDOW)
         return tuple(ttnn.slice(t, [0, 0, 0, 0], [1, 1, b - a, t.shape[3]]) for t in self._dspark_rope)
 
-    def prepare_chunk(self, start: int, length: int, host: list | None = None) -> None:
+    def prepare_chunk(self, start: int, length: int, host: list | None = None, pairs: list | None = None) -> None:
         """Host-fill the chunk's input buffers: RoPE rows, the pin page, the visible counts, the row indices. Runs
         between a chunk's ``_stage`` and its forward (or replay); no device work beyond the copies (ordered on the
-        command queue after the replays issued before them). ``host``: ``prepare_chunk_host(start)`` made ahead."""
+        command queue after the replays issued before them). ``host``: ``prepare_chunk_host(start)`` made ahead.
+        ``pairs``: a list the (host, buffer) pairs are appended to instead of copied, for a batched upload
+        (``TtV41Transformer._stage`` with ``TT_V41_PREFILL_HOST_BATCH=1``)."""
         assert self.generic
-        for tensor, buffer in self.prepare_chunk_host(start) if host is None else host:
-            ttnn.copy_host_to_device_tensor(tensor, buffer)
+        items = self.prepare_chunk_host(start) if host is None else host
         if self._dspark_rope is not None and length != self.chunk:  # a partial final chunk: its own seed rows
-            for tensor, buffer in self._dspark_rope_host(start, length):
+            # replace the full chunk's rope rows, so a batched upload writes each buffer once
+            rope = self._dspark_rope
+            items = [it for it in items if not any(it[1] is b for b in rope)] + self._dspark_rope_host(start, length)
+        if pairs is not None:
+            pairs.extend(items)
+        else:
+            for tensor, buffer in items:
                 ttnn.copy_host_to_device_tensor(tensor, buffer)
         self._chunk_start = start
 

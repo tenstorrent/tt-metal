@@ -12,11 +12,14 @@ Reference (``inference/model.py`` ``Engram`` / ``ParallelEngramEmbedding``, ``in
   the pad id) -> per (layer, n-gram, head) a prime-bucket hash id: ``[L, n_layers, 24]``. N-grams span chunk
   boundaries, so the last 3 compressed ids of the previous chunk are carried (graph.md §4 rule 5); padded
   tail tokens are never hashed and never enter the history (rule 8).
-* N3 lookup: FP8 e4m3 rows with E8M0 per-32 scales, dequantized on device exactly as the reference does -> bf16
+* N3 lookup: FP8 e4m3 rows with E8M0 per-32 scales, dequantized on device exactly as the reference does ->
+bf16
   ``[L, 24 * 256]``. Two table placements, chosen at construction, same rows (the sign of zero aside):
   host table (``V41EngramTable``): the host gathers the stored rows and uploads them packed (1 byte per value,
-  1/chips of the lookups per chip), the device decodes and all-gathers over TP; device table (``TtV41EngramTable``,
-  row-sharded over all chips): only row ids go up, every chip gathers its shard's rows (zero row elsewhere), the
+  1/chips of the lookups per chip), the device decodes and all-gathers over TP; device table
+  (``TtV41EngramTable``,
+  row-sharded over all chips): only row ids go up, every chip gathers its shard's rows (zero row elsewhere),
+  the
   byte sum over the mesh is reduce-scattered, decoded and all-gathered over TP. Both prepare steps depend on
   tokens only (prefetchable).
 * N4 wkv (device): FP8 linear 6144 -> (hc_mult + 1) * hidden with the reference's FP8 activation QDQ;
@@ -25,7 +28,8 @@ Reference (``inference/model.py`` ``Engram`` / ``ParallelEngramEmbedding``, ``in
   / sqrt(dim)))`` (fp32; the three per-copy sums are TP partials, all-gathered and summed in a fixed order),
   zero where the token mask is False (image tokens); ``h += gate * value``.
 
-Streams are ``[1, 1, S/sp, hc_mult * hidden/tp]`` fp32 (per chip its hidden slice of every stream, copy-major),
+Streams are ``[1, 1, S/sp, hc_mult * hidden/tp]`` fp32 (per chip its hidden slice of every stream,
+copy-major),
 as in ``tt/v41/mhc.py``; the output stays fp32 (the reference rounds it to bf16, dev-spec D-E).
 """
 
@@ -65,7 +69,8 @@ _SUBNORMAL_OFFSET = 2.0**-6  # e4m3 with the exponent field forced to 1 minus th
 
 
 def pack_rows(weight: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
-    """Table rows as stored (float8_e4m3fn [..., head_dim], E8M0 [..., head_dim / 32]) -> uint16 [..., PACKED_WIDTH]
+    """Table rows as stored (float8_e4m3fn [..., head_dim], E8M0 [..., head_dim / 32]) -> uint16 [...,
+    PACKED_WIDTH]
     (a byte rearrangement: the device decodes it bit-exactly, see ``_decode_packed``)."""
     half = weight.shape[-1] // 2
     data, scales = weight.view(torch.uint8), scale.view(torch.uint8)
@@ -99,8 +104,10 @@ def _scale_expand(mesh_device, head_dim: int) -> ttnn.Tensor:
 def _decode_packed(low: ttnn.Tensor, high: ttnn.Tensor, head_dim: int, expand: ttnn.Tensor) -> ttnn.Tensor:
     """The low and high bytes of ``pack_rows`` containers, int32 [1, 1, N, PACKED_WIDTH] TILE each -> bf16
     [1, 1, N, head_dim] (``expand``: ``_scale_expand``): the reference's
-    ``fp32(e4m3) * fp32(2^(e8m0 - 127))`` per group of 32, cast to bf16 (exact: every step is exact in fp32 and the
-    product has <= 4 significant bits). Equal as values; the sign of zero is not kept (the device writes e4m3 -0,
+    ``fp32(e4m3) * fp32(2^(e8m0 - 127))`` per group of 32, cast to bf16 (exact: every step is exact in fp32
+    and the
+    product has <= 4 significant bits). Equal as values; the sign of zero is not kept (the device writes e4m3
+    -0,
     code 0x80, as +0; no effect downstream)."""
     rows, half = low.shape[2], head_dim // 2
     halves = []
@@ -174,7 +181,8 @@ class V41EngramHash:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Hash the valid tokens [L] of a chunk that follows ``history``.
 
-        ``token_mask`` [L] bool: False for tokens that take no part in an n-gram (image spans); None = all text.
+        ``token_mask`` [L] bool: False for tokens that take no part in an n-gram (image spans); None = all
+        text.
         Returns (hash ids [L, n_layers, n_hash_cols] int64 global table rows, the history after the chunk)."""
         n = self.layout.max_ngram_size
         compressed = self.token_map[tokens.to(torch.int64)]
@@ -191,7 +199,8 @@ class V41EngramHash:
             blocked = blocked | (index < shift) | (source == DEAD)
             grams.append(torch.where(blocked, self.pad_id, source))
         grams = torch.stack(grams, dim=-1)  # [L, n]
-        # XOR of the multiplied ids, one look-back at a time: the running value after step i hashes the (i+1)-gram
+        # XOR of the multiplied ids, one look-back at a time: the running value after step i hashes the
+        # (i+1)-gram
         products = grams.unsqueeze(1) * self.multipliers  # [L, n_layers, n]
         rolling, hashes = products[..., 0], []
         for i in range(1, n):
@@ -200,9 +209,11 @@ class V41EngramHash:
         return torch.cat(hashes, dim=-1) + self.offsets, seq[-(n - 1) :].clone()
 
     def step(self, tokens: torch.Tensor, histories: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """One token of each of ``U`` requests at once: ``tokens`` [U], ``histories`` [U, n - 1] (each a request's
+        """One token of each of ``U`` requests at once: ``tokens`` [U], ``histories`` [U, n - 1] (each a
+        request's
         history from :meth:`__call__`, full: the request has at least n - 1 tokens) -> (hash ids [U, n_layers,
-        n_hash_cols], the histories after the tokens [U, n - 1]); what ``U`` calls of :meth:`__call__` with one token
+        n_hash_cols], the histories after the tokens [U, n - 1]); what ``U`` calls of :meth:`__call__` with
+        one token
         return, in one pass (the batched decode's per-step host work)."""
         n = self.layout.max_ngram_size
         assert histories.shape == (tokens.numel(), n - 1), (tuple(histories.shape), tokens.numel(), n)
@@ -219,9 +230,12 @@ class V41EngramHash:
 
 
 class V41EngramTable:
-    """One Engram layer's table on the host (N3), from the checkpoint's float8_e4m3fn rows ``[R, head_dim]`` and
-    float8_e8m0fnu scales ``[R, head_dim / 32]``, held packed once (``pack_rows``: the same bytes, rearranged for
-    the device, 320 B per row), so a chunk's upload is one row gather. ``row_ids`` (sorted int64): the global rows
+    """One Engram layer's table on the host (N3), from the checkpoint's float8_e4m3fn rows ``[R, head_dim]``
+    and
+    float8_e8m0fnu scales ``[R, head_dim / 32]``, held packed once (``pack_rows``: the same bytes, rearranged
+    for
+    the device, 320 B per row), so a chunk's upload is one row gather. ``row_ids`` (sorted int64): the global
+    rows
     these ``R`` rows are, for a row subset (e.g. the rows a prompt needs); None = the full table."""
 
     def __init__(self, weight: torch.Tensor, scale: torch.Tensor, row_ids: torch.Tensor | None = None):
@@ -233,8 +247,10 @@ class V41EngramTable:
 
     @classmethod
     def from_packed(cls, rows: torch.Tensor, head_dim: int, row_ids: torch.Tensor | None = None) -> "V41EngramTable":
-        """A table from rows already packed (``pack_rows`` bytes, uint16 ``[R, PACKED_WIDTH]``), e.g. a checkpoint
-        table packed in chunks and read back from a file (``engram_checkpoint``): the full table never has to exist
+        """A table from rows already packed (``pack_rows`` bytes, uint16 ``[R, PACKED_WIDTH]``), e.g. a
+        checkpoint
+        table packed in chunks and read back from a file (``engram_checkpoint``): the full table never has to
+        exist
         unpacked in memory."""
         assert rows.dtype == torch.uint16 and rows.shape[1:] == (PACKED_WIDTH,), (rows.dtype, rows.shape)
         assert row_ids is None or row_ids.shape == (rows.shape[0],)
@@ -251,7 +267,8 @@ class V41EngramTable:
         return local
 
     def lookup(self, ids: torch.Tensor) -> torch.Tensor:
-        """ids [...] int64 global rows -> bf16 [..., head_dim]: ``fp32(row) * fp32(scale)`` per 32, cast to bf16
+        """ids [...] int64 global rows -> bf16 [..., head_dim]: ``fp32(row) * fp32(scale)`` per 32, cast to
+        bf16
         (the reference ``ParallelEngramEmbedding``)."""
         half, groups = self.head_dim // 2, self.head_dim // SCALE_BLOCK // 2
         byte = self.rows[self._local(ids)].view(torch.uint8).unflatten(-1, (PACKED_WIDTH, 2))
@@ -268,7 +285,8 @@ class V41EngramTable:
 
 
 class TtV41EngramTable:
-    """One Engram layer's table resident in device DRAM: rows as stored (``pack_rows``), row-sharded over all chips
+    """One Engram layer's table resident in device DRAM: rows as stored (``pack_rows``), row-sharded over all
+    chips
     in (sp, tp) order, each shard followed by an all-zero row that out-of-shard lookups read."""
 
     def __init__(self, mesh_device, table: V41EngramTable):
@@ -281,7 +299,8 @@ class TtV41EngramTable:
         packed[:rows] = table.rows
         packed = packed.view(sp, tp, self.shard_rows, PACKED_WIDTH)
         packed = torch.cat([packed, torch.zeros(sp, tp, 1, PACKED_WIDTH, dtype=torch.uint16)], dim=2)
-        # ttnn.embedding gathers bf16 rows: the containers travel as bf16 bit patterns and are never computed on
+        # ttnn.embedding gathers bf16 rows: the containers travel as bf16 bit patterns and are never computed
+        # on
         self.rows = ttnn.from_torch(
             packed.view(torch.bfloat16),
             device=mesh_device,
@@ -291,7 +310,8 @@ class TtV41EngramTable:
         )
 
     def shard_ids(self, ids: torch.Tensor, count: int) -> torch.Tensor:
-        """ids [N] int64 global rows, N <= count -> int32 [chips, count]: each chip's local row of every id, or its
+        """ids [N] int64 global rows, N <= count -> int32 [chips, count]: each chip's local row of every id,
+        or its
         zero row where another chip holds the id (and for the padding beyond N)."""
         local = self.table._local(ids)
         out = torch.full((self.chips, count), self.shard_rows, dtype=torch.int32)
@@ -302,9 +322,12 @@ class TtV41EngramTable:
 @dataclass
 class EngramChunkInputs:
     """Per-chunk inputs of one Engram layer, on the host (``TtV41Engram.prepare_host``) or on the device.
-    ``lookup``: with a host table, this chip's share of the chunk's packed rows (uint16 [1, 1, chunk * n_hash_cols /
-    chips, PACKED_WIDTH], token-major, (sp, tp) order); with a device table, this chip's local row ids of all the
-    chunk's lookups (uint32 [1, 1, 1, chunk * n_hash_cols]). ``mask`` [1, 1, chunk/sp, 1] fp32 (1 = text, 0 = image
+    ``lookup``: with a host table, this chip's share of the chunk's packed rows (uint16 [1, 1, chunk *
+    n_hash_cols /
+    chips, PACKED_WIDTH], token-major, (sp, tp) order); with a device table, this chip's local row ids of all
+    the
+    chunk's lookups (uint32 [1, 1, 1, chunk * n_hash_cols]). ``mask`` [1, 1, chunk/sp, 1] fp32 (1 = text, 0 =
+    image
     token; None = all text)."""
 
     lookup: ttnn.Tensor
@@ -324,20 +347,26 @@ class EngramChunkInputs:
             pairs.append((self.mask, buffers.mask))
         return pairs
 
-    def copy_into(self, buffers: "EngramChunkInputs") -> "EngramChunkInputs":
-        """Write these host inputs into device ``buffers`` of the same shapes (fixed device addresses, as a traced
-        forward reads them) and return the device inputs of this chunk (no mask where these have none)."""
+    def device_inputs(self, buffers: "EngramChunkInputs") -> "EngramChunkInputs":
+        """The device inputs of this chunk once ``buffers`` hold it (what ``copy_into`` returns; no mask where
+        these have none), for a caller that uploads ``copy_pairs`` itself."""
         assert self.mask is None or buffers.mask is not None, "the buffers were allocated without a token mask"
-        ttnn.copy_host_to_device_tensor(self.lookup, buffers.lookup)
-        if self.mask is None:
-            return EngramChunkInputs(buffers.lookup, None)
-        ttnn.copy_host_to_device_tensor(self.mask, buffers.mask)
-        return buffers
+        return buffers if self.mask is not None else EngramChunkInputs(buffers.lookup, None)
+
+    def copy_into(self, buffers: "EngramChunkInputs") -> "EngramChunkInputs":
+        """Write these host inputs into device ``buffers`` of the same shapes (fixed device addresses, as a
+        traced
+        forward reads them) and return the device inputs of this chunk (no mask where these have none)."""
+        for host, dev in self.copy_pairs(buffers):
+            ttnn.copy_host_to_device_tensor(host, dev)
+        return self.device_inputs(buffers)
 
 
 class TtV41Engram(LightweightModule):
-    """One Engram layer. ``prepare_host`` (host, per chunk, tokens-only: prefetchable) builds the chunk's packed rows
-    (host table) or only its row ids (device-resident table), ``prepare`` also uploads them; ``forward`` dequantizes the rows on device, runs wkv and the gated
+    """One Engram layer. ``prepare_host`` (host, per chunk, tokens-only: prefetchable) builds the chunk's
+    packed rows
+    (host table) or only its row ids (device-resident table), ``prepare`` also uploads them; ``forward``
+    dequantizes the rows on device, runs wkv and the gated
     stream update. The two table placements are interchangeable at construction and give identical rows."""
 
     def __init__(
@@ -350,7 +379,8 @@ class TtV41Engram(LightweightModule):
         weights_dtype=ttnn.bfloat8_b,
     ):
         """``weights``: ``wkv`` [(hc_mult + 1) * hidden, n_hash_cols * head_dim] (FP8 dequantized, checkpoint
-        orientation [out, in]), ``q_weight`` and ``k_weight`` [hc_mult, hidden]; ``table``: this layer's rows, on the
+        orientation [out, in]), ``q_weight`` and ``k_weight`` [hc_mult, hidden]; ``table``: this layer's rows,
+        on the
         host (``V41EngramTable``) or resident on the device (``TtV41EngramTable``)."""
         assert layer in config.ENGRAM_LAYER_IDS, f"layer {layer} has no Engram"
         self.mesh_device, self.config, self.layer, self.table = mesh_device, config, layer, table
@@ -409,10 +439,12 @@ class TtV41Engram(LightweightModule):
         token_mask: torch.Tensor | None = None,
         live_rows: torch.Tensor | None = None,
     ) -> EngramChunkInputs:
-        """One chunk's Engram inputs as host tensors; depends on tokens only, so it can run ahead of the device.
+        """One chunk's Engram inputs as host tensors; depends on tokens only, so it can run ahead of the
+        device.
         ``hash_ids`` [L, n_hash_cols]: this layer's ids of the chunk's valid tokens (rows beyond L are zero);
         ``token_mask`` [L] bool: False for image tokens (their gate is zero); None = all text. ``live_rows``
-        (int64, sorted): with a host table, only the chips holding one of these token rows get their rows packed,
+        (int64, sorted): with a host table, only the chips holding one of these token rows get their rows
+        packed,
         the others the all-zero shard (a decode step's idle rows: nothing reads what they compute)."""
         lookups = chunk * self.n_hash_cols
         assert (
@@ -438,9 +470,12 @@ class TtV41Engram(LightweightModule):
     def _packed_shards(
         self, hash_ids: torch.Tensor, lookups: int, live_rows: torch.Tensor | None = None
     ) -> tuple[ttnn.Tensor, torch.Tensor]:
-        """The chunk's packed rows as a host mesh tensor, token-major over the chips in (sp, tp) order: one borrowed
-        host shard per chip that holds a valid lookup, the cached all-zero shard for the rest. The sharding was
-        ``from_torch`` with ``ShardTensor2dMesh`` over the whole chunk, 31 to 42 ms a layer for 1,028 valid tokens
+        """The chunk's packed rows as a host mesh tensor, token-major over the chips in (sp, tp) order: one
+        borrowed
+        host shard per chip that holds a valid lookup, the cached all-zero shard for the rest. The sharding
+        was
+        ``from_torch`` with ``ShardTensor2dMesh`` over the whole chunk, 31 to 42 ms a layer for 1,028 valid
+        tokens
         as for 5,120; this is 1.5 ms at 1,028 and 6 ms at 5,120. Returns the torch rows the
         shards borrow (kept alive with the inputs). ``live_rows``: the token rows whose chips get real shards
         (default: every chip up to the last row of ``hash_ids``)."""
@@ -506,7 +541,8 @@ class TtV41Engram(LightweightModule):
         return ttnn.bitwise_and(containers, 0xFF), ttnn.bitwise_right_shift(containers, 8)
 
     def rows(self, inputs: EngramChunkInputs) -> ttnn.Tensor:
-        """The chunk's looked-up rows ``embed(hash_ids).flatten(-2)``: [1, 1, chunk/sp, n_hash_cols * head_dim] bf16,
+        """The chunk's looked-up rows ``embed(hash_ids).flatten(-2)``: [1, 1, chunk/sp, n_hash_cols *
+        head_dim] bf16,
         SP-sharded, replicated over TP (bit-identical to ``V41EngramTable.lookup``)."""
         if isinstance(self.table, TtV41EngramTable):
             ids = ttnn.reshape(inputs.lookup, (1, inputs.lookup.shape[-1]))
@@ -515,7 +551,8 @@ class TtV41Engram(LightweightModule):
             packed = ttnn.reshape(ttnn.bitcast(gathered, ttnn.uint16), (1, 1, count, PACKED_WIDTH))
             low, high = self._bytes(packed)
             # every lookup is held by one chip, the others read their zero row: the sum over the mesh is exact
-            # for bytes (0..255, exact in bf16; 16-bit containers are not preserved by the reduction), scattered
+            # for bytes (0..255, exact in bf16; 16-bit containers are not preserved by the reduction),
+            # scattered
             # so each chip decodes 1/chips of the lookups
             summed = ttnn.concat([ttnn.typecast(low, ttnn.bfloat16), ttnn.typecast(high, ttnn.bfloat16)], dim=-1)
             summed = self._reduce_scatter(summed, 0, self.ccl.sp_topology) if self.sp > 1 else summed
@@ -534,13 +571,15 @@ class TtV41Engram(LightweightModule):
     def forward(self, x: ttnn.Tensor, inputs: EngramChunkInputs) -> ttnn.Tensor:
         """x [1, 1, chunk/sp, hc_mult * hidden/tp] fp32 streams -> the same after the Engram update."""
         hc, local = self.hc, self.local
-        # [1, 1, S, (hc + 1) * local] bf16 like the reference GEMM; HiFi4 + fp32 accumulation (HiFi2: update PCC 0.99985)
+        # [1, 1, S, (hc + 1) * local] bf16 like the reference GEMM; HiFi4 + fp32 accumulation (HiFi2: update
+        # PCC 0.99985)
         kv = ttnn.linear(fp8_qdq(self.rows(inputs)), self.wkv, compute_kernel_config=ENGRAM_COMPUTE_CONFIG)
         seq = kv.shape[2]
         key = ttnn.typecast(ttnn.slice(kv, [0, 0, 0, 0], [1, 1, seq, hc * local]), ttnn.float32)
         value = ttnn.typecast(ttnn.slice(kv, [0, 0, 0, hc * local], [1, 1, seq, (hc + 1) * local]), ttnn.float32)
 
-        # per-chip partial sums over its hidden slice: [sum h^2 (hc) | sum key^2 (hc) | sum h*qk*key (hc) | 0 ...]
+        # per-chip partial sums over its hidden slice: [sum h^2 (hc) | sum key^2 (hc) | sum h*qk*key (hc) | 0
+        # ...]
         weighted = ttnn.multiply(ttnn.multiply(x, self.qk_weight), key)
         terms = [ttnn.multiply(x, x), ttnn.multiply(key, key), weighted]
         stats = [self._sum(self._copy(t, c, local)) for t in terms for c in range(hc)]

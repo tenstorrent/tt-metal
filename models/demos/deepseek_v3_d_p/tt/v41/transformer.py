@@ -81,6 +81,16 @@ PREFILL_DRAIN = "TT_V41_PREFILL_DRAIN"
 # add it to the score kernel's row-major output directly; default "0": every index source
 # builds its own mask and tilizes the score around the add.
 PREFILL_MASK_ONCE = "TT_V41_PREFILL_MASK_ONCE"
+# "1": the chunk loop's host-to-device copies in one dispatch round each: ``reset_state``'s
+# zero-fills of the window carries (and DSpark rings) as one ``ttnn.copy_host_to_device_tensors``, and a chunk's
+# staging (the token ids, the Engram inputs and a generic state's position inputs) as one. Every copy is a round
+# of the 32 per-device dispatch workers (one wake-up of the slowest), so the
+# one-chunk call at 1K paid ~40 rounds in ``reset`` (9 ms) and ~15 in ``stage`` (6 ms) of its ~35 ms of host. The bytes and the buffers are the same: bit for bit. Default "0": one copy per tensor, as before.
+PREFILL_HOST_BATCH = "TT_V41_PREFILL_HOST_BATCH"
+
+
+def prefill_host_batch() -> bool:
+    return os.environ.get(PREFILL_HOST_BATCH, "0") == "1"
 
 
 def prefill_prefetch() -> int:
@@ -397,15 +407,32 @@ class TtV41Transformer(LightweightModule):
                 cost["tables"] = time.perf_counter() - t0
             yield _HostChunk(start, length, self._token_ids(chunk_tokens, device=False), engram, padded, position, cost)
 
-    def _stage(self, host: _HostChunk, buffers: dict):
+    def _stage(self, host: _HostChunk, buffers: dict, tables=None):
         """Write a chunk's host inputs into the request's device input buffers (allocated by its first chunk, so
-        every chunk's forward reads fixed addresses) -> (token ids, Engram inputs) on device."""
+        every chunk's forward reads fixed addresses) -> (token ids, Engram inputs) on device. ``tables`` (a generic
+        state's ``V41ChunkTables``): the chunk's position inputs are filled too (``prepare_chunk``), in the same
+        dispatch round as the rest with ``TT_V41_PREFILL_HOST_BATCH=1``."""
         if "token_ids" not in buffers:
             buffers["token_ids"] = ttnn.to_device(host.token_ids, self.mesh_device)
             buffers["engram"] = {l: e.to_device(self.mesh_device) for l, e in host.engram.items()}
+            if tables is not None:
+                tables.prepare_chunk(host.start, host.length, host.tables)
             return buffers["token_ids"], dict(buffers["engram"])
-        ttnn.copy_host_to_device_tensor(host.token_ids, buffers["token_ids"])
-        return buffers["token_ids"], {l: e.copy_into(buffers["engram"][l]) for l, e in host.engram.items()}
+        if not prefill_host_batch():
+            ttnn.copy_host_to_device_tensor(host.token_ids, buffers["token_ids"])
+            engram = {l: e.copy_into(buffers["engram"][l]) for l, e in host.engram.items()}
+            if tables is not None:
+                tables.prepare_chunk(host.start, host.length, host.tables)
+            return buffers["token_ids"], engram
+        pairs = [(host.token_ids, buffers["token_ids"])]
+        engram = {}
+        for l, e in host.engram.items():
+            pairs += e.copy_pairs(buffers["engram"][l])
+            engram[l] = e.device_inputs(buffers["engram"][l])
+        if tables is not None:
+            tables.prepare_chunk(host.start, host.length, host.tables, pairs=pairs)
+        ttnn.copy_host_to_device_tensors([h for h, _ in pairs], [d for _, d in pairs])
+        return buffers["token_ids"], engram
 
     def _chunk_forward(
         self, state, host: _HostChunk, token_ids, engram_inputs, image_features, rope, first_scored, on_block
@@ -496,9 +523,7 @@ class TtV41Transformer(LightweightModule):
                 for k, v in host.cost.items():
                     t[k] = t.get(k, 0.0) + v
             t0 = time.perf_counter()
-            token_ids, engram_inputs = self._stage(host, buffers)
-            if state.generic:
-                state.tables.prepare_chunk(host.start, host.length, host.tables)
+            token_ids, engram_inputs = self._stage(host, buffers, state.tables if state.generic else None)
             t["stage"] = t.get("stage", 0.0) + time.perf_counter() - t0
             if self.dspark is None:
                 rope = None
@@ -622,8 +647,12 @@ class TtV41Transformer(LightweightModule):
         state.engram_history = None
         for layer in state.compressor_carry:
             state.compressor_carry[layer] = None
-        for t in list(state.window_carry.values()) + list(state.dspark_rings or ()):
-            ttnn.copy_host_to_device_tensor(self._zeros(t), t)
+        targets = list(state.window_carry.values()) + list(state.dspark_rings or ())
+        if prefill_host_batch() and targets:
+            ttnn.copy_host_to_device_tensors([self._zeros(t) for t in targets], targets)
+        else:
+            for t in targets:
+                ttnn.copy_host_to_device_tensor(self._zeros(t), t)
 
     def _zeros(self, t: ttnn.Tensor) -> ttnn.Tensor:
         """A replicated all-zero host tensor of ``t``'s shape, dtype and layout (cached per spec)."""
