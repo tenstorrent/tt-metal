@@ -3180,6 +3180,11 @@ class SpeculativeDecoder:
         eager forward before (the pools are made by the first seed of serving_prepare)."""
         tid = self._srv_seed_traces.get(shape)
         if tid is not None:
+            if self._srv_pool_s is None:
+                raise RuntimeError(
+                    "the hidden pools do not exist after serving_prepare: a reseed never allocates (the first eager "
+                    "seed of serving_prepare makes them)"
+                )
             self._srv_seed_upload(shape, tokens, positions)
             # blocking: the reseed phase is the seed's device time (the cost table's entry cost), nothing overlaps it
             ttnn.execute_trace(self.mesh_device, tid, cq_id=0, blocking=True)
