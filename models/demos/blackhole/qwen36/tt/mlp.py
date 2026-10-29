@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.prefill_matmul import enabled as prefill_matmul_enabled
-from models.demos.blackhole.qwen36.tt.prefill_matmul import prefill_linear
+from models.demos.blackhole.qwen36.tt.prefill_matmul import fuses_silu, prefill_linear
 
 
 @dataclass(frozen=True)
@@ -217,13 +217,18 @@ class Qwen36MLP:
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
+        silu_in_mul = False
         if T > 1:
-            w1_out = prefill_linear(x, w.w1, ckc, activation="silu", memory_config=mc)
+            silu_in_mul = not fuses_silu(x, w.w1)
+            w1_out = prefill_linear(x, w.w1, ckc, activation=None if silu_in_mul else "silu", memory_config=mc)
             w3_out = prefill_linear(x, w.w3, ckc, memory_config=mc)
         else:
             w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
             w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
-        hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
+        if silu_in_mul:
+            hidden = ttnn.mul(w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc)
+        else:
+            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
         down_pc = None
