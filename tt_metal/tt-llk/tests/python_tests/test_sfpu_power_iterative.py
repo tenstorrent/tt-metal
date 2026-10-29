@@ -56,10 +56,10 @@ BF16_HIGH_HALF_MASK = -0x10000
 class POWER_EXPONENT(RuntimeParameter):
     """The exponent as read from the runtime parameter block: opaque to the compiler."""
 
-    exponent: int = 0
+    power_exponent: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t POWER_EXPONENT = {self.exponent}u;"
+        return f"constexpr std::uint32_t POWER_EXPONENT = {self.power_exponent}u;"
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "std::uint32_t POWER_EXPONENT;", "I"
@@ -69,12 +69,12 @@ class POWER_EXPONENT(RuntimeParameter):
 class POWER_CONST_EXPONENT(TemplateParameter):
     """A compile-time exponent; None selects the runtime POWER_EXPONENT instead."""
 
-    exponent: int | None = None
+    power_const_exponent: int | None = None
 
     def convert_to_cpp(self) -> str:
         return (
-            f"constexpr bool POWER_EXPONENT_IS_CONSTANT = {str(self.exponent is not None).lower()};\n"
-            f"constexpr std::uint32_t POWER_CONST_EXPONENT = {self.exponent or 0}u;"
+            f"constexpr bool POWER_EXPONENT_IS_CONSTANT = {str(self.power_const_exponent is not None).lower()};\n"
+            f"constexpr std::uint32_t POWER_CONST_EXPONENT = {self.power_const_exponent or 0}u;"
         )
 
 
