@@ -19,8 +19,13 @@ Smoke at the pool's far end: a prompt goes through the prefill into slot 5 on th
 fed steps; the B = 1 build decodes the same prompt (tokens compared; B = 1 runs another rmsnorm path, so a near-tie
 may flip them).
 
+Row orders (--orders): the a active rows are an order's first a. A B = 8 build splits each GDN value head over G head
+cores (core g takes rows 8 g / G ..), so the rows a step activates decide how much of the GDN work runs in parallel:
+"0,4,1,5,2,6,3,7" spreads users over G = 2 groups. --no-pp: the embedding table alone (no prefill model, smoke, B = 1),
+for quick probes, e.g. of RESIDENT_ATTN_WORKERS / RESIDENT_HEAD_GROUPS.
+
 usage: python -m qwen36_resident.tests.rows_grid --corpus corpus_ids.pt [--max-len 262144] [--contexts ...]
-           [--active 1,2,4,8] [--out rows_grid.json]
+           [--active 1,2,4,8] [--orders "0,1,2,3,4,5,6,7;0,4,1,5,2,6,3,7"] [--no-pp] [--out rows_grid.json]
 """
 
 import argparse
@@ -79,12 +84,21 @@ def main():
     ap.add_argument("--prompt-len", type=int, default=2000)
     ap.add_argument("--smoke-steps", type=int, default=32)
     ap.add_argument("--no-b1", action="store_true")
+    ap.add_argument(
+        "--orders",
+        default="0,1,2,3,4,5,6,7",
+        help="';'-separated row orders: a active rows are an order's first a (later orders skip active sets measured)",
+    )
+    ap.add_argument("--no-pp", action="store_true", help="no prefill model: embedding table only, no smoke, no B=1")
     ap.add_argument("--out")
     a = ap.parse_args()
     faulthandler.dump_traceback_later(300, repeat=True, file=sys.stderr)
     ids = torch.load(a.corpus)["ids"]
     contexts = [int(t) for t in a.contexts.split(",")]
     actives = [int(x) for x in a.active.split(",")]
+    orders = [[int(x) for x in o.split(",")] for o in a.orders.split(";")]
+    assert all(sorted(o) == list(range(B)) for o in orders)
+    a.no_b1 |= a.no_pp
     t_start = time.time()
     out = dict(args=vars(a), dram_gb={}, step_ms={}, aiclk={}, fed_ok={})
 
@@ -110,20 +124,35 @@ def main():
         n_attn = sum(is_attn(l, interval) for l in range(layers))
         empty = lambda: State(d, layers - n_attn, n_attn, 0, max_pos=max_pos, zero=True, kv=False)
         log_dram("open")
-        pp = PPPrefill(mesh, ck, layers, interval, chunk=list(PREFILL_CHUNKS), max_len=max_len)
-        phase(f"prefill model (max_len {max_len})")
-        after_pp = log_dram("after prefill model")
+        if a.no_pp:
+            pp = None
+            embed = ttnn.from_torch(
+                emb.bfloat16(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+            after_pp = log_dram("after embedding table")
+        else:
+            pp = PPPrefill(mesh, ck, layers, interval, chunk=list(PREFILL_CHUNKS), max_len=max_len)
+            embed = pp.embed
+            phase(f"prefill model (max_len {max_len})")
+            after_pp = log_dram("after prefill model")
 
         # pool: the DRAM left after the prefill model, less the rows model's other buffers (decode weights, GDN states,
         # conv histories, rope table, token states: measured below) and the margin
         block_bytes = 2 * n_attn * (BLOCK // 32) * 8 * 1088  # K and V, every attention layer, 8 bf8 tiles a page
+        need = -(-(max(contexts) + 1 + a.warm_steps + a.time_steps + 64) // BLOCK)  # blocks per row the grid writes
+        smoke_need = -(-(a.prompt_len + a.smoke_steps + 64) // BLOCK)
         if a.pool_blocks:
             nb = a.pool_blocks
+        elif a.no_pp:
+            nb = B * need + smoke_need
         else:
             other_gb = 6.45  # decode weights 5.97 + 8 GDN states 0.30 + conv histories 0.08 + rope 0.03 + small
             nb = int((after_pp["largest_free"] - other_gb - a.margin_gb) * 1e9 // block_bytes)
-        need = -(-(max(contexts) + 1 + a.warm_steps + a.time_steps + 64) // BLOCK)  # blocks per row the grid writes
-        smoke_need = -(-(a.prompt_len + a.smoke_steps + 64) // BLOCK)
         assert nb >= B * need + smoke_need, (nb, B * need + smoke_need)
         perm = torch.randperm(nb - smoke_need, generator=torch.Generator().manual_seed(11)).tolist()
         tables = [perm[u * need : (u + 1) * need] for u in range(B)]
@@ -139,13 +168,14 @@ def main():
             layers,
             interval,
             lm_head=True,
-            embed=pp.embed,
+            embed=embed,
             kv_pool_blocks=nb,
             block_tables=[[0]] * B,
             rows=True,
         )
         gc.collect()
-        phase("rows decode model")
+        phase(f"rows decode model (GDN head groups G={m.head_groups}: core g of a head takes rows {B} g / G ..)")
+        out["head_groups"] = m.head_groups
         after_rows = log_dram("after rows model")
         out["rows_model_other_gb"] = after_rows["allocated"] - after_pp["allocated"] - nb * block_bytes / 1e9
         # the blocks that would still fit: the largest free range, less the margin
@@ -156,10 +186,12 @@ def main():
             f"{room} more blocks: max {nb + room} blocks = {(nb + room) * BLOCK} tokens (margin {a.margin_gb} GB)"
         )
         # warm-ups before the captures (contract 6a), as the served profile does
-        pp.handoff(m, 1, block_table=[0], slot=0)
+        if pp is not None:
+            pp.handoff(m, 1, block_table=[0], slot=0)
         m.clear_slot(0)
         m.capture_trace()
-        pp.capture()
+        if pp is not None:
+            pp.capture()
         m.reset(state=False)
         log_dram("after traces")
         m.set_page_table(tables)
@@ -181,13 +213,21 @@ def main():
             ok = check(model.fed_token(), 1 + a.warm_steps + a.time_steps)
             return ms, ok
 
-        for T in contexts:
+        # (order index, active rows): an order's first a rows, each active set once
+        points = []
+        for oi, order in enumerate(orders):
             for act in actives:
+                on = sorted(order[:act])
+                if all(on != p for _, p in points):
+                    points.append((oi, on))
+        for T in contexts:
+            for oi, on in points:
+                act = len(on)
                 x0 = torch.zeros(B, 5120)
-                for s in range(act):
-                    x0[s] = emb[int(ids[T - 1 + s])].float()
-                active = [s < act for s in range(B)]
-                tok = m.token_state(x0, [T - 1 if s < act else 0 for s in range(B)], active=active)
+                for k, s in enumerate(on):
+                    x0[s] = emb[int(ids[T - 1 + k])].float()
+                active = [s in on for s in range(B)]
+                tok = m.token_state(x0, [T - 1 if active[s] else 0 for s in range(B)], active=active)
 
                 def check(fed, steps):
                     return all(
@@ -195,7 +235,7 @@ def main():
                         for s, f in enumerate(fed)
                     )
 
-                key = f"rows, {act} active, T={T}"
+                key = f"rows, {act} active, T={T}" + ("" if oi == 0 else f", rows {''.join(map(str, on))}")
                 ms, ok = time_fed(m, tok, check)
                 out["step_ms"][key], out["fed_ok"][key], out["aiclk"][key] = ms, ok, clk = ms, ok, aiclk()
                 phase(f"{key}: step {ms:.3f} ms ({act / ms * 1e3:.1f} tok/s total); fed ok {ok}; AICLK {clk}")
@@ -211,29 +251,31 @@ def main():
         phase(f"rows, 8 active, T=128, greedy: step {ms:.3f} ms; fed ok {ok}")
 
         # smoke at the pool's far end: slot 5 on the highest blocks, the other rows idle
-        prompt = ids[: a.prompt_len]
-        P = len(prompt)
-        tables[5] = smoke_table
-        m.set_page_table(tables)
-        m.reset(state=False)
-        pp.reset()
-        pp.run(prompt[: P - 1])
-        pp.handoff(m, P - 1, block_table=smoke_table, slot=5)
-        x0 = torch.zeros(B, 5120)
-        x0[5] = emb[int(prompt[-1])].float()
-        m.step(m.token_state(x0, [P - 1 if s == 5 else 0 for s in range(B)], active=[s == 5 for s in range(B)]))
-        rows_toks = []
-        for k in range(a.smoke_steps):
-            if k:
-                m.step(None)
-            ttnn.synchronize_device(mesh)
-            rows_toks.append(m.fed_token()[5][0])
-        phase(f"smoke: slot 5 on blocks {smoke_table[0]}..{smoke_table[-1]}: {rows_toks}")
-        out["smoke"] = dict(rows=rows_toks, blocks=[smoke_table[0], smoke_table[-1]])
-        log_dram("after smoke")
+        if pp is not None:
+            prompt = ids[: a.prompt_len]
+            P = len(prompt)
+            tables[5] = smoke_table
+            m.set_page_table(tables)
+            m.reset(state=False)
+            pp.reset()
+            pp.run(prompt[: P - 1])
+            pp.handoff(m, P - 1, block_table=smoke_table, slot=5)
+            x0 = torch.zeros(B, 5120)
+            x0[5] = emb[int(prompt[-1])].float()
+            m.step(m.token_state(x0, [P - 1 if s == 5 else 0 for s in range(B)], active=[s == 5 for s in range(B)]))
+            rows_toks = []
+            for k in range(a.smoke_steps):
+                if k:
+                    m.step(None)
+                ttnn.synchronize_device(mesh)
+                rows_toks.append(m.fed_token()[5][0])
+            phase(f"smoke: slot 5 on blocks {smoke_table[0]}..{smoke_table[-1]}: {rows_toks}")
+            out["smoke"] = dict(rows=rows_toks, blocks=[smoke_table[0], smoke_table[-1]])
+            log_dram("after smoke")
 
         m.release_trace()
-        pp._ho.pop("model", None)
+        if pp is not None:
+            pp._ho.pop("model", None)
         del m
         gc.collect()
         ttnn.synchronize_device(mesh)
