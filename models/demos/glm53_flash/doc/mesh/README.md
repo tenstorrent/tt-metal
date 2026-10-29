@@ -1581,6 +1581,19 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 17:50: the full-tile speculative defect was the MoE decode glue's path at 32 rows
+
+The per-row verify diagnostic (`GLM53_SPEC_DEBUG_ROWS=1`, `tt/spec_decode.py`): at 16 verify rows the verify's top-2
+margins are bit-identical across the 8 mesh rows; at 32 rows they drift by 0.3-0.75 logits per row (the anchor candidate
+included) and mesh row 5 commits a token the plain path rejects by 1.3. The 32-row verify was the one decode shape
+`decode_glue_modes` sent through the padded gather + reduce-scatter (its `T < 32` rule) instead of the compact gather +
+all-reduce (H1/H2): through the compact path (`spec_fulltile_glue_B8_K3`) the full tile is lossless with identical
+margins on every row. The compact path now covers T = 32 by default (`GLM53_HYBRID_GLUE_FULL_TILE=0` restores the old
+rule) and the policy cap is the full tile again (3f595f1ae47). The compact path costs 69 ms per iteration at 32 rows
+against the wrong path's 50 ms (14.4 vs 19.9 tok/s per user at 8 per row, K=3), so the table keeps K=1 at 8 per row
+(19.8, 16 rows); 16 per row K=1 through the compact path is being measured. The reduce-scatter glue's per-row drift is
+also the magnitude behind "rows not bit-identical": the 256-user dispatch decode still runs it.
+
 ### 2026-10-29 17:15: the end-to-end gate green on the day's tree; the K sweep closed
 
 `e2e_8x4_B4_default_green_r3` on today's tree (45 layers): traced decode step 48.48 ms = 20.6 tok/s per user, 660 aggregate;
