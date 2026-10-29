@@ -78,14 +78,18 @@ TEST(HostTransferStatsTest, CPU_SummaryShowsRateForTimedKindsAndStagedBytesForSo
     const auto t0 = Clock::now();
     stats.begin(HostTransfer::BufferWriteSlowDispatch);
     stats.end(HostTransfer::BufferWriteSlowDispatch, t0, t0 + 2s, 3'000'000'000);
+    stats.begin(HostTransfer::BufferReadFastDispatch);
+    stats.end(HostTransfer::BufferReadFastDispatch, t0, t0 + 2ms, 4'000'000);
     stats.add_bytes(HostTransfer::SocketPull, 2048);
 
     const auto rows = stats.summary_rows();
-    ASSERT_EQ(rows.size(), 2u);
+    ASSERT_EQ(rows.size(), 3u);
     EXPECT_EQ(rows[0].first, "buffer writes, slow dispatch");
     EXPECT_EQ(rows[0].second, "3.00 GB in 2.000 s (1.50 GB/s), 1 transfers");
-    EXPECT_EQ(rows[1].first, "H2D socket writes, device pull");
-    EXPECT_EQ(rows[1].second, "2.05 KB staged, 1 transfers");
+    EXPECT_EQ(rows[1].first, "buffer reads, fast dispatch");
+    EXPECT_EQ(rows[1].second, "4.00 MB in 2.000 ms (2.00 GB/s), 1 transfers");
+    EXPECT_EQ(rows[2].first, "H2D socket writes, device pull");
+    EXPECT_EQ(rows[2].second, "2.05 KB staged, 1 transfers");
 }
 
 TEST(HostTransferStatsTest, CPU_ResetClearsTotals) {

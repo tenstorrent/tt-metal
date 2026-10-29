@@ -38,6 +38,16 @@ std::string format_bytes(uint64_t bytes) {
     return fmt::format("{} B", bytes);
 }
 
+std::string format_seconds(double seconds) {
+    if (seconds >= 1) {
+        return fmt::format("{:.3f} s", seconds);
+    }
+    if (seconds >= 1e-3) {
+        return fmt::format("{:.3f} ms", seconds * 1e3);
+    }
+    return fmt::format("{:.3f} us", seconds * 1e6);
+}
+
 }  // namespace
 
 void HostTransferStats::begin(HostTransfer kind) {
@@ -98,9 +108,9 @@ std::vector<std::pair<std::string, std::string>> HostTransferStats::summary_rows
             value = fmt::format("{} staged, {} transfers", format_bytes(t.bytes), t.transfers);
         } else if (seconds > 0) {
             value = fmt::format(
-                "{} in {:.3f} s ({:.2f} GB/s), {} transfers",
+                "{} in {} ({:.2f} GB/s), {} transfers",
                 format_bytes(t.bytes),
-                seconds,
+                format_seconds(seconds),
                 static_cast<double>(t.bytes) / 1e9 / seconds,
                 t.transfers);
         } else {
