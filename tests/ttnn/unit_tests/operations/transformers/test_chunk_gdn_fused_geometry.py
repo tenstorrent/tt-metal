@@ -13,6 +13,8 @@ No device needed. The fused op's geometry is three pure C++ functions, bound thr
                                            factory calls;
 * ``chunk_gdn_fused_item_map``           — the producer map the factory and the three dataflow kernels
                                            share (which producer computes chunk c of head h).
+* ``chunk_gdn_fused_wave_plan``          — heads per program when a batch's heads run as several
+                                           fused programs (waves) into shared outputs.
 
 The device tests (test_chunk_gdn_fused.py) can only run the geometry of the attached chip. These
 tests take the grid as a parameter, so a geometry tuned for one chip (QB2's 11x10) cannot be baked
@@ -34,7 +36,10 @@ from ttnn._ttnn.operations import transformer as _t
 GRIDS = [(11, 10), (12, 10), (13, 10), (8, 8)]
 GRID_IDS = [f"{x}x{y}" for x, y in GRIDS]
 BHS = [1, 2, 4, 8, 12, 16, 24, 32, 48, 64]
+WAVE_BHS = BHS + [33, 49, 96, 110, 128, 384]  # batches beyond one program's core map
 VT = 4  # V = 128 -> 4 tiles; invariant across the Qwen GDN family
+_MAX_SINGLE_WAVE_HEADS = 32  # one program up to here when a geometry fits
+_MAX_WAVE_HEADS = 24  # above it, the fewest waves of at most this many heads
 
 # ---------------------------------------------------------------------------------------------
 # Inlined Python oracle of the fused geometry. Kept self-contained on purpose:
@@ -177,6 +182,37 @@ def _pool_feasible(gx, gy, bh, nv, P):
 
 
 PER_HEAD, POOL, BOTH = 0, 1, 2  # chunk_gdn_fused_geometry's `candidates`
+
+
+def _even_waves(bh, n):
+    n = min(n, bh)
+    base, rem = divmod(bh, n)
+    return [base + (1 if i < rem else 0) for i in range(n)]
+
+
+def _plan_waves(grid, bh, nc, max_wave=0, fixed_nv=0, fixed_np=0):
+    """One program up to _MAX_SINGLE_WAVE_HEADS when a geometry fits; else the fewest waves of at most
+    max_wave (default _MAX_WAVE_HEADS) heads, sizes within one of each other, more waves only when a size
+    has no geometry. The cost model prices the waves (fused_pays) and decides nothing else."""
+    cap = max_wave or _MAX_WAVE_HEADS
+    n = 1 if (max_wave == 0 and bh <= _MAX_SINGLE_WAVE_HEADS) else -(-bh // cap)
+    t_ph = _t_phased_us(bh, nc)
+    memo = {}
+
+    def t_wave(w):
+        if w not in memo:
+            o = _choose_geometry(grid, w, nc, fixed_nv, fixed_np)
+            memo[w] = o["T_fused"]
+        return memo[w]
+
+    while n <= bh:
+        waves = _even_waves(bh, n)
+        ts = [t_wave(w) for w in waves]
+        if all(t is not None for t in ts):
+            t = sum(ts)
+            return {"waves": waves, "T_fused": t, "T_phased": t_ph, "fused_pays": t < t_ph}
+        n += 1
+    return {"waves": [], "T_fused": 0.0, "T_phased": t_ph, "fused_pays": False}
 
 
 def _choose_geometry(grid, bh, nc, fixed_nv=0, fixed_np=0, fixed_nbuf=0, candidates=BOTH, fixed_share=-1.0):
@@ -899,3 +935,50 @@ def test_pool_share_choice():
     o = _choose_geometry((11, 10), 16, 64, fixed_nv=2, fixed_np=78, fixed_nbuf=2, candidates=POOL, fixed_share=1.0)
     assert got[7] == 78 == o["num"] and abs(got[4] - o["T_fused"]) < 0.5, (got, o)
     assert t_at[27] < got[4] < 10 * t_at[27], got[4]
+
+
+@pytest.mark.parametrize("nc", [8, 64])
+@pytest.mark.parametrize("bh", WAVE_BHS)
+@pytest.mark.parametrize("grid", GRIDS, ids=GRID_IDS)
+def test_wave_plan_mirror(grid, bh, nc):
+    """The C++ wave plan and the oracle agree on the waves, their modelled total and fused_pays."""
+    waves, t_f, t_ph, pays = _t.chunk_gdn_fused_wave_plan(grid[0], grid[1], bh, nc, VT)
+    o = _plan_waves(grid, bh, nc)
+    assert list(waves) == o["waves"], f"C++ {list(waves)} vs oracle {o}"
+    if waves:
+        assert abs(t_f - o["T_fused"]) < 0.5 * len(waves) and abs(t_ph - o["T_phased"]) < 0.5, (t_f, t_ph, o)
+    assert pays == o["fused_pays"]
+
+
+@pytest.mark.parametrize("bh", WAVE_BHS)
+@pytest.mark.parametrize("grid", GRIDS, ids=GRID_IDS)
+def test_wave_plan_structure(grid, bh):
+    """Every plan covers the heads exactly once in waves within one head of each other; one program up to
+    32 heads when a geometry fits, waves of at most 24 beyond, and every wave has a geometry."""
+    waves = list(_t.chunk_gdn_fused_wave_plan(grid[0], grid[1], bh, 64, VT)[0])
+    single_fits = _t.chunk_gdn_fused_geometry(grid[0], grid[1], bh, 64, VT)[0] >= 1
+    if not waves:
+        assert not single_fits
+        return
+    assert sum(waves) == bh and max(waves) - min(waves) <= 1 and waves == sorted(waves, reverse=True)
+    if bh <= _MAX_SINGLE_WAVE_HEADS and single_fits:
+        assert waves == [bh]
+    else:
+        assert len(waves) >= 2 and max(waves) <= _MAX_WAVE_HEADS
+    for w in set(waves):
+        assert _t.chunk_gdn_fused_geometry(grid[0], grid[1], w, 64, VT)[0] >= 1, (w, waves)
+
+
+def test_wave_plan_qb2_decisions():
+    """The plans the op runs on QB2's 11x10 grid at the production chunk count, and the pinned forms."""
+    plan = lambda bh, **kw: list(_t.chunk_gdn_fused_wave_plan(11, 10, bh, 64, VT, **kw)[0])
+    assert plan(12) == [12] and plan(24) == [24] and plan(32) == [32]
+    assert plan(48) == [24, 24]
+    assert plan(96) == [24, 24, 24, 24]
+    assert plan(384) == [24] * 16
+    assert plan(33) == [17, 16] and plan(49) == [17, 16, 16]
+    assert plan(48, max_wave=16) == [16, 16, 16]
+    assert plan(32, max_wave=16) == [16, 16]  # a pinned wave size splits below 32 too
+    assert plan(48, fixed_nv=2) == [24, 24]
+    pays = lambda bh: _t.chunk_gdn_fused_wave_plan(11, 10, bh, 64, VT)[3]
+    assert pays(48) and pays(96) and pays(384)

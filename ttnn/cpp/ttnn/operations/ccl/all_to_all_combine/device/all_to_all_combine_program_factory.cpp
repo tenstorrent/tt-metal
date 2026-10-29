@@ -196,7 +196,7 @@ tt::tt_metal::ProgramDescriptor build_combine_program_descriptor(
 
     const auto& axis = operation_attributes.axis;
 
-    const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
+    const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 

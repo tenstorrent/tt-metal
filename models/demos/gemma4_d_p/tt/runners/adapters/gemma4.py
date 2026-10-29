@@ -101,6 +101,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             num_users=params.num_users,
             max_seq_len=params.max_seq_len,
             prefill_chunk_size=params.chunk_size,
+            bank_aligned=True,
         )
 
     def build_runtime(self, *, mesh_device, hf_config, params):

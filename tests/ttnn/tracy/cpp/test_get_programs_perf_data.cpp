@@ -14,7 +14,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/profiler/profiler_paths.hpp"
 #include "impl/profiler/tt_metal_profiler.hpp"
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal::experimental {
 void to_json(nlohmann::json& j, const ProgramExecutionUID& program_execution_uid) {

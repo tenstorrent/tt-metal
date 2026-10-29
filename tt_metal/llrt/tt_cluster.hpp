@@ -128,6 +128,7 @@ public:
         ChipId chip_id, tt::tt_metal::CoreCoord logical_coord, const CoreType& core_type, bool no_warn = false) const;
     const std::unordered_set<tt::tt_metal::CoreCoord>& get_virtual_worker_cores(ChipId chip_id) const;
     const std::unordered_set<tt::tt_metal::CoreCoord>& get_virtual_eth_cores(ChipId chip_id) const;
+    IpVariant get_quasar_ip_variant() const;
 
     uint32_t get_harvesting_mask(ChipId chip) const {
         return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
@@ -331,6 +332,12 @@ public:
     // Configures ethernet cores for fabric routers depending on whether fabric is enabled
     void configure_ethernet_cores_for_fabric_routers(
         tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
+
+    // Wormhole silicon only. Restricts the ethernet cores UMD uses for host transfers to the remote (non-MMIO) chips
+    // behind this MMIO chip to the given channels. UMD does not lock its core list against in-flight remote transfers,
+    // so call this before any other thread (e.g. the watcher) can access remote chips.
+    void configure_ethernet_cores_for_remote_transfers(
+        ChipId mmio_chip_id, const std::set<tt_fabric::chan_id_t>& eth_chans);
 
     // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
