@@ -536,12 +536,10 @@ void kernel_main() {
         }
     }
 
-    // Subtract only this launch's ready credits instead of resetting. The semaphore is a GlobalSemaphore shared by
-    // every launch that gets the same set, and a faster rank can send a later launch's increments before this reader
-    // exits; a reset to 0 would erase them and that launch would wait forever (same fix as minimal_default_reader).
+    // Flush non-posted atomics from op_signaler before kernel exit (mirrors the writer's barrier).
+    if constexpr (fuse_op) {
+        noc_obj.async_atomic_barrier();
+    }
     // Device 2.0 migration: legacy primitive retained, out_ready_sem is a GlobalSemaphore address.
-    const uint32_t sem_target = partial_readiness_enabled ? slices_expected * 2 : slices_expected;
-    noc_semaphore_inc(get_noc_addr(out_ready_sem), uint32_t{0} - sem_target);
-    // Flush non-posted atomics (op_signaler's and the credit subtract above) before kernel exit.
-    noc_obj.async_atomic_barrier();
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }
