@@ -12,9 +12,7 @@
 
 #include <bit>
 #include <cstdint>
-#include <tuple>
 #include <variant>
-#include <vector>
 
 using namespace tt::tt_metal;
 
@@ -120,22 +118,20 @@ void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_c
 
 ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
     // Params are embedded bit-for-bit in kernel defines, but std::hash<float> equates +0.0 and -0.0.
-    std::vector<std::tuple<UnaryOpType, std::size_t, std::vector<std::uint32_t>>> op_chain_bits;
-    op_chain_bits.reserve(op_chain.size());
+    auto hash = ttsl::hash::hash_objects_with_default_seed(op_chain.size());
     for (const auto& op : op_chain) {
-        std::vector<std::uint32_t> bits;
+        hash = ttsl::hash::hash_objects(hash, op.type(), op.base.index());
         std::visit(
-            [&bits](auto params) {
-                bits.reserve(params.size());
+            [&hash](auto params) {
+                hash = ttsl::hash::hash_objects(hash, params.size());
                 for (const auto param : params) {
-                    bits.push_back(std::bit_cast<std::uint32_t>(param));
+                    hash = ttsl::hash::hash_objects(hash, std::bit_cast<std::uint32_t>(param));
                 }
             },
             op.get_params());
-        op_chain_bits.emplace_back(op.type(), op.base.index(), std::move(bits));
     }
-    return ttsl::hash::hash_objects_with_default_seed(
-        op_chain_bits,
+    return ttsl::hash::hash_objects(
+        hash,
         output_dtype,
         memory_config,
         fp32_dest_acc_en,

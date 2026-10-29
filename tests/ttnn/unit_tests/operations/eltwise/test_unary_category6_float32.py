@@ -281,7 +281,7 @@ def test_threshold(device, threshold_val, value):
     _assert_bitwise_equal(result, golden, f"threshold({threshold_val}, {value})")
 
 
-@pytest.mark.parametrize("ttnn_op", [ttnn.threshold, ttnn.clamp, ttnn.clip])
+@pytest.mark.parametrize("ttnn_op", [ttnn.threshold, ttnn.clamp, ttnn.clip, ttnn.hardtanh])
 @pytest.mark.parametrize("scalars", [(0.0, -0.0, 0.0), (-0.0, 0.0, -0.0)], ids=["pos_first", "neg_first"])
 def test_signed_zero_scalar_program_cache(device, ttnn_op, scalars):
     """+0.0 and -0.0 scalars must not share a cached program (#62557).
@@ -291,7 +291,8 @@ def test_signed_zero_scalar_program_cache(device, ttnn_op, scalars):
     | -1.0  | exact (bit pattern) | every output is the scalar, whose bits are     |
     |       |                     | embedded in the kernel defines                 |
 
-    The scalar is threshold's value (threshold 0.0) or clamp/clip's min (max 1.0).
+    The scalar is threshold's value (threshold 0.0) or the min bound of
+    clamp/clip/hardtanh (max 1.0).
     Each sign compiles its own program on first use and hits it on reuse, so the
     output does not depend on which sign ran first.
     """
@@ -304,6 +305,8 @@ def test_signed_zero_scalar_program_cache(device, ttnn_op, scalars):
         expected = torch.full((64, 64), scalar, dtype=torch.float32)
         if ttnn_op is ttnn.threshold:
             tt_out = ttnn.threshold(tt_in, 0.0, scalar)
+        elif ttnn_op is ttnn.hardtanh:
+            tt_out = ttnn.hardtanh(tt_in, min_val=scalar, max_val=1.0)
         else:
             tt_out = ttnn_op(tt_in, scalar, 1.0)
         entries = device.num_program_cache_entries()
