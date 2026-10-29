@@ -168,5 +168,5 @@ def test_up_batch_probe(mesh_device):
                 f"UPB {name} vs saved reference ({rd}): first tokens equal {one[1] == ref['first']}, bit-equal {eq2}, min pcc {pc2:.6f}, max|d| {mx2:.4f}"
             )
             ok &= pc2 > 0.999 and one[1] == ref["first"]
-    log(f"UPB DONE ok={ok}")
+    log(f"UPB DONE ok={ok} per_row={pm.dyn.per_row} dyn slots={getattr(pm.dyn, 'nslot', None)}")
     assert ok

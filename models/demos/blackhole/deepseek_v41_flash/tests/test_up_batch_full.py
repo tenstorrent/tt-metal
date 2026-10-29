@@ -97,6 +97,7 @@ def test_up_batch_full(mesh_device):
         wall = time.perf_counter() - t0
         return r, wall, len(rec), dict(m.timing)
 
+    bad = []
     for E in LENS:
         for name in [s for s in SCEN if s != "needle"]:
             if name == "aligned":
@@ -144,9 +145,9 @@ def test_up_batch_full(mesh_device):
                     "\n\nWhat is the secret code mentioned at the very start? Answer with just the number.",
                     add_special_tokens=False,
                 )["input_ids"]
-                n = max(0, tgt[b] - len(h) - len(t))
+                n = max(0, tgt[b] - len(h) - len(t) - 1)
                 f = (fill * (n // len(fill) + 1))[:n]
-                ids.append(torch.tensor(h + f + t, dtype=torch.long))
+                ids.append(torch.tensor([tk.bos_token_id] + h + f + t, dtype=torch.long))
             Es = [int(x.numel()) for x in ids]
             release()
             _, w0, _, _ = call([(b, ids[b], 0, 4 * CHUNK) for b in range(4)], {b: False for b in range(4)})
@@ -155,7 +156,7 @@ def test_up_batch_full(mesh_device):
             log(f"UPF needle E={E}: lengths {Es}, call wall {wall:.2f} s, replays {n}")
             tok = torch.tensor([int(res[b][0]) for b in U], dtype=torch.long)
             outs = [[int(t_)] for t_ in tok]
-            for k in range(24):
+            for k in range(int(os.environ.get("UPF_DEC", "64"))):
                 o = m.decode_forward(
                     tok, torch.tensor([e + k for e in Es], dtype=torch.long), enable_trace=False, reload_inputs=True
                 )
@@ -169,5 +170,6 @@ def test_up_batch_full(mesh_device):
                 good += hit
                 log(f"UPF needle user {b} len {Es[b]} code {codes[b]} hit {hit}: {txt!r}")
             log(f"UPF needle E={E}: {good}/8 correct")
-            assert good == B
-    log("UPF DONE")
+            bad.append(B - good)
+    log(f"UPF DONE needle misses {bad}")
+    assert not any(bad)
