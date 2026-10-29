@@ -3956,8 +3956,9 @@ class ModelArgs:
         """Return the validated P150 reader count for a Llama 3.1 8B decode projection."""
         # TT_DRAM_SHARDED_2READERS=1 tries the two-reader config on other models (Phi-3.5 S08 experiment).
         # Phi-3.5-mini: +13-21 % decode on P150 (batch 16-1), token match and G2 unchanged (S08, 2026-10-28).
+        # Llama-3.2-3B (accuracy mode): +21-23 % decode at batch 1-32, token match 97.8/100 unchanged (S08, 2026-10-29).
         validated = (
-            self.base_model_name in ("Llama-3.1-8B", "Phi-3.5-mini-instruct")
+            self.base_model_name in ("Llama-3.1-8B", "Phi-3.5-mini-instruct", "Llama-3.2-3B")
             or os.environ.get("TT_DRAM_SHARDED_2READERS") == "1"
         )
         if not validated or self.device_name != "P150":
