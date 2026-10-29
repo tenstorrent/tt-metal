@@ -436,6 +436,12 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
     )
     n = a.geometry.request_capacity
     t0 = time.perf_counter()
+    # case (h) poisons the batched KDA carries with a scalar multiply, a program the model never runs: warm it before
+    # the cache seals (binary_ng keys its program on the dtype / layout, the scalar is a runtime argument)
+    for dec in model.layers:
+        if dec.kda_batched is not None:
+            for st in (dec.kda_batched.recurrent, dec.kda_batched.convolution):
+                ttnn.multiply(st, 1.0, output_tensor=st)
     a.warmup_model_prefill(enable_trace=False, can_sample_on_device=False)
     a.warmup_model_decode(enable_trace=False, max_batch_size=n, num_blocks=1)
     a.warmup_model_prefill(enable_trace=True, can_sample_on_device=False)
