@@ -801,6 +801,10 @@ class SpeculativeDecoder:
         self._srv_iota = {}  # key-chunk length -> [1, 1, 1, n] fp32 iota for the in-trace masks
         self._srv_uploaded = {}  # last uploaded small inputs, by key
         self._srv_last = None  # {"shape", "rows", "K"} of the last replay
+        self._srv_phase_ms = {}  # the last serving_step's wall by sub-phase (serving_step_phases)
+        # GEMMA4_SPEC_REPLAY_BLOCKING=1: block on the replay before its readback, so ``replay_exec`` is the record's
+        # device time and ``replay_read`` the readback alone (attribution runs); off, the readback absorbs the wait.
+        self._srv_replay_blocking = os.environ.get("GEMMA4_SPEC_REPLAY_BLOCKING", "0") == "1"
         self._srv_frozen = (
             False  # True once serving_prepare ran: the device set is complete, nothing allocates after it
         )
@@ -2549,6 +2553,7 @@ class SpeculativeDecoder:
         self._srv_slots, self._srv_n_slots = serving_kv_group_slots(self._srv_layer_types())
         self._srv_uploaded = {}
         self._srv_last = None
+        self._srv_phase_ms = {}
         self._srv_seeded = {}
         self._srv_captured = False
         self._srv_frozen = False
@@ -2867,11 +2872,20 @@ class SpeculativeDecoder:
         rec = self._srv_records[(shape, width)]
         previous = None if self._srv_last is None else (self._srv_last["K"], self._srv_last["rows"])
         seed_idx = serving_seed_index(shape, rows, seed_cols, previous, self._srv_seeded)
+        t0 = time.perf_counter()
         self._srv_upload(rec, rows, live, anchors, positions, page_tables, seed_idx)
-        ttnn.execute_trace(self.mesh_device, rec["id"], cq_id=0, blocking=False)
+        t1 = time.perf_counter()
+        ttnn.execute_trace(self.mesh_device, rec["id"], cq_id=0, blocking=self._srv_replay_blocking)
+        t2 = time.perf_counter()
         vx = ttnn.get_device_tensors(rec["verify_x"])[0] if self._tp > 1 else rec["verify_x"]
         vx = ttnn.to_torch(vx).to(torch.int64).reshape(B, P)
         gids = torch.tensor(self._ids_to_host(rec["vidx"], B * P), dtype=torch.int64).reshape(B, P)
+        t3 = time.perf_counter()
+        self._srv_phase_ms = {
+            "replay_upload": (t1 - t0) * 1e3,
+            "replay_exec": (t2 - t1) * 1e3,
+            "replay_read": (t3 - t2) * 1e3,
+        }
         if (
             self._srv_check_steps > 0
             and not self._srv_measuring
@@ -2889,6 +2903,13 @@ class SpeculativeDecoder:
             logits=self._srv_logits,
             _reader=lambda rec=rec, live=live: self._srv_logits_to_host(rec, live),
         )
+
+    def serving_step_phases(self):
+        """The last ``serving_step``'s wall by sub-phase, in ms: ``replay_upload`` (the record's persistent inputs),
+        ``replay_exec`` (the trace submit; the record's device time under GEMMA4_SPEC_REPLAY_BLOCKING=1) and
+        ``replay_read`` (the drafts and argmax ids back to host, plus the device wait when the submit did not block).
+        The adapter folds them into its stats line next to the ``replay`` phase they add up to."""
+        return dict(self._srv_phase_ms)
 
     def serving_release(self):
         """Release every record's trace and buffer; idempotent."""
@@ -2927,6 +2948,7 @@ class SpeculativeDecoder:
         self._srv_iota = {}
         self._srv_uploaded = {}
         self._srv_last = None
+        self._srv_phase_ms = {}
         self._srv_seeded = {}
         self._srv_checked = {}
 

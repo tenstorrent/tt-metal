@@ -7946,6 +7946,8 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             self._spec_note_entry(shape, self._spec_last_phase_ms, self._spec_reseed_table_ms(shape, max(posits)))
         flat = self._mtp_record_rows(full, shape[0], row_ids)
         result = self._spec_timed("replay", decoder.serving_step, shape, row_ids, anchors, posits, flat, seed_cols)
+        for name, ms in decoder.serving_step_phases().items():  # the replay's own sub-phases (inside "replay")
+            self._spec_policy.calibration.note_phase(name, ms)
         self._mtp_check_result(result, shape, len(drafting))
         self._mtp_last_replay = result
         self._spec_mode_now = ("step", tuple(shape), int(result.width))

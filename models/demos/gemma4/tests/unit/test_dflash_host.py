@@ -294,7 +294,7 @@ def test_spec_plan_admits_concurrency_and_declares_narrow_decode(adapter, drafte
     assert plan.drafter_state == "shared_with_target"
     assert plan.drafter_target_cache_requires == ("named_layer_caches", "absolute_positions")
     assert plan.supports_narrow_decode is True
-    assert plan.k_by_rows == ((5, 5), (8, 3), (16, 1), (32, 1))
+    assert plan.k_by_rows == ((5, 5), (32, 1))  # the default table plus the plan's admission tail
     assert plan.extra_bytes_per_seq == 5376 * 2 + 16 and plan.extra_bytes_per_token == 0
     # -- the MTP rail: spec plan reads the table and clamps to the requested k
     monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", assistant_dir)
@@ -2997,14 +2997,14 @@ def test_eager_warmup_prepares_and_traced_warmup_captures_on_the_same_decoder(
         "time_plain",
     ]
     assert mtp.events[0] == ("base_warmup", False) and mtp.events[2] == ("base_warmup", True)
-    assert mtp.events[1] == ("prepare", list(mh.DEFAULT_SHAPES), 16)
+    assert mtp.events[1] == ("prepare", [(1, 5), (5, 5)], 5)  # the default table: K=5 up to 5 live rows
     assistant = dict(built[0][1])
-    assert built[0][0] == "assistant" and assistant["max_local_batch_size"] == 16
+    assert built[0][0] == "assistant" and assistant["max_local_batch_size"] == 5  # the table's last max_rows
     assert assistant["assistant_path"] == assistant_dir and assistant["max_seq_len"] == 1024 + 64
     decoder = dict(built[1][1])
     assert built[1][0] == "decoder" and decoder["draft_len"] == 5
-    assert tuple(decoder["page_table_torch"].shape) == (16, 8) and decoder["page_table_torch"].eq(0).all()
-    assert mtp._mtp_captured and mtp._mtp_max_rows == 16 and mtp._mtp_shapes == mh.DEFAULT_SHAPES
+    assert tuple(decoder["page_table_torch"].shape) == (5, 8) and decoder["page_table_torch"].eq(0).all()
+    assert mtp._mtp_captured and mtp._mtp_max_rows == 5 and mtp._mtp_shapes == ((1, 5), (5, 5))
     assert mtp._mtp_decoder.widths[(1, 5)] == adapter.mtp_pv_width_ladder(1024, 5)
     assert mtp._mtp_decoder.widths[(16, 1)] == adapter.mtp_pv_width_ladder(1024, 1)
     # -- the MTP rail: warmup caps the records at the engine batch and the row cap
@@ -3341,6 +3341,7 @@ def _costed(adapter, monkeypatch):
         "GEMMA4_SPEC_RETRY_OVERHEAD": "0.6",
         "GEMMA4_SPEC_PROBE_STEPS": "0",
         "GEMMA4_SPEC_CALIB_MIN": "1000",  # the pinned sequences read the scripted table
+        "GEMMA4_SPEC_MIN_GAIN": "1.10",  # the band mechanics below are written at the 1.10 bar (the default is 1.25)
     }
     return _with_costs(build_model(adapter, monkeypatch, env=env))
 
@@ -3653,7 +3654,7 @@ def _mtp_a_new_request_under_a_pessimistic_prior_gets_one_trial_whose_verify_cou
     steps = {(1, 5): 34.0, (5, 5): 40.0, (8, 3): 45.0, (16, 1): 50.0}
     outcomes = {}
     for name, rounds in (("accepted", [5, 5]), ("rejected", [0, 0, 0])):
-        model = _mtp_adaptive(adapter, monkeypatch)
+        model = _mtp_adaptive(adapter, monkeypatch, env={"GEMMA4_SPEC_MIN_GAIN": "1.10"})  # the 1.22x entry band
         mh.install_decoder(model, step_ms=steps, plain_ms=mh.PLAIN_MS)
         model._spec_costs.update({("reseed", shape): CostLine.flat(ms) for shape, ms in reseeds.items()})
         messages = []
