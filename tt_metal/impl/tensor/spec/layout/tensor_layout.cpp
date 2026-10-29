@@ -4,6 +4,7 @@
 
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
+#include <internal/tensor_layout.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 
 #include <tt-metalium/math.hpp>
@@ -465,19 +466,6 @@ const TensorLayoutImpl& TensorLayout::impl() const {
     return *impl_;
 }
 
-TensorLayout TensorLayout::fromPaddedShape(
-    DataType dtype,
-    const PageConfig& page_config,
-    const MemoryConfig& memory_config,
-    const tt::tt_metal::Shape& logical_shape,
-    const tt::tt_metal::Shape& padded_shape) {
-    return TensorLayout(
-        dtype,
-        page_config,
-        memory_config,
-        CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(logical_shape, padded_shape, page_config, memory_config));
-}
-
 Layout TensorLayout::get_layout() const { return impl().get_layout(); }
 Tile TensorLayout::get_tile() const { return impl().get_tile(); }
 PageConfig TensorLayout::get_page_config() const { return impl().get_page_config(); }
@@ -502,5 +490,22 @@ std::tuple<const DataType&, const PageConfig&, const MemoryConfig&, const Alignm
     const {
     return impl().attribute_values();
 }
+
+namespace internal {
+
+TensorLayout tensor_layout_from_padded_shape(
+    DataType dtype,
+    const PageConfig& page_config,
+    const MemoryConfig& memory_config,
+    const tt::tt_metal::Shape& logical_shape,
+    const tt::tt_metal::Shape& padded_shape) {
+    return TensorLayout(
+        dtype,
+        page_config,
+        memory_config,
+        CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(logical_shape, padded_shape, page_config, memory_config));
+}
+
+}  // namespace internal
 
 }  // namespace tt::tt_metal

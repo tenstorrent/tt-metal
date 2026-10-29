@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "binary_backward_device_operation.hpp"
 
 #include <fmt/format.h>
@@ -317,7 +318,7 @@ BinaryBackwardDeviceOperation::spec_return_value_t BinaryBackwardDeviceOperation
         }
         return TensorSpec(
             ref.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            tt::tt_metal::internal::tensor_layout_from_padded_shape(
                 output_dtype,
                 PageConfig(Layout::TILE),
                 args.output_memory_config,

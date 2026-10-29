@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "conv3d_device_operation.hpp"
 #include "conv3d_device_operation_types.hpp"
 #include "conv3d_program_factory.hpp"
@@ -347,7 +348,7 @@ tt::tt_metal::TensorSpec Conv3dDeviceOperation::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config, output_shape, padded_output_shape));
 }
 

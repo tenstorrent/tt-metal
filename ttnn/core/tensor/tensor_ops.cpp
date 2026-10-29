@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include <tt_stl/reflection.hpp>
 #include "tensor/tensor_ops.hpp"
 
@@ -453,7 +454,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
 
     auto new_spec = TensorSpec(
         new_logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             input_tensor.tensor_spec().page_config(),
             output_memory_config,

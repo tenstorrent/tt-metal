@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "rotate_half_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -33,7 +34,7 @@ tt::tt_metal::TensorSpec RotateHalfDeviceOperation::compute_output_specs(
     const Tensor& input_tensor = tensor_args;
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             PageConfig(Layout::TILE),
             operation_attributes.output_mem_config,

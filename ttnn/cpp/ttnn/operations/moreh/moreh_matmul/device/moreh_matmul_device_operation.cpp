@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "moreh_matmul_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
@@ -153,7 +154,7 @@ MorehMatmulOperation::spec_return_value_t MorehMatmulOperation::compute_output_s
     output_shape_wo_padding[output_rank - 1] = w_wo_padding;
     return tt::tt_metal::TensorSpec(
         output_shape_wo_padding,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             tensor_args.input.dtype(),
             PageConfig(Layout::TILE),
             operation_attributes.output_memory_config,

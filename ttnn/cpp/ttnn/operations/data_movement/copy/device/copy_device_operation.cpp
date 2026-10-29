@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "copy_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // common_tm_bw_model
@@ -167,7 +168,7 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
                                         // padded_shape due to having a different shard_spec.
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             operation_attributes.output_dtype,
             tt::tt_metal::PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config,

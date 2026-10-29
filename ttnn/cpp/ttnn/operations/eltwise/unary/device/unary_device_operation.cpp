@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <internal/tensor_layout.hpp>
 #include "unary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -309,7 +310,7 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
     const auto output_layout = tensor_args.input.layout();
     return tt::tt_metal::TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::internal::tensor_layout_from_padded_shape(
             args.output_dtype,
             PageConfig(output_layout),
             args.memory_config,
