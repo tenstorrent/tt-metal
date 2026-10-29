@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Debug event metadata, layer 1a: the rules a metadata type must follow and the host's unmarshalling
-// (hostdev/debug_event_meta.h), checked on the host with no device and no device compiler. The rules are
+// (hostdev/observability_event_meta.h), checked on the host with no device and no device compiler. The rules are
 // static_asserts on the header's predicates, so breaking one fails this file's build. Round trips of every shape
 // through the loader are in test_debug_event_meta_loader.cpp.
 // Not covered here: the device compiler's view (its spelling of type names, the asm it emits, the error text a
@@ -17,7 +17,7 @@
 #include <string_view>
 #include <vector>
 
-#include "hostdev/debug_event_meta.h"
+#include "hostdev/observability_event_meta.h"
 
 // Named, not anonymous: a metadata type in an anonymous namespace is itself a rule violation.
 namespace debug_event_meta_test {

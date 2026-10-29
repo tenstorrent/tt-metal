@@ -35,7 +35,7 @@
 //         "my-tool");
 //
 namespace tt::debug_event {
-struct SiteMeta;  // hostdev/debug_event_meta.h
+struct SiteMeta;  // hostdev/observability_event_meta.h
 }
 namespace tt::tt_metal::experimental::streaming_profiler {
 

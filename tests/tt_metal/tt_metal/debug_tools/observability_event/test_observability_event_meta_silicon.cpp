@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Debug event metadata, layer 3: the round trip on silicon. test_kernels/misc/debug_event_meta_silicon.cpp runs one
-// zone per metadata shape on every RISC of one core; the device compiler marshals each site's value into its ELF,
+// Debug event metadata, layer 3: the round trip on silicon. test_kernels/misc/observability_event_meta_silicon.cpp runs
+// one zone per metadata shape on every RISC of one core; the device compiler marshals each site's value into its ELF,
 // the host loader reads it back, and this test checks every zone's site through the public streaming profiler API
-// (Zone::site().meta) against the constants the kernel was built from (debug_event_meta_silicon.h).
+// (Zone::site().meta) against the constants the kernel was built from (observability_event_meta_silicon.h).
 //
 // Needs a Blackhole device and TT_METAL_STREAMING_PROFILER=1 in the environment before the process starts; skips
 // otherwise. Run it on its own (--gtest_filter=DebugEventMetaSilicon.*), since the profiler is armed for the whole
@@ -28,21 +28,21 @@
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 #include <tt-metalium/host_api.hpp>
 
-#include "hostdev/debug_event_meta.h"
+#include "hostdev/observability_event_meta.h"
 #include "llrt/rtoptions.hpp"
-#include "tt_metal/tt_metal/test_kernels/misc/debug_event_meta_silicon.h"
+#include "tt_metal/tt_metal/test_kernels/misc/observability_event_meta_silicon.h"
 
-namespace debug_event_meta_silicon_test {
+namespace observability_event_meta_silicon_test {
 
 using namespace tt::tt_metal;
 namespace sp = tt::tt_metal::experimental::streaming_profiler;
-namespace m = debug_event_meta_silicon;
+namespace m = observability_event_meta_silicon;
 using tt::debug_event::SiteMeta;
 using tt::debug_event::ZoneColorMeta;
 using tt::debug_event::ZoneMeta;
 using tt::debug_event::ZoneUnitMeta;
 
-constexpr const char* kKernel = "tests/tt_metal/tt_metal/test_kernels/misc/debug_event_meta_silicon.cpp";
+constexpr const char* kKernel = "tests/tt_metal/tt_metal/test_kernels/misc/observability_event_meta_silicon.cpp";
 constexpr int kRiscs = 5;
 
 // A metadata value's leaf fields, as comparable values: integers by their bits, strings by their text.
@@ -142,7 +142,7 @@ TEST(DebugEventMetaSilicon, EveryShapeRoundTripsOnEveryRisc) {
         zones[key]++;
         sites[key].insert(z.site);
 
-        EXPECT_TRUE(z.site->location.file.ends_with("debug_event_meta_silicon.cpp")) << z.site->location.file;
+        EXPECT_TRUE(z.site->location.file.ends_with("observability_event_meta_silicon.cpp")) << z.site->location.file;
         EXPECT_GT(z.site->location.line, 0u);
 
         const std::string_view name = z.site->name;
@@ -157,7 +157,7 @@ TEST(DebugEventMetaSilicon, EveryShapeRoundTripsOnEveryRisc) {
         } else if (name == "meta_deep") {
             expect_meta(*z.site, m::kDeep);
             // The device compiler (GCC) and this one must spell the signature alike, nesting included.
-            EXPECT_EQ(z.site->meta->signature, "debug_event_meta_silicon::DeepMeta:s{{bh}w}q");
+            EXPECT_EQ(z.site->meta->signature, "observability_event_meta_silicon::DeepMeta:s{{bh}w}q");
         } else if (name == "meta_all_widths") {
             expect_meta(*z.site, m::kAllWidths);
         } else if (name == "meta_defaulted") {
@@ -206,4 +206,4 @@ TEST(DebugEventMetaSilicon, EveryShapeRoundTripsOnEveryRisc) {
     }
 }
 
-}  // namespace debug_event_meta_silicon_test
+}  // namespace observability_event_meta_silicon_test

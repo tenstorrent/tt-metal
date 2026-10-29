@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Debug event metadata, layer 2: what the device compiler says about a site. Each case of
-// test_kernels/misc/debug_event_meta_cases.cpp is built offline (experimental::CompileKernelOffline, mock mode, no
-// device), so this runs the real device compiler with the real kernel flags and opens nothing that a failed build
+// test_kernels/misc/observability_event_meta_cases.cpp is built offline (experimental::CompileKernelOffline, mock mode,
+// no device), so this runs the real device compiler with the real kernel flags and opens nothing that a failed build
 // could leave wedged. A bad case must fail to compile with exactly one error, its own rule's; the valid case must
 // compile in every profiler mode.
 //
@@ -35,12 +35,12 @@ namespace debug_event_compile_test {
 using namespace tt::tt_metal;
 namespace fs = std::filesystem;
 
-constexpr const char* kCasesKernel = "tests/tt_metal/tt_metal/test_kernels/misc/debug_event_meta_cases.cpp";
+constexpr const char* kCasesKernel = "tests/tt_metal/tt_metal/test_kernels/misc/observability_event_meta_cases.cpp";
 
 // What the linker says when a kernel has no firmware ELF to link against.
 constexpr std::string_view kNoFirmwareLinkError = "non constant or forward reference address expression";
 
-// Every rule message in hostdev/debug_event_meta.h, so a case can be checked for breaking only its own rule.
+// Every rule message in hostdev/observability_event_meta.h, so a case can be checked for breaking only its own rule.
 constexpr std::string_view kRuleMessages[] = {
     "must be a simple aggregate",
     "cannot have a base class",
