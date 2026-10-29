@@ -30,7 +30,8 @@ constexpr bool SFPU_ROW_PAIR_STORE_ADVANCES_DEST = true;
 constexpr std::int16_t SFPU_ROW_PAIR_DEST_INCR = 4;
 
 /**
- * Programs the Dest increment the second-row store of a two-row body uses.
+ * @brief Programs the Dest increment the second-row store of a two-row body uses.
+ *
  * @note Call from the op's init; nothing may rewrite ADDR_MOD_6 between that init and the op's calls.
  */
 inline void _init_sfpu_row_pair_()
@@ -47,8 +48,13 @@ inline void _init_sfpu_row_pair_()
 }
 
 /**
- * Stores the second row of a two-row body; unless MM_THROTTLE is set, the store also advances Dest past
- * both rows. May sit inside a v_if: a store with every lane disabled still applies its address mode.
+ * @brief Stores the second row of a two-row body.
+ *
+ * Unless MM_THROTTLE is set, the store also advances Dest past both rows. It may sit inside a v_if: a
+ * store with every lane disabled still applies its address mode.
+ *
+ * @param value: The value to store to Dest row 1.
+ * @note Pair with @ref _sfpu_row_pair_end_ at the end of the body, after @ref _init_sfpu_row_pair_ ran.
  */
 sfpi_inline void _sfpu_row_pair_store_second_(const sfpi::vFloat value)
 {
@@ -63,7 +69,7 @@ sfpi_inline void _sfpu_row_pair_store_second_(const sfpi::vFloat value)
 }
 
 /**
- * Ends a two-row body: advances Dest past both rows when the second store did not.
+ * @brief Ends a two-row body: advances Dest past both rows when the second store did not.
  */
 sfpi_inline void _sfpu_row_pair_end_()
 {

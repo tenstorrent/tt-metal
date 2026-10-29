@@ -18,16 +18,23 @@ inline void hardshrink_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+/**
+ * @brief hardshrink(x, lambda) = x if |x| > lambda, else 0, over ITERATIONS Dest rows.
+ *
+ * @tparam APPROXIMATION_MODE: Unused; the kernel is exact in both modes.
+ * @tparam ITERATIONS: Number of Dest rows to process; must be even.
+ * @param param0: lambda as fp32 bits.
+ * @note Call @ref hardshrink_init first: the body advances Dest through ADDR_MOD_6.
+ */
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_hardshrink(std::uint32_t param0) {
-    // Hardshrink(x, λ) = x if |x| > λ, else 0
+    static_assert(ITERATIONS % 2 == 0, "calculate_hardshrink() processes dest rows in pairs.");
     // Single comparison against the magnitude: setsgn(v, 0) clears the sign bit.
     // param0 contains lambda as FP32 bits. For BF16 inputs, the host pre-rounds
     // lambda to BF16 precision (then re-expands to FP32) so that FP32→FP19b
     // truncation on SFPU preserves the BF16 value exactly. For FP32 inputs,
     // lambda is passed as full FP32, so both input and lambda undergo the same
     // FP32→FP19b truncation, keeping comparisons consistent.
-    static_assert(ITERATIONS % 2 == 0, "calculate_hardshrink() processes dest rows in pairs.");
     sfpi::vFloat lambda = Converter::as_float(param0);
     // Two rows per body: the second row's store also advances Dest (see sfpu/ckernel_sfpu_row_pair.h).
     // The SFPMAD that forms each difference has a 2-cycle result shadow, and the compiler pads a
@@ -52,6 +59,8 @@ inline void calculate_hardshrink(std::uint32_t param0) {
         sfpi::vFloat d1 = lambda - abs_v1;
         v_if(d0 >= 0.0f) { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
+        // Row 1's store also advances Dest past both rows, through the ADDR_MOD_6 that hardshrink_init
+        // programs (see sfpu/ckernel_sfpu_row_pair.h).
         v_if(d1 >= 0.0f) { _sfpu_row_pair_store_second_(0.0f); }
         v_endif;
         _sfpu_row_pair_end_();
