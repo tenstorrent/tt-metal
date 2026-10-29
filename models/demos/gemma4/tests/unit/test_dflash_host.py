@@ -3013,7 +3013,12 @@ def test_eager_warmup_prepares_and_traced_warmup_captures_on_the_same_decoder(
         monkeypatch,
         warm=False,
         max_batch_size=6,
-        env={"GEMMA4_ASSISTANT_MODEL": assistant_dir, "GEMMA4_SPEC_MAX_ROWS": "8", "GEMMA4_SPEC_MAX_ISL": "512"},
+        env={
+            "GEMMA4_ASSISTANT_MODEL": assistant_dir,
+            "GEMMA4_SPEC_K_BY_ROWS": "5:5,8:3,16:1",  # a table past the engine batch: capped at (6, 3)
+            "GEMMA4_SPEC_MAX_ROWS": "8",
+            "GEMMA4_SPEC_MAX_ISL": "512",
+        },
     )
     mh.stub_drafter_modules(monkeypatch, mtp.events)
     mh._warmup(mtp, False)
@@ -3875,7 +3880,10 @@ def _mtp_a_bad_policy_knob_is_refused_when_the_adapter_is_built(
 def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain(
     adapter, monkeypatch, assistant_dir=None, expect_error=None
 ):
-    adaptive = _mtp_adaptive(adapter, monkeypatch)
+    # the switch ladder of the batched records ((8,3) then (16,1) on the retry) at the 1.10 bar it documents
+    adaptive = _mtp_adaptive(
+        adapter, monkeypatch, env={"GEMMA4_SPEC_K_BY_ROWS": "5:5,8:3,16:1", "GEMMA4_SPEC_MIN_GAIN": "1.10"}
+    )
     messages = []
     monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
     monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
