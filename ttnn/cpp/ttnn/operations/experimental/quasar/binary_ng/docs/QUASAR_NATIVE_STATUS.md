@@ -17,6 +17,25 @@ simulator (~15 s/run, deterministic) with no transfer latency and no contention 
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
 
+# ► Week of 2026-10-26 — batching beside DRAM, up to 2.1x; every compute batch is exact
+
+## 1. TL;DR
+
+- **#61774 is fixed.** `llk_unpack_AB` scales the tile index by the ring stride, as `llk_unpack_A` and the pack do
+  (the `llk_unpack_AB` part of #61610). Every compute batch is exact at any ring stride, so
+  `native_compute_batch_exact` and the factory's wrong-output warning are gone, and the two batching-defect tests
+  expect exact output.
+- **The rule batches beside DRAM.** Where an input is in DRAM, a, b and c are interleaved and nothing is borrowed,
+  both batches are the largest power of 2 up to a compute thread's share, capped by a DST section, from a share of 4
+  tiles. fp32 divide stays at 1, as it measured slower batched. `TTNN_QSR_DRAM_BATCH=0` keeps 1 for an A/B. The
+  factory logs each such program's batches, as they follow the tile count.
+- **Measured** on craq-sim `b9d8e2f4`, DRAM-interleaved on 32 clusters, at 256 tiles per cluster: bf16 add 2.10x
+  (16833 → 8003 cycles), multiply 1.81x, fp32 add 1.55x, divide 1.00x to 1.06x. Every output is bit-identical with
+  batching off. craq-sim models no DRAM time, so silicon gains less where an op becomes DRAM-bound.
+- **TODO:** off DRAM the rule still batches the FPU kernel only at 1,1,1, until 4,4,2 and 1,4,1 are measured.
+
+---
+
 # ► Week of 2026-10-19, part 3 — the tests follow the hardware: the arch from the device, the FPU add's two roundings
 
 ## 1. TL;DR

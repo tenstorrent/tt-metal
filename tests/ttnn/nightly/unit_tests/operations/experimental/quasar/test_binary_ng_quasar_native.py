@@ -73,7 +73,7 @@ def _native_enabled():
 # The rule's value of every knob left unset. Mirrors resolve_native_config in binary_ng_utils.cpp: a test whose
 # prediction disagrees with the device is how a change on either side shows up.
 _RULE_COMPUTE_THREADS = 4
-# The FPU kernel's rule batch is 8 at R = C = W = 1 only: above ring stride 1 its batches come out wrong.
+# The FPU kernel's rule batch is 8 at R = C = W = 1 only, until batching the other thread splits is measured.
 _RULE_TILES_PER_CYCLE = 8
 # The SFPU kernel's rule batch is 4: it holds a tile in two DST slots, so 4 tiles fill a 16-bit DST section. In fp32
 # the rule runs it at 2; no prediction reads that batch, as SFPU batches are exact, and the log test checks it.
@@ -96,7 +96,8 @@ def _resolve(knobs, path, sfpu=False):
     """(R, C, W, compute batch) of a program run with `knobs`, a mapping of TTNN_QSR_* names to values.
 
     `path` is _NOC_L1, _NOC_DRAM, _BORROWED or one from _path. A borrowed pair of inputs or a borrowed output
-    runs one reader or writer thread whatever is set. Beside a DRAM operand it models batch 1. `sfpu` is
+    runs one reader or writer thread whatever is set. Beside a DRAM operand it models batch 1, not the compute
+    thread's share, as nothing that reads the batch predicts a wrong tile. `sfpu` is
     True for an op on the SFPU kernel, whose rule batch is smaller. An empty value counts as unset, as in
     native_tuning().
     """
@@ -149,8 +150,7 @@ def _threads(r, c, w):
     return {"TTNN_QSR_READER_THREADS": str(r), "TTNN_QSR_COMPUTE_THREADS": str(c), "TTNN_QSR_WRITER_THREADS": str(w)}
 
 
-# Compute batching off. Every other knob keeps the rule's value, so this is the rule's program short of the one
-# defect, and its output is exact.
+# Compute batching off. Every other knob keeps the rule's value.
 _COMPUTE_BATCH_1 = {"TTNN_QSR_TILES_PER_CYCLE": "1"}
 
 # One tile per DM transfer and per compute batch, in rings of two entries per thread, so that a thread's ring
@@ -165,9 +165,9 @@ class _WrongOutput(Exception):
     """An op ran to completion on the expected factory, and its output differs from the bf16 oracles."""
 
 
-# Above output ring stride 1 compute batching runs, but only one tile of each batch comes out right.
+# A test whose prediction has wrong tiles is a strict expected failure; _batched_wrong_tiles predicts none today.
 # strict=True: when the batched output changes, the counts move, and the run fails until the predictions follow.
-_BATCHED_REASON = "compute batching above ring stride 1: only one tile of each batch is right"
+_BATCHED_REASON = "compute batching: a modeled defect leaves these tiles wrong"
 _BATCHED_XFAIL = pytest.mark.xfail(raises=_WrongOutput, strict=True, reason=_BATCHED_REASON)
 
 
@@ -391,7 +391,7 @@ def _check_arm(p, what, expect_wrong=None):
     The arm scripts exit 2 only when every op completed and routed as expected and the output is wrong.
     An expected-failure marker restricted to _WrongOutput therefore cannot hide a crash, a hang, a
     refusal or a fallback. expect_wrong maps the label of each shape the prediction gets wrong to the
-    number of output tiles the pack-stride defect leaves wrong. Only exactly those counts raise
+    number of output tiles a modeled defect leaves wrong. Only exactly those counts raise
     _WrongOutput, so a new defect, or a shape that is wrong where the prediction is 0, fails the test.
     """
     expect_wrong = expect_wrong or {}
@@ -477,9 +477,9 @@ def test_native_even_and_uneven_share_a_process(device):
 
 
 # How the DM kernels and the compute move tiles in an arm. per-tile runs one tile per transfer and per batch
-# in two-entry rings, so the rings wrap at the low tile counts. batched sets a DM batch of 8, which the rule
-# does not take beside these DRAM tensors, in the 16-entry rings that the rule derives for it, with the
-# compute batch at 1 so the output stays exact at every thread count.
+# in two-entry rings, so the rings wrap at the low tile counts. batched sets a DM batch of 8 at every tile count,
+# in the 16-entry rings that the rule derives for it, with the compute batch at 1 so that only the DM batch
+# changes.
 _DM_BATCH_8 = {"TTNN_QSR_DM_BATCH": "8"}
 _BATCHING = {"per-tile": _PER_TILE, "batched": {**_DM_BATCH_8, **_COMPUTE_BATCH_1}}
 
@@ -528,8 +528,8 @@ def test_native_dm_batch_above_one_counter_is_bit_exact(rcw):
 
     The batch is set by its knob. The rule's depth for it, 16, is the
     smallest legal one: a batch occupies n consecutive slots and the ring wraps only afterwards, so the
-    factory demands entries_per_thread >= 2n and entries_per_thread % n == 0. The compute batch is 1, so the
-    output stays exact at ring stride 4.
+    factory demands entries_per_thread >= 2n and entries_per_thread % n == 0. The compute batch is 1, so only
+    the DM batch is under test.
 
     One process per arm, as above. The timeout is the failure detector for a broken pairing: a counter
     asked for more tiles than it receives hangs rather than corrupts.
@@ -540,9 +540,8 @@ def test_native_dm_batch_above_one_counter_is_bit_exact(rcw):
 
 # --- Compute batching --------------------------------------------------------------------------------
 #
-# An FPU-kernel compute batch of 8 runs eight tiles per tile_regs_acquire. The output is right only at output ring
-# stride 1 -- C = W = 1; above it only one tile of each batch is right. The factory runs any stride; the tests
-# above stride 1 expect the wrong output. Per-cluster tile counts on the 32-cluster grid: 1 runs a single
+# An FPU-kernel compute batch of 8 runs eight tiles per tile_regs_acquire. The output is exact at any ring stride:
+# the binary unpack and the pack both step a batch by the stride. Per-cluster tile counts on the 32-cluster grid: 1 runs a single
 # short batch and no full one; 9 runs one full batch of 8 then a tail of 1; 64 runs eight full batches,
 # wrapping the 16-deep ring three times, and no tail; 65 adds a tail of 1 that starts exactly on a wrap
 # boundary.
@@ -580,13 +579,16 @@ def test_native_tiles_per_cycle_above_stride_one():
     _check_arm(p, "a compute batch of 8 on the L1 NoC path", expect_wrong=_expect_wrong(cases, knobs))
 
 
-# Batching on and off must give the same output bits. 2080 tiles batch 8 per compute thread.
+# Batching on and off must give the same output bits. 2080 tiles are 65 per cluster, at least 16 per compute thread,
+# so with batching on both batches are 8, and with it off 1.
 _DRAM_BATCH_SPLITS = [
     ("rule", {}),
     ("R4C4W1", _threads(4, 4, 1)),
     ("R1C1W1", _threads(1, 1, 1)),
 ]
 _DRAM_BATCH_TILE_COUNTS = _RAGGED_TILE_COUNTS + [2080]
+# The factory's line for each program beside DRAM: its tile count, DM batch and compute batch.
+_PROGRAM_BATCHES = r"(\d+) tiles beside DRAM, \d+ per compute thread: dm_batch=(\d+) .*?tiles_per_cycle=(\d+)"
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
@@ -594,12 +596,14 @@ _DRAM_BATCH_TILE_COUNTS = _RAGGED_TILE_COUNTS + [2080]
 def test_native_dram_batch_is_bit_exact(split):
     label, knobs = split
     digests = {}
-    for state, switch in (("ON", {}), ("OFF", {"TTNN_QSR_DRAM_BATCH": "0"})):
+    for state, switch, batch in (("ON", {}, 8), ("OFF", {"TTNN_QSR_DRAM_BATCH": "0"}, 1)):
         p = _run_arm(_DRAM_BATCH_TILE_COUNTS, knobs={**knobs, **switch, "TT_LOGGER_LEVEL": "info"}, timeout=1200)
         _check_arm(p, f"batching beside DRAM {state}, {label}")
-        assert (
-            f"batching beside DRAM {state}" in p.stdout + p.stderr
-        ), f"{label}: the log does not report batching {state}"
+        log = p.stdout + p.stderr
+        assert f"batching beside DRAM {state}" in log, f"{label}: the log does not report batching {state}"
+        # The batches each program resolved, from the factory's line per program.
+        batches = {int(m.group(1)): (int(m.group(2)), int(m.group(3))) for m in re.finditer(_PROGRAM_BATCHES, log)}
+        assert batches.get(2080) == (batch, batch), f"{label}: with batching {state}, 2080 tiles resolve {batches}"
         digests[state] = dict(re.findall(r"^digest (\d+): (\w+)$", p.stdout, re.MULTILINE))
     assert len(digests["ON"]) == len(_DRAM_BATCH_TILE_COUNTS), f"{label}: missing digests {digests['ON']}"
     differ = sorted(int(t) for t in digests["ON"] if digests["ON"][t] != digests["OFF"].get(t))
@@ -1774,8 +1778,8 @@ def test_native_mixed_layouts_match_the_prediction(name, knobs):
 # run the SFPU kernel. Each op runs one mix of each kind: the output's shard walked by the reader, the inputs' shard
 # walked by the writer, the bank walk in the reader and in the writer, pad slots in the reader and in the writer, all
 # three borrowed as slices with partial tiles, all three borrowed as shards with 4 tiles per compute thread, and the
-# NoC path beside DRAM. Under the rule, the shards hold 4 tiles per compute thread, so the FPU kernel's batches give
-# the predicted wrong tiles, and the SFPU kernel's batches are exact.
+# NoC path beside DRAM. Under the rule, the shards hold 4 tiles per compute thread, so the SFPU kernel runs one full
+# batch per thread. Every output is exact.
 _OTHER_OPS = ("subtract", "multiply", "multiply_fast", "divide")
 _OP_MIXES = (
     "I.I.W32",

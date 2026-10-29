@@ -780,7 +780,8 @@ ProgramArtifacts create_no_bcast_artifacts(
     // anchor's tile count divides. Beside a DRAM operand the rule batches only as below.
     const auto in_dram = [](const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; };
     const bool any_dram = in_dram(a) || (!is_scalar && in_dram(*b_opt)) || in_dram(c);
-    // Batching beside DRAM needs interleaved a, b, c and nothing borrowed; NoC-moved shards abort on ttsim.
+    // Batching beside DRAM needs interleaved a, b, c and nothing borrowed. A sharded operand that moves over the NoC
+    // stays at batch 1 until batching it is measured: it aborted on ttsim, and no issue tracks that yet.
     const auto interleaved = [](const Tensor& tensor) { return !tensor.memory_config().is_sharded(); };
     uint32_t tiles_per_compute_thread = 0;
     if (anchor.kind == AnchorKind::kNone && interleaved(a) && interleaved(*b_opt) && interleaved(c) &&
@@ -788,7 +789,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         // The most tiles split_work_to_cores gives a cluster.
         const uint32_t tiles_per_cluster =
             tt::div_up(c_num_tiles, std::min<uint32_t>(op.worker_grid.num_cores(), c_num_tiles));
-        tiles_per_compute_thread = tt::div_up(tiles_per_cluster, native_compute_threads(t));
+        tiles_per_compute_thread = tt::div_up(tiles_per_cluster, compute_threads);
     }
     const NativeConfig cfg = resolve_native_config(
         t,
@@ -800,6 +801,18 @@ ProgramArtifacts create_no_bcast_artifacts(
          .tiles_per_compute_thread = tiles_per_compute_thread,
          // Batched fp32 divide measured slower at every size.
          .batch_pays = !(op_type == BinaryOpType::DIV && fp32_dest_acc_en)});
+    // The settings line cannot give these batches, as they follow the tile count.
+    if (tiles_per_compute_thread > 0) {
+        log_info(
+            tt::LogOp,
+            "binary_ng Quasar-native: {} tiles beside DRAM, {} per compute thread: dm_batch={} tiles_per_cycle={} "
+            "entries_per_thread={}",
+            c_num_tiles,
+            tiles_per_compute_thread,
+            describe_native_value(t.dm_batch, cfg.dm_batch),
+            describe_native_value(t.tiles_per_cycle, cfg.tiles_per_cycle),
+            describe_native_value(t.entries_per_thread, cfg.entries_per_thread));
+    }
     const uint32_t reader_threads = cfg.reader_threads;
     const uint32_t writer_threads = cfg.writer_threads;
     // A borrowed ring must divide by the compute count, so, until the DFB can give each tile counter its own
@@ -833,11 +846,10 @@ ProgramArtifacts create_no_bcast_artifacts(
     // HAS_SHARDING mirrors the descriptor's define for a borrowed shard; kernels_qsr/ does not read it.
     const bool has_sharding = anchor.kind == AnchorKind::kShard;
 
-    // --- num_tiles_per_cycle: tiles per tile_regs_acquire, which the DST capacity bounds; the rule takes all
-    // of it where every tile of a batch comes out right. Neither batch has to divide a thread's share: the kernels
-    // run a short last batch. A borrowed ring is the shard or slice, walked once, so a batch there never wraps, and
-    // the ring holds the thread's whole share. Above ring stride 1 an FPU-kernel compute batch gives a wrong output;
-    // see the warning below. ---
+    // --- num_tiles_per_cycle: tiles per tile_regs_acquire, which the DST capacity bounds; resolve_native_config
+    // gives the rule's value. Neither batch has to divide a thread's share: the kernels run a short last batch. A
+    // borrowed ring is the shard or slice, walked once, so a batch there never wraps, and the ring holds the thread's
+    // whole share. A compute batch is exact at any ring stride: the unpack and the pack both step it by the stride. ---
     // in0/in1 endpoints are (R, C); out endpoints are (C, W).
     const uint32_t in_producers_consumers = std::max(reader_threads, compute_threads);
     const uint32_t out_producers_consumers = std::max(compute_threads, writer_threads);

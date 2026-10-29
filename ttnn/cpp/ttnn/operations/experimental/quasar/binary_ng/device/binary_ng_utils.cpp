@@ -944,7 +944,6 @@ NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves
     // 8 on the FPU kernel at R = C = W = 1 only. Beside a DRAM operand both are 1,
     // except where every operand is interleaved: there both follow the compute thread's share (below).
     constexpr uint32_t kRuleDmBatch = 8;
-    const uint32_t rule_dm_batch = moves.dram ? 1u : kRuleDmBatch;
     NativeConfig config;
     config.compute_threads = native_compute_threads(tuning);
     config.reader_threads = moves.inputs ? tuning.reader_threads.env.value_or(config.compute_threads) : 1u;
@@ -968,7 +967,7 @@ NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves
         share_batches ? std::bit_floor(std::min(
                             native_max_tiles_per_cycle(moves.sfpu, moves.dst_32bit), moves.tiles_per_compute_thread))
                       : 1u;
-    config.dm_batch = tuning.dm_batch.env.value_or(moves.dram ? share_batch : rule_dm_batch);
+    config.dm_batch = tuning.dm_batch.env.value_or(moves.dram ? share_batch : kRuleDmBatch);
     // Off DRAM the rule batches the FPU kernel only at 1,1,1 until the other thread splits are measured.
     const bool fpu_batches = config.reader_threads == 1 && config.compute_threads == 1 && config.writer_threads == 1;
     const bool rule_batches = !moves.dram && one_counter_per_compute_thread && (moves.sfpu || fpu_batches);
@@ -1078,7 +1077,8 @@ const NativeTuning& native_tuning() {
         // num_entries is DERIVED (entries_per_thread x the endpoint's max(producers, consumers)), so the
         // depth reaching the credit register is not this number.
         // The program shapes can differ in their threads, batches and depth, so each gives its own. A DRAM
-        // operand changes only the batches and the depth, the same in every shape, so the DRAM part names those.
+        // operand changes only the batches and the depth. Where every operand is interleaved they follow the
+        // program's tile count, so the DRAM part names them for the other programs and the factory logs the rest.
         const NativeConfig noc_dram = resolve_native_config(t, {.inputs = true, .output = true, .dram = true});
         const NativeConfig output_borrowed = resolve_native_config(t, {.inputs = true, .output = false});
         const NativeConfig inputs_borrowed = resolve_native_config(t, {.inputs = false, .output = true});
@@ -1090,7 +1090,9 @@ const NativeTuning& native_tuning() {
             tt::LogOp,
             "binary_ng Quasar-native ENABLED. Where the operands move over the NoC, all in L1: R={} C={} W={} "
             "entries_per_thread={} dm_batch={} tiles_per_cycle={}. Where an operand is in DRAM: "
-            "entries_per_thread={} dm_batch={} tiles_per_cycle={}. Where the output is borrowed and an input moves: "
+            "entries_per_thread={} dm_batch={} tiles_per_cycle={}, or, where every operand is interleaved, the "
+            "batches of the compute thread's share that each program logs. Where the output is borrowed and an input "
+            "moves: "
             "R={} W=1 tiles_per_cycle={}. Where the inputs are borrowed and the output moves: R=1 W={} "
             "tiles_per_cycle={}. Where all of them are borrowed: R=1 W=1 tiles_per_cycle={}. Where the SFPU kernel "
             "runs, "

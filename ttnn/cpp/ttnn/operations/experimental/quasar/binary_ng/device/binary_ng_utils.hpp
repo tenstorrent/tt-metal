@@ -220,19 +220,21 @@ struct NativeConfig {
 uint32_t native_compute_threads(const NativeTuning& tuning);
 
 // Each set knob, else the rule's value for what the program moves. The rule takes the most threads and, with
-// every operand in L1, the largest batches that come out right: C = 4; R = C when an input moves, else 1;
-// W = min(C, 6 - R) when the output moves, else 1, so R + W fits the 6 user DM cores; DM batch 8; compute batch
-// native_max_tiles_per_cycle on the SFPU kernel where R <= C and W <= C, and on the FPU kernel at R = C = W = 1 only,
-// else 1; beside a DRAM operand both batches 1, or the compute thread's share where every operand is interleaved; ring
-// depth two batches per thread, a multiple of each. A borrowed input runs R = 1 and a borrowed output W = 1, whatever
-// is set. Off DRAM the rule does not batch the FPU kernel above ring stride 1 yet; a set batch still runs.
+// every operand in L1, these batches: C = 4; R = C when an input moves, else 1; W = min(C, 6 - R) when the output
+// moves, else 1, so R + W fits the 6 user DM cores; DM batch 8; compute batch native_max_tiles_per_cycle on the SFPU
+// kernel where R <= C and W <= C, and on the FPU kernel at R = C = W = 1 only, else 1. Beside a DRAM operand both
+// batches are bit_floor(min(native_max_tiles_per_cycle, NativeMoves::tiles_per_compute_thread)) where that share is
+// at least 4, R <= C, W <= C, NativeMoves::batch_pays holds and TTNN_QSR_DRAM_BATCH is not 0, else 1. Ring depth is
+// two batches per thread, a multiple of each. A borrowed input runs R = 1 and a borrowed output W = 1, whatever is
+// set. Off DRAM the rule does not batch the FPU kernel above ring stride 1 until those splits are measured; a set
+// batch still runs.
 NativeConfig resolve_native_config(const NativeTuning& tuning, NativeMoves moves);
 
 // "8 (rule)" or "8 (TTNN_QSR_DM_BATCH)": a value the knob or the rule gave, with its source, for messages.
 std::string describe_native_value(const NativeKnob& knob, uint32_t value);
 
 // Parsed once into a function-local static. Knobs are TTNN_QSR_{NATIVE, IMPLICIT_SYNC, READER_THREADS,
-// COMPUTE_THREADS, WRITER_THREADS, ENTRIES_PER_THREAD, DM_BATCH, TILES_PER_CYCLE}. Topology invariants are
+// COMPUTE_THREADS, WRITER_THREADS, ENTRIES_PER_THREAD, DM_BATCH, TILES_PER_CYCLE, DRAM_BATCH}. Topology invariants are
 // asserted only when `enabled`, so a bad knob cannot take down the fallback reference arm.
 const NativeTuning& native_tuning();
 }  // namespace ttnn::operations::experimental::quasar::binary_ng
