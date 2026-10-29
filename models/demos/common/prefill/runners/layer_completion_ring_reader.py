@@ -200,6 +200,7 @@ class LayerCompletionDrain:
         *,
         num_layers: int,
         chunk_layers: int | None = None,
+        on_completion=None,
         on_chunk_complete=None,
         poll_idle_s: float = 0.001,
     ):
@@ -207,6 +208,7 @@ class LayerCompletionDrain:
             ring,
             num_layers=num_layers,
             chunk_layers=chunk_layers,
+            on_completion=on_completion,
             on_chunk_complete=on_chunk_complete,
             poll_idle_s=poll_idle_s,
         )
@@ -281,12 +283,18 @@ def connect_layer_completion_channel(timeout_s: int):
     return ring
 
 
-def start_layer_completion_drain(completion_channel, *, num_layers: int, chunk_layers: int, on_chunk_complete=None):
+def start_layer_completion_drain(
+    completion_channel, *, num_layers: int, chunk_layers: int, on_completion=None, on_chunk_complete=None
+):
     """A started LayerCompletionDrain on the channel, or None when there is no channel."""
     if completion_channel is None:
         return None
     return LayerCompletionDrain(
-        completion_channel, num_layers=num_layers, chunk_layers=chunk_layers, on_chunk_complete=on_chunk_complete
+        completion_channel,
+        num_layers=num_layers,
+        chunk_layers=chunk_layers,
+        on_completion=on_completion,
+        on_chunk_complete=on_chunk_complete,
     ).start()
 
 
