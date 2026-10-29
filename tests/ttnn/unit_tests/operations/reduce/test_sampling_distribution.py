@@ -1,9 +1,22 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Distribution-level check of ttnn.sampling: with fixed candidate logits, many seeded draws
-must reproduce the reference distribution (softmax -> top-k -> top-p (nucleus incl. the
-crossing token) -> renormalise). Reports per-user total variation and the realised
-probability of tail tokens, which is where a quantised random threshold would show."""
+"""Distribution-level check of ttnn.sampling.
+
+The device threshold is k / 2^24 (three BF16 integer digits; see writer_interleaved.cpp), which
+is the FP32 ulp on [0.5, 1). A single packed BF16 uniform is a k/256 grid near 1 and is capped
+at 255/256, so a token whose mass sits in (255/256, 1] is never drawn.
+
+Draw count: N calls (default 3000, override with SAMPLING_DRAWS) times USERS (32) independent
+per-user streams. Seed policy: ttnn.manual_seed once, seeds = arange(1..USERS) * a fixed odd
+constant, then every ttnn.sampling call takes the next value of that stream. The op `seed`
+argument is not used here; it is a compile-time arg and would rebuild the kernel per call.
+Same assertions on Wormhole and Blackhole.
+
+Reference, per user: quantize logits to BF16 (what the device receives), restrict to the top-k,
+softmax in FP32 of those BF16 probabilities, apply the nucleus (drop the smallest tokens while
+their cumulative mass is <= 1 - p, always keep the largest), renormalize. Pass/fail is the
+multinomial sampling error of that reference, spelled out on each test.
+"""
 
 import os
 
@@ -69,6 +82,14 @@ def _reference(values):
 
 
 def test_sampling_matches_reference_distribution(device):
+    """Multi-candidate rows (dominant, near-flat, long ~0.3% tail, zipf) against `_reference`.
+
+    Pass when, for every user, total variation is at most max(0.03, 3 sigma of the multinomial
+    TV) and the reference mass of never-sampled tokens with probability >= 0.002 — excluding the
+    single nucleus-edge token — is at most 0.003. The 0.03 floor is the approximate-exp softmax
+    residual. A threshold stuck on the BF16 1/256 grid leaves those tail tokens unsampled, so
+    `never` exceeds 0.003 even when the TV floor would not.
+    """
     values = _rows()
     values_bf16 = values.to(torch.bfloat16)
     ref = _reference(values_bf16)
@@ -186,13 +207,15 @@ def test_sampling_threshold_uniformity(device):
 
 
 def test_sampling_low_digit_reaches_the_tail(device):
-    """Direct check of the threshold's low digit. Every user is the same two-token row with
-    P(second) just under 1/512, i.e. inside the last 1/256 of the mass: a threshold built from the
-    high digit alone (max 255/256) can never land there and draws the second token 0 times, and a
-    low digit that merely copies the high one lands there only when hi = 255 (1/256, twice the
-    expected rate). Only an independent 16-bit lattice gives the expected count, asserted within
-    4 sigma over USERS * N draws. (On Wormhole element 1 of this kernel's random tile is not a
-    draw, which is why the writer reads element 2.)"""
+    """Two-candidate frequency check at a probability the BF16 threshold cannot represent.
+
+    Every user is the same two-token row. gap = 6.25 is exact in BF16, and
+    P(second) = 1 / (1 + exp(6.25)) ≈ 0.00193, which lies entirely inside (255/256, 1].
+    A threshold capped at 255/256 never lands there, so the second token's count is 0.
+    The reference is the softmax of the BF16 logits. Over draws = USERS * N the count is
+    Binomial(draws, p); the test requires it within 4 standard deviations of draws * p
+    (and therefore not zero, and not the 2x rate of a low digit that copies the high one).
+    """
     gap = 6.25  # bf16-exact; P(second) = 1 / (1 + e^6.25) = 0.00193
     values = torch.full((1, 1, USERS, W), -30.0)
     values[..., 0] = 0.0
@@ -231,6 +254,69 @@ def test_sampling_softmax_gap(device):
         print(f"gap {d:>4}: P(second) expected {exp:.4f}  device {got:.4f}  ratio {ratio:.2f}")
         if d <= 6 and not (0.5 <= ratio <= 1.5):
             bad.append((d, ratio))
-    assert (
-        not bad
-    ), f"P(second) off by more than 50% at gaps {bad} (before the 16-bit threshold: 0.67x at 4, 0.20x at 5, 0 at 6)"
+    assert not bad, (
+        f"P(second) off by more than 50% at gaps {bad} "
+        "(a BF16 threshold capped at 255/256 is 0.67x at gap 4, 0.20x at gap 5, and 0 at gap 6)"
+    )
+
+
+def _grid_hits(numerator_bits, mass):
+    """How many points of the uniform grid k / 2^numerator_bits, k = 0 .. 2^numerator_bits - 1,
+    fall in the last `mass` of the unit interval. The sampler picks the second of two tokens
+    when the threshold is >= 1 - mass (comparison is cum_sum > threshold)."""
+    span = 1 << numerator_bits
+    # k >= ceil((1 - mass) * span). Python floats are float64; span <= 2^24 is exact, and the
+    # masses used here are either dyadic or a softmax probability whose product is nowhere near
+    # a rounding boundary relative to 1 ulp of the grid.
+    scaled = (1.0 - mass) * span
+    first = int(scaled) if scaled.is_integer() else int(scaled) + 1
+    return span - first
+
+
+def test_host_threshold_grid_matches_the_reference():
+    """No device. Fixes the pass/fail numbers used by the device tests.
+
+    Reference for the two-candidate row in test_sampling_low_digit_reaches_the_tail:
+    logits [0, -6.25] quantized to BF16 (6.25 is exact), then softmax.
+    P(second) sits entirely above 255/256, so a packed-BF16 threshold draws that token 0 times.
+    The same mass on the k/2^24 grid used by the kernel is within one grid cell of P(second).
+
+    Equal-probability candidates (test_sampling_threshold_uniformity) split the same grid into
+    bins whose counts differ by at most one cell, which is far inside the 4-sigma multinomial
+    band the device test applies to USERS * N draws.
+
+    A 16-bit grid still misses a token of mass 2^-17; the 24-bit grid assigns it exactly 2^-17.
+    """
+    logits = torch.tensor([0.0, -6.25])
+    p_second = torch.softmax(logits.to(torch.bfloat16).float(), dim=-1)[1].item()
+    # 255/256 is the largest BF16 value strictly below 1 that the old packed uniform could emit.
+    assert 1.0 - p_second > 255.0 / 256.0
+    assert _grid_hits(8, p_second) == 0
+
+    hits_24 = _grid_hits(24, p_second)
+    # One cell is 2^-24. The grid measure and the true probability differ by less than that.
+    assert abs(hits_24 / (1 << 24) - p_second) < (1.0 / (1 << 24))
+
+    # Mass 2^-17 starts past the last k/2^16 point (65535/65536 = 1 - 2^-16) and contains
+    # exactly 128 points of the k/2^24 grid: 128 / 2^24 = 2^-17.
+    assert _grid_hits(16, 2**-17) == 0
+    assert _grid_hits(24, 2**-17) == 128
+
+    # Device binomial band at the default draw count. A zero count is many sigma out, which is
+    # why test_sampling_low_digit_reaches_the_tail fails on the BF16 threshold and passes here.
+    draws = USERS * N
+    mean = draws * p_second
+    sigma = (draws * p_second * (1.0 - p_second)) ** 0.5
+    assert mean > 30  # absence is not a plausible binomial fluctuation
+    assert 0 < mean - 4 * sigma  # the device lower bound is above the BF16 count of 0
+
+    # m equal bins. 2^24 is not always divisible by m; bin counts still differ by at most 1.
+    for m in (4, 10, 20):
+        span = 1 << 24
+        counts = [((j + 1) * span) // m - (j * span) // m for j in range(m)]
+        assert max(counts) - min(counts) <= 1
+        expected = 1.0 / m
+        device_sigma = (expected * (1.0 - expected) / draws) ** 0.5
+        # The whole grid imbalance, spread over `draws` samples, is far below 4 sigma.
+        imbalance = (max(counts) - min(counts)) / span
+        assert imbalance < 4 * device_sigma
