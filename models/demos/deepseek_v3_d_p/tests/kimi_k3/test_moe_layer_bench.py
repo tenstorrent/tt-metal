@@ -374,3 +374,74 @@ def test_k3_layer_block(mesh_device, device_params):
     _summary(tag, "traced", replays)
     ttnn.release_trace(mesh_device, tid)
     ttnn.deallocate(y)
+
+
+def _glm_params():
+    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
+    from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+    from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import fabric_payload
+
+    return torus_xy_device_params(
+        fabric_payload_size=fabric_payload(GLM53Config.EMB_SIZE), l1_small_size=0, trace_region_size=TRACE_REGION
+    )
+
+
+ML_MODEL = os.environ.get("MOE_ML_MODEL", "k3")
+ML_PLACEMENTS = [
+    pytest.param(
+        (8, 4),
+        _glm_params() if ML_MODEL == "glm" else {**_device_params(), "trace_region_size": TRACE_REGION},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="8x4",
+    )
+]
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device, device_params", ML_PLACEMENTS, indirect=True)
+def test_block_layers_traced(mesh_device, device_params):
+    """Several MoE layers on one block, one after another (each its own MoELayer: the per-layer weight switch), eager then
+    captured in ONE trace and replayed - every layer's traced output against its eager one. MOE_ML_MODEL=k3 (K3_MOE_IMPL
+    =block, K3_BLOCK_WEIGHTS real_gate / weka) or glm (GLM-5.3, weka: $GLM53_HF_MODEL + its TtMoe cache)."""
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import TtK3MoEBlockFfn
+
+    layers = [int(v) for v in os.environ.get("MOE_ML_LAYERS", "3,4,5,6" if ML_MODEL == "glm" else "1,2,4,5").split(",")]
+    if ML_MODEL == "glm":
+        from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config as cfg
+
+        cache = Path(os.environ["TT_GLM53_PREFILL_TTNN_CACHE"]) / "glm_5_3_bh_32dev"
+        hits = sorted(cache.rglob(f"layer_{layers[0]}.routed_expert.local_0_gate_dtype_*.tensorbin"))
+        assert hits, f"no GLM routed cache under {cache}"
+        kw = dict(cache_path=hits[0].parent)
+    else:
+        assert os.environ.get("K3_MOE_IMPL") == "block"
+        cfg, kw = KimiK3Config, {}
+    H = cfg.EMB_SIZE
+    shape = tuple(mesh_device.shape)
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=shape, dims=(2, 3))
+    x = (torch.randn(CHUNK, H, generator=torch.Generator().manual_seed(11)) * 0.5).to(torch.bfloat16)
+    x_dev = ttnn.from_torch(x.view(1, 1, CHUNK, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper, device=mesh_device)
+    ffns = [TtK3MoEBlockFfn(mesh_device, cfg, L, **kw) for L in layers]
+
+    def seq():
+        return [f(x_dev) for f in ffns]
+
+    eager = []
+    for _ in range(2):
+        ys = seq()
+        ttnn.synchronize_device(mesh_device)
+        eager = [_composed(mesh_device, y) for y in ys]
+        for y in ys:
+            ttnn.deallocate(y)
+    logger.info(f"K3_ML eager: {len(layers)} layers {layers} ok, |y| max " + " ".join(f"{float(e.abs().max()):.3g}" for e in eager))
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    ys = seq()
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    for it in range(3):
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        got = [_composed(mesh_device, y) for y in ys]
+        pccs = [_pcc(g, e) for g, e in zip(got, eager)]
+        logger.info(f"K3_ML traced replay {it}: per-layer PCC vs eager " + " ".join(f"{p:.5f}" for p in pccs))
+        assert all(p > 0.999 for p in pccs), f"traced layers differ from eager: {pccs}"
+    ttnn.release_trace(mesh_device, tid)

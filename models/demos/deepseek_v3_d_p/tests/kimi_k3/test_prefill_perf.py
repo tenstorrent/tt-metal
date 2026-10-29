@@ -108,6 +108,64 @@ def _op_breakdown(num_layers, critical_path, sources, device_ms, chip_mean=None)
             json.dump(rows, f)
 
 
+def _traced(model, tokens, kvpe, mesh_device, num_layers, eager_ms, replays=10):
+    """One forward captured as a trace (SubDeviceTraceController: TtMoe's shared-expert / dispatch sub-device swaps
+    split it into segments, as the runtime's traced prefill does) and replayed: each replay's host wall, synced."""
+    import torch
+
+    from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata
+    from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
+
+    def meta1(v):  # (as the runtime's: a persistent 1-element uint32 the trace reads at its captured address)
+        return ttnn.from_torch(
+            torch.tensor([v], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    # (the chunk's bounds on the device - the eager path uploads them from the host each forward, illegal in a capture)
+    metadata = ChunkMetadata(meta1(0), meta1(0), meta1(SEQ_LEN))
+
+    def fwd():
+        out = model.forward(tokens, kvpe_cache=kvpe, metadata=metadata)
+        if out is not None:
+            ttnn.deallocate(out)
+
+    controller = SubDeviceTraceController(mesh_device)
+    model.set_trace_controller(controller)
+    capturing = False
+    try:
+        model.reset_streams()
+        fwd()  # (warm with the controller idle: the programs compiled, its sub-device managers created)
+        ttnn.synchronize_device(mesh_device)
+        controller.begin_capture()
+        capturing = True
+        fwd()
+        controller.end_capture()
+        capturing = False
+        ms = []
+        for _ in range(replays):
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            controller.replay()
+            ttnn.synchronize_device(mesh_device)
+            ms.append((time.perf_counter() - t0) * 1e3)
+        rest = sorted(ms[1:]) or ms
+        logger.info(
+            f"PERF_TRACE L{num_layers}: traced replay first {ms[0]:.2f} ms, median {rest[len(rest) // 2]:.2f} ms, min "
+            f"{rest[0]:.2f} ms over {len(ms)} ({controller.num_segments} segments, {controller.trace_bytes() / 2**20:.1f} "
+            f"MiB of trace); eager {eager_ms:.2f} ms"
+        )
+    finally:
+        if capturing:
+            controller.end_capture()
+        controller.release()
+        model.set_trace_controller(None)
+
+
 def _host_breakdown(model, once, mesh_device, num_layers, eager_ms, iters=5):
     """Where an eager forward's host time goes: each layer's parts timed on the host (no syncs - the enqueue cost, as
     the eager wall pays it while the device keeps up), then one forward under cProfile (the top functions by own
@@ -291,6 +349,8 @@ def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
 
         if os.environ.get("K3_PERF_HOST") == "1":
             _host_breakdown(model, once, mesh_device, num_layers, eager_ms)
+        if os.environ.get("K3_PERF_TRACE") == "1" and num_chunks == 1:
+            _traced(model, chunks[0], kvpe, mesh_device, num_layers, eager_ms)
 
         device_ms = None
         try:
