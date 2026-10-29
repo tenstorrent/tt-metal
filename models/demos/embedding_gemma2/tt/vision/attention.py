@@ -68,10 +68,12 @@ class VisionSdpaSpec(NamedTuple):
 # replaces `_SDPA_TABLE` for that bucket on that grid only, at batch 1. Grids without an entry (the P150a's
 # 13 x 10) keep the table. EG2_VISION_SDPA_TUNED=0 disables it (same-session control); VISION_SDPA_OVERRIDES
 # [seq_len] (in-process, empty by default) takes precedence on every grid (the in-model search sets it).
-# 12 x 10, 1 x 2560: q 256 / k 512 = 12 heads x 10 q chunks = 120 work units, one per core (q 128: 240 units,
-# two waves); same k chunk, so bit-identical to the table entry; -3.0 % per forward (tt-ops e10/02-attention
-# search vision_vs1 / vs3).
-VISION_SDPA_TUNED: dict[tuple[int, int], dict[int, VisionSdpaSpec]] = {(12, 10): {2560: VisionSdpaSpec(256, 512)}}
+# 12 x 10, 1 x 2560: q 256 / k 256 = 12 heads x 10 q chunks = 120 work units, one per core (q 128: 240 units,
+# two waves); -1.8 % per forward (tt-ops e10/02-attention search vision_vs1). q 256 / k 512 (-3.0 %,
+# bit-identical to the table entry) fits L1 in the tower alone but its circular buffers clash with the L1
+# buffers the full model holds when an image follows other items (test_full_model mixed_image_audio:
+# "static circular buffer region ends at 1295744", L1 buffer at 1286144), so the smaller k chunk is kept.
+VISION_SDPA_TUNED: dict[tuple[int, int], dict[int, VisionSdpaSpec]] = {(12, 10): {2560: VisionSdpaSpec(256, 256)}}
 VISION_SDPA_TUNED_ON = os.environ.get("EG2_VISION_SDPA_TUNED", "1") == "1"
 VISION_SDPA_OVERRIDES: dict[int, VisionSdpaSpec] = {}
 
