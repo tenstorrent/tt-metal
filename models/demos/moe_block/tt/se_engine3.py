@@ -1749,7 +1749,7 @@ def glu_defines(act):
 
 
 class ArenaTooLarge(ValueError):
-    """The engine's arena does not fit the L1 cap at any W ring / h slot count: .need (bytes, the last try's), .cap."""
+    """The matmul cores' arena does not fit the L1 cap at any W ring / h slot count: .need (bytes, the last try's), .cap."""
 
 
 def _ring_pages(pages, pushes):
@@ -1902,7 +1902,7 @@ class SeEngine3:
         if rs is not None:  # (the column's down passes: the plan's, widths the same on every chip)
             assert down and rs.pwmax == self.PWDMAX and rs.MT == MT and rs.GX == GX and rs.GY == GY, (
                 f"se_engine3: the RS plan's tiling (GX {rs.GX} GY {rs.GY} MT {rs.MT} pwmax {rs.pwmax}) is not the "
-                f"engine's (GX {GX} GY {GY} MT {MT} pwmax {self.PWDMAX})"
+                f"matmul cores' (GX {GX} GY {GY} MT {MT} pwmax {self.PWDMAX})"
             )
             self.wd = [[pw for _, pw, _ in rs.column_passes(0, c)] for c in range(GX)]
             self.NPD = len(self.wd[0])
@@ -2064,7 +2064,7 @@ class SeEngine3:
         ends = sorted(set(off.values()) | {o})
         self.sizes = {k: next(e for e in ends if e > v) - v if v < o else 0 for k, v in off.items()}
         # (the router's buffers over a region another chip writes - the reduce-scatter's arrival zones, the latent's:
-        # those writes wait for this chip's "router done" (SE_RDONE: every engine core's router phase over, counted on
+        # those writes wait for this chip's "router done" (SE_RDONE: every matmul core's router phase over, counted on
         # the ports; they credit the zones / tell "started" only then) - the chips do not run in step: a chip that
         # does not wait for this one's x (the DRAM fallback), or starts a call earlier, reaches its reduce-scatter
         # while this one still reads x rows / W_r^T there; on the first call of the fallback the logits came out wrong)

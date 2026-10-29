@@ -145,7 +145,7 @@ def _reason_class(why):
         ("L1:", "L1 (arena)"),
         ("tokens a chip > 2048", "routing: > 2048 tokens a chip"),
         ("experts a chip", "routing: experts a chip"),
-        ("no engine layout", "no engine layout"),
+        ("no matmul-core layout", "no matmul-core layout"),
         ("router cores", "router cores"),
     ):
         if key in why:

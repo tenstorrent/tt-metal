@@ -8,7 +8,7 @@ own arena sizing, se_engine3.SeEngine3 with no device; the router cores' arena),
 measured heads (MOE_BLOCK_WORKLOG.md, "the head planner"). Host only: tests/test_head_plan.py sweeps it over real and
 synthetic shapes.
 
-fit() is the head's whole host plan: every requirement its build checks (the engine's arena at each K step / W ring /
+fit() is the head's whole host plan: every requirement its build checks (the matmul cores' arena at each K step / W ring /
 row chunks, the RS plan, the mover column's cells, the router cores' arena and runtime args, the routing exchange's
 planner regions and port buffers, packet headers) on a HeadShape, no device. A shape fit() accepts builds (the build
 plans again with the device's own free L1, at least what fit() assumed); a shape it refuses says which requirement
@@ -187,9 +187,9 @@ def _al(v):
 
 
 def size(shape: HeadShape, lay: HeadLayout, arena_max=ARENA_MAX, compact=None):
-    """The head sized at this layout (host): (SeEngine3 or None, arena bytes - the engine's, grown to the router
+    """The head sized at this layout (host): (SeEngine3 or None, arena bytes - the matmul cores', grown to the router
     cores' least, as the build does; with why not: the bytes it would need, else 0 - region sizes, why not). Every
-    check of the build past the engine too (cores_check)."""
+    check of the build past the matmul cores too (cores_check)."""
     cap = arena_max(lay.KB) if callable(arena_max) else arena_max
     key = (shape, lay, cap, compact)
     if key not in _SIZED:
@@ -310,7 +310,7 @@ def la_dests(G, ring):
 
 
 def cores_check(shape: HeadShape, lay: HeadLayout, eng, rs_plan, arena):
-    """Every per-core requirement past the engine's arena (HeadSE3 / RouterStream / RoutingStream / XGather3's checks):
+    """Every per-core requirement past the matmul cores' arena (HeadSE3 / RouterStream / RoutingStream / XGather3's checks):
     "" or why not, with the numbers."""
     from ttnn.bringup.combine_rf.routing_a2a import routing_a2a_sizes, slot_bytes, worst_rows
 
@@ -322,8 +322,8 @@ def cores_check(shape: HeadShape, lay: HeadLayout, eng, rs_plan, arena):
     if rs_plan.P >= 256 or (G > 4 and rs_plan.scatter != -2):
         return f"reduce-scatter counts word: blocks of < 256 tiles (P {rs_plan.P}), past TP 4 the rows scatter only"
     if G > 4 and not lay.on_engine:  # (TP 8 on the LoudBox's perimeter ring / line, logits on the router cores: the
-        # picks of one x differed between calls in 200-360 of 1024 tokens; on the engine: bit-identical - open)
-        return f"TP {G} > 4: the router's logits on the router cores differ call to call - on the engine only"
+        # picks of one x differed between calls in 200-360 of 1024 tokens; on the matmul cores: bit-identical - open)
+        return f"TP {G} > 4: the router's logits on the router cores differ call to call - on the matmul cores only"
     if PORT_GROUP + 1 > HEADERS:
         return "packet headers"
     if shape.latent:
@@ -331,7 +331,7 @@ def cores_check(shape: HeadShape, lay: HeadLayout, eng, rs_plan, arena):
         if nd > 3 or PORT_GROUP + 1 + nd > HEADERS:
             return f"latent all-to-all: {nd} destination blocks a port > 3 (packet headers: {HEADERS} a RISC)"
     # the mover column: ports (2 a link, from the top), the watcher, the router cores (a row tile each of the owners'
-    # rows; with the split two) - or the router cores in free core rows under the engine
+    # rows; with the split two) - or the router cores in free core rows under the matmul cores
     nrt = shape.rows // 32 // G
     S2 = 2 if lay.split else 1
     if lay.GX * lay.GY // L > 128:
@@ -340,7 +340,7 @@ def cores_check(shape: HeadShape, lay: HeadLayout, eng, rs_plan, arena):
         return f"mover column: {2 * L} ports + {L} copy cores > {gy} cells"
     if nrt + 2 * L + 1 <= gy:
         if lay.split and lay.GX > gx - 2:
-            return f"router split: column {gx - 2} must be free (engine {lay.GX} columns)"
+            return f"router split: column {gx - 2} must be free ({lay.GX} matmul core columns)"
     else:
         if lay.split:
             return f"router split: {nrt} router cores + {2 * L} ports + the watcher > the mover column's {gy} cells"
@@ -351,7 +351,7 @@ def cores_check(shape: HeadShape, lay: HeadLayout, eng, rs_plan, arena):
         if lay.GY >= gy or not (nrt <= lay.GX or (lay.on_engine and nrt <= free) or rect):
             return (
                 f"router cores: {nrt} (a row tile each of a chip's owned rows) fit neither the mover column ({gy} cells "
-                f"less {2 * L} ports and the watcher) nor the {free} free cells under the engine "
+                f"less {2 * L} ports and the watcher) nor the {free} free cells under the matmul cores "
                 f"({lay.GX}x{lay.GY}{', one row: the logits on the router cores' if not lay.on_engine else ''})"
             )
     nc = S2 * nrt
@@ -646,7 +646,7 @@ def shape_checks(shape: HeadShape):
     if EPC > 64 or N * EPC > 1024:
         return f"routing planner: {EPC} experts a chip <= 64 and N x EPC {N * EPC} <= 1024 (fold the router)"
     if engine_width(shape) < 1:
-        return f"no engine column: I / TP {shape.I} or latent tiles a chip"
+        return f"no matmul core column: I / TP {shape.I} or latent tiles a chip"
     return ""
 
 
@@ -679,8 +679,8 @@ def _summary(unfit, shape, arena_max):
 
 def describe_lay(lay: HeadLayout):
     return (
-        f"engine {lay.GX}x{lay.GY} MT {lay.MT}, {lay.NCH} row chunk{'s' if lay.NCH > 1 else ''}, K step {lay.KB}, router "
-        f"{'on the engine' if lay.on_engine else 'cores'}{', split' if lay.split else ''}"
+        f"matmul cores {lay.GX}x{lay.GY} MT {lay.MT}, {lay.NCH} row chunk{'s' if lay.NCH > 1 else ''}, K step {lay.KB}, router "
+        f"{'on the matmul cores' if lay.on_engine else 'cores'}{', split' if lay.split else ''}"
     )
 
 
@@ -695,9 +695,10 @@ def degradation(chosen: Planned, free: Planned):
     if a.NCH != b.NCH:
         d.append(f"row chunks {b.NCH} -> {a.NCH}")
     if (a.GY, a.MT) != (b.GY, b.MT):
-        d.append(f"engine rows x MT {b.GY}x{b.MT} -> {a.GY}x{a.MT}")
+        d.append(f"matmul core rows x MT {b.GY}x{b.MT} -> {a.GY}x{a.MT}")
     if a.on_engine != b.on_engine:
-        d.append(f"router logits {'engine' if b.on_engine else 'cores'} -> {'engine' if a.on_engine else 'cores'}")
+        mr = lambda on: "matmul" if on else "router"  # noqa: E731
+        d.append(f"router logits {mr(b.on_engine)} cores -> {mr(a.on_engine)} cores")
     if a.compact != b.compact:
         d.append("compact RS zones")
     wr = chosen.parts.get("wring")
@@ -739,7 +740,7 @@ def fit(
         nrt = shape.rows // 32 // shape.G
         return HeadFit(
             False,
-            why=f"no engine layout for {shape.rows} rows a mesh row ({nrt} row tiles an owner: row chunks of whole "
+            why=f"no matmul-core layout for {shape.rows} rows a mesh row ({nrt} row tiles an owner: row chunks of whole "
             f"owner blocks, MT <= 2, the router cores' cells)",
         )
     ps = plan(shape, arena_max, keep_unfit=True, placement=placement, split=split)

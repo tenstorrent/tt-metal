@@ -49,7 +49,7 @@ FORCE_INLINE uint32_t cnt_of(uint32_t cnts, uint32_t b) {
 }
 constexpr uint32_t RSX = 12;  // (the RS block's words past the entry order: FINB, mailbox, zone, counter, P, FINB-free,
                               // zone credit, zone free, the zone-free signals a chunk, the credits a call expected,
-                              // the "router done" word, the engine cores it counts (0: no router-done credit))
+                              // the "router done" word, the matmul cores it counts (0: no router-done credit))
 """
 
 _WALK = r"""
@@ -500,7 +500,7 @@ void kernel_main() {
     const uint32_t zneed = get_arg_val<uint32_t>(rse + 8), zexp = get_arg_val<uint32_t>(rse + 9);
     const uint32_t zcred = get_arg_val<uint32_t>(rse + 6);
     const uint32_t NZF = zneed && NCH > 1 ? NCH - 1 : 0;
-    // (the router's buffers over this chip's arrival zones / LATZ: every engine core counts its router phase over on
+    // (the router's buffers over this chip's arrival zones / LATZ: every matmul core counts its router phase over on
     // my "router done" word (rneed of them) - only then the peer's chunk 0 credit and the latent's "started" go)
     volatile tt_l1_ptr uint32_t* rdone = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(rse + 10));
     const uint32_t rw_ = get_arg_val<uint32_t>(rse + 11), rneed = rw_ & 0xFFFF;
@@ -571,7 +571,7 @@ void kernel_main() {
 #define RA_BBP_ 16
 #define RA_MAXP_ 64
 #endif
-        auto rpoll = [&]() {  // (every engine core's router phase is over: the zones, LATZ free - also between the x
+        auto rpoll = [&]() {  // (every matmul core's router phase is over: the zones, LATZ free - also between the x
             // gather's packets: the upstream's chunk 0 reduce-scatter waits for it)
             if (!rtold && *rdone >= rneed) {
                 if (rzone && zneed) {  // (chunk 0's credit)
@@ -666,7 +666,7 @@ void kernel_main() {
         if (lneed) noc_semaphore_inc(get_noc_addr(lfence), 0u - lneed);  // (re-arm: a next call's early "started" stays)
         conn.close();
     }
-    if (rneed) {  // (re-arm: every engine core counted its router phase here - also on a port with nothing to send)
+    if (rneed) {  // (re-arm: every matmul core counted its router phase here - also on a port with nothing to send)
         noc_semaphore_wait_min(rdone, rneed);
         noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(rdone)), 0u - rneed);
         noc_async_atomic_barrier();
@@ -816,7 +816,7 @@ class XGather3:
         xdram=False,
     ):
         """watcher: the watcher's logical core (default: the plan's first copy core). xdram (the head's DRAM fallback):
-        no x streams - the engine loads every shard from a gathered DRAM copy; the ports keep the call fence and carry
+        no x streams - the matmul cores load every shard from a gathered DRAM copy; the ports keep the call fence and carry
         the reduce-scatter, the logits, the latent and the routing."""
         self.xdram = xdram
         self.mesh, self.eng = mesh_device, engine
@@ -951,7 +951,7 @@ class XGather3:
         # (the cores something lands on - a core with only "nothing comes" slots does not signal)
         lands = lambda q_, cx, cy, d_: any(t for _, _, t in plan.arrivals(q_, cx, cy)[d_])  # noqa: E731
         # (the router's buffers over the zones (rtr_overlay): one more credit a call, chunk 0's - sent once every
-        # engine core's router phase is over (the "router done" word here, GX GY))
+        # matmul core's router phase is over (the "router done" word here, GX GY))
         rd = 1 if getattr(e, "rtr_zones", False) else 0
         zneed = sum(1 for cx, cy in plan.port_cores(v) if lands(p, cx, cy, opp)) if e.NCH > 1 or rd else 0
         zexp = 0
@@ -963,7 +963,7 @@ class XGather3:
             + plan.entries(p)
             + [rs["finb"], rs["mbox"], rs["zone"][i], rs["arr"][i], 0 if plan.compact else plan.P]
             + [rs["ffree"], rs["zcred"], rs["zfree"], zneed, zexp]
-            # (the router-done word, the engine cores it counts | chunk 0's credit waits << 16 | the latent's
+            # (the router-done word, the matmul cores it counts | chunk 0's credit waits << 16 | the latent's
             # "started" waits << 17 - 0: no router buffers over a remote-written region)
             + [rs.get("rdone", 0) if e.rtr_overlay else 0]
             + [e.GX * e.GY | rd << 16 | int(e.rtr_latz) << 17 if e.rtr_overlay else 0]
@@ -1151,7 +1151,7 @@ class XGather3:
         wc = self.watcher_core(coord)
         shards, carry = self.order(coord)
         finals, wargs = {}, []
-        for q in shards[1:] if not self.xdram else []:  # (xdram: nothing to watch - one shard, the engine's own load)
+        for q in shards[1:] if not self.xdram else []:  # (xdram: nothing to watch - one shard, loaded by the cores)
             wargs += [len(carry[q])] + [x_ for d, v, j, n in carry[q] for x_ in (self.watch[(d, v)], j, n)]
         for d in ("fwd", "bwd") if not self.xdram else ():  # (a stream counts all its entries, also those carrying
             # nothing on this link)

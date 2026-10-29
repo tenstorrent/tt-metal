@@ -424,7 +424,7 @@ class HeadSE3:
             # (then, with chunks, the RS zone credits: a port's zone-free word (its chip's cores) and zone-credit word
             # (its peer's port))
             self.zw_off = self.lw_off + 4 * self.port_words
-            # (and the ports' "router done" word: the engine cores' router phase over - se_engine3 rtr_overlay)
+            # (and the ports' "router done" word: the matmul cores' router phase over - se_engine3 rtr_overlay)
             words = self.zw_off + 12
             self.mbox = ttnn.from_torch(
                 torch.zeros(len(cores), words, dtype=torch.int32),
@@ -694,7 +694,7 @@ class HeadSE3:
         return t
 
     def run(self, x, w, x_full=None):
-        """x_full (the DRAM fallback, self.xdram): x gathered over TP [rows, H] - the engine loads every shard from it."""
+        """x_full (the DRAM fallback, self.xdram): x gathered over TP [rows, H] - the matmul cores load every shard from it."""
         assert not self.xdram or x_full is not None, "HeadSE3: the DRAM fallback runs on the gathered x (x_full)"
         self._xfull = x_full
         if not hasattr(self, "_persist"):
