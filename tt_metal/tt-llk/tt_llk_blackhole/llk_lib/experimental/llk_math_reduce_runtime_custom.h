@@ -34,16 +34,6 @@ using namespace ckernel;
  */
 inline void reduce_max_row_configure_addrmod_runtime()
 {
-    // ADDR_MOD_6: Default mode used with pool operations (GMPOOL/GAPOOL)
-    // No auto-increment on any counter - keeps all address pointers at their current positions
-    // Used for initial pooling operations where we want explicit control over counter advancement
-    addr_mod_t {
-        .srca     = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb     = {.incr = 0, .clr = 0, .cr = 0},
-        .dest     = {.incr = 0, .clr = 0, .cr = 0},
-        .fidelity = {.incr = 0, .clr = 1}}
-        .set(ADDR_MOD_6);
-
     // ADDR_MOD_1: Face-to-face advancement mode used with GMPOOL operations
     // Increments SrcA by 16 rows to advance to the next face (F0->F1, F2->F3)
     // Clears SrcB counter to prepare for subsequent MOVD2B operations that write transposed results
@@ -81,13 +71,6 @@ inline void reduce_max_row_configure_addrmod_runtime()
 inline void reduce_max_row_configure_addrmod_reinit_runtime()
 {
     addr_mod_t {
-        .srca     = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb     = {.incr = 0, .clr = 0, .cr = 0},
-        .dest     = {.incr = 0, .clr = 0, .cr = 0},
-        .fidelity = {.incr = 0, .clr = 1}}
-        .set(ADDR_MOD_6);
-
-    addr_mod_t {
         .srca = {.incr = 16, .clr = 0, .cr = 1},
         .srcb = {.incr = 0, .clr = 1, .cr = 0},
         .dest = {.incr = 0, .clr = 0, .cr = 0},
@@ -109,19 +92,11 @@ inline void reduce_max_row_configure_addrmod_reinit_runtime()
         .set(ADDR_MOD_3);
 }
 
-// Minimal reinit: ADDR_MOD_1 + ADDR_MOD_2 (clobbered by matmul) and ADDR_MOD_6
-// (clobbered by sub_exp runtime). Skips ADDR_MOD_3 which is preserved from the
+// Minimal reinit: ADDR_MOD_1 + ADDR_MOD_2 (clobbered by matmul). Skips ADDR_MOD_3 which is preserved from the
 // previous reduce (matmul doesn't touch 3, sub_exp custom doesn't touch 3,
 // copy_tile_custom_v2 doesn't touch 3).
 inline void reduce_max_row_configure_addrmod_reinit_minimal_runtime()
 {
-    addr_mod_t {
-        .srca     = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb     = {.incr = 0, .clr = 0, .cr = 0},
-        .dest     = {.incr = 0, .clr = 0, .cr = 0},
-        .fidelity = {.incr = 0, .clr = 1}}
-        .set(ADDR_MOD_6);
-
     addr_mod_t {
         .srca = {.incr = 16, .clr = 0, .cr = 1},
         .srcb = {.incr = 0, .clr = 1, .cr = 0},
@@ -365,6 +340,14 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
     // Packer indexes at the 32x32 slot stride regardless of the operand's face count.
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
+    // The pool and transpose instructions run through ADDR_MOD_6: no counter advance, fidelity phase cleared.
+    addr_mod_t {
+        .srca     = {.incr = 0, .clr = 0, .cr = 0},
+        .srcb     = {.incr = 0, .clr = 0, .cr = 0},
+        .dest     = {.incr = 0, .clr = 0, .cr = 0},
+        .fidelity = {.incr = 0, .clr = 1}}
+        .set(ADDR_MOD_6);
+
     // Run the MOP. For num_faces=4 this reduces both face-rows (F0&F1 then F2&F3); for num_faces=2
     // it reduces the single face-row (F0&F1). The MOP only emits the GMPOOLs; the transpose is
     // replayed below.
@@ -394,6 +377,7 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
             // Replay the 7 instructions (slots 2-8) to transpose the single reduced face-row + CLR_B.
             lltt::replay(2, 7);
         }
+        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
         return;
     }
 
@@ -412,6 +396,9 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
         TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
         math::_configure_src_zero_flag_(false);
     }
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 /**
@@ -446,7 +433,7 @@ inline void _llk_math_reduce_block_max_row_reinit_short_runtime_(std::uint32_t b
 
 /**
  * Minimal reinitialization for block-based reduce_max_row operation.
- * Only reconfigures ADDR_MOD_1, ADDR_MOD_2, and ADDR_MOD_6 (preserves ADDR_MOD_3).
+ * Only reconfigures ADDR_MOD_1 and ADDR_MOD_2 (preserves ADDR_MOD_3).
  * Used when only specific addrmods were clobbered by previous operations.
  */
 inline void _llk_math_reduce_block_max_row_reinit_minimal_runtime_()
