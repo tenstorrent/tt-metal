@@ -1726,7 +1726,7 @@ class DecodeResidualAllReduce:
         shape = list(partial.shape)
         if shape[0] != 1 or shape[1] != 1:
             partial = ttnn.reshape(partial, (1, 1, shape[-4] * shape[-3] * shape[-2], shape[-1]))
-        if partial.memory_config() == self.res_mem:
+        if decode_res_direct_mode() == 2 and partial.memory_config() == self.res_mem:
             packed = partial  # QWEN36_DECODE_RES_DIRECT=2: the out-projection already wrote RES40
         else:
             packed = ttnn.to_memory_config(partial, self.res_mem)

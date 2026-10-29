@@ -405,9 +405,11 @@ class Qwen36MLP:
             ttnn.deallocate(w3_out)
         # Prefill w2: 2D progcfg on (8,10); decode (M<=32) keeps ttnn-auto.
         w2_pc = None
+        _w2_decode_1d = False
         if self._mlp_1d_decode and hidden.shape[-2] <= ttnn.TILE_SIZE:
             # 1D mcast decode down-proj on a small explicit grid (~16 cores).
             w2_pc = args.mlp_w2_decode_1d_progcfg
+            _w2_decode_1d = True
         elif hidden.shape[-2] > ttnn.TILE_SIZE:
             # Prefill down-proj: subblock-tuned 2D config with the wide grid (max_cols=device width),
             # off the generic 8-wide prefill_progcfg. Output L1 via mc_w2_out below.
@@ -425,7 +427,7 @@ class Qwen36MLP:
             if (x.shape[-2] <= ttnn.TILE_SIZE or (_prefill_tuned and tpc.prefill_l1_rows_ok(x.shape[-2])))
             else mc
         )
-        if w2_pc is not None and w2_pc is args.mlp_w2_decode_1d_progcfg:
+        if _w2_decode_1d and w2_pc is not None:
             # QWEN36_DECODE_RES_DIRECT=2: down-proj straight into RES40 (unchanged with the flag at 0 / 1).
             w2_pc, mc_w2_out = tpc.decode_out_proj_placement(decode_ar, w.w2, w2_pc, mc_w2_out)
         partial = weight_prefetch.linear(hidden, w.w2, w2_pc, compute_kernel_config=ckc, memory_config=mc_w2_out)
