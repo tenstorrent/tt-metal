@@ -6,6 +6,10 @@ here, inside the model folder; the ttnn ``experimental.kda`` ops stay shared). T
 (``deepseek_v3_d_p/reference/kda``) are still imported from the sibling.
 
 Local tweaks (keep this list current):
+- kda.py / recurrence.py carry the A0 ``sequence_parallel_size`` plumbing (branch arg/kda_sequence_parallel_size: a
+  row-local chronology per mesh row for the waves; the TP collective axis follows the mesh's SP extent), forwarded
+  to the ttnn ops only when set (``config.sp_size_kwargs``: the stock build runs the sequence-parallel path, the
+  row-local scans need the override build and say so).
 - config.py KDA_PREPARATION_L1_BYTES_PER_CORE 320 -> 256 KiB: the 1024-1088-local-row sequence-parallel geometry kept
   its chunk terms in L1 and clashed with the exclusive scan's circular buffers (2026-10-29).
 """

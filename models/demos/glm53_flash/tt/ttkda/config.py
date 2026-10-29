@@ -242,3 +242,29 @@ def decay_projection_program_config(
         fused_activation=fused_activation,
         fuse_batch=True,
     )
+
+
+def sp_size_kwargs(op, sequence_parallel_size):
+    """The ``sequence_parallel_size`` keyword for a ``ttnn.experimental.kda`` op call: ``{}`` when it is None (the
+    mesh extent, every ttnn build), else the keyword, or a RuntimeError when this ttnn build's op does not take it
+    (the row-local wave scans need branch ``arg/kda_sequence_parallel_size``: the A0 override build)."""
+    if sequence_parallel_size is None:
+        return {}
+    if not _op_takes_sp_size(op):
+        raise RuntimeError(
+            f"{getattr(op, '__name__', op)} of this ttnn build has no sequence_parallel_size: row-local KDA scans "
+            "(one chronology per mesh row) need the arg/kda_sequence_parallel_size ttnn build"
+        )
+    return {"sequence_parallel_size": int(sequence_parallel_size)}
+
+
+_SP_SIZE_OPS: dict = {}
+
+
+def _op_takes_sp_size(op) -> bool:
+    key = id(op)
+    if key not in _SP_SIZE_OPS:
+        inner = getattr(op, "function", op)
+        texts = [getattr(o, "__doc__", "") or "" for o in (op, inner, getattr(type(inner), "__call__", None))]
+        _SP_SIZE_OPS[key] = any("sequence_parallel_size" in t for t in texts)
+    return _SP_SIZE_OPS[key]

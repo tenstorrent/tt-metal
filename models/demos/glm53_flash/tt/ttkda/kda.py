@@ -25,6 +25,7 @@ from models.demos.glm53_flash.tt.ttkda.config import (
     KDAProgramConfig,
     decay_projection_program_config,
     l1_when_it_fits,
+    sp_size_kwargs,
     tuned_projection_matmul_configs,
 )
 from models.demos.glm53_flash.tt.ttkda.recurrence import KDARecurrence
@@ -150,6 +151,7 @@ class ttKDA:
         weights: KDAWeights | None = None,
         *,
         active_seq_len: int,
+        sequence_parallel_size: int | None = None,
     ) -> None:
         if tp_axis not in (0, 1) or sp_axis not in (0, 1) or sp_axis == tp_axis:
             raise ValueError(f"KDA requires distinct 2D SP/TP axes, got SP={sp_axis}, TP={tp_axis}")
@@ -157,14 +159,26 @@ class ttKDA:
         self.device = mesh_device
         self.tensor_parallel_axis = tp_axis
         self.sequence_parallel_axis = sp_axis
-        self.sequence_parallel_size = (
+        mesh_extent = (
             tuple(mesh_device.shape)[self.sequence_parallel_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         )
+        # ``sequence_parallel_size``: the ranks of one chronology along the SP axis; the mesh extent by default.
+        # 1 on a multi-row mesh = every row runs its own sequence (one prompt per row), with the single-rank
+        # paths below and the ops told the size explicitly (their kernels bind it from the mesh otherwise).
+        self.sequence_parallel_size = mesh_extent if sequence_parallel_size is None else int(sequence_parallel_size)
+        if self.sequence_parallel_size < 1 or mesh_extent % self.sequence_parallel_size:
+            raise ValueError(
+                f"sequence_parallel_size {self.sequence_parallel_size} must divide the SP axis extent {mesh_extent}"
+            )
+        self._explicit_sp_size = None if sequence_parallel_size is None else self.sequence_parallel_size
         if active_seq_len <= 0 or active_seq_len % (self.sequence_parallel_size * KDA_CHUNK_SIZE):
             raise ValueError("active_seq_len must give a positive tile-aligned local physical length")
         self.active_seq_len_local = active_seq_len // self.sequence_parallel_size
         self._is_sequence_parallel = self.sequence_parallel_size > 1
-        self._tp_cluster_axis = None if not self._is_sequence_parallel else self.tensor_parallel_axis
+        # The TP collectives run over the tensor-parallel axis whenever the mesh has a sequence-parallel axis of
+        # more than one device, whether or not this chronology spans it (sequence_parallel_size=1 on a multi-row
+        # mesh); only a mesh without an SP extent lets the collective span every device.
+        self._tp_cluster_axis = None if mesh_extent == 1 else self.tensor_parallel_axis
         # A bounded gate's projection already applies sigmoid(scale * (x @ W + bias)); chunk preparation applies the
         # lower bound, so only the softplus gate needs a separate activation.
         self._bounded_gate = config.gate_lower_bound is not None
@@ -275,6 +289,7 @@ class ttKDA:
             mesh_device,
             program_config.recurrence,
             sequence_parallel_axis=self.sequence_parallel_axis,
+            sequence_parallel_size=self._explicit_sp_size,
             local_rows=self.active_seq_len_local,
             heads=self.config.num_heads,
             key_dim=self.config.head_k_dim,
@@ -509,6 +524,7 @@ class ttKDA:
             exchange_semaphores=self._history_exchange.semaphores,
             actual_end=actual_end,
             sequence_parallel_axis=self.sequence_parallel_axis,
+            **sp_size_kwargs(ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry, self._explicit_sp_size),
             memory_config=self.qkv_memory_config,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
