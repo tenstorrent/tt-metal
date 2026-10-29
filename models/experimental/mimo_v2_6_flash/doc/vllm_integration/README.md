@@ -181,9 +181,14 @@ TT_METAL_HOME=<tt-metal build> PLUGIN_SRC=<vllm-tt-plugin at mimo-v2.6-flash/sin
     engine. Spreading them with a per-engine `LD_PRELOAD` offset made no difference.
 - **Startup** takes about 1.5 minutes, because each engine warms up 4 users of one replica. The 4-lane engine takes
   about 4.5 minutes.
-- **Stop.** Each engine runs in its own process group (`setsid`). Stopping sends SIGINT to every group, so an
-  EngineCore still loading is stopped with its API server, and SIGKILL to what is left after `STOP_TIMEOUT` seconds
-  (default 120). When an engine or the proxy exits, the script stops the rest and exits with that process's status.
+- **Stop.** Each engine runs in its own process group (`setsid`). Stopping sends SIGTERM to every group, then SIGKILL
+  to what is left after `STOP_TIMEOUT` seconds (default 120), or 10 s after the last EngineCore is gone. When an engine
+  or the proxy exits, the script stops the rest and exits with that process's status.
+  - Not SIGINT: an engine started in the background inherits SIGINT ignored, and an EngineCore installs its handler
+    only once the model is loaded. A SIGINT 60 s into startup was ignored until the SIGKILL.
+  - On SIGTERM a loading EngineCore, the process holding the chips, exits at once. Its API server, still waiting for
+    the EngineCore's handshake in a blocking poll, cannot run its SIGTERM handler, and multiprocessing's resource
+    tracker ignores SIGTERM; both go with the SIGKILL.
 - **Cold TTNN cache.** The four engines share one `MIMO_TT_CACHE`, and `ttnn.as_tensor` writes a cache file in place.
   Each cache tag (`top`, every layer, each MTP layer, DFlash) is therefore filled under a file lock
   (`tt.common.cache_fill`): one engine converts and writes it, and the others wait, then load it. A complete tag takes

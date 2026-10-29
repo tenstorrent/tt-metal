@@ -14,9 +14,10 @@
 #
 # Usage: serve_rows.sh <log dir> [max_model_len] [extra vllm serve args, the same for every engine]
 # Stop it with Ctrl-C or SIGTERM (started in the background by a script, it ignores SIGINT, as bash does). Each engine
-# runs in its own process group; stopping sends SIGINT to every group (the API server and its EngineCore) and SIGKILL
-# to what is left after STOP_TIMEOUT seconds. When an engine or the proxy exits, the others are stopped and the script
-# exits with that process's status.
+# runs in its own process group; stopping sends SIGTERM to every group (the API server and its EngineCore) and SIGKILL
+# to what is left after STOP_TIMEOUT seconds. SIGTERM, not SIGINT: an engine started in the background inherits SIGINT
+# ignored, and its EngineCore installs a handler only once the model is loaded, so SIGINT would not stop one that is
+# loading. When an engine or the proxy exits, the others are stopped and the script exits with that process's status.
 # env:
 #   TT_METAL_HOME    the tt-metal build (required); MODEL_SRC the model checkout (default: this file's repository)
 #   PLUGIN_SRC       a plugin checkout's src/ to use instead of the installed plugin
@@ -66,13 +67,16 @@ LB=
 stop() {
   # Whole process groups: an EngineCore can outlive its API server (one stopped while it loads, for instance).
   trap - INT TERM EXIT
-  local p t alive
-  for p in "${ENGINES[@]}"; do kill -INT -- "-$p" 2>/dev/null; done
-  [ -n "$LB" ] && kill -INT "$LB" 2>/dev/null
+  local p t live idle=0
+  for p in "${ENGINES[@]}"; do kill -TERM -- "-$p" 2>/dev/null; done
+  [ -n "$LB" ] && kill -TERM "$LB" 2>/dev/null
   for ((t = 0; t < ${STOP_TIMEOUT:-120}; t++)); do
-    alive=0
-    for p in "${ENGINES[@]}"; do kill -0 -- "-$p" 2>/dev/null && alive=1; done
-    [ "$alive" = 0 ] && break
+    # Each engine leads its own session (setsid), so -s lists its group; zombies (exited, not yet reaped) don't count.
+    live=$(for p in "${ENGINES[@]}"; do ps -o stat=,args= -s "$p" 2>/dev/null; done | awk '$1 !~ /^Z/')
+    [ -z "$live" ] && break
+    # An API server still waiting for its EngineCore to start cannot run its SIGTERM handler, and multiprocessing's
+    # resource tracker ignores SIGTERM: once no EngineCore (the process holding the chips) is left, give them 10 s.
+    if grep -q "VLLM::EngineCore" <<< "$live"; then idle=0; else idle=$((idle + 1)); [ "$idle" -ge 10 ] && break; fi
     sleep 1
   done
   for p in "${ENGINES[@]}"; do kill -KILL -- "-$p" 2>/dev/null; done
