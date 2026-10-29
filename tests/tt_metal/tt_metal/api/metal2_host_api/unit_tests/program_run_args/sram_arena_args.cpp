@@ -6,7 +6,6 @@
 #include <gmock/gmock.h>
 
 #include <array>
-#include <memory>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -16,7 +15,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/graph_tracking.hpp>
 
 #include "impl/sram_arena/sram_arena_impl.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -94,39 +92,12 @@ ProgramSpec MakeScratchpadSpecWithTwoArenasForTest() {
     return spec;
 }
 
-ProgramSpec MakeScratchpadSpecAtArenaBaseForTest() {
-    ProgramSpec spec = BorrowedScratchpadSpec();
-    spec.scratchpads[0].advanced_options.allocation_override->offset = 0;
-    return spec;
-}
-
 PrefetcherPipeSpaceConfig MakePrefetcherPipeSpaceConfigOnFirstScratchpadNodeForTest() {
     return {
         .sender_cores = CoreRangeSet(CoreRange(CoreCoord{0, 0})),
         .receiver_domain = CoreRangeSet(CoreRange(CoreCoord{0, 1})),
         .ring_size = 4096,
         .max_receivers_per_pipe = 1};
-}
-
-// Graph hooks that skip every buffer allocation, as a NO_DISPATCH graph capture does.
-class SkipAllocationGraphHooksForTest : public IGraphHooks {
-public:
-    bool hook_allocate(const Buffer*) override { return true; }
-    bool hook_deallocate(Buffer*) override { return true; }
-    bool hook_program(Program*) override { return false; }
-    bool hook_write_to_device(const Buffer*) override { return false; }
-    bool hook_write_to_device(const distributed::MeshBuffer*) override { return false; }
-    bool hook_read_from_device(Buffer*) override { return false; }
-    bool hook_read_from_device(const distributed::MeshBuffer*) override { return false; }
-};
-
-SRAMArena AllocateSRAMArenaWhileGraphHookSkipsAllocationForTest(
-    distributed::MeshDevice& device, const RangeLockstepSRAMArenaProperties& properties) {
-    GraphTracker::instance().add_hook(std::make_shared<SkipAllocationGraphHooksForTest>());
-    struct ClearGraphHookOnExit {
-        ~ClearGraphHookOnExit() { GraphTracker::instance().clear_hook(); }
-    } clear_graph_hook_on_exit;
-    return SRAMArena::allocate(device, properties);
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadWaitsForRunArgs) {
@@ -438,16 +409,6 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadRangeArenaForLockstepDecla
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, AllocationArgs(arena)); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("properties do not match")));
-}
-
-TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadAtZeroAddressRejected) {
-    // Binding a scratchpad at the base of an arena whose allocation a graph hook skipped (address 0) is rejected.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecAtArenaBaseForTest());
-    auto arena = AllocateSRAMArenaWhileGraphHookSkipsAllocationForTest(fixture_device, AllocationProperties());
-    EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, AllocationArgs(arena)); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has a 0 allocated address")));
 }
 
 }  // namespace

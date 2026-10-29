@@ -1452,6 +1452,13 @@ TEST_F(CommandListTest, PatchesTensorParameterOfProgramWithArenaAllocatedDFB) {
     EXPECT_NO_THROW(builder.add(workload, patchable_input(program, CmdListTensorArgName{"input"})));
 }
 
+TEST_F(CommandListTest, RejectsWorkloadWithUnboundArenaScratchpad) {
+    // Recording a workload whose arena scratchpad has no bound SRAMArena is rejected.
+    auto workload = m2::MakeMeshWorkloadFromSpec(*mesh_device_, make_arena_scratchpad_spec("unbound_arena_scratchpad"));
+    CommandListBuilder builder(*mesh_device_);
+    EXPECT_THAT([&] { builder.add(workload); }, ThrowsMessage<std::runtime_error>(HasSubstr("has no bound SRAMArena")));
+}
+
 TEST_F(CommandListTest, SubmeshClosesAfterRejectedEnqueueWhileParentUsesTheQueue) {
     // A rejected enqueue leaves the submesh's queue unused, so the submesh closes while its parent uses that queue.
     std::shared_ptr<MeshDevice> submesh = mesh_device_->create_submesh(MeshShape(1, 1));

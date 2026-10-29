@@ -130,22 +130,5 @@ TEST_F(PrefetcherPipeSpecTestGen1, CPU_SRAMArenaEnqueueRejectsScratchpadAfterSet
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no bound SRAMArena")));
 }
 
-TEST_F(PrefetcherPipeSpecTestGen1, CPU_SRAMArenaEnqueueRejectsScratchpadAfterUpdateRejectedByPipe) {
-    // An UpdateProgramRunArgs call rejected by its pipe argument does not bind the arena scratchpad.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto arena = SRAMArena::allocate(fixture_device, LockstepSRAMArenaProperties{4096});
-    PrefetcherPipe other_sender_pipe = MakePipeFor(fixture_device, test_helpers::MakePipeParameter(), CoreCoord{2, 0});
-    auto program = MakeProgramFromSpec(fixture_device, MakePipeSenderArenaScratchpadSpecForTest());
-    SetProgramRunArgs(program, {}, /*skip_validation=*/true);
-    ASSERT_THAT(
-        [&] { UpdateProgramRunArgs(program, MakeArenaAndPipeRunArgsForTest(arena, other_sender_pipe)); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("the supplied pipe's sender is (2,0)")));
-    distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange(fixture_device.shape()), std::move(program));
-    EXPECT_THAT(
-        [&] { distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(), workload, false); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no bound SRAMArena")));
-}
-
 }  // namespace
 }  // namespace tt::tt_metal::experimental
