@@ -420,11 +420,11 @@ template <
     bool FUSED_SORT         = false>
 void call_unary_sfpu_operation_init(std::uint32_t math_format)
 {
-    // Once-per-kernel SFPU init (SFPU config reg + invariant ADDR_MOD_7). In metal this is hoisted into the
-    // full-init entry points (compute_kernel_hw_startup / init_sfpu / unary_op_init_common); this standalone
-    // LLK harness bypasses those, so it must run the once-init itself. Ops migrated to the self-contained
-    // per-op init (SFPU_UNARY_INIT_SC*) rely on this running first; unmigrated ops still carry the invariant
-    // inside their _llk_math_eltwise_unary_sfpu_init_ but re-running it here is harmless (idempotent).
+    // Once-per-kernel SFPU init (SFPU config reg; ADDR_MOD_7 comes from _llk_math_hw_configure_). In metal this
+    // is hoisted into the full-init entry points (compute_kernel_hw_startup / init_sfpu / unary_op_init_common);
+    // this standalone LLK harness bypasses those, so it must run the once-init itself. Ops migrated to the
+    // self-contained per-op init (SFPU_UNARY_INIT_SC*) rely on this running first; unmigrated ops still carry the
+    // invariant inside their _llk_math_eltwise_unary_sfpu_init_ but re-running it here is harmless (idempotent).
     llk_math_sfpu_init_once();
 
     if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh)
@@ -684,7 +684,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
         OPERATION == SfpuType::lrelu || OPERATION == SfpuType::hardtanh || OPERATION == SfpuType::clamp || OPERATION == SfpuType::identity ||
         OPERATION == SfpuType::cast_fp32_to_fp16a || OPERATION == SfpuType::sqrt_custom || OPERATION == SfpuType::expm1_cw)
     {
-        // These ops need only the generic per-op init (SFPU config reg + ADDR_MOD_7 from
+        // These ops need only the generic per-op init (SFPU config reg from
         // llk_math_sfpu_init_once() above, plus a dest RWC counter reset), so route them through
         // the bare `unused` init. The reason each op is safe to route this way varies:
         //   - floor/ceil/trunc/frac/round/relu_max/relu_min/lrelu/hardtanh/clamp: their production/metal

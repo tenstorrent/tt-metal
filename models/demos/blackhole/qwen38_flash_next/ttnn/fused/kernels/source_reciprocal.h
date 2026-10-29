@@ -86,7 +86,6 @@ inline void qwen38_calculate_reciprocal(const int iterations) {
 template <bool APPROXIMATION_MODE>
 inline void qwen38_reciprocal_init() {
     _init_sfpu_config_reg();
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
 }

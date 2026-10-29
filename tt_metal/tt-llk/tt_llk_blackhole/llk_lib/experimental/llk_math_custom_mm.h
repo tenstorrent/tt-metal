@@ -108,14 +108,6 @@ inline void custom_mm_configure_addrmod()
         .dest = {.incr = 16, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_6); // Move to next face in all three regs, used for final accumulation
-
-    addr_mod_t {
-        .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 0, .clr = 0, .cr = 0},
-        .dest = {.incr = 0, .clr = 0, .cr = 0},
-    }
-        .set(ADDR_MOD_7); // NOP, has to be ADDR_MOD_7 to match with address mods configured in silu
-                          // for fusing matmul and activation
 }
 
 template <bool split_acc>

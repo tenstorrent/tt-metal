@@ -442,7 +442,8 @@ ALWI void topk_xl_add_lsb_indices_rt(std::uint32_t idst, std::uint32_t chunk_id)
  *
  * With TOPK_XL_BLAZE_COMPAT, the caller must drain prior SFPU work and restore
  * ADDR_MOD_7 to zero advance after MATH hands the section to PACK, then run this
- * init before removing values. The default init also programs ADDR_MOD_7.
+ * init before removing values. The default path relies on pack hw_configure having set ADDR_MOD_7 to zero
+ * advance.
  */
 ALWI void topk_xl_remove_msb_values_init() { PACK((llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values_init())); }
 

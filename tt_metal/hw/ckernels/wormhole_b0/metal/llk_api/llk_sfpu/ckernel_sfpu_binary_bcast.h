@@ -893,13 +893,6 @@ inline void _sfpu_binary_bcast_init_() {
     // recording or SFPCONFIG-based lane-mask setup below.
     _init_sfpu_config_reg();
 
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
-
     if constexpr (Dim == BroadcastType::COL) {
         // Build persistent col-0 lane mask in LREG_MASK.
         _build_lane_mask_col0_();

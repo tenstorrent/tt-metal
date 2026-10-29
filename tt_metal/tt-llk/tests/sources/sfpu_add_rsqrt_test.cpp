@@ -31,7 +31,7 @@
 // init_add_rsqrt<APPROX> forwards to sqrt_init<APPROX>, which programs vConstIntPrgm0
 // and vConstFloatPrgm1 (plus vConstFloatPrgm2 on the !APPROX path) — the seed constants
 // the body reads. It is called through the standard LLK SFPU init so the invariant SFPU
-// config + ADDR_MOD_7 are in place first.
+// config is in place first.
 
 #include <cstdint>
 
@@ -98,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
-    // Invariant SFPU config + ADDR_MOD_7, then the functor's own seed constants.
+    // Invariant SFPU config, then the functor's own seed constants.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
     ckernel::sfpu::init_add_rsqrt<APPROX_MODE>();
 

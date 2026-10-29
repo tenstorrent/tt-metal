@@ -23,11 +23,6 @@ void kernel_main() {
         for (std::uint32_t i = 0; i < block; ++i) {
             copy_tile(tt::CBIndex::c_0, i, i);
         }
-        // A fused operation may have used the SFPU address modifier. The public
-        // initializer must restore it without relying on a private test prelude.
-#ifdef TRISC_MATH
-        ckernel::addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_7);
-#endif
         csa_index_remap_init();
         csa_index_remap<256>(1);
         tile_regs_commit();

@@ -57,13 +57,6 @@ template <
     bool IS_FP32_DEST_ACC_EN,
     std::uint16_t SCALE_BF16>
 inline void calculate_exponential_polynomial() {
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(sdpa_addr_mod_x);
-
     constexpr float LN2_RECIP = 1.44269504088896340736f;
     constexpr float M_LN2 = -0.69314718055994530942f;
 
