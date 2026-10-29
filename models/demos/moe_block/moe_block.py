@@ -668,7 +668,7 @@ class MoEBlock(LightweightModule):
         if self.fused is not None:
             # (one L1 allocation a forward: the exchange's arena, the head's range inside it - the head runs there first)
             eng = self.fused.head.eng
-            arena = self.exchange.take_arena(inside=(eng.base, eng.arena_bytes))
+            arena = self.exchange.take_arena(inside=(eng.base, eng.arena_bytes), floor=self.fused.head.static_top)
             if self.options.residual == "owners":  # (the fused head reads the width split [S/SP, H/TP])
                 xs = self._tp_a2a(x, cat_dim=2, split_dim=3)
                 self._mark("x_a2a")
@@ -1732,19 +1732,22 @@ class TokenExchange:
         x2 = ttnn.reshape(own, [self.g.tokens_per_chip, self.model.routed_width])
         return self.block.routed(x2, rows, None, self.experts.op, hook=hook, tilize=tilize)
 
-    def take_arena(self, inside=None):
+    def take_arena(self, inside=None, floor=0):
         """The forward's one L1 allocation (MOE_ONE_ARENA=0 turns it off): the exchange's arena taken ahead for the fused
         head to run in first -> (tensor, bytes a core), or None - the in-program dispatch (its own), or the head's arena
-        range inside=(base, bytes) not within the exchange's (a head larger than the exchange's arena: K2.7, K3)."""
+        range inside=(base, bytes) not within the exchange's (a head larger than the exchange's arena: K2.7, K3), or the
+        exchange's arena reaching below floor (the head program's static circular buffers end there: its port cores'
+        packet CB - MiniMax M3's 6-page packets end it at 205 KB, above the exchange's arena at 188 KB)."""
         if self.dispatch_in_program or os.environ.get("MOE_ONE_ARENA", "1") == "0":
             return None
         a, n = self.block.arena_addr, self.block.arena_bytes
-        if inside is not None and not (a <= inside[0] and inside[0] + inside[1] <= a + n):
+        if inside is not None and not (a <= inside[0] and inside[0] + inside[1] <= a + n and a >= floor):
             if not getattr(self, "_two_logged", False):
                 from loguru import logger
 
                 logger.info(
-                    f"MoEBlock: two arenas a forward (the head's [{inside[0]}, +{inside[1]}) not in [{a}, +{n})"
+                    f"MoEBlock: two arenas a forward (the head's [{inside[0]}, +{inside[1]}) not in [{a}, +{n}), or "
+                    f"the head's static circular buffers above its start ({floor})"
                 )
                 self._two_logged = True
             return None
