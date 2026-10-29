@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import os
 import sys
 from types import SimpleNamespace
 
@@ -929,7 +930,19 @@ def test_rows_independent_needs_the_wave_prefill():
     # the traced phase: the wave inputs + compiles before ANY capture, the waves captured after the prefill traces
     order = [c[0] for c in m.calls if c[0] in ("prepare_waves", "capture_prefill", "capture_waves", "capture")]
     assert order == ["prepare_waves", "capture_prefill", "capture_waves", "capture"]
-    assert m._captured_waves == [256, 512, 1024, 2048] and not m._ready_waves
+    assert m._captured_waves == [256, 512] and not m._ready_waves  # the default 128,256,512 within the model's lengths
+    os.environ["GLM53_VLLM_WAVE_TRACE_LENGTHS"] = "all"
+    try:
+        _, m_all = _adapter(independent=True)
+        assert m_all._captured_waves == [256, 512, 1024, 2048]
+        os.environ["GLM53_VLLM_WAVE_TRACE_LENGTHS"] = "0"
+        _, m_none = _adapter(independent=True)
+        assert m_none._captured_waves == [] and not any(c[0] == "prepare_waves" for c in m_none.calls)
+        os.environ["GLM53_VLLM_WAVE_TRACE_LENGTHS"] = "96"
+        with expect_error(ValueError, "wave trace lengths"):
+            _adapter(independent=True)
+    finally:
+        os.environ.pop("GLM53_VLLM_WAVE_TRACE_LENGTHS", None)
     # the wave width must be a prefill bucket: a wave's chunk pads to the next bucket
     with expect_error(ValueError, "not a prefill bucket"):
         _adapter(independent=True, warm=False, wave_rows=2304)

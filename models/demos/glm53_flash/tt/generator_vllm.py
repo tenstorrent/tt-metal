@@ -251,6 +251,8 @@ def mesh_cache_root() -> Path | None:
 
 COMPILE_CHECK_ENV = "GLM53_VLLM_COMPILE_CHECK"  # "1" (default): seal the program cache after the last capture
 MEM_LOG_ENV = "GLM53_VLLM_MEM_LOG"  # "1": log the DRAM allocator's state after every eager prefill device chunk
+WAVE_TRACE_LENGTHS_ENV = "GLM53_VLLM_WAVE_TRACE_LENGTHS"  # the per-row wave lengths captured at boot (rows_independent)
+DEFAULT_WAVE_TRACE_LENGTHS = "128,256,512"
 
 
 def _dram_line(device) -> str:
@@ -1165,10 +1167,11 @@ class GLM53FlashForCausalLM:
         if self.trace_id is not None:
             raise RuntimeError("prefill traces must be captured before the decode trace (allocation order)")
         self._ensure_decode_inputs(U)
-        waves = self.geometry.rows_independent and callable(getattr(self.model, "capture_waves", None))
+        wave_lengths = self._wave_trace_lengths() if self.geometry.rows_independent else []
+        waves = bool(wave_lengths) and callable(getattr(self.model, "capture_waves", None))
         if waves:  # the wave traces' persistent inputs + their eager compiles precede EVERY capture
             t0 = time.perf_counter()
-            prepared = self.model.prepare_waves()
+            prepared = self.model.prepare_waves(wave_lengths)
             logger.info(
                 f"GLM53 vLLM: wave traces {prepared} (per-row lengths) prepared in {time.perf_counter() - t0:.0f} s"
             )
@@ -1177,7 +1180,7 @@ class GLM53FlashForCausalLM:
         logger.info(f"GLM53 vLLM: prefill traces {captured} captured in {time.perf_counter() - t0:.0f} s")
         if waves:
             t0 = time.perf_counter()
-            captured = self.model.capture_waves()
+            captured = self.model.capture_waves(wave_lengths)
             logger.info(
                 f"GLM53 vLLM: wave traces {captured} (per-row lengths) captured in {time.perf_counter() - t0:.0f} s"
             )
@@ -1319,6 +1322,27 @@ class GLM53FlashForCausalLM:
             f"GLM53 vLLM: continued-chunk warm-up ({n_calls} chunks at {max(0, g.max_seq_len // bucket - 1)} prefix "
             f"bucket start(s) of {bucket} into {B} slot(s), tails {tails}) in {time.perf_counter() - t0:.1f} s"
         )
+
+    def _wave_trace_lengths(self) -> list[int]:
+        """The per-row wave lengths captured at boot: ``GLM53_VLLM_WAVE_TRACE_LENGTHS``, a comma list drawn from the
+        model's ``wave_trace_lengths`` (``all`` = every one, ``0`` = none: eager waves only; default 128,256,512).
+        A wave trace of T rows per row costs about the SP trace of rows x T tokens: the 1024 / 2048-row waves are
+        the 8 K / 16 K-token class serving never traced, and with the prefill traces they overflowed the 512 MB
+        trace region on the 8x4 (2026-10-29: 550 MB at the first wave capture). Longer prompts take the eager wave;
+        the traced wave's launch-bound gain is for the short ones."""
+        lengths = getattr(self.model, "wave_trace_lengths", None)
+        model_lengths = [int(T) for T in lengths()] if callable(lengths) else []
+        raw = os.environ.get(WAVE_TRACE_LENGTHS_ENV, DEFAULT_WAVE_TRACE_LENGTHS).strip().lower()
+        if raw in ("0", "", "none"):
+            return []
+        if raw == "all":
+            return model_lengths
+        want = sorted({int(v) for v in raw.split(",") if v.strip()})
+        if WAVE_TRACE_LENGTHS_ENV in os.environ and any(T not in model_lengths for T in want):
+            raise ValueError(
+                f"{WAVE_TRACE_LENGTHS_ENV}={raw}: not among the model's wave trace lengths {model_lengths}"
+            )
+        return [T for T in want if T in model_lengths]
 
     def _warmup_waves(self) -> None:
         """The eager wave ladder (``GLM53_VLLM_ROWS_INDEPENDENT``): the wave path compiles its own programs, one set
