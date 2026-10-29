@@ -143,7 +143,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
         push_buffer_pair(cliffrow_set, BI_IN_CLIFFROW, BI_OUT_CLIFFROW);
     }
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // reader
 

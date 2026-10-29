@@ -30,7 +30,7 @@ void AttnMatmulDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE,
         "Operands to matmul need to be on device!");
     TT_FATAL(
-        input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
+        input_tensor_a.is_allocated() and input_tensor_b.is_allocated(),
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
@@ -69,6 +69,11 @@ void AttnMatmulDeviceOperation::validate_on_program_cache_miss(
     }
 
     auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+    TT_FATAL(
+        args.compute_with_storage_grid_size.x > 0 && args.compute_with_storage_grid_size.y > 0,
+        "attn_matmul: compute_with_storage_grid_size must be non-zero, got ({}, {})",
+        args.compute_with_storage_grid_size.x,
+        args.compute_with_storage_grid_size.y);
     TT_ASSERT(
         (args.compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
          args.compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),

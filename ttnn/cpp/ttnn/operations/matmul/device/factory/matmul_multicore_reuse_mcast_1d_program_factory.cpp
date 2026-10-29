@@ -2763,6 +2763,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     uint32_t first_col_max_x = device.arch() == tt::ARCH::WORMHOLE_B0 ? 3 : 7;
     uint32_t num_receiver_cores_per_dram = 2;  // default to 2 for wormhole b0 and blackhole
     if (in1_is_dram_sharded) {
+        // Blackhole derives each core's DRAM read offset modulo this count.
+        TT_FATAL(
+            device.arch() == tt::ARCH::WORMHOLE_B0 || ring_size >= in1_tensor.shard_spec()->grid.num_cores(),
+            "matmul gather_in0: the input A shard grid ({} cores) must have at least as many cores as B's DRAM "
+            "shard grid ({} cores)",
+            ring_size,
+            in1_tensor.shard_spec()->grid.num_cores());
         num_receiver_cores_per_dram = ring_size / in1_tensor.shard_spec()->grid.num_cores();
         if (device.arch() == tt::ARCH::WORMHOLE_B0) {
             worker_y_to_dram_bank_first_col[0] = 1;

@@ -4,9 +4,8 @@
 """Out-of-process watcher for one prefill stage: python hang_watcher.py <probe.json>
 
 Poll the stage's counters on device (0,0); if none has moved for the timeout, read every device and classify.
-On a verdict of culprit it prints the verdict and a stuck device's counts to stderr, runs the command, and
-SIGKILLs the rank. With no command it exits instead and leaves the rank hung for inspection. The timeouts,
-poll interval and command come from the TT_PREFILL_STAGE_HANG_* environment inherited from the rank.
+On a verdict of culprit it prints the verdict and a stuck device's counts to stderr, runs handoff.command,
+and SIGKILLs the rank. With no command it exits instead and leaves the rank hung for inspection.
 
 A chunk goes into a device through its inputs and out through its outputs. Five counts in chunks follow it:
 
@@ -49,14 +48,6 @@ from dataclasses import dataclass
 from enum import Enum, auto
 
 from ttexalens import tt_exalens_lib as lib
-
-TIMEOUT_ENV = "TT_PREFILL_STAGE_HANG_TIMEOUT_SECONDS"
-FIRST_CHUNK_TIMEOUT_ENV = "TT_PREFILL_STAGE_HANG_FIRST_CHUNK_TIMEOUT_SECONDS"
-POLL_ENV = "TT_PREFILL_STAGE_HANG_POLL_SECONDS"
-COMMAND_ENV = "TT_PREFILL_STAGE_HANG_COMMAND_TO_EXECUTE"
-DEFAULT_TIMEOUT_S = 30.0
-DEFAULT_FIRST_CHUNK_TIMEOUT_S = 600.0  # covers trace capture and cold first-chunk compiles
-DEFAULT_POLL_S = 1.0
 
 MASK32 = 0xFFFFFFFF
 
@@ -198,6 +189,10 @@ class Handoff:
     pid: int
     layers: str
     dummy: int
+    timeout_s: float
+    first_chunk_timeout_s: float
+    poll_s: float
+    command: str
     devices: list[Device]
 
 
@@ -233,35 +228,17 @@ def culprits(devices: list[Device]) -> list[Device]:
     return []
 
 
-def run_command(command: str, handoff: Handoff, detail: str, lines: str) -> None:
-    """Hand the verdict to the configured command. Its environment is the only output channel."""
-    subprocess.run(
-        command,
-        shell=True,
-        env={
-            **os.environ,
-            "PREFILL_HANG_STAGE": str(handoff.stage_idx),
-            "PREFILL_HANG_PID": str(handoff.pid),
-            "PREFILL_HANG_DETAIL": detail,
-            "PREFILL_HANG_COUNTERS": lines,
-        },
-    )
-
-
 def main(probe_path: str) -> int:
     handoff = load(probe_path)
     os.unlink(probe_path)
-    timeout_s = float(os.environ.get(TIMEOUT_ENV, DEFAULT_TIMEOUT_S))
-    first_chunk_timeout_s = float(os.environ.get(FIRST_CHUNK_TIMEOUT_ENV, DEFAULT_FIRST_CHUNK_TIMEOUT_S))
-    poll_s = float(os.environ.get(POLL_ENV, DEFAULT_POLL_S))
-    command = os.environ.get(COMMAND_ENV, "")
     dev00 = handoff.devices[0]
     frozen_since: float | None = None
     left_out: list[str] = []
     # DO NOT MERGE -- experiment: say the watcher is up, and show device (0,0)'s counts once a minute.
     print(
         f"PREFILL HANG WATCHER: stage {handoff.stage_idx} up, {len(handoff.devices)} devices, "
-        f"{len(dev00.words())} words on device (0,0), timeout {timeout_s}s, first chunk {first_chunk_timeout_s}s",
+        f"{len(dev00.words())} words on device (0,0), timeout {handoff.timeout_s}s, "
+        f"first chunk {handoff.first_chunk_timeout_s}s, poll {handoff.poll_s}s",
         file=sys.stderr,
         flush=True,
     )
@@ -278,12 +255,12 @@ def main(probe_path: str) -> int:
         except Exception as e:
             print(f"PREFILL HANG WATCHER: read failed: {e!r}", file=sys.stderr, flush=True)  # DO NOT MERGE
             return 1
-        # Until the first real chunk is out, trace capture and cold compiles can take minutes.
-        limit_s = timeout_s if dev00.produced >= 1 + handoff.dummy else first_chunk_timeout_s
+        # Until the first real chunk is out, the trace capture can hold the stage still for seconds.
+        limit_s = handoff.timeout_s if dev00.produced >= 1 + handoff.dummy else handoff.first_chunk_timeout_s
 
         now = time.monotonic()
         if now - shown >= 60:  # DO NOT MERGE
-            print(f"PREFILL HANG WATCHER: progress\n{dev00.counts()}", file=sys.stderr, flush=True)
+            print(f"PREFILL HANG WATCHER: counters\n{dev00.counts()}", file=sys.stderr, flush=True)
             shown = now
         if moved:
             frozen_since = None
@@ -319,14 +296,30 @@ def main(probe_path: str) -> int:
                     file=sys.stderr,
                     flush=True,
                 )
-                if not command:
+                if not handoff.command:
                     return 0
-                run_command(command, handoff, detail, lines)
+                subprocess.run(handoff.command, shell=True)
                 with contextlib.suppress(ProcessLookupError):
                     os.kill(handoff.pid, signal.SIGKILL)
+                # DO NOT MERGE -- experiment: did the SIGKILL end the rank? We are reparented once it has exited.
+                print(
+                    f"PREFILL HANG WATCHER: SIGKILL sent to {handoff.pid} at {time.time():.3f}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                killed_at = time.monotonic()
+                while os.getppid() == handoff.pid and time.monotonic() - killed_at < 30:
+                    time.sleep(0.05)
+                gone = os.getppid() != handoff.pid
+                print(
+                    f"PREFILL HANG WATCHER: rank {'exited' if gone else 'still our parent'} "
+                    f"{time.monotonic() - killed_at:.2f}s after the SIGKILL",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 return 1
 
-        time.sleep(poll_s)
+        time.sleep(handoff.poll_s)
 
 
 if __name__ == "__main__":
