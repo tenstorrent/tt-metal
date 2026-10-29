@@ -336,3 +336,40 @@ def test_sigmoid_bw_rejects_mismatched_shapes(device, expect_error):
 
     with expect_error(RuntimeError, "same logical shape"):
         ttnn.sigmoid_bw(tile_b, tile_a)
+
+
+def test_sigmoid_bw_program_cache_same_padded_shape(device):
+    """Two inputs with the same padded shape but different logical shapes must get separate cache entries. Their TensorSpecs differ, and the Metal 2.0 TensorParameter match would reject one on the other's entry."""
+    torch.manual_seed(0)
+    padded_shape = [1, 1, 96, 96]
+
+    # Build every operand up front: from_torch and tilize_with_val_padding dispatch device ops of
+    # their own, whose cache entries would otherwise be counted against sigmoid_bw.
+    operands = []
+    for logical_hw in (96, 40, 96):
+        torch_grad = torch.randn((1, 1, logical_hw, logical_hw), dtype=torch.float32)
+        torch_input = torch.randn((1, 1, logical_hw, logical_hw), dtype=torch.float32)
+
+        if logical_hw == padded_shape[-1]:
+            to_device = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            grad_tensor = ttnn.from_torch(torch_grad, **to_device)
+            input_tensor = ttnn.from_torch(torch_input, **to_device)
+        else:
+            to_device = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            grad_tensor = ttnn.tilize_with_val_padding(ttnn.from_torch(torch_grad, **to_device), padded_shape, 0.0)
+            input_tensor = ttnn.tilize_with_val_padding(ttnn.from_torch(torch_input, **to_device), padded_shape, 0.0)
+
+        operands.append((logical_hw, grad_tensor, input_tensor))
+
+    start = device.num_program_cache_entries()
+    for logical_hw, grad_tensor, input_tensor in operands:
+        output = ttnn.sigmoid_bw(grad_tensor, input_tensor)[0]
+
+        logical = (..., slice(None, logical_hw), slice(None, logical_hw))
+        expected = _torch_sigmoid_bw(
+            ttnn.to_torch(grad_tensor).float()[logical], ttnn.to_torch(input_tensor).float()[logical]
+        )
+        torch.testing.assert_close(ttnn.to_torch(output).float()[logical], expected, rtol=8e-3, atol=1e-4)
+
+    added = device.num_program_cache_entries() - start
+    assert added == 2, f"expected 2 program cache entries (one per TensorSpec, third call a hit), got {added}"
