@@ -37,6 +37,7 @@ ap.add_argument(
 ap.add_argument("--save", default="", help="save the drafts of the fixed input set here")
 ap.add_argument("--check", default="", help="compare the drafts of the fixed input set against this save")
 ap.add_argument("--prof-iters", type=int, default=5, help="draft + extend pairs between the signposts")
+ap.add_argument("--cprofile", action="store_true", help="the host side of --iters draft() calls under cProfile")
 a = ap.parse_args()
 faulthandler.dump_traceback_later(900, repeat=True, file=sys.stderr)
 mesh = open_mesh()
@@ -120,6 +121,44 @@ try:
             f"C={C}: draft() {med(t_d):.2f} ms (trace replay {med(r_d):.2f}), extend {med(t_x):.2f} ms "
             f"(trace replay {med(r_x):.2f}); host part of draft() {med(t_d) - med(r_d):.2f} ms"
         )
+
+    if a.cprofile:
+        # the host side of draft() by part, each part synchronized
+        from models.demos.blackhole.qwen36.tt.dflash2 import select_path
+
+        parts = {k: [] for k in ("stage", "replay", "readback", "-", "select")}
+        comp0 = ttnn.ConcatMeshToTensor(mesh, dim=0)
+        for i in range(a.iters):
+            ttnn.synchronize_device(mesh)
+            t0 = time.perf_counter()
+            dr._stage_draft(lay, [anchors[i % len(anchors)]], [Cs[0]])
+            ttnn.synchronize_device(mesh)
+            t1 = time.perf_counter()
+            ttnn.execute_trace(mesh, lay.draft_tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh)
+            t2 = time.perf_counter()
+            rb, hn = lay.draft_out
+            x = ttnn.to_torch(rb, mesh_composer=comp0).reshape(-1, R, rb.shape[-1])
+            t3 = time.perf_counter()
+            t4 = time.perf_counter()
+            un, cand, hph = x[0, :, :16], x[0, :, 16:32].long(), x[0, :, 32:]
+            select_path(un[1:], cand[1:], hph[1:], anchors[0], dr.pred_cb, dr.succ_cb)
+            t5 = time.perf_counter()
+            for k, v in zip(parts, (t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4)):
+                parts[k].append(v * 1e3)
+        log(
+            "draft() host parts (ms, median): "
+            + ", ".join(f"{k} {sorted(v)[len(v) // 2]:.3f}" for k, v in parts.items())
+        )
+        import cProfile
+        import pstats
+
+        pr = cProfile.Profile()
+        pr.enable()
+        for i in range(a.iters):
+            dr.draft(anchors[i % len(anchors)], Cs[0])
+        pr.disable()
+        pstats.Stats(pr).sort_stats("tottime").print_stats(25)
 
     # the profiled window (the device profiler's buffers emptied first: a core's buffer holds a limited number of
     # ops, and the KV writes all run on one core)

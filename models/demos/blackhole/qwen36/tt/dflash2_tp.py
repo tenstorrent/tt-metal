@@ -653,23 +653,42 @@ class DFlash2DrafterTP:
 
     # ------------------------------------------------------------------ LAYOUTS
     def _staging_for(self, R):
-        """The R-row staging buffers (draft: emb/cos/sin/pos/wpos/cur; extend: xpos/xcos/xsin), allocated
-        once per R and shared by every layout of that R (one layout runs per step)."""
+        """The R-row staging buffers, allocated once per R and shared by every layout of that R (one layout runs
+        per step). Draft: emb, cs = cos | sin rows [1, 2R, 1, HD], ints = pos | wpos (the KV write positions:
+        pos, or pos % ring) | cur [3R]; extend: xpos, xcs. One host copy each; the bodies slice them (_views)."""
         st = self._staging.get(R)
         if st is None:
             z = torch.zeros
             st = self._staging[R] = {
                 "emb": self._dev(z(1, 1, R, H, dtype=torch.bfloat16)),
-                "cos": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
-                "sin": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
-                "pos": self._rm(z(R, dtype=torch.int32)),
-                "wpos": self._rm(z(R, dtype=torch.int32)),  # KV write positions (== pos, or pos % ring)
-                "cur": self._rm(z(R, dtype=torch.int32)),
+                "cs": self._dev(z(1, 2 * R, 1, HD, dtype=torch.bfloat16)),
+                "ints": self._rm(z(3 * R, dtype=torch.int32)),
                 "xpos": self._rm(z(R, dtype=torch.int32)),
-                "xcos": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
-                "xsin": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
+                "xcs": self._dev(z(1, 2 * R, 1, HD, dtype=torch.bfloat16)),
             }
         return st
+
+    @staticmethod
+    def _views(st, R, extend=False):
+        """the staging buffers' parts as the body's ops take them (slices, inside the body / its trace)"""
+        if extend:
+            cs = st["xcs"]
+            return dict(
+                cos=ttnn.slice(cs, (0, 0, 0, 0), (1, R, 1, HD)), sin=ttnn.slice(cs, (0, R, 0, 0), (1, 2 * R, 1, HD))
+            )
+        cs, ints = st["cs"], st["ints"]
+        return dict(
+            cos=ttnn.slice(cs, (0, 0, 0, 0), (1, R, 1, HD)),
+            sin=ttnn.slice(cs, (0, R, 0, 0), (1, 2 * R, 1, HD)),
+            pos=ttnn.slice(ints, (0,), (R,)),
+            wpos=ttnn.slice(ints, (R,), (2 * R,)),
+            cur=ttnn.slice(ints, (2 * R,), (3 * R,)),
+        )
+
+    @staticmethod
+    def _free_views(v):
+        for t in v.values():
+            ttnn.deallocate(t)
 
     def add_layout(self, layout_id, U, block, tap_bufs=None):
         """Register the (U users x block) row geometry ``layout_id`` over the store (idempotent for the same
@@ -876,14 +895,16 @@ class DFlash2DrafterTP:
     def _extend_body(self, lay):
         st = self._staging[lay.R]
         R = lay.R
+        vw = self._views(st, R, extend=True)
         hctx = self._hctx(lay.tap_bufs, R)
         idx = self._write_index(st["xpos"], lay.xpt, lay)
         for li, lw in enumerate(self.layers):
             k, v = self._ctx_kv(hctx, lw, R)
-            kr = apply_partial_rope_decode(k, st["xcos"], st["xsin"], self.NKVl, R, HD)
+            kr = apply_partial_rope_decode(k, vw["cos"], vw["sin"], self.NKVl, R, HD)
             ttnn.deallocate(k)
             self._write_rows(li, kr, v, idx, lay)
         self._free_index(idx)
+        self._free_views(vw)
         ttnn.deallocate(hctx)
 
     @staticmethod
@@ -914,8 +935,7 @@ class DFlash2DrafterTP:
         st = self._staging[R]
         self._stage(pos % self.ring if self.ring else pos, st["xpos"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self._stage(pt, lay.xpt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        self._stage(cos.reshape(1, R, 1, HD).bfloat16(), st["xcos"], ttnn.bfloat16)
-        self._stage(sin.reshape(1, R, 1, HD).bfloat16(), st["xsin"], ttnn.bfloat16)
+        self._stage(torch.cat([cos, sin]).reshape(1, 2 * R, 1, HD).bfloat16(), st["xcs"], ttnn.bfloat16)
 
     def extend_context(self, slot0, n_valid, layout_id=None, traced=True):
         """Per user-row u of the layout: tap-buf rows u*block .. u*block+n_valid[u]-1 -> its slot's context
@@ -987,7 +1007,6 @@ class DFlash2DrafterTP:
 
     # ------------------------------------------------------------------ draft (traceable)
     def _attn(self, hb, lw, li, cur_t, lay, idx):
-        st = self._staging[lay.R]
         B = lay.R  # every draft row (U users x block) is a pseudo-user of the paged decode SDPA
         qkv = self._lin(hb, lw["qkv"])  # [1, 1, B, (NHl + 2 NKVl) HD]
         nq, nk = self.NHl * HD, self.NKVl * HD
@@ -999,9 +1018,9 @@ class DFlash2DrafterTP:
         ttnn.deallocate(k)
         v = ttnn.reshape(ttnn.slice(qkv, (0, 0, 0, nq + nk), (1, 1, B, nq + 2 * nk)), (1, B, self.NKVl, HD))
         ttnn.deallocate(qkv)
-        qr = apply_partial_rope_decode(qn, st["cos"], st["sin"], self.NHl, B, HD)
+        qr = apply_partial_rope_decode(qn, self._dv["cos"], self._dv["sin"], self.NHl, B, HD)
         ttnn.deallocate(qn)
-        kr = apply_partial_rope_decode(kn, st["cos"], st["sin"], self.NKVl, B, HD)
+        kr = apply_partial_rope_decode(kn, self._dv["cos"], self._dv["sin"], self.NKVl, B, HD)
         ttnn.deallocate(kn)
         self._write_rows(li, kr, v, idx, lay)
         kc, vc = self.kv[li]
@@ -1027,9 +1046,8 @@ class DFlash2DrafterTP:
         return self._allreduce(part)
 
     def _layer(self, hidden, lw, li, lay, idx):
-        st = self._staging[lay.R]
         L = lay.R
-        cur_t = st["pos"] if self.causal[li] else st["cur"]
+        cur_t = self._dv["pos"] if self.causal[li] else self._dv["cur"]
         h = self._rms_h(hidden, lw["in_ln"], lw["in_ln_rm"])
         if "ac_kp" in lw:
             kp = self._lin(h, lw["ac_kp"])
@@ -1062,23 +1080,31 @@ class DFlash2DrafterTP:
         return out
 
     def _draft_body(self, lay):
-        """Persistent inputs -> (vals [1,1,R,16] local, idx [1,1,R,16] local, hp [1,1,R,256] | None, h [1,1,R,H])."""
+        """Persistent inputs -> (rb [1,1,R,32 (+256)] fp32 local: the top-16 values | their vocab ids (local, exact
+        below 2^24) | hp (the selector projection, if any); hn [1,1,R,H]). One readback per chip (draft())."""
         st = self._staging[lay.R]
         h = st["emb"]
-        idx = self._write_index(st["wpos"], lay.ptB, lay)
+        self._dv = self._views(st, lay.R)
+        idx = self._write_index(self._dv["wpos"], lay.ptB, lay)
         for li, lw in enumerate(self.layers):
             h_new = self._layer(h, lw, li, lay, idx)
             if h is not st["emb"]:
                 ttnn.deallocate(h)
             h = h_new
         self._free_index(idx)
+        self._free_views(self._dv)
+        self._dv = None
         hn = self._rms_h(h, self.fnorm, self.fnorm_rm)
         ttnn.deallocate(h)
         logits = ttnn.linear(hn, self.lm_w)  # [1,1,B,V/nd] per device
         vals, idx = ttnn.topk(logits, self.topk, dim=-1, largest=True, sorted=True)
         ttnn.deallocate(logits)
-        hp = self._lin(hn, self.hproj) if self.has_selector else None
-        return vals, idx, hp, hn
+        parts = [vals, idx] + ([self._lin(hn, self.hproj)] if self.has_selector else [])
+        parts32 = [ttnn.typecast(t, ttnn.float32) for t in parts]
+        rb = ttnn.concat(parts32, dim=-1)
+        for t in parts + parts32:
+            ttnn.deallocate(t)
+        return rb, hn
 
     def _stage_draft(self, lay, anchors, Cs):
         """Per user-row u: block [anchor[u], MASK x (block-1)] at positions C[u] .. C[u]+block-1
@@ -1092,11 +1118,9 @@ class DFlash2DrafterTP:
         cos, sin = rope_tables(self.theta, pos)
         st = self._staging[R]
         self._stage(emb, st["emb"], ttnn.bfloat16)
-        self._stage(cos.reshape(1, R, 1, HD).bfloat16(), st["cos"], ttnn.bfloat16)
-        self._stage(sin.reshape(1, R, 1, HD).bfloat16(), st["sin"], ttnn.bfloat16)
-        self._stage(pos, st["pos"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        self._stage(pos % self.ring if self.ring else pos, st["wpos"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        self._stage(cur, st["cur"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self._stage(torch.cat([cos, sin]).reshape(1, 2 * R, 1, HD).bfloat16(), st["cs"], ttnn.bfloat16)
+        wpos = pos % self.ring if self.ring else pos
+        self._stage(torch.cat([pos, wpos, cur]), st["ints"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
     _trace_armed = False
 
@@ -1131,30 +1155,31 @@ class DFlash2DrafterTP:
         if traced and lay.draft_tid is not None:
             ttnn.execute_trace(self.mesh, lay.draft_tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(self.mesh)
-            vals, idx, hp, hn = lay.draft_out
+            rb, hn = lay.draft_out
             owned = False
             self.stats["draft_traced"] += 1
             lay.stats["draft_traced"] += 1
         else:
-            vals, idx, hp, hn = self._draft_body(lay)
+            rb, hn = self._draft_body(lay)
             owned = True
             self.stats["draft_eager"] += 1
             lay.stats["draft_eager"] += 1
-        comp0 = ttnn.ConcatMeshToTensor(self.mesh, dim=0)
+        kt = self.topk
         if self.lm_sharded:
             V_l = self.lm_w.shape[-1]
-            va = ttnn.to_torch(vals, mesh_composer=comp0).float().reshape(self.nd, R, self.topk)  # [nd,R,16]
-            ia = ttnn.to_torch(idx, mesh_composer=comp0).long().reshape(self.nd, R, self.topk)
-            ia = ia + torch.arange(self.nd).view(self.nd, 1, 1) * V_l
+            x = ttnn.to_torch(rb, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=0)).reshape(self.nd, R, -1)
+            va = x[..., :kt]  # [nd, R, 16]
+            ia = x[..., kt : 2 * kt].long() + torch.arange(self.nd).view(self.nd, 1, 1) * V_l
             va = va.permute(1, 0, 2).reshape(R, -1)  # [R, nd*16]
             ia = ia.permute(1, 0, 2).reshape(R, -1)
             top = va.topk(self.topk, dim=-1)
             unary_all = top.values
             cand_all = ia.gather(-1, top.indices)
         else:
-            unary_all = ttnn.to_torch(ttnn.get_device_tensors(vals)[0]).float().reshape(R, self.topk)
-            cand_all = ttnn.to_torch(ttnn.get_device_tensors(idx)[0]).long().reshape(R, self.topk)
-        hph_all = ttnn.to_torch(ttnn.get_device_tensors(hp)[0]).float().reshape(R, -1) if self.has_selector else None
+            x = ttnn.to_torch(ttnn.get_device_tensors(rb)[0]).reshape(1, R, -1)
+            unary_all = x[0, :, :kt]
+            cand_all = x[0, :, kt : 2 * kt].long()
+        hph_all = x[0, :, 2 * kt :] if self.has_selector else None
         hn_all = ttnn.to_torch(ttnn.get_device_tensors(hn)[0]).float().reshape(R, H) if self.keep_hidden else None
         outs, hiddens = [], []
         for u in range(U):
@@ -1169,7 +1194,6 @@ class DFlash2DrafterTP:
                 hiddens.append(hn_all[r0 + 1 : r0 + Bk])
         self.last_hidden = torch.stack(hiddens) if hiddens else None  # [U, K, H] (keep_hidden)
         if owned:
-            for t in (vals, idx, hp, hn):
-                if t is not None:
-                    ttnn.deallocate(t)
+            for t in (rb, hn):
+                ttnn.deallocate(t)
         return outs if per_user_out else outs[0]
