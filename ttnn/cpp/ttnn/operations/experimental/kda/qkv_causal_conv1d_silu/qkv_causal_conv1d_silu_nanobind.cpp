@@ -67,6 +67,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 Compute-kernel configuration.
             input_column_offset (int, optional): First convolution channel of
                 ``input``; tile aligned. Defaults to 0.
+            segment_length (int, optional): if > 0, every token t with t % segment_length == 0 (t > 0) starts a new sequence with zero history (rows of independent sequences folded into time); a multiple of 32 dividing T
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: New TILE-layout BFLOAT16
@@ -95,7 +96,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("input_column_offset") = 0);
+        nb::arg("input_column_offset") = 0,
+        nb::arg("segment_length") = 0);
 
     mod.def(
         "qkv_causal_conv1d_silu_exchange_core",
@@ -146,6 +148,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("input_column_offset") = 0);
+        nb::arg("input_column_offset") = 0,
+        nb::arg("segment_length") = 0);
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail

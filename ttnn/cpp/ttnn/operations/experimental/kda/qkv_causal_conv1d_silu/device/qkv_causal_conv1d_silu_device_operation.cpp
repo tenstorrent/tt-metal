@@ -147,6 +147,14 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
         "qkv_causal_conv1d_silu: history must be [1,{},Q+K+V]",
         qkv_conv::history_rows);
     TT_FATAL(
+        attrs.segment_length == 0 ||
+            (attrs.segment_length % tt::constants::TILE_HEIGHT == 0 && attrs.sequence % attrs.segment_length == 0),
+        "qkv_causal_conv1d_silu: segment_length must be 0 or a multiple of 32 dividing the sequence length");
+    TT_FATAL(
+        attrs.segment_length == 0 ||
+            (mesh->shape()[attrs.sequence_parallel_axis] == 1 && !in.exchange_buffer.has_value()),
+        "qkv_causal_conv1d_silu: segment_length > 0 supports neither sequence parallelism nor the history exchange");
+    TT_FATAL(
         attrs.sequence > 0 && attrs.sequence % tt::constants::TILE_HEIGHT == 0,
         "qkv_causal_conv1d_silu: sequence must be positive and tile aligned");
     for (const auto& [tensor, name] : std::array{

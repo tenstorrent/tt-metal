@@ -349,6 +349,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
              {"group", group},
              {"input_wt", input_wt},
              {"input_ct_offset", input_ct_offset},
+             {"segment_tiles", attrs.segment_length / tt::constants::TILE_HEIGHT},
              {"exchange", uint32_t(exchange)}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(),

@@ -22,6 +22,8 @@ struct QkvCausalConv1dSiluParams {
     uint32_t sequence_parallel_axis;
     // First channel of the convolution within the input's last dimension.
     uint32_t input_column_offset;
+    // If > 0, every segment_length tokens (t % segment_length == 0, t > 0) restart the causal history with zeros.
+    uint32_t segment_length = 0;
     // Fabric history exchange only: L1 addresses of its global semaphores, entry, predecessor arrival, carry arrival.
     std::array<uint32_t, 3> exchange_semaphore_addresses{};
     tt::tt_metal::MemoryConfig output_mem_config;

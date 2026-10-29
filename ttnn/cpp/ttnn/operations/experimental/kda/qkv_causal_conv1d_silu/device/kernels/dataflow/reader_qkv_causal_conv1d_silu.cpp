@@ -35,6 +35,7 @@ template <
     uint32_t group,
     uint32_t input_wt,
     uint32_t input_ct_offset,
+    uint32_t segment_tiles,
     uint32_t exchange,
     uint32_t sp_rank,
     uint32_t sp_size,
@@ -139,9 +140,11 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         // The three tokens preceding this tile: the chronological carry at a segment start (the logical start reads
         // the caller's history, any other segment start the predecessor's rows), else the previous tile's last rows.
         // Tile-aligned actual_start makes every segment start tile-aligned.
+        // segment_tiles != 0: independent sequences folded into time restart with zero history.
+        const bool reset = segment_tiles != 0 && mt != 0 && (mt % segment_tiles) == 0;
         const bool segment_start =
-            mt == 0 || (local_split_row != 0 && mt * tt::constants::TILE_HEIGHT == local_split_row);
-        const bool from_predecessor = segment_start && (initial_from_predecessor || mt != 0);
+            mt == 0 || reset || (local_split_row != 0 && mt * tt::constants::TILE_HEIGHT == local_split_row);
+        const bool from_predecessor = segment_start && !reset && (initial_from_predecessor || mt != 0);
         const bool from_previous_strip = !segment_start && previous_work + 1 == work;
         if (from_predecessor) {
             if (!predecessor_arrived) {
@@ -151,6 +154,11 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             // Without the exchange, predecessor is the bare three-row carry, read at the same pages.
             static_assert(predecessor_page == 0);
             read_rows(predecessor, predecessor_page, ct_start);
+        } else if (reset) {
+            auto* zeros = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows);
+            for (uint32_t i = 0; i < history_rows * block_row_bytes / sizeof(uint32_t); ++i) {
+                zeros[i] = 0;
+            }
         } else if (segment_start) {
             read_rows(history, 0, ct_start);
         } else if (!from_previous_strip) {
