@@ -51,6 +51,7 @@ def chat(port, model, msgs, max_tokens, thinking, sampling, ignore_eos=False):
     )
     prompt_ids, ids, text, times, finish, usage = None, [], [], [], None, None
     load0 = os.getloadavg()[0]
+    wall0 = time.time()
     t0 = time.perf_counter()
     with urllib.request.urlopen(req, timeout=1800) as resp:
         for line in resp:
@@ -82,6 +83,7 @@ def chat(port, model, msgs, max_tokens, thinking, sampling, ignore_eos=False):
         decode_tok_s=n_after / decode_s if decode_s > 0 else None,
         chunks=len(times),
         # (arrival s, tokens) per chunk, and the host's 1-minute load average before and after the request
+        start_unix_s=wall0,
         chunk_times=[(round(t, 5), n) for t, n in times],
         loadavg=(load0, os.getloadavg()[0]),
         finish=finish,
