@@ -528,13 +528,15 @@ SDPAForwardSchedule make_schedule(
     if (schedule.per_core.empty()) {
         schedule.per_core = split_items_contiguous(total_items, std::min(num_cores, total_items));
     }
-    // Longest first fills the cores from the first, so the cores without work are the last ones.
+    // Longest first fills the cores from the first, so the cores without work are the last ones. The
+    // prediction stays the one made on num_cores (the model's DRAM share is per core count), so the pick
+    // compares its candidates on one count; only the fallbacks, which schedule_pieces did not rate, are
+    // rated here.
     while (!schedule.per_core.empty() && schedule.per_core.back().empty()) {
         schedule.per_core.pop_back();
     }
-    if (schedule.num_slots == 0U) {
-        schedule.predicted_us =
-            makespan_us(shape, chunks, schedule.per_core, static_cast<uint32_t>(schedule.per_core.size()));
+    if (schedule.predicted_us == 0.0) {
+        schedule.predicted_us = makespan_us(shape, chunks, schedule.per_core, num_cores);
     }
     return schedule;
 }
@@ -662,12 +664,12 @@ SDPAForwardChunks resolve_chunks(
             chunks.Sq_chunk_t /= 2U;
         }
         if (may_cut) {
-            // Every candidate is scheduled on the same core count, the model's DRAM share being per core
-            // count. The model over-predicts a cut schedule against an uncut one by about a tenth (p150b
-            // calibration), so a smaller chunk, whose schedule cuts less, must win by that much; the
-            // larger chunk also reads K/V fewer times, which the model only approximates.
+            // Each candidate is rated by the schedule the factory would build for it (schedule_for), so the
+            // pick, the L1 filter above and the program agree on whether it cuts. The model over-predicts a
+            // cut schedule against an uncut one by about a tenth (p150b calibration), so a smaller chunk,
+            // whose schedule cuts less, must win by that much; the larger chunk also reads K/V fewer times,
+            // which the model only approximates.
             constexpr double kSmallerChunkMustWinBy = 0.9;
-            const uint32_t max_pieces = effective_max_pieces(config);
             SDPAForwardChunks best = chunks;
             double best_us = std::numeric_limits<double>::infinity();
             for (SDPAForwardChunks candidate = chunks; candidate.Sq_chunk_t >= 1U; candidate.Sq_chunk_t /= 2U) {
@@ -675,7 +677,7 @@ SDPAForwardChunks resolve_chunks(
                     l1_bytes(cb_tiles(shape, candidate, cuts(candidate))) > l1_budget_bytes) {
                     continue;  // the L1 shrink below only makes chunks smaller: one that does not fit is out
                 }
-                const double us = make_schedule(shape, candidate, num_available_cores, max_pieces).predicted_us;
+                const double us = schedule_for(config, shape, candidate, grid_cores).predicted_us;
                 if (us < best_us * kSmallerChunkMustWinBy) {
                     best = candidate;
                     best_us = us;
