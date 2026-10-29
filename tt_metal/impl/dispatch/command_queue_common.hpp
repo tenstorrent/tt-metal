@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "device.hpp"
 #include "impl/context/context_types.hpp"
 #include "sub_device_types.hpp"
@@ -30,7 +30,8 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     REALTIME_PROFILER_MSG = 9,
     DISPATCH_TELEMETRY = 10,
     DISPATCH_TELEMETRY_CONTROL = 11,
-    // Completion counters for worker-done signalling on Quasar. Not used on WH/BH.
+    // Quasar L1 worker-done counters; unused on WH/BH. Incremented by worker NOC, or by dispatch_s from FDS group
+    // counts when FDS signalling is enabled.
     WORKER_COMPLETION_SEMAPHORES = 12,
     UNRESERVED = 13,
 };

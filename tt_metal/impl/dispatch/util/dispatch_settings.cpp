@@ -17,7 +17,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
@@ -25,6 +25,10 @@ namespace tt::tt_metal {
 static_assert(
     DispatchSettings::DISPATCH_MESSAGE_ENTRIES <=
     sizeof(decltype(CQDispatchCmd::notify_dispatch_s_go_signal.index_bitmask)) * CHAR_BIT);
+
+static_assert(
+    DispatchSettings::DISPATCH_MESSAGE_ENTRIES + 1 < 16,
+    "FDS reserves group zero and requires every dispatch message index to fit in a four-bit group id");
 
 static_assert(
     DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET ==
@@ -131,7 +135,8 @@ uint32_t DispatchSettings::get_prefetch_q_entries(
     } else if (is_galaxy_cluster) {
         prefetch_q_entries = 1532 / num_hw_cqs;
     } else {
-        prefetch_q_entries = 1534;
+        // A whole number of 64 B lines with 4 B entries, which the cached Quasar fetch queue requires.
+        prefetch_q_entries = 1536;
     }
     return prefetch_q_entries;
 }

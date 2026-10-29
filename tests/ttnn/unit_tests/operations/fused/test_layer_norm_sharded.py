@@ -6,13 +6,15 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_watcher_enabled
+from tt_py_test_utils_common.utility_functions import is_watcher_enabled, run_for_wormhole_b0_or_blackhole
 from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     layernorm_test_main,
     single_stage_param_sets,
     simple_size_params,
     generate_input_tensor,
     ttnn_layer_norm_sharded,
+    create_sharded_mem_config,
+    torch_layer_norm,
     ttnn_rms_norm_sharded,
     make_sharded_norm_mem_config,
     run_sharded_norm_logical_width_multicore,
@@ -23,6 +25,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
+from tests.ttnn.unit_tests.operations.test_utils import TILE_WIDTH
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
@@ -161,6 +164,42 @@ def test_layer_norm_sharded_with_weight_and_bias_row_major(device, use_welford, 
         weight=weight[0],
         bias=bias[0],
         weight_bias_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
+@run_for_wormhole_b0_or_blackhole()
+def test_layer_norm_sharded_tile_backend_does_not_require_reciprocal(device):
+    torch.manual_seed(20260824)
+    h, w, num_cores_h, num_cores_w, block_ht, block_wt, _ = simple_size_params(False)
+    torch_input = torch.rand((h, w), dtype=torch.bfloat16)
+    reference = torch.nn.functional.layer_norm(torch_input, normalized_shape=[w])
+    memory_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage=False)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+
+    output = ttnn_layer_norm_sharded(
+        device,
+        input_tensor,
+        use_welford=True,
+        block_ht=block_ht,
+        block_wt=block_wt,
+        provide_reciprocal=False,
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        ),
+    )
+
+    assert_numeric_metrics(
+        reference,
+        output,
+        pcc_threshold=0.99999,
+        rtol=0,
+        atol=0.015,
+        frobenius_threshold=0.005,
     )
 
 
@@ -511,6 +550,54 @@ def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_
     )
 
 
+# A width-sharded grid with an idle row (more cores than real width-slices) must raise, not hang.
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+@pytest.mark.parametrize(
+    ("h", "w", "num_cores_w", "num_cores_h", "expect_idle_shard_error"),
+    [
+        (32, 256, 4, 2, False),  # 8 cores, tensor width needs all 8: valid
+        (32, 128, 4, 2, True),  # 8 cores, tensor width only needs 4: other 4 are idle
+    ],
+    ids=["grid_matches_tiles", "idle_row"],
+)
+def test_layer_norm_sharded_core_grid_utilization(
+    device, h, w, num_cores_w, num_cores_h, expect_idle_shard_error, use_welford, expect_error
+):
+    torch_input_tensor = generate_input_tensor(h, w, "random_normal", torch.float32)
+
+    core_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1))}
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(core_grid, [h, TILE_WIDTH], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.Layout.TILE, device=device, memory_config=sharded_mem_config
+    )
+
+    if expect_idle_shard_error:
+        with expect_error(RuntimeError, "does not align with tensor width"):
+            ttnn_layer_norm_sharded(device, tt_input_tensor, use_welford=use_welford, block_ht=1, block_wt=1)
+        return
+
+    output_ttnn = ttnn_layer_norm_sharded(device, tt_input_tensor, use_welford=use_welford, block_ht=1, block_wt=1)
+    ref_output_tensor = torch_layer_norm(torch_input_tensor)
+    if use_welford:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.99975, 0.14, 0.085, 0.02
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.9999, 0.065, 0.065, 0.014
+    assert_numeric_metrics(
+        ref_output_tensor,
+        output_ttnn,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
+
+
 # Column masking of a non-tile-aligned width must work regardless of whether gamma/beta are supplied
 # in TILE or ROW_MAJOR layout: ROW_MAJOR gamma/beta selects the row-major writer kernel, and the
 # compute kernel needs its column mask on that path too.
@@ -567,8 +654,9 @@ def test_layer_norm_sharded_uneven_multicore_logical_width_two_stage(device, w, 
 )
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
 @pytest.mark.parametrize("use_weight_bias", [False, True], ids=["no_weight_bias", "weight_bias"])
+@pytest.mark.parametrize("h", [32, 64])
 def test_layer_norm_sharded_width_non_rectangular_grid(
-    device, full_lines, cores_in_last_line, origin, line_length, orientation, use_welford, use_weight_bias
+    device, full_lines, cores_in_last_line, origin, line_length, orientation, use_welford, use_weight_bias, h
 ):
     """A shard grid with a partially-filled trailing line is not a rectangle, so the reduction multicasts
     over a bounding box larger than the active cores. The result must still match torch, including when the
@@ -576,7 +664,6 @@ def test_layer_norm_sharded_width_non_rectangular_grid(
     orientations (which select different mcast core-range topologies in the factory)."""
     torch.manual_seed(0)
 
-    h = 32
     shard_width = 32
     _, sharded_mem_config, w = non_rectangular_width_shard_config(
         device,
@@ -766,3 +853,49 @@ def test_layer_norm_sharded_subblock_w_zero(device, expect_error, norm, use_welf
             )
         else:
             ttnn_rms_norm_sharded(device, tt_input, block_ht=h // 32, block_wt=shard_w // 32, subblock_w=0)
+
+
+# The residual of a sharded layer_norm / rms_norm may have a different dtype than the input. Its DFB used to be
+# declared with the input's data format and tile size, so the residual was misread (or, when the input tile is
+# larger than the residual tile, the program failed to build). Reference: fp64 on the values stored on device.
+@pytest.mark.parametrize(
+    "input_dtype, residual_dtype",
+    [
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.float32, ttnn.bfloat16),
+        (ttnn.float32, ttnn.bfloat8_b),
+        (ttnn.bfloat8_b, ttnn.bfloat16),
+        (ttnn.bfloat8_b, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("two_stage", [False, True])
+@pytest.mark.parametrize("op, use_welford", [("layer_norm", False), ("layer_norm", True), ("rms_norm", False)])
+def test_sharded_norm_residual_dtype_differs_from_input(
+    device, input_dtype, residual_dtype, two_stage, op, use_welford
+):
+    torch.manual_seed(0)
+    h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
+    mem_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage)
+    tt_input = ttnn.from_torch(
+        torch.randn((h, w)), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+    tt_residual = ttnn.from_torch(
+        torch.randn((h, w)), dtype=residual_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+    x = ttnn.to_torch(tt_input).double() + ttnn.to_torch(tt_residual).double()
+
+    if op == "layer_norm":
+        output = ttnn_layer_norm_sharded(
+            device, tt_input, use_welford, block_ht, block_wt, subblock_wt, residual=tt_residual
+        )
+        expected = torch.nn.functional.layer_norm(x, [w], eps=1e-12)
+    else:
+        output = ttnn_rms_norm_sharded(device, tt_input, block_ht, block_wt, subblock_wt, residual=tt_residual)
+        expected = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-12)
+
+    output = output.double().reshape(expected.shape)
+    pcc = torch.corrcoef(torch.stack([output.flatten(), expected.flatten()]))[0, 1].item()
+    max_abs = (output - expected).abs().max().item()
+    # The interleaved path with the same dtypes reaches PCC >= 0.99995 and max abs error <= 0.06 here.
+    assert pcc > 0.9999 and max_abs < 0.1, f"pcc={pcc:.6f} max_abs={max_abs:.4g}"

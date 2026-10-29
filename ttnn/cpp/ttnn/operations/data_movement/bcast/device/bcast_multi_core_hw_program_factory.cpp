@@ -231,23 +231,46 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHWProgramFactory::create_
     };
 
     // ---- Per-core runtime args ----
-    // Interleaved: iterate the full grid; active cores (work-split groups) get real args, idle cores get
-    // no-op args (they are part of the all_device_cores WorkUnit, as in legacy). Sharded: only shard-grid
-    // cores are in the WorkUnit, so non-shard cores are skipped entirely.
+    // Sharded cores are walked in the shard's own orientation (matches placement); interleaved keeps the
+    // plain column-major grid walk, with idle cores (outside both work-split groups) zero-filled.
     ProgramRunArgs run_args;
     KernelRunArgs reader_args{.kernel = READER};
     KernelRunArgs writer_args{.kernel = WRITER};
     KernelRunArgs compute_args{.kernel = COMPUTE};
 
-    for (std::uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
-        const CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        std::uint32_t num_tensor_tiles_per_core;
-        if (core_group_1.contains(core)) {
-            num_tensor_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_tensor_tiles_per_core = num_tiles_per_core_group_2;
-        } else {
-            if (!is_sharded) {
+    if (is_sharded) {
+        const auto sharded_cores = corerange_to_cores(
+            shard_spec->grid, shard_spec->grid.num_cores(), shard_spec->orientation == ShardOrientation::ROW_MAJOR);
+        std::uint32_t num_tiles_read = 0;
+        for (const CoreCoord& core : sharded_cores) {
+            AddRuntimeArgsForNode(
+                reader_args.runtime_arg_values,
+                core,
+                {{"num_tiles", num_tiles_per_shard},
+                 {"HtWt", HtWt},
+                 {"base_start_id_HtWt", num_tiles_read / HtWt * HtWt},
+                 {"curr_id_from_base", num_tiles_read % HtWt},
+                 {"bcast_id", bnc1 ? 0u : num_tiles_read / HtWt}});
+
+            AddRuntimeArgsForNode(
+                compute_args.runtime_arg_values, core, {{"B", 1u}, {"Ht", 1u}, {"Wt", num_tiles_per_shard}});
+
+            AddRuntimeArgsForNode(
+                writer_args.runtime_arg_values,
+                core,
+                {{"num_pages", num_tiles_per_shard}, {"start_id", num_tiles_read}});
+
+            num_tiles_read += num_tiles_per_shard;
+        }
+    } else {
+        for (std::uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
+            const CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            std::uint32_t num_tensor_tiles_per_core;
+            if (core_group_1.contains(core)) {
+                num_tensor_tiles_per_core = num_tiles_per_core_group_1;
+            } else if (core_group_2.contains(core)) {
+                num_tensor_tiles_per_core = num_tiles_per_core_group_2;
+            } else {
                 AddRuntimeArgsForNode(
                     reader_args.runtime_arg_values,
                     core,
@@ -258,28 +281,28 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHWProgramFactory::create_
                      {"bcast_id", 0u}});
                 AddRuntimeArgsForNode(compute_args.runtime_arg_values, core, {{"B", 1u}, {"Ht", 1u}, {"Wt", 0u}});
                 AddRuntimeArgsForNode(writer_args.runtime_arg_values, core, {{"num_pages", 0u}, {"start_id", 0u}});
+                continue;
             }
-            continue;
+
+            AddRuntimeArgsForNode(
+                reader_args.runtime_arg_values,
+                core,
+                {{"num_tiles", num_tensor_tiles_per_core},
+                 {"HtWt", HtWt},
+                 {"base_start_id_HtWt", num_tiles_read / HtWt * HtWt},
+                 {"curr_id_from_base", num_tiles_read % HtWt},
+                 {"bcast_id", bnc1 ? 0u : num_tiles_read / HtWt}});
+
+            AddRuntimeArgsForNode(
+                compute_args.runtime_arg_values, core, {{"B", 1u}, {"Ht", 1u}, {"Wt", num_tensor_tiles_per_core}});
+
+            AddRuntimeArgsForNode(
+                writer_args.runtime_arg_values,
+                core,
+                {{"num_pages", num_tensor_tiles_per_core}, {"start_id", num_tiles_read}});
+
+            num_tiles_read += num_tensor_tiles_per_core;
         }
-
-        AddRuntimeArgsForNode(
-            reader_args.runtime_arg_values,
-            core,
-            {{"num_tiles", num_tensor_tiles_per_core},
-             {"HtWt", HtWt},
-             {"base_start_id_HtWt", num_tiles_read / HtWt * HtWt},
-             {"curr_id_from_base", num_tiles_read % HtWt},
-             {"bcast_id", bnc1 ? 0u : num_tiles_read / HtWt}});
-
-        AddRuntimeArgsForNode(
-            compute_args.runtime_arg_values, core, {{"B", 1u}, {"Ht", 1u}, {"Wt", num_tensor_tiles_per_core}});
-
-        AddRuntimeArgsForNode(
-            writer_args.runtime_arg_values,
-            core,
-            {{"num_pages", num_tensor_tiles_per_core}, {"start_id", num_tiles_read}});
-
-        num_tiles_read += num_tensor_tiles_per_core;
     }
 
     ProgramSpec spec{

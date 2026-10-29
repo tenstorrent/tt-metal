@@ -69,6 +69,8 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
+    # Dense KV dedup; sparse models always dedup.
+    tp_shard_kv: bool = False
     # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
     # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
     sparse_kv_cache_format: Optional[object] = None
@@ -86,6 +88,11 @@ class PrefillRunParams:
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
     mtp_levels: int = 0
+    # Decode's MTP level count, 0 = mtp_levels. Levels past mtp_levels reuse its KV: table aliases + acks.
+    mtp_decode_levels: int = 0
+    # Chunks per forward, PREFILL_FORWARD_TOKENS_BUDGET // chunk_size. 1 = one chunk per prefill_chunk call; > 1
+    # needs an adapter with supports_packed_forward and drives the runtime's prefill_forward.
+    forward_chunks: int = 1
 
     @property
     def sp_factor(self) -> int:
@@ -140,7 +147,45 @@ class PrefillModelAdapter(ABC):
     # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
+    # Whether the runner may build the drafter with PREFILL_USE_TRACE=0. Off by default: DFlash is gated
+    # traced. A model whose trace serves one slot only turns it on for multi-user runs.
+    dflash_allows_eager: bool = False
+    # The drafter partial travels as its own D2D plane next to the model's planes; False packs it beside the
+    # hidden instead, widening the activation to 2H.
+    dflash_partial_separate_plane: bool = False
     supports_mtp: bool = False
+    supports_tp_shard_kv: bool = False
+    tp_shard_kv_default: bool = False
+    # Whether the runtime implements prefill_forward (several chunks per forward), so the runner may run with
+    # PREFILL_FORWARD_TOKENS_BUDGET above the chunk size. See docs/ADDING_A_PREFILL_MODEL.md.
+    supports_packed_forward: bool = False
+    # Whether a pipeline split can hand indexer indices from one rank to the next (cross-layer indexer reuse).
+    passes_indexer_indices: bool = False
+    # Fail PCC verification unless the producer drained exactly one completion per layer per chunk.
+    verify_layer_completions: bool = False
+
+    def fabric_payload_size(self) -> int:
+        """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is
+        built, so a model whose ops need more room than ``model_config.FABRIC_PAYLOAD_SIZE`` returns it here."""
+        return self.model_config.FABRIC_PAYLOAD_SIZE
+
+    def cache_kind(self, config_id: int) -> str:
+        """What migration-table config ``config_id`` holds. Generic consumers understand ``"kvpe"`` and
+        ``"index"`` (a DSA indexer key cache) and treat any other value as an opaque cache they neither
+        decode nor infer a width for; a model may return its own kinds (Kimi-K3: ``"kda_recurrent"``,
+        ``"kda_convolution"``). The default keeps the historical convention (config 1 of a multi-config
+        table is the index cache); a model whose second config is something else overrides this so the
+        producer and the migration driver stop inferring the kind from the config count."""
+        if config_id == 0:
+            return "kvpe"
+        return "index" if config_id == 1 else "other"
+
+    def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
+        """Table positions one /migrate of layer ``layer_idx`` covers after a ``real_len``-token prefill.
+        A token cache migrates ``[0, real_len)``. A model whose layer holds a cache on another axis
+        (Kimi-K3's KDA state: one of decode's eight version windows) overrides this; the migration driver
+        issues one call per run of consecutive layers with equal ranges and byte-verifies that range."""
+        return 0, real_len
 
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
@@ -192,11 +237,9 @@ class PrefillModelAdapter(ABC):
 
     def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
         """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of
-        these). ``None`` => unconstrained (dense models — any split is fine). A DSA cross-layer-reuse
-        model returns its ``full`` layer indices: each rank must begin on a layer that seeds that rank's
-        indexer-reuse chain (a rank starting on a ``shared`` layer has no prior top-k — see
-        ``tt_prefill_transformer``). The runner (``compute_layer_split``) snaps the default even split
-        onto these and rejects any split whose rank starts fall off them."""
+        these). ``None`` => unconstrained (dense models — any split is fine). The runner
+        (``compute_layer_split``) snaps the default even split onto these and rejects any split whose
+        rank starts fall off them."""
         return None
 
     @abstractmethod
@@ -204,8 +247,9 @@ class PrefillModelAdapter(ABC):
         """Construct the model for this rank and return a runtime handle. The runtime
         is stateless w.r.t. the KV cache — it receives the engine-owned ``KvCaches`` as an
         argument on each call. The engine then calls ``.compile(kv_caches)`` and drives
-        it (make_chunk_input, prefill_chunk, and — when enabled — build_kv_chunk_table /
-        set_layer_completion_sink). ``params`` carries the per-rank knobs."""
+        it (make_chunk_input, prefill_chunk — or prefill_forward when ``params.forward_chunks > 1`` — and,
+        when enabled, build_kv_chunk_table / set_layer_completion_sink). ``params`` carries the per-rank
+        knobs."""
 
     # =====================================================================
     # Test-only metadata (HF download coordinates + reference modeling).
@@ -306,10 +350,13 @@ ADAPTER_PATHS = {
     # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
+    # DeepSeek-V4: hyper-connection residual, per-layer SWA / HCA / CSA attention; serving is single-rank, eager.
+    "deepseek_v4_flash": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4:DeepSeekV4FlashAdapter",
+    "deepseek_v4_pro": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4:DeepSeekV4ProAdapter",
     "gemma4_d_p": "models.demos.gemma4_d_p.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
-    # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
-    "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
+    # GLM-5.2: runnable through the runner only (no tests / CI); same architecture as GLM-5.3.
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
+    "glm_5_3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3:GLM53Adapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
     # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).

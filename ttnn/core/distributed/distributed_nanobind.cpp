@@ -38,7 +38,7 @@
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt_stl/assert.hpp>
-#include <ttnn/api/ttnn/types.hpp>
+#include "ttnn/types.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -50,14 +50,19 @@
 
 namespace {
 
-// The device a mesh coordinate names, or the mesh's first device when none is given.
+// The device a mesh coordinate names, or the mesh's first local device when none is given.
 // MeshDevice::get_device returns nullptr for a coordinate outside the mesh, and the raw L1
 // accessors would dereference it, so that is refused here with the coordinate in the message.
 tt::tt_metal::IDevice* device_at(
     tt::tt_metal::distributed::MeshDevice* mesh,
     const std::optional<tt::tt_metal::distributed::MeshCoordinate>& coord) {
     if (!coord.has_value()) {
-        return mesh->get_devices().at(0);
+        for (const auto& c : tt::tt_metal::distributed::MeshCoordinateRange(mesh->shape())) {
+            if (mesh->is_local(c)) {
+                return mesh->get_device(c);
+            }
+        }
+        TT_THROW("Mesh of shape {} has no local devices", mesh->shape());
     }
     tt::tt_metal::IDevice* device = mesh->get_device(*coord);
     TT_FATAL(device != nullptr, "MeshCoordinate {} is outside the mesh of shape {}", *coord, mesh->shape());

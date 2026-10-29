@@ -3,7 +3,12 @@
 
 
 import ttnn
-from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
+from models.demos.minimax_m3.utils.general_utils import (
+    get_cache_file_name,
+    is_dense_mlp_layer,
+    is_sparse_attention_layer,
+    msa_params,
+)
 from models.demos.minimax_m3.utils.profiler_utils import COARSE, FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
@@ -13,6 +18,16 @@ from .dense_mlp import DenseMLP
 from .mlp import MLP
 from .residual import gather_before_norm, use_sharded_residual
 from .rms_norm import RMSNorm
+
+
+def add_residual(residual, delta):
+    """residual + delta, always bf16: a branch output in another dtype (e.g. bf8 o_proj past 32k tokens) gets a
+    fresh bf16 output instead of being written into."""
+    if delta.dtype == ttnn.bfloat16:
+        return ttnn.add(residual, delta, output_tensor=delta)
+    out = ttnn.add(residual, delta, dtype=ttnn.bfloat16)
+    delta.deallocate(True)
+    return out
 
 
 class DecoderLayer:
@@ -35,6 +50,7 @@ class DecoderLayer:
         ep_seq_len_per_chip=1024,
         sequence_parallel=False,
         cache_layer_idx=None,
+        overlap_shared_expert=True,
     ):
         # layer_idx is global (weights + dense/MoE/sparse selection); cache_layer_idx is the local index
         # for the KV-cache slot (None => single-rank, equal to layer_idx).
@@ -66,13 +82,9 @@ class DecoderLayer:
         self.gather_before_norm = self.sharded_residual and gather_before_norm()
         self.mesh_config = mesh_config
         self.ccl_manager = ccl_manager
-        # Hybrid dense/MoE schedule (M3): layers with moe_layer_freq[idx]==0 are a plain dense
-        # SwiGLU MLP (mlp.{gate,up,down}_proj); the rest are MoE (block_sparse_moe.*). If
-        # moe_layer_freq is absent, default to MoE.
-        moe_layer_freq = getattr(hf_config, "moe_layer_freq", None)
-        self.is_dense = (
-            moe_layer_freq is not None and layer_idx < len(moe_layer_freq) and moe_layer_freq[layer_idx] == 0
-        )
+        # Per-layer MLP from the config's moe_layer_freq: 0 = plain dense SwiGLU MLP (mlp.{gate,up,down}_proj),
+        # 1 = MoE (block_sparse_moe.*). Both variants: layers 0-2 dense, 3-59 MoE.
+        self.is_dense = is_dense_mlp_layer(hf_config, layer_idx)
         if self.is_dense:
             self.mlp = DenseMLP(
                 mesh_device,
@@ -95,51 +107,29 @@ class DecoderLayer:
                 expert_weight_dtype=expert_weight_dtype,
                 use_ep_moe=use_ep_moe,
                 ep_seq_len_per_chip=ep_seq_len_per_chip,
+                overlap_shared_expert=overlap_shared_expert,
             )
 
-        # MiniMax-M3 lists per-layer attention types in `attn_type_list` (all 1 =
-        # full attention) via attn_type_list. Fall back gracefully.
-        attn_types = getattr(hf_config, "attn_type_list", None) or getattr(hf_config, "layer_types", None)
-        self.attention_type = attn_types[layer_idx] if attn_types is not None else 1
+        # Per-layer attention from the config's sparse_attention_freq: 1 = MSA block-sparse, 0 = dense GQA
+        # (M3: dense 0-2 / MSA 3-59; M3.1: MSA everywhere). MSA hyperparameters come from sparse_attention_config;
+        # the values the kernels fix (local block, score type, index heads) are checked by check_supported_config.
+        is_sparse = is_sparse_attention_layer(hf_config, layer_idx)
+        msa = msa_params(hf_config) if is_sparse else {}
 
-        # M3 MSA: layers with sparse_attention_freq[layer_idx]==1 (layers 3-59) run block-sparse
-        # attention; layers 0-2 (==0) stay dense. sparse_attention_config may be a dict or an object.
-        sparse_cfg = getattr(hf_config, "sparse_attention_config", None)
-        if isinstance(sparse_cfg, dict):
-            freq = sparse_cfg.get("sparse_attention_freq") if sparse_cfg.get("use_sparse_attention") else None
-        else:
-            freq = getattr(sparse_cfg, "sparse_attention_freq", None) if sparse_cfg is not None else None
-        is_sparse = bool(freq[layer_idx]) if freq is not None and layer_idx < len(freq) else False
-
-        # MSA hyperparams from sparse_attention_config (dict or object); defaults match M3.
-        def _sc(name, default):
-            if sparse_cfg is None:
-                return default
-            return sparse_cfg.get(name, default) if isinstance(sparse_cfg, dict) else getattr(sparse_cfg, name, default)
-
-        msa_block_size = _sc("sparse_block_size", 128)
-        msa_topk_blocks = _sc("sparse_topk_blocks", 16)
-        msa_index_dim = _sc("sparse_index_dim", 128)
-
-        # Create attention configuration
         attention_config = AttentionConfig(
             hidden_size=hf_config.hidden_size,
             num_heads=hf_config.num_attention_heads,
             num_kv_heads=hf_config.num_key_value_heads,
             head_dim=hf_config.head_dim,
-            rotary_dim=getattr(hf_config, "rotary_dim", hf_config.head_dim),
+            rotary_dim=hf_config.rotary_dim,
             rms_norm_eps=hf_config.rms_norm_eps,
-            use_qk_norm=getattr(hf_config, "use_qk_norm", True),
-            use_gemma_norm=getattr(hf_config, "use_gemma_norm", False),
             sliding_window=getattr(hf_config, "sliding_window", None),
             max_seq_len=max_seq_len,
             max_local_batch_size=max_local_batch_size,
             users_row_sharded=users_row_sharded,
             is_sparse=is_sparse,
-            msa_block_size=msa_block_size,
-            msa_topk_blocks=msa_topk_blocks,
-            msa_index_dim=msa_index_dim,
             sequence_parallel=sequence_parallel,
+            **msa,
         )
 
         # Create attention program config
@@ -159,11 +149,10 @@ class DecoderLayer:
         )
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
-        # Profiling zone name for this layer. M3 layers 0-2 are dense (dense attention + dense MLP)
-        # and 3-59 are sparse (MSA + MoE) — sparse_attention_freq and moe_layer_freq agree — so one
-        # tag describes the whole layer. Inner zone names are relative; the parser composes the full
-        # path from the nesting (see utils/profiler_utils.py).
-        self.zone_name = f"layer{layer_idx:02d}_{'sparse' if is_sparse else 'dense'}"
+        # Profiling zone name for this layer, tagged by its MLP (dense MLP vs MoE): the attention type
+        # follows sparse_attention_freq, which need not match moe_layer_freq. Inner zone names are
+        # relative; the parser composes the full path from the nesting (see utils/profiler_utils.py).
+        self.zone_name = f"layer{layer_idx:02d}_{'dense' if self.is_dense else 'sparse'}"
 
     def _gather_emb(self, tensor):
         """TP all-gather emb/tp -> full emb. The managed all_gather_async (ping-pong + barrier
@@ -200,11 +189,8 @@ class DecoderLayer:
         position_embeddings=None,
         position_idx=None,
         kv_cache=None,
-        user_id=0,
-        batch_size=1,
-        cached_len=0,
         indexed_rope=False,
-        actual_isl=None,
+        chunks=None,
     ):
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -226,16 +212,14 @@ class DecoderLayer:
                     rope_mats=position_embeddings,
                     position_idx=position_idx,
                     kv_cache=kv_cache,
-                    user_id=user_id,
-                    batch_size=batch_size,
-                    cached_len=cached_len,
                     indexed_rope=indexed_rope,
+                    chunks=chunks,
                 )
             hidden_states_post_norm.deallocate(True)
 
             # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
             with zone("residual_attn", FINE):
-                hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+                hidden_states = add_residual(residual, hidden_states)
             residual.deallocate(True)
             residual = hidden_states
             # The ONE pre-MLP all-gather (sharded residual only). Its full-emb output is consumed by the
@@ -247,19 +231,19 @@ class DecoderLayer:
             )
 
             with zone("mlp", COARSE):
-                # actual_isl only reaches the MoE MLP — it drives the gate/dispatch padding config.
-                # The dense layers (0-2) have no router or dispatch, so DenseMLP takes no such argument.
+                # The chunks' real rows drive the MoE gate/dispatch padding config. The dense layers (0-2)
+                # have no router or dispatch, so DenseMLP takes no such argument.
                 hidden_states = (
                     self.mlp(hidden_states_post_norm)
                     if self.is_dense
-                    else self.mlp(hidden_states_post_norm, actual_isl=actual_isl, actual_start=cached_len)
+                    else self.mlp(hidden_states_post_norm, chunks=chunks)
                 )
             hidden_states_post_norm.deallocate(True)
 
             # Both MLPs close with a reduce-scatter under a sharded residual (emb/tp, matching
             # `residual`) and with an all-reduce under the replicated one (full emb).
             with zone("residual_mlp", FINE):
-                hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+                hidden_states = add_residual(residual, hidden_states)
             residual.deallocate(True)
 
         return hidden_states

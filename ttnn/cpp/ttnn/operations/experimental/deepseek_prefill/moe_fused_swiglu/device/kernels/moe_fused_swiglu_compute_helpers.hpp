@@ -126,7 +126,7 @@ ALWI void matmul_row_major(
                     copy_tile_to_dst_init_short_with_dt(in1_cb, interm_cb);
                     const uint32_t source_base = m_subblock * row_group_tiles + n_subblock * shape.subblock_w;
                     for (uint32_t row = 0; row < shape.subblock_h; ++row) {
-                        copy_block_matmul_partials(
+                        copy_block(
                             interm_cb, source_base + row * out_row_width, row * shape.subblock_w, shape.subblock_w);
                     }
                     reconfig_data_format(in1_cb, in0_cb);
@@ -187,7 +187,7 @@ ALWI void add_silu_elementwise(
     reconfig_data_format_srca(partials_cb);
     reconfig_data_format_srcb(bias_cb);
     pack_reconfig_data_format(out_cb);
-    add_tiles_init(partials_cb, bias_cb);
+    add_init(partials_cb, bias_cb);
     partials.wait_front(tiles);
     out.reserve_back(tiles);
     tile_regs_acquire();

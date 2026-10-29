@@ -58,34 +58,21 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
     tt::tt_metal::Program program{};
 
     auto* mesh_device = input_tensor.device();
-    IDevice* sender_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensor.device();
-    std::vector<IDevice*> devices_to_use = {};
-    const auto& mesh_view = input_tensor.device()->get_view();
-    // User specified the cluster-axis. Derive devices based on the current coordinate
+    const auto& mesh_view = mesh_device->get_view();
+    // User specified the cluster-axis. Derive the ring based on the current coordinate
     // and the cluster-axis.
-    devices_to_use = (args.cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coord[1])
-                                              : mesh_view.get_devices_on_row(mesh_coord[0]);
     const auto fabric_node_ids = (args.cluster_axis == 0) ? mesh_view.get_fabric_node_ids_on_column(mesh_coord[1])
                                                           : mesh_view.get_fabric_node_ids_on_row(mesh_coord[0]);
-    uint32_t ring_size = devices_to_use.size();
+    const uint32_t ring_size = fabric_node_ids.size();
+    const uint32_t ring_index = mesh_coord[args.cluster_axis];
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
     std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
-    uint32_t ring_index = 0;  // Initialize ring (device) index
-    for (uint32_t i = 0; i < ring_size; ++i) {
-        if (devices_to_use.at(i) == sender_device) {
-            ring_index = i;
-            if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
-                backward_fabric_node_id = fabric_node_ids.at(i - 1);
-            }
-            if (i != ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
-                forward_fabric_node_id = fabric_node_ids.at(i + 1);
-            }
-        }
+    if (ring_index != 0) {
+        backward_fabric_node_id = fabric_node_ids.at(ring_index - 1);
+    }
+    if (ring_index != ring_size - 1) {
+        forward_fabric_node_id = fabric_node_ids.at(ring_index + 1);
     }
 
     // Tensor Info
@@ -99,8 +86,8 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
     uint32_t num_sticks_per_outer_dim = input_tensor_shape[1] * input_tensor_shape[2];
     uint32_t input_outer_dim_size = input_tensor_shape[0];
     uint32_t output_outer_dim_size = output_tensor_shape[0];
-    bool is_first_device = !backward_device.has_value();
-    bool is_last_device = !forward_device.has_value();
+    bool is_first_device = !backward_fabric_node_id.has_value();
+    bool is_last_device = !forward_fabric_node_id.has_value();
     // output coords for this device, in the input space
     uint32_t global_output_outer_dim_start = args.output_dim_offset + (output_outer_dim_size * ring_index);
     uint32_t global_output_outer_dim_end = args.output_dim_offset + (output_outer_dim_size * (ring_index + 1)) - 1;

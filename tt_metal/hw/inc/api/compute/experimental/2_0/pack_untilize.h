@@ -155,7 +155,7 @@ ALWI void pack_untilize_block(
  * Id-free pack-untilize DEST init (PACK thread only). Use when the tiles to untilize are already resident in
  * DEST (placed by copy_tile/reduce_tile/etc.) -- UNPACK and MATH are not configured here, unlike
  * pack_untilize_init. Takes only the output LLKOperand; the packer register format is derived inside the LLK
- * from OUT. Pair with pack_untilize_dest / pack_untilize_uninit. Blackhole only.
+ * from OUT. Pair with pack_untilize_dest_block / pack_untilize_uninit. Blackhole only.
  *
  * | Param Type | Name          | Description                                       | Type       | Valid Range               | Required              |
  * |------------|---------------|---------------------------------------------------|------------|---------------------------|-----------------------|
@@ -235,16 +235,16 @@ template <
     bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     DataFormat OutFormat,
     TensorShape OutShape>
-ALWI void pack_untilize_dest(
+ALWI void pack_untilize_dest_block(
     LLKOperand<OutFormat, OutShape> out,
     std::uint32_t block_rt_dim = 1,
     std::uint32_t block_c_index = 0,
     std::uint32_t tile_dst_rt_offset = 0) {
-    static_assert(diagonal == false, "pack_untilize_dest: diagonal is only supported on WH.");
-    static_assert(is_legal_tile_shape(OutShape), "pack_untilize_dest: illegal output tile shape.");
+    static_assert(diagonal == false, "pack_untilize_dest_block: diagonal is only supported on WH.");
+    static_assert(is_legal_tile_shape(OutShape), "pack_untilize_dest_block: illegal output tile shape.");
     static_assert(
         block_ct_dim > 0 && full_ct_dim % block_ct_dim == 0,
-        "pack_untilize_dest: full_ct_dim must be a positive multiple of block_ct_dim.");
+        "pack_untilize_dest_block: full_ct_dim must be a positive multiple of block_ct_dim.");
     PACK((llk_pack_untilize<
           LLKOperand<OutFormat, OutShape>::descriptor,
           is_fp32_dest_acc_en,

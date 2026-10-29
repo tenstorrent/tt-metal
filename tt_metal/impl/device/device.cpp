@@ -5,7 +5,6 @@
 #include <tt_stl/fmt.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
-#include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device_impl.hpp"
 
@@ -14,7 +13,6 @@
 #include <initializer_list>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
-#include "impl/sub_device/sub_device_impl.hpp"
 #include "impl/device/mock_allocator.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
@@ -35,11 +33,11 @@
 #include <vector>
 
 #include "allocator.hpp"
-#include "common/env_lib.hpp"
 #include <tt_stl/assert.hpp>
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
+#include "program/slow_dispatch.hpp"
 #include "memory_tracking/memory_stats_shm.hpp"
 #include "memory_tracking/shm_tracking_processor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
@@ -49,6 +47,7 @@
 #include "dispatch/dispatch_query_manager.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -63,10 +62,10 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <umd/device/coordinates/coordinate_manager.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/coordinates/coordinate_manager.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <impl/debug/watcher_server.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/dispatch/dispatch_telemetry.hpp>
@@ -349,8 +348,8 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                     // pointers for a serviced device must therefore be written into that device's DRAM, not
                     // the MMIO device's DRAM. Writing to this->id() left non-MMIO devices with an uninitialized
                     // (zero) completion write pointer, causing completion_queue_wait_front to return spuriously.
-                    const uint32_t dram_channel =
-                        this->allocator_impl()->get_dram_channel_from_bank_id(this->sysmem_manager_->get_dram_region_bank_id());
+                    const uint32_t dram_channel = this->allocator_impl()->get_dram_channel_from_bank_id(
+                        this->sysmem_manager_->get_dram_region_bank_id());
                     MetalEnvAccessor(*env_).impl().get_cluster().write_dram_vec(
                         pointers.data(),
                         pointers.size() * sizeof(uint32_t),
@@ -377,7 +376,7 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
 
     // Run the cq program
     command_queue_program.impl().finalize_offsets(this);
-    detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
+    slow_dispatch::ConfigureDeviceWithProgram(*this, command_queue_program, /*force_slow_dispatch=*/true);
     MetalEnvAccessor(*env_).impl().get_cluster().l1_barrier(this->id());
 }
 
@@ -424,9 +423,16 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
         uint64_t go_message_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
-        uint32_t zero = 0;
-        cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
+        // Every go message in every row, so no slot holds a stale go.
+        const std::vector<uint32_t> go_messages_done(
+            hal.get_dev_size(programmable_core_type, HalL1MemAddrType::GO_MSG) / sizeof(uint32_t), 0);
+        cluster.write_core(
+            go_messages_done.data(),
+            go_messages_done.size() * sizeof(uint32_t),
+            tt_cxy_pair(id_, virtual_core),
+            go_message_addr);
         cluster.l1_barrier(id_);
+        uint32_t zero = 0;
         uint64_t go_message_index_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };
@@ -482,42 +488,25 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         }
     }
 
-    // Precompute NOC data for go signals and set on dispatch command queues
     const auto& active_eth_cores = get_active_ethernet_cores(true);
-    std::vector<CoreRange> active_eth_core_ranges;
-    active_eth_core_ranges.reserve(active_eth_cores.size());
-    for (const auto& core : active_eth_cores) {
-        active_eth_core_ranges.emplace_back(core, core);
-    }
 
-    const NOC noc_index = context_->get_dispatch_query_manager().go_signal_noc();
-    uint32_t idx = 0U;
-    vector_aligned<uint32_t> noc_mcast_unicast_data;
-    for (uint32_t i = 0U; i < num_sub_devices(); ++i) {
-        for (const auto& core_range : active_eth_core_ranges) {
-            noc_mcast_unicast_data.resize(idx + core_range.size());
-            for (const auto& core : core_range) {
-                const auto virtual_core = virtual_core_from_logical_core(core, CoreType::ETH);
-                noc_mcast_unicast_data[idx++] = get_noc_unicast_encoding(noc_index, virtual_core);
-            }
-        }
-    }
-
-    // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
+    // Set num_worker_sems and dispatch sems on dispatch for the default sub device config
     const CoreCoord compute_grid_size = compute_with_storage_grid_size();
-    const uint32_t default_sub_device_worker_count =
-        compute_grid_size.x * compute_grid_size.y + static_cast<uint32_t>(active_eth_cores.size());
+    if (context_->get_dispatch_query_manager().fds_signalling_enabled()) {
+        TT_FATAL(active_eth_cores.empty(), "FDS worker signalling does not support ACTIVE_ETH cores");
+    }
+    const uint32_t default_sub_device_worker_count = compute_grid_size.x * compute_grid_size.y;
     std::vector<uint32_t> workers_per_sub_device(num_sub_devices(), default_sub_device_worker_count);
     for (auto& command_queue : command_queues_) {
-        command_queue->set_go_signal_noc_data_and_dispatch_sems(
-            num_sub_devices(), noc_mcast_unicast_data, workers_per_sub_device);
+        command_queue->set_dispatch_sems(num_sub_devices(), workers_per_sub_device);
     }
 }
 
 void Device::init_command_queue_device() { TT_FATAL(false, "Call init_command_queue_device_with_topology instead"); }
 
 bool Device::compile_fabric() {
-    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);
+    fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(
+        MetalEnvAccessor(*env_).impl(), context_->get_dispatch_core_manager().get_dispatch_core_config(), this);
     return fabric_program_ != nullptr;
 }
 
@@ -526,12 +515,12 @@ void Device::configure_fabric() {
         return;
     }
 
-    tt::tt_fabric::configure_fabric_cores(this);
+    tt::tt_fabric::configure_fabric_cores(MetalEnvAccessor(*env_).impl(), this);
 
     fabric_program_->impl().finalize_offsets(this);
 
-    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
-    detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
+    slow_dispatch::WriteRuntimeArgsToDevice(*this, *fabric_program_, /*force_slow_dispatch=*/using_fast_dispatch_);
+    slow_dispatch::ConfigureDeviceWithProgram(*this, *fabric_program_, /*force_slow_dispatch=*/using_fast_dispatch_);
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox have all landed
@@ -704,9 +693,12 @@ bool Device::close() {
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
-    this->optimal_dram_bank_to_logical_worker_assignment_.clear();
-    this->optimal_dram_bank_to_logical_worker_assignment_noc_.reset();
-    this->optimal_dram_bank_to_logical_worker_assignment_grid_size_.reset();
+    {
+        std::lock_guard<std::mutex> lock(optimal_dram_bank_to_logical_worker_assignment_mutex_);
+        this->optimal_dram_bank_to_logical_worker_assignment_.clear();
+        this->optimal_dram_bank_to_logical_worker_assignment_noc_.reset();
+        this->optimal_dram_bank_to_logical_worker_assignment_grid_size_.reset();
+    }
 
     // Clean up shared memory stats provider
     this->shm_stats_provider_.reset();
@@ -907,7 +899,7 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
 }
 
 HWCommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
-    detail::DispatchStateCheck(using_fast_dispatch_);
+    MetalContext::instance(this->get_context_id()).device_manager()->check_dispatch_mode(using_fast_dispatch_);
     TT_FATAL(using_fast_dispatch_, "Fast dispatch must be enabled to use command_queue");
     auto actual_cq_id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
     TT_FATAL(actual_cq_id < command_queues_.size(), "cq_id {} is out of range", actual_cq_id);
@@ -997,20 +989,24 @@ void Device::reset_sub_device_stall_group() {
     TT_FATAL(false, "reset_sub_device_stall_group is deprecated for device");
 }
 
-std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
+std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const {
     // Top level function that users (ex: Op Writers) can use to assign Tensix Worker cores
     // as DRAM readers or writers. Returns logical coordinates of optimally placed workers.
     // This function queries Physical Coordinates (only exposed directly to the Device class)
     // and passes them to logic in core_assignment.cpp to derive the most optimal core placement
     // based on architecture specific logic and Physical Grid configuration.
     const auto noc_tag = static_cast<std::uint8_t>(noc);
-    auto compute_with_storage_grid_size = this->compute_with_storage_grid_size();
-    if (!this->optimal_dram_bank_to_logical_worker_assignment_.empty() &&
-        this->optimal_dram_bank_to_logical_worker_assignment_noc_ == noc_tag &&
-        this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ == compute_with_storage_grid_size) {
-        return this->optimal_dram_bank_to_logical_worker_assignment_;
+    const auto compute_with_storage_grid_size = this->compute_with_storage_grid_size();
+    {
+        std::lock_guard<std::mutex> lock(optimal_dram_bank_to_logical_worker_assignment_mutex_);
+        if (!this->optimal_dram_bank_to_logical_worker_assignment_.empty() &&
+            this->optimal_dram_bank_to_logical_worker_assignment_noc_ == noc_tag &&
+            this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ == compute_with_storage_grid_size) {
+            return this->optimal_dram_bank_to_logical_worker_assignment_;
+        }
     }
-    this->optimal_dram_bank_to_logical_worker_assignment_.clear();
+    // Build the assignment locally so a failure leaves the published cache intact, and so the mutex
+    // is not held across the grid walk.
 
     uint32_t full_grid_size_x = this->grid_size().x;
     uint32_t full_grid_size_y = this->grid_size().y;
@@ -1061,6 +1057,8 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
     // Do not use soc_desc.translate_coord_to(NOC0, LOGICAL): that numbers all Tensix cores including
     // dispatch columns. Also do not split x/y lookups via worker_phy_x/y alone: (phys_x, phys_y) must
     // match physical_worker_core_from_logical_core((lx, ly)) as a pair.
+    std::vector<CoreCoord> assignment;
+    assignment.reserve(physical_worker_cores.size());
     for (const auto& physical_worker_core : physical_worker_cores) {
         bool found = false;
         uint32_t logical_x = 0;
@@ -1091,8 +1089,16 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             logical_y,
             num_cores_x,
             num_cores_y);
-        this->optimal_dram_bank_to_logical_worker_assignment_.push_back(CoreCoord(logical_x, logical_y));
+        assignment.push_back(CoreCoord(logical_x, logical_y));
     }
+    std::lock_guard<std::mutex> lock(optimal_dram_bank_to_logical_worker_assignment_mutex_);
+    // Another thread may have published this same key while we computed.
+    if (!this->optimal_dram_bank_to_logical_worker_assignment_.empty() &&
+        this->optimal_dram_bank_to_logical_worker_assignment_noc_ == noc_tag &&
+        this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ == compute_with_storage_grid_size) {
+        return this->optimal_dram_bank_to_logical_worker_assignment_;
+    }
+    this->optimal_dram_bank_to_logical_worker_assignment_ = std::move(assignment);
     this->optimal_dram_bank_to_logical_worker_assignment_noc_ = noc_tag;
     this->optimal_dram_bank_to_logical_worker_assignment_grid_size_ = compute_with_storage_grid_size;
     return this->optimal_dram_bank_to_logical_worker_assignment_;

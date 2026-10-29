@@ -262,21 +262,20 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
     // explicit entry wherever a compute kernel consumes a Float32 DFB with a 32-bit Dest register,
     // so the legacy default has to be stated for the DFBs this kernel consumes: intermed1 is Float32
     // whenever fp32_dest_acc_en is set, and the rest are Float32 whenever output_grad is. The legacy
-    // default is UnpackToSrc, which is legal for any format, so transcribing the whole legacy row
-    // reproduces the legacy unpack vector byte-for-byte in every configuration.
+    // default is UnpackToSrc, which is legal for any format.
     //
-    // Note the divergence from the multi-core factory, which sets intermed1 to UnpackToDest under
-    // the same fp32_dest_acc_en while this factory leaves it at UnpackToSrc. That looks unintended
-    // rather than deliberate: intermed1 is the running reduction accumulator and is read back on
-    // every iteration, so unpacking it to SrcA/SrcB narrows a 32-bit partial to the source
-    // registers' 19 bits — the precision fp32_dest_acc_en was asked for. Reproduced as-is anyway,
-    // because a port makes no functional change; correcting it is the op owner's call.
+    // intermed1 is the running reduction accumulator and is reloaded on every iteration, so under
+    // fp32_dest_acc_en it must unpack straight to Dest: unpacking it to SrcA/SrcB narrows the 32-bit
+    // partial to the source registers' 19 bits. Matches the multi-core factory.
     ComputeHardwareConfig::ComputeUnpackModes dfb_unpack_modes = {
         {IN0_DFB, UnpackMode::UnpackToSrc},
         {SCALER_DFB, UnpackMode::UnpackToSrc},
         {INTERMED0_DFB, UnpackMode::UnpackToSrc},
         {INTERMED1_DFB, UnpackMode::UnpackToSrc},
     };
+    if (fp32_dest_acc_en) {
+        dfb_unpack_modes[INTERMED1_DFB] = UnpackMode::UnpackToDest;
+    }
     if (do_mask_h_w) {
         // An entry naming a DFB the kernel does not bind is rejected, so this one shares the
         // binding's condition.

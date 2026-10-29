@@ -8,6 +8,7 @@
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/tensor/types.hpp"
 
+#include <initializer_list>
 #include <optional>
 #include <string>
 
@@ -91,16 +92,23 @@ struct OpConfig {
         EQ,
         NE,
         ISCLOSE,
+        SITU_GLU,
     };
 
     template <class EnumT>
-    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype = std::nullopt);
+    OpConfig(
+        BinaryOpType binary_op_type,
+        std::in_place_type_t<EnumT>,
+        std::optional<DataType> dtype = std::nullopt,
+        const std::optional<binary::BinaryOpParams>& op_params = std::nullopt);
 
     std::map<std::string, std::string> as_defines(DataType dtype) const;
 
     std::optional<unary::UnaryOpType> process_lhs;
     std::optional<unary::UnaryOpType> process_rhs;
-    std::optional<unary::UnaryOpType> postprocess;
+    // Carries a parameter: a bare UnaryOpType reaches get_op_init_and_func_default, which emits the
+    // paramless form and so inherits the compute API's default template argument.
+    std::optional<unary::EltwiseUnaryWithParam> postprocess;
     std::variant<FpuBinaryOp, SfpuBinaryOp> binary_op;
     bool is_sfpu_op() const;
 };
@@ -140,8 +148,23 @@ const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal:
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-bool is_native_L1_sharding(
-    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c);
+// b == nullptr is a scalar operand. The optional overload forwards a spec the caller already owns.
+bool is_native_L1_sharding(const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec* b, const MemoryConfig& c);
+
+inline bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c) {
+    return is_native_L1_sharding(a, b.has_value() ? &*b : nullptr, c);
+}
+
+// Null entries are skipped, so a missing operand or a missing preallocated output does not count.
+inline bool any_memory_config_sharded(std::initializer_list<const MemoryConfig*> configs) {
+    for (const MemoryConfig* config : configs) {
+        if (config != nullptr && config->is_sharded()) {
+            return true;
+        }
+    }
+    return false;
+}
 
 ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b);
 

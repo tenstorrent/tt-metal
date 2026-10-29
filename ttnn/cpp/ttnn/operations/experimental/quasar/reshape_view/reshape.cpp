@@ -580,7 +580,7 @@ ttnn::Tensor ttnn::operations::experimental::quasar::reshape(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grid,
     const bool skip_padding_fill) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     const bool explicit_memory_config = memory_config.has_value();
@@ -771,7 +771,7 @@ ttnn::Tensor ttnn::operations::experimental::quasar::reshape(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grid,
     const bool skip_padding_fill) {
     return reshape(tensor, shape, shape, memory_config, pad_value, reshape_map_mode, sub_core_grid, skip_padding_fill);
 }
@@ -782,7 +782,7 @@ ttnn::Tensor ttnn::operations::experimental::quasar::reshape(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
-    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grid,
     const bool skip_padding_fill) {
     return reshape(
         tensor,

@@ -35,14 +35,14 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <umd/device/driver_atomics.hpp>
+#include <tt-umd/driver_atomics.hpp>
 
 #include "socket_service_common.hpp"
 #include "tensor/tensor_ops.hpp"
-#include "tt_metal/distributed/h2d_stream_service_descriptor.hpp"
-#include "tt_metal/distributed/hd_socket_descriptor.hpp"
-#include "tt_metal/distributed/named_shm.hpp"
-#include "tt_metal/distributed/shm_resource_tracker.hpp"
+#include <tt-metalium/experimental/sockets/h2d_stream_service_descriptor.hpp>
+#include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
+#include <tt-metalium/experimental/sockets/named_shm.hpp>
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
 
@@ -89,6 +89,14 @@ ttnn::Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const 
                 shape,
                 MemoryPin{});
         case DataType::FP8_E4M3: TT_THROW("H2DStreamService: FP8_E4M3 is not supported");
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2: TT_THROW("H2DStreamService: {} is not supported", spec.data_type());
         case DataType::INVALID: TT_THROW("H2DStreamService: invalid global_spec data type");
     }
     TT_THROW("Unreachable");
@@ -461,7 +469,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     per_shard_spec_ = device_tensor_.tensor_spec();
 
     // Each device may resolve a different free service core; record it per coord.
-    auto& svc = tt::tt_metal::internal::service_core_manager();
+    auto& svc = tt::tt_metal::internal::service_core_manager(*mesh_device_);
     const auto& coords = topology.mesh_coords();
     for (const auto& coord : coords) {
         auto* d = mesh_device_->get_device(coord);
@@ -821,15 +829,13 @@ H2DStreamService::~H2DStreamService() {
 
         // Wait for each kernel to actually return (RUN_MSG_DONE), not just for
         // dispatch to drain, or a later instance finds the service core occupied.
-        auto& svc = tt::tt_metal::internal::service_core_manager();
         if (mesh_device_) {
+            auto& svc = tt::tt_metal::internal::service_core_manager(*mesh_device_);
             for (const auto& [coord, core] : service_cores_) {
                 auto* d = mesh_device_->get_device(coord);
                 svc.wait_done(d, core);
             }
-        }
 
-        if (mesh_device_) {
             for (const auto& [coord, addr] : termination_addrs_) {
                 auto* d = mesh_device_->get_device(coord);
                 svc.deallocate_l1(d, service_cores_.at(coord), addr);

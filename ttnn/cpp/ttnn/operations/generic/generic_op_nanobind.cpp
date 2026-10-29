@@ -72,4 +72,44 @@ void bind_generic_operation(nb::module_& mod) {
         )pbdoc");
 }
 
+void bind_generic_operation_preparation(nb::module_& mod) {
+    const char* doc =
+        R"doc(
+        Compiles and finalizes the program that ``ttnn.generic_op`` would enqueue, without enqueueing it.
+
+        Use it to find out whether a program compiles and fits the device's kernel-configuration buffer before
+        committing resources to it. The prepared workload is inserted into the program cache, so the next
+        ``ttnn.generic_op`` with the same tensors and descriptor is a cache hit. A failed preparation leaves the
+        program cache unchanged.
+
+        Args:
+            io_tensors (List[ttnn.Tensor]): The input and output tensors ``ttnn.generic_op`` would receive.
+            program_descriptor (ttnn.ProgramDescriptor): The program to prepare in SPMD mode (same program on all
+                devices).
+            mesh_program_descriptor (ttnn.MeshProgramDescriptor): The per-device programs to prepare, for explicit
+                per-device control. Pass exactly one of ``program_descriptor`` and ``mesh_program_descriptor``.
+
+        Raises:
+            RuntimeError: If a kernel does not compile, if the program configuration does not fit the
+                kernel-configuration buffer, or if the tensors' MeshDevice has no local devices.
+
+        Example:
+            Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op_preparation.py for usage examples
+        )doc";
+
+    auto mesh_program_overload = ttnn::overload_t(
+        static_cast<void (*)(const std::vector<Tensor>&, const tt::tt_metal::experimental::MeshProgramDescriptor&)>(
+            &ttnn::experimental::prepare_generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("mesh_program_descriptor"));
+
+    auto program_overload = ttnn::overload_t(
+        static_cast<void (*)(const std::vector<Tensor>&, const tt::tt_metal::ProgramDescriptor&)>(
+            &ttnn::experimental::prepare_generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("program_descriptor"));
+
+    ttnn::bind_function<"prepare_generic_op", "ttnn.experimental.">(mod, doc, mesh_program_overload, program_overload);
+}
+
 }  // namespace ttnn::operations::generic

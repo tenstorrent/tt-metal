@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Thin wrapper around compute_kernel_lib::reduce<>. The input data format is deduced from the input
-// buffer inside the helper, so Int32 MAX, MIN and SUM are routed to the SFPU path automatically;
-// otherwise FPU/GMPOOL. Accurate fp32 also uses the SFPU; fast-mode float/bf16 MIN is lowered to
-// -MAX(-x) via reduce_{h,w}_neg on the host.
+// buffer inside the helper, so Int32 MAX, MIN and SUM, and bf16 MIN, are routed to the SFPU path
+// automatically; otherwise FPU/GMPOOL. Accurate fp32 also uses the SFPU. Every other MIN (bfloat8_b,
+// fast-mode fp32) never reaches here: the host rewrites it as -MAX(-x) and dispatches
+// reduce_{h,w}_neg instead.
 
 #include <cstdint>
 #include "api/compute/cb_api.h"
@@ -22,6 +23,10 @@ void kernel_main() {
     // vs the FPU (tf32).
     constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_scaler(dfb::scaler);
+    DataflowBuffer dfb_out(dfb::out);
+
     compute_kernel_hw_startup(dfb::in0, dfb::scaler, dfb::out);
 
     compute_kernel_lib::reduce<
@@ -33,6 +38,9 @@ void kernel_main() {
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT,
         fp32_mode>(
+        dfb_in0,
+        dfb_scaler,
+        dfb_out,
         compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
         compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
         compute_kernel_lib::NoAccumulation{},
@@ -49,7 +57,7 @@ void kernel_main() {
             // is read from the JIT descriptor array indexed by the DFB handle rather than off a
             // DataflowBuffer object: DataflowBuffer's constructor is not constexpr, so no such object
             // is usable in a constant expression.
-            constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[dfb::in0]);
+            constexpr auto reduce_format = static_cast<DataFormat>(unpack_src_format[dfb::in0]);
             compute_kernel_lib::detail::reduce_post_mul_tile<reduce_format>(dst_idx, post_mul_scaler_bits);
         }
 #else
@@ -59,6 +67,5 @@ void kernel_main() {
 
     // The reduce helper waits on the scaler buffer but never pops it (the single scaler tile is
     // reused for the whole reduction). Pop it here so the buffer is left balanced.
-    DataflowBuffer dfb_scaler(dfb::scaler);
     dfb_scaler.pop_front(1);
 }

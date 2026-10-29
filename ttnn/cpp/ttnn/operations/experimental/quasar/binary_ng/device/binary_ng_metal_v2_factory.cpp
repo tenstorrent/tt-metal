@@ -13,8 +13,9 @@
 //   - CBDescriptor -> DataflowBufferSpec (one per CB index the NONE path allocates: c_0->in0/pre_lhs,
 //     c_1->in1/pre_rhs, c_2->out, c_3->post_lhs, c_4->post_rhs).
 //   - The decisive property is BORROWED vs NoC-READ, all-or-nothing. An operand is BORROWED only when the
-//     config is is_native_L1_sharding (output L1-sharded, a and b sharing that memory config, all sharded
-//     grids == the output grid, all buffers L1) AND every operand is itself L1-sharded with a shard spec.
+//     config is is_native_L1_sharding (output L1-sharded, a and b sharing that memory config, every sharded
+//     input carrying the output's shard spec, all buffers L1) AND every operand is itself L1-sharded with a
+//     shard spec.
 //     is_native_L1_sharding can hold with an L1-interleaved input (a single sharded operand satisfies it),
 //     and an interleaved operand has no shard spec to back a DFB, so any interleaved operand forces the
 //     whole op to the NoC path. When borrowed, all three are co-resident L1 shards on one grid with
@@ -34,12 +35,12 @@
 //   - The descriptor's `has_sharding` TensorAccessor CTA -> a HAS_SHARDING #define (the DFB kernels
 //     read it as a macro).
 //
-// Deferred to the descriptor (rejected by matches_metal_v2_slice, NOT handled here): row-major (non-tile)
-// layout, tensor-scalar (no input_tensor_b), where-op, quantization, and mixed lhs/rhs dtype. Mixed
+// Not supported (rejected by matches_metal_v2_slice, NOT handled here): row-major (non-tile)
+// layout, where-op, quantization, and mixed lhs/rhs dtype. Mixed
 // sharded/interleaved layouts AND width sharding ARE handled: the borrow path is taken only when all
-// three operands are co-resident L1 shards on one matching grid; everything else (interleaved output OR
-// input, mixed strategies, divergent grids) takes the NoC path via sharding-aware TensorAccessors. A
-// borrowed operand is L1-sharded-tiled (height/block/width).
+// three operands are co-resident L1 shards with one memory config; everything else (interleaved output OR
+// input, or a different shard spec) takes the NoC path via sharding-aware TensorAccessors. A borrowed
+// operand is L1-sharded-tiled (height/block/width).
 
 #include "binary_ng_device_operation.hpp"
 #include "binary_ng_utils.hpp"
@@ -166,7 +167,7 @@ constexpr const char* kComputeIncludeCommon =
 constexpr const char* kComputeIncludeDfb =
     "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute";
 
-// Per-broadcast-type kernel-source seam (the DFB analogue of the descriptor's BinaryNgKernelConfig):
+// Per-broadcast-type kernel-source seam:
 // it maps a SubtileBroadcastType to the reader/writer/compute kernel sources. NONE, ROW_A/ROW_B,
 // COL_A/COL_B, and SCALAR_A/SCALAR_B are wired; the remaining (mixed ROW/COL) broadcast variants follow
 // when their DFB kernels are added.
@@ -240,16 +241,16 @@ DfbKernelSources select_dfb_kernel_sources(SubtileBroadcastType subtile_broadcas
         "binary_ng Metal 2.0 factory: unsupported subtile broadcast type {}", static_cast<int>(subtile_broadcast_type));
 }
 
-// --- Small pure helpers mirrored from the descriptor factory's anonymous namespace. They live in
-// that .cpp's anonymous namespace (not the shared header), so they are reimplemented here to avoid
-// touching the proven descriptor path. Keep behavior identical to binary_ng_program_factory.cpp. ---
+// --- Small pure helpers. ---
 
 // For rank > 5, dims are collapsed into a single dim. Mirrors extract_nD_dims in the descriptor factory.
 uint32_t extract_nD_dims(const Tensor& x, int out_rank) {
     const auto& shape = x.logical_shape();
     uint32_t nD_dim = 1;
     if (out_rank >= 6 && shape.rank() >= 6) {
-        for (int i = -6; i >= -out_rank; --i) {
+        // A lower-rank operand has no dims beyond its own rank; they broadcast as 1.
+        const int rank = std::min<int>(out_rank, shape.rank());
+        for (int i = -6; i >= -rank; --i) {
             nD_dim *= shape[i];
         }
     }
@@ -268,12 +269,10 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(cons
         tt::div_up(shape[-1], tile.get_width())};
 }
 
-// Compute-kernel {freq, tile_start} for the subtile-broadcast reuse loop. Mirrors
-// calculate_compute_kernel_args in binary_ng_program_factory.cpp (anonymous namespace there, so
-// reimplemented here like the other small helpers). For COL it returns {Wt, start_tw}: the compute
-// broadcasts the column tile once and reuses it across a full tile-row (freq = Wt), starting at this
-// core's column offset (start_tw). ROW/NONE need no reuse ({1, 0}); SCALAR reuses across the whole
-// HtWt block. Kept as a full switch so a later SCALAR/mixed wiring reuses it unchanged.
+// Compute-kernel {freq, tile_start} for the subtile-broadcast reuse loop. For COL it returns {Wt, start_tw}: the
+// compute broadcasts the column tile once and reuses it across a full tile-row (freq = Wt), starting at this core's
+// column offset (start_tw). ROW/NONE need no reuse ({1, 0}); SCALAR reuses across the whole HtWt block. Kept as a full
+// switch so a later SCALAR/mixed wiring reuses it unchanged.
 std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
     SubtileBroadcastType broadcast_type, uint32_t start_tile_id, uint32_t Ht, uint32_t Wt) {
     const uint32_t start_t = start_tile_id % (Ht * Wt);
@@ -367,8 +366,8 @@ ProgramArtifacts create_no_bcast_artifacts(
         "binary_ng Metal 2.0 no-bcast factory requires allocated device buffers");
 
     // --- Borrow vs NoC routing. The borrow facts come from the shared get_shard_volumes helper -- the
-    // same one the descriptor factory and compute_program_hash use -- so this factory and the descriptor
-    // agree on what "native L1 sharding" means: get_shard_volumes is is_native_L1_sharding plus an
+    // same one compute_program_hash uses -- so this factory and the hash agree on what "native L1
+    // sharding" means: get_shard_volumes is is_native_L1_sharding plus an
     // uneven-shard guard (an unevenly-sharded output additionally requires all three operands to share one
     // shard spec), so it returns nullopt both for a non-native config and for an uneven output the
     // all-or-nothing borrow cannot serve; it reports a per-operand shard volume only for an operand that is
@@ -376,7 +375,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     // from it, but this no-broadcast slice collapses borrow to all-or-nothing: an operand is BORROWED (its
     // resident L1 shard backs the DFB; reader/writer do no NoC work) only when EVERY operand is sharded, so
     // all three are co-resident L1 shards on one grid with identical per-core tile partitions. Otherwise --
-    // an interleaved output OR input, mixed strategies, or a divergent grid -- NONE are borrowed and every
+    // an interleaved output OR input, or a different shard spec -- NONE are borrowed and every
     // operand is read/written through its own sharding-aware TensorAccessor over a linear page-id walk (the
     // get_shard_volumes == nullopt / single-or-partial-sharded case). The per-operand a/b/c_borrowed flags
     // are kept separate (the DFB specs, SRC_SHARDED defines, tensor bindings and placement already branch
@@ -404,7 +403,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     const bool has_sharding = borrow_shards;
 
     // --- Dtypes / data formats / tile sizes (mirrors the descriptor factory). For a scalar there is no
-    // `b`, so b_dtype is derived exactly as the descriptor does (binary_ng_program_factory.cpp): the
+    // `b`, so b_dtype is derived as follows: the
     // scalar is packed as bf16 for block-float a, else the sfpu path keeps a_dtype, else bf16. b_tile
     // borrows a's tile geometry (a single bf16 scalar tile). ---
     const DataType a_dtype = a.dtype();
@@ -422,8 +421,9 @@ ProgramArtifacts create_no_bcast_artifacts(
     const uint32_t c_tile_bytes = static_cast<uint32_t>(c_tile.get_tile_size(c_df));
 
     // --- OpConfig + compute defines (mirrors the descriptor factory). ---
-    OpConfig op_config = is_sfpu ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
-                                 : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
+    const auto& op_params = op.op_params;
+    OpConfig op_config = is_sfpu ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype, op_params)
+                                 : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype, op_params);
     std::map<std::string, std::string> compute_defines = op_config.as_defines(a_dtype);
 
     // ISCLOSE: the DFB SFPU kernel reads rtol/atol as named args (args::rtol_bits/atol_bits), so the
@@ -436,9 +436,9 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // --- Activation assembly (faithful copy of the descriptor factory). ---
     {
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = op.lhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = op.rhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations = op.post_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = op.lhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = op.rhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations = op.post_activations;
 
         if (op_config.process_lhs.has_value()) {
             lhs_activations.push_back(*op_config.process_lhs);
@@ -463,7 +463,10 @@ ProgramArtifacts create_no_bcast_artifacts(
 
         const bool is_integer_division =
             (op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 && b_dtype == DataType::INT32);
-        if (binary::utils::is_typecast(a_dtype, c_dtype) && !is_integer_division) {
+        // MX conversions are done by the packer, never by a fused TYPECAST: that define carries host
+        // DataFormat values, and the device numbers MxInt8/4/2 differently.
+        const bool involves_mx = is_mx(a_dtype) || is_mx(c_dtype);
+        if (binary::utils::is_typecast(a_dtype, c_dtype) && !is_integer_division && !involves_mx) {
             post_activations.push_back({
                 unary::UnaryOpType::TYPECAST,
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
@@ -481,7 +484,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         const bool is_subtile_broadcast = op.subtile_broadcast_type != SubtileBroadcastType::NONE;
 
         // PACK_RELU fast path (no-broadcast only). Other single post-acts expand to the SFPU post chain
-        // (as in the descriptor factory; ZERO_POINT/quant routes to the descriptor).
+        // (ZERO_POINT/quant is not supported).
         if (lhs_activations.empty() && rhs_activations.empty() && post_activations.size() == 1) {
             compute_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
             if (post_activations[0].type() == unary::UnaryOpType::RELU && !is_subtile_broadcast) {
@@ -528,7 +531,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     const m2::KernelSpecName WRITER{"binary_ng_writer"};
     const m2::KernelSpecName COMPUTE{"binary_ng_compute"};
 
-    // Per-broadcast-type kernel-source selection (the descriptor's BinaryNgKernelConfig analogue): the
+    // Per-broadcast-type kernel-source selection: the
     // no-broadcast (NONE) triple, the ROW subtile-broadcast reader/compute for ROW_A / ROW_B, the COL
     // subtile-broadcast reader/compute for COL_A / COL_B, and the SCALAR subtile-broadcast reader/compute
     // for SCALAR_A / SCALAR_B.
@@ -577,7 +580,7 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // --- DataflowBuffers (mirrors the descriptor factory's CB block). A BORROWED operand backs the DFB
     // with its resident L1 shard (num_entries == full shard, borrowed_from set); any NoC-read operand
-    // (interleaved, or sharded on a non-matching grid) is a 2-entry ring filled over the NoC.
+    // (interleaved, or sharded with a different shard spec) is a 2-entry ring filled over the NoC.
     // post_lhs/post_rhs exist only when that operand has activations; their format is the op_has_exp
     // Float16_b intermediate on the FPU path, else the operand's own format. ---
     const uint32_t a_entries = a_borrowed ? full_shard_tiles(a, *a.shard_spec()) : 2u;
@@ -596,8 +599,9 @@ ProgramArtifacts create_no_bcast_artifacts(
     dfbs.push_back(
         make_dfb(OUT, c_tile_bytes, c_entries, c_df, c_tile, c_borrowed ? std::optional{T_C} : std::nullopt));
 
-    const tt::DataFormat a_inter_df = is_sfpu ? a_df : (op_has_exp ? tt::DataFormat::Float16_b : a_df);
-    const tt::DataFormat b_inter_df = is_sfpu ? b_df : (op_has_exp ? tt::DataFormat::Float16_b : b_df);
+    // An MX intermediate would re-quantize between the activation and the binary op, so keep it in Float16_b.
+    const tt::DataFormat a_inter_df = (is_mx(a_dtype) || (!is_sfpu && op_has_exp)) ? tt::DataFormat::Float16_b : a_df;
+    const tt::DataFormat b_inter_df = (is_mx(b_dtype) || (!is_sfpu && op_has_exp)) ? tt::DataFormat::Float16_b : b_df;
     // post_lhs/post_rhs intermediate rings (c_3/c_4): num_tiles_per_cycle entries, matching the
     // descriptor factory's intermediate CBs. Allocated only when that operand has an activation chain.
     // The compute kernel both produces (PREPROCESS) and consumes (binary op) these in strict program
@@ -676,7 +680,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     // OTHER_OP) operand off BCAST_INPUT (1 = ROW_A_COL_B, 0 = ROW_B_COL_A) and reads the ROW operand's
     // llk_post via the dfb::llk_post accessor (bound to c_5 / c_6 by bcast_lhs / bcast_rhs above), so it
     // needs no SRC_BCAST[_B]. SRC_BCAST_COL and SRC_BCAST_ROW_B carry the same value (a is COL <=> b is
-    // ROW, and vice versa), matching the descriptor factory (binary_ng_program_factory.cpp).
+    // ROW, and vice versa).
     if (is_mixed_bcast) {
         const std::string src_bcast_col = op.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
         reader_defines["SRC_BCAST_COL"] = src_bcast_col;
@@ -739,7 +743,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     // Reader: publishes a borrowed shard (borrowed operand) or reads it over the NoC (via
     // TensorAccessor(tensor::in0/in1)). A borrowed operand needs no tensor binding (its tensor::
     // reference is compiled out under SRC_SHARDED) and borrows via the DFB; every NoC-read operand is
-    // bound — including a sharded input on a non-matching grid, whose accessor is sharding-aware.
+    // bound — including a sharded input with a different shard spec, whose accessor is sharding-aware.
     m2::Group<m2::TensorBinding> reader_tensor_bindings;
     if (!a_borrowed) {
         reader_tensor_bindings.push_back(m2::TensorBinding{T_A, "in0"});

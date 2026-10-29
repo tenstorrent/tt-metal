@@ -82,6 +82,9 @@ jobs:
       matrix:
         test-group: ${{ fromJson(inputs.matrix) }}
     runs-on: ${{ matrix.test-group.runs_on }}
+    # SC4 container initialization provisions remote worker pods and counts against
+    # the job timeout. Two days; other supercluster configs keep the six-hour default.
+    timeout-minutes: ${{ startsWith(matrix.test-group.sku, 'bh_sc4') && 2880 || 360 }}
     outputs:
       test-result: ${{ steps.run-test.outcome }}
     steps:
@@ -156,6 +159,20 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: ${{ env.PIPELINE_DIR }}/
+
+      - name: 📈 Publish tt-train metrics
+        timeout-minutes: 5
+        if: ${{ !cancelled() && matrix.test-group.team == 'train' }}
+        uses: ./.github/actions/publish-tt-train-metrics
+        with:
+          repo-root: /home/user/tt-metal
+          # Since mpirun operates on a separate environment, run_models.py writes to the
+          # shared NFS dir rather than the repo tree the SFTP batchfile reads from.
+          copy-metrics-from: ${{ env.PIPELINE_DIR }}/tt-train-metrics
+          plot-artifact-name: loss-plot-${{ matrix.test-group.name }}
+          sftp-ssh-private-key: ${{ secrets.TT_TRAIN_AWS_KEY }}
+          sftp-username: ${{ secrets.TT_TRAIN_AWS_USERNAME }}
+          sftp-hostname: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
 
       - name: 🤖 AI job summary
         if: always() && !cancelled()

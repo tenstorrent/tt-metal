@@ -79,6 +79,9 @@ class Transformer(LightweightModule):
         use_paged_kv_cache=False,
         attention_class=None,
         rope_setup_class=None,
+        block_class=None,
+        lm_head_cls=None,
+        final_norm_builder=None,
         prefetcher=None,
     ):
         super().__init__()
@@ -188,8 +191,24 @@ class Transformer(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+        # Model-family dispatch (Command-R / cohere): swap the decoder block, final
+        # norm and LM head. Lazy imports keep the experimental cohere module out of the default path.
+        ActualBlockClass = block_class
+        ActualLMHeadCls = lm_head_cls
+        final_norm_builder_resolved = final_norm_builder
+        if str(getattr(self.args, "model_type", None) or "").lower() == "cohere":
+            from models.experimental.cohere.tt.cohere_decoder import CohereDecoderLayer
+            from models.experimental.cohere.tt.cohere_lm_head import CohereLMHead
+            from models.experimental.cohere.tt.cohere_norm import build_cohere_final_norm
+
+            ActualBlockClass = ActualBlockClass or CohereDecoderLayer
+            ActualLMHeadCls = ActualLMHeadCls or CohereLMHead
+            final_norm_builder_resolved = final_norm_builder_resolved or build_cohere_final_norm
+        ActualBlockClass = ActualBlockClass or TransformerBlock
+        ActualLMHeadCls = ActualLMHeadCls or LMHead
+
         self.layers = [
-            TransformerBlock(
+            ActualBlockClass(
                 args=args,
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
@@ -205,28 +224,39 @@ class Transformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
-        self.norm = DistributedNorm(
-            RMSNorm(
-                device=mesh_device,
-                dim=args.dim,
-                eps=args.norm_eps,
+        self.norm = (
+            final_norm_builder_resolved(
+                args=args,
+                mesh_device=mesh_device,
                 state_dict=state_dict,
-                state_dict_prefix=args.get_state_dict_prefix("", None),
-                weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key="norm",
-                add_unit_offset=self.args.rms_norm_add_unit_offset,
-                is_distributed=self.args.is_distributed_norm,
-                ccl_topology=self.args.ccl_topology(),
+                weight_cache_path=weight_cache_path,
+                dtype=dtype,
                 tt_ccl=self.tt_ccl,
-            ),
-            args,
-            tt_ccl=self.tt_ccl,
-            prefetcher=prefetcher,
-            TG=args.is_galaxy,
-        )
+            )
+            if final_norm_builder_resolved is not None
+            else DistributedNorm(
+                RMSNorm(
+                    device=mesh_device,
+                    dim=args.dim,
+                    eps=args.norm_eps,
+                    state_dict=state_dict,
+                    state_dict_prefix=args.get_state_dict_prefix("", None),
+                    weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                    weight_dtype=ttnn.bfloat16,
+                    weight_key="norm",
+                    add_unit_offset=self.args.rms_norm_add_unit_offset,
+                    is_distributed=self.args.is_distributed_norm,
+                    ccl_topology=self.args.ccl_topology(),
+                    tt_ccl=self.tt_ccl,
+                ),
+                args,
+                tt_ccl=self.tt_ccl,
+                prefetcher=prefetcher,
+                TG=args.is_galaxy,
+            )
+        )  # close the final_norm_builder_resolved conditional-expression paren
 
-        self.lm_head = LMHead(
+        self.lm_head = ActualLMHeadCls(
             args=args,
             mesh_device=mesh_device,
             tt_ccl=self.tt_ccl,
@@ -364,11 +394,6 @@ class Transformer(LightweightModule):
     ):
         """Extract each user's last-token hidden state from batched prefill output.
 
-        Reads hidden states to host, extracts the relevant row for each user,
-        and sends the combined tensor back to device with the correct column-sharded
-        mesh mapping (ShardTensorToMesh dim=-1) so the DistributedNorm all-gather
-        produces the correct full hidden dim.
-
         Args:
             hidden_states: [padded_batch, 1, prefill_seq_len, dim_per_device] on device (column-sharded, TILE_LAYOUT)
             last_token_idx_list: list of length padded_batch with per-user last token positions
@@ -377,57 +402,40 @@ class Transformer(LightweightModule):
 
         Returns:
             user_tokens: [1, 1, target_batch or padded_batch, dim_per_device] per device,
-            column-sharded, TILE_LAYOUT
+            column-sharded, TILE_LAYOUT. Rows past padded_batch are zero.
         """
-        active_indices = [lt for lt in last_token_idx_list if lt > 0]
-        all_same = len(set(active_indices)) <= 1
-
-        if all_same and active_indices:
-            common_last = active_indices[0]
-            get_last = (common_last // 32) * 32
-            R = common_last % 32
-            block = ttnn.slice(
-                hidden_states,
-                (0, 0, get_last, 0),
-                (padded_batch, 1, get_last + 32, hidden_states.shape[-1]),
-            )
-        else:
-            block = hidden_states
-            R = None
-
-        host_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(block)]
-        host_full = torch.cat(host_tensors, dim=-1)
-
-        if R is not None:
-            combined = host_full[:, :, R : R + 1, :].reshape(1, 1, padded_batch, -1).contiguous()
-        else:
-            rows = []
-            for slot in range(padded_batch):
-                lt_idx = last_token_idx_list[slot]
-                rows.append(host_full[slot : slot + 1, :, lt_idx : lt_idx + 1, :])
-            combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
-
         target_batch = padded_batch if target_batch is None else target_batch
         if target_batch < padded_batch:
             raise ValueError(f"target_batch {target_batch} must be >= padded_batch {padded_batch}")
-        if target_batch > padded_batch:
-            padded_combined = torch.zeros(
-                1,
-                1,
-                target_batch,
-                combined.shape[-1],
-                dtype=combined.dtype,
-            )
-            padded_combined[:, :, :padded_batch, :] = combined
-            combined = padded_combined
 
-        user_tokens = ttnn.from_torch(
-            combined,
+        fold_len = padded_batch * prefill_seq_len
+        sel = torch.zeros(1, 1, target_batch, fold_len, dtype=torch.bfloat16)
+        for slot in range(padded_batch):
+            last = last_token_idx_list[slot]
+            assert 0 <= last < prefill_seq_len, f"slot {slot}: last token index {last} outside [0, {prefill_seq_len})"
+            sel[0, 0, slot, slot * prefill_seq_len + last] = 1.0
+        sel_tt = ttnn.from_torch(
+            sel,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        hidden_folded = ttnn.reshape(hidden_states, (1, 1, fold_len, hidden_states.shape[-1]))
+        user_tokens = ttnn.matmul(
+            sel_tt,
+            hidden_folded,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            ),
+        )
+        ttnn.deallocate(sel_tt)
         return user_tokens
 
     def process_logits_after_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
@@ -616,6 +624,13 @@ class Transformer(LightweightModule):
             tt_rot_mats_prefill_local = None
 
         if page_table is not None:
+            if chunk_page_table is not None:
+                # Chunked SDPA cannot read -1 blocks. Use an initialized block from
+                # this request for padded reads; causal masking excludes those
+                # positions from valid queries. Keep -1 in the separate write table.
+                if page_table.shape[1] == 0 or torch.any(page_table[:, :1] < 0):
+                    raise ValueError("Chunked prefill requires an owned first KV cache block")
+                page_table = torch.where(page_table == -1, page_table[:, :1], page_table)
             # For batched prefill, replicate page_table to all devices (same as single-user path)
             # The KV cache fill will loop over users and use batch_idx=user_id for each
             tt_page_table = ttnn.from_torch(
@@ -807,7 +822,8 @@ class Transformer(LightweightModule):
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
             tt_out = ttnn.to_torch(tt_out).float()
-        tt_out = tt_out[:, :, :B, : self.vocab_size].view(B, S, -1)
+        # B is the serving limit; a bucketed decode can return fewer rows.
+        tt_out = tt_out[:, :, :B, : self.vocab_size].reshape(-1, S, self.vocab_size)
         return tt_out
 
     def ttnn_prefill_forward(

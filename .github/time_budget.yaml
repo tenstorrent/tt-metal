@@ -84,16 +84,17 @@ ttnn:
     bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox_civ2: 40
-    sim_wh_n150: 695
-    sim_bh_p150: 680
+    sim_wh_n150: 755
+    sim_bh_p150: 740
+    sim_quasar: 45
   unit:
     wh_llmbox: 50
     wh_galaxy: 125
     bh_galaxy: 40
     bh_p100: 815
-    bh_p150b_civ2: 855
-    wh_n150_civ2: 1055
-    wh_n300_civ2: 1190
+    bh_p150b_civ2: 900  # data_movement leg 80 -> 100 min (#61862)
+    wh_n150_civ2: 1065
+    wh_n300_civ2: 1200
     bh_p150b_civ2_viommu: 125
     bh_p300: 60
     bh_quietbox_2: 60
@@ -156,8 +157,9 @@ train:
   unit:
     bh_p100: 105
     bh_p150b_civ2: 90
+    bh_quietbox_2: 50
   perf:
-    bh_p100: 160
+    bh_p100: 180
     bh_p150b_civ2: 400
   e2e_tier3:
     bh_sc1_high_power: 140
@@ -186,22 +188,23 @@ shield:
     bh_p150: 100
     bh_p150b_civ2: 90
   unit_tier3:
-    bh_p150b_civ2: 50
+    bh_p150b_civ2: 70
     bh_p150: 2
   device_perf:
     wh_n150: 100
     wh_n300_civ2: 10
     bh_p150: 60
   demo:
-    bh_sc4: 360
-    bh_sc1: 330
+    bh_sc4: 380
+    bh_sc1: 120
+    bh_sc1_high_power: 210
 
 scaleout:
   merge_gate:
     cpu_medium: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 280
+    cpu_medium: 275
     wh_llmbox: 60
     wh_galaxy: 75
     wh_n300_civ2: 15
@@ -230,9 +233,9 @@ scaleout:
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
-    bh_galaxy: 155
+    bh_galaxy: 175
     bh_sc1: 20
-    bh_sc4: 90
+    bh_sc4: 160
     bh_sc16: 150
     bh_loudbox: 80
     bh_p300: 80
@@ -261,11 +264,11 @@ runtime:
     sim_wh_n150: 30
     sim_bh_p150: 30
     sim_wh_galaxy: 10
-    sim_bh_galaxy: 10
+    sim_bh_galaxy: 15
   unit:
     wh_n150_civ2: 232
     wh_n300_civ2: 139
-    wh_llmbox: 20
+    wh_llmbox: 25
     bh_p150b_civ2: 214
     bh_p300: 69
     bh_p150b_civ2_viommu: 11
@@ -277,7 +280,7 @@ runtime:
     bh_p150b_civ2: 360
     bh_loudbox: 25
     wh_galaxy: 15
-    bh_galaxy: 15
+    bh_galaxy: 17
   profiler:
     wh_llmbox: 60
     wh_galaxy: 50
@@ -285,6 +288,7 @@ runtime:
     wh_n300_civ2: 52
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
+    bh_loudbox: 20
   perf:
     wh_n300_civ2: 65
     bh_p150_perf: 50
@@ -305,10 +309,13 @@ triage:
 llk:
   pr_gate:
     wh_n150_civ2: 40
-    bh_p150b_civ2_viommu: 40
+    bh_p150b_civ2_viommu: 45
+    sim_quasar_xl: 30
+    cpu_xlarge: 10
   sanity:
     wh_n150_civ2: 40
-    bh_p150b_civ2_viommu: 40
+    bh_p150b_civ2_viommu: 45
+    sim_quasar_xl: 30
   unit:
     wh_n150_civ2: 40
     wh_n300_civ2: 40
@@ -324,12 +331,16 @@ llk:
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
+  # /llk-sfpu-test (llk-sfpu-report.yaml): on demand, one leg per arch per command.
+  on_demand:
+    wh_n150_civ2: 60
+    bh_p150b_civ2: 60
   ttnop:
     wh_n150_civ2: 21600
     bh_p150b_civ2: 21600
   merge_gate:
     wh_n150_civ2: 300
-    bh_p150b_civ2_viommu: 70
+    bh_p150b_civ2_viommu: 85
   weekly:
     sim_wh_n150_xl: 75
     sim_bh_p150_xl: 240
@@ -337,7 +348,8 @@ llk:
 
 models:
   agentic_research_tier3:
-    bh_quietbox_2: 102
+    bh_quietbox_2: 182
+    bh_p150: 30
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
@@ -349,34 +361,36 @@ models:
   e2e:
     bh_p150b_civ2: 8
     bh_p300: 20
-    bh_loudbox: 200
+    bh_loudbox: 215
     bh_quietbox_2: 90
     bh_sc1: 20
+    bh_galaxy: 40
   e2e_tier1:
     wh_n150: 28
     wh_galaxy_perf: 215
     bh_p150: 27
     bh_quietbox_2: 434
     bh_galaxy: 78
-    bh_sc1: 335
+    bh_sc1: 355
     bh_sc4: 160
   e2e_tier2:
     wh_llmbox_perf: 270
-    wh_n150: 45
+    wh_n150: 56
     wh_n300: 6
-    bh_p150: 26
+    bh_p150: 35
     bh_p300: 42
     bh_quietbox_2: 186
   e2e_tier3:
-    wh_llmbox_perf: 180
+    wh_llmbox_perf: 200
     wh_galaxy_perf: 55
     wh_n150: 108
     wh_n300: 60
-    bh_p150: 33
+    bh_p150: 36
+    bh_p150b_civ2: 30  # VibeVoice-1.5B (PR #51447)
     bh_p300: 13
     bh_quietbox_2: 62
   unit_tier1:
-    wh_llmbox: 155
+    wh_llmbox: 347  # TT-DiT encoder unit leg 45 -> 60 min (PR #61849)
     wh_n150: 133
     wh_galaxy: 260
     wh_galaxy_perf: 65
@@ -387,34 +401,37 @@ models:
     bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
-    wh_llmbox_perf: 191
-    wh_n150: 87
+    wh_llmbox_perf: 206
+    wh_n150: 122
     wh_n300: 30
-    wh_galaxy_perf: 80
-    bh_p150: 20
+    wh_galaxy_perf: 85
+    bh_p150: 43
     bh_quietbox_2: 60
   unit_tier3:
     wh_llmbox: 90
     wh_galaxy: 80
-    wh_llmbox_perf: 58
+    wh_llmbox_perf: 65
     wh_n150: 75
     wh_n150_civ2: 12
     wh_n300: 43
     bh_p150: 30
+    bh_p150b_civ2: 8  # VibeVoice-1.5B (PR #51447)
     bh_p300: 30
     bh_quietbox_2: 25
   integration:
     wh_llmbox: 0
   device_perf:
-    wh_n150: 20
+    # Llama 3.1-8B device perf: the two profiled cases plus tracy post-processing need ~19 min on a slow
+    # N150 VM episode (vm-109 2026-10-01); 20 cut the leg off after both cases had passed.
+    wh_n150: 30
     wh_galaxy_perf: 70
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 1750
-    bh_sc1_high_power: 388
+    bh_sc1: 2375
+    bh_sc1_high_power: 498
     bh_sc4: 60
     wh_n150: 500
     wh_n150_civ2: 300
@@ -423,26 +440,33 @@ models:
     wh_n300_perf: 200
     bh_p150: 250
     bh_p150_perf: 420
-    bh_p150b_civ2: 130
+    bh_p150b_civ2: 92
     bh_p150b_civ2_viommu: 50
     bh_loudbox: 1200
     bh_p300: 800
+  # Request-behavior additions reserve declared job timeouts, not measured usage.
+  # See tests/model_behavior/README.md#ci-runtime-accounting for each delta.
+  # Trace allocation sweeps reserve twice the source e2e job time for diagnostics.
   sweep_tier1:
     wh_llmbox: 131
-    wh_n150: 30
+    wh_n150: 52
+    wh_n150_civ2: 45
     wh_galaxy: 40
-    wh_galaxy_perf: 55
-    bh_p150: 30
+    wh_galaxy_perf: 265
+    bh_p150: 52
+    bh_p150b_civ2: 45
+    bh_quietbox_2: 609
+    bh_galaxy: 150
   sweep_tier2:
     wh_n150: 30
-    wh_llmbox_perf: 60
-    bh_quietbox_2: 30
+    wh_llmbox_perf: 271
+    bh_quietbox_2: 75
     bh_p150: 30
   vllm:
     wh_galaxy_perf: 430
     bh_quietbox_2: 310
-    wh_llmbox: 342
-    bh_loudbox: 245
+    wh_llmbox: 370
+    bh_loudbox: 320
     bh_galaxy: 65
     wh_n150: 65
 umd:
@@ -458,8 +482,9 @@ syseng:
   integration:
     wh_n150_civ2: 34
     wh_n300_civ2: 36
-    bh_p100: 18
-    bh_p150b_civ2: 18
+    bh_p100: 20
+    bh_p150b_civ2: 30
+    bh_p300: 10
 
 gtm:
   e2e:

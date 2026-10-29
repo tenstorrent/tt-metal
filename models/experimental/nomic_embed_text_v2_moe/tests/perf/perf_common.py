@@ -14,9 +14,9 @@ The gap between the second and the third is host work and transfers; the gap bet
 and the device kernel total reported by test_nomic_device_perf.py is dispatch. Collapsing them
 into one figure hides which of trace, sharding or precision is worth doing.
 
-Shapes are fixed rather than swept. T = B * S is what the expert bank scales with, and 8x512
-sits just past the 3520-token bound in tt/experts.py, so it takes the multi-pass branch that
-8x384 does not. Keeping both makes the cost of that split visible.
+Shapes are fixed rather than swept. T = B * S is what the expert bank scales with: 8x512, 4096
+tokens, fills exactly one expert pass (MAX_TOKENS_PER_PASS in tt/experts.py), and 8x384 three
+quarters of one.
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ import ttnn
 from models.experimental.nomic_embed_text_v2_moe.tt.model import TtNomicBertModel
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import TtModelConfig
 
-# (batch, seqlen). 8x512 is the headline: T = 4096, the longest the tokenizer emits at this
-# checkpoint's 512-token truncation limit, and the shape the expert chunking splits.
+# (batch, seqlen). 8x512 is the headline: S = 512 is the tokenizer's truncation limit, and
+# T = 4096 fills one expert pass.
 BENCHMARK_SHAPES = [(1, 128), (8, 384), (8, 512)]
 HEADLINE_SHAPE = (8, 512)
 

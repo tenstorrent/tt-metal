@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Public API for the DeepSeek-V3.2 / GLM-5.1 sparse-MLA CPU reference.
+Public API for the DeepSeek-V3.2 / GLM-5.3 sparse-MLA CPU reference.
 
 Shaped after the device model ``ttMLA``: construct with ``(config, weights)`` plus ``seq_len``, then
 ``forward(hidden_states)``. The HF-attribute config is the only configuration input; the upstream
@@ -35,7 +35,7 @@ Weights = dict[str, torch.Tensor]
 
 @runtime_checkable
 class SparseMLAConfig(Protocol):
-    """The HF-attribute config contract this package reads (deepseek_v32_hf_config / glm_hf_config)."""
+    """The HF-attribute config contract this package reads (deepseek_v32_hf_config / glm_5_3_hf_config)."""
 
     hidden_size: int
     num_attention_heads: int
@@ -152,7 +152,7 @@ def pretrained_mla_weights(
 
 
 class SparseMLAReference:
-    """CPU truth for one DeepSeek-V3.2 / GLM-5.1 sparse-MLA layer. Built like ttMLA: ``(config, weights)``."""
+    """CPU truth for one DeepSeek-V3.2 / GLM-5.3 sparse-MLA layer. Built like ttMLA: ``(config, weights)``."""
 
     def __init__(
         self,

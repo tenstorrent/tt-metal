@@ -7,18 +7,23 @@
 // silicon's extraction 1:1 so the POD carries exactly what silicon feeds. Every consumer
 // (program_model / kernel_defines / metal2_emit / device_map / cb_dfb_setup) reads this POD.
 
+#include <filesystem>
 #include "emule_descriptor_builder.hpp"
 
 #include <optional>
 #include <set>
+#include <string>
 #include <tuple>
+#include <unordered_map>
 #include <type_traits>
 
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "impl/metal2_host_api/llk_metadata.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "emule_device_map.hpp"              // NOC_NODE_ID_BITS
@@ -29,13 +34,12 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/face_geometry.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tile.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
 #include <tt-metalium/experimental/fabric/control_plane.hpp>  // get_fabric_node_id_from_physical_chip_id
-#include <tt_stl/assert.hpp>                                  // TT_FATAL
 
 namespace tt_emule {
 
@@ -121,9 +125,9 @@ SocView build_soc_view(IDevice* device, Program& program) {
         v.l1_banks.push_back(bank);
     }
 
-    v.dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    v.l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-    v.arch_num_circular_buffers = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    v.dram_alignment = hw.get_alignment(tt::tt_metal::HalMemType::DRAM);
+    v.l1_alignment = hw.get_alignment(tt::tt_metal::HalMemType::L1);
+    v.arch_num_circular_buffers = hw.get_num_dataflow_buffers();
     v.num_semaphores = tt::tt_metal::NUM_SEMAPHORES;
     v.has_tile_counter_registers = hw.has_tile_counter_registers();
 
@@ -160,10 +164,124 @@ static ResolvedGeom to_resolved_geom(const tt::tt_metal::emule::ResolvedTileGeom
         g.narrow_tile};
 }
 
+// Per-core CB / DFB / semaphore setup (init_core_cb_sync / allocate_dfbs_on_core / init_core_semaphores)
+// plus the semaphore table: everything setup_core_state reads on each dispatch.
+static void fill_core_state(Program& program, EmuleProgramDescriptor& pd) {
+    auto& impl = program.impl();
+    // logical_cores() returns one vector per programmable core type; the outer index IS the pct.
+    const auto logical_cores = impl.logical_cores();
+    // Creation order is the order prep_kernel's set_cb/dfb_data_fmt_and_tile visit them.
+    std::unordered_map<const void*, uint32_t> cb_creation_index, dfb_creation_index;
+    for (const auto& cb : impl.circular_buffers()) {
+        cb_creation_index.emplace(cb.get(), cb_creation_index.size());
+    }
+    for (const auto& dfb : impl.dataflow_buffers()) {
+        dfb_creation_index.emplace(dfb.get(), dfb_creation_index.size());
+    }
+    for (uint32_t pct = 0; pct < logical_cores.size(); ++pct) {
+        for (const tt::tt_metal::CoreCoord& core : logical_cores[pct]) {
+            CoreDescriptor cs;
+            cs.programmable_core_type = pct;
+            cs.logical_x = core.x;
+            cs.logical_y = core.y;
+
+            for (const auto& cb : impl.circular_buffers_on_core(core)) {
+                if (!cb) {
+                    continue;
+                }
+                CbDescriptor cd;
+                cd.address = cb->address();
+                cd.total_size = cb->size();
+                cd.globally_allocated = cb->globally_allocated();
+                cd.creation_index = cb_creation_index.at(cb.get());
+                for (uint8_t idx : cb->local_buffer_indices()) {
+                    CbBuffer b;
+                    b.index = idx;
+                    b.page_size = cb->page_size(idx);
+                    b.num_pages = cb->num_pages(idx);
+                    cd.buffers.push_back(std::move(b));
+                }
+                // set_cb_data_fmt_and_tile's slots: every buffer index, local and remote. Silicon's
+                // tile/face precedence is applied here (marshaller has the live Tile).
+                for (uint8_t idx : cb->buffer_indices()) {
+                    const auto fmt = cb->data_format(idx);
+                    const auto& tile = cb->tile(idx);
+                    const auto& face = cb->unpack_face_geometry(idx);
+                    cd.geom_slots.push_back(CbGeomSlot{
+                        idx,
+                        static_cast<uint32_t>(fmt),
+                        tile.has_value() || face.has_value(),
+                        to_resolved_geom(tt::tt_metal::emule::resolve_tile_geometry(tile, face), fmt)});
+                }
+                cs.cbs.push_back(std::move(cd));
+            }
+
+            for (const auto& dfb : impl.dataflow_buffers_on_core(core)) {
+                if (!dfb) {
+                    continue;
+                }
+                const auto& c = dfb->config;
+                DfbDescriptor dd;
+                dd.device_slot = dfb->device_slot;
+                dd.creation_index = dfb_creation_index.at(dfb.get());
+                dd.entry_size = c.entry_size;
+                dd.num_entries = c.num_entries;
+                dd.num_producers = c.num_producers;
+                dd.num_consumers = c.num_consumers;
+                dd.producer_risc_mask = c.producer_risc_mask;
+                dd.consumer_risc_mask = c.consumer_risc_mask;
+                dd.cap = static_cast<AccessPattern>(static_cast<uint8_t>(c.cap));
+                dd.data_format = static_cast<uint32_t>(c.data_format);
+                // Only valid-format DFBs feed the geometry tables (build_kernel_defines skips Invalid).
+                // Face layout lives on Tile; DFB no longer carries a separate unpack FaceGeometry.
+                if (c.data_format != tt::DataFormat::Invalid) {
+                    const tt::tt_metal::emule::ResolvedTileGeometry g =
+                        tt::tt_metal::emule::resolve_tile_geometry(c.tile, std::nullopt);
+                    dd.geom = to_resolved_geom(g, c.data_format);
+                    dd.sets_tile_dims = c.tile.has_value();
+                }
+                auto cl = dfb->core_lookup_.find(core);
+                dd.has_finalize = (cl != dfb->core_lookup_.end());
+                dd.finalize_l1_offset = dd.has_finalize ? cl->second.second : 0;  // 0-based L1 offset
+                cs.dfbs.push_back(std::move(dd));
+            }
+
+            for (const auto& sem : impl.semaphores()) {
+                if (sem.initialized_on_logical_core(core)) {
+                    cs.semaphore_ids.push_back(sem.id());
+                }
+            }
+            pd.cores.push_back(std::move(cs));
+        }
+    }
+
+    for (const auto& sem : impl.semaphores()) {
+        SemaphoreDescriptor sd;
+        sd.id = sem.id();
+        sd.initial_value = sem.initial_value();
+        pd.semaphores.push_back(sd);
+    }
+}
+
 EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device) {
     (void)device;                 // kept for signature symmetry with build_soc_view; this half is program-only
     auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
     const auto& hw = MetalContext::instance().hal();
+    auto& metal_context = MetalContext::instance(impl.get_context_id());
+    const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
+    std::string quasar_arch_include;
+    if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR) {
+        auto variant = metal_context.get_cluster().get_quasar_ip_variant();
+        const std::string lower_variant = [&]() {
+            std::string result = std::string(enchantum::to_string(variant));
+            std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+            return result;
+        }();
+        const std::string dir = rtoptions.get_root_dir() + "tt_metal/tt-llk/tt_llk_quasar/arch/" + lower_variant;
+        if (std::filesystem::is_directory(dir)) {
+            quasar_arch_include = dir;
+        }
+    }
 
     EmuleProgramDescriptor pd;
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
@@ -210,6 +328,9 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             });
             k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
+            if (!quasar_arch_include.empty()) {
+                kd.include_paths.insert(kd.include_paths.begin(), quasar_arch_include);
+            }
             kd.is_compute = (k.get_kernel_processor_class() == HalProcessorClassType::COMPUTE);
             {
                 const auto cfg = k.config();
@@ -230,13 +351,35 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             }
             {
-                // COMPILE_FOR_* selection index + the PROCESSOR_INDEX define value (collect_kernels).
+                // COMPILE_FOR_* selection index + the PROCESSOR_INDEX define value (collect_kernels). An ethernet
+                // kernel is data movement on its own core type (EthernetKernel is not a DataMovementKernel).
                 auto* dm_kernel = dynamic_cast<DataMovementKernel*>(&k);
-                kd.is_data_movement = (dm_kernel != nullptr);
+                auto* eth_kernel = dynamic_cast<EthernetKernel*>(&k);
+                kd.is_data_movement = (dm_kernel != nullptr || eth_kernel != nullptr);
                 uint32_t proc_type_idx = 0;
-                if (!kd.is_compute && dm_kernel != nullptr &&
+                if (dm_kernel != nullptr &&
                     std::get<DataMovementConfig>(dm_kernel->config()).processor == DataMovementProcessor::RISCV_1) {
                     proc_type_idx = 1;
+                }
+                if (eth_kernel != nullptr) {
+                    const auto processor = std::get<EthernetConfig>(eth_kernel->config()).processor;
+                    kd.dm_processor = static_cast<uint32_t>(processor);
+                    proc_type_idx = static_cast<uint32_t>(processor);
+                    // Silicon's JIT takes an ethernet build's per-RISC macros (COMPILE_FOR_ERISC, ...) from HAL.
+                    const auto& rtoptions = MetalContext::instance().rtoptions();
+                    for (const auto& define : hw.get_jit_build_query().defines(
+                             {false,
+                              k.get_kernel_programmable_core_type(),
+                              HalProcessorClassType::DM,
+                              proc_type_idx,
+                              rtoptions})) {
+                        const auto eq = define.find('=');
+                        const std::string name = define.substr(0, eq);
+                        if (name == "PROCESSOR_INDEX" || name == "PROGRAMMABLE_CORE_TYPE") {
+                            continue;  // collect_kernels sets these for every kernel
+                        }
+                        kd.defines[name] = eq == std::string::npos ? "1" : define.substr(eq + 1);
+                    }
                 }
                 kd.compile_processor_index = hw.get_processor_index(
                     k.get_kernel_programmable_core_type(), k.get_kernel_processor_class(), proc_type_idx);
@@ -258,40 +401,47 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                                                           uint16_t id,
                                                           bool is_relay,
                                                           uint8_t pipe,
-                                                          const std::optional<LLKMetadata>&) {
-                kd.bindings.dfb.push_back(DfbBinding{name, id, is_relay, pipe});
+                                                          const std::optional<LLKMetadata>& llk,
+                                                          uint8_t /*pap*/,
+                                                          uint8_t /*cap*/) {
+                kd.bindings.dfb.push_back(
+                    DfbBinding{name, id, is_relay, pipe, llk ? serialize_llk_metadata(*llk) : ""});
             });
             k.process_semaphore_binding_handles(
                 [&kd](const std::string& name, uint16_t id, auto scope, uint32_t harts) {
                     kd.bindings.sem.push_back(
                         SemBinding{name, id, static_cast<tt_emule::SemScope>(static_cast<uint8_t>(scope)), harts});
                 });
-            k.process_tensor_binding_handles(
-                [&kd](
-                    const std::string& name,
-                    uint32_t cta_off,
-                    uint32_t addr_crta_off,
-                    uint32_t num_rt,
-                    const LLKMetadata&) {
-                    // Emule doesn't yet model per-binding runtime CRTA words; the downstream
-                    // get_common_vararg base math assumes 1 word/binding. Fail loudly on the
-                    // dynamic-shape case here (the sole binding reader) rather than in a consumer.
-                    TT_FATAL(
-                        num_rt == 0,
-                        "Emule does not yet support dynamic-shape Metal 2.0 tensor bindings "
-                        "(binding '{}' has num_runtime_field_crta_words={}). Wire the per-"
-                        "binding word count through Metal2BindingsSnapshot::TaEntry, the "
-                        "cache key, and emit_metal2_namespaces' get_common_vararg base "
-                        "before enabling this path.",
-                        name,
-                        num_rt);
-                    kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off});
-                });
-            k.process_scratchpad_binding_handles(
-                [&kd](
-                    const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word, const std::optional<LLKMetadata>&) {
-                    kd.bindings.scratch.push_back(ScratchBinding{name, size_bytes, addr_crta_word});
-                });
+            k.process_tensor_binding_handles([&kd](
+                                                 const std::string& name,
+                                                 uint32_t cta_off,
+                                                 bool is_per_node,
+                                                 uint32_t addr_offset,
+                                                 uint32_t /*num_rt*/,
+                                                 const LLKMetadata& llk) {
+                TT_FATAL(
+                    !is_per_node,
+                    "Tensor binding '{}' is bound to a per-node tensor, which emulation does not support yet",
+                    name);
+                // num_rt needs no handling: crta_vararg_offset (below) already counts those words.
+                kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_offset, serialize_llk_metadata(llk)});
+            });
+            k.process_prefetcher_pipe_binding_handles([&kd](const std::string& name, uint8_t prefetcher_pipe_id) {
+                kd.bindings.prefetcher_pipe.push_back(PrefetcherPipeBinding{name, prefetcher_pipe_id});
+            });
+            k.process_scratchpad_binding_handles([&kd](
+                                                     const std::string& name,
+                                                     uint32_t size_bytes,
+                                                     uint32_t addr_crta_word,
+                                                     const std::optional<LLKMetadata>& llk) {
+                kd.bindings.scratch.push_back(
+                    ScratchBinding{name, size_bytes, addr_crta_word, llk ? serialize_llk_metadata(*llk) : ""});
+            });
+            kd.bindings.crta_vararg_offset = k.get_crta_layout().vararg_section_offset;
+            k.process_tensor_binding_sequences([&kd](const std::string& name, const std::vector<std::string>& members) {
+                kd.bindings.tensor_sequences.push_back(TensorBindingSequence{name, members});
+            });
+            kd.bindings.compile_time_vararg_count = k.get_compile_time_vararg_count();
             for (const auto& r : k.core_range_set().ranges()) {
                 kd.core_ranges.push_back(
                     {static_cast<uint32_t>(r.start_coord.x),
@@ -346,6 +496,8 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                             auto rta = kc.rta_offset()[processor_index];
                             ck.rta_offset = rta.rta_offset();
                             ck.crta_offset = rta.crta_offset();
+                            ck.remote_cb_offset = static_cast<uint16_t>(kc.remote_cb_offset());
+                            ck.min_remote_cb_start_index = static_cast<uint32_t>(kc.min_remote_cb_start_index());
                         }
                         const tt::tt_metal::CoreCoord lc(x, y);
                         if (k.cores_with_runtime_args().count(lc) != 0) {
@@ -360,89 +512,19 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
         }
     }
 
-    // Per-core CB / DFB / semaphore setup (init_core_cb_sync / allocate_dfbs_on_core / init_core_semaphores).
-    // logical_cores() returns one vector per programmable core type; the outer index IS the pct.
-    const auto logical_cores = impl.logical_cores();
-    for (uint32_t pct = 0; pct < logical_cores.size(); ++pct) {
-        for (const tt::tt_metal::CoreCoord& core : logical_cores[pct]) {
-            CoreDescriptor cs;
-            cs.programmable_core_type = pct;
-            cs.logical_x = core.x;
-            cs.logical_y = core.y;
-
-            for (const auto& cb : impl.circular_buffers_on_core(core)) {
-                if (!cb) {
-                    continue;
-                }
-                CbDescriptor cd;
-                cd.address = cb->address();
-                cd.total_size = cb->size();
-                cd.globally_allocated = cb->globally_allocated();
-                for (uint8_t idx : cb->local_buffer_indices()) {
-                    CbBuffer b;
-                    b.index = idx;
-                    b.page_size = cb->page_size(idx);
-                    b.num_pages = cb->num_pages(idx);
-                    const auto fmt = cb->data_format(idx);
-                    b.data_format = static_cast<uint32_t>(fmt);
-                    // Apply silicon's tile/face precedence here (marshaller has the live Tile);
-                    // the POD carries only the resolved primitives. Mirrors build_kernel_defines.
-                    const tt::tt_metal::emule::ResolvedTileGeometry g =
-                        tt::tt_metal::emule::resolve_tile_geometry(cb->tile(idx), cb->unpack_face_geometry(idx));
-                    b.geom = to_resolved_geom(g, fmt);
-                    cd.buffers.push_back(std::move(b));
-                }
-                cs.cbs.push_back(std::move(cd));
-            }
-
-            for (const auto& dfb : impl.dataflow_buffers_on_core(core)) {
-                if (!dfb) {
-                    continue;
-                }
-                const auto& c = dfb->config;
-                DfbDescriptor dd;
-                dd.device_slot = dfb->device_slot;
-                dd.entry_size = c.entry_size;
-                dd.num_entries = c.num_entries;
-                dd.num_producers = c.num_producers;
-                dd.num_consumers = c.num_consumers;
-                dd.producer_risc_mask = c.producer_risc_mask;
-                dd.consumer_risc_mask = c.consumer_risc_mask;
-                dd.cap = static_cast<AccessPattern>(static_cast<uint8_t>(c.cap));
-                dd.data_format = static_cast<uint32_t>(c.data_format);
-                // Only valid-format DFBs feed the geometry tables (build_kernel_defines skips Invalid).
-                // Face layout lives on Tile; DFB no longer carries a separate unpack FaceGeometry.
-                if (c.data_format != tt::DataFormat::Invalid) {
-                    const tt::tt_metal::emule::ResolvedTileGeometry g =
-                        tt::tt_metal::emule::resolve_tile_geometry(c.tile, std::nullopt);
-                    dd.geom = to_resolved_geom(g, c.data_format);
-                }
-                auto cl = dfb->core_lookup_.find(core);
-                dd.has_finalize = (cl != dfb->core_lookup_.end());
-                dd.finalize_l1_offset = dd.has_finalize ? cl->second.second : 0;  // 0-based L1 offset
-                cs.dfbs.push_back(std::move(dd));
-            }
-
-            for (const auto& sem : impl.semaphores()) {
-                if (sem.initialized_on_logical_core(core)) {
-                    cs.semaphore_ids.push_back(sem.id());
-                }
-            }
-            auto ck_it =
-                core_kernels.find(std::make_tuple(pct, static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)));
-            if (ck_it != core_kernels.end()) {
-                cs.kernels = std::move(ck_it->second);
-            }
-            pd.cores.push_back(std::move(cs));
+    fill_core_state(program, pd);
+    for (CoreDescriptor& cs : pd.cores) {
+        auto ck_it = core_kernels.find(std::make_tuple(cs.programmable_core_type, cs.logical_x, cs.logical_y));
+        if (ck_it != core_kernels.end()) {
+            cs.kernels = std::move(ck_it->second);
         }
     }
+    return pd;
+}
 
-    for (const auto& sem : impl.semaphores()) {
-        SemaphoreDescriptor sd;
-        sd.id = sem.id();
-        sd.initial_value = sem.initial_value();
-        pd.semaphores.push_back(sd);
-    }
+EmuleProgramDescriptor build_core_state_descriptor(Program& program) {
+    EmuleProgramDescriptor pd;
+    fill_core_state(program, pd);
     return pd;
 }
 

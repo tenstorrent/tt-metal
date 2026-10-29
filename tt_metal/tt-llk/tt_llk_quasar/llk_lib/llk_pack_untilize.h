@@ -110,7 +110,7 @@ inline void _llk_pack_untilize_(const std::uint32_t dest_idx, const std::uint32_
 
     // The value field of the TT_SET_DST_TILE_FACE_ROW_IDX instruction is 18 bits wide, but only values up to 11 bits are actually
     // passed on when using FACE_SEL; anything larger is truncated and aliases back to an earlier tile.
-    LLK_ASSERT(l1_tile_idx < (1u << 11), "l1_tile_idx exceeds the 11 bits the dst face index can carry");
+    LLK_ASSERT(l1_tile_idx < FACE_SEL_IDX_LIMIT, "l1_tile_idx exceeds the 11 bits the dst face index can carry");
 
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, l1_tile_idx);
     // Runs MOP

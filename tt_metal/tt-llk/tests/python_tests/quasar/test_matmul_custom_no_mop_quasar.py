@@ -23,6 +23,7 @@ THROTTLE_LEVEL == 0 (same on Wormhole).
 
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
     get_valid_math_fidelities,
@@ -38,7 +39,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     Transpose,
     format_dict,
 )
@@ -59,7 +59,6 @@ from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
     ENABLE_2X_FORMAT,
-    IMPLIED_MATH_FORMAT,
     MATH_FIDELITY,
     NUM_FACES,
     TILE_COUNT,
@@ -98,7 +97,6 @@ def _run_matmul_custom_no_mop(
     math_fidelity,
     formats,
     dest_acc,
-    implied_math_format,
     input_A_dimensions,
     input_B_dimensions,
     enable_2x_format: bool,
@@ -148,12 +146,6 @@ def _run_matmul_custom_no_mop(
             dimensions=input_B_dimensions,
         )
 
-    # 2x register-format opt-in has to flow through inference; only disable inference for plain MX
-    # formats, where there is nothing to infer.
-    disable_format_inference = (
-        formats.input_format.is_mx_format() and formats.register_format_hint is None
-    )
-
     formats_config = data_formats(
         input_format=formats.input_format,
         input_format_B=formats.input_format_B,
@@ -161,7 +153,6 @@ def _run_matmul_custom_no_mop(
         is_fp32_dest_acc_en=dest_acc,
         num_iterations=1,
         unpacking_to_dest=False,
-        disable_format_inference=disable_format_inference,
         register_format_hint=formats.register_format_hint,
     )[0]
     pack_src_format = formats_config.pack_src
@@ -188,7 +179,6 @@ def _run_matmul_custom_no_mop(
         formats=formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             ENABLE_2X_FORMAT(enable_2x_format),
             DEST_SYNC(DEST_SYNC_MODE),
             UNPACK_TRANS_FACES(Transpose.No),
@@ -211,7 +201,6 @@ def _run_matmul_custom_no_mop(
         ),
         unpack_to_dest=False,
         dest_acc=dest_acc,
-        disable_format_inference=disable_format_inference,
         boot_mode=boot_mode,
     )
 
@@ -259,9 +248,6 @@ def test_matmul_custom_no_mop_quasar(
         math_fidelity,
         formats,
         dest_acc,
-        # The metal llk_api wrapper configures the ALU format state with IMPLIED_MATH_FORMAT off,
-        # so the non-MX path is tested in that mode.
-        ImpliedMathFormat.No,
         input_A_dimensions,
         input_B_dimensions,
         enable_2x_format=False,
@@ -289,11 +275,15 @@ MATMUL_2X_DIMENSIONS = [
 
 
 @pytest.mark.quasar
+@pytest.mark.skipif(
+    is_4row_arch(),
+    reason="MxFp4_2x register formats do not exist on the 4-row Quasar variant; its 2x path is Int8_2x",
+)
 @parametrize(
     math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     formats=MATMUL_2X_FORMATS,
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    dimensions=MATMUL_2X_DIMENSIONS,
+    dimensions=runtime(MATMUL_2X_DIMENSIONS),
 )
 def test_matmul_custom_no_mop_quasar_mxfp4_2x(
     math_fidelity,
@@ -307,8 +297,6 @@ def test_matmul_custom_no_mop_quasar_mxfp4_2x(
         math_fidelity,
         formats,
         dest_acc,
-        # MX formats carry their exponent in the data, so the math format has to be implied.
-        ImpliedMathFormat.Yes,
         input_A_dimensions,
         input_B_dimensions,
         enable_2x_format=True,

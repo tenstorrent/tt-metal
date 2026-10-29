@@ -38,8 +38,10 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     // Column reduce is a GAPOOL (op-mmul family) and consumes MxFp4 SrcA as the 2x-packed
     // src-register format, exactly like matmul. Derive the effective SrcA format from the L1/src
     // format; the matching unpacker OUT_DATA_FORMAT override lives in llk_unpack_AB_reduce_init.
-    // Only REDUCE_COL supports 2x (row/scalar reduce post-pool ELWADDDI does not).
-    const bool srcA_2x = (reduce_dim == ReduceDim::REDUCE_COL) &&
+    // Only REDUCE_COL supports 2x (row/scalar reduce post-pool ELWADDDI does not), and only GAPOOL
+    // (SUM/AVG) accepts a 2x SrcA - GMPOOL (MAX) does not.
+    const bool srcA_2x = (pool_type == PoolType::SUM || pool_type == PoolType::AVG) &&
+                         (reduce_dim == ReduceDim::REDUCE_COL) &&
                          (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4);
     const DataFormat srcA_format =
         srcA_2x ? DataFormat::MxFp4_2x_B : static_cast<DataFormat>(unpack_dst_format[operandA_id]);
@@ -50,18 +52,18 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     // DataFormatConfigSet::DEFAULT. That latch keys on which config set is active, not on the
     // formats, so _configure_default_alu_data_format_state_ would early-return and leave the ALU
     // decoding 2x-packed SrcA as Float16_b. Program the ALU directly in that case; this is still the
-    // DEFAULT config shape (implied math format off, no dest-format override), so the latched
+    // DEFAULT config shape (no dest-format override), so the latched
     // DataFormatConfigSet::DEFAULT stays truthful and transpose-dest's restore contract holds.
     if (srcA_2x) {
         const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
                                           _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
-        _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(
+        _configure_alu_formats_<EN_32BIT_DEST>(
             srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
     } else {
-        _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(
-            srcA_format, srcB_format);
+        _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
     }
-    _llk_math_reduce_init_<pool_type, reduce_dim, EN_32BIT_DEST, math_fidelity, is_int_fpu_en>(tensor_shape);
+    _llk_math_reduce_init_<pool_type, reduce_dim, EN_32BIT_DEST, math_fidelity, is_int_fpu_en>(
+        srcA_format, srcB_format, tensor_shape);
 }
 
 /**
@@ -84,7 +86,7 @@ inline void llk_math_reduce_uninit(const std::uint32_t operandA) {
     // reprogramming both ALU srcs to operandA's table value is the correct restore.
     const DataFormat table_fmt = static_cast<DataFormat>(unpack_dst_format[operandA_id]);
     const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(table_fmt) && DST_ACCUM_MODE;
-    _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
+    _configure_alu_formats_<DST_ACCUM_MODE>(
         table_fmt, table_fmt, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
 }
 
@@ -107,6 +109,9 @@ inline void llk_math_reduce(const std::uint32_t dst_index, const ckernel::Tensor
                 tensor_shape.num_faces_c_dim == DEFAULT_TENSOR_SHAPE.num_faces_c_dim,
             "Int reduce: only default 32x32 tensor_shape supported");
     }
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "llk_math_reduce: dst_index exceeds dest capacity");
     _llk_math_reduce_<type, dim, is_int_fpu_en>(dst_index, tensor_shape);
 }
 

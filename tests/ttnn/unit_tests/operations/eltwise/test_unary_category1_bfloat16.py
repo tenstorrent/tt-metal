@@ -138,12 +138,12 @@ def test_spl_value_check_ops(device, ttnn_op):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Logical NOT (-0.0) returns False while golden returns True
+# Logical NOT
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_logical_not_ops(device):
-    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
+    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=True)
     ttnn_op = ttnn.logical_not
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -360,18 +360,15 @@ def test_error_functions(device, ttnn_op, low, high):
 # ─────────────────────────────────────────────────────────────────────────────
 # reciprocal: 1/x, swept over both signs
 #
-# The kernel's only departure from 1 ULP is at the small-output end, and it is
-# sharp on the input side: the device packs zero as soon as 1/x would land at
-# or below the smallest normal, which is |x| >= 2^126 exactly. Splitting the
-# sweep there is what keeps the comparison honest. Flushing both outputs at a
-# fixed threshold instead straddles pairs that are 1 ULP apart — at
-# x = 8.474e37 the golden is 1.1847e-38 and the device returns the adjacent
-# 1.1755e-38, and a threshold between them zeroes one side and reports the
-# 129 ULP of a value-against-zero comparison.
+# Split at |x| = 2^126, whose reciprocal is the smallest normal BF16.
+# Wormhole preserves that boundary result; the other architectures retain
+# their existing flush-to-zero behavior there. Larger magnitudes produce
+# subnormal reciprocals and are flushed to +0. Test the boundary separately
+# so the normal-domain comparison does not mask underflow errors.
 # ─────────────────────────────────────────────────────────────────────────────
 
-RECIPROCAL_FTZ_INPUT = 2.0**126
-RECIPROCAL_MAX_INPUT = RECIPROCAL_FTZ_INPUT * (1 - 2.0**-8)  # largest bfloat16 below it
+RECIPROCAL_BOUNDARY_INPUT = 2.0**126
+RECIPROCAL_MAX_INPUT = RECIPROCAL_BOUNDARY_INPUT * (1 - 2.0**-8)  # largest bfloat16 below it
 
 
 @pytest.mark.parametrize(
@@ -383,9 +380,9 @@ RECIPROCAL_MAX_INPUT = RECIPROCAL_FTZ_INPUT * (1 - 2.0**-8)  # largest bfloat16 
     ids=["positive", "negative"],
 )
 def test_reciprocal(device, low, high):
-    """Every normal bfloat16 of one sign whose reciprocal the device can still
-    represent. This covers |x| < 1, where 1/x amplifies instead of shrinking
-    and the output runs all the way up to 2^126, as well as the shrinking half.
+    """Every normal bfloat16 of one sign below the underflow boundary.
+    This covers |x| < 1, where 1/x amplifies instead of shrinking and the
+    output runs all the way up to 2^126, as well as the shrinking half.
     """
     input_tensor = generate_bfloat16_bits_in_range(low, high)
 
@@ -397,25 +394,23 @@ def test_reciprocal(device, low, high):
     tt_result = ttnn.reciprocal(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+    ulp_threshold = 0 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 1
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp_threshold)
 
 
 @pytest.mark.parametrize(
     "low, high",
     [
-        (RECIPROCAL_FTZ_INPUT, MAX_BF16),
-        (-MAX_BF16, -RECIPROCAL_FTZ_INPUT),
+        (RECIPROCAL_BOUNDARY_INPUT, MAX_BF16),
+        (-MAX_BF16, -RECIPROCAL_BOUNDARY_INPUT),
     ],
     ids=["positive", "negative"],
 )
-def test_reciprocal_flushes_to_zero(device, low, high):
-    """From |x| = 2^126 up the device returns exactly 0, and the sign goes with
-    the magnitude — the negative half returns +0, not -0.
-
-    The cutoff is a step early rather than a rounding artifact: 1/2^126 is the
-    smallest normal itself, so the device gives up before subnormals even
-    start, and every input in this range has a nonzero reciprocal that
-    bfloat16 can hold.
+def test_reciprocal_underflow_boundary(device, low, high):
+    """Wormhole returns +/-2^-126 at +/-2^126 and +0 beyond that boundary.
+    Other architectures retain their existing +0 result at the boundary.
+    Every exact reciprocal in this range is nonzero and BF16-representable
+    after rounding, but subnormal outputs are flushed on the device.
     """
     input_tensor = generate_bfloat16_bits_in_range(low, high)
 
@@ -423,8 +418,12 @@ def test_reciprocal_flushes_to_zero(device, low, high):
     result = ttnn.to_torch(ttnn.reciprocal(to_tt_tensor(input_tensor, device)))
 
     assert (golden != 0).all(), "expected every reciprocal in this range to be representable"
-    assert_equal(torch.zeros_like(result), result)
-    assert not torch.signbit(result).any(), "flushed results must be +0 for both input signs"
+    expected = torch.zeros_like(result)
+    if device.arch() == ttnn.device.Arch.WORMHOLE_B0:
+        boundary = input_tensor.abs() == RECIPROCAL_BOUNDARY_INPUT
+        expected[boundary] = golden[boundary]
+    assert_equal(expected, result)
+    assert not torch.signbit(result[expected == 0]).any(), "flushed results must be +0 for both input signs"
 
 
 def test_reciprocal_zero_and_nonfinite(device):
@@ -577,6 +576,35 @@ def test_exp2_allclose(device):
     result = ttnn.to_torch(tt_result)
 
     assert_allclose(actual_result=result, expected_result=golden, atol=8.5e-39, rtol=0)
+
+
+def test_exp2_special_values(device):
+    """exp2 saturation and infinity handling, which the bfloat16 sweeps replace with 0 (see #44507).
+
+    | Input                    | Expected                                   |
+    |--------------------------|--------------------------------------------|
+    | -inf                     | 0                                          |
+    | -127                     | 0 (golden 2^-127 is subnormal; device FTZ) |
+    | -126                     | 2^-126, smallest normal (ULP ≤ 1)          |
+    | 0, ±1, ±10, 127          | ULP ≤ 1                                    |
+    | 128, +inf                | +inf                                       |
+
+    NaN is excluded: ttnn.bfloat16 host-side packing turns NaN into +inf before
+    the tensor reaches the device, so NaN propagation can't be tested at this dtype.
+    """
+    input_tensor = torch.tensor(
+        [0.0, 1.0, -1.0, 10.0, -10.0, 127.0, -126.0, float("inf"), -float("inf"), 128.0, -127.0],
+        dtype=torch.bfloat16,
+    )
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = flush_subnormal_values_to_zero(golden_function(input_tensor, device=device))
+
+    result = ttnn.to_torch(ttnn.exp2(tt_in))
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(

@@ -18,12 +18,12 @@ using namespace overlay;
 
 // 4 cols x 4 rows
 constexpr uint32_t src_base = 0x30000;
-constexpr LoopConfig src_inner_cfg = {.stride = 128, .end_addr = 4 * 128};    // 4 cols, 128B apart
-constexpr LoopConfig src_outer_cfg = {.stride = 1024, .end_addr = 4 * 1024};  // 4 rows, 1024B apart
+constexpr LoopConfig src_inner_cfg = {.stride = 128, .end = 4 * 128};    // 4 cols, 128B apart
+constexpr LoopConfig src_outer_cfg = {.stride = 1024, .end = 4 * 1024};  // 4 rows, 1024B apart
 
 constexpr uint32_t dst_base = 0x40000;
-constexpr LoopConfig dst_inner_cfg = {.stride = 128, .end_addr = 4 * 128};
-constexpr LoopConfig dst_outer_cfg = {.stride = 1024, .end_addr = 4 * 1024};
+constexpr LoopConfig dst_inner_cfg = {.stride = 128, .end = 4 * 128};
+constexpr LoopConfig dst_outer_cfg = {.stride = 1024, .end = 4 * 1024};
 
 void kernel_main() {
     constexpr uint32_t src_stride_en = get_arg(args::src_stride_en);

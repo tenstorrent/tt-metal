@@ -1,11 +1,26 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#define TTI_INSN(ENCODING)    void(({ __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING))); }))
-#define TT_INSN(ENCODING)     void(::ckernel::instrn_buffer[0] = (ENCODING))
+#if __riscv_xtttensixqsr || (__clang__ && defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC))
+#if __clang__
+// User is likely using static analysis tool.  Provide a declaration.
+extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
+#endif
+#define TT_INSN(ENCODING)  __builtin_rvtt_ttinsn(::ckernel::instrn_buffer, (ENCODING), 0, 0, 0)
+#define TTI_INSN(ENCODING) __builtin_rvtt_ttinsn(nullptr, (ENCODING), 0, 0, 0)
+#elif defined(ARCH_QUASAR) && defined(LLK_BOOT_BRISC)
+// The llk test infra uses TTI macros on brisc and somehow executes
+// it. So icky. See #58141
+#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".4byte ((%0 >> 30) & 3) | ((%0 & 0x3fffffff) << 2)" ::"n"(unsigned(ENCODING))); })
+#define TT_INSN(ENCODING)  ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
+#else
+#define TTI_INSN(ENCODING) ({ __asm__ __volatile__(".error \"TTI_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
+#define TT_INSN(ENCODING)  ({ __asm__ __volatile__(".error \"TT_INSN in non-tensix code\"" ::"X"(unsigned(ENCODING))); })
+#endif
+
 #define TT_OP(opcode, params) ((opcode << 24) + params)
 
 #define TT_OP_ADDGPR(OpB_is_Const, Result_GPR_Index, OpB_GPR_Index, OpA_GPR_Index) \
@@ -635,7 +650,7 @@
     TT_OP(0x86, (((lreg_a) << 16) + ((lreg_b) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPMUL(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1)  TT_INSN(TT_OP_SFPMUL(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1))
 #define TTI_SFPMUL(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1) TTI_INSN(TT_OP_SFPMUL(lreg_a, lreg_b, lreg_c, lreg_dest, instr_mod1))
-#define TT_OP_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1) TT_OP(0x98, (((lreg_a) << 16) + ((lreg_b) << 12) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
+#define TT_OP_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1) TT_OP(0x98, (((lreg_a) << 16) + ((lreg_b) << 12) + (9 << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1)        TT_INSN(TT_OP_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1))
 #define TTI_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1)       TTI_INSN(TT_OP_SFPMUL24(lreg_a, lreg_b, lreg_dest, instr_mod1))
 #define TT_OP_SFPMULI(imm16_math, lreg_dest, instr_mod1)      TT_OP(0x74, (((imm16_math) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))

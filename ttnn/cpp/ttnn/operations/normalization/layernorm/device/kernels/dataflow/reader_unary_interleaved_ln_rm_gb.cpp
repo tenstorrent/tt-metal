@@ -34,6 +34,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_in1(dfb::inb);
 #endif
+#ifdef COMPACT_FP32_PRE_ADD
+    DataflowBuffer dfb_in0_fp32(dfb::in_fp32);
+    DataflowBuffer dfb_in1_fp32(dfb::inb_fp32);
+#endif
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma(dfb::gamma);
 #endif
@@ -76,12 +80,13 @@ void kernel_main() {
 
     // Generate constant tiles for layernorm compute
 #ifndef USE_WELFORD
+    DataflowBuffer dfb_scaler(dfb::scaler);
     {
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
             dfb::scaler,
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW,
-            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(dfb_scaler);
         // Push count shared with the compute kernel's dfb_scaler pop count (issue #48487).
         constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
         constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tt::constants::TILE_WIDTH);
@@ -90,7 +95,7 @@ void kernel_main() {
                 dfb::scaler,
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
-                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(partial_last_tile_cols);
+                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(dfb_scaler, partial_last_tile_cols);
         }
     }
 #endif
@@ -131,6 +136,14 @@ void kernel_main() {
             }
             noc.async_read_barrier();
             dfb_in1.push_back(block.full_block_size());
+#ifdef COMPACT_FP32_PRE_ADD
+            // The aliases share input SRAM but maintain independent FIFO state. Publish the same
+            // tiles so compute can unpack both operands directly to FP32 DEST for the pre-add.
+            dfb_in0_fp32.reserve_back(block.full_block_size());
+            dfb_in0_fp32.push_back(block.full_block_size());
+            dfb_in1_fp32.reserve_back(block.full_block_size());
+            dfb_in1_fp32.push_back(block.full_block_size());
+#endif
 #else
             // Non-fused welford-fp32 alias: dfb_x_welford shares dfb_in0's memory but has its own
             // read/write pointers. After the data lands in dfb_in0, push dfb_x_welford by the same

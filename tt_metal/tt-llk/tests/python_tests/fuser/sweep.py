@@ -46,6 +46,7 @@ def _sfpu_operations(node: dict) -> list[str]:
     supported_ops = {
         "UnarySfpu": parser.UNARY_SFPU_OPS,
         "BinarySfpu": parser.BINARY_SFPU_OPS,
+        "TernarySfpu": parser.TERNARY_SFPU_OPS,
     }
     return sorted(op.name for op in supported_ops[node["type"]])
 
@@ -61,14 +62,14 @@ def _operand_formats(_node: dict) -> list[str]:
 
 _SFPU_OPERATION = SweepParameter(
     all_values=_sfpu_operations,
-    node_types=("UnarySfpu", "BinarySfpu"),
+    node_types=("UnarySfpu", "BinarySfpu", "TernarySfpu"),
     id_field="",
 )
 
 _SFPU_APPROXIMATION_MODE = SweepParameter(
     value_type=bool,
     all_values=(False, True),
-    node_types=("UnarySfpu", "BinarySfpu"),
+    node_types=("UnarySfpu", "BinarySfpu", "TernarySfpu"),
 )
 
 # Register new fields here; discovery and expansion are shared by every parameter.

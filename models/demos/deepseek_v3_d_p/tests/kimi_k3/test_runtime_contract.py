@@ -10,7 +10,7 @@ silently becomes a block argument and raises `TypeError` on the first layer, aft
 weight load. That is a long way to travel for a signature mismatch, and it is only reachable through
 `build_runtime`, which no eager test exercises.
 
-`tp_shard_kv` did exactly this: it arrived with GLM-5.2's 2D KV sharding (#51968), after the branch's
+`tp_shard_kv` did exactly this: it arrived with GLM-5.3's 2D KV sharding (#51968), after the branch's
 merge-base, and broke every runner construction until it was named.
 
 Hardware-free: this reads the call site's keyword list out of the source and binds it against the two
@@ -30,7 +30,12 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, TtK3KdaAttention, build_attention
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import (
+    K3AttnContext,
+    K3KdaChunk,
+    TtK3KdaAttention,
+    build_attention,
+)
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 
@@ -46,13 +51,13 @@ def _call_sites(callee: str, expected: int = 1) -> list[ast.Call]:
     ), f"expected {expected} {callee} call site(s), found {len(calls)}; the test needs updating, not deleting"
     for call in calls:
         assert not any(isinstance(arg, ast.Starred) for arg in call.args) and all(
-            kw.arg for kw in call.keywords
+            kw.arg or ast.unparse(kw.value).startswith("self._seed_kwargs(") for kw in call.keywords
         ), f"{callee} is called with */** expansion, which this test cannot bind; the test needs updating"
     return calls
 
 
 def _bind(func, call: ast.Call, *leading) -> None:
-    inspect.signature(func).bind(*leading, *[None] * len(call.args), **{kw.arg: None for kw in call.keywords})
+    inspect.signature(func).bind(*leading, *[None] * len(call.args), **{kw.arg: None for kw in call.keywords if kw.arg})
 
 
 def _model_cls_kwargs() -> list[str]:
@@ -88,7 +93,13 @@ def test_every_forward_call_binds_to_the_transformer():
 
 @pytest.mark.parametrize(
     "mtp_kwargs",
-    [{"mtp_union": object()}, {"on_mtp_complete": Mock()}, {"input_is_embedded": True}, {"provided_levels": 1}],
+    [
+        {"mtp_union": object()},
+        {"on_mtp_complete": Mock()},
+        {"input_is_embedded": True},
+        {"provided_levels": 1},
+        {"mtp_geometry": object()},
+    ],
 )
 def test_forward_rejects_mtp_arguments_before_device_work(expect_error, mtp_kwargs):
     model = object.__new__(TtKimiK3Transformer)
@@ -213,7 +224,37 @@ def test_kda_forward_uses_live_metadata_or_eager_position(monkeypatch, host_star
         assert any(call.args == (scalar,) for call in deallocate.call_args_list)
 
 
-@pytest.mark.parametrize("start,end", [(1, 64), (0, 33), (-32, 32), (32, 32), (64, 32)])
+def test_kda_chunk_shares_bounds_across_layers(monkeypatch):
+    kdas = [create_autospec(ttKDA, instance=True) for _ in range(2)]
+    device = object()
+    for kda in kdas:
+        kda.device = device
+        kda.forward.return_value = object(), object()
+    start, end = object(), object()
+    from_torch = Mock(side_effect=[start, end])
+    deallocate = Mock()
+    monkeypatch.setattr(ttnn, "from_torch", from_torch)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda device: object())
+    monkeypatch.setattr(ttnn, "deallocate", deallocate)
+    monkeypatch.setattr(ttnn, "all_gather", lambda tensor, **kwargs: tensor)
+    monkeypatch.setattr(ttnn, "squeeze", lambda tensor, **kwargs: tensor)
+    monkeypatch.setattr(ttnn, "unsqueeze", lambda tensor, **kwargs: tensor)
+    chunk = K3KdaChunk(5120, 10240)
+    ctx = K3AttnContext(actual_start=5120, actual_end=10240, kda_chunk=chunk)
+    for layer_idx, kda in enumerate(kdas):
+        TtK3KdaAttention(kda, layer_idx, 1, 1, ttnn.Topology.Linear, Mock()).forward(object(), ctx)
+
+    assert from_torch.call_count == 2
+    for kda in kdas:
+        assert kda.forward.call_args.kwargs == {"actual_start": start, "actual_end": end}
+    # The layers do not free the shared bounds; the transformer releases them once per chunk.
+    assert all(call.args not in ((start,), (end,)) for call in deallocate.call_args_list)
+    deallocate.reset_mock()
+    chunk.release()
+    assert [call.args for call in deallocate.call_args_list] == [(start,), (end,)]
+
+
+@pytest.mark.parametrize("start,end", [(1, 64), (33, 64), (-32, 32), (32, 32), (64, 32), (32, 31)])
 def test_kda_rejects_invalid_host_bounds_before_device_work(monkeypatch, expect_error, start, end):
     gather = Mock()
     monkeypatch.setattr(ttnn, "all_gather", gather)
@@ -223,7 +264,7 @@ def test_kda_rejects_invalid_host_bounds_before_device_work(monkeypatch, expect_
     gather.assert_not_called()
 
 
-def test_runtime_rejects_unaligned_end_before_reset_or_replay(monkeypatch, expect_error):
+def test_runtime_rejects_unaligned_start_before_reset_or_replay(monkeypatch, expect_error):
     from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
@@ -233,6 +274,20 @@ def test_runtime_rejects_unaligned_end_before_reset_or_replay(monkeypatch, expec
     monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_forward)
     # Positional arguments exercise the same binding used by the runner.
     with expect_error(ValueError, "32-token aligned"):
-        runtime.prefill_chunk(object(), object(), 0, 0, 33)
+        runtime.prefill_chunk(object(), object(), 0, 33, 64)
     runtime.model.kda_states.reset.assert_not_called()
     parent_forward.assert_not_called()
+
+
+def test_runtime_accepts_unaligned_end(monkeypatch):
+    """A prompt's last chunk ends at its real length, which need not be 32-aligned."""
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
+
+    runtime = object.__new__(TtKimiK3Runtime)
+    runtime.model = SimpleNamespace(kda_states=Mock())
+    parent_forward = create_autospec(TtPrefillRuntime.prefill_chunk)
+    monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_forward)
+    runtime.prefill_chunk(object(), object(), 0, 0, 33)
+    runtime.model.kda_states.reset.assert_called_once_with(0)
+    parent_forward.assert_called_once()

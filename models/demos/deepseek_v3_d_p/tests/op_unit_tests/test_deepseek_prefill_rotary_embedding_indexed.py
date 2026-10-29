@@ -468,9 +468,13 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device):
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 2 * 1024 * 1024}], indirect=True)
 @pytest.mark.parametrize("rotary_offset", [0, 32])
 @pytest.mark.parametrize(
-    "subshard, reuse_cos_sin", [(False, False), (True, False), (True, True)], ids=["keys", "queries", "queries-reuse"]
+    "subshard, reuse_cos_sin, prefix_width",
+    [(False, False, 0), (True, False, 0), (True, True, 0), (True, False, 512)],
+    ids=["keys", "queries", "queries-reuse", "queries-concat"],
 )
-def test_rotary_embedding_indexed_partial(mesh_device, rotary_offset, subshard, reuse_cos_sin, expect_error):
+def test_rotary_embedding_indexed_partial(
+    mesh_device, rotary_offset, subshard, reuse_cos_sin, prefix_width, expect_error
+):
     """Partial RoPE matches slice/rotate/concat and copies other channels exactly on replay."""
     sp, tp = mesh_device.shape
     # Keep each TP query shard tile-aligned on both meshes.
@@ -518,8 +522,36 @@ def test_rotary_embedding_indexed_partial(mesh_device, rotary_offset, subshard, 
     rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
     opts = {"seq_subshard_axis": 1 if subshard else None}
 
-    def partial(start):
-        return rope(x, cos, sin, trans, start, 0, rotary_dim=rotary_dim, rotary_offset=rotary_offset, **opts)
+    # Keep two buffers alive to exercise prefix address rebinding on cache hits.
+    prefix_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(2, 1))
+    host_prefixes = (
+        [
+            ttnn.from_torch(
+                torch.randn(*input_host.shape[:-1], prefix_width, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=prefix_mapper,
+            )
+            for _ in range(2)
+        ]
+        if prefix_width
+        else []
+    )
+    prefixes = [ttnn.to_device(t, mesh_device) for t in host_prefixes]
+
+    def partial(start, prefix=None):
+        return rope(
+            x,
+            cos,
+            sin,
+            trans,
+            start,
+            0,
+            rotary_dim=rotary_dim,
+            rotary_offset=rotary_offset,
+            concat_prefix=prefix,
+            **opts,
+        )
 
     with expect_error(RuntimeError, "rotary"):
         rope(x, cos, sin, trans, 0, 0, rotary_dim=64, rotary_offset=16, **opts)
@@ -528,18 +560,24 @@ def test_rotary_embedding_indexed_partial(mesh_device, rotary_offset, subshard, 
     with expect_error(RuntimeError, "rotary"):
         rope(x, cos, sin, trans, 0, 0, rotary_dim=32, **opts)
 
-    warmed = partial(metadata)
+    traced_prefix = prefixes[0] if prefixes else None
+    warmed = partial(metadata, traced_prefix)
     ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(warmed)
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    out = partial(metadata)
+    out = partial(metadata, traced_prefix)
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     try:
-        for start in (0, chunk_global, chunk_local + 32, 2 * chunk_global + chunk_local - 32):
+        entries = None
+        for i, start in enumerate((0, chunk_global, chunk_local + 32, 2 * chunk_global + chunk_local - 32)):
+            prefix = prefixes[i % 2] if prefixes else None
+            if prefixes:
+                ttnn.copy_host_to_device_tensor(host_prefixes[i % 2], prefix)
+                prefix_host = ttnn.to_torch(prefix, mesh_composer=composer)
             pe = ttnn.slice(x, [0, 0, 0, rotary_offset], [1, heads, local_rows, rotary_offset + rotary_dim])
             expected = rope(pe, cos, sin, trans, start, 0, **opts)
             expected_host = ttnn.to_torch(expected, mesh_composer=composer)
-            scalar = partial(start)
+            scalar = partial(start, prefix)
             scalar_host = ttnn.to_torch(scalar, mesh_composer=composer)
             for t in (pe, expected, scalar):
                 ttnn.deallocate(t)
@@ -549,9 +587,17 @@ def test_rotary_embedding_indexed_partial(mesh_device, rotary_offset, subshard, 
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
             ttnn.copy_host_to_device_tensor(host_start, metadata)
+            if prefixes:
+                ttnn.copy_host_to_device_tensor(host_prefixes[i % 2], traced_prefix)
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
             replay_host = ttnn.to_torch(out, mesh_composer=composer)
+            if entries is None:
+                entries = mesh_device.num_program_cache_entries()
+            assert mesh_device.num_program_cache_entries() == entries
             for result in (scalar_host, replay_host):
+                if prefixes:
+                    assert torch.equal(prefix_host, result[..., :prefix_width])
+                    result = result[..., prefix_width:]
                 assert_with_pcc(expected_host, result[..., rotary_offset : rotary_offset + rotary_dim], 0.9999)
                 assert torch.equal(input_host[..., :rotary_offset], result[..., :rotary_offset])
                 assert torch.equal(
@@ -688,6 +734,59 @@ def test_rotary_embedding_indexed_padded_default(device, use_metadata, expect_er
         ttnn.deallocate(out)
     with expect_error(RuntimeError, "rotary region must fit"):
         rope(x, c, s, trans, start, 0, rotary_dim=96)
+
+
+@pytest.mark.parametrize(
+    "prefix_memory_config, rotary_offset", [(ttnn.DRAM_MEMORY_CONFIG, 0), (ttnn.L1_MEMORY_CONFIG, 32)]
+)
+def test_rotary_embedding_indexed_concat_prefix(device, prefix_memory_config, rotary_offset, expect_error):
+    """The indexed writer must match a separate rotary plus concat, including mixed input memory configs."""
+    torch.manual_seed(42)
+
+    def upload(x, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        return ttnn.from_torch(
+            x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=memory_config
+        )
+
+    x = upload(torch.randn(1, 2, 32, 96, dtype=torch.bfloat16))
+    prefix = upload(torch.randn(1, 2, 32, 512, dtype=torch.bfloat16), prefix_memory_config)
+    cos = upload(torch.randn(1, 1, 32, 64, dtype=torch.bfloat16))
+    sin = upload(torch.randn(1, 1, 32, 64, dtype=torch.bfloat16))
+    trans = upload(get_rot_transformation_mat())
+    rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+
+    rotated = rope(x, cos, sin, trans, 0, 0, rotary_dim=64, rotary_offset=rotary_offset)
+    expected = ttnn.concat([prefix, rotated], dim=-1)
+    fused = rope(x, cos, sin, trans, 0, 0, concat_prefix=prefix, rotary_dim=64, rotary_offset=rotary_offset)
+    assert torch.equal(ttnn.to_torch(fused), ttnn.to_torch(expected))
+    if prefix_memory_config == ttnn.DRAM_MEMORY_CONFIG:
+        transposed_prefix = ttnn.from_torch(
+            torch.randn(1, 2, 32, 512, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            tile=ttnn.Tile((32, 32), transpose_tile=True),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        with expect_error(RuntimeError, "ordinary face order"):
+            rope(x, cos, sin, trans, 0, 0, concat_prefix=transposed_prefix, rotary_dim=64, rotary_offset=rotary_offset)
+
+
+@pytest.mark.parametrize("padded_shape", [(1, 2, 64, 512), (1, 2, 32, 544)])
+def test_rotary_embedding_indexed_concat_prefix_rejects_padding(device, padded_shape, expect_error):
+    def upload(tensor):
+        return ttnn.from_torch(tensor, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    x = upload(torch.randn(1, 2, 32, 64, dtype=torch.bfloat16))
+    cos, sin = _make_cos_sin(32, 64)
+    cos, sin, trans = upload(cos), upload(sin), upload(get_rot_transformation_mat())
+    raw_prefix = upload(torch.randn(padded_shape, dtype=torch.bfloat16))
+    prefix = ttnn.reshape(raw_prefix, (1, 2, 32, 512), padded_shape=padded_shape)
+    assert tuple(prefix.shape) == (1, 2, 32, 512)
+    assert tuple(prefix.padded_shape) == padded_shape
+    message = "padded leading shape" if padded_shape[2] != 32 else "extra padding"
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(x, cos, sin, trans, 0, 0, concat_prefix=prefix)
 
 
 @pytest.mark.parametrize("cos_width, sin_width", [(33, 64), (64, 33), (33, 33)])

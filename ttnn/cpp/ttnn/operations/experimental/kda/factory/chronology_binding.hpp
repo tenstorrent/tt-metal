@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include <algorithm>
+#include <initializer_list>
 #include <optional>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/metal_v2_artifacts.hpp"
@@ -16,19 +17,21 @@ inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
     const ttnn::MeshDevice& device,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
-    const tt::tt_metal::experimental::KernelSpecName& chronology_reader) {
+    std::initializer_list<tt::tt_metal::experimental::KernelSpecName> chronology_readers) {
     using namespace tt::tt_metal::experimental;
     TT_FATAL(sequence_parallel_axis < device.shape().dims(), "KDA: invalid sequence_parallel_axis");
     ttnn::device_operation::MeshWorkloadArtifacts workload;
     for (const auto& coordinate : tensor_coords.coords()) {
         auto spec = artifacts.spec;
-        auto reader = std::find_if(spec.kernels.begin(), spec.kernels.end(), [&](const auto& kernel) {
-            return kernel.unique_id == chronology_reader;
-        });
-        TT_FATAL(reader != spec.kernels.end(), "KDA: chronology reader is absent from the program");
-        reader->compile_time_args.insert({"sp_rank", coordinate[sequence_parallel_axis]});
-        reader->compile_time_args.insert({"sp_size", device.shape()[sequence_parallel_axis]});
-        reader->compile_time_args.insert({"local_rows", local_rows});
+        for (const auto& chronology_reader : chronology_readers) {
+            auto reader = std::find_if(spec.kernels.begin(), spec.kernels.end(), [&](const auto& kernel) {
+                return kernel.unique_id == chronology_reader;
+            });
+            TT_FATAL(reader != spec.kernels.end(), "KDA: chronology reader is absent from the program");
+            reader->compile_time_args.insert({"sp_rank", coordinate[sequence_parallel_axis]});
+            reader->compile_time_args.insert({"sp_size", device.shape()[sequence_parallel_axis]});
+            reader->compile_time_args.insert({"local_rows", local_rows});
+        }
         workload.programs.push_back({
             .range = ttnn::MeshCoordinateRange(coordinate),
             .spec = std::move(spec),
@@ -37,7 +40,28 @@ inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
     }
     return workload;
 }
+inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
+    const ttnn::device_operation::ProgramArtifacts& artifacts,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const ttnn::MeshDevice& device,
+    uint32_t sequence_parallel_axis,
+    uint32_t local_rows,
+    const tt::tt_metal::experimental::KernelSpecName& chronology_reader) {
+    return chronology_workload(
+        artifacts, tensor_coords, device, sequence_parallel_axis, local_rows, {chronology_reader});
+}
 
+inline void bind_chronology_channel(
+    tt::tt_metal::experimental::ProgramSpec& spec,
+    tt::tt_metal::experimental::KernelSpec& reader,
+    tt::tt_metal::experimental::KernelSpec& compute) {
+    using namespace tt::tt_metal::experimental;
+    const DFBSpecName channel{"chronology_compute"};
+    spec.dataflow_buffers.push_back(
+        {.unique_id = channel, .entry_size = 32, .num_entries = 1, .data_format_metadata = tt::DataFormat::UInt32});
+    reader.dfb_bindings.push_back(ProducerOf(channel, "chronology_compute"));
+    compute.dfb_bindings.push_back(ConsumerOf(channel, "chronology_compute"));
+}
 inline void bind_chronology(
     tt::tt_metal::experimental::ProgramSpec& spec,
     tt::tt_metal::experimental::ProgramRunArgs& run,
@@ -49,12 +73,21 @@ inline void bind_chronology(
     const auto& tensor = actual_start.mesh_tensor();
     spec.tensor_parameters.push_back({.unique_id = name, .spec = tensor.tensor_spec()});
     run.tensor_args.emplace(name, tensor);
-    const DFBSpecName channel{"chronology_compute"};
-    spec.dataflow_buffers.push_back(
-        {.unique_id = channel, .entry_size = 32, .num_entries = 1, .data_format_metadata = tt::DataFormat::UInt32});
     reader.tensor_bindings.push_back({name, "actual_start"});
-    reader.dfb_bindings.push_back(ProducerOf(channel, "chronology_compute"));
-    compute.dfb_bindings.push_back(ConsumerOf(channel, "chronology_compute"));
+    bind_chronology_channel(spec, reader, compute);
+}
+// Leave actual_start unbound when absent; kernels resolve it with get_token_if_present.
+inline void bind_chronology(
+    tt::tt_metal::experimental::ProgramSpec& spec,
+    tt::tt_metal::experimental::ProgramRunArgs& run,
+    const std::optional<Tensor>& actual_start,
+    tt::tt_metal::experimental::KernelSpec& reader,
+    tt::tt_metal::experimental::KernelSpec& compute) {
+    if (actual_start) {
+        bind_chronology(spec, run, *actual_start, reader, compute);
+    } else {
+        bind_chronology_channel(spec, reader, compute);
+    }
 }
 inline void bind_actual_end(
     tt::tt_metal::experimental::ProgramSpec& spec,

@@ -84,7 +84,7 @@ void issue_trace_commands(
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
-    CoreCoord dispatch_core) {
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state) {
     MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
@@ -101,28 +101,18 @@ void issue_trace_commands(
     }
 
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
-        const auto& noc_data_start_idx =
-            mesh_device->impl().noc_data_start_index(id, desc.num_traced_programs_needing_go_signal_unicast);
-
-        const auto& num_noc_unicast_txns =
-            desc.num_traced_programs_needing_go_signal_unicast ? mesh_device->impl().num_virtual_eth_cores(id) : 0;
         auto index = *id;
 
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
         command_sequence.add_dispatch_go_signal_mcast(
             expected_num_workers_completed[index],
             metal_ctx.hal().make_go_msg_u32(
-                dev_msgs::RUN_MSG_REPLAY_TRACE,
-                dispatch_core.x,
-                dispatch_core.y,
-                metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(index) +
-                    metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id)),
+                dev_msgs::RUN_MSG_REPLAY_TRACE, metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(index)),
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
             desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-            num_noc_unicast_txns,
-            noc_data_start_idx,
+            worker_launch_message_buffer_state[index].get_mcast_wptr(),
             dispatcher_for_go_signal);
     }
 
@@ -135,9 +125,6 @@ void issue_trace_commands(
         if (desc.num_traced_programs_needing_go_signal_multicast) {
             expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
         }
-        if (desc.num_traced_programs_needing_go_signal_unicast) {
-            expected_num_workers += mesh_device->impl().num_virtual_eth_cores(id);
-        }
 
         if (metal_ctx.get_dispatch_query_manager().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
@@ -145,15 +132,13 @@ void issue_trace_commands(
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
                 expected_num_workers,
-                cq_id,
                 1);
         }
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
-            expected_num_workers,
-            cq_id);
+            expected_num_workers);
     }
 
     uint32_t page_size_log2 = __builtin_ctz(dispatch_md.trace_buffer_page_size);
@@ -213,10 +198,6 @@ void update_worker_state_post_trace_execution(
         if (desc.num_traced_programs_needing_go_signal_multicast) {
             worker_launch_message_buffer_state[index].set_mcast_wptr(
                 desc.num_traced_programs_needing_go_signal_multicast);
-        }
-        if (desc.num_traced_programs_needing_go_signal_unicast) {
-            worker_launch_message_buffer_state[index].set_unicast_wptr(
-                desc.num_traced_programs_needing_go_signal_unicast);
         }
         // The config buffer manager is unaware of what memory is used inside the trace, so mark all memory as used so
         // that it will force a stall and avoid stomping on in-use state.

@@ -50,11 +50,6 @@ def _digest(tensor):
     return hashlib.sha256(tensor.contiguous().numpy().tobytes()).hexdigest()[:16]
 
 
-@pytest.mark.parametrize("num_frames,expected", [(1, 5), (5, 5), (6, 22), (22, 22), (120, 124), (192, 192)])
-def test_align_num_frames(num_frames, expected):
-    assert p.align_num_frames(num_frames) == expected
-
-
 @pytest.mark.parametrize("num_frames,latents", [(5, 2), (22, 7), (39, 12), (124, 37), (192, 57), (362, 107)])
 def test_video_latent_num_frames(num_frames, latents):
     assert p.video_latent_num_frames(num_frames) == latents

@@ -4,6 +4,7 @@
 
 #include <mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt_stl/fmt.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
@@ -41,11 +42,8 @@
 #include "impl/buffers/semaphore.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tracy/Tracy.hpp"
-#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
-#include "tt_metal/impl/debug/inspector/inspector.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -79,23 +77,23 @@ std::optional<MeshCoordinateRange> find_intersection(
 
 }  // namespace
 
-MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) { Inspector::mesh_workload_created(this); }
+MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {}
 
-MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
+MeshWorkloadImpl::~MeshWorkloadImpl() = default;
 
 MeshWorkloadImpl::FinalizedMetadata& MeshWorkloadImpl::get_finalized_metadata() {
     TT_ASSERT(finalized_metadata_.has_value());
     return *finalized_metadata_;
 }
 
-void MeshWorkloadImpl::set_finalized(uint32_t max_program_kernels_sizeB) {
+void MeshWorkloadImpl::set_finalized(uint32_t max_program_kernels_sizeB, int mesh_device_id) {
     TT_ASSERT(!is_finalized());
-    FinalizedMetadata metadata{.max_program_kernels_sizeB = max_program_kernels_sizeB};
+    FinalizedMetadata metadata{
+        .max_program_kernels_sizeB = max_program_kernels_sizeB, .mesh_device_id = mesh_device_id};
     for (auto& [device_range, program] : programs_) {
         auto& program_impl = program.impl();
         metadata.num_program_devices += device_range.shape().mesh_size();
         metadata.runs_on_noc_multicast_only_cores |= program_impl.runs_on_noc_multicast_only_cores();
-        metadata.runs_on_noc_unicast_only_cores |= program_impl.runs_on_noc_unicast_only_cores();
 
         const auto& program_config_sizes = program_impl.get_program_config_sizes();
         if (metadata.program_config_sizes.empty()) {
@@ -126,7 +124,6 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
         "Program range {} overlaps with the previously added range {}",
         device_range,
         *potential_intersection);
-    Inspector::mesh_workload_add_program(this, device_range, program.impl().get_id());
     programs_[device_range] = std::move(program);
 }
 
@@ -136,6 +133,15 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
 }
 
 void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
+    if (is_finalized()) {
+        const int finalized_mesh_device_id = get_finalized_metadata().mesh_device_id;
+        TT_FATAL(
+            finalized_mesh_device_id == mesh_device->id(),
+            "MeshWorkload was finalized for MeshDevice {} and cannot be compiled for MeshDevice {}. Reusing "
+            "MeshWorkloads across MeshDevices is currently not supported.",
+            finalized_mesh_device_id,
+            mesh_device->id());
+    }
     // Multi-Step Compile:
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
@@ -242,6 +248,38 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
     }
 }
 
+std::shared_ptr<MeshBuffer> MeshWorkloadImpl::prepare_for_command_list(MeshCommandQueue& mesh_cq) {
+    auto* mesh_device = mesh_cq.device();
+    TT_FATAL(mesh_device != nullptr, "Cannot prepare a MeshWorkload using a command queue without a MeshDevice");
+    TT_FATAL(!programs_.empty(), "Cannot prepare an empty MeshWorkload for a command list");
+
+    for (const auto& [device_range, program] : programs_) {
+        TT_FATAL(
+            program.impl().created_from_spec(),
+            "Command lists only support Metal 2.0 programs; program {} on mesh range {} was not created from a "
+            "ProgramSpec",
+            program.impl().get_id(),
+            device_range);
+    }
+
+    compile(mesh_device);
+
+    const ProgramBinaryStatus binary_status = get_program_binary_status(mesh_device->id());
+    TT_FATAL(
+        binary_status != ProgramBinaryStatus::InFlight,
+        "Cannot prepare MeshWorkload {} for a command list while its kernel binaries are in flight",
+        id);
+
+    if (binary_status == ProgramBinaryStatus::NotSent) {
+        load_binaries(mesh_cq);
+        mesh_cq.finish();
+        set_program_binary_status(mesh_device->id(), ProgramBinaryStatus::Committed);
+    }
+
+    generate_dispatch_commands(mesh_cq);
+    return kernel_bin_buf_;
+}
+
 ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh_id) const {
     if (program_binary_status_.contains(mesh_id)) {
         return program_binary_status_.at(mesh_id);
@@ -250,14 +288,7 @@ ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh
 }
 
 void MeshWorkloadImpl::set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status) {
-    // Enqueue re-commits the status on every launch, but the Inspector record describes a
-    // transition and writing one costs a mutex and a YAML append. Report only real changes.
-    const auto [entry, inserted] = program_binary_status_.try_emplace(mesh_id, status);
-    if (!inserted && entry->second == status) {
-        return;
-    }
-    entry->second = status;
-    Inspector::mesh_workload_set_program_binary_status(this, mesh_id, status);
+    program_binary_status_[mesh_id] = status;
 }
 
 void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
@@ -277,10 +308,6 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
 
 bool MeshWorkloadImpl::runs_on_noc_multicast_only_cores() {
     return get_finalized_metadata().runs_on_noc_multicast_only_cores;
-}
-
-bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
-    return get_finalized_metadata().runs_on_noc_unicast_only_cores;
 }
 
 // kernels_ is sized to the programmable-core-type count by finalize_offsets, which reaches this
@@ -362,6 +389,15 @@ void MeshWorkloadImpl::set_last_used_command_queue_for_testing(MeshCommandQueue*
 
 MeshCommandQueue* MeshWorkloadImpl::get_last_used_command_queue() const { return last_used_command_queue_; }
 
+namespace {
+// Emulated devices launch each program through the slow-dispatch path (tt-emule's queue), as slow dispatch does,
+// so their workloads carry per-program configs rather than the FD workload finalization.
+bool uses_fd_program_configs(MetalEnvImpl& env) {
+    return env.get_rtoptions().get_fast_dispatch() &&
+           env.get_cluster().get_target_device_type() != tt::TargetDevice::Emule;
+}
+}  // namespace
+
 ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index, bool using_fast_dispatch) {
     TT_FATAL(!programs_.empty(), "Program Configs can only be queried if a MeshWorkload is populated.");
     const bool requires_finalized_config = using_fast_dispatch && !is_service_workload_.value_or(false);
@@ -377,10 +413,10 @@ uint32_t MeshWorkloadImpl::get_sem_base_addr(
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
     auto& env = mesh_device->impl().metal_env();
-    return base_addr + get_program_config(
-                           env.get_hal().get_programmable_core_type_index(programmable_core_type),
-                           env.get_rtoptions().get_fast_dispatch())
-                           .sem_offset;
+    return base_addr +
+           get_program_config(
+               env.get_hal().get_programmable_core_type_index(programmable_core_type), uses_fd_program_configs(env))
+               .sem_offset;
 }
 
 uint32_t MeshWorkloadImpl::get_sem_size(
@@ -404,10 +440,10 @@ uint32_t MeshWorkloadImpl::get_cb_base_addr(
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
     auto& env = mesh_device->impl().metal_env();
-    return base_addr + get_program_config(
-                           env.get_hal().get_programmable_core_type_index(programmable_core_type),
-                           env.get_rtoptions().get_fast_dispatch())
-                           .cb_offset;
+    return base_addr +
+           get_program_config(
+               env.get_hal().get_programmable_core_type_index(programmable_core_type), uses_fd_program_configs(env))
+               .cb_offset;
 }
 
 uint32_t MeshWorkloadImpl::get_cb_size(
@@ -456,14 +492,14 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     ttsl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     const uint32_t max_program_kernels_sizeB = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
-        extract_context_id(mesh_device),
+        mesh_device->impl().get_context_id(),
         mesh_device,
         kernels_getter,
         kernel_groups_getter,
         semaphores_getter,
         programs);
 
-    set_finalized(max_program_kernels_sizeB);
+    set_finalized(max_program_kernels_sizeB, mesh_device->id());
 }
 
 // MeshWorkload PIMPL Implementation
@@ -511,3 +547,16 @@ uint32_t MeshWorkload::get_cb_size(
 }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental::program_preparation {
+
+void prepare(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& workload) {
+    // EnqueueMeshWorkload is a no-op on a MeshDevice without local devices, so there is nothing to prepare.
+    TT_FATAL(!mesh_device.get_device_ids().empty(), "Cannot prepare a MeshWorkload for an inactive MeshDevice");
+    // Checked before compile(), which finalizes the workload; a finalized workload rejects add_program(), so a later
+    // check would leave the caller unable to fix the workload and retry.
+    TT_FATAL(!workload.get_programs().empty(), "Cannot prepare a MeshWorkload that has no programs");
+    workload.impl().compile(&mesh_device);
+}
+
+}  // namespace tt::tt_metal::experimental::program_preparation

@@ -45,6 +45,7 @@ class Attention(Module):
         k_chunk_size: int = 512,
         q_chunk_size: int = 128,
         is_fsdp: bool = False,
+        exp_approx_mode: bool = False,
     ) -> None:
         super().__init__()
 
@@ -76,7 +77,10 @@ class Attention(Module):
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
-            exp_approx_mode=False,  # NOTE: False is more correct
+            # Only the joint SDPA kernel (sequence_parallel.factor == 1) honours this flag; the streaming
+            # ring-joint kernel used when factor > 1 always runs the approximate exponential. False is more
+            # accurate, but on Wormhole the bf16-dest accurate exponential costs ~10x per QK tile (#57180).
+            exp_approx_mode=exp_approx_mode,
         )
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,

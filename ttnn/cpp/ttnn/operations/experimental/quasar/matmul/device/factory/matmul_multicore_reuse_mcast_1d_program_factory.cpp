@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -87,8 +88,8 @@ uint32_t get_preferred_noc(
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_program_and_create_override_variables(
     tt_metal::Program& program,
     const ttnn::Tensor& a,
-    tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -153,7 +154,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -1116,8 +1120,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_program_and_create_override_variables(
     tt_metal::Program& program,
     const ttnn::Tensor& a,
-    tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -1163,11 +1167,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     bool fuse_op = false;
 
     uint32_t num_blocks = K / in0_block_w;
-    // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
-    // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
-    // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
-    // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_tensor.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -1180,7 +1182,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -1976,8 +1981,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     tt_metal::Program& program,
     const ttnn::Tensor& a,
     const std::vector<ttnn::Tensor>& b_tensors,
-    tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -2206,12 +2211,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
     tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
 
-    uint32_t output_cb_index = base_cb_index + 5;  // output operands start at index 16
-    uint32_t interm0_cb_index = base_cb_index + 6;
+    const uint32_t output_cb_index_base = base_cb_index + 5;  // output operands start at index 16
+    const uint32_t interm0_cb_index_base = base_cb_index + 6;
     tt_metal::CircularBufferConfig interm0_cb_config =
-        tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
+        tt_metal::CircularBufferConfig(0, {{interm0_cb_index_base, interm0_data_format}});
     tt_metal::CircularBufferConfig output_cb_config =
-        tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
+        tt_metal::CircularBufferConfig(0, {{output_cb_index_base, output_data_format}});
     std::vector<tt::tt_metal::CBHandle> cb_outputs;
     std::vector<tt::tt_metal::CBHandle> output_cb_indices;
     std::vector<tt::tt_metal::CBHandle> interm_cb_indices;
@@ -2219,17 +2224,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // interm0
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
-            {interm0_cb_index, interm0_data_format},
+            {interm0_cb_index_base, interm0_data_format},
         };
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
-                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
-                                .set_tile_dims(interm0_cb_index, output_tile);
+                                .set_page_size(interm0_cb_index_base, interm0_single_tile_size)
+                                .set_tile_dims(interm0_cb_index_base, output_tile);
 
         tt_metal::CreateCircularBuffer(program, all_cores, interm0_cb_config);
 
         for (uint32_t i = 0; i < out_buffers.size(); ++i) {
             const auto& out_buffer = out_buffers[i];
-            output_cb_index += i * 2;  // 5, 7, 9...
+            const uint32_t output_cb_index = output_cb_index_base + i * 2;  // 5, 7, 9...
             TT_FATAL(
                 output_cb_index <= tt::CBIndex::c_31,
                 "Output circular buffer index {} exceeds maximum value {}",
@@ -2246,13 +2251,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
             cb_outputs.push_back(cb_output);
             output_cb_indices.push_back(output_cb_index);
-            interm_cb_indices.push_back(interm0_cb_index);
+            interm_cb_indices.push_back(interm0_cb_index_base);
         }
     } else {
         for (uint32_t i = 0; i < out_buffers.size(); ++i) {
             const auto& out_buffer = out_buffers[i];
-            output_cb_index += i * 2;   // 5, 7, 9...
-            interm0_cb_index += i * 2;  // 6, 8, 10...
+            const uint32_t output_cb_index = output_cb_index_base + i * 2;    // 5, 7, 9...
+            const uint32_t interm0_cb_index = interm0_cb_index_base + i * 2;  // 6, 8, 10...
             TT_FATAL(
                 output_cb_index <= tt::CBIndex::c_31,
                 "Output circular buffer index {} exceeds maximum value {}",
@@ -2425,6 +2430,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
                 {"cb_sync2", sync_cb2_index},
                 {"cb_remote", remote_cb_index}}});
 
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        for (const auto interm_cb_index : interm_cb_indices) {
+            unpack_to_dest_mode[interm_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
+
     auto mm_kernel = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/compute/"
@@ -2434,6 +2447,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -2931,8 +2945,8 @@ void override_program_parameters(
 // [[maybe_unused]] suppresses -Wunused-function until it is removed in a follow-up cleanup.
 [[maybe_unused]] static ProgramDescriptor create_program_mcast_in0_descriptor(
     const ttnn::Tensor& a,
-    tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -3010,7 +3024,10 @@ void override_program_parameters(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -3966,8 +3983,8 @@ void override_program_parameters(
 // create_program_artifacts port. [[maybe_unused]] suppresses -Wunused-function pending removal.
 [[maybe_unused]] static ProgramDescriptor create_program_mcast_in1_descriptor(
     const ttnn::Tensor& a,
-    tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -4013,11 +4030,9 @@ void override_program_parameters(
     bool fuse_op = false;
 
     uint32_t num_blocks = K / in0_block_w;
-    // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
-    // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
-    // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
-    // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_tensor.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -4041,7 +4056,10 @@ void override_program_parameters(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -4894,7 +4912,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::distributed::MeshDevice* device = a.device();
+    const tt_metal::distributed::MeshDevice& device = a.mesh_tensor().device();
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -4935,7 +4953,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         in1_tile.get_width());
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
@@ -4998,7 +5016,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             program,
             a,
             b_tensors,
-            *device,
+            device,
             math_fidelity,
             fp32_dest_acc_en,
             math_approx_mode,
@@ -5046,7 +5064,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     CoreCoord sub_device_start_core = {0, 0};
     if (sub_device_id.has_value()) {
         auto sd_worker_cores =
-            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+            device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
         auto bbox = sd_worker_cores.bounding_box();
         TT_FATAL(
             sd_worker_cores.num_cores() == bbox.size(),
@@ -5069,7 +5087,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         return reuse_mcast_1d_optimized_helpers::process_mcast_in0_program_and_create_override_variables(
             program,
             a,
-            *device,
+            device,
             math_fidelity,
             fp32_dest_acc_en,
             math_approx_mode,
@@ -5115,7 +5133,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     return reuse_mcast_1d_optimized_helpers::process_mcast_in1_program_and_create_override_variables(
         program,
         a,
-        *device,
+        device,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode,
@@ -5376,8 +5394,8 @@ m2::KernelSpec make_compute_kernel(
 // ---------------------------------------------------------------------------------------------------
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     const ttnn::Tensor& a,
-    tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -5445,7 +5463,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -5666,6 +5687,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         mm_kernel_in1_sender_writer_defines["BIAS_SHARDED"] = "1";
     }
     if (output_is_sharded) {
+        // The in1 writer pops batch * out_shard_tiles tiles in one wait_front/pop_front call, which takes a uint16_t.
+        TT_FATAL(
+            in0_B * out_shard_tiles <= std::numeric_limits<uint16_t>::max(),
+            "matmul_multicore_reuse_mcast_1d: a sharded output of {} tiles per core exceeds the maximum of {} "
+            "supported by this program factory",
+            in0_B * out_shard_tiles,
+            std::numeric_limits<uint16_t>::max());
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
     }
     if (in0_mcast_receiver_num_cores == 1) {
@@ -6097,6 +6125,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             {"in1_mcast_num_cores", 0u},
             {"KtNt", K * N},
             {"batch", in0_B},
+            {"out_block_num_tiles", out_block_tiles},
             {"bcast_B", (uint32_t)bcast_batch},
             {"batchB", 0u},
             {"sparsity_pagesize", 0u},
@@ -6450,8 +6479,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
 // ---------------------------------------------------------------------------------------------------
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     const ttnn::Tensor& a,
-    tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    const tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -6496,7 +6525,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     const bool fuse_op = false;
 
     uint32_t num_blocks = K / in0_block_w;
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_tensor.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
@@ -6513,7 +6544,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -6681,6 +6715,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         mm_kernel_in0_sender_defines["EXTRACT_SHARD_SUB_BLOCKS"] = "1";
     }
     if (output_is_sharded) {
+        // The in1 writer pops batch * out_shard_tiles tiles in one wait_front/pop_front call, which takes a uint16_t.
+        TT_FATAL(
+            in0_B * out_shard_tiles <= std::numeric_limits<uint16_t>::max(),
+            "matmul_multicore_reuse_mcast_1d: a sharded output of {} tiles per core exceeds the maximum of {} "
+            "supported by this program factory",
+            in0_B * out_shard_tiles,
+            std::numeric_limits<uint16_t>::max());
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
     }
@@ -6968,6 +7009,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             {"in1_mcast_num_cores", in1_mcast_receiver_num_cores - 1},
             {"KtNt", K * N},
             {"batch", reuse_in0_in_CB ? in1_B : in0_B},
+            {"out_block_num_tiles", out_block_tiles},
             {"bcast_B", (uint32_t)bcast_batch},
             {"batchB", 0u},
             {"sparsity_pagesize", 0u},
@@ -7053,6 +7095,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             {"num_blocks_w_dim", out_num_blocks_x},
             {"num_blocks_h_dim", out_num_blocks_y},
             {"batch", reuse_in0_in_CB ? in1_B : in0_B},
+            {"out_block_num_tiles", out_block_tiles},
             {"out_tensor_stride_w", 1u},
             {"out_tensor_stride_h", N},
             {"out_tensor_next_subblock_stride_w", out_subblock_w},
@@ -7454,7 +7497,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::distributed::MeshDevice& device = in0_tensor.mutable_device();
+    const tt_metal::distributed::MeshDevice& device = in0_tensor.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device.arch(), compute_kernel_config);

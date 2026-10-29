@@ -7,7 +7,7 @@
 #include <api/dataflow/dataflow_api.h>
 #include "api/dataflow/dataflow_buffer.h"
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "ttnn/cpp/ttnn/operations/pool/device/kernels/experimental_device_api.hpp"
 
 #define RM_DF_ALWI inline __attribute__((always_inline))
@@ -105,10 +105,10 @@ rm_compute_w_chunk_bytes(uint32_t wt_base, uint32_t wt_in_chunk, uint32_t valid_
 //
 // ClearTemplateSrc is the opaque return type of experimental::local_addr() — templated so callers
 // don't need to spell it out.
-template <typename ClearTemplateSrc>
+template <typename DFB, typename ClearTemplateSrc>
 RM_DF_ALWI void rm_fill_page_with_clear_template(
     Noc& noc,
-    DataflowBuffer& cb_rm,
+    DFB& cb_rm,
     uint32_t region_bytes,
     const ClearTemplateSrc& clear_template_src,
     uint32_t clear_template_bytes) {

@@ -51,16 +51,16 @@ case "${MODEL:-}" in
   KIMI_K2_7)
     TEST_FUNC="test_kimi_prefill_transformer_chunked_perf"
     VARIANT_ID="kimi_k2_7"; LAYERS_ID="L61"; NODE_SUFFIX="-$MARGIN_ID-$TRACE_ID"
-    ENV_VARS='KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320'
+    ENV_VARS='KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320'
     ;;
-  GLM5_2)
+  GLM5_3)
     TEST_FUNC="test_glm_prefill_transformer_chunked_no_pcc"
     # The GLM test has no perf_margin param, so its node id has no margin token.
-    VARIANT_ID="glm52"; LAYERS_ID="L78"; NODE_SUFFIX="-$TRACE_ID"
-    ENV_VARS='GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8 TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k'
+    VARIANT_ID="glm53"; LAYERS_ID="L78"; NODE_SUFFIX="-$TRACE_ID"
+    ENV_VARS='GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4 TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k'
     ;;
   *)
-    echo "ERROR: set MODEL to one of: KIMI_K2_7 | GLM5_2  (got '${MODEL:-<unset>}')" >&2
+    echo "ERROR: set MODEL to one of: KIMI_K2_7 | GLM5_3  (got '${MODEL:-<unset>}')" >&2
     echo "  e.g.  export MODEL=KIMI_K2_7" >&2
     # Sourced, so return; the || exit covers the case where this file is executed directly.
     return 1 2>/dev/null || exit 1
@@ -88,6 +88,25 @@ esac
 
 # Seconds without log growth before a still-running iteration is flagged STALE.
 STALE_SECS="${STALE_SECS:-240}"
+
+# Hang detection, opt-in with TRIAGE=1. HANG_SECS arms metal's dispatch watchdog: the timer resets on
+# every dispatch advance, so it means "no dispatch progress for N s", not "the op must finish in N s".
+# On expiry metal system()s the triage command below from inside the hung pytest, and that command then
+# kill -9s the pytest ($PPID of system()'s shell): left alive, metal would tear the hung mesh down one
+# device at a time, each waiting out the timeout — about an hour on a galaxy. The loop's next iteration
+# resets the galaxy as usual. 120s because a 55k chunk has legitimate gaps far longer than CI's 5s default.
+TRIAGE="${TRIAGE:-0}"
+HANG_SECS="${HANG_SECS:-120}"
+
+triage_out() { printf "%s/crash_triage_%02d.csv" "$1" "$2"; }
+
+# Env prefix arming hang detection for one iteration: triage_env <log_dir> <n>. Empty when TRIAGE!=1:
+# arming the watchdog also bounds metal's own core waits, so it is opt-in.
+triage_env() {
+  [ "$TRIAGE" = "1" ] || return 0
+  printf 'TT_METAL_OPERATION_TIMEOUT_SECONDS=%s TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=%q ' "$HANG_SECS" \
+    "$TT_METAL_HOME/python_env/bin/python $TT_METAL_HOME/tools/tt-triage.py --disable-progress --run=dump_op_mesh --run=check_dram_health --run=dump_callstacks --llm-output --llm-output-path=$(triage_out "$1" "$2"); kill -9 \$PPID"
+}
 
 # Path of the Nth outer-iteration log (zero-padded): log_for 3 -> <dir>/log_03
 log_for() { printf "%s/log_%02d" "$1" "$2"; }
@@ -157,7 +176,7 @@ crash_snapshot() {
 
   {
     echo "=== crash snapshot: iteration $n on $(hostname -s) at $(date '+%F %T %Z')"
-    echo "exit=$rc ($(sig_name "$rc"))   log=$log"
+    echo "exit=$rc ($(sig_name "$rc"))   $(phase_split "$log" "$(stat -c %Y "$log")")   log=$log"
     echo
     echo "--- hugepages (1 GB pool: one page per PCIe device, $ndev bound)"
     printf "1G  nr=%s free=%s resv=%s surplus=%s\n" \
@@ -207,19 +226,22 @@ scan_log_dir() {
     fi
     mtime=$(stat -c %Y "$f" 2>/dev/null || echo 0)
     split=$(phase_split "$f" "$mtime")
-    if grep -qE 'smoke test passed|Chunked prefill no-PCC run done|^=+.*1 passed' "$f" 2>/dev/null; then
+    if [ -s "$(triage_out "$dir" "$i")" ]; then
+      details+=("  $N: HANG   triaged -> $(basename "$(triage_out "$dir" "$i")")  $split")
+      ((hang++))
+    elif grep -qE 'smoke test passed|Chunked prefill no-PCC run done|^=+.*1 passed' "$f" 2>/dev/null; then
       elapsed=$(grep -oE '[0-9]+\.[0-9]+s \([0-9:]+\)' "$f" | tail -1)
       details+=("  $N: PASS  $elapsed  $split")
       ((pass++))
     elif grep -qE '^=+.*(1 failed|1 error)' "$f" 2>/dev/null; then
-      details+=("  $N: FAIL")
+      details+=("  $N: FAIL  $split")
       ((fail++))
     elif rc=$(grep -oE 'TEST_DONE_EXIT=[0-9]+' "$f" 2>/dev/null | tail -1 | cut -d= -f2) &&
       [ -n "$rc" ] && [ "$rc" -ge 128 ]; then
       # Killed by a signal: pytest never printed a summary, so the PASS/FAIL greps
       # above both miss it and the mtime logic below would call it HANG?. See
       # crash_NN.txt in this dir for the host state at the time.
-      details+=("  $N: CRASH  $(sig_name "$rc")")
+      details+=("  $N: CRASH  $(sig_name "$rc")  $split")
       ((crash++))
     elif grep -q 'Fatal Python error' "$f" 2>/dev/null; then
       # Same thing caught mid-flight: the faulthandler dump is in the log but the

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""S3 gate: end-to-end CER vs the HuggingFace reference, through the qwen3_vl generator vLLM also uses.
+"""S3 gates: end-to-end CER vs the HuggingFace reference and vs corpus ground truth, through the qwen3_vl generator vLLM also uses.
 
 Run::
 
@@ -15,18 +15,21 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import unicodedata
 
 import torch
 from PIL import Image
 
 import ttnn
+from models.demos.blackhole.paddleocr_vl.tests.ocr_corpus import CORPUS, render
 from models.demos.blackhole.paddleocr_vl.tt.common import multimodal_rope_from_hf, splice_image_embeddings
 from models.demos.blackhole.paddleocr_vl.tt.model import Transformer
-from models.demos.blackhole.paddleocr_vl.tt.vision.model import DropInVisionTransformer
+from models.demos.blackhole.paddleocr_vl.tt.vision.model import VISION_BUCKETS, DropInVisionTransformer
 from models.demos.blackhole.paddleocr_vl.tt.vision.vision_model_config import VisionModelArgs
 from models.demos.blackhole.paddleocr_vl.tt.weight_mapping import map_vision_state_dict
 from models.demos.qwen3_vl.tt.generator import Generator as VLGenerator
+from models.demos.utils.common_demo_utils import report_e2e_metrics
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -34,6 +37,7 @@ DEMO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "demo"))
 OCR_PROMPT = "OCR:"
 MAX_NEW_TOKENS = 256
 MEAN_CER_GATE = 0.01  # "gate: <= 1.00%" -- see tests/probe_ocr_e2e.py history
+GT_CER_GATE = 0.03  # headroom over the measured mean; a broken tower reads far above it
 
 
 def _to_torch_logits(x, mesh, vocab_size: int, row: int = -1) -> torch.Tensor:
@@ -60,7 +64,21 @@ def _cer(ref: str, hyp: str) -> float:
     return prev[-1] / len(ref)
 
 
-def _read_page(sample: dict, processor, tower, generator, embed_tokens, image_token_id, ref, text_args, device) -> str:
+def _read_page(
+    sample: dict,
+    processor,
+    tower,
+    generator,
+    embed_tokens,
+    image_token_id,
+    ref,
+    text_args,
+    device,
+    decode_stats: list[tuple[int, float]],
+) -> str:
+    # Report-only decode telemetry for the CI dashboard (#58596): appends one
+    # (decode_tokens, decode_seconds) pair per page to the caller-owned accumulator,
+    # keeping each test's stats isolated from the others.
     img = Image.open(os.path.join(DEMO, sample["image"])).convert("RGB")
     messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": OCR_PROMPT}]}]
     text = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
@@ -112,6 +130,8 @@ def _read_page(sample: dict, processor, tower, generator, embed_tokens, image_to
     generated = [token]
 
     eos = set(tokenizer.all_special_ids or [])
+    decode_tokens = 0
+    decode_start = time.perf_counter()
     for step in range(MAX_NEW_TOKENS - 1):
         if token in eos:
             break
@@ -121,18 +141,24 @@ def _read_page(sample: dict, processor, tower, generator, embed_tokens, image_to
             page_table=None,
             kv_cache=None,
             enable_trace=False,
+            # Version-1 decode update commands (#51646): every call restages the host token,
+            # which a non-traced decode requires; no page table and host-side greedy sampling.
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         lg = out[0] if isinstance(out, tuple) else out
         token = int(_to_torch_logits(lg, device, text_args.vocab_size).argmax().item())
         generated.append(token)
+        decode_tokens += 1
+
+    decode_stats.append((decode_tokens, time.perf_counter() - decode_start))
 
     return tokenizer.decode([t for t in generated if t not in eos], skip_special_tokens=True)
 
 
-def test_ocr_mean_cer_vs_hf_reference(device, hf_goldens):
-    samples = hf_goldens["samples"]
-    assert samples, "hf_goldens.json has no samples"
-
+def _build_pipeline(device):
     vision_args = VisionModelArgs(device, instruct=True, max_batch_size=1, max_seq_len=8192)
     text_args = ModelArgs(device, instruct=True, max_batch_size=1, max_seq_len=8192)
 
@@ -163,10 +189,18 @@ def test_ocr_mean_cer_vs_hf_reference(device, hf_goldens):
     ref.eval()
     embed_tokens = ref.model.language_model.embed_tokens
     image_token_id = ref.config.image_token_id
+    return processor, tower, generator, embed_tokens, image_token_id, ref, text_args
 
+
+def test_ocr_mean_cer_vs_hf_reference(device, hf_goldens):
+    samples = hf_goldens["samples"]
+    assert samples, "hf_goldens.json has no samples"
+    pipeline = _build_pipeline(device)
+
+    decode_stats: list[tuple[int, float]] = []
     cers = []
     for s in samples:
-        text = _read_page(s, processor, tower, generator, embed_tokens, image_token_id, ref, text_args, device)
+        text = _read_page(s, *pipeline, device, decode_stats)
         c = _cer(s["hf_output"], text)
         cers.append(c)
         print(f"[{s['name']}] CERvsHF={c * 100:.2f}%  TT={text[:120]!r}")
@@ -174,3 +208,48 @@ def test_ocr_mean_cer_vs_hf_reference(device, hf_goldens):
     mean_cer = sum(cers) / len(cers)
     print(f"mean CER vs HF reference: {mean_cer * 100:.2f}%  (gate: <= {MEAN_CER_GATE * 100:.2f}%)")
     assert mean_cer <= MEAN_CER_GATE
+
+
+def test_ocr_mean_cer_vs_ground_truth(device, tmp_path):
+    """CI gate: renders the corpus itself, so it needs no staged goldens."""
+    samples = []
+    for s in CORPUS:
+        try:
+            img = render(s)
+        except FileNotFoundError as e:  # a font the host lacks; ground truth is font-independent
+            print(f"[{s.name}] skipped: {e}")
+            continue
+        path = str(tmp_path / f"{s.name}.png")
+        img.save(path, format="PNG")
+        samples.append((s, path))
+    missing = set(VISION_BUCKETS) - {s.bucket for s, _ in samples}
+    assert not missing, f"no renderable sample in bucket(s) {sorted(missing)}"
+
+    pipeline = _build_pipeline(device)
+    decode_stats: list[tuple[int, float]] = []
+    cers = []
+    for s, path in samples:
+        text = _read_page({"image": path}, *pipeline, device, decode_stats)
+        c = _cer(s.ground_truth, text)
+        cers.append(c)
+        print(f"[{s.name}] bucket={s.bucket} CERvsTruth={c * 100:.2f}%")
+
+    mean_cer = sum(cers) / len(cers)
+    print(
+        f"mean CER vs ground truth over {len(cers)} pages: {mean_cer * 100:.2f}%  (gate: <= {GT_CER_GATE * 100:.2f}%)"
+    )
+
+    # Report-only perf for the CI dashboard (#58596): aggregate single-user decode rate
+    # across all pages. No-op outside CI; device is still open for the SKU lookup.
+    total_tokens = sum(n for n, _ in decode_stats)
+    total_decode_s = sum(s for _, s in decode_stats)
+    if total_tokens > 0 and total_decode_s > 0:
+        decode_tps_u = total_tokens / total_decode_s
+        report_e2e_metrics(
+            "paddleocr-vl-1.6",
+            {"decode_t/s": decode_tps_u, "decode_t/s/u": decode_tps_u},
+            batch_size=1,
+            model_type="vlm",
+        )
+
+    assert mean_cer <= GT_CER_GATE

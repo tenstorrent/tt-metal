@@ -32,12 +32,13 @@
 
 #include "device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -498,7 +499,6 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
         CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
         auto& cq = mesh_device->mesh_command_queue();
-        auto* device = mesh_device->get_devices()[0];
         auto workload = unit_tests::runtime_args::initialize_program_data_movement_rta(mesh_device, core_range_set, 2);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -518,7 +518,6 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         experimental::SetProgramRunArgs(
             program, unit_tests::runtime_args::make_data_movement_program_run_args(core_to_rt_args));
 
-        detail::WriteRuntimeArgsToDevice(device, program);
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);
@@ -532,7 +531,6 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         }
         experimental::SetProgramRunArgs(
             program, unit_tests::runtime_args::make_data_movement_program_run_args(core_to_rt_args));
-        detail::WriteRuntimeArgsToDevice(device, program);
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);
@@ -544,7 +542,6 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         std::vector<uint32_t> common_runtime_args = {0x30303030, 0x60606060, 0x90909090, 1234};
         experimental::SetProgramRunArgs(
             program2, unit_tests::runtime_args::make_data_movement_program_run_args({}, common_runtime_args));
-        detail::WriteRuntimeArgsToDevice(device, program2);
         distributed::EnqueueMeshWorkload(cq, workload2, false);
         distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload2, core_to_rt_args, common_runtime_args);
@@ -754,7 +751,6 @@ TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        auto* device = mesh_device->get_devices()[0];
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
@@ -775,7 +771,6 @@ TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
         }
         experimental::SetProgramRunArgs(
             program, unit_tests::runtime_args::make_data_movement_program_run_args(core_to_rt_args));
-        detail::WriteRuntimeArgsToDevice(device, program);
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
         unit_tests::runtime_args::verify_results(false, mesh_device, workload, core_to_rt_args);
@@ -873,7 +868,7 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
         hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t) -
         watcher_reserved_count_words;
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         auto active_eth_cores = device->get_active_ethernet_cores(true);
 
         // Skip test if no active ethernet cores available
@@ -958,7 +953,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
         hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t) -
         watcher_reserved_count_words;
     for (auto& mesh_device : this->devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         auto idle_eth_cores = device->get_inactive_ethernet_cores();
 
         // Skip test if no idle ethernet cores available

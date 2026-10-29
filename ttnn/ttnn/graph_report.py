@@ -36,7 +36,7 @@ import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Generator, Union
+from typing import Generator, NamedTuple, Optional, Union
 from urllib.parse import urlparse, urlunparse
 
 from loguru import logger
@@ -263,7 +263,9 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
 # 3.2 - git hash and remote URL in report_metadata (#43830)
 # 3.3 - rank on local/global_tensor_comparison_records (#45448)
-DATABASE_SCHEMA_VERSION = "3.3"
+# 3.4 - storage_type on tensors; buffer_type is NULL for host tensors instead of 0 (DRAM)
+# 3.5 - sub-device topology and operation/program execution placement: sub_device_managers, sub_devices, operation_executions, execution_sub_devices
+DATABASE_SCHEMA_VERSION = "3.5"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
@@ -271,6 +273,11 @@ COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
 _OPERATION_ID_STRIDE_PER_RANK_FILE = 10000
+
+# operation_executions.execution_id is operation_id * this stride + a per-operation index, so ids
+# stay unique wherever operation_id is. Bounds an operation to this many program executions, i.e.
+# this many devices in one rank's local mesh.
+_EXECUTION_ID_STRIDE_PER_OPERATION = 1024
 
 
 def _schema_version_tuple(ver: str) -> tuple[int, ...]:
@@ -370,6 +377,109 @@ def _int_param(params, key):
     if v is None:
         return None
     return v if isinstance(v, int) else int(v)
+
+
+class _TensorRow(NamedTuple):
+    """One ``tensors`` row, fields in column order."""
+
+    tensor_id: Union[int, str]
+    shape: Optional[str]
+    dtype: Optional[str]
+    layout: Optional[str]
+    memory_config: Optional[str]
+    device_id: Optional[int]
+    address: Optional[int]
+    buffer_type: Optional[int]
+    rank: int
+    storage_type: Optional[str]
+
+
+_TENSORS_INSERT_SQL = (
+    f"INSERT OR IGNORE INTO tensors ({', '.join(_TensorRow._fields)}) "
+    f"VALUES ({', '.join('?' * len(_TensorRow._fields))})"
+)
+
+
+def _tensor_row_from_params(tensor_id, params: dict, rank: int) -> _TensorRow:
+    """Build a ``tensors`` row from a captured tensor node's params.
+
+    ``buffer_type`` stays None when the capture recorded none: ``0`` is DRAM, so defaulting to it
+    mislabels host tensors. Captures predating ``storage_type`` only emitted ``memory_config`` and
+    ``address`` for device tensors, so either marks one; their absence cannot mark a host tensor,
+    because a deallocated device tensor looked the same.
+    """
+    dtype = params.get("dtype")
+    layout = params.get("layout")
+    if dtype and "::" in dtype:
+        dtype = dtype.replace("::", ".")
+    if layout and "::" in layout:
+        layout = layout.replace("::", ".")
+    memory_config = params.get("memory_config")
+    address = _int_param(params, "address")
+    storage_type = params.get("storage_type")
+    if storage_type is None and (memory_config is not None or address is not None):
+        storage_type = "DEVICE"
+    return _TensorRow(
+        tensor_id=tensor_id,
+        shape=params.get("shape", ""),
+        dtype=dtype,
+        layout=layout,
+        memory_config=memory_config,
+        device_id=_int_param(params, "device_id"),
+        address=address,
+        buffer_type=_int_param(params, "buffer_type"),
+        rank=rank,
+        storage_type=storage_type,
+    )
+
+
+# Tensors whose buffers are live during an import: (device_id, address) -> [(buffer_type, tensor_id), ...].
+_LiveTensors = dict[tuple[Optional[int], int], list[tuple[Optional[int], int]]]
+
+
+def _add_live_tensor(
+    live_tensors: _LiveTensors,
+    device_id: Optional[int],
+    address: int,
+    buffer_type: Optional[int],
+    tensor_id: int,
+) -> None:
+    """Record that ``tensor_id`` now lives at ``address`` on ``device_id``.
+
+    ``live_tensors`` maps (device_id, address) to [(buffer_type, tensor_id), ...], most recent last. DRAM and L1
+    addresses overlap, so an address can hold one live tensor per buffer type; ``buffer_type`` is None when the
+    capture didn't record it. A tensor seen at a slot another tensor still holds replaces it, as the earlier one's
+    buffer must have been freed without the capture seeing it.
+    """
+    entries = live_tensors.setdefault((device_id, address), [])
+    entries[:] = [entry for entry in entries if entry[0] != buffer_type]
+    entries.append((buffer_type, tensor_id))
+
+
+def _take_live_tensor(
+    live_tensors: _LiveTensors, device_id: Optional[int], address: int, buffer_type: Optional[int]
+) -> Optional[int]:
+    """Return the tensor whose buffer at ``address`` on ``device_id`` is being freed, and forget it, or None.
+
+    Each owning buffer records one deallocation, so once freed the tensor can't own a later buffer at that address,
+    such as a scratch buffer that no tensor names. Prefers a tensor of the freed buffer's type, then one whose type
+    wasn't recorded; a deallocation with no buffer type takes the most recent tensor at the address.
+    """
+    entries = live_tensors.get((device_id, address))
+    if not entries:
+        return None
+    if buffer_type is None:
+        index = len(entries) - 1
+    else:
+        index = next((i for i, entry in enumerate(entries) if entry[0] == buffer_type), None)
+        if index is None:
+            index = next((i for i, entry in enumerate(entries) if entry[0] is None), None)
+        if index is None:
+            return None
+    tensor_id = entries.pop(index)[1]
+    if not entries:
+        del live_tensors[(device_id, address)]
+    return tensor_id
 
 
 def _tid_int(tid):
@@ -644,6 +754,59 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     """
     )
 
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sub_device_managers (
+            device_id int,
+            sub_device_manager_id int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(device_id, sub_device_manager_id, rank)
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sub_devices (
+            device_id int,
+            sub_device_manager_id int,
+            sub_device_id int,
+            worker_core_ranges text,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(device_id, sub_device_manager_id, sub_device_id, rank)
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS operation_executions (
+            execution_id int,
+            operation_id int,
+            device_id int,
+            physical_device_id int,
+            runtime_id int,
+            global_call_count int,
+            command_queue_id int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(execution_id, rank)
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS execution_sub_devices (
+            execution_id int,
+            device_id int,
+            sub_device_manager_id int,
+            sub_device_id int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(execution_id, device_id, sub_device_manager_id, sub_device_id, rank)
+        )
+    """
+    )
+
     # Tensors table
     cursor.execute(
         """
@@ -657,6 +820,7 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             address int,
             buffer_type int,
             rank int NOT NULL DEFAULT 0,
+            storage_type text,
             UNIQUE(tensor_id, rank)
         )
     """
@@ -1134,6 +1298,10 @@ def import_graph(
     stack_traces_batch = []
     operations_batch = []
     operation_arguments_batch = []
+    sub_device_managers_batch = []
+    sub_devices_batch = []
+    operation_executions_batch = []
+    execution_sub_devices_batch = []
     input_tensors_batch = []
     output_tensors_batch = []
     tensors_batch = []
@@ -1171,6 +1339,9 @@ def import_graph(
     operation_counter = 1
     tensor_ids_seen = set()
     active_buffers = []
+    # Tensors whose buffers are live, so a buffer_deallocate is credited to the tensor living at the freed address,
+    # not to whichever one first used it. See _take_live_tensor.
+    live_tensors: _LiveTensors = {}
     current_op_nodes = []
     op_nesting_depth = 0
     # Counts only non-filtered, non-nested ops so filtered wrappers are transparent
@@ -1356,6 +1527,69 @@ def import_graph(
             operation_id = base_operation_id + operation_counter
             operations_batch.append((operation_id, name, duration_s, rank))
 
+            execution_index = 0
+            for execution_node in current_op_nodes:
+                execution_node_type = execution_node.get("node_type")
+
+                # Sub-device topology is snapshotted per manager by the producer, so it covers
+                # sub-devices that never ran an operation. Deriving it from executions would not.
+                if execution_node_type == "sub_device_manager":
+                    manager_params = execution_node.get("params") or {}
+                    device_id = int(manager_params["device_id"])
+                    manager_id = int(manager_params["sub_device_manager_id"])
+                    sub_device_managers_batch.append((device_id, manager_id, rank))
+                    for sub_device in json.loads(manager_params.get("sub_devices") or "[]"):
+                        sub_devices_batch.append(
+                            (
+                                device_id,
+                                manager_id,
+                                int(sub_device["sub_device_id"]),
+                                json.dumps(sub_device.get("worker_core_ranges", [])),
+                                rank,
+                            )
+                        )
+                    continue
+
+                if execution_node_type != "program_execution":
+                    continue
+                execution_params = execution_node.get("params") or {}
+                # Derive the id from operation_id, which is already unique across ranks and merged
+                # files. Deriving it from the graph node counter instead would collide across files,
+                # because node counters routinely exceed _OPERATION_ID_STRIDE_PER_RANK_FILE.
+                if execution_index >= _EXECUTION_ID_STRIDE_PER_OPERATION:
+                    logger.warning(
+                        f"operation_id={operation_id} has more than {_EXECUTION_ID_STRIDE_PER_OPERATION} "
+                        f"program executions; dropping the remainder to keep execution_id unique"
+                    )
+                    break
+                execution_id = operation_id * _EXECUTION_ID_STRIDE_PER_OPERATION + execution_index
+                execution_index += 1
+                device_id = int(execution_params["device_id"])
+                physical_device_id = int(execution_params.get("physical_device_id", device_id))
+                manager_id = int(execution_params["sub_device_manager_id"])
+                # Absent when capture could not place the program on a sub-device. The execution
+                # still gets its operation_executions row -- which chip ran the operation is worth
+                # reporting on its own -- and only the execution_sub_devices link is omitted, so
+                # an unplaced execution reads as unknown rather than as sub-device 0.
+                raw_sub_device_id = execution_params.get("sub_device_id")
+
+                operation_executions_batch.append(
+                    (
+                        execution_id,
+                        operation_id,
+                        device_id,
+                        physical_device_id,
+                        int(execution_params["runtime_id"]),
+                        int(execution_params["global_call_count"]),
+                        int(execution_params["command_queue_id"]),
+                        rank,
+                    )
+                )
+                if raw_sub_device_id is not None:
+                    execution_sub_devices_batch.append(
+                        (execution_id, device_id, manager_id, int(raw_sub_device_id), rank)
+                    )
+
             if start_node:
                 graph_counter_to_op_id[start_node["counter"]] = operation_id
 
@@ -1532,31 +1766,16 @@ def import_graph(
             tensor_id = params.get("tensor_id", "")
             if tensor_id and tensor_id not in tensor_ids_seen:
                 tensor_ids_seen.add(tensor_id)
-                shape = params.get("shape", "")
-                dtype = params.get("dtype")
-                layout = params.get("layout")
-                memory_config = params.get("memory_config")
-
-                if dtype and "::" in dtype:
-                    dtype = dtype.replace("::", ".")
-                if layout and "::" in layout:
-                    layout = layout.replace("::", ".")
-                device_id = _int_param(params, "device_id")
-                address = _int_param(params, "address")
-                buffer_type = _int_param(params, "buffer_type") or 0
-                tensors_batch.append(
-                    (
-                        tensor_id,
-                        shape,
-                        dtype,
-                        layout,
-                        memory_config,
-                        device_id,
-                        address,
-                        buffer_type,
-                        rank,
+                tensor_row = _tensor_row_from_params(tensor_id, params, rank)
+                tensors_batch.append(tensor_row)
+                if tensor_row.address is not None:
+                    _add_live_tensor(
+                        live_tensors,
+                        tensor_row.device_id,
+                        tensor_row.address,
+                        tensor_row.buffer_type,
+                        _tid_int(tensor_id),
                     )
-                )
 
                 device_tensors_str = params.get("device_tensors")
                 if device_tensors_str:
@@ -1594,24 +1813,35 @@ def import_graph(
         elif node_type == "buffer_deallocate":
             # Resolve address: prefer direct param, fall back to connected buffer_allocate
             dealloc_address = None
+            dealloc_params = params
             if "address" in params:
                 dealloc_address = int(params["address"])
             else:
                 for conn_id in node.get("connections", []):
                     if conn_id < len(graph) and graph[conn_id].get("node_type") == "buffer_allocate":
-                        dealloc_address = int(graph[conn_id].get("params", {}).get("address", 0))
+                        dealloc_params = graph[conn_id].get("params", {})
+                        dealloc_address = int(dealloc_params.get("address", 0))
                         break
-            if dealloc_address is not None:
-                active_buffers = [b for b in active_buffers if b[1] != dealloc_address]
+            dealloc_device_id = _int_param(dealloc_params, "device_id")
+            dealloc_buffer_type = _int_param(dealloc_params, "buffer_type")
 
-            # Find the tensor that owns the deallocated address
             dealloc_tensor_id = None
             if dealloc_address is not None:
-                for t in tensors_batch:
-                    tid, _, _, _, _, _, addr, _, _ = t
-                    if addr == dealloc_address:
-                        dealloc_tensor_id = _tid_int(tid)
-                        break
+                # Only the freed buffer: not a buffer of another type, or on another device, at the same address. A
+                # free that doesn't say which device or type matches any.
+                active_buffers = [
+                    b
+                    for b in active_buffers
+                    if not (
+                        b[1] == dealloc_address
+                        and dealloc_device_id in (None, b[0])
+                        and dealloc_buffer_type in (None, b[3])
+                    )
+                ]
+                # The tensor that owns the deallocated address
+                dealloc_tensor_id = _take_live_tensor(
+                    live_tensors, dealloc_device_id, dealloc_address, dealloc_buffer_type
+                )
 
             if not function_stack:
                 # Synthesize a deallocate operation if not inside a function_start/end pair
@@ -1765,23 +1995,20 @@ def import_graph(
     for _, _, tid, _ in output_tensors_batch:
         referenced_tids.add(_tid_int(tid))
 
-    filtered_tensors = []
-    for t in tensors_batch:
-        tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, _tr = t
-        tid_int = _tid_int(tid)
-        if dev_id is None:
-            if tid_int in referenced_tids:
-                filtered_tensors.append(t)
-        else:
-            filtered_tensors.append(t)
-    tensors_batch = filtered_tensors
+    # A device tensor without a buffer has no device_id either, so storage_type decides; captures
+    # predating it fall back to device_id.
+    tensors_batch = [
+        t
+        for t in tensors_batch
+        if t.storage_type == "DEVICE" or t.device_id is not None or _tid_int(t.tensor_id) in referenced_tids
+    ]
 
     # Ensure py_io tensor IDs that don't have C++ graph entries get created.
     # When enable_logging=True, Python's set_output_tensor_id_decorator assigns
     # new tensor IDs after C++ records the output.  These Python-level IDs appear
     # in py_io output_tensor_ids but have no C++ tensor node.  Create tensor
     # entries for them by copying from the nearest tensor at the same address.
-    existing_tids = {_tid_int(t[0]) for t in tensors_batch}
+    existing_tids = {_tid_int(t.tensor_id) for t in tensors_batch}
     io_tids = set()
     for _, _, tid, _ in input_tensors_batch:
         io_tids.add(_tid_int(tid))
@@ -1791,33 +2018,16 @@ def import_graph(
     if missing_tids:
         addr_to_tensor = {}
         for t in tensors_batch:
-            tid_val, shape, dtype, layout, mem_cfg, dev_id, addr, bt, _tr = t
-            if addr is not None and addr not in addr_to_tensor:
-                addr_to_tensor[addr] = t
+            if t.address is not None and t.address not in addr_to_tensor:
+                addr_to_tensor[t.address] = t
         for mtid in missing_tids:
             addr = tensor_address.get(mtid)
             if addr is not None and addr in addr_to_tensor:
-                _, shape, dtype, layout, mem_cfg, dev_id, _, bt, _tr = addr_to_tensor[addr]
-                tensors_batch.append((mtid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, rank))
+                tensors_batch.append(addr_to_tensor[addr]._replace(tensor_id=mtid, address=addr, rank=rank))
             elif mtid in pyid_to_cpp_tensor:
-                cpp_node = pyid_to_cpp_tensor[mtid]
-                p = cpp_node.get("params", {})
-                btv = _int_param(p, "buffer_type") or 0
-                tensors_batch.append(
-                    (
-                        mtid,
-                        str(p.get("shape", "")),
-                        str(p.get("dtype", "")),
-                        str(p.get("layout", "")),
-                        str(p.get("memory_config", "")),
-                        _int_param(p, "device_id"),
-                        _int_param(p, "address"),
-                        btv,
-                        rank,
-                    )
-                )
+                tensors_batch.append(_tensor_row_from_params(mtid, pyid_to_cpp_tensor[mtid].get("params", {}), rank))
 
-    kept_tensor_ids = {_tid_int(t[0]) for t in tensors_batch}
+    kept_tensor_ids = {_tid_int(t.tensor_id) for t in tensors_batch}
 
     # Deduplicate per operation (same op + same tensor = one entry)
     seen_input = set()
@@ -1886,6 +2096,26 @@ def import_graph(
         cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?, ?, ?)""", stack_traces_rows)
     if operations_batch:
         cursor.executemany("""INSERT OR REPLACE INTO operations VALUES (?, ?, ?, ?)""", operations_batch)
+    if sub_device_managers_batch:
+        cursor.executemany(
+            """INSERT OR IGNORE INTO sub_device_managers VALUES (?, ?, ?)""",
+            sub_device_managers_batch,
+        )
+    if sub_devices_batch:
+        cursor.executemany(
+            """INSERT OR IGNORE INTO sub_devices VALUES (?, ?, ?, ?, ?)""",
+            sub_devices_batch,
+        )
+    if operation_executions_batch:
+        cursor.executemany(
+            """INSERT OR REPLACE INTO operation_executions VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            operation_executions_batch,
+        )
+    if execution_sub_devices_batch:
+        cursor.executemany(
+            """INSERT OR IGNORE INTO execution_sub_devices VALUES (?, ?, ?, ?, ?)""",
+            execution_sub_devices_batch,
+        )
     if operation_arguments_batch:
         cursor.executemany("""INSERT INTO operation_arguments VALUES (?, ?, ?, ?)""", operation_arguments_batch)
     if input_tensors_batch:
@@ -1903,7 +2133,7 @@ def import_graph(
             tensor_producers_batch,
         )
     if tensors_batch:
-        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+        cursor.executemany(_TENSORS_INSERT_SQL, tensors_batch)
     tensor_lifetime_records = []
     if record_tensor_lifetime:
         tensor_lifetime_records = compute_tensor_lifetime_records(
@@ -1957,6 +2187,9 @@ def import_graph(
 
     return {
         "operations": len(operations_batch),
+        "operation_executions": len(operation_executions_batch),
+        "sub_device_managers": len(set(sub_device_managers_batch)),
+        "sub_devices": len(set(sub_devices_batch)),
         "tensors": len(tensors_batch),
         "device_tensors": len(device_tensors_batch),
         "buffers": len(buffers_batch),
@@ -1992,18 +2225,9 @@ def _comparison_record_to_row(record: dict, rank: int = 0) -> tuple:
     )
 
 
-def _tensor_record_to_row(tensor: dict, rank: int = 0) -> tuple:
-    return (
-        int(tensor["tensor_id"]),
-        tensor.get("shape"),
-        tensor.get("dtype"),
-        tensor.get("layout"),
-        tensor.get("memory_config"),
-        tensor.get("device_id"),
-        tensor.get("address"),
-        tensor.get("buffer_type"),
-        rank,
-    )
+def _tensor_record_to_row(tensor: dict, rank: int = 0) -> _TensorRow:
+    # Same fields as a captured tensor node, so sidecars predating storage_type get the same inference
+    return _tensor_row_from_params(int(tensor["tensor_id"]), tensor, rank)
 
 
 def import_tensor_comparison_records(cursor: sqlite3.Cursor, comparison_data: dict, rank: int = 0) -> dict:
@@ -2021,7 +2245,7 @@ def import_tensor_comparison_records(cursor: sqlite3.Cursor, comparison_data: di
     ]
 
     if tensors_batch:
-        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+        cursor.executemany(_TENSORS_INSERT_SQL, tensors_batch)
     if local_records_batch:
         cursor.executemany(
             """INSERT INTO local_tensor_comparison_records VALUES (?, ?, ?, ?, ?, ?)""", local_records_batch
