@@ -153,14 +153,10 @@ uint32_t wait_for_filled(FabricSender& fabric, uint32_t sent, uint32_t* fwd_sinc
         if (avail > 0) {
             return avail;
         }
-        // Nothing of ours to send, so announce what we already sent. A channel is only vc_pages deep while
-        // the bump batch is FWD_BUMP_EVERY, so a producer that fills a channel without completing a batch
-        // would never tell the consumer those pages are there -- and that consumer is the only source of
-        // the credits the producer is now waiting on. Deadlock, and exactly the one a chunk-ending forward
-        // used to rule out by forcing a bump on a chunk's last page. Channels have no chunk ends, so this
-        // announce is what rules it out instead.
-        //
-        // Once per idle spell rather than per spin, or announcing becomes the busy-wait.
+        // Nothing of ours to send, so announce what we already sent. A producer that fills a channel without
+        // completing a bump batch would never tell the consumer those pages are there -- and that consumer is
+        // the only source of the credits the producer is now waiting on. This announce is what rules out that
+        // deadlock. Once per idle spell rather than per spin, or announcing becomes the busy-wait.
         if (!announced) {
             for (uint32_t v = 0; v < ct.num_vcs; v++) {
                 if (fwd_since_bump[v] > 0) {
