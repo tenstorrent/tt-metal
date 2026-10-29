@@ -394,6 +394,22 @@ class DeepseekV41ForCausalLM:
         self.slots[key] = slot  # most recently used
         return slot
 
+    def release_request(self, key: int) -> None:
+        """The plugin's notice that request ``key`` (its first block id) finished or was preempted: its decode
+        slot goes back to the free list and its pending prefill state is dropped. Without the notice a new
+        request's join evicts the least recently used slot, which is a finished request's only while the join
+        runs after every live slot's row of the same step; a join from ``_state_for`` (a prefill step that
+        needs a pending request's state) evicts whichever slot decoded first in the previous step, a live
+        one when several requests finished together (the served c32 round's KeyError)."""
+        slot = self.slots.pop(key, None)
+        if slot is not None:
+            self.free.append(slot)
+            if self.drafter is not None:
+                self.next_drafts.pop(slot, None)
+                self.buffered.pop(slot, None)
+                self.handed.pop(slot, None)
+        self.pending.pop(key, None)
+
     def _prefill_state(self) -> V41PrefillState:
         state = self.prefill_states[self.next_prefill_state]
         self.next_prefill_state = (self.next_prefill_state + 1) % len(self.prefill_states)
