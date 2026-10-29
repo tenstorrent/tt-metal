@@ -52,6 +52,7 @@ enum SparseCB : uint32_t {
     cb_k4,              // ROW_BFP4 only: the chunk's K as bfloat4_b tiles [Skt, DHt], made by the unpacker (compute)
     cb_k8_rm,           // bfloat8_b window only: the window chunk's staging block [exponents | bytes]
     cb_k8,              // bfloat8_b window only: the window chunk's K as bfloat8_b tiles [Skt, DHt]
+    cb_k4_rec,          // ROW_BFP4 only: scratch for a chunk's whole row records (one DRAM read a row)
     cb_count
 };
 
@@ -212,6 +213,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
            ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH,
            tt::DataFormat::Bfp4_b);
         cb(cb_k4, tt::tile_size(tt::DataFormat::Bfp4_b), Skt * DHt, tt::DataFormat::Bfp4_b);
+        cb(cb_k4_rec, ::sparse_sdpa::row_bfp4_rec_bytes(k_dim, k_chunk), 1, tt::DataFormat::Bfp4_b);
     }
     if (window_bfp8) {
         cb(cb_k8_rm,
@@ -262,7 +264,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     TT_FATAL(
         reader_ct.size() == ::sparse_sdpa::reader_ct_arg::END,
         "sparse_sdpa reader compile-time argument layout is out of sync");
-    std::vector<uint32_t> row_bfp4_ct = {cb_k4_rm, cb_k4, k_chunk};  // row_bfp4_ct_arg order
+    std::vector<uint32_t> row_bfp4_ct = {cb_k4_rm, cb_k4, k_chunk, cb_k4_rec};  // row_bfp4_ct_arg order
     if (window_bfp8) {
         row_bfp4_ct.insert(row_bfp4_ct.end(), {cb_k8_rm, cb_k8});
     }

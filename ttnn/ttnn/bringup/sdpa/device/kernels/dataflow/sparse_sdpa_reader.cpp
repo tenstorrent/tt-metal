@@ -69,6 +69,9 @@ void kernel_main() {
     constexpr uint32_t ct_rb = sparse_sdpa::reader_ct_arg::END;
     constexpr uint32_t cb_k4_rm = get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::CB_K4_RM);
     constexpr uint32_t k4_eb = sparse_sdpa::row_bfp4_exp_bytes(k_dim);
+    constexpr uint32_t cb_k4_rec = get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::CB_K4_REC);
+    const uint32_t k4_rec_l1 =
+        (get_write_ptr(cb_k4_rec) + sparse_sdpa::ROW_BFP4_ALIGN - 1) & ~(sparse_sdpa::ROW_BFP4_ALIGN - 1);
 #endif
     constexpr auto q_args = TensorAccessorArgs<
         sparse_sdpa::reader_ct_arg::END + sparse_sdpa::ROW_BFP4_CT_COUNT,
@@ -213,8 +216,8 @@ void kernel_main() {
                     request[sparse_sdpa::gather_request::KIND] = sparse_sdpa::gather_request::KIND_BFP4;
                 }
                 kreq_cb.push_back(1);
-                sparse_sdpa::gather_bfp4_rows<k_dim, k_chunk, sparse_sdpa::SCALED_K_TRID_RING>(
-                    noc, kv, block_l1, idx_ptr, base, half, valid, kv_batch_page_offset);
+                sparse_sdpa::gather_bfp4_rows_staged<k_dim, k_chunk, sparse_sdpa::SCALED_K_TRID_RING>(
+                    noc, kv, block_l1, k4_rec_l1, idx_ptr, base, half, valid, kv_batch_page_offset);
                 if (valid < k_chunk) {
                     noc.async_write_zeros(
                         k4_rm_cb, (k_chunk - valid) * k4_eb, {.offset_bytes = block_off + valid * k4_eb});
