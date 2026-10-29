@@ -2289,6 +2289,14 @@ bindings, test, docs) and INDEX.md - forks every agent may write (F48) are outsi
 would also drop the pick's finding (known_issues DS41-131, BREADCRUMBS). Overseer reverted the fork code by hand and
 kept the notes. To do: reject reverts every file the pick changed except the knowledge files.
 
+## F210: a gate commit leaves the generated dashboard pages out (DeepSeek-V4.1 FIX.8, 2026-10-29)
+Problem: git_commit staged everything under the task's paths, and the ledger dir holds dashboard/index.html and
+teletext.html, re-exported after every gate (published as artifacts). At ~0.9 MB each they hit the repo's 500 KB hook,
+and FIX.8's passed gate (4-bit KV, 11 units) went COMMIT_PENDING; the same pages had been swept into a commit by hand
+before (the overseer's `git add -u`). Fix: core/gate.py GENERATED = `:(exclude,glob)**/dashboard/*.html` on the add,
+diff and commit pathspecs (and unstaged), so no gate commit takes them. Selftest
+test_a_gate_commit_leaves_the_generated_dashboard_pages_out.
+
 ## F220: a model switch set in the environment is part of a unit's stamp (DeepSeek-V4.1 2x2 engram bfp8 A/B, 2026-10-28)
 
 `DS41_ENGRAM_ROWS=bfp8 verify --tasks L.s4096 L.last L.s55296` printed "reused: same code, kept PASS" for all three

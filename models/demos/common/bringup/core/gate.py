@@ -492,18 +492,24 @@ def _git_retry(cmd: list[str], repo, check: bool = True, tries: int = 20, wait: 
     return r
 
 
+# F210: the generated dashboard pages (re-exported after every gate, published as artifacts; ~0.9 MB each by
+# DeepSeek-V4.1 FIX.8) never go into a gate commit: the repo's 500 KB hook refused FIX.8's passed gate over them.
+GENERATED = [":(exclude,glob)**/dashboard/*.html"]
+
+
 def git_commit(spec: Spec, paths: list[str], subject: str, body: str) -> str | None:
     """Commit only the given paths, so work in progress elsewhere in the tree never leaks into a gate commit."""
     repo = spec.repo
-    _git_retry(["git", "add", "-A", "--", *paths], repo)
-    if subprocess.run(["git", "diff", "--cached", "--quiet", "--", *paths], cwd=repo).returncode == 0:
+    _git_retry(["git", "add", "-A", "--", *paths, *GENERATED], repo)
+    _git_retry(["git", "reset", "-q", "--", *[f.split(")", 1)[1] for f in GENERATED]], repo, check=False)
+    if subprocess.run(["git", "diff", "--cached", "--quiet", "--", *paths, *GENERATED], cwd=repo).returncode == 0:
         return None
     trailer = spec.get("commit_trailer", DEFAULT_TRAILER)
     msg = f"{subject}\n\n{body}\n" + (f"\n{trailer}\n" if trailer else "")
-    commit = ["git", "commit", "-q", "-m", msg, "--", *paths]
+    commit = ["git", "commit", "-q", "-m", msg, "--", *paths, *GENERATED]
     # pre-commit hooks may still rewrite files (black, EOF fixer): re-stage and retry once.
     if _git_retry(commit, repo, check=False).returncode != 0:
-        _git_retry(["git", "add", "-A", "--", *paths], repo)
+        _git_retry(["git", "add", "-A", "--", *paths, *GENERATED], repo)
         r = _git_retry(commit, repo, check=False)
         if r.returncode != 0:
             raise RuntimeError(f"git commit failed:\n{r.stdout}\n{r.stderr}")
