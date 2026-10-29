@@ -366,7 +366,9 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          submodules: recursive
+          # The basic-dev image of a packages leg has no git, so checkout falls back to
+          # the REST API download, which takes no submodules. The debs carry what they need.
+          submodules: ${{ !matrix.leg.gate_packages && 'recursive' || 'false' }}
           path: docker-job
 
       - name: ⬇️ Setup Job
@@ -409,7 +411,8 @@ jobs:
           # container already has /opt/tenstorrent/sfpi for the JIT-build runtime fallback
           # (see tt_metal/jit_build/build.cpp).
           shopt -s nullglob
-          pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb)
+          pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
+                ./pkgs/tt-metalium-validation_*.deb ./pkgs/tt-nn_*.deb ./pkgs/tt-nn-validation_*.deb)
           apt install -y "${pkgs[@]}"
 
       - name: Set up tt-train

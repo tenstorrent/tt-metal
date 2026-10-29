@@ -2,12 +2,35 @@
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 # For max allowed timeout refer to .github/time_budget.yaml (ttnn -> pr_gate).
+# TT_METAL_RUNTIME_ROOT is the deb install root the binary defaults to; naming it lets
+# verify-changed-tests run the entry against the installed debs.
 
 - name: ttnn validation smoke
-  cmd: /usr/bin/tt-nn-validation-smoke
+  # CPU_ tests run on the github_hosted_cpu entries below.
+  cmd: TT_METAL_RUNTIME_ROOT=/usr/libexec/tt-metalium /usr/bin/tt-nn-validation-smoke --gtest_filter='-*CPU_*'
   skus:
     wh_n150_civ2:
       timeout: 15
   team: ttnn
   budget_type: pr_gate
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
+
+# Kernel compile on mock devices, per arch: hand-picked cases (the sweeps run in the merge gate).
+# An empty TT_METAL_CACHE makes every kernel compile.
+- name: ttnn kernel compile wormhole
+  cmd: TT_METAL_CACHE=$(mktemp -d) TT_METAL_RUNTIME_ROOT=/usr/libexec/tt-metalium /usr/bin/tt-nn-validation-smoke --gtest_filter='CPU_KernelCompile/*wormhole_*'
+  skus:
+    github_hosted_cpu:
+      timeout: 5
+  team: ttnn
+  budget_type: pr_gate
+  owner_id: U0BK8PFEXGU # Igor Jankowski
+
+- name: ttnn kernel compile blackhole
+  cmd: TT_METAL_CACHE=$(mktemp -d) TT_METAL_RUNTIME_ROOT=/usr/libexec/tt-metalium /usr/bin/tt-nn-validation-smoke --gtest_filter='CPU_KernelCompile/*blackhole_*'
+  skus:
+    github_hosted_cpu:
+      timeout: 5
+  team: ttnn
+  budget_type: pr_gate
+  owner_id: U0BK8PFEXGU # Igor Jankowski

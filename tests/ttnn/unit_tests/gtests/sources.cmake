@@ -121,3 +121,5 @@ set(TEST_CCL_MULTI_CQ_MULTI_DEVICE_SOURCES multi_thread/test_ccl_multi_cq_multi_
 set(UNIT_TESTS_TTNN_EMITC_SOURCES emitc/test_sanity.cpp)
 
 set(UNIT_TESTS_TTNN_MOCK_ALLOCATOR_SOURCES test_query_op_constraints_mock_device.cpp)
+
+set(UNIT_TESTS_TTNN_KERNEL_COMPILE_SOURCES test_kernel_compile_mock_device.cpp)

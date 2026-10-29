@@ -226,5 +226,24 @@ add_executable(unit_tests_ttnn_mock_allocator)
 target_sources(unit_tests_ttnn_mock_allocator PRIVATE ${UNIT_TESTS_TTNN_MOCK_ALLOCATOR_SOURCES})
 setup_ttnn_test_target(unit_tests_ttnn_mock_allocator)
 
+# unit_tests_ttnn_kernel_compile: CPU_ kernel compile tests on mock devices, linked into tt-nn-validation-smoke.
+
+add_library(unit_tests_ttnn_kernel_compile OBJECT)
+add_library(TTNN::Test::KernelCompile ALIAS unit_tests_ttnn_kernel_compile)
+target_sources(unit_tests_ttnn_kernel_compile PRIVATE ${UNIT_TESTS_TTNN_KERNEL_COMPILE_SOURCES})
+target_include_directories(
+    unit_tests_ttnn_kernel_compile
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/tests
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+    unit_tests_ttnn_kernel_compile
+    PRIVATE
+        test_common_libs
+        TTNN::CPP
+)
+tt_reuse_precompile_headers(unit_tests_ttnn_kernel_compile TTNN::TestPCH)
+
 add_subdirectory(multiprocess)
 add_subdirectory(udm)

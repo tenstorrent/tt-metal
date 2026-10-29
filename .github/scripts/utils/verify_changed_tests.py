@@ -96,9 +96,15 @@ METADATA_FIELDS = {"owner_id", "team"}
 # does the same with `sed -E 's/[[:space:]]+--timeout[[:space:]]+[0-9]+//g'`.
 PYTEST_TIMEOUT_FLAG = re.compile(r"\s+--timeout\s+\d+")
 
-# Paths only the installed tt-metalium debs provide; a cmd touching one needs the
-# packages artifact rather than a build tree.
-PACKAGE_INSTALL_PREFIXES = ("/usr/share/tt-metalium", "/usr/libexec/tt-metalium")
+# Paths only the installed debs provide; a cmd touching one needs the packages
+# artifact rather than a build tree. The validation debs put their smoke binaries
+# in /usr/bin.
+PACKAGE_INSTALL_PREFIXES = (
+    "/usr/share/tt-metalium",
+    "/usr/libexec/tt-metalium",
+    "/usr/bin/tt-metalium-validation-",
+    "/usr/bin/tt-nn-validation-",
+)
 
 # An undeclared SPEED_OF_LIGHT does not crash these -- the script defaults it, so
 # the leg silently measures the wrong mode. See check_llk_perf_env.
@@ -598,7 +604,7 @@ def resolve_profile(path, tracy_files):
 
 def needs_packages(entry):
     """
-    Whether a leg runs against the installed tt-metalium debs rather than a build tree.
+    Whether a leg runs against the installed debs rather than a build tree.
 
     A handful of entries invoke things the packages put on the system -- the examples
     under /usr/share/tt-metalium, for instance -- which no build artifact provides.
