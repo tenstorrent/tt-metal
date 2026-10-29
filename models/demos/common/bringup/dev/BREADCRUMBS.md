@@ -2399,3 +2399,17 @@ test_a_pow2_scale_fp4_input_is_nudged_by_the_size_of_its_quantizers_rounding` (f
 and `::test_nudge_inner_moves_a_steps_own_quantizer_only_in_its_marked_nudged_runs`; noise_floor + swap_checks +
 component_checks 109 pass; the whole selftest suite 660 pass, 1 failing before and after (test_e2e_runtime
 test_no_runner_contract_test_takes_a_fixed_threshold: xing40_a4b_d_p/tests/bringup/contract/server_rules.py:393).
+
+## F225: an owner waiver for named failures of a frozen test that has no limit to waive (DeepSeek-V4.1 FIX.12, owner 2026-10-29)
+Trigger: FIX.12's gate (P.10's units) failed test_adapter_acks and test_runner_contract on one contract check (layer 20
+window KV, last 128 rows of a 2536-token prompt, PCC 0.98855 < 0.98957, from P.9; DS41-141). The owner waived it for
+now, but only component / swap tests read `tests.waivers`; a contract test's check had no waiver at all. Fix:
+`tests.unit_waivers: {<test file stem>: {match: [regex, ...], why}}` (core/stamps.unit_waivers). After a unit fails
+(not a hang, not a box stop), core/gate.waived_failures passes it only when every failure in its pytest output is an
+AssertionError whose every message line matches a pattern; a second failure, an ERROR, a crash with no failure lines
+is never waived. The log gets "# <unit>: WAIVED (owner, tests.unit_waivers): ..." and the stamp record `waived`; the
+waiver is part of the unit's stamp (waiver_key), so a changed waiver re-runs only its own unit. Selftest
+test_core.py::test_an_owner_unit_waiver_passes_only_the_named_contract_failures; checked against the real FIX.12 logs
+of both tests. Selftest suite: 651 pass, 2 failing before and after (test_e2e_runtime
+test_no_runner_contract_test_takes_a_fixed_threshold: xing40 server_rules.py:393; test_fork_cases
+test_a_volatile_cache_key_does_not_change_a_calls_signature: timeout > 300 s) - to look at.

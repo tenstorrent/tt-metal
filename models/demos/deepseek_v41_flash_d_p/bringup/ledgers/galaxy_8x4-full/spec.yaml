@@ -204,6 +204,16 @@ tests:
       the router step misses its noise floor (swa_12: rel 7.9e-4 vs 3.6e-4; 31 selection flips, all explained by the input
       nudge; layer-0 golden: 4 of 2048 rows pick another 6th expert at near ties). TF32 is accepted; no emulation. Judged
       end to end.'
+  unit_waivers:  # F225: named failures of a frozen test
+    test_adapter_acks:
+      match:
+      - '\(last-window 128 rows\): 0_window_kv layer 20 nope pcc 0\.98[5-9]\d* < '
+      why: 'owner 2026-10-29 (FIX.12): waived for now. P.9 (ATTN_SP32_PROJ) moves layer 20''s window KV over the last 128 rows of the 2536-token prompt to PCC 0.9885 vs the reference-derived 0.9896 (passes with P.9 off; ladder window_kv L20 0.090 -> 0.106, within its 0.151). Cause under investigation as FIX.13 (DS41-141); remove when it is fixed.'
+    test_runner_contract:
+      match:
+      - '^\[tt-d-gen engine \(.*\)\]$'
+      - '\(last-window 128 rows\): 0_window_kv layer 20 nope pcc 0\.98[5-9]\d* < '
+      why: 'owner 2026-10-29 (FIX.12): waived for now. P.9 (ATTN_SP32_PROJ) moves layer 20''s window KV over the last 128 rows of the 2536-token prompt to PCC 0.9885 vs the reference-derived 0.9896 (passes with P.9 off; ladder window_kv L20 0.090 -> 0.106, within its 0.151). Cause under investigation as FIX.13 (DS41-141); remove when it is fixed.'
 text:
   source: models/tt_transformers/tests/tale-of-two-cities.txt.bz2
   wrap: model_turn
