@@ -895,3 +895,21 @@ guards around the CUR walls ~412-438); the A/B decides.
   Owner asked the 2x2 to rebase on model_bringup (P.7-P.9). Order: 2x2 fork / CPU work now; rebase again after FIX.11
   lands (OV note to FIX.11: keep sparse_sdpa / ckv_bfp4 changes to options); model wiring (phase 2) after P.10.
   Owner choices pending: index K/Q bfp4 (recommended), window bfp8 blocks (recommended).
+- 13:00 OWNER DECISION: index keys + index query -> bfloat4_b (RNE), window KV -> bfloat8_b blocks of 32 rows. Plan:
+  (1) 2x2 rebases + fork-level work now; (2) Galaxy, right after FIX.11 commits and before P.10: merge the 2x2's
+  fork-only commits (one-read ROW_BFP4 records, shorter SFPU round; new options default off) as a perf pick with a
+  quick A/B (bit-identical); (3) P.10; (4) 2x2 phase 2 model wiring (INDEX_K_FORMAT / INDEX_Q_FORMAT bfp4,
+  WINDOW_KV_FORMAT bfp8 blocks, served bf16 unchanged) after P.10 is pushed, its own component / swap / ladder;
+  (5) Galaxy full-size integration (as FIX.8). Galaxy does P.4 / P.5 during (4). (Not committed yet: FIX.11's agent
+  is running; commit between steps.)
+- 13:15 FIX.11 RESULT (agent, CPU, no device change): DS41-140 - the galaxy goldens have no official_floor.json, so the
+  component tests' limits fell back SILENTLY to one bf16 rounding of the output (L00 limit 0.0033). The official bf16
+  reference on the galaxy L00 input is 0.0327 from native, the device 0.0171: the device is ~2x closer to native than
+  the reference's own arithmetic (2x2 taps L00 0.045, L02 0.074; device L02 0.060 with 4-bit KV). No precision problem.
+  OWNER: stop FIX.11's gate (no code changed; ~1.5 device-hours) and go to P.10. Done: orchestrator / agent / gate
+  stopped, FIX.11's records committed by hand, FIX.11 removed from P.10's deps (FIX.11 stays TODO in state: there is
+  no command to close a fix job without its gate - F216).
+  FRAMEWORK TO DO (overseer, at the next gap, selftests): F215 - a component / swap test without official_floor.json
+  next to its goldens must FAIL loudly ("no margin source"), never fall back (F138); F216 - `overseer close-fix
+  FIX.n --why` for a fix job that needs no gate (records only). CPU job: testing/official_floor.py for the galaxy
+  goldens (nice 19), then the two attention component tests against the real limits.

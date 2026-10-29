@@ -491,6 +491,12 @@
   },
   "waiting": null
  },
+ "FIX.11": {
+  "attempt": 1,
+  "role": "overseer",
+  "status": "RUNNING",
+  "waiting": null
+ },
  "FIX.2": {
   "agent": {
    "defs": {
@@ -4924,6 +4930,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 0.0,
+  "full_pending": true,
   "history": [
    {
     "s": 0.0,

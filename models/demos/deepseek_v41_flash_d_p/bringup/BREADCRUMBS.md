@@ -3941,3 +3941,30 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   `DS41_ATTN_SP32_PROJ=off`. The matmul probe (one chip, `scripts/tt-probe.sh --device auto`, then a --mesh run per
   K-57) was not kept, because it is outside this step's paths. It timed mm._run with mm.rule's config against auto over 40 calls
   after a synchronize, on random bfp8 inputs.
+
+## FIX.11 (overseer fix, attempt 1): attention precision vs the reference. Disagree, no code change
+
+- Request: L00 attention 0.0171 vs limit 0.0033 ("~10x the reference's arithmetic") and L02 0.0604 vs 0.0499 with
+  4-bit KV. STEP 1 attribute on the CPU, STEP 2 raise the dominant items to the reference's precision.
+- Finding (DS41-140): the 0.0033 is 2 x one bf16 rounding of the output (0.00166). The galaxy goldens have no
+  official_floor.json, so noise_floor.arith returns None and the reference's arithmetic is missing from the limit.
+  Measured on the CPU on the galaxy golden input: the official reference at bf16 is 0.0327 from native on L00 (fp32:
+  0.0323) and 0.0371 on L02 (without its fp4 KV, which the input nudge covers: 0.0249). The 2x2 taps give 0.045 / 0.074.
+  So the device (0.0171 / 0.0604) is closer to native than the reference is.
+- Attribution, L00 (table in known_issues_detail.md "DS41-140"): bfp8 GEMM inputs 0.0117 alone (0.0139 with the
+  packer's double rounding, DS41-137); sparse_sdpa HiFi2 operand truncation 0.0074 alone, but nothing when the other
+  items are on; bf16 activations 0.0037; bfp8 weights 0.0030; RoPE bf16 tables 0.0012; bf16 P 0.0006; bf16 sink
+  0.00005. All items together 0.0129-0.0149, device 0.0171.
+- Device diagnostic: ATTN_FIDELITY=HiFi4 gives L00 0.0162 (from 0.0171), bias +0.48 %. Not adopted: -5 % of the error
+  for ~1 % of the chunk (DS41-68), and the result is still 5x the nudge-only limit.
+- Nothing changed in tt/ or the forks. The items narrower than the reference (HiFi2 sdpa, bf16 RoPE tables, bf16 sink)
+  are small. The dominant one is the reference's own fp8 in the device's bfp8 (F208), which can't be raised without
+  going above the reference. bfp8_pack_precise on the wq_b / wo_a-output packers would need forks of the stock
+  multiply / matmul (no compute-config field), and would remove ~0.002 and the +0.65 % bias.
+- Next (orchestrator / owner): generate official_floor.json for the galaxy goldens (`python -m
+  models.demos.common.bringup.testing.official_floor --spec <galaxy spec>`), so the component limits include the
+  reference's arithmetic as rule 14 says.
+- Re-run: the CPU attribution script `/scratch/dnijemcevic/fix11/attrib.py [layer]` (native step + official + item
+  emulations on the component golden, CPU only). Device: `DS41_ATTN_FIDELITY=HiFi4 scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_attention.py`. Log:
+  /scratch/dnijemcevic/fix11/swa_hifi4.log.
