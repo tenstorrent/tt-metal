@@ -409,15 +409,16 @@ def test_miss_prefills_from_zero_and_a_shorter_hit_is_not_served(monkeypatch):
     assert a.apc.content(0, user).length == L
     a.release_request(1)
     # the same prompt again with vLLM's hit 2336 (= the full blocks of the content): the slot has no snapshot <= 2336
-    # (2348 is unaligned, nothing crossed in decode) -> a miss again; the retained slot is the one dropped last
+    # (2348 is unaligned, nothing crossed in decode) -> a miss again, re-prefilled from 0 on the slot that retains
+    # this very prompt (the same mesh row: a repeated greedy request repeats its text)
     m.calls.clear()
     a.prefill_forward(
         prompt, prompt_lens=[L], start_pos=torch.tensor([2336]), empty_slots=[1], sampling_params=_greedy(1)
     )
     calls = [c for c in m.calls if c[0] in ("restore_kda", "prefill")]
     assert (
-        calls[0][0] == "prefill" and calls[0][2] == 0 and calls[0][1] != user
-    ), "a slot without content is taken first"
+        calls[0][0] == "prefill" and calls[0][2] == 0 and calls[0][1] == user
+    ), "the slot retaining the prompt is taken (slot affinity)"
     assert a.apc.stats["downgraded"] == 2
     a.release_request(1)
     # with the tail split, the eager prefill snapshots the prompt's last 32-boundary: the same hit is then served
