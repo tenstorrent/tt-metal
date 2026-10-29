@@ -61,7 +61,10 @@ class Geometry:
 
 
 def _pcc(a, b):
+    """PCC over the entries where both are defined (a sliced reference leaves the rest NaN)."""
     a, b = a.flatten().double(), b.flatten().double()
+    keep = ~(torch.isnan(a) | torch.isnan(b))
+    a, b = a[keep], b[keep]
     return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
 
@@ -113,10 +116,12 @@ def pool(x, geo, S):
     return out
 
 
-def sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, S, scale, *, pooled=True):
-    """fp32 block-sparse attention: kept blocks exact, other valid blocks one pooled entry of weight len.
+def sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, S, scale, *, pooled=True, heads=None, shards=None):
+    """fp64 block-sparse attention: kept blocks exact, other valid blocks one pooled entry of weight len.
 
     pooled=False: kept blocks only (no pooled entries); the softmax normalizes over the kept blocks.
+    heads / shards: compute only these (the rest of the output stays NaN), in 512-row chunks, so a slice of a
+    production-size call is checked exactly in seconds; _pcc compares the computed entries only.
     """
     _, H, _, _ = q.shape
     nb, nb_pad = geo.nb(), geo.nb_pad()
@@ -127,14 +132,15 @@ def sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, S, scale, *, pooled
     tok = torch.arange(S * geo.rows)
     tok_block = (tok // geo.rows) * nb_pad + (tok % geo.rows) // BLOCK
     tok_valid = tok < geo.logical_n
-    out = torch.zeros(1, H, S * geo.rows, q.shape[3])
-    for h in range(H):
+    out = torch.full((1, H, S * geo.rows, q.shape[3]), float("nan"))
+    for h in range(H) if heads is None else heads:
         kh, vh = k[0, h].double(), v[0, h].double()
         pk, pv = pooled_k[0, h].double(), pooled_v[0, h].double()
-        for s in range(S):
-            rows = slice(s * geo.rows, (s + 1) * geo.rows)
+        for s, r0 in ((s, r0) for s in (range(S) if shards is None else shards) for r0 in range(0, geo.rows, 512)):
+            r1 = min(r0 + 512, geo.rows)
+            rows = slice(s * geo.rows + r0, s * geo.rows + r1)
             qh = q[0, h, rows].double()  # [rows, D]
-            keep = mask[s, h, (torch.arange(geo.rows) // BLOCK)].bool()  # [rows, S * nb_pad]
+            keep = mask[s, h, (torch.arange(r0, r1) // BLOCK)].bool()  # [rows, S * nb_pad]
             exact = keep[:, tok_block] & tok_valid[None, :]  # [rows, S * rows]
             le = (qh @ kh.T) * scale
             le = le.masked_fill(~exact, float("-inf"))
@@ -266,8 +272,10 @@ class Case:
                 rt.ccl_column,
             )
             dense = ttnn.to_torch(tt_dense, mesh_composer=self.composer).float()
+        # want_ref="slice": the first and last head of the first and last shard only (production sizes).
+        sl = dict(heads=[0, self.H - 1], shards=[0, self.S - 1]) if want_ref == "slice" else {}
         ref = (
-            sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, self.S, self.scale, pooled=pooled)
+            sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, self.S, self.scale, pooled=pooled, **sl)
             if want_ref
             else None
         )
@@ -390,19 +398,14 @@ def test_fresh_inputs_per_call(runtime, geom):
 @pytest.mark.parametrize("density", [KEEP_ALL, 0.15])
 @pytest.mark.parametrize("k_chunk", [256, 384])
 def test_production_5s(runtime, k_chunk, density):
-    """MiniMax-H3 at 5 s: 4736 rows per device, the dense op at its measured chunks (320, 384). No torch reference
-    at this size: keep-all must match dense; the sparse mask checks that the shape runs and stays finite."""
+    """MiniMax-H3 at 5 s: 4736 rows per device, the dense op at its measured chunks (320, 384). Gated on a sliced fp64
+    reference (first / last head of the first / last shard); dense is logged: at 37,888 random keys dense attention
+    is nearly flat, so bf16 rounding in either op dominates its PCC."""
     geo = Geometry(4736, 4736 * MESH_CONFIG.sp_size, k_chunk, dense_chunks=(320, 384))
     case = Case(runtime, geo)
     mask = make_mask(geo, case.S, case.H, density=density, seed=6)
-    r = case.run(*case.inputs(6), mask, want_ref=False)
-    _check(
-        f"5s k{k_chunk} d{density}",
-        r,
-        _density(mask, geo, case.S),
-        dense_min=0.9995 if density == 1 else None,
-        ref_min=None,
-    )
+    r = case.run(*case.inputs(6), mask, want_ref="slice")
+    _check(f"5s k{k_chunk} d{density}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
 
 
 @pytest.mark.parametrize("passes", [2, 3])
@@ -437,20 +440,15 @@ def test_forced_passes(runtime, geom, passes):
 @pytest.mark.parametrize("density", [KEEP_ALL, 0.15])
 def test_production_10s(runtime, density):
     """MiniMax-H3 at 10 s: 9184 rows per device, more Q blocks per core than fit L1 at once, so the op picks
-    several passes (logged by the program factory). No torch reference at this size."""
+    several passes (logged by the program factory). Gated on a sliced fp64 reference; dense is logged (each shard's
+    32-token last block is pooled even with every full block kept)."""
     geo = Geometry(9184, 9184 * MESH_CONFIG.sp_size, 256, dense_chunks=(256, 512))
     case = Case(runtime, geo)
     most, _ = case.blocks_per_core()
     logger.info(f"[10s] {most} Q blocks per core at most")
     mask = make_mask(geo, case.S, case.H, density=density, seed=8)
-    r = case.run(*case.inputs(8), mask, want_ref=False)
-    _check(
-        f"10s d{density}",
-        r,
-        _density(mask, geo, case.S),
-        dense_min=0.9995 if density == 1 else None,
-        ref_min=None,
-    )
+    r = case.run(*case.inputs(8), mask, want_ref="slice")
+    _check(f"10s d{density}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
 
 
 # Kept blocks only (no pooled K / V): the mode the VSA fine branch needs. The softmax normalizes over the kept blocks,
