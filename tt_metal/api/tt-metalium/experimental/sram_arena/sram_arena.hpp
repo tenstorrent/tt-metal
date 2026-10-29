@@ -21,6 +21,9 @@ struct SRAMArenaImpl;
  * the user and the runtime. It is the sole owner of the memory reservation it
  * represents.
  *
+ * A moved-from arena permits destruction, assignment, and is_valueless_after_move().
+ * Implementation access fails on a moved-from arena.
+ *
  * This is used to implement arena allocation & is a blaze-only feature.
  */
 struct SRAMArena {
@@ -66,14 +69,18 @@ struct SRAMArena {
      */
     static SRAMArena allocate(distributed::MeshDevice& device, RangeLockstepSRAMArenaProperties properties);
 
+    // Returns true if this handle has no reservation after a move.
+    bool is_valueless_after_move() const;
+
     // Opaque handle.
 
     // Implementation details
-    explicit SRAMArena(SRAMArenaImpl&& impl);
     SRAMArenaImpl& impl();
     const SRAMArenaImpl& impl() const;
 
 private:
+    explicit SRAMArena(SRAMArenaImpl&& impl);
+
     std::unique_ptr<SRAMArenaImpl> pimpl_;
 };
 

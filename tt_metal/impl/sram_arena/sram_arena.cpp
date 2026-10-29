@@ -6,6 +6,8 @@
 
 #include <utility>
 
+#include <tt_stl/assert.hpp>
+
 #include "experimental/sram_arena/sram_arena_properties.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/sram_arena/sram_arena_impl.hpp"
@@ -20,9 +22,17 @@ SRAMArena::SRAMArena(SRAMArena&&) noexcept = default;
 
 SRAMArena& SRAMArena::operator=(SRAMArena&&) noexcept = default;
 
-SRAMArenaImpl& SRAMArena::impl() { return *pimpl_; }
+SRAMArenaImpl& SRAMArena::impl() {
+    TT_FATAL(pimpl_ != nullptr, "SRAMArena is in a moved-from state.");
+    return *pimpl_;
+}
 
-const SRAMArenaImpl& SRAMArena::impl() const { return *pimpl_; }
+const SRAMArenaImpl& SRAMArena::impl() const {
+    TT_FATAL(pimpl_ != nullptr, "SRAMArena is in a moved-from state.");
+    return *pimpl_;
+}
+
+bool SRAMArena::is_valueless_after_move() const { return pimpl_ == nullptr; }
 
 DeviceAddr SRAMArenaImpl::address() const {
     return std::visit([](const auto& allocation) { return allocation.addr; }, layout);

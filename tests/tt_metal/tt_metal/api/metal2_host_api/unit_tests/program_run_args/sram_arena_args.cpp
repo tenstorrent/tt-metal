@@ -7,6 +7,7 @@
 
 #include <array>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
@@ -291,6 +292,62 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMergeUncheckedKeepsFirstArgument) {
     std::vector<ProgramRunArgs> rest{AllocationArgs(second)};
     auto merged = MergeProgramRunArgs(AllocationArgs(first), rest, /*skip_validation=*/true);
     EXPECT_EQ(AllocationArgument(merged, "arena"), &first);
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedFromValidatedSetFails) {
+    // Binding a moved-from arena reports an error, including when validation is skipped.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto arena = SRAMArena::allocate(fixture_device, AllocationProperties());
+    auto program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
+    auto owner = std::move(arena);
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, AllocationArgs(arena), /*skip_validation=*/false); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedFromUncheckedSetFails) {
+    // Binding a moved-from arena reports an error, including when validation is skipped.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto arena = SRAMArena::allocate(fixture_device, AllocationProperties());
+    auto program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
+    auto owner = std::move(arena);
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, AllocationArgs(arena), /*skip_validation=*/true); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedFromValidatedUpdateFails) {
+    // Binding a moved-from arena reports an error, including when validation is skipped.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto arena = SRAMArena::allocate(fixture_device, AllocationProperties());
+    auto program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
+    SetProgramRunArgs(program, AllocationArgs(arena));
+    auto owner = std::move(arena);
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, AllocationArgs(arena), /*skip_validation=*/false); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedFromUncheckedUpdateFails) {
+    // Binding a moved-from arena reports an error, including when validation is skipped.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto arena = SRAMArena::allocate(fixture_device, AllocationProperties());
+    auto program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
+    SetProgramRunArgs(program, AllocationArgs(arena));
+    auto owner = std::move(arena);
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, AllocationArgs(arena), /*skip_validation=*/true); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
+}
+
+TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedOwnerCanBind) {
+    // The new owner of a moved reservation can supply program arena storage.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto arena = SRAMArena::allocate(fixture_device, AllocationProperties());
+    auto owner = std::move(arena);
+    auto program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
+    SetProgramRunArgs(program, AllocationArgs(owner));
+    EXPECT_THAT(ScratchpadAddresses(program), ::testing::Each(BorrowedAddress(owner)));
 }
 
 }  // namespace
