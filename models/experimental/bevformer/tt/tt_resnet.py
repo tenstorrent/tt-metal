@@ -10,7 +10,6 @@ Each BatchNorm is already folded into the conv before it.
 import math
 
 import ttnn
-from models.experimental.bevformer.model_config import DCN_SHARDED_INPUT_CHANNELS
 from models.experimental.bevformer.tt.tt_common import TTConv2D, signpost
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import TTModulatedDeformConv2dDevice
 
@@ -23,9 +22,17 @@ class TTModulatedDeformConv2dPack:
     """
 
     def __init__(
-        self, conv_args, conv_pth, device, input_dtype=ttnn.bfloat16, relu=False, weights_dtype=ttnn.bfloat8_b
+        self,
+        conv_args,
+        conv_pth,
+        device,
+        input_dtype=ttnn.bfloat16,
+        relu=False,
+        weights_dtype=ttnn.bfloat8_b,
+        sharded_input=False,
     ):
-        """``weights_dtype`` is the offset conv's."""
+        """``weights_dtype`` is the offset conv's; ``sharded_input`` gives the DCN and the offset
+        conv one height-sharded L1 input."""
         offset_args = conv_args.conv_offset
         # __call__ reshapes the input to the output's (B, H, W), which holds only at stride 1.
         # The DCN variants' caffe-style ResNet puts every stride on conv1 or the downsample shortcut.
@@ -46,14 +53,14 @@ class TTModulatedDeformConv2dPack:
         )
 
         # The DCN's input, height-sharded over the grid in whole 32-row blocks where that pays
-        # (DCN_SHARDED_INPUT_CHANNELS): the op gives each core the output rows of its own shard, so
+        # (``sharded_input``): the op gives each core the output rows of its own shard, so
         # most bilinear corners are in its own L1 and the rest in a neighbour's, instead of spread
         # over every core's. conv_offset then reads that same shard, so the block input reaches L1
         # once, as TILE, and is untilized there. Otherwise the DCN reads an interleaved L1 copy and
         # conv_offset a ROW_MAJOR one in DRAM.
         self.input_memory_config = None
         conv_offset_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        if offset_args.in_channels in DCN_SHARDED_INPUT_CHANNELS:
+        if sharded_input:
             grid = device.compute_with_storage_grid_size()
             rows = offset_args.batch_size * offset_args.input_height * offset_args.input_width
             shard_rows = math.ceil(rows / (grid.x * grid.y) / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
@@ -135,6 +142,7 @@ class TTResLayer:
         dram_conv_slices=None,
         block_sharded=False,
         fp32_acc=False,
+        dcn_sharded_input=False,
         conv2_act_block_h=None,
         weights_dtype=ttnn.bfloat8_b,
         input_dtype=ttnn.bfloat16,
@@ -154,6 +162,7 @@ class TTResLayer:
                     dram_conv_slices=dram_conv_slices,
                     block_sharded=block_sharded,
                     fp32_acc=fp32_acc,
+                    dcn_sharded_input=dcn_sharded_input,
                     conv2_act_block_h=conv2_act_block_h,
                     weights_dtype=weights_dtype,
                     input_dtype=input_dtype if first else self.layer[-1].output_dtype,
@@ -204,6 +213,7 @@ class TTBottleneck:
         dram_conv_slices=None,
         block_sharded=False,
         fp32_acc=False,
+        dcn_sharded_input=False,
         conv2_act_block_h=None,
         weights_dtype=ttnn.bfloat8_b,
         input_dtype=ttnn.bfloat16,
@@ -257,6 +267,7 @@ class TTBottleneck:
                 input_dtype=conv2_dtype,
                 relu=True,
                 weights_dtype=weights_dtype,
+                sharded_input=dcn_sharded_input,
             )
 
         self.conv3 = TTConv2D(
@@ -317,8 +328,9 @@ class TTResNet:
     spatial convs run in ``dram_conv_slices`` width slices and their 1x1 convs as a DRAM
     matmul. A layer that follows one of them and is not listed itself reads its input from
     DRAM the same way. ``block_sharded_stages`` lists the layers whose downsample and non-DCN
-    conv2s are block sharded, and ``fp32_acc_stages`` the layers whose convs accumulate in an
-    fp32 destination register (see TTBottleneck). ``stem_act_block_h`` and ``conv2_act_block_h``
+    conv2s are block sharded, ``fp32_acc_stages`` the layers whose convs accumulate in an
+    fp32 destination register (see TTBottleneck), and ``dcn_sharded_input_stages`` the layers
+    whose DCNs take a height-sharded L1 input (TTModulatedDeformConv2dPack). ``stem_act_block_h`` and ``conv2_act_block_h``
     are the stem conv's and the non-DCN conv2s' act_block_h overrides, None for conv2d's own, and
     ``weights_dtype`` the convs' weight dtype. ``model_config.tt_resnet_kwargs`` gives the
     configured variant's values, and ``model_config.RESNET_KWARGS["out_indices"]`` its
@@ -376,6 +388,7 @@ class TTResNet:
         dram_conv_slices=None,
         block_sharded_stages=(),
         fp32_acc_stages=(),
+        dcn_sharded_input_stages=(),
         conv2_act_block_h=None,
         weights_dtype=ttnn.bfloat8_b,
     ):
@@ -387,6 +400,7 @@ class TTResNet:
             dram_conv_slices=dram_conv_slices,
             block_sharded=i in block_sharded_stages,
             fp32_acc=i in fp32_acc_stages,
+            dcn_sharded_input=i in dcn_sharded_input_stages,
             conv2_act_block_h=conv2_act_block_h,
             weights_dtype=weights_dtype,
         )

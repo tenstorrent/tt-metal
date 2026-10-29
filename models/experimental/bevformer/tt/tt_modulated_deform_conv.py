@@ -68,7 +68,9 @@ class TTModulatedDeformConv2dDevice:
     def __call__(self, x_nhwc, offset_mask_nhwc):
         """``x_nhwc`` (B, H_in, W_in, C_in) and ``offset_mask_nhwc`` (B, H_out, W_out, 3*K*K), the
         offset conv's output: the offsets in pixels, (y, x) per kernel position, then the mask
-        logits. Both inputs bfloat16, ROW_MAJOR, interleaved. Returns the
+        logits. Both inputs bfloat16, ROW_MAJOR; ``x_nhwc`` interleaved, or height-sharded in L1 in
+        whole 32-row shards when the output has the input's height and width, ``offset_mask_nhwc``
+        interleaved. Returns the
         (1, 1, B*H_out*W_out, C_out) bfloat16 TILE output, conv2d's layout."""
         B, H_in, W_in, _ = x_nhwc.shape
         _, H_out, W_out, _ = offset_mask_nhwc.shape

@@ -258,10 +258,11 @@ _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 # suffice, the rest is margin.
 CODER_BISECTION_STEPS = 22
 
-# DCN input channels whose input goes to the op height-sharded rather than interleaved in L1: most
-# bilinear corners then lie in the core's own shard or a neighbour's. It pays at layer3 (C=256,
-# ten 32-row blocks per core); layer4's three blocks per core and two channel passes run slower so.
-DCN_SHARDED_INPUT_CHANNELS = (256,)
+# Layers whose DCNs take their input height-sharded rather than interleaved in L1, by layer (0 is
+# layer1): most bilinear corners then lie in the core's own shard or a neighbour's. Sharding pays
+# where each core owns many blocks of a single channel pass, as in layer3; layer4's few blocks per
+# core and two channel passes do not amortize it.
+DCN_SHARDED_INPUT_STAGES = (2,)
 
 
 # The backbone and FPN. Their choices below are sized for base's 6 cameras at 1600x928; small and
@@ -320,6 +321,7 @@ def tt_resnet_kwargs():
         dram_conv_slices=DRAM_CONV_SLICES,
         block_sharded_stages=BLOCK_SHARDED_STAGES,
         fp32_acc_stages=FP32_ACC_STAGES,
+        dcn_sharded_input_stages=DCN_SHARDED_INPUT_STAGES,
         stem_act_block_h=STEM_ACT_BLOCK_H,
         conv2_act_block_h=CONV2_ACT_BLOCK_H,
         weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),
