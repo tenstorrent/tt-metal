@@ -63,6 +63,25 @@ captured graph is the same in both modes: the only difference is whether the hos
   decode to tolerate a mid-prompt slot (the plugin's stable prefill slot plus a model-side guard that skips the
   slot's KDA state write for a row mid-prefill).
 
-Order: (1) the in-graph feedback + the `supports_async_decode` flag behind `GLM53_VLLM_RESIDENT_DECODE=1`, validated
+Order: (1) the in-graph feedback + the `supports_async_decode` flag behind `GLM53_RESIDENT_DECODE=1`, validated
 by the served smokes (stages a / b / d: the ids must be identical to today's reload path for the same prompts);
 (2) the bench A/B at 32 users; (3) vLLM async scheduling on; (4) the interleave.
+
+## Step 4, the prefill / decode interleave: design (2026-10-29 19:30)
+
+Today the adapter refuses a decode step while a slot is mid-prefill (`_stage_rows`: `supports_slot_mask` is unset on
+the mesh model) and the catalog runs with the plugin's decode interleave off, so every decoder stalls for the whole
+of a burst's prefills (the 5.2 s mean TTFT of 32 arrivals is also 5 s of silence for the 31 others). What a decode
+step does to a slot `u` of row `r` between two chunks of its prompt, and the answer for each:
+
+| hazard | today | with the interleave |
+|---|---|---|
+| the KDA recurrence updates every slot's batched carry in place: slot `u` loses chunk `k`'s end state, which chunk `k + 1` must start from | the guard refuses the step | the chunked prefill keeps its carry OUT of the batched state: one in-flight carry per row per KDA layer (`[H, K, V]` fp32, 1 MiB per layer per chip, ~34 MiB per chip for the KDA layers; per-row ownership and the SP path prefill at most one prompt per row at a time), written at every chunk end, read at the next chunk start, and the batched slot is written once, at the prompt's last chunk. The decode step's garbage write into the batched slot is overwritten there |
+| the DSA decode writes slot `u`'s latent row and pooled index at the slot's position | the guard | the slot is parked (live 0) at its prefilled end: chunk `k + 1` starts there (chunk starts are 32-aligned, pools of 4 are whole) and rewrites the row and its pool |
+| the token / position feed of the parked slot | the guard | the live mask: position fixed at the prefilled end, a pad id |
+| the plugin's slot bookkeeping across chunks | the stable prefill slot (plugin 0506d8f) | unchanged; `decode_interleave_enabled: true` in the catalog once the model declares `supports_slot_mask` |
+
+Cost: the chunk-end carry write and the chunk-start read already exist (they target the batched slot today); the
+prompt-end write adds ~34 MiB per prompt per chip. Gain: decoders keep stepping between prefill chunks (one step per
+chunk under vLLM's chunked prefill: the catalog's chunk size then trades burst TTFT against decode continuity). Needs
+the resident live mask (step 1) and the traced step's tolerance of a parked slot, which is today's parking.
