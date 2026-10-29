@@ -21,9 +21,9 @@ carving the single-process test uses.
 (rows 0-3) and the bottom one (rows 4-7), the stages of the 4x4 SC4 pipeline. The bottom half's rows
 are listed in reverse, asking for TP row t on physical row 7-t (shorter top/bottom D2D hops). The
 topology mapper does not honour list order today -- it places the half's rows 4..7 in natural
-order -- so taking effect needs mesh-graph-descriptor pinnings (ci/sc4_4x4_sp1_mgd.textproto and
-the 2-galaxy descriptor carry them, Rev C only). For more than one galaxy, stitch the per-host
-outputs with assemble_pipeline_binding.py.
+order -- so taking effect needs mesh-graph-descriptor pinnings (ci/sc4_4x4_sp1_mgd.textproto
+carries them, Rev C only). For more than one galaxy, stitch the per-host outputs with
+assemble_pipeline_binding.py.
 
 Usage (galaxy must be idle):
     python gen_pipeline_binding.py [--layout 8x1|4x4] [--template <yaml>] [--out <yaml>] [--profile]
